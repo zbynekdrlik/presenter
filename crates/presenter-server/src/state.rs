@@ -26,6 +26,7 @@ impl AppState {
         Ok(state)
     }
 
+    #[cfg(test)]
     #[instrument(skip_all)]
     pub async fn in_memory() -> anyhow::Result<Self> {
         let repo = Repository::connect_in_memory().await?;
