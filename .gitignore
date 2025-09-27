@@ -1,1 +1,7 @@
+target/
+**/*.rs.bk
+.DS_Store
+.idea/
+.vscode/
+*.swp
 Propresenter library/
