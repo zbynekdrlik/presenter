@@ -30,6 +30,7 @@ Presenter is a monolithic, production-ready lyrics/Bible/timers display applicat
 
 ## Collaboration & Decision Log
 - Capture architectural decisions in numbered ADRs under `docs/adr/` and cross-reference them from PRs when applicable.
+- Use GitHub Issues as the primary location for comprehensive feature plans; do not commit temporary planning documents to the repository. Keep plan updates and implementation notes in issue comments.
 - Surface open questions or scope uncertainties directly in PRs to secure answers before merge.
 
 ## Immediate Next Actions
