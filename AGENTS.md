@@ -8,6 +8,17 @@ Presenter is a monolithic, production-ready lyrics/Bible/timers display applicat
 - Prioritize robustness, predictable behavior, and graceful failure handling over breadth of functionality.
 - Future revisions to functional scope will be documented separately (e.g., in `docs/functional-needs.md`). Agents should treat that documentation as the source of truth for domain specifics.
 
+## Tooling & Dependencies
+- Install any required tool, utility, package, framework, or application immediately using `sudo apt install` (or the appropriate package manager) instead of attempting workarounds or waiting for approval.
+- If Ubuntu's default repositories lack a sufficiently recent version, research state-of-the-art 2025 sources (official PPAs, vendor repos, direct installers) and install the newest stable release that satisfies project requirements. Document the chosen source in the PR.
+- Preference is always for the latest stable versions of crucial frameworks; do not proceed with outdated tooling unless explicitly directed by the user.
+
+## Runtime Environments
+- Maintain three installations on this controller: development, testing, and production. Keep dev updated immediately after each approved PR so the user can evaluate changes quickly.
+- Testing environment mirrors production configuration for validation prior to promotion. Automate deployment from the main branch once changes pass review.
+- Production environment is updated only after explicit user approval; ensure zero-downtime handoff and rollback plan.
+- Always prioritize the fastest path for the user to test changes on the development instance, then promote to production for other operators once sign-off is received.
+
 ## Workflow States
 1. **Discovery & Research** – Gather requirements from existing docs or stakeholders. When selecting new tools/frameworks, perform current online research to confirm choices represent state-of-the-art 2025 technology, architecture, and design. Summarize findings and sources in the PR description.
 2. **Specification** – Translate requirements into executable tests or clear acceptance criteria before writing production code.
