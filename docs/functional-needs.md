@@ -1,0 +1,37 @@
+# Functional Needs
+
+## Lyrics
+- Rapid search across catalog, set lists, and history.
+- Support for alternate arrangements, key changes, and responsive line breaks.
+- Operator view should preview next slide and permit one-click or shortcut jumps.
+
+## Bible
+- Offline cache of approved translations with fast reference lookup.
+- Formatting presets for scripture slides (single verse, passage, responsive reading).
+- Highlight keywords or responsive parts for stage prompts.
+
+## Timers
+- Global service clock with overruns/underruns visual indicators.
+- Segment timers tied to plan items, supporting pause/adjust mid-service.
+- Stage alerts for time warnings (flash, color shift, optional audio ping).
+
+## Stage Displays
+- Layout builder that places lyrics, timers, notes, and alerts in flexible regions.
+- Per-display profiles (e.g., main stage monitor vs. choir screen).
+- Remote preview on tablets/phones for production leads.
+
+## Data Model Considerations
+- Versioned song data to track edits and reuse arrangements.
+- Scripture references stored as structured data (book, chapter, verses) for reliable rendering.
+- Timer templates stored per service type (Sunday AM, youth night, rehearsal).
+
+## Operational Workflow
+1. Build plan with songs, scripture, and service segments.
+2. Assign stage display profiles per venue.
+3. Run service from control UI, track live status, and push cues to displays.
+4. Capture operator notes/session log for future refinement.
+
+## Open Questions
+- Which UI stack best supports multi-display output on Windows/macOS?
+- How should we sync data between control machine and backup devices? Offline-first or cloud-first?
+- Do we need mobile remote control or limit to primary console?
