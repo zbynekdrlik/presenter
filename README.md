@@ -24,6 +24,8 @@ Early implementation. The repository now includes the first-pass Rust workspace:
 
 - `presenter-core` – domain crate covering libraries, presentations, slides, playlists, Bible references, and timers.
 - `presenter-server` – Axum/Tokio web server exposing JSON endpoints and housing the future operator & tablet interfaces.
+- `presenter-persistence` – SeaORM-backed repository and migration runner targeting SQLite (dev/test) with a forward path to Postgres.
+- `presenter-migration` – schema evolution crate orchestrated by the persistence layer.
 - ADRs under `docs/adr/` capture stack decisions as they are finalized.
 
 Refer to issue #2 for the end-to-end delivery plan.
@@ -51,6 +53,7 @@ Internal project. Please coordinate changes via issues and planning sessions bef
    ```
 
    The server binds to `0.0.0.0:8877` by default; override with `PRESENTER_PORT`.
+   Use `PRESENTER_DB_URL` to point at a SQLite/SQL database (defaults to `sqlite://presenter_dev.db`).
 
 3. Execute the full test suite (core + server) with:
 

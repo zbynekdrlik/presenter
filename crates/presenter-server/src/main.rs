@@ -19,7 +19,7 @@ async fn main() -> anyhow::Result<()> {
         .with_context(|| format!("invalid PRESENTER_PORT value: {port}"))?;
 
     let addr: SocketAddr = SocketAddr::from(([0, 0, 0, 0], port));
-    let state = AppState::seeded();
+    let state = AppState::from_env().await?;
     let app = build_router(state);
 
     let listener = TcpListener::bind(addr)

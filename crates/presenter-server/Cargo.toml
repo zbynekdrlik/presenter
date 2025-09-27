@@ -9,6 +9,7 @@ license.workspace = true
 anyhow.workspace = true
 axum.workspace = true
 presenter-core = { path = "../presenter-core" }
+presenter-persistence = { path = "../presenter-persistence" }
 serde.workspace = true
 serde_json.workspace = true
 tokio.workspace = true
@@ -22,6 +23,7 @@ axum.workspace = true
 serde_json.workspace = true
 tokio.workspace = true
 tower.workspace = true
+presenter-persistence = { path = "../presenter-persistence" }
 
 [lints]
 workspace = true
