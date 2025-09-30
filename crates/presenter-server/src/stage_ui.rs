@@ -18,11 +18,7 @@ pub fn render_stage_display(snapshot: StageDisplaySnapshot) -> Html<String> {
 #[component]
 fn StageDisplayDocument(snapshot: StageDisplaySnapshot) -> impl IntoView {
     let layout = snapshot.layout.clone();
-    let generated_at = snapshot.generated_at;
     let layout_view = render_layout(&snapshot);
-    let presentation_name = snapshot.presentation_name.clone().unwrap_or_default();
-    let presentation_hidden = presentation_name.is_empty().to_string();
-    let generated_label = format!("Generated at {}", generated_at.format("%H:%M:%S"));
     let layout_code = layout.code.clone();
     let snapshot_json = to_string(&snapshot).unwrap_or_else(|_| "{}".to_string());
     let script = format!(
@@ -37,7 +33,7 @@ fn StageDisplayDocument(snapshot: StageDisplaySnapshot) -> impl IntoView {
   }};
 
   const selectPrimary = (slide) => {{
-    if (!slide) return 'No active slide';
+    if (!slide) return '';
     const stage = (slide.stage || '').trim();
     return stage.length ? stage : (slide.main || '');
   }};
@@ -62,28 +58,6 @@ fn StageDisplayDocument(snapshot: StageDisplaySnapshot) -> impl IntoView {
     const el = document.getElementById(id);
     if (el) {{
       el.dataset.hidden = hidden ? 'true' : 'false';
-    }}
-  }};
-
-  const updateHeader = (snapshot) => {{
-    const generated = document.querySelector('[data-role="stage-generated"]');
-    if (generated) {{
-      try {{
-        const parsed = new Date(snapshot.generated_at);
-        const label = Number.isNaN(parsed.getTime())
-          ? snapshot.generated_at
-          : parsed.toLocaleTimeString();
-        generated.textContent = 'Updated at ' + label;
-      }} catch (_) {{
-        generated.textContent = 'Updated';
-      }}
-    }}
-
-    const presentation = document.querySelector('[data-role="presentation-name"]');
-    if (presentation) {{
-      const name = snapshot.presentation_name || '';
-      presentation.textContent = name;
-      presentation.dataset.hidden = name ? 'false' : 'true';
     }}
   }};
 
@@ -117,7 +91,6 @@ fn StageDisplayDocument(snapshot: StageDisplaySnapshot) -> impl IntoView {
   }};
 
   const applyStage = (snapshot) => {{
-    updateHeader(snapshot);
     applyTimers(snapshot.timers);
 
     if (layout === 'worship-snv') {{
@@ -125,7 +98,7 @@ fn StageDisplayDocument(snapshot: StageDisplaySnapshot) -> impl IntoView {
       const next = snapshot.next;
       setText('current-text', selectPrimary(current));
       const nextText = selectPrimary(next);
-      setText('next-text', nextText || 'No next slide');
+      setText('next-text', nextText || '');
 
       const currentGroup = current && current.group ? current.group : '';
       setText('current-group', currentGroup || '');
@@ -137,7 +110,7 @@ fn StageDisplayDocument(snapshot: StageDisplaySnapshot) -> impl IntoView {
     }} else if (layout === 'worship-pp') {{
       const current = snapshot.current;
       const next = snapshot.next;
-      setText('current-main', current ? current.main : 'No active slide');
+      setText('current-main', current ? current.main : '');
       const currentGroup = current && current.group ? current.group : '';
       setText('current-group', currentGroup || '');
       setHidden('current-group', !currentGroup);
@@ -252,20 +225,6 @@ fn StageDisplayDocument(snapshot: StageDisplaySnapshot) -> impl IntoView {
                 <style>{STAGE_STYLES}</style>
             </head>
             <body class="stage" data-layout-code={layout_code}>
-                <header class="stage__header">
-                    <div>
-                        <h1>{layout.name.clone()}</h1>
-                        <p class="stage__description">{layout.description.clone()}</p>
-                        <p
-                            class="stage__presentation"
-                            data-role="presentation-name"
-                            data-hidden={presentation_hidden.clone()}
-                        >
-                            {presentation_name}
-                        </p>
-                    </div>
-                    <small class="stage__generated" data-role="stage-generated">{generated_label}</small>
-                </header>
                 <main class="stage__body">{layout_view}</main>
                 <script>{script}</script>
             </body>
@@ -288,17 +247,13 @@ fn render_worship_snv(snapshot: &StageDisplaySnapshot) -> AnyView {
         .current
         .as_ref()
         .map(primary_text)
-        .unwrap_or_else(|| "No active slide".to_string());
+        .unwrap_or_default();
     let current_group = snapshot
         .current
         .as_ref()
         .and_then(|slide| slide.group.clone())
         .unwrap_or_default();
-    let next_text = snapshot
-        .next
-        .as_ref()
-        .map(primary_text)
-        .unwrap_or_else(|| "No next slide".to_string());
+    let next_text = snapshot.next.as_ref().map(primary_text).unwrap_or_default();
     let next_group = snapshot
         .next
         .as_ref()
@@ -338,7 +293,7 @@ fn render_worship_pp(snapshot: &StageDisplaySnapshot) -> AnyView {
         .current
         .as_ref()
         .map(|slide| slide.main.clone())
-        .unwrap_or_else(|| "No active slide".to_string());
+        .unwrap_or_default();
     let current_group = snapshot
         .current
         .as_ref()
@@ -461,36 +416,93 @@ fn format_hms(seconds: i64) -> String {
 }
 
 const STAGE_STYLES: &str = r#"
-body.stage { background: #000; color: #f8fafc; font-family: 'Inter', system-ui, sans-serif; margin: 0; min-height: 100vh; display: flex; flex-direction: column; }
-.stage__header { display: flex; justify-content: space-between; align-items: flex-end; padding: 1.5rem 2rem; background: linear-gradient(90deg, #1e293b, #0f172a); border-bottom: 1px solid rgba(148, 163, 184, 0.2); }
-.stage__header h1 { margin: 0; font-size: 2rem; letter-spacing: 0.08em; text-transform: uppercase; }
-.stage__description { margin: 0.5rem 0 0; color: #94a3b8; }
-.stage__presentation { margin: 0.25rem 0 0; color: #e2e8f0; font-weight: 600; letter-spacing: 0.05em; text-transform: uppercase; }
-.stage__presentation[data-hidden="true"] { display: none; }
-.stage__generated { color: #64748b; }
-.stage__body { flex: 1; display: flex; justify-content: center; align-items: center; padding: 2rem; }
-.stage__lyrics { display: grid; gap: 2rem; text-align: center; width: 100%; }
-.stage__lyrics-current { font-size: 5rem; font-weight: 700; text-transform: uppercase; display: flex; flex-direction: column; gap: 0.5rem; align-items: center; }
-.stage__lyrics-current p { margin: 0; }
-.stage__lyrics-next { font-size: 2rem; color: #94a3b8; letter-spacing: 0.12em; display: flex; flex-direction: column; gap: 0.5rem; align-items: center; }
-.stage__lyrics-next span { display: block; font-size: 1rem; color: #38bdf8; }
-.stage__lyrics-next p { margin: 0; }
+* { box-sizing: border-box; }
+body.stage { background: #000; color: #f8fafc; font-family: 'Inter', system-ui, sans-serif; margin: 0; min-height: 100vh; display: flex; align-items: stretch; justify-content: center; padding: 4vh 6vw; }
+.stage__body { flex: 1; display: flex; align-items: stretch; justify-content: center; width: 100%; }
+.stage__lyrics { display: grid; gap: 3rem; text-align: center; width: 100%; align-content: center; }
+.stage__lyrics-current { font-size: 6.5rem; font-weight: 700; display: flex; flex-direction: column; gap: 1rem; align-items: center; letter-spacing: 0.04em; }
+.stage__lyrics-current p { margin: 0; line-height: 1.06; white-space: pre-wrap; text-transform: none; max-width: 100%; }
+.stage__lyrics-next { font-size: 3rem; color: #cbd5f5; letter-spacing: 0.06em; display: flex; flex-direction: column; gap: 0.75rem; align-items: center; }
+.stage__lyrics-next span { display: block; font-size: 1.2rem; color: #38bdf8; letter-spacing: 0.2em; text-transform: uppercase; }
+.stage__lyrics-next p { margin: 0; white-space: pre-wrap; text-transform: none; line-height: 1.1; max-width: 100%; }
 .stage__split { display: grid; gap: 2rem; grid-template-columns: minmax(0, 2fr) minmax(0, 1fr); width: 100%; }
-.stage__split-main { background: rgba(15, 23, 42, 0.75); padding: 2rem; border-radius: 1rem; box-shadow: 0 20px 40px -30px rgba(15, 23, 42, 0.9); }
+.stage__split-main { background: rgba(15, 23, 42, 0.75); padding: 2rem; border-radius: 1rem; box-shadow: 0 20px 40px -30px rgba(15, 23, 42, 0.9); display: flex; flex-direction: column; gap: 1.25rem; }
 .stage__split-main h2 { margin-top: 0; font-size: 1.5rem; letter-spacing: 0.1em; color: #38bdf8; }
-.stage__split-main p { font-size: 3rem; margin: 1rem 0; }
+.stage__split-main p { font-size: 3rem; margin: 0; white-space: pre-wrap; }
 .stage__split-main small { color: #cbd5f5; }
-.stage__split-sidebar { background: rgba(15, 23, 42, 0.55); padding: 1.5rem; border-radius: 1rem; display: flex; flex-direction: column; gap: 0.75rem; }
+.stage__split-sidebar { background: rgba(15, 23, 42, 0.55); padding: 1.5rem; border-radius: 1rem; display: flex; flex-direction: column; gap: 1rem; }
 .stage__split-sidebar h3 { margin: 0; letter-spacing: 0.1em; color: #38bdf8; }
+.stage__split-sidebar p { margin: 0; white-space: pre-wrap; }
 .stage__timer { text-align: center; width: 100%; }
 .stage__timer-value { font-size: 8rem; font-weight: 700; letter-spacing: 0.1em; }
 .stage__timer-label { font-size: 1.5rem; color: #94a3b8; letter-spacing: 0.3em; text-transform: uppercase; }
 .stage__timer--preach .stage__timer-value { color: #34d399; }
 .stage__timer--countdown .stage__timer-value { color: #38bdf8; }
-.stage__group { display: inline-block; padding: 0.25rem 0.75rem; background: rgba(56, 189, 248, 0.25); color: #38bdf8; border-radius: 999px; font-size: 0.9rem; letter-spacing: 0.08em; text-transform: uppercase; }
+.stage__group { display: inline-block; padding: 0.35rem 1.5rem; background: rgba(56, 189, 248, 0.25); color: #38bdf8; border-radius: 999px; font-size: 1.2rem; letter-spacing: 0.08em; text-transform: uppercase; }
 .stage__group[data-hidden="true"] { display: none; }
-.stage__group--next { background: rgba(250, 204, 21, 0.2); color: #facc15; }
+.stage__group--next { background: rgba(250, 204, 21, 0.3); color: #facc15; }
 .stage__meta { color: #cbd5f5; display: block; margin-top: 0.5rem; }
 .stage__meta[data-hidden="true"] { display: none; }
 .stage__empty { color: #94a3b8; font-size: 2rem; }
 "#;
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use chrono::Utc;
+    use presenter_core::{StageDisplayLayout, StageDisplaySlide};
+
+    fn worship_layout() -> StageDisplayLayout {
+        StageDisplayLayout::built_in()
+            .into_iter()
+            .find(|layout| layout.code == "worship-snv")
+            .expect("worship layout")
+    }
+
+    #[test]
+    fn worship_stage_cleared_snapshot_has_no_placeholders() {
+        let now = Utc::now();
+        let snapshot = StageDisplaySnapshot::new(
+            worship_layout(),
+            now,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            presenter_core::timer::TimersOverview::demo(now),
+        );
+
+        let html = render_stage_display(snapshot).0;
+        assert!(!html.contains("No next slide"));
+        assert!(!html.contains("No active slide"));
+    }
+
+    #[test]
+    fn worship_stage_preserves_line_breaks() {
+        let now = Utc::now();
+        let layout = worship_layout();
+        let slide = StageDisplaySlide {
+            main: "Line A\nLine B".to_string(),
+            translation: String::new(),
+            stage: String::new(),
+            group: Some("Verse".to_string()),
+        };
+        let snapshot = StageDisplaySnapshot::new(
+            layout,
+            now,
+            Some(presenter_core::PresentationId::new()),
+            Some("Sample".into()),
+            Some(presenter_core::SlideId::new()),
+            Some(slide),
+            None,
+            None,
+            presenter_core::timer::TimersOverview::demo(now),
+        );
+
+        let html = render_stage_display(snapshot).0;
+        assert!(html.contains("Line A\nLine B"));
+        assert!(html.contains("Verse"));
+    }
+}

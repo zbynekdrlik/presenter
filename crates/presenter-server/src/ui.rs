@@ -1166,6 +1166,29 @@ body.operator {
     transition: background 0.2s ease, border 0.2s ease;
 }
 
+.operator__presentation-item[data-drop-position] {
+    position: relative;
+}
+
+.operator__presentation-item[data-drop-position="before"]::before,
+.operator__presentation-item[data-drop-position="after"]::after {
+    content: '';
+    position: absolute;
+    left: 12px;
+    right: 12px;
+    border-top: 3px solid rgba(59, 124, 255, 0.85);
+    border-radius: 999px;
+    pointer-events: none;
+}
+
+.operator__presentation-item[data-drop-position="before"]::before {
+    top: -6px;
+}
+
+.operator__presentation-item[data-drop-position="after"]::after {
+    bottom: -6px;
+}
+
 .operator__presentation-item.is-active {
     background: rgba(59, 124, 255, 0.2);
     border-color: rgba(59, 124, 255, 0.5);
@@ -2127,6 +2150,29 @@ body.operator[data-view="timers"] [data-view-panel="timers"] {
     font-size: 0.84rem;
     cursor: pointer;
     transition: border 0.2s ease, box-shadow 0.2s ease, background 0.2s ease;
+}
+
+.operator__presentation-item[data-drop-position] {
+    position: relative;
+}
+
+.operator__presentation-item[data-drop-position="before"]::before,
+.operator__presentation-item[data-drop-position="after"]::after {
+    content: '';
+    position: absolute;
+    left: 10px;
+    right: 10px;
+    border-top: 3px solid rgba(59, 124, 255, 0.85);
+    border-radius: 999px;
+    pointer-events: none;
+}
+
+.operator__presentation-item[data-drop-position="before"]::before {
+    top: -6px;
+}
+
+.operator__presentation-item[data-drop-position="after"]::after {
+    bottom: -6px;
 }
 
 .operator__presentation-item.is-active {

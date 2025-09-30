@@ -507,6 +507,7 @@
     event.dataTransfer.effectAllowed = 'copy';
     event.dataTransfer.setData('application/x-presenter-presentation', presentationId);
     event.dataTransfer.setData('text/plain', presentationId);
+    event.dataTransfer.setData('application/x-presenter-search', 'true');
     const title = item.querySelector('.operator__search-result-title');
     if (title) {
       const rect = title.getBoundingClientRect();
@@ -2562,7 +2563,12 @@ function updateCardWarnings(card) {
     }
   }
 
-  async function handlePlaylistInsertion(presentationId, playlistId) {
+  async function handlePlaylistInsertion(
+    presentationId,
+    playlistId,
+    insertIndex = null,
+    options = {},
+  ) {
     if (!playlistId) {
       showToast('Select a playlist before adding presentations.', 'warning');
       return;
@@ -2573,7 +2579,10 @@ function updateCardWarnings(card) {
       return;
     }
     const entries = playlist.entries.slice();
-    entries.push({
+    const insertionPoint = Number.isInteger(insertIndex)
+      ? Math.min(Math.max(insertIndex, 0), entries.length)
+      : entries.length;
+    entries.splice(insertionPoint, 0, {
       entryId: null,
       entryType: 'presentation',
       presentationId,
@@ -2586,6 +2595,9 @@ function updateCardWarnings(card) {
       });
       refreshPlaylistState(response);
       showToast('Presentation added to playlist', 'success');
+      if (options && options.clearSearch) {
+        clearSearchResults();
+      }
     } catch (error) {
       console.error('Failed to add to playlist', error);
       showToast('Failed to add to playlist', 'error');
@@ -3391,6 +3403,17 @@ function updateCardWarnings(card) {
       state.presentationEditModalOpen;
 
     if (!isEditable && !modalOpen) {
+      if ((event.key === ' ' || event.key === 'Space') && state.mode === 'live') {
+        if (els.searchInput) {
+          event.preventDefault();
+          els.searchInput.focus();
+          els.searchInput.select();
+          if (state.searchQuery.trim()) {
+            renderSearchResults();
+          }
+        }
+        return;
+      }
       if (event.key === 'ArrowRight') {
         event.preventDefault();
         navigateSlides(1);
@@ -3558,7 +3581,7 @@ function updateCardWarnings(card) {
     }
   }
 
-  function handlePlaylistDrop(event) {
+  async function handlePlaylistDrop(event) {
     if (state.playlistReorderSnapshot) {
       return;
     }
@@ -3567,12 +3590,17 @@ function updateCardWarnings(card) {
       showToast('Select a playlist before adding presentations.', 'warning');
       return;
     }
-    const id =
-      event.dataTransfer.getData('application/x-presenter-presentation') ||
-      event.dataTransfer.getData('text/plain');
+    const transfer = event.dataTransfer;
+    const id = transfer
+      ? transfer.getData('application/x-presenter-presentation') || transfer.getData('text/plain')
+      : '';
     if (!id) return;
     event.preventDefault();
-    handlePlaylistInsertion(id, playlistId);
+    const fromSearch = transfer
+      ? Array.from(transfer.types || []).includes('application/x-presenter-search')
+      : false;
+    await handlePlaylistInsertion(id, playlistId, null, { clearSearch: fromSearch });
+    clearPlaylistDropIndicators();
   }
 
   function handleAddSlide() {
@@ -3743,51 +3771,123 @@ function updateCardWarnings(card) {
     }
   }
 
-  function handlePlaylistEntryDragOver(event) {
-    if (!state.playlistReorderSnapshot) return;
-    if (!state.activePlaylistId || state.activePlaylistId !== state.playlistReorderSnapshot.playlistId) {
-      return;
-    }
-    const target = event.target.closest('[data-role="presentation-item"]');
-    if (!target) {
-      event.preventDefault();
-      return;
-    }
-    event.preventDefault();
-    const draggingId = state.playlistReorderSnapshot.sourceId;
-    if (target.dataset.entryId === draggingId) return;
-    const items = qsa('[data-role="presentation-item"]', els.presentationList);
-    const dragging = items.find((node) => node.dataset.entryId === draggingId);
-    if (!dragging) return;
-    const rect = target.getBoundingClientRect();
-    const isBefore = event.clientY < rect.top + rect.height / 2;
-    if (isBefore) {
-      els.presentationList.insertBefore(dragging, target);
-    } else {
-      els.presentationList.insertBefore(dragging, target.nextSibling);
-    }
+  function clearPlaylistDropIndicators() {
+    if (!els.presentationList) return;
+    qsa('[data-role="presentation-item"][data-drop-position]', els.presentationList).forEach((node) => {
+      node.removeAttribute('data-drop-position');
+    });
   }
 
-  function handlePlaylistEntryDrop(event) {
-    if (!state.playlistReorderSnapshot) return;
-    if (!state.activePlaylistId || state.activePlaylistId !== state.playlistReorderSnapshot.playlistId) {
-      state.playlistReorderSnapshot = null;
+  function handlePlaylistEntryDragOver(event) {
+    const transfer = event.dataTransfer;
+    const types = transfer ? Array.from(transfer.types || []) : [];
+    const isPresentationDrag =
+      types.includes('application/x-presenter-presentation') || types.includes('text/plain');
+    const isReorder =
+      !!state.playlistReorderSnapshot &&
+      state.activePlaylistId &&
+      state.activePlaylistId === state.playlistReorderSnapshot.playlistId &&
+      types.includes('application/x-presenter-playlist-entry');
+
+    const target = event.target.closest('[data-role="presentation-item"]');
+
+    if (isReorder) {
+      if (!target) return;
+      event.preventDefault();
+      clearPlaylistDropIndicators();
+      const draggingId = state.playlistReorderSnapshot.sourceId;
+      if (target.dataset.entryId === draggingId) return;
+      const items = qsa('[data-role="presentation-item"]', els.presentationList);
+      const dragging = items.find((node) => node.dataset.entryId === draggingId);
+      if (!dragging) return;
+      const rect = target.getBoundingClientRect();
+      const isBefore = event.clientY < rect.top + rect.height / 2;
+      if (isBefore) {
+        els.presentationList.insertBefore(dragging, target);
+      } else {
+        els.presentationList.insertBefore(dragging, target.nextSibling);
+      }
       return;
     }
+
+    if (!isPresentationDrag) {
+      clearPlaylistDropIndicators();
+      return;
+    }
+
     event.preventDefault();
-    const ordered = qsa('[data-role="presentation-item"]', els.presentationList)
-      .map((node) => node.dataset.entryId)
-      .filter(Boolean);
-    if (
-      ordered.length &&
-      state.playlistReorderSnapshot.initialOrder &&
-      ordered.join(',') === state.playlistReorderSnapshot.initialOrder.join(',')
-    ) {
-      state.playlistReorderSnapshot = null;
+    if (!target) {
+      clearPlaylistDropIndicators();
       return;
     }
-    reorderPlaylistEntries(state.activePlaylistId, ordered);
-    state.playlistReorderSnapshot = null;
+    const rect = target.getBoundingClientRect();
+    const isBefore = event.clientY < rect.top + rect.height / 2;
+    clearPlaylistDropIndicators();
+    target.dataset.dropPosition = isBefore ? 'before' : 'after';
+  }
+
+  async function handlePlaylistEntryDrop(event) {
+    const transfer = event.dataTransfer;
+    const types = transfer ? Array.from(transfer.types || []) : [];
+    const presentationId = transfer
+      ? transfer.getData('application/x-presenter-presentation') || transfer.getData('text/plain')
+      : '';
+
+    if (
+      state.playlistReorderSnapshot &&
+      state.activePlaylistId &&
+      state.activePlaylistId === state.playlistReorderSnapshot.playlistId
+    ) {
+      event.preventDefault();
+      const ordered = qsa('[data-role="presentation-item"]', els.presentationList)
+        .map((node) => node.dataset.entryId)
+        .filter(Boolean);
+      if (
+        ordered.length &&
+        state.playlistReorderSnapshot.initialOrder &&
+        ordered.join(',') === state.playlistReorderSnapshot.initialOrder.join(',')
+      ) {
+        state.playlistReorderSnapshot = null;
+        clearPlaylistDropIndicators();
+        return;
+      }
+      reorderPlaylistEntries(state.activePlaylistId, ordered);
+      state.playlistReorderSnapshot = null;
+      clearPlaylistDropIndicators();
+      return;
+    }
+
+    if (presentationId) {
+      const playlistId = state.activePlaylistId;
+      if (!playlistId) {
+        clearPlaylistDropIndicators();
+        return;
+      }
+      const playlist =
+        state.playlists.find((item) => item.id === playlistId) || state.playlistLookup.get(playlistId);
+      if (!playlist) {
+        clearPlaylistDropIndicators();
+        showToast('Playlist not found.', 'error');
+        return;
+      }
+      event.preventDefault();
+      const target = event.target.closest('[data-role="presentation-item"]');
+      let insertIndex = playlist.entries.length;
+      if (target && target.dataset.entryIndex) {
+        const baseIndex = Number(target.dataset.entryIndex);
+        if (!Number.isNaN(baseIndex)) {
+          const rect = target.getBoundingClientRect();
+          const isBefore = event.clientY < rect.top + rect.height / 2;
+          insertIndex = isBefore ? baseIndex : baseIndex + 1;
+        }
+      }
+      const fromSearch = types.includes('application/x-presenter-search');
+      await handlePlaylistInsertion(presentationId, playlistId, insertIndex, { clearSearch: fromSearch });
+      clearPlaylistDropIndicators();
+      return;
+    }
+
+    clearPlaylistDropIndicators();
   }
 
   function handlePlaylistEntryDragEnd() {
@@ -3797,6 +3897,7 @@ function updateCardWarnings(card) {
         renderPresentationList();
       }
     }
+    clearPlaylistDropIndicators();
   }
 
   function handleSlideInputBlur(event) {

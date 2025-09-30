@@ -355,7 +355,7 @@ test.describe('Operator control surface', () => {
     `Playlist: ${playlistName}`
   );
 
-  const playlistItems = page.locator('[data-role="presentation-item"][data-type="presentation"]');
+  const playlistItems = page.locator('[data-role="catalog-bottom"] [data-role="presentation-item"][data-type="presentation"]');
   await expect(playlistItems).toHaveCount(2);
   const secondPlaylistLabel = await playlistItems
     .nth(1)
@@ -445,6 +445,11 @@ test.describe('Operator control surface', () => {
     );
   }
 
+  await playlistButtonById.click({ timeout: 20_000 });
+  await expect(page.locator('[data-role="context-title"]')).toHaveText(
+    `Playlist: ${playlistName}`
+  );
+
   await searchInput.fill('Nadej');
   await expect(searchResults).toHaveAttribute('data-visible', 'true');
   const presentationResult = searchResults
@@ -454,9 +459,68 @@ test.describe('Operator control surface', () => {
   const beforeCount = Number((await playlistCountBadge.textContent())?.trim() || '0');
   await presentationResult.dragTo(playlistButtonById);
   await expect(playlistCountBadge).toHaveText(String(beforeCount + 1));
-  await page.locator('[data-role="global-search-clear"]').click();
+  const afterAppendCount = Number((await playlistCountBadge.textContent())?.trim() || '0');
+  await expect(searchInput).toHaveValue('');
+  await expect(searchResults).toHaveAttribute('data-visible', 'false');
+
+  await searchInput.fill('Nadej');
+  await expect(searchResults).toHaveAttribute('data-visible', 'true');
+  const searchPresentationResults = searchResults.locator('[data-role="search-result-item"][data-kind="presentation"]');
+  const existingPresentationIds = new Set(
+    (
+      await playlistItems.evaluateAll((nodes) =>
+        nodes.map((node) => node.getAttribute('data-presentation-id') || ''),
+      )
+    ).filter((value) => Boolean(value))
+  );
+  const candidateCount = await searchPresentationResults.count();
+  expect(candidateCount).toBeGreaterThan(0);
+  let insertionResult = searchPresentationResults.first();
+  let insertionTitle = '';
+  let insertionPresentationId = '';
+  let insertingNewPresentation = false;
+  for (let index = 0; index < candidateCount; index += 1) {
+    const candidate = searchPresentationResults.nth(index);
+    const candidateId = (await candidate.getAttribute('data-presentation-id')) || '';
+    const candidateTitle = (await candidate
+      .locator('.operator__search-result-title')
+      .innerText()).trim();
+    if (candidateId && !existingPresentationIds.has(candidateId)) {
+      insertionResult = candidate;
+      insertionTitle = candidateTitle;
+      insertionPresentationId = candidateId;
+      insertingNewPresentation = true;
+      break;
+    }
+    if (!insertionTitle) {
+      insertionTitle = candidateTitle;
+      insertionPresentationId = candidateId;
+    }
+  }
+  await expect(insertionResult).toBeVisible();
+  await playlistItems.first().waitFor({ state: 'visible' });
+  await insertionResult.dragTo(playlistItems.first(), {
+    targetPosition: { x: 24, y: 6 },
+  });
+  if (insertingNewPresentation) {
+    await expect(playlistCountBadge).toHaveText(String(afterAppendCount + 1));
+  } else {
+    if (insertionPresentationId) {
+      expect(existingPresentationIds.has(insertionPresentationId)).toBeTruthy();
+    }
+    await expect(playlistCountBadge).toHaveText(String(afterAppendCount));
+  }
+  await expect(playlistItems.first()).toContainText(insertionTitle);
+  await expect(searchInput).toHaveValue('');
+  await expect(searchResults).toHaveAttribute('data-visible', 'false');
 
   await page.locator('[data-role="mode-toggle"][data-mode="live"]').click();
+  await page.locator('[data-role="context-title"]').click();
+  await page.keyboard.press('Space');
+  await expect(searchInput).toBeFocused();
+  await expect(searchInput).toHaveValue('');
+  await expect(searchResults).toHaveAttribute('data-visible', 'false');
+  await page.locator('[data-role="presentation-list"]').click();
 
   await expect(slideContainer.locator('[data-action="duplicate"]')).toHaveCount(0);
 
@@ -611,7 +675,7 @@ test.describe('Operator control surface', () => {
     await expect(page.locator('[data-role="stage-current"]')).toHaveText('—', {
       timeout: 2_000,
     });
-    await expect(stagePage.locator('#current-text')).toHaveText(/No active slide/i, {
+    await expect(stagePage.locator('#current-text')).toHaveText('', {
       timeout: 2_000,
     });
 
