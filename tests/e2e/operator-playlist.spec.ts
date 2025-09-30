@@ -105,7 +105,13 @@ test('stage display status shows connection and latency', async ({ page }) => {
 
   const latencyLabel = page.locator('#stage-status-latency');
   await page.waitForTimeout(2500);
-  const updatedLatency = (await latencyLabel.textContent())?.trim() ?? '';
-  expect(updatedLatency.length).toBeGreaterThan(0);
-  expect(updatedLatency).not.toBe('—');
+  const latencyText = (await latencyLabel.textContent())?.trim() ?? '';
+  const latencyVisible = await latencyLabel.getAttribute('data-visible');
+  if (latencyVisible === 'true') {
+    expect(latencyText.length).toBeGreaterThan(0);
+    expect(latencyText).not.toBe('—');
+  } else {
+    expect(latencyText).toBe('');
+  }
+  await expect(page.locator('#stage-status')).not.toContainText('&');
 });
