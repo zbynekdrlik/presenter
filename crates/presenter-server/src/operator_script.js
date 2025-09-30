@@ -65,6 +65,7 @@
     searchAbort: null,
     searchOpen: false,
     clearingSlide: false,
+    searchDragging: false,
     catalogTopHeight: resolvedCatalogHeight,
     catalogResizeActive: false,
     catalogResizePointerId: null,
@@ -508,11 +509,16 @@
     event.dataTransfer.setData('application/x-presenter-presentation', presentationId);
     event.dataTransfer.setData('text/plain', presentationId);
     event.dataTransfer.setData('application/x-presenter-search', 'true');
+    state.searchDragging = true;
     const title = item.querySelector('.operator__search-result-title');
     if (title) {
       const rect = title.getBoundingClientRect();
       event.dataTransfer.setDragImage(title, rect.width / 2, rect.height / 2);
     }
+  }
+
+  function handleSearchResultDragEnd() {
+    state.searchDragging = false;
   }
 
   function handleSearchOutsideClick(event) {
@@ -1904,9 +1910,12 @@
               </div>`
           : '';
         return `
-          <article class="operator__slide-card stage-control__slide${active}${focused}" data-slide-id="${slide.id}" data-slide-index="${index}" data-group-inherited="${hasExplicitGroup ? 'false' : 'true'}"${cardWarningAttr} draggable="true">
+          <article class="operator__slide-card stage-control__slide${active}${focused}" data-slide-id="${slide.id}" data-slide-index="${index}" data-group-inherited="${hasExplicitGroup ? 'false' : 'true'}"${cardWarningAttr}>
             <header class="operator__slide-header">
-              <span class="operator__slide-index">${index + 1}${overLimitBadge}</span>
+              <div class="operator__slide-header-left">
+                <button type="button" class="operator__slide-handle" data-role="slide-drag-handle" draggable="true" tabindex="-1" aria-label="Reorder slide">↕</button>
+                <span class="operator__slide-index">${index + 1}${overLimitBadge}</span>
+              </div>
               ${controlsMarkup}
             </header>
             <section class="operator__slide-bodies">
@@ -3596,11 +3605,15 @@ function updateCardWarnings(card) {
       : '';
     if (!id) return;
     event.preventDefault();
-    const fromSearch = transfer
+    const fromSearch = state.searchDragging || (transfer
       ? Array.from(transfer.types || []).includes('application/x-presenter-search')
-      : false;
+      : false);
     await handlePlaylistInsertion(id, playlistId, null, { clearSearch: fromSearch });
+    if (fromSearch) {
+      clearSearchResults();
+    }
     clearPlaylistDropIndicators();
+    state.searchDragging = false;
   }
 
   function handleAddSlide() {
@@ -3721,7 +3734,12 @@ function updateCardWarnings(card) {
   }
 
   function handleSlideDragStart(event) {
-    const card = event.target.closest('[data-slide-id]');
+    const handle = event.target.closest('[data-role="slide-drag-handle"]');
+    if (!handle) {
+      event.preventDefault();
+      return;
+    }
+    const card = handle.closest('[data-slide-id]');
     if (!card) return;
     state.reorderSnapshot = {
       sourceId: card.dataset.slideId,
@@ -3881,9 +3899,13 @@ function updateCardWarnings(card) {
           insertIndex = isBefore ? baseIndex : baseIndex + 1;
         }
       }
-      const fromSearch = types.includes('application/x-presenter-search');
+      const fromSearch = state.searchDragging || types.includes('application/x-presenter-search');
       await handlePlaylistInsertion(presentationId, playlistId, insertIndex, { clearSearch: fromSearch });
+      if (fromSearch) {
+        clearSearchResults();
+      }
       clearPlaylistDropIndicators();
+      state.searchDragging = false;
       return;
     }
 
@@ -4193,7 +4215,8 @@ function updateCardWarnings(card) {
     }
     if (els.searchResults) {
       els.searchResults.addEventListener('click', handleSearchResultClick);
-      els.searchResults.addEventListener('dragstart', handleSearchResultDragStart);
+      els.searchResults.addEventListener('dragstart', handleSearchResultDragStart, true);
+      els.searchResults.addEventListener('dragend', handleSearchResultDragEnd, true);
     }
     if (els.playlistCreate) {
       els.playlistCreate.addEventListener('click', (event) => {
