@@ -45,73 +45,65 @@ Internal project. Please coordinate changes via issues and planning sessions bef
 
 ## Development Environment
 
-1. Install the latest stable Rust toolchain (1.90.0 or newer) via `rustup`.
-2. From the repo root, run the server locally:
+### Prerequisites
 
-   ```bash
-   cargo run -p presenter-server
-   ```
+- Docker Engine 24+ with Compose V2 (`docker compose` CLI).
+- Node.js 20+ for Playwright and end-to-end tests (already required by `package.json`).
+- The Rust toolchain remains useful for local builds and IDE integration, but daily demo servers now run inside Docker.
 
-   or use the helper script (`scripts/dev/run-dev-server.sh`) which seeds defaults for `PRESENTER_DB_URL` and `PRESENTER_PORT`.
+### Launch the landing page (port 80)
 
-  For a continuously running demo environment that rebuilds on every file change, enable the bundled systemd unit:
+Start the gateway once per machine; it serves `http://localhost/` with links to every running demo.
 
-  ```bash
-  sudo ./scripts/ops/setup-systemd.sh dev test
-  ```
+```bash
+docker compose -f docker-compose.gateway.yml up -d
+```
 
-  This installs the templated systemd unit (`presenter@.service`) and boots two managed environments:
+Stop it with `docker compose -f docker-compose.gateway.yml down` when you are done.
 
-  - `presenter@dev.service` → auto-refreshing developer instance on port **80**. It runs `cargo watch` via `scripts/dev/watch-demo.sh`, re-importing the ProPresenter & Bible data on every rebuild so the demo always mirrors the latest code.
-  - `presenter@test.service` → stable test instance on port **8081** backed by its own SQLite database. Use it for pre-production validation without disrupting the live demo.
+### Spin up an isolated demo for this repository
 
-  When production promotion is required, run `sudo ./scripts/ops/setup-systemd.sh prod` to install and start `presenter@prod.service` (port **8080**, release build) together with the nightly backup timer `presenter-backup@prod.timer`.
+```bash
+./scripts/docker/run-demo.sh --name "$(git rev-parse --abbrev-ref HEAD)"
+```
 
-  Useful management commands:
+- Each demo uses its own Compose project (`presenter-<slug>`), so containers, volumes, and networks never collide.
+- Host ports default to a deterministic high value (e.g. `http://localhost:18042/`). Override with `--port 19001` if you prefer a specific port.
+- Presentation imports default to `Propresenter library/` and persisted data lives under `var/docker/data/<slug>/`.
+- A manifest is written to `var/docker/demos/<slug>.json`; the gateway watches this directory to populate the landing page.
 
-  ```bash
-  systemctl status presenter@dev.service            # health + active processes (dev)
-  journalctl -u presenter@dev.service -f            # follow live logs
-  sudo systemctl restart presenter@dev.service      # force refresh + redeploy dev
-  sudo systemctl stop presenter@dev.service         # temporarily halt dev
+Stop a demo when you are finished:
 
-  sudo systemctl restart presenter@test.service     # restart test instance
-  sudo systemctl restart presenter@prod.service     # restart production instance
-  sudo systemctl status presenter-backup@prod.timer # confirm nightly backups
-  ```
+```bash
+./scripts/docker/stop-demo.sh --name "$(git rev-parse --abbrev-ref HEAD)"
+```
 
-  The manual helper script (`scripts/dev/start-demo-server.sh`) still exists for ad-hoc runs without systemd and now delegates to the same `run-env.sh dev` entrypoint used by the unit.
-  All environments bind to `0.0.0.0`; override with `PRESENTER_PORT` if you need a different port (binding to 80 typically requires `cap_net_bind_service`, granted via the unit).
-   Use `PRESENTER_DB_URL` to point at a SQLite/SQL database (defaults to `sqlite://presenter_dev.db`).
-   If you want Companion connections to require authentication, set `PRESENTER_COMPANION_TOKEN` before starting the server—clients must echo this token in their WebSocket handshake.
+Add `--delete-data` to wipe the corresponding SQLite snapshot. List all active demos and their ports with `./scripts/docker/list-demos.sh`.
 
-3. Rebuild the development database with live content (presentations + Bibles):
+### Running tests
 
-   ```bash
-   ./scripts/dev/refresh-dev-data.sh
-   ```
+Playwright already runs isolated servers per worker (unique ports + SQLite databases), so concurrency is safe:
 
-  The script deletes the existing SQLite file, imports every ProPresenter library under `Propresenter library/`, and pulls the default Bible bundle (King James Version + Slovenský ekumenický + Roháčkov + Slovenský evanjelický) straight from their upstream archives. Pass an alternative source directory as the first argument if your libraries live elsewhere. When you only need to re-import Bibles without touching presentation data, run `cargo run -p presenter-importer --bin ingest_bibles` directly—`scripts/dev/ingest-default-bibles.sh` also wipes the SQLite database before ingesting. For finer control (purging behaviour, alternate library roots), inspect the importer CLI via `cargo run -p presenter-importer --bin import_propresenter -- --help`.
+```bash
+npm run test:playwright
+```
 
-   Managed services write their SQLite databases to `var/data/<env>/presenter_<env>.db` so backups and environment swaps never pollute the working tree.
+Unit/integration tests remain the same:
 
-4. Back up or restore an environment database:
+```bash
+cargo test
+```
 
-   ```bash
-   ./scripts/ops/db-maintenance.sh backup dev
-   ./scripts/ops/db-maintenance.sh list prod
-   sudo ./scripts/ops/db-maintenance.sh restore prod /path/to/backup.db
-   ```
+### Manual (non-Docker) runs
 
-   The production systemd timer `presenter-backup@prod.timer` (installed with `./scripts/ops/setup-systemd.sh prod`) runs nightly at 02:30 UTC and writes timestamped archives to `var/backups/prod/` by default. Override `PRESENTER_BACKUP_ROOT` when you want backups under `/var/lib/presenter/backups` or network storage instead of the repository.
+For quick experiments you can still execute:
 
-5. Execute the full test suite (core + server) with:
+```bash
+cargo run -p presenter-server
+```
 
-  ```bash
-  cargo test
-  ```
+or `scripts/dev/run-dev-server.sh` (which seeds defaults for `PRESENTER_DB_URL` and `PRESENTER_PORT`). The Docker pathway is recommended for demos because it isolates data and ports per branch.
 
-6. Keep development, testing, and production deployments in sync with AGENTS.md runtime instructions as branches progress.
 
 ## Live Update Surfaces
 

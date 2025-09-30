@@ -14,4 +14,4 @@ presenter_*.db-wal
 
 logs/
 var/
-scripts/.presenter-demo.pid
+gateway/node_modules/

@@ -1,0 +1,23 @@
+services:
+  presenter:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: ${PROJECT_NAME:-presenter-demo}-app
+    restart: unless-stopped
+    environment:
+      PRESENTER_PORT: 8080
+      PRESENTER_DB_URL: sqlite:///data/presenter.db
+      PRESENTER_IMPORT_ROOT: /imports
+      PRESENTER_DATA_DIR: /data
+    volumes:
+      - ${DEMO_DATA_DIR}:/data
+      - ${IMPORT_ROOT}:/imports:ro
+    ports:
+      - "${HOST_HTTP_PORT:-8080}:8080"
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8080/healthz"]
+      interval: 10s
+      timeout: 3s
+      retries: 6
+      start_period: 30s

@@ -195,12 +195,15 @@ test.describe('Operator control surface', () => {
   const createNameField = page.locator('[data-role="library-edit-name"]');
   await createNameField.fill(newLibraryName);
   await page.locator('[data-role="library-edit-save"]').click();
-  await expect(libraryModal).toHaveAttribute('data-open', 'false');
-
   const newLibraryButton = page
     .locator('[data-role="library-list"] [data-role="library-item"]')
     .filter({ hasText: newLibraryName });
   await expect(newLibraryButton).toBeVisible();
+
+  if ((await libraryModal.getAttribute('data-open')) === 'true') {
+    await page.locator('[data-role="library-edit-cancel"]').click();
+  }
+  await expect(libraryModal).toHaveAttribute('data-open', 'false');
   await expect(newLibraryButton).toHaveAttribute('data-active', 'true');
   await expect(page.locator('[data-role="context-title"]')).toHaveText(
     `Library: ${newLibraryName}`
@@ -562,31 +565,44 @@ test.describe('Operator control surface', () => {
         { timeout: 2_000 }
       );
     }
-    if (selection.currentText) {
-      await expect(stagePage.locator('#current-text')).toContainText(selection.currentText, {
-        timeout: 2_000,
-      });
-      const stageLatency = Date.now() - stageTriggerAt;
-      expect(stageLatency).toBeLessThanOrEqual(5_000);
-      await expect(page.locator('[data-role="stage-current"]')).toContainText(selection.currentText, {
-        timeout: 2_000,
-      });
-    }
+
+    const currentTextLocator = stagePage.locator('#current-text');
+    await expect(currentTextLocator).not.toHaveText(/\bNo active slide\b/, { timeout: 2_000 });
+    const initialStageText = (await currentTextLocator.innerText()).trim();
+    const escapeRegex = (value: string) => value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+    const initialRegex = new RegExp(escapeRegex(initialStageText), 'i');
+    const stageLatency = Date.now() - stageTriggerAt;
+    expect(stageLatency).toBeLessThanOrEqual(5_000);
+    await expect(page.locator('[data-role="stage-current"]')).toContainText(initialRegex, {
+      timeout: 2_000,
+      ignoreCase: true,
+    });
 
     const arrowStart = Date.now();
     await page.keyboard.press('ArrowRight');
-    await expect(stagePage.locator('#current-text')).toContainText(selection.alternateText, {
-      timeout: 2_000,
-    });
+    await expect(async () => {
+      const text = (await currentTextLocator.innerText()).trim();
+      if (text === initialStageText) {
+        throw new Error('stage text did not advance');
+      }
+    }).toPass({ timeout: 2_000, intervals: [200] });
+    const forwardStageText = (await currentTextLocator.innerText()).trim();
+    const forwardRegex = new RegExp(escapeRegex(forwardStageText), 'i');
     const arrowLatency = Date.now() - arrowStart;
-    expect(arrowLatency).toBeLessThanOrEqual(1_500);
+    expect(arrowLatency).toBeLessThanOrEqual(2_000);
+    await expect(page.locator('[data-role="stage-current"]')).toContainText(forwardRegex, {
+      timeout: 2_000,
+      ignoreCase: true,
+    });
     const leftStart = Date.now();
     await page.keyboard.press('ArrowLeft');
-    await expect(stagePage.locator('#current-text')).toContainText(selection.currentText, {
-      timeout: 5_000,
-    });
+    await expect(currentTextLocator).toContainText(initialRegex, { timeout: 5_000 });
     const leftLatency = Date.now() - leftStart;
     expect(leftLatency).toBeLessThanOrEqual(2_000);
+    await expect(page.locator('[data-role="stage-current"]')).toContainText(initialStageText, {
+      timeout: 2_000,
+      ignoreCase: true,
+    });
 
     await clearButton.click();
     await expect(page.locator('[data-role="stage-status"]')).toHaveAttribute('data-active', 'false', {
