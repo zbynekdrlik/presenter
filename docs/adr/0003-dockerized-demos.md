@@ -37,7 +37,7 @@ with Docker Compose. The design has three pillars:
    publish it on a high host port that is calculated from the Compose project
    hash, but the script allows explicitly picking a port.
 
-   Each demo writes a small manifest (`var/docker/demos/<project>.json`) with
+   Each demo writes a small manifest (`${XDG_DATA_HOME:-$HOME/.local/share}/presenter-demos/manifests/<project>.json`) with
    metadata: display name, host port, repository path, and last refresh time.
 
 3. **Landing gateway on port 80** – a lightweight Node/Express service runs in

@@ -33,7 +33,7 @@ done
 PROJECT="$(derive_project_name "$NAME")"
 
 printf '[stop-demo] Stopping project %s\n' "$PROJECT"
-docker compose -f "$REPO_ROOT/docker-compose.demo.yml" -p "$PROJECT" down
+"${DOCKER_CMD[@]}" compose -f "$REPO_ROOT/docker-compose.demo.yml" -p "$PROJECT" down
 
 remove_manifest "$PROJECT"
 printf '[stop-demo] Removed manifest %s/%s.json\n' "$MANIFEST_DIR" "$PROJECT"

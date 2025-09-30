@@ -64,7 +64,7 @@ export HOST_HTTP_PORT
 export DEMO_DATA_DIR
 export IMPORT_ROOT
 
-COMPOSE_ARGS=("docker" "compose" "-f" "$REPO_ROOT/docker-compose.demo.yml" "-p" "$PROJECT" up -d)
+COMPOSE_ARGS=("${DOCKER_CMD[@]}" "compose" "-f" "$REPO_ROOT/docker-compose.demo.yml" "-p" "$PROJECT" up -d)
 if [[ "$FORCE" -eq 1 ]]; then
   COMPOSE_ARGS+=("--build")
 fi

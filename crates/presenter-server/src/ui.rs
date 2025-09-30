@@ -282,7 +282,7 @@ pub fn OperatorDocument(
                                     </section>
                                 </div>
                                 <div class="operator__catalog-resizer" data-role="catalog-resizer" aria-hidden="true"></div>
-                                <div class="operator__catalog-bottom" data-role="catalog-bottom">
+                                <div class="operator__catalog-bottom" data-role="catalog-bottom" data-dropzone-target="presentations">
                                     <header class="operator__group-header operator__presentations-header">
                                         <h2 data-role="context-title">"Presentations"</h2>
                                         <div class="operator__group-controls">
@@ -1158,6 +1158,16 @@ body.operator {
     flex-direction: column;
     gap: 0.5rem;
     overflow-y: auto;
+}
+
+.operator__presentation-list[data-dropzone="append"] {
+    background: rgba(59, 124, 255, 0.08);
+    outline: 2px dashed rgba(59, 124, 255, 0.5);
+    outline-offset: -6px;
+}
+
+.operator__catalog-bottom[data-dropzone="append"] {
+    background: rgba(59, 124, 255, 0.04);
 }
 
 .operator__presentation-item {

@@ -263,24 +263,27 @@ fn render_worship_snv(snapshot: &StageDisplaySnapshot) -> AnyView {
     view! {
         <section class="stage__lyrics">
             <div class="stage__lyrics-current">
-                <span
-                    id="current-group"
-                    class="stage__group"
-                    data-hidden={(current_group.is_empty()).to_string()}
-                >
-                    {current_group.clone()}
-                </span>
+                <div class="stage__group-slot">
+                    <span
+                        id="current-group"
+                        class="stage__group"
+                        data-hidden={(current_group.is_empty()).to_string()}
+                    >
+                        {current_group.clone()}
+                    </span>
+                </div>
                 <p id="current-text">{current_text}</p>
             </div>
             <div class="stage__lyrics-next">
-                <span>"NEXT"</span>
-                <span
-                    id="next-group"
-                    class="stage__group stage__group--next"
-                    data-hidden={(next_group.is_empty()).to_string()}
-                >
-                    {next_group.clone()}
-                </span>
+                <div class="stage__group-slot stage__group-slot--next">
+                    <span
+                        id="next-group"
+                        class="stage__group stage__group--next"
+                        data-hidden={(next_group.is_empty()).to_string()}
+                    >
+                        {next_group.clone()}
+                    </span>
+                </div>
                 <p id="next-text">{next_text}</p>
             </div>
         </section>
@@ -321,13 +324,15 @@ fn render_worship_pp(snapshot: &StageDisplaySnapshot) -> AnyView {
         <section class="stage__split">
             <div class="stage__split-main">
                 <h2>"Current"</h2>
-                <span
-                    id="current-group"
-                    class="stage__group"
-                    data-hidden={(current_group.is_empty()).to_string()}
-                >
-                    {current_group.clone()}
-                </span>
+                <div class="stage__group-slot">
+                    <span
+                        id="current-group"
+                        class="stage__group"
+                        data-hidden={(current_group.is_empty()).to_string()}
+                    >
+                        {current_group.clone()}
+                    </span>
+                </div>
                 <p id="current-main">{current_main}</p>
                 <small
                     id="current-stage"
@@ -339,13 +344,15 @@ fn render_worship_pp(snapshot: &StageDisplaySnapshot) -> AnyView {
             </div>
             <aside class="stage__split-sidebar">
                 <h3>"Next"</h3>
-                <span
-                    id="next-group"
-                    class="stage__group stage__group--next"
-                    data-hidden={(next_group.is_empty()).to_string()}
-                >
-                    {next_group.clone()}
-                </span>
+                <div class="stage__group-slot stage__group-slot--next">
+                    <span
+                        id="next-group"
+                        class="stage__group stage__group--next"
+                        data-hidden={(next_group.is_empty()).to_string()}
+                    >
+                        {next_group.clone()}
+                    </span>
+                </div>
                 <p id="next-main">{next_main}</p>
             </aside>
         </section>
@@ -419,12 +426,13 @@ const STAGE_STYLES: &str = r#"
 * { box-sizing: border-box; }
 body.stage { background: #000; color: #f8fafc; font-family: 'Inter', system-ui, sans-serif; margin: 0; min-height: 100vh; display: flex; align-items: stretch; justify-content: center; padding: 4vh 6vw; }
 .stage__body { flex: 1; display: flex; align-items: stretch; justify-content: center; width: 100%; }
-.stage__lyrics { display: grid; gap: 3rem; text-align: center; width: 100%; align-content: center; }
-.stage__lyrics-current { font-size: 6.5rem; font-weight: 700; display: flex; flex-direction: column; gap: 1rem; align-items: center; letter-spacing: 0.04em; }
+.stage__lyrics { display: flex; flex-direction: column; justify-content: space-between; gap: 2.5rem; text-align: center; width: 100%; height: 100%; padding: 2vh 4vw; box-sizing: border-box; }
+.stage__lyrics-current { font-size: 6.5rem; font-weight: 700; display: flex; flex-direction: column; gap: 1rem; align-items: center; justify-content: flex-start; letter-spacing: 0.04em; min-height: 0; }
 .stage__lyrics-current p { margin: 0; line-height: 1.06; white-space: pre-wrap; text-transform: none; max-width: 100%; }
-.stage__lyrics-next { font-size: 3rem; color: #cbd5f5; letter-spacing: 0.06em; display: flex; flex-direction: column; gap: 0.75rem; align-items: center; }
-.stage__lyrics-next span { display: block; font-size: 1.2rem; color: #38bdf8; letter-spacing: 0.2em; text-transform: uppercase; }
+.stage__lyrics-next { font-size: 3.6rem; color: #cbd5f5; letter-spacing: 0.06em; display: flex; flex-direction: column; gap: 1.4rem; align-items: center; justify-content: center; padding-bottom: 4vh; }
 .stage__lyrics-next p { margin: 0; white-space: pre-wrap; text-transform: none; line-height: 1.1; max-width: 100%; }
+.stage__group-slot { min-height: 3.8rem; display: flex; align-items: center; justify-content: center; }
+.stage__group-slot--next { justify-content: center; }
 .stage__split { display: grid; gap: 2rem; grid-template-columns: minmax(0, 2fr) minmax(0, 1fr); width: 100%; }
 .stage__split-main { background: rgba(15, 23, 42, 0.75); padding: 2rem; border-radius: 1rem; box-shadow: 0 20px 40px -30px rgba(15, 23, 42, 0.9); display: flex; flex-direction: column; gap: 1.25rem; }
 .stage__split-main h2 { margin-top: 0; font-size: 1.5rem; letter-spacing: 0.1em; color: #38bdf8; }
@@ -433,12 +441,14 @@ body.stage { background: #000; color: #f8fafc; font-family: 'Inter', system-ui, 
 .stage__split-sidebar { background: rgba(15, 23, 42, 0.55); padding: 1.5rem; border-radius: 1rem; display: flex; flex-direction: column; gap: 1rem; }
 .stage__split-sidebar h3 { margin: 0; letter-spacing: 0.1em; color: #38bdf8; }
 .stage__split-sidebar p { margin: 0; white-space: pre-wrap; }
+.stage__split-main .stage__group-slot,
+.stage__split-sidebar .stage__group-slot { justify-content: flex-start; }
 .stage__timer { text-align: center; width: 100%; }
 .stage__timer-value { font-size: 8rem; font-weight: 700; letter-spacing: 0.1em; }
 .stage__timer-label { font-size: 1.5rem; color: #94a3b8; letter-spacing: 0.3em; text-transform: uppercase; }
 .stage__timer--preach .stage__timer-value { color: #34d399; }
 .stage__timer--countdown .stage__timer-value { color: #38bdf8; }
-.stage__group { display: inline-block; padding: 0.35rem 1.5rem; background: rgba(56, 189, 248, 0.25); color: #38bdf8; border-radius: 999px; font-size: 1.2rem; letter-spacing: 0.08em; text-transform: uppercase; }
+.stage__group { display: inline-flex; align-items: center; justify-content: center; padding: 0.75rem 2.8rem; background: rgba(56, 189, 248, 0.35); color: #38bdf8; border-radius: 999px; font-size: 2.4rem; letter-spacing: 0.18em; text-transform: uppercase; font-weight: 700; }
 .stage__group[data-hidden="true"] { display: none; }
 .stage__group--next { background: rgba(250, 204, 21, 0.3); color: #facc15; }
 .stage__meta { color: #cbd5f5; display: block; margin-top: 0.5rem; }
