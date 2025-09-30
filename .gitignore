@@ -1,1 +1,17 @@
+target/
+node_modules/
+playwright-report/
+test-results/
+**/*.rs.bk
+.DS_Store
+.idea/
+.vscode/
+*.swp
 Propresenter library/
+presenter_*.db
+presenter_*.db-shm
+presenter_*.db-wal
+
+logs/
+var/
+scripts/.presenter-demo.pid

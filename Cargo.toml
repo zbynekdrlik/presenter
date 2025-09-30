@@ -1,0 +1,54 @@
+[workspace]
+members = [
+    "crates/presenter-core",
+    "crates/presenter-server",
+    "crates/presenter-persistence",
+    "crates/presenter-migration",
+    "crates/presenter-importer",
+    "crates/presenter-bible",
+]
+resolver = "2"
+
+[workspace.package]
+edition = "2021"
+authors = ["Presenter Team <drlik.zbynek@gmail.com>"]
+license = "MIT"
+
+[workspace.dependencies]
+anyhow = "1.0"
+axum = { version = "0.8", features = ["macros", "json", "ws"] }
+chrono = { version = "0.4", features = ["serde"] }
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+thiserror = "1.0"
+tokio = { version = "1.40", features = ["macros", "rt-multi-thread", "sync", "time"] }
+tokio-stream = { version = "0.1", features = ["sync"] }
+tower = { version = "0.5", features = ["util"] }
+tower-http = { version = "0.6", features = ["cors", "trace"] }
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["fmt", "env-filter"] }
+uuid = { version = "1.8", features = ["serde", "v4"] }
+async-trait = "0.1"
+serde_with = "3.0"
+validator = { version = "0.18", features = ["derive"] }
+insta = { version = "1.39", features = ["yaml"] }
+reqwest = { version = "0.12", features = ["json", "rustls-tls"] }
+sea-orm = { version = "1.1", features = ["sqlx-sqlite", "runtime-tokio-native-tls", "macros"] }
+sqlx = { version = "0.7", features = ["runtime-tokio-native-tls", "sqlite", "macros", "chrono", "uuid"] }
+utoipa = { version = "4.2", features = ["axum_extras", "chrono", "uuid", "yaml"] }
+utoipa-swagger-ui = { version = "4.2", features = ["axum"] }
+sea-orm-migration = "1.1"
+once_cell = "1.20"
+leptos = { version = "0.7", default-features = false, features = ["ssr"] }
+reactive_graph = "0.1.8"
+futures-util = "0.3"
+unicode-normalization = "0.1"
+
+[workspace.lints.rust]
+rust_2018_idioms = "warn"
+
+[workspace.lints.clippy]
+all = "warn"
+pedantic = "warn"
+complexity = { level = "warn", priority = 1 }
+perf = { level = "warn", priority = 1 }

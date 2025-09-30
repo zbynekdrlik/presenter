@@ -8,6 +8,11 @@ Presenter is a monolithic, production-ready lyrics/Bible/timers display applicat
 - Prioritize robustness, predictable behavior, and graceful failure handling over breadth of functionality.
 - Future revisions to functional scope will be documented separately (e.g., in `docs/functional-needs.md`). Agents should treat that documentation as the source of truth for domain specifics.
 
+## Design Iteration Policy
+- We are still in the **initial design round**. Treat every redesign request as a greenfield effort aimed at delivering the first correct architecture; never anchor on prior incorrect drafts or partial implementations.
+- Do **not** preserve compatibility with previous UI code, APIs, database snapshots, or scripts that stem from earlier flawed iterations. Remove or rewrite them freely in favor of the proper design.
+- When refactoring, prefer clean rebuilds over incremental patches that keep legacy artifacts. Strive for the clearest expression of the current requirements, even if that means deleting large portions of prior work.
+
 ## Tooling & Dependencies
 - Install any required tool, utility, package, framework, or application immediately using `sudo apt install` (or the appropriate package manager) instead of attempting workarounds or waiting for approval.
 - If Ubuntu's default repositories lack a sufficiently recent version, research state-of-the-art 2025 sources (official PPAs, vendor repos, direct installers) and install the newest stable release that satisfies project requirements. Document the chosen source in the PR.
@@ -18,18 +23,25 @@ Presenter is a monolithic, production-ready lyrics/Bible/timers display applicat
 - Testing environment mirrors production configuration for validation prior to promotion. Automate deployment from the main branch once changes pass review.
 - Production environment is updated only after explicit user approval; ensure zero-downtime handoff and rollback plan.
 - Always prioritize the fastest path for the user to test changes on the development instance, then promote to production for other operators once sign-off is received.
+- Maintain the continuously updated demo/test server (`presenter@dev.service`) bound to port 80 on **all** network interfaces at all times so stakeholders can verify changes immediately. If the service stops (crash, deploy, reboot), restart it without prompting the user and confirm it stays reachable from every assigned interface (LAN, Zerotier, localhost).
+
+## Database Management (Pre-release)
+- We are still before our first public release. Treat the schema as mutable: **never add incremental migrations**. Instead, evolve the single initial migration (or equivalent schema definition) directly whenever the data model changes.
+- After each schema adjustment, rebuild the SQLite database from scratch and rerun the full ingestion pipeline (ProPresenter + Bible imports) so development, testing, and production remain aligned. Do not attempt in-place migrations or partial data preservation at this stage.
+- Keep scripts such as `scripts/dev/refresh-dev-data.sh` up to date so they create a clean database and repopulate it automatically after every change.
 
 ## Workflow States
 1. **Discovery & Research** – Gather requirements from existing docs or stakeholders. When selecting new tools/frameworks, perform current online research to confirm choices represent state-of-the-art 2025 technology, architecture, and design. Summarize findings and sources in the PR description.
 2. **Specification** – Translate requirements into executable tests or clear acceptance criteria before writing production code.
 3. **Implementation (TDD)** – Follow red/green/refactor loops. Keep commits small, descriptive, and focused on a single change.
-4. **Verification** – Run automated tests and, when applicable, add integration/end-user simulations that mirror service workflows. Update Markdown documentation to stay consistent with behavior.
+4. **Verification** – Run automated tests and, when applicable, add integration/end-user simulations that mirror service workflows. Ensure the suites include a health check that pings the always-on port-80 demo instance across every active interface (loopback, LAN, Zerotier) and treat any failure as a release blocker. Update Markdown documentation to stay consistent with behavior.
 5. **Review & Iterate** – Use GitHub pull requests for continuous review. Address feedback promptly and document significant decisions (ADRs, PR notes).
 
 ## Branching & Review Protocol
 - Work exclusively on feature branches named after the task (e.g., `feature/lyrics-presentation`). Never commit directly to `main`; this is a strict rule.
 - Create a GitHub pull request immediately after branching to enable ongoing web-based review. Keep the PR description and checklist current.
 - Commit and push frequently so reviewers can track incremental progress. Avoid large, monolithic pushes.
+- Never declare work “done” or report progress to the user until the full automated suites have just been executed locally and completed without failures. Minimum required commands: `cargo test` and `npm run test:playwright`, both of which must include the demo-server reachability checks.
 - All merges to `main` happen through GitHub PR after explicit user approval. Fast-forwards or direct merges from local machines are forbidden.
 
 ## Final Merge Preparation Checklist

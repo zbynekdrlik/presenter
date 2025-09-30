@@ -1,0 +1,16 @@
+[Unit]
+Description=Presenter %i database backup
+After=presenter@%i.service
+
+[Service]
+Type=oneshot
+User=newlevel
+Group=newlevel
+WorkingDirectory=/home/newlevel/marek/presenter
+ExecStart=/home/newlevel/marek/presenter/scripts/ops/db-maintenance.sh backup %i
+Nice=10
+IOSchedulingClass=best-effort
+IOSchedulingPriority=6
+
+[Install]
+WantedBy=multi-user.target
