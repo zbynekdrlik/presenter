@@ -26,10 +26,67 @@ fn StageDisplayDocument(snapshot: StageDisplaySnapshot) -> impl IntoView {
   const initial = {snapshot_json};
   let currentSnapshot = initial;
   const layout = initial.layout.code;
+  const statusEls = {{
+    container: document.getElementById('stage-status'),
+    connection: document.getElementById('stage-status-connection'),
+    latency: document.getElementById('stage-status-latency'),
+  }};
+  let lastGeneratedAt = initial.generated_at ? Date.parse(initial.generated_at) : null;
+
+  const renderLatency = (value) => {{
+    if (!statusEls.latency) return;
+    if (value == null || Number.isNaN(value)) {{
+      statusEls.latency.textContent = '--';
+      return;
+    }}
+    if (value >= 1000) {{
+      statusEls.latency.textContent = `${{(value / 1000).toFixed(1)}} s`;
+      return;
+    }}
+    statusEls.latency.textContent = `${{Math.max(0, Math.round(value))}} ms`;
+  }};
+
+  const updateLatency = (generatedAt) => {{
+    if (!generatedAt) {{
+      lastGeneratedAt = null;
+      renderLatency(null);
+      return;
+    }}
+    const timestamp = Date.parse(generatedAt);
+    if (Number.isNaN(timestamp)) {{
+      return;
+    }}
+    lastGeneratedAt = timestamp;
+    renderLatency(Date.now() - timestamp);
+  }};
+
+  if (lastGeneratedAt != null) {{
+    renderLatency(Date.now() - lastGeneratedAt);
+  }}
+
+  setInterval(() => {{
+    if (lastGeneratedAt != null) {{
+      renderLatency(Date.now() - lastGeneratedAt);
+    }}
+  }}, 2000);
+
+
+  const connectionLabels = {{
+    connecting: 'Connecting',
+    connected: 'Connected',
+    disconnected: 'Disconnected',
+    error: 'Error',
+  }};
 
   const setConnectionState = (state) => {{
     document.body.dataset.liveState = state;
     window.__presenterStageConnectionState = state;
+    if (statusEls.connection) {{
+      statusEls.connection.textContent = connectionLabels[state] || state;
+    }}
+    if (state !== 'connected') {{
+      renderLatency(null);
+    }}
   }};
 
   const selectPrimary = (slide) => {{
@@ -91,6 +148,7 @@ fn StageDisplayDocument(snapshot: StageDisplaySnapshot) -> impl IntoView {
   }};
 
   const applyStage = (snapshot) => {{
+    updateLatency(snapshot.generated_at);
     applyTimers(snapshot.timers);
 
     if (layout === 'worship-snv') {{
@@ -226,6 +284,11 @@ fn StageDisplayDocument(snapshot: StageDisplaySnapshot) -> impl IntoView {
             </head>
             <body class="stage" data-layout-code={layout_code}>
                 <main class="stage__body">{layout_view}</main>
+                <div class="stage__status" id="stage-status">
+                    <span class="stage__status-connection" id="stage-status-connection">Connecting...</span>
+                    <span class="stage__status-separator" aria-hidden="true">&bull;</span>
+                    <span class="stage__status-latency" id="stage-status-latency">&mdash;</span>
+                </div>
                 <script>{script}</script>
             </body>
         </html>
@@ -454,6 +517,13 @@ body.stage { background: #000; color: #f8fafc; font-family: 'Inter', system-ui, 
 .stage__meta { color: #cbd5f5; display: block; margin-top: 0.5rem; }
 .stage__meta[data-hidden="true"] { display: none; }
 .stage__empty { color: #94a3b8; font-size: 2rem; }
+.stage__status { position: fixed; bottom: 2rem; right: 2.5rem; display: inline-flex; align-items: center; gap: 0.65rem; padding: 0.55rem 1.1rem; font-size: 0.85rem; letter-spacing: 0.12em; text-transform: uppercase; background: rgba(15, 23, 42, 0.7); border-radius: 999px; box-shadow: 0 12px 32px -24px rgba(15, 23, 42, 0.95); }
+.stage__status span { display: inline-flex; align-items: center; }
+.stage__status-connection { color: #38bdf8; font-weight: 600; }
+.stage__status-separator { opacity: 0.6; }
+.stage__status-latency { font-variant-numeric: tabular-nums; color: #e2e8f0; }
+body.stage[data-live-state="disconnected"] .stage__status-connection,
+body.stage[data-live-state="error"] .stage__status-connection { color: #f87171; }
 "#;
 
 #[cfg(test)]
@@ -514,5 +584,27 @@ mod tests {
         let html = render_stage_display(snapshot).0;
         assert!(html.contains("Line A\nLine B"));
         assert!(html.contains("Verse"));
+    }
+
+    #[test]
+    fn stage_status_overlay_is_rendered() {
+        let now = Utc::now();
+        let snapshot = StageDisplaySnapshot::new(
+            worship_layout(),
+            now,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            presenter_core::timer::TimersOverview::demo(now),
+        );
+
+        let html = render_stage_display(snapshot).0;
+        assert!(html.contains("id=\"stage-status\""));
+        assert!(html.contains("id=\"stage-status-connection\""));
+        assert!(html.contains("id=\"stage-status-latency\""));
+        assert!(html.contains("Connecting"));
     }
 }
