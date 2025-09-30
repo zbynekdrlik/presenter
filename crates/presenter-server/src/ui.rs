@@ -1559,7 +1559,8 @@ body.operator[data-mode="live"] .operator__line-limit {
     padding: 0.5rem 0.65rem;
     font-family: inherit;
     font-size: 0.9rem;
-    width: 100%;
+    width: min(100%, calc(var(--operator-line-limit-ch, 32) * 1ch + 1.75rem));
+    margin-inline: auto;
 }
 
 .operator__slide-editor input::placeholder {
@@ -1572,14 +1573,11 @@ body.operator[data-mode="live"] .operator__line-limit {
     min-height: calc(var(--operator-line-line-height, 1.35) * 2em + 1.2rem);
     max-height: calc(var(--operator-line-line-height, 1.35) * 2em + 1.2rem);
     height: calc(var(--operator-line-line-height, 1.35) * 2em + 1.2rem);
-    max-width: calc(var(--operator-line-limit-ch, 32) * 1ch + 1.75rem);
     overflow-y: auto;
     resize: none;
 }
 
-.operator__slide-editor input {
-    max-width: calc(var(--operator-line-limit-ch, 32) * 1ch + 1.75rem);
-}
+
 
 body.operator[data-mode="edit"] .operator__slide-editor textarea,
 body.operator[data-mode="edit"] .operator__slide-editor input {
