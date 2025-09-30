@@ -1,13 +1,23 @@
 use crate::id::{LibraryId, PresentationId};
 use crate::presentation::Presentation;
 use serde::{Deserialize, Serialize};
-use std::collections::HashSet;
 use thiserror::Error;
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct PresentationSummary {
+    pub id: PresentationId,
+    pub name: String,
+}
+
+impl PresentationSummary {
+    pub fn new(id: PresentationId, name: String) -> Self {
+        Self { id, name }
+    }
+}
 
 #[derive(Debug, Error, PartialEq, Eq)]
 pub enum LibraryError {
-    #[error("presentation with name '{0}' already exists in library")]
-    DuplicatePresentation(String),
     #[error("presentation {0} not found in library")]
     PresentationNotFound(PresentationId),
 }
@@ -20,18 +30,41 @@ pub struct Library {
     pub presentations: Vec<Presentation>,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct LibrarySummary {
+    pub id: LibraryId,
+    pub name: String,
+    pub presentation_count: usize,
+    pub presentations: Vec<PresentationSummary>,
+}
+
+impl LibrarySummary {
+    pub fn new(
+        id: LibraryId,
+        name: String,
+        presentation_count: usize,
+        presentations: Vec<PresentationSummary>,
+    ) -> Self {
+        Self {
+            id,
+            name,
+            presentation_count,
+            presentations,
+        }
+    }
+}
+
 impl Library {
     pub fn new<T: Into<String>>(
         name: T,
         presentations: Vec<Presentation>,
     ) -> Result<Self, LibraryError> {
-        let library = Self {
+        Ok(Self {
             id: LibraryId::new(),
             name: name.into(),
             presentations,
-        };
-        library.ensure_unique_names()?;
-        Ok(library)
+        })
     }
 
     pub fn with_id(mut self, id: LibraryId) -> Self {
@@ -40,15 +73,6 @@ impl Library {
     }
 
     pub fn add_presentation(&mut self, presentation: Presentation) -> Result<(), LibraryError> {
-        if self
-            .presentations
-            .iter()
-            .any(|p| p.name.eq_ignore_ascii_case(&presentation.name))
-        {
-            return Err(LibraryError::DuplicatePresentation(
-                presentation.name.clone(),
-            ));
-        }
         self.presentations.push(presentation);
         self.presentations
             .sort_by(|a, b| a.name.to_lowercase().cmp(&b.name.to_lowercase()));
@@ -69,17 +93,6 @@ impl Library {
 
     pub fn get(&self, presentation_id: PresentationId) -> Option<&Presentation> {
         self.presentations.iter().find(|p| p.id == presentation_id)
-    }
-
-    fn ensure_unique_names(&self) -> Result<(), LibraryError> {
-        let mut seen: HashSet<String> = HashSet::new();
-        for presentation in &self.presentations {
-            let key = presentation.name.to_lowercase();
-            if !seen.insert(key.clone()) {
-                return Err(LibraryError::DuplicatePresentation(key));
-            }
-        }
-        Ok(())
     }
 }
 
@@ -106,24 +119,22 @@ mod tests {
     }
 
     #[test]
-    fn duplicate_names_are_rejected() {
-        let result = Library::new(
-            "Songs",
-            vec![presentation_named("Song", 0), presentation_named("song", 1)],
-        );
-        assert_eq!(
-            result.unwrap_err(),
-            LibraryError::DuplicatePresentation("song".into())
-        );
-    }
-
-    #[test]
     fn remove_presentation_returns_removed_entity() {
         let mut library = Library::new("Songs", vec![presentation_named("Song", 0)]).unwrap();
         let id = library.presentations[0].id;
         let removed = library.remove_presentation(id).unwrap();
         assert_eq!(removed.id, id);
         assert!(library.presentations.is_empty());
+    }
+
+    #[test]
+    fn duplicate_presentation_names_are_allowed() {
+        let library = Library::new(
+            "Songs",
+            vec![presentation_named("Song", 0), presentation_named("Song", 1)],
+        )
+        .unwrap();
+        assert_eq!(library.presentations.len(), 2);
     }
 
     #[test]

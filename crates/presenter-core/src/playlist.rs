@@ -1,4 +1,4 @@
-use crate::id::{PlaylistId, PresentationId};
+use crate::id::{PlaylistEntryId, PlaylistId, PresentationId};
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
 
@@ -32,9 +32,22 @@ impl MidiBinding {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct PlaylistEntry {
-    pub presentation_id: PresentationId,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub midi_binding: Option<MidiBinding>,
+    pub id: PlaylistEntryId,
+    #[serde(flatten)]
+    pub kind: PlaylistEntryKind,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", tag = "type")]
+pub enum PlaylistEntryKind {
+    Presentation {
+        presentation_id: PresentationId,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        midi_binding: Option<MidiBinding>,
+    },
+    Separator {
+        name: String,
+    },
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -42,6 +55,8 @@ pub struct PlaylistEntry {
 pub struct Playlist {
     pub id: PlaylistId,
     pub name: String,
+    #[serde(default)]
+    pub show_in_dashboard: bool,
     pub entries: Vec<PlaylistEntry>,
 }
 
@@ -53,6 +68,28 @@ impl Playlist {
         let playlist = Self {
             id: PlaylistId::new(),
             name: name.into(),
+            show_in_dashboard: false,
+            entries,
+        };
+        playlist.ensure_unique_midi()?;
+        Ok(playlist)
+    }
+
+    pub fn with_id(mut self, id: PlaylistId) -> Self {
+        self.id = id;
+        self
+    }
+
+    pub fn from_parts(
+        id: PlaylistId,
+        name: String,
+        show_in_dashboard: bool,
+        entries: Vec<PlaylistEntry>,
+    ) -> Result<Self, PlaylistError> {
+        let playlist = Self {
+            id,
+            name,
+            show_in_dashboard,
             entries,
         };
         playlist.ensure_unique_midi()?;
@@ -60,20 +97,25 @@ impl Playlist {
     }
 
     pub fn position_for_midi(&self, note: u8) -> Option<usize> {
-        self.entries
-            .iter()
-            .position(|entry| entry.midi_binding.map(|binding| binding.note()) == Some(note))
+        self.entries.iter().position(|entry| match &entry.kind {
+            PlaylistEntryKind::Presentation { midi_binding, .. } => {
+                midi_binding.map(|binding| binding.note()) == Some(note)
+            }
+            PlaylistEntryKind::Separator { .. } => false,
+        })
     }
 
     fn ensure_unique_midi(&self) -> Result<(), PlaylistError> {
         let mut seen = [false; 128];
         for entry in &self.entries {
-            if let Some(binding) = entry.midi_binding {
-                let note = binding.note() as usize;
-                if seen[note] {
-                    return Err(PlaylistError::DuplicateMidiBinding(binding.note()));
+            if let PlaylistEntryKind::Presentation { midi_binding, .. } = &entry.kind {
+                if let Some(binding) = midi_binding {
+                    let note = binding.note() as usize;
+                    if seen[note] {
+                        return Err(PlaylistError::DuplicateMidiBinding(binding.note()));
+                    }
+                    seen[note] = true;
                 }
-                seen[note] = true;
             }
         }
         Ok(())
@@ -99,12 +141,18 @@ mod tests {
         let presentation_id = PresentationId::new();
         let entries = vec![
             PlaylistEntry {
-                presentation_id,
-                midi_binding: Some(MidiBinding::new(1).unwrap()),
+                id: PlaylistEntryId::new(),
+                kind: PlaylistEntryKind::Presentation {
+                    presentation_id,
+                    midi_binding: Some(MidiBinding::new(1).unwrap()),
+                },
             },
             PlaylistEntry {
-                presentation_id: PresentationId::new(),
-                midi_binding: Some(MidiBinding::new(1).unwrap()),
+                id: PlaylistEntryId::new(),
+                kind: PlaylistEntryKind::Presentation {
+                    presentation_id: PresentationId::new(),
+                    midi_binding: Some(MidiBinding::new(1).unwrap()),
+                },
             },
         ];
         let err = Playlist::new("Set", entries).unwrap_err();
@@ -118,12 +166,18 @@ mod tests {
             "Set",
             vec![
                 PlaylistEntry {
-                    presentation_id: first,
-                    midi_binding: Some(MidiBinding::new(10).unwrap()),
+                    id: PlaylistEntryId::new(),
+                    kind: PlaylistEntryKind::Presentation {
+                        presentation_id: first,
+                        midi_binding: Some(MidiBinding::new(10).unwrap()),
+                    },
                 },
                 PlaylistEntry {
-                    presentation_id: PresentationId::new(),
-                    midi_binding: None,
+                    id: PlaylistEntryId::new(),
+                    kind: PlaylistEntryKind::Presentation {
+                        presentation_id: PresentationId::new(),
+                        midi_binding: None,
+                    },
                 },
             ],
         )

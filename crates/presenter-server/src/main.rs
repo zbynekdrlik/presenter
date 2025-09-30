@@ -1,5 +1,9 @@
+mod companion;
+mod live;
 mod router;
+mod stage_ui;
 mod state;
+mod ui;
 
 use anyhow::Context;
 use router::build_router;
@@ -8,7 +12,7 @@ use std::net::SocketAddr;
 use tokio::net::TcpListener;
 use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt};
 
-const DEFAULT_PORT: &str = "8877";
+const DEFAULT_PORT: &str = "80";
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
@@ -47,6 +51,6 @@ mod tests {
     #[test]
     fn default_port_is_number() {
         let port: u16 = DEFAULT_PORT.parse().unwrap();
-        assert_eq!(port, 8877);
+        assert_eq!(port, 80);
     }
 }

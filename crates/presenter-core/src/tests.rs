@@ -1,5 +1,10 @@
 use super::*;
-use crate::slide::SlideGroup;
+use crate::{
+    id::PlaylistEntryId,
+    playlist::PlaylistEntryKind,
+    search::{fold_query, normalise_for_search, query_tokens},
+    slide::SlideGroup,
+};
 
 fn sample_slide(order: u32, group: Option<&str>) -> Slide {
     Slide::new(
@@ -27,12 +32,18 @@ fn library_and_playlist_share_ids_without_collision() {
         "Set",
         vec![
             PlaylistEntry {
-                presentation_id: first_presentation.id,
-                midi_binding: Some(crate::playlist::MidiBinding::new(1).unwrap()),
+                id: PlaylistEntryId::new(),
+                kind: PlaylistEntryKind::Presentation {
+                    presentation_id: first_presentation.id,
+                    midi_binding: Some(crate::playlist::MidiBinding::new(1).unwrap()),
+                },
             },
             PlaylistEntry {
-                presentation_id: second_presentation.id,
-                midi_binding: Some(crate::playlist::MidiBinding::new(2).unwrap()),
+                id: PlaylistEntryId::new(),
+                kind: PlaylistEntryKind::Presentation {
+                    presentation_id: second_presentation.id,
+                    midi_binding: Some(crate::playlist::MidiBinding::new(2).unwrap()),
+                },
             },
         ],
     )
@@ -40,4 +51,26 @@ fn library_and_playlist_share_ids_without_collision() {
 
     assert_eq!(playlist.entries.len(), 2);
     assert!(library.get(first_presentation.id).is_some());
+}
+
+#[test]
+fn fold_query_strips_accents_and_punctuation() {
+    let folded = fold_query("Ježiš, ja!");
+    assert_eq!(folded, "jezis ja");
+}
+
+#[test]
+fn query_tokens_split_on_commas_and_spaces() {
+    let tokens = query_tokens("jezis, ja tymy");
+    assert_eq!(tokens, vec!["jezis", "ja", "tymy"]);
+}
+
+#[test]
+fn normalise_for_search_handles_mixed_scripts() {
+    assert_eq!(
+        normalise_for_search("Žalm 23 – PÁSTIER"),
+        "zalm 23 – pastier"
+    );
+    assert_eq!(normalise_for_search("Čítanie"), "citanie");
+    assert_eq!(normalise_for_search(" ТЕСТ "), " тест ");
 }

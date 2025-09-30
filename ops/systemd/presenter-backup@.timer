@@ -1,0 +1,11 @@
+[Unit]
+Description=Nightly Presenter %i database backup
+
+[Timer]
+OnCalendar=*-*-* 02:30:00
+RandomizedDelaySec=600
+Persistent=true
+Unit=presenter-backup@%i.service
+
+[Install]
+WantedBy=timers.target
