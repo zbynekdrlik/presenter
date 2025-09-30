@@ -49,6 +49,8 @@ if [[ -z "$DISPLAY_NAME" ]]; then
 fi
 HOST_HTTP_PORT="$(compute_port "$PROJECT" "$PORT")"
 
+stop_conflicting_demos "$REPO_ROOT" "$PROJECT"
+
 DEMO_DATA_DIR="$DATA_ROOT/$PROJECT"
 mkdir -p "$DEMO_DATA_DIR"
 
