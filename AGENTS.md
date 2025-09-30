@@ -23,7 +23,7 @@ Presenter is a monolithic, production-ready lyrics/Bible/timers display applicat
 - Testing environment mirrors production configuration for validation prior to promotion. Automate deployment from the main branch once changes pass review.
 - Production environment is updated only after explicit user approval; ensure zero-downtime handoff and rollback plan.
 - Always prioritize the fastest path for the user to test changes on the development instance, then promote to production for other operators once sign-off is received.
-- Maintain the continuously updated demo/test server (`presenter@dev.service`) bound to port 80 on **all** network interfaces at all times so stakeholders can verify changes immediately. If the service stops (crash, deploy, reboot), restart it without prompting the user and confirm it stays reachable from every assigned interface (LAN, Zerotier, localhost).
+- Docker is now the primary demo platform. Keep the gateway (`docker compose -f docker-compose.gateway.yml up -d`) running on port 80 and ensure the manifests directory (`var/docker/demos/`) reflects every active branch demo. For each feature branch checkout, launch or refresh its dedicated stack via `./scripts/docker/run-demo.sh`. **Agents are responsible for starting, stopping, and keeping these demos current without prompting the user.** Never request that the user manage container lifecycle; demos must remain available and in a healthy state at all times unless the user explicitly instructs otherwise.
 
 ## Database Management (Pre-release)
 - We are still before our first public release. Treat the schema as mutable: **never add incremental migrations**. Instead, evolve the single initial migration (or equivalent schema definition) directly whenever the data model changes.
@@ -43,6 +43,7 @@ Presenter is a monolithic, production-ready lyrics/Bible/timers display applicat
 - Commit and push frequently so reviewers can track incremental progress. Avoid large, monolithic pushes.
 - Never declare work “done” or report progress to the user until the full automated suites have just been executed locally and completed without failures. Minimum required commands: `cargo test` and `npm run test:playwright`, both of which must include the demo-server reachability checks.
 - All merges to `main` happen through GitHub PR after explicit user approval. Fast-forwards or direct merges from local machines are forbidden.
+- Agents must never merge pull requests. Only the user merges PRs after review. Agents may prepare branches and PRs but must await explicit user approval for the merge.
 
 ## Final Merge Preparation Checklist
 - All necessary files are committed; the working tree is clean (no unstaged or untracked changes).
