@@ -7,6 +7,10 @@ const PORT = Number(process.env.PORT || 8080);
 const MANIFEST_DIR = process.env.DEMO_MANIFEST_DIR || '/manifests';
 const REFRESH_INTERVAL_MS = Number(process.env.REFRESH_INTERVAL_MS || 3000);
 
+app.get('/healthz', (_req, res) => {
+  res.json({ status: 'ok' });
+});
+
 async function loadManifests() {
   try {
     const entries = await fs.readdir(MANIFEST_DIR, { withFileTypes: true });
