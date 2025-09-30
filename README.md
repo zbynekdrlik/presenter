@@ -56,10 +56,10 @@ Internal project. Please coordinate changes via issues and planning sessions bef
 Start the gateway once per machine; it serves `http://localhost/` with links to every running demo.
 
 ```bash
-docker compose -f docker-compose.gateway.yml up -d
+./scripts/docker/run-gateway.sh --force
 ```
 
-Stop it with `docker compose -f docker-compose.gateway.yml down` when you are done.
+Re-running the script refreshes the container with the latest landing page assets. To stop it entirely, execute `docker compose -f docker-compose.gateway.yml down` afterwards.
 
 ### Spin up an isolated demo for this repository
 
@@ -69,8 +69,8 @@ Stop it with `docker compose -f docker-compose.gateway.yml down` when you are do
 
 - Each demo uses its own Compose project (`presenter-<slug>`), so containers, volumes, and networks never collide.
 - Host ports default to a deterministic high value (e.g. `http://localhost:18042/`). Override with `--port 19001` if you prefer a specific port.
-- Presentation imports default to `Propresenter library/` and persisted data lives under `var/docker/data/<slug>/`.
-- A manifest is written to `var/docker/demos/<slug>.json`; the gateway watches this directory to populate the landing page.
+- Presentation imports default to `Propresenter library/` and persisted data lives under `${XDG_DATA_HOME:-$HOME/.local/share}/presenter-demos/data/<slug>/`.
+- A manifest is written to `${XDG_DATA_HOME:-$HOME/.local/share}/presenter-demos/manifests/<slug>.json`; the gateway watches this directory to populate the landing page.
 
 Stop a demo when you are finished:
 

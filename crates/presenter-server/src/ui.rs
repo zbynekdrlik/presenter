@@ -282,13 +282,11 @@ pub fn OperatorDocument(
                                     </section>
                                 </div>
                                 <div class="operator__catalog-resizer" data-role="catalog-resizer" aria-hidden="true"></div>
-                                <div class="operator__catalog-bottom" data-role="catalog-bottom">
+                                <div class="operator__catalog-bottom" data-role="catalog-bottom" data-dropzone-target="presentations">
                                     <header class="operator__group-header operator__presentations-header">
-                                        <div class="operator__presentations-heading">
-                                            <h2 data-role="context-title">"Presentations"</h2>
-                                            <span class="operator__group-count operator__group-count--static" data-role="presentation-count">"—"</span>
-                                        </div>
+                                        <h2 data-role="context-title">"Presentations"</h2>
                                         <div class="operator__group-controls">
+                                            <span class="operator__group-count operator__group-count--static" data-role="presentation-count">"—"</span>
                                             <button
                                                 type="button"
                                                 data-role="presentation-create"
@@ -895,6 +893,15 @@ body.operator {
     margin-bottom: 0.75rem;
 }
 
+.operator__presentations-header h2 {
+    margin: 0;
+    font-size: 0.95rem;
+    font-weight: 600;
+    color: var(--operator-muted);
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
+}
+
 .operator__group h2 {
     margin: 0;
     font-size: 0.95rem;
@@ -1153,6 +1160,16 @@ body.operator {
     overflow-y: auto;
 }
 
+.operator__presentation-list[data-dropzone="append"] {
+    background: rgba(59, 124, 255, 0.08);
+    outline: 2px dashed rgba(59, 124, 255, 0.5);
+    outline-offset: -6px;
+}
+
+.operator__catalog-bottom[data-dropzone="append"] {
+    background: rgba(59, 124, 255, 0.04);
+}
+
 .operator__presentation-item {
     display: flex;
     align-items: center;
@@ -1164,6 +1181,29 @@ body.operator {
     border: 1px solid transparent;
     cursor: pointer;
     transition: background 0.2s ease, border 0.2s ease;
+}
+
+.operator__presentation-item[data-drop-position] {
+    position: relative;
+}
+
+.operator__presentation-item[data-drop-position="before"]::before,
+.operator__presentation-item[data-drop-position="after"]::after {
+    content: '';
+    position: absolute;
+    left: 12px;
+    right: 12px;
+    border-top: 3px solid rgba(59, 124, 255, 0.85);
+    border-radius: 999px;
+    pointer-events: none;
+}
+
+.operator__presentation-item[data-drop-position="before"]::before {
+    top: -6px;
+}
+
+.operator__presentation-item[data-drop-position="after"]::after {
+    bottom: -6px;
 }
 
 .operator__presentation-item.is-active {
@@ -1427,8 +1467,41 @@ body.operator[data-mode="live"] .operator__line-limit {
 
 .operator__slide-header {
     display: flex;
-    justify-content: space-between;
     align-items: center;
+    justify-content: space-between;
+    gap: 0.75rem;
+}
+
+.operator__slide-header-left {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.5rem;
+}
+
+.operator__slide-handle {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 1.75rem;
+    height: 1.75rem;
+    border-radius: 0.6rem;
+    border: 1px solid rgba(15, 23, 42, 0.12);
+    background: rgba(15, 23, 42, 0.04);
+    color: var(--operator-muted);
+    font-size: 0.95rem;
+    cursor: grab;
+    transition: background 0.2s ease, border-color 0.2s ease, color 0.2s ease;
+}
+
+.operator__slide-handle:hover {
+    background: rgba(59, 124, 255, 0.12);
+    border-color: rgba(59, 124, 255, 0.35);
+    color: var(--operator-accent-dark);
+}
+
+.operator__slide-handle:active {
+    cursor: grabbing;
+    background: rgba(59, 124, 255, 0.2);
 }
 
 .operator__slide-index {
@@ -2127,6 +2200,29 @@ body.operator[data-view="timers"] [data-view-panel="timers"] {
     font-size: 0.84rem;
     cursor: pointer;
     transition: border 0.2s ease, box-shadow 0.2s ease, background 0.2s ease;
+}
+
+.operator__presentation-item[data-drop-position] {
+    position: relative;
+}
+
+.operator__presentation-item[data-drop-position="before"]::before,
+.operator__presentation-item[data-drop-position="after"]::after {
+    content: '';
+    position: absolute;
+    left: 10px;
+    right: 10px;
+    border-top: 3px solid rgba(59, 124, 255, 0.85);
+    border-radius: 999px;
+    pointer-events: none;
+}
+
+.operator__presentation-item[data-drop-position="before"]::before {
+    top: -6px;
+}
+
+.operator__presentation-item[data-drop-position="after"]::after {
+    bottom: -6px;
 }
 
 .operator__presentation-item.is-active {

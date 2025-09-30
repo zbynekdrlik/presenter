@@ -49,6 +49,8 @@ if [[ -z "$DISPLAY_NAME" ]]; then
 fi
 HOST_HTTP_PORT="$(compute_port "$PROJECT" "$PORT")"
 
+stop_conflicting_demos "$REPO_ROOT" "$PROJECT"
+
 DEMO_DATA_DIR="$DATA_ROOT/$PROJECT"
 mkdir -p "$DEMO_DATA_DIR"
 
@@ -62,7 +64,7 @@ export HOST_HTTP_PORT
 export DEMO_DATA_DIR
 export IMPORT_ROOT
 
-COMPOSE_ARGS=("docker" "compose" "-f" "$REPO_ROOT/docker-compose.demo.yml" "-p" "$PROJECT" up -d)
+COMPOSE_ARGS=("${DOCKER_CMD[@]}" "compose" "-f" "$REPO_ROOT/docker-compose.demo.yml" "-p" "$PROJECT" up -d)
 if [[ "$FORCE" -eq 1 ]]; then
   COMPOSE_ARGS+=("--build")
 fi

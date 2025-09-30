@@ -6,6 +6,24 @@ const app = express();
 const PORT = Number(process.env.PORT || 8080);
 const MANIFEST_DIR = process.env.DEMO_MANIFEST_DIR || '/manifests';
 const REFRESH_INTERVAL_MS = Number(process.env.REFRESH_INTERVAL_MS || 3000);
+const DATE_FORMATTER = new Intl.DateTimeFormat('sk-SK', {
+  dateStyle: 'short',
+  timeStyle: 'medium',
+  timeZone: 'Europe/Bratislava',
+});
+
+function formatUpdatedAt(value) {
+  if (!value) return '—';
+  try {
+    const parsed = new Date(value);
+    if (Number.isNaN(parsed.getTime())) {
+      return value;
+    }
+    return DATE_FORMATTER.format(parsed);
+  } catch (error) {
+    return value;
+  }
+}
 
 app.get('/healthz', (_req, res) => {
   res.json({ status: 'ok' });
@@ -68,18 +86,20 @@ function render(manifests, baseOrigin) {
       { label: 'Stage Timer', href: stageTimer },
       { label: 'Stage Preach', href: stagePreach },
     ];
+    const lastUpdated = formatUpdatedAt(manifest.updatedAt);
     const linkMarkup = links
       .map((link) => `<a href="${link.href}" target="_blank" rel="noopener">${link.label}</a>`)
       .join('\n');
+    const updatedIso = manifest.updatedAt ?? '';
     return `
-      <article class="card">
+      <article class="card" data-project="${manifest.project}" data-updated-at="${updatedIso}">
         <header>
           <h2>${manifest.displayName}</h2>
           <span class="slug">${manifest.project}</span>
         </header>
         <dl>
           <div><dt>Port</dt><dd>${manifest.port ?? '—'}</dd></div>
-          <div><dt>Last updated</dt><dd>${manifest.updatedAt ?? '—'}</dd></div>
+          <div><dt>Last updated</dt><dd>${lastUpdated}</dd></div>
           <div><dt>Repository</dt><dd><code>${repoPath}</code></dd></div>
         </dl>
         <nav>

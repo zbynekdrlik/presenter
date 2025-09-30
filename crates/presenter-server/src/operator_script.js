@@ -65,6 +65,9 @@
     searchAbort: null,
     searchOpen: false,
     clearingSlide: false,
+    searchDragging: false,
+    draggingPresentationId: null,
+    draggingFromSearch: false,
     catalogTopHeight: resolvedCatalogHeight,
     catalogResizeActive: false,
     catalogResizePointerId: null,
@@ -80,6 +83,7 @@
     catalog: document.querySelector('[data-role="catalog"]'),
     catalogResizer: document.querySelector('[data-role="catalog-resizer"]'),
     contextTitle: document.querySelector('[data-role="context-title"]'),
+    presentationDropzone: document.querySelector('[data-dropzone-target="presentations"]'),
     presentationList: document.querySelector('[data-role="presentation-list"]'),
     presentationCount: document.querySelector('[data-role="presentation-count"]'),
     presentationCreate: document.querySelector('[data-role="presentation-create"]'),
@@ -507,11 +511,21 @@
     event.dataTransfer.effectAllowed = 'copy';
     event.dataTransfer.setData('application/x-presenter-presentation', presentationId);
     event.dataTransfer.setData('text/plain', presentationId);
+    event.dataTransfer.setData('application/x-presenter-search', 'true');
+    state.searchDragging = true;
+    state.draggingPresentationId = presentationId;
+    state.draggingFromSearch = true;
     const title = item.querySelector('.operator__search-result-title');
     if (title) {
       const rect = title.getBoundingClientRect();
       event.dataTransfer.setDragImage(title, rect.width / 2, rect.height / 2);
     }
+  }
+
+  function handleSearchResultDragEnd() {
+    state.searchDragging = false;
+    state.draggingPresentationId = null;
+    state.draggingFromSearch = false;
   }
 
   function handleSearchOutsideClick(event) {
@@ -1704,22 +1718,26 @@
         html = '<li class="empty">No presentations in this library.</li>';
         count = 0;
       } else {
-        count = library.presentations.length;
-        html = library.presentations
+        const sortedPresentations = library.presentations
+          .slice()
+          .sort((a, b) => a.name.localeCompare(b.name, undefined, { sensitivity: 'base' }));
+        count = sortedPresentations.length;
+        html = sortedPresentations
           .map((presentation) => {
             const active = state.currentPresentationId === presentation.id ? ' is-active' : '';
             const meta = presentationIndex.get(presentation.id);
             const libraryName = meta ? meta.libraryName : library.name;
-            const actions = isEditMode
-              ? `<div class="operator__presentation-actions">
-                  <button type="button" class="operator__presentation-action" data-action="presentation-rename" data-presentation-id="${presentation.id}" data-library-id="${library.id}" title="Rename presentation">
-                    <span aria-hidden="true">✎</span>
-                    <span class="sr-only">Rename presentation</span>
-                  </button>
-                </div>`
-              : '';
+            const renameAction = `
+                <button type="button" class="operator__presentation-action" data-action="presentation-rename" data-presentation-id="${presentation.id}" data-library-id="${library.id}" title="Rename presentation">
+                  <span aria-hidden="true">✎</span>
+                  <span class="sr-only">Rename presentation</span>
+                </button>`;
+            const actions = `
+                <div class="operator__presentation-actions">
+                  ${renameAction}
+                </div>`;
             return `
-              <li class="operator__presentation-item${active}" data-role="presentation-item" data-type="presentation" data-presentation-id="${presentation.id}" draggable="true">
+              <li class="operator__presentation-item${active}" data-role="presentation-item" data-type="presentation" data-presentation-id="${presentation.id}" draggable="false">
                 <span>${escapeHtml(presentation.name)}</span>
                 <span class="operator__presentation-meta">${escapeHtml(libraryName || '')}</span>
                 ${actions}
@@ -1758,7 +1776,7 @@
             const meta = presentationId ? presentationIndex.get(presentationId) : null;
             const label = meta ? meta.libraryName : 'Unknown library';
             const active = presentationId && state.currentPresentationId === presentationId ? ' is-active' : '';
-            const renameAction = isEditMode
+            const renameAction = presentationId
               ? `<button type="button" class="operator__presentation-action" data-action="presentation-rename" data-presentation-id="${presentationId || ''}" data-library-id="${meta ? meta.libraryId || '' : ''}" title="Rename presentation">
                     <span aria-hidden="true">✎</span>
                     <span class="sr-only">Rename presentation</span>
@@ -1767,14 +1785,15 @@
             const removeAction = isEditMode
               ? `<button type="button" data-action="playlist-remove" title="Remove from playlist">×</button>`
               : '';
-            const actions = isEditMode
+            const hasActions = Boolean(renameAction || removeAction);
+            const actions = hasActions
               ? `<div class="operator__presentation-actions">
                   ${renameAction}
                   ${removeAction}
                 </div>`
               : '';
             return `
-              <li class="operator__presentation-item${active}" data-role="presentation-item" data-type="presentation" data-entry-id="${entry.entryId}" data-presentation-id="${presentationId || ''}" data-entry-index="${index}" draggable="${isEditMode ? 'true' : 'false'}">
+              <li class="operator__presentation-item${active}" data-role="presentation-item" data-type="presentation" data-entry-id="${entry.entryId}" data-presentation-id="${presentationId || ''}" data-entry-index="${index}" draggable="true">
                 <span>${escapeHtml(entry.name)}</span>
                 <span class="operator__presentation-meta">${escapeHtml(label || '')}</span>
                 ${actions}
@@ -1869,7 +1888,7 @@
             </div>`
           : '';
         const footerMarkup = '';
-        const showGroup = state.mode === 'live' && hasExplicitGroup && effectiveGroup;
+        const showGroup = state.mode === 'live' && Boolean(effectiveGroup);
         const groupBadge = `<div class="operator__slide-group" data-role="slide-group" data-hidden="${showGroup ? 'false' : 'true'}">${showGroup ? escapeHtml(effectiveGroup) : ''}</div>`;
         const highlightOptions = { highlightOverflow: lintEnabled };
         const mainTextHtml = formatMultiline(content.main.value, mainLint, highlightOptions);
@@ -1903,9 +1922,12 @@
               </div>`
           : '';
         return `
-          <article class="operator__slide-card stage-control__slide${active}${focused}" data-slide-id="${slide.id}" data-slide-index="${index}" data-group-inherited="${hasExplicitGroup ? 'false' : 'true'}"${cardWarningAttr} draggable="true">
+          <article class="operator__slide-card stage-control__slide${active}${focused}" data-slide-id="${slide.id}" data-slide-index="${index}" data-group-inherited="${hasExplicitGroup ? 'false' : 'true'}"${cardWarningAttr}>
             <header class="operator__slide-header">
-              <span class="operator__slide-index">${index + 1}${overLimitBadge}</span>
+              <div class="operator__slide-header-left">
+                <button type="button" class="operator__slide-handle" data-role="slide-drag-handle" draggable="true" tabindex="-1" aria-label="Reorder slide">↕</button>
+                <span class="operator__slide-index">${index + 1}${overLimitBadge}</span>
+              </div>
               ${controlsMarkup}
             </header>
             <section class="operator__slide-bodies">
@@ -2562,9 +2584,16 @@ function updateCardWarnings(card) {
     }
   }
 
-  async function handlePlaylistInsertion(presentationId, playlistId) {
+  async function handlePlaylistInsertion(
+    presentationId,
+    playlistId,
+    insertIndex = null,
+    options = {},
+  ) {
     if (!playlistId) {
       showToast('Select a playlist before adding presentations.', 'warning');
+      state.draggingFromSearch = false;
+      state.draggingPresentationId = null;
       return;
     }
     const playlist = state.playlists.find((item) => item.id === playlistId) || state.playlistLookup.get(playlistId);
@@ -2573,7 +2602,10 @@ function updateCardWarnings(card) {
       return;
     }
     const entries = playlist.entries.slice();
-    entries.push({
+    const insertionPoint = Number.isInteger(insertIndex)
+      ? Math.min(Math.max(insertIndex, 0), entries.length)
+      : entries.length;
+    entries.splice(insertionPoint, 0, {
       entryId: null,
       entryType: 'presentation',
       presentationId,
@@ -2586,6 +2618,9 @@ function updateCardWarnings(card) {
       });
       refreshPlaylistState(response);
       showToast('Presentation added to playlist', 'success');
+      if (options && options.clearSearch) {
+        clearSearchResults();
+      }
     } catch (error) {
       console.error('Failed to add to playlist', error);
       showToast('Failed to add to playlist', 'error');
@@ -3318,6 +3353,16 @@ function updateCardWarnings(card) {
           }
         }
         const existingIndex = presentationIndex.get(target.presentationId);
+        state.playlists.forEach((playlist) => {
+          if (!Array.isArray(playlist.entries)) {
+            return;
+          }
+          playlist.entries.forEach((entry) => {
+            if (entry.entryType === 'presentation' && entry.presentationId === target.presentationId) {
+              entry.name = name;
+            }
+          });
+        });
         if (existingIndex) {
           existingIndex.name = name;
         }
@@ -3391,6 +3436,17 @@ function updateCardWarnings(card) {
       state.presentationEditModalOpen;
 
     if (!isEditable && !modalOpen) {
+      if ((event.key === ' ' || event.key === 'Space') && state.mode === 'live') {
+        if (els.searchInput) {
+          event.preventDefault();
+          els.searchInput.focus();
+          els.searchInput.select();
+          if (state.searchQuery.trim()) {
+            renderSearchResults();
+          }
+        }
+        return;
+      }
       if (event.key === 'ArrowRight') {
         event.preventDefault();
         navigateSlides(1);
@@ -3504,7 +3560,12 @@ function updateCardWarnings(card) {
     if (!item) return;
     const entryId = item.dataset.entryId || null;
     const presentationId = item.dataset.presentationId || null;
+    state.draggingFromSearch = false;
     const entryIndex = item.dataset.entryIndex;
+    if (state.activeLibraryId && !state.activePlaylistId) {
+      event.preventDefault();
+      return;
+    }
     const isPlaylistEntry =
       entryId && typeof entryIndex !== 'undefined' && entryIndex !== null && entryIndex !== '' && state.activePlaylistId;
     if (isPlaylistEntry) {
@@ -3519,6 +3580,7 @@ function updateCardWarnings(card) {
       event.dataTransfer.effectAllowed = 'move';
       event.dataTransfer.setData('application/x-presenter-playlist-entry', entryId);
       event.dataTransfer.setData('application/x-presenter-playlist-id', state.activePlaylistId);
+      state.draggingPresentationId = null;
       return;
     }
 
@@ -3526,6 +3588,7 @@ function updateCardWarnings(card) {
       event.preventDefault();
       return;
     }
+    state.draggingPresentationId = presentationId;
     event.dataTransfer.effectAllowed = 'copyMove';
     event.dataTransfer.setData('application/x-presenter-presentation', presentationId);
     event.dataTransfer.setData('text/plain', presentationId);
@@ -3558,7 +3621,7 @@ function updateCardWarnings(card) {
     }
   }
 
-  function handlePlaylistDrop(event) {
+  async function handlePlaylistDrop(event) {
     if (state.playlistReorderSnapshot) {
       return;
     }
@@ -3567,12 +3630,35 @@ function updateCardWarnings(card) {
       showToast('Select a playlist before adding presentations.', 'warning');
       return;
     }
-    const id =
-      event.dataTransfer.getData('application/x-presenter-presentation') ||
-      event.dataTransfer.getData('text/plain');
-    if (!id) return;
+    const transfer = event.dataTransfer;
+    let id = transfer
+      ? transfer.getData('application/x-presenter-presentation') || transfer.getData('text/plain')
+      : '';
+    if (!id && state.draggingPresentationId) {
+      id = state.draggingPresentationId;
+    }
+    if (!id) {
+      clearPlaylistDropIndicators();
+      state.draggingPresentationId = null;
+      state.draggingFromSearch = false;
+      return;
+    }
     event.preventDefault();
-    handlePlaylistInsertion(id, playlistId);
+    const fromSearch =
+      state.searchDragging ||
+      state.draggingFromSearch ||
+      (transfer
+        ? Array.from(transfer.types || []).includes('application/x-presenter-search')
+        : false) ||
+      (state.searchOpen && typeof state.searchQuery === 'string' && state.searchQuery.trim().length > 0);
+    await handlePlaylistInsertion(id, playlistId, null, { clearSearch: fromSearch });
+    if (fromSearch) {
+      clearSearchResults();
+    }
+    clearPlaylistDropIndicators();
+    state.searchDragging = false;
+    state.draggingPresentationId = null;
+    state.draggingFromSearch = false;
   }
 
   function handleAddSlide() {
@@ -3693,7 +3779,12 @@ function updateCardWarnings(card) {
   }
 
   function handleSlideDragStart(event) {
-    const card = event.target.closest('[data-slide-id]');
+    const handle = event.target.closest('[data-role="slide-drag-handle"]');
+    if (!handle) {
+      event.preventDefault();
+      return;
+    }
+    const card = handle.closest('[data-slide-id]');
     if (!card) return;
     state.reorderSnapshot = {
       sourceId: card.dataset.slideId,
@@ -3723,7 +3814,6 @@ function updateCardWarnings(card) {
   }
 
   function handleSlideDrop(event) {
-    if (state.mode !== 'edit') return;
     if (!state.reorderSnapshot) return;
     event.preventDefault();
     const newOrder = qsa('[data-slide-id]', els.slides).map((card) => card.dataset.slideId);
@@ -3743,51 +3833,189 @@ function updateCardWarnings(card) {
     }
   }
 
-  function handlePlaylistEntryDragOver(event) {
-    if (!state.playlistReorderSnapshot) return;
-    if (!state.activePlaylistId || state.activePlaylistId !== state.playlistReorderSnapshot.playlistId) {
-      return;
+  function setPresentationDropzoneState(state) {
+    if (els.presentationDropzone) {
+      if (state) {
+        els.presentationDropzone.dataset.dropzone = state;
+      } else {
+        delete els.presentationDropzone.dataset.dropzone;
+      }
     }
-    const target = event.target.closest('[data-role="presentation-item"]');
-    if (!target) {
-      event.preventDefault();
-      return;
-    }
-    event.preventDefault();
-    const draggingId = state.playlistReorderSnapshot.sourceId;
-    if (target.dataset.entryId === draggingId) return;
-    const items = qsa('[data-role="presentation-item"]', els.presentationList);
-    const dragging = items.find((node) => node.dataset.entryId === draggingId);
-    if (!dragging) return;
-    const rect = target.getBoundingClientRect();
-    const isBefore = event.clientY < rect.top + rect.height / 2;
-    if (isBefore) {
-      els.presentationList.insertBefore(dragging, target);
-    } else {
-      els.presentationList.insertBefore(dragging, target.nextSibling);
+    if (els.presentationList) {
+      if (state) {
+        els.presentationList.dataset.dropzone = state;
+      } else {
+        delete els.presentationList.dataset.dropzone;
+      }
     }
   }
 
-  function handlePlaylistEntryDrop(event) {
-    if (!state.playlistReorderSnapshot) return;
-    if (!state.activePlaylistId || state.activePlaylistId !== state.playlistReorderSnapshot.playlistId) {
-      state.playlistReorderSnapshot = null;
+  function clearPlaylistDropIndicators() {
+    if (els.presentationList) {
+      qsa('[data-role="presentation-item"][data-drop-position]', els.presentationList).forEach((node) => {
+        node.removeAttribute('data-drop-position');
+      });
+    }
+    setPresentationDropzoneState(null);
+  }
+
+  function handlePlaylistEntryDragOver(event) {
+    if (!state.activePlaylistId) {
+      clearPlaylistDropIndicators();
       return;
     }
+    const transfer = event.dataTransfer;
+    const types = transfer ? Array.from(transfer.types || []) : [];
+    const isPresentationDrag =
+      types.includes('application/x-presenter-presentation') || types.includes('text/plain');
+    const isReorder =
+      !!state.playlistReorderSnapshot &&
+      state.activePlaylistId &&
+      state.activePlaylistId === state.playlistReorderSnapshot.playlistId &&
+      types.includes('application/x-presenter-playlist-entry');
+
+    const target = event.target.closest('[data-role="presentation-item"]');
+
+    if (isReorder) {
+      if (!target) return;
+      event.preventDefault();
+      clearPlaylistDropIndicators();
+      const draggingId = state.playlistReorderSnapshot.sourceId;
+      if (target.dataset.entryId === draggingId) return;
+      const items = qsa('[data-role="presentation-item"]', els.presentationList);
+      const dragging = items.find((node) => node.dataset.entryId === draggingId);
+      if (!dragging) return;
+      const rect = target.getBoundingClientRect();
+      const isBefore = event.clientY < rect.top + rect.height / 2;
+      if (isBefore) {
+        els.presentationList.insertBefore(dragging, target);
+      } else {
+        els.presentationList.insertBefore(dragging, target.nextSibling);
+      }
+      return;
+    }
+
+    if (!isPresentationDrag) {
+      clearPlaylistDropIndicators();
+      return;
+    }
+
     event.preventDefault();
-    const ordered = qsa('[data-role="presentation-item"]', els.presentationList)
-      .map((node) => node.dataset.entryId)
-      .filter(Boolean);
-    if (
-      ordered.length &&
-      state.playlistReorderSnapshot.initialOrder &&
-      ordered.join(',') === state.playlistReorderSnapshot.initialOrder.join(',')
-    ) {
-      state.playlistReorderSnapshot = null;
+    event.stopPropagation();
+    if (!target) {
+      if (els.presentationList) {
+        qsa('[data-role="presentation-item"][data-drop-position]', els.presentationList).forEach((node) => {
+          node.removeAttribute('data-drop-position');
+        });
+      }
+      setPresentationDropzoneState('append');
       return;
     }
-    reorderPlaylistEntries(state.activePlaylistId, ordered);
-    state.playlistReorderSnapshot = null;
+    const rect = target.getBoundingClientRect();
+    const isBefore = event.clientY < rect.top + rect.height / 2;
+    clearPlaylistDropIndicators();
+    setPresentationDropzoneState(null);
+    target.dataset.dropPosition = isBefore ? 'before' : 'after';
+  }
+
+  async function handlePlaylistEntryDrop(event) {
+    if (!state.activePlaylistId) {
+      clearPlaylistDropIndicators();
+      state.draggingPresentationId = null;
+      state.draggingFromSearch = false;
+      return;
+    }
+    const transfer = event.dataTransfer;
+    const types = transfer ? Array.from(transfer.types || []) : [];
+    let presentationId = transfer
+      ? transfer.getData('application/x-presenter-presentation') || transfer.getData('text/plain')
+      : '';
+    if (!presentationId && state.draggingPresentationId) {
+      presentationId = state.draggingPresentationId;
+    }
+
+    setPresentationDropzoneState(null);
+
+    if (
+      state.playlistReorderSnapshot &&
+      state.activePlaylistId &&
+      state.activePlaylistId === state.playlistReorderSnapshot.playlistId
+    ) {
+      event.preventDefault();
+      event.stopPropagation();
+      const ordered = qsa('[data-role="presentation-item"]', els.presentationList)
+        .map((node) => node.dataset.entryId)
+        .filter(Boolean);
+      if (
+        ordered.length &&
+        state.playlistReorderSnapshot.initialOrder &&
+        ordered.join(',') === state.playlistReorderSnapshot.initialOrder.join(',')
+      ) {
+        state.playlistReorderSnapshot = null;
+        clearPlaylistDropIndicators();
+        return;
+      }
+      reorderPlaylistEntries(state.activePlaylistId, ordered);
+      state.playlistReorderSnapshot = null;
+      clearPlaylistDropIndicators();
+      return;
+    }
+
+    if (presentationId) {
+      const playlistId = state.activePlaylistId;
+    if (!playlistId) {
+      clearPlaylistDropIndicators();
+      state.draggingFromSearch = false;
+      state.draggingPresentationId = null;
+      return;
+    }
+      const playlist =
+        state.playlists.find((item) => item.id === playlistId) || state.playlistLookup.get(playlistId);
+      if (!playlist) {
+        clearPlaylistDropIndicators();
+        showToast('Playlist not found.', 'error');
+        state.draggingPresentationId = null;
+        state.draggingFromSearch = false;
+        return;
+      }
+      event.preventDefault();
+      event.stopPropagation();
+      const target = event.target.closest('[data-role="presentation-item"]');
+      let insertIndex = playlist.entries.length;
+      if (target && target.dataset.entryIndex) {
+        const baseIndex = Number(target.dataset.entryIndex);
+        if (!Number.isNaN(baseIndex)) {
+          const rect = target.getBoundingClientRect();
+          const isBefore = event.clientY < rect.top + rect.height / 2;
+          insertIndex = isBefore ? baseIndex : baseIndex + 1;
+        }
+      }
+      const fromSearch =
+        state.searchDragging ||
+        state.draggingFromSearch ||
+        types.includes('application/x-presenter-search');
+      await handlePlaylistInsertion(presentationId, playlistId, insertIndex, { clearSearch: fromSearch });
+      if (fromSearch) {
+        clearSearchResults();
+      }
+      clearPlaylistDropIndicators();
+      state.searchDragging = false;
+      state.draggingPresentationId = null;
+      state.draggingFromSearch = false;
+      return;
+    }
+
+    clearPlaylistDropIndicators();
+    state.draggingPresentationId = null;
+    state.draggingFromSearch = false;
+  }
+
+  function handlePresentationDropzoneDragLeave(event) {
+    if (!els.presentationDropzone) return;
+    const nextTarget = event.relatedTarget;
+    if (!nextTarget || !els.presentationDropzone.contains(nextTarget)) {
+      setPresentationDropzoneState(null);
+    }
   }
 
   function handlePlaylistEntryDragEnd() {
@@ -3797,6 +4025,8 @@ function updateCardWarnings(card) {
         renderPresentationList();
       }
     }
+    clearPlaylistDropIndicators();
+    state.draggingPresentationId = null;
   }
 
   function handleSlideInputBlur(event) {
@@ -4054,6 +4284,11 @@ function updateCardWarnings(card) {
       els.presentationList.addEventListener('drop', handlePlaylistEntryDrop);
       els.presentationList.addEventListener('dragend', handlePlaylistEntryDragEnd);
     }
+    if (els.presentationDropzone) {
+      els.presentationDropzone.addEventListener('dragover', handlePlaylistEntryDragOver);
+      els.presentationDropzone.addEventListener('drop', handlePlaylistEntryDrop);
+      els.presentationDropzone.addEventListener('dragleave', handlePresentationDropzoneDragLeave);
+    }
     if (els.slides) {
       els.slides.addEventListener('click', handleSlidesClick);
       els.slides.addEventListener('pointerdown', handleSlidesPointerDown);
@@ -4092,7 +4327,8 @@ function updateCardWarnings(card) {
     }
     if (els.searchResults) {
       els.searchResults.addEventListener('click', handleSearchResultClick);
-      els.searchResults.addEventListener('dragstart', handleSearchResultDragStart);
+      els.searchResults.addEventListener('dragstart', handleSearchResultDragStart, true);
+      els.searchResults.addEventListener('dragend', handleSearchResultDragEnd, true);
     }
     if (els.playlistCreate) {
       els.playlistCreate.addEventListener('click', (event) => {
@@ -4152,5 +4388,40 @@ function updateCardWarnings(card) {
   }
 
   window.__presenterOperatorState = state;
+  window.__presenterOperatorTestHelpers = {
+    addPresentationToPlaylist: (presentationId, playlistId) =>
+      handlePlaylistInsertion(presentationId, playlistId, null, { clearSearch: false }),
+    playlistPresentationCount: (playlistId) => {
+      if (!playlistId) return -1;
+      const playlist = state.playlists.find((item) => item.id === playlistId)
+        || state.playlistLookup.get(playlistId);
+      if (!playlist || !Array.isArray(playlist.entries)) {
+        return -1;
+      }
+      return playlist.entries.filter((entry) => entry.entryType === 'presentation').length;
+    },
+    reorderSlides: (presentationId, orderedIds) => reorderSlides(presentationId, orderedIds),
+    slideOrder: (presentationId) => {
+      if (!presentationId) return [];
+      const slides = getSlidesForPresentation(presentationId);
+      if (!Array.isArray(slides)) return [];
+      return slides.map((slide) => slide.id);
+    },
+    clearSearch: () => {
+      if (els.searchInput) {
+        els.searchInput.value = '';
+        try {
+          els.searchInput.dispatchEvent(new Event('input', { bubbles: true }));
+          els.searchInput.dispatchEvent(new Event('change', { bubbles: true }));
+        } catch (error) {
+          console.warn('dispatch search clear events failed', error);
+        }
+      }
+      state.searchQuery = '';
+      state.searchOpen = false;
+      clearSearchResults();
+      updateSearchClearVisibility();
+    },
+  };
   initialise();
 })();
