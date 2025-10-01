@@ -3984,6 +3984,10 @@ fn SettingsDocument(hosts: Vec<SettingsHostRow>, script: String) -> impl IntoVie
                                     <dt>"#bible-clear"</dt>
                                     <dd>"Clears the Bible layer when triggered."</dd>
                                 </div>
+                                <div>
+                                    <dt>"Suffixes: -u / -re"</dt>
+                                    <dd>"Append -u to force uppercase and -re to collapse multi-line text into a single space-delimited line. Combine them (e.g., #translate-b-u-re) for stacked transforms."</dd>
+                                </div>
                             </dl>
                         </section>
                     </section>
