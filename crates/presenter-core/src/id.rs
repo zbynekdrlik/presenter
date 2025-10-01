@@ -41,3 +41,4 @@ id_type!(PresentationId);
 id_type!(SlideId);
 id_type!(PlaylistId);
 id_type!(PlaylistEntryId);
+id_type!(ResolumeHostId);

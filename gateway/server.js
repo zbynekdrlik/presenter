@@ -90,8 +90,9 @@ function render(manifests, baseOrigin) {
     const linkMarkup = links
       .map((link) => `<a href="${link.href}" target="_blank" rel="noopener">${link.label}</a>`)
       .join('\n');
+    const updatedIso = manifest.updatedAt ?? '';
     return `
-      <article class="card">
+      <article class="card" data-project="${manifest.project}" data-updated-at="${updatedIso}">
         <header>
           <h2>${manifest.displayName}</h2>
           <span class="slug">${manifest.project}</span>

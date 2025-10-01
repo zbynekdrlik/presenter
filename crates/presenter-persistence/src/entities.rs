@@ -205,6 +205,28 @@ pub mod playlist_favorite {
     impl ActiveModelBehavior for ActiveModel {}
 }
 
+pub mod resolume_host {
+    use sea_orm::entity::prelude::*;
+
+    #[derive(Clone, Debug, PartialEq, Eq, DeriveEntityModel)]
+    #[sea_orm(table_name = "resolume_hosts")]
+    pub struct Model {
+        #[sea_orm(primary_key)]
+        pub id: String,
+        pub label: String,
+        pub host: String,
+        pub port: i32,
+        pub is_enabled: bool,
+        pub created_at: DateTimeWithTimeZone,
+        pub updated_at: DateTimeWithTimeZone,
+    }
+
+    #[derive(Copy, Clone, Debug, EnumIter, DeriveRelation)]
+    pub enum Relation {}
+
+    impl ActiveModelBehavior for ActiveModel {}
+}
+
 pub mod playlist_entry {
     use super::{playlist, presentation};
     use sea_orm::entity::prelude::*;

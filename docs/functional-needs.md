@@ -19,6 +19,15 @@
 - Layout builder that places lyrics, timers, notes, and alerts in flexible regions.
 - Per-display profiles (e.g., main stage monitor vs. choir screen).
 - Remote preview on tablets/phones for production leads.
+- Live synchronization with Resolume Arena decks, including auto-discovery of clips and
+  alternating A/B lanes for main, translation, and Bible outputs.
+
+## External Integrations
+- Manage multiple Resolume Arena connections (DNS hostnames on port 8090 by default) from a
+  centralized settings surface.
+- Cache clip metadata and warn operators when expected `#main-a`, `#bible-clear`, etc. tokens are
+  missing so they can fix naming before service.
+- Guarantee sub-100 ms trigger-to-clip latency with health indicators when latency drifts.
 
 ## Data Model Considerations
 - Versioned song data to track edits and reuse arrangements.

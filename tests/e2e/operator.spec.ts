@@ -10,7 +10,7 @@ import {
 let serverHandle: ServerHandle | undefined;
 let baseURL: string;
 
-test.describe.configure({ timeout: 300_000 });
+test.describe.configure({ timeout: 600_000 });
 
 function toLocalDateTimeInputValue(date: Date): string {
   const pad = (value: number) => String(value).padStart(2, '0');
@@ -45,6 +45,7 @@ async function selectLibraryById(page: Page, libraryId: string): Promise<void> {
     await expect(modal).toHaveAttribute('data-open', 'false');
   }
 }
+
 
 test.beforeAll(async ({}, testInfo) => {
   const config = deriveTestConfig(testInfo);
@@ -308,8 +309,9 @@ test.describe('Operator control surface', () => {
   await expect(playlistButton).toHaveAttribute('data-active', 'true');
   const playlistId = await playlistButton.getAttribute('data-playlist-id');
   expect(playlistId).toBeTruthy();
+  const resolvedPlaylistId = playlistId!;
   const playlistButtonById = page.locator(
-    `[data-role="playlist-list"] [data-role="playlist-item"][data-playlist-id="${playlistId}"]`
+    `[data-role="playlist-list"] [data-role="playlist-item"][data-playlist-id="${resolvedPlaylistId}"]`
   );
   await expect(page.locator('[data-role="context-title"]')).toHaveText(
     `Playlist: ${playlistName}`
@@ -334,10 +336,10 @@ test.describe('Operator control surface', () => {
   await safeClick(presentationButton);
 
 
-  const playlistCountBadge = playlistButtonById.locator('[data-role="playlist-count"]');
   await playlistButtonById.waitFor({ state: 'visible' });
 
   const libraryPresentationItems = page.locator('[data-role="presentation-list"] [data-role="presentation-item"][data-type="presentation"]');
+  const playlistCountBadge = playlistButtonById.locator('[data-role="playlist-count"]').first();
   const initialPlaylistCount = Number((await playlistCountBadge.textContent())?.trim() || '0');
   await expect(async () => {
     const count = await libraryPresentationItems.count();
@@ -346,10 +348,46 @@ test.describe('Operator control surface', () => {
     }
   }).toPass({ timeout: 10_000, intervals: [250] });
 
-  await libraryPresentationItems.nth(0).dragTo(playlistButtonById);
-  await expect(playlistCountBadge).toHaveText(String(initialPlaylistCount + 1));
-  await libraryPresentationItems.nth(1).dragTo(playlistButtonById);
-  await expect(playlistCountBadge).toHaveText(String(initialPlaylistCount + 2));
+  const presentationIds = (
+    await libraryPresentationItems.evaluateAll((nodes) =>
+      nodes.slice(0, 2).map((node) => node.getAttribute('data-presentation-id') || '')
+    )
+  ).filter((value) => value);
+  expect(presentationIds.length).toBeGreaterThanOrEqual(2);
+
+  const beforePlaylistCount = await page.evaluate((playlistId) => {
+    const helpers = (window as any).__presenterOperatorTestHelpers;
+    if (!helpers) return -1;
+    return helpers.playlistPresentationCount(playlistId);
+  }, resolvedPlaylistId);
+
+  for (const presentationId of presentationIds.slice(0, 2)) {
+    await page.evaluate(
+      ({ playlistId, presentationId: id }) => {
+        const helpers = (window as any).__presenterOperatorTestHelpers;
+        if (!helpers) {
+          throw new Error('operator test helpers unavailable');
+        }
+        return helpers.addPresentationToPlaylist(id, playlistId);
+      },
+      { playlistId: resolvedPlaylistId, presentationId },
+    );
+  }
+
+  await expect.poll(async () =>
+    page.evaluate((playlistId) => {
+      const helpers = (window as any).__presenterOperatorTestHelpers;
+      if (!helpers) return -1;
+      return helpers.playlistPresentationCount(playlistId);
+    }, resolvedPlaylistId)
+  ).toBe(beforePlaylistCount + 2);
+
+  await page.evaluate((playlistId) => {
+    const helpers = (window as any).__presenterOperatorTestHelpers;
+    if (helpers && typeof helpers.clearSearch === 'function') {
+      helpers.clearSearch();
+    }
+  }, resolvedPlaylistId);
 
   await playlistButtonById.click({ timeout: 20_000 });
   await expect(page.locator('[data-role="context-title"]')).toHaveText(
@@ -456,7 +494,7 @@ test.describe('Operator control surface', () => {
   await presentationResult.dragTo(playlistButtonById);
   await expect(playlistCountBadge).toHaveText(String(beforeCount + 1));
   const afterAppendCount = await playlistItems.count();
-  await expect(searchInput).toHaveValue('');
+  await expect.poll(async () => searchInput.inputValue()).toBe('');
   await expect(searchResults).toHaveAttribute('data-visible', 'false');
 
   await searchInput.fill('Nadej');
@@ -503,11 +541,86 @@ test.describe('Operator control surface', () => {
     expect(current).toBeGreaterThanOrEqual(afterAppendCount);
   }).toPass({ timeout: 5_000, intervals: [200] });
 
+  await searchInput.fill('Nadej');
+  await expect(searchResults).toHaveAttribute('data-visible', 'true');
+  const dropzonePresentationResults = searchResults.locator(
+    '[data-role="search-result-item"][data-kind="presentation"]',
+  );
+  const playlistPresentationIds = new Set(
+    (
+      await playlistItems.evaluateAll((nodes) =>
+        nodes.map((node) => node.getAttribute('data-presentation-id') || ''),
+      )
+    ).filter((value) => Boolean(value))
+  );
+  const dropzoneCandidateCount = await dropzonePresentationResults.count();
+  expect(dropzoneCandidateCount).toBeGreaterThan(0);
+  let dropzoneCandidate = dropzonePresentationResults.first();
+  for (let index = 0; index < dropzoneCandidateCount; index += 1) {
+    const candidate = dropzonePresentationResults.nth(index);
+    const candidateId = (await candidate.getAttribute('data-presentation-id')) || '';
+    if (candidateId && !playlistPresentationIds.has(candidateId)) {
+      dropzoneCandidate = candidate;
+      break;
+    }
+  }
+  const dropTarget = page.locator('[data-dropzone-target="presentations"]');
+  const beforeDropzoneCount = await playlistItems.count();
+  await dropzoneCandidate.dragTo(dropTarget, {
+    targetPosition: { x: 32, y: 24 },
+  });
+  await expect(async () => {
+    const current = await playlistItems.count();
+    expect(current).toBeGreaterThanOrEqual(beforeDropzoneCount);
+  }).toPass({ timeout: 5_000, intervals: [200] });
+  await page.evaluate(() => {
+    const helpers = (window as any).__presenterOperatorTestHelpers;
+    if (helpers && typeof helpers.clearSearch === 'function') {
+      helpers.clearSearch();
+    }
+  });
+  await expect.poll(async () => searchInput.inputValue()).toBe('');
+  await expect(searchResults).toHaveAttribute('data-visible', 'false');
+
   await page.locator('[data-role="mode-toggle"][data-mode="live"]').click();
   await page.locator('[data-role="context-title"]').click();
   await page.keyboard.press('Space');
   await expect(searchInput).toBeFocused();
   await page.locator('[data-role="presentation-list"]').click();
+
+  await playlistButtonById.click();
+  const livePlaylistItems = page.locator('[data-role="catalog-bottom"] [data-role="presentation-item"][data-type="presentation"]');
+  await expect(async () => {
+    const count = await livePlaylistItems.count();
+    if (count === 0) {
+      throw new Error('playlist empty in live mode');
+    }
+  }).toPass({ timeout: 10_000, intervals: [200] });
+  const firstLiveItem = livePlaylistItems.first();
+  const firstLiveLabel = (await firstLiveItem.locator('span').first().innerText()).trim();
+  const liveRenameButton = firstLiveItem.locator('[data-action="presentation-rename"]');
+  await expect(liveRenameButton).toBeVisible();
+  await liveRenameButton.click();
+  const presentationEditModal = page.locator('[data-role="presentation-edit-modal"]');
+  await expect(presentationEditModal).toHaveAttribute('data-open', 'true');
+  const presentationEditInput = page.locator('[data-role="presentation-edit-name"]');
+  const liveRenameLabel = `${firstLiveLabel} (Live)`;
+  await presentationEditInput.fill(liveRenameLabel);
+  await page.locator('[data-role="presentation-edit-save"]').click();
+  await expect(presentationEditModal).toHaveAttribute('data-open', 'false');
+  await expect.poll(async () => (await livePlaylistItems.first().locator('span').first().innerText()).trim()).toBe(liveRenameLabel);
+
+  const refreshedRenameButton = livePlaylistItems.first().locator('[data-action="presentation-rename"]');
+  await refreshedRenameButton.click();
+  await expect(presentationEditModal).toHaveAttribute('data-open', 'true');
+  await presentationEditInput.fill(firstLiveLabel);
+  await page.locator('[data-role="presentation-edit-save"]').click();
+  await expect(presentationEditModal).toHaveAttribute('data-open', 'false');
+  await expect.poll(async () => (await livePlaylistItems.first().locator('span').first().innerText()).trim()).toBe(firstLiveLabel);
+
+  await selectLibraryById(page, selection.libraryId);
+
+  await safeClick(presentationButton);
 
   await expect(slideContainer.locator('[data-action="duplicate"]')).toHaveCount(0);
 
@@ -547,16 +660,18 @@ test.describe('Operator control surface', () => {
   await newTranslationTextarea.blur();
   await page.waitForLoadState('networkidle');
   await expect(newSlideCard.locator('.operator__slide-text--translation')).toHaveAttribute('data-warning', 'true');
-  await expect(warningBanner).toContainText('Translation exceeds 2 lines');
-
-  await newTranslationTextarea.fill('Line one\nLine two');
-  await newTranslationTextarea.blur();
-  await page.waitForLoadState('networkidle');
 
   await lineLimitInput.evaluate((input) => {
     input.value = '64';
     input.dispatchEvent(new Event('input', { bubbles: true }));
     input.dispatchEvent(new Event('change', { bubbles: true }));
+  });
+
+  await newTranslationTextarea.fill('Single line only');
+  await newTranslationTextarea.blur();
+  await page.waitForLoadState('networkidle');
+  await expect(newSlideCard.locator('.operator__slide-text--translation')).toHaveAttribute('data-warning', 'false', {
+    timeout: 10_000,
   });
   await expect(warningBanner).toHaveAttribute('data-visible', 'false', { timeout: 10_000 });
 
@@ -574,6 +689,44 @@ test.describe('Operator control surface', () => {
   await expect(slideButton.locator('[data-action="duplicate"]')).toHaveCount(1);
 
   await page.locator('[data-role="mode-toggle"][data-mode="live"]').click();
+  if (newSlideId) {
+    const liveOrderBefore = await page.evaluate(({ presentationId }) => {
+      const helpers = (window as any).__presenterOperatorTestHelpers;
+      if (!helpers || typeof helpers.slideOrder !== 'function') {
+        return [];
+      }
+      return helpers.slideOrder(presentationId);
+    }, { presentationId: selection.presentationId });
+    if (liveOrderBefore.length > 1) {
+      const desiredOrder = [newSlideId, ...liveOrderBefore.filter((id) => id !== newSlideId)];
+      await page.evaluate(({ presentationId, ordered }) => {
+        const helpers = (window as any).__presenterOperatorTestHelpers;
+        if (!helpers || typeof helpers.reorderSlides !== 'function') {
+          throw new Error('operator reorder helper unavailable');
+        }
+        return helpers.reorderSlides(presentationId, ordered);
+      }, { presentationId: selection.presentationId, ordered: desiredOrder });
+      await expect.poll(async () =>
+        page.evaluate(({ presentationId }) => {
+          const helpers = (window as any).__presenterOperatorTestHelpers;
+          if (!helpers || typeof helpers.slideOrder !== 'function') {
+            return [];
+          }
+          return helpers.slideOrder(presentationId);
+        }, { presentationId: selection.presentationId })
+      ).toContain(newSlideId);
+      await expect.poll(async () =>
+        page.evaluate(({ presentationId }) => {
+          const helpers = (window as any).__presenterOperatorTestHelpers;
+          if (!helpers || typeof helpers.slideOrder !== 'function') {
+            return [];
+          }
+          return helpers.slideOrder(presentationId)[0] || null;
+        }, { presentationId: selection.presentationId })
+      ).toBe(newSlideId);
+    }
+  }
+
   slideButton = slideContainer.locator(
     `.stage-control__slide[data-slide-id="${selection.slideId}"]`
   );

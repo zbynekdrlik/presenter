@@ -54,6 +54,10 @@ stop_conflicting_demos "$REPO_ROOT" "$PROJECT"
 DEMO_DATA_DIR="$DATA_ROOT/$PROJECT"
 mkdir -p "$DEMO_DATA_DIR"
 
+# Force regeneration of the SQLite database and imports so new settings/data
+# are always reflected in the running demo.
+rm -f "$DEMO_DATA_DIR/presenter.db" "$DEMO_DATA_DIR/.presenter_import_complete"
+
 if [[ ! -d "$IMPORT_ROOT" ]]; then
   echo "[run-demo] Import root '$IMPORT_ROOT' not found" >&2
   exit 1
@@ -63,8 +67,9 @@ export PROJECT_NAME="$PROJECT"
 export HOST_HTTP_PORT
 export DEMO_DATA_DIR
 export IMPORT_ROOT
+export PRESENTER_FORCE_IMPORT=1
 
-COMPOSE_ARGS=("docker" "compose" "-f" "$REPO_ROOT/docker-compose.demo.yml" "-p" "$PROJECT" up -d)
+COMPOSE_ARGS=("${DOCKER_CMD[@]}" "compose" "-f" "$REPO_ROOT/docker-compose.demo.yml" "-p" "$PROJECT" up -d)
 if [[ "$FORCE" -eq 1 ]]; then
   COMPOSE_ARGS+=("--build")
 fi
@@ -92,3 +97,8 @@ fi
 
 write_manifest "$PROJECT" "$DISPLAY_NAME" "$HOST_HTTP_PORT" "$REPO_ROOT"
 printf '[run-demo] Manifest written to %s/%s.json\n' "$MANIFEST_DIR" "$PROJECT"
+
+# Ensure the gateway is running so the branch demo appears on the landing page.
+if ! "$SCRIPT_DIR/run-gateway.sh" >/dev/null 2>&1; then
+  echo "[run-demo] Failed to launch gateway; check docker logs" >&2
+fi

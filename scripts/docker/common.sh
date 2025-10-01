@@ -3,11 +3,29 @@ set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd "${SCRIPT_DIR}/../.." && pwd)"
-MANIFEST_DIR="${PRESENTER_MANIFEST_DIR:-$REPO_ROOT/var/docker/demos}"
-DATA_ROOT="${PRESENTER_DATA_ROOT:-$REPO_ROOT/var/docker/data}"
+
+# Default to a shared, user-writable state directory to avoid root-owned
+# manifests and enable cross-repository aggregation. Agents can override via
+# PRESENTER_MANIFEST_DIR / PRESENTER_DATA_ROOT when needed.
+STATE_ROOT_DEFAULT="${PRESENTER_STATE_DIR:-${XDG_DATA_HOME:-$HOME/.local/share}/presenter-demos}"
+MANIFEST_DIR="${PRESENTER_MANIFEST_DIR:-$STATE_ROOT_DEFAULT/manifests}"
+DATA_ROOT="${PRESENTER_DATA_ROOT:-$STATE_ROOT_DEFAULT/data}"
 DEFAULT_IMPORT_ROOT="$REPO_ROOT/Propresenter library"
 
 mkdir -p "$MANIFEST_DIR" "$DATA_ROOT"
+
+# Discover available docker command. Prefer native access; fall back to
+# passwordless sudo while keeping environment variables for docker compose.
+if docker info >/dev/null 2>&1; then
+  DOCKER_CMD=(docker)
+else
+  if command -v sudo >/dev/null 2>&1 && sudo -n docker info >/dev/null 2>&1; then
+    DOCKER_CMD=(sudo -E docker)
+  else
+    echo "[docker] Unable to contact Docker daemon. Ensure the current user can run docker or configure passwordless sudo." >&2
+    exit 1
+  fi
+fi
 
 stop_conflicting_demos() {
   local repo="$1"
@@ -17,28 +35,8 @@ stop_conflicting_demos() {
     return
   fi
 
-  while IFS=$'\t' read -r project repo_path port; do
-    [[ -z "$project" ]] && continue
-    if [[ "$repo_path" != "$repo" ]]; then
-      continue
-    fi
-    if [[ "$project" == "$keep_project" ]]; then
-      continue
-    fi
-
-    printf '[run-demo] Stopping existing demo %s for %s\n' "$project" "$repo_path"
-    local compose_file="$repo_path/docker-compose.demo.yml"
-    local data_dir="$repo_path/var/docker/data/$project"
-    local import_root="$repo_path/Propresenter library"
-    local env=("DEMO_DATA_DIR=$data_dir" "IMPORT_ROOT=$import_root" "HOST_HTTP_PORT=${port:-8080}" "PROJECT_NAME=$project")
-    if [[ -f "$compose_file" ]]; then
-      (
-        cd "$repo_path"
-        "${env[@]}" docker compose -f "$compose_file" -p "$project" down || true
-      )
-    fi
-    remove_manifest "$project"
-  done < <(MANIFEST_DIR="$MANIFEST_DIR" REPO="$repo" KEEP="$keep_project" python3 - <<'PY'
+  local conflicts
+  conflicts="$(MANIFEST_DIR="$MANIFEST_DIR" REPO="$repo" KEEP="$keep_project" python3 - <<'PY'
 import json
 import os
 import sys
@@ -65,7 +63,30 @@ for name in sorted(os.listdir(manifest_dir)):
     if repo_path == repo and project and project != keep:
         print(f"{project}\t{repo_path}\t{port or ''}")
 PY
-  )
+  )"
+
+  while IFS=$'\t' read -r project repo_path port; do
+    [[ -z "$project" ]] && continue
+    if [[ "$repo_path" != "$repo" ]]; then
+      continue
+    fi
+    if [[ "$project" == "$keep_project" ]]; then
+      continue
+    fi
+
+    printf '[run-demo] Stopping existing demo %s for %s\n' "$project" "$repo_path"
+    local compose_file="$repo_path/docker-compose.demo.yml"
+    local data_dir="$repo_path/var/docker/data/$project"
+    local import_root="$repo_path/Propresenter library"
+    local env=("DEMO_DATA_DIR=$data_dir" "IMPORT_ROOT=$import_root" "HOST_HTTP_PORT=${port:-8080}" "PROJECT_NAME=$project")
+    if [[ -f "$compose_file" ]]; then
+      (
+        cd "$repo_path"
+        env "${env[@]}" "${DOCKER_CMD[@]}" compose -f "$compose_file" -p "$project" down || true
+      )
+    fi
+    remove_manifest "$project"
+  done <<< "$conflicts"
 }
 
 slugify() {

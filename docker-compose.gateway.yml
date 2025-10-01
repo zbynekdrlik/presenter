@@ -8,6 +8,6 @@ services:
       PORT: 8080
       DEMO_MANIFEST_DIR: /manifests
     volumes:
-      - ./var/docker/demos:/manifests:ro
+      - ${PRESENTER_MANIFEST_DIR}:/manifests:ro
     ports:
       - "80:8080"
