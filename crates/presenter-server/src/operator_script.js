@@ -1782,9 +1782,7 @@
                     <span class="sr-only">Rename presentation</span>
                   </button>`
               : '';
-            const removeAction = isEditMode
-              ? `<button type="button" data-action="playlist-remove" title="Remove from playlist">×</button>`
-              : '';
+            const removeAction = `<button type="button" data-action="playlist-remove" title="Remove from playlist">×</button>`;
             const hasActions = Boolean(renameAction || removeAction);
             const actions = hasActions
               ? `<div class="operator__presentation-actions">
