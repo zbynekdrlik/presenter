@@ -6,6 +6,31 @@ REPO_ROOT="$(cd "${SCRIPT_DIR}/../.." && pwd)"
 
 cd "$REPO_ROOT"
 
+if [[ $EUID -ne 0 ]]; then
+  echo "[verify] This helper must be launched via sudo -E ./scripts/dev/verify-and-refresh.sh" >&2
+  exit 1
+fi
+
+if [[ -z "${SUDO_USER:-}" ]]; then
+  echo "[verify] SUDO_USER not set; use sudo -E so tests run as your account." >&2
+  exit 1
+fi
+
+ORIGINAL_USER="$SUDO_USER"
+ORIGINAL_HOME="$(getent passwd "$ORIGINAL_USER" | cut -d: -f6)"
+NVM_DIR_DEFAULT="${ORIGINAL_HOME}/.nvm"
+ORIGINAL_PATH="$(sudo -H -u "$ORIGINAL_USER" HOME="$ORIGINAL_HOME" NVM_DIR="$NVM_DIR_DEFAULT" bash -lc 'source ~/.profile >/dev/null 2>&1; source ~/.bashrc >/dev/null 2>&1; if [ -s "$NVM_DIR/nvm.sh" ]; then source "$NVM_DIR/nvm.sh"; fi; echo $PATH')"
+RUN_AS_ORIGINAL() {
+  local cmd=("$@")
+  local quoted=$(printf '%q ' "${cmd[@]}")
+  sudo -H -u "$ORIGINAL_USER" HOME="$ORIGINAL_HOME" PATH="$ORIGINAL_PATH" NVM_DIR="$NVM_DIR_DEFAULT" bash -lc "source ~/.profile >/dev/null 2>&1; source ~/.bashrc >/dev/null 2>&1; if [ -s "$NVM_DIR/nvm.sh" ]; then source "$NVM_DIR/nvm.sh"; fi; ${quoted}"
+}
+
+if ! docker info >/dev/null 2>&1; then
+  echo "[verify] Docker daemon is not reachable even under sudo." >&2
+  exit 1
+fi
+
 BRANCH_NAME="$(git rev-parse --abbrev-ref HEAD)"
 BRANCH_SLUG="$(echo "$BRANCH_NAME" | tr '[:upper:]' '[:lower:]' | sed -E 's/[^a-z0-9]+/-/g; s/^-+|-+$//g')"
 REPO_SLUG="$(basename "$REPO_ROOT")"
@@ -52,7 +77,7 @@ done
 DISPLAY_NAME="${CUSTOM_DISPLAY_NAME:-$DISPLAY_NAME_DEFAULT}"
 
 echo "[verify] Running cargo test"
-cargo test
+RUN_AS_ORIGINAL cargo test
 
 RUN_ARGS=("--name" "$REPO_SLUG" "--display-name" "$DISPLAY_NAME" "--port" "$DEMO_PORT")
 if [[ "$FORCE_REBUILD" -eq 1 ]]; then
@@ -66,7 +91,7 @@ echo "[verify] Restarting gateway"
 "$REPO_ROOT/scripts/docker/run-gateway.sh"
 
 echo "[verify] Running Playwright suite"
-npm run test:playwright
+RUN_AS_ORIGINAL npm run test:playwright
 
 echo "[verify] Refreshing Docker demo for project '$REPO_SLUG' (post-tests)"
 "$REPO_ROOT/scripts/docker/run-demo.sh" "--name" "$REPO_SLUG" "--display-name" "$DISPLAY_NAME" "--port" "$DEMO_PORT"

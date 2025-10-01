@@ -24,6 +24,7 @@ Presenter is a monolithic, production-ready lyrics/Bible/timers display applicat
 - Production environment is updated only after explicit user approval; ensure zero-downtime handoff and rollback plan.
 - Always prioritize the fastest path for the user to test changes on the development instance, then promote to production for other operators once sign-off is received.
 - Docker is now the primary demo platform. Keep the gateway (`./scripts/docker/run-gateway.sh`) running on port 80 with manifests mounted from `${XDG_DATA_HOME:-$HOME/.local/share}/presenter-demos/manifests`. For each feature branch checkout, launch or refresh its dedicated stack via `./scripts/docker/run-demo.sh`. **Agents are responsible for starting, stopping, and keeping these demos current without prompting the user.** Ensure only one demo per repository folder is active—`run-demo.sh` already stops stale containers for the same repo—and immediately tear down any legacy systemd or bare-metal presenter services so they never conflict with Docker-managed demos.
+- Always invoke `./scripts/dev/verify-and-refresh.sh` with `sudo -E` so Docker commands succeed while tests still run as your user; the helper now enforces this requirement at startup.
 
 ## Database Management (Pre-release)
 - We are still before our first public release. Treat the schema as mutable: **never add incremental migrations**. Instead, evolve the single initial migration (or equivalent schema definition) directly whenever the data model changes.
