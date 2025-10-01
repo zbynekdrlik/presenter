@@ -5,6 +5,7 @@ use presenter_core::{BibleBroadcast, ResolumeHost, ResolumeHostId};
 use reqwest::{header::HOST, Client, RequestBuilder};
 use serde::Serialize;
 use std::{
+    borrow::Cow,
     collections::HashMap,
     net::{IpAddr, SocketAddr},
     sync::Arc,
@@ -26,6 +27,7 @@ const TRIGGER_DELAY: Duration = Duration::from_millis(35);
 const TRIGGER_DELAY: Duration = Duration::from_millis(0);
 const HOST_COMMAND_CAPACITY: usize = 16;
 const MAPPING_REFRESH_INTERVAL: Duration = Duration::from_secs(10);
+const MAPPING_CACHE_TTL: Duration = Duration::from_secs(1);
 const RESOLUTION_TTL: Duration = Duration::from_secs(300);
 
 #[derive(Debug, Clone, Serialize, PartialEq, Eq)]
@@ -261,6 +263,7 @@ struct HostDriver {
     mapping: Option<ClipMapping>,
     lane_state: SlotState,
     endpoint: Option<ResolvedEndpoint>,
+    last_mapping_refresh: Option<Instant>,
 }
 
 impl HostDriver {
@@ -271,6 +274,7 @@ impl HostDriver {
             mapping: None,
             lane_state: SlotState::default(),
             endpoint: None,
+            last_mapping_refresh: None,
         }
     }
 
@@ -279,6 +283,7 @@ impl HostDriver {
         self.mapping = None;
         self.lane_state = SlotState::default();
         self.endpoint = None;
+        self.last_mapping_refresh = None;
     }
 
     async fn refresh_status(&self, status: &Arc<RwLock<ResolumeConnectionSnapshot>>) {
@@ -468,6 +473,15 @@ impl HostDriver {
         }
         if self.mapping.is_none() {
             self.refresh_mapping().await?;
+            return Ok(());
+        }
+
+        let stale = self
+            .last_mapping_refresh
+            .map(|instant| instant.elapsed() >= MAPPING_CACHE_TTL)
+            .unwrap_or(true);
+        if stale {
+            self.refresh_mapping().await?;
         }
         Ok(())
     }
@@ -502,12 +516,8 @@ impl HostDriver {
             );
             return Err(anyhow!("missing Resolume clips: {}", joined));
         }
-        let previous = self.mapping.clone();
-        let changed = previous.as_ref().map(|old| old != &mapping).unwrap_or(true);
         self.mapping = Some(mapping);
-        if changed {
-            self.lane_state = SlotState::default();
-        }
+        self.last_mapping_refresh = Some(Instant::now());
         Ok(())
     }
 
@@ -568,10 +578,12 @@ impl HostDriver {
             return Ok(None);
         };
         let url = format!("{}/parameter/by-id/{}", endpoint.base_url, param_id);
+        let payload = self.apply_transforms(text, &target.transforms);
+        debug!(clip_id = target.clip_id, payload = %payload, "resolume.update_text");
         let start = Instant::now();
         let response = self
             .apply_host_header(self.client.put(&url), endpoint)
-            .json(&serde_json::json!({ "value": text }))
+            .json(&serde_json::json!({ "value": payload.as_ref() }))
             .send()
             .await
             .with_context(|| format!("failed to update text parameter {}", param_id))?;
@@ -600,6 +612,7 @@ impl HostDriver {
                 &endpoint.base_url, clip_id
             );
             let host_header = endpoint.host_header.clone();
+            debug!(clip_id, "resolume.trigger_clip");
 
             futures.push(async move {
                 let mut request = client.post(&url);
@@ -675,6 +688,26 @@ impl HostDriver {
         Ok(ResolvedEndpoint::new(base_url, Some(host.to_string())))
     }
 
+    fn apply_transforms<'a>(&self, text: &'a str, transforms: &[TextTransform]) -> Cow<'a, str> {
+        if transforms.is_empty() {
+            return Cow::Borrowed(text);
+        }
+
+        let mut output: Cow<'a, str> = Cow::Borrowed(text);
+        for transform in transforms {
+            match transform {
+                TextTransform::Uppercase => {
+                    output = Cow::Owned(output.to_uppercase());
+                }
+                TextTransform::RemoveLineBreaks => {
+                    let collapsed = output.split_whitespace().collect::<Vec<_>>().join(" ");
+                    output = Cow::Owned(collapsed);
+                }
+            }
+        }
+        output
+    }
+
     fn apply_host_header(
         &self,
         builder: RequestBuilder,
@@ -714,6 +747,7 @@ impl HostDriver {
         guard.last_error = Some(err.to_string());
         self.mapping = None;
         self.endpoint = None;
+        self.last_mapping_refresh = None;
     }
 }
 
@@ -799,6 +833,13 @@ impl SlotState {
 pub struct ClipTarget {
     pub clip_id: i64,
     pub text_param_id: Option<i64>,
+    pub transforms: Vec<TextTransform>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum TextTransform {
+    Uppercase,
+    RemoveLineBreaks,
 }
 
 fn select_lane_targets<'a>(
@@ -813,7 +854,7 @@ fn select_lane_targets<'a>(
 }
 
 mod clip_map {
-    use super::ClipTarget;
+    use super::{ClipTarget, LaneTarget, TextTransform};
     use anyhow::{anyhow, Result};
     use serde_json::Value;
 
@@ -860,6 +901,7 @@ mod clip_map {
         let Some(clip_id) = clip_id else {
             return;
         };
+
         let name = clip
             .get("name")
             .and_then(|v| v.get("value"))
@@ -867,41 +909,193 @@ mod clip_map {
             .unwrap_or("");
         let name_lower = name.to_ascii_lowercase();
         let text_param = extract_text_param_id(clip);
-        let target = ClipTarget {
-            clip_id,
-            text_param_id: text_param,
+
+        for fragment in name_lower.split_whitespace() {
+            if let Some(start) = fragment.find('#') {
+                let mut tag = &fragment[start..];
+                tag = tag.trim_end_matches(|c: char| {
+                    !(c.is_ascii_alphanumeric() || c == '-' || c == '#')
+                });
+                if tag.len() < 2 {
+                    continue;
+                }
+
+                for destination in parse_clip_destinations(tag, clip_id, text_param) {
+                    match destination {
+                        ClipDestination::Main(lane, target) => match lane {
+                            LaneTarget::A => mapping.main_a.push(target),
+                            LaneTarget::B => mapping.main_b.push(target),
+                        },
+                        ClipDestination::Translation(lane, target) => match lane {
+                            LaneTarget::A => mapping.translation_a.push(target),
+                            LaneTarget::B => mapping.translation_b.push(target),
+                        },
+                        ClipDestination::Bible(lane, target) => match lane {
+                            LaneTarget::A => mapping.bible_a.push(target),
+                            LaneTarget::B => mapping.bible_b.push(target),
+                        },
+                        ClipDestination::BibleTranslation(lane, target) => match lane {
+                            LaneTarget::A => mapping.bible_translation_a.push(target),
+                            LaneTarget::B => mapping.bible_translation_b.push(target),
+                        },
+                        ClipDestination::BibleClear(target) => mapping.bible_clear.push(target),
+                    }
+                }
+            }
+        }
+    }
+
+    enum ClipDestination {
+        Main(LaneTarget, ClipTarget),
+        Translation(LaneTarget, ClipTarget),
+        Bible(LaneTarget, ClipTarget),
+        BibleTranslation(LaneTarget, ClipTarget),
+        BibleClear(ClipTarget),
+    }
+
+    #[derive(Debug, Clone, Copy)]
+    enum ClipKind {
+        Main,
+        Translation,
+        Bible,
+        BibleTranslation,
+        BibleClear,
+    }
+
+    fn parse_clip_destinations(
+        name: &str,
+        clip_id: i64,
+        text_param_id: Option<i64>,
+    ) -> Vec<ClipDestination> {
+        let mut result = Vec::new();
+        if !name.starts_with('#') {
+            return result;
+        }
+
+        let tokens: Vec<&str> = name
+            .split('-')
+            .map(|token| token.trim())
+            .filter(|token| !token.is_empty())
+            .collect();
+        if tokens.is_empty() {
+            return result;
+        }
+
+        let mut index = 1;
+        let kind = match tokens[0] {
+            "#main" => ClipKind::Main,
+            "#translate" | "#translation" => ClipKind::Translation,
+            "#bible" => {
+                if tokens.get(index) == Some(&"translate") {
+                    index += 1;
+                    ClipKind::BibleTranslation
+                } else if tokens.get(index) == Some(&"clear") {
+                    index += 1;
+                    ClipKind::BibleClear
+                } else {
+                    ClipKind::Bible
+                }
+            }
+            "#bibleclear" => ClipKind::BibleClear,
+            _ => return result,
         };
 
-        if name_lower.contains("#main-a") {
-            mapping.main_a.push(target.clone());
+        let transforms_start;
+        let lane = match kind {
+            ClipKind::BibleClear => {
+                transforms_start = index;
+                None
+            }
+            _ => {
+                let token = tokens.get(index).copied();
+                let lane = match token {
+                    Some("a") => Some(LaneTarget::A),
+                    Some("b") => Some(LaneTarget::B),
+                    _ => None,
+                };
+                if lane.is_none() {
+                    return result;
+                }
+                index += 1;
+                transforms_start = index;
+                lane
+            }
+        };
+
+        let transforms = parse_transforms(&tokens[transforms_start..]);
+
+        match (kind, lane) {
+            (ClipKind::Main, Some(lane)) => {
+                result.push(ClipDestination::Main(
+                    lane,
+                    ClipTarget {
+                        clip_id,
+                        text_param_id,
+                        transforms,
+                    },
+                ));
+            }
+            (ClipKind::Translation, Some(lane)) => {
+                result.push(ClipDestination::Translation(
+                    lane,
+                    ClipTarget {
+                        clip_id,
+                        text_param_id,
+                        transforms,
+                    },
+                ));
+            }
+            (ClipKind::Bible, Some(lane)) => {
+                result.push(ClipDestination::Bible(
+                    lane,
+                    ClipTarget {
+                        clip_id,
+                        text_param_id,
+                        transforms,
+                    },
+                ));
+            }
+            (ClipKind::BibleTranslation, Some(lane)) => {
+                result.push(ClipDestination::BibleTranslation(
+                    lane,
+                    ClipTarget {
+                        clip_id,
+                        text_param_id,
+                        transforms,
+                    },
+                ));
+            }
+            (ClipKind::BibleClear, _) => {
+                result.push(ClipDestination::BibleClear(ClipTarget {
+                    clip_id,
+                    text_param_id: None,
+                    transforms,
+                }));
+            }
+            _ => {}
         }
-        if name_lower.contains("#main-b") {
-            mapping.main_b.push(target.clone());
+
+        result
+    }
+
+    fn parse_transforms(tokens: &[&str]) -> Vec<TextTransform> {
+        let mut transforms = Vec::new();
+        for token in tokens {
+            match *token {
+                "u" | "upper" => {
+                    if !transforms.contains(&TextTransform::Uppercase) {
+                        transforms.push(TextTransform::Uppercase);
+                    }
+                }
+                "re" | "noenter" | "singleline" => {
+                    if !transforms.contains(&TextTransform::RemoveLineBreaks) {
+                        transforms.push(TextTransform::RemoveLineBreaks);
+                    }
+                }
+                _ => {}
+            }
         }
-        if name_lower.contains("#translate-a") || name_lower.contains("#translation-a") {
-            mapping.translation_a.push(target.clone());
-        }
-        if name_lower.contains("#translate-b") || name_lower.contains("#translation-b") {
-            mapping.translation_b.push(target.clone());
-        }
-        if name_lower.contains("#bible-a") {
-            mapping.bible_a.push(target.clone());
-        }
-        if name_lower.contains("#bible-b") {
-            mapping.bible_b.push(target.clone());
-        }
-        if name_lower.contains("#bible-translate-a") {
-            mapping.bible_translation_a.push(target.clone());
-        }
-        if name_lower.contains("#bible-translate-b") {
-            mapping.bible_translation_b.push(target.clone());
-        }
-        if name_lower.contains("#bible-clear") {
-            mapping.bible_clear.push(ClipTarget {
-                clip_id,
-                text_param_id: None,
-            });
-        }
+        transforms
     }
 
     fn compute_missing_tokens(mapping: &ClipMapping) -> Vec<&'static str> {
@@ -992,6 +1186,32 @@ mod tests {
             .iter()
             .filter(|req| req.method.as_str() == method_name && req.url.path() == path_name)
             .count()
+    }
+
+    #[test]
+    fn clip_mapping_parses_tags_inside_names() {
+        let composition = serde_json::json!({
+            "layers": [
+                {
+                    "clips": [
+                        clip(100, "Song Title #main-a-u-re", Some(1)),
+                        clip(200, "ALT #translate-b-u", Some(2)),
+                    ],
+                }
+            ]
+        });
+
+        let mapping = clip_map::ClipMapping::from_composition(&composition).expect("mapping");
+        assert_eq!(mapping.main_a.len(), 1);
+        assert_eq!(mapping.translation_b.len(), 1);
+        assert_eq!(
+            mapping.main_a[0].transforms,
+            vec![TextTransform::Uppercase, TextTransform::RemoveLineBreaks]
+        );
+        assert_eq!(
+            mapping.translation_b[0].transforms,
+            vec![TextTransform::Uppercase]
+        );
     }
 
     #[tokio::test]
@@ -1153,6 +1373,243 @@ mod tests {
                 "/api/v1/composition/clips/by-id/201/connect",
             ),
             1
+        );
+    }
+
+    #[tokio::test]
+    async fn clip_name_transforms_apply_to_payload() {
+        let server = MockServer::start().await;
+
+        let composition = serde_json::json!({
+            "layers": [
+                {
+                    "clips": [
+                        clip(100, "#main-a-u-re", Some(1)),
+                        clip(101, "#main-b", Some(2)),
+                        clip(200, "#translate-a", Some(10)),
+                        clip(201, "#translate-b", Some(20)),
+                        clip(300, "#bible-a", Some(30)),
+                        clip(301, "#bible-b", Some(31)),
+                        clip(400, "#bible-translate-a", Some(40)),
+                        clip(401, "#bible-translate-b", Some(41)),
+                        clip(500, "#bible-clear", None),
+                    ],
+                }
+            ]
+        });
+
+        Mock::given(method("GET"))
+            .and(path("/api/v1/composition"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(&composition))
+            .mount(&server)
+            .await;
+
+        Mock::given(method("PUT"))
+            .and(path("/api/v1/parameter/by-id/1"))
+            .respond_with(ResponseTemplate::new(200))
+            .mount(&server)
+            .await;
+
+        Mock::given(method("POST"))
+            .and(path("/api/v1/composition/clips/by-id/100/connect"))
+            .respond_with(ResponseTemplate::new(200))
+            .mount(&server)
+            .await;
+
+        let addr = server.address();
+        let now = Utc::now();
+        let config = ResolumeHost::new(
+            ResolumeHostId::new(),
+            "Mock".into(),
+            addr.ip().to_string(),
+            addr.port(),
+            true,
+            now,
+            now,
+        );
+
+        let client = Client::builder()
+            .timeout(DEFAULT_TIMEOUT)
+            .build()
+            .expect("client");
+
+        let mut driver = HostDriver::new(client, config);
+        let status = Arc::new(RwLock::new(ResolumeConnectionSnapshot::disabled()));
+
+        driver.ensure_mapping().await.unwrap();
+
+        let stage = StageUpdate {
+            current_main: Some(
+                "Line 1
+Line 2"
+                    .to_string(),
+            ),
+            current_translation: None,
+        };
+
+        driver
+            .handle_stage(stage, &status)
+            .await
+            .expect("stage update");
+
+        let requests = server.received_requests().await.expect("requests");
+        dbg!(&requests);
+        for request in &requests {
+            println!("{} {}", request.method, request.url.path());
+        }
+        let payload_request = requests
+            .iter()
+            .find(|req| {
+                req.method.as_str() == "PUT" && req.url.path() == "/api/v1/parameter/by-id/1"
+            })
+            .expect("transform request");
+        let body: serde_json::Value =
+            serde_json::from_slice(&payload_request.body).expect("json body");
+        assert_eq!(
+            body.get("value"),
+            Some(&serde_json::Value::String("LINE 1 LINE 2".into()))
+        );
+    }
+
+    #[tokio::test]
+    async fn refreshes_mapping_after_cache_ttl_for_new_deck() {
+        let server = MockServer::start().await;
+
+        let composition_a = serde_json::json!({
+            "layers": [
+                {
+                    "clips": [
+                        clip(100, "#main-a", Some(1)),
+                        clip(101, "#main-b", Some(2)),
+                        clip(200, "#translate-a", Some(10)),
+                        clip(201, "#translate-b", Some(20)),
+                        clip(300, "#bible-a", Some(30)),
+                        clip(301, "#bible-b", Some(31)),
+                        clip(400, "#bible-translate-a", Some(40)),
+                        clip(401, "#bible-translate-b", Some(41)),
+                        clip(500, "#bible-clear", None),
+                    ],
+                }
+            ]
+        });
+
+        let composition_b = serde_json::json!({
+            "layers": [
+                {
+                    "clips": [
+                        clip(300, "#main-a", Some(101)),
+                        clip(301, "#main-b", Some(102)),
+                        clip(400, "#translate-a", Some(110)),
+                        clip(401, "#translate-b", Some(120)),
+                        clip(500, "#bible-a", Some(130)),
+                        clip(501, "#bible-b", Some(131)),
+                        clip(600, "#bible-translate-a", Some(140)),
+                        clip(601, "#bible-translate-b", Some(141)),
+                        clip(700, "#bible-clear", None),
+                    ],
+                }
+            ]
+        });
+
+        Mock::given(method("GET"))
+            .and(path("/api/v1/composition"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(&composition_a))
+            .mount(&server)
+            .await;
+
+        for endpoint in [1, 2, 10, 20, 30, 31, 40, 41] {
+            let route = format!("/api/v1/parameter/by-id/{endpoint}");
+            Mock::given(method("PUT"))
+                .and(path(route.as_str()))
+                .respond_with(ResponseTemplate::new(200))
+                .mount(&server)
+                .await;
+        }
+
+        for clip_id in [100, 101, 200, 201, 300, 301, 400, 401, 500] {
+            let route = format!("/api/v1/composition/clips/by-id/{clip_id}/connect");
+            Mock::given(method("POST"))
+                .and(path(route.as_str()))
+                .respond_with(ResponseTemplate::new(200))
+                .mount(&server)
+                .await;
+        }
+
+        let addr = server.address();
+        let now = Utc::now();
+        let config = ResolumeHost::new(
+            ResolumeHostId::new(),
+            "Mock".into(),
+            addr.ip().to_string(),
+            addr.port(),
+            true,
+            now,
+            now,
+        );
+
+        let client = Client::builder()
+            .timeout(DEFAULT_TIMEOUT)
+            .build()
+            .expect("client");
+
+        let mut driver = HostDriver::new(client, config);
+        let status = Arc::new(RwLock::new(ResolumeConnectionSnapshot::disabled()));
+
+        driver.ensure_mapping().await.unwrap();
+
+        let first = StageUpdate {
+            current_main: Some("First".to_string()),
+            current_translation: None,
+        };
+        driver
+            .handle_stage(first, &status)
+            .await
+            .expect("first stage");
+
+        server.reset().await;
+
+        Mock::given(method("GET"))
+            .and(path("/api/v1/composition"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(&composition_b))
+            .mount(&server)
+            .await;
+
+        for endpoint in [101, 102, 110, 120, 130, 131, 140, 141] {
+            let route = format!("/api/v1/parameter/by-id/{endpoint}");
+            Mock::given(method("PUT"))
+                .and(path(route.as_str()))
+                .respond_with(ResponseTemplate::new(200))
+                .mount(&server)
+                .await;
+        }
+
+        for clip_id in [300, 301, 400, 401, 500, 600, 601, 700] {
+            let route = format!("/api/v1/composition/clips/by-id/{clip_id}/connect");
+            Mock::given(method("POST"))
+                .and(path(route.as_str()))
+                .respond_with(ResponseTemplate::new(200))
+                .mount(&server)
+                .await;
+        }
+
+        driver.refresh_mapping().await.unwrap();
+
+        let second = StageUpdate {
+            current_main: Some("Second".to_string()),
+            current_translation: None,
+        };
+        driver
+            .handle_stage(second, &status)
+            .await
+            .expect("second stage");
+
+        let requests = server.received_requests().await.expect("requests");
+        let new_param_hits = count_requests(&requests, "PUT", "/api/v1/parameter/by-id/101")
+            + count_requests(&requests, "PUT", "/api/v1/parameter/by-id/102");
+        assert_eq!(new_param_hits, 1);
+        assert_eq!(
+            count_requests(&requests, "PUT", "/api/v1/parameter/by-id/2"),
+            0
         );
     }
 }

@@ -27,6 +27,7 @@
   centralized settings surface.
 - Cache clip metadata and warn operators when expected `#main-a`, `#bible-clear`, etc. tokens are
   missing so they can fix naming before service.
+- Allow clip name modifiers (e.g., `-u`, `-re`) so formatting tweaks happen directly in Resolume without duplicating slides.
 - Guarantee sub-100 ms trigger-to-clip latency with health indicators when latency drifts.
 
 ## Data Model Considerations

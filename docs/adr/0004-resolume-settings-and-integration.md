@@ -54,6 +54,9 @@ Operators require:
   - A bounded channel (capacity 16) receiving Presenter text intents; the worker serializes payloads to
     Resolume REST endpoints (`PUT /api/v1/parameter/by-id/{id}` for text and `POST
     /api/v1/composition/clips/by-id/{clipId}/connect` to trigger the clip).
+  - Composition metadata is refreshed proactively whenever cached mappings are older than one
+    second or a command fails, so deck changes in Resolume remap the clip targets before the next
+    slide fires.
   - A DNS resolver that caches resolved socket addresses for five minutes while preserving the original
     hostname via the HTTP `Host` header so Dockerized deployments avoid repeated lookups yet still reach
     `resolume.lan`.
@@ -69,6 +72,9 @@ Operators require:
   is case-insensitive, ignores surrounding text, and supports alias tokens (`main-a`, `Main A`).
 - Maintain two clip references per output channel (Main, Translation, Bible, Bible Translation),
   alternating between A/B lanes. `#bible-clear` remains a dedicated clip.
+- Clip names may include suffix modifiers: `-u` forces uppercase output, `-re` collapses
+  multi-line payloads into a single space-delimited line. Modifiers can be combined (e.g.
+  `#translate-b-u-re`).
 - If a token is missing we surface the error to the settings UI and log with `warn` so operators can
   correct naming before service.
 

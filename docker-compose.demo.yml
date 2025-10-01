@@ -11,6 +11,7 @@ services:
       PRESENTER_IMPORT_ROOT: /imports
       PRESENTER_DATA_DIR: /data
       PRESENTER_FORCE_IMPORT: ${PRESENTER_FORCE_IMPORT:-0}
+      RUST_LOG: ${RUST_LOG:-presenter_server=info}
     volumes:
       - ${DEMO_DATA_DIR}:/data
       - ${IMPORT_ROOT}:/imports:ro
