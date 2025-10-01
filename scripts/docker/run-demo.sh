@@ -8,6 +8,7 @@ NAME=""
 PORT=""
 IMPORT_ROOT="$DEFAULT_IMPORT_ROOT"
 DISPLAY_NAME=""
+LOG_LEVEL="presenter_server=info"
 FORCE=0
 
 usage() {
@@ -17,6 +18,7 @@ Usage: $(basename "$0") [options]
   --port PORT          Host port to publish (defaults to derived high port)
   --import-root PATH   Path to ProPresenter library (default: "$DEFAULT_IMPORT_ROOT")
   --display-name TEXT  Display name for landing page (defaults to NAME)
+  --log-level LEVEL   RUST_LOG value for the presenter container (default: presenter_server=info)
   --force              Rebuild the image even if it exists
   -h, --help           Show this help message
 USAGE
@@ -32,6 +34,8 @@ while [[ $# -gt 0 ]]; do
       IMPORT_ROOT="$2"; shift 2 ;;
     --display-name)
       DISPLAY_NAME="$2"; shift 2 ;;
+    --log-level)
+      LOG_LEVEL="$2"; shift 2 ;;
     --force)
       FORCE=1; shift ;;
     -h|--help)
@@ -74,6 +78,7 @@ export HOST_HTTP_PORT
 export DEMO_DATA_DIR
 export IMPORT_ROOT
 export PRESENTER_FORCE_IMPORT=1
+export RUST_LOG="$LOG_LEVEL"
 
 COMPOSE_ARGS=("${DOCKER_CMD[@]}" "compose" "-f" "$REPO_ROOT/docker-compose.demo.yml" "-p" "$PROJECT" up -d)
 if [[ "$FORCE" -eq 1 ]]; then
