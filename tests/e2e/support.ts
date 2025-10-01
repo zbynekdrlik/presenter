@@ -1,5 +1,7 @@
 import { spawn, type ChildProcessWithoutNullStreams } from 'child_process';
 import { once } from 'events';
+import http from 'http';
+import type { AddressInfo } from 'net';
 import type { TestInfo } from '@playwright/test';
 
 export const REPO_ROOT = process.cwd();
@@ -8,6 +10,12 @@ export type ServerHandle = {
   process: ChildProcessWithoutNullStreams;
   port: number;
   stop: () => Promise<void>;
+};
+
+export type MockResolumeHandle = {
+  port: number;
+  setOnline: (online: boolean) => void;
+  close: () => Promise<void>;
 };
 
 export function deriveTestConfig(testInfo: TestInfo) {
@@ -102,3 +110,100 @@ export async function stopServer(handle?: ServerHandle) {
   handle.process.kill('SIGTERM');
   await once(handle.process, 'exit');
 }
+
+export async function startMockResolume(): Promise<MockResolumeHandle> {
+  let online = true;
+
+  const server = http.createServer((req, res) => {
+    const { method, url } = req;
+    if (!url) {
+      res.statusCode = 400;
+      return res.end('bad request');
+    }
+
+    if (!online) {
+      res.statusCode = 503;
+      return res.end('resolume offline');
+    }
+
+    if (method === 'GET' && url.startsWith('/api/v1/composition')) {
+      res.writeHead(200, { 'content-type': 'application/json' });
+      const body = {
+        layers: [
+          {
+            clips: [
+              clip(100, '#main-a', 1),
+              clip(101, '#main-b', 2),
+              clip(200, '#translate-a', 10),
+              clip(201, '#translate-b', 20),
+              clip(300, '#bible-a', 30),
+              clip(301, '#bible-b', 31),
+              clip(400, '#bible-translate-a', 40),
+              clip(401, '#bible-translate-b', 41),
+              clip(500, '#bible-clear', undefined),
+            ],
+          },
+        ],
+      };
+      const payload = JSON.stringify(body);
+      res.end(payload);
+      return;
+    }
+
+    if (method === 'PUT' && url.startsWith('/api/v1/parameter/by-id/')) {
+      res.statusCode = 200;
+      res.end();
+      return;
+    }
+
+    if (method === 'POST' && url.startsWith('/api/v1/composition/clips/by-id/')) {
+      res.statusCode = 200;
+      res.end();
+      return;
+    }
+
+    res.statusCode = 404;
+    res.end('not found');
+  });
+
+  function clip(id: number, name: string, param?: number) {
+    const sourceparams = param
+      ? {
+          text: {
+            valuetype: 'ParamText',
+            id: param,
+          },
+        }
+      : {};
+
+    return {
+      id,
+      name: { value: name },
+      video: { sourceparams },
+    };
+  }
+
+  await new Promise<void>((resolve, reject) => {
+    server.listen(0, '127.0.0.1', (err?: Error) => {
+      if (err) reject(err);
+      else resolve();
+    });
+  });
+
+  const address = server.address() as AddressInfo;
+
+  return {
+    port: address.port,
+    setOnline: (value: boolean) => {
+      online = value;
+    },
+    close: () =>
+      new Promise<void>((resolve, reject) => {
+        server.close((err) => {
+          if (err) reject(err);
+          else resolve();
+        });
+      }),
+  };
+}
+

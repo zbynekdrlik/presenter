@@ -29,6 +29,26 @@ app.get('/healthz', (_req, res) => {
   res.json({ status: 'ok' });
 });
 
+function deriveInstanceInfo(manifest) {
+  const source = manifest.repoPath ? path.basename(manifest.repoPath) : manifest.project;
+  if (!source) {
+    return {
+      sortKey: 'zzz',
+      label: manifest.displayName || manifest.project || 'Unknown',
+    };
+  }
+
+  const match = /(?:^|-)dev(\d+)/i.exec(source);
+  if (match) {
+    const num = Number.parseInt(match[1] || '0', 10);
+    const sortKey = `dev-${num.toString().padStart(4, '0')}`;
+    const label = `Dev${Number.isNaN(num) ? match[1] : num}`;
+    return { sortKey, label };
+  }
+
+  return { sortKey: source.toLowerCase(), label: source };
+}
+
 async function loadManifests() {
   try {
     const entries = await fs.readdir(MANIFEST_DIR, { withFileTypes: true });
@@ -37,21 +57,30 @@ async function loadManifests() {
       if (!entry.isFile() || !entry.name.endsWith('.json')) continue;
       try {
         const raw = await fs.readFile(path.join(MANIFEST_DIR, entry.name), 'utf8');
-       const data = JSON.parse(raw);
-       manifests.push({
-         project: data.project ?? entry.name.replace(/\.json$/, ''),
-         displayName: data.displayName ?? data.project ?? entry.name,
-         port: data.port ?? null,
-         url: data.url ?? null,
-         operatorUrl: data.operatorUrl ?? null,
+        const data = JSON.parse(raw);
+        const manifest = {
+          project: data.project ?? entry.name.replace(/\.json$/, ''),
+          displayName: data.displayName ?? data.project ?? entry.name,
+          port: data.port ?? null,
+          url: data.url ?? null,
+          operatorUrl: data.operatorUrl ?? null,
           updatedAt: data.updatedAt ?? null,
           repoPath: data.repoPath ?? null,
-        });
+        };
+        const instance = deriveInstanceInfo(manifest);
+        manifest.instanceLabel = instance.label;
+        manifest.instanceSortKey = instance.sortKey;
+        manifests.push(manifest);
       } catch {
         // ignore malformed manifest
       }
     }
-    manifests.sort((a, b) => (a.displayName || '').localeCompare(b.displayName || ''));
+    manifests.sort((a, b) => {
+      if (a.instanceSortKey !== b.instanceSortKey) {
+        return a.instanceSortKey.localeCompare(b.instanceSortKey);
+      }
+      return (a.displayName || '').localeCompare(b.displayName || '');
+    });
     return manifests;
   } catch (error) {
     if (error.code === 'ENOENT') {
@@ -60,6 +89,7 @@ async function loadManifests() {
     throw error;
   }
 }
+
 
 function render(manifests, baseOrigin) {
   const originUrl = new URL(baseOrigin);
@@ -86,6 +116,7 @@ function render(manifests, baseOrigin) {
       { label: 'Stage Timer', href: stageTimer },
       { label: 'Stage Preach', href: stagePreach },
     ];
+    const branchLabel = manifest.displayName || manifest.project;
     const lastUpdated = formatUpdatedAt(manifest.updatedAt);
     const linkMarkup = links
       .map((link) => `<a href="${link.href}" target="_blank" rel="noopener">${link.label}</a>`)
@@ -94,8 +125,8 @@ function render(manifests, baseOrigin) {
     return `
       <article class="card" data-project="${manifest.project}" data-updated-at="${updatedIso}">
         <header>
-          <h2>${manifest.displayName}</h2>
-          <span class="slug">${manifest.project}</span>
+          <h2>${manifest.instanceLabel}</h2>
+          <span class="slug">${branchLabel}</span>
         </header>
         <dl>
           <div><dt>Port</dt><dd>${manifest.port ?? '—'}</dd></div>
@@ -134,11 +165,29 @@ function render(manifests, baseOrigin) {
       justify-content: space-between;
       align-items: baseline;
       gap: 1rem;
+      flex-wrap: wrap;
     }
     .grid {
       display: grid;
       gap: 1.5rem;
-      grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
+      width: min(1200px, 100%);
+      margin: 0 auto;
+      grid-template-columns: repeat(auto-fit, minmax(320px, 1fr));
+      align-items: stretch;
+    }
+
+    @media (max-width: 900px) {
+      .grid {
+        width: min(100%, 720px);
+        grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
+      }
+    }
+
+    @media (max-width: 640px) {
+      .grid {
+        width: 100%;
+        grid-template-columns: 1fr;
+      }
     }
     .card {
       background: rgba(15, 23, 42, 0.75);
@@ -149,12 +198,14 @@ function render(manifests, baseOrigin) {
       flex-direction: column;
       gap: 1rem;
       box-shadow: 0 16px 40px rgba(15, 23, 42, 0.35);
+      overflow: hidden;
     }
     .card header {
       display: flex;
       justify-content: space-between;
       gap: 0.5rem;
-      align-items: baseline;
+      align-items: center;
+      flex-wrap: wrap;
     }
     .card h2 {
       margin: 0;
@@ -164,6 +215,7 @@ function render(manifests, baseOrigin) {
       font-family: "JetBrains Mono", ui-monospace, monospace;
       font-size: 0.75rem;
       opacity: 0.7;
+      margin-left: auto;
     }
     dl {
       display: grid;
@@ -179,23 +231,37 @@ function render(manifests, baseOrigin) {
       margin: 0;
     }
     nav {
-      display: flex;
+      display: grid;
+      width: 100%;
+      margin-top: 0.5rem;
       gap: 0.75rem;
+      grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
     }
     nav a {
-      flex: 1 1 auto;
-      text-align: center;
-      padding: 0.6rem 0.8rem;
+      display: inline-flex;
+      justify-content: center;
+      align-items: center;
+      padding: 0.65rem 0.9rem;
       border-radius: 12px;
       text-decoration: none;
       font-weight: 600;
       color: #0f172a;
-      background: #38bdf8;
-      transition: background 0.2s ease, transform 0.2s ease;
+      background: linear-gradient(135deg, #38bdf8, #2563eb);
+      box-shadow: 0 10px 26px rgba(37, 99, 235, 0.28);
+      transition: transform 0.18s ease, box-shadow 0.18s ease;
     }
     nav a:hover {
-      background: #0ea5e9;
       transform: translateY(-1px);
+      box-shadow: 0 12px 30px rgba(37, 99, 235, 0.35);
+    }
+    nav a:focus-visible {
+      outline: 2px solid rgba(56, 189, 248, 0.75);
+      outline-offset: 3px;
+    }
+    @media (max-width: 768px) {
+      nav {
+        grid-template-columns: repeat(auto-fit, minmax(140px, 1fr));
+      }
     }
     .empty {
       opacity: 0.8;

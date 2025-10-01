@@ -1,5 +1,9 @@
-use crate::state::AppState;
+use crate::{
+    resolume::{ResolumeConnectionSnapshot, ResolumeConnectionState},
+    state::AppState,
+};
 use axum::response::Html;
+use chrono::{DateTime, Utc};
 use leptos::prelude::*;
 use presenter_core::{
     playlist::PlaylistEntryKind, BibleBroadcast, BibleTranslation, TimerState, TimersOverview,
@@ -15,6 +19,7 @@ use std::{
 const OPERATOR_SCRIPT_TEMPLATE: &str = include_str!("operator_script.js");
 const TABLET_SCRIPT_TEMPLATE: &str = include_str!("tablet_script.js");
 const BIBLE_SCRIPT_TEMPLATE: &str = include_str!("bible_script.js");
+const SETTINGS_SCRIPT_TEMPLATE: &str = include_str!("settings_script.js");
 
 #[derive(Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -51,6 +56,27 @@ pub struct PlaylistEntryRow {
     pub name: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub presentation_id: Option<String>,
+}
+
+#[derive(Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SettingsHostRow {
+    pub id: String,
+    pub label: String,
+    pub host: String,
+    pub port: u16,
+    pub is_enabled: bool,
+    pub created_at: String,
+    pub created_at_display: String,
+    pub updated_at: String,
+    pub updated_at_display: String,
+    pub status_state: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub status_message: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub last_latency_ms: Option<f64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub status: Option<ResolumeConnectionSnapshot>,
 }
 
 fn format_timer_state(state: TimerState) -> &'static str {
@@ -118,6 +144,11 @@ pub fn OperatorDocument(
                                 >"Worship"</button>
                                 <button type="button" data-role="view-toggle" data-view="bible">"Bible"</button>
                                 <button type="button" data-role="view-toggle" data-view="timers">"Timers"</button>
+                                <button
+                                    type="button"
+                                    data-role="view-toggle"
+                                    data-view="settings"
+                                >"Settings"</button>
                             </nav>
                         </div>
                         <div class="operator__header-center">
@@ -387,6 +418,9 @@ pub fn OperatorDocument(
                                     </div>
                                 </div>
                             </div>
+                        </section>
+                        <section class="operator__panel operator__panel--settings" data-view-panel="settings">
+                            <iframe src="/ui/settings" title="Settings" class="operator__settings-frame"></iframe>
                         </section>
                     </main>
                     <div class="operator__toast" data-role="toast"></div>
@@ -1714,6 +1748,23 @@ body.operator[data-view="timers"] [data-view-panel="timers"] {
     display: block;
 }
 
+body.operator[data-view="settings"] [data-view-panel="settings"] {
+    display: block;
+}
+
+.operator__panel--settings {
+    padding: 0;
+}
+
+.operator__settings-frame {
+    width: 100%;
+    height: 100%;
+    border: none;
+    border-radius: var(--operator-radius);
+    box-shadow: var(--shadow-soft);
+    background: #ffffff;
+}
+
 .operator__panel--bible iframe {
     width: 100%;
     height: 100%;
@@ -2777,6 +2828,496 @@ body.bible {
 }
 "#;
 
+const SETTINGS_STYLES: &str = r#"
+:root {
+    color-scheme: light;
+}
+
+body.settings {
+    margin: 0;
+    background: #f8fafc;
+    color: #0f172a;
+    font-family: 'Inter', system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+}
+
+.settings__header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 24px 40px;
+    background: #ffffff;
+    border-bottom: 1px solid #e2e8f0;
+}
+
+.settings__header-title h1 {
+    margin: 0;
+    font-size: 1.75rem;
+    font-weight: 600;
+}
+
+.settings__header-title p {
+    margin: 8px 0 0;
+    color: #475569;
+}
+
+.settings__header-nav .settings__link {
+    text-decoration: none;
+    color: #3b82f6;
+    font-weight: 600;
+}
+
+.settings__header-nav .settings__link:hover {
+    text-decoration: underline;
+}
+
+.settings__main {
+    max-width: 1000px;
+    margin: 32px auto;
+    padding: 0 32px 48px;
+    display: flex;
+    flex-direction: column;
+    gap: 32px;
+}
+
+.settings__card {
+    background: #ffffff;
+    border-radius: 20px;
+    box-shadow: 0 12px 40px rgba(15, 23, 42, 0.08);
+    padding: 32px;
+    display: flex;
+    flex-direction: column;
+    gap: 24px;
+}
+
+.settings__card-header {
+    display: flex;
+    align-items: flex-start;
+    justify-content: space-between;
+    gap: 24px;
+}
+
+.settings__card-header h2 {
+    margin: 0;
+    font-size: 1.5rem;
+    font-weight: 600;
+}
+
+.settings__card-header p {
+    margin: 8px 0 0;
+    color: #475569;
+    max-width: 460px;
+}
+
+.settings__badge-group {
+    display: flex;
+    flex-direction: column;
+    align-items: flex-end;
+    gap: 4px;
+}
+
+.settings__badge {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    min-width: 48px;
+    padding: 6px 12px;
+    border-radius: 999px;
+    background: #eef2ff;
+    color: #312e81;
+    font-weight: 600;
+    font-size: 0.95rem;
+}
+
+.settings__badge-label {
+    font-size: 0.8rem;
+    text-transform: uppercase;
+    letter-spacing: 0.08em;
+    color: #64748b;
+}
+
+.settings__form {
+    display: flex;
+    flex-direction: column;
+    gap: 20px;
+    background: #f8fafc;
+    border: 1px solid #e2e8f0;
+    border-radius: 16px;
+    padding: 24px;
+}
+
+.settings__form-header h3 {
+    margin: 0;
+    font-size: 1.2rem;
+    font-weight: 600;
+}
+
+.settings__form-header p {
+    margin: 6px 0 0;
+    color: #64748b;
+}
+
+.settings__form-row {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 16px;
+}
+
+.settings__form-row--single {
+    justify-content: flex-start;
+}
+
+.settings__form-row label {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+    flex: 1 1 220px;
+    font-weight: 600;
+    color: #0f172a;
+}
+
+.settings__form-row label span {
+    font-size: 0.9rem;
+}
+
+.settings__form-row input[type="text"],
+.settings__form-row input[type="number"] {
+    padding: 10px 12px;
+    border: 1px solid #cbd5f5;
+    border-radius: 10px;
+    font-size: 1rem;
+    background: #ffffff;
+    color: #0f172a;
+    transition: border-color 0.2s ease, box-shadow 0.2s ease;
+}
+
+.settings__form-row input:focus {
+    outline: none;
+    border-color: #6366f1;
+    box-shadow: 0 0 0 3px rgba(99, 102, 241, 0.12);
+}
+
+.settings__form-control--small {
+    flex: 0 1 120px;
+}
+
+.settings__form-checkbox {
+    flex: 0 1 auto;
+    flex-direction: row;
+    align-items: center;
+    gap: 10px;
+    padding-top: 28px;
+    font-weight: 600;
+}
+
+.settings__form-checkbox--block {
+    padding-top: 0;
+}
+
+.settings__form-checkbox input {
+    width: 18px;
+    height: 18px;
+}
+
+.settings__form-actions {
+    display: flex;
+    gap: 12px;
+    align-items: center;
+}
+
+.settings__form-checkbox--inline {
+    flex: 0 0 auto;
+    display: inline-flex;
+    align-items: center;
+    gap: 0.5rem;
+    font-weight: 600;
+    color: #0f172a;
+}
+
+.settings__form-checkbox--inline input {
+    width: 18px;
+    height: 18px;
+}
+
+.settings__button {
+    border: none;
+    border-radius: 10px;
+    font-size: 0.95rem;
+    font-weight: 600;
+    padding: 10px 18px;
+    cursor: pointer;
+    transition: transform 0.15s ease, box-shadow 0.15s ease;
+}
+
+.settings__button:disabled {
+    opacity: 0.6;
+    cursor: wait;
+}
+
+.settings__button--primary {
+    background: #4f46e5;
+    color: #ffffff;
+    box-shadow: 0 12px 24px rgba(79, 70, 229, 0.22);
+}
+
+.settings__button--primary:hover:not(:disabled) {
+    transform: translateY(-1px);
+    box-shadow: 0 14px 28px rgba(79, 70, 229, 0.26);
+}
+
+.settings__button--ghost {
+    background: transparent;
+    color: #475569;
+    border: 1px solid #cbd5f5;
+}
+
+.settings__button--ghost:hover {
+    background: #e2e8f0;
+}
+
+.settings__button--danger {
+    background: #dc2626;
+    color: #ffffff;
+    box-shadow: 0 10px 24px rgba(220, 38, 38, 0.25);
+}
+
+.settings__button--danger:hover {
+    transform: translateY(-1px);
+}
+
+body.settings[data-mode="create"] [data-role="host-reset"] {
+    display: none;
+}
+
+.settings__form-status {
+    min-height: 1.2rem;
+    font-size: 0.9rem;
+    margin: 0;
+}
+
+.settings__form-status[data-state="error"] {
+    color: #dc2626;
+}
+
+.settings__form-status[data-state="success"] {
+    color: #16a34a;
+}
+
+.settings__list {
+    list-style: none;
+    padding: 0;
+    margin: 0;
+    display: flex;
+    flex-direction: column;
+    gap: 16px;
+}
+
+.settings__list-item {
+    display: flex;
+    justify-content: space-between;
+    gap: 24px;
+    padding: 20px 24px;
+    border: 1px solid #e2e8f0;
+    border-radius: 16px;
+    background: #ffffff;
+    box-shadow: 0 10px 24px rgba(15, 23, 42, 0.04);
+}
+
+.settings__list-item[data-enabled="false"] {
+    opacity: 0.75;
+}
+
+.settings__list-primary {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+}
+
+.settings__list-title {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+}
+
+.settings__host-label {
+    font-size: 1.1rem;
+    font-weight: 600;
+}
+
+.settings__status {
+    font-size: 0.8rem;
+    text-transform: uppercase;
+    letter-spacing: 0.08em;
+    padding: 4px 10px;
+    border-radius: 999px;
+}
+
+.settings__status--enabled {
+    background: #dcfcef;
+    color: #047857;
+}
+
+.settings__status--connecting {
+    background: #bfdbfe;
+    color: #1d4ed8;
+}
+
+.settings__status--disabled {
+    background: #fee2e2;
+    color: #b91c1c;
+}
+
+.settings__status--error {
+    background: #fee2e2;
+    color: #b91c1c;
+}
+
+.settings__list-line {
+    margin: 0;
+    font-family: 'JetBrains Mono', 'Fira Mono', monospace;
+    font-size: 0.95rem;
+    color: #0f172a;
+}
+
+.settings__list-meta {
+    margin: 0;
+    color: #64748b;
+    font-size: 0.85rem;
+}
+
+.settings__list-meta--warning {
+    color: #b91c1c;
+    font-weight: 600;
+}
+
+.settings__list-actions {
+    display: flex;
+    gap: 10px;
+    align-items: flex-start;
+}
+
+.settings__list-empty {
+    padding: 32px;
+    border: 1px dashed #cbd5f5;
+    border-radius: 16px;
+    text-align: center;
+    color: #64748b;
+    background: #f8fafc;
+    font-weight: 500;
+}
+
+.settings__toast {
+    position: fixed;
+    right: 28px;
+    bottom: 28px;
+    padding: 14px 20px;
+    background: #1e293b;
+    color: #f8fafc;
+    border-radius: 12px;
+    box-shadow: 0 18px 40px rgba(15, 23, 42, 0.35);
+    opacity: 0;
+    pointer-events: none;
+    transform: translateY(20px);
+    transition: opacity 0.2s ease, transform 0.2s ease;
+}
+
+.settings__toast[data-visible="true"] {
+    opacity: 1;
+    pointer-events: auto;
+    transform: translateY(0);
+}
+
+.settings__toast[data-state="success"] {
+    background: #0f766e;
+}
+
+.settings__toast[data-state="error"] {
+    background: #b91c1c;
+}
+
+body.settings[data-embedded="true"] {
+    background: transparent;
+}
+
+body.settings[data-embedded="true"] .settings__header {
+    display: none;
+}
+
+body.settings[data-embedded="true"] .settings__main {
+    margin: 0;
+    padding: 16px 24px 32px;
+}
+
+body.settings[data-embedded="true"] .settings__card {
+    box-shadow: none;
+}
+
+.settings__legend {
+    margin-top: 1.75rem;
+    background: rgba(148, 163, 184, 0.08);
+    border: 1px solid rgba(148, 163, 184, 0.2);
+    border-radius: 14px;
+    padding: 1.25rem;
+    display: flex;
+    flex-direction: column;
+    gap: 0.75rem;
+}
+
+.settings__legend-note {
+    margin: 0;
+    color: #cbd5f5;
+    font-size: 0.85rem;
+    line-height: 1.4;
+}
+
+.settings__legend h3 {
+    margin: 0;
+    font-size: 1.05rem;
+    font-weight: 600;
+}
+
+.settings__legend dl {
+    margin: 0;
+    display: grid;
+    gap: 0.25rem 1.25rem;
+    grid-template-columns: minmax(160px, auto) 1fr;
+}
+
+.settings__legend dt {
+    font-weight: 600;
+    color: #cbd5f5;
+}
+
+.settings__legend dd {
+    margin: 0;
+    color: #e2e8f0;
+}
+
+@media (max-width: 840px) {
+    .settings__card {
+        padding: 24px;
+    }
+
+    .settings__card-header {
+        flex-direction: column;
+        align-items: flex-start;
+    }
+
+    .settings__badge-group {
+        flex-direction: row;
+        align-items: center;
+        gap: 12px;
+    }
+
+    .settings__list-item {
+        flex-direction: column;
+    }
+
+    .settings__list-actions {
+        align-self: flex-end;
+    }
+}
+"#;
+
 const HOME_STYLES: &str = r#"
 body.home {
     margin: 0;
@@ -2795,6 +3336,31 @@ body.home {
     display: flex;
     flex-direction: column;
     gap: 2rem;
+}
+
+.home__cta-row {
+    display: flex;
+    justify-content: flex-start;
+}
+
+.home__cta-button {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    padding: 0.9rem 1.6rem;
+    border-radius: 999px;
+    background: #3b82f6;
+    color: #0f172a;
+    font-weight: 600;
+    font-size: 1rem;
+    text-decoration: none;
+    box-shadow: 0 18px 36px rgba(59, 130, 246, 0.35);
+    transition: transform 0.2s ease, box-shadow 0.2s ease;
+}
+
+.home__cta-button:hover {
+    transform: translateY(-2px);
+    box-shadow: 0 24px 42px rgba(59, 130, 246, 0.45);
 }
 
 .home__header h1 {
@@ -3158,6 +3724,281 @@ pub async fn render_bible_ui(state: &AppState) -> anyhow::Result<Html<String>> {
     Ok(Html(format!("<!DOCTYPE html>{html}")))
 }
 
+pub async fn render_settings_ui(state: &AppState) -> anyhow::Result<Html<String>> {
+    let hosts = state.list_resolume_hosts().await?;
+    let statuses = state.resolume_status_snapshot().await;
+    let host_rows: Vec<SettingsHostRow> = hosts
+        .into_iter()
+        .map(|host| {
+            let created_display = format_settings_timestamp(host.created_at);
+            let updated_display = format_settings_timestamp(host.updated_at);
+            let status = statuses
+                .get(&host.id)
+                .cloned()
+                .unwrap_or_else(ResolumeConnectionSnapshot::disabled);
+            let status_state = match status.state {
+                ResolumeConnectionState::Disabled => "Disabled".to_string(),
+                ResolumeConnectionState::Connecting => "Connecting".to_string(),
+                ResolumeConnectionState::Connected => "Connected".to_string(),
+                ResolumeConnectionState::Error => "Error".to_string(),
+            };
+            SettingsHostRow {
+                id: host.id.to_string(),
+                label: host.label,
+                host: host.host,
+                port: host.port,
+                is_enabled: host.is_enabled,
+                created_at: host.created_at.to_rfc3339(),
+                created_at_display: created_display,
+                updated_at: host.updated_at.to_rfc3339(),
+                updated_at_display: updated_display,
+                status_state,
+                status_message: status.last_error.clone(),
+                last_latency_ms: status.last_latency_ms,
+                status: Some(status),
+            }
+        })
+        .collect();
+
+    let hosts_json = to_string(&host_rows).unwrap_or_else(|_| "[]".to_string());
+    let hosts_json = hosts_json.replace("</script>", r"<\/script>");
+    let script = SETTINGS_SCRIPT_TEMPLATE.replace("__RESOLUME_HOSTS__", &hosts_json);
+
+    let owner = Owner::new_root(None);
+    let html = owner.with(|| {
+        view! {
+            <SettingsDocument hosts=host_rows.clone() script=script.clone() />
+        }
+        .into_view()
+        .to_html()
+    });
+
+    Ok(Html(format!("<!DOCTYPE html>{html}")))
+}
+
+#[component]
+fn SettingsDocument(hosts: Vec<SettingsHostRow>, script: String) -> impl IntoView {
+    let hosts = Arc::new(hosts);
+    let host_count_text = hosts.len().to_string();
+
+    view! {
+        <html lang="en">
+            <head>
+                <meta charset="utf-8" />
+                <title>"Presenter Settings"</title>
+                <meta name="viewport" content="width=device-width, initial-scale=1" />
+                <style>{SETTINGS_STYLES}</style>
+            </head>
+            <body class="settings" data-mode="create">
+                <header class="settings__header">
+                    <div class="settings__header-title">
+                        <h1>"Presenter Settings"</h1>
+                        <p>"Configure integrations and controller connections."</p>
+                    </div>
+                    <nav class="settings__header-nav">
+                        <a href="/" class="settings__link">"← Back to hub"</a>
+                    </nav>
+                </header>
+                <main class="settings__main">
+                    <section class="settings__card">
+                        <header class="settings__card-header">
+                            <div>
+                                <h2>"Resolume Arena Connections"</h2>
+                                <p>
+                                    "Define Resolume web servers Presenter should control."
+                                </p>
+                            </div>
+                            <div class="settings__badge-group">
+                                <span class="settings__badge" data-role="host-count">{host_count_text.clone()}</span>
+                                <span class="settings__badge-label">"Hosts"</span>
+                            </div>
+                        </header>
+                        <form class="settings__form" data-role="host-form" autocomplete="off">
+                            <input type="hidden" data-role="host-id" />
+                            <div class="settings__form-header">
+                                <div>
+                                    <h3 data-role="form-title">"Add Resolume Connection"</h3>
+                                    <p data-role="form-subtitle">"Specify hostname, port, and availability."</p>
+                                </div>
+                            </div>
+                            <div class="settings__form-row">
+                                <label>
+                                    <span>"Label"</span>
+                                    <input
+                                        type="text"
+                                        name="label"
+                                        data-role="host-label"
+                                        placeholder="Main Arena"
+                                        required
+                                    />
+                                </label>
+                                <label>
+                                    <span>"Hostname or DNS"</span>
+                                    <input
+                                        type="text"
+                                        name="host"
+                                        data-role="host-host"
+                                        placeholder="resolume.lan"
+                                        required
+                                    />
+                                </label>
+                                <label class="settings__form-control--small">
+                                    <span>"Port"</span>
+                                    <input
+                                        type="number"
+                                        name="port"
+                                        data-role="host-port"
+                                        min="1"
+                                        max="65535"
+                                        value="8090"
+                                        required
+                                    />
+                                </label>
+                            </div>
+                            <div class="settings__form-row settings__form-row--single">
+                                <label class="settings__form-checkbox settings__form-checkbox--block">
+                                    <input type="checkbox" name="isEnabled" data-role="host-enabled" checked />
+                                    <span>"Enabled"</span>
+                                </label>
+                            </div>
+                            <div class="settings__form-actions">
+                                <button
+                                    type="submit"
+                                    class="settings__button settings__button--primary"
+                                    data-role="host-submit"
+                                >"Add Connection"</button>
+                                <button
+                                    type="button"
+                                    class="settings__button settings__button--ghost"
+                                    data-role="host-reset"
+                                >"Cancel"</button>
+                            </div>
+                            <p class="settings__form-status" data-role="form-status" data-state="idle"></p>
+                        </form>
+                        <ul class="settings__list" data-role="resolume-host-list">
+                            <Show
+                                when={
+                                    let hosts = Arc::clone(&hosts);
+                                    move || !hosts.is_empty()
+                                }
+                                fallback={move || view! {
+                                    <li class="settings__list-empty" data-role="host-empty">"No Resolume connections defined yet."</li>
+                                }}
+                            >
+                                <For
+                                    each={
+                                        let hosts = Arc::clone(&hosts);
+                                        move || (*hosts).clone()
+                                    }
+                                    key=|host: &SettingsHostRow| host.id.clone()
+                                    children={|host: SettingsHostRow| {
+                                        let raw_state = if host.status_state.is_empty() {
+                                            "disabled".to_string()
+                                        } else {
+                                            host.status_state.to_lowercase()
+                                        };
+                                        let status_class =
+                                            format!("settings__status settings__status--{}", raw_state);
+                                        let status_label = format!(
+                                            "{}{}",
+                                            raw_state
+                                                .chars()
+                                                .next()
+                                                .map(|c| c.to_uppercase().collect::<String>())
+                                                .unwrap_or_else(String::new),
+                                            raw_state.chars().skip(1).collect::<String>()
+                                        );
+                                        let latency_text = host
+                                            .last_latency_ms
+                                            .map(|ms| format!("{ms:.1} ms"))
+                                            .unwrap_or_else(|| "—".to_string());
+                                        let warning_text = host.status_message.clone().unwrap_or_default();
+                                        let warning_view = (!warning_text.is_empty()).then(|| {
+                                            view! { <p class="settings__list-meta settings__list-meta--warning">{format!("⚠ {warning_text}")}</p> }
+                                        });
+                                        let host_id_edit = host.id.clone();
+                                        let host_id_delete = host.id.clone();
+                                        view! {
+                                            <li
+                                                class="settings__list-item"
+                                                data-id={host.id.clone()}
+                                                data-enabled={host.is_enabled.to_string()}
+                                            >
+                                                <div class="settings__list-primary">
+                                                    <div class="settings__list-title">
+                                                        <span class="settings__host-label">{host.label.clone()}</span>
+                                                        <span class={status_class}>{status_label.clone()}</span>
+                                                    </div>
+                                                    <p class="settings__list-line">
+                                                        <code>{host.host.clone()}</code>
+                                                        <span class="settings__host-port">{format!(":{}", host.port)}</span>
+                                                    </p>
+                                                    <p class="settings__list-meta">{"Updated "}{host.updated_at_display.clone()}</p>
+                                                    <p class="settings__list-meta">{"Created "}{host.created_at_display.clone()}</p>
+                                                    <p class="settings__list-meta">{"Latency "}{latency_text}</p>
+                                                    {warning_view}
+                                                </div>
+                                                <div class="settings__list-actions">
+                                                    <button
+                                                        type="button"
+                                                        class="settings__button settings__button--ghost"
+                                                        data-role="host-edit"
+                                                        data-id={host_id_edit}
+                                                    >"Edit"</button>
+                                                    <button
+                                                        type="button"
+                                                        class="settings__button settings__button--danger"
+                                                        data-role="host-delete"
+                                                        data-id={host_id_delete}
+                                                    >"Delete"</button>
+                                                </div>
+                                            </li>
+                                        }
+                                    }}
+                                />
+                            </Show>
+                        </ul>
+                        <section class="settings__legend">
+                            <h3>"Clip Tokens"</h3>
+                            <p class="settings__legend-note">
+                                "Presenter updates every clip whose name contains these tokens (for example, #main-a or #main-a-2) and alternates between A/B lanes so the next look is always preloaded."
+                            </p>
+                            <dl>
+                                <div>
+                                    <dt>"#main-a / #main-b"</dt>
+                                    <dd>"Main lyric text, alternating between A and B for seamless cuts."</dd>
+                                </div>
+                                <div>
+                                    <dt>"#translate-a / #translate-b"</dt>
+                                    <dd>"Translation lyric text matched to each lane."</dd>
+                                </div>
+                                <div>
+                                    <dt>"#bible-a / #bible-b"</dt>
+                                    <dd>"Bible verse text for scripture cues."</dd>
+                                </div>
+                                <div>
+                                    <dt>"#bible-translate-a / #bible-translate-b"</dt>
+                                    <dd>"Bible translation label accompanying the verse."</dd>
+                                </div>
+                                <div>
+                                    <dt>"#bible-clear"</dt>
+                                    <dd>"Clears the Bible layer when triggered."</dd>
+                                </div>
+                            </dl>
+                        </section>
+                    </section>
+                </main>
+                <div class="settings__toast" data-role="toast" data-visible="false"></div>
+                <script>{script}</script>
+            </body>
+        </html>
+    }
+}
+
+fn format_settings_timestamp(value: DateTime<Utc>) -> String {
+    value.format("%Y-%m-%d %H:%M UTC").to_string()
+}
+
 #[component]
 fn HomeDocument() -> impl IntoView {
     view! {
@@ -3173,12 +4014,21 @@ fn HomeDocument() -> impl IntoView {
                         <h1>"Presenter Demo Environment"</h1>
                         <p>"Quick links to control surfaces and stage displays for live verification."</p>
                     </header>
+                    <div class="home__cta-row">
+                        <a
+                            class="home__cta-button"
+                            href="/ui/settings"
+                            target="_blank"
+                            rel="noopener"
+                        >"Open Settings"</a>
+                    </div>
                     <section class="home__section">
                         <h2>"Control Surfaces"</h2>
                         <ul class="home__links">
                             <li><a href="/ui/operator">"Operator UI"</a></li>
                             <li><a href="/ui/tablet">"Tablet UI"</a></li>
                             <li><a href="/ui/bible">"Bible Control"</a></li>
+                            <li><a href="/ui/settings" target="_blank" rel="noopener">"Settings"</a></li>
                         </ul>
                     </section>
                     <section class="home__section">

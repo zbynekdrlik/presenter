@@ -1,12 +1,16 @@
-use crate::live::{LiveEvent, LiveHub};
+use crate::{
+    live::{LiveEvent, LiveHub},
+    resolume::{BibleUpdate, ResolumeConnectionSnapshot, ResolumeRegistry, StageUpdate},
+};
 use anyhow;
 use chrono::{DateTime, Utc};
 use presenter_bible::BibleImportSummary;
 use presenter_core::{
     BibleBroadcast, BibleReference, BibleTranslation, Library, LibraryId, LibrarySummary, Playlist,
-    PlaylistEntry, PlaylistId, Presentation, PresentationId, SearchResult, Slide, SlideContent,
-    SlideGroup, SlideId, SlideText, StageDisplayLayout, StageDisplaySlide, StageDisplaySnapshot,
-    StageState, TimerCommand, TimersOverview, TimersState,
+    PlaylistEntry, PlaylistId, Presentation, PresentationId, ResolumeHost, ResolumeHostDraft,
+    ResolumeHostId, SearchResult, Slide, SlideContent, SlideGroup, SlideId, SlideText,
+    StageDisplayLayout, StageDisplaySlide, StageDisplaySnapshot, StageState, TimerCommand,
+    TimersOverview, TimersState,
 };
 use presenter_importer::bible::BibleIngestionService;
 use presenter_persistence::{DatabaseSettings, Repository};
@@ -21,17 +25,23 @@ pub struct AppState {
     live_hub: LiveHub,
     bible_broadcast: Arc<RwLock<Option<BibleBroadcast>>>,
     companion_token: Option<String>,
+    resolume_registry: ResolumeRegistry,
     #[cfg(test)]
     bible_ingestion_override: Option<std::sync::Arc<dyn TestBibleIngestion + Send + Sync>>,
 }
 
 impl AppState {
-    pub fn new(repository: Repository, companion_token: Option<String>) -> Self {
+    pub fn new(
+        repository: Repository,
+        companion_token: Option<String>,
+        resolume_registry: ResolumeRegistry,
+    ) -> Self {
         Self {
             repository,
             live_hub: LiveHub::new(),
             bible_broadcast: Arc::new(RwLock::new(None)),
             companion_token,
+            resolume_registry,
             #[cfg(test)]
             bible_ingestion_override: None,
         }
@@ -43,8 +53,10 @@ impl AppState {
             .unwrap_or_else(|_| "sqlite://presenter_dev.db".to_string());
         let repo = Repository::connect(&DatabaseSettings::new(&db_url)).await?;
         let companion_token = env::var("PRESENTER_COMPANION_TOKEN").ok();
-        let state = Self::new(repo, companion_token);
+        let registry = ResolumeRegistry::new();
+        let state = Self::new(repo, companion_token, registry);
         state.ensure_seed_library().await?;
+        state.sync_resolume_hosts().await?;
         Ok(state)
     }
 
@@ -52,7 +64,8 @@ impl AppState {
     #[instrument(skip_all)]
     pub async fn in_memory() -> anyhow::Result<Self> {
         let repo = Repository::connect_in_memory().await?;
-        let state = Self::new(repo, None);
+        let registry = ResolumeRegistry::new();
+        let state = Self::new(repo, None, registry);
         state.ensure_seed_library().await?;
         Ok(state)
     }
@@ -198,6 +211,44 @@ impl AppState {
             .await
     }
 
+    pub async fn list_resolume_hosts(&self) -> anyhow::Result<Vec<ResolumeHost>> {
+        self.repository.list_resolume_hosts().await
+    }
+
+    pub async fn resolume_status_snapshot(
+        &self,
+    ) -> HashMap<ResolumeHostId, ResolumeConnectionSnapshot> {
+        self.resolume_registry.snapshot().await
+    }
+
+    pub async fn resolume_status_for(&self, id: ResolumeHostId) -> ResolumeConnectionSnapshot {
+        self.resolume_registry.snapshot_for(id).await
+    }
+
+    pub async fn create_resolume_host(
+        &self,
+        draft: ResolumeHostDraft,
+    ) -> anyhow::Result<ResolumeHost> {
+        let host = self.repository.create_resolume_host(&draft).await?;
+        self.sync_resolume_hosts().await?;
+        Ok(host)
+    }
+
+    pub async fn update_resolume_host(
+        &self,
+        id: ResolumeHostId,
+        draft: ResolumeHostDraft,
+    ) -> anyhow::Result<ResolumeHost> {
+        let host = self.repository.update_resolume_host(id, &draft).await?;
+        self.sync_resolume_hosts().await?;
+        Ok(host)
+    }
+
+    pub async fn delete_resolume_host(&self, id: ResolumeHostId) -> anyhow::Result<()> {
+        self.repository.delete_resolume_host(id).await?;
+        self.sync_resolume_hosts().await
+    }
+
     pub async fn refresh_default_bible_translations(
         &self,
     ) -> anyhow::Result<Vec<BibleImportSummary>> {
@@ -246,6 +297,11 @@ impl AppState {
         self.live_hub.publish(LiveEvent::Bible {
             broadcast: broadcast.clone(),
         });
+        self.resolume_registry
+            .bible_update(BibleUpdate {
+                passage: Some(broadcast.clone()),
+            })
+            .await;
         Ok(broadcast)
     }
 
@@ -255,6 +311,9 @@ impl AppState {
             *guard = None;
         }
         self.live_hub.publish(LiveEvent::BibleCleared);
+        self.resolume_registry
+            .bible_update(BibleUpdate { passage: None })
+            .await;
     }
 
     #[cfg(test)]
@@ -269,6 +328,12 @@ impl AppState {
         if self.repository.fetch_libraries().await?.is_empty() {
             self.repository.upsert_library(&sample_library()).await?;
         }
+        Ok(())
+    }
+
+    async fn sync_resolume_hosts(&self) -> anyhow::Result<()> {
+        let hosts = self.repository.list_resolume_hosts().await?;
+        self.resolume_registry.set_hosts(hosts).await;
         Ok(())
     }
 
@@ -629,6 +694,23 @@ impl AppState {
             resolution,
         };
         self.publish_stage_context(&context);
+        let current_main = context
+            .resolution
+            .current
+            .as_ref()
+            .map(|slide| slide.main.clone())
+            .unwrap_or_else(String::new);
+        let current_translation = context
+            .resolution
+            .current
+            .as_ref()
+            .map(|slide| slide.translation.clone())
+            .unwrap_or_else(String::new);
+        let stage_update = StageUpdate {
+            current_main: Some(current_main),
+            current_translation: Some(current_translation),
+        };
+        self.resolume_registry.stage_update(stage_update).await;
         Ok(())
     }
 
