@@ -165,19 +165,28 @@ function render(manifests, baseOrigin) {
       justify-content: space-between;
       align-items: baseline;
       gap: 1rem;
+      flex-wrap: wrap;
     }
     .grid {
       display: grid;
       gap: 1.5rem;
-      width: min(960px, 100%);
+      width: min(1200px, 100%);
       margin: 0 auto;
-      grid-template-columns: repeat(auto-fill, minmax(320px, 1fr));
+      grid-template-columns: repeat(auto-fit, minmax(320px, 1fr));
+      align-items: stretch;
     }
 
     @media (max-width: 900px) {
       .grid {
+        width: min(100%, 720px);
+        grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
+      }
+    }
+
+    @media (max-width: 640px) {
+      .grid {
         width: 100%;
-        grid-template-columns: repeat(auto-fill, minmax(280px, 1fr));
+        grid-template-columns: 1fr;
       }
     }
     .card {
@@ -189,12 +198,14 @@ function render(manifests, baseOrigin) {
       flex-direction: column;
       gap: 1rem;
       box-shadow: 0 16px 40px rgba(15, 23, 42, 0.35);
+      overflow: hidden;
     }
     .card header {
       display: flex;
       justify-content: space-between;
       gap: 0.5rem;
-      align-items: baseline;
+      align-items: center;
+      flex-wrap: wrap;
     }
     .card h2 {
       margin: 0;
@@ -204,6 +215,7 @@ function render(manifests, baseOrigin) {
       font-family: "JetBrains Mono", ui-monospace, monospace;
       font-size: 0.75rem;
       opacity: 0.7;
+      margin-left: auto;
     }
     dl {
       display: grid;
@@ -219,23 +231,37 @@ function render(manifests, baseOrigin) {
       margin: 0;
     }
     nav {
-      display: flex;
+      display: grid;
+      width: 100%;
+      margin-top: 0.5rem;
       gap: 0.75rem;
+      grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
     }
     nav a {
-      flex: 1 1 auto;
-      text-align: center;
-      padding: 0.6rem 0.8rem;
+      display: inline-flex;
+      justify-content: center;
+      align-items: center;
+      padding: 0.65rem 0.9rem;
       border-radius: 12px;
       text-decoration: none;
       font-weight: 600;
       color: #0f172a;
-      background: #38bdf8;
-      transition: background 0.2s ease, transform 0.2s ease;
+      background: linear-gradient(135deg, #38bdf8, #2563eb);
+      box-shadow: 0 10px 26px rgba(37, 99, 235, 0.28);
+      transition: transform 0.18s ease, box-shadow 0.18s ease;
     }
     nav a:hover {
-      background: #0ea5e9;
       transform: translateY(-1px);
+      box-shadow: 0 12px 30px rgba(37, 99, 235, 0.35);
+    }
+    nav a:focus-visible {
+      outline: 2px solid rgba(56, 189, 248, 0.75);
+      outline-offset: 3px;
+    }
+    @media (max-width: 768px) {
+      nav {
+        grid-template-columns: repeat(auto-fit, minmax(140px, 1fr));
+      }
     }
     .empty {
       opacity: 0.8;

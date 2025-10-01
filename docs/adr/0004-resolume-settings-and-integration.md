@@ -54,6 +54,9 @@ Operators require:
   - A bounded channel (capacity 16) receiving Presenter text intents; the worker serializes payloads to
     Resolume REST endpoints (`PUT /api/v1/parameter/by-id/{id}` for text and `POST
     /api/v1/composition/clips/by-id/{clipId}/connect` to trigger the clip).
+  - A DNS resolver that caches resolved socket addresses for five minutes while preserving the original
+    hostname via the HTTP `Host` header so Dockerized deployments avoid repeated lookups yet still reach
+    `resolume.lan`.
 - The registry surfaces status snapshots (`connecting`, `connected`, `error`, `disabled`) cached in
   memory and served via the settings API.
 - AppState exposes `create_resolume_host`, `update_resolume_host`, `delete_resolume_host`, and

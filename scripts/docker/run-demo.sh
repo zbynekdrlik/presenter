@@ -48,11 +48,17 @@ if [[ -z "$DISPLAY_NAME" ]]; then
   DISPLAY_NAME="$PROJECT"
 fi
 HOST_HTTP_PORT="$(compute_port "$PROJECT" "$PORT")"
+DEMO_DATA_DIR="$DATA_ROOT/$PROJECT"
 
 stop_conflicting_demos "$REPO_ROOT" "$PROJECT"
 
-DEMO_DATA_DIR="$DATA_ROOT/$PROJECT"
+# Always stop the current stack before rebuilding so bind mounts refresh cleanly.
+if ! DEMO_DATA_DIR="$DEMO_DATA_DIR" IMPORT_ROOT="$IMPORT_ROOT" "${DOCKER_CMD[@]}" compose -f "$REPO_ROOT/docker-compose.demo.yml" -p "$PROJECT" down >/dev/null 2>&1; then
+  echo "[run-demo] (info) no existing stack to stop for $PROJECT"
+fi
+
 mkdir -p "$DEMO_DATA_DIR"
+chmod 777 "$DEMO_DATA_DIR"
 
 # Force regeneration of the SQLite database and imports so new settings/data
 # are always reflected in the running demo.

@@ -3,12 +3,15 @@ import {
   deriveTestConfig,
   refreshDevData,
   startTestServer,
+  startMockResolume,
   stopServer,
+  type MockResolumeHandle,
   type ServerHandle,
 } from './support';
 
 let serverHandle: ServerHandle | undefined;
 let baseURL: string;
+let mockResolume: MockResolumeHandle | undefined;
 
 const selectors = {
   form: '[data-role="host-form"]',
@@ -29,11 +32,16 @@ test.beforeAll(async ({}, testInfo) => {
   baseURL = config.baseURL;
   await refreshDevData(config.dbUrl);
   serverHandle = await startTestServer(config.port, config.dbUrl);
+  mockResolume = await startMockResolume();
 });
 
 test.afterAll(async () => {
   await stopServer(serverHandle);
   serverHandle = undefined;
+  if (mockResolume) {
+    await mockResolume.close();
+    mockResolume = undefined;
+  }
 });
 
 async function waitForToast(page, expected: string) {
@@ -65,19 +73,32 @@ test('resolume settings CRUD with status feedback', async ({ page }) => {
   const emptyState = page.locator('[data-role="host-empty"]');
   await expect(emptyState).toHaveText('No Resolume connections defined yet.');
 
+  if (!mockResolume) {
+    throw new Error('Mock Resolume server not started');
+  }
+  const mockHost = '127.0.0.1';
+  const mockPort = String(mockResolume.port);
+
   // Create a new connection.
   await page.fill(selectors.labelInput, testLabel);
-  await page.fill(selectors.hostInput, 'settings-test.invalid');
-  await page.fill(selectors.portInput, '8090');
+  await page.fill(selectors.hostInput, mockHost);
+  await page.fill(selectors.portInput, mockPort);
   await page.check(selectors.enabledCheckbox);
   await page.click(selectors.submitButton);
   await waitForToast(page, 'Added Resolume connection.');
 
   const listItem = page.locator(`[data-role="resolume-host-list"] li[data-id]`).first();
   await expect(listItem).toContainText(testLabel);
-  await expect(listItem).toContainText('settings-test.invalid');
+  await expect(listItem).toContainText(mockHost);
 
-  // Status should transition from connecting to error because Resolume is offline in tests.
+  // Wait for the mock Resolume to report as connected.
+  await expect.poll(async () => {
+    const hosts = await getHostsViaApi(page);
+    return hosts[0]?.status.state;
+  }, { timeout: 30_000 }).toEqual('connected');
+
+  // Simulate a disconnect and verify the UI reflects it.
+  mockResolume.setOnline(false);
   await expect.poll(async () => {
     const hosts = await getHostsViaApi(page);
     return hosts[0]?.status.state;
@@ -85,10 +106,12 @@ test('resolume settings CRUD with status feedback', async ({ page }) => {
   await expect(listItem.locator('.settings__list-meta--warning')).toContainText('⚠', {
     timeout: 30_000,
   });
+  mockResolume.setOnline(true);
 
   const hostsAfterCreate = await getHostsViaApi(page);
   expect(hostsAfterCreate).toHaveLength(1);
   expect(hostsAfterCreate[0].label).toBe(testLabel);
+  expect(hostsAfterCreate[0].host).toBe(mockHost);
   const hostId = hostsAfterCreate[0].id;
   const hostRow = page.locator(`[data-role="resolume-host-list"] li[data-id="${hostId}"]`);
 
@@ -96,14 +119,15 @@ test('resolume settings CRUD with status feedback', async ({ page }) => {
   await page.locator(`[data-role="host-edit"][data-id="${hostId}"]`).click();
   const updatedLabel = `${testLabel} Updated`;
   await page.fill(selectors.labelInput, updatedLabel);
-  await page.fill(selectors.hostInput, 'settings-test-updated.invalid');
+  await page.fill(selectors.hostInput, mockHost);
+  await page.fill(selectors.portInput, mockPort);
   await page.click(selectors.submitButton);
   await waitForToast(page, 'Updated Resolume connection.');
   await expect(hostRow).toContainText(updatedLabel);
 
   const hostsAfterUpdate = await getHostsViaApi(page);
   expect(hostsAfterUpdate[0].label).toBe(updatedLabel);
-  expect(hostsAfterUpdate[0].host).toBe('settings-test-updated.invalid');
+  expect(hostsAfterUpdate[0].host).toBe(mockHost);
 
   // Delete the connection.
   page.once('dialog', (dialog) => dialog.accept());

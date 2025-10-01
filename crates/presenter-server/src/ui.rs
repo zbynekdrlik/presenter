@@ -146,7 +146,6 @@ pub fn OperatorDocument(
                                 <button type="button" data-role="view-toggle" data-view="timers">"Timers"</button>
                                 <button
                                     type="button"
-                                    class="operator__view-link"
                                     data-role="view-toggle"
                                     data-view="settings"
                                 >"Settings"</button>
@@ -190,12 +189,6 @@ pub fn OperatorDocument(
                                 >"Live"</button>
                                 <button type="button" data-role="mode-toggle" data-mode="edit">"Edit"</button>
                             </div>
-                            <button
-                                type="button"
-                                class="operator__settings-link operator__view-link"
-                                data-role="view-toggle"
-                                data-view="settings"
-                            >"Settings"</button>
                         </div>
                     </header>
                     <main class="operator__main">
@@ -877,9 +870,8 @@ body.operator {
     padding: 0.25rem;
 }
 
-operator__view-nav [data-role="view-toggle"],
-.operator__mode-toggle button,
-.operator__settings-link {
+.operator__view-nav button,
+.operator__mode-toggle button {
     border: none;
     background: transparent;
     color: inherit;
@@ -890,21 +882,11 @@ operator__view-nav [data-role="view-toggle"],
     transition: background 0.2s ease, color 0.2s ease;
 }
 
-operator__view-nav [data-role="view-toggle"][data-active="true"],
-.operator__mode-toggle button[data-active="true"],
-.operator__settings-link[data-active="true"] {
+.operator__view-nav button[data-active="true"],
+.operator__mode-toggle button[data-active="true"] {
     background: #ffffff;
     color: #1f2937;
     box-shadow: 0 6px 12px rgba(15, 23, 42, 0.15);
-}
-
-.operator__view-nav [data-role="view-toggle"]:hover,
-.operator__settings-link:hover {
-    background: rgba(255, 255, 255, 0.18);
-}
-
-.operator__settings-link {
-    margin-left: 0.75rem;
 }
 
 .operator__main {

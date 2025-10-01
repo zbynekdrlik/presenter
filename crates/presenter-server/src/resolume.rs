@@ -2,16 +2,31 @@ use anyhow::{anyhow, Context};
 use chrono::{DateTime, Utc};
 use futures_util::{stream::FuturesUnordered, StreamExt};
 use presenter_core::{BibleBroadcast, ResolumeHost, ResolumeHostId};
-use reqwest::Client;
+use reqwest::{header::HOST, Client, RequestBuilder};
 use serde::Serialize;
-use std::{collections::HashMap, sync::Arc, time::Duration};
+use std::{
+    collections::HashMap,
+    net::{IpAddr, SocketAddr},
+    sync::Arc,
+    time::Duration,
+};
 use tokio::sync::RwLock;
-use tokio::{sync::mpsc, task::JoinHandle, time::Instant};
+use tokio::{
+    net::lookup_host,
+    sync::mpsc,
+    task::JoinHandle,
+    time::{sleep, Instant},
+};
 use tracing::{debug, error, warn};
 
 const DEFAULT_TIMEOUT: Duration = Duration::from_millis(500);
+#[cfg(not(test))]
+const TRIGGER_DELAY: Duration = Duration::from_millis(35);
+#[cfg(test)]
+const TRIGGER_DELAY: Duration = Duration::from_millis(0);
 const HOST_COMMAND_CAPACITY: usize = 16;
 const MAPPING_REFRESH_INTERVAL: Duration = Duration::from_secs(10);
+const RESOLUTION_TTL: Duration = Duration::from_secs(300);
 
 #[derive(Debug, Clone, Serialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
@@ -47,8 +62,6 @@ impl ResolumeConnectionSnapshot {
 pub struct StageUpdate {
     pub current_main: Option<String>,
     pub current_translation: Option<String>,
-    pub next_main: Option<String>,
-    pub next_translation: Option<String>,
 }
 
 #[derive(Debug, Clone)]
@@ -247,6 +260,7 @@ struct HostDriver {
     config: ResolumeHost,
     mapping: Option<ClipMapping>,
     lane_state: SlotState,
+    endpoint: Option<ResolvedEndpoint>,
 }
 
 impl HostDriver {
@@ -256,17 +270,15 @@ impl HostDriver {
             config,
             mapping: None,
             lane_state: SlotState::default(),
+            endpoint: None,
         }
-    }
-
-    fn base_url(&self) -> String {
-        format!("http://{}:{}/api/v1", self.config.host, self.config.port)
     }
 
     fn update_config(&mut self, config: ResolumeHost) {
         self.config = config;
         self.mapping = None;
         self.lane_state = SlotState::default();
+        self.endpoint = None;
     }
 
     async fn refresh_status(&self, status: &Arc<RwLock<ResolumeConnectionSnapshot>>) {
@@ -292,70 +304,60 @@ impl HostDriver {
             let main_lane = self.lane_state.current(SlotKind::Main);
             let translation_lane = self.lane_state.current(SlotKind::Translation);
 
-            let trigger_main = update.current_main.is_some();
-            let trigger_translation = update.current_translation.is_some();
-
-            let mut main_targets = self
-                .update_lane_text(
-                    main_lane,
-                    &mapping.main_a,
-                    &mapping.main_b,
-                    update.current_main.as_ref(),
-                    status,
-                )
-                .await?;
-            let mut translation_targets = self
-                .update_lane_text(
-                    translation_lane,
-                    &mapping.translation_a,
-                    &mapping.translation_b,
-                    update.current_translation.as_ref(),
-                    status,
-                )
-                .await?;
-
             let mut to_trigger = Vec::new();
-            if trigger_main && !main_targets.is_empty() {
-                to_trigger.append(&mut main_targets);
+            let mut main_lane_filled = false;
+            if let Some(ref main_text) = update.current_main {
+                let mut main_targets = self
+                    .update_lane_text(
+                        main_lane,
+                        &mapping.main_a,
+                        &mapping.main_b,
+                        Some(main_text),
+                        status,
+                    )
+                    .await?;
+                if !main_targets.is_empty() {
+                    to_trigger.append(&mut main_targets);
+                    main_lane_filled = true;
+                }
             }
-            if trigger_translation && !translation_targets.is_empty() {
-                to_trigger.append(&mut translation_targets);
+
+            let mut translation_lane_filled = false;
+            if let Some(ref translation_text) = update.current_translation {
+                let mut translation_targets = self
+                    .update_lane_text(
+                        translation_lane,
+                        &mapping.translation_a,
+                        &mapping.translation_b,
+                        Some(translation_text),
+                        status,
+                    )
+                    .await?;
+                if !translation_targets.is_empty() {
+                    to_trigger.append(&mut translation_targets);
+                    translation_lane_filled = true;
+                }
             }
 
             if !to_trigger.is_empty() {
+                if TRIGGER_DELAY.as_millis() > 0 {
+                    sleep(TRIGGER_DELAY).await;
+                }
                 self.trigger_clips(&to_trigger).await?;
             }
 
-            if trigger_main {
+            if main_lane_filled {
                 self.lane_state.flip(SlotKind::Main);
-                self.lane_state.flip(SlotKind::Translation);
-            } else if trigger_translation {
-                self.lane_state.flip(SlotKind::Translation);
+                if !translation_lane_filled
+                    && !mapping.translation_a.is_empty()
+                    && !mapping.translation_b.is_empty()
+                {
+                    self.lane_state.flip(SlotKind::Translation);
+                }
             }
 
-            let upcoming_main_lane = self.lane_state.current(SlotKind::Main);
-            if let Some(ref next_main) = update.next_main {
-                let _ = self
-                    .update_lane_text(
-                        upcoming_main_lane,
-                        &mapping.main_a,
-                        &mapping.main_b,
-                        Some(next_main),
-                        status,
-                    )
-                    .await?;
-            }
-            let upcoming_translation_lane = self.lane_state.current(SlotKind::Translation);
-            if let Some(ref next_translation) = update.next_translation {
-                let _ = self
-                    .update_lane_text(
-                        upcoming_translation_lane,
-                        &mapping.translation_a,
-                        &mapping.translation_b,
-                        Some(next_translation),
-                        status,
-                    )
-                    .await?;
+            if translation_lane_filled {
+                self.lane_state.flip(SlotKind::Translation);
             }
         }
         self.mark_connected(status).await;
@@ -375,8 +377,7 @@ impl HostDriver {
             let bible_lane = self.lane_state.current(SlotKind::Bible);
             let bible_translation_lane = self.lane_state.current(SlotKind::BibleTranslation);
             let mut to_trigger = Vec::new();
-
-            match update.passage {
+            let (bible_lane_filled, bible_translation_lane_filled) = match update.passage {
                 Some(ref passage) => {
                     let verse_text = passage.passage.text.clone();
                     let translation = passage.passage.translation.name.clone();
@@ -391,6 +392,10 @@ impl HostDriver {
                             status,
                         )
                         .await?;
+                    let bible_lane_filled = !bible_targets.is_empty();
+                    if bible_lane_filled {
+                        to_trigger.extend(bible_targets.into_iter());
+                    }
                     let bible_translation_targets = self
                         .update_lane_text(
                             bible_translation_lane,
@@ -400,8 +405,11 @@ impl HostDriver {
                             status,
                         )
                         .await?;
-                    to_trigger.extend(bible_targets.into_iter());
-                    to_trigger.extend(bible_translation_targets.into_iter());
+                    let bible_translation_lane_filled = !bible_translation_targets.is_empty();
+                    if bible_translation_lane_filled {
+                        to_trigger.extend(bible_translation_targets.into_iter());
+                    }
+                    (bible_lane_filled, bible_translation_lane_filled)
                 }
                 None => {
                     let blank = String::new();
@@ -414,6 +422,10 @@ impl HostDriver {
                             status,
                         )
                         .await?;
+                    let bible_lane_filled = !bible_targets.is_empty();
+                    if bible_lane_filled {
+                        to_trigger.extend(bible_targets.into_iter());
+                    }
                     let bible_translation_targets = self
                         .update_lane_text(
                             bible_translation_lane,
@@ -423,15 +435,25 @@ impl HostDriver {
                             status,
                         )
                         .await?;
-                    to_trigger.extend(bible_targets.into_iter());
-                    to_trigger.extend(bible_translation_targets.into_iter());
+                    let bible_translation_lane_filled = !bible_translation_targets.is_empty();
+                    if bible_translation_lane_filled {
+                        to_trigger.extend(bible_translation_targets.into_iter());
+                    }
                     to_trigger.extend(mapping.bible_clear.iter().cloned());
+                    (bible_lane_filled, bible_translation_lane_filled)
                 }
-            }
+            };
 
             if !to_trigger.is_empty() {
+                if TRIGGER_DELAY.as_millis() > 0 {
+                    sleep(TRIGGER_DELAY).await;
+                }
                 self.trigger_clips(&to_trigger).await?;
+            }
+            if bible_lane_filled {
                 self.lane_state.flip(SlotKind::Bible);
+            }
+            if bible_translation_lane_filled {
                 self.lane_state.flip(SlotKind::BibleTranslation);
             }
         }
@@ -455,10 +477,10 @@ impl HostDriver {
             self.mapping = None;
             return Ok(());
         }
-        let url = format!("{}/composition", self.base_url());
+        let endpoint = self.endpoint().await?;
+        let url = format!("{}/composition", endpoint.base_url);
         let response = self
-            .client
-            .get(&url)
+            .apply_host_header(self.client.get(&url), &endpoint)
             .send()
             .await
             .with_context(|| format!("failed to fetch composition from {}", url))?;
@@ -480,13 +502,17 @@ impl HostDriver {
             );
             return Err(anyhow!("missing Resolume clips: {}", joined));
         }
+        let previous = self.mapping.clone();
+        let changed = previous.as_ref().map(|old| old != &mapping).unwrap_or(true);
         self.mapping = Some(mapping);
-        self.lane_state = SlotState::default();
+        if changed {
+            self.lane_state = SlotState::default();
+        }
         Ok(())
     }
 
     async fn update_lane_text(
-        &self,
+        &mut self,
         lane: LaneTarget,
         lane_a: &[ClipTarget],
         lane_b: &[ClipTarget],
@@ -494,19 +520,31 @@ impl HostDriver {
         status: &Arc<RwLock<ResolumeConnectionSnapshot>>,
     ) -> anyhow::Result<Vec<ClipTarget>> {
         let (primary, alternate) = select_lane_targets(lane, lane_a, lane_b);
-        let selected = if !primary.is_empty() {
-            primary
-        } else {
-            alternate
-        };
-        if selected.is_empty() {
+        if primary.is_empty() {
+            if !alternate.is_empty() {
+                warn!(
+                    host = %self.config.host,
+                    port = self.config.port,
+                    lane = %lane.label(),
+                    "Resolume lane missing clips; skipping update"
+                );
+            } else {
+                warn!(
+                    host = %self.config.host,
+                    port = self.config.port,
+                    lane = %lane.label(),
+                    "Resolume has no clips configured for lane"
+                );
+            }
             return Ok(Vec::new());
         }
+        let selected = primary;
 
         if let Some(payload) = text {
+            let endpoint = self.endpoint().await?;
             let mut latency_recorded = None;
             for target in selected {
-                if let Some(duration) = self.update_clip_text(target, payload).await? {
+                if let Some(duration) = self.update_clip_text(target, payload, &endpoint).await? {
                     if latency_recorded.is_none() {
                         latency_recorded = Some(duration);
                     }
@@ -524,15 +562,15 @@ impl HostDriver {
         &self,
         target: &ClipTarget,
         text: &str,
+        endpoint: &ResolvedEndpoint,
     ) -> anyhow::Result<Option<Duration>> {
         let Some(param_id) = target.text_param_id else {
             return Ok(None);
         };
-        let url = format!("{}/parameter/by-id/{}", self.base_url(), param_id);
+        let url = format!("{}/parameter/by-id/{}", endpoint.base_url, param_id);
         let start = Instant::now();
         let response = self
-            .client
-            .put(&url)
+            .apply_host_header(self.client.put(&url), endpoint)
             .json(&serde_json::json!({ "value": text }))
             .send()
             .await
@@ -546,22 +584,29 @@ impl HostDriver {
         Ok(Some(start.elapsed()))
     }
 
-    async fn trigger_clips(&self, targets: &[ClipTarget]) -> anyhow::Result<()> {
+    async fn trigger_clips(&mut self, targets: &[ClipTarget]) -> anyhow::Result<()> {
         if targets.is_empty() {
             return Ok(());
         }
 
-        let base_url = self.base_url();
+        let endpoint = self.endpoint().await?;
         let mut futures = FuturesUnordered::new();
 
         for target in targets {
             let client = self.client.clone();
             let clip_id = target.clip_id;
-            let url = format!("{}/composition/clips/by-id/{}/connect", &base_url, clip_id);
+            let url = format!(
+                "{}/composition/clips/by-id/{}/connect",
+                &endpoint.base_url, clip_id
+            );
+            let host_header = endpoint.host_header.clone();
 
             futures.push(async move {
-                let response = client
-                    .post(&url)
+                let mut request = client.post(&url);
+                if let Some(host) = host_header {
+                    request = request.header(HOST, host);
+                }
+                let response = request
                     .send()
                     .await
                     .with_context(|| format!("failed to trigger clip {}", clip_id))?;
@@ -581,6 +626,65 @@ impl HostDriver {
         }
 
         Ok(())
+    }
+
+    async fn endpoint(&mut self) -> anyhow::Result<ResolvedEndpoint> {
+        if let Some(endpoint) = &self.endpoint {
+            if endpoint.resolved_at.elapsed() < RESOLUTION_TTL {
+                return Ok(endpoint.clone());
+            }
+        }
+        let resolved = self.resolve_endpoint().await?;
+        self.endpoint = Some(resolved.clone());
+        Ok(resolved)
+    }
+
+    async fn resolve_endpoint(&self) -> anyhow::Result<ResolvedEndpoint> {
+        let host = self.config.host.trim();
+        if host.is_empty() {
+            return Err(anyhow!("Resolume host cannot be empty"));
+        }
+        let port = self.config.port;
+
+        if host.parse::<IpAddr>().is_ok() {
+            let base_url = format!("http://{}:{}/api/v1", host, port);
+            return Ok(ResolvedEndpoint::new(base_url, None));
+        }
+
+        let mut candidates: Vec<SocketAddr> = lookup_host((host, port))
+            .await
+            .with_context(|| format!("failed to resolve Resolume host {host}"))?
+            .collect();
+
+        if candidates.is_empty() {
+            return Err(anyhow!("no socket addresses resolved for {host}"));
+        }
+
+        candidates.sort_by(|a, b| match (a, b) {
+            (SocketAddr::V4(_), SocketAddr::V6(_)) => std::cmp::Ordering::Less,
+            (SocketAddr::V6(_), SocketAddr::V4(_)) => std::cmp::Ordering::Greater,
+            _ => std::cmp::Ordering::Equal,
+        });
+
+        let addr = candidates[0];
+        let ip = match addr.ip() {
+            IpAddr::V4(v4) => v4.to_string(),
+            IpAddr::V6(v6) => format!("[{}]", v6),
+        };
+        let base_url = format!("http://{}:{}/api/v1", ip, addr.port());
+        Ok(ResolvedEndpoint::new(base_url, Some(host.to_string())))
+    }
+
+    fn apply_host_header(
+        &self,
+        builder: RequestBuilder,
+        endpoint: &ResolvedEndpoint,
+    ) -> RequestBuilder {
+        if let Some(host) = &endpoint.host_header {
+            builder.header(HOST, host.clone())
+        } else {
+            builder
+        }
     }
 
     async fn mark_connected(&self, status: &Arc<RwLock<ResolumeConnectionSnapshot>>) {
@@ -609,6 +713,24 @@ impl HostDriver {
         guard.state = ResolumeConnectionState::Error;
         guard.last_error = Some(err.to_string());
         self.mapping = None;
+        self.endpoint = None;
+    }
+}
+
+#[derive(Debug, Clone)]
+struct ResolvedEndpoint {
+    base_url: String,
+    host_header: Option<String>,
+    resolved_at: Instant,
+}
+
+impl ResolvedEndpoint {
+    fn new(base_url: String, host_header: Option<String>) -> Self {
+        Self {
+            base_url,
+            host_header,
+            resolved_at: Instant::now(),
+        }
     }
 }
 
@@ -629,6 +751,15 @@ enum LaneTarget {
 impl Default for LaneTarget {
     fn default() -> Self {
         LaneTarget::A
+    }
+}
+
+impl LaneTarget {
+    fn label(&self) -> &'static str {
+        match self {
+            LaneTarget::A => "A",
+            LaneTarget::B => "B",
+        }
     }
 }
 
@@ -664,7 +795,7 @@ impl SlotState {
     }
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ClipTarget {
     pub clip_id: i64,
     pub text_param_id: Option<i64>,
@@ -686,7 +817,7 @@ mod clip_map {
     use anyhow::{anyhow, Result};
     use serde_json::Value;
 
-    #[derive(Debug, Clone, Default)]
+    #[derive(Debug, Clone, Default, PartialEq)]
     pub struct ClipMapping {
         pub main_a: Vec<ClipTarget>,
         pub main_b: Vec<ClipTarget>,
@@ -822,8 +953,22 @@ mod clip_map {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use presenter_core::ResolumeHostId;
     use wiremock::matchers::{method, path};
     use wiremock::{Mock, MockServer, ResponseTemplate};
+
+    fn sample_host(host: &str) -> ResolumeHost {
+        let now = Utc::now();
+        ResolumeHost::new(
+            ResolumeHostId::new(),
+            "Test Resolume".to_string(),
+            host.to_string(),
+            8090,
+            true,
+            now,
+            now,
+        )
+    }
 
     fn clip(id: i64, name: &str, param_id: Option<i64>) -> serde_json::Value {
         let sourceparams = match param_id {
@@ -847,6 +992,27 @@ mod tests {
             .iter()
             .filter(|req| req.method.as_str() == method_name && req.url.path() == path_name)
             .count()
+    }
+
+    #[tokio::test]
+    async fn resolve_endpoint_with_ip_literal_skips_host_header() {
+        let host = sample_host("127.0.0.1");
+        let driver = HostDriver::new(Client::new(), host);
+        let endpoint = driver.resolve_endpoint().await.unwrap();
+        assert_eq!(endpoint.base_url, "http://127.0.0.1:8090/api/v1");
+        assert!(endpoint.host_header.is_none());
+    }
+
+    #[tokio::test]
+    async fn resolve_endpoint_with_hostname_sets_header() {
+        let host = sample_host("localhost");
+        let driver = HostDriver::new(Client::new(), host);
+        let endpoint = driver.resolve_endpoint().await.unwrap();
+        assert!(
+            endpoint.base_url.contains("127.0.0.1:8090")
+                || endpoint.base_url.contains("[::1]:8090")
+        );
+        assert_eq!(endpoint.host_header.as_deref(), Some("localhost"));
     }
 
     #[tokio::test]
@@ -921,8 +1087,6 @@ mod tests {
         let stage_first = StageUpdate {
             current_main: Some("Line 1".to_string()),
             current_translation: Some("Trans 1".to_string()),
-            next_main: Some("Line 2".to_string()),
-            next_translation: Some("Trans 2".to_string()),
         };
         driver
             .handle_stage(stage_first, &status)
@@ -932,8 +1096,6 @@ mod tests {
         let stage_second = StageUpdate {
             current_main: Some("Line 2".to_string()),
             current_translation: Some("Trans 2".to_string()),
-            next_main: Some("Line 3".to_string()),
-            next_translation: Some("Trans 3".to_string()),
         };
         driver
             .handle_stage(stage_second, &status)
@@ -945,19 +1107,19 @@ mod tests {
         assert_eq!(count_requests(&requests, "GET", "/api/v1/composition"), 1);
         assert_eq!(
             count_requests(&requests, "PUT", "/api/v1/parameter/by-id/1"),
-            2
+            1
         );
         assert_eq!(
             count_requests(&requests, "PUT", "/api/v1/parameter/by-id/2"),
-            2
+            1
         );
         assert_eq!(
             count_requests(&requests, "PUT", "/api/v1/parameter/by-id/10"),
-            2
+            1
         );
         assert_eq!(
             count_requests(&requests, "PUT", "/api/v1/parameter/by-id/20"),
-            2
+            1
         );
 
         assert_eq!(

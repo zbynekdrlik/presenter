@@ -1,9 +1,74 @@
 import { test, expect } from '@playwright/test';
+import fs from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 
+import { runShell } from './support';
+
 const STALE_THRESHOLD_MS = Number(process.env.PRESENTER_DEMO_STALE_MS ?? 30 * 60 * 1000);
 const EXPECTED_PROJECT = process.env.PRESENTER_DEMO_PROJECT ?? slugify(path.basename(process.cwd()));
+const DISPLAY_NAME = process.env.PRESENTER_DEMO_DISPLAY_NAME ?? process.env.PRESENTER_BRANCH ?? 'Playwright Demo';
+
+function resolveManifestDir(): string {
+  if (process.env.PRESENTER_MANIFEST_DIR) {
+    return process.env.PRESENTER_MANIFEST_DIR;
+  }
+
+  const stateRoot = process.env.PRESENTER_STATE_DIR
+    ?? path.join(process.env.XDG_DATA_HOME ?? path.join(os.homedir(), '.local/share'), 'presenter-demos');
+
+  return path.join(stateRoot, 'manifests');
+}
+
+async function manifestAgeMs(): Promise<number | null> {
+  const manifestPath = path.join(resolveManifestDir(), `${EXPECTED_PROJECT}.json`);
+  try {
+    const raw = await fs.readFile(manifestPath, 'utf8');
+    const data = JSON.parse(raw);
+    if (!data.updatedAt) {
+      return null;
+    }
+    const parsed = new Date(data.updatedAt);
+    if (Number.isNaN(parsed.getTime())) {
+      return null;
+    }
+    return Date.now() - parsed.getTime();
+  } catch (error: unknown) {
+    const code = (error as NodeJS.ErrnoException)?.code;
+    if (code === 'ENOENT') {
+      return null;
+    }
+    throw error;
+  }
+}
+
+function manifestIsFresh(age: number | null): boolean {
+  if (age === null) {
+    return false;
+  }
+  return age >= 0 && age <= STALE_THRESHOLD_MS;
+}
+
+async function ensureDemoFresh() {
+  if (process.env.PRESENTER_SKIP_DEMO_REFRESH === '1') {
+    return;
+  }
+  const age = await manifestAgeMs();
+  if (manifestIsFresh(age)) {
+    return;
+  }
+  await runShell(`./scripts/docker/run-demo.sh --name ${EXPECTED_PROJECT} --display-name "${DISPLAY_NAME}"`);
+
+  for (let attempt = 0; attempt < 10; attempt += 1) {
+    const refreshedAge = await manifestAgeMs();
+    if (manifestIsFresh(refreshedAge)) {
+      return;
+    }
+    await new Promise((resolve) => setTimeout(resolve, 1_000));
+  }
+
+  throw new Error('Demo manifest did not refresh after run-demo execution');
+}
 
 function slugify(raw: string): string {
   return raw
@@ -38,6 +103,10 @@ function getDemoHosts(): string[] {
 }
 
 test.describe('demo server availability', () => {
+  test.beforeAll(async () => {
+    await ensureDemoFresh();
+  });
+
   const hosts = getDemoHosts();
   for (const host of hosts) {
     test(`responds on ${host}`, async ({ request }) => {

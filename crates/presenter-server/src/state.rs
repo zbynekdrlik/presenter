@@ -694,29 +694,21 @@ impl AppState {
             resolution,
         };
         self.publish_stage_context(&context);
+        let current_main = context
+            .resolution
+            .current
+            .as_ref()
+            .map(|slide| slide.main.clone())
+            .unwrap_or_else(String::new);
+        let current_translation = context
+            .resolution
+            .current
+            .as_ref()
+            .map(|slide| slide.translation.clone())
+            .unwrap_or_else(String::new);
         let stage_update = StageUpdate {
-            current_main: context
-                .resolution
-                .current
-                .as_ref()
-                .map(|slide| slide.main.clone())
-                .or_else(|| Some(String::new())),
-            current_translation: context
-                .resolution
-                .current
-                .as_ref()
-                .map(|slide| slide.translation.clone())
-                .or_else(|| Some(String::new())),
-            next_main: context
-                .resolution
-                .next
-                .as_ref()
-                .map(|slide| slide.main.clone()),
-            next_translation: context
-                .resolution
-                .next
-                .as_ref()
-                .map(|slide| slide.translation.clone()),
+            current_main: Some(current_main),
+            current_translation: Some(current_translation),
         };
         self.resolume_registry.stage_update(stage_update).await;
         Ok(())
