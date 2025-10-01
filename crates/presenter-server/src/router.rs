@@ -1,4 +1,4 @@
-use crate::{companion, stage_ui, state::AppState, ui};
+use crate::{companion, resolume::ResolumeConnectionSnapshot, stage_ui, state::AppState, ui};
 use anyhow::Error as AnyhowError;
 use axum::{
     extract::{ws::WebSocketUpgrade, Path, Query, State},
@@ -10,8 +10,9 @@ use axum::{
 use presenter_core::{
     playlist::{MidiBinding, PlaylistEntryKind},
     BiblePassage, BibleReference, BibleTranslation, Library, LibraryId, LibrarySummary, Playlist,
-    PlaylistEntry, PlaylistEntryId, PlaylistId, Presentation, PresentationId, SearchResult, Slide,
-    SlideId, StageDisplayLayout, StageDisplaySnapshot, TimersOverview,
+    PlaylistEntry, PlaylistEntryId, PlaylistId, Presentation, PresentationId, ResolumeHost,
+    ResolumeHostDraft, ResolumeHostId, SearchResult, Slide, SlideId, StageDisplayLayout,
+    StageDisplaySnapshot, TimersOverview,
 };
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
@@ -53,11 +54,20 @@ pub fn build_router(state: AppState) -> Router {
         .route("/ui/operator", get(operator_ui))
         .route("/ui/tablet", get(tablet_ui))
         .route("/ui/bible", get(bible_ui))
+        .route("/ui/settings", get(settings_ui))
         .route("/stage-displays", get(list_stage_displays))
         .route("/stage/{code}", get(stage_display_html))
         .route("/stage/snapshots/{code}", get(stage_display_snapshot_json))
         .route("/stage/state", post(update_stage_state))
         .route("/stage/clear", post(clear_stage_state))
+        .route(
+            "/integrations/resolume/hosts",
+            get(list_resolume_hosts).post(create_resolume_host),
+        )
+        .route(
+            "/integrations/resolume/hosts/{id}",
+            put(update_resolume_host).delete(delete_resolume_host),
+        )
         .route(
             "/presentations/{id}",
             get(get_presentation_detail).patch(update_presentation),
@@ -548,10 +558,75 @@ async fn clear_stage_state(State(state): State<AppState>) -> Result<StatusCode, 
 }
 
 #[instrument(skip_all)]
+async fn list_resolume_hosts(
+    State(state): State<AppState>,
+) -> Result<Json<Vec<ResolumeHostDto>>, AppError> {
+    let hosts = state.list_resolume_hosts().await?;
+    let statuses = state.resolume_status_snapshot().await;
+    let payload = hosts
+        .into_iter()
+        .map(|host| {
+            let status = statuses
+                .get(&host.id)
+                .cloned()
+                .unwrap_or_else(ResolumeConnectionSnapshot::disabled);
+            ResolumeHostDto::from_host(host, status)
+        })
+        .collect::<Vec<_>>();
+    Ok(Json(payload))
+}
+
+#[instrument(skip_all)]
+async fn create_resolume_host(
+    State(state): State<AppState>,
+    Json(payload): Json<ResolumeHostRequest>,
+) -> Result<Json<ResolumeHostDto>, AppError> {
+    let draft = ResolumeHostDraft::new(payload.label, payload.host, payload.port)
+        .with_enabled(payload.is_enabled);
+    let host = state.create_resolume_host(draft).await?;
+    let status = state.resolume_status_for(host.id).await;
+    Ok(Json(ResolumeHostDto::from_host(host, status)))
+}
+
+#[instrument(skip_all)]
+async fn update_resolume_host(
+    State(state): State<AppState>,
+    Path(id): Path<Uuid>,
+    Json(payload): Json<ResolumeHostRequest>,
+) -> Result<Json<ResolumeHostDto>, AppError> {
+    let draft = ResolumeHostDraft::new(payload.label, payload.host, payload.port)
+        .with_enabled(payload.is_enabled);
+    let host = state
+        .update_resolume_host(ResolumeHostId::from_uuid(id), draft)
+        .await?;
+    let status = state.resolume_status_for(host.id).await;
+    Ok(Json(ResolumeHostDto::from_host(host, status)))
+}
+
+#[instrument(skip_all)]
+async fn delete_resolume_host(
+    State(state): State<AppState>,
+    Path(id): Path<Uuid>,
+) -> Result<StatusCode, AppError> {
+    state
+        .delete_resolume_host(ResolumeHostId::from_uuid(id))
+        .await?;
+    Ok(StatusCode::NO_CONTENT)
+}
+
+#[instrument(skip_all)]
 async fn operator_ui(
     State(state): State<AppState>,
 ) -> Result<axum::response::Html<String>, AppError> {
     let html = ui::render_operator_ui(&state).await?;
+    Ok(html)
+}
+
+#[instrument(skip_all)]
+async fn settings_ui(
+    State(state): State<AppState>,
+) -> Result<axum::response::Html<String>, AppError> {
+    let html = ui::render_settings_ui(&state).await?;
     Ok(html)
 }
 
@@ -836,6 +911,53 @@ struct PresentationDetailDto {
     presentation: Presentation,
 }
 
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct ResolumeHostDto {
+    id: ResolumeHostId,
+    label: String,
+    host: String,
+    port: u16,
+    is_enabled: bool,
+    created_at: String,
+    updated_at: String,
+    status: ResolumeConnectionSnapshot,
+}
+
+impl ResolumeHostDto {
+    fn from_host(host: ResolumeHost, status: ResolumeConnectionSnapshot) -> Self {
+        Self {
+            id: host.id,
+            label: host.label,
+            host: host.host,
+            port: host.port,
+            is_enabled: host.is_enabled,
+            created_at: host.created_at.to_rfc3339(),
+            updated_at: host.updated_at.to_rfc3339(),
+            status,
+        }
+    }
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct ResolumeHostRequest {
+    label: String,
+    host: String,
+    #[serde(default = "default_resolume_port")]
+    port: u16,
+    #[serde(default = "default_true")]
+    is_enabled: bool,
+}
+
+const fn default_resolume_port() -> u16 {
+    8090
+}
+
+const fn default_true() -> bool {
+    true
+}
+
 #[derive(Debug)]
 struct AppError {
     status: StatusCode,
@@ -895,8 +1017,26 @@ mod tests {
     use axum::http::{Request, StatusCode};
     use chrono::{Duration as ChronoDuration, Utc};
     use presenter_core::{SearchResult, SearchResultKind, TimerState};
+    use serde::Deserialize;
     use serde_json::json;
     use tower::ServiceExt;
+
+    #[derive(Debug, Deserialize)]
+    #[serde(rename_all = "camelCase")]
+    struct TestResolumeHostDto {
+        id: String,
+        label: String,
+        host: String,
+        port: u16,
+        is_enabled: bool,
+        status: TestHostStatus,
+    }
+
+    #[derive(Debug, Deserialize)]
+    #[serde(rename_all = "camelCase")]
+    struct TestHostStatus {
+        state: String,
+    }
 
     #[tokio::test]
     async fn health_endpoint_returns_ok() {
@@ -930,6 +1070,134 @@ mod tests {
         assert!(body.contains("Operator UI"));
         assert!(body.contains("Tablet UI"));
         assert!(body.contains("Bible Control"));
+    }
+
+    #[tokio::test]
+    async fn resolume_host_endpoints_crud() {
+        let app = build_router(AppState::in_memory().await.unwrap());
+
+        let list_empty = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .uri("/integrations/resolume/hosts")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(list_empty.status(), StatusCode::OK);
+        let empty_bytes = axum::body::to_bytes(list_empty.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        let empty_hosts: Vec<TestResolumeHostDto> = serde_json::from_slice(&empty_bytes).unwrap();
+        assert!(empty_hosts.is_empty());
+
+        let create_body = json!({
+            "label": "Arena",
+            "host": "resolume.lan",
+            "port": 8090,
+            "isEnabled": true
+        })
+        .to_string();
+        let created_response = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method(axum::http::Method::POST)
+                    .uri("/integrations/resolume/hosts")
+                    .header(axum::http::header::CONTENT_TYPE, "application/json")
+                    .body(Body::from(create_body))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(created_response.status(), StatusCode::OK);
+        let created_bytes = axum::body::to_bytes(created_response.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        let created: TestResolumeHostDto = serde_json::from_slice(&created_bytes).unwrap();
+        assert_eq!(created.label, "Arena");
+        assert_eq!(created.host, "resolume.lan");
+        assert_eq!(created.port, 8090);
+        assert!(created.is_enabled);
+        assert!(!created.status.state.is_empty());
+
+        let list_after_create = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .uri("/integrations/resolume/hosts")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        let list_bytes = axum::body::to_bytes(list_after_create.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        let hosts: Vec<TestResolumeHostDto> = serde_json::from_slice(&list_bytes).unwrap();
+        assert_eq!(hosts.len(), 1);
+        assert!(!hosts[0].status.state.is_empty());
+
+        let update_body = json!({
+            "label": "Arena North",
+            "host": "resolume.lan",
+            "port": 8090,
+            "isEnabled": false
+        })
+        .to_string();
+        let update_response = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method(axum::http::Method::PUT)
+                    .uri(format!("/integrations/resolume/hosts/{}", created.id))
+                    .header(axum::http::header::CONTENT_TYPE, "application/json")
+                    .body(Body::from(update_body))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(update_response.status(), StatusCode::OK);
+        let updated_bytes = axum::body::to_bytes(update_response.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        let updated: TestResolumeHostDto = serde_json::from_slice(&updated_bytes).unwrap();
+        assert_eq!(updated.label, "Arena North");
+        assert!(!updated.is_enabled);
+        assert_eq!(updated.host, "resolume.lan");
+        assert!(!updated.status.state.is_empty());
+
+        let delete_response = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method(axum::http::Method::DELETE)
+                    .uri(format!("/integrations/resolume/hosts/{}", updated.id))
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(delete_response.status(), StatusCode::NO_CONTENT);
+
+        let list_after_delete = app
+            .oneshot(
+                Request::builder()
+                    .uri("/integrations/resolume/hosts")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        let list_after_delete_bytes =
+            axum::body::to_bytes(list_after_delete.into_body(), usize::MAX)
+                .await
+                .unwrap();
+        let after_delete_hosts: Vec<TestResolumeHostDto> =
+            serde_json::from_slice(&list_after_delete_bytes).unwrap();
+        assert!(after_delete_hosts.is_empty());
     }
 
     #[tokio::test]

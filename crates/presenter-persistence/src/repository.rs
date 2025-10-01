@@ -1,19 +1,19 @@
 use crate::entities::{
     bible_passage, bible_translation, library, library_favorite, playlist, playlist_entry,
-    playlist_favorite, presentation as presentation_entity, slide as slide_entity, stage_state,
-    timers,
+    playlist_favorite, presentation as presentation_entity, resolume_host, slide as slide_entity,
+    stage_state, timers,
 };
 use anyhow::{anyhow, Context};
-use chrono::{Duration, Utc};
+use chrono::{DateTime, Duration, Utc};
 use presenter_core::{
     bible::BibleIngestionBatch,
     playlist::{MidiBinding, PlaylistEntryKind},
     search::{fold_query, query_tokens},
     BiblePassage, BibleReference, BibleTranslation, CountdownTimer, Library, LibraryId,
     LibrarySummary, Playlist, PlaylistEntry, PlaylistEntryId, PlaylistId, PreachTimer,
-    Presentation, PresentationId, PresentationSummary, SearchMatchField, SearchResult,
-    SearchResultKind, Slide, SlideContent, SlideGroup, SlideId, SlideText, StageState, TimerState,
-    TimersState,
+    Presentation, PresentationId, PresentationSummary, ResolumeHost, ResolumeHostDraft,
+    ResolumeHostId, SearchMatchField, SearchResult, SearchResultKind, Slide, SlideContent,
+    SlideGroup, SlideId, SlideText, StageState, TimerState, TimersState,
 };
 use presenter_migration::{Migrator, MigratorTrait};
 use sea_orm::{
@@ -1161,6 +1161,76 @@ impl Repository {
     }
 
     #[instrument(skip_all)]
+    pub async fn list_resolume_hosts(&self) -> anyhow::Result<Vec<ResolumeHost>> {
+        let models = resolume_host::Entity::find()
+            .order_by_asc(resolume_host::Column::Label)
+            .all(&self.db)
+            .await?;
+        models.into_iter().map(resolume_model_to_domain).collect()
+    }
+
+    #[instrument(skip_all)]
+    pub async fn create_resolume_host(
+        &self,
+        draft: &ResolumeHostDraft,
+    ) -> anyhow::Result<ResolumeHost> {
+        draft.validate().map_err(|err| anyhow!(err))?;
+        let id = ResolumeHostId::new();
+        let now = Utc::now();
+        let model = resolume_host::ActiveModel {
+            id: Set(id.to_string()),
+            label: Set(draft.label.trim().to_string()),
+            host: Set(draft.host.trim().to_string()),
+            port: Set(draft.port as i32),
+            is_enabled: Set(draft.is_enabled),
+            created_at: Set(now.into()),
+            updated_at: Set(now.into()),
+        };
+
+        resolume_host::Entity::insert(model).exec(&self.db).await?;
+
+        let inserted = resolume_host::Entity::find_by_id(id.to_string())
+            .one(&self.db)
+            .await?
+            .ok_or_else(|| anyhow!("resolume host missing after insert"))?;
+        resolume_model_to_domain(inserted)
+    }
+
+    #[instrument(skip_all)]
+    pub async fn update_resolume_host(
+        &self,
+        id: ResolumeHostId,
+        draft: &ResolumeHostDraft,
+    ) -> anyhow::Result<ResolumeHost> {
+        draft.validate().map_err(|err| anyhow!(err))?;
+        let existing = resolume_host::Entity::find_by_id(id.to_string())
+            .one(&self.db)
+            .await?
+            .ok_or_else(|| anyhow!("resolume host not found"))?;
+
+        let mut model = existing.into_active_model();
+        model.label = Set(draft.label.trim().to_string());
+        model.host = Set(draft.host.trim().to_string());
+        model.port = Set(draft.port as i32);
+        model.is_enabled = Set(draft.is_enabled);
+        model.updated_at = Set(Utc::now().into());
+
+        let updated = model.update(&self.db).await?;
+        resolume_model_to_domain(updated)
+    }
+
+    #[instrument(skip_all)]
+    pub async fn delete_resolume_host(&self, id: ResolumeHostId) -> anyhow::Result<()> {
+        let result = resolume_host::Entity::delete_by_id(id.to_string())
+            .exec(&self.db)
+            .await?;
+        if result.rows_affected == 0 {
+            return Err(anyhow!("resolume host not found"));
+        }
+        Ok(())
+    }
+
+    #[instrument(skip_all)]
     pub async fn get_stage_state(&self) -> anyhow::Result<Option<StageState>> {
         let model = stage_state::Entity::find_by_id(STAGE_STATE_SINGLETON_ID.to_string())
             .one(&self.db)
@@ -1391,6 +1461,27 @@ fn to_domain_passage(
     Ok(BiblePassage::new(reference, translation, model.content))
 }
 
+fn resolume_model_to_domain(model: resolume_host::Model) -> anyhow::Result<ResolumeHost> {
+    let id = ResolumeHostId::from_uuid(
+        Uuid::parse_str(&model.id).map_err(|_| anyhow!("invalid resolume host id"))?,
+    );
+    let port = u16::try_from(model.port).map_err(|_| anyhow!("resolume host port out of range"))?;
+    if port == 0 {
+        return Err(anyhow!("resolume host port cannot be zero"));
+    }
+    let created_at: DateTime<Utc> = model.created_at.into();
+    let updated_at: DateTime<Utc> = model.updated_at.into();
+    Ok(ResolumeHost::new(
+        id,
+        model.label,
+        model.host,
+        port,
+        model.is_enabled,
+        created_at,
+        updated_at,
+    ))
+}
+
 fn timer_state_to_string(state: TimerState) -> String {
     match state {
         TimerState::Idle => "idle".to_string(),
@@ -1455,7 +1546,7 @@ mod tests {
     use super::*;
     use presenter_core::{
         bible::BibleIngestionBatch, playlist::PlaylistEntryKind, BiblePassage, BibleReference,
-        BibleTranslation, PlaylistEntryId, SearchResultKind, StageState,
+        BibleTranslation, PlaylistEntryId, ResolumeHostDraft, SearchResultKind, StageState,
     };
     fn sample_library() -> Library {
         let presentation = Presentation::new(
@@ -1634,6 +1725,33 @@ mod tests {
             .await
             .unwrap();
         assert!(head.is_some());
+    }
+
+    #[tokio::test]
+    async fn resolume_host_crud_round_trip() {
+        let repo = Repository::connect_in_memory().await.unwrap();
+        let draft = ResolumeHostDraft::new("Arena", "resolume.lan", 8090);
+        let created = repo.create_resolume_host(&draft).await.unwrap();
+        assert_eq!(created.label, "Arena");
+        assert_eq!(created.host, "resolume.lan");
+        assert_eq!(created.port, 8090);
+        assert!(created.is_enabled);
+
+        let hosts = repo.list_resolume_hosts().await.unwrap();
+        assert_eq!(hosts.len(), 1);
+
+        let updated_draft =
+            ResolumeHostDraft::new("Arena North", "resolume.lan", 8090).with_enabled(false);
+        let updated = repo
+            .update_resolume_host(created.id, &updated_draft)
+            .await
+            .unwrap();
+        assert_eq!(updated.label, "Arena North");
+        assert!(!updated.is_enabled);
+
+        repo.delete_resolume_host(created.id).await.unwrap();
+        let after_delete = repo.list_resolume_hosts().await.unwrap();
+        assert!(after_delete.is_empty());
     }
 
     #[tokio::test]

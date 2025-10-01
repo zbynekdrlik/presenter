@@ -80,15 +80,30 @@ Stop a demo when you are finished:
 
 Add `--delete-data` to wipe the corresponding SQLite snapshot. List all active demos and their ports with `./scripts/docker/list-demos.sh`.
 
-### Running tests
+### Full verification + demo refresh
 
-Playwright already runs isolated servers per worker (unique ports + SQLite databases), so concurrency is safe:
+Use the combined harness to execute `cargo test`, run the Playwright suite, rebuild the branch demo, and restart the gateway in one go:
+
+```bash
+./scripts/dev/verify-and-refresh.sh --force
+```
+
+Options:
+
+- `--force` forces a Docker image rebuild (recommended after code changes).
+- `--display-name NAME` overrides the gateway card label (defaults to the current branch).
+
+The script exits immediately on the first failing step—fix the reported issue and rerun until it passes.
+
+The script derives the demo slug from the repository folder, so multiple parallel worktrees can run without colliding. It updates `${XDG_DATA_HOME:-$HOME/.local/share}/presenter-demos/manifests/` so the landing page always points at the latest build for that checkout.
+
+### Running tests individually
+
+If you need to run suites separately you still can:
 
 ```bash
 npm run test:playwright
 ```
-
-Unit/integration tests remain the same:
 
 ```bash
 cargo test

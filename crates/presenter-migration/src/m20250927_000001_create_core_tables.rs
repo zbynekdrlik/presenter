@@ -322,6 +322,58 @@ impl MigrationTrait for Migration {
         manager
             .create_table(
                 Table::create()
+                    .table(ResolumeHosts::Table)
+                    .if_not_exists()
+                    .col(
+                        ColumnDef::new(ResolumeHosts::Id)
+                            .string_len(36)
+                            .not_null()
+                            .primary_key(),
+                    )
+                    .col(ColumnDef::new(ResolumeHosts::Label).string().not_null())
+                    .col(ColumnDef::new(ResolumeHosts::Host).string().not_null())
+                    .col(
+                        ColumnDef::new(ResolumeHosts::Port)
+                            .integer()
+                            .not_null()
+                            .default(8090),
+                    )
+                    .col(
+                        ColumnDef::new(ResolumeHosts::IsEnabled)
+                            .boolean()
+                            .not_null()
+                            .default(true),
+                    )
+                    .col(
+                        ColumnDef::new(ResolumeHosts::CreatedAt)
+                            .timestamp_with_time_zone()
+                            .not_null()
+                            .extra("DEFAULT CURRENT_TIMESTAMP"),
+                    )
+                    .col(
+                        ColumnDef::new(ResolumeHosts::UpdatedAt)
+                            .timestamp_with_time_zone()
+                            .not_null()
+                            .extra("DEFAULT CURRENT_TIMESTAMP"),
+                    )
+                    .to_owned(),
+            )
+            .await?;
+
+        manager
+            .create_index(
+                Index::create()
+                    .name("idx_resolume_hosts_label_unique")
+                    .table(ResolumeHosts::Table)
+                    .col(ResolumeHosts::Label)
+                    .unique()
+                    .to_owned(),
+            )
+            .await?;
+
+        manager
+            .create_table(
+                Table::create()
                     .table(Timers::Table)
                     .if_not_exists()
                     .col(
@@ -511,6 +563,9 @@ impl MigrationTrait for Migration {
             .drop_table(Table::drop().table(Timers::Table).to_owned())
             .await?;
         manager
+            .drop_table(Table::drop().table(ResolumeHosts::Table).to_owned())
+            .await?;
+        manager
             .drop_table(Table::drop().table(PlaylistFavorites::Table).to_owned())
             .await?;
         manager
@@ -599,6 +654,18 @@ enum PlaylistEntries {
     Position,
     MidiNote,
     Label,
+}
+
+#[derive(DeriveIden)]
+enum ResolumeHosts {
+    Table,
+    Id,
+    Label,
+    Host,
+    Port,
+    IsEnabled,
+    CreatedAt,
+    UpdatedAt,
 }
 
 #[derive(DeriveIden)]
