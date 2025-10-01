@@ -94,7 +94,6 @@
     toast: document.querySelector('[data-role="toast"]'),
     viewButtons: document.querySelectorAll('[data-role="view-toggle"]'),
     modeButtons: document.querySelectorAll('[data-role="mode-toggle"]'),
-    settingsOpen: document.querySelector('[data-role="open-settings"]'),
     countdownInput: document.querySelector('[data-role="countdown-target-input"]'),
     timerCards: document.querySelector('[data-role="timer-cards"]'),
     libraryModal: document.querySelector('[data-role="library-modal"]'),
@@ -4139,14 +4138,6 @@ function updateCardWarnings(card) {
     setView(view);
   }
 
-  function handleSettingsOpen(event) {
-    event.preventDefault();
-    const win = window.open('/ui/settings', '_blank');
-    if (win) {
-      win.opener = null;
-    }
-  }
-
   function bindEvents() {
     if (els.libraryList) {
       els.libraryList.addEventListener('click', handleLibraryClick);
@@ -4333,9 +4324,6 @@ function updateCardWarnings(card) {
     }
     if (els.searchClear) {
       els.searchClear.addEventListener('click', handleSearchClear);
-    }
-    if (els.settingsOpen) {
-      els.settingsOpen.addEventListener('click', handleSettingsOpen);
     }
     if (els.searchResults) {
       els.searchResults.addEventListener('click', handleSearchResultClick);

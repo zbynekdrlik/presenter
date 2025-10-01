@@ -8,6 +8,11 @@ cd "$REPO_ROOT"
 
 BRANCH_NAME="$(git rev-parse --abbrev-ref HEAD)"
 BRANCH_SLUG="$(echo "$BRANCH_NAME" | tr '[:upper:]' '[:lower:]' | sed -E 's/[^a-z0-9]+/-/g; s/^-+|-+$//g')"
+REPO_SLUG="$(basename "$REPO_ROOT")"
+REPO_SLUG="$(echo "$REPO_SLUG" | tr '[:upper:]' '[:lower:]' | sed -E 's/[^a-z0-9]+/-/g; s/^-+|-+$//g')"
+PORT_HASH=$(printf '%s' "$REPO_SLUG" | md5sum | cut -c1-4)
+DEMO_PORT=$((0x$PORT_HASH))
+DEMO_PORT=$((18000 + (DEMO_PORT % 1000)))
 
 DISPLAY_NAME_DEFAULT="${BRANCH_NAME}"
 FORCE_REBUILD=0
@@ -46,12 +51,12 @@ DISPLAY_NAME="${CUSTOM_DISPLAY_NAME:-$DISPLAY_NAME_DEFAULT}"
 echo "[verify] Running cargo test"
 cargo test
 
-RUN_ARGS=("--display-name" "$DISPLAY_NAME")
+RUN_ARGS=("--name" "$REPO_SLUG" "--display-name" "$DISPLAY_NAME" "--port" "$DEMO_PORT")
 if [[ "$FORCE_REBUILD" -eq 1 ]]; then
   RUN_ARGS=("--force" "${RUN_ARGS[@]}")
 fi
 
-echo "[verify] Refreshing Docker demo for project '$BRANCH_SLUG' (pre-tests)"
+echo "[verify] Refreshing Docker demo for project '$REPO_SLUG' (pre-tests)"
 "$REPO_ROOT/scripts/docker/run-demo.sh" "${RUN_ARGS[@]}"
 
 echo "[verify] Restarting gateway"
@@ -60,8 +65,8 @@ echo "[verify] Restarting gateway"
 echo "[verify] Running Playwright suite"
 npm run test:playwright
 
-echo "[verify] Refreshing Docker demo for project '$BRANCH_SLUG' (post-tests)"
-"$REPO_ROOT/scripts/docker/run-demo.sh" "--display-name" "$DISPLAY_NAME"
+echo "[verify] Refreshing Docker demo for project '$REPO_SLUG' (post-tests)"
+"$REPO_ROOT/scripts/docker/run-demo.sh" "--name" "$REPO_SLUG" "--display-name" "$DISPLAY_NAME" "--port" "$DEMO_PORT"
 
 echo "[verify] Restarting gateway (post-tests)"
 "$REPO_ROOT/scripts/docker/run-gateway.sh"

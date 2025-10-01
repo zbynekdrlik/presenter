@@ -147,7 +147,8 @@ pub fn OperatorDocument(
                                 <button
                                     type="button"
                                     class="operator__view-link"
-                                    data-role="open-settings"
+                                    data-role="view-toggle"
+                                    data-view="settings"
                                 >"Settings"</button>
                             </nav>
                         </div>
@@ -189,12 +190,12 @@ pub fn OperatorDocument(
                                 >"Live"</button>
                                 <button type="button" data-role="mode-toggle" data-mode="edit">"Edit"</button>
                             </div>
-                            <a
+                            <button
+                                type="button"
                                 class="operator__settings-link"
-                                href="/ui/settings"
-                                target="_blank"
-                                rel="noopener"
-                            >"Settings"</a>
+                                data-role="view-toggle"
+                                data-view="settings"
+                            >"Settings"</button>
                         </div>
                     </header>
                     <main class="operator__main">
@@ -424,6 +425,9 @@ pub fn OperatorDocument(
                                     </div>
                                 </div>
                             </div>
+                        </section>
+                        <section class="operator__panel operator__panel--settings" data-view-panel="settings">
+                            <iframe src="/ui/settings" title="Settings" class="operator__settings-frame"></iframe>
                         </section>
                     </main>
                     <div class="operator__toast" data-role="toast"></div>
@@ -907,6 +911,8 @@ body.operator {
     color: #ffffff;
     font-weight: 600;
     text-decoration: none;
+    border: none;
+    cursor: pointer;
     transition: background 0.2s ease, transform 0.2s ease;
 }
 
@@ -1772,6 +1778,23 @@ body.operator[data-view="worship"] [data-view-panel="worship"] {
 body.operator[data-view="bible"] [data-view-panel="bible"],
 body.operator[data-view="timers"] [data-view-panel="timers"] {
     display: block;
+}
+
+body.operator[data-view="settings"] [data-view-panel="settings"] {
+    display: block;
+}
+
+.operator__panel--settings {
+    padding: 0;
+}
+
+.operator__settings-frame {
+    width: 100%;
+    height: 100%;
+    border: none;
+    border-radius: var(--operator-radius);
+    box-shadow: var(--shadow-soft);
+    background: #ffffff;
 }
 
 .operator__panel--bible iframe {
@@ -3241,6 +3264,23 @@ body.settings[data-mode="create"] [data-role="host-reset"] {
 
 .settings__toast[data-state="error"] {
     background: #b91c1c;
+}
+
+body.settings[data-embedded="true"] {
+    background: transparent;
+}
+
+body.settings[data-embedded="true"] .settings__header {
+    display: none;
+}
+
+body.settings[data-embedded="true"] .settings__main {
+    margin: 0;
+    padding: 16px 24px 32px;
+}
+
+body.settings[data-embedded="true"] .settings__card {
+    box-shadow: none;
 }
 
 .settings__legend {

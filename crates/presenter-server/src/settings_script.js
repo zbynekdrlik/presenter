@@ -1,6 +1,9 @@
 'use strict';
 
 (function () {
+  if (window.self !== window.top) {
+    document.body.dataset.embedded = 'true';
+  }
   const API_ROOT = '/integrations/resolume/hosts';
   const initialHosts = __RESOLUME_HOSTS__;
   const state = {
