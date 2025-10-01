@@ -192,7 +192,7 @@ pub fn OperatorDocument(
                             </div>
                             <button
                                 type="button"
-                                class="operator__settings-link"
+                                class="operator__settings-link operator__view-link"
                                 data-role="view-toggle"
                                 data-view="settings"
                             >"Settings"</button>
@@ -877,8 +877,9 @@ body.operator {
     padding: 0.25rem;
 }
 
-.operator__view-nav button,
-.operator__mode-toggle button {
+operator__view-nav [data-role="view-toggle"],
+.operator__mode-toggle button,
+.operator__settings-link {
     border: none;
     background: transparent;
     color: inherit;
@@ -889,36 +890,21 @@ body.operator {
     transition: background 0.2s ease, color 0.2s ease;
 }
 
-.operator__view-nav button[data-active="true"],
-.operator__mode-toggle button[data-active="true"] {
+operator__view-nav [data-role="view-toggle"][data-active="true"],
+.operator__mode-toggle button[data-active="true"],
+.operator__settings-link[data-active="true"] {
     background: #ffffff;
     color: #1f2937;
     box-shadow: 0 6px 12px rgba(15, 23, 42, 0.15);
 }
 
-.operator__view-nav .operator__view-link:hover {
+.operator__view-nav [data-role="view-toggle"]:hover,
+.operator__settings-link:hover {
     background: rgba(255, 255, 255, 0.18);
 }
 
 .operator__settings-link {
     margin-left: 0.75rem;
-    display: inline-flex;
-    align-items: center;
-    justify-content: center;
-    padding: 0.5rem 0.9rem;
-    border-radius: 10px;
-    background: #2563eb;
-    color: #ffffff;
-    font-weight: 600;
-    text-decoration: none;
-    border: none;
-    cursor: pointer;
-    transition: background 0.2s ease, transform 0.2s ease;
-}
-
-.operator__settings-link:hover {
-    background: #1d4ed8;
-    transform: translateY(-1px);
 }
 
 .operator__main {

@@ -169,7 +169,16 @@ function render(manifests, baseOrigin) {
     .grid {
       display: grid;
       gap: 1.5rem;
-      grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
+      width: min(960px, 100%);
+      margin: 0 auto;
+      grid-template-columns: repeat(auto-fill, minmax(320px, 1fr));
+    }
+
+    @media (max-width: 900px) {
+      .grid {
+        width: 100%;
+        grid-template-columns: repeat(auto-fill, minmax(280px, 1fr));
+      }
     }
     .card {
       background: rgba(15, 23, 42, 0.75);
