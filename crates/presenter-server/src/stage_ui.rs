@@ -31,7 +31,7 @@ fn StageDisplayDocument(snapshot: StageDisplaySnapshot) -> impl IntoView {
     connection: document.getElementById('stage-status-connection'),
     latency: document.getElementById('stage-status-latency'),
   }};
-  let lastGeneratedAt = initial.generated_at ? Date.parse(initial.generated_at) : null;
+  let lastGeneratedAt = initial.generatedAt ? Date.parse(initial.generatedAt) : null;
 
   const renderLatency = (value) => {{
     if (!statusEls.latency) return;
@@ -190,7 +190,7 @@ fn StageDisplayDocument(snapshot: StageDisplaySnapshot) -> impl IntoView {
   }};
 
   const applyStage = (snapshot) => {{
-    updateLatency(snapshot.generated_at);
+    updateLatency(snapshot.generatedAt);
     applyTimers(snapshot.timers);
 
     if (layout === 'worship-snv') {{
