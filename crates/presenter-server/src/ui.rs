@@ -792,7 +792,7 @@ body.operator {
     border: none;
     background: transparent;
     text-align: left;
-    padding: 0.5rem 0.65rem;
+    padding: 0.4rem 0.55rem;
     border-radius: 10px;
     cursor: pointer;
     display: flex;
@@ -1629,7 +1629,7 @@ body.operator[data-mode="live"] .operator__line-limit {
 .operator__slide-editor input {
     border-radius: 8px;
     border: 1px solid rgba(15, 23, 42, 0.16);
-    padding: 0.5rem 0.65rem;
+    padding: 0.4rem 0.55rem;
     font-family: inherit;
     font-size: 0.9rem;
     width: min(100%, calc(var(--operator-line-limit-ch, 32) * 1ch + 1.75rem));
@@ -1643,9 +1643,9 @@ body.operator[data-mode="live"] .operator__line-limit {
 
 .operator__slide-editor textarea {
     line-height: var(--operator-line-line-height, 1.35);
-    min-height: calc(var(--operator-line-line-height, 1.35) * 2em + 1.2rem);
-    max-height: calc(var(--operator-line-line-height, 1.35) * 2em + 1.2rem);
-    height: calc(var(--operator-line-line-height, 1.35) * 2em + 1.2rem);
+    min-height: calc(var(--operator-line-line-height, 1.35) * 2em + 0.6rem);
+    max-height: calc(var(--operator-line-line-height, 1.35) * 2em + 0.6rem);
+    height: calc(var(--operator-line-line-height, 1.35) * 2em + 0.6rem);
     overflow-y: auto;
     resize: none;
 }

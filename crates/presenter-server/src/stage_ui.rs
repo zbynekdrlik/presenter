@@ -26,10 +26,109 @@ fn StageDisplayDocument(snapshot: StageDisplaySnapshot) -> impl IntoView {
   const initial = {snapshot_json};
   let currentSnapshot = initial;
   const layout = initial.layout.code;
+  const statusEls = {{
+    container: document.getElementById('stage-status'),
+    connection: document.getElementById('stage-status-connection'),
+    latency: document.getElementById('stage-status-latency'),
+  }};
+  let lastGeneratedAt = initial.generatedAt ? Date.parse(initial.generatedAt) : null;
+
+  const renderLatency = (value) => {{
+    if (!statusEls.latency) return;
+    if (value == null || Number.isNaN(value)) {{
+      statusEls.latency.textContent = '';
+      statusEls.latency.dataset.visible = 'false';
+      return;
+    }}
+    if (value >= 1000) {{
+      statusEls.latency.textContent = `${{(value / 1000).toFixed(1)}} s`;
+      statusEls.latency.dataset.visible = 'true';
+      return;
+    }}
+    statusEls.latency.textContent = `${{Math.max(0, Math.round(value))}} ms`;
+    statusEls.latency.dataset.visible = 'true';
+  }};
+
+  const updateLatency = (generatedAt) => {{
+    if (!generatedAt) {{
+      lastGeneratedAt = null;
+      renderLatency(null);
+      return;
+    }}
+    const timestamp = Date.parse(generatedAt);
+    if (Number.isNaN(timestamp)) {{
+      return;
+    }}
+    lastGeneratedAt = timestamp;
+    renderLatency(Date.now() - timestamp);
+  }};
+
+  if (lastGeneratedAt != null) {{
+    renderLatency(Date.now() - lastGeneratedAt);
+  }}
+
+  setInterval(() => {{
+    if (lastGeneratedAt != null) {{
+      renderLatency(Date.now() - lastGeneratedAt);
+    }}
+  }}, 2000);
+
+
+  const connectionLabels = {{
+    connecting: 'Connecting',
+    connected: 'Connected',
+    disconnected: 'Disconnected',
+    error: 'Error',
+  }};
 
   const setConnectionState = (state) => {{
     document.body.dataset.liveState = state;
     window.__presenterStageConnectionState = state;
+    if (statusEls.connection) {{
+      statusEls.connection.textContent = connectionLabels[state] || state;
+    }}
+    if (state !== 'connected') {{
+      renderLatency(null);
+    }}
+  }};
+
+  const fitTextElement = (element, baseRem, minRem = 2.4, maxLines = 2) => {{
+    if (!element) return;
+    let size = baseRem;
+    const applySize = (value) => {{
+      size = Math.max(value, minRem);
+      element.style.fontSize = `${{size}}rem`;
+    }};
+    applySize(baseRem);
+
+    const measureLines = () => {{
+      const style = window.getComputedStyle(element);
+      const lineHeight = parseFloat(style.lineHeight || '0');
+      if (!lineHeight) {{
+        return 0;
+      }}
+      return Math.ceil(element.scrollHeight / lineHeight);
+    }};
+
+    let lines = measureLines();
+    let iterations = 0;
+    while (lines > maxLines && size > minRem && iterations < 40) {{
+      applySize(size - 0.15);
+      lines = measureLines();
+      iterations += 1;
+    }}
+  }};
+
+  const fitLyrics = (snapshotLayout) => {{
+    window.requestAnimationFrame(() => {{
+      if (snapshotLayout === 'worship-snv') {{
+        fitTextElement(document.getElementById('current-text'), 6.5, 3.2);
+        fitTextElement(document.getElementById('next-text'), 5.2, 2.6);
+      }} else if (snapshotLayout === 'worship-pp') {{
+        fitTextElement(document.getElementById('current-main'), 5.4, 3.0);
+        fitTextElement(document.getElementById('next-main'), 4.0, 2.4);
+      }}
+    }});
   }};
 
   const selectPrimary = (slide) => {{
@@ -91,6 +190,7 @@ fn StageDisplayDocument(snapshot: StageDisplaySnapshot) -> impl IntoView {
   }};
 
   const applyStage = (snapshot) => {{
+    updateLatency(snapshot.generatedAt);
     applyTimers(snapshot.timers);
 
     if (layout === 'worship-snv') {{
@@ -124,6 +224,7 @@ fn StageDisplayDocument(snapshot: StageDisplaySnapshot) -> impl IntoView {
       setText('next-group', nextGroup || '');
       setHidden('next-group', !nextGroup);
     }}
+    fitLyrics(layout);
   }};
 
   const layoutEndpoint = `/stage/snapshots/${{layout}}`;
@@ -209,6 +310,7 @@ fn StageDisplayDocument(snapshot: StageDisplaySnapshot) -> impl IntoView {
     }}
   }});
 
+  window.addEventListener('resize', () => fitLyrics(layout));
   window.addEventListener('focus', refreshFromServer);
   window.__presenterStageRefresh = refreshFromServer;
   window.__presenterStageReconnect = connectLive;
@@ -226,6 +328,10 @@ fn StageDisplayDocument(snapshot: StageDisplaySnapshot) -> impl IntoView {
             </head>
             <body class="stage" data-layout-code={layout_code}>
                 <main class="stage__body">{layout_view}</main>
+                <div class="stage__status" id="stage-status">
+                    <span class="stage__status-connection" id="stage-status-connection">Connecting...</span>
+                    <span class="stage__status-latency" id="stage-status-latency" data-visible="false"></span>
+                </div>
                 <script>{script}</script>
             </body>
         </html>
@@ -429,7 +535,7 @@ body.stage { background: #000; color: #f8fafc; font-family: 'Inter', system-ui, 
 .stage__lyrics { display: flex; flex-direction: column; justify-content: space-between; gap: 2.5rem; text-align: center; width: 100%; height: 100%; padding: 2vh 4vw; box-sizing: border-box; }
 .stage__lyrics-current { font-size: 6.5rem; font-weight: 700; display: flex; flex-direction: column; gap: 1rem; align-items: center; justify-content: flex-start; letter-spacing: 0.04em; min-height: 0; }
 .stage__lyrics-current p { margin: 0; line-height: 1.06; white-space: pre-wrap; text-transform: none; max-width: 100%; }
-.stage__lyrics-next { font-size: 3.6rem; color: #cbd5f5; letter-spacing: 0.06em; display: flex; flex-direction: column; gap: 1.4rem; align-items: center; justify-content: center; padding-bottom: 4vh; }
+.stage__lyrics-next { font-size: 5.2rem; color: #cbd5f5; letter-spacing: 0.06em; display: flex; flex-direction: column; gap: 1.4rem; align-items: center; justify-content: center; padding-bottom: 4vh; }
 .stage__lyrics-next p { margin: 0; white-space: pre-wrap; text-transform: none; line-height: 1.1; max-width: 100%; }
 .stage__group-slot { min-height: 3.8rem; display: flex; align-items: center; justify-content: center; }
 .stage__group-slot--next { justify-content: center; }
@@ -454,6 +560,13 @@ body.stage { background: #000; color: #f8fafc; font-family: 'Inter', system-ui, 
 .stage__meta { color: #cbd5f5; display: block; margin-top: 0.5rem; }
 .stage__meta[data-hidden="true"] { display: none; }
 .stage__empty { color: #94a3b8; font-size: 2rem; }
+.stage__status { position: fixed; bottom: 2rem; right: 2.5rem; display: inline-flex; align-items: center; gap: 0.75rem; padding: 0.6rem 1.2rem; font-size: 0.85rem; letter-spacing: 0.12em; text-transform: uppercase; background: rgba(15, 23, 42, 0.7); border-radius: 999px; box-shadow: 0 12px 32px -24px rgba(15, 23, 42, 0.95); }
+.stage__status span { display: inline-flex; align-items: center; }
+.stage__status-connection { color: #38bdf8; font-weight: 600; }
+.stage__status-latency { font-variant-numeric: tabular-nums; color: #e2e8f0; }
+.stage__status-latency[data-visible="false"] { display: none; }
+body.stage[data-live-state="disconnected"] .stage__status-connection,
+body.stage[data-live-state="error"] .stage__status-connection { color: #f87171; }
 "#;
 
 #[cfg(test)]
@@ -514,5 +627,27 @@ mod tests {
         let html = render_stage_display(snapshot).0;
         assert!(html.contains("Line A\nLine B"));
         assert!(html.contains("Verse"));
+    }
+
+    #[test]
+    fn stage_status_overlay_is_rendered() {
+        let now = Utc::now();
+        let snapshot = StageDisplaySnapshot::new(
+            worship_layout(),
+            now,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            presenter_core::timer::TimersOverview::demo(now),
+        );
+
+        let html = render_stage_display(snapshot).0;
+        assert!(html.contains("id=\"stage-status\""));
+        assert!(html.contains("id=\"stage-status-connection\""));
+        assert!(html.contains("id=\"stage-status-latency\""));
+        assert!(html.contains("Connecting"));
     }
 }
