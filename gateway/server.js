@@ -29,6 +29,26 @@ app.get('/healthz', (_req, res) => {
   res.json({ status: 'ok' });
 });
 
+function deriveInstanceInfo(manifest) {
+  const source = manifest.repoPath ? path.basename(manifest.repoPath) : manifest.project;
+  if (!source) {
+    return {
+      sortKey: 'zzz',
+      label: manifest.displayName || manifest.project || 'Unknown',
+    };
+  }
+
+  const match = /(?:^|-)dev(\d+)/i.exec(source);
+  if (match) {
+    const num = Number.parseInt(match[1] || '0', 10);
+    const sortKey = `dev-${num.toString().padStart(4, '0')}`;
+    const label = `Dev${Number.isNaN(num) ? match[1] : num}`;
+    return { sortKey, label };
+  }
+
+  return { sortKey: source.toLowerCase(), label: source };
+}
+
 async function loadManifests() {
   try {
     const entries = await fs.readdir(MANIFEST_DIR, { withFileTypes: true });
@@ -37,21 +57,30 @@ async function loadManifests() {
       if (!entry.isFile() || !entry.name.endsWith('.json')) continue;
       try {
         const raw = await fs.readFile(path.join(MANIFEST_DIR, entry.name), 'utf8');
-       const data = JSON.parse(raw);
-       manifests.push({
-         project: data.project ?? entry.name.replace(/\.json$/, ''),
-         displayName: data.displayName ?? data.project ?? entry.name,
-         port: data.port ?? null,
-         url: data.url ?? null,
-         operatorUrl: data.operatorUrl ?? null,
+        const data = JSON.parse(raw);
+        const manifest = {
+          project: data.project ?? entry.name.replace(/\.json$/, ''),
+          displayName: data.displayName ?? data.project ?? entry.name,
+          port: data.port ?? null,
+          url: data.url ?? null,
+          operatorUrl: data.operatorUrl ?? null,
           updatedAt: data.updatedAt ?? null,
           repoPath: data.repoPath ?? null,
-        });
+        };
+        const instance = deriveInstanceInfo(manifest);
+        manifest.instanceLabel = instance.label;
+        manifest.instanceSortKey = instance.sortKey;
+        manifests.push(manifest);
       } catch {
         // ignore malformed manifest
       }
     }
-    manifests.sort((a, b) => (a.displayName || '').localeCompare(b.displayName || ''));
+    manifests.sort((a, b) => {
+      if (a.instanceSortKey !== b.instanceSortKey) {
+        return a.instanceSortKey.localeCompare(b.instanceSortKey);
+      }
+      return (a.displayName || '').localeCompare(b.displayName || '');
+    });
     return manifests;
   } catch (error) {
     if (error.code === 'ENOENT') {
@@ -60,6 +89,7 @@ async function loadManifests() {
     throw error;
   }
 }
+
 
 function render(manifests, baseOrigin) {
   const originUrl = new URL(baseOrigin);
@@ -86,6 +116,7 @@ function render(manifests, baseOrigin) {
       { label: 'Stage Timer', href: stageTimer },
       { label: 'Stage Preach', href: stagePreach },
     ];
+    const branchLabel = manifest.displayName || manifest.project;
     const lastUpdated = formatUpdatedAt(manifest.updatedAt);
     const linkMarkup = links
       .map((link) => `<a href="${link.href}" target="_blank" rel="noopener">${link.label}</a>`)
@@ -94,8 +125,8 @@ function render(manifests, baseOrigin) {
     return `
       <article class="card" data-project="${manifest.project}" data-updated-at="${updatedIso}">
         <header>
-          <h2>${manifest.displayName}</h2>
-          <span class="slug">${manifest.project}</span>
+          <h2>${manifest.instanceLabel}</h2>
+          <span class="slug">${branchLabel}</span>
         </header>
         <dl>
           <div><dt>Port</dt><dd>${manifest.port ?? '—'}</dd></div>
