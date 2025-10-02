@@ -60,7 +60,7 @@ test('allows managing playlist entries while in live mode', async ({ page }) => 
     timeout: 60_000,
   });
   expect(librariesResponse.ok()).toBeTruthy();
-  const libraries: Array<{ presentations: Array<{ id: string; name: string }> }> =
+  const libraries: Array<{ id: string; name: string; presentations: Array<{ id: string; name: string }> }> =
     await librariesResponse.json();
   const source = libraries.find((lib) => Array.isArray(lib.presentations) && lib.presentations.length > 0);
   if (!source) {
@@ -89,6 +89,60 @@ test('allows managing playlist entries while in live mode', async ({ page }) => 
 
   await expect(presentationList.locator('li.empty')).toHaveText(/Playlist is empty/i);
   await expect(playlistItems).toHaveCount(0);
+  const playlistResponse = await page.request.get(new URL('/playlists', baseURL).toString(), {
+    timeout: 60_000,
+  });
+  expect(playlistResponse.ok()).toBeTruthy();
+  const playlists: Array<{ id: string; name: string }> = await playlistResponse.json();
+  const createdPlaylist = playlists.find((item) => item.name === playlistName);
+  expect(createdPlaylist).toBeTruthy();
+  const playlistId = createdPlaylist!.id;
+  const playlistButton = page.locator(`[data-role=\"playlist-item\"][data-playlist-id=\"${playlistId}\"]`).first();
+  await expect(playlistButton).toBeVisible();
+  await playlistButton.click();
+
+  const sourceLibrary = source;
+  await page.locator('[data-role=\"library-more\"]').click();
+  const libraryModalRow = page.locator(`[data-role="library-modal-list"] [data-role="library-row"][data-library-id="${sourceLibrary.id}"]`);
+  await expect(libraryModalRow).toBeVisible();
+  const favoriteToggle = libraryModalRow.locator('[data-action="library-favorite"]');
+  const pressed = await favoriteToggle.getAttribute('aria-pressed');
+  if (pressed !== 'true') {
+    await favoriteToggle.click();
+  }
+  const closeButton = page.locator('[data-role="library-modal-close"]');
+  if (await closeButton.isVisible()) {
+    await closeButton.click();
+  } else {
+    await page.keyboard.press('Escape');
+  }
+  await expect(page.locator('[data-role="library-modal"]')).toHaveAttribute('data-open', 'false');
+  const libraryButton = page.locator(`[data-role="library-list"] [data-role="library-item"][data-library-id="${sourceLibrary.id}"]`);
+  await expect(libraryButton).toBeVisible({ timeout: 10_000 });
+  await libraryButton.click();
+
+  await expect(playlistButton).toBeVisible();
+
+  const libraryPresentation = page
+    .locator('[data-role="presentation-item"][data-type="presentation"]')
+    .first();
+  await expect(libraryPresentation).toBeVisible();
+  const presentationDropzone = page.locator('[data-dropzone-target="presentations"]');
+  await expect(presentationDropzone).toBeVisible();
+  await libraryPresentation.dragTo(presentationDropzone);
+
+  await expect.poll(async () => {
+    return await page.evaluate(
+      (id) => window.__presenterOperatorTestHelpers.playlistPresentationCount?.(id),
+      playlistId,
+    );
+  }, { timeout: 10_000 }).toBe(1);
+
+  await playlistButton.click();
+  const playlistItemsAfter = page.locator('[data-role="presentation-item"][data-type="presentation"]');
+  await expect(playlistItemsAfter).toHaveCount(1, { timeout: 10_000 });
+  const playlistCountBadge = playlistButton.locator('[data-role="playlist-count"]');
+  await expect(playlistCountBadge).toHaveText(/\b1\b/, { timeout: 10_000 });
 });
 
 test('stage display status shows connection and latency', async ({ page }) => {
