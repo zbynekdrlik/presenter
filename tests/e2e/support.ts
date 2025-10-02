@@ -6,6 +6,14 @@ import type { TestInfo } from '@playwright/test';
 
 export const REPO_ROOT = process.cwd();
 
+function stableHash(input: string): number {
+  let hash = 0;
+  for (let i = 0; i < input.length; i += 1) {
+    hash = (hash * 31 + input.charCodeAt(i)) >>> 0;
+  }
+  return hash;
+}
+
 export type ServerHandle = {
   process: ChildProcessWithoutNullStreams;
   port: number;
@@ -21,7 +29,9 @@ export type MockResolumeHandle = {
 export function deriveTestConfig(testInfo: TestInfo) {
   const workerIndex = testInfo.workerIndex ?? 0;
   const basePort = Number.parseInt(process.env.PRESENTER_PORT ?? '8899', 10);
-  const port = basePort + workerIndex;
+  const scopeKey = testInfo.file ?? testInfo.title ?? `worker-${workerIndex}`;
+  const fileOffset = stableHash(scopeKey) % 50;
+  const port = basePort + workerIndex * 100 + fileOffset;
   const explicitDbUrl = process.env.PRESENTER_DB_URL;
   const dbUrl = explicitDbUrl ?? `sqlite://presenter_e2e_${workerIndex}.db`;
   const baseURL = `http://127.0.0.1:${port}`;

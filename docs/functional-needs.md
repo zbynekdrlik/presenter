@@ -19,8 +19,8 @@
 - Layout builder that places lyrics, timers, notes, and alerts in flexible regions.
 - Per-display profiles (e.g., main stage monitor vs. choir screen).
 - Remote preview on tablets/phones for production leads.
-- Live synchronization with Resolume Arena decks, including auto-discovery of clips and
-  alternating A/B lanes for main, translation, and Bible outputs.
+- Persistent heartbeat and latency visibility so operators can confirm live links without advancing slides.
+- Live synchronization with Resolume Arena decks, including auto-discovery of clips and alternating A/B lanes for main, translation, and Bible outputs.
 
 ## External Integrations
 - Manage multiple Resolume Arena connections (DNS hostnames on port 8090 by default) from a

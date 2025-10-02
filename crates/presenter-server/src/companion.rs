@@ -540,6 +540,8 @@ impl CompanionVariableState {
     fn apply_live_event(&mut self, event: crate::live::LiveEvent) -> bool {
         match event {
             crate::live::LiveEvent::Stage { snapshot } => self.apply_stage_snapshot(snapshot),
+            crate::live::LiveEvent::Heartbeat { .. } => false,
+            crate::live::LiveEvent::StageConnection { .. } => false,
             crate::live::LiveEvent::Timers { overview } => self.apply_timers(overview),
             crate::live::LiveEvent::Bible { broadcast } => self.apply_bible(broadcast),
             crate::live::LiveEvent::BibleCleared => self.clear_bible(),
