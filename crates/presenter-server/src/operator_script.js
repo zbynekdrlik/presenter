@@ -440,7 +440,6 @@
     if (!libraryId) return;
 
     state.activeLibraryId = libraryId;
-    state.activePlaylistId = null;
     renderLibraries();
     renderPlaylists();
     renderPresentationList();
@@ -1109,7 +1108,6 @@
       return;
     }
     state.activeLibraryId = libraryId;
-    state.activePlaylistId = null;
     updateContextTitleFromLibrary(libraryId);
     renderLibraries();
     renderPlaylists();
@@ -1905,7 +1903,7 @@
                   ${renameAction}
                 </div>`;
             return `
-              <li class="operator__presentation-item${active}" data-role="presentation-item" data-type="presentation" data-presentation-id="${presentation.id}" draggable="false">
+              <li class="operator__presentation-item${active}" data-role="presentation-item" data-type="presentation" data-presentation-id="${presentation.id}" draggable="true">
                 <span>${escapeHtml(presentation.name)}</span>
                 <span class="operator__presentation-meta">${escapeHtml(libraryName || '')}</span>
                 ${actions}
@@ -3730,10 +3728,6 @@ function updateCardWarnings(card) {
     const presentationId = item.dataset.presentationId || null;
     state.draggingFromSearch = false;
     const entryIndex = item.dataset.entryIndex;
-    if (state.activeLibraryId && !state.activePlaylistId) {
-      event.preventDefault();
-      return;
-    }
     const isPlaylistEntry =
       entryId && typeof entryIndex !== 'undefined' && entryIndex !== null && entryIndex !== '' && state.activePlaylistId;
     if (isPlaylistEntry) {
