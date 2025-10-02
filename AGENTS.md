@@ -17,7 +17,7 @@ Presenter is a monolithic, production-ready lyrics/Bible/timers display applicat
 - Install any required tool, utility, package, framework, or application immediately using `sudo apt install` (or the appropriate package manager) instead of attempting workarounds or waiting for approval.
 - If Ubuntu's default repositories lack a sufficiently recent version, research state-of-the-art 2025 sources (official PPAs, vendor repos, direct installers) and install the newest stable release that satisfies project requirements. Document the chosen source in the PR.
 - Preference is always for the latest stable versions of crucial frameworks; do not proceed with outdated tooling unless explicitly directed by the user.
-
+- Slash-command prompts live under `prompts/` in this repository. After editing any prompt, run `scripts/prompts/publish.sh` so the definitions are copied into `~/.codex/prompts` before using them. Keep prompts in sync with docs and commit changes alongside code.
 ## Runtime Environments
 - Maintain three installations on this controller: development, testing, and production. Keep dev updated immediately after each approved PR so the user can evaluate changes quickly.
 - Testing environment mirrors production configuration for validation prior to promotion. Automate deployment from the main branch once changes pass review.
