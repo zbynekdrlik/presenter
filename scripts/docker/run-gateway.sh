@@ -29,6 +29,9 @@ done
 
 export PRESENTER_MANIFEST_DIR="$MANIFEST_DIR"
 
+# Ensure any existing gateway container is removed so the latest verify run owns it.
+"${DOCKER_CMD[@]}" rm -f presenter-gateway >/dev/null 2>&1 || true
+
 CMD=("${DOCKER_CMD[@]}" compose -f "$REPO_ROOT/docker-compose.gateway.yml" up -d)
 if [[ "$FORCE" -eq 1 ]]; then
   CMD+=("--build")
