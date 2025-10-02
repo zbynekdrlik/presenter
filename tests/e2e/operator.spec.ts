@@ -470,6 +470,7 @@ test.describe('Operator control surface', () => {
   }
 
   await searchInput.fill('Nadej');
+  await searchInput.press('Enter');
   await expect(searchResults).toHaveAttribute('data-visible', 'true');
   const slideResult = searchResults
     .locator('[data-role="search-result-item"][data-kind="slide"]')
@@ -485,6 +486,7 @@ test.describe('Operator control surface', () => {
   }
 
   await searchInput.fill('Nadej');
+  await searchInput.press('Enter');
   await expect(searchResults).toHaveAttribute('data-visible', 'true');
   const presentationResult = searchResults
     .locator('[data-role="search-result-item"][data-kind="presentation"]')
@@ -498,6 +500,7 @@ test.describe('Operator control surface', () => {
   await expect(searchResults).toHaveAttribute('data-visible', 'false');
 
   await searchInput.fill('Nadej');
+  await searchInput.press('Enter');
   await expect(searchResults).toHaveAttribute('data-visible', 'true');
   const searchPresentationResults = searchResults.locator('[data-role="search-result-item"][data-kind="presentation"]');
   const existingPresentationIds = new Set(
@@ -507,8 +510,14 @@ test.describe('Operator control surface', () => {
       )
     ).filter((value) => Boolean(value))
   );
+  await expect(async () => {
+    const count = await searchPresentationResults.count();
+    if (count === 0) {
+      throw new Error('no presentation search results');
+    }
+    return count;
+  }).toPass({ timeout: 5_000, intervals: [200] });
   const candidateCount = await searchPresentationResults.count();
-  expect(candidateCount).toBeGreaterThan(0);
   let insertionResult = searchPresentationResults.first();
   let insertionTitle = '';
   let insertionPresentationId = '';
@@ -542,6 +551,7 @@ test.describe('Operator control surface', () => {
   }).toPass({ timeout: 5_000, intervals: [200] });
 
   await searchInput.fill('Nadej');
+  await searchInput.press('Enter');
   await expect(searchResults).toHaveAttribute('data-visible', 'true');
   const dropzonePresentationResults = searchResults.locator(
     '[data-role="search-result-item"][data-kind="presentation"]',
@@ -553,8 +563,14 @@ test.describe('Operator control surface', () => {
       )
     ).filter((value) => Boolean(value))
   );
+  await expect(async () => {
+    const count = await dropzonePresentationResults.count();
+    if (count === 0) {
+      throw new Error('no dropzone candidates');
+    }
+    return count;
+  }).toPass({ timeout: 5_000, intervals: [200] });
   const dropzoneCandidateCount = await dropzonePresentationResults.count();
-  expect(dropzoneCandidateCount).toBeGreaterThan(0);
   let dropzoneCandidate = dropzonePresentationResults.first();
   for (let index = 0; index < dropzoneCandidateCount; index += 1) {
     const candidate = dropzonePresentationResults.nth(index);
@@ -750,8 +766,9 @@ test.describe('Operator control surface', () => {
     await timerStagePage.goto(new URL('/stage/timer', baseURL).toString());
     await timerStagePage.waitForSelector('#countdown-value', { state: 'attached' });
 
-    await slideButton.click();
     const stageTriggerAt = Date.now();
+    await slideButton.dispatchEvent('pointerdown', { button: 0 });
+    await slideButton.dispatchEvent('pointerup', { button: 0 });
     await expect(async () => {
       const className = await slideButton.evaluate((el) => el.className);
       if (className.includes('is-loading')) {
@@ -776,7 +793,7 @@ test.describe('Operator control surface', () => {
     const escapeRegex = (value: string) => value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
     const initialRegex = new RegExp(escapeRegex(initialStageText), 'i');
     const stageLatency = Date.now() - stageTriggerAt;
-    expect(stageLatency).toBeLessThanOrEqual(5_000);
+    expect(stageLatency).toBeLessThanOrEqual(800);
     await expect(page.locator('[data-role="stage-current"]')).toContainText(initialRegex, {
       timeout: 2_000,
       ignoreCase: true,
@@ -793,7 +810,7 @@ test.describe('Operator control surface', () => {
     const forwardStageText = (await currentTextLocator.innerText()).trim();
     const forwardRegex = new RegExp(escapeRegex(forwardStageText), 'i');
     const arrowLatency = Date.now() - arrowStart;
-    expect(arrowLatency).toBeLessThanOrEqual(2_000);
+    expect(arrowLatency).toBeLessThanOrEqual(800);
     await expect(page.locator('[data-role="stage-current"]')).toContainText(forwardRegex, {
       timeout: 2_000,
       ignoreCase: true,
@@ -802,7 +819,7 @@ test.describe('Operator control surface', () => {
     await page.keyboard.press('ArrowLeft');
     await expect(currentTextLocator).toContainText(initialRegex, { timeout: 5_000 });
     const leftLatency = Date.now() - leftStart;
-    expect(leftLatency).toBeLessThanOrEqual(2_000);
+    expect(leftLatency).toBeLessThanOrEqual(800);
     await expect(page.locator('[data-role="stage-current"]')).toContainText(initialStageText, {
       timeout: 2_000,
       ignoreCase: true,

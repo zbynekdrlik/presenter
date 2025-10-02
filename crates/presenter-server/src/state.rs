@@ -30,6 +30,7 @@ pub struct AppState {
     resolume_registry: ResolumeRegistry,
     stage_connections: StageConnections,
     heartbeat_config: StageHeartbeatConfig,
+    presentation_cache: Arc<RwLock<HashMap<PresentationId, Arc<Presentation>>>>,
     #[cfg(test)]
     bible_ingestion_override: Option<std::sync::Arc<dyn TestBibleIngestion + Send + Sync>>,
 }
@@ -50,6 +51,7 @@ impl AppState {
             resolume_registry,
             stage_connections,
             heartbeat_config,
+            presentation_cache: Arc::new(RwLock::new(HashMap::new())),
             #[cfg(test)]
             bible_ingestion_override: None,
         };
@@ -148,6 +150,7 @@ impl AppState {
             .repository
             .create_presentation(library_id, name)
             .await?;
+        self.cache_presentation_ref(&presentation).await;
         let summaries = self.repository.list_library_summaries(None).await?;
         let summary = summaries.into_iter().find(|summary| summary.id == id);
         Ok((id, lib_name, presentation, summary))
@@ -160,7 +163,15 @@ impl AppState {
     ) -> anyhow::Result<()> {
         self.repository
             .rename_presentation(presentation_id, name)
-            .await
+            .await?;
+        {
+            let mut guard = self.presentation_cache.write().await;
+            if let Some(entry) = guard.get_mut(&presentation_id) {
+                let pres = Arc::make_mut(entry);
+                pres.name = name.to_string();
+            }
+        }
+        Ok(())
     }
 
     pub async fn list_bible_translations(&self) -> anyhow::Result<Vec<BibleTranslation>> {
@@ -388,6 +399,39 @@ impl AppState {
         Ok(())
     }
 
+    async fn presentation_from_cache(
+        &self,
+        presentation_id: PresentationId,
+    ) -> anyhow::Result<Arc<Presentation>> {
+        if let Some(cached) = {
+            let guard = self.presentation_cache.read().await;
+            guard.get(&presentation_id).cloned()
+        } {
+            return Ok(cached);
+        }
+        let detail = self
+            .repository
+            .fetch_presentation_detail(presentation_id)
+            .await?;
+        let Some((_, _, presentation)) = detail else {
+            return Err(anyhow::anyhow!("presentation not found"));
+        };
+        let arc = Arc::new(presentation);
+        let mut guard = self.presentation_cache.write().await;
+        guard.insert(presentation_id, arc.clone());
+        Ok(arc)
+    }
+
+    async fn cache_presentation_ref(&self, presentation: &Presentation) {
+        let mut guard = self.presentation_cache.write().await;
+        guard.insert(presentation.id, Arc::new(presentation.clone()));
+    }
+
+    async fn cache_presentation_value(&self, presentation: Presentation) {
+        let mut guard = self.presentation_cache.write().await;
+        guard.insert(presentation.id, Arc::new(presentation));
+    }
+
     pub async fn stage_display_snapshot(
         &self,
         layout_code: &str,
@@ -420,13 +464,8 @@ impl AppState {
         current_slide_id: SlideId,
         next_slide_id: Option<SlideId>,
     ) -> anyhow::Result<()> {
-        let detail = self
-            .repository
-            .fetch_presentation_detail(presentation_id)
-            .await?;
-        let Some((_, _, presentation)) = detail else {
-            anyhow::bail!("presentation not found");
-        };
+        let presentation_arc = self.presentation_from_cache(presentation_id).await?;
+        let presentation = presentation_arc.as_ref();
 
         if !presentation
             .slides
@@ -452,11 +491,8 @@ impl AppState {
             next_slide_id,
         );
         self.repository.upsert_stage_state(&stage_state).await?;
-        let resolution = stage_resolution_from_presentation(
-            &presentation,
-            Some(current_slide_id),
-            next_slide_id,
-        );
+        let resolution =
+            stage_resolution_from_presentation(presentation, Some(current_slide_id), next_slide_id);
         self.broadcast_stage_resolution(resolution).await?;
         Ok(())
     }
@@ -473,9 +509,16 @@ impl AppState {
         &self,
         presentation_id: PresentationId,
     ) -> anyhow::Result<Option<(LibraryId, String, Presentation)>> {
-        self.repository
+        let detail = self
+            .repository
             .fetch_presentation_detail(presentation_id)
-            .await
+            .await?;
+        if let Some((library_id, library_name, presentation)) = detail {
+            self.cache_presentation_ref(&presentation).await;
+            Ok(Some((library_id, library_name, presentation)))
+        } else {
+            Ok(None)
+        }
     }
 
     pub async fn update_slide_content(
@@ -487,10 +530,8 @@ impl AppState {
         stage: String,
         group: Option<String>,
     ) -> anyhow::Result<Slide> {
-        let (_, _, presentation) = self
-            .presentation_detail(presentation_id)
-            .await?
-            .ok_or_else(|| anyhow::anyhow!("presentation not found"))?;
+        let presentation_arc = self.presentation_from_cache(presentation_id).await?;
+        let presentation = presentation_arc.as_ref();
 
         let existing_slide = presentation
             .slides
@@ -517,12 +558,21 @@ impl AppState {
             stage_text.clone(),
             group.clone(),
         );
+        let updated_slide = Slide::new(existing_slide.order, content.clone()).with_id(slide_id);
 
         self.repository
             .update_slide_content(presentation_id, slide_id, &content)
             .await?;
 
-        let updated_slide = Slide::new(existing_slide.order, content.clone()).with_id(slide_id);
+        let mut updated_presentation = presentation.clone();
+        if let Some(slot) = updated_presentation
+            .slides
+            .iter_mut()
+            .find(|slide| slide.id == slide_id)
+        {
+            *slot = updated_slide.clone();
+        }
+        self.cache_presentation_value(updated_presentation).await;
 
         self.broadcast_stage_snapshots().await?;
 
@@ -534,11 +584,9 @@ impl AppState {
         presentation_id: PresentationId,
         position: Option<u32>,
     ) -> anyhow::Result<Vec<Slide>> {
-        let (_, _, presentation) = self
-            .presentation_detail(presentation_id)
-            .await?
-            .ok_or_else(|| anyhow::anyhow!("presentation not found"))?;
-        let mut slides = presentation.slides;
+        let presentation_arc = self.presentation_from_cache(presentation_id).await?;
+        let presentation = presentation_arc.as_ref();
+        let mut slides = presentation.slides.clone();
         let insert_at = position
             .map(|value| value as usize)
             .unwrap_or(slides.len())
@@ -550,6 +598,9 @@ impl AppState {
             .await?;
         self.reconcile_stage_state_after_edit(presentation_id, &slides)
             .await?;
+        let mut updated_presentation = presentation.clone();
+        updated_presentation.slides = slides.clone();
+        self.cache_presentation_value(updated_presentation).await;
         self.broadcast_stage_snapshots().await?;
         Ok(slides)
     }
@@ -559,11 +610,9 @@ impl AppState {
         presentation_id: PresentationId,
         slide_id: SlideId,
     ) -> anyhow::Result<Vec<Slide>> {
-        let (_, _, presentation) = self
-            .presentation_detail(presentation_id)
-            .await?
-            .ok_or_else(|| anyhow::anyhow!("presentation not found"))?;
-        let mut slides = presentation.slides;
+        let presentation_arc = self.presentation_from_cache(presentation_id).await?;
+        let presentation = presentation_arc.as_ref();
+        let mut slides = presentation.slides.clone();
         let index = slides
             .iter()
             .position(|slide| slide.id == slide_id)
@@ -576,6 +625,9 @@ impl AppState {
             .await?;
         self.reconcile_stage_state_after_edit(presentation_id, &slides)
             .await?;
+        let mut updated_presentation = presentation.clone();
+        updated_presentation.slides = slides.clone();
+        self.cache_presentation_value(updated_presentation).await;
         self.broadcast_stage_snapshots().await?;
         Ok(slides)
     }
@@ -585,11 +637,9 @@ impl AppState {
         presentation_id: PresentationId,
         slide_id: SlideId,
     ) -> anyhow::Result<Vec<Slide>> {
-        let (_, _, presentation) = self
-            .presentation_detail(presentation_id)
-            .await?
-            .ok_or_else(|| anyhow::anyhow!("presentation not found"))?;
-        let mut slides = presentation.slides;
+        let presentation_arc = self.presentation_from_cache(presentation_id).await?;
+        let presentation = presentation_arc.as_ref();
+        let mut slides = presentation.slides.clone();
         let index = slides
             .iter()
             .position(|slide| slide.id == slide_id)
@@ -604,6 +654,9 @@ impl AppState {
             .await?;
         self.reconcile_stage_state_after_edit(presentation_id, &slides)
             .await?;
+        let mut updated_presentation = presentation.clone();
+        updated_presentation.slides = slides.clone();
+        self.cache_presentation_value(updated_presentation).await;
         self.broadcast_stage_snapshots().await?;
         Ok(slides)
     }
@@ -613,12 +666,10 @@ impl AppState {
         presentation_id: PresentationId,
         order: Vec<SlideId>,
     ) -> anyhow::Result<Vec<Slide>> {
-        let (_, _, presentation) = self
-            .presentation_detail(presentation_id)
-            .await?
-            .ok_or_else(|| anyhow::anyhow!("presentation not found"))?;
+        let presentation_arc = self.presentation_from_cache(presentation_id).await?;
+        let presentation = presentation_arc.as_ref();
         let mut map = HashMap::new();
-        for slide in presentation.slides {
+        for slide in presentation.slides.clone() {
             map.insert(slide.id, slide);
         }
         if order.len() != map.len() {
@@ -637,6 +688,9 @@ impl AppState {
             .await?;
         self.reconcile_stage_state_after_edit(presentation_id, &slides)
             .await?;
+        let mut updated_presentation = presentation.clone();
+        updated_presentation.slides = slides.clone();
+        self.cache_presentation_value(updated_presentation).await;
         self.broadcast_stage_snapshots().await?;
         Ok(slides)
     }
@@ -909,9 +963,22 @@ fn stage_resolution_from_presentation(
     current_slide_id: Option<SlideId>,
     next_slide_id: Option<SlideId>,
 ) -> StageResolution {
-    let resolved = presentation.resolved_slides();
+    #[derive(Clone)]
+    struct SlideCtx<'a> {
+        slide: &'a Slide,
+        effective_group: Option<String>,
+    }
 
-    if resolved.is_empty() {
+    fn to_stage_display(ctx: &SlideCtx<'_>) -> StageDisplaySlide {
+        StageDisplaySlide {
+            main: ctx.slide.content.main.value().to_string(),
+            translation: ctx.slide.content.translation.value().to_string(),
+            stage: ctx.slide.content.stage.value().to_string(),
+            group: ctx.effective_group.clone(),
+        }
+    }
+
+    if presentation.slides.is_empty() {
         return StageResolution {
             presentation_id: Some(presentation.id),
             presentation_name: Some(presentation.name.clone()),
@@ -922,33 +989,72 @@ fn stage_resolution_from_presentation(
         };
     }
 
-    let resolve_by_id = |id: SlideId| resolved.iter().find(|slide| slide.id == id);
+    let mut effective_group: Option<String> = None;
+    let mut first: Option<SlideCtx<'_>> = None;
+    let mut second: Option<SlideCtx<'_>> = None;
+    let mut current_ctx: Option<SlideCtx<'_>> = None;
+    let mut current_order: Option<u32> = None;
+    let mut next_by_id: Option<SlideCtx<'_>> = None;
+    let mut next_after_current: Option<SlideCtx<'_>> = None;
 
-    let current_resolved = current_slide_id.and_then(resolve_by_id);
-    let fallback_current = current_resolved.or_else(|| resolved.first());
+    for slide in &presentation.slides {
+        if let Some(group) = slide.content.group.as_ref() {
+            effective_group = Some(group.name().to_string());
+        }
+        let ctx = SlideCtx {
+            slide,
+            effective_group: effective_group.clone(),
+        };
+        if first.is_none() {
+            first = Some(ctx.clone());
+        } else if second.is_none() {
+            second = Some(ctx.clone());
+        }
 
-    let next_resolved = next_slide_id
-        .and_then(resolve_by_id)
-        .or_else(|| fallback_current.and_then(|current| find_next_resolved(&resolved, current)));
+        if let Some(target_next) = next_slide_id {
+            if slide.id == target_next {
+                next_by_id = Some(ctx.clone());
+            }
+        }
+
+        if current_ctx.is_none() {
+            if let Some(target_current) = current_slide_id {
+                if slide.id == target_current {
+                    current_order = Some(slide.order);
+                    current_ctx = Some(ctx.clone());
+                }
+            }
+        } else if next_after_current.is_none() {
+            if let Some(order) = current_order {
+                if slide.order > order {
+                    next_after_current = Some(ctx.clone());
+                }
+            }
+        }
+    }
+
+    let resolved_current = current_ctx.or_else(|| first.clone());
+    let resolved_next = if let Some(next_ctx) = next_by_id {
+        Some(next_ctx)
+    } else if current_order.is_some() {
+        next_after_current.clone()
+    } else {
+        second.clone()
+    };
+
+    let current_slide_id_value = resolved_current.as_ref().map(|ctx| ctx.slide.id);
+    let next_slide_id_value = resolved_next.as_ref().map(|ctx| ctx.slide.id);
+    let current_slide = resolved_current.as_ref().map(to_stage_display);
+    let next_slide = resolved_next.as_ref().map(to_stage_display);
 
     StageResolution {
         presentation_id: Some(presentation.id),
         presentation_name: Some(presentation.name.clone()),
-        current_slide_id: fallback_current.map(|slide| slide.id),
-        current: fallback_current.map(StageDisplaySlide::from),
-        next_slide_id: next_resolved.map(|slide| slide.id),
-        next: next_resolved.map(StageDisplaySlide::from),
+        current_slide_id: current_slide_id_value,
+        current: current_slide,
+        next_slide_id: next_slide_id_value,
+        next: next_slide,
     }
-}
-
-fn find_next_resolved<'a>(
-    slides: &'a [presenter_core::slide::ResolvedSlide],
-    current: &presenter_core::slide::ResolvedSlide,
-) -> Option<&'a presenter_core::slide::ResolvedSlide> {
-    slides
-        .iter()
-        .filter(|slide| slide.order > current.order)
-        .min_by_key(|slide| slide.order)
 }
 
 fn build_stage_snapshot(

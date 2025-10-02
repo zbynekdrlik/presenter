@@ -67,6 +67,7 @@
     searchOpen: false,
     clearingSlide: false,
     searchDragging: false,
+    skipClickTrigger: null,
     draggingPresentationId: null,
     draggingFromSearch: false,
     catalogTopHeight: resolvedCatalogHeight,
@@ -3851,6 +3852,18 @@ function updateCardWarnings(card) {
     const card = event.target.closest('[data-slide-id]');
     if (!card) return;
     const slideId = card.dataset.slideId;
+    const now = typeof performance !== 'undefined' && performance.now ? performance.now() : Date.now();
+    if (state.mode === 'live' && state.skipClickTrigger) {
+      if (state.skipClickTrigger.slideId === slideId && state.skipClickTrigger.expiresAt >= now) {
+        state.skipClickTrigger = null;
+        event.preventDefault();
+        event.stopPropagation();
+        return;
+      }
+      if (state.skipClickTrigger.expiresAt < now) {
+        state.skipClickTrigger = null;
+      }
+    }
     const presentationId = state.currentPresentationId;
     if (!presentationId) return;
     const actionButton = event.target.closest('[data-action]');
@@ -3891,6 +3904,33 @@ function updateCardWarnings(card) {
   }
 
   function handleSlidesPointerDown(event) {
+    if (state.mode === 'live') {
+      if (event.button !== 0) {
+        state.pendingFocus = null;
+        return;
+      }
+      const actionButton = event.target.closest('[data-action]');
+      const editableField = event.target.closest('[data-field]');
+      if (actionButton || editableField) {
+        state.pendingFocus = null;
+        return;
+      }
+      const card = event.target.closest('[data-slide-id]');
+      const presentationId = state.currentPresentationId || state.stagePresentationId;
+      const slideId = card ? card.dataset.slideId : null;
+      if (card && presentationId && slideId) {
+        const now = typeof performance !== 'undefined' && performance.now ? performance.now() : Date.now();
+        state.skipClickTrigger = { slideId, expiresAt: now + 250 };
+        state.currentPresentationId = presentationId;
+        state.focusedSlideId = slideId;
+        triggerSlide(presentationId, slideId, card);
+        event.preventDefault();
+        event.stopPropagation();
+        return;
+      }
+      state.pendingFocus = null;
+      return;
+    }
     const field = event.target.closest('[data-field]');
     if (!field) {
       state.pendingFocus = null;
