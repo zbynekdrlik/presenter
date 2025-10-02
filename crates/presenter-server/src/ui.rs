@@ -175,6 +175,19 @@ pub fn OperatorDocument(
                                 <div class="operator__stage-preview-panel operator__stage-preview-panel--current" data-role="stage-current">"—"</div>
                                 <button
                                     type="button"
+                                    class="operator__stage-monitor"
+                                    data-role="stage-monitor"
+                                    data-connected="0"
+                                    data-issues="0"
+                                    aria-label="Stage display health"
+                                    title="Stage displays – no data"
+                                >
+                                    <span data-role="stage-monitor-connected" class="operator__stage-monitor-count operator__stage-monitor-count--connected">"0"</span>
+                                    <span class="operator__stage-monitor-separator">"/"</span>
+                                    <span data-role="stage-monitor-issues" class="operator__stage-monitor-count operator__stage-monitor-count--issues">"0"</span>
+                                </button>
+                                <button
+                                    type="button"
                                     class="operator__clear-button"
                                     data-role="clear-slide"
                                     aria-label="Clear live outputs"
@@ -860,7 +873,14 @@ body.operator {
     color: var(--operator-muted);
 }
 
-.operator__view-nav,
+.operator__view-nav {
+    font-size: 0.7rem;
+    letter-spacing: 0.16em;
+    text-transform: uppercase;
+    color: #cbd5f5;
+    opacity: 0.75;
+}
+
 .operator__mode-toggle {
     display: inline-flex;
     align-items: center;
@@ -1367,6 +1387,74 @@ body.operator[data-mode="live"] .operator__line-limit {
 
 .operator__stage-preview[data-active="false"] {
     opacity: 0.6;
+}
+
+.operator__stage-monitor {
+    position: absolute;
+    right: 0.35rem;
+    bottom: 0.25rem;
+    padding: 0;
+    border: none;
+    background: none;
+    color: #e2e8f0;
+    font-size: 0.78rem;
+    font-weight: 700;
+    display: inline-flex;
+    align-items: baseline;
+    gap: 0.2rem;
+    cursor: pointer;
+    font-variant-numeric: tabular-nums;
+    text-shadow: 0 0 6px rgba(15, 23, 42, 0.85);
+}
+
+.operator__stage-monitor:hover {
+    color: #38bdf8;
+}
+
+.operator__stage-monitor:focus-visible {
+    outline: 2px solid rgba(56, 189, 248, 0.65);
+    outline-offset: 2px;
+}
+
+.operator__stage-monitor--alert {
+    color: #f87171;
+}
+
+.operator__stage-monitor-separator {
+    opacity: 0.6;
+}
+
+.operator__stage-monitor-count {
+    font-variant-numeric: tabular-nums;
+    min-width: 1.4ch;
+    text-align: right;
+    display: inline-block;
+}
+
+.operator__stage-monitor-count--connected {
+    color: #4ade80;
+}
+
+.operator__stage-monitor-count--issues {
+    color: #64748b;
+    transition: color 0.2s ease;
+}
+
+.operator__stage-monitor--alert .operator__stage-monitor-count--issues {
+    color: #f87171;
+    font-size: 1.15rem;
+    font-weight: 800;
+    animation: operatorStageMonitorPulse 1s ease-in-out infinite;
+    text-shadow: 0 0 8px rgba(248, 113, 113, 0.45);
+}
+
+@keyframes operatorStageMonitorPulse {
+    0%, 100% {
+        opacity: 1;
+    }
+    50% {
+        opacity: 0.35;
+    }
 }
 
 .operator__stage-preview-panel {

@@ -3,7 +3,8 @@
 (function () {
   const libraries = __LIBRARIES__;
   const playlistsData = __PLAYLISTS__;
-  const timersOverview = __TIMERS__;
+  const timersOverview = __TIMERS__
+;
   const DEFAULT_LINE_LIMIT = 32;
   const MAX_SLIDE_LINES = 2;
   const DEFAULT_CATALOG_HEIGHT = 320;
@@ -73,7 +74,13 @@
     catalogResizePointerId: null,
     catalogResizeStartY: 0,
     catalogResizeStartHeight: resolvedCatalogHeight,
+    stageConnections: new Map(),
+    stageBaseline: new Set(),
+    stageMonitorRefreshTimer: null,
   };
+
+  const STAGE_MONITOR_BASELINE_KEY = 'presenter.stageMonitorBaseline';
+  const STAGE_MONITOR_REFRESH_MS = 60_000;
 
   const els = {
     libraryList: document.querySelector('[data-role="library-list"]'),
@@ -88,6 +95,9 @@
     presentationCount: document.querySelector('[data-role="presentation-count"]'),
     presentationCreate: document.querySelector('[data-role="presentation-create"]'),
     slides: document.querySelector('[data-role="slides"]'),
+    stageMonitor: document.querySelector('[data-role="stage-monitor"]'),
+    stageMonitorConnected: document.querySelector('[data-role="stage-monitor-connected"]'),
+    stageMonitorIssues: document.querySelector('[data-role="stage-monitor-issues"]'),
     addSlide: document.querySelector('[data-role="add-slide"]'),
     clearSlide: document.querySelector('[data-role="clear-slide"]'),
     lineLimit: document.querySelector('[data-role="line-limit"]'),
@@ -816,6 +826,164 @@
     if (nextEl) {
       nextEl.textContent = nextText || '—';
     }
+  }
+
+  function parseStageConnectionSnapshot(raw) {
+    if (!raw || typeof raw !== 'object') return null;
+    const id = raw.id || raw.clientId || raw.client_id;
+    if (!id) return null;
+    const status = (raw.status || '').toString().toLowerCase();
+    const latency = raw.latencyMs ?? raw.latency_ms;
+    return {
+      id: String(id),
+      status,
+      layoutCode: raw.layoutCode ?? raw.layout_code ?? '',
+      latencyMs: typeof latency === 'number' ? latency : null,
+      lastHeartbeat: raw.lastHeartbeat ?? raw.last_heartbeat ?? null,
+    };
+  }
+
+  function loadStageMonitorBaseline() {
+    try {
+      if (!window.localStorage) return new Set();
+      const raw = window.localStorage.getItem(STAGE_MONITOR_BASELINE_KEY);
+      if (!raw) return new Set();
+      const parsed = JSON.parse(raw);
+      if (Array.isArray(parsed)) {
+        return new Set(parsed.map((value) => String(value)));
+      }
+    } catch (error) {
+      console.warn('Failed to load stage monitor baseline', error);
+    }
+    return new Set();
+  }
+
+  function persistStageMonitorBaseline() {
+    try {
+      if (!window.localStorage) return;
+      const values = Array.from(state.stageBaseline);
+      window.localStorage.setItem(STAGE_MONITOR_BASELINE_KEY, JSON.stringify(values));
+    } catch (error) {
+      console.warn('Failed to persist stage monitor baseline', error);
+    }
+  }
+
+  function updateStageMonitorUI() {
+    if (!els.stageMonitor || !els.stageMonitorConnected || !els.stageMonitorIssues) return;
+
+    const baselineIds = state.stageBaseline.size
+      ? Array.from(state.stageBaseline)
+      : [];
+
+    if (baselineIds.length === 0) {
+      els.stageMonitorConnected.textContent = '0';
+      els.stageMonitorIssues.textContent = '0';
+      els.stageMonitor.dataset.connected = '0';
+      els.stageMonitor.dataset.issues = '0';
+      els.stageMonitor.classList.remove('operator__stage-monitor--alert');
+      els.stageMonitor.title = 'Stage displays – baseline empty';
+      return;
+    }
+
+    let connectedCount = 0;
+    let issueCount = 0;
+
+    for (const id of baselineIds) {
+      const snapshot = state.stageConnections.get(id);
+      if (snapshot && snapshot.status === 'connected') {
+        connectedCount += 1;
+      } else {
+        issueCount += 1;
+      }
+    }
+
+    els.stageMonitorConnected.textContent = String(connectedCount);
+    els.stageMonitorIssues.textContent = String(issueCount);
+    els.stageMonitor.dataset.connected = String(connectedCount);
+    els.stageMonitor.dataset.issues = String(issueCount);
+    els.stageMonitor.classList.toggle('operator__stage-monitor--alert', issueCount > 0);
+
+    const totalKnown = baselineIds.length;
+    if (issueCount > 0) {
+      els.stageMonitor.title = `Stage displays – Connected: ${connectedCount}/${totalKnown}`;
+    } else {
+      els.stageMonitor.title = `Stage displays – All ${connectedCount} online`;
+    }
+  }
+
+  function handleStageConnectionSnapshot(raw) {
+    const snapshot = parseStageConnectionSnapshot(raw);
+    if (!snapshot) return;
+    state.stageConnections.set(snapshot.id, snapshot);
+    let baselineChanged = false;
+    if (!state.stageBaseline.has(snapshot.id) && snapshot.status === 'connected') {
+      state.stageBaseline.add(snapshot.id);
+      baselineChanged = true;
+    }
+    if (baselineChanged) {
+      persistStageMonitorBaseline();
+    }
+    updateStageMonitorUI();
+  }
+
+  async function refreshStageConnections() {
+    try {
+      const response = await fetch('/stage/connections', { cache: 'no-store' });
+      if (!response.ok) throw new Error(`stage connections request failed (${response.status})`);
+      const payload = await response.json();
+      if (!Array.isArray(payload)) return;
+      const map = new Map();
+      for (const entry of payload) {
+        const snapshot = parseStageConnectionSnapshot(entry);
+        if (!snapshot) continue;
+        map.set(snapshot.id, snapshot);
+      }
+      let baselineChanged = false;
+      for (const snapshot of map.values()) {
+        if (snapshot.status === 'connected' && !state.stageBaseline.has(snapshot.id)) {
+          state.stageBaseline.add(snapshot.id);
+          baselineChanged = true;
+        }
+      }
+      state.stageConnections = map;
+      if (baselineChanged) {
+        persistStageMonitorBaseline();
+      }
+      updateStageMonitorUI();
+    } catch (error) {
+      console.warn('Failed to refresh stage connections', error);
+    }
+  }
+
+  function resetStageMonitorBaseline(showToast = true) {
+    const connectedIds = [];
+    for (const [id, snapshot] of state.stageConnections) {
+      if (snapshot.status === 'connected') {
+        connectedIds.push(id);
+      }
+    }
+    state.stageBaseline = new Set(connectedIds);
+    persistStageMonitorBaseline();
+    updateStageMonitorUI();
+    if (showToast) {
+      showToast('Stage monitor baseline reset', 'info');
+    }
+  }
+
+  function initialiseStageMonitor() {
+    state.stageBaseline = loadStageMonitorBaseline();
+    if (els.stageMonitor) {
+      els.stageMonitor.addEventListener('click', (event) => {
+        event.preventDefault();
+        resetStageMonitorBaseline(true);
+      });
+    }
+    updateStageMonitorUI();
+    refreshStageConnections();
+    if (state.stageMonitorRefreshTimer) {
+      clearInterval(state.stageMonitorRefreshTimer);
+    }
+    state.stageMonitorRefreshTimer = window.setInterval(refreshStageConnections, STAGE_MONITOR_REFRESH_MS);
   }
 
   function showToast(message, variant) {
@@ -3031,6 +3199,8 @@ function updateCardWarnings(card) {
             applyTimers(snapshot.timers);
           }
           renderStageStatus();
+        } else if (payload.type === 'stage_connection' || payload.type === 'StageConnection') {
+          handleStageConnectionSnapshot(payload.snapshot || payload);
         } else if (payload.type === 'bible' || payload.type === 'Bible') {
           // no-op for operator for now
         }
@@ -4382,8 +4552,16 @@ function updateCardWarnings(card) {
     setMode(state.mode);
     applyTimers(state.timers);
     renderStageStatus();
+    initialiseStageMonitor();
     connectLiveSocket();
   }
+
+  window.addEventListener('beforeunload', () => {
+    if (state.stageMonitorRefreshTimer) {
+      clearInterval(state.stageMonitorRefreshTimer);
+      state.stageMonitorRefreshTimer = null;
+    }
+  });
 
   window.__presenterOperatorState = state;
   window.__presenterOperatorTestHelpers = {
@@ -4405,6 +4583,14 @@ function updateCardWarnings(card) {
       if (!Array.isArray(slides)) return [];
       return slides.map((slide) => slide.id);
     },
+    stageMonitorCounts: () => {
+      if (!els.stageMonitor) return { connected: 0, issues: 0 };
+      return {
+        connected: Number(els.stageMonitor.dataset.connected ?? 0),
+        issues: Number(els.stageMonitor.dataset.issues ?? 0),
+      };
+    },
+    resetStageMonitorBaseline: () => resetStageMonitorBaseline(false),
     clearSearch: () => {
       if (els.searchInput) {
         els.searchInput.value = '';

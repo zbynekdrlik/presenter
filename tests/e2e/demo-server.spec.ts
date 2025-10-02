@@ -1,3 +1,4 @@
+import './stub-network';
 import { test, expect } from '@playwright/test';
 import fs from 'node:fs/promises';
 import os from 'node:os';

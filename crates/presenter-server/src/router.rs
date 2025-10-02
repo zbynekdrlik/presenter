@@ -1,4 +1,7 @@
-use crate::{companion, resolume::ResolumeConnectionSnapshot, stage_ui, state::AppState, ui};
+use crate::{
+    companion, resolume::ResolumeConnectionSnapshot, stage_connections::StageClientSnapshot,
+    stage_ui, state::AppState, ui,
+};
 use anyhow::Error as AnyhowError;
 use axum::{
     extract::{ws::WebSocketUpgrade, Path, Query, State},
@@ -56,6 +59,7 @@ pub fn build_router(state: AppState) -> Router {
         .route("/ui/bible", get(bible_ui))
         .route("/ui/settings", get(settings_ui))
         .route("/stage-displays", get(list_stage_displays))
+        .route("/stage/connections", get(list_stage_connections))
         .route("/stage/{code}", get(stage_display_html))
         .route("/stage/snapshots/{code}", get(stage_display_snapshot_json))
         .route("/stage/state", post(update_stage_state))
@@ -649,7 +653,9 @@ async fn stage_display_html(
     State(state): State<AppState>,
 ) -> Result<Response, AppError> {
     match state.stage_display_snapshot(&code).await? {
-        Some(snapshot) => Ok(stage_ui::render_stage_display(snapshot).into_response()),
+        Some(snapshot) => {
+            Ok(stage_ui::render_stage_display(snapshot, state.heartbeat_config()).into_response())
+        }
         None => Ok((
             StatusCode::NOT_FOUND,
             format!("Unknown stage layout: {}", code),
@@ -838,6 +844,14 @@ async fn update_stage_state(
 }
 
 #[instrument(skip_all)]
+async fn list_stage_connections(
+    State(state): State<AppState>,
+) -> Result<Json<Vec<StageClientSnapshot>>, AppError> {
+    let snapshot = state.stage_connections_snapshot().await;
+    Ok(Json(snapshot))
+}
+
+#[instrument(skip_all)]
 async fn list_stage_displays(
     State(state): State<AppState>,
 ) -> Result<Json<Vec<StageDisplayLayout>>, AppError> {
@@ -874,8 +888,9 @@ async fn execute_timer_command(
 #[instrument(skip_all)]
 async fn live_websocket(ws: WebSocketUpgrade, State(state): State<AppState>) -> impl IntoResponse {
     let hub = state.live_hub();
+    let connections = state.stage_connections_handle();
     ws.on_upgrade(move |socket| async move {
-        crate::live::serve_websocket(hub, socket).await;
+        crate::live::serve_websocket(hub, connections, socket).await;
     })
 }
 

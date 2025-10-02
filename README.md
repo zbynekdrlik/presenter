@@ -82,18 +82,17 @@ Add `--delete-data` to wipe the corresponding SQLite snapshot. List all active d
 
 ### Full verification + demo refresh
 
-Use the combined harness to execute `cargo test`, run the Playwright suite, rebuild the branch demo, and restart the gateway in one go:
+Use the combined harness to execute `cargo test`, run the Playwright suite, rebuild the branch demo, and restart the gateway in one go. Run it with sudo so Docker has access to the daemon while tests still execute as your user:
 
 ```bash
-./scripts/dev/verify-and-refresh.sh --force
+sudo -E ./scripts/dev/verify-and-refresh.sh
 ```
 
 Options:
 
-- `--force` forces a Docker image rebuild (recommended after code changes).
 - `--display-name NAME` overrides the gateway card label (defaults to the current branch).
 
-The script exits immediately on the first failing step—fix the reported issue and rerun until it passes.
+The helper always rebuilds the demo container and gateway image to avoid stale assets. It exits immediately on the first failing step—fix the reported issue and rerun until it passes.
 
 The script derives the demo slug from the repository folder, so multiple parallel worktrees can run without colliding. It updates `${XDG_DATA_HOME:-$HOME/.local/share}/presenter-demos/manifests/` so the landing page always points at the latest build for that checkout.
 

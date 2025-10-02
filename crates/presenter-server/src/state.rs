@@ -1,6 +1,7 @@
 use crate::{
     live::{LiveEvent, LiveHub},
     resolume::{BibleUpdate, ResolumeConnectionSnapshot, ResolumeRegistry, StageUpdate},
+    stage_connections::{StageClientSnapshot, StageConnections, StageHeartbeatConfig},
 };
 use anyhow;
 use chrono::{DateTime, Utc};
@@ -18,6 +19,7 @@ use serde::{Deserialize, Serialize};
 use std::{collections::HashMap, env, sync::Arc};
 use tokio::sync::RwLock;
 use tracing::instrument;
+use uuid::Uuid;
 
 #[derive(Clone)]
 pub struct AppState {
@@ -26,6 +28,8 @@ pub struct AppState {
     bible_broadcast: Arc<RwLock<Option<BibleBroadcast>>>,
     companion_token: Option<String>,
     resolume_registry: ResolumeRegistry,
+    stage_connections: StageConnections,
+    heartbeat_config: StageHeartbeatConfig,
     #[cfg(test)]
     bible_ingestion_override: Option<std::sync::Arc<dyn TestBibleIngestion + Send + Sync>>,
 }
@@ -36,15 +40,50 @@ impl AppState {
         companion_token: Option<String>,
         resolume_registry: ResolumeRegistry,
     ) -> Self {
-        Self {
+        let stage_connections = StageConnections::new();
+        let heartbeat_config = StageHeartbeatConfig::from_env();
+        let state = Self {
             repository,
             live_hub: LiveHub::new(),
             bible_broadcast: Arc::new(RwLock::new(None)),
             companion_token,
             resolume_registry,
+            stage_connections,
+            heartbeat_config,
             #[cfg(test)]
             bible_ingestion_override: None,
-        }
+        };
+        state.spawn_heartbeat_tasks();
+        state
+    }
+
+    fn spawn_heartbeat_tasks(&self) {
+        let hub = self.live_hub.clone();
+        let connections = self.stage_connections.clone();
+        let config = self.heartbeat_config;
+        tokio::spawn(async move {
+            let mut ticker = tokio::time::interval(config.interval);
+            ticker.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
+            loop {
+                ticker.tick().await;
+                let now = Utc::now();
+                let heartbeat_id = Uuid::new_v4();
+                connections.note_heartbeat_sent(heartbeat_id, now).await;
+                hub.publish(LiveEvent::Heartbeat {
+                    id: heartbeat_id,
+                    timestamp: now,
+                });
+                let grace = config.grace_duration();
+                let disconnect = config.disconnect_duration();
+                let changed = connections.apply_timeouts(now, grace, disconnect).await;
+                if !changed.is_empty() {
+                    tracing::debug!(count = changed.len(), "stage connection statuses updated");
+                    for snapshot in changed {
+                        hub.publish(LiveEvent::StageConnection { snapshot });
+                    }
+                }
+            }
+        });
     }
 
     #[instrument(skip_all)]
@@ -268,6 +307,18 @@ impl AppState {
 
     pub fn live_hub(&self) -> LiveHub {
         self.live_hub.clone()
+    }
+
+    pub fn stage_connections_handle(&self) -> StageConnections {
+        self.stage_connections.clone()
+    }
+
+    pub fn heartbeat_config(&self) -> StageHeartbeatConfig {
+        self.heartbeat_config
+    }
+
+    pub async fn stage_connections_snapshot(&self) -> Vec<StageClientSnapshot> {
+        self.stage_connections.snapshot().await
     }
 
     pub fn companion_token(&self) -> Option<&str> {

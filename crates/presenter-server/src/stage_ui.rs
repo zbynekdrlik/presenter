@@ -1,3 +1,4 @@
+use crate::stage_connections::StageHeartbeatConfig;
 use axum::response::Html;
 use leptos::prelude::*;
 use leptos::prelude::{AnyView, IntoAny};
@@ -5,10 +6,13 @@ use presenter_core::{StageDisplaySlide, StageDisplaySnapshot, TimerState};
 use reactive_graph::owner::Owner;
 use serde_json::to_string;
 
-pub fn render_stage_display(snapshot: StageDisplaySnapshot) -> Html<String> {
+pub fn render_stage_display(
+    snapshot: StageDisplaySnapshot,
+    heartbeat_config: StageHeartbeatConfig,
+) -> Html<String> {
     let owner = Owner::new_root(None);
     let html = owner.with(|| {
-        view! { <StageDisplayDocument snapshot /> }
+        view! { <StageDisplayDocument snapshot=snapshot heartbeat_config=heartbeat_config /> }
             .into_view()
             .to_html()
     });
@@ -16,11 +20,20 @@ pub fn render_stage_display(snapshot: StageDisplaySnapshot) -> Html<String> {
 }
 
 #[component]
-fn StageDisplayDocument(snapshot: StageDisplaySnapshot) -> impl IntoView {
+fn StageDisplayDocument(
+    snapshot: StageDisplaySnapshot,
+    heartbeat_config: StageHeartbeatConfig,
+) -> impl IntoView {
     let layout = snapshot.layout.clone();
     let layout_view = render_layout(&snapshot);
     let layout_code = layout.code.clone();
     let snapshot_json = to_string(&snapshot).unwrap_or_else(|_| "{}".to_string());
+    let heartbeat_config_literal = format!(
+        "{{ intervalMs: {}, graceMs: {}, disconnectMs: {} }}",
+        heartbeat_config.interval_ms(),
+        heartbeat_config.grace_ms(),
+        heartbeat_config.disconnect_ms(),
+    );
     let script = format!(
         r#"(function() {{
   const initial = {snapshot_json};
@@ -31,65 +44,173 @@ fn StageDisplayDocument(snapshot: StageDisplaySnapshot) -> impl IntoView {
     connection: document.getElementById('stage-status-connection'),
     latency: document.getElementById('stage-status-latency'),
   }};
-  let lastGeneratedAt = initial.generatedAt ? Date.parse(initial.generatedAt) : null;
+  const heartbeatConfig = {heartbeat_config};
+  const parseMs = (value, fallback) => {{
+    const num = Number(value);
+    return Number.isFinite(num) && num > 0 ? num : fallback;
+  }};
+  const testConfig = window.PRESENTER_STAGE_TEST_CONFIG || {{}};
+  const config = {{
+    intervalMs: parseMs(testConfig.heartbeatIntervalMs ?? testConfig.intervalMs, heartbeatConfig.intervalMs),
+    graceMs: parseMs(testConfig.heartbeatGraceMs ?? testConfig.graceMs, heartbeatConfig.graceMs),
+    disconnectMs: parseMs(testConfig.disconnectAfterMs ?? testConfig.disconnectMs, heartbeatConfig.disconnectMs),
+    suppressReconnect: Boolean(testConfig.suppressReconnect ?? false),
+  }};
+  const useLegacyClientId = Boolean(testConfig.forceLegacyClientId);
+  const generateClientId = () => {{
+    if (!useLegacyClientId && typeof crypto !== 'undefined') {{
+      if (typeof crypto.randomUUID === 'function') {{
+        return crypto.randomUUID();
+      }}
+      if (typeof crypto.getRandomValues === 'function') {{
+        const bytes = new Uint8Array(16);
+        crypto.getRandomValues(bytes);
+        bytes[6] = (bytes[6] & 0x0f) | 0x40;
+        bytes[8] = (bytes[8] & 0x3f) | 0x80;
+        const segments = [
+          bytes.subarray(0, 4),
+          bytes.subarray(4, 6),
+          bytes.subarray(6, 8),
+          bytes.subarray(8, 10),
+          bytes.subarray(10, 16),
+        ];
+        return segments
+          .map((segment) => Array.from(segment, (byte) => byte.toString(16).padStart(2, '0')).join(''))
+          .join('-');
+      }}
+    }}
+    return 'xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx'.replace(/[xy]/g, (char) => {{
+      const rand = (Math.random() * 16) | 0;
+      const value = char === 'x' ? rand : ((rand & 0x3) | 0x8);
+      return value.toString(16);
+    }});
+  }};
 
-  const renderLatency = (value) => {{
+  const CLIENT_ID_STORAGE_KEY = 'presenter.stageClientId';
+  let clientId = null;
+  try {{
+    if (window.localStorage) {{
+      const stored = window.localStorage.getItem(CLIENT_ID_STORAGE_KEY);
+      if (stored && typeof stored === 'string') {{
+        clientId = stored;
+      }}
+    }}
+  }} catch (error) {{
+    console.warn('Presenter stage client id load failed', error);
+  }}
+  if (!clientId) {{
+    clientId = generateClientId();
+    try {{
+      if (window.localStorage) {{
+        window.localStorage.setItem(CLIENT_ID_STORAGE_KEY, clientId);
+      }}
+    }} catch (error) {{
+      console.warn('Presenter stage client id persist failed', error);
+    }}
+  }}
+
+  const clientIdLower = clientId.toLowerCase();
+  window.__presenterStageClientId = clientId;
+  window.__presenterStageConfig = config;
+
+  let lastLatencyMs = null;
+  let lastHeartbeatAt = Date.now();
+  let liveState = 'connecting';
+  let reconnectAttempts = 0;
+  let reconnectTimer = null;
+  let liveSocket = null;
+  let reconnectBlocked = Boolean(config.suppressReconnect);
+
+  const setOutputStale = (value) => {{
+    document.body.dataset.outputStale = value ? 'true' : 'false';
+  }};
+
+  const formatLatency = (valueMs) => {{
+    if (valueMs == null || Number.isNaN(valueMs)) {{
+      return '';
+    }}
+    const value = Math.max(0, Number(valueMs));
+    if (!Number.isFinite(value)) {{
+      return '';
+    }}
+    if (value >= 1000) {{
+      return `${{(value / 1000).toFixed(1).padStart(6, ' ')}} s`;
+    }}
+    const rounded = Math.round(value);
+    return `${{rounded.toString().padStart(3, '0')}} ms`;
+  }};
+
+  const renderLatency = (valueMs) => {{
     if (!statusEls.latency) return;
-    if (value == null || Number.isNaN(value)) {{
+    const formatted = formatLatency(valueMs);
+    if (!formatted) {{
       statusEls.latency.textContent = '';
       statusEls.latency.dataset.visible = 'false';
       return;
     }}
-    if (value >= 1000) {{
-      statusEls.latency.textContent = `${{(value / 1000).toFixed(1)}} s`;
-      statusEls.latency.dataset.visible = 'true';
-      return;
-    }}
-    statusEls.latency.textContent = `${{Math.max(0, Math.round(value))}} ms`;
+    statusEls.latency.textContent = `· ${{formatted}}`;
     statusEls.latency.dataset.visible = 'true';
   }};
 
-  const updateLatency = (generatedAt) => {{
-    if (!generatedAt) {{
-      lastGeneratedAt = null;
+  const setLatency = (valueMs) => {{
+    if (valueMs == null || !Number.isFinite(valueMs)) {{
+      lastLatencyMs = null;
+      delete window.__presenterStageLatencyMs;
       renderLatency(null);
       return;
     }}
-    const timestamp = Date.parse(generatedAt);
-    if (Number.isNaN(timestamp)) {{
-      return;
-    }}
-    lastGeneratedAt = timestamp;
-    renderLatency(Date.now() - timestamp);
+    lastLatencyMs = Math.max(0, valueMs);
+    window.__presenterStageLatencyMs = lastLatencyMs;
+    renderLatency(lastLatencyMs);
   }};
 
-  if (lastGeneratedAt != null) {{
-    renderLatency(Date.now() - lastGeneratedAt);
-  }}
-
-  setInterval(() => {{
-    if (lastGeneratedAt != null) {{
-      renderLatency(Date.now() - lastGeneratedAt);
-    }}
-  }}, 2000);
-
-
   const connectionLabels = {{
-    connecting: 'Connecting',
+    connecting: 'Connecting…',
     connected: 'Connected',
+    reconnecting: 'Reconnecting…',
     disconnected: 'Disconnected',
     error: 'Error',
   }};
 
   const setConnectionState = (state) => {{
+    if (liveState === state) return;
+    liveState = state;
     document.body.dataset.liveState = state;
     window.__presenterStageConnectionState = state;
     if (statusEls.connection) {{
       statusEls.connection.textContent = connectionLabels[state] || state;
     }}
-    if (state !== 'connected') {{
-      renderLatency(null);
+    if (state === 'connected') {{
+      setOutputStale(false);
+    }} else {{
+      setOutputStale(true);
+      setLatency(null);
     }}
+  }};
+
+  const sendJson = (payload) => {{
+    if (!liveSocket || liveSocket.readyState !== WebSocket.OPEN) {{
+      return false;
+    }}
+    try {{
+      liveSocket.send(JSON.stringify(payload));
+      return true;
+    }} catch (error) {{
+      console.warn('Presenter stage send failed', error);
+      return false;
+    }}
+  }};
+
+  const sendStagePresence = () => {{
+    sendJson({{ type: 'stage_presence', client_id: clientId, layout_code: layout }});
+  }};
+
+  const sendHeartbeatAck = (heartbeatId) => {{
+    if (!heartbeatId) {{
+      sendJson({{ type: 'stage_heartbeat_ack', client_id: clientId }});
+      return;
+    }}
+    sendJson({{ type: 'stage_heartbeat_ack', client_id: clientId, heartbeat_id: heartbeatId }});
   }};
 
   const fitTextElement = (element, baseRem, minRem = 2.4, maxLines = 2) => {{
@@ -190,7 +311,6 @@ fn StageDisplayDocument(snapshot: StageDisplaySnapshot) -> impl IntoView {
   }};
 
   const applyStage = (snapshot) => {{
-    updateLatency(snapshot.generatedAt);
     applyTimers(snapshot.timers);
 
     if (layout === 'worship-snv') {{
@@ -228,9 +348,6 @@ fn StageDisplayDocument(snapshot: StageDisplaySnapshot) -> impl IntoView {
   }};
 
   const layoutEndpoint = `/stage/snapshots/${{layout}}`;
-  let liveSocket = null;
-  let reconnectAttempts = 0;
-  let reconnectTimer = null;
 
   const refreshFromServer = async () => {{
     try {{
@@ -245,16 +362,19 @@ fn StageDisplayDocument(snapshot: StageDisplaySnapshot) -> impl IntoView {
   }};
 
   const scheduleReconnect = () => {{
+    if (reconnectBlocked) return;
     if (reconnectTimer) return;
+    setConnectionState('reconnecting');
     const delay = Math.min(500 * Math.pow(2, reconnectAttempts), 5000);
     reconnectAttempts += 1;
-    reconnectTimer = setTimeout(() => {{
+    reconnectTimer = window.setTimeout(() => {{
       reconnectTimer = null;
       connectLive();
     }}, delay);
   }};
 
   const connectLive = () => {{
+    if (reconnectBlocked) return;
     if (liveSocket) {{
       try {{
         liveSocket.close();
@@ -269,7 +389,13 @@ fn StageDisplayDocument(snapshot: StageDisplaySnapshot) -> impl IntoView {
 
     ws.addEventListener('open', () => {{
       reconnectAttempts = 0;
-      setConnectionState('connected');
+      reconnectBlocked = Boolean(config.suppressReconnect);
+      if (reconnectTimer) {{
+        clearTimeout(reconnectTimer);
+        reconnectTimer = null;
+      }}
+      lastHeartbeatAt = Date.now();
+      sendStagePresence();
       refreshFromServer();
     }});
 
@@ -282,6 +408,36 @@ fn StageDisplayDocument(snapshot: StageDisplaySnapshot) -> impl IntoView {
         }} else if (data.type === 'timers') {{
           currentSnapshot.timers = data.overview;
           applyTimers(currentSnapshot.timers);
+        }} else if (data.type === 'heartbeat' || data.type === 'Heartbeat') {{
+          lastHeartbeatAt = Date.now();
+          reconnectAttempts = 0;
+          reconnectBlocked = Boolean(config.suppressReconnect);
+          setConnectionState('connected');
+          const heartbeatId = typeof data.id === 'string' ? data.id : null;
+          sendHeartbeatAck(heartbeatId);
+        }} else if (data.type === 'stage_connection' || data.type === 'StageConnection') {{
+          const snapshot = data.snapshot || data;
+          const rawId = snapshot.id || snapshot.clientId || snapshot.client_id;
+          if (rawId) {{
+            const normalised = String(rawId).toLowerCase();
+            if (normalised === clientIdLower) {{
+              const latencyValue = snapshot.latencyMs ?? snapshot.latency_ms;
+              if (typeof latencyValue === 'number' && Number.isFinite(latencyValue)) {{
+                setLatency(latencyValue);
+              }}
+              const status = (snapshot.status || '').toString().toLowerCase();
+              if (status === 'connected') {{
+                setConnectionState('connected');
+                lastHeartbeatAt = Date.now();
+              }} else if (status === 'reconnecting') {{
+                setConnectionState('reconnecting');
+              }} else if (status === 'disconnected') {{
+                setConnectionState('disconnected');
+              }} else if (status === 'connecting') {{
+                setConnectionState('connecting');
+              }}
+            }}
+          }}
         }}
       }} catch (error) {{
         console.error('Presenter live event error', error);
@@ -289,7 +445,11 @@ fn StageDisplayDocument(snapshot: StageDisplaySnapshot) -> impl IntoView {
     }});
 
     const handleClose = () => {{
-      setConnectionState('disconnected');
+      if (reconnectBlocked) {{
+        setConnectionState('disconnected');
+        return;
+      }}
+      setConnectionState('reconnecting');
       scheduleReconnect();
     }};
 
@@ -300,6 +460,28 @@ fn StageDisplayDocument(snapshot: StageDisplaySnapshot) -> impl IntoView {
       try {{ ws.close(); }} catch (_) {{}}
     }});
   }};
+
+  const checkHeartbeatTimeout = () => {{
+    const now = Date.now();
+    const elapsed = now - lastHeartbeatAt;
+    if (!Number.isFinite(elapsed)) {{
+      return;
+    }}
+    if (elapsed >= config.disconnectMs) {{
+      setConnectionState('disconnected');
+      if (!reconnectBlocked) {{
+        scheduleReconnect();
+      }}
+    }} else if (elapsed >= config.graceMs) {{
+      setConnectionState('reconnecting');
+      if (!reconnectBlocked) {{
+        scheduleReconnect();
+      }}
+    }}
+  }};
+
+  const timeoutInterval = Math.max(250, Math.min(1000, Math.floor(config.graceMs / 2)));
+  window.setInterval(checkHeartbeatTimeout, timeoutInterval);
 
   applyStage(currentSnapshot);
   connectLive();
@@ -313,10 +495,37 @@ fn StageDisplayDocument(snapshot: StageDisplaySnapshot) -> impl IntoView {
   window.addEventListener('resize', () => fitLyrics(layout));
   window.addEventListener('focus', refreshFromServer);
   window.__presenterStageRefresh = refreshFromServer;
-  window.__presenterStageReconnect = connectLive;
+  window.__presenterStageReconnect = () => {{
+    reconnectBlocked = false;
+    connectLive();
+  }};
+
+  const debugHelpers = window.__presenterStageDebug || {{}};
+  debugHelpers.simulateHeartbeatLoss = () => {{
+    reconnectBlocked = true;
+    if (liveSocket && liveSocket.readyState === WebSocket.OPEN) {{
+      try {{ liveSocket.close(); }} catch (_) {{}}
+    }}
+    lastHeartbeatAt = Date.now() - (config.graceMs + 100);
+    checkHeartbeatTimeout();
+    const delay = Math.min(200, Math.max(100, config.disconnectMs - config.graceMs));
+    window.setTimeout(() => {{
+      lastHeartbeatAt = Date.now() - (config.disconnectMs + 100);
+      checkHeartbeatTimeout();
+    }}, delay);
+  }};
+  debugHelpers.resumeHeartbeats = () => {{
+    reconnectBlocked = Boolean(config.suppressReconnect);
+    lastHeartbeatAt = Date.now();
+    if (!reconnectBlocked) {{
+      scheduleReconnect();
+    }}
+  }};
+  window.__presenterStageDebug = debugHelpers;
 }})();
 "#,
-        snapshot_json = snapshot_json
+        snapshot_json = snapshot_json,
+        heartbeat_config = heartbeat_config_literal
     );
 
     view! {
@@ -326,7 +535,7 @@ fn StageDisplayDocument(snapshot: StageDisplaySnapshot) -> impl IntoView {
                 <title>{layout.name.clone()}</title>
                 <style>{STAGE_STYLES}</style>
             </head>
-            <body class="stage" data-layout-code={layout_code}>
+            <body class="stage" data-layout-code={layout_code} data-output-stale="false">
                 <main class="stage__body">{layout_view}</main>
                 <div class="stage__status" id="stage-status">
                     <span class="stage__status-connection" id="stage-status-connection">Connecting...</span>
@@ -531,6 +740,16 @@ fn format_hms(seconds: i64) -> String {
 const STAGE_STYLES: &str = r#"
 * { box-sizing: border-box; }
 body.stage { background: #000; color: #f8fafc; font-family: 'Inter', system-ui, sans-serif; margin: 0; min-height: 100vh; display: flex; align-items: stretch; justify-content: center; padding: 4vh 6vw; }
+body.stage[data-output-stale="true"] .stage__body { opacity: 0.55; transition: opacity 0.25s ease; }
+body.stage[data-output-stale="true"] .stage__status { box-shadow: 0 12px 32px -18px rgba(248, 113, 113, 0.55); }
+body.stage[data-output-stale="true"] .stage__lyrics-current,
+body.stage[data-output-stale="true"] .stage__lyrics-next,
+body.stage[data-output-stale="true"] .stage__timer,
+body.stage[data-output-stale="true"] .stage__split-main,
+body.stage[data-output-stale="true"] .stage__split-sidebar { opacity: 0.65; transition: opacity 0.25s ease; }
+body.stage[data-live-state="reconnecting"] .stage__status-connection { color: #fbbf24; }
+body.stage[data-live-state="disconnected"] .stage__status-connection,
+body.stage[data-live-state="error"] .stage__status-connection { color: #f87171; }
 .stage__body { flex: 1; display: flex; align-items: stretch; justify-content: center; width: 100%; }
 .stage__lyrics { display: flex; flex-direction: column; justify-content: space-between; gap: 2.5rem; text-align: center; width: 100%; height: 100%; padding: 2vh 4vw; box-sizing: border-box; }
 .stage__lyrics-current { font-size: 6.5rem; font-weight: 700; display: flex; flex-direction: column; gap: 1rem; align-items: center; justify-content: flex-start; letter-spacing: 0.04em; min-height: 0; }
@@ -563,7 +782,7 @@ body.stage { background: #000; color: #f8fafc; font-family: 'Inter', system-ui, 
 .stage__status { position: fixed; bottom: 2rem; right: 2.5rem; display: inline-flex; align-items: center; gap: 0.75rem; padding: 0.6rem 1.2rem; font-size: 0.85rem; letter-spacing: 0.12em; text-transform: uppercase; background: rgba(15, 23, 42, 0.7); border-radius: 999px; box-shadow: 0 12px 32px -24px rgba(15, 23, 42, 0.95); }
 .stage__status span { display: inline-flex; align-items: center; }
 .stage__status-connection { color: #38bdf8; font-weight: 600; }
-.stage__status-latency { font-variant-numeric: tabular-nums; color: #e2e8f0; }
+.stage__status-latency { font-variant-numeric: tabular-nums; color: #e2e8f0; min-width: 7ch; white-space: pre; text-align: right; display: inline-flex; justify-content: flex-end; text-transform: none; letter-spacing: normal; }
 .stage__status-latency[data-visible="false"] { display: none; }
 body.stage[data-live-state="disconnected"] .stage__status-connection,
 body.stage[data-live-state="error"] .stage__status-connection { color: #f87171; }
@@ -572,6 +791,7 @@ body.stage[data-live-state="error"] .stage__status-connection { color: #f87171; 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::stage_connections::StageHeartbeatConfig;
     use chrono::Utc;
     use presenter_core::{StageDisplayLayout, StageDisplaySlide};
 
@@ -597,7 +817,7 @@ mod tests {
             presenter_core::timer::TimersOverview::demo(now),
         );
 
-        let html = render_stage_display(snapshot).0;
+        let html = render_stage_display(snapshot, StageHeartbeatConfig::default_values()).0;
         assert!(!html.contains("No next slide"));
         assert!(!html.contains("No active slide"));
     }
@@ -624,7 +844,7 @@ mod tests {
             presenter_core::timer::TimersOverview::demo(now),
         );
 
-        let html = render_stage_display(snapshot).0;
+        let html = render_stage_display(snapshot, StageHeartbeatConfig::default_values()).0;
         assert!(html.contains("Line A\nLine B"));
         assert!(html.contains("Verse"));
     }
@@ -644,7 +864,7 @@ mod tests {
             presenter_core::timer::TimersOverview::demo(now),
         );
 
-        let html = render_stage_display(snapshot).0;
+        let html = render_stage_display(snapshot, StageHeartbeatConfig::default_values()).0;
         assert!(html.contains("id=\"stage-status\""));
         assert!(html.contains("id=\"stage-status-connection\""));
         assert!(html.contains("id=\"stage-status-latency\""));

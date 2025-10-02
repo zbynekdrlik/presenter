@@ -12,7 +12,8 @@ if [[ $EUID -ne 0 ]]; then
 fi
 
 if [[ -z "${SUDO_USER:-}" ]]; then
-  echo "[verify] SUDO_USER not set; use sudo -E so tests run as your account." >&2
+  echo "[verify] This helper must be launched via sudo -E ./scripts/dev/verify-and-refresh.sh" >&2
+  echo "[verify] (Docker requires elevated access; tests still run as the original user.)" >&2
   exit 1
 fi
 
@@ -43,7 +44,6 @@ DEMO_ORIGIN="http://127.0.0.1:${DEMO_PORT}"
 GATEWAY_URL="http://127.0.0.1/"
 
 DISPLAY_NAME_DEFAULT="${BRANCH_NAME}"
-FORCE_REBUILD=0
 CUSTOM_DISPLAY_NAME=""
 
 usage() {
@@ -54,7 +54,6 @@ Runs cargo tests, Playwright tests, then rebuilds and refreshes the branch demo 
 
 Options:
   --display-name NAME  Friendly name for the demo card (defaults to current branch name)
-  --force              Force Docker image rebuild even if unchanged
   -h, --help           Show this help message
 USAGE
 }
@@ -63,8 +62,6 @@ while [[ $# -gt 0 ]]; do
   case "$1" in
     --display-name)
       CUSTOM_DISPLAY_NAME="$2"; shift 2 ;;
-    --force)
-      FORCE_REBUILD=1; shift ;;
     -h|--help)
       usage; exit 0 ;;
     *)
@@ -79,25 +76,22 @@ DISPLAY_NAME="${CUSTOM_DISPLAY_NAME:-$DISPLAY_NAME_DEFAULT}"
 echo "[verify] Running cargo test"
 RUN_AS_ORIGINAL cargo test
 
-RUN_ARGS=("--name" "$REPO_SLUG" "--display-name" "$DISPLAY_NAME" "--port" "$DEMO_PORT")
-if [[ "$FORCE_REBUILD" -eq 1 ]]; then
-  RUN_ARGS=("--force" "${RUN_ARGS[@]}")
-fi
+RUN_ARGS=("--force" "--name" "$REPO_SLUG" "--display-name" "$DISPLAY_NAME" "--port" "$DEMO_PORT")
 
 echo "[verify] Refreshing Docker demo for project '$REPO_SLUG' (pre-tests)"
 "$REPO_ROOT/scripts/docker/run-demo.sh" "${RUN_ARGS[@]}"
 
 echo "[verify] Restarting gateway"
-"$REPO_ROOT/scripts/docker/run-gateway.sh"
+"$REPO_ROOT/scripts/docker/run-gateway.sh" --force
 
 echo "[verify] Running Playwright suite"
 RUN_AS_ORIGINAL npm run test:playwright
 
 echo "[verify] Refreshing Docker demo for project '$REPO_SLUG' (post-tests)"
-"$REPO_ROOT/scripts/docker/run-demo.sh" "--name" "$REPO_SLUG" "--display-name" "$DISPLAY_NAME" "--port" "$DEMO_PORT"
+"$REPO_ROOT/scripts/docker/run-demo.sh" "--force" "--name" "$REPO_SLUG" "--display-name" "$DISPLAY_NAME" "--port" "$DEMO_PORT"
 
 echo "[verify] Restarting gateway (post-tests)"
-"$REPO_ROOT/scripts/docker/run-gateway.sh"
+"$REPO_ROOT/scripts/docker/run-gateway.sh" --force
 
 echo "[verify] Checking demo operator UI at ${DEMO_ORIGIN}/ui/operator"
 curl --fail --silent --show-error "${DEMO_ORIGIN}/ui/operator" >/dev/null
