@@ -38,7 +38,7 @@ fn StageDisplayDocument(
         r#"(function() {{
   const initial = {snapshot_json};
   let currentSnapshot = initial;
-  const layout = initial.layout.code;
+  let layout = initial.layout.code;
   const statusEls = {{
     container: document.getElementById('stage-status'),
     connection: document.getElementById('stage-status-connection'),
@@ -112,6 +112,7 @@ fn StageDisplayDocument(
   const clientIdLower = clientId.toLowerCase();
   window.__presenterStageClientId = clientId;
   window.__presenterStageConfig = config;
+  window.__presenterStageLayout = layout;
 
   let lastLatencyMs = null;
   let lastHeartbeatAt = Date.now();
@@ -347,7 +348,7 @@ fn StageDisplayDocument(
     fitLyrics(layout);
   }};
 
-  const layoutEndpoint = `/stage/snapshots/${{layout}}`;
+  const layoutEndpoint = '/stage/snapshot';
 
   const refreshFromServer = async () => {{
     try {{
@@ -408,6 +409,14 @@ fn StageDisplayDocument(
         }} else if (data.type === 'timers') {{
           currentSnapshot.timers = data.overview;
           applyTimers(currentSnapshot.timers);
+        }} else if (data.type === 'stage_layout' || data.type === 'StageLayout') {{
+          const next =
+            data.code || data.layoutCode || data.layout_code || '';
+          if (typeof next === 'string' && next && next !== layout) {{
+            window.__presenterStageLayout = next;
+            layout = next;
+            window.location.reload();
+          }}
         }} else if (data.type === 'heartbeat' || data.type === 'Heartbeat') {{
           lastHeartbeatAt = Date.now();
           reconnectAttempts = 0;

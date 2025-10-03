@@ -545,6 +545,7 @@ impl CompanionVariableState {
             crate::live::LiveEvent::Timers { overview } => self.apply_timers(overview),
             crate::live::LiveEvent::Bible { broadcast } => self.apply_bible(broadcast),
             crate::live::LiveEvent::BibleCleared => self.clear_bible(),
+            crate::live::LiveEvent::StageLayout { .. } => false,
         }
     }
 

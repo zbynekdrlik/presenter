@@ -1,6 +1,8 @@
 use crate::{
     live::{LiveEvent, LiveHub},
-    resolume::{BibleUpdate, ResolumeConnectionSnapshot, ResolumeRegistry, StageUpdate},
+    resolume::{
+        BibleUpdate, ResolumeConnectionSnapshot, ResolumeRegistry, StageUpdate, TimerFrame,
+    },
     stage_connections::{StageClientSnapshot, StageConnections, StageHeartbeatConfig},
 };
 use anyhow;
@@ -11,14 +13,17 @@ use presenter_core::{
     PlaylistEntry, PlaylistId, Presentation, PresentationId, ResolumeHost, ResolumeHostDraft,
     ResolumeHostId, SearchResult, Slide, SlideContent, SlideGroup, SlideId, SlideText,
     StageDisplayLayout, StageDisplaySlide, StageDisplaySnapshot, StageState, TimerCommand,
-    TimersOverview, TimersState,
+    TimerState, TimersOverview, TimersState,
 };
 use presenter_importer::bible::BibleIngestionService;
 use presenter_persistence::{DatabaseSettings, Repository};
 use serde::{Deserialize, Serialize};
 use std::{collections::HashMap, env, sync::Arc};
-use tokio::sync::RwLock;
-use tracing::instrument;
+use tokio::{
+    sync::RwLock,
+    time::{interval, Duration as TokioDuration, MissedTickBehavior},
+};
+use tracing::{instrument, warn};
 use uuid::Uuid;
 
 #[derive(Clone)]
@@ -31,6 +36,7 @@ pub struct AppState {
     stage_connections: StageConnections,
     heartbeat_config: StageHeartbeatConfig,
     presentation_cache: Arc<RwLock<HashMap<PresentationId, Arc<Presentation>>>>,
+    stage_layout: Arc<RwLock<String>>,
     #[cfg(test)]
     bible_ingestion_override: Option<std::sync::Arc<dyn TestBibleIngestion + Send + Sync>>,
 }
@@ -43,6 +49,11 @@ impl AppState {
     ) -> Self {
         let stage_connections = StageConnections::new();
         let heartbeat_config = StageHeartbeatConfig::from_env();
+        let default_layout = StageDisplayLayout::built_in()
+            .into_iter()
+            .map(|layout| layout.code)
+            .find(|code| code == "worship-snv")
+            .unwrap_or_else(|| "worship-snv".to_string());
         let state = Self {
             repository,
             live_hub: LiveHub::new(),
@@ -52,6 +63,7 @@ impl AppState {
             stage_connections,
             heartbeat_config,
             presentation_cache: Arc::new(RwLock::new(HashMap::new())),
+            stage_layout: Arc::new(RwLock::new(default_layout)),
             #[cfg(test)]
             bible_ingestion_override: None,
         };
@@ -88,6 +100,23 @@ impl AppState {
         });
     }
 
+    fn spawn_background_tasks(&self) {
+        let timers_state = self.clone();
+        tokio::spawn(async move {
+            if let Err(err) = timers_state.tick_timers().await {
+                warn!(?err, "timer tick failed");
+            }
+            let mut ticker = interval(TokioDuration::from_secs(1));
+            ticker.set_missed_tick_behavior(MissedTickBehavior::Delay);
+            loop {
+                ticker.tick().await;
+                if let Err(err) = timers_state.tick_timers().await {
+                    warn!(?err, "timer tick failed");
+                }
+            }
+        });
+    }
+
     #[instrument(skip_all)]
     pub async fn from_env() -> anyhow::Result<Self> {
         let db_url = env::var("PRESENTER_DB_URL")
@@ -98,6 +127,7 @@ impl AppState {
         let state = Self::new(repo, companion_token, registry);
         state.ensure_seed_library().await?;
         state.sync_resolume_hosts().await?;
+        state.spawn_background_tasks();
         Ok(state)
     }
 
@@ -448,6 +478,39 @@ impl AppState {
         Ok(Some(build_stage_snapshot(layout, &context)))
     }
 
+    pub async fn selected_stage_display_snapshot(
+        &self,
+    ) -> anyhow::Result<Option<StageDisplaySnapshot>> {
+        let code = {
+            let guard = self.stage_layout.read().await;
+            guard.clone()
+        };
+        self.stage_display_snapshot(&code).await
+    }
+
+    pub async fn stage_layout_code(&self) -> String {
+        self.stage_layout.read().await.clone()
+    }
+
+    pub async fn set_stage_layout_code(&self, code: &str) -> anyhow::Result<StageDisplayLayout> {
+        let layout = StageDisplayLayout::built_in()
+            .into_iter()
+            .find(|layout| layout.code == code)
+            .ok_or_else(|| anyhow::anyhow!("unknown stage layout: {code}"))?;
+        {
+            let mut guard = self.stage_layout.write().await;
+            if *guard == layout.code {
+                return Ok(layout);
+            }
+            *guard = layout.code.clone();
+        }
+        self.live_hub.publish(LiveEvent::StageLayout {
+            code: layout.code.clone(),
+        });
+        self.broadcast_stage_snapshots().await?;
+        Ok(layout)
+    }
+
     pub async fn stage_displays(&self) -> anyhow::Result<Vec<StageDisplayLayout>> {
         Ok(StageDisplayLayout::built_in())
     }
@@ -715,6 +778,32 @@ impl AppState {
         Ok(overview)
     }
 
+    pub async fn tick_timers(&self) -> anyhow::Result<()> {
+        let now = Utc::now();
+        let mut state = self.load_or_init_timers(now).await?;
+        let mut state_changed = false;
+        if state.countdown.state == TimerState::Running {
+            let previous = state.countdown.state;
+            state.countdown.update_state(now);
+            state_changed = state.countdown.state != previous;
+        }
+
+        let overview = state.overview(now);
+
+        if state_changed {
+            self.repository.upsert_timers_state(&state).await?;
+        }
+
+        let formatted = format_countdown_text(overview.countdown_to_start.seconds_remaining);
+        self.resolume_registry
+            .timer_update(TimerFrame::new(formatted))
+            .await;
+
+        self.live_hub.publish(LiveEvent::Timers { overview });
+
+        Ok(())
+    }
+
     async fn load_or_init_timers(&self, now: DateTime<Utc>) -> anyhow::Result<TimersState> {
         if let Some(state) = self.repository.get_timers_state().await? {
             Ok(state)
@@ -786,7 +875,7 @@ impl AppState {
         let Some(context) = self.build_stage_context().await? else {
             return Ok(());
         };
-        self.publish_stage_context(&context);
+        self.publish_stage_context(&context).await?;
         Ok(())
     }
 
@@ -798,7 +887,7 @@ impl AppState {
             overview: timers_state.overview(now),
             resolution,
         };
-        self.publish_stage_context(&context);
+        self.publish_stage_context(&context).await?;
         let current_main = context
             .resolution
             .current
@@ -819,11 +908,21 @@ impl AppState {
         Ok(())
     }
 
-    fn publish_stage_context(&self, context: &StageContext) {
-        for layout in StageDisplayLayout::built_in() {
-            let snapshot = build_stage_snapshot(layout, context);
-            self.publish_stage_update(snapshot);
-        }
+    async fn publish_stage_context(&self, context: &StageContext) -> anyhow::Result<()> {
+        let code = self.stage_layout_code().await;
+        let mut layouts = StageDisplayLayout::built_in()
+            .into_iter()
+            .map(|layout| (layout.code.clone(), layout))
+            .collect::<HashMap<_, _>>();
+        let Some(layout) = layouts
+            .remove(&code)
+            .or_else(|| layouts.remove("worship-snv"))
+        else {
+            return Ok(());
+        };
+        let snapshot = build_stage_snapshot(layout, context);
+        self.publish_stage_update(snapshot);
+        Ok(())
     }
 
     async fn build_stage_context(&self) -> anyhow::Result<Option<StageContext>> {
@@ -1083,6 +1182,17 @@ fn blank_slide_content() -> SlideContent {
     )
 }
 
+fn format_countdown_text(seconds_remaining: i64) -> String {
+    let total = seconds_remaining.max(0);
+    if total < 60 {
+        total.to_string()
+    } else {
+        let minutes = total / 60;
+        let seconds = total % 60;
+        format!("{minutes:02}:{seconds:02}")
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1326,6 +1436,33 @@ mod tests {
         }
 
         assert!(seen_running, "expected running timers event after command");
+    }
+
+    #[test]
+    fn countdown_format_switches_below_minute() {
+        assert_eq!(super::format_countdown_text(3605), "60:05");
+        assert_eq!(super::format_countdown_text(125), "02:05");
+        assert_eq!(super::format_countdown_text(59), "59");
+        assert_eq!(super::format_countdown_text(0), "0");
+        assert_eq!(super::format_countdown_text(-12), "0");
+    }
+
+    #[tokio::test]
+    async fn tick_timers_emits_live_event() {
+        let state = AppState::in_memory().await.unwrap();
+        let mut rx = state.live_hub().subscribe();
+
+        state.tick_timers().await.unwrap();
+
+        let mut saw_timers = false;
+        for _ in 0..3 {
+            if let LiveEvent::Timers { .. } = rx.recv().await.unwrap() {
+                saw_timers = true;
+                break;
+            }
+        }
+
+        assert!(saw_timers, "expected timers live event from tick");
     }
 
     #[tokio::test]

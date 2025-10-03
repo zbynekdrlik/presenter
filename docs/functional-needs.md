@@ -14,9 +14,11 @@
 - Global service clock with overruns/underruns visual indicators.
 - Segment timers tied to plan items, supporting pause/adjust mid-service.
 - Stage alerts for time warnings (flash, color shift, optional audio ping).
+- OBS-friendly countdown overlay with transparent background for live streams.
 
 ## Stage Displays
 - Layout builder that places lyrics, timers, notes, and alerts in flexible regions.
+- Single stage display endpoint (`/stage`) whose mode is driven from the operator header, keeping OBS browser sources and on-stage monitors aligned without URL churn.
 - Per-display profiles (e.g., main stage monitor vs. choir screen).
 - Remote preview on tablets/phones for production leads.
 - Persistent heartbeat and latency visibility so operators can confirm live links without advancing slides.
@@ -27,6 +29,7 @@
   centralized settings surface.
 - Cache clip metadata and warn operators when expected `#main-a`, `#bible-clear`, etc. tokens are
   missing so they can fix naming before service.
+- Stream countdown text into a dedicated `#timer` clip on each deck without triggering playback.
 - Allow clip name modifiers (e.g., `-u`, `-re`) so formatting tweaks happen directly in Resolume without duplicating slides.
 - Guarantee sub-100 ms trigger-to-clip latency with health indicators when latency drifts.
 

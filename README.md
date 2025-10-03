@@ -138,8 +138,10 @@ or `scripts/dev/run-dev-server.sh` (which seeds defaults for `PRESENTER_DB_URL` 
 - Slide cards distinguish Main, Translation, and Stage text with dedicated styling. Group badges now appear only on slides that explicitly anchor a new group, keeping inherited slides clean while still propagating the effective group through the presentation.
 - The On Air status panel sits beside the Slides heading, showing the current and next main lyric lines at a glance. It collapses automatically in Edit mode so the editor has maximum vertical space.
 - Live mode exposes a dedicated **Clear Slide** control that blanks every output while leaving the current playlist selection untouched. Edit mode enables inline duplication, deletion, and keyboard navigation, with line-limit warnings scoped to the global limit configured in the toolbar.
-- Countdown timers can be set/reset by selecting a target datetime and pressing the provided buttons. All timer commands reuse the `/timers/command` API, so every interaction is backed by server validation.
-- If you arrive before a show is running, the page fetches an initial stage snapshot (`GET /stage/snapshots/worship-snv`) so active/next slides are highlighted even before the first WebSocket event.
+- Countdown timers now use a time-only selector (HH:MM). Type a new value, hit Enter (or the **Start** button) and Presenter schedules the next occurrence while keeping the running/paused state intact. Quick `±5 min` controls make last-second offsets easy.
+- A dedicated OBS-ready overlay lives at `/overlays/timer`; it renders the countdown on a transparent background and updates live via the same WebSocket feed.
+- A single stage output selector sits beside the global search bar. Choosing a new mode issues `POST /stage/layout`, reloads the shared `/stage` endpoint automatically, and keeps on-stage monitors, Resolume, and OBS sources aligned without touching URLs.
+- If you arrive before a show is running, the page fetches an initial stage snapshot (`GET /stage/snapshot`) for the currently selected layout so active/next slides are highlighted even before the first WebSocket event.
 - Troubleshooting: if highlights or timers stop updating, verify the `/live/ws` connection in your browser console (look for reconnect attempts) and confirm the server log shows “presenter server listening” on the expected port.
 
 ### Tablet Control UI
@@ -151,11 +153,11 @@ or `scripts/dev/run-dev-server.sh` (which seeds defaults for `PRESENTER_DB_URL` 
 - Connection status, mode selection, and toast confirmations follow the same WebSocket feed so operators see immediate feedback on every action.
  Events are tagged with a `type`:
   - `timers` – includes `overview` with countdown/preach snapshots.
-  - `stage` – includes a `snapshot` payload for each built-in stage layout.
-- Static HTML previews under `GET /ui/operator` and `GET /stage/{code}` now hydrate in the browser: as soon as the WebSocket connects they update countdowns, preach timers, and lyric groups without requiring a refresh.
+  - `stage` – includes a `snapshot` payload for the currently active stage layout.
+- Static HTML previews under `GET /ui/operator` and `GET /stage` now hydrate in the browser: as soon as the WebSocket connects they update countdowns, preach timers, and lyric groups without requiring a refresh.
 - To exercise the flow locally:
   1. Start the dev server with `scripts/dev/run-dev-server.sh`.
-  2. Visit `http://localhost:${PRESENTER_PORT:-8877}/ui/operator` in one tab and `http://localhost:${PRESENTER_PORT:-8877}/stage/worship-snv` in another.
+  2. Visit `http://localhost:${PRESENTER_PORT:-8877}/ui/operator` in one tab and `http://localhost:${PRESENTER_PORT:-8877}/stage` in another.
   3. Issue timer commands (`POST /timers/command`) or stage updates (`POST /stage/state`) and observe both tabs update instantly.
 - Sample message (pretty-printed) emitted on `/live/ws`:
 
@@ -192,7 +194,7 @@ or `scripts/dev/run-dev-server.sh` (which seeds defaults for `PRESENTER_DB_URL` 
   - `stage.set` – payload `{ "presentationId": UUID, "currentSlideId": UUID, "nextSlideId": UUID? }`
   - `timer.set_countdown_target` – payload `{ "target": "2025-09-27T18:00:00Z" }`
   - `timer.start_countdown`, `timer.pause_countdown`, `timer.reset_countdown`
-  - `timer.start_preach`, `timer.pause_preach`, `timer.reset_preach`
+  - `timer.start_preach`, `timer.reset_preach`
   - `bible.trigger` – payload `{ "translation": "KJV", "book": "John", "chapter": 3, "verseStart": 16, "verseEnd": 17? }`
   - `bible.clear`
 - Each successful command responds with `{ "type":"ack","command":"<name>" }`. Failures return `{ "type":"error","message":"..." }`. State-changing commands immediately refresh the variable feed so Companion feedbacks update without waiting for additional events.
@@ -212,8 +214,10 @@ or `scripts/dev/run-dev-server.sh` (which seeds defaults for `PRESENTER_DB_URL` 
 - `GET /ui/tablet` – touch-optimised controller for triggering and editing slides in real time.
 - `GET /ui/bible` – Bible control surface for search/trigger workflows.
 - `GET /stage-displays` – list of built-in stage layouts (WORSHIP SNV, WORSHIP PP, TIMER, PREACH).
-- `GET /stage/{code}` – HTML stage display for the chosen layout (SSR preview of lyrics/timers).
-- `GET /stage/snapshots/{code}` – JSON snapshot for a layout (current/next slide IDs, timers).
+- `GET /stage` – HTML stage display for the active layout (SSR preview of lyrics/timers).
+- `GET /stage/snapshot` – JSON snapshot for the active layout (current/next slide IDs, timers).
+- `GET /stage/layout` – Returns the active layout code and metadata for all available layouts.
+- `POST /stage/layout` – Switch the active stage layout (e.g., worship lyrics → countdown timer).
 - `POST /stage/state` – set the active slide for stage displays (presentation + current/next slide IDs).
 - `GET /timers/overview` – snapshot of countdown/preach timers stored in the database.
 - `POST /timers/command` – mutate timers state (set countdown target, start/pause/reset countdown/preach timers).

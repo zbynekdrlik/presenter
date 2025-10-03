@@ -12,9 +12,22 @@ let baseURL: string;
 
 test.describe.configure({ timeout: 600_000 });
 
-function toLocalDateTimeInputValue(date: Date): string {
-  const pad = (value: number) => String(value).padStart(2, '0');
-  return `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())}T${pad(date.getHours())}:${pad(date.getMinutes())}`;
+async function setCountdownInput(page: Page, minutesAhead: number): Promise<string> {
+  return page.evaluate((delta) => {
+    const input = document.querySelector('[data-role="countdown-target-input"]') as HTMLInputElement | null;
+    if (!input) {
+      throw new Error('countdown input missing');
+    }
+    input.focus();
+    const now = new Date();
+    now.setMilliseconds(0);
+    now.setSeconds(0);
+    now.setMinutes(now.getMinutes() + delta);
+    const pad = (value: number) => String(value).padStart(2, '0');
+    input.value = `${pad(now.getHours())}:${pad(now.getMinutes())}`;
+    input.dispatchEvent(new Event('input', { bubbles: true }));
+    return now.toISOString();
+  }, minutesAhead);
 }
 
 type ClickOptions = Parameters<Locator['click']>[0];
@@ -146,10 +159,6 @@ async function pickSlideWithContent(request: APIRequestContext, baseURL: string)
 
 test.describe('Operator control surface', () => {
   test('can trigger slide and drive timers with stage updates', async ({ page, context }) => {
-    page.on('console', (msg) => {
-      console.log('browser console', msg.type(), msg.text());
-    });
-
     await expect(async () => {
       const response = await page.request.get(new URL('/healthz', baseURL).toString(), {
         timeout: 120_000,
@@ -570,6 +579,7 @@ test.describe('Operator control surface', () => {
     }
     return count;
   }).toPass({ timeout: 5_000, intervals: [200] });
+  await expect(dropzonePresentationResults.first()).toBeVisible();
   const dropzoneCandidateCount = await dropzonePresentationResults.count();
   let dropzoneCandidate = dropzonePresentationResults.first();
   for (let index = 0; index < dropzoneCandidateCount; index += 1) {
@@ -754,7 +764,7 @@ test.describe('Operator control surface', () => {
   await expect(clearButton).toBeVisible();
 
     const stagePage = await context.newPage();
-    await stagePage.goto(new URL('/stage/worship-snv', baseURL).toString());
+    await stagePage.goto(new URL('/stage', baseURL).toString());
     await stagePage.waitForSelector('#current-text', { state: 'attached' });
     await stagePage.waitForFunction(
       () => document.body.dataset.liveState === 'connected',
@@ -762,9 +772,11 @@ test.describe('Operator control surface', () => {
       { timeout: 10_000 }
     );
 
-    const timerStagePage = await context.newPage();
-    await timerStagePage.goto(new URL('/stage/timer', baseURL).toString());
-    await timerStagePage.waitForSelector('#countdown-value', { state: 'attached' });
+    const stageLayoutSelect = page.locator('[data-role="stage-layout-select"]');
+
+    const timerOverlayPage = await context.newPage();
+    await timerOverlayPage.goto(new URL('/overlays/timer', baseURL).toString());
+    await timerOverlayPage.waitForSelector('#timer-value', { state: 'attached' });
 
     const stageTriggerAt = Date.now();
     await slideButton.dispatchEvent('pointerdown', { button: 0 });
@@ -838,26 +850,26 @@ test.describe('Operator control surface', () => {
 
     await page.locator('[data-role="view-toggle"][data-view="timers"]').click();
 
-    const countdownInput = page.locator('[data-role="countdown-target-input"]');
-    const target = new Date(Date.now() + 10 * 60 * 1000);
-    await countdownInput.fill(toLocalDateTimeInputValue(target));
-    await page.locator('[data-command="set_countdown_target"]').click();
+    await stageLayoutSelect.selectOption('timer');
+    await expect(async () => {
+      const layoutCode = await stagePage.evaluate(() => document.body.dataset.layoutCode);
+      if (layoutCode !== 'timer') {
+        throw new Error(`layout=${layoutCode}`);
+      }
+    }).toPass({ timeout: 10_000, intervals: [200] });
+    await stagePage.waitForSelector('#countdown-value', { state: 'attached' });
 
-    await page.locator('[data-command="start_countdown"]').click();
+    const countdownInput = page.locator('[data-role="countdown-target-input"]');
+    const initialTargetIso = await setCountdownInput(page, 10);
+    await countdownInput.press('Enter');
+
+    await page.locator('[data-role="countdown-start"]').click();
     const countdownStartAt = Date.now();
-    const countdownSnapshotBefore = await page.evaluate(() => ({
-      text: document.getElementById('countdown-state')?.textContent ?? null,
-      html: document.getElementById('countdown-state')?.outerHTML ?? null,
-    }));
-    console.log('countdown before wait', countdownSnapshotBefore);
-    const overviewResponse = await page.request.get(new URL('/timers/overview', baseURL).toString());
-    console.log('timer overview', await overviewResponse.json());
     await expect(async () => {
       const state = await page.evaluate(() => ({
         display: window.__presenterCountdownDisplay ?? '',
         timers: window.__presenterTimers ?? null,
       }));
-      console.log('timers snapshot', state);
       if (!state.timers) {
         throw new Error('timers not yet available');
       }
@@ -865,31 +877,68 @@ test.describe('Operator control surface', () => {
         throw new Error(`countdown display=${state.display}`);
       }
     }).toPass({ timeout: 3_000, intervals: [100] });
-    await expect(page.locator('#countdown-state')).toHaveText('Running', {
-      timeout: 2_000,
-    });
     await expect(async () => {
-      const stageValue = await timerStagePage.evaluate(
+      const stageValue = await stagePage.evaluate(
         () => window.__presenterStageCountdown ?? ''
       );
       if (!stageValue || stageValue === '00:00') {
         throw new Error(`stage countdown=${stageValue}`);
       }
     }).toPass({ timeout: 3_000, intervals: [100] });
+
+    await expect(async () => {
+      const overlayValue = await timerOverlayPage.locator('#timer-value').innerText();
+      if (!overlayValue || overlayValue.trim() === '0') {
+        throw new Error(`overlay countdown=${overlayValue}`);
+      }
+    }).toPass({ timeout: 3_000, intervals: [100] });
     const countdownLatency = Date.now() - countdownStartAt;
     expect(countdownLatency).toBeLessThanOrEqual(3_000);
 
-    await page.locator('[data-command="pause_countdown"]').click();
-    await expect(page.locator('#countdown-state')).toHaveText('Paused', {
-      timeout: 10_000,
-    });
+    const timersSnapshot = await page.evaluate(() => (window as any).__presenterTimers);
+    const initialRemaining = timersSnapshot?.countdownToStart?.secondsRemaining ?? null;
+    await page.locator('[data-role="countdown-offset-plus"]').click();
+    await expect(async () => {
+      const updated = await page.evaluate(() => (window as any).__presenterTimers);
+      const updatedRemaining = updated?.countdownToStart?.secondsRemaining ?? 0;
+      if (typeof initialRemaining === 'number') {
+        if (updatedRemaining <= initialRemaining + 250) {
+          throw new Error(`remaining did not increase enough: ${updatedRemaining}`);
+        }
+      }
+    }).toPass({ timeout: 3_000, intervals: [200] });
+
+    const newTargetIso = await setCountdownInput(page, 6);
+    await page.locator('[data-role="countdown-start"]').click();
+    await expect(async () => {
+      const updated = await page.evaluate(() => (window as any).__presenterTimers);
+      const iso = updated?.countdownToStart?.target;
+      if (!iso) {
+        throw new Error('missing countdown target');
+      }
+      const currentTarget = new Date(iso);
+      const expectedTarget = new Date(newTargetIso);
+      const diff = Math.abs(currentTarget.getTime() - expectedTarget.getTime());
+      if (diff > 60_000) {
+        throw new Error(`target mismatch ${diff}ms`);
+      }
+    }).toPass({ timeout: 5_000, intervals: [200] });
+
+    await stageLayoutSelect.selectOption('worship-snv');
+    await expect(async () => {
+      const layoutCode = await stagePage.evaluate(() => document.body.dataset.layoutCode);
+      if (layoutCode !== 'worship-snv') {
+        throw new Error(`layout=${layoutCode}`);
+      }
+    }).toPass({ timeout: 10_000, intervals: [200] });
+    await stagePage.waitForSelector('#current-text', { state: 'attached' });
 
     await page.locator('[data-command="start_preach"]').click();
     await expect(page.locator('#preach-state')).toHaveText('Running', {
       timeout: 10_000,
     });
-    await page.locator('[data-command="pause_preach"]').click();
-    await expect(page.locator('#preach-state')).toHaveText('Paused', {
+    await page.locator('[data-command="reset_preach"]').click();
+    await expect(page.locator('#preach-state')).toHaveText('Idle', {
       timeout: 10_000,
     });
 
@@ -905,7 +954,7 @@ test.describe('Operator control surface', () => {
     });
 
     await stagePage.close();
-    await timerStagePage.close();
+    await timerOverlayPage.close();
 
     await test.step('delete playlist and verify removal', async () => {
       const playlistRow = page.locator(

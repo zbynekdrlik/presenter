@@ -100,6 +100,17 @@ fn format_seconds(total_seconds: i64) -> String {
     }
 }
 
+fn format_seconds_compact(total_seconds: i64) -> String {
+    let total = total_seconds.max(0);
+    if total < 60 {
+        total.to_string()
+    } else {
+        let minutes = total / 60;
+        let seconds = total % 60;
+        format!("{minutes:02}:{seconds:02}")
+    }
+}
+
 #[component]
 pub fn OperatorDocument(
     libraries: Vec<LibraryRow>,
@@ -107,6 +118,8 @@ pub fn OperatorDocument(
     timers: TimersOverview,
     libraries_json: String,
     playlists_json: String,
+    stage_layouts_json: String,
+    stage_layout_code: String,
 ) -> impl IntoView {
     let initial_library_id = libraries.first().map(|library| library.id.clone());
     let initial_playlist_id = playlists.first().map(|playlist| playlist.id.clone());
@@ -118,11 +131,16 @@ pub fn OperatorDocument(
     let playlists_json = playlists_json.replace("</script>", r"<\/script>");
     let timers_json = to_string(&*timers).unwrap_or_else(|_| "{}".to_string());
     let timers_json = timers_json.replace("</script>", r"<\/script>");
+    let stage_layouts_json = stage_layouts_json.replace("</script>", r"<\/script>");
+
+    let stage_layout_code_safe = stage_layout_code.replace('"', "\\\"");
 
     let operator_script = OPERATOR_SCRIPT_TEMPLATE
         .replace("__LIBRARIES__", &libraries_json)
         .replace("__PLAYLISTS__", &playlists_json)
-        .replace("__TIMERS__", &timers_json);
+        .replace("__TIMERS__", &timers_json)
+        .replace("__STAGE_LAYOUTS__", &stage_layouts_json)
+        .replace("__STAGE_LAYOUT_CODE__", &stage_layout_code_safe);
 
     view! {
             <html lang="en">
@@ -168,6 +186,10 @@ pub fn OperatorDocument(
                                 ><span aria-hidden="true">{ "×" }</span><span class="sr-only">Clear search</span></button>
                             </form>
                             <div class="operator__search-results" data-role="global-search-results"></div>
+                            <div class="operator__stage-layout" aria-label="Stage display mode">
+                                <label class="operator__stage-layout-label" for="stage-layout-select">"Stage Output"</label>
+                                <select id="stage-layout-select" data-role="stage-layout-select"></select>
+                            </div>
                         </div>
                         <div class="operator__header-right">
                             <div class="operator__stage-preview" data-role="stage-status" data-active="false">
@@ -375,9 +397,6 @@ pub fn OperatorDocument(
                                     <article class="operator__timer-card" data-role="timer-countdown">
                                         <header>
                                             <strong>"Countdown"</strong>
-                                            <span class="operator__timer-state" id="countdown-state">
-                                                {format_timer_state(overview.countdown_to_start.state)}
-                                            </span>
                                         </header>
                                         <p class="operator__timer-primary" id="countdown-value">
                                             {format_seconds(overview.countdown_to_start.seconds_remaining)}
@@ -412,21 +431,32 @@ pub fn OperatorDocument(
                                 <div class="operator__timer-group">
                                     <h3>"Countdown"</h3>
                                     <label class="operator__timer-field">
-                                        <span>"Target"</span>
-                                        <input type="datetime-local" data-role="countdown-target-input" />
+                                        <span>"Service start"</span>
+                                        <input
+                                            type="text"
+                                            inputmode="numeric"
+                                            placeholder="18:00"
+                                            data-role="countdown-target-input"
+                                            aria-label="Countdown target time (HH:MM)"
+                                        />
                                     </label>
+                                    <p class="operator__timer-help">
+                                        "Type HH:MM (or minutes only) and press Enter or Set to update while the timer runs."
+                                    </p>
                                     <div class="operator__timer-buttons">
-                                        <button type="button" data-command="set_countdown_target">"Set Target"</button>
-                                        <button type="button" data-command="start_countdown">"Start"</button>
-                                        <button type="button" data-command="pause_countdown">"Pause"</button>
-                                        <button type="button" data-command="reset_countdown">"Reset"</button>
+                                        <button type="button" data-role="countdown-start">"Start"</button>
+                                        <button type="button" data-role="countdown-offset-minus">"-5 min"</button>
+                                        <button type="button" data-role="countdown-offset-plus">"+5 min"</button>
+                                    </div>
+                                    <div class="operator__timer-links">
+                                        <button type="button" data-role="timer-overlay-open">"Open Countdown Overlay"</button>
+                                        <button type="button" data-role="timer-overlay-copy">"Copy Overlay URL"</button>
                                     </div>
                                 </div>
                                 <div class="operator__timer-group">
                                     <h3>"Preach"</h3>
                                     <div class="operator__timer-buttons">
                                         <button type="button" data-command="start_preach">"Start"</button>
-                                        <button type="button" data-command="pause_preach">"Pause"</button>
                                         <button type="button" data-command="reset_preach">"Reset"</button>
                                     </div>
                                 </div>
@@ -552,6 +582,8 @@ pub async fn render_operator_ui(state: &AppState) -> anyhow::Result<Html<String>
         .collect();
     let playlists = state.playlists().await?;
     let timers = state.timers_overview().await?;
+    let stage_layouts = state.stage_displays().await?;
+    let stage_layout_code = state.stage_layout_code().await;
 
     let mut presentation_lookup: HashMap<String, String> = HashMap::new();
 
@@ -621,6 +653,7 @@ pub async fn render_operator_ui(state: &AppState) -> anyhow::Result<Html<String>
 
     let libraries_json = to_string(&library_rows)?;
     let playlists_json = to_string(&playlist_rows)?;
+    let stage_layouts_json = to_string(&stage_layouts)?;
 
     let owner = Owner::new_root(None);
     let html = owner.with(|| {
@@ -631,6 +664,8 @@ pub async fn render_operator_ui(state: &AppState) -> anyhow::Result<Html<String>
                 timers=timers.clone()
                 libraries_json=libraries_json.clone()
                 playlists_json=playlists_json.clone()
+                stage_layouts_json=stage_layouts_json.clone()
+                stage_layout_code=stage_layout_code.clone()
             />
         }
         .into_view()
@@ -1881,6 +1916,10 @@ body.operator[data-view="settings"] [data-view-panel="settings"] {
     display: inline-block;
     font-size: 0.75rem;
     color: var(--operator-muted);
+    margin-left: 0.5rem;
+    padding: 0.125rem 0.5rem;
+    border-radius: 999px;
+    background: rgba(59, 124, 255, 0.12);
 }
 
 .operator__timer-primary {
@@ -1914,11 +1953,19 @@ body.operator[data-view="settings"] [data-view-panel="settings"] {
     border: 1px solid rgba(15, 23, 42, 0.12);
     padding: 0.5rem 0.6rem;
     font-size: 0.9rem;
+    max-width: 160px;
+}
+
+.operator__timer-help {
+    margin: -0.35rem 0 0.85rem;
+    font-size: 0.75rem;
+    color: var(--operator-muted);
 }
 
 .operator__timer-buttons {
     display: flex;
     gap: 0.5rem;
+    flex-wrap: wrap;
 }
 
 .operator__timer-buttons button {
@@ -1926,6 +1973,23 @@ body.operator[data-view="settings"] [data-view-panel="settings"] {
     border-radius: 8px;
     border: none;
     background: rgba(59, 124, 255, 0.1);
+    color: var(--operator-accent-dark);
+    padding: 0.45rem 0.5rem;
+    cursor: pointer;
+}
+
+.operator__timer-links {
+    display: flex;
+    gap: 0.5rem;
+    margin-top: 0.75rem;
+    flex-wrap: wrap;
+}
+
+.operator__timer-links button {
+    flex: 1;
+    border-radius: 8px;
+    border: 1px solid rgba(59, 124, 255, 0.4);
+    background: rgba(59, 124, 255, 0.08);
     color: var(--operator-accent-dark);
     padding: 0.45rem 0.5rem;
     cursor: pointer;
@@ -3496,6 +3560,39 @@ body.home {
 }
 "#;
 
+const TIMER_OVERLAY_STYLES: &str = r#"
+body.overlay {
+    margin: 0;
+    min-height: 100vh;
+    background: transparent;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-family: "Inter", "Segoe UI", system-ui, sans-serif;
+    color: #f8fafc;
+}
+
+.overlay__timer {
+    font-size: 12vw;
+    font-weight: 700;
+    letter-spacing: 0.08em;
+    text-align: center;
+    text-shadow: 0 12px 40px rgba(15, 23, 42, 0.55);
+    font-variant-numeric: tabular-nums;
+    font-feature-settings: 'tnum' 1;
+    text-rendering: optimizeLegibility;
+    -webkit-font-smoothing: antialiased;
+    font-smooth: always;
+}
+
+@media (max-width: 720px) {
+    .overlay__timer {
+        font-size: 18vw;
+        letter-spacing: 0.06em;
+    }
+}
+"#;
+
 #[component]
 fn TabletDocument(
     library_json: String,
@@ -3600,6 +3697,156 @@ fn TabletDocument(
             </body>
         </html>
     }
+}
+
+pub async fn render_timer_overlay(state: &AppState) -> anyhow::Result<Html<String>> {
+    let overview = state.timers_overview().await?;
+    let initial_seconds = overview.countdown_to_start.seconds_remaining;
+    let initial_display = format_seconds_compact(initial_seconds);
+    let timers_json = to_string(&overview).unwrap_or_else(|_| "{}".to_string());
+    let timers_json = timers_json.replace("</script>", r"<\/script>");
+
+    let script = format!(
+        r#"(function() {{
+  const initial = {timers_json};
+  let overview = initial || {{}};
+  let countdown = overview.countdown_to_start || overview.countdownToStart || {{}};
+  let remaining = Number(countdown.seconds_remaining ?? countdown.secondsRemaining ?? 0);
+  let state = String(countdown.state ?? 'idle').toLowerCase();
+  const valueEl = document.getElementById('timer-value');
+
+  const coerceTargetEpoch = (value) => {{
+    if (typeof value !== 'string') return null;
+    const parsed = Date.parse(value);
+    return Number.isNaN(parsed) ? null : parsed;
+  }};
+
+  let targetEpochMs = coerceTargetEpoch(
+    countdown.target ?? countdown.targetUtc ?? countdown.targetUTC ?? null
+  );
+
+  const clampNumber = (value) => (Number.isFinite(value) ? value : 0);
+  const format = (seconds) => {{
+    const total = Math.max(0, Math.floor(clampNumber(seconds)));
+    if (total < 60) {{
+      return String(total);
+    }}
+    const minutes = Math.floor(total / 60);
+    const secs = total % 60;
+    return `${{String(minutes).padStart(2, '0')}}:${{String(secs).padStart(2, '0')}}`;
+  }};
+
+  const remainingFromTarget = () => {{
+    if (!Number.isFinite(targetEpochMs)) return null;
+    return Math.max(0, Math.round((targetEpochMs - Date.now()) / 1000));
+  }};
+
+  const publishState = () => {{
+    window.__presenterTimerOverlayState = {{ remaining, state }};
+  }};
+
+  const render = () => {{
+    if (valueEl) {{
+      valueEl.textContent = format(remaining);
+    }}
+    publishState();
+  }};
+
+  const applyOverview = (nextOverview) => {{
+    if (!nextOverview) return;
+    const nextCountdown =
+      nextOverview.countdown_to_start ||
+      nextOverview.countdownToStart ||
+      {{}};
+    const rawSeconds = Number(
+      nextCountdown.seconds_remaining ??
+        nextCountdown.secondsRemaining ??
+        remaining
+    );
+    if (Number.isFinite(rawSeconds)) {{
+      remaining = Math.floor(rawSeconds);
+    }}
+    if (typeof nextCountdown.state === 'string') {{
+      state = nextCountdown.state.toLowerCase();
+    }}
+    const candidateTarget =
+      nextCountdown.target ??
+      nextCountdown.targetUtc ??
+      nextCountdown.targetUTC ??
+      null;
+    const parsedTarget = coerceTargetEpoch(candidateTarget);
+    if (parsedTarget !== null) {{
+      targetEpochMs = parsedTarget;
+    }}
+    render();
+  }};
+
+  applyOverview(overview);
+
+  window.setInterval(() => {{
+    if (state === 'running') {{
+      const derived = remainingFromTarget();
+      if (derived !== null) {{
+        remaining = derived;
+      }} else {{
+        remaining = Math.max(0, remaining - 1);
+      }}
+      render();
+    }}
+  }}, 1000);
+
+  const connect = () => {{
+    const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
+    const socket = new WebSocket(`${{protocol}}//${{window.location.host}}/live/ws`);
+    window.__presenterTimerOverlaySocket = socket;
+
+    socket.addEventListener('message', (event) => {{
+      try {{
+        const data = JSON.parse(event.data);
+        if (data.type === 'timers') {{
+          overview = data.overview || overview;
+          applyOverview(overview);
+        }}
+      }} catch (error) {{
+        console.warn('timer overlay parse error', error);
+      }}
+    }});
+
+    const scheduleReconnect = () => {{
+      window.setTimeout(connect, 1500);
+    }};
+
+    socket.addEventListener('close', scheduleReconnect);
+    socket.addEventListener('error', () => {{
+      try {{ socket.close(); }} catch (_) {{}}
+    }});
+  }};
+
+  connect();
+}})();"#,
+        timers_json = timers_json
+    );
+
+    let owner = Owner::new_root(None);
+    let html = owner.with(|| {
+        view! {
+            <html lang="en">
+                <head>
+                    <meta charset="utf-8" />
+                    <title>"Presenter Timer Overlay"</title>
+                    <style>{TIMER_OVERLAY_STYLES}</style>
+                </head>
+                <body class="overlay overlay--timer">
+                    <div class="overlay__timer" id="timer-value">{initial_display}</div>
+                    <script>{script}</script>
+                </body>
+            </html>
+        }
+        .into_view()
+        .to_html()
+    });
+
+    Ok(Html(format!("<!DOCTYPE html>{html}")))
 }
 
 pub async fn render_tablet_ui(state: &AppState) -> anyhow::Result<Html<String>> {
@@ -4126,10 +4373,8 @@ fn HomeDocument() -> impl IntoView {
                     <section class="home__section">
                         <h2>"Stage Displays"</h2>
                         <ul class="home__links">
-                            <li><a href="/stage/worship-snv">"WORSHIP SNV"</a></li>
-                            <li><a href="/stage/worship-pp">"WORSHIP PP"</a></li>
-                            <li><a href="/stage/timer">"Timer"</a></li>
-                            <li><a href="/stage/preach">"Preach"</a></li>
+                            <li><a href="/stage">"Stage Output"</a></li>
+                            <li><a href="/overlays/timer">"Timer Overlay"</a></li>
                         </ul>
                     </section>
                 </main>

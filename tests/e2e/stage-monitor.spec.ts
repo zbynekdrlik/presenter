@@ -25,6 +25,9 @@ async function waitForOperatorReady(page: Page) {
 }
 
 async function openStageDisplay(context: BrowserContext, options?: { forceLegacy?: boolean }) {
+  await context.request.post(new URL('/stage/layout', baseURL).toString(), {
+    data: { code: 'worship-snv' },
+  });
   const stagePage = await context.newPage();
   if (options?.forceLegacy) {
     await stagePage.addInitScript(() => {
@@ -33,7 +36,7 @@ async function openStageDisplay(context: BrowserContext, options?: { forceLegacy
       });
     });
   }
-  await stagePage.goto(new URL('/stage/worship-snv', baseURL).toString(), {
+  await stagePage.goto(new URL('/stage', baseURL).toString(), {
     waitUntil: 'domcontentloaded',
   });
   await stagePage.waitForFunction(() => window.__presenterStageConnectionState === 'connected', {

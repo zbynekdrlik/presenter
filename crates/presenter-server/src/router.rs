@@ -58,10 +58,15 @@ pub fn build_router(state: AppState) -> Router {
         .route("/ui/tablet", get(tablet_ui))
         .route("/ui/bible", get(bible_ui))
         .route("/ui/settings", get(settings_ui))
+        .route("/overlays/timer", get(timer_overlay))
         .route("/stage-displays", get(list_stage_displays))
+        .route(
+            "/stage/layout",
+            get(get_stage_layout).post(set_stage_layout),
+        )
         .route("/stage/connections", get(list_stage_connections))
-        .route("/stage/{code}", get(stage_display_html))
-        .route("/stage/snapshots/{code}", get(stage_display_snapshot_json))
+        .route("/stage", get(stage_display_selected_html))
+        .route("/stage/snapshot", get(stage_display_selected_snapshot_json))
         .route("/stage/state", post(update_stage_state))
         .route("/stage/clear", post(clear_stage_state))
         .route(
@@ -106,6 +111,14 @@ async fn health() -> impl IntoResponse {
 #[instrument(skip_all)]
 async fn home(State(_state): State<AppState>) -> Result<axum::response::Html<String>, AppError> {
     let html = ui::render_home_ui().await?;
+    Ok(html)
+}
+
+#[instrument(skip_all)]
+async fn timer_overlay(
+    State(state): State<AppState>,
+) -> Result<axum::response::Html<String>, AppError> {
+    let html = ui::render_timer_overlay(&state).await?;
     Ok(html)
 }
 
@@ -648,34 +661,76 @@ async fn bible_ui(State(state): State<AppState>) -> Result<axum::response::Html<
 }
 
 #[instrument(skip_all)]
-async fn stage_display_html(
-    Path(code): Path<String>,
-    State(state): State<AppState>,
-) -> Result<Response, AppError> {
-    match state.stage_display_snapshot(&code).await? {
+async fn stage_display_selected_html(State(state): State<AppState>) -> Result<Response, AppError> {
+    match state.selected_stage_display_snapshot().await? {
         Some(snapshot) => {
             Ok(stage_ui::render_stage_display(snapshot, state.heartbeat_config()).into_response())
         }
-        None => Ok((
-            StatusCode::NOT_FOUND,
-            format!("Unknown stage layout: {}", code),
-        )
-            .into_response()),
+        None => Ok((StatusCode::SERVICE_UNAVAILABLE, "Stage display unavailable").into_response()),
     }
 }
 
 #[instrument(skip_all)]
-async fn stage_display_snapshot_json(
-    Path(code): Path<String>,
+async fn stage_display_selected_snapshot_json(
     State(state): State<AppState>,
 ) -> Result<Json<StageDisplaySnapshot>, AppError> {
-    match state.stage_display_snapshot(&code).await? {
+    match state.selected_stage_display_snapshot().await? {
         Some(snapshot) => Ok(Json(snapshot)),
-        None => Err(AppError::not_found(format!(
-            "Unknown stage layout: {}",
-            code
-        ))),
+        None => Err(AppError::not_found("Stage display unavailable")),
     }
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct StageLayoutResponse {
+    code: String,
+    layout: StageDisplayLayout,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct StageLayoutUpdateRequest {
+    code: String,
+}
+
+#[instrument(skip_all)]
+async fn get_stage_layout(
+    State(state): State<AppState>,
+) -> Result<Json<StageLayoutResponse>, AppError> {
+    let code = state.stage_layout_code().await;
+    let layouts = state.stage_displays().await?;
+    let layout = layouts
+        .into_iter()
+        .find(|layout| layout.code == code)
+        .unwrap_or_else(|| {
+            StageDisplayLayout::built_in()
+                .into_iter()
+                .next()
+                .expect("stage layouts")
+        });
+    Ok(Json(StageLayoutResponse {
+        code: layout.code.clone(),
+        layout,
+    }))
+}
+
+#[instrument(skip_all)]
+async fn set_stage_layout(
+    State(state): State<AppState>,
+    Json(payload): Json<StageLayoutUpdateRequest>,
+) -> Result<Json<StageLayoutResponse>, AppError> {
+    let code = payload.code.trim();
+    if code.is_empty() {
+        return Err(AppError::bad_request_message("code cannot be empty"));
+    }
+    let layout = state
+        .set_stage_layout_code(code)
+        .await
+        .map_err(|err| AppError::not_found(err.to_string()))?;
+    Ok(Json(StageLayoutResponse {
+        code: layout.code.clone(),
+        layout,
+    }))
 }
 
 #[instrument(skip_all)]
@@ -1836,6 +1891,29 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn timer_overlay_endpoint_renders_html() {
+        let state = AppState::in_memory().await.unwrap();
+        let app = build_router(state);
+        let response = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .uri("/overlays/timer")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+        let bytes = axum::body::to_bytes(response.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        let body = String::from_utf8(bytes.to_vec()).unwrap();
+        assert!(body.contains("Presenter Timer Overlay"));
+        assert!(body.contains("timer-value"));
+    }
+
+    #[tokio::test]
     async fn update_slide_content_endpoint_updates_slide() {
         let state = AppState::in_memory().await.unwrap();
         let libraries = state.libraries().await.unwrap();
@@ -1955,7 +2033,7 @@ mod tests {
             .clone()
             .oneshot(
                 Request::builder()
-                    .uri("/stage/worship-snv")
+                    .uri("/stage")
                     .body(Body::empty())
                     .unwrap(),
             )
@@ -1973,8 +2051,10 @@ mod tests {
             .clone()
             .oneshot(
                 Request::builder()
-                    .uri("/stage/does-not-exist")
-                    .body(Body::empty())
+                    .method("POST")
+                    .uri("/stage/layout")
+                    .header("content-type", "application/json")
+                    .body(Body::from(json!({ "code": "unknown" }).to_string()))
                     .unwrap(),
             )
             .await
@@ -1991,7 +2071,7 @@ mod tests {
             .clone()
             .oneshot(
                 Request::builder()
-                    .uri("/stage/snapshots/worship-snv")
+                    .uri("/stage/snapshot")
                     .body(Body::empty())
                     .unwrap(),
             )
@@ -2004,17 +2084,52 @@ mod tests {
         let snapshot: StageDisplaySnapshot = serde_json::from_slice(&bytes).unwrap();
         assert!(snapshot.presentation_id.is_some());
         assert!(snapshot.current_slide_id.is_some());
+    }
+
+    #[tokio::test]
+    async fn stage_layout_endpoint_reports_and_sets_layout() {
+        let state = AppState::in_memory().await.unwrap();
+        let app = build_router(state.clone());
 
         let response = app
+            .clone()
             .oneshot(
                 Request::builder()
-                    .uri("/stage/snapshots/unknown-layout")
+                    .uri("/stage/layout")
                     .body(Body::empty())
                     .unwrap(),
             )
             .await
             .unwrap();
-        assert_eq!(response.status(), StatusCode::NOT_FOUND);
+        assert_eq!(response.status(), StatusCode::OK);
+        let bytes = axum::body::to_bytes(response.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        let mut payload: StageLayoutResponse = serde_json::from_slice(&bytes).unwrap();
+        assert_eq!(payload.code, "worship-snv");
+
+        let response = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/stage/layout")
+                    .header("content-type", "application/json")
+                    .body(Body::from(json!({ "code": "timer" }).to_string()))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+        let bytes = axum::body::to_bytes(response.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        payload = serde_json::from_slice(&bytes).unwrap();
+        assert_eq!(payload.code, "timer");
+        assert_eq!(payload.layout.code, "timer");
+
+        let current = state.stage_layout_code().await;
+        assert_eq!(current, "timer");
     }
 
     #[tokio::test]

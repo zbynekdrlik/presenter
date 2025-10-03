@@ -60,6 +60,7 @@ pub enum LiveEvent {
     StageConnection { snapshot: StageClientSnapshot },
     Bible { broadcast: BibleBroadcast },
     BibleCleared,
+    StageLayout { code: String },
 }
 
 pub async fn serve_websocket(hub: LiveHub, connections: StageConnections, socket: WebSocket) {

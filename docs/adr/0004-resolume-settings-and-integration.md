@@ -75,6 +75,8 @@ Operators require:
 - Clip names may include suffix modifiers: `-u` forces uppercase output, `-re` collapses
   multi-line payloads into a single space-delimited line. Modifiers can be combined (e.g.
   `#translate-b-u-re`).
+- Require a dedicated `#timer` clip (with a text parameter) per deck. Presenter updates this clip’s
+  text every second without triggering playback so countdown overlays and Resolume layers stay aligned.
 - If a token is missing we surface the error to the settings UI and log with `warn` so operators can
   correct naming before service.
 

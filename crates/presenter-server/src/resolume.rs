@@ -72,6 +72,17 @@ pub struct BibleUpdate {
 }
 
 #[derive(Debug, Clone)]
+pub struct TimerFrame {
+    pub formatted: String,
+}
+
+impl TimerFrame {
+    pub fn new(formatted: String) -> Self {
+        Self { formatted }
+    }
+}
+
+#[derive(Debug, Clone)]
 pub struct ResolumeRegistry {
     client: Client,
     hosts: Arc<RwLock<HashMap<ResolumeHostId, HostEntry>>>,
@@ -89,6 +100,7 @@ struct HostEntry {
 enum HostCommand {
     Stage(StageUpdate),
     Bible(BibleUpdate),
+    Timer(TimerFrame),
     RefreshConfig(ResolumeHost),
     Shutdown,
 }
@@ -192,6 +204,12 @@ impl ResolumeRegistry {
         }
     }
 
+    pub async fn timer_update(&self, frame: TimerFrame) {
+        for entry in self.hosts.read().await.values() {
+            let _ = entry.command_tx.try_send(HostCommand::Timer(frame.clone()));
+        }
+    }
+
     pub async fn snapshot(&self) -> HashMap<ResolumeHostId, ResolumeConnectionSnapshot> {
         let mut snapshots = HashMap::new();
         for (id, entry) in self.hosts.read().await.iter() {
@@ -233,6 +251,11 @@ async fn run_host_worker(
                             driver.record_error(err, &status).await;
                         }
                     }
+                    Some(HostCommand::Timer(frame)) => {
+                        if let Err(err) = driver.handle_timer(frame, &status).await {
+                            driver.record_error(err, &status).await;
+                        }
+                    }
                     Some(HostCommand::RefreshConfig(new_config)) => {
                         host = new_config.clone();
                         driver.update_config(new_config);
@@ -264,6 +287,7 @@ struct HostDriver {
     lane_state: SlotState,
     endpoint: Option<ResolvedEndpoint>,
     last_mapping_refresh: Option<Instant>,
+    last_timer_payload: Option<String>,
 }
 
 impl HostDriver {
@@ -275,6 +299,7 @@ impl HostDriver {
             lane_state: SlotState::default(),
             endpoint: None,
             last_mapping_refresh: None,
+            last_timer_payload: None,
         }
     }
 
@@ -284,6 +309,7 @@ impl HostDriver {
         self.lane_state = SlotState::default();
         self.endpoint = None;
         self.last_mapping_refresh = None;
+        self.last_timer_payload = None;
     }
 
     async fn refresh_status(&self, status: &Arc<RwLock<ResolumeConnectionSnapshot>>) {
@@ -466,6 +492,52 @@ impl HostDriver {
         Ok(())
     }
 
+    async fn handle_timer(
+        &mut self,
+        frame: TimerFrame,
+        status: &Arc<RwLock<ResolumeConnectionSnapshot>>,
+    ) -> anyhow::Result<()> {
+        if !self.config.is_enabled {
+            return Ok(());
+        }
+        self.ensure_mapping().await?;
+        if let Some(mapping) = self.mapping.clone() {
+            if mapping.timer.is_empty() {
+                warn!(
+                    host = %self.config.host,
+                    port = self.config.port,
+                    "Resolume mapping missing #timer clip"
+                );
+                return Ok(());
+            }
+
+            let text = frame.formatted;
+            if self
+                .last_timer_payload
+                .as_ref()
+                .map(|previous| previous.as_str())
+                == Some(text.as_str())
+            {
+                return Ok(());
+            }
+
+            let endpoint = self.endpoint().await?;
+            let mut latency_recorded = None;
+            for target in &mapping.timer {
+                if let Some(duration) = self.update_clip_text(target, &text, &endpoint).await? {
+                    if latency_recorded.is_none() {
+                        latency_recorded = Some(duration);
+                    }
+                }
+            }
+            if let Some(latency) = latency_recorded {
+                self.note_latency(status, latency).await;
+            }
+            self.last_timer_payload = Some(text);
+        }
+        Ok(())
+    }
+
     async fn ensure_mapping(&mut self) -> anyhow::Result<()> {
         if !self.config.is_enabled {
             self.mapping = None;
@@ -509,15 +581,15 @@ impl HostDriver {
         let mapping = ClipMapping::from_composition(&body)?;
         let missing = mapping.missing_tokens().to_vec();
         if !missing.is_empty() {
-            let joined = missing.join(", ");
             warn!(
                 host = %self.config.host,
-                "Resolume mapping missing expected clips: {joined}"
+                missing = ?missing,
+                "Resolume mapping missing expected clips"
             );
-            return Err(anyhow!("missing Resolume clips: {}", joined));
         }
         self.mapping = Some(mapping);
         self.last_mapping_refresh = Some(Instant::now());
+        self.last_timer_payload = None;
         Ok(())
     }
 
@@ -748,6 +820,7 @@ impl HostDriver {
         self.mapping = None;
         self.endpoint = None;
         self.last_mapping_refresh = None;
+        self.last_timer_payload = None;
     }
 }
 
@@ -869,6 +942,7 @@ mod clip_map {
         pub bible_translation_a: Vec<ClipTarget>,
         pub bible_translation_b: Vec<ClipTarget>,
         pub bible_clear: Vec<ClipTarget>,
+        pub timer: Vec<ClipTarget>,
         missing_tokens: Vec<&'static str>,
     }
 
@@ -939,6 +1013,7 @@ mod clip_map {
                             LaneTarget::B => mapping.bible_translation_b.push(target),
                         },
                         ClipDestination::BibleClear(target) => mapping.bible_clear.push(target),
+                        ClipDestination::Timer(target) => mapping.timer.push(target),
                     }
                 }
             }
@@ -951,6 +1026,7 @@ mod clip_map {
         Bible(LaneTarget, ClipTarget),
         BibleTranslation(LaneTarget, ClipTarget),
         BibleClear(ClipTarget),
+        Timer(ClipTarget),
     }
 
     #[derive(Debug, Clone, Copy)]
@@ -960,6 +1036,7 @@ mod clip_map {
         Bible,
         BibleTranslation,
         BibleClear,
+        Timer,
     }
 
     fn parse_clip_destinations(
@@ -997,12 +1074,13 @@ mod clip_map {
                 }
             }
             "#bibleclear" => ClipKind::BibleClear,
+            "#timer" => ClipKind::Timer,
             _ => return result,
         };
 
         let transforms_start;
         let lane = match kind {
-            ClipKind::BibleClear => {
+            ClipKind::BibleClear | ClipKind::Timer => {
                 transforms_start = index;
                 None
             }
@@ -1072,6 +1150,13 @@ mod clip_map {
                     transforms,
                 }));
             }
+            (ClipKind::Timer, _) => {
+                result.push(ClipDestination::Timer(ClipTarget {
+                    clip_id,
+                    text_param_id,
+                    transforms,
+                }));
+            }
             _ => {}
         }
 
@@ -1126,6 +1211,9 @@ mod clip_map {
         }
         if mapping.bible_clear.is_empty() {
             missing.push("#bible-clear");
+        }
+        if mapping.timer.is_empty() {
+            missing.push("#timer");
         }
         missing
     }
@@ -1196,6 +1284,7 @@ mod tests {
                     "clips": [
                         clip(100, "Song Title #main-a-u-re", Some(1)),
                         clip(200, "ALT #translate-b-u", Some(2)),
+                        clip(300, "Countdown #timer", Some(3)),
                     ],
                 }
             ]
@@ -1252,6 +1341,7 @@ mod tests {
                         clip(400, "#bible-translate-a", Some(40)),
                         clip(401, "#bible-translate-b", Some(41)),
                         clip(500, "#bible-clear", None),
+                        clip(900, "#timer", Some(90)),
                     ],
                 }
             ]
@@ -1263,7 +1353,7 @@ mod tests {
             .mount(&server)
             .await;
 
-        for endpoint in &[1, 2, 10, 20, 30, 31, 40, 41] {
+        for endpoint in &[1, 2, 10, 20, 30, 31, 40, 41, 90] {
             let route = format!("/api/v1/parameter/by-id/{endpoint}");
             Mock::given(method("PUT"))
                 .and(path(route.as_str()))
@@ -1272,7 +1362,7 @@ mod tests {
                 .await;
         }
 
-        for clip_id in &[100, 101, 200, 201, 300, 301, 400, 401, 500] {
+        for clip_id in &[100, 101, 200, 201, 300, 301, 400, 401, 500, 900] {
             let route = format!("/api/v1/composition/clips/by-id/{clip_id}/connect");
             Mock::given(method("POST"))
                 .and(path(route.as_str()))
@@ -1393,6 +1483,7 @@ mod tests {
                         clip(400, "#bible-translate-a", Some(40)),
                         clip(401, "#bible-translate-b", Some(41)),
                         clip(500, "#bible-clear", None),
+                        clip(900, "#timer", Some(90)),
                     ],
                 }
             ]
@@ -1406,6 +1497,12 @@ mod tests {
 
         Mock::given(method("PUT"))
             .and(path("/api/v1/parameter/by-id/1"))
+            .respond_with(ResponseTemplate::new(200))
+            .mount(&server)
+            .await;
+
+        Mock::given(method("PUT"))
+            .and(path("/api/v1/parameter/by-id/90"))
             .respond_with(ResponseTemplate::new(200))
             .mount(&server)
             .await;
@@ -1472,6 +1569,105 @@ Line 2"
     }
 
     #[tokio::test]
+    async fn timer_updates_send_text_without_trigger() {
+        let server = MockServer::start().await;
+
+        let composition = serde_json::json!({
+            "layers": [
+                {
+                    "clips": [
+                        clip(100, "#main-a", Some(1)),
+                        clip(101, "#main-b", Some(2)),
+                        clip(200, "#translate-a", Some(10)),
+                        clip(201, "#translate-b", Some(20)),
+                        clip(300, "#bible-a", Some(30)),
+                        clip(301, "#bible-b", Some(31)),
+                        clip(400, "#bible-translate-a", Some(40)),
+                        clip(401, "#bible-translate-b", Some(41)),
+                        clip(500, "#bible-clear", None),
+                        clip(900, "#timer", Some(90)),
+                    ],
+                }
+            ]
+        });
+
+        Mock::given(method("GET"))
+            .and(path("/api/v1/composition"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(&composition))
+            .mount(&server)
+            .await;
+
+        Mock::given(method("PUT"))
+            .and(path("/api/v1/parameter/by-id/90"))
+            .respond_with(ResponseTemplate::new(200))
+            .mount(&server)
+            .await;
+
+        let addr = server.address();
+        let now = Utc::now();
+        let config = ResolumeHost::new(
+            ResolumeHostId::new(),
+            "Mock".into(),
+            addr.ip().to_string(),
+            addr.port(),
+            true,
+            now,
+            now,
+        );
+
+        let client = Client::builder()
+            .timeout(DEFAULT_TIMEOUT)
+            .build()
+            .expect("client");
+
+        let mut driver = HostDriver::new(client, config);
+        let status = Arc::new(RwLock::new(ResolumeConnectionSnapshot::disabled()));
+
+        driver.refresh_status(&status).await;
+
+        driver
+            .handle_timer(TimerFrame::new("05:00".to_string()), &status)
+            .await
+            .expect("initial timer update");
+
+        let mut requests = server.received_requests().await.expect("requests");
+        assert_eq!(
+            count_requests(&requests, "PUT", "/api/v1/parameter/by-id/90",),
+            1
+        );
+
+        driver
+            .handle_timer(TimerFrame::new("05:00".to_string()), &status)
+            .await
+            .expect("deduplicated timer update");
+
+        requests = server.received_requests().await.expect("requests");
+        assert_eq!(
+            count_requests(&requests, "PUT", "/api/v1/parameter/by-id/90",),
+            1
+        );
+
+        driver
+            .handle_timer(TimerFrame::new("59".to_string()), &status)
+            .await
+            .expect("second timer update");
+
+        requests = server.received_requests().await.expect("requests");
+        assert_eq!(
+            count_requests(&requests, "PUT", "/api/v1/parameter/by-id/90",),
+            2
+        );
+
+        assert!(requests.iter().any(|req| {
+            req.method.as_str() == "PUT"
+                && req.url.path() == "/api/v1/parameter/by-id/90"
+                && std::str::from_utf8(&req.body)
+                    .unwrap_or_default()
+                    .contains("59")
+        }));
+    }
+
+    #[tokio::test]
     async fn refreshes_mapping_after_cache_ttl_for_new_deck() {
         let server = MockServer::start().await;
 
@@ -1488,6 +1684,7 @@ Line 2"
                         clip(400, "#bible-translate-a", Some(40)),
                         clip(401, "#bible-translate-b", Some(41)),
                         clip(500, "#bible-clear", None),
+                        clip(900, "#timer", Some(90)),
                     ],
                 }
             ]
@@ -1506,6 +1703,7 @@ Line 2"
                         clip(600, "#bible-translate-a", Some(140)),
                         clip(601, "#bible-translate-b", Some(141)),
                         clip(700, "#bible-clear", None),
+                        clip(950, "#timer", Some(190)),
                     ],
                 }
             ]
@@ -1517,7 +1715,7 @@ Line 2"
             .mount(&server)
             .await;
 
-        for endpoint in [1, 2, 10, 20, 30, 31, 40, 41] {
+        for endpoint in [1, 2, 10, 20, 30, 31, 40, 41, 90] {
             let route = format!("/api/v1/parameter/by-id/{endpoint}");
             Mock::given(method("PUT"))
                 .and(path(route.as_str()))
@@ -1526,7 +1724,7 @@ Line 2"
                 .await;
         }
 
-        for clip_id in [100, 101, 200, 201, 300, 301, 400, 401, 500] {
+        for clip_id in [100, 101, 200, 201, 300, 301, 400, 401, 500, 900] {
             let route = format!("/api/v1/composition/clips/by-id/{clip_id}/connect");
             Mock::given(method("POST"))
                 .and(path(route.as_str()))
@@ -1574,7 +1772,7 @@ Line 2"
             .mount(&server)
             .await;
 
-        for endpoint in [101, 102, 110, 120, 130, 131, 140, 141] {
+        for endpoint in [101, 102, 110, 120, 130, 131, 140, 141, 190] {
             let route = format!("/api/v1/parameter/by-id/{endpoint}");
             Mock::given(method("PUT"))
                 .and(path(route.as_str()))
@@ -1583,7 +1781,7 @@ Line 2"
                 .await;
         }
 
-        for clip_id in [300, 301, 400, 401, 500, 600, 601, 700] {
+        for clip_id in [300, 301, 400, 401, 500, 600, 601, 700, 950] {
             let route = format!("/api/v1/composition/clips/by-id/{clip_id}/connect");
             Mock::given(method("POST"))
                 .and(path(route.as_str()))
