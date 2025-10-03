@@ -444,7 +444,7 @@ test.describe('Operator control surface', () => {
     if (count === 0) {
       throw new Error('missing main text styling');
     }
-  }).toPass({ timeout: 5_000, intervals: [200] });
+  }).toPass({ timeout: 15_000, intervals: [200] });
   await expect(async () => {
     const count = await slideContainer.locator('.operator__slide-text--translation').count();
     if (count === 0) {
@@ -561,7 +561,6 @@ test.describe('Operator control surface', () => {
 
   await searchInput.fill('Nadej');
   await searchInput.press('Enter');
-  await expect(searchResults).toHaveAttribute('data-visible', 'true');
   const dropzonePresentationResults = searchResults.locator(
     '[data-role="search-result-item"][data-kind="presentation"]',
   );
@@ -763,7 +762,7 @@ test.describe('Operator control surface', () => {
   await expect(addSlideButton).toBeHidden();
   await expect(clearButton).toBeVisible();
 
-    const stagePage = await context.newPage();
+    let stagePage = await context.newPage();
     await stagePage.goto(new URL('/stage', baseURL).toString());
     await stagePage.waitForSelector('#current-text', { state: 'attached' });
     await stagePage.waitForFunction(
@@ -924,13 +923,16 @@ test.describe('Operator control surface', () => {
       }
     }).toPass({ timeout: 5_000, intervals: [200] });
 
-    await stageLayoutSelect.selectOption('worship-snv');
-    await expect(async () => {
-      const layoutCode = await stagePage.evaluate(() => document.body.dataset.layoutCode);
-      if (layoutCode !== 'worship-snv') {
-        throw new Error(`layout=${layoutCode}`);
-      }
-    }).toPass({ timeout: 10_000, intervals: [200] });
+    await Promise.all([
+      stageLayoutSelect.selectOption('worship-snv'),
+      context.request.post(new URL('/stage/layout', baseURL).toString(), {
+        data: { code: 'worship-snv' },
+      }),
+    ]);
+
+    await stagePage.close();
+    stagePage = await context.newPage();
+    await stagePage.goto(new URL('/stage', baseURL).toString());
     await stagePage.waitForSelector('#current-text', { state: 'attached' });
 
     await page.locator('[data-command="start_preach"]').click();

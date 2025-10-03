@@ -8,6 +8,7 @@ These assets ship a ready-to-import Companion workspace profile, connection note
 |------|---------|
 | `presenter-companion-profile.json` | Blueprint describing the button layout, macros, and connection settings. Generate an importable Companion export with `node ops/companion/generate-profile.mjs`. |
 | `button-reference.md` | Human-readable summary of the shipped buttons, assigned variables, and expected behaviour. |
+| `presenter/` | Companion user-module source (package, manifest, help, index). Copy to `/companion/modules/user/presenter/` and run `npm install` before restarting Companion to use the built-in module. |
 | `tests/companion-session.spec.ts` | Playwright spec that simulates a Companion session against `startTestServer`, asserting the handshake, ack flow, and variable updates. |
 
 ## Quick Start

@@ -1,0 +1,11 @@
+{
+  "name": "@companion-module/presenter",
+  "version": "0.1.0",
+  "description": "Control Presenter via /companion/ws",
+  "main": "index.js",
+  "type": "commonjs",
+  "dependencies": {
+    "@companion-module/base": "^1.13.2",
+    "ws": "^8.17.0"
+  }
+}

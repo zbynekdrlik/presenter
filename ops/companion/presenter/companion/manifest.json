@@ -1,0 +1,22 @@
+{
+  "id": "presenter",
+  "name": "Presenter Companion WS",
+  "shortname": "presenter",
+  "description": "Control Presenter via the /companion/ws API",
+  "version": "0.1.0",
+  "license": "MIT",
+  "maintainers": [
+    { "name": "New Level Tech" }
+  ],
+  "legacyIds": [],
+  "runtime": {
+    "type": "node18",
+    "api": "nodejs-ipc",
+    "apiVersion": "1.13.2",
+    "entrypoint": "../index.js"
+  },
+  "manufacturer": "New Level Church",
+  "products": ["Presenter"],
+  "keywords": ["Presenter", "Worship", "Timers"],
+  "isPrerelease": false
+}

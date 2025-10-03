@@ -89,6 +89,7 @@ Set `PRESENTER_BACKUP_ROOT` (e.g., `/var/lib/presenter/backups`) before calling 
 ## Companion Automation Checklist
 
 - Generate the packaged Companion profile by running `node ops/companion/generate-profile.mjs`, then import the resulting file under `ops/companion/generated/` into your Companion workspace (v3.2+). It provisions a Generic Websocket instance aimed at `ws://presenter.dev.local:80/companion/ws` plus the default button pages.
+- To install the native Companion module, copy `ops/companion/presenter/` into `/companion/modules/user/presenter/` on the Companion host, run `npm install --prefix /companion/modules/user/presenter`, and restart the container. This eliminates the need for Generic WebSocket macros—the module handles the handshake and exposes variables/actions directly.
 - Update the hostname/port per environment, then paste the shared secret if `PRESENTER_COMPANION_TOKEN` is set on the Presenter host. Invalid or missing tokens immediately close the socket with code `4001`—Companion should display an alert.
 - Buttons ship with feedback bindings for `stage_current_main`, `stage_next_main`, `timer_countdown_state`, and `stage_countdown_remaining_seconds`. Keep those variables intact when cloning buttons so colour/state logic continues to work.
 - Enable Companion’s “Run Macro on Connection State” option and tie the provided `macro_presenter_alert` to the Generic Websocket instance so operators see a red panic indicator whenever `live_ws_connected` flips to false.
