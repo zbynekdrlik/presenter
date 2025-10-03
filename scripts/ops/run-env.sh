@@ -3,6 +3,8 @@ set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd "${SCRIPT_DIR}/../.." && pwd)"
+REPO_PARENT="$(cd "${REPO_ROOT}/.." && pwd)"
+SHARED_LIB_ROOT="${PRESENTER_LIBRARY_ROOT:-$REPO_PARENT/presenter-libraries}"
 
 # ensure rustup toolchain is available when running under systemd where PATH may exclude ~/.cargo/bin
 if [[ -f "$HOME/.cargo/env" ]]; then
@@ -35,7 +37,7 @@ case "$ENVIRONMENT" in
     export PRESENTER_DB_URL="${PRESENTER_DB_URL:-sqlite://$PRESENTER_DATA_ROOT/test/presenter_test.db}"
     export PRESENTER_PORT="${PRESENTER_PORT:-8081}"
     if [[ "${PRESENTER_RESET_DB:-1}" == "1" ]]; then
-      "$REPO_ROOT/scripts/dev/refresh-dev-data.sh" "${PRESENTER_LIBRARY_ROOT:-Propresenter library}"
+      "$REPO_ROOT/scripts/dev/refresh-dev-data.sh" "$SHARED_LIB_ROOT"
     fi
     exec cargo run -p presenter-server "$@"
     ;;

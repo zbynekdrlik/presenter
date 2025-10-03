@@ -8,6 +8,7 @@ test-results/
 .vscode/
 *.swp
 Propresenter library/
+Libraries/
 presenter_*.db
 presenter_*.db-shm
 presenter_*.db-wal

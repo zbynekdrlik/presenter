@@ -463,8 +463,15 @@ test.describe('Operator control surface', () => {
 
   const mainTokens = selection.currentText.split(/\s+/).filter(Boolean);
   const libraryTokens = selection.libraryName.split(/\s+/).filter(Boolean);
+  const sanitize = (value: string) => value.replace(/[.,;:!?]/g, '');
+  const searchTermCandidates = [...mainTokens, ...libraryTokens]
+    .map((token) => sanitize(token))
+    .filter((token) => token.length > 0);
+  const searchTerm =
+    searchTermCandidates.find((token) => token.length >= 4) ??
+    searchTermCandidates[0] ??
+    'Jezis';
   if (mainTokens.length >= 1) {
-    const sanitize = (value: string) => value.replace(/[.,;:!?]/g, '');
     const first = sanitize(mainTokens[0]);
     const second = sanitize(mainTokens[1] ?? '');
     const libraryToken = sanitize(libraryTokens[0] ?? selection.libraryName);
@@ -478,7 +485,7 @@ test.describe('Operator control surface', () => {
     await page.locator('[data-role="global-search-clear"]').click();
   }
 
-  await searchInput.fill('Nadej');
+  await searchInput.fill(searchTerm);
   await searchInput.press('Enter');
   await expect(searchResults).toHaveAttribute('data-visible', 'true');
   const slideResult = searchResults
@@ -494,7 +501,7 @@ test.describe('Operator control surface', () => {
     );
   }
 
-  await searchInput.fill('Nadej');
+  await searchInput.fill(searchTerm);
   await searchInput.press('Enter');
   await expect(searchResults).toHaveAttribute('data-visible', 'true');
   const presentationResult = searchResults
@@ -508,7 +515,7 @@ test.describe('Operator control surface', () => {
   await expect.poll(async () => searchInput.inputValue()).toBe('');
   await expect(searchResults).toHaveAttribute('data-visible', 'false');
 
-  await searchInput.fill('Nadej');
+  await searchInput.fill(searchTerm);
   await searchInput.press('Enter');
   await expect(searchResults).toHaveAttribute('data-visible', 'true');
   const searchPresentationResults = searchResults.locator('[data-role="search-result-item"][data-kind="presentation"]');
@@ -559,7 +566,7 @@ test.describe('Operator control surface', () => {
     expect(current).toBeGreaterThanOrEqual(afterAppendCount);
   }).toPass({ timeout: 5_000, intervals: [200] });
 
-  await searchInput.fill('Nadej');
+  await searchInput.fill(searchTerm);
   await searchInput.press('Enter');
   await expect(searchResults).toHaveAttribute('data-visible', 'true');
   const dropzonePresentationResults = searchResults.locator(

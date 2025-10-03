@@ -37,7 +37,7 @@ presenter/
 │   ├── presenter-core     # Domain logic + unit tests
 │   └── presenter-server   # HTTP/WebSocket entrypoint (axum)
 ├── docs/                  # Functional specs and ADRs
-└── Propresenter library/  # Source assets slated for import pipeline
+└── scripts/               # Dev and ops helpers
 ```
 
 ## Contributing
@@ -48,8 +48,24 @@ Internal project. Please coordinate changes via issues and planning sessions bef
 ### Prerequisites
 
 - Docker Engine 24+ with Compose V2 (`docker compose` CLI).
-- Node.js 20+ for Playwright and end-to-end tests (already required by `package.json`).
-- The Rust toolchain remains useful for local builds and IDE integration, but daily demo servers now run inside Docker.
+- Node.js 20+ (we standardise on Node 22.x from the NodeSource apt repo).
+- Run the one-time bootstrap script to install compilers, system libraries, Playwright browsers, and the Rust toolchain:
+
+  ```bash
+  ./scripts/ops/bootstrap-host.sh
+  ```
+
+  Re-run it on any fresh host before attempting builds or tests.
+
+#### Syncing the ProPresenter bundle
+
+The sanitised production libraries live outside each repository checkout. By default we keep a sibling directory named `../presenter-libraries` (override with `PRESENTER_LIBRARY_ROOT`). After cleaning a new export, mirror it into that shared directory, for example:
+
+```
+rsync -a /path/to/exported/Libraries/ "$(cd .. && pwd)/presenter-libraries/"
+```
+
+Keeping this location current ensures every `presenter-dev*` checkout imports the same data when pipelines run.
 
 ### Launch the landing page (port 80)
 
@@ -69,7 +85,8 @@ Re-running the script refreshes the container with the latest landing page asset
 
 - Each demo uses its own Compose project (`presenter-<slug>`), so containers, volumes, and networks never collide.
 - Host ports default to a deterministic high value (e.g. `http://localhost:18042/`). Override with `--port 19001` if you prefer a specific port.
-- Presentation imports default to `Propresenter library/` and persisted data lives under `${XDG_DATA_HOME:-$HOME/.local/share}/presenter-demos/data/<slug>/`.
+- Presentation imports default to `${PRESENTER_LIBRARY_ROOT:-$(cd .. && pwd)/presenter-libraries}` (shared sanitised bundle available to all dev checkouts) and persisted data lives under `${XDG_DATA_HOME:-$HOME/.local/share}/presenter-demos/data/<slug>/`.
+- During import the pipeline now preserves intentionally blank slides and strips the single-dot placeholder that ProPresenter requires on otherwise empty text boxes.
 - A manifest is written to `${XDG_DATA_HOME:-$HOME/.local/share}/presenter-demos/manifests/<slug>.json`; the gateway watches this directory to populate the landing page.
 
 Stop a demo when you are finished:
