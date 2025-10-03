@@ -3,8 +3,9 @@
 (function () {
   const libraries = __LIBRARIES__;
   const playlistsData = __PLAYLISTS__;
-  const timersOverview = __TIMERS__
-;
+  const timersOverview = __TIMERS__;
+  const stageLayouts = __STAGE_LAYOUTS__;
+  const stageLayoutCodeSeed = "__STAGE_LAYOUT_CODE__";
   const DEFAULT_LINE_LIMIT = 32;
   const MAX_SLIDE_LINES = 2;
   const DEFAULT_CATALOG_HEIGHT = 320;
@@ -78,6 +79,11 @@
     stageConnections: new Map(),
     stageBaseline: new Set(),
     stageMonitorRefreshTimer: null,
+    stageLayouts: Array.isArray(stageLayouts) ? stageLayouts : [],
+    stageLayoutCode: typeof stageLayoutCodeSeed === 'string' ? stageLayoutCodeSeed : '',
+    stageLayoutLoading: false,
+    countdownInputActive: false,
+    countdownInputDirty: false,
   };
 
   const STAGE_MONITOR_BASELINE_KEY = 'presenter.stageMonitorBaseline';
@@ -106,6 +112,12 @@
     viewButtons: document.querySelectorAll('[data-role="view-toggle"]'),
     modeButtons: document.querySelectorAll('[data-role="mode-toggle"]'),
     countdownInput: document.querySelector('[data-role="countdown-target-input"]'),
+    timerOverlayOpen: document.querySelector('[data-role="timer-overlay-open"]'),
+    timerOverlayCopy: document.querySelector('[data-role="timer-overlay-copy"]'),
+    countdownStart: document.querySelector('[data-role="countdown-start"]'),
+    countdownOffsetMinus: document.querySelector('[data-role="countdown-offset-minus"]'),
+    countdownOffsetPlus: document.querySelector('[data-role="countdown-offset-plus"]'),
+    stageLayoutSelect: document.querySelector('[data-role="stage-layout-select"]'),
     timerCards: document.querySelector('[data-role="timer-cards"]'),
     libraryModal: document.querySelector('[data-role="library-modal"]'),
     libraryModalList: document.querySelector('[data-role="library-modal-list"]'),
@@ -176,6 +188,7 @@
     .map((playlist) => normalisePlaylist(playlist))
     .filter(Boolean);
   indexPlaylists();
+  populateStageLayoutSelect();
 
   function updateLineLimitStyle() {
     const target = document.body || document.documentElement;
@@ -185,6 +198,103 @@
   }
 
   updateLineLimitStyle();
+
+  function stageLayoutByCode(code) {
+    return state.stageLayouts.find((layout) => layout && layout.code === code) || null;
+  }
+
+  function applyStageLayoutSelection(code) {
+    if (typeof code !== 'string') {
+      return;
+    }
+    state.stageLayoutCode = code;
+    if (els.stageLayoutSelect) {
+      const select = els.stageLayoutSelect;
+      const normalized = code.toLowerCase();
+      for (const option of Array.from(select.options)) {
+        option.selected = option.value.toLowerCase() === normalized;
+      }
+    }
+    const layout = stageLayoutByCode(code);
+    if (layout) {
+      const title = `${layout.name} – ${layout.description}`;
+      if (els.stageLayoutSelect) {
+        els.stageLayoutSelect.title = title;
+      }
+      window.__presenterStageLayout = layout.code;
+    }
+  }
+
+  function populateStageLayoutSelect() {
+    if (!els.stageLayoutSelect) return;
+    const select = els.stageLayoutSelect;
+    const existing = new Set();
+    state.stageLayouts.forEach((layout) => {
+      if (!layout || !layout.code) return;
+      existing.add(layout.code);
+      if (!Array.from(select.options).some((option) => option.value === layout.code)) {
+        const option = document.createElement('option');
+        option.value = layout.code;
+        option.textContent = layout.name || layout.code;
+        option.title = layout.description || '';
+        select.appendChild(option);
+      }
+    });
+    Array.from(select.options).forEach((option) => {
+      if (!existing.has(option.value)) {
+        option.remove();
+      }
+    });
+    applyStageLayoutSelection(state.stageLayoutCode || (select.options[0]?.value ?? ''));
+  }
+
+  async function submitStageLayout(code) {
+    const trimmed = (code || '').trim();
+    if (!trimmed || state.stageLayoutLoading) {
+      return;
+    }
+    state.stageLayoutLoading = true;
+    if (els.stageLayoutSelect) {
+      els.stageLayoutSelect.disabled = true;
+    }
+    try {
+      const response = await apiFetch('/stage/layout', {
+        method: 'POST',
+        body: JSON.stringify({ code: trimmed }),
+      });
+      if (response && response.code) {
+        applyStageLayoutSelection(response.code);
+      }
+    } catch (error) {
+      console.error('Failed to set stage layout', error);
+      showToast('Failed to switch stage output', 'error');
+      applyStageLayoutSelection(state.stageLayoutCode);
+    } finally {
+      state.stageLayoutLoading = false;
+      if (els.stageLayoutSelect) {
+        els.stageLayoutSelect.disabled = false;
+      }
+    }
+  }
+
+  const clockFormatter = typeof Intl !== 'undefined' && typeof Intl.DateTimeFormat === 'function'
+    ? new Intl.DateTimeFormat('sk-SK', { hour: '2-digit', minute: '2-digit' })
+    : null;
+
+  function formatClock(date) {
+    if (!(date instanceof Date)) {
+      return '';
+    }
+    if (Number.isNaN(date.getTime())) {
+      return '';
+    }
+    if (clockFormatter) {
+      return clockFormatter.format(date);
+    }
+    const hours = String(date.getHours()).padStart(2, '0');
+    const minutes = String(date.getMinutes()).padStart(2, '0');
+    return `${hours}:${minutes}`;
+  }
 
   function hideSearchResults() {
     if (els.searchResults) {
@@ -3104,8 +3214,14 @@ function updateCardWarnings(card) {
       });
       state.timers = response;
       applyTimers(response);
+      if (command === 'set_countdown_target') {
+        state.countdownInputDirty = false;
+      }
     } catch (error) {
       console.error('Timer command failed', error);
+      if (command === 'set_countdown_target') {
+        state.countdownInputDirty = true;
+      }
       showToast('Timer command failed', 'error');
     }
   }
@@ -3121,22 +3237,43 @@ function updateCardWarnings(card) {
     const preachState = formatTimerState(preach.state || 'idle');
     const preachSeconds = preach.secondsElapsed ?? preach.seconds_elapsed ?? 0;
 
-    const countdownStateEl = qs('#countdown-state');
     const countdownValueEl = qs('#countdown-value');
     const countdownTargetEl = qs('#countdown-target');
-    if (countdownStateEl) {
-      countdownStateEl.textContent = countdownState;
-      window.__presenterCountdownDisplay = countdownState;
-    }
+    window.__presenterCountdownDisplay = countdownState;
     if (countdownValueEl) {
       countdownValueEl.textContent = formatSeconds(countdownSeconds);
     }
-    if (countdownTargetEl && target) {
+    let targetDate = null;
+    if (target) {
       try {
-        const targetDate = new Date(target);
-        countdownTargetEl.textContent = `Target ${targetDate.toLocaleTimeString(undefined, { hour: '2-digit', minute: '2-digit' })}`;
+        targetDate = new Date(target);
       } catch (error) {
+        targetDate = null;
+        if (countdownTargetEl) {
+          countdownTargetEl.textContent = `Target ${target}`;
+        }
+      }
+    }
+    if (countdownTargetEl) {
+      if (targetDate instanceof Date && !Number.isNaN(targetDate.getTime())) {
+        countdownTargetEl.textContent = `Target ${formatClock(targetDate)}`;
+      } else if (target) {
         countdownTargetEl.textContent = `Target ${target}`;
+      } else {
+        countdownTargetEl.textContent = 'Target —';
+      }
+    }
+    if (
+      els.countdownInput &&
+      !state.countdownInputActive &&
+      !state.countdownInputDirty
+    ) {
+      if (targetDate instanceof Date && !Number.isNaN(targetDate.getTime())) {
+        const hours = String(targetDate.getHours()).padStart(2, '0');
+        const minutes = String(targetDate.getMinutes()).padStart(2, '0');
+        els.countdownInput.value = `${hours}:${minutes}`;
+      } else {
+        els.countdownInput.value = '';
       }
     }
 
@@ -3198,6 +3335,12 @@ function updateCardWarnings(card) {
             applyTimers(snapshot.timers);
           }
           renderStageStatus();
+        } else if (payload.type === 'stage_layout' || payload.type === 'StageLayout') {
+          const nextCode = String(payload.code || '').trim();
+          if (nextCode.length > 0) {
+            state.stageLayoutCode = nextCode;
+            applyStageLayoutSelection(nextCode);
+          }
         } else if (payload.type === 'stage_connection' || payload.type === 'StageConnection') {
           handleStageConnectionSnapshot(payload.snapshot || payload);
         } else if (payload.type === 'bible' || payload.type === 'Bible') {
@@ -4297,30 +4440,134 @@ function updateCardWarnings(card) {
     updateCardWarnings(card);
   }
 
+  function parseCountdownTarget(rawValue) {
+    const trimmed = (rawValue || '').replace(/\s+/g, '');
+    if (!trimmed) {
+      return null;
+    }
+
+    let hours = 0;
+    let minutes = 0;
+    let seconds = 0;
+
+    if (trimmed.includes(':')) {
+      const parts = trimmed.split(':').map((part) => part.trim()).filter(Boolean);
+      if (parts.length < 2 || parts.length > 3) {
+        return null;
+      }
+      hours = Number(parts[0]);
+      minutes = Number(parts[1]);
+      seconds = parts.length === 3 ? Number(parts[2]) : 0;
+    } else if (/^\d+$/.test(trimmed)) {
+      if (trimmed.length <= 2) {
+        minutes = Number(trimmed);
+      } else if (trimmed.length <= 4) {
+        minutes = Number(trimmed.slice(-2));
+        hours = Number(trimmed.slice(0, trimmed.length - 2));
+      } else {
+        return null;
+      }
+    } else {
+      return null;
+    }
+
+    if (
+      !Number.isFinite(hours) ||
+      !Number.isFinite(minutes) ||
+      !Number.isFinite(seconds) ||
+      hours < 0 ||
+      hours > 23 ||
+      minutes < 0 ||
+      minutes > 59 ||
+      seconds < 0 ||
+      seconds > 59
+    ) {
+      return null;
+    }
+
+    const now = new Date();
+    const target = new Date(now);
+    target.setMilliseconds(0);
+    target.setHours(hours, minutes, seconds, 0);
+    if (target.getTime() <= now.getTime()) {
+      target.setDate(target.getDate() + 1);
+    }
+
+    const display = `${String(hours).padStart(2, '0')}:${String(minutes).padStart(2, '0')}`;
+    return { target, display };
+  }
+
+  async function submitCountdownTarget() {
+    if (!els.countdownInput) {
+      showToast('Countdown input missing', 'error');
+      return false;
+    }
+    const result = parseCountdownTarget(els.countdownInput.value);
+    if (!result) {
+      showToast('Invalid time format', 'error');
+      return false;
+    }
+    els.countdownInput.value = result.display;
+    state.countdownInputDirty = false;
+    await executeTimerCommand('set_countdown_target', { target: result.target.toISOString() });
+    return true;
+  }
+
   function handleTimerButtonClick(event) {
     const button = event.target.closest('[data-command]');
     if (!button) return;
     const command = button.dataset.command;
     if (!command) return;
     if (command === 'set_countdown_target') {
-      if (!els.countdownInput) {
-        showToast('Countdown input missing', 'error');
-        return;
-      }
-      const value = els.countdownInput.value;
-      if (!value) {
-        showToast('Select a target time first', 'warning');
-        return;
-      }
-      const date = new Date(value);
-      if (Number.isNaN(date.getTime())) {
-        showToast('Invalid datetime value', 'error');
-        return;
-      }
-      executeTimerCommand('set_countdown_target', { target: date.toISOString() });
+      submitCountdownTarget();
       return;
     }
     executeTimerCommand(command, {});
+  }
+
+  async function startCountdownFromInput() {
+    const currentTargetIso = state.timers?.countdownToStart?.target || null;
+    const updated = await submitCountdownTarget();
+    if (!updated && !currentTargetIso) {
+      showToast('Set a target time first', 'warning');
+      return;
+    }
+    await executeTimerCommand('start_countdown', {});
+  }
+
+  async function offsetCountdown(minutesDelta) {
+    const overview = state.timers?.countdownToStart || state.timers?.countdown_to_start;
+    let targetDate = null;
+    if (overview && overview.target) {
+      const parsed = new Date(overview.target);
+      if (!Number.isNaN(parsed.getTime())) {
+        targetDate = parsed;
+      }
+    }
+
+    if (!targetDate) {
+      const parsedInput = parseCountdownTarget(els.countdownInput ? els.countdownInput.value : '');
+      if (!parsedInput) {
+        showToast('Set a target time first', 'warning');
+        return;
+      }
+      targetDate = parsedInput.target;
+    }
+
+    targetDate = new Date(targetDate.getTime());
+    targetDate.setMinutes(targetDate.getMinutes() + minutesDelta);
+    targetDate.setSeconds(0, 0);
+    if (targetDate.getTime() <= Date.now()) {
+      targetDate.setDate(targetDate.getDate() + 1);
+    }
+
+    if (els.countdownInput && !state.countdownInputActive) {
+      const hours = String(targetDate.getHours()).padStart(2, '0');
+      const minutes = String(targetDate.getMinutes()).padStart(2, '0');
+      els.countdownInput.value = `${hours}:${minutes}`;
+    }
+
+    await executeTimerCommand('set_countdown_target', { target: targetDate.toISOString() });
   }
 
   function handleModeToggle(event) {
@@ -4398,6 +4645,84 @@ function updateCardWarnings(card) {
       els.presentationEditModal.addEventListener('click', (event) => {
         if (event.target === els.presentationEditModal && !state.presentationEditSubmitting) {
           closePresentationEdit();
+        }
+      });
+    }
+    if (els.countdownInput) {
+      els.countdownInput.addEventListener('focus', () => {
+        state.countdownInputActive = true;
+      });
+      els.countdownInput.addEventListener('blur', () => {
+        state.countdownInputActive = false;
+        if (!state.countdownInputDirty && state.timers) {
+          applyTimers(state.timers);
+        }
+      });
+      els.countdownInput.addEventListener('input', () => {
+        state.countdownInputDirty = true;
+      });
+      els.countdownInput.addEventListener('keydown', (event) => {
+        if (event.key === 'Enter') {
+          event.preventDefault();
+          submitCountdownTarget();
+        }
+      });
+    }
+    if (els.countdownStart) {
+      els.countdownStart.addEventListener('click', (event) => {
+        event.preventDefault();
+        startCountdownFromInput();
+      });
+    }
+    if (els.countdownOffsetMinus) {
+      els.countdownOffsetMinus.addEventListener('click', (event) => {
+        event.preventDefault();
+        offsetCountdown(-5);
+      });
+    }
+    if (els.countdownOffsetPlus) {
+      els.countdownOffsetPlus.addEventListener('click', (event) => {
+        event.preventDefault();
+        offsetCountdown(5);
+      });
+    }
+    if (els.stageLayoutSelect) {
+      els.stageLayoutSelect.addEventListener('change', (event) => {
+        submitStageLayout(event.target.value || '');
+      });
+      els.stageLayoutSelect.addEventListener('keydown', (event) => {
+        if (event.key === 'Enter') {
+          event.preventDefault();
+          submitStageLayout(event.target.value || '');
+        }
+      });
+    }
+    if (els.timerOverlayOpen) {
+      els.timerOverlayOpen.addEventListener('click', (event) => {
+        event.preventDefault();
+        const url = new URL('/overlays/timer', window.location.href);
+        window.open(url.toString(), '_blank', 'noopener');
+      });
+    }
+    if (els.timerOverlayCopy) {
+      els.timerOverlayCopy.addEventListener('click', async (event) => {
+        event.preventDefault();
+        const url = new URL('/overlays/timer', window.location.href).toString();
+        try {
+          if (navigator.clipboard && navigator.clipboard.writeText) {
+            await navigator.clipboard.writeText(url);
+          } else {
+            const temp = document.createElement('input');
+            temp.value = url;
+            document.body.appendChild(temp);
+            temp.select();
+            document.execCommand('copy');
+            document.body.removeChild(temp);
+          }
+          showToast('Overlay link copied', 'success');
+        } catch (copyError) {
+          console.error('Failed to copy overlay URL', copyError);
+          showToast('Failed to copy link', 'error');
         }
       });
     }

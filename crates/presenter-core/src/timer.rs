@@ -190,7 +190,13 @@ impl TimersState {
     ) -> Result<(), TimerError> {
         match command {
             TimerCommand::SetCountdownTarget { target } => {
+                let previous_state = self.countdown.state;
                 self.countdown.set_target(*target)?;
+                match previous_state {
+                    TimerState::Running => self.countdown.start(),
+                    TimerState::Paused => self.countdown.state = TimerState::Paused,
+                    _ => {}
+                }
             }
             TimerCommand::StartCountdown => {
                 self.countdown.start();

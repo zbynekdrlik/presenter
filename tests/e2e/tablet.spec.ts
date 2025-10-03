@@ -241,14 +241,18 @@ test('tablet operator can trigger and edit slide content', async ({ page, contex
   );
   await slideButton.waitFor({ state: 'visible' });
 
+  await page.request.post(new URL('/stage/layout', baseURL).toString(), {
+    data: { code: 'worship-snv' },
+  });
+
   const stagePage = await context.newPage();
-  await stagePage.goto(new URL('/stage/worship-snv', baseURL).toString());
+  await stagePage.goto(new URL('/stage', baseURL).toString());
   await stagePage.waitForSelector('#current-text', { state: 'attached' });
 
   await slideButton.click();
   await page.waitForTimeout(500);
   await expect(async () => {
-    const snapshotResponse = await page.request.get(new URL('/stage/snapshots/worship-snv', baseURL).toString(), {
+    const snapshotResponse = await page.request.get(new URL('/stage/snapshot', baseURL).toString(), {
       timeout: 15_000,
     });
     if (!snapshotResponse.ok()) {

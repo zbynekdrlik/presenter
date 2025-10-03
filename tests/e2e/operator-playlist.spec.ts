@@ -146,7 +146,10 @@ test('allows managing playlist entries while in live mode', async ({ page }) => 
 });
 
 test('stage display status shows connection and latency', async ({ page }) => {
-  await page.goto(new URL('/stage/worship-snv', baseURL).toString(), {
+  await page.request.post(new URL('/stage/layout', baseURL).toString(), {
+    data: { code: 'worship-snv' },
+  });
+  await page.goto(new URL('/stage', baseURL).toString(), {
     waitUntil: 'domcontentloaded',
   });
 
