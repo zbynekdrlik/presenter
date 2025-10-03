@@ -1,6 +1,6 @@
 use std::path::PathBuf;
 
-use presenter_importer::ProPresenterImporter;
+use presenter_importer::{default_library_root, ProPresenterImporter};
 use presenter_persistence::{DatabaseSettings, Repository};
 
 #[tokio::main]
@@ -10,7 +10,7 @@ async fn main() -> anyhow::Result<()> {
     let root = std::env::args()
         .nth(1)
         .map(PathBuf::from)
-        .unwrap_or_else(|| PathBuf::from("Propresenter library"));
+        .unwrap_or_else(default_library_root);
 
     let repo = Repository::connect(&DatabaseSettings::new(&db_url)).await?;
     let importer = ProPresenterImporter::new(&repo);

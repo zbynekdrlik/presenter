@@ -2,12 +2,10 @@ use std::path::PathBuf;
 use std::{env, process};
 
 use anyhow::{Context, Result};
-use presenter_importer::ProPresenterImporter;
+use presenter_importer::{default_library_root, ProPresenterImporter};
 use presenter_persistence::{DatabaseSettings, Repository};
 
 const DEFAULT_DB_URL: &str = "sqlite://presenter_dev.db";
-const DEFAULT_ROOT: &str = "Propresenter library";
-
 #[derive(Debug)]
 struct CliConfig {
     root: PathBuf,
@@ -17,7 +15,7 @@ struct CliConfig {
 impl CliConfig {
     fn parse() -> Result<Self> {
         let mut args = env::args().skip(1);
-        let mut root = PathBuf::from(DEFAULT_ROOT);
+        let mut root = default_library_root();
         let mut purge = true;
 
         while let Some(arg) = args.next() {
@@ -54,7 +52,7 @@ fn print_usage() {
     eprintln!("  -h, --help         Show this help message");
     eprintln!("");
     eprintln!(
-        "When ROOT_PATH is supplied as a positional argument it overrides --root, e.g.\n  import_propresenter /data/PropPresenter",
+        "When ROOT_PATH is supplied as a positional argument it overrides --root, e.g.\n  import_propresenter /home/youruser/propresenter-libraries",
     );
 }
 

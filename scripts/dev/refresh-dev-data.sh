@@ -3,8 +3,10 @@ set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd "${SCRIPT_DIR}/../.." && pwd)"
+REPO_PARENT="$(cd "${REPO_ROOT}/.." && pwd)"
+DEFAULT_LIB_ROOT="${PRESENTER_LIBRARY_ROOT:-${REPO_PARENT}/presenter-libraries}"
 export PRESENTER_DB_URL="${PRESENTER_DB_URL:-sqlite://$REPO_ROOT/var/data/dev/presenter_dev.db}"
-ROOT_DIR="${1:-Propresenter library}"
+ROOT_DIR="${1:-$DEFAULT_LIB_ROOT}"
 
 if [[ "$PRESENTER_DB_URL" == sqlite://* ]]; then
   db_path="${PRESENTER_DB_URL#sqlite://}"

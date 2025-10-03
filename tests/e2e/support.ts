@@ -1,6 +1,7 @@
 import { spawn, type ChildProcessWithoutNullStreams } from 'child_process';
 import { once } from 'events';
 import http from 'http';
+import path from 'path';
 import type { AddressInfo } from 'net';
 import type { TestInfo } from '@playwright/test';
 
@@ -60,7 +61,11 @@ export function runShell(command: string, extraEnv: NodeJS.ProcessEnv = {}): Pro
   });
 }
 
-export async function refreshDevData(dbUrl: string, root = 'Propresenter library') {
+const DEFAULT_LIBRARY_ROOT =
+  process.env.PRESENTER_LIBRARY_ROOT ??
+  path.resolve(REPO_ROOT, '..', 'presenter-libraries');
+
+export async function refreshDevData(dbUrl: string, root = DEFAULT_LIBRARY_ROOT) {
   await runShell(`PRESENTER_DB_URL=${dbUrl} ./scripts/dev/refresh-dev-data.sh "${root}"`, {
     PRESENTER_DB_URL: dbUrl,
   });
