@@ -86,6 +86,14 @@ Set `PRESENTER_BACKUP_ROOT` (e.g., `/var/lib/presenter/backups`) before calling 
    ```
 5. Confirm health checks (`/healthz`) and stage display latency (<100 ms) from a client machine.
 
+## Companion Automation Checklist
+
+- Generate the packaged Companion profile by running `node ops/companion/generate-profile.mjs`, then import the resulting file under `ops/companion/generated/` into your Companion workspace (v3.2+). It provisions a Generic Websocket instance aimed at `ws://presenter.dev.local:80/companion/ws` plus the default button pages.
+- Update the hostname/port per environment, then paste the shared secret if `PRESENTER_COMPANION_TOKEN` is set on the Presenter host. Invalid or missing tokens immediately close the socket with code `4001`—Companion should display an alert.
+- Buttons ship with feedback bindings for `stage_current_main`, `stage_next_main`, `timer_countdown_state`, and `stage_countdown_remaining_seconds`. Keep those variables intact when cloning buttons so colour/state logic continues to work.
+- Enable Companion’s “Run Macro on Connection State” option and tie the provided `macro_presenter_alert` to the Generic Websocket instance so operators see a red panic indicator whenever `live_ws_connected` flips to false.
+- After modifying Presenter commands or adding new cues, run `npm run test:playwright -- --grep @companion` to exercise the simulated Companion session and verify acks/variable updates still flow end-to-end.
+
 ## Troubleshooting Checklist
 
 - **Service fails to start on port 80:** ensure the unit runs as a user with `CAP_NET_BIND_SERVICE`. The templated unit already applies this capability; if you override it, re-add `AmbientCapabilities=CAP_NET_BIND_SERVICE`.

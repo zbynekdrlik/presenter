@@ -1,0 +1,268 @@
+{
+  "schemaVersion": 1,
+  "connection": {
+    "id": "presenter",
+    "module": "generic-websocket",
+    "label": "Presenter",
+    "host": "presenter.dev.local",
+    "port": 80,
+    "path": "/companion/ws",
+    "secure": false,
+    "autoReconnectMs": 2000,
+    "token": ""
+  },
+  "macros": [
+    {
+      "id": "macro_presenter_alert",
+      "name": "Presenter Socket Alert",
+      "description": "Lights the panic button and posts an alert when live_ws_connected is false or a command errors.",
+      "steps": [
+        {
+          "type": "feedback",
+          "target": "button",
+          "page": 2,
+          "bank": 4,
+          "style": {
+            "bgcolor": "ff0000",
+            "color": "000000",
+            "text": "ALERT"
+          }
+        },
+        {
+          "type": "notification",
+          "level": "error",
+          "message": "Presenter Companion link dropped"
+        }
+      ]
+    },
+    {
+      "id": "macro_presenter_offset_plus",
+      "name": "Countdown Offset +5",
+      "description": "Adds five minutes to the current countdown target and resends timer.set_countdown_target.",
+      "script": "offsetCountdown(5)"
+    },
+    {
+      "id": "macro_presenter_offset_minus",
+      "name": "Countdown Offset -5",
+      "description": "Subtracts five minutes from the current countdown target and resends timer.set_countdown_target.",
+      "script": "offsetCountdown(-5)"
+    }
+  ],
+  "buttons": [
+    {
+      "page": 1,
+      "bank": 1,
+      "label": "Countdown\nStart",
+      "command": {
+        "name": "timer.start_countdown",
+        "payload": {}
+      },
+      "feedbacks": [
+        {
+          "type": "equals",
+          "variable": "timer_countdown_state",
+          "value": "running",
+          "color": "00ff00"
+        }
+      ]
+    },
+    {
+      "page": 1,
+      "bank": 2,
+      "label": "Countdown\nPause",
+      "command": {
+        "name": "timer.pause_countdown",
+        "payload": {}
+      },
+      "feedbacks": [
+        {
+          "type": "equals",
+          "variable": "timer_countdown_state",
+          "value": "paused",
+          "color": "ffaa00"
+        }
+      ]
+    },
+    {
+      "page": 1,
+      "bank": 3,
+      "label": "Countdown\nReset",
+      "command": {
+        "name": "timer.reset_countdown",
+        "payload": {}
+      },
+      "feedbacks": [
+        {
+          "type": "equals",
+          "variable": "timer_countdown_state",
+          "value": "idle",
+          "color": "ff2222"
+        }
+      ]
+    },
+    {
+      "page": 1,
+      "bank": 4,
+      "label": "+5 min",
+      "macro": "macro_presenter_offset_plus",
+      "feedbacks": [
+        {
+          "type": "progress",
+          "variable": "stage_countdown_remaining_seconds",
+          "range": {
+            "max": 3600
+          }
+        }
+      ]
+    },
+    {
+      "page": 1,
+      "bank": 5,
+      "label": "-5 min",
+      "macro": "macro_presenter_offset_minus",
+      "feedbacks": [
+        {
+          "type": "progress",
+          "variable": "stage_countdown_remaining_seconds",
+          "range": {
+            "max": 3600
+          }
+        }
+      ]
+    },
+    {
+      "page": 1,
+      "bank": 6,
+      "label": "Set HH:MM",
+      "command": {
+        "name": "timer.set_countdown_target",
+        "payload": {
+          "fromField": "countdown_target_text"
+        }
+      },
+      "feedbacks": []
+    },
+    {
+      "page": 1,
+      "bank": 7,
+      "label": "Preach\nStart",
+      "command": {
+        "name": "timer.start_preach",
+        "payload": {}
+      },
+      "feedbacks": []
+    },
+    {
+      "page": 1,
+      "bank": 8,
+      "label": "Preach\nReset",
+      "command": {
+        "name": "timer.reset_preach",
+        "payload": {}
+      },
+      "feedbacks": []
+    },
+    {
+      "page": 1,
+      "bank": 9,
+      "label": "Remaining",
+      "display": {
+        "variable": "stage_countdown_remaining_seconds"
+      },
+      "feedbacks": []
+    },
+    {
+      "page": 2,
+      "bank": 1,
+      "label": "Stage\nClear",
+      "command": {
+        "name": "stage.set",
+        "payload": {
+          "presentationId": null,
+          "currentSlideId": null,
+          "nextSlideId": null
+        }
+      },
+      "feedbacks": []
+    },
+    {
+      "page": 2,
+      "bank": 2,
+      "label": "Next\nSlide",
+      "command": {
+        "name": "stage.set",
+        "payload": {
+          "presentationId": "$(presenter:active_presentation_id)",
+          "currentSlideId": "$(presenter:next_slide_id)",
+          "nextSlideId": null
+        }
+      },
+      "feedbacks": [
+        {
+          "type": "text",
+          "variable": "stage_next_main"
+        }
+      ]
+    },
+    {
+      "page": 2,
+      "bank": 3,
+      "label": "Blank\nOutputs",
+      "command": {
+        "name": "stage.set",
+        "payload": {
+          "blank": true
+        }
+      },
+      "feedbacks": []
+    },
+    {
+      "page": 2,
+      "bank": 4,
+      "label": "Panic",
+      "macro": "macro_presenter_alert",
+      "feedbacks": [
+        {
+          "type": "equals",
+          "variable": "live_ws_connected",
+          "value": false,
+          "color": "ff0000"
+        }
+      ]
+    },
+    {
+      "page": 2,
+      "bank": 5,
+      "label": "Bible\nTrigger",
+      "command": {
+        "name": "bible.trigger",
+        "payload": {
+          "translation": "KJV",
+          "book": "John",
+          "chapter": 3,
+          "verseStart": 16
+        }
+      },
+      "feedbacks": [
+        {
+          "type": "text",
+          "variable": "bible_reference"
+        }
+      ]
+    },
+    {
+      "page": 2,
+      "bank": 6,
+      "label": "Bible\nClear",
+      "command": {
+        "name": "bible.clear",
+        "payload": {}
+      },
+      "feedbacks": []
+    }
+  ],
+  "scripts": {
+    "offsetCountdown": "function offsetCountdown(deltaMinutes) {\n  const now = Date.now();\n  const current = Number(globalVars.get('stage_countdown_remaining_seconds'));\n  const target = Number.isFinite(current) && current > 0\n    ? now + current * 1000\n    : now;\n  const adjusted = new Date(target + deltaMinutes * 60 * 1000);\n  sendCommand('timer.set_countdown_target', { target: adjusted.toISOString() });\n}\n",
+    "sendCommand": "function sendCommand(name, payload) {\n  companion.send('presenter', {\n    type: 'command',\n    command: name,\n    payload\n  });\n}\n"
+  }
+}

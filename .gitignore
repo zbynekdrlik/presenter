@@ -15,3 +15,5 @@ presenter_*.db-wal
 logs/
 var/
 gateway/node_modules/
+
+ops/companion/generated/

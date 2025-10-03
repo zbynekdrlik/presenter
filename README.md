@@ -181,23 +181,28 @@ or `scripts/dev/run-dev-server.sh` (which seeds defaults for `PRESENTER_DB_URL` 
 
 ### Companion Control WS
 
-- Connect Bitfocus Companion (or any WebSocket automation client) to `ws://{host}:{port}/companion/ws`.
-- The first message must be a `hello` envelope:
+- **Endpoint:** `ws://{host}:{port}/companion/ws`. Use Companion’s Generic Websocket module (TCP) and enable auto-reconnect with a 2 s backoff so the link recovers gracefully after network hiccups.
+- **Handshake:** Immediately send a JSON envelope when the socket opens:
 
   ```json
-  {"type":"hello","client":"Companion","instanceName":"FrontDesk","token":"optional-secret"}
+  {
+    "type": "hello",
+    "client": "Companion",
+    "instanceName": "FrontDesk",
+    "token": "optional-secret"
+  }
   ```
 
-  If `PRESENTER_COMPANION_TOKEN` is set on the server, the `token` field must match; otherwise it may be omitted.
-- On success the server replies with `welcome` and an initial `variables` payload. Variables are emitted as name/value pairs so Companion buttons and feedbacks can bind directly (examples: `stage_current_main`, `stage_next_main`, `timer_countdown_remaining_seconds`, `bible_reference`). Every subsequent stage/timer/Bible change pushes a fresh `variables` message.
-- Send commands by posting JSON envelopes of the form `{"type":"command","command":"<name>","payload":{...}}`. Supported commands:
-  - `stage.set` – payload `{ "presentationId": UUID, "currentSlideId": UUID, "nextSlideId": UUID? }`
-  - `timer.set_countdown_target` – payload `{ "target": "2025-09-27T18:00:00Z" }`
+  Set `token` only when `PRESENTER_COMPANION_TOKEN` is configured; missing or incorrect tokens terminate the socket with code `4001`.
+- The server replies with `welcome` and continues streaming `variables` payloads—flat name/value maps you can bind straight to button feedbacks (`stage_current_main`, `stage_countdown_remaining_seconds`, `timer_countdown_state`, `bible_reference`, etc.).
+- **Commands:** send envelopes of the form `{"type":"command","command":"<name>","payload":{...}}`. Supported commands include:
+  - `stage.set` – `{ "presentationId": UUID, "currentSlideId": UUID, "nextSlideId": UUID? }`
+  - `timer.set_countdown_target` – `{ "target": "2025-10-05T17:45:00Z" }`
   - `timer.start_countdown`, `timer.pause_countdown`, `timer.reset_countdown`
   - `timer.start_preach`, `timer.reset_preach`
-  - `bible.trigger` – payload `{ "translation": "KJV", "book": "John", "chapter": 3, "verseStart": 16, "verseEnd": 17? }`
-  - `bible.clear`
-- Each successful command responds with `{ "type":"ack","command":"<name>" }`. Failures return `{ "type":"error","message":"..." }`. State-changing commands immediately refresh the variable feed so Companion feedbacks update without waiting for additional events.
+  - `bible.trigger` / `bible.clear`
+- Successful commands respond with `{"type":"ack","command":"..."}`; failures respond with `{"type":"error","message":"..."}`. Expose those errors via a Companion “alert” button so ops notice when a cue fails.
+- Recommended layout: dedicate buttons for countdown start/reset, stage clear, Bible trigger, and an emergency “blank outputs” action, each with feedback driven by `timer_countdown_state` or `stage_current_main`. Importable button layouts and helper scripts live under `ops/companion/`.
 
 
 ## HTTP API Snapshot – September 2025
