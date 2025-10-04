@@ -824,6 +824,9 @@ mod tests {
             None,
             None,
             presenter_core::timer::TimersOverview::demo(now),
+            None,
+            None,
+            None,
         );
 
         let html = render_stage_display(snapshot, StageHeartbeatConfig::default_values()).0;
@@ -851,6 +854,9 @@ mod tests {
             None,
             None,
             presenter_core::timer::TimersOverview::demo(now),
+            None,
+            None,
+            None,
         );
 
         let html = render_stage_display(snapshot, StageHeartbeatConfig::default_values()).0;
@@ -871,6 +877,9 @@ mod tests {
             None,
             None,
             presenter_core::timer::TimersOverview::demo(now),
+            None,
+            None,
+            None,
         );
 
         let html = render_stage_display(snapshot, StageHeartbeatConfig::default_values()).0;

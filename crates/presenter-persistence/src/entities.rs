@@ -5,7 +5,7 @@ pub mod library {
     #[derive(Clone, Debug, PartialEq, Eq, DeriveEntityModel)]
     #[sea_orm(table_name = "libraries")]
     pub struct Model {
-        #[sea_orm(primary_key)]
+        #[sea_orm(primary_key, auto_increment = false)]
         pub id: String,
         pub name: String,
         pub search_name: String,
@@ -66,7 +66,7 @@ pub mod presentation {
     #[derive(Clone, Debug, PartialEq, Eq, DeriveEntityModel)]
     #[sea_orm(table_name = "presentations")]
     pub struct Model {
-        #[sea_orm(primary_key)]
+        #[sea_orm(primary_key, auto_increment = false)]
         pub id: String,
         pub library_id: String,
         pub name: String,
@@ -110,7 +110,7 @@ pub mod slide {
     #[derive(Clone, Debug, PartialEq, Eq, DeriveEntityModel)]
     #[sea_orm(table_name = "slides")]
     pub struct Model {
-        #[sea_orm(primary_key)]
+        #[sea_orm(primary_key, auto_increment = false)]
         pub id: String,
         pub presentation_id: String,
         pub position: i32,
@@ -217,6 +217,28 @@ pub mod resolume_host {
         pub host: String,
         pub port: i32,
         pub is_enabled: bool,
+        pub created_at: DateTimeWithTimeZone,
+        pub updated_at: DateTimeWithTimeZone,
+    }
+
+    #[derive(Copy, Clone, Debug, EnumIter, DeriveRelation)]
+    pub enum Relation {}
+
+    impl ActiveModelBehavior for ActiveModel {}
+}
+
+pub mod osc_settings {
+    use sea_orm::entity::prelude::*;
+
+    #[derive(Clone, Debug, PartialEq, Eq, DeriveEntityModel)]
+    #[sea_orm(table_name = "osc_settings")]
+    pub struct Model {
+        #[sea_orm(primary_key)]
+        pub id: String,
+        pub enabled: bool,
+        pub listen_port: i32,
+        pub address_pattern: String,
+        pub velocity_mode: String,
         pub created_at: DateTimeWithTimeZone,
         pub updated_at: DateTimeWithTimeZone,
     }
@@ -390,6 +412,30 @@ pub mod stage_state {
         pub presentation_id: Option<String>,
         pub current_slide_id: Option<String>,
         pub next_slide_id: Option<String>,
+        pub updated_at: DateTimeWithTimeZone,
+    }
+
+    #[derive(Copy, Clone, Debug, EnumIter, DeriveRelation)]
+    pub enum Relation {}
+
+    impl ActiveModelBehavior for ActiveModel {}
+}
+
+pub mod ableset_settings {
+    use sea_orm::entity::prelude::*;
+
+    #[derive(Clone, Debug, PartialEq, Eq, DeriveEntityModel)]
+    #[sea_orm(table_name = "ableset_settings")]
+    pub struct Model {
+        #[sea_orm(primary_key, auto_increment = false)]
+        pub id: String,
+        pub enabled: bool,
+        pub host: String,
+        pub osc_port: i32,
+        pub http_port: i32,
+        pub library_name: String,
+        pub song_prefix_length: i32,
+        pub created_at: DateTimeWithTimeZone,
         pub updated_at: DateTimeWithTimeZone,
     }
 

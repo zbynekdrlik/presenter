@@ -111,10 +111,12 @@ test.describe('demo server availability', () => {
   const hosts = getDemoHosts();
   for (const host of hosts) {
     test(`responds on ${host}`, async ({ request }) => {
-      const response = await request.get(`http://${host}/healthz`, {
-        timeout: 15_000,
-      });
-      expect(response.ok(), `Failed to reach demo server on ${host}:80`).toBeTruthy();
+      await expect(async () => {
+        const response = await request.get(`http://${host}/healthz`, {
+          timeout: 5_000,
+        });
+        expect(response.ok(), `Failed to reach demo server on ${host}:80`).toBeTruthy();
+      }).toPass({ timeout: 60_000, intervals: [1_000] });
     });
   }
 

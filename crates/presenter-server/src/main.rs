@@ -1,5 +1,7 @@
+mod ableset;
 mod companion;
 mod live;
+mod osc;
 mod resolume;
 mod router;
 mod stage_connections;

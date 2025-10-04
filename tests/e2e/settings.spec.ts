@@ -31,7 +31,7 @@ test.beforeAll(async ({}, testInfo) => {
   const config = deriveTestConfig(testInfo);
   baseURL = config.baseURL;
   await refreshDevData(config.dbUrl);
-  serverHandle = await startTestServer(config.port, config.dbUrl);
+  serverHandle = await startTestServer(config.port, config.dbUrl, config.oscPort);
   mockResolume = await startMockResolume();
 });
 

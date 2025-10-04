@@ -32,6 +32,12 @@
 - Stream countdown text into a dedicated `#timer` clip on each deck without triggering playback.
 - Allow clip name modifiers (e.g., `-u`, `-re`) so formatting tweaks happen directly in Resolume without duplicating slides.
 - Guarantee sub-100 ms trigger-to-clip latency with health indicators when latency drifts.
+- Accept OSC note/velocity commands (mirroring ProPresenter MIDI auto-fill: notes 18/19/20) so Ableton cues routed through Max for Live can select playlists, presentations, and trigger slides without reprogramming show files.
+- Provide operator controls for AbleSet automation: a global enable/disable toggle (default on) and a
+  separate follow toggle (default off) that lets automation drive slides in the background while
+  keeping the UI steady unless follow is explicitly engaged.
+- Surface the current AbleSet song title and slide index in the operator header so teams can verify
+  background triggers even when follow is disabled.
 
 ## Data Model Considerations
 - Versioned song data to track edits and reuse arrangements.

@@ -6,7 +6,7 @@ use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 
 /// Built-in stage display layouts exposed by the Presenter server.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct StageDisplayLayout {
     pub code: String,
@@ -59,7 +59,7 @@ pub struct StageDisplaySlide {
     pub group: Option<String>,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct StageDisplaySnapshot {
     pub layout: StageDisplayLayout,
@@ -75,6 +75,12 @@ pub struct StageDisplaySnapshot {
     pub next_slide_id: Option<SlideId>,
     pub next: Option<StageDisplaySlide>,
     pub timers: crate::timer::TimersOverview,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub latency_ms: Option<f64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub current_position: Option<u32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub total_slides: Option<u32>,
 }
 
 impl From<&DomainSlide> for StageDisplaySlide {
@@ -140,6 +146,9 @@ impl StageDisplaySnapshot {
         next_slide_id: Option<SlideId>,
         next: Option<StageDisplaySlide>,
         timers: crate::timer::TimersOverview,
+        latency_ms: Option<f64>,
+        current_position: Option<u32>,
+        total_slides: Option<u32>,
     ) -> Self {
         Self {
             layout,
@@ -151,6 +160,9 @@ impl StageDisplaySnapshot {
             next_slide_id,
             next,
             timers,
+            latency_ms,
+            current_position,
+            total_slides,
         }
     }
 }
