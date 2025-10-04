@@ -527,8 +527,11 @@ impl AppState {
         current_slide_id: SlideId,
         next_slide_id: Option<SlideId>,
     ) -> anyhow::Result<()> {
-        let presentation_arc = self.presentation_from_cache(presentation_id).await?;
-        let presentation = presentation_arc.as_ref();
+        let Some((_, library_name, presentation)) =
+            self.presentation_detail(presentation_id).await?
+        else {
+            anyhow::bail!("presentation not found");
+        };
 
         if !presentation
             .slides
@@ -554,8 +557,12 @@ impl AppState {
             next_slide_id,
         );
         self.repository.upsert_stage_state(&stage_state).await?;
-        let resolution =
-            stage_resolution_from_presentation(presentation, Some(current_slide_id), next_slide_id);
+        let resolution = stage_resolution_from_presentation(
+            &presentation,
+            Some(library_name),
+            Some(current_slide_id),
+            next_slide_id,
+        );
         self.broadcast_stage_resolution(resolution).await?;
         Ok(())
     }
@@ -900,9 +907,18 @@ impl AppState {
             .as_ref()
             .map(|slide| slide.translation.clone())
             .unwrap_or_else(String::new);
+        let song_name = context
+            .resolution
+            .presentation_name
+            .clone()
+            .map(|name| sanitize_song_title(&name))
+            .unwrap_or_default();
+        let band_name = context.resolution.library_name.clone().unwrap_or_default();
         let stage_update = StageUpdate {
             current_main: Some(current_main),
             current_translation: Some(current_translation),
+            song_name: Some(song_name),
+            band_name: Some(band_name),
         };
         self.resolume_registry.stage_update(stage_update).await;
         Ok(())
@@ -963,11 +979,12 @@ impl AppState {
             .repository
             .fetch_presentation_detail(presentation_id)
             .await?;
-        let Some((_, _library_name, presentation)) = detail else {
+        let Some((_, library_name, presentation)) = detail else {
             return Ok(None);
         };
         let resolution = stage_resolution_from_presentation(
             &presentation,
+            Some(library_name),
             stage_state.current_slide_id,
             stage_state.next_slide_id,
         );
@@ -976,10 +993,11 @@ impl AppState {
 
     async fn resolve_default_stage(&self) -> anyhow::Result<Option<StageResolution>> {
         let detail = self.repository.fetch_first_presentation_detail().await?;
-        let Some((_, _presentation_name, presentation)) = detail else {
+        let Some((_, library_name, presentation)) = detail else {
             return Ok(None);
         };
-        let resolution = stage_resolution_from_presentation(&presentation, None, None);
+        let resolution =
+            stage_resolution_from_presentation(&presentation, Some(library_name), None, None);
         Ok(Some(resolution))
     }
 }
@@ -1038,6 +1056,7 @@ struct StageContext {
 struct StageResolution {
     presentation_id: Option<PresentationId>,
     presentation_name: Option<String>,
+    library_name: Option<String>,
     current_slide_id: Option<SlideId>,
     current: Option<StageDisplaySlide>,
     next_slide_id: Option<SlideId>,
@@ -1049,6 +1068,7 @@ impl StageResolution {
         Self {
             presentation_id: None,
             presentation_name: None,
+            library_name: None,
             current_slide_id: None,
             current: None,
             next_slide_id: None,
@@ -1059,6 +1079,7 @@ impl StageResolution {
 
 fn stage_resolution_from_presentation(
     presentation: &Presentation,
+    library_name: Option<String>,
     current_slide_id: Option<SlideId>,
     next_slide_id: Option<SlideId>,
 ) -> StageResolution {
@@ -1081,6 +1102,7 @@ fn stage_resolution_from_presentation(
         return StageResolution {
             presentation_id: Some(presentation.id),
             presentation_name: Some(presentation.name.clone()),
+            library_name,
             current_slide_id: None,
             current: None,
             next_slide_id: None,
@@ -1149,6 +1171,7 @@ fn stage_resolution_from_presentation(
     StageResolution {
         presentation_id: Some(presentation.id),
         presentation_name: Some(presentation.name.clone()),
+        library_name,
         current_slide_id: current_slide_id_value,
         current: current_slide,
         next_slide_id: next_slide_id_value,
@@ -1171,6 +1194,22 @@ fn build_stage_snapshot(
         context.resolution.next.clone(),
         context.overview.clone(),
     )
+}
+
+fn sanitize_song_title(name: &str) -> String {
+    let trimmed = name.trim_start();
+    let bytes = trimmed.as_bytes();
+    if bytes.len() >= 4
+        && bytes[0].is_ascii_digit()
+        && bytes[1].is_ascii_digit()
+        && bytes[2].is_ascii_digit()
+        && bytes[3].is_ascii_whitespace()
+    {
+        let remainder = trimmed[4..].trim_start();
+        remainder.to_string()
+    } else {
+        trimmed.to_string()
+    }
 }
 
 fn blank_slide_content() -> SlideContent {
@@ -1388,8 +1427,12 @@ mod tests {
             .map(|group| group.name().to_string());
         assert_eq!(second_resolved_group, Some(first_group.clone()));
 
-        let resolution =
-            stage_resolution_from_presentation(&presentation, Some(second_slide), None);
+        let resolution = stage_resolution_from_presentation(
+            &presentation,
+            Some(libraries[0].name.clone()),
+            Some(second_slide),
+            None,
+        );
 
         let current_group = resolution
             .current
@@ -1504,5 +1547,13 @@ mod tests {
         }
 
         assert!(state.active_bible_broadcast().await.is_none());
+    }
+
+    #[test]
+    fn sanitize_song_names_remove_numeric_prefix() {
+        assert_eq!(sanitize_song_title("001 Amazing Grace"), "Amazing Grace");
+        assert_eq!(sanitize_song_title("001   Song"), "Song");
+        assert_eq!(sanitize_song_title("100"), "100");
+        assert_eq!(sanitize_song_title("No Prefix"), "No Prefix");
     }
 }
