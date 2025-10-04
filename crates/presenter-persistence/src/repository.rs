@@ -1967,7 +1967,7 @@ mod tests {
     async fn osc_settings_default_is_seeded() {
         let repo = Repository::connect_in_memory().await.unwrap();
         let settings = repo.get_osc_settings().await.unwrap();
-        assert!(settings.enabled);
+        assert!(!settings.enabled);
         assert_eq!(settings.listen_port, 9000);
         assert_eq!(settings.address_pattern, "/note");
         assert_eq!(settings.velocity_mode, VelocityMode::ZeroBased);
