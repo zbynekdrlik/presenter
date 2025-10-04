@@ -89,7 +89,7 @@ impl AbleSetSettingsDraft {
 impl Default for AbleSetSettingsDraft {
     fn default() -> Self {
         Self {
-            enabled: true,
+            enabled: false,
             host: "fohabl.lan".to_string(),
             osc_port: 39051,
             http_port: 80,
