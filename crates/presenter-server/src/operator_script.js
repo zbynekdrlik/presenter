@@ -6,6 +6,7 @@
   const timersOverview = __TIMERS__;
   const stageLayouts = __STAGE_LAYOUTS__;
   const stageLayoutCodeSeed = "__STAGE_LAYOUT_CODE__";
+  const ableSetStatus = __ABLESET_STATUS__ || null;
   const DEFAULT_LINE_LIMIT = 32;
   const MAX_SLIDE_LINES = 2;
   const DEFAULT_CATALOG_HEIGHT = 320;
@@ -36,6 +37,7 @@
     slidesCache: new Map(),
     presentationMeta: new Map(),
     playlistLookup: new Map(),
+    presentationPlaylistIndex: new Map(),
     toastTimer: null,
     liveSocket: null,
     liveReconnectTimer: null,
@@ -84,6 +86,11 @@
     stageLayoutLoading: false,
     countdownInputActive: false,
     countdownInputDirty: false,
+    ableset: {
+      status: normalizeAbleSetStatus(ableSetStatus),
+      enableLoading: false,
+      followLoading: false,
+    },
   };
 
   const STAGE_MONITOR_BASELINE_KEY = 'presenter.stageMonitorBaseline';
@@ -106,6 +113,11 @@
     stageMonitorConnected: document.querySelector('[data-role="stage-monitor-connected"]'),
     stageMonitorIssues: document.querySelector('[data-role="stage-monitor-issues"]'),
     addSlide: document.querySelector('[data-role="add-slide"]'),
+    ablesetPanel: document.querySelector('[data-role="ableset-panel"]'),
+    ablesetEnable: document.querySelector('[data-role="ableset-enable"]'),
+    ablesetFollow: document.querySelector('[data-role="ableset-follow"]'),
+    stageSongName: document.querySelector('[data-role="stage-song-name"]'),
+    stageSlideIndex: document.querySelector('[data-role="stage-slide-index"]'),
     clearSlide: document.querySelector('[data-role="clear-slide"]'),
     lineLimit: document.querySelector('[data-role="line-limit"]'),
     toast: document.querySelector('[data-role="toast"]'),
@@ -154,6 +166,27 @@
     searchClear: document.querySelector('[data-role="global-search-clear"]'),
     searchResults: document.querySelector('[data-role="global-search-results"]'),
   };
+
+  function normalizeAbleSetStatus(input) {
+    if (!input || typeof input !== 'object') {
+      return { enabled: false, tracking: false, lastSong: null, lastError: null };
+    }
+    const rawSong = input.lastSong || input.last_song || null;
+    const song = rawSong && typeof rawSong === 'object' ? {
+      name: (rawSong.name || '').toString(),
+      prefix: (rawSong.prefix || '').toString(),
+      index: typeof rawSong.index === 'number' ? rawSong.index : null,
+      lastSeenAt: rawSong.lastSeenAt || rawSong.last_seen_at || null,
+    } : null;
+    return {
+      enabled: Boolean(input.enabled),
+      tracking: Boolean(input.tracking),
+       followEnabled: Boolean(input.followEnabled ?? input.follow_enabled),
+      lastSong: song,
+      lastError: input.lastError || input.last_error || null,
+    };
+  }
+
 
   state.libraries = state.libraries.map((library) => ({
     ...library,
@@ -532,6 +565,8 @@
       clearSearchResults();
       return;
     }
+    state.searchQuery = trimmed;
+    state.searchOpen = true;
     if (state.searchTimer) {
       clearTimeout(state.searchTimer);
       state.searchTimer = null;
@@ -935,6 +970,14 @@
     const nextText = stagePrimaryText(nextSlide) || '—';
     if (nextEl) {
       nextEl.textContent = nextText || '—';
+    }
+
+    const { songName, slideLabel } = resolveSongAndSlide(snapshot);
+    if (els.stageSongName) {
+      els.stageSongName.textContent = songName;
+    }
+    if (els.stageSlideIndex) {
+      els.stageSlideIndex.textContent = slideLabel;
     }
   }
 
@@ -1923,11 +1966,15 @@
     const favoritesMarkup = dashboard
       .map((playlist) => renderPlaylistRow(playlist))
       .join('');
-    const favoritesSection = favoritesMarkup
-      ? `<div class="operator__favorites" data-role="playlist-favorites">${favoritesMarkup}</div>`
-      : '<div class="operator__favorites-empty" data-role="playlist-empty">Star playlists in settings to keep them handy.</div>';
 
-    els.playlistList.innerHTML = favoritesSection;
+    if (favoritesMarkup) {
+      els.playlistList.innerHTML = `<div class="operator__favorites" data-role="playlist-favorites">${favoritesMarkup}</div>`;
+    } else {
+      const fullList = sorted.map((playlist) => renderPlaylistRow(playlist)).join('');
+      els.playlistList.innerHTML = fullList
+        ? `<div class="operator__list" data-role="playlist-fallback">${fullList}</div>`
+        : '<div class="operator__favorites-empty" data-role="playlist-empty">No playlists yet. Create one to build a run sheet.</div>';
+    }
 
     if (els.playlistModalList) {
       const modalEntries = sorted
@@ -2098,6 +2145,16 @@
     );
     if (target && typeof target.scrollIntoView === 'function') {
       target.scrollIntoView({ block: 'center', behavior: 'smooth' });
+    }
+  }
+
+  function scrollSlideIntoView(slideId) {
+    if (!slideId || !els.slides) {
+      return;
+    }
+    const card = els.slides.querySelector(`[data-slide-id="${slideId}"]`);
+    if (card && typeof card.scrollIntoView === 'function') {
+      card.scrollIntoView({ block: 'center', behavior: 'smooth' });
     }
   }
 
@@ -2420,10 +2477,22 @@ function updateCardWarnings(card) {
 
   function indexPlaylists() {
     const lookup = new Map();
+    const presentationMap = new Map();
     state.playlists.forEach((playlist) => {
       lookup.set(playlist.id, playlist);
+      (playlist.entries || []).forEach((entry, index) => {
+        if (entry.entryType === 'presentation' && entry.presentationId) {
+          if (!presentationMap.has(entry.presentationId)) {
+            presentationMap.set(entry.presentationId, {
+              playlistId: playlist.id,
+              entryIndex: index,
+            });
+          }
+        }
+      });
     });
     state.playlistLookup = lookup;
+    state.presentationPlaylistIndex = presentationMap;
   }
 
   function upsertPlaylist(playlist) {
@@ -2650,11 +2719,16 @@ function updateCardWarnings(card) {
                 group: extractGroup(followingSlide) || null,
               }
             : null,
+          timers: state.timers,
+          latencyMs: null,
+          currentPosition: index >= 0 ? index + 1 : null,
+          totalSlides: slides.length ? slides.length : null,
         };
       }
       updateActivePresentationIndicators();
       updateActiveSlideIndicators();
       renderStageStatus();
+      renderAbleSetPanel();
     } catch (error) {
       console.error('Failed to trigger slide', error);
       showToast('Failed to trigger slide', 'error');
@@ -2680,10 +2754,14 @@ function updateCardWarnings(card) {
         current: null,
         next: null,
         timers: state.timers,
+        latencyMs: null,
+        currentPosition: null,
+        totalSlides: null,
       };
       updateActivePresentationIndicators();
       updateActiveSlideIndicators();
       renderStageStatus();
+      renderAbleSetPanel();
       showToast('Slide outputs cleared', 'success');
     } catch (error) {
       console.error('Failed to clear slide', error);
@@ -3163,9 +3241,10 @@ function updateCardWarnings(card) {
         state.currentPresentationId = null;
       }
       if (state.stagePresentationId && removedPresentationIds.has(state.stagePresentationId)) {
-        state.stagePresentationId = null;
-        state.stageSlideId = null;
-        state.stageSnapshot = null;
+      state.stagePresentationId = null;
+      state.stageSlideId = null;
+      state.stageSnapshot = null;
+      renderAbleSetPanel();
       }
 
       if (state.activeLibraryId === libraryId) {
@@ -3287,6 +3366,97 @@ function updateCardWarnings(card) {
     }
   }
 
+  function syncOperatorSelectionFromStage(presentationId, slideId) {
+    if (!presentationId) {
+      updateActivePresentationIndicators();
+      updateActiveSlideIndicators();
+      return;
+    }
+    const isLiveMode = state.mode === 'live';
+    if (!isLiveMode || !state.ableset.status.followEnabled) {
+      updateActiveSlideIndicators();
+      return;
+    }
+
+    const mapping = state.presentationPlaylistIndex.get(presentationId) || null;
+    let playlistChanged = false;
+    let listNeedsRender = false;
+
+    if (mapping) {
+      if (state.activePlaylistId !== mapping.playlistId) {
+        state.activePlaylistId = mapping.playlistId;
+        state.activeLibraryId = null;
+        playlistChanged = true;
+        listNeedsRender = true;
+        renderPlaylists();
+        renderLibraries();
+        updateContextTitleFromPlaylist(mapping.playlistId);
+      }
+    } else {
+      let libraryMatched = false;
+      if (Array.isArray(state.libraries)) {
+        const library = state.libraries.find((item) =>
+          Array.isArray(item.presentations) && item.presentations.some((entry) => entry.id === presentationId)
+        );
+        if (library) {
+          libraryMatched = true;
+          if (state.activeLibraryId !== library.id || state.activePlaylistId) {
+            state.activeLibraryId = library.id;
+            state.activePlaylistId = null;
+            listNeedsRender = true;
+            renderPlaylists();
+            renderLibraries();
+          }
+          updateContextTitleFromLibrary(library.id);
+        }
+      }
+      if (!libraryMatched && state.stageSnapshot && state.stageSnapshot.presentationName && els.contextTitle) {
+        els.contextTitle.textContent = `Live: ${state.stageSnapshot.presentationName}`;
+      }
+    }
+
+    const presentationChanged = isLiveMode && state.currentPresentationId !== presentationId;
+    listNeedsRender = listNeedsRender && !presentationChanged;
+    if (presentationChanged) {
+      state.currentPresentationId = presentationId;
+      state.focusedSlideId = null;
+      renderPresentationList();
+      scrollPresentationIntoView(presentationId);
+      if (state.slidesCache.has(presentationId)) {
+        renderSlides(presentationId);
+        if (slideId) {
+          scrollSlideIntoView(slideId);
+        }
+      } else {
+        loadPresentation(presentationId)
+          .then(() => {
+            if (state.currentPresentationId === presentationId) {
+              scrollPresentationIntoView(presentationId);
+              if (slideId) {
+                scrollSlideIntoView(slideId);
+              } else {
+                updateActiveSlideIndicators();
+              }
+            }
+          })
+          .catch((error) => console.error('Failed to load presentation for stage sync', error));
+      }
+      updateActivePresentationIndicators();
+    } else {
+      if (playlistChanged) {
+        scrollPresentationIntoView(presentationId);
+      }
+      if (listNeedsRender) {
+        renderPresentationList();
+      }
+      updateActivePresentationIndicators();
+      if (state.currentPresentationId === presentationId && slideId) {
+        scrollSlideIntoView(slideId);
+      }
+      updateActiveSlideIndicators();
+    }
+  }
+
   function connectLiveSocket() {
     if (state.liveSocket) {
       try {
@@ -3315,26 +3485,43 @@ function updateCardWarnings(card) {
           const snapshot = payload.snapshot || {};
           const presentationId = snapshot.presentationId ?? snapshot.presentation_id ?? null;
           const currentSlideId = snapshot.currentSlideId ?? snapshot.current_slide_id ?? null;
+          const latencyMsValue =
+            typeof snapshot.latencyMs === 'number'
+              ? snapshot.latencyMs
+              : typeof snapshot.latency_ms === 'number'
+              ? snapshot.latency_ms
+              : null;
+          const currentPositionValue =
+            typeof snapshot.currentPosition === 'number'
+              ? snapshot.currentPosition
+              : typeof snapshot.current_position === 'number'
+              ? snapshot.current_position
+              : null;
+          const totalSlidesValue =
+            typeof snapshot.totalSlides === 'number'
+              ? snapshot.totalSlides
+              : typeof snapshot.total_slides === 'number'
+              ? snapshot.total_slides
+              : null;
           state.stageSnapshot = {
             presentationId,
             presentationName: snapshot.presentationName ?? snapshot.presentation_name ?? '',
             current: snapshot.current || null,
             next: snapshot.next || null,
             timers: snapshot.timers || null,
+            latencyMs: latencyMsValue,
+            currentPosition: currentPositionValue,
+            totalSlides: totalSlidesValue,
           };
           state.stagePresentationId = presentationId;
           state.stageSlideId = currentSlideId;
           state.timers = snapshot.timers || state.timers;
-          if (presentationId && state.currentPresentationId === presentationId) {
-            updateActiveSlideIndicators();
-          } else if (!presentationId) {
-            updateActiveSlideIndicators();
-          }
-          updateActivePresentationIndicators();
+          syncOperatorSelectionFromStage(presentationId, currentSlideId);
           if (snapshot.timers) {
             applyTimers(snapshot.timers);
           }
           renderStageStatus();
+          renderAbleSetPanel();
         } else if (payload.type === 'stage_layout' || payload.type === 'StageLayout') {
           const nextCode = String(payload.code || '').trim();
           if (nextCode.length > 0) {
@@ -3694,6 +3881,7 @@ function updateCardWarnings(card) {
         ) {
           state.stageSnapshot.presentationName = name;
           renderStageStatus();
+          renderAbleSetPanel();
         }
         showToast('Presentation renamed', 'success');
       } else if (target.type === 'separator') {
@@ -4587,7 +4775,208 @@ function updateCardWarnings(card) {
     setView(view);
   }
 
+  function renderAbleSetPanel() {
+    const status = state.ableset.status || {
+      enabled: false,
+      tracking: false,
+      followEnabled: false,
+      lastSong: null,
+      lastError: null,
+    };
+
+    if (els.ablesetPanel) {
+      els.ablesetPanel.dataset.enabled = status.enabled ? 'true' : 'false';
+      els.ablesetPanel.dataset.follow = status.followEnabled ? 'true' : 'false';
+    }
+
+    if (els.ablesetEnable) {
+      const label = status.enabled
+        ? (status.tracking ? 'Automation • Tracking' : 'Automation • On')
+        : 'Automation • Off';
+      els.ablesetEnable.textContent = label;
+      els.ablesetEnable.dataset.state = status.enabled ? 'on' : 'off';
+      els.ablesetEnable.dataset.loading = state.ableset.enableLoading ? 'true' : 'false';
+      els.ablesetEnable.disabled = state.ableset.enableLoading;
+    }
+
+    if (els.ablesetFollow) {
+      const label = status.followEnabled ? 'Follow UI • On' : 'Follow UI • Off';
+      els.ablesetFollow.textContent = label;
+      els.ablesetFollow.dataset.state = status.followEnabled ? 'on' : 'off';
+      els.ablesetFollow.dataset.loading = state.ableset.followLoading ? 'true' : 'false';
+      els.ablesetFollow.disabled = !status.enabled || state.ableset.followLoading;
+    }
+
+    const snapshot = state.stageSnapshot;
+    const { songName, slideLabel } = resolveSongAndSlide(snapshot);
+    if (els.stageSongName) {
+      els.stageSongName.textContent = songName;
+    }
+    if (els.stageSlideIndex) {
+      els.stageSlideIndex.textContent = slideLabel;
+    }
+  }
+
+  function resolvePresentationNameByPrefix(prefix) {
+    const raw = (prefix || '').toString().trim();
+    if (!raw) return null;
+    const normalized = raw.toLowerCase();
+
+    for (const entry of presentationIndex.values()) {
+      if (!entry) continue;
+      const name = (entry.name || '').toString().trim();
+      if (!name) continue;
+      if (name.toLowerCase().startsWith(normalized)) {
+        return name;
+      }
+    }
+
+    if (Array.isArray(state.libraries)) {
+      for (const library of state.libraries) {
+        const presentations = Array.isArray(library?.presentations) ? library.presentations : [];
+        for (const presentation of presentations) {
+          const name = (presentation?.name || '').toString().trim();
+          if (!name) continue;
+          if (name.toLowerCase().startsWith(normalized)) {
+            return name;
+          }
+        }
+      }
+    }
+
+    return null;
+  }
+
+  function resolveSongAndSlide(snapshot) {
+    const status = state.ableset.status || {};
+    let songName = snapshot && snapshot.presentationName ? snapshot.presentationName : '';
+    if (!songName && status.lastSong) {
+      const prefix = status.lastSong.prefix || '';
+      const fromPrefix = resolvePresentationNameByPrefix(prefix);
+      if (fromPrefix) {
+        songName = fromPrefix;
+      } else if (typeof status.lastSong.name === 'string') {
+        songName = status.lastSong.name;
+      }
+    }
+    if (!songName) {
+      songName = '—';
+    }
+
+    let slideLabel = '—';
+    if (snapshot) {
+      const position = typeof snapshot.currentPosition === 'number' ? snapshot.currentPosition : null;
+      const total = typeof snapshot.totalSlides === 'number' ? snapshot.totalSlides : null;
+      if (position !== null) {
+        slideLabel = total && total > 0 ? `${position}/${total}` : String(position);
+      }
+    } else if (status.lastSong && typeof status.lastSong.index === 'number') {
+      slideLabel = String(status.lastSong.index + 1);
+    }
+
+    return { songName, slideLabel };
+  }
+
+  async function refreshAbleSetStatus(showError) {
+    try {
+      const response = await fetch('/integrations/ableset/status', { headers: { Accept: 'application/json' } });
+      if (!response.ok) {
+        throw new Error(`Failed to load AbleSet status (${response.status})`);
+      }
+      const data = await response.json();
+      state.ableset.status = normalizeAbleSetStatus(data);
+      renderAbleSetPanel();
+    } catch (error) {
+      if (showError) {
+        console.warn('Unable to refresh AbleSet status', error);
+      }
+    }
+  }
+
+  async function toggleAbleSetAutomation() {
+    if (state.ableset.enableLoading) return;
+    state.ableset.enableLoading = true;
+    renderAbleSetPanel();
+    try {
+      const response = await fetch('/integrations/ableset/settings', { headers: { Accept: 'application/json' } });
+      if (!response.ok) {
+        throw new Error(`Failed to fetch AbleSet settings (${response.status})`);
+      }
+      const settings = await response.json();
+      const config = settings && typeof settings === 'object' ? settings : {};
+      const payload = {
+        enabled: !Boolean(config.enabled),
+        host: (config.host || 'fohabl.lan').toString(),
+        httpPort: Number.isFinite(Number(config.httpPort ?? config.http_port)) ? Number(config.httpPort ?? config.http_port) : 80,
+        oscPort: Number.isFinite(Number(config.oscPort ?? config.osc_port)) ? Number(config.oscPort ?? config.osc_port) : 39051,
+        libraryName: (config.libraryName || config.library_name || 'NEW LEVEL').toString(),
+        songPrefixLength: Number.isFinite(Number(config.songPrefixLength ?? config.song_prefix_length)) ? Number(config.songPrefixLength ?? config.song_prefix_length) : 3,
+      };
+      const update = await fetch('/integrations/ableset/settings', {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json', Accept: 'application/json' },
+        body: JSON.stringify(payload),
+      });
+      if (!update.ok) {
+        throw new Error(`Failed to toggle AbleSet (${update.status})`);
+      }
+      const updated = await update.json();
+      state.ableset.status = normalizeAbleSetStatus(updated);
+      renderAbleSetPanel();
+      showToast(`Ableton automation ${state.ableset.status.enabled ? 'enabled' : 'disabled'}.`, 'info');
+    } catch (error) {
+      console.error('Unable to toggle AbleSet automation', error);
+      showToast('Unable to toggle Ableton automation.', 'error');
+    } finally {
+      state.ableset.enableLoading = false;
+      renderAbleSetPanel();
+      refreshAbleSetStatus(false);
+    }
+  }
+
+  async function toggleAbleSetFollow() {
+    const status = state.ableset.status;
+    if (!status.enabled) {
+      showToast('Enable Ableton automation first.', 'warning');
+      return;
+    }
+    if (state.ableset.followLoading) return;
+    state.ableset.followLoading = true;
+    renderAbleSetPanel();
+    try {
+      const response = await fetch('/integrations/ableset/follow', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', Accept: 'application/json' },
+        body: JSON.stringify({ enabled: !Boolean(status.followEnabled) }),
+      });
+      if (!response.ok) {
+        throw new Error(`Failed to toggle AbleSet follow (${response.status})`);
+      }
+      const snapshot = await response.json();
+      state.ableset.status = normalizeAbleSetStatus(snapshot);
+      renderAbleSetPanel();
+      showToast(`Ableton follow ${state.ableset.status.followEnabled ? 'enabled' : 'disabled'}.`, 'info');
+      if (state.ableset.status.followEnabled && state.stageSnapshot) {
+        syncOperatorSelectionFromStage(state.stageSnapshot.presentationId, state.stageSlideId);
+      }
+    } catch (error) {
+      console.error('Unable to toggle AbleSet follow', error);
+      showToast('Unable to toggle Ableton follow.', 'error');
+    } finally {
+      state.ableset.followLoading = false;
+      renderAbleSetPanel();
+      refreshAbleSetStatus(false);
+    }
+  }
+
   function bindEvents() {
+    if (els.ablesetEnable) {
+      els.ablesetEnable.addEventListener('click', toggleAbleSetAutomation);
+    }
+    if (els.ablesetFollow) {
+      els.ablesetFollow.addEventListener('click', toggleAbleSetFollow);
+    }
+
     if (els.libraryList) {
       els.libraryList.addEventListener('click', handleLibraryClick);
       els.libraryList.addEventListener('dragover', handlePlaylistDragOver);
@@ -4912,6 +5301,8 @@ function updateCardWarnings(card) {
     applyTimers(state.timers);
     renderStageStatus();
     initialiseStageMonitor();
+    renderAbleSetPanel();
+    refreshAbleSetStatus(false);
     connectLiveSocket();
   }
 

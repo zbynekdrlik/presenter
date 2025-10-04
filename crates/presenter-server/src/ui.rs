@@ -1,4 +1,6 @@
 use crate::{
+    ableset::AbleSetStatusSnapshot,
+    osc::OscStatusSnapshot,
     resolume::{ResolumeConnectionSnapshot, ResolumeConnectionState},
     state::AppState,
 };
@@ -6,11 +8,12 @@ use axum::response::Html;
 use chrono::{DateTime, Utc};
 use leptos::prelude::*;
 use presenter_core::{
-    playlist::PlaylistEntryKind, BibleBroadcast, BibleTranslation, TimerState, TimersOverview,
+    playlist::PlaylistEntryKind, AbleSetSettings, BibleBroadcast, BibleTranslation, OscSettings,
+    TimerState, TimersOverview,
 };
 use reactive_graph::owner::Owner;
 use serde::Serialize;
-use serde_json::to_string;
+use serde_json::{json, to_string};
 use std::{
     collections::{HashMap, HashSet},
     sync::Arc,
@@ -116,6 +119,7 @@ pub fn OperatorDocument(
     libraries: Vec<LibraryRow>,
     playlists: Vec<PlaylistRow>,
     timers: TimersOverview,
+    ableset_status: AbleSetStatusSnapshot,
     libraries_json: String,
     playlists_json: String,
     stage_layouts_json: String,
@@ -126,7 +130,23 @@ pub fn OperatorDocument(
     let libraries = Arc::new(libraries);
     let playlists = Arc::new(playlists);
     let timers = Arc::new(timers);
-
+    let ableset_enabled = ableset_status.enabled;
+    let ableset_tracking = ableset_status.tracking;
+    let ableset_follow_enabled = ableset_status.follow_enabled;
+    let ableset_enable_label = if ableset_enabled {
+        if ableset_tracking {
+            "Automation • Tracking".to_string()
+        } else {
+            "Automation • On".to_string()
+        }
+    } else {
+        "Automation • Off".to_string()
+    };
+    let ableset_follow_label = if ableset_follow_enabled {
+        "Follow UI • On".to_string()
+    } else {
+        "Follow UI • Off".to_string()
+    };
     let libraries_json = libraries_json.replace("</script>", r"<\/script>");
     let playlists_json = playlists_json.replace("</script>", r"<\/script>");
     let timers_json = to_string(&*timers).unwrap_or_else(|_| "{}".to_string());
@@ -135,12 +155,17 @@ pub fn OperatorDocument(
 
     let stage_layout_code_safe = stage_layout_code.replace('"', "\\\"");
 
+    let ableset_status_json = to_string(&ableset_status)
+        .unwrap_or_else(|_| "{}".to_string())
+        .replace("</script>", r"<\/script>");
+
     let operator_script = OPERATOR_SCRIPT_TEMPLATE
         .replace("__LIBRARIES__", &libraries_json)
         .replace("__PLAYLISTS__", &playlists_json)
         .replace("__TIMERS__", &timers_json)
         .replace("__STAGE_LAYOUTS__", &stage_layouts_json)
-        .replace("__STAGE_LAYOUT_CODE__", &stage_layout_code_safe);
+        .replace("__STAGE_LAYOUT_CODE__", &stage_layout_code_safe)
+        .replace("__ABLESET_STATUS__", &ableset_status_json);
 
     view! {
             <html lang="en">
@@ -192,8 +217,35 @@ pub fn OperatorDocument(
                             </div>
                         </div>
                         <div class="operator__header-right">
+                            <div
+                                class="operator__ableset-panel"
+                                data-role="ableset-panel"
+                                data-enabled={if ableset_enabled { "true" } else { "false" }}
+                                data-follow={if ableset_follow_enabled { "true" } else { "false" }}
+                            >
+                                <button
+                                    type="button"
+                                    class="operator__ableset-toggle"
+                                    data-role="ableset-enable"
+                                    data-state={if ableset_enabled { "on" } else { "off" }}
+                                >{ableset_enable_label.clone()}</button>
+                                <button
+                                    type="button"
+                                    class="operator__ableset-toggle"
+                                    data-role="ableset-follow"
+                                    data-state={if ableset_follow_enabled { "on" } else { "off" }}
+                                >{ableset_follow_label.clone()}</button>
+                            </div>
                             <div class="operator__stage-preview" data-role="stage-status" data-active="false">
-                                <div class="operator__stage-preview-panel" data-role="stage-next">"—"</div>
+                                <div class="operator__stage-preview-stack">
+                                    <div class="operator__stage-preview-panel operator__stage-preview-panel--next" data-role="stage-next">"—"</div>
+                                    <div class="operator__stage-preview-meta">
+                                        <span class="operator__stage-preview-meta-label">"Song"</span>
+                                        <span class="operator__stage-preview-meta-value" data-role="stage-song-name">"—"</span>
+                                        <span class="operator__stage-preview-meta-label operator__stage-preview-meta-label--secondary">"Slide"</span>
+                                        <span class="operator__stage-preview-meta-value" data-role="stage-slide-index">"—"</span>
+                                    </div>
+                                </div>
                                 <div class="operator__stage-preview-panel operator__stage-preview-panel--current" data-role="stage-current">"—"</div>
                                 <button
                                     type="button"
@@ -584,6 +636,7 @@ pub async fn render_operator_ui(state: &AppState) -> anyhow::Result<Html<String>
     let timers = state.timers_overview().await?;
     let stage_layouts = state.stage_displays().await?;
     let stage_layout_code = state.stage_layout_code().await;
+    let ableset_status = state.ableset_status_snapshot().await;
 
     let mut presentation_lookup: HashMap<String, String> = HashMap::new();
 
@@ -662,6 +715,7 @@ pub async fn render_operator_ui(state: &AppState) -> anyhow::Result<Html<String>
                 libraries=library_rows.clone()
                 playlists=playlist_rows.clone()
                 timers=timers.clone()
+                ableset_status=ableset_status.clone()
                 libraries_json=libraries_json.clone()
                 playlists_json=playlists_json.clone()
                 stage_layouts_json=stage_layouts_json.clone()
@@ -1403,14 +1457,61 @@ body.operator[data-mode="live"] .operator__line-limit {
 .operator__header-right {
     display: flex;
     align-items: center;
-    gap: 1rem;
+    gap: 1.25rem;
+}
+
+.operator__ableset-panel {
+    display: flex;
+    flex-direction: column;
+    gap: 0.5rem;
+    min-width: 180px;
+    padding: 0.65rem 0.85rem;
+    border-radius: 14px;
+    background: rgba(15, 23, 42, 0.55);
+    border: 1px solid rgba(148, 163, 184, 0.22);
+    box-shadow: inset 0 0 0 1px rgba(15, 23, 42, 0.28);
+}
+
+.operator__ableset-panel[data-enabled="false"] {
+    opacity: 0.9;
+}
+
+.operator__ableset-toggle {
+    border: none;
+    border-radius: 999px;
+    padding: 0.45rem 0.75rem;
+    font-size: 0.78rem;
+    font-weight: 600;
+    letter-spacing: 0.04em;
+    text-transform: uppercase;
+    cursor: pointer;
+    color: #ffffff;
+    background: rgba(255, 255, 255, 0.12);
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    transition: background 0.15s ease, opacity 0.15s ease;
+}
+
+.operator__ableset-toggle[data-state="on"] {
+    background: linear-gradient(135deg, rgba(34, 197, 94, 0.9), rgba(14, 165, 233, 0.9));
+}
+
+.operator__ableset-toggle[data-loading="true"] {
+    opacity: 0.6;
+    cursor: wait;
+}
+
+.operator__ableset-toggle:disabled {
+    cursor: not-allowed;
+    opacity: 0.45;
 }
 
 .operator__stage-preview {
     position: relative;
     display: inline-flex;
     align-items: stretch;
-    gap: 0.75rem;
+    gap: 1rem;
     padding: 0.65rem 1rem;
     background: #101828;
     border: 1px solid rgba(148, 163, 184, 0.25);
@@ -1492,9 +1593,17 @@ body.operator[data-mode="live"] .operator__line-limit {
     }
 }
 
+.operator__stage-preview-stack {
+    display: flex;
+    flex-direction: column;
+    justify-content: flex-start;
+    gap: 0.5rem;
+    min-width: 12rem;
+}
+
 .operator__stage-preview-panel {
     width: 180px;
-    height: 70px;
+    min-height: 70px;
     display: flex;
     align-items: center;
     justify-content: center;
@@ -1507,9 +1616,42 @@ body.operator[data-mode="live"] .operator__line-limit {
     border-radius: 10px;
 }
 
+.operator__stage-preview-panel--next {
+    min-height: 3.5rem;
+    font-size: 0.82rem;
+    padding: 0.45rem 0.65rem;
+}
+
 .operator__stage-preview-panel--current {
     background: rgba(59, 124, 255, 0.28);
     font-weight: 600;
+}
+
+.operator__stage-preview-meta {
+    display: grid;
+    grid-template-columns: auto 1fr;
+    column-gap: 0.75rem;
+    row-gap: 0.25rem;
+    font-size: 0.72rem;
+    letter-spacing: 0.1em;
+    text-transform: uppercase;
+}
+
+.operator__stage-preview-meta-label {
+    color: rgba(226, 232, 240, 0.62);
+    font-weight: 600;
+}
+
+.operator__stage-preview-meta-label--secondary {
+    margin-top: 0.35rem;
+}
+
+.operator__stage-preview-meta-value {
+    color: #f8fafc;
+    font-weight: 600;
+    text-align: right;
+    font-size: 0.78rem;
+    min-width: 3ch;
 }
 
 .operator__clear-button {
@@ -2447,6 +2589,43 @@ body.operator[data-view="settings"] [data-view-panel="settings"] {
 .operator__presentation-item[data-type="separator"] span {
     opacity: 0.85;
 }
+.settings__form--osc {
+    margin-bottom: 1.5rem;
+}
+
+.settings__osc-status {
+    border-top: 1px solid rgba(15, 23, 42, 0.08);
+    padding-top: 1rem;
+}
+
+.settings__status-line {
+    display: flex;
+    align-items: center;
+    margin-bottom: 0.75rem;
+}
+
+.settings__status-list {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(160px, 1fr));
+    gap: 0.8rem 1.2rem;
+    margin: 0 0 0.75rem 0;
+    padding: 0;
+}
+
+.settings__status-list dt {
+    font-size: 0.75rem;
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+    color: rgba(255, 255, 255, 0.65);
+    margin: 0 0 0.2rem 0;
+}
+
+.settings__status-list dd {
+    margin: 0;
+    font-size: 0.95rem;
+    font-weight: 500;
+}
+
 "#;
 
 const TABLET_STYLES: &str = r#"
@@ -4062,6 +4241,11 @@ pub async fn render_bible_ui(state: &AppState) -> anyhow::Result<Html<String>> {
 pub async fn render_settings_ui(state: &AppState) -> anyhow::Result<Html<String>> {
     let hosts = state.list_resolume_hosts().await?;
     let statuses = state.resolume_status_snapshot().await;
+    let osc_settings = state.osc_settings().await?;
+    let osc_status = state.osc_status_snapshot().await;
+    let ableset_settings = state.ableset_settings().await?;
+    let ableset_status = state.ableset_status_snapshot().await;
+
     let host_rows: Vec<SettingsHostRow> = hosts
         .into_iter()
         .map(|host| {
@@ -4097,12 +4281,52 @@ pub async fn render_settings_ui(state: &AppState) -> anyhow::Result<Html<String>
 
     let hosts_json = to_string(&host_rows).unwrap_or_else(|_| "[]".to_string());
     let hosts_json = hosts_json.replace("</script>", r"<\/script>");
-    let script = SETTINGS_SCRIPT_TEMPLATE.replace("__RESOLUME_HOSTS__", &hosts_json);
+
+    let osc_config_json = json!({
+        "enabled": osc_settings.enabled,
+        "listenPort": osc_settings.listen_port,
+        "addressPattern": osc_settings.address_pattern,
+        "velocityMode": osc_settings.velocity_mode,
+    });
+    let osc_config_json = to_string(&osc_config_json)
+        .unwrap_or_else(|_| "{}".to_string())
+        .replace("</script>", r"<\/script>");
+    let osc_status_json = to_string(&osc_status)
+        .unwrap_or_else(|_| "{}".to_string())
+        .replace("</script>", r"<\/script>");
+    let ableset_config_json = json!({
+        "enabled": ableset_settings.enabled,
+        "host": ableset_settings.host,
+        "httpPort": ableset_settings.http_port,
+        "oscPort": ableset_settings.osc_port,
+        "libraryName": ableset_settings.library_name,
+        "songPrefixLength": ableset_settings.song_prefix_length,
+    });
+    let ableset_config_json = to_string(&ableset_config_json)
+        .unwrap_or_else(|_| "{}".to_string())
+        .replace("</script>", r"<\/script>");
+    let ableset_status_json = to_string(&ableset_status)
+        .unwrap_or_else(|_| "{}".to_string())
+        .replace("</script>", r"<\/script>");
+
+    let script = SETTINGS_SCRIPT_TEMPLATE
+        .replace("__RESOLUME_HOSTS__", &hosts_json)
+        .replace("__OSC_CONFIG__", &osc_config_json)
+        .replace("__OSC_STATUS__", &osc_status_json)
+        .replace("__ABLESET_CONFIG__", &ableset_config_json)
+        .replace("__ABLESET_STATUS__", &ableset_status_json);
 
     let owner = Owner::new_root(None);
     let html = owner.with(|| {
         view! {
-            <SettingsDocument hosts=host_rows.clone() script=script.clone() />
+            <SettingsDocument
+                hosts=host_rows.clone()
+                osc_settings=osc_settings.clone()
+                osc_status=osc_status.clone()
+                ableset_settings=ableset_settings.clone()
+                ableset_status=ableset_status.clone()
+                script=script.clone()
+            />
         }
         .into_view()
         .to_html()
@@ -4112,9 +4336,94 @@ pub async fn render_settings_ui(state: &AppState) -> anyhow::Result<Html<String>
 }
 
 #[component]
-fn SettingsDocument(hosts: Vec<SettingsHostRow>, script: String) -> impl IntoView {
+fn SettingsDocument(
+    hosts: Vec<SettingsHostRow>,
+    osc_settings: OscSettings,
+    osc_status: OscStatusSnapshot,
+    ableset_settings: AbleSetSettings,
+    ableset_status: AbleSetStatusSnapshot,
+    script: String,
+) -> impl IntoView {
     let hosts = Arc::new(hosts);
     let host_count_text = hosts.len().to_string();
+    let osc_port_value = osc_settings.listen_port.to_string();
+    let osc_address_value = osc_settings.address_pattern.clone();
+    let osc_mode_value = match osc_settings.velocity_mode {
+        presenter_core::VelocityMode::ZeroBased => "zero_based",
+        presenter_core::VelocityMode::OneBased => "one_based",
+    };
+    let osc_mode_value_string = osc_mode_value.to_string();
+    let osc_host_port_display = osc_status.host_port.unwrap_or(osc_settings.listen_port);
+    let osc_status_state = if !osc_status.enabled {
+        "disabled".to_string()
+    } else if osc_status.listening {
+        "listening".to_string()
+    } else {
+        "enabled".to_string()
+    };
+    let osc_status_label = format!(
+        "{}{}",
+        osc_status_state
+            .chars()
+            .next()
+            .map(|c| c.to_uppercase().collect::<String>())
+            .unwrap_or_else(String::new),
+        osc_status_state.chars().skip(1).collect::<String>()
+    );
+    let osc_last_message_display = osc_status
+        .last_message_at
+        .map(format_settings_timestamp)
+        .unwrap_or_else(|| "\u{2014}".to_string());
+    let osc_last_note_display = osc_status
+        .last_note
+        .map(|note| {
+            if let Some(velocity) = osc_status.last_velocity {
+                format!("note {note} (vel {velocity})")
+            } else {
+                format!("note {note}")
+            }
+        })
+        .unwrap_or_else(|| "\u{2014}".to_string());
+    let osc_last_error = osc_status.last_error.clone();
+    let ableset_host_value = ableset_settings.host.clone();
+    let ableset_http_port_value = ableset_settings.http_port.to_string();
+    let ableset_osc_port_value = ableset_settings.osc_port.to_string();
+    let ableset_library_value = ableset_settings.library_name.clone();
+    let ableset_prefix_value = ableset_settings.song_prefix_length.to_string();
+    let ableset_enabled = ableset_settings.enabled;
+    let ableset_status_state = if !ableset_status.enabled {
+        "disabled"
+    } else if ableset_status.tracking {
+        "tracking"
+    } else {
+        "enabled"
+    };
+    let ableset_status_label = format!(
+        "{}{}",
+        ableset_status_state
+            .chars()
+            .next()
+            .map(|c| c.to_uppercase().collect::<String>())
+            .unwrap_or_else(String::new),
+        ableset_status_state.chars().skip(1).collect::<String>()
+    );
+    let ableset_last_song_name = ableset_status
+        .last_song
+        .as_ref()
+        .map(|song| song.name.clone())
+        .unwrap_or_else(|| "\u{2014}".to_string());
+    let ableset_last_song_prefix = ableset_status
+        .last_song
+        .as_ref()
+        .map(|song| song.prefix.clone())
+        .unwrap_or_else(|| "\u{2014}".to_string());
+    let ableset_last_song_seen = ableset_status
+        .last_song
+        .as_ref()
+        .and_then(|song| song.last_seen_at)
+        .map(format_settings_timestamp)
+        .unwrap_or_else(|| "\u{2014}".to_string());
+    let ableset_last_error = ableset_status.last_error.clone();
 
     view! {
         <html lang="en">
@@ -4334,6 +4643,201 @@ fn SettingsDocument(hosts: Vec<SettingsHostRow>, script: String) -> impl IntoVie
                             </dl>
                         </section>
                     </section>
+                    <section class="settings__card settings__card--osc">
+                        <header class="settings__card-header">
+                            <div>
+                                <h2>"OSC Bridge"</h2>
+                                <p>"Receive Ableton cues via the OSC MIDI Send Max for Live device."</p>
+                            </div>
+                        </header>
+                        <form
+                            class="settings__form settings__form--osc"
+                            data-role="osc-form"
+                            autocomplete="off"
+                            data-mode={if osc_settings.enabled { "enabled" } else { "disabled" }}
+                        >
+                            <div class="settings__form-row settings__form-row--single">
+                                <label class="settings__form-checkbox settings__form-checkbox--block">
+                                    <input type="checkbox" data-role="osc-enabled" checked={osc_settings.enabled} />
+                                    <span>"Enabled"</span>
+                                </label>
+                            </div>
+                            <div class="settings__form-row">
+                                <label class="settings__form-control settings__form-control--small">
+                                    <span>"Listener Port"</span>
+                                    <input
+                                        type="number"
+                                        data-role="osc-port"
+                                        min="1"
+                                        max="65535"
+                                        value={osc_port_value.clone()}
+                                        required
+                                    />
+                                </label>
+                                <label>
+                                    <span>"Address Pattern"</span>
+                                    <input
+                                        type="text"
+                                        data-role="osc-address"
+                                        value={osc_address_value.clone()}
+                                        placeholder="/note"
+                                        required
+                                    />
+                                </label>
+                                <label>
+                                    <span>"Velocity Mapping"</span>
+                                    <select data-role="osc-mode" prop:value={osc_mode_value_string.clone()}>
+                                        <option value="zero_based" selected={osc_mode_value == "zero_based"}>"Zero-based (0 = first item)"</option>
+                                        <option value="one_based" selected={osc_mode_value == "one_based"}>"One-based (1 = first item)"</option>
+                                    </select>
+                                </label>
+                            </div>
+                            <div class="settings__form-actions">
+                                <button
+                                    type="submit"
+                                    class="settings__button settings__button--primary"
+                                    data-role="osc-submit"
+                                >"Save OSC Settings"</button>
+                            </div>
+                        </form>
+                        <section class="settings__osc-status">
+                            <div class="settings__status-line">
+                                <span
+                                    class="settings__status"
+                                    data-role="osc-status-indicator"
+                                    data-state={osc_status_state.clone()}
+                                >{osc_status_label.clone()}</span>
+                            </div>
+                            <dl class="settings__status-list">
+                                <div>
+                                    <dt>"Host Port"</dt>
+                                    <dd data-role="osc-status-host-port">{osc_host_port_display}</dd>
+                                </div>
+                                <div>
+                                    <dt>"Last event"</dt>
+                                    <dd data-role="osc-status-last-message">{osc_last_message_display.clone()}</dd>
+                                </div>
+                                <div>
+                                    <dt>"Last note"</dt>
+                                    <dd data-role="osc-status-last-note">{osc_last_note_display.clone()}</dd>
+                                </div>
+                            </dl>
+                            <p
+                                class="settings__list-meta settings__list-meta--warning"
+                                data-role="osc-status-error"
+                                data-visible={if osc_last_error.is_some() { "true" } else { "false" }}
+                            >{osc_last_error.clone().map(|err| format!("⚠ {}", err)).unwrap_or_default()}</p>
+                        </section>
+                    </section>
+                    <section class="settings__card settings__card--ableset">
+                        <header class="settings__card-header">
+                            <div>
+                                <h2>"AbleSet Bridge"</h2>
+                                <p>"Map Ableton cues to the NEWLEVEL library using AbleSet."</p>
+                            </div>
+                        </header>
+                        <form
+                            class="settings__form settings__form--ableset"
+                            data-role="ableset-form"
+                            autocomplete="off"
+                            data-mode={if ableset_enabled { "enabled" } else { "disabled" }}
+                        >
+                            <div class="settings__form-row settings__form-row--single">
+                                <label class="settings__form-checkbox settings__form-checkbox--block">
+                                    <input type="checkbox" data-role="ableset-enabled" checked={ableset_enabled} />
+                                    <span>"Enable AbleSet automation"</span>
+                                </label>
+                            </div>
+                            <div class="settings__form-row">
+                                <label>
+                                    <span>"AbleSet Host"</span>
+                                    <input
+                                        type="text"
+                                        data-role="ableset-host"
+                                        value={ableset_host_value.clone()}
+                                        required
+                                    />
+                                </label>
+                                <label class="settings__form-control settings__form-control--small">
+                                    <span>"HTTP Port"</span>
+                                    <input
+                                        type="number"
+                                        data-role="ableset-http-port"
+                                        min="1"
+                                        max="65535"
+                                        value={ableset_http_port_value.clone()}
+                                        required
+                                    />
+                                </label>
+                                <label class="settings__form-control settings__form-control--small">
+                                    <span>"OSC Port"</span>
+                                    <input
+                                        type="number"
+                                        data-role="ableset-osc-port"
+                                        min="1"
+                                        max="65535"
+                                        value={ableset_osc_port_value.clone()}
+                                        required
+                                    />
+                                </label>
+                            </div>
+                            <div class="settings__form-row">
+                                <label>
+                                    <span>"Library Name"</span>
+                                    <input
+                                        type="text"
+                                        data-role="ableset-library"
+                                        value={ableset_library_value.clone()}
+                                        required
+                                    />
+                                </label>
+                                <label class="settings__form-control settings__form-control--small">
+                                    <span>"Song Prefix Length"</span>
+                                    <input
+                                        type="number"
+                                        data-role="ableset-prefix"
+                                        min="1"
+                                        max="6"
+                                        value={ableset_prefix_value.clone()}
+                                        required
+                                    />
+                                </label>
+                            </div>
+                            <div class="settings__form-actions">
+                                <button
+                                    type="submit"
+                                    class="settings__button settings__button--primary"
+                                    data-role="ableset-submit"
+                                >"Save AbleSet Settings"</button>
+                            </div>
+                            <p class="settings__form-status" data-role="ableset-form-status" data-state="idle"></p>
+                        </form>
+                        <div class="settings__status-panel">
+                            <span
+                                class={format!("settings__status settings__status--{}", ableset_status_state)}
+                                data-role="ableset-status-indicator"
+                            >{ableset_status_label.clone()}</span>
+                            <dl class="settings__status-list">
+                                <div>
+                                    <dt>"Current Song"</dt>
+                                    <dd data-role="ableset-status-song">{ableset_last_song_name.clone()}</dd>
+                                </div>
+                                <div>
+                                    <dt>"Prefix"</dt>
+                                    <dd data-role="ableset-status-prefix">{ableset_last_song_prefix.clone()}</dd>
+                                </div>
+                                <div>
+                                    <dt>"Last Update"</dt>
+                                    <dd data-role="ableset-status-updated">{ableset_last_song_seen.clone()}</dd>
+                                </div>
+                            </dl>
+                            <p class="settings__list-meta settings__list-meta--warning" data-role="ableset-status-error">
+                                {ableset_last_error.clone().unwrap_or_default()}
+                            </p>
+                            <button type="button" class="settings__button settings__button--ghost" data-role="ableset-refresh">"Refresh"</button>
+                        </div>
+                    </section>
+
                 </main>
                 <div class="settings__toast" data-role="toast" data-visible="false"></div>
                 <script>{script}</script>

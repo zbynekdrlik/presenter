@@ -1,0 +1,366 @@
+use anyhow::{anyhow, Context};
+use chrono::{DateTime, Utc};
+use presenter_core::{extract_song_prefix, AbleSetSettings, AbleSetSongSnapshot};
+use reqwest::Client;
+use serde::{Deserialize, Serialize};
+use std::{sync::Arc, time::Duration};
+use tokio::{
+    sync::{oneshot, Mutex, RwLock},
+    task::JoinHandle,
+    time::{interval, MissedTickBehavior},
+};
+use tracing::debug;
+
+const SETLIST_ENDPOINT: &str = "/api/setlist";
+const POLL_INTERVAL_MS: u64 = 250;
+
+#[derive(Clone)]
+pub struct AbleSetBridge {
+    inner: Arc<AbleSetInner>,
+}
+
+struct AbleSetInner {
+    status: RwLock<AbleSetStatusInner>,
+    tracker: Mutex<Option<TrackerGuard>>,
+}
+
+struct AbleSetStatusInner {
+    enabled: bool,
+    host: String,
+    http_port: u16,
+    osc_port: u16,
+    library_name: String,
+    song_prefix_length: u8,
+    tracking: bool,
+    last_song: Option<SongState>,
+    last_error: Option<String>,
+    follow_enabled: bool,
+}
+
+struct SongState {
+    name: String,
+    prefix: String,
+    index: Option<u32>,
+    last_seen_at: DateTime<Utc>,
+}
+
+struct TrackerGuard {
+    shutdown: oneshot::Sender<()>,
+    handle: JoinHandle<()>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct AbleSetStatusSnapshot {
+    pub enabled: bool,
+    pub tracking: bool,
+    pub follow_enabled: bool,
+    pub host: String,
+    pub http_port: u16,
+    pub osc_port: u16,
+    pub library_name: String,
+    pub song_prefix_length: u8,
+    pub last_song: Option<AbleSetSongSnapshot>,
+    pub last_error: Option<String>,
+}
+
+#[derive(Clone)]
+struct AbleSetTrackerConfig {
+    client: Client,
+    host: String,
+    http_port: u16,
+    song_prefix_length: u8,
+}
+
+#[derive(Debug, Deserialize)]
+struct SetlistResponse {
+    #[serde(rename = "activeSongId")]
+    active_song_id: Option<String>,
+    #[serde(default)]
+    songs: Vec<SetlistSong>,
+}
+
+#[derive(Debug, Deserialize)]
+struct SetlistSong {
+    #[serde(default)]
+    id: Option<String>,
+    #[serde(default)]
+    meta: Option<SetlistSongMeta>,
+    #[serde(rename = "internalMeta")]
+    #[serde(default)]
+    internal_meta: Option<SetlistSongInternalMeta>,
+    #[serde(default)]
+    cue: Option<SetlistCue>,
+}
+
+#[derive(Debug, Deserialize)]
+struct SetlistSongMeta {
+    #[serde(default)]
+    name: Option<String>,
+    #[serde(default)]
+    raw: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+struct SetlistSongInternalMeta {
+    #[serde(default)]
+    order: Option<u32>,
+}
+
+#[derive(Debug, Deserialize)]
+struct SetlistCue {
+    #[serde(default)]
+    name: Option<String>,
+}
+
+impl AbleSetBridge {
+    pub fn new() -> Self {
+        Self {
+            inner: Arc::new(AbleSetInner {
+                status: RwLock::new(AbleSetStatusInner {
+                    enabled: false,
+                    host: "fohabl.lan".to_string(),
+                    http_port: 80,
+                    osc_port: 39051,
+                    library_name: "NEW LEVEL".to_string(),
+                    song_prefix_length: 3,
+                    tracking: false,
+                    last_song: None,
+                    last_error: None,
+                    follow_enabled: false,
+                }),
+                tracker: Mutex::new(None),
+            }),
+        }
+    }
+
+    pub async fn apply_settings(&self, mut settings: AbleSetSettings) -> anyhow::Result<()> {
+        settings.host = settings.host.trim().to_string();
+        settings.library_name = settings.library_name.trim().to_string();
+        {
+            let mut status = self.inner.status.write().await;
+            status.enabled = settings.enabled;
+            status.host = settings.host.clone();
+            status.http_port = settings.http_port;
+            status.osc_port = settings.osc_port;
+            status.library_name = settings.library_name.clone();
+            status.song_prefix_length = settings.song_prefix_length;
+            status.last_error = None;
+            if !settings.enabled {
+                status.tracking = false;
+                status.last_song = None;
+                status.follow_enabled = false;
+            }
+        }
+
+        self.stop_tracker().await;
+
+        if !settings.enabled {
+            return Ok(());
+        }
+
+        match self.start_tracker(settings.clone()).await {
+            Ok(()) => Ok(()),
+            Err(err) => {
+                let mut status = self.inner.status.write().await;
+                status.tracking = false;
+                status.last_error = Some(err.to_string());
+                Err(err)
+            }
+        }
+    }
+
+    #[allow(dead_code)]
+    pub async fn song_snapshot(&self) -> Option<AbleSetSongSnapshot> {
+        let status = self.inner.status.read().await;
+        status.last_song.as_ref().map(|song| {
+            AbleSetSongSnapshot::new(
+                song.name.clone(),
+                song.prefix.clone(),
+                song.index,
+                Some(song.last_seen_at),
+            )
+        })
+    }
+
+    pub async fn status_snapshot(&self) -> AbleSetStatusSnapshot {
+        let status = self.inner.status.read().await;
+        AbleSetStatusSnapshot {
+            enabled: status.enabled,
+            tracking: status.tracking,
+            follow_enabled: status.follow_enabled,
+            host: status.host.clone(),
+            http_port: status.http_port,
+            osc_port: status.osc_port,
+            library_name: status.library_name.clone(),
+            song_prefix_length: status.song_prefix_length,
+            last_song: status.last_song.as_ref().map(|song| {
+                AbleSetSongSnapshot::new(
+                    song.name.clone(),
+                    song.prefix.clone(),
+                    song.index,
+                    Some(song.last_seen_at),
+                )
+            }),
+            last_error: status.last_error.clone(),
+        }
+    }
+
+    pub async fn set_follow_enabled(&self, enabled: bool) -> AbleSetStatusSnapshot {
+        {
+            let mut status = self.inner.status.write().await;
+            status.follow_enabled = enabled;
+        }
+        self.status_snapshot().await
+    }
+
+    async fn start_tracker(&self, settings: AbleSetSettings) -> anyhow::Result<()> {
+        let client = Client::builder()
+            .timeout(Duration::from_secs(2))
+            .build()
+            .context("failed to build AbleSet client")?;
+        let config = AbleSetTrackerConfig {
+            client,
+            host: settings.host.trim().to_string(),
+            http_port: settings.http_port,
+            song_prefix_length: settings.song_prefix_length,
+        };
+        let (shutdown_tx, shutdown_rx) = oneshot::channel();
+        let inner = self.inner.clone();
+        let handle = tokio::spawn(run_tracker(inner.clone(), config, shutdown_rx));
+        {
+            let mut guard = self.inner.tracker.lock().await;
+            *guard = Some(TrackerGuard {
+                shutdown: shutdown_tx,
+                handle,
+            });
+        }
+        let mut status = self.inner.status.write().await;
+        status.tracking = true;
+        status.last_error = None;
+        Ok(())
+    }
+
+    async fn stop_tracker(&self) {
+        let mut guard = self.inner.tracker.lock().await;
+        if let Some(tracker) = guard.take() {
+            let _ = tracker.shutdown.send(());
+            if let Err(err) = tracker.handle.await {
+                debug!(?err, "ableset tracker join error");
+            }
+        }
+        let mut status = self.inner.status.write().await;
+        status.tracking = false;
+    }
+}
+
+async fn run_tracker(
+    inner: Arc<AbleSetInner>,
+    config: AbleSetTrackerConfig,
+    mut shutdown: oneshot::Receiver<()>,
+) {
+    let AbleSetTrackerConfig {
+        client,
+        host,
+        http_port,
+        song_prefix_length,
+    } = config;
+    let mut interval = interval(Duration::from_millis(POLL_INTERVAL_MS));
+    interval.set_missed_tick_behavior(MissedTickBehavior::Skip);
+
+    loop {
+        tokio::select! {
+            _ = &mut shutdown => {
+                break;
+            }
+            _ = interval.tick() => {
+                match fetch_active_song(&client, &host, http_port).await {
+                    Ok(Some((name, index))) => {
+                        if let Some(prefix) = extract_song_prefix(&name, song_prefix_length) {
+                            let snapshot = SongState {
+                                name: name.clone(),
+                                prefix: prefix.clone(),
+                                index,
+                                last_seen_at: Utc::now(),
+                            };
+                            let mut status = inner.status.write().await;
+                            status.last_song = Some(snapshot);
+                            status.last_error = None;
+                        } else {
+                            let mut status = inner.status.write().await;
+                            status.last_error = Some(format!(
+                                "unable to extract prefix of length {} from song '{name}'",
+                                song_prefix_length
+                            ));
+                        }
+                    }
+                    Ok(None) => {
+                        let mut status = inner.status.write().await;
+                        status.last_song = None;
+                        status.last_error = None;
+                    }
+                    Err(err) => {
+                        let mut status = inner.status.write().await;
+                        status.last_error = Some(err.to_string());
+                        debug!(?err, "ableset fetch failed");
+                    }
+                }
+            }
+        }
+    }
+
+    let mut status = inner.status.write().await;
+    status.tracking = false;
+}
+
+async fn fetch_active_song(
+    client: &Client,
+    host: &str,
+    http_port: u16,
+) -> anyhow::Result<Option<(String, Option<u32>)>> {
+    let url = format!("http://{host}:{http_port}{SETLIST_ENDPOINT}");
+    let response = client
+        .get(&url)
+        .send()
+        .await
+        .with_context(|| format!("failed to query AbleSet at {url}"))?;
+
+    if response.status().is_success() {
+        let payload: SetlistResponse = response
+            .json()
+            .await
+            .context("failed to parse AbleSet setlist payload")?;
+        let Some(active_id) = payload.active_song_id else {
+            return Ok(None);
+        };
+        for (idx, song) in payload.songs.iter().enumerate() {
+            let Some(song_id) = song.id.as_ref() else {
+                continue;
+            };
+            if song_id != &active_id {
+                continue;
+            }
+            let name = song
+                .meta
+                .as_ref()
+                .and_then(|meta| meta.name.as_ref().cloned().or_else(|| meta.raw.clone()))
+                .or_else(|| song.cue.as_ref().and_then(|cue| cue.name.clone()))
+                .unwrap_or_else(|| active_id.clone());
+            let index = song
+                .internal_meta
+                .as_ref()
+                .and_then(|meta| meta.order)
+                .or_else(|| Some(idx as u32));
+            return Ok(Some((name, index)));
+        }
+        return Ok(None);
+    }
+
+    if response.status().as_u16() == 404 {
+        return Ok(None);
+    }
+
+    Err(anyhow!(
+        "AbleSet responded with status {}",
+        response.status()
+    ))
+}

@@ -1,6 +1,7 @@
 use crate::{
-    companion, resolume::ResolumeConnectionSnapshot, stage_connections::StageClientSnapshot,
-    stage_ui, state::AppState, ui,
+    ableset::AbleSetStatusSnapshot, companion, osc::OscStatusSnapshot,
+    resolume::ResolumeConnectionSnapshot, stage_connections::StageClientSnapshot, stage_ui,
+    state::AppState, ui,
 };
 use anyhow::Error as AnyhowError;
 use axum::{
@@ -10,12 +11,14 @@ use axum::{
     routing::{get, patch, post, put},
     Json, Router,
 };
+use chrono::{DateTime, Utc};
 use presenter_core::{
     playlist::{MidiBinding, PlaylistEntryKind},
-    BiblePassage, BibleReference, BibleTranslation, Library, LibraryId, LibrarySummary, Playlist,
-    PlaylistEntry, PlaylistEntryId, PlaylistId, Presentation, PresentationId, ResolumeHost,
-    ResolumeHostDraft, ResolumeHostId, SearchResult, Slide, SlideId, StageDisplayLayout,
-    StageDisplaySnapshot, TimersOverview,
+    AbleSetSettings, AbleSetSettingsDraft, BiblePassage, BibleReference, BibleTranslation, Library,
+    LibraryId, LibrarySummary, OscSettings, OscSettingsDraft, Playlist, PlaylistEntry,
+    PlaylistEntryId, PlaylistId, Presentation, PresentationId, ResolumeHost, ResolumeHostDraft,
+    ResolumeHostId, SearchResult, Slide, SlideId, StageDisplayLayout, StageDisplaySnapshot,
+    TimersOverview, VelocityMode,
 };
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
@@ -78,6 +81,17 @@ pub fn build_router(state: AppState) -> Router {
             put(update_resolume_host).delete(delete_resolume_host),
         )
         .route(
+            "/integrations/osc/settings",
+            get(get_osc_settings).put(update_osc_settings),
+        )
+        .route("/integrations/osc/status", get(get_osc_status))
+        .route(
+            "/integrations/ableset/settings",
+            get(get_ableset_settings).put(update_ableset_settings),
+        )
+        .route("/integrations/ableset/status", get(get_ableset_status))
+        .route("/integrations/ableset/follow", post(set_ableset_follow))
+        .route(
             "/presentations/{id}",
             get(get_presentation_detail).patch(update_presentation),
         )
@@ -134,6 +148,11 @@ struct SearchQueryParams {
     query: Option<String>,
     #[serde(default)]
     limit: Option<u32>,
+}
+
+#[derive(Debug, Deserialize)]
+struct AbleSetFollowPayload {
+    enabled: bool,
 }
 
 #[instrument(skip_all)]
@@ -632,6 +651,85 @@ async fn delete_resolume_host(
 }
 
 #[instrument(skip_all)]
+async fn get_osc_settings(
+    State(state): State<AppState>,
+) -> Result<Json<OscSettingsResponse>, AppError> {
+    let settings = state.osc_settings().await?;
+    Ok(Json(OscSettingsResponse::from(settings)))
+}
+
+#[instrument(skip_all)]
+async fn update_osc_settings(
+    State(state): State<AppState>,
+    Json(payload): Json<UpdateOscSettingsRequest>,
+) -> Result<Json<OscSettingsResponse>, AppError> {
+    if payload.address_pattern.trim().is_empty() {
+        return Err(AppError::bad_request_message(
+            "address pattern cannot be empty",
+        ));
+    }
+    if payload.listen_port == 0 {
+        return Err(AppError::bad_request_message(
+            "listener port must be between 1 and 65535",
+        ));
+    }
+    let draft = OscSettingsDraft {
+        enabled: payload.enabled,
+        listen_port: payload.listen_port,
+        address_pattern: payload.address_pattern.trim().to_string(),
+        velocity_mode: payload.velocity_mode,
+    };
+    let settings = state
+        .update_osc_settings(draft)
+        .await
+        .map_err(|err| AppError::bad_request_message(err.to_string()))?;
+    Ok(Json(OscSettingsResponse::from(settings)))
+}
+
+#[instrument(skip_all)]
+async fn get_osc_status(
+    State(state): State<AppState>,
+) -> Result<Json<OscStatusSnapshot>, AppError> {
+    Ok(Json(state.osc_status_snapshot().await))
+}
+
+#[instrument(skip_all)]
+async fn get_ableset_settings(
+    State(state): State<AppState>,
+) -> Result<Json<AbleSetSettings>, AppError> {
+    let settings = state.ableset_settings().await?;
+    Ok(Json(settings))
+}
+
+#[instrument(skip_all)]
+async fn update_ableset_settings(
+    State(state): State<AppState>,
+    Json(payload): Json<AbleSetSettingsDraft>,
+) -> Result<Json<AbleSetSettings>, AppError> {
+    let settings = state
+        .update_ableset_settings(payload)
+        .await
+        .map_err(|err| AppError::bad_request_message(err.to_string()))?;
+    Ok(Json(settings))
+}
+
+#[instrument(skip_all)]
+async fn get_ableset_status(
+    State(state): State<AppState>,
+) -> Result<Json<AbleSetStatusSnapshot>, AppError> {
+    Ok(Json(state.ableset_status_snapshot().await))
+}
+
+#[instrument(skip_all)]
+async fn set_ableset_follow(
+    State(state): State<AppState>,
+    Json(payload): Json<AbleSetFollowPayload>,
+) -> Result<Json<AbleSetStatusSnapshot>, AppError> {
+    let snapshot = state.set_ableset_follow(payload.enabled).await;
+    Ok(Json(snapshot))
+}
+
+#[instrument(skip_all)]
 async fn operator_ui(
     State(state): State<AppState>,
 ) -> Result<axum::response::Html<String>, AppError> {
@@ -866,6 +964,39 @@ async fn update_slide_content_handler(
         )
         .await?;
     Ok(Json(updated))
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct OscSettingsResponse {
+    enabled: bool,
+    listen_port: u16,
+    address_pattern: String,
+    velocity_mode: VelocityMode,
+    created_at: DateTime<Utc>,
+    updated_at: DateTime<Utc>,
+}
+
+impl From<OscSettings> for OscSettingsResponse {
+    fn from(settings: OscSettings) -> Self {
+        Self {
+            enabled: settings.enabled,
+            listen_port: settings.listen_port,
+            address_pattern: settings.address_pattern,
+            velocity_mode: settings.velocity_mode,
+            created_at: settings.created_at,
+            updated_at: settings.updated_at,
+        }
+    }
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct UpdateOscSettingsRequest {
+    enabled: bool,
+    listen_port: u16,
+    address_pattern: String,
+    velocity_mode: VelocityMode,
 }
 
 #[derive(Debug, Deserialize)]

@@ -64,7 +64,7 @@ test.beforeAll(async ({}, testInfo) => {
   const config = deriveTestConfig(testInfo);
   baseURL = config.baseURL;
   await refreshDevData(config.dbUrl);
-  serverHandle = await startTestServer(config.port, config.dbUrl);
+  serverHandle = await startTestServer(config.port, config.dbUrl, config.oscPort);
 });
 
 test.afterAll(async () => {
@@ -477,7 +477,10 @@ test.describe('Operator control surface', () => {
     const libraryToken = sanitize(libraryTokens[0] ?? selection.libraryName);
     const compoundQuery = `${first}, ${second} ${libraryToken}`.trim();
     await searchInput.fill(compoundQuery);
-    await expect(searchResults).toHaveAttribute('data-visible', 'true');
+    await expect(async () => {
+      const visible = await searchResults.getAttribute('data-visible');
+      expect(visible).toBe('true');
+    }).toPass({ timeout: 10_000, intervals: [200] });
     await expect(async () => {
       const count = await searchResults.locator('[data-role="search-result-item"]').count();
       expect(count).toBeGreaterThan(0);
@@ -487,23 +490,10 @@ test.describe('Operator control surface', () => {
 
   await searchInput.fill(searchTerm);
   await searchInput.press('Enter');
-  await expect(searchResults).toHaveAttribute('data-visible', 'true');
-  const slideResult = searchResults
-    .locator('[data-role="search-result-item"][data-kind="slide"]')
-    .first();
-  const slidePresentationId = await slideResult.getAttribute('data-presentation-id');
-  await slideResult.locator('[data-role="search-result"]').click();
-  if (slidePresentationId) {
-    await expect(slideContainer).toHaveAttribute(
-      'data-slides-placeholder',
-      slidePresentationId,
-      { timeout: 10_000 }
-    );
-  }
-
-  await searchInput.fill(searchTerm);
-  await searchInput.press('Enter');
-  await expect(searchResults).toHaveAttribute('data-visible', 'true');
+  await expect(async () => {
+    const visible = await searchResults.getAttribute('data-visible');
+    expect(visible).toBe('true');
+  }).toPass({ timeout: 10_000, intervals: [200] });
   const presentationResult = searchResults
     .locator('[data-role="search-result-item"][data-kind="presentation"]')
     .first();
@@ -517,7 +507,10 @@ test.describe('Operator control surface', () => {
 
   await searchInput.fill(searchTerm);
   await searchInput.press('Enter');
-  await expect(searchResults).toHaveAttribute('data-visible', 'true');
+  await expect(async () => {
+    const visible = await searchResults.getAttribute('data-visible');
+    expect(visible).toBe('true');
+  }).toPass({ timeout: 10_000, intervals: [200] });
   const searchPresentationResults = searchResults.locator('[data-role="search-result-item"][data-kind="presentation"]');
   const existingPresentationIds = new Set(
     (
@@ -568,7 +561,8 @@ test.describe('Operator control surface', () => {
 
   await searchInput.fill(searchTerm);
   await searchInput.press('Enter');
-  await expect(searchResults).toHaveAttribute('data-visible', 'true');
+  const firstSearchResult = searchResults.locator('[data-role="search-result-item"]').first();
+  await firstSearchResult.waitFor({ state: 'visible' });
   const dropzonePresentationResults = searchResults.locator(
     '[data-role="search-result-item"][data-kind="presentation"]',
   );

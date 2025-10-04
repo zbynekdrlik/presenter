@@ -30,7 +30,7 @@ test.beforeAll(async ({}, testInfo) => {
   dbUrl = config.dbUrl;
   port = config.port;
   await refreshDevData(dbUrl);
-  serverHandle = await startTestServer(port, dbUrl);
+  serverHandle = await startTestServer(port, dbUrl, config.oscPort);
 });
 
 test.afterAll(async () => {

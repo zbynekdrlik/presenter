@@ -1,5 +1,7 @@
 use crate::{
+    ableset::{AbleSetBridge, AbleSetStatusSnapshot},
     live::{LiveEvent, LiveHub},
+    osc::{OscBridge, OscStatusSnapshot},
     resolume::{
         BibleUpdate, ResolumeConnectionSnapshot, ResolumeRegistry, StageUpdate, TimerFrame,
     },
@@ -8,12 +10,14 @@ use crate::{
 use anyhow;
 use chrono::{DateTime, Utc};
 use presenter_bible::BibleImportSummary;
+use presenter_core::playlist::PlaylistEntryKind;
 use presenter_core::{
-    BibleBroadcast, BibleReference, BibleTranslation, Library, LibraryId, LibrarySummary, Playlist,
-    PlaylistEntry, PlaylistId, Presentation, PresentationId, ResolumeHost, ResolumeHostDraft,
-    ResolumeHostId, SearchResult, Slide, SlideContent, SlideGroup, SlideId, SlideText,
-    StageDisplayLayout, StageDisplaySlide, StageDisplaySnapshot, StageState, TimerCommand,
-    TimerState, TimersOverview, TimersState,
+    extract_song_prefix, AbleSetSettings, AbleSetSettingsDraft, AbleSetSongSnapshot,
+    BibleBroadcast, BibleReference, BibleTranslation, Library, LibraryId, LibrarySummary,
+    OscSettings, OscSettingsDraft, Playlist, PlaylistEntry, PlaylistEntryId, PlaylistId,
+    Presentation, PresentationId, ResolumeHost, ResolumeHostDraft, ResolumeHostId, SearchResult,
+    Slide, SlideContent, SlideGroup, SlideId, SlideText, StageDisplayLayout, StageDisplaySlide,
+    StageDisplaySnapshot, StageState, TimerCommand, TimerState, TimersOverview, TimersState,
 };
 use presenter_importer::bible::BibleIngestionService;
 use presenter_persistence::{DatabaseSettings, Repository};
@@ -37,6 +41,9 @@ pub struct AppState {
     heartbeat_config: StageHeartbeatConfig,
     presentation_cache: Arc<RwLock<HashMap<PresentationId, Arc<Presentation>>>>,
     stage_layout: Arc<RwLock<String>>,
+    osc_bridge: OscBridge,
+    ableset_bridge: AbleSetBridge,
+    ableset_cache: Arc<RwLock<AbleSetLibraryCache>>,
     #[cfg(test)]
     bible_ingestion_override: Option<std::sync::Arc<dyn TestBibleIngestion + Send + Sync>>,
 }
@@ -46,6 +53,8 @@ impl AppState {
         repository: Repository,
         companion_token: Option<String>,
         resolume_registry: ResolumeRegistry,
+        osc_bridge: OscBridge,
+        ableset_bridge: AbleSetBridge,
     ) -> Self {
         let stage_connections = StageConnections::new();
         let heartbeat_config = StageHeartbeatConfig::from_env();
@@ -54,6 +63,7 @@ impl AppState {
             .map(|layout| layout.code)
             .find(|code| code == "worship-snv")
             .unwrap_or_else(|| "worship-snv".to_string());
+        let ableset_cache = Arc::new(RwLock::new(AbleSetLibraryCache::default()));
         let state = Self {
             repository,
             live_hub: LiveHub::new(),
@@ -64,6 +74,9 @@ impl AppState {
             heartbeat_config,
             presentation_cache: Arc::new(RwLock::new(HashMap::new())),
             stage_layout: Arc::new(RwLock::new(default_layout)),
+            osc_bridge,
+            ableset_bridge,
+            ableset_cache,
             #[cfg(test)]
             bible_ingestion_override: None,
         };
@@ -124,9 +137,55 @@ impl AppState {
         let repo = Repository::connect(&DatabaseSettings::new(&db_url)).await?;
         let companion_token = env::var("PRESENTER_COMPANION_TOKEN").ok();
         let registry = ResolumeRegistry::new();
-        let state = Self::new(repo, companion_token, registry);
+        let osc_bridge = OscBridge::new();
+        let ableset_bridge = AbleSetBridge::new();
+        let state = Self::new(
+            repo,
+            companion_token,
+            registry,
+            osc_bridge.clone(),
+            ableset_bridge.clone(),
+        );
         state.ensure_seed_library().await?;
+        state.ensure_demo_playlist().await?;
         state.sync_resolume_hosts().await?;
+        let mut osc_settings = state.repository.get_osc_settings().await?;
+        if let Ok(port_raw) = env::var("PRESENTER_OSC_LISTEN_PORT") {
+            match port_raw.parse::<u16>() {
+                Ok(port) if port != 0 && port != osc_settings.listen_port => {
+                    let draft = OscSettingsDraft {
+                        enabled: osc_settings.enabled,
+                        listen_port: port,
+                        address_pattern: osc_settings.address_pattern.clone(),
+                        velocity_mode: osc_settings.velocity_mode,
+                    };
+                    osc_settings = state.repository.upsert_osc_settings(&draft).await?;
+                }
+                Ok(_) => {}
+                Err(err) => {
+                    tracing::warn!(value = %port_raw, ?err, "invalid PRESENTER_OSC_LISTEN_PORT")
+                }
+            }
+        }
+        if let Err(err) = osc_bridge
+            .apply_settings(osc_settings.clone(), state.clone())
+            .await
+        {
+            tracing::warn!(?err, "failed to initialise OSC listener");
+        }
+        let ableset_settings = state.repository.get_ableset_settings().await?;
+        match ableset_bridge
+            .apply_settings(ableset_settings.clone())
+            .await
+        {
+            Ok(()) => {
+                let snapshot = state.ableset_bridge.status_snapshot().await;
+                if let Err(err) = state.refresh_ableset_cache(&snapshot).await {
+                    tracing::warn!(?err, "failed to seed AbleSet cache");
+                }
+            }
+            Err(err) => tracing::warn!(?err, "failed to initialise AbleSet tracker"),
+        }
         state.spawn_background_tasks();
         Ok(state)
     }
@@ -136,8 +195,54 @@ impl AppState {
     pub async fn in_memory() -> anyhow::Result<Self> {
         let repo = Repository::connect_in_memory().await?;
         let registry = ResolumeRegistry::new();
-        let state = Self::new(repo, None, registry);
+        let osc_bridge = OscBridge::new();
+        let ableset_bridge = AbleSetBridge::new();
+        let state = Self::new(
+            repo,
+            None,
+            registry,
+            osc_bridge.clone(),
+            ableset_bridge.clone(),
+        );
         state.ensure_seed_library().await?;
+        state.ensure_demo_playlist().await?;
+        let mut osc_settings = state.repository.get_osc_settings().await?;
+        if let Ok(port_raw) = env::var("PRESENTER_OSC_LISTEN_PORT") {
+            match port_raw.parse::<u16>() {
+                Ok(port) if port != 0 && port != osc_settings.listen_port => {
+                    let draft = OscSettingsDraft {
+                        enabled: osc_settings.enabled,
+                        listen_port: port,
+                        address_pattern: osc_settings.address_pattern.clone(),
+                        velocity_mode: osc_settings.velocity_mode,
+                    };
+                    osc_settings = state.repository.upsert_osc_settings(&draft).await?;
+                }
+                Ok(_) => {}
+                Err(err) => {
+                    tracing::warn!(value = %port_raw, ?err, "invalid PRESENTER_OSC_LISTEN_PORT")
+                }
+            }
+        }
+        if let Err(err) = osc_bridge
+            .apply_settings(osc_settings.clone(), state.clone())
+            .await
+        {
+            tracing::warn!(?err, "failed to initialise OSC listener");
+        }
+        let ableset_settings = state.repository.get_ableset_settings().await?;
+        match ableset_bridge
+            .apply_settings(ableset_settings.clone())
+            .await
+        {
+            Ok(()) => {
+                let snapshot = state.ableset_bridge.status_snapshot().await;
+                if let Err(err) = state.refresh_ableset_cache(&snapshot).await {
+                    tracing::warn!(?err, "failed to seed AbleSet cache");
+                }
+            }
+            Err(err) => tracing::warn!(?err, "failed to initialise AbleSet tracker"),
+        }
         Ok(state)
     }
 
@@ -291,6 +396,116 @@ impl AppState {
             .await
     }
 
+    pub async fn osc_settings(&self) -> anyhow::Result<OscSettings> {
+        self.repository.get_osc_settings().await
+    }
+
+    pub async fn update_osc_settings(
+        &self,
+        draft: OscSettingsDraft,
+    ) -> anyhow::Result<OscSettings> {
+        let settings = self.repository.upsert_osc_settings(&draft).await?;
+        self.osc_bridge
+            .apply_settings(settings.clone(), self.clone())
+            .await?;
+        Ok(settings)
+    }
+
+    pub async fn osc_status_snapshot(&self) -> OscStatusSnapshot {
+        self.osc_bridge.status().await
+    }
+
+    pub async fn ableset_settings(&self) -> anyhow::Result<AbleSetSettings> {
+        self.repository.get_ableset_settings().await
+    }
+
+    pub async fn update_ableset_settings(
+        &self,
+        draft: AbleSetSettingsDraft,
+    ) -> anyhow::Result<AbleSetSettings> {
+        let settings = self.repository.upsert_ableset_settings(&draft).await?;
+        self.ableset_bridge.apply_settings(settings.clone()).await?;
+        {
+            let mut cache = self.ableset_cache.write().await;
+            cache.invalidate();
+            cache.library_name = None;
+            cache.song_prefix_length = settings.song_prefix_length;
+        }
+        Ok(settings)
+    }
+
+    pub async fn ableset_status_snapshot(&self) -> AbleSetStatusSnapshot {
+        self.ableset_bridge.status_snapshot().await
+    }
+
+    pub async fn set_ableset_follow(&self, enabled: bool) -> AbleSetStatusSnapshot {
+        self.ableset_bridge.set_follow_enabled(enabled).await
+    }
+
+    pub async fn current_ableset_song(&self) -> Option<AbleSetSongSnapshot> {
+        self.ableset_bridge.song_snapshot().await
+    }
+
+    pub async fn resolve_ableset_presentation(
+        &self,
+        prefix: &str,
+    ) -> anyhow::Result<Option<PresentationId>> {
+        let key = prefix.trim();
+        if key.is_empty() {
+            return Ok(None);
+        }
+        let settings = self.ableset_bridge.status_snapshot().await;
+        if !settings.enabled {
+            return Ok(None);
+        }
+        self.ensure_ableset_cache(&settings).await?;
+        let lookup = key.to_ascii_lowercase();
+        let cache = self.ableset_cache.read().await;
+        Ok(cache.entries.get(&lookup).copied())
+    }
+
+    async fn ensure_ableset_cache(&self, settings: &AbleSetStatusSnapshot) -> anyhow::Result<()> {
+        let needs_refresh = {
+            let cache = self.ableset_cache.read().await;
+            !cache.matches(&settings.library_name, settings.song_prefix_length)
+                || cache.entries.is_empty()
+        };
+        if needs_refresh {
+            self.refresh_ableset_cache(settings).await?;
+        }
+        Ok(())
+    }
+
+    async fn refresh_ableset_cache(&self, settings: &AbleSetStatusSnapshot) -> anyhow::Result<()> {
+        let summaries = self.repository.list_library_summaries(None).await?;
+        let target = summaries
+            .into_iter()
+            .find(|summary| summary.name.eq_ignore_ascii_case(&settings.library_name));
+        let mut cache = self.ableset_cache.write().await;
+        cache.library_name = Some(settings.library_name.clone());
+        cache.song_prefix_length = settings.song_prefix_length;
+        cache.entries.clear();
+        cache.last_updated = Some(Utc::now());
+        cache.last_error = None;
+        if let Some(summary) = target {
+            for presentation in summary.presentations {
+                if let Some(prefix) =
+                    extract_song_prefix(&presentation.name, settings.song_prefix_length)
+                {
+                    cache
+                        .entries
+                        .insert(prefix.to_ascii_lowercase(), presentation.id);
+                }
+            }
+            if cache.entries.is_empty() {
+                cache.last_error = Some("no presentations with valid prefix".to_string());
+            }
+        } else {
+            cache.last_error = Some("library not found".to_string());
+        }
+        Ok(())
+    }
+
     pub async fn list_resolume_hosts(&self) -> anyhow::Result<Vec<ResolumeHost>> {
         self.repository.list_resolume_hosts().await
     }
@@ -414,6 +629,43 @@ impl AppState {
         ingestion: std::sync::Arc<dyn TestBibleIngestion + Send + Sync>,
     ) {
         self.bible_ingestion_override = Some(ingestion);
+    }
+
+    async fn ensure_demo_playlist(&self) -> anyhow::Result<()> {
+        if !self.repository.list_playlists().await?.is_empty() {
+            return Ok(());
+        }
+
+        let libraries = self.repository.fetch_libraries().await?;
+        let Some(library) = libraries.first() else {
+            return Ok(());
+        };
+
+        let entries: Vec<PlaylistEntry> = library
+            .presentations
+            .iter()
+            .take(5)
+            .map(|presentation| PlaylistEntry {
+                id: PlaylistEntryId::new(),
+                kind: PlaylistEntryKind::Presentation {
+                    presentation_id: presentation.id,
+                    midi_binding: None,
+                },
+            })
+            .collect();
+
+        if entries.is_empty() {
+            return Ok(());
+        }
+
+        let playlist = self
+            .repository
+            .create_playlist("Ableton Demo", true)
+            .await?;
+        self.repository
+            .replace_playlist_entries(playlist.id, &entries)
+            .await?;
+        Ok(())
     }
 
     async fn ensure_seed_library(&self) -> anyhow::Result<()> {
@@ -824,6 +1076,14 @@ impl AppState {
         }
     }
 
+    async fn sample_resolume_latency(&self) -> Option<f64> {
+        let snapshot = self.resolume_registry.snapshot().await;
+        snapshot
+            .values()
+            .filter_map(|status| status.last_latency_ms)
+            .min_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal))
+    }
+
     fn reindex_slides(slides: &mut Vec<Slide>) {
         for (index, slide) in slides.iter_mut().enumerate() {
             slide.order = index as u32;
@@ -889,10 +1149,12 @@ impl AppState {
     async fn broadcast_stage_resolution(&self, resolution: StageResolution) -> anyhow::Result<()> {
         let now = Utc::now();
         let timers_state = self.load_or_init_timers(now).await?;
+        let latency_ms = self.sample_resolume_latency().await;
         let context = StageContext {
             generated_at: now,
             overview: timers_state.overview(now),
             resolution,
+            latency_ms,
         };
         self.publish_stage_context(&context).await?;
         let current_main = context
@@ -961,10 +1223,12 @@ impl AppState {
             return Ok(None);
         };
 
+        let latency_ms = self.sample_resolume_latency().await;
         Ok(Some(StageContext {
             generated_at: now,
             overview,
             resolution,
+            latency_ms,
         }))
     }
 
@@ -1049,6 +1313,7 @@ struct StageContext {
     generated_at: DateTime<Utc>,
     overview: TimersOverview,
     resolution: StageResolution,
+    latency_ms: Option<f64>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -1061,6 +1326,10 @@ struct StageResolution {
     current: Option<StageDisplaySlide>,
     next_slide_id: Option<SlideId>,
     next: Option<StageDisplaySlide>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    current_index: Option<u32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    total_slides: Option<u32>,
 }
 
 impl StageResolution {
@@ -1073,6 +1342,8 @@ impl StageResolution {
             current: None,
             next_slide_id: None,
             next: None,
+            current_index: None,
+            total_slides: None,
         }
     }
 }
@@ -1098,6 +1369,8 @@ fn stage_resolution_from_presentation(
         }
     }
 
+    let total_slides = presentation.slides.len() as u32;
+
     if presentation.slides.is_empty() {
         return StageResolution {
             presentation_id: Some(presentation.id),
@@ -1107,6 +1380,8 @@ fn stage_resolution_from_presentation(
             current: None,
             next_slide_id: None,
             next: None,
+            current_index: None,
+            total_slides: Some(total_slides),
         };
     }
 
@@ -1168,6 +1443,16 @@ fn stage_resolution_from_presentation(
     let current_slide = resolved_current.as_ref().map(to_stage_display);
     let next_slide = resolved_next.as_ref().map(to_stage_display);
 
+    let current_index_value = resolved_current
+        .as_ref()
+        .and_then(|ctx| {
+            presentation
+                .slides
+                .iter()
+                .position(|slide| slide.id == ctx.slide.id)
+        })
+        .map(|index| index as u32 + 1);
+
     StageResolution {
         presentation_id: Some(presentation.id),
         presentation_name: Some(presentation.name.clone()),
@@ -1176,6 +1461,8 @@ fn stage_resolution_from_presentation(
         current: current_slide,
         next_slide_id: next_slide_id_value,
         next: next_slide,
+        current_index: current_index_value,
+        total_slides: Some(total_slides),
     }
 }
 
@@ -1193,6 +1480,9 @@ fn build_stage_snapshot(
         context.resolution.next_slide_id,
         context.resolution.next.clone(),
         context.overview.clone(),
+        context.latency_ms,
+        context.resolution.current_index,
+        context.resolution.total_slides,
     )
 }
 
@@ -1219,6 +1509,35 @@ fn blank_slide_content() -> SlideContent {
         SlideText::new("").expect("empty stage within limit"),
         None,
     )
+}
+
+#[derive(Default)]
+struct AbleSetLibraryCache {
+    library_name: Option<String>,
+    song_prefix_length: u8,
+    entries: HashMap<String, PresentationId>,
+    last_updated: Option<DateTime<Utc>>,
+    last_error: Option<String>,
+}
+
+impl AbleSetLibraryCache {
+    #[allow(dead_code)]
+    fn invalidate(&mut self) {
+        self.entries.clear();
+        self.library_name = None;
+        self.song_prefix_length = 0;
+        self.last_updated = None;
+        self.last_error = None;
+    }
+
+    #[allow(dead_code)]
+    fn matches(&self, library_name: &str, prefix_len: u8) -> bool {
+        if let Some(current) = &self.library_name {
+            current.eq_ignore_ascii_case(library_name) && self.song_prefix_length == prefix_len
+        } else {
+            false
+        }
+    }
 }
 
 fn format_countdown_text(seconds_remaining: i64) -> String {

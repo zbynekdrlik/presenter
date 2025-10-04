@@ -147,10 +147,14 @@ function render(manifests, baseOrigin) {
   <meta http-equiv="refresh" content="${Math.max(REFRESH_INTERVAL_MS / 1000, 5)}" />
   <style>
     :root {
+      box-sizing: border-box;
       color-scheme: dark light;
       font-family: Inter, "Segoe UI", system-ui, sans-serif;
       background: #0f172a;
       color: #e2e8f0;
+    }
+    *, *::before, *::after {
+      box-sizing: inherit;
     }
     body {
       margin: 0;
@@ -231,13 +235,14 @@ function render(manifests, baseOrigin) {
       margin: 0;
     }
     nav {
-      display: grid;
+      display: flex;
+      flex-wrap: wrap;
+      gap: 0.75rem;
       width: 100%;
       margin-top: 0.5rem;
-      gap: 0.75rem;
-      grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
     }
     nav a {
+      flex: 1 1 clamp(160px, 32%, 220px);
       display: inline-flex;
       justify-content: center;
       align-items: center;
@@ -249,6 +254,7 @@ function render(manifests, baseOrigin) {
       background: linear-gradient(135deg, #38bdf8, #2563eb);
       box-shadow: 0 10px 26px rgba(37, 99, 235, 0.28);
       transition: transform 0.18s ease, box-shadow 0.18s ease;
+      min-width: 160px;
     }
     nav a:hover {
       transform: translateY(-1px);
@@ -258,9 +264,14 @@ function render(manifests, baseOrigin) {
       outline: 2px solid rgba(56, 189, 248, 0.75);
       outline-offset: 3px;
     }
-    @media (max-width: 768px) {
-      nav {
-        grid-template-columns: repeat(auto-fit, minmax(140px, 1fr));
+    @media (max-width: 900px) {
+      nav a {
+        flex: 1 1 clamp(160px, 48%, 220px);
+      }
+    }
+    @media (max-width: 600px) {
+      nav a {
+        flex: 1 1 100%;
       }
     }
     .empty {

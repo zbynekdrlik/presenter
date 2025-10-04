@@ -1,7 +1,7 @@
 use crate::entities::{
-    bible_passage, bible_translation, library, library_favorite, playlist, playlist_entry,
-    playlist_favorite, presentation as presentation_entity, resolume_host, slide as slide_entity,
-    stage_state, timers,
+    ableset_settings, bible_passage, bible_translation, library, library_favorite, osc_settings,
+    playlist, playlist_entry, playlist_favorite, presentation as presentation_entity,
+    resolume_host, slide as slide_entity, stage_state, timers,
 };
 use anyhow::{anyhow, Context};
 use chrono::{DateTime, Duration, Utc};
@@ -9,17 +9,19 @@ use presenter_core::{
     bible::BibleIngestionBatch,
     playlist::{MidiBinding, PlaylistEntryKind},
     search::{fold_query, query_tokens},
-    BiblePassage, BibleReference, BibleTranslation, CountdownTimer, Library, LibraryId,
-    LibrarySummary, Playlist, PlaylistEntry, PlaylistEntryId, PlaylistId, PreachTimer,
-    Presentation, PresentationId, PresentationSummary, ResolumeHost, ResolumeHostDraft,
-    ResolumeHostId, SearchMatchField, SearchResult, SearchResultKind, Slide, SlideContent,
-    SlideGroup, SlideId, SlideText, StageState, TimerState, TimersState,
+    AbleSetSettings, AbleSetSettingsDraft, BiblePassage, BibleReference, BibleTranslation,
+    CountdownTimer, Library, LibraryId, LibrarySummary, OscSettings, OscSettingsDraft, Playlist,
+    PlaylistEntry, PlaylistEntryId, PlaylistId, PreachTimer, Presentation, PresentationId,
+    PresentationSummary, ResolumeHost, ResolumeHostDraft, ResolumeHostId, SearchMatchField,
+    SearchResult, SearchResultKind, Slide, SlideContent, SlideGroup, SlideId, SlideText,
+    StageState, TimerState, TimersState, VelocityMode,
 };
 use presenter_migration::{Migrator, MigratorTrait};
 use sea_orm::{
-    sea_query::Expr, ActiveModelTrait, ColumnTrait, Condition, Database, DatabaseConnection,
-    EntityTrait, IntoActiveModel, PaginatorTrait, QueryFilter, QueryOrder, QuerySelect, Set,
-    TransactionTrait,
+    sea_query::{Expr, OnConflict},
+    ActiveModelTrait, ColumnTrait, Condition, ConnectionTrait, Database, DatabaseConnection,
+    EntityTrait, IntoActiveModel, PaginatorTrait, QueryFilter, QueryOrder, QuerySelect, Schema,
+    Set, TransactionTrait,
 };
 use std::{
     collections::{HashMap, HashSet},
@@ -36,6 +38,8 @@ pub struct Repository {
 
 const TIMERS_SINGLETON_ID: &str = "timers";
 const STAGE_STATE_SINGLETON_ID: &str = "stage-state";
+const OSC_SETTINGS_SINGLETON_ID: &str = "osc";
+const ABLESET_SETTINGS_SINGLETON_ID: &str = "ableset";
 
 #[derive(Debug, Clone)]
 pub struct DatabaseSettings {
@@ -1161,6 +1165,166 @@ impl Repository {
     }
 
     #[instrument(skip_all)]
+    #[instrument(skip_all)]
+    pub async fn get_osc_settings(&self) -> anyhow::Result<OscSettings> {
+        if let Some(model) = osc_settings::Entity::find_by_id(OSC_SETTINGS_SINGLETON_ID.to_string())
+            .one(&self.db)
+            .await?
+        {
+            return Ok(osc_model_to_domain(model)?);
+        }
+        self.insert_osc_settings(OscSettingsDraft::default()).await
+    }
+
+    #[instrument(skip_all)]
+    pub async fn upsert_osc_settings(
+        &self,
+        draft: &OscSettingsDraft,
+    ) -> anyhow::Result<OscSettings> {
+        draft.validate().map_err(|err| anyhow!(err))?;
+        self.insert_osc_settings(draft.clone()).await
+    }
+
+    async fn ensure_ableset_settings_table(&self) -> anyhow::Result<()> {
+        let backend = self.db.get_database_backend();
+        let builder = Schema::new(backend);
+        let table = builder
+            .create_table_from_entity(ableset_settings::Entity)
+            .if_not_exists()
+            .to_owned();
+        let statement = backend.build(&table);
+        self.db.execute(statement).await?;
+        Ok(())
+    }
+
+    async fn insert_osc_settings(&self, draft: OscSettingsDraft) -> anyhow::Result<OscSettings> {
+        let now = Utc::now();
+        let address = draft.address_pattern.trim().to_string();
+        let mode = velocity_mode_to_string(draft.velocity_mode).to_string();
+        let active = osc_settings::ActiveModel {
+            id: sea_orm::ActiveValue::set(OSC_SETTINGS_SINGLETON_ID.to_string()),
+            enabled: sea_orm::ActiveValue::set(draft.enabled),
+            listen_port: sea_orm::ActiveValue::set(draft.listen_port as i32),
+            address_pattern: sea_orm::ActiveValue::set(address.clone()),
+            velocity_mode: sea_orm::ActiveValue::set(mode.clone()),
+            created_at: sea_orm::ActiveValue::set(now.into()),
+            updated_at: sea_orm::ActiveValue::set(now.into()),
+        };
+
+        osc_settings::Entity::insert(active)
+            .on_conflict(
+                OnConflict::column(osc_settings::Column::Id)
+                    .update_columns([
+                        osc_settings::Column::Enabled,
+                        osc_settings::Column::ListenPort,
+                        osc_settings::Column::AddressPattern,
+                        osc_settings::Column::VelocityMode,
+                        osc_settings::Column::UpdatedAt,
+                    ])
+                    .to_owned(),
+            )
+            .exec(&self.db)
+            .await?;
+
+        let model = osc_settings::Entity::find_by_id(OSC_SETTINGS_SINGLETON_ID.to_string())
+            .one(&self.db)
+            .await?
+            .ok_or_else(|| anyhow!("osc settings missing after upsert"))?;
+        Ok(osc_model_to_domain(model)?)
+    }
+
+    #[instrument(skip_all)]
+    pub async fn get_ableset_settings(&self) -> anyhow::Result<AbleSetSettings> {
+        self.ensure_ableset_settings_table().await?;
+        if let Some(mut model) =
+            ableset_settings::Entity::find_by_id(ABLESET_SETTINGS_SINGLETON_ID.to_string())
+                .one(&self.db)
+                .await?
+        {
+            let defaults = AbleSetSettingsDraft::default();
+            let mut needs_update = false;
+            if model.http_port == 5950 {
+                model.http_port = defaults.http_port as i32;
+                needs_update = true;
+            }
+            if model.osc_port == 5950 {
+                model.osc_port = defaults.osc_port as i32;
+                needs_update = true;
+            }
+            if model.library_name.trim().eq_ignore_ascii_case("NEWLEVEL") {
+                model.library_name = defaults.library_name.clone();
+                needs_update = true;
+            }
+            if needs_update {
+                let mut active: ableset_settings::ActiveModel = model.clone().into();
+                active.http_port = sea_orm::ActiveValue::set(model.http_port);
+                active.osc_port = sea_orm::ActiveValue::set(model.osc_port);
+                active.updated_at = sea_orm::ActiveValue::set(Utc::now().into());
+                active.update(&self.db).await?;
+                model =
+                    ableset_settings::Entity::find_by_id(ABLESET_SETTINGS_SINGLETON_ID.to_string())
+                        .one(&self.db)
+                        .await?
+                        .ok_or_else(|| anyhow!("ableset settings missing after migration"))?;
+            }
+            return Ok(ableset_model_to_domain(model)?);
+        }
+        self.insert_ableset_settings(AbleSetSettingsDraft::default())
+            .await
+    }
+
+    #[instrument(skip_all)]
+    pub async fn upsert_ableset_settings(
+        &self,
+        draft: &AbleSetSettingsDraft,
+    ) -> anyhow::Result<AbleSetSettings> {
+        draft.validate().map_err(|err| anyhow!(err))?;
+        self.insert_ableset_settings(draft.clone()).await
+    }
+
+    async fn insert_ableset_settings(
+        &self,
+        draft: AbleSetSettingsDraft,
+    ) -> anyhow::Result<AbleSetSettings> {
+        self.ensure_ableset_settings_table().await?;
+        let now = Utc::now();
+        let active = ableset_settings::ActiveModel {
+            id: sea_orm::ActiveValue::set(ABLESET_SETTINGS_SINGLETON_ID.to_string()),
+            enabled: sea_orm::ActiveValue::set(draft.enabled),
+            host: sea_orm::ActiveValue::set(draft.host.trim().to_string()),
+            osc_port: sea_orm::ActiveValue::set(draft.osc_port as i32),
+            http_port: sea_orm::ActiveValue::set(draft.http_port as i32),
+            library_name: sea_orm::ActiveValue::set(draft.library_name.trim().to_string()),
+            song_prefix_length: sea_orm::ActiveValue::set(draft.song_prefix_length as i32),
+            created_at: sea_orm::ActiveValue::set(now.into()),
+            updated_at: sea_orm::ActiveValue::set(now.into()),
+        };
+
+        ableset_settings::Entity::insert(active)
+            .on_conflict(
+                OnConflict::column(ableset_settings::Column::Id)
+                    .update_columns([
+                        ableset_settings::Column::Enabled,
+                        ableset_settings::Column::Host,
+                        ableset_settings::Column::OscPort,
+                        ableset_settings::Column::HttpPort,
+                        ableset_settings::Column::LibraryName,
+                        ableset_settings::Column::SongPrefixLength,
+                        ableset_settings::Column::UpdatedAt,
+                    ])
+                    .to_owned(),
+            )
+            .exec(&self.db)
+            .await?;
+
+        let model = ableset_settings::Entity::find_by_id(ABLESET_SETTINGS_SINGLETON_ID.to_string())
+            .one(&self.db)
+            .await?
+            .ok_or_else(|| anyhow!("ableset settings missing after upsert"))?;
+
+        Ok(ableset_model_to_domain(model)?)
+    }
+
     pub async fn list_resolume_hosts(&self) -> anyhow::Result<Vec<ResolumeHost>> {
         let models = resolume_host::Entity::find()
             .order_by_asc(resolume_host::Column::Label)
@@ -1360,6 +1524,14 @@ enum RepositoryError {
     UnknownTimerState(String),
     #[error("unknown playlist entry type '{0}' in persistence layer")]
     UnknownPlaylistEntryType(String),
+    #[error("osc port {0} out of range")]
+    InvalidOscPort(i32),
+    #[error("ableset port {0} out of range")]
+    InvalidAbleSetPort(i32),
+    #[error("ableset song prefix length {0} out of range")]
+    InvalidAbleSetPrefix(i32),
+    #[error("unknown osc velocity mode '{0}' in persistence layer")]
+    UnknownOscVelocityMode(String),
 }
 
 fn parse_uuid(id: &str) -> Result<Uuid, RepositoryError> {
@@ -1433,6 +1605,70 @@ fn to_domain_playlist(
         show_in_dashboard,
         entries,
     )?)
+}
+
+fn ableset_model_to_domain(
+    model: ableset_settings::Model,
+) -> Result<AbleSetSettings, RepositoryError> {
+    let osc_port = cast_ableset_port(model.osc_port)?;
+    let http_port = cast_ableset_port(model.http_port)?;
+    let prefix_length = cast_prefix_length(model.song_prefix_length)?;
+    Ok(AbleSetSettings::new(
+        model.enabled,
+        model.host,
+        osc_port,
+        http_port,
+        model.library_name,
+        prefix_length,
+        model.created_at.into(),
+        model.updated_at.into(),
+    ))
+}
+
+fn cast_ableset_port(value: i32) -> Result<u16, RepositoryError> {
+    if value <= 0 || value > u16::MAX as i32 {
+        return Err(RepositoryError::InvalidAbleSetPort(value));
+    }
+    Ok(value as u16)
+}
+
+fn cast_prefix_length(value: i32) -> Result<u8, RepositoryError> {
+    if value <= 0 || value > u8::MAX as i32 {
+        return Err(RepositoryError::InvalidAbleSetPrefix(value));
+    }
+    Ok(value as u8)
+}
+
+fn osc_model_to_domain(model: osc_settings::Model) -> Result<OscSettings, RepositoryError> {
+    let mode = parse_velocity_mode(&model.velocity_mode)?;
+    let port_i32 = model.listen_port;
+    if port_i32 <= 0 || port_i32 > u16::MAX as i32 {
+        return Err(RepositoryError::InvalidOscPort(port_i32));
+    }
+    let port = port_i32 as u16;
+    Ok(OscSettings::new(
+        model.enabled,
+        port,
+        model.address_pattern,
+        mode,
+        model.created_at.into(),
+        model.updated_at.into(),
+    ))
+}
+
+fn velocity_mode_to_string(mode: VelocityMode) -> &'static str {
+    match mode {
+        VelocityMode::ZeroBased => "zero_based",
+        VelocityMode::OneBased => "one_based",
+    }
+}
+
+fn parse_velocity_mode(value: &str) -> Result<VelocityMode, RepositoryError> {
+    match value.to_lowercase().as_str() {
+        "zero_based" | "zero-based" | "zero" | "0" => Ok(VelocityMode::ZeroBased),
+        "one_based" | "one-based" | "one" | "1" => Ok(VelocityMode::OneBased),
+        other => Err(RepositoryError::UnknownOscVelocityMode(other.to_string())),
+    }
 }
 
 fn to_domain_translation(model: bible_translation::Model) -> BibleTranslation {
@@ -1725,6 +1961,37 @@ mod tests {
             .await
             .unwrap();
         assert!(head.is_some());
+    }
+
+    #[tokio::test]
+    async fn osc_settings_default_is_seeded() {
+        let repo = Repository::connect_in_memory().await.unwrap();
+        let settings = repo.get_osc_settings().await.unwrap();
+        assert!(settings.enabled);
+        assert_eq!(settings.listen_port, 9000);
+        assert_eq!(settings.address_pattern, "/note");
+        assert_eq!(settings.velocity_mode, VelocityMode::ZeroBased);
+    }
+
+    #[tokio::test]
+    async fn osc_settings_upsert_updates_values() {
+        let repo = Repository::connect_in_memory().await.unwrap();
+        let draft = OscSettingsDraft {
+            enabled: true,
+            listen_port: 10023,
+            address_pattern: "/presenter/trigger".to_string(),
+            velocity_mode: VelocityMode::OneBased,
+        };
+        let updated = repo.upsert_osc_settings(&draft).await.unwrap();
+        assert!(updated.enabled);
+        assert_eq!(updated.listen_port, 10023);
+        assert_eq!(updated.address_pattern, "/presenter/trigger");
+        assert_eq!(updated.velocity_mode, VelocityMode::OneBased);
+
+        // upsert idempotency
+        let second = repo.get_osc_settings().await.unwrap();
+        assert_eq!(second.address_pattern, updated.address_pattern);
+        assert_eq!(second.listen_port, updated.listen_port);
     }
 
     #[tokio::test]

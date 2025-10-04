@@ -1,8 +1,10 @@
 //! Core domain models for the Presenter application.
 
+pub mod ableset;
 pub mod bible;
 pub mod id;
 pub mod library;
+pub mod osc;
 pub mod playlist;
 pub mod presentation;
 pub mod resolume;
@@ -11,9 +13,14 @@ pub mod slide;
 pub mod stage_display;
 pub mod timer;
 
+pub use ableset::{
+    extract_song_prefix, AbleSetSettings, AbleSetSettingsDraft, AbleSetSettingsValidationError,
+    AbleSetSongSnapshot,
+};
 pub use bible::{BibleBroadcast, BiblePassage, BibleReference, BibleTranslation};
 pub use id::{LibraryId, PlaylistEntryId, PlaylistId, PresentationId, ResolumeHostId, SlideId};
 pub use library::{Library, LibrarySummary, PresentationSummary};
+pub use osc::{OscSettings, OscSettingsDraft, OscSettingsValidationError, VelocityMode};
 pub use playlist::{Playlist, PlaylistEntry};
 pub use presentation::Presentation;
 pub use resolume::{ResolumeHost, ResolumeHostDraft, ResolumeHostValidationError};
