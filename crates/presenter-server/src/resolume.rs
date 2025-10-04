@@ -1726,10 +1726,6 @@ Line 2"
             .expect("stage update");
 
         let requests = server.received_requests().await.expect("requests");
-        dbg!(&requests);
-        for request in &requests {
-            println!("{} {}", request.method, request.url.path());
-        }
         let payload_request = requests
             .iter()
             .find(|req| {
@@ -1971,11 +1967,6 @@ Line 2"
         }
 
         driver.refresh_mapping().await.unwrap();
-        println!("mapping present? {}", driver.mapping.is_some());
-        if let Some(mapping) = driver.mapping.clone() {
-            let ids: Vec<_> = mapping.song_name.iter().map(|target| target.clip_id).collect();
-            println!("song mapping clip ids: {:?}", ids);
-        }
 
         let second = StageUpdate {
             current_main: Some("Second".to_string()),
