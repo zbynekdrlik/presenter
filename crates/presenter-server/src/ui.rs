@@ -131,22 +131,19 @@ pub fn OperatorDocument(
     let playlists = Arc::new(playlists);
     let timers = Arc::new(timers);
     let ableset_enabled = ableset_status.enabled;
-    let ableset_tracking = ableset_status.tracking;
     let ableset_follow_enabled = ableset_status.follow_enabled;
     let ableset_enable_label = if ableset_enabled {
-        if ableset_tracking {
-            "Automation • Tracking".to_string()
-        } else {
-            "Automation • On".to_string()
-        }
+        "Ableton ON"
     } else {
-        "Automation • Off".to_string()
-    };
+        "Ableton OFF"
+    }
+    .to_string();
     let ableset_follow_label = if ableset_follow_enabled {
-        "Follow UI • On".to_string()
+        "Follow ON"
     } else {
-        "Follow UI • Off".to_string()
-    };
+        "Follow OFF"
+    }
+    .to_string();
     let libraries_json = libraries_json.replace("</script>", r"<\/script>");
     let playlists_json = playlists_json.replace("</script>", r"<\/script>");
     let timers_json = to_string(&*timers).unwrap_or_else(|_| "{}".to_string());
@@ -217,33 +214,23 @@ pub fn OperatorDocument(
                             </div>
                         </div>
                         <div class="operator__header-right">
-                            <div
-                                class="operator__ableset-panel"
-                                data-role="ableset-panel"
-                                data-enabled={if ableset_enabled { "true" } else { "false" }}
-                                data-follow={if ableset_follow_enabled { "true" } else { "false" }}
-                            >
-                                <button
-                                    type="button"
-                                    class="operator__ableset-toggle"
-                                    data-role="ableset-enable"
-                                    data-state={if ableset_enabled { "on" } else { "off" }}
-                                >{ableset_enable_label.clone()}</button>
-                                <button
-                                    type="button"
-                                    class="operator__ableset-toggle"
-                                    data-role="ableset-follow"
-                                    data-state={if ableset_follow_enabled { "on" } else { "off" }}
-                                >{ableset_follow_label.clone()}</button>
-                            </div>
                             <div class="operator__stage-preview" data-role="stage-status" data-active="false">
                                 <div class="operator__stage-preview-stack">
                                     <div class="operator__stage-preview-panel operator__stage-preview-panel--next" data-role="stage-next">"—"</div>
-                                    <div class="operator__stage-preview-meta">
-                                        <span class="operator__stage-preview-meta-label">"Song"</span>
-                                        <span class="operator__stage-preview-meta-value" data-role="stage-song-name">"—"</span>
-                                        <span class="operator__stage-preview-meta-label operator__stage-preview-meta-label--secondary">"Slide"</span>
-                                        <span class="operator__stage-preview-meta-value" data-role="stage-slide-index">"—"</span>
+                                    <div class="operator__stage-preview-song" data-role="stage-song-line">"—"</div>
+                                    <div class="operator__stage-preview-actions">
+                                        <button
+                                            type="button"
+                                            class="operator__stage-toggle"
+                                            data-role="ableset-enable"
+                                            data-state={if ableset_enabled { "on" } else { "off" }}
+                                        >{ableset_enable_label}</button>
+                                        <button
+                                            type="button"
+                                            class="operator__stage-toggle"
+                                            data-role="ableset-follow"
+                                            data-state={if ableset_follow_enabled { "on" } else { "off" }}
+                                        >{ableset_follow_label}</button>
                                     </div>
                                 </div>
                                 <div class="operator__stage-preview-panel operator__stage-preview-panel--current" data-role="stage-current">"—"</div>
@@ -1457,54 +1444,7 @@ body.operator[data-mode="live"] .operator__line-limit {
 .operator__header-right {
     display: flex;
     align-items: center;
-    gap: 1.25rem;
-}
-
-.operator__ableset-panel {
-    display: flex;
-    flex-direction: column;
-    gap: 0.5rem;
-    min-width: 180px;
-    padding: 0.65rem 0.85rem;
-    border-radius: 14px;
-    background: rgba(15, 23, 42, 0.55);
-    border: 1px solid rgba(148, 163, 184, 0.22);
-    box-shadow: inset 0 0 0 1px rgba(15, 23, 42, 0.28);
-}
-
-.operator__ableset-panel[data-enabled="false"] {
-    opacity: 0.9;
-}
-
-.operator__ableset-toggle {
-    border: none;
-    border-radius: 999px;
-    padding: 0.45rem 0.75rem;
-    font-size: 0.78rem;
-    font-weight: 600;
-    letter-spacing: 0.04em;
-    text-transform: uppercase;
-    cursor: pointer;
-    color: #ffffff;
-    background: rgba(255, 255, 255, 0.12);
-    display: flex;
-    justify-content: space-between;
-    align-items: center;
-    transition: background 0.15s ease, opacity 0.15s ease;
-}
-
-.operator__ableset-toggle[data-state="on"] {
-    background: linear-gradient(135deg, rgba(34, 197, 94, 0.9), rgba(14, 165, 233, 0.9));
-}
-
-.operator__ableset-toggle[data-loading="true"] {
-    opacity: 0.6;
-    cursor: wait;
-}
-
-.operator__ableset-toggle:disabled {
-    cursor: not-allowed;
-    opacity: 0.45;
+    gap: 1.5rem;
 }
 
 .operator__stage-preview {
@@ -1599,6 +1539,47 @@ body.operator[data-mode="live"] .operator__line-limit {
     justify-content: flex-start;
     gap: 0.5rem;
     min-width: 12rem;
+    align-items: center;
+}
+
+.operator__stage-preview-song {
+    font-size: 0.82rem;
+    font-weight: 400;
+    letter-spacing: 0.01em;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    max-width: 100%;
+    text-align: center;
+}
+
+.operator__stage-preview-actions {
+    display: flex;
+    gap: 0.5rem;
+    justify-content: center;
+}
+
+.operator__stage-toggle {
+    border: 1px solid rgba(148, 163, 184, 0.35);
+    border-radius: 8px;
+    background: rgba(15, 23, 42, 0.6);
+    color: #f1f5f9;
+    padding: 0.35rem 0.7rem;
+    font-size: 0.75rem;
+    font-weight: 600;
+    cursor: pointer;
+    transition: background 0.2s ease, border-color 0.2s ease;
+}
+
+.operator__stage-toggle[data-state="off"] {
+    background: rgba(15, 23, 42, 0.25);
+    color: rgba(226, 232, 240, 0.75);
+    border-color: rgba(148, 163, 184, 0.25);
+}
+
+.operator__stage-toggle:disabled {
+    opacity: 0.55;
+    cursor: not-allowed;
 }
 
 .operator__stage-preview-panel {
@@ -1616,42 +1597,15 @@ body.operator[data-mode="live"] .operator__line-limit {
     border-radius: 10px;
 }
 
-.operator__stage-preview-panel--next {
-    min-height: 3.5rem;
-    font-size: 0.82rem;
-    padding: 0.45rem 0.65rem;
-}
-
 .operator__stage-preview-panel--current {
     background: rgba(59, 124, 255, 0.28);
     font-weight: 600;
 }
 
-.operator__stage-preview-meta {
-    display: grid;
-    grid-template-columns: auto 1fr;
-    column-gap: 0.75rem;
-    row-gap: 0.25rem;
-    font-size: 0.72rem;
-    letter-spacing: 0.1em;
-    text-transform: uppercase;
-}
-
-.operator__stage-preview-meta-label {
-    color: rgba(226, 232, 240, 0.62);
-    font-weight: 600;
-}
-
-.operator__stage-preview-meta-label--secondary {
-    margin-top: 0.35rem;
-}
-
-.operator__stage-preview-meta-value {
-    color: #f8fafc;
-    font-weight: 600;
-    text-align: right;
-    font-size: 0.78rem;
-    min-width: 3ch;
+.operator__stage-preview-panel--next {
+    min-height: 3.5rem;
+    font-size: 0.82rem;
+    padding: 0.45rem 0.6rem;
 }
 
 .operator__clear-button {

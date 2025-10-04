@@ -113,11 +113,9 @@
     stageMonitorConnected: document.querySelector('[data-role="stage-monitor-connected"]'),
     stageMonitorIssues: document.querySelector('[data-role="stage-monitor-issues"]'),
     addSlide: document.querySelector('[data-role="add-slide"]'),
-    ablesetPanel: document.querySelector('[data-role="ableset-panel"]'),
     ablesetEnable: document.querySelector('[data-role="ableset-enable"]'),
     ablesetFollow: document.querySelector('[data-role="ableset-follow"]'),
-    stageSongName: document.querySelector('[data-role="stage-song-name"]'),
-    stageSlideIndex: document.querySelector('[data-role="stage-slide-index"]'),
+    stageSongLine: document.querySelector('[data-role="stage-song-line"]'),
     clearSlide: document.querySelector('[data-role="clear-slide"]'),
     lineLimit: document.querySelector('[data-role="line-limit"]'),
     toast: document.querySelector('[data-role="toast"]'),
@@ -169,7 +167,7 @@
 
   function normalizeAbleSetStatus(input) {
     if (!input || typeof input !== 'object') {
-      return { enabled: false, tracking: false, lastSong: null, lastError: null };
+      return { enabled: false, tracking: false, followEnabled: false, lastSong: null, lastError: null };
     }
     const rawSong = input.lastSong || input.last_song || null;
     const song = rawSong && typeof rawSong === 'object' ? {
@@ -181,7 +179,7 @@
     return {
       enabled: Boolean(input.enabled),
       tracking: Boolean(input.tracking),
-       followEnabled: Boolean(input.followEnabled ?? input.follow_enabled),
+      followEnabled: Boolean(input.followEnabled ?? input.follow_enabled),
       lastSong: song,
       lastError: input.lastError || input.last_error || null,
     };
@@ -972,12 +970,8 @@
       nextEl.textContent = nextText || '—';
     }
 
-    const { songName, slideLabel } = resolveSongAndSlide(snapshot);
-    if (els.stageSongName) {
-      els.stageSongName.textContent = songName;
-    }
-    if (els.stageSlideIndex) {
-      els.stageSlideIndex.textContent = slideLabel;
+    if (els.stageSongLine) {
+      els.stageSongLine.textContent = resolveSongLine(snapshot);
     }
   }
 
@@ -4784,15 +4778,8 @@ function updateCardWarnings(card) {
       lastError: null,
     };
 
-    if (els.ablesetPanel) {
-      els.ablesetPanel.dataset.enabled = status.enabled ? 'true' : 'false';
-      els.ablesetPanel.dataset.follow = status.followEnabled ? 'true' : 'false';
-    }
-
     if (els.ablesetEnable) {
-      const label = status.enabled
-        ? (status.tracking ? 'Automation • Tracking' : 'Automation • On')
-        : 'Automation • Off';
+      const label = status.enabled ? 'Ableton ON' : 'Ableton OFF';
       els.ablesetEnable.textContent = label;
       els.ablesetEnable.dataset.state = status.enabled ? 'on' : 'off';
       els.ablesetEnable.dataset.loading = state.ableset.enableLoading ? 'true' : 'false';
@@ -4800,7 +4787,7 @@ function updateCardWarnings(card) {
     }
 
     if (els.ablesetFollow) {
-      const label = status.followEnabled ? 'Follow UI • On' : 'Follow UI • Off';
+      const label = status.followEnabled ? 'Follow ON' : 'Follow OFF';
       els.ablesetFollow.textContent = label;
       els.ablesetFollow.dataset.state = status.followEnabled ? 'on' : 'off';
       els.ablesetFollow.dataset.loading = state.ableset.followLoading ? 'true' : 'false';
@@ -4808,12 +4795,8 @@ function updateCardWarnings(card) {
     }
 
     const snapshot = state.stageSnapshot;
-    const { songName, slideLabel } = resolveSongAndSlide(snapshot);
-    if (els.stageSongName) {
-      els.stageSongName.textContent = songName;
-    }
-    if (els.stageSlideIndex) {
-      els.stageSlideIndex.textContent = slideLabel;
+    if (els.stageSongLine) {
+      els.stageSongLine.textContent = resolveSongLine(snapshot);
     }
   }
 
@@ -4847,34 +4830,44 @@ function updateCardWarnings(card) {
     return null;
   }
 
-  function resolveSongAndSlide(snapshot) {
+  function resolveSongLine(snapshot) {
     const status = state.ableset.status || {};
-    let songName = snapshot && snapshot.presentationName ? snapshot.presentationName : '';
-    if (!songName && status.lastSong) {
+    let presentationName = snapshot && snapshot.presentationName ? snapshot.presentationName.toString().trim() : '';
+    if (!presentationName && status.lastSong) {
       const prefix = status.lastSong.prefix || '';
       const fromPrefix = resolvePresentationNameByPrefix(prefix);
       if (fromPrefix) {
-        songName = fromPrefix;
+        presentationName = fromPrefix;
       } else if (typeof status.lastSong.name === 'string') {
-        songName = status.lastSong.name;
+        presentationName = status.lastSong.name;
       }
     }
-    if (!songName) {
-      songName = '—';
+    if (!presentationName && status.lastSong && typeof status.lastSong.name === 'string') {
+      presentationName = status.lastSong.name;
+    }
+    if (!presentationName) {
+      presentationName = '';
     }
 
-    let slideLabel = '—';
-    if (snapshot) {
-      const position = typeof snapshot.currentPosition === 'number' ? snapshot.currentPosition : null;
-      const total = typeof snapshot.totalSlides === 'number' ? snapshot.totalSlides : null;
-      if (position !== null) {
-        slideLabel = total && total > 0 ? `${position}/${total}` : String(position);
-      }
+    let slideIndex = null;
+    if (snapshot && typeof snapshot.currentPosition === 'number') {
+      slideIndex = snapshot.currentPosition;
     } else if (status.lastSong && typeof status.lastSong.index === 'number') {
-      slideLabel = String(status.lastSong.index + 1);
+      slideIndex = status.lastSong.index + 1;
     }
 
-    return { songName, slideLabel };
+    if (!presentationName && slideIndex == null) {
+      return '—';
+    }
+
+    const slideSuffix = slideIndex != null ? ` (${slideIndex})` : '';
+    if (presentationName) {
+      return `${presentationName}${slideSuffix}`.trim();
+    }
+    if (slideIndex != null) {
+      return `Slide ${slideIndex}`;
+    }
+    return '—';
   }
 
   async function refreshAbleSetStatus(showError) {

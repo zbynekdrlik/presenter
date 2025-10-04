@@ -129,12 +129,7 @@ impl<'a> ProPresenterImporter<'a> {
             self.repository
                 .set_library_favorite(library.id, true)
                 .await
-                .with_context(|| {
-                    format!(
-                        "failed to mark library {} as favorite",
-                        &library.name
-                    )
-                })?;
+                .with_context(|| format!("failed to mark library {} as favorite", &library.name))?;
         }
         Ok(Some(summary))
     }
