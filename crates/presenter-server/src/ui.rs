@@ -4320,6 +4320,14 @@ fn SettingsDocument(hosts: Vec<SettingsHostRow>, script: String) -> impl IntoVie
                                     <dd>"Clears the Bible layer when triggered."</dd>
                                 </div>
                                 <div>
+                                    <dt>"#song-name"</dt>
+                                    <dd>"Displays the active song title (numeric prefixes like '001 ' are removed automatically)."</dd>
+                                </div>
+                                <div>
+                                    <dt>"#band-name"</dt>
+                                    <dd>"Displays the library/band the current song belongs to."</dd>
+                                </div>
+                                <div>
                                     <dt>"Suffixes: -u / -re"</dt>
                                     <dd>"Append -u to force uppercase and -re to collapse multi-line text into a single space-delimited line. Combine them (e.g., #translate-b-u-re) for stacked transforms."</dd>
                                 </div>

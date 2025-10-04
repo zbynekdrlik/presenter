@@ -72,6 +72,9 @@ Operators require:
   is case-insensitive, ignores surrounding text, and supports alias tokens (`main-a`, `Main A`).
 - Maintain two clip references per output channel (Main, Translation, Bible, Bible Translation),
   alternating between A/B lanes. `#bible-clear` remains a dedicated clip.
+- Single-slot metadata clips – `#song-name` and `#band-name` – display the active song title and
+  library/band name respectively. Presenter updates both alongside slide advances so overlays can show
+  contextual text without lane juggling.
 - Clip names may include suffix modifiers: `-u` forces uppercase output, `-re` collapses
   multi-line payloads into a single space-delimited line. Modifiers can be combined (e.g.
   `#translate-b-u-re`).

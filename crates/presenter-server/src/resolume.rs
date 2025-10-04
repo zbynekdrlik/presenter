@@ -64,6 +64,8 @@ impl ResolumeConnectionSnapshot {
 pub struct StageUpdate {
     pub current_main: Option<String>,
     pub current_translation: Option<String>,
+    pub song_name: Option<String>,
+    pub band_name: Option<String>,
 }
 
 #[derive(Debug, Clone)]
@@ -288,6 +290,14 @@ struct HostDriver {
     endpoint: Option<ResolvedEndpoint>,
     last_mapping_refresh: Option<Instant>,
     last_timer_payload: Option<String>,
+    last_song_name_payload: Option<String>,
+    last_band_name_payload: Option<String>,
+}
+
+#[derive(Clone, Copy, Debug)]
+enum MetadataSlot {
+    SongName,
+    BandName,
 }
 
 impl HostDriver {
@@ -300,6 +310,8 @@ impl HostDriver {
             endpoint: None,
             last_mapping_refresh: None,
             last_timer_payload: None,
+            last_song_name_payload: None,
+            last_band_name_payload: None,
         }
     }
 
@@ -310,6 +322,8 @@ impl HostDriver {
         self.endpoint = None;
         self.last_mapping_refresh = None;
         self.last_timer_payload = None;
+        self.last_song_name_payload = None;
+        self.last_band_name_payload = None;
     }
 
     async fn refresh_status(&self, status: &Arc<RwLock<ResolumeConnectionSnapshot>>) {
@@ -368,6 +382,46 @@ impl HostDriver {
                     to_trigger.append(&mut translation_targets);
                     translation_lane_filled = true;
                 }
+            }
+
+            if let Some(ref song_name) = update.song_name {
+                if mapping.song_name.is_empty() {
+                    warn!(
+                        host = %self.config.host,
+                        port = self.config.port,
+                        "Resolume mapping missing #song-name clip"
+                    );
+                } else {
+                    self.update_metadata_targets(
+                        &mapping.song_name,
+                        song_name,
+                        MetadataSlot::SongName,
+                        status,
+                    )
+                    .await?;
+                }
+            } else {
+                self.last_song_name_payload = None;
+            }
+
+            if let Some(ref band_name) = update.band_name {
+                if mapping.band_name.is_empty() {
+                    warn!(
+                        host = %self.config.host,
+                        port = self.config.port,
+                        "Resolume mapping missing #band-name clip"
+                    );
+                } else {
+                    self.update_metadata_targets(
+                        &mapping.band_name,
+                        band_name,
+                        MetadataSlot::BandName,
+                        status,
+                    )
+                    .await?;
+                }
+            } else {
+                self.last_band_name_payload = None;
             }
 
             if !to_trigger.is_empty() {
@@ -638,6 +692,45 @@ impl HostDriver {
         }
 
         Ok(selected.to_vec())
+    }
+
+    async fn update_metadata_targets(
+        &mut self,
+        targets: &[ClipTarget],
+        text: &str,
+        slot: MetadataSlot,
+        status: &Arc<RwLock<ResolumeConnectionSnapshot>>,
+    ) -> anyhow::Result<()> {
+        if targets.is_empty() {
+            return Ok(());
+        }
+
+        let already_sent = match slot {
+            MetadataSlot::SongName => self.last_song_name_payload.as_deref() == Some(text),
+            MetadataSlot::BandName => self.last_band_name_payload.as_deref() == Some(text),
+        };
+
+        if already_sent {
+            return Ok(());
+        }
+
+        let endpoint = self.endpoint().await?;
+        let mut latency_recorded = None;
+        for target in targets {
+            if let Some(duration) = self.update_clip_text(target, text, &endpoint).await? {
+                if latency_recorded.is_none() {
+                    latency_recorded = Some(duration);
+                }
+            }
+        }
+        if let Some(latency) = latency_recorded {
+            self.note_latency(status, latency).await;
+        }
+        match slot {
+            MetadataSlot::SongName => self.last_song_name_payload = Some(text.to_string()),
+            MetadataSlot::BandName => self.last_band_name_payload = Some(text.to_string()),
+        }
+        Ok(())
     }
 
     async fn update_clip_text(
@@ -943,6 +1036,8 @@ mod clip_map {
         pub bible_translation_b: Vec<ClipTarget>,
         pub bible_clear: Vec<ClipTarget>,
         pub timer: Vec<ClipTarget>,
+        pub song_name: Vec<ClipTarget>,
+        pub band_name: Vec<ClipTarget>,
         missing_tokens: Vec<&'static str>,
     }
 
@@ -1014,6 +1109,8 @@ mod clip_map {
                         },
                         ClipDestination::BibleClear(target) => mapping.bible_clear.push(target),
                         ClipDestination::Timer(target) => mapping.timer.push(target),
+                        ClipDestination::SongName(target) => mapping.song_name.push(target),
+                        ClipDestination::BandName(target) => mapping.band_name.push(target),
                     }
                 }
             }
@@ -1027,6 +1124,8 @@ mod clip_map {
         BibleTranslation(LaneTarget, ClipTarget),
         BibleClear(ClipTarget),
         Timer(ClipTarget),
+        SongName(ClipTarget),
+        BandName(ClipTarget),
     }
 
     #[derive(Debug, Clone, Copy)]
@@ -1037,6 +1136,8 @@ mod clip_map {
         BibleTranslation,
         BibleClear,
         Timer,
+        SongName,
+        BandName,
     }
 
     fn parse_clip_destinations(
@@ -1075,12 +1176,28 @@ mod clip_map {
             }
             "#bibleclear" => ClipKind::BibleClear,
             "#timer" => ClipKind::Timer,
+            "#song" => {
+                if tokens.get(index) == Some(&"name") {
+                    index += 1;
+                    ClipKind::SongName
+                } else {
+                    return result;
+                }
+            }
+            "#band" => {
+                if tokens.get(index) == Some(&"name") {
+                    index += 1;
+                    ClipKind::BandName
+                } else {
+                    return result;
+                }
+            }
             _ => return result,
         };
 
         let transforms_start;
         let lane = match kind {
-            ClipKind::BibleClear | ClipKind::Timer => {
+            ClipKind::BibleClear | ClipKind::Timer | ClipKind::SongName | ClipKind::BandName => {
                 transforms_start = index;
                 None
             }
@@ -1157,6 +1274,20 @@ mod clip_map {
                     transforms,
                 }));
             }
+            (ClipKind::SongName, _) => {
+                result.push(ClipDestination::SongName(ClipTarget {
+                    clip_id,
+                    text_param_id,
+                    transforms,
+                }));
+            }
+            (ClipKind::BandName, _) => {
+                result.push(ClipDestination::BandName(ClipTarget {
+                    clip_id,
+                    text_param_id,
+                    transforms,
+                }));
+            }
             _ => {}
         }
 
@@ -1214,6 +1345,12 @@ mod clip_map {
         }
         if mapping.timer.is_empty() {
             missing.push("#timer");
+        }
+        if mapping.song_name.is_empty() {
+            missing.push("#song-name");
+        }
+        if mapping.band_name.is_empty() {
+            missing.push("#band-name");
         }
         missing
     }
@@ -1285,6 +1422,8 @@ mod tests {
                         clip(100, "Song Title #main-a-u-re", Some(1)),
                         clip(200, "ALT #translate-b-u", Some(2)),
                         clip(300, "Countdown #timer", Some(3)),
+                        clip(400, "#song-name-u", Some(4)),
+                        clip(500, "#band-name", Some(5)),
                     ],
                 }
             ]
@@ -1293,12 +1432,18 @@ mod tests {
         let mapping = clip_map::ClipMapping::from_composition(&composition).expect("mapping");
         assert_eq!(mapping.main_a.len(), 1);
         assert_eq!(mapping.translation_b.len(), 1);
+        assert_eq!(mapping.song_name.len(), 1);
+        assert_eq!(mapping.band_name.len(), 1);
         assert_eq!(
             mapping.main_a[0].transforms,
             vec![TextTransform::Uppercase, TextTransform::RemoveLineBreaks]
         );
         assert_eq!(
             mapping.translation_b[0].transforms,
+            vec![TextTransform::Uppercase]
+        );
+        assert_eq!(
+            mapping.song_name[0].transforms,
             vec![TextTransform::Uppercase]
         );
     }
@@ -1341,6 +1486,8 @@ mod tests {
                         clip(400, "#bible-translate-a", Some(40)),
                         clip(401, "#bible-translate-b", Some(41)),
                         clip(500, "#bible-clear", None),
+                        clip(600, "#song-name", Some(60)),
+                        clip(601, "#band-name", Some(61)),
                         clip(900, "#timer", Some(90)),
                     ],
                 }
@@ -1354,6 +1501,14 @@ mod tests {
             .await;
 
         for endpoint in &[1, 2, 10, 20, 30, 31, 40, 41, 90] {
+            let route = format!("/api/v1/parameter/by-id/{endpoint}");
+            Mock::given(method("PUT"))
+                .and(path(route.as_str()))
+                .respond_with(ResponseTemplate::new(200))
+                .mount(&server)
+                .await;
+        }
+        for endpoint in &[60, 61] {
             let route = format!("/api/v1/parameter/by-id/{endpoint}");
             Mock::given(method("PUT"))
                 .and(path(route.as_str()))
@@ -1397,6 +1552,8 @@ mod tests {
         let stage_first = StageUpdate {
             current_main: Some("Line 1".to_string()),
             current_translation: Some("Trans 1".to_string()),
+            song_name: Some("First Song".to_string()),
+            band_name: Some("Library".to_string()),
         };
         driver
             .handle_stage(stage_first, &status)
@@ -1406,6 +1563,8 @@ mod tests {
         let stage_second = StageUpdate {
             current_main: Some("Line 2".to_string()),
             current_translation: Some("Trans 2".to_string()),
+            song_name: Some("Second Song".to_string()),
+            band_name: Some("Library".to_string()),
         };
         driver
             .handle_stage(stage_second, &status)
@@ -1431,6 +1590,10 @@ mod tests {
             count_requests(&requests, "PUT", "/api/v1/parameter/by-id/20"),
             1
         );
+        let song60 = count_requests(&requests, "PUT", "/api/v1/parameter/by-id/60");
+        let band61 = count_requests(&requests, "PUT", "/api/v1/parameter/by-id/61");
+        assert_eq!(song60, 2);
+        assert_eq!(band61, 1);
 
         assert_eq!(
             count_requests(
@@ -1483,6 +1646,8 @@ mod tests {
                         clip(400, "#bible-translate-a", Some(40)),
                         clip(401, "#bible-translate-b", Some(41)),
                         clip(500, "#bible-clear", None),
+                        clip(910, "#song-name", Some(95)),
+                        clip(911, "#band-name", Some(96)),
                         clip(900, "#timer", Some(90)),
                     ],
                 }
@@ -1500,6 +1665,15 @@ mod tests {
             .respond_with(ResponseTemplate::new(200))
             .mount(&server)
             .await;
+
+        for endpoint in [95, 96] {
+            let route = format!("/api/v1/parameter/by-id/{endpoint}");
+            Mock::given(method("PUT"))
+                .and(path(route.as_str()))
+                .respond_with(ResponseTemplate::new(200))
+                .mount(&server)
+                .await;
+        }
 
         Mock::given(method("PUT"))
             .and(path("/api/v1/parameter/by-id/90"))
@@ -1542,6 +1716,8 @@ Line 2"
                     .to_string(),
             ),
             current_translation: None,
+            song_name: Some("Song".to_string()),
+            band_name: Some("Band".to_string()),
         };
 
         driver
@@ -1550,10 +1726,6 @@ Line 2"
             .expect("stage update");
 
         let requests = server.received_requests().await.expect("requests");
-        dbg!(&requests);
-        for request in &requests {
-            println!("{} {}", request.method, request.url.path());
-        }
         let payload_request = requests
             .iter()
             .find(|req| {
@@ -1703,6 +1875,8 @@ Line 2"
                         clip(600, "#bible-translate-a", Some(140)),
                         clip(601, "#bible-translate-b", Some(141)),
                         clip(700, "#bible-clear", None),
+                        clip(960, "#song-name", Some(195)),
+                        clip(961, "#band-name", Some(196)),
                         clip(950, "#timer", Some(190)),
                     ],
                 }
@@ -1715,7 +1889,7 @@ Line 2"
             .mount(&server)
             .await;
 
-        for endpoint in [1, 2, 10, 20, 30, 31, 40, 41, 90] {
+        for endpoint in [1, 2, 10, 20, 30, 31, 40, 41, 90, 95, 96] {
             let route = format!("/api/v1/parameter/by-id/{endpoint}");
             Mock::given(method("PUT"))
                 .and(path(route.as_str()))
@@ -1724,7 +1898,7 @@ Line 2"
                 .await;
         }
 
-        for clip_id in [100, 101, 200, 201, 300, 301, 400, 401, 500, 900] {
+        for clip_id in [100, 101, 200, 201, 300, 301, 400, 401, 500, 900, 910, 911] {
             let route = format!("/api/v1/composition/clips/by-id/{clip_id}/connect");
             Mock::given(method("POST"))
                 .and(path(route.as_str()))
@@ -1758,6 +1932,8 @@ Line 2"
         let first = StageUpdate {
             current_main: Some("First".to_string()),
             current_translation: None,
+            song_name: Some("First Song".to_string()),
+            band_name: Some("Band A".to_string()),
         };
         driver
             .handle_stage(first, &status)
@@ -1772,7 +1948,7 @@ Line 2"
             .mount(&server)
             .await;
 
-        for endpoint in [101, 102, 110, 120, 130, 131, 140, 141, 190] {
+        for endpoint in [101, 102, 110, 120, 130, 131, 140, 141, 190, 195, 196] {
             let route = format!("/api/v1/parameter/by-id/{endpoint}");
             Mock::given(method("PUT"))
                 .and(path(route.as_str()))
@@ -1781,7 +1957,7 @@ Line 2"
                 .await;
         }
 
-        for clip_id in [300, 301, 400, 401, 500, 600, 601, 700, 950] {
+        for clip_id in [300, 301, 400, 401, 500, 600, 601, 700, 950, 960, 961] {
             let route = format!("/api/v1/composition/clips/by-id/{clip_id}/connect");
             Mock::given(method("POST"))
                 .and(path(route.as_str()))
@@ -1795,6 +1971,8 @@ Line 2"
         let second = StageUpdate {
             current_main: Some("Second".to_string()),
             current_translation: None,
+            song_name: Some("Second Song".to_string()),
+            band_name: Some("Band B".to_string()),
         };
         driver
             .handle_stage(second, &status)
