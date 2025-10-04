@@ -2,6 +2,17 @@
 
 This runbook captures the day-to-day commands for operating the Presenter environments on the Intel N100 controller. All paths assume the repository lives at `/home/newlevel/marek/presenter`; adjust if you relocate the checkout.
 
+## Host Bootstrap
+
+For any fresh workstation or controller, run the provisioning helper before touching the services:
+
+```bash
+cd /home/newlevel/devel/presenter/presenter-dev1   # or any checkout in /home/newlevel/devel/presenter
+./scripts/ops/bootstrap-host.sh
+```
+
+The script installs build essentials, browser/runtime libraries, the Rust toolchain, and Playwright browsers. Re-run it after OS upgrades or when bringing additional dev folders online so every env stays consistent.
+
 ## Environment Matrix
 
 | Environment | Service Name             | Port | Database Path                                      | Purpose |

@@ -15,6 +15,7 @@ Presenter is a monolithic, production-ready lyrics/Bible/timers display applicat
 
 ## Tooling & Dependencies
 - Install any required tool, utility, package, framework, or application immediately using `sudo apt install` (or the appropriate package manager) instead of attempting workarounds or waiting for approval.
+- On any new host (or after OS upgrades) run `./scripts/ops/bootstrap-host.sh` from a repository checkout to provision build essentials, Playwright browser deps, and the Rust toolchain before starting work.
 - If Ubuntu's default repositories lack a sufficiently recent version, research state-of-the-art 2025 sources (official PPAs, vendor repos, direct installers) and install the newest stable release that satisfies project requirements. Document the chosen source in the PR.
 - Preference is always for the latest stable versions of crucial frameworks; do not proceed with outdated tooling unless explicitly directed by the user.
 - Slash-command prompts live under `prompts/` in this repository. After editing any prompt, run `scripts/prompts/publish.sh` so the definitions are copied into `~/.codex/prompts` before using them. Keep prompts in sync with docs and commit changes alongside code.

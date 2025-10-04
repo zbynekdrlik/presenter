@@ -1,6 +1,7 @@
 pub mod bible;
 
 use std::collections::HashMap;
+use std::env;
 use std::fs;
 use std::path::{Path, PathBuf};
 
@@ -9,11 +10,73 @@ use encoding_rs::{Encoding, WINDOWS_1250, WINDOWS_1251, WINDOWS_1252, WINDOWS_12
 use presenter_core::{Library, Presentation, Slide, SlideContent, SlideGroup, SlideText};
 use presenter_persistence::Repository;
 use prost::Message;
+use proto::presentation::CueGroup;
 use rtf_parser::RtfDocument;
 use tracing::instrument;
 
 pub mod proto {
     include!(concat!(env!("OUT_DIR"), "/rv.data.rs"));
+}
+
+/// Default location for the shared ProPresenter bundle.
+pub fn default_library_root() -> PathBuf {
+    if let Ok(root) = env::var("PRESENTER_LIBRARY_ROOT") {
+        return PathBuf::from(root);
+    }
+
+    let mut candidates: Vec<PathBuf> = Vec::new();
+    let mut push_candidate = |path: PathBuf| {
+        if !candidates.iter().any(|existing| existing == &path) {
+            candidates.push(path);
+        }
+    };
+
+    if let Ok(current_dir) = env::current_dir() {
+        push_candidate(current_dir.join("../presenter-libraries"));
+        push_candidate(current_dir.join("presenter-libraries"));
+        push_candidate(current_dir.join("../propresenter-libraries"));
+    }
+
+    if let Ok(exe) = env::current_exe() {
+        if let Some(dir) = exe.parent() {
+            push_candidate(dir.join("../presenter-libraries"));
+            push_candidate(dir.join("../../presenter-libraries"));
+            push_candidate(dir.join("../propresenter-libraries"));
+        }
+        if let Some(repo_root) = exe
+            .parent()
+            .and_then(|p| p.parent())
+            .and_then(|p| p.parent())
+        {
+            push_candidate(repo_root.join("../presenter-libraries"));
+            push_candidate(repo_root.join("presenter-libraries"));
+        }
+    }
+
+    if let Ok(home) = env::var("HOME") {
+        let home = PathBuf::from(home);
+        push_candidate(home.join("presenter-libraries"));
+        push_candidate(home.join("propresenter-libraries"));
+    }
+
+    if let Ok(profile) = env::var("USERPROFILE") {
+        let profile = PathBuf::from(profile);
+        push_candidate(profile.join("presenter-libraries"));
+        push_candidate(profile.join("propresenter-libraries"));
+    }
+
+    push_candidate(PathBuf::from("../presenter-libraries"));
+    push_candidate(PathBuf::from("presenter-libraries"));
+    push_candidate(PathBuf::from("../propresenter-libraries"));
+    push_candidate(PathBuf::from("propresenter-libraries"));
+
+    for candidate in candidates {
+        if candidate.exists() {
+            return candidate;
+        }
+    }
+
+    PathBuf::from("../presenter-libraries")
 }
 
 /// Summary describing the outcome of importing a single ProPresenter library directory.
@@ -61,6 +124,18 @@ impl<'a> ProPresenterImporter<'a> {
                     &library.name
                 )
             })?;
+
+        if library.name.eq_ignore_ascii_case("NEW LEVEL") {
+            self.repository
+                .set_library_favorite(library.id, true)
+                .await
+                .with_context(|| {
+                    format!(
+                        "failed to mark library {} as favorite",
+                        &library.name
+                    )
+                })?;
+        }
         Ok(Some(summary))
     }
 
@@ -144,27 +219,33 @@ struct GroupAssignment {
 
 fn presentation_from_proto(raw: &proto::Presentation) -> Result<Presentation> {
     let groups = build_group_lookup(raw);
+    let cue_sequence = resolve_cue_sequence(raw);
     let mut slides = Vec::new();
 
-    for (index, cue) in raw.cues.iter().enumerate() {
-        if let Some(slide_proto) = extract_presentation_slide(cue) {
+    for (order, cue) in cue_sequence.into_iter().enumerate() {
+        let mut first_action = true;
+        for slide_proto in extract_presentation_slides(cue) {
             let base_slide = slide_proto
                 .base_slide
                 .as_ref()
                 .ok_or_else(|| anyhow!("presentation slide missing base slide data"))?;
-            let group = cue
-                .uuid
-                .as_ref()
-                .and_then(|uuid| groups.get(&uuid.string))
-                .and_then(|assignment| {
-                    if assignment.anchor {
-                        Some(SlideGroup::new(assignment.name.clone()))
-                    } else {
-                        None
-                    }
-                });
+            let group = if first_action {
+                cue.uuid
+                    .as_ref()
+                    .and_then(|uuid| groups.get(&uuid.string))
+                    .and_then(|assignment| {
+                        if assignment.anchor {
+                            Some(SlideGroup::new(assignment.name.clone()))
+                        } else {
+                            None
+                        }
+                    })
+            } else {
+                None
+            };
             let content = slide_content_from_proto(base_slide, group)?;
-            slides.push(Slide::new(index as u32, content));
+            slides.push(Slide::new(order as u32, content));
+            first_action = false;
         }
     }
 
@@ -192,7 +273,7 @@ fn slide_content_from_proto(
                 }
                 let decoded = decode_rtf(&text.rtf_data)?;
                 let trimmed = decoded.trim();
-                if trimmed.is_empty() {
+                if trimmed.is_empty() || is_placeholder_text(trimmed) {
                     continue;
                 }
                 let role = classify_text_role(&graphic.name);
@@ -206,7 +287,12 @@ fn slide_content_from_proto(
     }
 
     let main = select_text(&buckets, TextRole::Main)
-        .or_else(|| buckets.first().map(|(_, text)| text.clone()))
+        .or_else(|| {
+            buckets
+                .iter()
+                .find(|(role, _)| *role == TextRole::Unknown)
+                .map(|(_, text)| text.clone())
+        })
         .unwrap_or_default();
     let translation = select_text(&buckets, TextRole::Translation).unwrap_or_else(|| String::new());
     let stage = select_text(&buckets, TextRole::Stage).unwrap_or_default();
@@ -229,24 +315,25 @@ fn select_text(buckets: &[(TextRole, String)], role: TextRole) -> Option<String>
     })
 }
 
-pub fn extract_presentation_slide(cue: &proto::Cue) -> Option<&proto::PresentationSlide> {
-    cue.actions.iter().find_map(
-        |action| match proto::action::ActionType::from_i32(action.r#type) {
-            Some(proto::action::ActionType::PresentationSlide) => {
-                if let Some(proto::action::ActionTypeData::Slide(slide_type)) =
-                    &action.action_type_data
+fn extract_presentation_slides<'a>(
+    cue: &'a proto::Cue,
+) -> impl Iterator<Item = &'a proto::PresentationSlide> {
+    cue.actions.iter().filter_map(|action| {
+        if matches!(
+            proto::action::ActionType::from_i32(action.r#type),
+            Some(proto::action::ActionType::PresentationSlide)
+        ) {
+            if let Some(proto::action::ActionTypeData::Slide(slide_type)) = &action.action_type_data
+            {
+                if let Some(proto::action::slide_type::Slide::Presentation(presentation)) =
+                    &slide_type.slide
                 {
-                    if let Some(proto::action::slide_type::Slide::Presentation(presentation)) =
-                        &slide_type.slide
-                    {
-                        return Some(presentation);
-                    }
+                    return Some(presentation);
                 }
-                None
             }
-            _ => None,
-        },
-    )
+        }
+        None
+    })
 }
 
 fn build_group_lookup(presentation: &proto::Presentation) -> HashMap<String, GroupAssignment> {
@@ -492,6 +579,9 @@ fn clean_text(text: String) -> String {
     let mut prev_lower = false;
     let mut iter = text.chars().peekable();
     while let Some(ch) = iter.next() {
+        if ch.is_control() && ch != '\n' && ch != '\r' && ch != '\t' {
+            continue;
+        }
         if is_formatting_char(ch) {
             continue;
         }
@@ -628,12 +718,107 @@ fn is_pro_presentation(path: &Path) -> bool {
         .unwrap_or(false)
 }
 
+fn is_placeholder_text(text: &str) -> bool {
+    matches!(text, "." | "0")
+}
+
+fn resolve_cue_sequence<'a>(raw: &'a proto::Presentation) -> Vec<&'a proto::Cue> {
+    use std::collections::{HashMap, HashSet};
+
+    let mut cues_by_uuid: HashMap<&str, &proto::Cue> = HashMap::new();
+    let mut cues_without_uuid: Vec<&proto::Cue> = Vec::new();
+
+    for cue in &raw.cues {
+        if let Some(uuid) = cue.uuid.as_ref() {
+            cues_by_uuid.insert(uuid.string.as_str(), cue);
+        } else {
+            cues_without_uuid.push(cue);
+        }
+    }
+
+    let mut ordered: Vec<&proto::Cue> = Vec::new();
+    let mut seen: HashSet<&str> = HashSet::new();
+
+    let group_map: HashMap<&str, &CueGroup> = raw
+        .cue_groups
+        .iter()
+        .filter_map(|group| {
+            let uuid = group.group.as_ref()?.uuid.as_ref()?;
+            Some((uuid.string.as_str(), group))
+        })
+        .collect();
+
+    if let Some(arrangement) = raw
+        .arrangements
+        .iter()
+        .find(|arr| !arr.group_identifiers.is_empty())
+    {
+        for group_id in &arrangement.group_identifiers {
+            let group_key = group_id.string.as_str();
+            if let Some(group) = group_map.get(group_key) {
+                for cue_id in &group.cue_identifiers {
+                    let cue_key = cue_id.string.as_str();
+                    if let Some(cue) = cues_by_uuid.get(cue_key) {
+                        ordered.push(*cue);
+                    }
+                    seen.insert(cue_key);
+                }
+            } else if let Some(cue) = cues_by_uuid.get(group_key) {
+                ordered.push(*cue);
+                seen.insert(group_key);
+            }
+        }
+    }
+
+    if ordered.is_empty() {
+        for group in &raw.cue_groups {
+            for cue_id in &group.cue_identifiers {
+                let cue_key = cue_id.string.as_str();
+                if seen.insert(cue_key) {
+                    if let Some(cue) = cues_by_uuid.get(cue_key) {
+                        ordered.push(*cue);
+                    }
+                }
+            }
+        }
+    }
+
+    for cue in &raw.cues {
+        if let Some(uuid) = cue.uuid.as_ref() {
+            let cue_key = uuid.string.as_str();
+            if seen.insert(cue_key) {
+                ordered.push(cue);
+            }
+        }
+    }
+
+    if !cues_without_uuid.is_empty() {
+        ordered.extend(cues_without_uuid);
+    }
+
+    if ordered.is_empty() {
+        return raw.cues.iter().collect();
+    }
+
+    ordered
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::path::PathBuf;
 
-    fn repo_root() -> PathBuf {
-        PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../..")
+    fn library_path(relative: &str) -> Option<PathBuf> {
+        let path = default_library_root().join(relative);
+        if path.exists() {
+            Some(path)
+        } else {
+            eprintln!(
+                "Skipping test: missing library data at {} (set PRESENTER_LIBRARY_ROOT)",
+                path.display()
+            );
+            None
+        }
     }
 
     #[test]
@@ -690,22 +875,99 @@ mod tests {
         );
     }
 
+    #[test]
+    fn slide_content_treats_single_dot_as_blank() {
+        let mut text = proto::graphics::Text::default();
+        text.rtf_data = b".".to_vec();
+
+        let mut element = proto::graphics::Element::default();
+        element.name = "Main".into();
+        element.text = Some(text);
+
+        let slide = proto::Slide {
+            elements: vec![proto::slide::Element {
+                element: Some(element),
+                ..Default::default()
+            }],
+            ..Default::default()
+        };
+
+        let content = super::slide_content_from_proto(&slide, None).expect("content");
+        assert!(content.main.value().is_empty(), "main text should be blank");
+    }
+
+    #[test]
+    fn slide_content_preserves_real_text_when_stage_placeholder_removed() {
+        let mut main = proto::graphics::Text::default();
+        main.rtf_data = b"Verse".to_vec();
+
+        let mut stage = proto::graphics::Text::default();
+        stage.rtf_data = b".".to_vec();
+
+        let mut main_element = proto::graphics::Element::default();
+        main_element.name = "Main".into();
+        main_element.text = Some(main);
+
+        let mut stage_element = proto::graphics::Element::default();
+        stage_element.name = "Stage".into();
+        stage_element.text = Some(stage);
+
+        let slide = proto::Slide {
+            elements: vec![
+                proto::slide::Element {
+                    element: Some(main_element),
+                    ..Default::default()
+                },
+                proto::slide::Element {
+                    element: Some(stage_element),
+                    ..Default::default()
+                },
+            ],
+            ..Default::default()
+        };
+
+        let content = super::slide_content_from_proto(&slide, None).expect("content");
+        assert_eq!(content.main.value(), "Verse");
+        assert!(
+            content.stage.value().is_empty(),
+            "stage placeholder should be stripped"
+        );
+    }
+
+    #[test]
+    fn slide_content_defaults_to_blank_when_no_elements_present() {
+        let slide = proto::Slide::default();
+        let content = super::slide_content_from_proto(&slide, None).expect("content");
+        assert!(content.main.value().is_empty());
+        assert!(content.translation.value().is_empty());
+        assert!(content.stage.value().is_empty());
+    }
+
     #[tokio::test]
     async fn parses_sample_presentation() {
-        let path = repo_root().join("Propresenter library/IFY NSOHA/Gospel.pro");
+        let Some(path) = library_path("IFY NSOHA/Gospel.pro") else {
+            return;
+        };
         let presentation = load_presentation_from_path(&path).expect("presentation to parse");
         assert!(presentation.name.starts_with("Gospel"));
         assert!(!presentation.slides.is_empty());
-        assert!(presentation.slides[0]
+        let first_non_empty = presentation
+            .slides
+            .iter()
+            .find(|slide| !slide.content.main.is_empty())
+            .expect("expected at least one slide with content");
+        assert!(first_non_empty
             .content
             .main
             .value()
-            .contains("I came here"));
+            .contains("Talking that gospel"));
     }
 
     #[test]
     fn importer_sets_group_only_on_first_slide_per_section() {
-        let path = repo_root().join("Propresenter library/IFY NSOHA/Gospel.pro");
+        let Some(path) = library_path("IFY NSOHA/Gospel.pro") else {
+            return;
+        };
         let presentation = load_presentation_from_path(&path).expect("presentation to parse");
         assert!(presentation.slides.len() > 1, "expected multiple slides");
 
@@ -737,7 +999,9 @@ mod tests {
     async fn imports_library_into_repository() {
         let repo = Repository::connect_in_memory().await.unwrap();
         let importer = ProPresenterImporter::new(&repo);
-        let library_dir = repo_root().join("Propresenter library/RACHEM");
+        let Some(library_dir) = library_path("RACHEM") else {
+            return;
+        };
         let summary = importer
             .import_library_dir(&library_dir)
             .await

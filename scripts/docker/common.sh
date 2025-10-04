@@ -3,6 +3,7 @@ set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd "${SCRIPT_DIR}/../.." && pwd)"
+REPO_PARENT="$(cd "${REPO_ROOT}/.." && pwd)"
 
 # Default to a shared, user-writable state directory to avoid root-owned
 # manifests and enable cross-repository aggregation. Agents can override via
@@ -10,7 +11,7 @@ REPO_ROOT="$(cd "${SCRIPT_DIR}/../.." && pwd)"
 STATE_ROOT_DEFAULT="${PRESENTER_STATE_DIR:-${XDG_DATA_HOME:-$HOME/.local/share}/presenter-demos}"
 MANIFEST_DIR="${PRESENTER_MANIFEST_DIR:-$STATE_ROOT_DEFAULT/manifests}"
 DATA_ROOT="${PRESENTER_DATA_ROOT:-$STATE_ROOT_DEFAULT/data}"
-DEFAULT_IMPORT_ROOT="$REPO_ROOT/Propresenter library"
+DEFAULT_IMPORT_ROOT="${PRESENTER_LIBRARY_ROOT:-$REPO_PARENT/presenter-libraries}"
 
 mkdir -p "$MANIFEST_DIR" "$DATA_ROOT"
 
@@ -77,7 +78,14 @@ PY
     printf '[run-demo] Stopping existing demo %s for %s\n' "$project" "$repo_path"
     local compose_file="$repo_path/docker-compose.demo.yml"
     local data_dir="$repo_path/var/docker/data/$project"
-    local import_root="$repo_path/Propresenter library"
+    local repo_parent
+    repo_parent="$(cd "$repo_path/.." && pwd)"
+    local import_root
+    if [[ -n "${PRESENTER_LIBRARY_ROOT:-}" ]]; then
+      import_root="$PRESENTER_LIBRARY_ROOT"
+    else
+      import_root="$repo_parent/presenter-libraries"
+    fi
     local env=("DEMO_DATA_DIR=$data_dir" "IMPORT_ROOT=$import_root" "HOST_HTTP_PORT=${port:-8080}" "PROJECT_NAME=$project")
     if [[ -f "$compose_file" ]]; then
       (
