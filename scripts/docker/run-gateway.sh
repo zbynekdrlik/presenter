@@ -29,8 +29,14 @@ done
 
 export PRESENTER_MANIFEST_DIR="$MANIFEST_DIR"
 
-# Ensure any existing gateway container is removed so the latest verify run owns it.
-"${DOCKER_CMD[@]}" rm -f presenter-gateway >/dev/null 2>&1 || true
+if ! "${DOCKER_CMD[@]}" compose -f "$REPO_ROOT/docker-compose.gateway.yml" down >/dev/null 2>&1; then
+  echo "[run-gateway] (info) no existing gateway stack to stop"
+fi
+
+# Guard against stray containers left by older compose project names.
+if ! "${DOCKER_CMD[@]}" rm -f presenter-gateway >/dev/null 2>&1; then
+  echo "[run-gateway] (info) no legacy presenter-gateway container to remove"
+fi
 
 CMD=("${DOCKER_CMD[@]}" compose -f "$REPO_ROOT/docker-compose.gateway.yml" up -d)
 if [[ "$FORCE" -eq 1 ]]; then

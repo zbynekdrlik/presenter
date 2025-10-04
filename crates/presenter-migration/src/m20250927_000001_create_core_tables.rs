@@ -374,6 +374,120 @@ impl MigrationTrait for Migration {
         manager
             .create_table(
                 Table::create()
+                    .table(OscSettings::Table)
+                    .if_not_exists()
+                    .col(
+                        ColumnDef::new(OscSettings::Id)
+                            .string_len(36)
+                            .not_null()
+                            .primary_key(),
+                    )
+                    .col(
+                        ColumnDef::new(OscSettings::Enabled)
+                            .boolean()
+                            .not_null()
+                            .default(false),
+                    )
+                    .col(
+                        ColumnDef::new(OscSettings::ListenPort)
+                            .integer()
+                            .not_null()
+                            .default(9000),
+                    )
+                    .col(
+                        ColumnDef::new(OscSettings::AddressPattern)
+                            .string()
+                            .not_null()
+                            .default("/note"),
+                    )
+                    .col(
+                        ColumnDef::new(OscSettings::VelocityMode)
+                            .string_len(32)
+                            .not_null()
+                            .default("zero_based"),
+                    )
+                    .col(
+                        ColumnDef::new(OscSettings::CreatedAt)
+                            .timestamp_with_time_zone()
+                            .not_null()
+                            .extra("DEFAULT CURRENT_TIMESTAMP"),
+                    )
+                    .col(
+                        ColumnDef::new(OscSettings::UpdatedAt)
+                            .timestamp_with_time_zone()
+                            .not_null()
+                            .extra("DEFAULT CURRENT_TIMESTAMP"),
+                    )
+                    .to_owned(),
+            )
+            .await?;
+
+        manager
+            .create_table(
+                Table::create()
+                    .table(AbleSetSettings::Table)
+                    .if_not_exists()
+                    .col(
+                        ColumnDef::new(AbleSetSettings::Id)
+                            .string_len(36)
+                            .not_null()
+                            .primary_key(),
+                    )
+                    .col(
+                        ColumnDef::new(AbleSetSettings::Enabled)
+                            .boolean()
+                            .not_null()
+                            .default(false),
+                    )
+                    .col(
+                        ColumnDef::new(AbleSetSettings::Host)
+                            .string()
+                            .not_null()
+                            .default("fohabl.lan"),
+                    )
+                    .col(
+                        ColumnDef::new(AbleSetSettings::OscPort)
+                            .integer()
+                            .not_null()
+                            .default(39051),
+                    )
+                    .col(
+                        ColumnDef::new(AbleSetSettings::HttpPort)
+                            .integer()
+                            .not_null()
+                            .default(80),
+                    )
+                    .col(
+                        ColumnDef::new(AbleSetSettings::LibraryName)
+                            .string()
+                            .not_null()
+                            .default("NEW LEVEL"),
+                    )
+                    .col(
+                        ColumnDef::new(AbleSetSettings::SongPrefixLength)
+                            .integer()
+                            .not_null()
+                            .default(3),
+                    )
+                    .col(
+                        ColumnDef::new(AbleSetSettings::CreatedAt)
+                            .timestamp_with_time_zone()
+                            .not_null()
+                            .extra("DEFAULT CURRENT_TIMESTAMP"),
+                    )
+                    .col(
+                        ColumnDef::new(AbleSetSettings::UpdatedAt)
+                            .timestamp_with_time_zone()
+                            .not_null()
+                            .extra("DEFAULT CURRENT_TIMESTAMP"),
+                    )
+                    .to_owned(),
+            )
+            .await?;
+
+        manager
+            .create_table(
+                Table::create()
                     .table(Timers::Table)
                     .if_not_exists()
                     .col(
@@ -566,6 +680,12 @@ impl MigrationTrait for Migration {
             .drop_table(Table::drop().table(ResolumeHosts::Table).to_owned())
             .await?;
         manager
+            .drop_table(Table::drop().table(AbleSetSettings::Table).to_owned())
+            .await?;
+        manager
+            .drop_table(Table::drop().table(OscSettings::Table).to_owned())
+            .await?;
+        manager
             .drop_table(Table::drop().table(PlaylistFavorites::Table).to_owned())
             .await?;
         manager
@@ -664,6 +784,32 @@ enum ResolumeHosts {
     Host,
     Port,
     IsEnabled,
+    CreatedAt,
+    UpdatedAt,
+}
+
+#[derive(DeriveIden)]
+enum OscSettings {
+    Table,
+    Id,
+    Enabled,
+    ListenPort,
+    AddressPattern,
+    VelocityMode,
+    CreatedAt,
+    UpdatedAt,
+}
+
+#[derive(DeriveIden)]
+enum AbleSetSettings {
+    Table,
+    Id,
+    Enabled,
+    Host,
+    OscPort,
+    HttpPort,
+    LibraryName,
+    SongPrefixLength,
     CreatedAt,
     UpdatedAt,
 }

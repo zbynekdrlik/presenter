@@ -6,10 +6,24 @@
   }
   const API_ROOT = '/integrations/resolume/hosts';
   const initialHosts = __RESOLUME_HOSTS__;
+  const initialOscConfig = __OSC_CONFIG__ || null;
+  const initialOscStatus = __OSC_STATUS__ || null;
+  const initialAbleSetConfig = __ABLESET_CONFIG__ || null;
+  const initialAbleSetStatus = __ABLESET_STATUS__ || null;
   const state = {
     hosts: Array.isArray(initialHosts) ? initialHosts : [],
     editingId: null,
     toastTimer: null,
+    osc: {
+      config: normalizeOscConfig(initialOscConfig),
+      status: normalizeOscStatus(initialOscStatus),
+      submitting: false,
+    },
+    ableset: {
+      config: normalizeAbleSetConfig(initialAbleSetConfig),
+      status: normalizeAbleSetStatus(initialAbleSetStatus),
+      submitting: false,
+    },
   };
   const STATUS_REFRESH_MS = 5000;
 
@@ -29,12 +43,141 @@
     toast: document.querySelector('[data-role="toast"]'),
     hostCount: document.querySelector('[data-role="host-count"]'),
     emptyState: document.querySelector('[data-role="host-empty"]'),
+    oscForm: document.querySelector('[data-role="osc-form"]'),
+    oscEnabled: document.querySelector('[data-role="osc-enabled"]'),
+    oscPort: document.querySelector('[data-role="osc-port"]'),
+    oscAddress: document.querySelector('[data-role="osc-address"]'),
+    oscMode: document.querySelector('[data-role="osc-mode"]'),
+    oscSubmit: document.querySelector('[data-role="osc-submit"]'),
+    oscStatusIndicator: document.querySelector('[data-role="osc-status-indicator"]'),
+    oscStatusHostPort: document.querySelector('[data-role="osc-status-host-port"]'),
+    oscStatusLastMessage: document.querySelector('[data-role="osc-status-last-message"]'),
+    oscStatusLastNote: document.querySelector('[data-role="osc-status-last-note"]'),
+    oscStatusError: document.querySelector('[data-role="osc-status-error"]'),
+    ablesetForm: document.querySelector('[data-role="ableset-form"]'),
+    ablesetEnabled: document.querySelector('[data-role="ableset-enabled"]'),
+    ablesetHost: document.querySelector('[data-role="ableset-host"]'),
+    ablesetHttpPort: document.querySelector('[data-role="ableset-http-port"]'),
+    ablesetOscPort: document.querySelector('[data-role="ableset-osc-port"]'),
+    ablesetLibrary: document.querySelector('[data-role="ableset-library"]'),
+    ablesetPrefix: document.querySelector('[data-role="ableset-prefix"]'),
+    ablesetSubmit: document.querySelector('[data-role="ableset-submit"]'),
+    ablesetFormStatus: document.querySelector('[data-role="ableset-form-status"]'),
+    ablesetStatusIndicator: document.querySelector('[data-role="ableset-status-indicator"]'),
+    ablesetStatusSong: document.querySelector('[data-role="ableset-status-song"]'),
+    ablesetStatusPrefix: document.querySelector('[data-role="ableset-status-prefix"]'),
+    ablesetStatusUpdated: document.querySelector('[data-role="ableset-status-updated"]'),
+    ablesetStatusError: document.querySelector('[data-role="ableset-status-error"]'),
+    ablesetRefresh: document.querySelector('[data-role="ableset-refresh"]'),
   };
 
   const dateFormatter = new Intl.DateTimeFormat(undefined, {
     dateStyle: 'medium',
     timeStyle: 'short',
   });
+
+  function normalizeOscConfig(input) {
+    const fallback = {
+      enabled: true,
+      listenPort: 9000,
+      addressPattern: '/note',
+      velocityMode: 'zero_based',
+    };
+    if (!input || typeof input !== 'object') {
+      return { ...fallback };
+    }
+    return {
+      enabled: Boolean(input.enabled),
+      listenPort: Number.isFinite(Number(input.listenPort)) ? Number(input.listenPort) : fallback.listenPort,
+      addressPattern: (input.addressPattern || fallback.addressPattern).toString(),
+      velocityMode: (input.velocityMode || fallback.velocityMode).toString(),
+    };
+  }
+
+  function normalizeOscStatus(input) {
+    if (!input || typeof input !== 'object') {
+      return {
+        enabled: false,
+        listening: false,
+        listenPort: 9000,
+        addressPattern: '/note',
+        velocityMode: 'zero_based',
+        lastMessageAt: null,
+        lastNote: null,
+        lastVelocity: null,
+        lastError: null,
+      };
+    }
+    return {
+      enabled: Boolean(input.enabled),
+      listening: Boolean(input.listening),
+      listenPort: Number.isFinite(Number(input.listenPort)) ? Number(input.listenPort) : 9000,
+      hostPort: Number.isFinite(Number(input.hostPort ?? input.host_port)) ? Number(input.hostPort ?? input.host_port) : null,
+      addressPattern: (input.addressPattern || '/note').toString(),
+      velocityMode: (input.velocityMode || 'zero_based').toString(),
+      lastMessageAt: input.lastMessageAt || input.last_message_at || null,
+      lastNote: typeof input.lastNote === 'number' ? input.lastNote : input.last_note ?? null,
+      lastVelocity: typeof input.lastVelocity === 'number' ? input.lastVelocity : input.last_velocity ?? null,
+      lastError: input.lastError || input.last_error || null,
+    };
+  }
+  function normalizeAbleSetConfig(input) {
+    const fallback = {
+      enabled: true,
+      host: 'fohabl.lan',
+      httpPort: 80,
+      oscPort: 39051,
+      libraryName: 'NEW LEVEL',
+      songPrefixLength: 3,
+    };
+    if (!input || typeof input !== 'object') {
+      return { ...fallback };
+    }
+    return {
+      enabled: Boolean(input.enabled),
+      host: (input.host || fallback.host).toString(),
+      httpPort: Number.isFinite(Number(input.httpPort ?? input.http_port)) ? Number(input.httpPort ?? input.http_port) : fallback.httpPort,
+      oscPort: Number.isFinite(Number(input.oscPort ?? input.osc_port)) ? Number(input.oscPort ?? input.osc_port) : fallback.oscPort,
+      libraryName: (input.libraryName || fallback.libraryName).toString(),
+      songPrefixLength: Number.isFinite(Number(input.songPrefixLength ?? input.song_prefix_length)) ? Number(input.songPrefixLength ?? input.song_prefix_length) : fallback.songPrefixLength,
+    };
+  }
+
+  function normalizeAbleSetStatus(input) {
+    if (!input || typeof input !== 'object') {
+      return {
+        enabled: false,
+        tracking: false,
+        host: 'fohabl.lan',
+        httpPort: 80,
+        oscPort: 39051,
+        libraryName: 'NEW LEVEL',
+        songPrefixLength: 3,
+        lastSong: null,
+        lastError: null,
+      };
+    }
+    const lastSong = input.lastSong || input.last_song || null;
+    const normalisedSong = lastSong && typeof lastSong === 'object' ? {
+      name: (lastSong.name || '').toString(),
+      prefix: (lastSong.prefix || '').toString(),
+      index: Number.isFinite(Number(lastSong.index ?? lastSong.index)) ? Number(lastSong.index ?? lastSong.index) : null,
+      lastSeenAt: lastSong.lastSeenAt || lastSong.last_seen_at || null,
+    } : null;
+    return {
+      enabled: Boolean(input.enabled),
+      tracking: Boolean(input.tracking),
+      host: (input.host || 'fohabl.lan').toString(),
+      httpPort: Number.isFinite(Number(input.httpPort ?? input.http_port)) ? Number(input.httpPort ?? input.http_port) : 80,
+      oscPort: Number.isFinite(Number(input.oscPort ?? input.osc_port)) ? Number(input.oscPort ?? input.osc_port) : 39051,
+      libraryName: (input.libraryName || 'NEW LEVEL').toString(),
+      songPrefixLength: Number.isFinite(Number(input.songPrefixLength ?? input.song_prefix_length)) ? Number(input.songPrefixLength ?? input.song_prefix_length) : 3,
+      lastSong: normalisedSong,
+      lastError: input.lastError || input.last_error || null,
+    };
+  }
+
+
 
   function toNumber(value, fallback) {
     const parsed = Number.parseInt(value, 10);
@@ -54,6 +197,12 @@
     if (!els.formStatus) return;
     els.formStatus.textContent = message || '';
     els.formStatus.dataset.state = status || 'idle';
+  }
+
+  function setAbleSetFormStatus(message, status) {
+    if (!els.ablesetFormStatus) return;
+    els.ablesetFormStatus.textContent = message || '';
+    els.ablesetFormStatus.dataset.state = status || 'idle';
   }
 
   function showToast(message, type) {
@@ -101,6 +250,158 @@
     if (!els.submit) return;
     els.submit.disabled = isBusy;
     els.submit.dataset.loading = isBusy ? 'true' : 'false';
+  }
+
+  function setOscBusy(isBusy) {
+    state.osc.submitting = Boolean(isBusy);
+    if (els.oscSubmit) {
+      els.oscSubmit.disabled = isBusy;
+      els.oscSubmit.dataset.loading = isBusy ? 'true' : 'false';
+    }
+  }
+
+  function setAbleSetBusy(isBusy) {
+    state.ableset.submitting = Boolean(isBusy);
+    if (els.ablesetSubmit) {
+      els.ablesetSubmit.disabled = isBusy;
+      els.ablesetSubmit.dataset.loading = isBusy ? 'true' : 'false';
+    }
+  }
+
+  function setAbleSetFormValues() {
+    if (!els.ablesetForm) return;
+    const config = state.ableset.config;
+    if (els.ablesetEnabled) {
+      els.ablesetEnabled.checked = Boolean(config.enabled);
+    }
+    if (els.ablesetHost) {
+      els.ablesetHost.value = (config.host || '').toString();
+    }
+    if (els.ablesetHttpPort) {
+      const value = Number.isFinite(Number(config.httpPort)) ? String(config.httpPort) : '80';
+      els.ablesetHttpPort.value = value;
+    }
+    if (els.ablesetOscPort) {
+      const value = Number.isFinite(Number(config.oscPort)) ? String(config.oscPort) : '39051';
+      els.ablesetOscPort.value = value;
+    }
+    if (els.ablesetLibrary) {
+      els.ablesetLibrary.value = (config.libraryName || '').toString();
+    }
+    if (els.ablesetPrefix) {
+      const value = Number.isFinite(Number(config.songPrefixLength)) ? String(config.songPrefixLength) : '3';
+      els.ablesetPrefix.value = value;
+    }
+  }
+
+  function setOscFormValues() {
+    if (!els.oscForm) return;
+    const config = state.osc.config;
+    if (els.oscEnabled) {
+      els.oscEnabled.checked = Boolean(config.enabled);
+    }
+    if (els.oscPort) {
+      const portValue = Number.isFinite(Number(config.listenPort)) ? String(config.listenPort) : '9000';
+      els.oscPort.value = portValue;
+    }
+    if (els.oscAddress) {
+      els.oscAddress.value = (config.addressPattern || '/note').toString();
+    }
+    if (els.oscMode) {
+      els.oscMode.value = (config.velocityMode || 'zero_based').toString();
+    }
+  }
+
+  function renderOscStatus() {
+    const status = state.osc.status;
+    const stateLabel = status.enabled
+      ? (status.listening ? 'listening' : 'enabled')
+      : 'disabled';
+    if (els.oscStatusIndicator) {
+      els.oscStatusIndicator.textContent = stateLabel.charAt(0).toUpperCase() + stateLabel.slice(1);
+      els.oscStatusIndicator.dataset.state = stateLabel;
+    }
+    if (els.oscStatusHostPort) {
+      const hostPort = status.hostPort != null ? status.hostPort : null;
+      const displayPort = hostPort != null ? hostPort : status.listenPort;
+      els.oscStatusHostPort.textContent = String(displayPort);
+      els.oscStatusHostPort.dataset.state = hostPort != null ? 'resolved' : 'container';
+    }
+    if (els.oscStatusLastMessage) {
+      const value = status.lastMessageAt ? formatDate(status.lastMessageAt) : '—';
+      els.oscStatusLastMessage.textContent = value;
+    }
+    if (els.oscStatusLastNote) {
+      if (status.lastNote != null) {
+        const vel = status.lastVelocity != null ? ` (vel ${status.lastVelocity})` : '';
+        els.oscStatusLastNote.textContent = `note ${status.lastNote}${vel}`;
+      } else {
+        els.oscStatusLastNote.textContent = '—';
+      }
+    }
+    if (els.oscStatusError) {
+      if (status.lastError) {
+        els.oscStatusError.textContent = `⚠ ${status.lastError}`;
+        els.oscStatusError.dataset.visible = 'true';
+      } else {
+        els.oscStatusError.textContent = '';
+        els.oscStatusError.dataset.visible = 'false';
+      }
+    }
+    if (els.oscForm) {
+      els.oscForm.dataset.mode = status.enabled ? 'enabled' : 'disabled';
+    }
+  }
+  function renderAbleSetStatus() {
+    const status = state.ableset.status;
+    const stateLabel = status.enabled
+      ? (status.tracking ? 'tracking' : 'enabled')
+      : 'disabled';
+    if (els.ablesetStatusIndicator) {
+      const label = stateLabel.charAt(0).toUpperCase() + stateLabel.slice(1);
+      els.ablesetStatusIndicator.textContent = label;
+      els.ablesetStatusIndicator.dataset.state = stateLabel;
+    }
+    const lastSong = status.lastSong || null;
+    if (els.ablesetStatusSong) {
+      els.ablesetStatusSong.textContent = lastSong && lastSong.name ? lastSong.name : '—';
+    }
+    if (els.ablesetStatusPrefix) {
+      els.ablesetStatusPrefix.textContent = lastSong && lastSong.prefix ? lastSong.prefix : '—';
+    }
+    if (els.ablesetStatusUpdated) {
+      const value = lastSong && lastSong.lastSeenAt ? formatDate(lastSong.lastSeenAt) : '—';
+      els.ablesetStatusUpdated.textContent = value;
+    }
+    if (els.ablesetStatusError) {
+      if (status.lastError) {
+        els.ablesetStatusError.textContent = `⚠ ${status.lastError}`;
+        els.ablesetStatusError.dataset.visible = 'true';
+      } else {
+        els.ablesetStatusError.textContent = '';
+        els.ablesetStatusError.dataset.visible = 'false';
+      }
+    }
+    if (els.ablesetForm) {
+      els.ablesetForm.dataset.mode = status.enabled ? 'enabled' : 'disabled';
+    }
+  }
+
+
+  async function refreshOscStatus(showError) {
+    try {
+      const response = await fetch('/integrations/osc/status', { headers: { Accept: 'application/json' } });
+      if (!response.ok) {
+        throw new Error(`Failed to load OSC status (${response.status})`);
+      }
+      const data = await response.json();
+      state.osc.status = normalizeOscStatus(data);
+      renderOscStatus();
+    } catch (error) {
+      if (showError) {
+        console.warn('Unable to refresh OSC status', error);
+      }
+    }
   }
 
   function renderHosts() {
@@ -212,6 +513,47 @@
     }
   }
 
+  async function submitOscForm(event) {
+    event.preventDefault();
+    if (!els.oscForm) return;
+    setOscBusy(true);
+    setFormStatus('', 'idle');
+    const payload = {
+      enabled: els.oscEnabled ? Boolean(els.oscEnabled.checked) : false,
+      listenPort: els.oscPort ? Number.parseInt(els.oscPort.value, 10) || 9000 : 9000,
+      addressPattern: els.oscAddress ? els.oscAddress.value.trim() || '/note' : '/note',
+      velocityMode: els.oscMode ? els.oscMode.value : 'zero_based',
+    };
+
+    // optimistic update
+    state.osc.config = normalizeOscConfig(payload);
+
+    try {
+      const response = await fetch('/integrations/osc/settings', {
+        method: 'PUT',
+        headers: {
+          'Content-Type': 'application/json',
+          Accept: 'application/json',
+        },
+        body: JSON.stringify(payload),
+      });
+      if (!response.ok) {
+        const message = await extractError(response);
+        throw new Error(message);
+      }
+      const data = await response.json();
+      state.osc.config = normalizeOscConfig(data);
+      showToast('OSC settings saved', 'success');
+      await refreshOscStatus(false);
+    } catch (error) {
+      console.error('Failed to save OSC settings', error);
+      showToast(error.message || 'Failed to save OSC settings', 'error');
+    } finally {
+      setOscBusy(false);
+      setOscFormValues();
+    }
+  }
+
   async function saveHost(event) {
     event.preventDefault();
     if (!els.form || !els.submit) {
@@ -315,11 +657,75 @@
       });
   }
 
+  async function submitAbleSetForm(event) {
+    event.preventDefault();
+    if (!els.ablesetForm) return;
+    const payload = {
+      enabled: Boolean(els.ablesetEnabled && els.ablesetEnabled.checked),
+      host: (els.ablesetHost && els.ablesetHost.value ? els.ablesetHost.value : '').trim(),
+      httpPort: toNumber(els.ablesetHttpPort && els.ablesetHttpPort.value, state.ableset.config.httpPort),
+      oscPort: toNumber(els.ablesetOscPort && els.ablesetOscPort.value, state.ableset.config.oscPort),
+      libraryName: (els.ablesetLibrary && els.ablesetLibrary.value ? els.ablesetLibrary.value : '').trim(),
+      songPrefixLength: toNumber(els.ablesetPrefix && els.ablesetPrefix.value, state.ableset.config.songPrefixLength),
+    };
+    setAbleSetBusy(true);
+    setAbleSetFormStatus('Saving AbleSet settings…', 'loading');
+    try {
+      const response = await fetch('/integrations/ableset/settings', {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json', Accept: 'application/json' },
+        body: JSON.stringify(payload),
+      });
+      if (!response.ok) {
+        throw new Error(await extractError(response));
+      }
+      const data = await response.json();
+      state.ableset.config = normalizeAbleSetConfig(data);
+      setAbleSetFormValues();
+      setAbleSetFormStatus('AbleSet settings saved.', 'success');
+      showToast('AbleSet settings saved.', 'success');
+      await refreshAbleSetStatus(false);
+    } catch (error) {
+      console.error('Failed to update AbleSet settings', error);
+      setAbleSetFormStatus(error.message || 'Failed to update AbleSet settings.', 'error');
+      showToast('Unable to update AbleSet settings.', 'error');
+    } finally {
+      setAbleSetBusy(false);
+    }
+  }
+
+  async function refreshAbleSetStatus(showError) {
+    try {
+      const response = await fetch('/integrations/ableset/status', { headers: { Accept: 'application/json' } });
+      if (!response.ok) {
+        throw new Error(`Failed to load AbleSet status (${response.status})`);
+      }
+      const data = await response.json();
+      state.ableset.status = normalizeAbleSetStatus(data);
+      renderAbleSetStatus();
+    } catch (error) {
+      if (showError) {
+        console.warn('Unable to refresh AbleSet status', error);
+      }
+    }
+  }
+
+  if (els.ablesetForm) {
+    els.ablesetForm.addEventListener('submit', submitAbleSetForm);
+  }
+  if (els.ablesetRefresh) {
+    els.ablesetRefresh.addEventListener('click', () => {
+      refreshAbleSetStatus(true);
+    });
+  }
   if (els.form) {
     els.form.addEventListener('submit', saveHost);
   }
   if (els.reset) {
     els.reset.addEventListener('click', resetForm);
+  }
+  if (els.oscForm) {
+    els.oscForm.addEventListener('submit', submitOscForm);
   }
   if (els.list) {
     els.list.addEventListener('click', (event) => {
@@ -333,11 +739,23 @@
   });
 
   renderHosts();
+  setOscFormValues();
+  renderOscStatus();
+  setAbleSetFormValues();
+  renderAbleSetStatus();
   refreshHosts(false);
+  refreshOscStatus(false);
+  refreshAbleSetStatus(false);
 
   window.setInterval(() => {
     refreshHosts(false).catch((error) => {
       console.warn('failed to refresh Resolume host statuses', error);
+    });
+    refreshOscStatus(false).catch((error) => {
+      console.warn('failed to refresh OSC status', error);
+    });
+    refreshAbleSetStatus(false).catch((error) => {
+      console.warn('failed to refresh AbleSet status', error);
     });
   }, STATUS_REFRESH_MS);
 })();

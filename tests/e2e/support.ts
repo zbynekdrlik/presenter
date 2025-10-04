@@ -27,16 +27,26 @@ export type MockResolumeHandle = {
   close: () => Promise<void>;
 };
 
-export function deriveTestConfig(testInfo: TestInfo) {
+export type TestConfig = {
+  workerIndex: number;
+  port: number;
+  dbUrl: string;
+  baseURL: string;
+  oscPort: number;
+};
+
+export function deriveTestConfig(testInfo: TestInfo): TestConfig {
   const workerIndex = testInfo.workerIndex ?? 0;
-  const basePort = Number.parseInt(process.env.PRESENTER_PORT ?? '8899', 10);
+  const basePort = Number.parseInt(process.env.PRESENTER_PORT_BASE ?? '18999', 10);
   const scopeKey = testInfo.file ?? testInfo.title ?? `worker-${workerIndex}`;
   const fileOffset = stableHash(scopeKey) % 50;
   const port = basePort + workerIndex * 100 + fileOffset;
   const explicitDbUrl = process.env.PRESENTER_DB_URL;
-  const dbUrl = explicitDbUrl ?? `sqlite://presenter_e2e_${workerIndex}.db`;
+  const defaultDbPath = path.join(REPO_ROOT, 'var', 'tmp', `presenter_e2e_${workerIndex}.db`);
+  const dbUrl = explicitDbUrl ?? `sqlite://${defaultDbPath}`;
   const baseURL = `http://127.0.0.1:${port}`;
-  return { workerIndex, port, dbUrl, baseURL };
+  const oscPort = port + 1;
+  return { workerIndex, port, dbUrl, baseURL, oscPort };
 }
 
 export function runShell(command: string, extraEnv: NodeJS.ProcessEnv = {}): Promise<void> {
@@ -90,17 +100,21 @@ async function waitForServerReady(baseURL: string, timeoutMs = 240_000) {
   throw new Error(`Presenter server did not become ready within ${timeoutMs}ms`);
 }
 
-export async function startTestServer(port: number, dbUrl: string): Promise<ServerHandle> {
+export async function startTestServer(port: number, dbUrl: string, oscPort?: number): Promise<ServerHandle> {
   const env = {
     ...process.env,
     PRESENTER_DB_URL: dbUrl,
     PRESENTER_PORT: String(port),
+    ...(oscPort ? { PRESENTER_OSC_LISTEN_PORT: String(oscPort) } : {}),
     RUST_LOG: process.env.RUST_LOG ?? 'presenter_server=info,tower_http=warn,sqlx=warn',
   };
 
   const processHandle = spawn(
     'bash',
-    ['-lc', `PRESENTER_DB_URL=${dbUrl} PRESENTER_PORT=${port} cargo run -p presenter-server`],
+    [
+      '-lc',
+      `PRESENTER_DB_URL=${dbUrl} PRESENTER_PORT=${port} ${oscPort ? `PRESENTER_OSC_LISTEN_PORT=${oscPort} ` : ''}cargo run -p presenter-server`,
+    ],
     {
       cwd: REPO_ROOT,
       env,

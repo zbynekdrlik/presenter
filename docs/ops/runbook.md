@@ -81,6 +81,18 @@ To start the development instance without systemd (useful on laptops), run `./sc
 
 Set `PRESENTER_BACKUP_ROOT` (e.g., `/var/lib/presenter/backups`) before calling the backup script or installing the systemd units if you prefer off-repo storage.
 
+## OSC Bridge Quickstart
+
+- Run `sudo -E ./scripts/dev/verify-and-refresh.sh --force` before testing a branch demo; the helper seeds an _Ableton Demo_ playlist with the first five imported presentations and leaves the OSC bridge enabled with the `/note` pattern bound to notes 18/19/20.
+- AbleSet's local status API defaults to port 80. If AbleSet picked a different HTTP port (it will auto-increment when 80 is busy), check the AbleSet status card in Settings → Ableton Bridge and update the host/port fields accordingly.
+- AbleSet listens for OSC control on UDP 39051 by default; keep the bridge pointed there unless you've changed it in AbleSet’s preferences.
+- Each demo publishes the OSC listener on a deterministic high port. Check **Settings → OSC Bridge** or `curl http://127.0.0.1:<demo-port>/integrations/osc/status` to read the `hostPort` field. For example, the `presenter-dev2` stack listens on UDP `10.77.9.21:18532`.
+- In Ableton, load the Max for Live OSC/MIDI bridge, set the target host to the controller's IP (e.g., `10.77.9.21`) and the port from the status API, and keep the default `/note` address. The plugin should emit zero-based velocity values so playlist 0, presentation 0, and slide indices line up.
+- A 75 ms suppression window prevents tight Ableton loops from re-triggering the same slide; if you need intentional repeats, stagger cues or adjust the loop length accordingly.
+- The operator header exposes `Automation` and `Follow UI` toggles along with the currently playing song and slide index. Leave *Follow UI* off to keep the interface steady while AbleSet still drives Resolume; re-enable it when you want the library/slide lists to follow AbleSet cues in real time.
+- The verify helper restarts the gateway after each demo refresh so the landing page advertises the correct OSC port and timestamp per branch.
+
+
 ## Promotion Workflow
 
 1. Merge the feature branch into `main` after review per AGENTS.md.

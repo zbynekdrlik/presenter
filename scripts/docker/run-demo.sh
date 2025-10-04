@@ -6,6 +6,7 @@ source "${SCRIPT_DIR}/common.sh"
 
 NAME=""
 PORT=""
+OSC_PORT=""
 IMPORT_ROOT="$DEFAULT_IMPORT_ROOT"
 DISPLAY_NAME=""
 LOG_LEVEL="presenter_server=info"
@@ -18,6 +19,7 @@ Usage: $(basename "$0") [options]
   --port PORT          Host port to publish (defaults to derived high port)
   --import-root PATH   Path to ProPresenter library (default: "$DEFAULT_IMPORT_ROOT")
   --display-name TEXT  Display name for landing page (defaults to NAME)
+  --osc-port PORT      Host port to publish for OSC listener (defaults to derived high port)
   --log-level LEVEL   RUST_LOG value for the presenter container (default: presenter_server=info)
   --force              Rebuild the image even if it exists
   -h, --help           Show this help message
@@ -34,6 +36,8 @@ while [[ $# -gt 0 ]]; do
       IMPORT_ROOT="$2"; shift 2 ;;
     --display-name)
       DISPLAY_NAME="$2"; shift 2 ;;
+    --osc-port)
+      OSC_PORT="$2"; shift 2 ;;
     --log-level)
       LOG_LEVEL="$2"; shift 2 ;;
     --force)
@@ -52,6 +56,7 @@ if [[ -z "$DISPLAY_NAME" ]]; then
   DISPLAY_NAME="$PROJECT"
 fi
 HOST_HTTP_PORT="$(compute_port "$PROJECT" "$PORT")"
+HOST_OSC_PORT="$(compute_port "${PROJECT}-osc" "$OSC_PORT")"
 DEMO_DATA_DIR="$DATA_ROOT/$PROJECT"
 
 stop_conflicting_demos "$REPO_ROOT" "$PROJECT"
@@ -75,6 +80,7 @@ fi
 
 export PROJECT_NAME="$PROJECT"
 export HOST_HTTP_PORT
+export HOST_OSC_PORT
 export DEMO_DATA_DIR
 export IMPORT_ROOT
 export PRESENTER_FORCE_IMPORT=1
@@ -85,7 +91,7 @@ if [[ "$FORCE" -eq 1 ]]; then
   COMPOSE_ARGS+=("--build")
 fi
 
-printf '[run-demo] Launching %s on http://localhost:%s\n' "$PROJECT" "$HOST_HTTP_PORT"
+printf '[run-demo] Launching %s on http://localhost:%s (OSC %s)\n' "$PROJECT" "$HOST_HTTP_PORT" "$HOST_OSC_PORT"
 "${COMPOSE_ARGS[@]}"
 
 # Wait for health endpoint
