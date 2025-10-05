@@ -3193,6 +3193,24 @@ body.settings {
     max-width: 460px;
 }
 
+.settings__ableton-actions {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+}
+
+.settings__ableton-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(320px, 1fr));
+    gap: 24px;
+}
+
+.settings__ableton-column {
+    display: flex;
+    flex-direction: column;
+    gap: 16px;
+}
+
 .settings__badge-group {
     display: flex;
     flex-direction: column;
@@ -3329,8 +3347,13 @@ body.settings {
     font-size: 0.95rem;
     font-weight: 600;
     padding: 10px 18px;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    gap: 0.4rem;
     cursor: pointer;
     transition: transform 0.15s ease, box-shadow 0.15s ease;
+    text-decoration: none;
 }
 
 .settings__button:disabled {
@@ -4301,12 +4324,6 @@ fn SettingsDocument(
     let hosts = Arc::new(hosts);
     let host_count_text = hosts.len().to_string();
     let osc_port_value = osc_settings.listen_port.to_string();
-    let osc_address_value = osc_settings.address_pattern.clone();
-    let osc_mode_value = match osc_settings.velocity_mode {
-        presenter_core::VelocityMode::ZeroBased => "zero_based",
-        presenter_core::VelocityMode::OneBased => "one_based",
-    };
-    let osc_mode_value_string = osc_mode_value.to_string();
     let osc_host_port_display = osc_status.host_port.unwrap_or(osc_settings.listen_port);
     let osc_status_state = if !osc_status.enabled {
         "disabled".to_string()
@@ -4344,7 +4361,6 @@ fn SettingsDocument(
     let ableset_osc_port_value = ableset_settings.osc_port.to_string();
     let ableset_library_value = ableset_settings.library_name.clone();
     let ableset_prefix_value = ableset_settings.song_prefix_length.to_string();
-    let ableset_enabled = ableset_settings.enabled;
     let ableset_status_state = if !ableset_status.enabled {
         "disabled"
     } else if ableset_status.tracking {
@@ -4597,201 +4613,203 @@ fn SettingsDocument(
                             </dl>
                         </section>
                     </section>
-                    <section class="settings__card settings__card--osc">
+                    <section class="settings__card settings__card--ableton">
                         <header class="settings__card-header">
                             <div>
-                                <h2>"OSC Bridge"</h2>
-                                <p>"Receive Ableton cues via the OSC MIDI Send Max for Live device."</p>
+                                <h2>"Presenter OSC"</h2>
+                                <p>
+                                    "Configure AbleSet tracking, OSC ingestion, and download the Presenter OSC device for Ableton Live."
+                                </p>
+                            </div>
+                            <div class="settings__ableton-actions">
+                                <a
+                                    class="settings__button settings__button--ghost settings__ableton-download"
+                                    href="/downloads/presenter-osc-send.maxpat"
+                                    download="Presenter OSC Send.maxpat"
+                                    data-role="ableton-download"
+                                >"Download Presenter OSC"</a>
                             </div>
                         </header>
-                        <form
-                            class="settings__form settings__form--osc"
-                            data-role="osc-form"
-                            autocomplete="off"
-                            data-mode={if osc_settings.enabled { "enabled" } else { "disabled" }}
-                        >
-                            <div class="settings__form-row settings__form-row--single">
-                                <label class="settings__form-checkbox settings__form-checkbox--block">
-                                    <input type="checkbox" data-role="osc-enabled" checked={osc_settings.enabled} />
-                                    <span>"Enabled"</span>
-                                </label>
-                            </div>
-                            <div class="settings__form-row">
-                                <label class="settings__form-control settings__form-control--small">
-                                    <span>"Listener Port"</span>
-                                    <input
-                                        type="number"
-                                        data-role="osc-port"
-                                        min="1"
-                                        max="65535"
-                                        value={osc_port_value.clone()}
-                                        required
-                                    />
-                                </label>
-                                <label>
-                                    <span>"Address Pattern"</span>
-                                    <input
-                                        type="text"
-                                        data-role="osc-address"
-                                        value={osc_address_value.clone()}
-                                        placeholder="/note"
-                                        required
-                                    />
-                                </label>
-                                <label>
-                                    <span>"Velocity Mapping"</span>
-                                    <select data-role="osc-mode" prop:value={osc_mode_value_string.clone()}>
-                                        <option value="zero_based" selected={osc_mode_value == "zero_based"}>"Zero-based (0 = first item)"</option>
-                                        <option value="one_based" selected={osc_mode_value == "one_based"}>"One-based (1 = first item)"</option>
-                                    </select>
-                                </label>
-                            </div>
-                            <div class="settings__form-actions">
-                                <button
-                                    type="submit"
-                                    class="settings__button settings__button--primary"
-                                    data-role="osc-submit"
-                                >"Save OSC Settings"</button>
-                            </div>
-                        </form>
-                        <section class="settings__osc-status">
-                            <div class="settings__status-line">
-                                <span
-                                    class="settings__status"
-                                    data-role="osc-status-indicator"
-                                    data-state={osc_status_state.clone()}
-                                >{osc_status_label.clone()}</span>
-                            </div>
-                            <dl class="settings__status-list">
-                                <div>
-                                    <dt>"Host Port"</dt>
-                                    <dd data-role="osc-status-host-port">{osc_host_port_display}</dd>
+                        <div class="settings__ableton-grid">
+                            <div class="settings__ableton-column">
+                                <form
+                                    class="settings__form settings__form--ableset"
+                                    data-role="ableset-form"
+                                    autocomplete="off"
+                                    data-mode={if ableset_settings.enabled { "enabled" } else { "disabled" }}
+                                >
+                                    <div class="settings__form-header">
+                                        <div>
+                                            <h3>"AbleSet Tracker"</h3>
+                                            <p>"Pull the active song from AbleSet to map slides automatically."</p>
+                                        </div>
+                                    </div>
+                                    <div class="settings__form-row settings__form-row--single">
+                                        <label class="settings__form-checkbox settings__form-checkbox--block">
+                                            <input type="checkbox" data-role="ableset-enabled" checked={ableset_settings.enabled} />
+                                            <span>"Enabled"</span>
+                                        </label>
+                                    </div>
+                                    <div class="settings__form-row">
+                                        <label>
+                                            <span>"AbleSet Host"</span>
+                                            <input
+                                                type="text"
+                                                data-role="ableset-host"
+                                                value={ableset_host_value.clone()}
+                                                required
+                                            />
+                                        </label>
+                                        <label class="settings__form-control settings__form-control--small">
+                                            <span>"HTTP Port"</span>
+                                            <input
+                                                type="number"
+                                                data-role="ableset-http-port"
+                                                min="1"
+                                                max="65535"
+                                                value={ableset_http_port_value.clone()}
+                                                required
+                                            />
+                                        </label>
+                                        <label class="settings__form-control settings__form-control--small">
+                                            <span>"OSC Port"</span>
+                                            <input
+                                                type="number"
+                                                data-role="ableset-osc-port"
+                                                min="1"
+                                                max="65535"
+                                                value={ableset_osc_port_value.clone()}
+                                                required
+                                            />
+                                        </label>
+                                    </div>
+                                    <div class="settings__form-row">
+                                        <label>
+                                            <span>"Library Name"</span>
+                                            <input
+                                                type="text"
+                                                data-role="ableset-library"
+                                                value={ableset_library_value.clone()}
+                                                required
+                                            />
+                                        </label>
+                                        <label class="settings__form-control settings__form-control--small">
+                                            <span>"Song Prefix Length"</span>
+                                            <input
+                                                type="number"
+                                                data-role="ableset-prefix"
+                                                min="1"
+                                                max="6"
+                                                value={ableset_prefix_value.clone()}
+                                                required
+                                            />
+                                        </label>
+                                    </div>
+                                    <div class="settings__form-actions">
+                                        <button
+                                            type="submit"
+                                            class="settings__button settings__button--primary"
+                                            data-role="ableset-submit"
+                                        >"Save AbleSet Settings"</button>
+                                    </div>
+                                    <p class="settings__form-status" data-role="ableset-form-status" data-state="idle"></p>
+                                </form>
+                                <div class="settings__status-panel">
+                                    <span
+                                        class={format!("settings__status settings__status--{}", ableset_status_state)}
+                                        data-role="ableset-status-indicator"
+                                    >{ableset_status_label.clone()}</span>
+                                    <dl class="settings__status-list">
+                                        <div>
+                                            <dt>"Current Song"</dt>
+                                            <dd data-role="ableset-status-song">{ableset_last_song_name.clone()}</dd>
+                                        </div>
+                                        <div>
+                                            <dt>"Prefix"</dt>
+                                            <dd data-role="ableset-status-prefix">{ableset_last_song_prefix.clone()}</dd>
+                                        </div>
+                                        <div>
+                                            <dt>"Last Update"</dt>
+                                            <dd data-role="ableset-status-updated">{ableset_last_song_seen.clone()}</dd>
+                                        </div>
+                                    </dl>
+                                    <p class="settings__list-meta settings__list-meta--warning" data-role="ableset-status-error">
+                                        {ableset_last_error.clone().unwrap_or_default()}
+                                    </p>
+                                    <button type="button" class="settings__button settings__button--ghost" data-role="ableset-refresh">"Refresh"</button>
                                 </div>
-                                <div>
-                                    <dt>"Last event"</dt>
-                                    <dd data-role="osc-status-last-message">{osc_last_message_display.clone()}</dd>
-                                </div>
-                                <div>
-                                    <dt>"Last note"</dt>
-                                    <dd data-role="osc-status-last-note">{osc_last_note_display.clone()}</dd>
-                                </div>
-                            </dl>
-                            <p
-                                class="settings__list-meta settings__list-meta--warning"
-                                data-role="osc-status-error"
-                                data-visible={if osc_last_error.is_some() { "true" } else { "false" }}
-                            >{osc_last_error.clone().map(|err| format!("⚠ {}", err)).unwrap_or_default()}</p>
-                        </section>
-                    </section>
-                    <section class="settings__card settings__card--ableset">
-                        <header class="settings__card-header">
-                            <div>
-                                <h2>"AbleSet Bridge"</h2>
-                                <p>"Map Ableton cues to the NEWLEVEL library using AbleSet."</p>
                             </div>
-                        </header>
-                        <form
-                            class="settings__form settings__form--ableset"
-                            data-role="ableset-form"
-                            autocomplete="off"
-                            data-mode={if ableset_enabled { "enabled" } else { "disabled" }}
-                        >
-                            <div class="settings__form-row settings__form-row--single">
-                                <label class="settings__form-checkbox settings__form-checkbox--block">
-                                    <input type="checkbox" data-role="ableset-enabled" checked={ableset_enabled} />
-                                    <span>"Enable AbleSet automation"</span>
-                                </label>
+                            <div class="settings__ableton-column">
+                                <form
+                                    class="settings__form settings__form--osc"
+                                    data-role="osc-form"
+                                    autocomplete="off"
+                                    data-mode={if osc_settings.enabled { "enabled" } else { "disabled" }}
+                                >
+                                    <div class="settings__form-header">
+                                        <div>
+                                            <h3>"OSC Listener"</h3>
+                                            <p>"Presenter listens for `/note` messages from the Presenter OSC device. Velocity is fixed to 1."</p>
+                                        </div>
+                                    </div>
+                                    <div class="settings__form-row settings__form-row--single">
+                                        <label class="settings__form-checkbox settings__form-checkbox--block">
+                                            <input type="checkbox" data-role="osc-enabled" checked={osc_settings.enabled} />
+                                            <span>"Enabled"</span>
+                                        </label>
+                                    </div>
+                                    <div class="settings__form-row">
+                                        <label class="settings__form-control settings__form-control--small">
+                                            <span>"Listener Port"</span>
+                                            <input
+                                                type="number"
+                                                data-role="osc-port"
+                                                min="1"
+                                                max="65535"
+                                                value={osc_port_value.clone()}
+                                                required
+                                            />
+                                        </label>
+                                    </div>
+                                    <div class="settings__form-actions">
+                                        <button
+                                            type="submit"
+                                            class="settings__button settings__button--primary"
+                                            data-role="osc-submit"
+                                        >"Save OSC Settings"</button>
+                                    </div>
+                                </form>
+                                <section class="settings__osc-status">
+                                    <div class="settings__status-line">
+                                        <span
+                                            class="settings__status"
+                                            data-role="osc-status-indicator"
+                                            data-state={osc_status_state.clone()}
+                                        >{osc_status_label.clone()}</span>
+                                    </div>
+                                    <dl class="settings__status-list">
+                                        <div>
+                                            <dt>"OSC Port"</dt>
+                                            <dd data-role="osc-status-host-port">{osc_host_port_display}</dd>
+                                        </div>
+                                        <div>
+                                            <dt>"Last event"</dt>
+                                            <dd data-role="osc-status-last-message">{osc_last_message_display.clone()}</dd>
+                                        </div>
+                                        <div>
+                                            <dt>"Last note"</dt>
+                                            <dd data-role="osc-status-last-note">{osc_last_note_display.clone()}</dd>
+                                        </div>
+                                    </dl>
+                                    <p
+                                        class="settings__list-meta settings__list-meta--warning"
+                                        data-role="osc-status-error"
+                                        data-visible={if osc_last_error.is_some() { "true" } else { "false" }}
+                                    >{osc_last_error.clone().map(|err| format!("⚠ {}", err)).unwrap_or_default()}</p>
+                                </section>
                             </div>
-                            <div class="settings__form-row">
-                                <label>
-                                    <span>"AbleSet Host"</span>
-                                    <input
-                                        type="text"
-                                        data-role="ableset-host"
-                                        value={ableset_host_value.clone()}
-                                        required
-                                    />
-                                </label>
-                                <label class="settings__form-control settings__form-control--small">
-                                    <span>"HTTP Port"</span>
-                                    <input
-                                        type="number"
-                                        data-role="ableset-http-port"
-                                        min="1"
-                                        max="65535"
-                                        value={ableset_http_port_value.clone()}
-                                        required
-                                    />
-                                </label>
-                                <label class="settings__form-control settings__form-control--small">
-                                    <span>"OSC Port"</span>
-                                    <input
-                                        type="number"
-                                        data-role="ableset-osc-port"
-                                        min="1"
-                                        max="65535"
-                                        value={ableset_osc_port_value.clone()}
-                                        required
-                                    />
-                                </label>
-                            </div>
-                            <div class="settings__form-row">
-                                <label>
-                                    <span>"Library Name"</span>
-                                    <input
-                                        type="text"
-                                        data-role="ableset-library"
-                                        value={ableset_library_value.clone()}
-                                        required
-                                    />
-                                </label>
-                                <label class="settings__form-control settings__form-control--small">
-                                    <span>"Song Prefix Length"</span>
-                                    <input
-                                        type="number"
-                                        data-role="ableset-prefix"
-                                        min="1"
-                                        max="6"
-                                        value={ableset_prefix_value.clone()}
-                                        required
-                                    />
-                                </label>
-                            </div>
-                            <div class="settings__form-actions">
-                                <button
-                                    type="submit"
-                                    class="settings__button settings__button--primary"
-                                    data-role="ableset-submit"
-                                >"Save AbleSet Settings"</button>
-                            </div>
-                            <p class="settings__form-status" data-role="ableset-form-status" data-state="idle"></p>
-                        </form>
-                        <div class="settings__status-panel">
-                            <span
-                                class={format!("settings__status settings__status--{}", ableset_status_state)}
-                                data-role="ableset-status-indicator"
-                            >{ableset_status_label.clone()}</span>
-                            <dl class="settings__status-list">
-                                <div>
-                                    <dt>"Current Song"</dt>
-                                    <dd data-role="ableset-status-song">{ableset_last_song_name.clone()}</dd>
-                                </div>
-                                <div>
-                                    <dt>"Prefix"</dt>
-                                    <dd data-role="ableset-status-prefix">{ableset_last_song_prefix.clone()}</dd>
-                                </div>
-                                <div>
-                                    <dt>"Last Update"</dt>
-                                    <dd data-role="ableset-status-updated">{ableset_last_song_seen.clone()}</dd>
-                                </div>
-                            </dl>
-                            <p class="settings__list-meta settings__list-meta--warning" data-role="ableset-status-error">
-                                {ableset_last_error.clone().unwrap_or_default()}
-                            </p>
-                            <button type="button" class="settings__button settings__button--ghost" data-role="ableset-refresh">"Refresh"</button>
                         </div>
                     </section>
-
                 </main>
                 <div class="settings__toast" data-role="toast" data-visible="false"></div>
                 <script>{script}</script>

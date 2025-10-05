@@ -12,32 +12,26 @@
     "rect": [
       62.0,
       85.0,
-      800.0,
-      520.0
+      760.0,
+      480.0
     ],
     "bglocked": 0,
     "defrect": [
       0.0,
       0.0,
-      800.0,
-      520.0
+      760.0,
+      480.0
     ],
     "openrect": [
-      188.0,
-      134.0,
-      800.0,
-      520.0
+      180.0,
+      120.0,
+      760.0,
+      480.0
     ],
     "openinpresentation": 0,
     "default_fontsize": 12.0,
     "default_fontface": 0,
     "default_fontname": "Arial",
-    "gridonopen": 0,
-    "gridsize": [
-      15.0,
-      15.0
-    ],
-    "gridsnaponopen": 1,
     "toolbarvisible": 1,
     "boxanimatetime": 200,
     "enablehscroll": 1,
@@ -45,7 +39,7 @@
     "boxes": [
       {
         "box": {
-          "id": "obj-in",
+          "id": "inlet",
           "maxclass": "inlet",
           "patching_rect": [
             60.0,
@@ -57,7 +51,7 @@
       },
       {
         "box": {
-          "id": "obj-trigger",
+          "id": "trigger",
           "maxclass": "newobj",
           "patching_rect": [
             110.0,
@@ -70,7 +64,7 @@
       },
       {
         "box": {
-          "id": "obj-out",
+          "id": "outlet",
           "maxclass": "outlet",
           "patching_rect": [
             210.0,
@@ -82,7 +76,7 @@
       },
       {
         "box": {
-          "id": "obj-midiparse",
+          "id": "midiparse",
           "maxclass": "newobj",
           "patching_rect": [
             110.0,
@@ -95,20 +89,20 @@
       },
       {
         "box": {
-          "id": "obj-unpack",
+          "id": "unpack",
           "maxclass": "newobj",
           "patching_rect": [
             110.0,
             190.0,
-            80.0,
+            70.0,
             22.0
           ],
-          "text": "unpack 0 0 0"
+          "text": "unpack 0 0"
         }
       },
       {
         "box": {
-          "id": "obj-pak",
+          "id": "pak",
           "maxclass": "newobj",
           "patching_rect": [
             110.0,
@@ -116,17 +110,30 @@
             70.0,
             22.0
           ],
-          "text": "pak i i i"
+          "text": "pak i i"
         }
       },
       {
         "box": {
-          "id": "obj-prepend",
+          "id": "loadmess",
+          "maxclass": "newobj",
+          "patching_rect": [
+            200.0,
+            190.0,
+            80.0,
+            22.0
+          ],
+          "text": "loadmess 1"
+        }
+      },
+      {
+        "box": {
+          "id": "prepend",
           "maxclass": "newobj",
           "patching_rect": [
             110.0,
             270.0,
-            90.0,
+            110.0,
             22.0
           ],
           "text": "prepend /note"
@@ -134,20 +141,20 @@
       },
       {
         "box": {
-          "id": "obj-udpsend",
+          "id": "udpsend",
           "maxclass": "newobj",
           "patching_rect": [
             110.0,
             310.0,
-            130.0,
+            150.0,
             22.0
           ],
-          "text": "udpsend 127.0.0.1 39051"
+          "text": "udpsend presenter.lan 39051"
         }
       },
       {
         "box": {
-          "id": "obj-host-label",
+          "id": "host_label",
           "maxclass": "comment",
           "patching_rect": [
             360.0,
@@ -161,7 +168,7 @@
       },
       {
         "box": {
-          "id": "obj-host",
+          "id": "host_input",
           "maxclass": "textedit",
           "patching_rect": [
             360.0,
@@ -169,9 +176,9 @@
             200.0,
             24.0
           ],
+          "text": "presenter.lan",
           "fontname": "Arial",
           "fontsize": 12.0,
-          "text": "127.0.0.1",
           "varname": "host_input",
           "pastemode": 1,
           "wordwrap": 0,
@@ -180,7 +187,7 @@
       },
       {
         "box": {
-          "id": "obj-route-text",
+          "id": "route_text",
           "maxclass": "newobj",
           "patching_rect": [
             580.0,
@@ -193,7 +200,7 @@
       },
       {
         "box": {
-          "id": "obj-thost",
+          "id": "thost",
           "maxclass": "newobj",
           "patching_rect": [
             660.0,
@@ -206,7 +213,7 @@
       },
       {
         "box": {
-          "id": "obj-send-host",
+          "id": "send_host",
           "maxclass": "newobj",
           "patching_rect": [
             720.0,
@@ -219,7 +226,7 @@
       },
       {
         "box": {
-          "id": "obj-prepend-host",
+          "id": "prepend_host",
           "maxclass": "newobj",
           "patching_rect": [
             720.0,
@@ -232,7 +239,7 @@
       },
       {
         "box": {
-          "id": "obj-recv-host",
+          "id": "recv_host",
           "maxclass": "newobj",
           "patching_rect": [
             720.0,
@@ -245,7 +252,7 @@
       },
       {
         "box": {
-          "id": "obj-port-label",
+          "id": "port_label",
           "maxclass": "comment",
           "patching_rect": [
             360.0,
@@ -259,7 +266,7 @@
       },
       {
         "box": {
-          "id": "obj-port",
+          "id": "port_input",
           "maxclass": "newobj",
           "patching_rect": [
             360.0,
@@ -280,7 +287,7 @@
       },
       {
         "box": {
-          "id": "obj-int",
+          "id": "int_port",
           "maxclass": "newobj",
           "patching_rect": [
             450.0,
@@ -293,7 +300,7 @@
       },
       {
         "box": {
-          "id": "obj-tport",
+          "id": "tport",
           "maxclass": "newobj",
           "patching_rect": [
             500.0,
@@ -306,7 +313,7 @@
       },
       {
         "box": {
-          "id": "obj-send-port",
+          "id": "send_port",
           "maxclass": "newobj",
           "patching_rect": [
             560.0,
@@ -319,7 +326,7 @@
       },
       {
         "box": {
-          "id": "obj-prepend-port",
+          "id": "prepend_port",
           "maxclass": "newobj",
           "patching_rect": [
             560.0,
@@ -332,7 +339,7 @@
       },
       {
         "box": {
-          "id": "obj-recv-port",
+          "id": "recv_port",
           "maxclass": "newobj",
           "patching_rect": [
             560.0,
@@ -345,7 +352,7 @@
       },
       {
         "box": {
-          "id": "obj-autopattr",
+          "id": "autopattr",
           "maxclass": "newobj",
           "patching_rect": [
             360.0,
@@ -358,12 +365,12 @@
       },
       {
         "box": {
-          "id": "obj-pattrstorage",
+          "id": "pattrstorage",
           "maxclass": "newobj",
           "patching_rect": [
             360.0,
             290.0,
-            230.0,
+            205.0,
             22.0
           ],
           "text": "pattrstorage store @autorestore 1 @outputmode 1"
@@ -371,7 +378,7 @@
       },
       {
         "box": {
-          "id": "obj-route-store",
+          "id": "route_store",
           "maxclass": "newobj",
           "patching_rect": [
             360.0,
@@ -384,16 +391,16 @@
       },
       {
         "box": {
-          "id": "obj-help",
+          "id": "note",
           "maxclass": "comment",
           "patching_rect": [
             360.0,
             380.0,
-            340.0,
-            50.0
+            330.0,
+            48.0
           ],
           "fontsize": 11.0,
-          "text": "Presenter OSC Send: drop on a MIDI track and route Ableton notes. Host/port are stored with the Live Set via pattrstorage."
+          "text": "Presenter OSC: drop on a MIDI track feeding Presenter. Host/port are stored with the Live Set via pattrstorage."
         }
       }
     ],
@@ -401,11 +408,11 @@
       {
         "patchline": {
           "source": [
-            "obj-in",
+            "inlet",
             0
           ],
           "destination": [
-            "obj-trigger",
+            "trigger",
             0
           ]
         }
@@ -413,11 +420,11 @@
       {
         "patchline": {
           "source": [
-            "obj-trigger",
+            "trigger",
             0
           ],
           "destination": [
-            "obj-out",
+            "outlet",
             0
           ]
         }
@@ -425,11 +432,11 @@
       {
         "patchline": {
           "source": [
-            "obj-trigger",
+            "trigger",
             1
           ],
           "destination": [
-            "obj-midiparse",
+            "midiparse",
             0
           ]
         }
@@ -437,11 +444,11 @@
       {
         "patchline": {
           "source": [
-            "obj-midiparse",
+            "midiparse",
             0
           ],
           "destination": [
-            "obj-unpack",
+            "unpack",
             0
           ]
         }
@@ -449,11 +456,11 @@
       {
         "patchline": {
           "source": [
-            "obj-unpack",
+            "unpack",
             0
           ],
           "destination": [
-            "obj-pak",
+            "pak",
             0
           ]
         }
@@ -461,35 +468,143 @@
       {
         "patchline": {
           "source": [
-            "obj-unpack",
+            "loadmess",
+            0
+          ],
+          "destination": [
+            "pak",
+            1
+          ]
+        }
+      },
+      {
+        "patchline": {
+          "source": [
+            "pak",
+            0
+          ],
+          "destination": [
+            "prepend",
+            0
+          ]
+        }
+      },
+      {
+        "patchline": {
+          "source": [
+            "prepend",
+            0
+          ],
+          "destination": [
+            "udpsend",
+            0
+          ]
+        }
+      },
+      {
+        "patchline": {
+          "source": [
+            "recv_host",
+            0
+          ],
+          "destination": [
+            "prepend_host",
+            0
+          ]
+        }
+      },
+      {
+        "patchline": {
+          "source": [
+            "prepend_host",
+            0
+          ],
+          "destination": [
+            "udpsend",
+            0
+          ]
+        }
+      },
+      {
+        "patchline": {
+          "source": [
+            "recv_port",
+            0
+          ],
+          "destination": [
+            "prepend_port",
+            0
+          ]
+        }
+      },
+      {
+        "patchline": {
+          "source": [
+            "prepend_port",
+            0
+          ],
+          "destination": [
+            "udpsend",
+            0
+          ]
+        }
+      },
+      {
+        "patchline": {
+          "source": [
+            "host_input",
+            0
+          ],
+          "destination": [
+            "route_text",
+            0
+          ]
+        }
+      },
+      {
+        "patchline": {
+          "source": [
+            "route_text",
+            0
+          ],
+          "destination": [
+            "thost",
+            0
+          ]
+        }
+      },
+      {
+        "patchline": {
+          "source": [
+            "thost",
+            0
+          ],
+          "destination": [
+            "send_host",
+            0
+          ]
+        }
+      },
+      {
+        "patchline": {
+          "source": [
+            "thost",
             1
           ],
           "destination": [
-            "obj-pak",
-            1
+            "prepend_host",
+            0
           ]
         }
       },
       {
         "patchline": {
           "source": [
-            "obj-unpack",
-            2
-          ],
-          "destination": [
-            "obj-pak",
-            2
-          ]
-        }
-      },
-      {
-        "patchline": {
-          "source": [
-            "obj-pak",
+            "port_input",
             0
           ],
           "destination": [
-            "obj-prepend",
+            "int_port",
             0
           ]
         }
@@ -497,11 +612,11 @@
       {
         "patchline": {
           "source": [
-            "obj-prepend",
+            "int_port",
             0
           ],
           "destination": [
-            "obj-udpsend",
+            "tport",
             0
           ]
         }
@@ -509,11 +624,11 @@
       {
         "patchline": {
           "source": [
-            "obj-recv-host",
+            "tport",
             0
           ],
           "destination": [
-            "obj-prepend-host",
+            "send_port",
             0
           ]
         }
@@ -521,83 +636,11 @@
       {
         "patchline": {
           "source": [
-            "obj-prepend-host",
-            0
-          ],
-          "destination": [
-            "obj-udpsend",
-            0
-          ]
-        }
-      },
-      {
-        "patchline": {
-          "source": [
-            "obj-recv-port",
-            0
-          ],
-          "destination": [
-            "obj-prepend-port",
-            0
-          ]
-        }
-      },
-      {
-        "patchline": {
-          "source": [
-            "obj-prepend-port",
-            0
-          ],
-          "destination": [
-            "obj-udpsend",
-            0
-          ]
-        }
-      },
-      {
-        "patchline": {
-          "source": [
-            "obj-host",
-            0
-          ],
-          "destination": [
-            "obj-route-text",
-            0
-          ]
-        }
-      },
-      {
-        "patchline": {
-          "source": [
-            "obj-route-text",
-            0
-          ],
-          "destination": [
-            "obj-thost",
-            0
-          ]
-        }
-      },
-      {
-        "patchline": {
-          "source": [
-            "obj-thost",
-            0
-          ],
-          "destination": [
-            "obj-send-host",
-            0
-          ]
-        }
-      },
-      {
-        "patchline": {
-          "source": [
-            "obj-thost",
+            "tport",
             1
           ],
           "destination": [
-            "obj-prepend-host",
+            "prepend_port",
             0
           ]
         }
@@ -605,47 +648,11 @@
       {
         "patchline": {
           "source": [
-            "obj-port",
-            0
-          ],
-          "destination": [
-            "obj-int",
-            0
-          ]
-        }
-      },
-      {
-        "patchline": {
-          "source": [
-            "obj-int",
-            0
-          ],
-          "destination": [
-            "obj-tport",
-            0
-          ]
-        }
-      },
-      {
-        "patchline": {
-          "source": [
-            "obj-tport",
-            0
-          ],
-          "destination": [
-            "obj-send-port",
-            0
-          ]
-        }
-      },
-      {
-        "patchline": {
-          "source": [
-            "obj-tport",
+            "pattrstorage",
             1
           ],
           "destination": [
-            "obj-prepend-port",
+            "route_store",
             0
           ]
         }
@@ -653,11 +660,23 @@
       {
         "patchline": {
           "source": [
-            "obj-pattrstorage",
+            "route_store",
+            0
+          ],
+          "destination": [
+            "send_host",
+            0
+          ]
+        }
+      },
+      {
+        "patchline": {
+          "source": [
+            "route_store",
             1
           ],
           "destination": [
-            "obj-route-store",
+            "send_port",
             0
           ]
         }
@@ -665,11 +684,11 @@
       {
         "patchline": {
           "source": [
-            "obj-route-store",
+            "send_host",
             0
           ],
           "destination": [
-            "obj-send-host",
+            "prepend_host",
             0
           ]
         }
@@ -677,11 +696,11 @@
       {
         "patchline": {
           "source": [
-            "obj-route-store",
-            1
+            "send_host",
+            0
           ],
           "destination": [
-            "obj-send-port",
+            "recv_host",
             0
           ]
         }
@@ -689,11 +708,11 @@
       {
         "patchline": {
           "source": [
-            "obj-send-host",
+            "send_port",
             0
           ],
           "destination": [
-            "obj-prepend-host",
+            "prepend_port",
             0
           ]
         }
@@ -701,35 +720,11 @@
       {
         "patchline": {
           "source": [
-            "obj-send-port",
+            "send_port",
             0
           ],
           "destination": [
-            "obj-prepend-port",
-            0
-          ]
-        }
-      },
-      {
-        "patchline": {
-          "source": [
-            "obj-send-host",
-            0
-          ],
-          "destination": [
-            "obj-recv-host",
-            0
-          ]
-        }
-      },
-      {
-        "patchline": {
-          "source": [
-            "obj-send-port",
-            0
-          ],
-          "destination": [
-            "obj-recv-port",
+            "recv_port",
             0
           ]
         }

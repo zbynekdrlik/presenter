@@ -6,7 +6,7 @@ use crate::{
 use anyhow::Error as AnyhowError;
 use axum::{
     extract::{ws::WebSocketUpgrade, Path, Query, State},
-    http::StatusCode,
+    http::{header, HeaderValue, StatusCode},
     response::{IntoResponse, Response},
     routing::{get, patch, post, put},
     Json, Router,
@@ -24,6 +24,11 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use tracing::instrument;
 use uuid::Uuid;
+
+const PRESENTER_OSC_SEND_DEVICE: &[u8] = include_bytes!(concat!(
+    env!("CARGO_MANIFEST_DIR"),
+    "/../../ableton/presenter-osc-send.maxpat"
+));
 
 pub fn build_router(state: AppState) -> Router {
     Router::new()
@@ -61,6 +66,10 @@ pub fn build_router(state: AppState) -> Router {
         .route("/ui/tablet", get(tablet_ui))
         .route("/ui/bible", get(bible_ui))
         .route("/ui/settings", get(settings_ui))
+        .route(
+            "/downloads/presenter-osc-send.maxpat",
+            get(download_presenter_osc_device),
+        )
         .route("/overlays/timer", get(timer_overlay))
         .route("/stage-displays", get(list_stage_displays))
         .route(
@@ -735,6 +744,25 @@ async fn operator_ui(
 ) -> Result<axum::response::Html<String>, AppError> {
     let html = ui::render_operator_ui(&state).await?;
     Ok(html)
+}
+
+#[instrument(skip_all)]
+async fn download_presenter_osc_device() -> Result<Response, AppError> {
+    let response = (
+        [
+            (
+                header::CONTENT_TYPE,
+                HeaderValue::from_static("application/json"),
+            ),
+            (
+                header::CONTENT_DISPOSITION,
+                HeaderValue::from_static("attachment; filename=\"Presenter OSC Send.maxpat\""),
+            ),
+        ],
+        PRESENTER_OSC_SEND_DEVICE,
+    )
+        .into_response();
+    Ok(response)
 }
 
 #[instrument(skip_all)]

@@ -1968,7 +1968,7 @@ mod tests {
         let repo = Repository::connect_in_memory().await.unwrap();
         let settings = repo.get_osc_settings().await.unwrap();
         assert!(!settings.enabled);
-        assert_eq!(settings.listen_port, 9000);
+        assert_eq!(settings.listen_port, 39051);
         assert_eq!(settings.address_pattern, "/note");
         assert_eq!(settings.velocity_mode, VelocityMode::ZeroBased);
     }

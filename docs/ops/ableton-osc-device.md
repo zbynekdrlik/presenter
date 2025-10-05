@@ -11,7 +11,7 @@ The Connection Kit device forgets its target host/port whenever a set is saved a
 ## Installation
 
 1. **Prerequisites** – Ableton Live Suite (with Max for Live) and Max 8.5+ installed locally.
-2. **Copy the patch** – In this repository locate `ableton/presenter-osc-send.maxpat`.
+2. **Copy the patch** – In this repository locate `ableton/presenter-osc-send.maxpat` (you can also download it from *Settings → Ableton Bridge* inside Presenter).
 3. **Open in Max** – Double-click the file (or open from Max: `File → Open…`).
 4. **Export as a Max for Live device** – In Max choose `File → Save As…`, set the format to *Max for Live MIDI Effect* (`.amxd`), and save it inside your `Ableton User Library/Presets/MIDI Effects/Presenter/` folder. Name the device `Presenter OSC Send.amxd`.
 5. **(Optional) Create a default preset** – Drag the saved device into Ableton and click the disk icon to store a preset so it appears in Live’s browser.
@@ -19,8 +19,8 @@ The Connection Kit device forgets its target host/port whenever a set is saved a
 ## Using the device
 
 1. Drop the device on the Ableton MIDI track that drives Presenter.
-2. Set **OSC host** to your Presenter endpoint (for demos: `10.77.9.21`).
-3. Set **OSC port** to the Presenter OSC listener (defaults to `39051` as configured in `Presenter → Settings → OSC Bridge`).
+2. Set **OSC host** to your Presenter endpoint (the Max patch defaults to `presenter.lan`; for demos you can still reach it at `10.77.9.21`).
+3. Leave **OSC port** at `39051` unless you have changed the Presenter OSC bridge port.
 4. Arm the track / reroute AbleSet as usual. MIDI notes now forward to Presenter over OSC.
 5. Save the Live Set. Reopen it and confirm the host/port fields reload automatically.
 
@@ -29,6 +29,7 @@ The device still passes MIDI through to the rest of the track so existing arrang
 ## Version control
 
 Check the exported `.amxd` into your project repo (e.g. `ableton/devices/`) so other operators can drag the same device into their Ableton User Library without re-exporting.
+If you ever change the default host/port, update the `.maxpat` in the repo so the download served from Presenter stays aligned.
 
 ## Troubleshooting
 

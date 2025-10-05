@@ -69,6 +69,10 @@ test('resolume settings CRUD with status feedback', async ({ page }) => {
   await page.goto(new URL('/ui/settings', baseURL).toString());
   await page.waitForLoadState('networkidle');
 
+  const abletonDownload = page.locator('[data-role="ableton-download"]');
+  await expect(abletonDownload).toHaveAttribute('href', '/downloads/presenter-osc-send.maxpat');
+  await expect(page.locator('[data-role="osc-port"]')).toHaveValue(/\d+/);
+
   // Ensure the list starts empty.
   const emptyState = page.locator('[data-role="host-empty"]');
   await expect(emptyState).toHaveText('No Resolume connections defined yet.');

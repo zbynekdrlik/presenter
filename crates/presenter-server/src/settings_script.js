@@ -46,8 +46,6 @@
     oscForm: document.querySelector('[data-role="osc-form"]'),
     oscEnabled: document.querySelector('[data-role="osc-enabled"]'),
     oscPort: document.querySelector('[data-role="osc-port"]'),
-    oscAddress: document.querySelector('[data-role="osc-address"]'),
-    oscMode: document.querySelector('[data-role="osc-mode"]'),
     oscSubmit: document.querySelector('[data-role="osc-submit"]'),
     oscStatusIndicator: document.querySelector('[data-role="osc-status-indicator"]'),
     oscStatusHostPort: document.querySelector('[data-role="osc-status-host-port"]'),
@@ -78,8 +76,8 @@
 
   function normalizeOscConfig(input) {
     const fallback = {
-      enabled: true,
-      listenPort: 9000,
+      enabled: false,
+      listenPort: 39051,
       addressPattern: '/note',
       velocityMode: 'zero_based',
     };
@@ -89,8 +87,8 @@
     return {
       enabled: Boolean(input.enabled),
       listenPort: Number.isFinite(Number(input.listenPort)) ? Number(input.listenPort) : fallback.listenPort,
-      addressPattern: (input.addressPattern || fallback.addressPattern).toString(),
-      velocityMode: (input.velocityMode || fallback.velocityMode).toString(),
+      addressPattern: '/note',
+      velocityMode: 'zero_based',
     };
   }
 
@@ -99,7 +97,7 @@
       return {
         enabled: false,
         listening: false,
-        listenPort: 9000,
+        listenPort: 39051,
         addressPattern: '/note',
         velocityMode: 'zero_based',
         lastMessageAt: null,
@@ -111,7 +109,7 @@
     return {
       enabled: Boolean(input.enabled),
       listening: Boolean(input.listening),
-      listenPort: Number.isFinite(Number(input.listenPort)) ? Number(input.listenPort) : 9000,
+      listenPort: Number.isFinite(Number(input.listenPort)) ? Number(input.listenPort) : 39051,
       hostPort: Number.isFinite(Number(input.hostPort ?? input.host_port)) ? Number(input.hostPort ?? input.host_port) : null,
       addressPattern: (input.addressPattern || '/note').toString(),
       velocityMode: (input.velocityMode || 'zero_based').toString(),
@@ -301,14 +299,8 @@
       els.oscEnabled.checked = Boolean(config.enabled);
     }
     if (els.oscPort) {
-      const portValue = Number.isFinite(Number(config.listenPort)) ? String(config.listenPort) : '9000';
+      const portValue = Number.isFinite(Number(config.listenPort)) ? String(config.listenPort) : '39051';
       els.oscPort.value = portValue;
-    }
-    if (els.oscAddress) {
-      els.oscAddress.value = (config.addressPattern || '/note').toString();
-    }
-    if (els.oscMode) {
-      els.oscMode.value = (config.velocityMode || 'zero_based').toString();
     }
   }
 
@@ -520,9 +512,9 @@
     setFormStatus('', 'idle');
     const payload = {
       enabled: els.oscEnabled ? Boolean(els.oscEnabled.checked) : false,
-      listenPort: els.oscPort ? Number.parseInt(els.oscPort.value, 10) || 9000 : 9000,
-      addressPattern: els.oscAddress ? els.oscAddress.value.trim() || '/note' : '/note',
-      velocityMode: els.oscMode ? els.oscMode.value : 'zero_based',
+      listenPort: els.oscPort ? Number.parseInt(els.oscPort.value, 10) || 39051 : 39051,
+      addressPattern: '/note',
+      velocityMode: 'zero_based',
     };
 
     // optimistic update

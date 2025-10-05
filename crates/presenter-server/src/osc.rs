@@ -52,7 +52,7 @@ impl Default for OscStatusInner {
         Self {
             enabled: false,
             listening: false,
-            listen_port: 9000,
+            listen_port: 39051,
             host_port: std::env::var("PRESENTER_OSC_HOST_PORT")
                 .ok()
                 .and_then(|raw| raw.parse().ok()),

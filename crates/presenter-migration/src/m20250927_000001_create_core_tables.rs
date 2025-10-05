@@ -392,7 +392,7 @@ impl MigrationTrait for Migration {
                         ColumnDef::new(OscSettings::ListenPort)
                             .integer()
                             .not_null()
-                            .default(9000),
+                            .default(39051),
                     )
                     .col(
                         ColumnDef::new(OscSettings::AddressPattern)

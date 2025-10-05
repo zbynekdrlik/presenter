@@ -16,6 +16,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 # Copy manifests first for dependency resolution
 COPY Cargo.toml Cargo.lock ./
 COPY crates ./crates
+COPY ableton ./ableton
 
 RUN cargo fetch
 

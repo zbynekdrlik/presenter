@@ -56,7 +56,7 @@ if [[ -z "$DISPLAY_NAME" ]]; then
   DISPLAY_NAME="$PROJECT"
 fi
 HOST_HTTP_PORT="$(compute_port "$PROJECT" "$PORT")"
-HOST_OSC_PORT="$(compute_port "${PROJECT}-osc" "$OSC_PORT")"
+HOST_OSC_PORT="${OSC_PORT:-39051}"
 DEMO_DATA_DIR="$DATA_ROOT/$PROJECT"
 
 stop_conflicting_demos "$REPO_ROOT" "$PROJECT"

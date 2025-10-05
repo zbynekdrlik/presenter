@@ -136,4 +136,4 @@ Keep this document up to date whenever the deployment process changes.
 
 ## Ableton Live OSC bridge
 
-See [docs/ops/ableton-osc-device.md](ableton-osc-device.md) for installing the "Presenter OSC Send" Max for Live device that persists the OSC target when Ableton sets are reopened.
+See [docs/ops/ableton-osc-device.md](ableton-osc-device.md) for installing the "Presenter OSC Send" Max for Live device that persists the OSC target when Ableton sets are reopened. The Ableton Bridge card also links the latest patch and defaults to `presenter.lan:39051`, so operators rarely need to change the fields.

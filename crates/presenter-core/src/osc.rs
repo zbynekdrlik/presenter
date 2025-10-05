@@ -80,7 +80,7 @@ impl Default for OscSettingsDraft {
     fn default() -> Self {
         Self {
             enabled: false,
-            listen_port: 9000,
+            listen_port: 39051,
             address_pattern: "/note".to_string(),
             velocity_mode: VelocityMode::ZeroBased,
         }
