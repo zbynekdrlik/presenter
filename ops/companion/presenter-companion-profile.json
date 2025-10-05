@@ -2,14 +2,15 @@
   "schemaVersion": 1,
   "connection": {
     "id": "presenter",
-    "module": "generic-websocket",
-    "label": "Presenter",
-    "host": "presenter.dev.local",
-    "port": 80,
-    "path": "/companion/ws",
-    "secure": false,
-    "autoReconnectMs": 2000,
-    "token": ""
+    "module": "presenter",
+    "label": "Presenter (Dev)",
+    "config": {
+      "host": "10.77.9.21",
+      "port": 18175,
+      "secure": false,
+      "token": "",
+      "reconnect": 2000
+    }
   },
   "macros": [
     {
@@ -108,7 +109,7 @@
       "feedbacks": [
         {
           "type": "progress",
-          "variable": "stage_countdown_remaining_seconds",
+          "variable": "timer_countdown_remaining_seconds",
           "range": {
             "max": 3600
           }
@@ -123,7 +124,7 @@
       "feedbacks": [
         {
           "type": "progress",
-          "variable": "stage_countdown_remaining_seconds",
+          "variable": "timer_countdown_remaining_seconds",
           "range": {
             "max": 3600
           }
@@ -167,66 +168,71 @@
       "bank": 9,
       "label": "Remaining",
       "display": {
-        "variable": "stage_countdown_remaining_seconds"
+        "variable": "timer_countdown_remaining_hhmm"
       },
       "feedbacks": []
     },
     {
       "page": 2,
       "bank": 1,
-      "label": "Stage\nClear",
+      "label": "Lyrics\nSNV",
       "command": {
-        "name": "stage.set",
-        "payload": {
-          "presentationId": null,
-          "currentSlideId": null,
-          "nextSlideId": null
-        }
+        "name": "stage.layout.worship-snv"
       },
-      "feedbacks": []
+      "feedbacks": [
+        {
+          "type": "equals",
+          "variable": "stage_layout_code",
+          "value": "worship-snv",
+          "color": "00ff00"
+        }
+      ]
     },
     {
       "page": 2,
       "bank": 2,
-      "label": "Next\nSlide",
+      "label": "Lyrics\nPP",
       "command": {
-        "name": "stage.set",
-        "payload": {
-          "presentationId": "$(presenter:active_presentation_id)",
-          "currentSlideId": "$(presenter:next_slide_id)",
-          "nextSlideId": null
-        }
+        "name": "stage.layout.worship-pp"
       },
       "feedbacks": [
         {
-          "type": "text",
-          "variable": "stage_next_main"
+          "type": "equals",
+          "variable": "stage_layout_code",
+          "value": "worship-pp",
+          "color": "00ff00"
         }
       ]
     },
     {
       "page": 2,
       "bank": 3,
-      "label": "Blank\nOutputs",
+      "label": "Timer",
       "command": {
-        "name": "stage.set",
-        "payload": {
-          "blank": true
-        }
+        "name": "stage.layout.timer"
       },
-      "feedbacks": []
+      "feedbacks": [
+        {
+          "type": "equals",
+          "variable": "stage_layout_code",
+          "value": "timer",
+          "color": "00ff00"
+        }
+      ]
     },
     {
       "page": 2,
       "bank": 4,
-      "label": "Panic",
-      "macro": "macro_presenter_alert",
+      "label": "Preach",
+      "command": {
+        "name": "stage.layout.preach"
+      },
       "feedbacks": [
         {
           "type": "equals",
-          "variable": "live_ws_connected",
-          "value": false,
-          "color": "ff0000"
+          "variable": "stage_layout_code",
+          "value": "preach",
+          "color": "00ff00"
         }
       ]
     },
@@ -259,10 +265,24 @@
         "payload": {}
       },
       "feedbacks": []
+    },
+    {
+      "page": 2,
+      "bank": 7,
+      "label": "Panic",
+      "macro": "macro_presenter_alert",
+      "feedbacks": [
+        {
+          "type": "equals",
+          "variable": "live_ws_connected",
+          "value": false,
+          "color": "ff0000"
+        }
+      ]
     }
   ],
   "scripts": {
-    "offsetCountdown": "function offsetCountdown(deltaMinutes) {\n  const now = Date.now();\n  const current = Number(globalVars.get('stage_countdown_remaining_seconds'));\n  const target = Number.isFinite(current) && current > 0\n    ? now + current * 1000\n    : now;\n  const adjusted = new Date(target + deltaMinutes * 60 * 1000);\n  sendCommand('timer.set_countdown_target', { target: adjusted.toISOString() });\n}\n",
+    "offsetCountdown": "function offsetCountdown(deltaMinutes) {\n  const current = Number(globalVars.get('timer_countdown_remaining_seconds'));\n  const remaining = Number.isFinite(current) ? current : 0;\n  const adjusted = Math.max(0, remaining + deltaMinutes * 60);\n  const totalMinutes = Math.max(0, Math.round(adjusted / 60));\n  const hours = Math.floor(totalMinutes / 60);\n  const minutes = totalMinutes % 60;\n  const formatted = `${String(hours).padStart(2, '0')}:${String(minutes).padStart(2, '0')}`;\n  sendCommand('timer.set_countdown_target', { target: formatted });\n}\n",
     "sendCommand": "function sendCommand(name, payload) {\n  companion.send('presenter', {\n    type: 'command',\n    command: name,\n    payload\n  });\n}\n"
   }
 }

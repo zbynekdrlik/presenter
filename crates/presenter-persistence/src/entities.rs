@@ -370,6 +370,7 @@ pub mod bible_passage {
     impl ActiveModelBehavior for ActiveModel {}
 }
 
+pub use app_settings::Entity as AppSettingsEntity;
 pub use bible_passage::Entity as BiblePassageEntity;
 pub use bible_translation::Entity as BibleTranslationEntity;
 pub use library::Entity as LibraryEntity;
@@ -377,6 +378,24 @@ pub use playlist::Entity as PlaylistEntity;
 pub use playlist_entry::Entity as PlaylistEntryEntity;
 pub use presentation::Entity as PresentationEntity;
 pub use slide::Entity as SlideEntity;
+
+pub mod app_settings {
+    use sea_orm::entity::prelude::*;
+
+    #[derive(Clone, Debug, PartialEq, Eq, DeriveEntityModel)]
+    #[sea_orm(table_name = "app_settings")]
+    pub struct Model {
+        #[sea_orm(primary_key)]
+        pub key: String,
+        pub value: String,
+        pub updated_at: DateTimeWithTimeZone,
+    }
+
+    #[derive(Copy, Clone, Debug, EnumIter, DeriveRelation)]
+    pub enum Relation {}
+
+    impl ActiveModelBehavior for ActiveModel {}
+}
 
 pub mod timers {
     use sea_orm::entity::prelude::*;

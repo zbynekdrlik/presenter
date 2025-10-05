@@ -23,6 +23,10 @@ const selectors = {
   resetButton: '[data-role="host-reset"]',
   toast: '[data-role="toast"]',
   list: '[data-role="resolume-host-list"]',
+  companionToggle: '[data-role="feature-companion-toggle"]',
+  companionStatus: '[data-role="feature-status"]',
+  companionPort: '[data-role="feature-companion-port"]',
+  companionSubmit: '[data-role="feature-submit"]',
 };
 
 test.describe.configure({ timeout: 600_000 });
@@ -62,6 +66,19 @@ async function getHostsViaApi(page) {
     host: string;
     status: { state: string };
   }>;
+}
+
+async function getFeatureFlags() {
+  const response = await fetch(new URL('/settings/features', baseURL).toString(), {
+    headers: { Accept: 'application/json' },
+  });
+  expect(response.ok).toBeTruthy();
+  return (await response.json()) as {
+    companionEnabled?: boolean;
+    companion_enabled?: boolean;
+    companionPort?: number;
+    companion_port?: number;
+  };
 }
 
 test('resolume settings CRUD with status feedback', async ({ page }) => {
@@ -137,4 +154,52 @@ test('resolume settings CRUD with status feedback', async ({ page }) => {
 
   const hostsAfterDelete = await getHostsViaApi(page);
   expect(hostsAfterDelete).toHaveLength(0);
+});
+
+test('companion settings reflect feature flags', async ({ page }) => {
+  await page.goto(new URL('/ui/settings', baseURL).toString());
+  await page.waitForLoadState('networkidle');
+
+  const toggle = page.locator(selectors.companionToggle);
+  const portInput = page.locator(selectors.companionPort);
+
+  const initialFeatures = await getFeatureFlags();
+  const initiallyEnabled = Boolean(
+    initialFeatures.companionEnabled ?? initialFeatures.companion_enabled
+  );
+  const initialPort =
+    initialFeatures.companionPort ?? initialFeatures.companion_port ?? 18175;
+
+  const randomPort = () => 20000 + Math.floor(Math.random() * 10000);
+  let desiredPort = randomPort();
+  if (desiredPort === initialPort) {
+    desiredPort += 1;
+  }
+
+  const updateFeatures = async (enabled: boolean, port: number) => {
+    const response = await page.request.post(new URL('/settings/features', baseURL).toString(), {
+      data: {
+        companionEnabled: enabled,
+        companionPort: port,
+      },
+    });
+    if (!response.ok()) {
+      const body = await response.text();
+      throw new Error(`Failed to update features (${response.status()}): ${body}`);
+    }
+  };
+
+  await updateFeatures(true, desiredPort);
+  await page.reload();
+  await expect(toggle).toBeChecked();
+  await expect(portInput).toHaveValue(String(desiredPort));
+
+  await updateFeatures(false, desiredPort);
+  await page.reload();
+  await expect(toggle).not.toBeChecked();
+
+  await updateFeatures(initiallyEnabled, initialPort);
+  await page.reload();
+  await expect(toggle).toHaveJSProperty('checked', initiallyEnabled);
+  await expect(portInput).toHaveValue(String(initialPort));
 });

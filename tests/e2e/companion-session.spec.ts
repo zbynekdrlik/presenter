@@ -16,10 +16,41 @@ test.describe('@companion Companion control socket', () => {
   test.beforeAll(async ({}, testInfo) => {
     const config = deriveTestConfig(testInfo);
     baseURL = config.baseURL;
-    wsURL = new URL('/companion/ws', baseURL).toString().replace('http', 'ws');
-
     await refreshDevData(config.dbUrl);
     server = await startTestServer(config.port, config.dbUrl);
+
+    const desiredPort = config.port + 100;
+
+    const response = await fetch(new URL('/settings/features', baseURL).toString(), {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({ companionEnabled: true, companionPort: desiredPort }),
+    });
+    if (!response.ok) {
+      throw new Error(`Failed to enable companion websocket (${response.status})`);
+    }
+
+    const features = await fetch(new URL('/settings/features', baseURL).toString(), {
+      headers: {
+        Accept: 'application/json',
+      },
+    });
+    if (!features.ok) {
+      throw new Error(`Failed to fetch feature flags (${features.status})`);
+    }
+    const payload = (await features.json()) as {
+      companionPort?: number;
+      companion_port?: number;
+    };
+    const base = new URL(baseURL);
+    const rawPortValue =
+      payload.companionPort ?? payload.companion_port ?? desiredPort;
+    const parsedPort = Number.parseInt(String(rawPortValue), 10);
+    const companionPort = Number.isFinite(parsedPort) && parsedPort >= 1 ? parsedPort : desiredPort;
+    const wsOrigin = `${base.protocol.replace('http', 'ws')}//${base.hostname}:${companionPort}`;
+    wsURL = `${wsOrigin}/companion/ws`;
   });
 
   test.afterAll(async () => {
@@ -81,6 +112,13 @@ test.describe('@companion Companion control socket', () => {
 
     const initialVars = await waitForMessage((msg) => msg.type === 'variables');
     expect(initialVars).toBeTruthy();
+    const initialVarNames = new Set(
+      Array.isArray(initialVars.values)
+        ? (initialVars.values as Array<{ name?: unknown }>).map((entry) => String(entry.name ?? ''))
+        : []
+    );
+    expect(initialVarNames.has('timer_countdown_remaining_hhmm')).toBeTruthy();
+    expect(initialVarNames.has('timer_preach_elapsed_hhmm')).toBeTruthy();
 
     socket.send(
       JSON.stringify({
@@ -97,6 +135,28 @@ test.describe('@companion Companion control socket', () => {
 
     const followupVars = await waitForMessage((msg) => msg.type === 'variables');
     expect(followupVars).toBeTruthy();
+
+    socket.send(
+      JSON.stringify({
+        type: 'command',
+        command: 'stage.layout',
+        payload: { code: 'timer' },
+      })
+    );
+
+    const layoutAck = await waitForMessage(
+      (msg) => msg.type === 'ack' && msg.command === 'stage.layout'
+    );
+    expect(layoutAck).toBeTruthy();
+
+    const layoutVars = await waitForMessage((msg) => msg.type === 'variables');
+    expect(layoutVars).toBeTruthy();
+
+    const layoutEntries = Array.isArray(layoutVars.values)
+      ? (layoutVars.values as Array<{ name?: unknown; value?: unknown }>)
+      : [];
+    const layoutCode = layoutEntries.find((entry) => entry.name === 'stage_layout_code');
+    expect(layoutCode?.value).toBe('timer');
 
     expect(errors).toHaveLength(0);
 

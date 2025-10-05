@@ -1,4 +1,5 @@
 use sea_orm_migration::prelude::*;
+use sea_orm_migration::sea_query::{Query, SimpleExpr, Value};
 
 #[derive(DeriveMigrationName)]
 pub struct Migration;
@@ -659,11 +660,62 @@ impl MigrationTrait for Migration {
             )
             .await?;
 
+        manager
+            .create_table(
+                Table::create()
+                    .table(AppSettings::Table)
+                    .if_not_exists()
+                    .col(
+                        ColumnDef::new(AppSettings::Key)
+                            .string_len(100)
+                            .not_null()
+                            .primary_key(),
+                    )
+                    .col(ColumnDef::new(AppSettings::Value).string().not_null())
+                    .col(
+                        ColumnDef::new(AppSettings::UpdatedAt)
+                            .timestamp_with_time_zone()
+                            .not_null()
+                            .extra("DEFAULT CURRENT_TIMESTAMP"),
+                    )
+                    .to_owned(),
+            )
+            .await?;
+
+        manager
+            .exec_stmt(
+                Query::insert()
+                    .into_table(AppSettings::Table)
+                    .columns([AppSettings::Key, AppSettings::Value])
+                    .values_panic([
+                        SimpleExpr::Value(Value::from("feature.companion.enabled")),
+                        SimpleExpr::Value(Value::from("0")),
+                    ])
+                    .to_owned(),
+            )
+            .await?;
+
+        manager
+            .exec_stmt(
+                Query::insert()
+                    .into_table(AppSettings::Table)
+                    .columns([AppSettings::Key, AppSettings::Value])
+                    .values_panic([
+                        SimpleExpr::Value(Value::from("feature.companion.port")),
+                        SimpleExpr::Value(Value::from("18175")),
+                    ])
+                    .to_owned(),
+            )
+            .await?;
+
         Ok(())
     }
 
     #[allow(elided_lifetimes_in_paths)]
     async fn down(&self, manager: &SchemaManager) -> Result<(), DbErr> {
+        manager
+            .drop_table(Table::drop().table(AppSettings::Table).to_owned())
+            .await?;
         manager
             .drop_table(Table::drop().table(BiblePassages::Table).to_owned())
             .await?;
@@ -858,4 +910,12 @@ enum BiblePassages {
     VerseEnd,
     Content,
     CreatedAt,
+}
+
+#[derive(DeriveIden)]
+enum AppSettings {
+    Table,
+    Key,
+    Value,
+    UpdatedAt,
 }

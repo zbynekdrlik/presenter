@@ -19,10 +19,11 @@ These assets ship a ready-to-import Companion workspace profile, connection note
    ```
    The script writes `ops/companion/generated/presenter-companion-profile.export.json`.
 2. Open Companion (v3.2+) → *Connections* → *Import connection* and select the generated export.
-3. Edit the newly created **Presenter** Generic Websocket instance:
-   - Set `Host` to your controller hostname (default export is `presenter.dev.local`).
-   - Adjust the port if you are targeting testing/production (80/8081/8080 per runbook).
-   - Paste the shared secret under *Password* if the server defines `PRESENTER_COMPANION_TOKEN`.
+3. Edit the newly created **Presenter Companion WS** module instance:
+   - Set *Host or IP* to your controller hostname (default export keeps the dev demo `10.77.9.21`).
+   - Adjust the *Port* to match the value configured in Presenter (see **Settings → Companion**). Each demo should choose a unique port; default is `18175`.
+   - Paste the shared secret under *Token* if the server defines `PRESENTER_COMPANION_TOKEN`.
+   - In Presenter’s **Settings → Companion** card, toggle “Companion WebSocket” on and pick a unique port. Saving hot-reloads the listener; disable it for parallel demos that should not expose the service.
 4. Navigate to *Surfaces* → map the supplied button pages (Page 1: Timers, Page 2: Stage/Bible) to your stream deck or emulator.
 5. Press the **Connect** button; Companion should report “connected” and the Timer button will light green when `timer_countdown_state === running`.
 
@@ -32,10 +33,10 @@ A detailed reference lives in `button-reference.md`; highlights:
 
 - **Countdown Control (Page 1, buttons 1–6)**
   - Start / Pause / Reset, ±5 minutes, and a direct HH:MM setter using dynamic text fields.
-  - Feedback based on `timer_countdown_state` (green = running, amber = paused, red = idle) and a progress bar bound to `stage_countdown_remaining_seconds`.
+  - Feedback based on `timer_countdown_state` (green = running, amber = paused, red = idle), a `timer_countdown_remaining_hhmm` text tile, and a progress bar bound to `timer_countdown_remaining_seconds`.
 - **Stage Output (Page 2, buttons 1–4)**
-  - Clear stage, jump to next slide, emergency blank, and “panic” (all outputs blank) actions.
-  - Each button shows the current/next lyric snippet via `stage_current_main` / `stage_next_main`.
+  - Quick layout presets (SNV lyrics, PP overview, Timer, Preach) wired to dedicated `stage.layout.*` actions, plus a panic-button macro.
+  - Each button reflects `stage_layout_name` alongside lyric snippets (`stage_current_main`, `stage_next_main`).
 - **Bible (Page 2, buttons 5–6)**
   - Quick trigger for configurable passages plus a clear button.
 - **Alert Macro**
@@ -57,7 +58,7 @@ A detailed reference lives in `button-reference.md`; highlights:
 1. Spawns a Presenter test server.
 2. Opens a WebSocket, performs the hello handshake, and waits for `welcome` + `variables`.
 3. Sends a `timer.reset_preach` command and asserts an `ack` response.
-4. Triggers `stage.set` with known IDs and verifies a follow-up `variables` payload contains the IDs.
+4. Triggers `stage.layout` to confirm layout switching and checks the refreshed variable payload.
 
 Run the spec directly during development with:
 

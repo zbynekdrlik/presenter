@@ -22,13 +22,117 @@ use presenter_core::{
 use presenter_importer::bible::BibleIngestionService;
 use presenter_persistence::{DatabaseSettings, Repository};
 use serde::{Deserialize, Serialize};
-use std::{collections::HashMap, env, sync::Arc};
+use std::{
+    collections::HashMap,
+    env,
+    sync::{atomic::AtomicBool, atomic::AtomicU16, atomic::Ordering, Arc},
+};
 use tokio::{
-    sync::RwLock,
+    net::TcpListener,
+    sync::{oneshot, Mutex, RwLock},
+    task::JoinHandle,
     time::{interval, Duration as TokioDuration, MissedTickBehavior},
 };
-use tracing::{instrument, warn};
+use tracing::{debug, error, info, instrument, warn};
 use uuid::Uuid;
+
+fn parse_bool_flag(value: &str) -> Option<bool> {
+    match value.trim().to_ascii_lowercase().as_str() {
+        "1" | "true" | "yes" | "on" => Some(true),
+        "0" | "false" | "no" | "off" => Some(false),
+        _ => None,
+    }
+}
+
+const COMPANION_FEATURE_KEY: &str = "feature.companion.enabled";
+const COMPANION_PORT_KEY: &str = "feature.companion.port";
+const DEFAULT_COMPANION_PORT: u16 = 18_175;
+
+#[derive(Clone, Default)]
+struct CompanionServerManager {
+    handle: Arc<Mutex<Option<CompanionServerHandle>>>,
+}
+
+struct CompanionServerHandle {
+    port: u16,
+    shutdown: Option<oneshot::Sender<()>>,
+    join: JoinHandle<()>,
+}
+
+impl CompanionServerManager {
+    async fn reconfigure(&self, state: AppState, enabled: bool, port: u16) -> anyhow::Result<()> {
+        if !enabled {
+            self.stop().await;
+            return Ok(());
+        }
+
+        {
+            let guard = self.handle.lock().await;
+            if let Some(existing) = guard.as_ref() {
+                if existing.port == port && !existing.join.is_finished() {
+                    return Ok(());
+                }
+            }
+        }
+
+        // Attempt to bind before tearing down the current server so we can surface errors without
+        // losing the previous listener when switching ports.
+        let listener = TcpListener::bind(("0.0.0.0", port)).await.map_err(|err| {
+            anyhow::anyhow!("failed to bind Companion websocket on port {port}: {err}")
+        })?;
+
+        let mut guard = self.handle.lock().await;
+        if let Some(existing) = guard.take() {
+            existing.shutdown().await;
+        }
+
+        let (shutdown_tx, shutdown_rx) = oneshot::channel();
+        let router = crate::companion::build_router(state.clone());
+        let join = tokio::spawn(async move {
+            let shutdown = async {
+                let _ = shutdown_rx.await;
+            };
+            let server = axum::serve(listener, router);
+            info!(port, "Companion websocket server listening");
+            let result = server.with_graceful_shutdown(shutdown).await;
+            if let Err(err) = result {
+                error!(?err, port, "Companion websocket server exited with error");
+            } else {
+                debug!(port, "Companion websocket server stopped");
+            }
+        });
+
+        *guard = Some(CompanionServerHandle {
+            port,
+            shutdown: Some(shutdown_tx),
+            join,
+        });
+
+        Ok(())
+    }
+
+    async fn stop(&self) {
+        let mut guard = self.handle.lock().await;
+        if let Some(handle) = guard.take() {
+            handle.shutdown().await;
+        }
+    }
+}
+
+impl CompanionServerHandle {
+    async fn shutdown(mut self) {
+        if let Some(tx) = self.shutdown.take() {
+            let _ = tx.send(());
+        }
+        if let Err(err) = self.join.await {
+            error!(
+                ?err,
+                port = self.port,
+                "Companion websocket task join error"
+            );
+        }
+    }
+}
 
 #[derive(Clone)]
 pub struct AppState {
@@ -36,6 +140,9 @@ pub struct AppState {
     live_hub: LiveHub,
     bible_broadcast: Arc<RwLock<Option<BibleBroadcast>>>,
     companion_token: Option<String>,
+    companion_enabled: Arc<AtomicBool>,
+    companion_port: Arc<AtomicU16>,
+    companion_server: CompanionServerManager,
     resolume_registry: ResolumeRegistry,
     stage_connections: StageConnections,
     heartbeat_config: StageHeartbeatConfig,
@@ -48,10 +155,19 @@ pub struct AppState {
     bible_ingestion_override: Option<std::sync::Arc<dyn TestBibleIngestion + Send + Sync>>,
 }
 
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct FeatureFlags {
+    pub companion_enabled: bool,
+    pub companion_port: u16,
+}
+
 impl AppState {
     pub fn new(
         repository: Repository,
         companion_token: Option<String>,
+        companion_enabled: bool,
+        companion_port: u16,
         resolume_registry: ResolumeRegistry,
         osc_bridge: OscBridge,
         ableset_bridge: AbleSetBridge,
@@ -69,6 +185,9 @@ impl AppState {
             live_hub: LiveHub::new(),
             bible_broadcast: Arc::new(RwLock::new(None)),
             companion_token,
+            companion_enabled: Arc::new(AtomicBool::new(companion_enabled)),
+            companion_port: Arc::new(AtomicU16::new(companion_port)),
+            companion_server: CompanionServerManager::default(),
             resolume_registry,
             stage_connections,
             heartbeat_config,
@@ -136,12 +255,58 @@ impl AppState {
             .unwrap_or_else(|_| "sqlite://presenter_dev.db".to_string());
         let repo = Repository::connect(&DatabaseSettings::new(&db_url)).await?;
         let companion_token = env::var("PRESENTER_COMPANION_TOKEN").ok();
+
+        let stored_companion = repo
+            .get_app_setting(COMPANION_FEATURE_KEY)
+            .await?
+            .and_then(|value| parse_bool_flag(&value))
+            .unwrap_or(false);
+
+        let env_override = env::var("PRESENTER_COMPANION_ENABLED")
+            .ok()
+            .and_then(|value| parse_bool_flag(&value));
+
+        let companion_enabled = env_override.unwrap_or(stored_companion);
+
+        if let Some(value) = env_override {
+            repo.set_app_setting(COMPANION_FEATURE_KEY, if value { "1" } else { "0" })
+                .await?;
+        }
+
+        let raw_port = repo.get_app_setting(COMPANION_PORT_KEY).await?;
+        let mut persist_port = false;
+        let stored_port = raw_port
+            .as_deref()
+            .and_then(|value| value.parse::<u16>().ok())
+            .filter(|port| *port >= 1 && *port <= u16::MAX);
+        let mut companion_port = stored_port.unwrap_or(DEFAULT_COMPANION_PORT);
+        if stored_port.is_none() {
+            persist_port = true;
+        }
+
+        let env_port_override = env::var("PRESENTER_COMPANION_PORT")
+            .ok()
+            .and_then(|value| value.parse::<u16>().ok())
+            .filter(|port| *port >= 1 && *port <= u16::MAX);
+
+        if let Some(port_override) = env_port_override {
+            companion_port = port_override;
+            persist_port = true;
+        }
+
+        if persist_port {
+            repo.set_app_setting(COMPANION_PORT_KEY, &companion_port.to_string())
+                .await?;
+        }
+
         let registry = ResolumeRegistry::new();
         let osc_bridge = OscBridge::new();
         let ableset_bridge = AbleSetBridge::new();
         let state = Self::new(
             repo,
             companion_token,
+            companion_enabled,
+            companion_port,
             registry,
             osc_bridge.clone(),
             ableset_bridge.clone(),
@@ -186,10 +351,12 @@ impl AppState {
             }
             Err(err) => tracing::warn!(?err, "failed to initialise AbleSet tracker"),
         }
+        state
+            .configure_companion_service(companion_enabled, companion_port)
+            .await?;
         state.spawn_background_tasks();
         Ok(state)
     }
-
     #[cfg(test)]
     #[instrument(skip_all)]
     pub async fn in_memory() -> anyhow::Result<Self> {
@@ -200,6 +367,8 @@ impl AppState {
         let state = Self::new(
             repo,
             None,
+            false,
+            DEFAULT_COMPANION_PORT,
             registry,
             osc_bridge.clone(),
             ableset_bridge.clone(),
@@ -243,6 +412,9 @@ impl AppState {
             }
             Err(err) => tracing::warn!(?err, "failed to initialise AbleSet tracker"),
         }
+        state
+            .configure_companion_service(false, DEFAULT_COMPANION_PORT)
+            .await?;
         Ok(state)
     }
 
@@ -579,6 +751,73 @@ impl AppState {
 
     pub fn companion_token(&self) -> Option<&str> {
         self.companion_token.as_deref()
+    }
+
+    pub fn companion_enabled(&self) -> bool {
+        self.companion_enabled.load(Ordering::SeqCst)
+    }
+
+    pub fn companion_port(&self) -> u16 {
+        self.companion_port.load(Ordering::SeqCst)
+    }
+
+    pub fn feature_flags(&self) -> FeatureFlags {
+        FeatureFlags {
+            companion_enabled: self.companion_enabled(),
+            companion_port: self.companion_port(),
+        }
+    }
+
+    pub async fn configure_companion_service(
+        &self,
+        enabled: bool,
+        port: u16,
+    ) -> anyhow::Result<()> {
+        self.companion_server
+            .reconfigure(self.clone(), enabled, port)
+            .await
+    }
+
+    pub async fn set_companion_settings(&self, enabled: bool, port: u16) -> anyhow::Result<()> {
+        if port == 0 {
+            return Err(anyhow::anyhow!(
+                "companion port must be between 1 and 65535"
+            ));
+        }
+        let previous_enabled = self.companion_enabled();
+        let previous_port = self.companion_port();
+
+        self.configure_companion_service(enabled, port).await?;
+
+        if let Err(err) = self
+            .repository
+            .set_app_setting(COMPANION_PORT_KEY, &port.to_string())
+            .await
+        {
+            let _ = self
+                .configure_companion_service(previous_enabled, previous_port)
+                .await;
+            return Err(err);
+        }
+
+        if let Err(err) = self
+            .repository
+            .set_app_setting(COMPANION_FEATURE_KEY, if enabled { "1" } else { "0" })
+            .await
+        {
+            let _ = self
+                .repository
+                .set_app_setting(COMPANION_PORT_KEY, &previous_port.to_string())
+                .await;
+            let _ = self
+                .configure_companion_service(previous_enabled, previous_port)
+                .await;
+            return Err(err);
+        }
+
+        self.companion_enabled.store(enabled, Ordering::SeqCst);
+        self.companion_port.store(port, Ordering::SeqCst);
+        Ok(())
     }
 
     pub async fn active_bible_broadcast(&self) -> Option<BibleBroadcast> {

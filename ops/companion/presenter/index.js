@@ -1,7 +1,10 @@
-const { InstanceBase, InstanceStatus, Regex, runEntrypoint } = require('@companion-module/base')
+const { InstanceBase, InstanceStatus, runEntrypoint } = require('@companion-module/base')
 const WebSocket = require('ws')
 
 const VARIABLE_DEFINITIONS = [
+  'stage_layout_code',
+  'stage_layout_name',
+  'stage_layout_description',
   'stage_presentation_id',
   'stage_presentation_name',
   'stage_current_slide_id',
@@ -17,8 +20,16 @@ const VARIABLE_DEFINITIONS = [
   'timer_countdown_state',
   'timer_countdown_target',
   'timer_countdown_remaining_seconds',
+  'timer_countdown_remaining_hms',
+  'timer_countdown_remaining_mmss',
+  'timer_countdown_remaining_hhmm',
+  'timer_countdown_remaining_readable',
   'timer_preach_state',
   'timer_preach_elapsed_seconds',
+  'timer_preach_elapsed_hms',
+  'timer_preach_elapsed_mmss',
+  'timer_preach_elapsed_hhmm',
+  'timer_preach_elapsed_readable',
   'bible_translation_code',
   'bible_translation_name',
   'bible_reference',
@@ -27,17 +38,57 @@ const VARIABLE_DEFINITIONS = [
   'live_ws_connected',
 ]
 
-const COMMANDS = [
-  { id: 'timer.start_countdown', label: 'Timer: start countdown' },
-  { id: 'timer.pause_countdown', label: 'Timer: pause countdown' },
-  { id: 'timer.reset_countdown', label: 'Timer: reset countdown' },
-  { id: 'timer.set_countdown_target', label: 'Timer: set countdown target (ISO)' },
-  { id: 'timer.start_preach', label: 'Timer: start preach' },
-  { id: 'timer.reset_preach', label: 'Timer: reset preach' },
-  { id: 'stage.set', label: 'Stage: set slide' },
-  { id: 'bible.trigger', label: 'Bible: trigger passage' },
-  { id: 'bible.clear', label: 'Bible: clear passage' },
+const STAGE_LAYOUT_CHOICES = [
+  { id: 'worship-snv', label: 'WORSHIP SNV' },
+  { id: 'worship-pp', label: 'WORSHIP PP' },
+  { id: 'timer', label: 'TIMER' },
+  { id: 'preach', label: 'PREACH' },
 ]
+
+const BASE_COMMANDS = [
+  { id: 'timer.start_countdown', command: 'timer.start_countdown', label: 'Timer: start countdown' },
+  { id: 'timer.pause_countdown', command: 'timer.pause_countdown', label: 'Timer: pause countdown' },
+  { id: 'timer.reset_countdown', command: 'timer.reset_countdown', label: 'Timer: reset countdown' },
+  { id: 'timer.set_countdown_target', command: 'timer.set_countdown_target', label: 'Timer: set countdown duration (HH:MM)' },
+  { id: 'timer.start_preach', command: 'timer.start_preach', label: 'Timer: start preach' },
+  { id: 'timer.reset_preach', command: 'timer.reset_preach', label: 'Timer: reset preach' },
+  { id: 'stage.layout', command: 'stage.layout', label: 'Stage: set layout' },
+  { id: 'bible.trigger', command: 'bible.trigger', label: 'Bible: trigger passage' },
+  { id: 'bible.clear', command: 'bible.clear', label: 'Bible: clear passage' },
+]
+
+const LAYOUT_COMMANDS = STAGE_LAYOUT_CHOICES.map((choice) => ({
+  id: `stage.layout.${choice.id}`,
+  command: 'stage.layout',
+  label: `Stage: layout ${choice.label}`,
+  layoutCode: choice.id,
+}))
+
+const COMMANDS = [...BASE_COMMANDS, ...LAYOUT_COMMANDS]
+
+function parseDurationHhMm(value) {
+  if (typeof value !== 'string') {
+    return null
+  }
+  const trimmed = value.trim()
+  if (!/^\d{1,2}:\d{2}$/.test(trimmed)) {
+    return null
+  }
+  const [hoursStr, minutesStr] = trimmed.split(':')
+  const hours = Number.parseInt(hoursStr, 10)
+  const minutes = Number.parseInt(minutesStr, 10)
+  if (!Number.isFinite(hours) || !Number.isFinite(minutes)) {
+    return null
+  }
+  if (minutes < 0 || minutes > 59 || hours < 0 || hours > 99) {
+    return null
+  }
+  const totalSeconds = (hours * 60 + minutes) * 60
+  if (totalSeconds <= 0) {
+    return null
+  }
+  return totalSeconds
+}
 
 class PresenterInstance extends InstanceBase {
   constructor(internal) {
@@ -50,16 +101,26 @@ class PresenterInstance extends InstanceBase {
   getConfigFields() {
     return [
       {
+        type: 'static-text',
+        id: 'info',
+        label: 'Presenter Companion Service',
+        width: 12,
+        value:
+          'Enable the Companion websocket inside Presenter (Settings → Services) and assign a unique port. Point this module at the matching host and port; defaults target the demo container.',
+      },
+      {
         type: 'textinput',
         id: 'host',
-        label: 'Presenter host / IP',
-        regex: Regex.HOSTNAME,
+        label: 'Host or IP',
+        width: 6,
         default: '10.77.9.21',
+        placeholder: '10.77.9.21',
       },
       {
         type: 'number',
         id: 'port',
         label: 'Port',
+        width: 3,
         min: 1,
         max: 65535,
         default: 18175,
@@ -68,18 +129,21 @@ class PresenterInstance extends InstanceBase {
         type: 'checkbox',
         id: 'secure',
         label: 'Use TLS (wss://)',
+        width: 3,
         default: false,
       },
       {
         type: 'textinput',
         id: 'token',
-        label: 'Companion token (optional)',
+        label: 'Token (optional)',
+        width: 6,
         default: '',
       },
       {
         type: 'number',
         id: 'reconnect',
         label: 'Auto-reconnect (ms)',
+        width: 6,
         default: 2000,
         min: 0,
       },
@@ -88,7 +152,7 @@ class PresenterInstance extends InstanceBase {
 
   async init(config) {
     this.config = config
-    this.setStatus(InstanceStatus.Connecting)
+    this.updateStatus(InstanceStatus.Connecting)
     this._setupVariables()
     this._setupActions()
     this._setupFeedbacks()
@@ -114,7 +178,7 @@ class PresenterInstance extends InstanceBase {
 
   _connect() {
     if (!this.config.host || !this.config.port) {
-      this.setStatus(InstanceStatus.BadConfig, 'Missing host or port')
+      this.updateStatus(InstanceStatus.BadConfig, 'Missing host or port')
       return
     }
 
@@ -138,7 +202,7 @@ class PresenterInstance extends InstanceBase {
 
       this.ws.addEventListener('open', () => {
         this.log('info', `Connected to Presenter: ${url}`)
-        this.setStatus(InstanceStatus.Ok)
+        this.updateStatus(InstanceStatus.Ok)
 
         const hello = {
           type: 'hello',
@@ -163,7 +227,7 @@ class PresenterInstance extends InstanceBase {
 
       this.ws.addEventListener('close', (event) => {
         this.log('warn', `Presenter socket closed (${event.code}): ${event.reason}`)
-        this.setStatus(InstanceStatus.Disconnected, `Closed ${event.code}`)
+        this.updateStatus(InstanceStatus.Disconnected, `Closed ${event.code}`)
         this._updateVariable('live_ws_connected', 'false')
         this._scheduleReconnect()
       })
@@ -173,7 +237,7 @@ class PresenterInstance extends InstanceBase {
       })
     } catch (error) {
       this.log('error', `Connection error: ${error}`)
-      this.setStatus(InstanceStatus.ConnectionFailure, error.message)
+      this.updateStatus(InstanceStatus.ConnectionFailure, error.message)
       this._scheduleReconnect()
     }
   }
@@ -231,10 +295,12 @@ class PresenterInstance extends InstanceBase {
     const actions = {}
 
     COMMANDS.forEach((cmd) => {
+      const commandId = cmd.command || cmd.id
+      const options = cmd.layoutCode ? [] : this._commandOptionsFor(commandId)
       actions[cmd.id] = {
         name: cmd.label,
-        options: this._commandOptionsFor(cmd.id),
-        callback: (event) => this._sendCommand(cmd.id, event.options),
+        options,
+        callback: (event) => this._sendCommand(cmd, event.options || {}),
       }
     })
 
@@ -248,36 +314,20 @@ class PresenterInstance extends InstanceBase {
           {
             type: 'textinput',
             id: 'target',
-            label: 'ISO datetime (yyyy-mm-ddThh:mm:ssZ)',
-            placeholder: '2025-10-05T18:00:00Z',
-            default: '',
+            label: 'Countdown duration (HH:MM)',
+            placeholder: '00:15',
+            default: '00:15',
           },
         ]
-      case 'stage.set':
+      case 'stage.layout':
         return [
           {
-            type: 'textinput',
-            id: 'presentationId',
-            label: 'Presentation ID',
-            default: '',
-          },
-          {
-            type: 'textinput',
-            id: 'currentSlideId',
-            label: 'Current slide ID',
-            default: '',
-          },
-          {
-            type: 'textinput',
-            id: 'nextSlideId',
-            label: 'Next slide ID (optional)',
-            default: '',
-          },
-          {
-            type: 'checkbox',
-            id: 'blank',
-            label: 'Blank outputs',
-            default: false,
+            type: 'dropdown',
+            id: 'code',
+            label: 'Stage layout',
+            default: 'worship-snv',
+            choices: STAGE_LAYOUT_CHOICES,
+            allowCustom: true,
           },
         ]
       case 'bible.trigger':
@@ -362,29 +412,39 @@ class PresenterInstance extends InstanceBase {
     this.setFeedbackDefinitions(feedbacks)
   }
 
-  _sendCommand(command, options = {}) {
+  _sendCommand(descriptor, options = {}) {
     if (!this.ws || this.ws.readyState !== WebSocket.OPEN) {
       this.log('error', 'Not connected to Presenter; cannot send command')
       return
     }
 
+    const info = typeof descriptor === 'string' ? { id: descriptor, command: descriptor } : descriptor
+    const command = info.command || info.id
+    const layoutCode = info.layoutCode
+
     let payload = {}
 
     switch (command) {
-      case 'timer.set_countdown_target':
+      case 'timer.set_countdown_target': {
+        const seconds = parseDurationHhMm(options.target || '')
+        if (typeof seconds !== 'number' || !Number.isFinite(seconds)) {
+          this.log('error', 'Invalid duration. Use HH:MM, e.g. 00:30 for 30 minutes.')
+          return
+        }
+        const targetDate = new Date(Date.now() + seconds * 1000)
         payload = {
-          target: options.target,
+          target: targetDate.toISOString(),
         }
         break
-      case 'stage.set':
+      }
+      case 'stage.layout': {
+        const code = layoutCode || options.code || 'worship-snv'
         payload = {
-          presentationId: options.presentationId || null,
-          currentSlideId: options.currentSlideId || null,
-          nextSlideId: options.nextSlideId || null,
-          blank: Boolean(options.blank),
+          code,
         }
         break
-      case 'bible.trigger':
+      }
+      case 'bible.trigger': {
         payload = {
           translation: options.translation || 'KJV',
           book: options.book || 'John',
@@ -395,6 +455,7 @@ class PresenterInstance extends InstanceBase {
           payload.verseEnd = Number(options.verseEnd)
         }
         break
+      }
       default:
         payload = {}
     }
