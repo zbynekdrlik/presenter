@@ -1,14 +1,23 @@
 use crate::state::AppState;
-use axum::extract::ws::{Message, WebSocket};
+use axum::{
+    extract::{
+        ws::{Message, WebSocket, WebSocketUpgrade},
+        State,
+    },
+    http::StatusCode,
+    response::IntoResponse,
+    routing::get,
+    Router,
+};
 use chrono::{DateTime, Utc};
 use futures_util::{SinkExt, StreamExt};
 use presenter_core::{
-    BibleBroadcast, BibleReference, PresentationId, SlideId, StageDisplaySnapshot, TimerCommand,
-    TimerState, TimersOverview,
+    BibleBroadcast, BibleReference, PresentationId, SlideId, StageDisplayLayout,
+    StageDisplaySnapshot, TimerCommand, TimerState, TimersOverview,
 };
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
-use std::sync::Arc;
+use std::{collections::HashMap, sync::Arc};
 use tokio::sync::{broadcast::error::RecvError, Mutex};
 use tracing::{debug, info, warn};
 use uuid::Uuid;
@@ -103,6 +112,22 @@ pub async fn serve_companion_socket(state: AppState, socket: WebSocket) {
         instance = hello.instance_name.as_deref().unwrap_or("unspecified"),
         "companion client disconnected"
     );
+}
+
+pub fn build_router(state: AppState) -> Router {
+    Router::new()
+        .route("/companion/ws", get(websocket_entry))
+        .with_state(state)
+}
+
+async fn websocket_entry(ws: WebSocketUpgrade, State(state): State<AppState>) -> impl IntoResponse {
+    if !state.companion_enabled() {
+        return StatusCode::NOT_FOUND.into_response();
+    }
+
+    ws.on_upgrade(move |socket| async move {
+        serve_companion_socket(state, socket).await;
+    })
 }
 
 #[derive(Debug, Clone)]
@@ -231,6 +256,11 @@ fn parse_command(command: &str, payload: Value) -> Result<CompanionCommand, Stri
                 next_slide_id,
             })
         }
+        "stage.layout" => {
+            let data: StageLayoutPayload = serde_json::from_value(payload)
+                .map_err(|err| format!("invalid stage.layout payload: {err}"))?;
+            Ok(CompanionCommand::StageLayout { code: data.code })
+        }
         "timer.set_countdown_target" => {
             let data: TimerTargetPayload = serde_json::from_value(payload)
                 .map_err(|err| format!("invalid timer.set_countdown_target payload: {err}"))?;
@@ -271,6 +301,11 @@ fn parse_uuid_field(field: &str, value: &str) -> Result<Uuid, String> {
 async fn initialise_variable_state(state: &AppState) -> CompanionVariableState {
     let mut variables = CompanionVariableState::default();
 
+    match state.stage_displays().await {
+        Ok(layouts) => variables.set_stage_layouts(layouts),
+        Err(err) => warn!(?err, "failed to load stage layout directory for companion"),
+    }
+
     match state.stage_display_snapshot("worship-snv").await {
         Ok(Some(snapshot)) => {
             variables.apply_stage_snapshot(snapshot);
@@ -286,6 +321,11 @@ async fn initialise_variable_state(state: &AppState) -> CompanionVariableState {
             }
             Err(err) => warn!(?err, "failed to load timers overview for companion init"),
         }
+    }
+
+    if variables.stage_layout.is_none() {
+        let code = state.stage_layout_code().await;
+        variables.set_stage_layout_code(&code);
     }
 
     if let Some(broadcast) = state.active_bible_broadcast().await {
@@ -384,6 +424,9 @@ enum CompanionCommand {
         current_slide_id: SlideId,
         next_slide_id: Option<SlideId>,
     },
+    StageLayout {
+        code: String,
+    },
     Timer(TimerCommand),
     BibleTrigger {
         translation: String,
@@ -399,6 +442,12 @@ struct StageSetPayload {
     current_slide_id: String,
     #[serde(default)]
     next_slide_id: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct StageLayoutPayload {
+    code: String,
 }
 
 #[derive(Debug, Deserialize)]
@@ -451,6 +500,31 @@ async fn handle_command(
             }
             Err(err) => Ok(CommandResponse::error(format!(
                 "stage update failed: {}",
+                err
+            ))),
+        },
+        CompanionCommand::StageLayout { code } => match state.set_stage_layout_code(&code).await {
+            Ok(layout) => {
+                let mut refresh = variables.apply_stage_layout(layout.clone());
+
+                if layout.code == "worship-snv" {
+                    match state.stage_display_snapshot("worship-snv").await {
+                        Ok(Some(snapshot)) => {
+                            if variables.apply_stage_snapshot(snapshot) {
+                                refresh = true;
+                            }
+                        }
+                        Ok(None) => {}
+                        Err(err) => {
+                            warn!(?err, "failed to refresh stage snapshot after layout change")
+                        }
+                    }
+                }
+
+                Ok(CommandResponse::ack(command).with_refresh(refresh))
+            }
+            Err(err) => Ok(CommandResponse::error(format!(
+                "stage layout failed: {}",
                 err
             ))),
         },
@@ -534,6 +608,8 @@ struct CompanionVariableState {
     stage: Option<StageVariables>,
     timers: Option<TimersOverview>,
     bible: Option<BibleBroadcast>,
+    stage_layout: Option<StageLayoutVariables>,
+    stage_layouts: HashMap<String, StageDisplayLayout>,
 }
 
 impl CompanionVariableState {
@@ -545,24 +621,60 @@ impl CompanionVariableState {
             crate::live::LiveEvent::Timers { overview } => self.apply_timers(overview),
             crate::live::LiveEvent::Bible { broadcast } => self.apply_bible(broadcast),
             crate::live::LiveEvent::BibleCleared => self.clear_bible(),
-            crate::live::LiveEvent::StageLayout { .. } => false,
+            crate::live::LiveEvent::StageLayout { code } => self.set_stage_layout_code(&code),
         }
     }
 
     fn apply_stage_snapshot(&mut self, snapshot: StageDisplaySnapshot) -> bool {
-        let mut changed = false;
-        if snapshot.layout.code == "worship-snv" {
-            let stage_variables = StageVariables::from_snapshot(&snapshot);
-            if self.stage.as_ref() != Some(&stage_variables) {
-                self.stage = Some(stage_variables);
-                changed = true;
-            }
+        let mut changed = self.apply_stage_layout(snapshot.layout.clone());
+        let stage_variables = StageVariables::from_snapshot(&snapshot);
+        if self.stage.as_ref() != Some(&stage_variables) {
+            self.stage = Some(stage_variables);
+            changed = true;
         }
 
         if self.apply_timers(snapshot.timers.clone()) {
             changed = true;
         }
         changed
+    }
+
+    fn set_stage_layouts(&mut self, layouts: Vec<StageDisplayLayout>) {
+        let current = self.stage_layout.as_ref().map(|layout| layout.code.clone());
+        self.stage_layouts = layouts
+            .into_iter()
+            .map(|layout| (layout.code.clone(), layout))
+            .collect();
+
+        if let Some(code) = current {
+            let _ = self.set_stage_layout_code(&code);
+        }
+    }
+
+    fn apply_stage_layout(&mut self, layout: StageDisplayLayout) -> bool {
+        let info = StageLayoutVariables::from_layout(&layout);
+        self.stage_layouts.insert(layout.code.clone(), layout);
+
+        if self.stage_layout.as_ref() == Some(&info) {
+            false
+        } else {
+            self.stage_layout = Some(info);
+            true
+        }
+    }
+
+    fn set_stage_layout_code(&mut self, code: &str) -> bool {
+        if let Some(layout) = self.stage_layouts.get(code) {
+            self.apply_stage_layout(layout.clone())
+        } else {
+            let info = StageLayoutVariables::from_code(code);
+            if self.stage_layout.as_ref() == Some(&info) {
+                false
+            } else {
+                self.stage_layout = Some(info);
+                true
+            }
+        }
     }
 
     fn apply_timers(&mut self, overview: TimersOverview) -> bool {
@@ -594,6 +706,7 @@ impl CompanionVariableState {
 
     fn to_variables(&self) -> Vec<CompanionVariable> {
         let mut builder = VariableBuilder::default();
+        write_stage_layout_variables(&mut builder, self.stage_layout.as_ref());
         write_stage_variables(&mut builder, self.stage.as_ref());
         write_timer_variables(&mut builder, self.timers.as_ref());
         write_bible_variables(&mut builder, self.bible.as_ref());
@@ -605,6 +718,8 @@ impl CompanionVariableState {
 struct StageVariables {
     presentation_id: Option<String>,
     presentation_name: String,
+    band_name: String,
+    song_name: String,
     current_slide_id: Option<String>,
     current_main: String,
     current_translation: String,
@@ -625,6 +740,8 @@ impl StageVariables {
         Self {
             presentation_id: snapshot.presentation_id.map(|id| id.to_string()),
             presentation_name: snapshot.presentation_name.clone().unwrap_or_default(),
+            band_name: snapshot.library_name.clone().unwrap_or_default(),
+            song_name: snapshot.song_name.clone().unwrap_or_default(),
             current_slide_id: snapshot.current_slide_id.map(|id| id.to_string()),
             current_main: current.map(|slide| slide.main.clone()).unwrap_or_default(),
             current_translation: current
@@ -650,6 +767,8 @@ impl StageVariables {
         builder.set_opt("stage_presentation_id", self.presentation_id.clone());
         builder.set("stage_presentation_name", self.presentation_name.clone());
         builder.set_opt("stage_current_slide_id", self.current_slide_id.clone());
+        builder.set("song_name", self.song_name.clone());
+        builder.set("band_name", self.band_name.clone());
         builder.set("stage_current_main", self.current_main.clone());
         builder.set(
             "stage_current_translation",
@@ -662,6 +781,36 @@ impl StageVariables {
         builder.set("stage_next_translation", self.next_translation.clone());
         builder.set("stage_next_stage", self.next_stage.clone());
         builder.set("stage_next_group", self.next_group.clone());
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+struct StageLayoutVariables {
+    code: String,
+    name: String,
+    description: String,
+}
+
+impl StageLayoutVariables {
+    fn from_layout(layout: &StageDisplayLayout) -> Self {
+        Self {
+            code: layout.code.clone(),
+            name: layout.name.clone(),
+            description: layout.description.clone(),
+        }
+    }
+
+    fn from_code(code: &str) -> Self {
+        Self {
+            code: code.to_string(),
+            ..Self::default()
+        }
+    }
+
+    fn write(&self, builder: &mut VariableBuilder) {
+        builder.set("stage_layout_code", self.code.clone());
+        builder.set("stage_layout_name", self.name.clone());
+        builder.set("stage_layout_description", self.description.clone());
     }
 }
 
@@ -694,6 +843,16 @@ fn write_stage_variables(builder: &mut VariableBuilder, stage: Option<&StageVari
     }
 }
 
+fn write_stage_layout_variables(
+    builder: &mut VariableBuilder,
+    layout: Option<&StageLayoutVariables>,
+) {
+    match layout {
+        Some(layout) => layout.write(builder),
+        None => StageLayoutVariables::default().write(builder),
+    }
+}
+
 fn write_timer_variables(builder: &mut VariableBuilder, overview: Option<&TimersOverview>) {
     match overview {
         Some(timers) => {
@@ -710,6 +869,22 @@ fn write_timer_variables(builder: &mut VariableBuilder, overview: Option<&Timers
                 timers.countdown_to_start.seconds_remaining.to_string(),
             );
             builder.set(
+                "timer_countdown_remaining_hms",
+                format_duration_hms(timers.countdown_to_start.seconds_remaining),
+            );
+            builder.set(
+                "timer_countdown_remaining_mmss",
+                format_duration_mmss(timers.countdown_to_start.seconds_remaining),
+            );
+            builder.set(
+                "timer_countdown_remaining_hhmm",
+                format_duration_hhmm(timers.countdown_to_start.seconds_remaining),
+            );
+            builder.set(
+                "timer_countdown_remaining_readable",
+                format_duration_readable(timers.countdown_to_start.seconds_remaining),
+            );
+            builder.set(
                 "timer_preach_state",
                 timer_state_to_string(timers.preach_timer.state),
             );
@@ -717,13 +892,37 @@ fn write_timer_variables(builder: &mut VariableBuilder, overview: Option<&Timers
                 "timer_preach_elapsed_seconds",
                 timers.preach_timer.seconds_elapsed.to_string(),
             );
+            builder.set(
+                "timer_preach_elapsed_hms",
+                format_duration_hms(timers.preach_timer.seconds_elapsed),
+            );
+            builder.set(
+                "timer_preach_elapsed_mmss",
+                format_duration_mmss(timers.preach_timer.seconds_elapsed),
+            );
+            builder.set(
+                "timer_preach_elapsed_hhmm",
+                format_duration_hhmm(timers.preach_timer.seconds_elapsed),
+            );
+            builder.set(
+                "timer_preach_elapsed_readable",
+                format_duration_readable(timers.preach_timer.seconds_elapsed),
+            );
         }
         None => {
             builder.set("timer_countdown_state", "idle".into());
             builder.set("timer_countdown_target", "".into());
             builder.set("timer_countdown_remaining_seconds", "0".into());
+            builder.set("timer_countdown_remaining_hms", "00:00:00".into());
+            builder.set("timer_countdown_remaining_mmss", "0:00".into());
+            builder.set("timer_countdown_remaining_hhmm", "00:00".into());
+            builder.set("timer_countdown_remaining_readable", "0s".into());
             builder.set("timer_preach_state", "idle".into());
             builder.set("timer_preach_elapsed_seconds", "0".into());
+            builder.set("timer_preach_elapsed_hms", "00:00:00".into());
+            builder.set("timer_preach_elapsed_mmss", "0:00".into());
+            builder.set("timer_preach_elapsed_hhmm", "00:00".into());
+            builder.set("timer_preach_elapsed_readable", "0s".into());
         }
     }
 }
@@ -749,6 +948,55 @@ fn write_bible_variables(builder: &mut VariableBuilder, broadcast: Option<&Bible
         builder.set("bible_text", "".into());
         builder.set("bible_triggered_at", "".into());
     }
+}
+
+fn format_duration_hms(seconds: i64) -> String {
+    let sign = if seconds < 0 { "-" } else { "" };
+    let total = seconds.abs();
+    let hours = total / 3600;
+    let minutes = (total % 3600) / 60;
+    let secs = total % 60;
+    format!("{sign}{hours:02}:{minutes:02}:{secs:02}")
+}
+
+fn format_duration_hhmm(seconds: i64) -> String {
+    let sign = if seconds < 0 { "-" } else { "" };
+    let total = seconds.abs();
+    let hours = total / 3600;
+    let minutes = (total % 3600) / 60;
+    format!("{sign}{hours:02}:{minutes:02}")
+}
+
+fn format_duration_mmss(seconds: i64) -> String {
+    let sign = if seconds < 0 { "-" } else { "" };
+    let total = seconds.abs();
+    let minutes = total / 60;
+    let secs = total % 60;
+    format!("{sign}{minutes}:{secs:02}")
+}
+
+fn format_duration_readable(seconds: i64) -> String {
+    let sign = if seconds < 0 { "-" } else { "" };
+    let total = seconds.abs();
+
+    let hours = total / 3600;
+    let minutes = (total % 3600) / 60;
+    let secs = total % 60;
+
+    let mut parts = Vec::new();
+
+    if hours > 0 {
+        parts.push(format!("{}h", hours));
+        parts.push(format!("{:02}m", minutes));
+        parts.push(format!("{:02}s", secs));
+    } else if minutes > 0 {
+        parts.push(format!("{}m", minutes));
+        parts.push(format!("{:02}s", secs));
+    } else {
+        parts.push(format!("{}s", secs));
+    }
+
+    format!("{}{}", sign, parts.join(" "))
 }
 
 fn timer_state_to_string(state: TimerState) -> String {
@@ -826,6 +1074,8 @@ mod tests {
             .collect();
         assert_eq!(map.get("stage_current_main").unwrap(), "");
         assert_eq!(map.get("timer_countdown_state").unwrap(), "idle");
+        assert_eq!(map.get("timer_countdown_remaining_hhmm").unwrap(), "00:00");
+        assert_eq!(map.get("timer_preach_elapsed_hhmm").unwrap(), "00:00");
         assert_eq!(map.get("bible_text").unwrap(), "");
     }
 
@@ -852,6 +1102,84 @@ mod tests {
         assert_eq!(map.get("timer_countdown_state").unwrap(), "running");
         assert_eq!(map.get("timer_preach_state").unwrap(), "paused");
         assert_eq!(map.get("timer_countdown_remaining_seconds").unwrap(), "120");
+        assert_eq!(map.get("timer_countdown_remaining_hhmm").unwrap(), "00:02");
+        assert_eq!(map.get("timer_preach_elapsed_hhmm").unwrap(), "00:00");
+    }
+
+    #[test]
+    fn stage_variables_update_across_layouts() {
+        use std::collections::HashMap;
+
+        let mut state = CompanionVariableState::default();
+        let now = Utc::now();
+        let presentation_id = presenter_core::PresentationId::new();
+        let slide_id = presenter_core::SlideId::new();
+        let layout = StageDisplayLayout {
+            code: "timer".to_string(),
+            name: "Timer".to_string(),
+            description: "Countdown".to_string(),
+        };
+        let snapshot = StageDisplaySnapshot::new(
+            layout.clone(),
+            now,
+            Some(presentation_id),
+            Some("001 Alpha Song".to_string()),
+            Some("Alpha Library".to_string()),
+            Some("Alpha Song".to_string()),
+            Some(slide_id),
+            Some(presenter_core::stage_display::StageDisplaySlide {
+                main: "Alpha".to_string(),
+                translation: "".to_string(),
+                stage: "".to_string(),
+                group: None,
+            }),
+            None,
+            None,
+            presenter_core::timer::TimersOverview::demo(now),
+            None,
+            Some(1),
+            Some(3),
+        );
+
+        assert!(state.apply_stage_snapshot(snapshot));
+        let map: HashMap<_, _> = state
+            .to_variables()
+            .into_iter()
+            .map(|var| (var.name, var.value))
+            .collect();
+        assert_eq!(map.get("song_name"), Some(&"Alpha Song".to_string()));
+        assert_eq!(map.get("band_name"), Some(&"Alpha Library".to_string()));
+
+        let next_snapshot = StageDisplaySnapshot::new(
+            layout,
+            now + chrono::Duration::seconds(1),
+            Some(presenter_core::PresentationId::new()),
+            Some("002 Beta Hymn".to_string()),
+            Some("Beta Library".to_string()),
+            Some("Beta Hymn".to_string()),
+            Some(presenter_core::SlideId::new()),
+            Some(presenter_core::stage_display::StageDisplaySlide {
+                main: "Beta".to_string(),
+                translation: "".to_string(),
+                stage: "".to_string(),
+                group: None,
+            }),
+            None,
+            None,
+            presenter_core::timer::TimersOverview::demo(now),
+            None,
+            Some(1),
+            Some(2),
+        );
+
+        assert!(state.apply_stage_snapshot(next_snapshot));
+        let updated: HashMap<_, _> = state
+            .to_variables()
+            .into_iter()
+            .map(|var| (var.name, var.value))
+            .collect();
+        assert_eq!(updated.get("song_name"), Some(&"Beta Hymn".to_string()));
+        assert_eq!(updated.get("band_name"), Some(&"Beta Library".to_string()));
     }
 
     #[tokio::test]

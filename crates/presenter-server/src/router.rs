@@ -1,7 +1,6 @@
 use crate::{
-    ableset::AbleSetStatusSnapshot, companion, osc::OscStatusSnapshot,
-    resolume::ResolumeConnectionSnapshot, stage_connections::StageClientSnapshot, stage_ui,
-    state::AppState, ui,
+    ableset::AbleSetStatusSnapshot, osc::OscStatusSnapshot, resolume::ResolumeConnectionSnapshot,
+    stage_connections::StageClientSnapshot, stage_ui, state::AppState, ui,
 };
 use anyhow::Error as AnyhowError;
 use axum::{
@@ -114,7 +113,10 @@ pub fn build_router(state: AppState) -> Router {
         .route("/timers/overview", get(get_timers_overview))
         .route("/timers/command", post(execute_timer_command))
         .route("/live/ws", get(live_websocket))
-        .route("/companion/ws", get(companion_websocket))
+        .route(
+            "/settings/features",
+            get(get_feature_settings).post(update_feature_settings),
+        )
         .with_state(state)
 }
 
@@ -791,6 +793,22 @@ struct StageLayoutUpdateRequest {
     code: String,
 }
 
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct FeatureSettingsResponse {
+    companion_enabled: bool,
+    companion_port: u16,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct FeatureSettingsRequest {
+    #[serde(alias = "enabled", alias = "companion_enabled")]
+    companion_enabled: bool,
+    #[serde(default, alias = "companion_port", alias = "port")]
+    companion_port: Option<u16>,
+}
+
 #[instrument(skip_all)]
 async fn get_stage_layout(
     State(state): State<AppState>,
@@ -828,6 +846,39 @@ async fn set_stage_layout(
     Ok(Json(StageLayoutResponse {
         code: layout.code.clone(),
         layout,
+    }))
+}
+
+#[instrument(skip_all)]
+async fn get_feature_settings(
+    State(state): State<AppState>,
+) -> Result<Json<FeatureSettingsResponse>, AppError> {
+    Ok(Json(FeatureSettingsResponse {
+        companion_enabled: state.companion_enabled(),
+        companion_port: state.companion_port(),
+    }))
+}
+
+#[instrument(skip_all)]
+async fn update_feature_settings(
+    State(state): State<AppState>,
+    Json(payload): Json<FeatureSettingsRequest>,
+) -> Result<Json<FeatureSettingsResponse>, AppError> {
+    let requested_port = payload
+        .companion_port
+        .unwrap_or_else(|| state.companion_port());
+    if requested_port == 0 {
+        return Err(AppError::bad_request_message(
+            "companionPort must be between 1 and 65535",
+        ));
+    }
+
+    state
+        .set_companion_settings(payload.companion_enabled, requested_port)
+        .await?;
+    Ok(Json(FeatureSettingsResponse {
+        companion_enabled: state.companion_enabled(),
+        companion_port: state.companion_port(),
     }))
 }
 
@@ -1077,15 +1128,6 @@ async fn live_websocket(ws: WebSocketUpgrade, State(state): State<AppState>) -> 
     let connections = state.stage_connections_handle();
     ws.on_upgrade(move |socket| async move {
         crate::live::serve_websocket(hub, connections, socket).await;
-    })
-}
-
-async fn companion_websocket(
-    ws: WebSocketUpgrade,
-    State(state): State<AppState>,
-) -> impl IntoResponse {
-    ws.on_upgrade(move |socket| async move {
-        companion::serve_companion_socket(state, socket).await;
     })
 }
 
