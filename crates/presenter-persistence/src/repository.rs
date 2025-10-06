@@ -1,6 +1,6 @@
 use crate::entities::{
-    ableset_settings, bible_passage, bible_translation, library, library_favorite, osc_settings,
-    playlist, playlist_entry, playlist_favorite, presentation as presentation_entity,
+    ableset_settings, app_settings, bible_passage, bible_translation, library, library_favorite,
+    osc_settings, playlist, playlist_entry, playlist_favorite, presentation as presentation_entity,
     resolume_host, slide as slide_entity, stage_state, timers,
 };
 use anyhow::{anyhow, Context};
@@ -78,6 +78,33 @@ impl Repository {
 
     pub fn connection(&self) -> &DatabaseConnection {
         &self.db
+    }
+
+    #[instrument(skip_all)]
+    pub async fn get_app_setting(&self, key: &str) -> anyhow::Result<Option<String>> {
+        let result = app_settings::Entity::find_by_id(key.to_string())
+            .one(&self.db)
+            .await?;
+        Ok(result.map(|model| model.value))
+    }
+
+    #[instrument(skip_all)]
+    pub async fn set_app_setting(&self, key: &str, value: &str) -> anyhow::Result<()> {
+        let model = app_settings::ActiveModel {
+            key: Set(key.to_string()),
+            value: Set(value.to_string()),
+            updated_at: Set(Utc::now().into()),
+        };
+
+        app_settings::Entity::insert(model)
+            .on_conflict(
+                OnConflict::column(app_settings::Column::Key)
+                    .update_columns([app_settings::Column::Value, app_settings::Column::UpdatedAt])
+                    .to_owned(),
+            )
+            .exec(&self.db)
+            .await?;
+        Ok(())
     }
 
     #[instrument(skip_all)]

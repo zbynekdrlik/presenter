@@ -196,25 +196,16 @@ or `scripts/dev/run-dev-server.sh` (which seeds defaults for `PRESENTER_DB_URL` 
 - Use the search field for quick lookups (`"John 3:16"`, `"Psalm 23"`, keywords). Up to 25 matches are returned per query; refine terms for more specific results.
 
 
-### Companion Control WS
-
-- Connect Bitfocus Companion (or any WebSocket automation client) to `ws://{host}:{port}/companion/ws`.
-- The first message must be a `hello` envelope:
-
-  ```json
-  {"type":"hello","client":"Companion","instanceName":"FrontDesk","token":"optional-secret"}
-  ```
-
-  If `PRESENTER_COMPANION_TOKEN` is set on the server, the `token` field must match; otherwise it may be omitted.
-- On success the server replies with `welcome` and an initial `variables` payload. Variables are emitted as name/value pairs so Companion buttons and feedbacks can bind directly (examples: `stage_current_main`, `stage_next_main`, `timer_countdown_remaining_seconds`, `bible_reference`). Every subsequent stage/timer/Bible change pushes a fresh `variables` message.
-- Send commands by posting JSON envelopes of the form `{"type":"command","command":"<name>","payload":{...}}`. Supported commands:
-  - `stage.set` – payload `{ "presentationId": UUID, "currentSlideId": UUID, "nextSlideId": UUID? }`
-  - `timer.set_countdown_target` – payload `{ "target": "2025-09-27T18:00:00Z" }`
+  - `timer.set_countdown_target` – `{ "target": "2025-10-05T17:45:00Z" }`
   - `timer.start_countdown`, `timer.pause_countdown`, `timer.reset_countdown`
   - `timer.start_preach`, `timer.reset_preach`
-  - `bible.trigger` – payload `{ "translation": "KJV", "book": "John", "chapter": 3, "verseStart": 16, "verseEnd": 17? }`
-  - `bible.clear`
-- Each successful command responds with `{ "type":"ack","command":"<name>" }`. Failures return `{ "type":"error","message":"..." }`. State-changing commands immediately refresh the variable feed so Companion feedbacks update without waiting for additional events.
+  - `bible.trigger` / `bible.clear`
+- Successful commands respond with `{"type":"ack","command":"..."}`; failures respond with `{"type":"error","message":"..."}`. Expose those errors via a Companion “alert” button so ops notice when a cue fails.
+- Recommended layout: dedicate buttons for countdown start/reset, stage layout presets, Bible trigger, and an emergency “blank outputs” action, each with feedback driven by `timer_countdown_state`, `timer_countdown_remaining_hms`, or `stage_current_main`. Importable button layouts and helper scripts live under `ops/companion/`.
+
+#### Enabling the Companion socket
+
+The `/companion/ws` route is disabled by default so multiple dev servers can coexist without port conflicts. Set `PRESENTER_COMPANION_ENABLED=1` in the environment of the instance that should publish the socket (e.g. `PRESENTER_COMPANION_ENABLED=1 cargo run -p presenter-server`). The branch demo helper (`scripts/docker/run-demo.sh`) accepts `--enable-companion` to flip the flag; omit the option (or pass `--disable-companion`) to keep the socket offline for other sandboxes. Refer to `docs/settings/README.md` for a consolidated list of feature flags.
 
 
 ## HTTP API Snapshot – September 2025
@@ -241,7 +232,22 @@ or `scripts/dev/run-dev-server.sh` (which seeds defaults for `PRESENTER_DB_URL` 
 - `GET /presentations/{id}` – presentation detail with slides for operator/stage tooling.
 - `PATCH /presentations/{presentation_id}/slides/{slide_id}` – update slide text (main/translation/stage/group) with validation and live refresh.
 - `GET /live/ws` (WebSocket) – streams JSON events for timers and stage-state snapshots (see “Live Update Surfaces”).
-- `GET /companion/ws` (WebSocket) – bidirectional Companion control channel (see “Companion Control WS”).
+- `GET /companion/ws` (WebSocket) – bidirectional Companion control channel (see “Companion Control WS”); disabled unless `PRESENTER_COMPANION_ENABLED=1`.
+
+### Companion Control WS
+
+- Enable the websocket per instance under **Settings → Companion**. Assign a unique port (default `18175`) whenever multiple branch demos run on the same host; the saved value is persisted in SQLite so the listener restarts automatically.
+- The Companion docker image ships with the `Presenter Companion WS` module (`ops/companion/presenter`). Add a connection in Companion, set the Presenter host/port, and the module handles the hello handshake, variables stream, and automatic reconnects. Tokens remain optional unless `PRESENTER_COMPANION_TOKEN` is set.
+- **Handshake:** immediately send `{ "type": "hello", "client": "Companion", "instanceName": "FrontDesk", "token": "optional" }`. Missing or incorrect tokens close the socket with code `4001`.
+- **Commands:** send envelopes of the form `{ "type": "command", "command": "<name>", "payload": { ... } }`. Supported commands include:
+  - `stage.layout` – `{ "code": "worship-snv" }` (module ships presets for SNV/PP/Timer/Preach)
+  - `stage.set` – `{ "presentationId": UUID, "currentSlideId": UUID, "nextSlideId": UUID? }`
+  - `timer.set_countdown_target` – `{ "target": "2025-10-05T17:45:00Z" }` (module converts HH:MM inputs automatically)
+  - `timer.start_countdown`, `timer.pause_countdown`, `timer.reset_countdown`
+  - `timer.start_preach`, `timer.reset_preach`
+  - `bible.trigger` / `bible.clear`
+- **Variables:** Presenter streams flat name/value pairs suitable for Companion feedback. Timers expose derived formats (`timer_countdown_remaining_hhmm`, `timer_countdown_remaining_hms`, `timer_countdown_remaining_mmss`, `timer_countdown_remaining_readable`, and matching preach variants), alongside stage metadata, Bible text, and a `live_ws_connected` heartbeat.
+- Importable button layouts and helper scripts live under `ops/companion/`; the defaults dedicate buttons for countdown start/reset, stage layout presets, Bible trigger, and a panic indicator whenever the websocket drops.
 
 ## Upcoming Work
 - Expanded interface specifications and additional Bible translations are being planned under issue #5.

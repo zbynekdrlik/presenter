@@ -69,6 +69,10 @@ pub struct StageDisplaySnapshot {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub presentation_name: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
+    pub library_name: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub song_name: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub current_slide_id: Option<SlideId>,
     pub current: Option<StageDisplaySlide>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -141,6 +145,8 @@ impl StageDisplaySnapshot {
         generated_at: DateTime<Utc>,
         presentation_id: Option<PresentationId>,
         presentation_name: Option<String>,
+        library_name: Option<String>,
+        song_name: Option<String>,
         current_slide_id: Option<SlideId>,
         current: Option<StageDisplaySlide>,
         next_slide_id: Option<SlideId>,
@@ -155,6 +161,8 @@ impl StageDisplaySnapshot {
             generated_at,
             presentation_id,
             presentation_name,
+            library_name,
+            song_name,
             current_slide_id,
             current,
             next_slide_id,

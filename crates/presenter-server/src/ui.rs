@@ -2,7 +2,7 @@ use crate::{
     ableset::AbleSetStatusSnapshot,
     osc::OscStatusSnapshot,
     resolume::{ResolumeConnectionSnapshot, ResolumeConnectionState},
-    state::AppState,
+    state::{AppState, FeatureFlags},
 };
 use axum::response::Html;
 use chrono::{DateTime, Utc};
@@ -4222,6 +4222,7 @@ pub async fn render_settings_ui(state: &AppState) -> anyhow::Result<Html<String>
     let osc_status = state.osc_status_snapshot().await;
     let ableset_settings = state.ableset_settings().await?;
     let ableset_status = state.ableset_status_snapshot().await;
+    let feature_flags = state.feature_flags();
 
     let host_rows: Vec<SettingsHostRow> = hosts
         .into_iter()
@@ -4285,13 +4286,17 @@ pub async fn render_settings_ui(state: &AppState) -> anyhow::Result<Html<String>
     let ableset_status_json = to_string(&ableset_status)
         .unwrap_or_else(|_| "{}".to_string())
         .replace("</script>", r"<\/script>");
+    let feature_json = to_string(&feature_flags)
+        .unwrap_or_else(|_| "{}".to_string())
+        .replace("</script>", r"<\/script>");
 
     let script = SETTINGS_SCRIPT_TEMPLATE
         .replace("__RESOLUME_HOSTS__", &hosts_json)
         .replace("__OSC_CONFIG__", &osc_config_json)
         .replace("__OSC_STATUS__", &osc_status_json)
         .replace("__ABLESET_CONFIG__", &ableset_config_json)
-        .replace("__ABLESET_STATUS__", &ableset_status_json);
+        .replace("__ABLESET_STATUS__", &ableset_status_json)
+        .replace("__FEATURE_FLAGS__", &feature_json);
 
     let owner = Owner::new_root(None);
     let html = owner.with(|| {
@@ -4302,6 +4307,7 @@ pub async fn render_settings_ui(state: &AppState) -> anyhow::Result<Html<String>
                 osc_status=osc_status.clone()
                 ableset_settings=ableset_settings.clone()
                 ableset_status=ableset_status.clone()
+                features=feature_flags.clone()
                 script=script.clone()
             />
         }
@@ -4319,10 +4325,13 @@ fn SettingsDocument(
     osc_status: OscStatusSnapshot,
     ableset_settings: AbleSetSettings,
     ableset_status: AbleSetStatusSnapshot,
+    features: FeatureFlags,
     script: String,
 ) -> impl IntoView {
     let hosts = Arc::new(hosts);
     let host_count_text = hosts.len().to_string();
+    let companion_enabled = features.companion_enabled;
+    let companion_port_text = features.companion_port.to_string();
     let osc_port_value = osc_settings.listen_port.to_string();
     let osc_host_port_display = osc_status.host_port.unwrap_or(osc_settings.listen_port);
     let osc_status_state = if !osc_status.enabled {
@@ -4414,6 +4423,42 @@ fn SettingsDocument(
                     </nav>
                 </header>
                 <main class="settings__main">
+                    <section class="settings__card settings__card--feature">
+                        <header class="settings__card-header">
+                            <div>
+                                <h2>"Companion"</h2>
+                            </div>
+                        </header>
+                        <form class="settings__form settings__form--compact" data-role="feature-companion-form" autocomplete="off">
+                            <div class="settings__form-row settings__form-row--compact settings__form-row--inline">
+                                <label class="settings__form-checkbox settings__form-checkbox--inline">
+                                    <input
+                                        type="checkbox"
+                                        data-role="feature-companion-toggle"
+                                        checked={companion_enabled}
+                                    />
+                                    <span>"Enable"</span>
+                                </label>
+                                <label class="settings__form-control--tiny">
+                                    <span>"Port"</span>
+                                    <input
+                                        type="number"
+                                        min="1"
+                                        max="65535"
+                                        value={companion_port_text.clone()}
+                                        data-role="feature-companion-port"
+                                        required
+                                    />
+                                </label>
+                                <button
+                                    type="submit"
+                                    class="settings__button settings__button--primary settings__button--compact"
+                                    data-role="feature-submit"
+                                >"Save"</button>
+                            </div>
+                            <p class="settings__form-status" data-role="feature-status" data-state="idle"></p>
+                        </form>
+                    </section>
                     <section class="settings__card">
                         <header class="settings__card-header">
                             <div>

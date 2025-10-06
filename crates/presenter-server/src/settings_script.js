@@ -10,6 +10,7 @@
   const initialOscStatus = __OSC_STATUS__ || null;
   const initialAbleSetConfig = __ABLESET_CONFIG__ || null;
   const initialAbleSetStatus = __ABLESET_STATUS__ || null;
+  const initialFeatures = __FEATURE_FLAGS__ || null;
   const state = {
     hosts: Array.isArray(initialHosts) ? initialHosts : [],
     editingId: null,
@@ -22,6 +23,10 @@
     ableset: {
       config: normalizeAbleSetConfig(initialAbleSetConfig),
       status: normalizeAbleSetStatus(initialAbleSetStatus),
+      submitting: false,
+    },
+    features: {
+      config: normalizeFeatureFlags(initialFeatures),
       submitting: false,
     },
   };
@@ -67,6 +72,11 @@
     ablesetStatusUpdated: document.querySelector('[data-role="ableset-status-updated"]'),
     ablesetStatusError: document.querySelector('[data-role="ableset-status-error"]'),
     ablesetRefresh: document.querySelector('[data-role="ableset-refresh"]'),
+    featureForm: document.querySelector('[data-role="feature-companion-form"]'),
+    featureToggle: document.querySelector('[data-role="feature-companion-toggle"]'),
+    featurePort: document.querySelector('[data-role="feature-companion-port"]'),
+    featureSubmit: document.querySelector('[data-role="feature-submit"]'),
+    featureStatus: document.querySelector('[data-role="feature-status"]'),
   };
 
   const dateFormatter = new Intl.DateTimeFormat(undefined, {
@@ -175,6 +185,27 @@
     };
   }
 
+  function normalizeFeatureFlags(input) {
+    const fallback = {
+      companionEnabled: false,
+      companionPort: 18175,
+    };
+    if (!input || typeof input !== 'object') {
+      return { ...fallback };
+    }
+    const enabled = Boolean(
+      input.companion_enabled ?? input.companionEnabled ?? input.enabled ?? false
+    );
+    const rawPort = input.companion_port ?? input.companionPort ?? input.port;
+    const parsed = Number(rawPort);
+    const port = Number.isFinite(parsed) ? parsed : fallback.companionPort;
+    return {
+      companionEnabled: enabled,
+      companionPort: port > 0 && port <= 65535 ? port : fallback.companionPort,
+    };
+  }
+
+
 
 
   function toNumber(value, fallback) {
@@ -201,6 +232,75 @@
     if (!els.ablesetFormStatus) return;
     els.ablesetFormStatus.textContent = message || '';
     els.ablesetFormStatus.dataset.state = status || 'idle';
+  }
+
+  function setFeatureStatus(message, stateName) {
+    if (!els.featureStatus) return;
+    els.featureStatus.textContent = message || '';
+    els.featureStatus.dataset.state = stateName || 'idle';
+  }
+
+  function setFeatureBusy(busy) {
+    state.features.submitting = Boolean(busy);
+    if (els.featureToggle) {
+      els.featureToggle.disabled = busy;
+    }
+    if (els.featurePort) {
+      els.featurePort.disabled = busy;
+    }
+    if (els.featureSubmit) {
+      els.featureSubmit.disabled = busy;
+    }
+  }
+
+  function renderFeatureForm() {
+    if (!els.featureForm) return;
+    const config = state.features.config || { companionEnabled: false, companionPort: 18175 };
+    if (els.featureToggle) {
+      els.featureToggle.checked = Boolean(config.companionEnabled);
+    }
+    if (els.featurePort && document.activeElement !== els.featurePort) {
+      els.featurePort.value = String(config.companionPort);
+    }
+  }
+
+  async function submitFeatureForm(event) {
+    event.preventDefault();
+    if (!els.featureForm) return;
+    const enabled = Boolean(els.featureToggle && els.featureToggle.checked);
+    const rawPort = els.featurePort ? els.featurePort.value.trim() : '';
+    const port = Number.parseInt(rawPort, 10);
+    if (!Number.isInteger(port) || port < 1 || port > 65535) {
+      setFeatureStatus('Port must be between 1 and 65535.', 'error');
+      if (els.featurePort) {
+        els.featurePort.focus();
+      }
+      return;
+    }
+    setFeatureBusy(true);
+    setFeatureStatus('Saving…', 'info');
+    try {
+      const response = await fetch('/settings/features', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', Accept: 'application/json' },
+        body: JSON.stringify({
+          companionEnabled: enabled,
+          companionPort: port,
+        }),
+      });
+      if (!response.ok) {
+        throw new Error(await extractError(response));
+      }
+      const data = await response.json();
+      state.features.config = normalizeFeatureFlags(data);
+      renderFeatureForm();
+      setFeatureStatus('Saved.', 'success');
+    } catch (error) {
+      console.error('Failed to update Companion settings', error);
+      setFeatureStatus(error.message || 'Unable to save Companion settings.', 'error');
+    } finally {
+      setFeatureBusy(false);
+    }
   }
 
   function showToast(message, type) {
@@ -700,6 +800,23 @@
         console.warn('Unable to refresh AbleSet status', error);
       }
     }
+  }
+
+  if (els.featureForm) {
+    renderFeatureForm();
+    setFeatureStatus('', 'idle');
+    els.featureForm.addEventListener('submit', submitFeatureForm);
+  }
+  if (els.featureToggle) {
+    els.featureToggle.addEventListener('change', () => {
+      setFeatureStatus('', 'idle');
+    });
+  }
+  if (els.featurePort) {
+    els.featurePort.addEventListener('input', () => {
+      if (state.features.submitting) return;
+      setFeatureStatus('', 'idle');
+    });
   }
 
   if (els.ablesetForm) {

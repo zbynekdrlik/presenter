@@ -7,10 +7,12 @@ source "${SCRIPT_DIR}/common.sh"
 NAME=""
 PORT=""
 OSC_PORT=""
+COMPANION_PORT=""
 IMPORT_ROOT="$DEFAULT_IMPORT_ROOT"
 DISPLAY_NAME=""
 LOG_LEVEL="presenter_server=info"
 FORCE=0
+COMPANION_ENABLED="${PRESENTER_COMPANION_ENABLED:-0}"
 
 usage() {
   cat <<USAGE
@@ -20,7 +22,10 @@ Usage: $(basename "$0") [options]
   --import-root PATH   Path to ProPresenter library (default: "$DEFAULT_IMPORT_ROOT")
   --display-name TEXT  Display name for landing page (defaults to NAME)
   --osc-port PORT      Host port to publish for OSC listener (defaults to derived high port)
+  --companion-port PORT  Host port to publish for the Companion websocket (defaults to derived high port)
   --log-level LEVEL   RUST_LOG value for the presenter container (default: presenter_server=info)
+  --enable-companion  Expose the /companion/ws socket inside the demo (default: disabled)
+  --disable-companion Disable the /companion/ws socket explicitly
   --force              Rebuild the image even if it exists
   -h, --help           Show this help message
 USAGE
@@ -38,8 +43,14 @@ while [[ $# -gt 0 ]]; do
       DISPLAY_NAME="$2"; shift 2 ;;
     --osc-port)
       OSC_PORT="$2"; shift 2 ;;
+    --companion-port)
+      COMPANION_PORT="$2"; shift 2 ;;
     --log-level)
       LOG_LEVEL="$2"; shift 2 ;;
+    --enable-companion)
+      COMPANION_ENABLED="1"; shift ;;
+    --disable-companion)
+      COMPANION_ENABLED="0"; shift ;;
     --force)
       FORCE=1; shift ;;
     -h|--help)
@@ -56,7 +67,8 @@ if [[ -z "$DISPLAY_NAME" ]]; then
   DISPLAY_NAME="$PROJECT"
 fi
 HOST_HTTP_PORT="$(compute_port "$PROJECT" "$PORT")"
-HOST_OSC_PORT="${OSC_PORT:-39051}"
+HOST_OSC_PORT="$(compute_port "${PROJECT}-osc" "$OSC_PORT")"
+HOST_COMPANION_PORT="$(compute_port "${PROJECT}-companion" "$COMPANION_PORT")"
 DEMO_DATA_DIR="$DATA_ROOT/$PROJECT"
 
 stop_conflicting_demos "$REPO_ROOT" "$PROJECT"
@@ -81,17 +93,25 @@ fi
 export PROJECT_NAME="$PROJECT"
 export HOST_HTTP_PORT
 export HOST_OSC_PORT
+export HOST_COMPANION_PORT
 export DEMO_DATA_DIR
 export IMPORT_ROOT
 export PRESENTER_FORCE_IMPORT=1
 export RUST_LOG="$LOG_LEVEL"
+export PRESENTER_COMPANION_ENABLED="$COMPANION_ENABLED"
+export PRESENTER_COMPANION_PORT="$HOST_COMPANION_PORT"
 
 COMPOSE_ARGS=("${DOCKER_CMD[@]}" "compose" "-f" "$REPO_ROOT/docker-compose.demo.yml" "-p" "$PROJECT" up -d)
 if [[ "$FORCE" -eq 1 ]]; then
   COMPOSE_ARGS+=("--build")
 fi
 
-printf '[run-demo] Launching %s on http://localhost:%s (OSC %s)\n' "$PROJECT" "$HOST_HTTP_PORT" "$HOST_OSC_PORT"
+if [[ "$COMPANION_ENABLED" == "1" ]]; then
+  companion_status="enabled on $HOST_COMPANION_PORT"
+else
+  companion_status="disabled (reserved $HOST_COMPANION_PORT)"
+fi
+printf '[run-demo] Launching %s on http://localhost:%s (OSC %s, Companion %s)\n' "$PROJECT" "$HOST_HTTP_PORT" "$HOST_OSC_PORT" "$companion_status"
 "${COMPOSE_ARGS[@]}"
 
 # Wait for health endpoint

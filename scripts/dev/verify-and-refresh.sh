@@ -76,7 +76,10 @@ DISPLAY_NAME="${CUSTOM_DISPLAY_NAME:-$DISPLAY_NAME_DEFAULT}"
 echo "[verify] Running cargo test"
 RUN_AS_ORIGINAL cargo test
 
-RUN_ARGS=("--force" "--name" "$REPO_SLUG" "--display-name" "$DISPLAY_NAME" "--port" "$DEMO_PORT")
+echo "[verify] Running Companion module unit tests"
+RUN_AS_ORIGINAL npm run test:companion
+
+RUN_ARGS=("--force" "--name" "$REPO_SLUG" "--display-name" "$DISPLAY_NAME" "--port" "$DEMO_PORT" "--enable-companion")
 
 echo "[verify] Refreshing Docker demo for project '$REPO_SLUG' (pre-tests)"
 "$REPO_ROOT/scripts/docker/run-demo.sh" "${RUN_ARGS[@]}"
@@ -88,7 +91,7 @@ echo "[verify] Running Playwright suite"
 RUN_AS_ORIGINAL npm run test:playwright
 
 echo "[verify] Refreshing Docker demo for project '$REPO_SLUG' (post-tests)"
-"$REPO_ROOT/scripts/docker/run-demo.sh" "--force" "--name" "$REPO_SLUG" "--display-name" "$DISPLAY_NAME" "--port" "$DEMO_PORT"
+"$REPO_ROOT/scripts/docker/run-demo.sh" "--force" "--name" "$REPO_SLUG" "--display-name" "$DISPLAY_NAME" "--port" "$DEMO_PORT" "--enable-companion"
 
 echo "[verify] Restarting gateway (post-tests)"
 "$REPO_ROOT/scripts/docker/run-gateway.sh" --force

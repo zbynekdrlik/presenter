@@ -1,15 +1,16 @@
 {
   "name": "presenter",
   "version": "1.0.0",
-  "description": "Presenter is a purpose-built presentation and worship display tool tailored for our community's needs. It focuses on delivering the essentials—lyrics, Bible passages, timers, and stage displays—without the complexity of larger presentation suites.",
+  "description": "Presenter is a purpose-built presentation and worship display tool tailored for our community's needs. It focuses on delivering the essentials\u2014lyrics, Bible passages, timers, and stage displays\u2014without the complexity of larger presentation suites.",
   "main": "index.js",
   "directories": {
     "doc": "docs"
   },
   "scripts": {
-    "test": "npm run test:playwright",
+    "test": "npm run test:companion && npm run test:playwright",
     "test:playwright": "playwright test",
-    "test:playwright:headed": "playwright test --headed"
+    "test:playwright:headed": "playwright test --headed",
+    "test:companion": "node --test ops/companion/presenter/lib/time.test.js"
   },
   "repository": {
     "type": "git",
@@ -23,6 +24,7 @@
   },
   "homepage": "https://github.com/zbynekdrlik/presenter#readme",
   "devDependencies": {
-    "@playwright/test": "^1.55.1"
+    "@playwright/test": "^1.55.1",
+    "ws": "^8.18.3"
   }
 }
