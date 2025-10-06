@@ -119,6 +119,20 @@ test.describe('@companion Companion control socket', () => {
     );
     expect(initialVarNames.has('timer_countdown_remaining_hhmm')).toBeTruthy();
     expect(initialVarNames.has('timer_preach_elapsed_hhmm')).toBeTruthy();
+    expect(initialVarNames.has('song_name')).toBeTruthy();
+    expect(initialVarNames.has('band_name')).toBeTruthy();
+
+    const initialEntries = Array.isArray(initialVars.values)
+      ? (initialVars.values as Array<{ name?: unknown; value?: unknown }>)
+      : [];
+    const initialValues = new Map(
+      initialEntries.map((entry) => [String(entry.name ?? ''), entry.value])
+    );
+    const songName = String(initialValues.get('song_name') ?? '');
+    const bandName = String(initialValues.get('band_name') ?? '');
+    expect(songName).not.toBe('');
+    expect(songName).not.toMatch(/^\d{3}\s/);
+    expect(bandName).not.toBe('');
 
     socket.send(
       JSON.stringify({
@@ -157,6 +171,104 @@ test.describe('@companion Companion control socket', () => {
       : [];
     const layoutCode = layoutEntries.find((entry) => entry.name === 'stage_layout_code');
     expect(layoutCode?.value).toBe('timer');
+
+    const sanitizeSongTitle = (raw: string): string => {
+      const trimmed = raw.trimStart();
+      if (/^\d{3}\s/.test(trimmed)) {
+        return trimmed.slice(4).trimStart();
+      }
+      return trimmed;
+    };
+
+    const librariesResponse = await fetch(new URL('/libraries', baseURL).toString(), {
+      headers: { Accept: 'application/json' },
+    });
+    expect(librariesResponse.ok).toBeTruthy();
+    const libraries = (await librariesResponse.json()) as Array<{
+      id: string;
+      name: string;
+      presentations: Array<{
+        id: string;
+        name: string;
+        slides: Array<{ id: string }>;
+      }>;
+    }>;
+
+    const currentSong = String(initialValues.get('song_name') ?? '');
+    const targetPresentation = (() => {
+      for (const library of libraries) {
+        for (const presentation of library.presentations) {
+          const expected = sanitizeSongTitle(presentation.name);
+          if (presentation.slides.length === 0) continue;
+          if (expected && expected !== currentSong) {
+            return {
+              presentationId: presentation.id,
+              currentSlideId: presentation.slides[0].id,
+              nextSlideId: presentation.slides[1]?.id,
+              expectedSong: expected,
+              expectedBand: library.name,
+            };
+          }
+        }
+      }
+      throw new Error('Unable to find alternate presentation for stage change');
+    })();
+
+    const stageResponse = await fetch(new URL('/stage/state', baseURL).toString(), {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        presentationId: targetPresentation.presentationId,
+        currentSlideId: targetPresentation.currentSlideId,
+        nextSlideId: targetPresentation.nextSlideId ?? undefined,
+      }),
+    });
+    expect(stageResponse.ok).toBeTruthy();
+
+    const stageVars = await waitForMessage((msg) =>
+      msg.type === 'variables' &&
+      Array.isArray(msg.values) &&
+      msg.values.some((entry) => entry.name === 'song_name')
+    );
+    const stageEntries = Array.isArray(stageVars.values)
+      ? (stageVars.values as Array<{ name?: unknown; value?: unknown }>)
+      : [];
+    const stageValues = new Map(stageEntries.map((entry) => [String(entry.name ?? ''), entry.value]));
+    const updatedSong = String(stageValues.get('song_name') ?? '');
+    const updatedBand = String(stageValues.get('band_name') ?? '');
+    expect(updatedSong).toBe(targetPresentation.expectedSong);
+    expect(updatedBand).toBe(targetPresentation.expectedBand);
+    expect(updatedSong).not.toBe(currentSong);
+
+    const futureTarget = new Date(Date.now() + 20 * 60 * 1000);
+    socket.send(
+      JSON.stringify({
+        type: 'command',
+        command: 'timer.set_countdown_target',
+        payload: { target: futureTarget.toISOString() },
+      })
+    );
+
+    const countdownAck = await waitForMessage(
+      (msg) => msg.type === 'ack' && msg.command === 'timer.set_countdown_target'
+    );
+    expect(countdownAck).toBeTruthy();
+
+    const countdownVars = await waitForMessage(
+      (msg) =>
+        msg.type === 'variables' &&
+        Array.isArray(msg.values) &&
+        msg.values.some((entry) => entry.name === 'timer_countdown_target')
+    );
+    const countdownEntries = Array.isArray(countdownVars.values)
+      ? (countdownVars.values as Array<{ name?: unknown; value?: unknown }>)
+      : [];
+    const targetEntry = countdownEntries.find((entry) => entry.name === 'timer_countdown_target');
+    expect(targetEntry).toBeTruthy();
+    const parsedTarget = Date.parse(String(targetEntry?.value ?? ''));
+    expect(Number.isNaN(parsedTarget)).toBeFalsy();
+    expect(parsedTarget).toBeGreaterThan(futureTarget.getTime() - 5_000);
+    expect(parsedTarget).toBeLessThan(futureTarget.getTime() + 60_000);
 
     expect(errors).toHaveLength(0);
 

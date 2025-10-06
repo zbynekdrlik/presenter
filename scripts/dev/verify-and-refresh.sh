@@ -76,6 +76,9 @@ DISPLAY_NAME="${CUSTOM_DISPLAY_NAME:-$DISPLAY_NAME_DEFAULT}"
 echo "[verify] Running cargo test"
 RUN_AS_ORIGINAL cargo test
 
+echo "[verify] Running Companion module unit tests"
+RUN_AS_ORIGINAL npm run test:companion
+
 RUN_ARGS=("--force" "--name" "$REPO_SLUG" "--display-name" "$DISPLAY_NAME" "--port" "$DEMO_PORT" "--enable-companion")
 
 echo "[verify] Refreshing Docker demo for project '$REPO_SLUG' (pre-tests)"

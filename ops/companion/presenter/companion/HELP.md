@@ -25,12 +25,13 @@ Timers now expose derived formats ready for button text:
 - `timer_countdown_remaining_readable` / `timer_preach_elapsed_readable`
 
 The currently selected stage layout is surfaced as `stage_layout_code`, `stage_layout_name`, and `stage_layout_description`.
+The active song metadata is available as `song_name` (prefix-trimmed presentation name) and `band_name` (source library).
 
 ## Actions
 
 - Timer start/pause/reset
-- Set countdown duration (HH:MM)
-- Stage layout switcher (generic + presets for SNV, PP, Timer, Preach)
+- Set countdown duration (plain minutes or HH:MM time-of-day for the next occurrence)
+- Stage layout switcher (single `stage.layout` action with dropdown for SNV, PP, Timer, Preach)
 - Bible trigger & clear
 
 ## Feedback

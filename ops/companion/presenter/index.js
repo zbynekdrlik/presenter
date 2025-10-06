@@ -1,8 +1,12 @@
 const { InstanceBase, InstanceStatus, runEntrypoint } = require('@companion-module/base')
 const WebSocket = require('ws')
+const { version: MODULE_VERSION } = require('./package.json')
+const { normaliseCountdownTarget } = require('./lib/time')
 
 const VARIABLE_DEFINITIONS = [
   'stage_layout_code',
+  'song_name',
+  'band_name',
   'stage_layout_name',
   'stage_layout_description',
   'stage_presentation_id',
@@ -38,57 +42,24 @@ const VARIABLE_DEFINITIONS = [
   'live_ws_connected',
 ]
 
+const COMMANDS = [
+  { id: 'timer.start_countdown', label: 'Timer: start countdown' },
+  { id: 'timer.pause_countdown', label: 'Timer: pause countdown' },
+  { id: 'timer.reset_countdown', label: 'Timer: reset countdown' },
+  { id: 'timer.set_countdown_target', label: 'Timer: set countdown target (HH:MM or minutes)' },
+  { id: 'timer.start_preach', label: 'Timer: start preach' },
+  { id: 'timer.reset_preach', label: 'Timer: reset preach' },
+  { id: 'stage.layout', label: 'Stage: set layout' },
+  { id: 'bible.trigger', label: 'Bible: trigger passage' },
+  { id: 'bible.clear', label: 'Bible: clear passage' },
+]
+
 const STAGE_LAYOUT_CHOICES = [
   { id: 'worship-snv', label: 'WORSHIP SNV' },
   { id: 'worship-pp', label: 'WORSHIP PP' },
   { id: 'timer', label: 'TIMER' },
   { id: 'preach', label: 'PREACH' },
 ]
-
-const BASE_COMMANDS = [
-  { id: 'timer.start_countdown', command: 'timer.start_countdown', label: 'Timer: start countdown' },
-  { id: 'timer.pause_countdown', command: 'timer.pause_countdown', label: 'Timer: pause countdown' },
-  { id: 'timer.reset_countdown', command: 'timer.reset_countdown', label: 'Timer: reset countdown' },
-  { id: 'timer.set_countdown_target', command: 'timer.set_countdown_target', label: 'Timer: set countdown duration (HH:MM)' },
-  { id: 'timer.start_preach', command: 'timer.start_preach', label: 'Timer: start preach' },
-  { id: 'timer.reset_preach', command: 'timer.reset_preach', label: 'Timer: reset preach' },
-  { id: 'stage.layout', command: 'stage.layout', label: 'Stage: set layout' },
-  { id: 'bible.trigger', command: 'bible.trigger', label: 'Bible: trigger passage' },
-  { id: 'bible.clear', command: 'bible.clear', label: 'Bible: clear passage' },
-]
-
-const LAYOUT_COMMANDS = STAGE_LAYOUT_CHOICES.map((choice) => ({
-  id: `stage.layout.${choice.id}`,
-  command: 'stage.layout',
-  label: `Stage: layout ${choice.label}`,
-  layoutCode: choice.id,
-}))
-
-const COMMANDS = [...BASE_COMMANDS, ...LAYOUT_COMMANDS]
-
-function parseDurationHhMm(value) {
-  if (typeof value !== 'string') {
-    return null
-  }
-  const trimmed = value.trim()
-  if (!/^\d{1,2}:\d{2}$/.test(trimmed)) {
-    return null
-  }
-  const [hoursStr, minutesStr] = trimmed.split(':')
-  const hours = Number.parseInt(hoursStr, 10)
-  const minutes = Number.parseInt(minutesStr, 10)
-  if (!Number.isFinite(hours) || !Number.isFinite(minutes)) {
-    return null
-  }
-  if (minutes < 0 || minutes > 59 || hours < 0 || hours > 99) {
-    return null
-  }
-  const totalSeconds = (hours * 60 + minutes) * 60
-  if (totalSeconds <= 0) {
-    return null
-  }
-  return totalSeconds
-}
 
 class PresenterInstance extends InstanceBase {
   constructor(internal) {
@@ -151,6 +122,7 @@ class PresenterInstance extends InstanceBase {
   }
 
   async init(config) {
+    this.log('info', `Presenter Companion WS v${MODULE_VERSION} loaded`);
     this.config = config
     this.updateStatus(InstanceStatus.Connecting)
     this._setupVariables()
@@ -295,12 +267,10 @@ class PresenterInstance extends InstanceBase {
     const actions = {}
 
     COMMANDS.forEach((cmd) => {
-      const commandId = cmd.command || cmd.id
-      const options = cmd.layoutCode ? [] : this._commandOptionsFor(commandId)
       actions[cmd.id] = {
         name: cmd.label,
-        options,
-        callback: (event) => this._sendCommand(cmd, event.options || {}),
+        options: this._commandOptionsFor(cmd.id),
+        callback: (event) => this._sendCommand(cmd.id, event.options || {}),
       }
     })
 
@@ -314,7 +284,7 @@ class PresenterInstance extends InstanceBase {
           {
             type: 'textinput',
             id: 'target',
-            label: 'Countdown duration (HH:MM)',
+            label: 'Countdown target (HH:MM or minutes)',
             placeholder: '00:15',
             default: '00:15',
           },
@@ -412,33 +382,28 @@ class PresenterInstance extends InstanceBase {
     this.setFeedbackDefinitions(feedbacks)
   }
 
-  _sendCommand(descriptor, options = {}) {
+  _sendCommand(command, options = {}) {
     if (!this.ws || this.ws.readyState !== WebSocket.OPEN) {
       this.log('error', 'Not connected to Presenter; cannot send command')
       return
     }
 
-    const info = typeof descriptor === 'string' ? { id: descriptor, command: descriptor } : descriptor
-    const command = info.command || info.id
-    const layoutCode = info.layoutCode
-
     let payload = {}
 
     switch (command) {
       case 'timer.set_countdown_target': {
-        const seconds = parseDurationHhMm(options.target || '')
-        if (typeof seconds !== 'number' || !Number.isFinite(seconds)) {
-          this.log('error', 'Invalid duration. Use HH:MM, e.g. 00:30 for 30 minutes.')
+        const targetIso = normaliseCountdownTarget(options.target || '')
+        if (!targetIso) {
+          this.log('error', 'Invalid duration. Use HH:MM (e.g. 00:30) or an ISO timestamp.')
           return
         }
-        const targetDate = new Date(Date.now() + seconds * 1000)
         payload = {
-          target: targetDate.toISOString(),
+          target: targetIso,
         }
         break
       }
       case 'stage.layout': {
-        const code = layoutCode || options.code || 'worship-snv'
+        const code = options.code || 'worship-snv'
         payload = {
           code,
         }
@@ -460,12 +425,13 @@ class PresenterInstance extends InstanceBase {
         payload = {}
     }
 
+    this.log('info', `Presenter command ${command} ${JSON.stringify(payload)}`)
+
     const envelope = {
       type: 'command',
       command,
       payload,
     }
-
     this.ws.send(JSON.stringify(envelope))
   }
 }

@@ -627,12 +627,10 @@ impl CompanionVariableState {
 
     fn apply_stage_snapshot(&mut self, snapshot: StageDisplaySnapshot) -> bool {
         let mut changed = self.apply_stage_layout(snapshot.layout.clone());
-        if snapshot.layout.code == "worship-snv" {
-            let stage_variables = StageVariables::from_snapshot(&snapshot);
-            if self.stage.as_ref() != Some(&stage_variables) {
-                self.stage = Some(stage_variables);
-                changed = true;
-            }
+        let stage_variables = StageVariables::from_snapshot(&snapshot);
+        if self.stage.as_ref() != Some(&stage_variables) {
+            self.stage = Some(stage_variables);
+            changed = true;
         }
 
         if self.apply_timers(snapshot.timers.clone()) {
@@ -720,6 +718,8 @@ impl CompanionVariableState {
 struct StageVariables {
     presentation_id: Option<String>,
     presentation_name: String,
+    band_name: String,
+    song_name: String,
     current_slide_id: Option<String>,
     current_main: String,
     current_translation: String,
@@ -740,6 +740,8 @@ impl StageVariables {
         Self {
             presentation_id: snapshot.presentation_id.map(|id| id.to_string()),
             presentation_name: snapshot.presentation_name.clone().unwrap_or_default(),
+            band_name: snapshot.library_name.clone().unwrap_or_default(),
+            song_name: snapshot.song_name.clone().unwrap_or_default(),
             current_slide_id: snapshot.current_slide_id.map(|id| id.to_string()),
             current_main: current.map(|slide| slide.main.clone()).unwrap_or_default(),
             current_translation: current
@@ -765,6 +767,8 @@ impl StageVariables {
         builder.set_opt("stage_presentation_id", self.presentation_id.clone());
         builder.set("stage_presentation_name", self.presentation_name.clone());
         builder.set_opt("stage_current_slide_id", self.current_slide_id.clone());
+        builder.set("song_name", self.song_name.clone());
+        builder.set("band_name", self.band_name.clone());
         builder.set("stage_current_main", self.current_main.clone());
         builder.set(
             "stage_current_translation",
@@ -1100,6 +1104,82 @@ mod tests {
         assert_eq!(map.get("timer_countdown_remaining_seconds").unwrap(), "120");
         assert_eq!(map.get("timer_countdown_remaining_hhmm").unwrap(), "00:02");
         assert_eq!(map.get("timer_preach_elapsed_hhmm").unwrap(), "00:00");
+    }
+
+    #[test]
+    fn stage_variables_update_across_layouts() {
+        use std::collections::HashMap;
+
+        let mut state = CompanionVariableState::default();
+        let now = Utc::now();
+        let presentation_id = presenter_core::PresentationId::new();
+        let slide_id = presenter_core::SlideId::new();
+        let layout = StageDisplayLayout {
+            code: "timer".to_string(),
+            name: "Timer".to_string(),
+            description: "Countdown".to_string(),
+        };
+        let snapshot = StageDisplaySnapshot::new(
+            layout.clone(),
+            now,
+            Some(presentation_id),
+            Some("001 Alpha Song".to_string()),
+            Some("Alpha Library".to_string()),
+            Some("Alpha Song".to_string()),
+            Some(slide_id),
+            Some(presenter_core::stage_display::StageDisplaySlide {
+                main: "Alpha".to_string(),
+                translation: "".to_string(),
+                stage: "".to_string(),
+                group: None,
+            }),
+            None,
+            None,
+            presenter_core::timer::TimersOverview::demo(now),
+            None,
+            Some(1),
+            Some(3),
+        );
+
+        assert!(state.apply_stage_snapshot(snapshot));
+        let map: HashMap<_, _> = state
+            .to_variables()
+            .into_iter()
+            .map(|var| (var.name, var.value))
+            .collect();
+        assert_eq!(map.get("song_name"), Some(&"Alpha Song".to_string()));
+        assert_eq!(map.get("band_name"), Some(&"Alpha Library".to_string()));
+
+        let next_snapshot = StageDisplaySnapshot::new(
+            layout,
+            now + chrono::Duration::seconds(1),
+            Some(presenter_core::PresentationId::new()),
+            Some("002 Beta Hymn".to_string()),
+            Some("Beta Library".to_string()),
+            Some("Beta Hymn".to_string()),
+            Some(presenter_core::SlideId::new()),
+            Some(presenter_core::stage_display::StageDisplaySlide {
+                main: "Beta".to_string(),
+                translation: "".to_string(),
+                stage: "".to_string(),
+                group: None,
+            }),
+            None,
+            None,
+            presenter_core::timer::TimersOverview::demo(now),
+            None,
+            Some(1),
+            Some(2),
+        );
+
+        assert!(state.apply_stage_snapshot(next_snapshot));
+        let updated: HashMap<_, _> = state
+            .to_variables()
+            .into_iter()
+            .map(|var| (var.name, var.value))
+            .collect();
+        assert_eq!(updated.get("song_name"), Some(&"Beta Hymn".to_string()));
+        assert_eq!(updated.get("band_name"), Some(&"Beta Library".to_string()));
     }
 
     #[tokio::test]

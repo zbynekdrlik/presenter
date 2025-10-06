@@ -27,6 +27,17 @@ These assets ship a ready-to-import Companion workspace profile, connection note
 4. Navigate to *Surfaces* → map the supplied button pages (Page 1: Timers, Page 2: Stage/Bible) to your stream deck or emulator.
 5. Press the **Connect** button; Companion should report “connected” and the Timer button will light green when `timer_countdown_state === running`.
 
+6. New live variables `song_name` and `band_name` mirror the active song title (prefix trimmed) and its library. Bind them to buttons or feedback for quick context.
+
+### Module distribution (container builds)
+
+- Package the module tarball before promoting to infrastructure:
+  ```bash
+  scripts/companion/package-module.sh
+  ```
+  This produces `ops/companion/releases/presenter-companion-ws-0.5.0.tgz` and an accompanying `latest.json` manifest (version + SHA-256). Automations in `nl-infrastructure` can curl those files directly from the repo to seed Companion images.
+- Regenerate the tarball after any module change so Docker rebuilds always use the matching version. The packaging script rewrites files deterministically to keep diffs reviewable.
+
 ## Button Layout Overview
 
 A detailed reference lives in `button-reference.md`; highlights:
@@ -34,8 +45,9 @@ A detailed reference lives in `button-reference.md`; highlights:
 - **Countdown Control (Page 1, buttons 1–6)**
   - Start / Pause / Reset, ±5 minutes, and a direct HH:MM setter using dynamic text fields.
   - Feedback based on `timer_countdown_state` (green = running, amber = paused, red = idle), a `timer_countdown_remaining_hhmm` text tile, and a progress bar bound to `timer_countdown_remaining_seconds`.
+  - Enter times like `18:30` to jump to the next occurrence of that time-of-day or use plain minutes (e.g. `15`) for relative durations.
 - **Stage Output (Page 2, buttons 1–4)**
-  - Quick layout presets (SNV lyrics, PP overview, Timer, Preach) wired to dedicated `stage.layout.*` actions, plus a panic-button macro.
+  - Quick layout presets (SNV lyrics, PP overview, Timer, Preach) using the shared `stage.layout` action with a per-button code payload, plus a panic-button macro.
   - Each button reflects `stage_layout_name` alongside lyric snippets (`stage_current_main`, `stage_next_main`).
 - **Bible (Page 2, buttons 5–6)**
   - Quick trigger for configurable passages plus a clear button.

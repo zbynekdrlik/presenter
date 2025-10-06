@@ -177,7 +177,10 @@
       "bank": 1,
       "label": "Lyrics\nSNV",
       "command": {
-        "name": "stage.layout.worship-snv"
+        "name": "stage.layout",
+        "payload": {
+          "code": "worship-snv"
+        }
       },
       "feedbacks": [
         {
@@ -193,7 +196,10 @@
       "bank": 2,
       "label": "Lyrics\nPP",
       "command": {
-        "name": "stage.layout.worship-pp"
+        "name": "stage.layout",
+        "payload": {
+          "code": "worship-pp"
+        }
       },
       "feedbacks": [
         {
@@ -209,7 +215,10 @@
       "bank": 3,
       "label": "Timer",
       "command": {
-        "name": "stage.layout.timer"
+        "name": "stage.layout",
+        "payload": {
+          "code": "timer"
+        }
       },
       "feedbacks": [
         {
@@ -225,7 +234,10 @@
       "bank": 4,
       "label": "Preach",
       "command": {
-        "name": "stage.layout.preach"
+        "name": "stage.layout",
+        "payload": {
+          "code": "preach"
+        }
       },
       "feedbacks": [
         {

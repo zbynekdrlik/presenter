@@ -803,8 +803,9 @@ struct FeatureSettingsResponse {
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
 struct FeatureSettingsRequest {
+    #[serde(alias = "enabled", alias = "companion_enabled")]
     companion_enabled: bool,
-    #[serde(default)]
+    #[serde(default, alias = "companion_port", alias = "port")]
     companion_port: Option<u16>,
 }
 

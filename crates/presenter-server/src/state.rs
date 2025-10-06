@@ -1714,6 +1714,12 @@ fn build_stage_snapshot(
         context.generated_at,
         context.resolution.presentation_id,
         context.resolution.presentation_name.clone(),
+        context.resolution.library_name.clone(),
+        context
+            .resolution
+            .presentation_name
+            .clone()
+            .map(|name| sanitize_song_title(&name)),
         context.resolution.current_slide_id,
         context.resolution.current.clone(),
         context.resolution.next_slide_id,
