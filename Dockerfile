@@ -23,12 +23,13 @@ RUN cargo fetch
 RUN cargo build --release --bin presenter-server --bin import_propresenter --bin ingest_bibles
 
 # --- Runtime image ---------------------------------------------------------
-FROM debian:bookworm-slim AS runtime
+FROM debian:unstable-slim AS runtime
 
 RUN apt-get update && apt-get install -y --no-install-recommends \
     ca-certificates \
     openssl \
     curl \
+    android-tools-adb \
     && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /presenter

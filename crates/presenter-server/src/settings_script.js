@@ -5,7 +5,9 @@
     document.body.dataset.embedded = 'true';
   }
   const API_ROOT = '/integrations/resolume/hosts';
+  const ANDROID_API_ROOT = '/integrations/android-stage/displays';
   const initialHosts = __RESOLUME_HOSTS__;
+  const initialAndroidDisplays = __ANDROID_STAGE_DISPLAYS__;
   const initialOscConfig = __OSC_CONFIG__ || null;
   const initialOscStatus = __OSC_STATUS__ || null;
   const initialAbleSetConfig = __ABLESET_CONFIG__ || null;
@@ -13,6 +15,13 @@
   const initialFeatures = __FEATURE_FLAGS__ || null;
   const state = {
     hosts: Array.isArray(initialHosts) ? initialHosts : [],
+    android: {
+      displays: Array.isArray(initialAndroidDisplays)
+        ? initialAndroidDisplays.map(normalizeAndroidDisplay)
+        : [],
+      editingId: null,
+      submitting: false,
+    },
     editingId: null,
     toastTimer: null,
     osc: {
@@ -48,6 +57,21 @@
     toast: document.querySelector('[data-role="toast"]'),
     hostCount: document.querySelector('[data-role="host-count"]'),
     emptyState: document.querySelector('[data-role="host-empty"]'),
+    androidForm: document.querySelector('[data-role="android-form"]'),
+    androidId: document.querySelector('[data-role="android-id"]'),
+    androidLabel: document.querySelector('[data-role="android-label"]'),
+    androidHost: document.querySelector('[data-role="android-host"]'),
+    androidPort: document.querySelector('[data-role="android-port"]'),
+    androidComponent: document.querySelector('[data-role="android-component"]'),
+    androidEnabled: document.querySelector('[data-role="android-enabled"]'),
+    androidSubmit: document.querySelector('[data-role="android-submit"]'),
+    androidReset: document.querySelector('[data-role="android-reset"]'),
+    androidFormTitle: document.querySelector('[data-role="android-form-title"]'),
+    androidFormSubtitle: document.querySelector('[data-role="android-form-subtitle"]'),
+    androidFormStatus: document.querySelector('[data-role="android-form-status"]'),
+    androidList: document.querySelector('[data-role="android-display-list"]'),
+    androidCount: document.querySelector('[data-role="android-count"]'),
+    androidEmpty: document.querySelector('[data-role="android-empty"]'),
     oscForm: document.querySelector('[data-role="osc-form"]'),
     oscEnabled: document.querySelector('[data-role="osc-enabled"]'),
     oscPort: document.querySelector('[data-role="osc-port"]'),
@@ -187,6 +211,62 @@
     };
   }
 
+  function normalizeAndroidDisplay(input) {
+    const fallback = {
+      id: '',
+      label: '',
+      host: '',
+      port: 5555,
+      launchComponent: 'com.fullykiosk.videokiosk/de.ozerov.fully.MainActivity',
+      isEnabled: true,
+      createdAt: new Date().toISOString(),
+      createdAtDisplay: '',
+      updatedAt: new Date().toISOString(),
+      updatedAtDisplay: '',
+      statusState: 'Disabled',
+      lastAttemptDisplay: '—',
+      lastSuccessDisplay: '—',
+      statusMessage: null,
+      status: null,
+    };
+    if (!input || typeof input !== 'object') {
+      return { ...fallback };
+    }
+    const status = input.status || null;
+    const statusStateRaw = input.statusState || input.status_state || (status && status.state) || fallback.statusState;
+    const deriveTimestamp = (displayValue, statusValue) => {
+      const displayString = typeof displayValue === 'string' ? displayValue.trim() : displayValue;
+      const candidate = (displayString && displayString !== '—') ? displayString : statusValue;
+      if (!candidate) return '—';
+      try {
+        return formatDate(candidate);
+      } catch (_err) {
+        return candidate.toString();
+      }
+    };
+    return {
+      id: (input.id || '').toString(),
+      label: (input.label || '').toString(),
+      host: (input.host || '').toString(),
+      port: Number.isFinite(Number(input.port)) ? Number(input.port) : fallback.port,
+      launchComponent: (input.launchComponent || input.launch_component || fallback.launchComponent).toString(),
+      isEnabled: input.isEnabled !== undefined
+        ? Boolean(input.isEnabled)
+        : input.is_enabled !== undefined
+          ? Boolean(input.is_enabled)
+          : fallback.isEnabled,
+      createdAt: (input.createdAt || input.created_at || fallback.createdAt).toString(),
+      createdAtDisplay: (input.createdAtDisplay || input.created_at_display || '').toString(),
+      updatedAt: (input.updatedAt || input.updated_at || fallback.updatedAt).toString(),
+      updatedAtDisplay: (input.updatedAtDisplay || input.updated_at_display || '').toString(),
+      statusState: statusStateRaw.toString(),
+      lastAttemptDisplay: deriveTimestamp(input.lastAttemptDisplay || input.last_attempt_display, status && (status.lastAttempt || status.last_attempt)),
+      lastSuccessDisplay: deriveTimestamp(input.lastSuccessDisplay || input.last_success_display, status && (status.lastSuccess || status.last_success)),
+      statusMessage: input.statusMessage || input.status_message || (status && status.lastError) || null,
+      status,
+    };
+  }
+
   function normalizeFeatureFlags(input) {
     const fallback = {
       companionEnabled: false,
@@ -222,6 +302,18 @@
       return value;
     }
     return dateFormatter.format(date);
+  }
+
+  function escapeHtml(value) {
+    if (value === null || value === undefined) {
+      return '';
+    }
+    return String(value)
+      .replace(/&/g, '&amp;')
+      .replace(/</g, '&lt;')
+      .replace(/>/g, '&gt;')
+      .replace(/"/g, '&quot;')
+      .replace(/'/g, '&#39;');
   }
 
   function setFormStatus(message, status) {
@@ -350,6 +442,61 @@
     if (!els.submit) return;
     els.submit.disabled = isBusy;
     els.submit.dataset.loading = isBusy ? 'true' : 'false';
+  }
+
+  function setAndroidFormMode(mode) {
+    if (!els.androidForm) return;
+    els.androidForm.dataset.mode = mode;
+    if (els.androidSubmit) {
+      els.androidSubmit.disabled = state.android.submitting;
+      els.androidSubmit.dataset.loading = state.android.submitting ? 'true' : 'false';
+      els.androidSubmit.textContent = mode === 'edit' ? 'Save Changes' : 'Add Android Display';
+    }
+    if (els.androidFormTitle) {
+      els.androidFormTitle.textContent = mode === 'edit'
+        ? 'Edit Android Stage Display'
+        : 'Add Android Stage Display';
+    }
+    if (els.androidFormSubtitle) {
+      els.androidFormSubtitle.textContent = mode === 'edit'
+        ? 'Update connection details or disable auto-launch.'
+        : 'Presenter relaunches Fully Kiosk whenever this device wakes up.';
+    }
+  }
+
+  function setAndroidFormStatus(message, stateName) {
+    if (!els.androidFormStatus) return;
+    els.androidFormStatus.textContent = message || '';
+    els.androidFormStatus.dataset.state = stateName || 'idle';
+  }
+
+  function setAndroidBusy(isBusy) {
+    state.android.submitting = Boolean(isBusy);
+    if (els.androidSubmit) {
+      els.androidSubmit.disabled = isBusy;
+      els.androidSubmit.dataset.loading = isBusy ? 'true' : 'false';
+    }
+  }
+
+  function resetAndroidForm() {
+    state.android.editingId = null;
+    if (els.androidForm) {
+      els.androidForm.reset();
+    }
+    if (els.androidPort) {
+      els.androidPort.value = '5555';
+    }
+    if (els.androidComponent) {
+      els.androidComponent.value = 'com.fullykiosk.videokiosk/de.ozerov.fully.MainActivity';
+    }
+    if (els.androidEnabled) {
+      els.androidEnabled.checked = true;
+    }
+    if (els.androidId) {
+      els.androidId.value = '';
+    }
+    setAndroidFormStatus('', 'idle');
+    setAndroidFormMode('create');
   }
 
   function setOscBusy(isBusy) {
@@ -556,6 +703,59 @@
     }
   }
 
+  function renderAndroidDisplays() {
+    if (!els.androidList) return;
+    if (!Array.isArray(state.android.displays)) {
+      state.android.displays = [];
+    }
+    if (state.android.displays.length === 0) {
+      els.androidList.innerHTML = '<li class="settings__list-empty" data-role="android-empty">No Android stage displays configured yet.</li>';
+    } else {
+      const items = state.android.displays
+        .map((display) => {
+          const normalized = normalizeAndroidDisplay(display);
+          const statusObj = normalized.status || {};
+          const stateLabelRaw = (statusObj.state || normalized.statusState || (normalized.isEnabled ? 'connecting' : 'disabled')).toString();
+          const normalizedState = stateLabelRaw.toLowerCase().replace(/\s+/g, '-');
+          const statusClass = `settings__status settings__status--${normalizedState}`;
+          const statusLabel = stateLabelRaw.charAt(0).toUpperCase() + stateLabelRaw.slice(1);
+          const updated = formatDate(normalized.updatedAtDisplay || normalized.updatedAt);
+          const created = formatDate(normalized.createdAtDisplay || normalized.createdAt);
+          const lastAttempt = normalized.lastAttemptDisplay || '—';
+          const lastSuccess = normalized.lastSuccessDisplay || '—';
+          const errorMessage = normalized.statusMessage || statusObj.lastError || '';
+          const warningDetail = errorMessage
+            ? `<p class="settings__list-meta settings__list-meta--warning">⚠ ${escapeHtml(errorMessage)}</p>`
+            : '';
+          return `
+<li class="settings__list-item" data-id="${normalized.id}" data-enabled="${normalized.isEnabled}">
+  <div class="settings__list-primary">
+    <div class="settings__list-title">
+      <span class="settings__host-label">${escapeHtml(normalized.label)}</span>
+      <span class="${statusClass}">${escapeHtml(statusLabel)}</span>
+    </div>
+    <p class="settings__list-line"><code>${escapeHtml(normalized.host)}</code><span class="settings__host-port">:${normalized.port}</span></p>
+    <p class="settings__list-meta">Component ${escapeHtml(normalized.launchComponent)}</p>
+    <p class="settings__list-meta">Last attempt ${escapeHtml(lastAttempt)}</p>
+    <p class="settings__list-meta">Last success ${escapeHtml(lastSuccess)}</p>
+    <p class="settings__list-meta">Updated ${escapeHtml(updated)}</p>
+    <p class="settings__list-meta">Created ${escapeHtml(created)}</p>
+    ${warningDetail}
+  </div>
+  <div class="settings__list-actions">
+    <button type="button" class="settings__button settings__button--ghost" data-role="android-edit" data-id="${normalized.id}">Edit</button>
+    <button type="button" class="settings__button settings__button--danger" data-role="android-delete" data-id="${normalized.id}">Delete</button>
+  </div>
+</li>`;
+        })
+        .join('');
+      els.androidList.innerHTML = items;
+    }
+    if (els.androidCount) {
+      els.androidCount.textContent = String(state.android.displays.length);
+    }
+  }
+
   async function refreshHosts(showError) {
     try {
       const response = await fetch(API_ROOT, { headers: { Accept: 'application/json' } });
@@ -571,6 +771,156 @@
       if (showError) {
         showToast(error.message || 'Unable to refresh hosts', 'error');
       }
+    }
+  }
+
+  async function refreshAndroidDisplays(showError) {
+    try {
+      const response = await fetch(ANDROID_API_ROOT, { headers: { Accept: 'application/json' } });
+      if (!response.ok) {
+        throw new Error(`Failed to load Android displays (${response.status})`);
+      }
+      const data = await response.json();
+      if (Array.isArray(data)) {
+        state.android.displays = data.map(normalizeAndroidDisplay);
+      }
+      renderAndroidDisplays();
+    } catch (error) {
+      if (showError) {
+        showToast(error.message || 'Unable to refresh Android displays', 'error');
+      }
+    }
+  }
+
+  function startAndroidEdit(id) {
+    if (!els.androidForm) return;
+    const display = state.android.displays.find((item) => item.id === id);
+    if (!display) return;
+    const normalised = normalizeAndroidDisplay(display);
+    state.android.editingId = normalised.id;
+    if (els.androidId) {
+      els.androidId.value = normalised.id;
+    }
+    if (els.androidLabel) {
+      els.androidLabel.value = normalised.label;
+    }
+    if (els.androidHost) {
+      els.androidHost.value = normalised.host;
+    }
+    if (els.androidPort) {
+      els.androidPort.value = String(normalised.port || 5555);
+    }
+    if (els.androidComponent) {
+      els.androidComponent.value = normalised.launchComponent;
+    }
+    if (els.androidEnabled) {
+      els.androidEnabled.checked = Boolean(normalised.isEnabled);
+    }
+    setAndroidFormStatus('', 'idle');
+    setAndroidFormMode('edit');
+    window.scrollTo({ top: 0, behavior: 'smooth' });
+    if (els.androidLabel) {
+      els.androidLabel.focus();
+    }
+  }
+
+  function validateAndroidPayload(payload) {
+    if (!payload.label || !payload.label.trim()) {
+      throw new Error('Label cannot be empty.');
+    }
+    if (!payload.host || !payload.host.trim()) {
+      throw new Error('Host cannot be empty.');
+    }
+    if (payload.port < 1 || payload.port > 65535) {
+      throw new Error('Port must be between 1 and 65535.');
+    }
+    if (!payload.launchComponent || !payload.launchComponent.trim()) {
+      throw new Error('Launch component cannot be empty.');
+    }
+  }
+
+  async function saveAndroidDisplay(event) {
+    event.preventDefault();
+    if (!els.androidForm) return;
+    const payload = {
+      label: els.androidLabel ? els.androidLabel.value.trim() : '',
+      host: els.androidHost ? els.androidHost.value.trim() : '',
+      port: toNumber(els.androidPort && els.androidPort.value, 5555),
+      launchComponent: els.androidComponent ? els.androidComponent.value.trim() : '',
+      isEnabled: Boolean(els.androidEnabled && els.androidEnabled.checked),
+    };
+    try {
+      validateAndroidPayload(payload);
+    } catch (error) {
+      setAndroidFormStatus(error.message, 'error');
+      return;
+    }
+    const isEdit = Boolean(state.android.editingId);
+    const method = isEdit ? 'PUT' : 'POST';
+    const targetId = isEdit ? state.android.editingId : undefined;
+    const endpoint = isEdit ? `${ANDROID_API_ROOT}/${targetId}` : ANDROID_API_ROOT;
+    setAndroidBusy(true);
+    setAndroidFormStatus(isEdit ? 'Updating display…' : 'Creating display…', 'loading');
+    try {
+      const response = await fetch(endpoint, {
+        method,
+        headers: {
+          'Content-Type': 'application/json',
+          Accept: 'application/json',
+        },
+        body: JSON.stringify(payload),
+      });
+      if (!response.ok) {
+        throw new Error(await extractError(response));
+      }
+      await refreshAndroidDisplays(false);
+      resetAndroidForm();
+      showToast(isEdit ? 'Saved Android stage display.' : 'Added Android stage display.', 'success');
+    } catch (error) {
+      console.error('Failed to save Android display', error);
+      setAndroidFormStatus(error.message || 'Unable to save display.', 'error');
+      showToast(error.message || 'Unable to save display.', 'error');
+    } finally {
+      setAndroidBusy(false);
+    }
+  }
+
+  async function deleteAndroidDisplay(id) {
+    if (!id) return;
+    const display = state.android.displays.find((item) => item.id === id);
+    const label = display ? display.label : 'this display';
+    if (!window.confirm(`Remove ${label}? Presenter will stop reconnecting.`)) {
+      return;
+    }
+    try {
+      const response = await fetch(`${ANDROID_API_ROOT}/${id}`, {
+        method: 'DELETE',
+      });
+      if (!response.ok) {
+        throw new Error(await extractError(response));
+      }
+      await refreshAndroidDisplays(false);
+      if (state.android.editingId === id) {
+        resetAndroidForm();
+      }
+      showToast('Deleted Android stage display.', 'success');
+    } catch (error) {
+      console.error('Failed to delete Android display', error);
+      showToast(error.message || 'Unable to delete display.', 'error');
+    }
+  }
+
+  async function handleAndroidListClick(event) {
+    const target = event.target;
+    if (!(target instanceof HTMLElement)) {
+      return;
+    }
+    const id = target.dataset.id;
+    if (!id) return;
+    if (target.dataset.role === 'android-edit') {
+      startAndroidEdit(id);
+    } else if (target.dataset.role === 'android-delete') {
+      await deleteAndroidDisplay(id);
     }
   }
 
@@ -835,6 +1185,17 @@
       refreshAbleSetStatus(true);
     });
   }
+  if (els.androidForm) {
+    els.androidForm.addEventListener('submit', saveAndroidDisplay);
+  }
+  if (els.androidReset) {
+    els.androidReset.addEventListener('click', resetAndroidForm);
+  }
+  if (els.androidList) {
+    els.androidList.addEventListener('click', (event) => {
+      handleAndroidListClick(event);
+    });
+  }
   if (els.form) {
     els.form.addEventListener('submit', saveHost);
   }
@@ -850,23 +1211,35 @@
     });
   }
   window.addEventListener('keydown', (event) => {
-    if (event.key === 'Escape' && state.editingId) {
-      resetForm();
+    if (event.key === 'Escape') {
+      if (state.editingId) {
+        resetForm();
+      }
+      if (state.android.editingId) {
+        resetAndroidForm();
+      }
     }
   });
 
   renderHosts();
+  renderAndroidDisplays();
   setOscFormValues();
   renderOscStatus();
   setAbleSetFormValues();
   renderAbleSetStatus();
   refreshHosts(false);
+  refreshAndroidDisplays(false);
   refreshOscStatus(false);
   refreshAbleSetStatus(false);
+
+  resetAndroidForm();
 
   window.setInterval(() => {
     refreshHosts(false).catch((error) => {
       console.warn('failed to refresh Resolume host statuses', error);
+    });
+    refreshAndroidDisplays(false).catch((error) => {
+      console.warn('failed to refresh Android stage display statuses', error);
     });
     refreshOscStatus(false).catch((error) => {
       console.warn('failed to refresh OSC status', error);

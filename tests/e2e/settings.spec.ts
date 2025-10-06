@@ -27,6 +27,15 @@ const selectors = {
   companionStatus: '[data-role="feature-status"]',
   companionPort: '[data-role="feature-companion-port"]',
   companionSubmit: '[data-role="feature-submit"]',
+  androidForm: '[data-role="android-form"]',
+  androidLabel: '[data-role="android-label"]',
+  androidHost: '[data-role="android-host"]',
+  androidPort: '[data-role="android-port"]',
+  androidComponent: '[data-role="android-component"]',
+  androidEnabled: '[data-role="android-enabled"]',
+  androidSubmit: '[data-role="android-submit"]',
+  androidReset: '[data-role="android-reset"]',
+  androidList: '[data-role="android-display-list"]',
 };
 
 test.describe.configure({ timeout: 600_000 });
@@ -65,6 +74,24 @@ async function getHostsViaApi(page) {
     label: string;
     host: string;
     status: { state: string };
+  }>;
+}
+
+async function getAndroidDisplaysViaApi(page) {
+  const response = await page.request.get(
+    new URL('/integrations/android-stage/displays', baseURL).toString(),
+    { timeout: 60_000 }
+  );
+  expect(response.ok()).toBeTruthy();
+  return (await response.json()) as Array<{
+    id: string;
+    label: string;
+    host: string;
+    port: number;
+    launchComponent: string;
+    launch_component?: string;
+    isEnabled?: boolean;
+    is_enabled?: boolean;
   }>;
 }
 
@@ -154,6 +181,71 @@ test('resolume settings CRUD with status feedback', async ({ page }) => {
 
   const hostsAfterDelete = await getHostsViaApi(page);
   expect(hostsAfterDelete).toHaveLength(0);
+});
+
+test('android stage launchers CRUD', async ({ page }) => {
+  await page.goto(new URL('/ui/settings', baseURL).toString());
+  await page.waitForLoadState('networkidle');
+
+  await expect(page.locator('[data-role="android-empty"]')).toHaveText(
+    'No Android stage displays configured yet.'
+  );
+
+  const label = `Stage Display ${Date.now()}`;
+  await page.fill(selectors.androidLabel, label);
+  await page.fill(selectors.androidHost, 'sd1l.lan');
+  await page.fill(selectors.androidPort, '5555');
+  await page.fill(
+    selectors.androidComponent,
+    'com.fullykiosk.videokiosk/de.ozerov.fully.MainActivity'
+  );
+  await page.check(selectors.androidEnabled);
+  await page.click(selectors.androidSubmit);
+  await waitForToast(page, 'Added Android stage display.');
+
+  const displaysAfterCreate = await getAndroidDisplaysViaApi(page);
+  expect(displaysAfterCreate).toHaveLength(1);
+  const created = displaysAfterCreate[0];
+  expect(created.label).toBe(label);
+  expect(created.host).toBe('sd1l.lan');
+  const androidListItem = page.locator(
+    `${selectors.androidList} li[data-id="${created.id}"]`
+  );
+  await expect(androidListItem).toContainText(label);
+
+  // Edit display details.
+  await page.locator(`[data-role="android-edit"][data-id="${created.id}"]`).click();
+  const updatedLabel = `${label} Updated`;
+  await page.fill(selectors.androidLabel, updatedLabel);
+  await page.fill(selectors.androidHost, 'sd2l.lan');
+  await page.fill(selectors.androidPort, '5566');
+  await page.fill(selectors.androidComponent, 'com.example/.Main');
+  await page.uncheck(selectors.androidEnabled);
+  await page.click(selectors.androidSubmit);
+  await waitForToast(page, 'Saved Android stage display.');
+  await expect(androidListItem).toContainText(updatedLabel);
+  await expect(androidListItem).toContainText('sd2l.lan');
+
+  const displaysAfterUpdate = await getAndroidDisplaysViaApi(page);
+  expect(displaysAfterUpdate[0].label).toBe(updatedLabel);
+  expect(displaysAfterUpdate[0].host).toBe('sd2l.lan');
+  expect(displaysAfterUpdate[0].port).toBe(5566);
+  expect(
+    displaysAfterUpdate[0].launchComponent ?? displaysAfterUpdate[0].launch_component
+  ).toBe('com.example/.Main');
+
+  // Delete the display.
+  page.once('dialog', (dialog) => dialog.accept());
+  await page
+    .locator(`[data-role="android-delete"][data-id="${created.id}"]`)
+    .click();
+  await waitForToast(page, 'Deleted Android stage display.');
+
+  const displaysAfterDelete = await getAndroidDisplaysViaApi(page);
+  expect(displaysAfterDelete).toHaveLength(0);
+  await expect(page.locator('[data-role="android-empty"]')).toHaveText(
+    'No Android stage displays configured yet.'
+  );
 });
 
 test('companion settings reflect feature flags', async ({ page }) => {

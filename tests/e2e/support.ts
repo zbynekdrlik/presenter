@@ -106,6 +106,7 @@ export async function startTestServer(port: number, dbUrl: string, oscPort?: num
     PRESENTER_DB_URL: dbUrl,
     PRESENTER_PORT: String(port),
     ...(oscPort ? { PRESENTER_OSC_LISTEN_PORT: String(oscPort) } : {}),
+    PRESENTER_ANDROID_ADB_BIN: process.env.PRESENTER_ANDROID_ADB_BIN ?? 'true',
     RUST_LOG: process.env.RUST_LOG ?? 'presenter_server=info,tower_http=warn,sqlx=warn',
   };
 
