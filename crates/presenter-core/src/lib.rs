@@ -1,6 +1,7 @@
 //! Core domain models for the Presenter application.
 
 pub mod ableset;
+pub mod android_stage_display;
 pub mod bible;
 pub mod id;
 pub mod library;
@@ -17,8 +18,15 @@ pub use ableset::{
     extract_song_prefix, AbleSetSettings, AbleSetSettingsDraft, AbleSetSettingsValidationError,
     AbleSetSongSnapshot,
 };
+pub use android_stage_display::{
+    AndroidStageDisplay, AndroidStageDisplayDraft, AndroidStageDisplayValidationError,
+    DEFAULT_ADB_PORT, DEFAULT_LAUNCH_COMPONENT,
+};
 pub use bible::{BibleBroadcast, BiblePassage, BibleReference, BibleTranslation};
-pub use id::{LibraryId, PlaylistEntryId, PlaylistId, PresentationId, ResolumeHostId, SlideId};
+pub use id::{
+    AndroidStageDisplayId, LibraryId, PlaylistEntryId, PlaylistId, PresentationId, ResolumeHostId,
+    SlideId,
+};
 pub use library::{Library, LibrarySummary, PresentationSummary};
 pub use osc::{OscSettings, OscSettingsDraft, OscSettingsValidationError, VelocityMode};
 pub use playlist::{Playlist, PlaylistEntry};

@@ -21,10 +21,20 @@ ORIGINAL_USER="$SUDO_USER"
 ORIGINAL_HOME="$(getent passwd "$ORIGINAL_USER" | cut -d: -f6)"
 NVM_DIR_DEFAULT="${ORIGINAL_HOME}/.nvm"
 ORIGINAL_PATH="$(sudo -H -u "$ORIGINAL_USER" HOME="$ORIGINAL_HOME" NVM_DIR="$NVM_DIR_DEFAULT" bash -lc 'source ~/.profile >/dev/null 2>&1; source ~/.bashrc >/dev/null 2>&1; if [ -s "$NVM_DIR/nvm.sh" ]; then source "$NVM_DIR/nvm.sh"; fi; echo $PATH')"
+
+if [[ -z "${PRESENTER_ANDROID_ADB_BIN:-}" ]]; then
+  if command -v adb >/dev/null 2>&1; then
+    export PRESENTER_ANDROID_ADB_BIN="$(command -v adb)"
+  else
+    export PRESENTER_ANDROID_ADB_BIN="true"
+  fi
+fi
+
+export ADB_KEYS_DIR="${ADB_KEYS_DIR:-${ORIGINAL_HOME}/.config/presenter/adb}"
 RUN_AS_ORIGINAL() {
   local cmd=("$@")
   local quoted=$(printf '%q ' "${cmd[@]}")
-  sudo -H -u "$ORIGINAL_USER" HOME="$ORIGINAL_HOME" PATH="$ORIGINAL_PATH" NVM_DIR="$NVM_DIR_DEFAULT" bash -lc "source ~/.profile >/dev/null 2>&1; source ~/.bashrc >/dev/null 2>&1; if [ -s "$NVM_DIR/nvm.sh" ]; then source "$NVM_DIR/nvm.sh"; fi; ${quoted}"
+  sudo -H -u "$ORIGINAL_USER" HOME="$ORIGINAL_HOME" PATH="$ORIGINAL_PATH" NVM_DIR="$NVM_DIR_DEFAULT" PRESENTER_ANDROID_ADB_BIN="$PRESENTER_ANDROID_ADB_BIN" ADB_KEYS_DIR="$ADB_KEYS_DIR" bash -lc "source ~/.profile >/dev/null 2>&1; source ~/.bashrc >/dev/null 2>&1; if [ -s "$NVM_DIR/nvm.sh" ]; then source "$NVM_DIR/nvm.sh"; fi; ${quoted}"
 }
 
 if ! docker info >/dev/null 2>&1; then
@@ -82,19 +92,19 @@ RUN_AS_ORIGINAL npm run test:companion
 RUN_ARGS=("--force" "--name" "$REPO_SLUG" "--display-name" "$DISPLAY_NAME" "--port" "$DEMO_PORT" "--enable-companion")
 
 echo "[verify] Refreshing Docker demo for project '$REPO_SLUG' (pre-tests)"
-"$REPO_ROOT/scripts/docker/run-demo.sh" "${RUN_ARGS[@]}"
+PRESENTER_ANDROID_ADB_BIN="$PRESENTER_ANDROID_ADB_BIN" ADB_KEYS_DIR="$ADB_KEYS_DIR" "$REPO_ROOT/scripts/docker/run-demo.sh" "${RUN_ARGS[@]}"
 
 echo "[verify] Restarting gateway"
-"$REPO_ROOT/scripts/docker/run-gateway.sh" --force
+PRESENTER_ANDROID_ADB_BIN="$PRESENTER_ANDROID_ADB_BIN" ADB_KEYS_DIR="$ADB_KEYS_DIR" "$REPO_ROOT/scripts/docker/run-gateway.sh" --force
 
 echo "[verify] Running Playwright suite"
 RUN_AS_ORIGINAL npm run test:playwright
 
 echo "[verify] Refreshing Docker demo for project '$REPO_SLUG' (post-tests)"
-"$REPO_ROOT/scripts/docker/run-demo.sh" "--force" "--name" "$REPO_SLUG" "--display-name" "$DISPLAY_NAME" "--port" "$DEMO_PORT" "--enable-companion"
+PRESENTER_ANDROID_ADB_BIN="$PRESENTER_ANDROID_ADB_BIN" ADB_KEYS_DIR="$ADB_KEYS_DIR" "$REPO_ROOT/scripts/docker/run-demo.sh" "--force" "--name" "$REPO_SLUG" "--display-name" "$DISPLAY_NAME" "--port" "$DEMO_PORT" "--enable-companion"
 
 echo "[verify] Restarting gateway (post-tests)"
-"$REPO_ROOT/scripts/docker/run-gateway.sh" --force
+PRESENTER_ANDROID_ADB_BIN="$PRESENTER_ANDROID_ADB_BIN" ADB_KEYS_DIR="$ADB_KEYS_DIR" "$REPO_ROOT/scripts/docker/run-gateway.sh" --force
 
 echo "[verify] Checking demo operator UI at ${DEMO_ORIGIN}/ui/operator"
 curl --fail --silent --show-error "${DEMO_ORIGIN}/ui/operator" >/dev/null

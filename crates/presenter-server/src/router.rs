@@ -1,5 +1,6 @@
 use crate::{
-    ableset::AbleSetStatusSnapshot, osc::OscStatusSnapshot, resolume::ResolumeConnectionSnapshot,
+    ableset::AbleSetStatusSnapshot, android_stage::AndroidStageDisplayStatusSnapshot,
+    osc::OscStatusSnapshot, resolume::ResolumeConnectionSnapshot,
     stage_connections::StageClientSnapshot, stage_ui, state::AppState, ui,
 };
 use anyhow::Error as AnyhowError;
@@ -13,11 +14,12 @@ use axum::{
 use chrono::{DateTime, Utc};
 use presenter_core::{
     playlist::{MidiBinding, PlaylistEntryKind},
-    AbleSetSettings, AbleSetSettingsDraft, BiblePassage, BibleReference, BibleTranslation, Library,
-    LibraryId, LibrarySummary, OscSettings, OscSettingsDraft, Playlist, PlaylistEntry,
-    PlaylistEntryId, PlaylistId, Presentation, PresentationId, ResolumeHost, ResolumeHostDraft,
-    ResolumeHostId, SearchResult, Slide, SlideId, StageDisplayLayout, StageDisplaySnapshot,
-    TimersOverview, VelocityMode,
+    AbleSetSettings, AbleSetSettingsDraft, AndroidStageDisplay, AndroidStageDisplayDraft,
+    AndroidStageDisplayId, BiblePassage, BibleReference, BibleTranslation, Library, LibraryId,
+    LibrarySummary, OscSettings, OscSettingsDraft, Playlist, PlaylistEntry, PlaylistEntryId,
+    PlaylistId, Presentation, PresentationId, ResolumeHost, ResolumeHostDraft, ResolumeHostId,
+    SearchResult, Slide, SlideId, StageDisplayLayout, StageDisplaySnapshot, TimersOverview,
+    VelocityMode, DEFAULT_ADB_PORT, DEFAULT_LAUNCH_COMPONENT,
 };
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
@@ -78,6 +80,14 @@ pub fn build_router(state: AppState) -> Router {
         .route(
             "/integrations/resolume/hosts/{id}",
             put(update_resolume_host).delete(delete_resolume_host),
+        )
+        .route(
+            "/integrations/android-stage/displays",
+            get(list_android_stage_displays).post(create_android_stage_display),
+        )
+        .route(
+            "/integrations/android-stage/displays/{id}",
+            put(update_android_stage_display).delete(delete_android_stage_display),
         )
         .route(
             "/integrations/osc/settings",
@@ -653,6 +663,67 @@ async fn delete_resolume_host(
 }
 
 #[instrument(skip_all)]
+async fn list_android_stage_displays(
+    State(state): State<AppState>,
+) -> Result<Json<Vec<AndroidStageDisplayDto>>, AppError> {
+    let displays = state.list_android_stage_displays().await?;
+    let statuses = state.android_stage_status_snapshot().await;
+    let payload = displays
+        .into_iter()
+        .map(|display| {
+            let status = statuses
+                .get(&display.id)
+                .cloned()
+                .unwrap_or_else(AndroidStageDisplayStatusSnapshot::disabled);
+            AndroidStageDisplayDto::from_display(display, status)
+        })
+        .collect();
+    Ok(Json(payload))
+}
+
+#[instrument(skip_all)]
+async fn create_android_stage_display(
+    State(state): State<AppState>,
+    Json(payload): Json<AndroidStageDisplayRequest>,
+) -> Result<Json<AndroidStageDisplayDto>, AppError> {
+    let draft = AndroidStageDisplayDraft::new(payload.label, payload.host)
+        .with_port(payload.port)
+        .with_launch_component(normalize_launch_component(&payload.launch_component))
+        .with_enabled(payload.is_enabled);
+    let display = state.create_android_stage_display(draft).await?;
+    let status = state.android_stage_status_for(display.id).await;
+    Ok(Json(AndroidStageDisplayDto::from_display(display, status)))
+}
+
+#[instrument(skip_all)]
+async fn update_android_stage_display(
+    State(state): State<AppState>,
+    Path(id): Path<Uuid>,
+    Json(payload): Json<AndroidStageDisplayRequest>,
+) -> Result<Json<AndroidStageDisplayDto>, AppError> {
+    let draft = AndroidStageDisplayDraft::new(payload.label, payload.host)
+        .with_port(payload.port)
+        .with_launch_component(normalize_launch_component(&payload.launch_component))
+        .with_enabled(payload.is_enabled);
+    let display = state
+        .update_android_stage_display(AndroidStageDisplayId::from_uuid(id), draft)
+        .await?;
+    let status = state.android_stage_status_for(display.id).await;
+    Ok(Json(AndroidStageDisplayDto::from_display(display, status)))
+}
+
+#[instrument(skip_all)]
+async fn delete_android_stage_display(
+    State(state): State<AppState>,
+    Path(id): Path<Uuid>,
+) -> Result<StatusCode, AppError> {
+    state
+        .delete_android_stage_display(AndroidStageDisplayId::from_uuid(id))
+        .await?;
+    Ok(StatusCode::NO_CONTENT)
+}
+
+#[instrument(skip_all)]
 async fn get_osc_settings(
     State(state): State<AppState>,
 ) -> Result<Json<OscSettingsResponse>, AppError> {
@@ -1201,6 +1272,69 @@ const fn default_true() -> bool {
     true
 }
 
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct AndroidStageDisplayDto {
+    id: AndroidStageDisplayId,
+    label: String,
+    host: String,
+    port: u16,
+    launch_component: String,
+    is_enabled: bool,
+    created_at: String,
+    updated_at: String,
+    status: AndroidStageDisplayStatusSnapshot,
+}
+
+impl AndroidStageDisplayDto {
+    fn from_display(
+        display: AndroidStageDisplay,
+        status: AndroidStageDisplayStatusSnapshot,
+    ) -> Self {
+        Self {
+            id: display.id,
+            label: display.label,
+            host: display.host,
+            port: display.port,
+            launch_component: display.launch_component,
+            is_enabled: display.is_enabled,
+            created_at: display.created_at.to_rfc3339(),
+            updated_at: display.updated_at.to_rfc3339(),
+            status,
+        }
+    }
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct AndroidStageDisplayRequest {
+    label: String,
+    host: String,
+    #[serde(default = "default_android_stage_port")]
+    port: u16,
+    #[serde(default = "default_android_stage_launch_component")]
+    launch_component: String,
+    #[serde(default = "default_true")]
+    is_enabled: bool,
+}
+
+const fn default_android_stage_port() -> u16 {
+    DEFAULT_ADB_PORT
+}
+
+fn default_android_stage_launch_component() -> String {
+    DEFAULT_LAUNCH_COMPONENT.to_string()
+}
+
+fn normalize_launch_component(component: &str) -> String {
+    let trimmed = component.trim();
+    if trimmed.is_empty() {
+        DEFAULT_LAUNCH_COMPONENT.to_string()
+    } else {
+        trimmed.to_string()
+    }
+}
+
 #[derive(Debug)]
 struct AppError {
     status: StatusCode,
@@ -1279,6 +1413,17 @@ mod tests {
     #[serde(rename_all = "camelCase")]
     struct TestHostStatus {
         state: String,
+    }
+
+    #[derive(Debug, Deserialize)]
+    #[serde(rename_all = "camelCase")]
+    struct TestAndroidDisplayDto {
+        id: String,
+        label: String,
+        host: String,
+        port: u16,
+        launch_component: String,
+        is_enabled: bool,
     }
 
     #[tokio::test]
@@ -1441,6 +1586,146 @@ mod tests {
         let after_delete_hosts: Vec<TestResolumeHostDto> =
             serde_json::from_slice(&list_after_delete_bytes).unwrap();
         assert!(after_delete_hosts.is_empty());
+    }
+
+    #[tokio::test]
+    async fn android_stage_display_endpoints_crud() {
+        std::env::set_var("PRESENTER_ANDROID_ADB_BIN", "true");
+        let app = build_router(AppState::in_memory().await.unwrap());
+
+        let list_empty = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .uri("/integrations/android-stage/displays")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(list_empty.status(), StatusCode::OK);
+        let empty_bytes = axum::body::to_bytes(list_empty.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        let empty_displays: Vec<TestAndroidDisplayDto> =
+            serde_json::from_slice(&empty_bytes).unwrap();
+        assert!(empty_displays.is_empty());
+
+        let create_body = json!({
+            "label": "Stage Left",
+            "host": "sd1l.lan",
+            "port": 5555,
+            "launchComponent": "com.fullykiosk.videokiosk/de.ozerov.fully.MainActivity",
+            "isEnabled": true
+        })
+        .to_string();
+        let created_response = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method(axum::http::Method::POST)
+                    .uri("/integrations/android-stage/displays")
+                    .header(axum::http::header::CONTENT_TYPE, "application/json")
+                    .body(Body::from(create_body))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(created_response.status(), StatusCode::OK);
+        let created_bytes = axum::body::to_bytes(created_response.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        let created: TestAndroidDisplayDto = serde_json::from_slice(&created_bytes).unwrap();
+        assert_eq!(created.label, "Stage Left");
+        assert_eq!(created.host, "sd1l.lan");
+        assert_eq!(created.port, 5555);
+        assert_eq!(
+            created.launch_component,
+            "com.fullykiosk.videokiosk/de.ozerov.fully.MainActivity"
+        );
+
+        let list_after_create = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .uri("/integrations/android-stage/displays")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        let list_bytes = axum::body::to_bytes(list_after_create.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        let displays: Vec<TestAndroidDisplayDto> = serde_json::from_slice(&list_bytes).unwrap();
+        assert_eq!(displays.len(), 1);
+
+        let update_body = json!({
+            "label": "Stage Right",
+            "host": "sd2l.lan",
+            "port": 5566,
+            "launchComponent": "com.example/.Main",
+            "isEnabled": false
+        })
+        .to_string();
+        let update_response = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method(axum::http::Method::PUT)
+                    .uri(format!(
+                        "/integrations/android-stage/displays/{}",
+                        created.id
+                    ))
+                    .header(axum::http::header::CONTENT_TYPE, "application/json")
+                    .body(Body::from(update_body))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(update_response.status(), StatusCode::OK);
+        let updated_bytes = axum::body::to_bytes(update_response.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        let updated: TestAndroidDisplayDto = serde_json::from_slice(&updated_bytes).unwrap();
+        assert_eq!(updated.label, "Stage Right");
+        assert_eq!(updated.host, "sd2l.lan");
+        assert_eq!(updated.port, 5566);
+        assert_eq!(updated.launch_component, "com.example/.Main");
+        assert!(!updated.is_enabled);
+
+        let delete_response = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method(axum::http::Method::DELETE)
+                    .uri(format!(
+                        "/integrations/android-stage/displays/{}",
+                        updated.id
+                    ))
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(delete_response.status(), StatusCode::NO_CONTENT);
+
+        let list_after_delete = app
+            .oneshot(
+                Request::builder()
+                    .uri("/integrations/android-stage/displays")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        let list_after_delete_bytes =
+            axum::body::to_bytes(list_after_delete.into_body(), usize::MAX)
+                .await
+                .unwrap();
+        let after_delete_displays: Vec<TestAndroidDisplayDto> =
+            serde_json::from_slice(&list_after_delete_bytes).unwrap();
+        assert!(after_delete_displays.is_empty());
     }
 
     #[tokio::test]

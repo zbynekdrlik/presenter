@@ -375,6 +375,72 @@ impl MigrationTrait for Migration {
         manager
             .create_table(
                 Table::create()
+                    .table(AndroidStageDisplays::Table)
+                    .if_not_exists()
+                    .col(
+                        ColumnDef::new(AndroidStageDisplays::Id)
+                            .string_len(36)
+                            .not_null()
+                            .primary_key(),
+                    )
+                    .col(
+                        ColumnDef::new(AndroidStageDisplays::Label)
+                            .string()
+                            .not_null(),
+                    )
+                    .col(
+                        ColumnDef::new(AndroidStageDisplays::Host)
+                            .string()
+                            .not_null(),
+                    )
+                    .col(
+                        ColumnDef::new(AndroidStageDisplays::Port)
+                            .integer()
+                            .not_null()
+                            .default(5555),
+                    )
+                    .col(
+                        ColumnDef::new(AndroidStageDisplays::LaunchComponent)
+                            .string()
+                            .not_null()
+                            .default("com.fullykiosk.videokiosk/de.ozerov.fully.MainActivity"),
+                    )
+                    .col(
+                        ColumnDef::new(AndroidStageDisplays::IsEnabled)
+                            .boolean()
+                            .not_null()
+                            .default(true),
+                    )
+                    .col(
+                        ColumnDef::new(AndroidStageDisplays::CreatedAt)
+                            .timestamp_with_time_zone()
+                            .not_null()
+                            .extra("DEFAULT CURRENT_TIMESTAMP"),
+                    )
+                    .col(
+                        ColumnDef::new(AndroidStageDisplays::UpdatedAt)
+                            .timestamp_with_time_zone()
+                            .not_null()
+                            .extra("DEFAULT CURRENT_TIMESTAMP"),
+                    )
+                    .to_owned(),
+            )
+            .await?;
+
+        manager
+            .create_index(
+                Index::create()
+                    .name("idx_android_stage_displays_label_unique")
+                    .table(AndroidStageDisplays::Table)
+                    .col(AndroidStageDisplays::Label)
+                    .unique()
+                    .to_owned(),
+            )
+            .await?;
+
+        manager
+            .create_table(
+                Table::create()
                     .table(OscSettings::Table)
                     .if_not_exists()
                     .col(
@@ -729,6 +795,9 @@ impl MigrationTrait for Migration {
             .drop_table(Table::drop().table(Timers::Table).to_owned())
             .await?;
         manager
+            .drop_table(Table::drop().table(AndroidStageDisplays::Table).to_owned())
+            .await?;
+        manager
             .drop_table(Table::drop().table(ResolumeHosts::Table).to_owned())
             .await?;
         manager
@@ -835,6 +904,19 @@ enum ResolumeHosts {
     Label,
     Host,
     Port,
+    IsEnabled,
+    CreatedAt,
+    UpdatedAt,
+}
+
+#[derive(DeriveIden)]
+enum AndroidStageDisplays {
+    Table,
+    Id,
+    Label,
+    Host,
+    Port,
+    LaunchComponent,
     IsEnabled,
     CreatedAt,
     UpdatedAt,
