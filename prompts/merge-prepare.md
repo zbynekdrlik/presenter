@@ -8,8 +8,8 @@
 6. Update the pull request—create it if none exists, or edit the draft (`gh pr create ...` / `gh pr edit --title "..." --body-file ...`) with an accurate summary and the latest test evidence.
 7. Push the branch (`git push`).
 
-8. Tests must be comprehensive, with E2E as the priority:
+8. Tests must be comprehensive, with E2E as priority:
    - Run `cargo test` and `npm run test:playwright` (no flake retries).
-   - Fail the review if any `.only` or `.skip` is present: `rg -n "\.only\(|test\.only|describe\.only|it\.skip|test\.skip|describe\.skip" tests/e2e` must output nothing.
-   - For integration features, assert E2E covers UI + side effects: AbleSet status (mock `/api/setlist`), OSC `/note` reception, and stage snapshot updates.
-   - Re-run `sudo -E ./scripts/dev/verify-and-refresh.sh` and confirm the demo + gateway validations pass.
+   - Reject focused/skipped tests: `rg -n "\.only\(|describe\.only|it\.only|test\.only|\.skip\(" tests/e2e` must return nothing.
+   - Ensure E2E covers UI plus side effects for ALL workflows changed in this branch (use mocks where needed). Examples: Resolume, Ableton/AbleSet/OSC, Android Stage, Companion, gateway, stage layouts, Bible imports.
+   - Re-run `sudo -E ./scripts/dev/verify-and-refresh.sh` and confirm demo + gateway validations pass.
