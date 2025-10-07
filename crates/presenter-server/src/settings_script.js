@@ -72,14 +72,8 @@
     androidList: document.querySelector('[data-role="android-display-list"]'),
     androidCount: document.querySelector('[data-role="android-count"]'),
     androidEmpty: document.querySelector('[data-role="android-empty"]'),
-    oscForm: document.querySelector('[data-role="osc-form"]'),
-    oscEnabled: document.querySelector('[data-role="osc-enabled"]'),
     oscPort: document.querySelector('[data-role="osc-port"]'),
-    oscAddress: document.querySelector('[data-role="osc-address"]'),
-    oscMode: document.querySelector('[data-role="osc-mode"]'),
-    oscSubmit: document.querySelector('[data-role="osc-submit"]'),
     oscStatusIndicator: document.querySelector('[data-role="osc-status-indicator"]'),
-    oscStatusHostPort: document.querySelector('[data-role="osc-status-host-port"]'),
     oscStatusLastMessage: document.querySelector('[data-role="osc-status-last-message"]'),
     oscStatusLastNote: document.querySelector('[data-role="osc-status-last-note"]'),
     oscStatusError: document.querySelector('[data-role="osc-status-error"]'),
@@ -87,17 +81,13 @@
     ablesetEnabled: document.querySelector('[data-role="ableset-enabled"]'),
     ablesetHost: document.querySelector('[data-role="ableset-host"]'),
     ablesetHttpPort: document.querySelector('[data-role="ableset-http-port"]'),
-    ablesetOscPort: document.querySelector('[data-role="ableset-osc-port"]'),
     ablesetLibrary: document.querySelector('[data-role="ableset-library"]'),
-    ablesetPrefix: document.querySelector('[data-role="ableset-prefix"]'),
     ablesetSubmit: document.querySelector('[data-role="ableset-submit"]'),
     ablesetFormStatus: document.querySelector('[data-role="ableset-form-status"]'),
     ablesetStatusIndicator: document.querySelector('[data-role="ableset-status-indicator"]'),
     ablesetStatusSong: document.querySelector('[data-role="ableset-status-song"]'),
-    ablesetStatusPrefix: document.querySelector('[data-role="ableset-status-prefix"]'),
     ablesetStatusUpdated: document.querySelector('[data-role="ableset-status-updated"]'),
     ablesetStatusError: document.querySelector('[data-role="ableset-status-error"]'),
-    ablesetRefresh: document.querySelector('[data-role="ableset-refresh"]'),
     featureForm: document.querySelector('[data-role="feature-companion-form"]'),
     featureToggle: document.querySelector('[data-role="feature-companion-toggle"]'),
     featurePort: document.querySelector('[data-role="feature-companion-port"]'),
@@ -105,17 +95,22 @@
     featureStatus: document.querySelector('[data-role="feature-status"]'),
   };
 
-  const dateFormatter = new Intl.DateTimeFormat(undefined, {
-    dateStyle: 'medium',
-    timeStyle: 'short',
+  const dateFormatter = new Intl.DateTimeFormat('sk-SK', {
+    day: '2-digit',
+    month: '2-digit',
+    year: 'numeric',
+    hour: '2-digit',
+    minute: '2-digit',
+    second: '2-digit',
+    hour12: false,
   });
 
   function normalizeOscConfig(input) {
     const fallback = {
-      enabled: true,
-      listenPort: 9000,
+      enabled: false,
+      listenPort: 39051,
       addressPattern: '/note',
-      velocityMode: 'zero_based',
+      velocityMode: 'one_based',
     };
     if (!input || typeof input !== 'object') {
       return { ...fallback };
@@ -123,8 +118,8 @@
     return {
       enabled: Boolean(input.enabled),
       listenPort: Number.isFinite(Number(input.listenPort)) ? Number(input.listenPort) : fallback.listenPort,
-      addressPattern: (input.addressPattern || fallback.addressPattern).toString(),
-      velocityMode: (input.velocityMode || fallback.velocityMode).toString(),
+      addressPattern: '/note',
+      velocityMode: 'one_based',
     };
   }
 
@@ -133,9 +128,9 @@
       return {
         enabled: false,
         listening: false,
-        listenPort: 9000,
+        listenPort: 39051,
         addressPattern: '/note',
-        velocityMode: 'zero_based',
+        velocityMode: 'one_based',
         lastMessageAt: null,
         lastNote: null,
         lastVelocity: null,
@@ -145,7 +140,7 @@
     return {
       enabled: Boolean(input.enabled),
       listening: Boolean(input.listening),
-      listenPort: Number.isFinite(Number(input.listenPort)) ? Number(input.listenPort) : 9000,
+      listenPort: Number.isFinite(Number(input.listenPort)) ? Number(input.listenPort) : 39051,
       hostPort: Number.isFinite(Number(input.hostPort ?? input.host_port)) ? Number(input.hostPort ?? input.host_port) : null,
       addressPattern: (input.addressPattern || '/note').toString(),
       velocityMode: (input.velocityMode || 'zero_based').toString(),
@@ -157,7 +152,7 @@
   }
   function normalizeAbleSetConfig(input) {
     const fallback = {
-      enabled: true,
+      enabled: false,
       host: 'fohabl.lan',
       httpPort: 80,
       oscPort: 39051,
@@ -499,14 +494,6 @@
     setAndroidFormMode('create');
   }
 
-  function setOscBusy(isBusy) {
-    state.osc.submitting = Boolean(isBusy);
-    if (els.oscSubmit) {
-      els.oscSubmit.disabled = isBusy;
-      els.oscSubmit.dataset.loading = isBusy ? 'true' : 'false';
-    }
-  }
-
   function setAbleSetBusy(isBusy) {
     state.ableset.submitting = Boolean(isBusy);
     if (els.ablesetSubmit) {
@@ -528,34 +515,12 @@
       const value = Number.isFinite(Number(config.httpPort)) ? String(config.httpPort) : '80';
       els.ablesetHttpPort.value = value;
     }
-    if (els.ablesetOscPort) {
-      const value = Number.isFinite(Number(config.oscPort)) ? String(config.oscPort) : '39051';
-      els.ablesetOscPort.value = value;
-    }
     if (els.ablesetLibrary) {
       els.ablesetLibrary.value = (config.libraryName || '').toString();
     }
-    if (els.ablesetPrefix) {
-      const value = Number.isFinite(Number(config.songPrefixLength)) ? String(config.songPrefixLength) : '3';
-      els.ablesetPrefix.value = value;
-    }
-  }
-
-  function setOscFormValues() {
-    if (!els.oscForm) return;
-    const config = state.osc.config;
-    if (els.oscEnabled) {
-      els.oscEnabled.checked = Boolean(config.enabled);
-    }
     if (els.oscPort) {
-      const portValue = Number.isFinite(Number(config.listenPort)) ? String(config.listenPort) : '9000';
+      const portValue = Number.isFinite(Number(state.osc.config.listenPort)) ? String(state.osc.config.listenPort) : '39051';
       els.oscPort.value = portValue;
-    }
-    if (els.oscAddress) {
-      els.oscAddress.value = (config.addressPattern || '/note').toString();
-    }
-    if (els.oscMode) {
-      els.oscMode.value = (config.velocityMode || 'zero_based').toString();
     }
   }
 
@@ -567,12 +532,6 @@
     if (els.oscStatusIndicator) {
       els.oscStatusIndicator.textContent = stateLabel.charAt(0).toUpperCase() + stateLabel.slice(1);
       els.oscStatusIndicator.dataset.state = stateLabel;
-    }
-    if (els.oscStatusHostPort) {
-      const hostPort = status.hostPort != null ? status.hostPort : null;
-      const displayPort = hostPort != null ? hostPort : status.listenPort;
-      els.oscStatusHostPort.textContent = String(displayPort);
-      els.oscStatusHostPort.dataset.state = hostPort != null ? 'resolved' : 'container';
     }
     if (els.oscStatusLastMessage) {
       const value = status.lastMessageAt ? formatDate(status.lastMessageAt) : '—';
@@ -595,9 +554,6 @@
         els.oscStatusError.dataset.visible = 'false';
       }
     }
-    if (els.oscForm) {
-      els.oscForm.dataset.mode = status.enabled ? 'enabled' : 'disabled';
-    }
   }
   function renderAbleSetStatus() {
     const status = state.ableset.status;
@@ -611,10 +567,8 @@
     }
     const lastSong = status.lastSong || null;
     if (els.ablesetStatusSong) {
-      els.ablesetStatusSong.textContent = lastSong && lastSong.name ? lastSong.name : '—';
-    }
-    if (els.ablesetStatusPrefix) {
-      els.ablesetStatusPrefix.textContent = lastSong && lastSong.prefix ? lastSong.prefix : '—';
+      const value = lastSong && lastSong.name ? lastSong.name : '—';
+      els.ablesetStatusSong.textContent = value;
     }
     if (els.ablesetStatusUpdated) {
       const value = lastSong && lastSong.lastSeenAt ? formatDate(lastSong.lastSeenAt) : '—';
@@ -963,47 +917,6 @@
     }
   }
 
-  async function submitOscForm(event) {
-    event.preventDefault();
-    if (!els.oscForm) return;
-    setOscBusy(true);
-    setFormStatus('', 'idle');
-    const payload = {
-      enabled: els.oscEnabled ? Boolean(els.oscEnabled.checked) : false,
-      listenPort: els.oscPort ? Number.parseInt(els.oscPort.value, 10) || 9000 : 9000,
-      addressPattern: els.oscAddress ? els.oscAddress.value.trim() || '/note' : '/note',
-      velocityMode: els.oscMode ? els.oscMode.value : 'zero_based',
-    };
-
-    // optimistic update
-    state.osc.config = normalizeOscConfig(payload);
-
-    try {
-      const response = await fetch('/integrations/osc/settings', {
-        method: 'PUT',
-        headers: {
-          'Content-Type': 'application/json',
-          Accept: 'application/json',
-        },
-        body: JSON.stringify(payload),
-      });
-      if (!response.ok) {
-        const message = await extractError(response);
-        throw new Error(message);
-      }
-      const data = await response.json();
-      state.osc.config = normalizeOscConfig(data);
-      showToast('OSC settings saved', 'success');
-      await refreshOscStatus(false);
-    } catch (error) {
-      console.error('Failed to save OSC settings', error);
-      showToast(error.message || 'Failed to save OSC settings', 'error');
-    } finally {
-      setOscBusy(false);
-      setOscFormValues();
-    }
-  }
-
   async function saveHost(event) {
     event.preventDefault();
     if (!els.form || !els.submit) {
@@ -1110,35 +1023,61 @@
   async function submitAbleSetForm(event) {
     event.preventDefault();
     if (!els.ablesetForm) return;
-    const payload = {
-      enabled: Boolean(els.ablesetEnabled && els.ablesetEnabled.checked),
-      host: (els.ablesetHost && els.ablesetHost.value ? els.ablesetHost.value : '').trim(),
-      httpPort: toNumber(els.ablesetHttpPort && els.ablesetHttpPort.value, state.ableset.config.httpPort),
-      oscPort: toNumber(els.ablesetOscPort && els.ablesetOscPort.value, state.ableset.config.oscPort),
-      libraryName: (els.ablesetLibrary && els.ablesetLibrary.value ? els.ablesetLibrary.value : '').trim(),
-      songPrefixLength: toNumber(els.ablesetPrefix && els.ablesetPrefix.value, state.ableset.config.songPrefixLength),
+    const enabled = Boolean(els.ablesetEnabled && els.ablesetEnabled.checked);
+    const host = (els.ablesetHost && els.ablesetHost.value ? els.ablesetHost.value : '').trim();
+    const httpPort = toNumber(els.ablesetHttpPort && els.ablesetHttpPort.value, state.ableset.config.httpPort);
+    const libraryName = (els.ablesetLibrary && els.ablesetLibrary.value ? els.ablesetLibrary.value : '').trim();
+    const listenPort = toNumber(els.oscPort && els.oscPort.value, state.osc.config.listenPort);
+    const songPrefixLength = state.ableset.config.songPrefixLength ?? 3;
+
+    const ableSetPayload = {
+      enabled,
+      host,
+      httpPort,
+      oscPort: listenPort,
+      libraryName,
+      songPrefixLength,
     };
+    const oscPayload = {
+      enabled,
+      listenPort,
+      addressPattern: '/note',
+      velocityMode: 'one_based',
+    };
+
     setAbleSetBusy(true);
-    setAbleSetFormStatus('Saving AbleSet settings…', 'loading');
+    setAbleSetFormStatus('Saving Ableton settings…', 'loading');
     try {
-      const response = await fetch('/integrations/ableset/settings', {
+      const ableSetResponse = await fetch('/integrations/ableset/settings', {
         method: 'PUT',
         headers: { 'Content-Type': 'application/json', Accept: 'application/json' },
-        body: JSON.stringify(payload),
+        body: JSON.stringify(ableSetPayload),
       });
-      if (!response.ok) {
-        throw new Error(await extractError(response));
+      if (!ableSetResponse.ok) {
+        throw new Error(await extractError(ableSetResponse));
       }
-      const data = await response.json();
-      state.ableset.config = normalizeAbleSetConfig(data);
+      const ableSetData = await ableSetResponse.json();
+      state.ableset.config = normalizeAbleSetConfig(ableSetData);
+
+      const oscResponse = await fetch('/integrations/osc/settings', {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json', Accept: 'application/json' },
+        body: JSON.stringify(oscPayload),
+      });
+      if (!oscResponse.ok) {
+        throw new Error(await extractError(oscResponse));
+      }
+      const oscData = await oscResponse.json();
+      state.osc.config = normalizeOscConfig(oscData);
+
       setAbleSetFormValues();
-      setAbleSetFormStatus('AbleSet settings saved.', 'success');
-      showToast('AbleSet settings saved.', 'success');
-      await refreshAbleSetStatus(false);
+      setAbleSetFormStatus('Ableton settings saved.', 'success');
+      showToast('Ableton settings saved.', 'success');
+      await Promise.all([refreshAbleSetStatus(false), refreshOscStatus(false)]);
     } catch (error) {
-      console.error('Failed to update AbleSet settings', error);
-      setAbleSetFormStatus(error.message || 'Failed to update AbleSet settings.', 'error');
-      showToast('Unable to update AbleSet settings.', 'error');
+      console.error('Failed to update Ableton settings', error);
+      setAbleSetFormStatus(error.message || 'Failed to update Ableton settings.', 'error');
+      showToast('Unable to update Ableton settings.', 'error');
     } finally {
       setAbleSetBusy(false);
     }
@@ -1180,11 +1119,6 @@
   if (els.ablesetForm) {
     els.ablesetForm.addEventListener('submit', submitAbleSetForm);
   }
-  if (els.ablesetRefresh) {
-    els.ablesetRefresh.addEventListener('click', () => {
-      refreshAbleSetStatus(true);
-    });
-  }
   if (els.androidForm) {
     els.androidForm.addEventListener('submit', saveAndroidDisplay);
   }
@@ -1201,9 +1135,6 @@
   }
   if (els.reset) {
     els.reset.addEventListener('click', resetForm);
-  }
-  if (els.oscForm) {
-    els.oscForm.addEventListener('submit', submitOscForm);
   }
   if (els.list) {
     els.list.addEventListener('click', (event) => {
@@ -1223,7 +1154,6 @@
 
   renderHosts();
   renderAndroidDisplays();
-  setOscFormValues();
   renderOscStatus();
   setAbleSetFormValues();
   renderAbleSetStatus();

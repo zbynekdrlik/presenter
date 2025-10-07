@@ -6,7 +6,7 @@ use crate::{
     state::{AppState, FeatureFlags},
 };
 use axum::response::Html;
-use chrono::{DateTime, Utc};
+use chrono::{DateTime, Local, Utc};
 use leptos::prelude::*;
 use presenter_core::{
     playlist::PlaylistEntryKind, AbleSetSettings, BibleBroadcast, BibleTranslation, OscSettings,
@@ -4390,13 +4390,6 @@ fn SettingsDocument(
     let companion_enabled = features.companion_enabled;
     let companion_port_text = features.companion_port.to_string();
     let osc_port_value = osc_settings.listen_port.to_string();
-    let osc_address_value = osc_settings.address_pattern.clone();
-    let osc_mode_value = match osc_settings.velocity_mode {
-        presenter_core::VelocityMode::ZeroBased => "zero_based",
-        presenter_core::VelocityMode::OneBased => "one_based",
-    };
-    let osc_mode_value_string = osc_mode_value.to_string();
-    let osc_host_port_display = osc_status.host_port.unwrap_or(osc_settings.listen_port);
     let osc_status_state = if !osc_status.enabled {
         "disabled".to_string()
     } else if osc_status.listening {
@@ -4430,10 +4423,19 @@ fn SettingsDocument(
     let osc_last_error = osc_status.last_error.clone();
     let ableset_host_value = ableset_settings.host.clone();
     let ableset_http_port_value = ableset_settings.http_port.to_string();
-    let ableset_osc_port_value = ableset_settings.osc_port.to_string();
     let ableset_library_value = ableset_settings.library_name.clone();
-    let ableset_prefix_value = ableset_settings.song_prefix_length.to_string();
     let ableset_enabled = ableset_settings.enabled;
+    let ableset_last_song_name = ableset_status
+        .last_song
+        .as_ref()
+        .map(|song| song.name.clone())
+        .unwrap_or_else(|| "\u{2014}".to_string());
+    let ableset_last_song_seen = ableset_status
+        .last_song
+        .as_ref()
+        .and_then(|song| song.last_seen_at)
+        .map(format_settings_timestamp)
+        .unwrap_or_else(|| "\u{2014}".to_string());
     let ableset_status_state = if !ableset_status.enabled {
         "disabled"
     } else if ableset_status.tracking {
@@ -4450,22 +4452,6 @@ fn SettingsDocument(
             .unwrap_or_else(String::new),
         ableset_status_state.chars().skip(1).collect::<String>()
     );
-    let ableset_last_song_name = ableset_status
-        .last_song
-        .as_ref()
-        .map(|song| song.name.clone())
-        .unwrap_or_else(|| "\u{2014}".to_string());
-    let ableset_last_song_prefix = ableset_status
-        .last_song
-        .as_ref()
-        .map(|song| song.prefix.clone())
-        .unwrap_or_else(|| "\u{2014}".to_string());
-    let ableset_last_song_seen = ableset_status
-        .last_song
-        .as_ref()
-        .and_then(|song| song.last_seen_at)
-        .map(format_settings_timestamp)
-        .unwrap_or_else(|| "\u{2014}".to_string());
     let ableset_last_error = ableset_status.last_error.clone();
 
     view! {
@@ -4861,97 +4847,11 @@ fn SettingsDocument(
                             </Show>
                         </ul>
                     </section>
-                    <section class="settings__card settings__card--osc">
+                    <section class="settings__card settings__card--ableton">
                         <header class="settings__card-header">
                             <div>
-                                <h2>"OSC Bridge"</h2>
-                                <p>"Receive Ableton cues via the OSC MIDI Send Max for Live device."</p>
-                            </div>
-                        </header>
-                        <form
-                            class="settings__form settings__form--osc"
-                            data-role="osc-form"
-                            autocomplete="off"
-                            data-mode={if osc_settings.enabled { "enabled" } else { "disabled" }}
-                        >
-                            <div class="settings__form-row settings__form-row--single">
-                                <label class="settings__form-checkbox settings__form-checkbox--block">
-                                    <input type="checkbox" data-role="osc-enabled" checked={osc_settings.enabled} />
-                                    <span>"Enabled"</span>
-                                </label>
-                            </div>
-                            <div class="settings__form-row">
-                                <label class="settings__form-control settings__form-control--small">
-                                    <span>"Listener Port"</span>
-                                    <input
-                                        type="number"
-                                        data-role="osc-port"
-                                        min="1"
-                                        max="65535"
-                                        value={osc_port_value.clone()}
-                                        required
-                                    />
-                                </label>
-                                <label>
-                                    <span>"Address Pattern"</span>
-                                    <input
-                                        type="text"
-                                        data-role="osc-address"
-                                        value={osc_address_value.clone()}
-                                        placeholder="/note"
-                                        required
-                                    />
-                                </label>
-                                <label>
-                                    <span>"Velocity Mapping"</span>
-                                    <select data-role="osc-mode" prop:value={osc_mode_value_string.clone()}>
-                                        <option value="zero_based" selected={osc_mode_value == "zero_based"}>"Zero-based (0 = first item)"</option>
-                                        <option value="one_based" selected={osc_mode_value == "one_based"}>"One-based (1 = first item)"</option>
-                                    </select>
-                                </label>
-                            </div>
-                            <div class="settings__form-actions">
-                                <button
-                                    type="submit"
-                                    class="settings__button settings__button--primary"
-                                    data-role="osc-submit"
-                                >"Save OSC Settings"</button>
-                            </div>
-                        </form>
-                        <section class="settings__osc-status">
-                            <div class="settings__status-line">
-                                <span
-                                    class="settings__status"
-                                    data-role="osc-status-indicator"
-                                    data-state={osc_status_state.clone()}
-                                >{osc_status_label.clone()}</span>
-                            </div>
-                            <dl class="settings__status-list">
-                                <div>
-                                    <dt>"Host Port"</dt>
-                                    <dd data-role="osc-status-host-port">{osc_host_port_display}</dd>
-                                </div>
-                                <div>
-                                    <dt>"Last event"</dt>
-                                    <dd data-role="osc-status-last-message">{osc_last_message_display.clone()}</dd>
-                                </div>
-                                <div>
-                                    <dt>"Last note"</dt>
-                                    <dd data-role="osc-status-last-note">{osc_last_note_display.clone()}</dd>
-                                </div>
-                            </dl>
-                            <p
-                                class="settings__list-meta settings__list-meta--warning"
-                                data-role="osc-status-error"
-                                data-visible={if osc_last_error.is_some() { "true" } else { "false" }}
-                            >{osc_last_error.clone().map(|err| format!("⚠ {}", err)).unwrap_or_default()}</p>
-                        </section>
-                    </section>
-                    <section class="settings__card settings__card--ableset">
-                        <header class="settings__card-header">
-                            <div>
-                                <h2>"AbleSet Bridge"</h2>
-                                <p>"Map Ableton cues to the NEWLEVEL library using AbleSet."</p>
+                                <h2>"Ableton Control"</h2>
+                                <p>"Configure AbleSet tracking and Presenter's OSC listener."</p>
                             </div>
                         </header>
                         <form
@@ -4963,7 +4863,7 @@ fn SettingsDocument(
                             <div class="settings__form-row settings__form-row--single">
                                 <label class="settings__form-checkbox settings__form-checkbox--block">
                                     <input type="checkbox" data-role="ableset-enabled" checked={ableset_enabled} />
-                                    <span>"Enable AbleSet automation"</span>
+                                    <span>"Enable Ableton automation"</span>
                                 </label>
                             </div>
                             <div class="settings__form-row">
@@ -4987,19 +4887,6 @@ fn SettingsDocument(
                                         required
                                     />
                                 </label>
-                                <label class="settings__form-control settings__form-control--small">
-                                    <span>"OSC Port"</span>
-                                    <input
-                                        type="number"
-                                        data-role="ableset-osc-port"
-                                        min="1"
-                                        max="65535"
-                                        value={ableset_osc_port_value.clone()}
-                                        required
-                                    />
-                                </label>
-                            </div>
-                            <div class="settings__form-row">
                                 <label>
                                     <span>"Library Name"</span>
                                     <input
@@ -5009,14 +4896,16 @@ fn SettingsDocument(
                                         required
                                     />
                                 </label>
+                            </div>
+                            <div class="settings__form-row settings__form-row--single">
                                 <label class="settings__form-control settings__form-control--small">
-                                    <span>"Song Prefix Length"</span>
+                                    <span>"OSC Listener Port"</span>
                                     <input
                                         type="number"
-                                        data-role="ableset-prefix"
+                                        data-role="osc-port"
                                         min="1"
-                                        max="6"
-                                        value={ableset_prefix_value.clone()}
+                                        max="65535"
+                                        value={osc_port_value.clone()}
                                         required
                                     />
                                 </label>
@@ -5037,22 +4926,38 @@ fn SettingsDocument(
                             >{ableset_status_label.clone()}</span>
                             <dl class="settings__status-list">
                                 <div>
-                                    <dt>"Current Song"</dt>
+                                    <dt>"Current song"</dt>
                                     <dd data-role="ableset-status-song">{ableset_last_song_name.clone()}</dd>
                                 </div>
                                 <div>
-                                    <dt>"Prefix"</dt>
-                                    <dd data-role="ableset-status-prefix">{ableset_last_song_prefix.clone()}</dd>
-                                </div>
-                                <div>
-                                    <dt>"Last Update"</dt>
+                                    <dt>"Last update"</dt>
                                     <dd data-role="ableset-status-updated">{ableset_last_song_seen.clone()}</dd>
                                 </div>
                             </dl>
                             <p class="settings__list-meta settings__list-meta--warning" data-role="ableset-status-error">
                                 {ableset_last_error.clone().unwrap_or_default()}
                             </p>
-                            <button type="button" class="settings__button settings__button--ghost" data-role="ableset-refresh">"Refresh"</button>
+                        </div>
+                        <div class="settings__status-panel">
+                            <span
+                                class={format!("settings__status settings__status--{}", osc_status_state)}
+                                data-role="osc-status-indicator"
+                            >{osc_status_label.clone()}</span>
+                            <dl class="settings__status-list">
+                                <div>
+                                    <dt>"Last event"</dt>
+                                    <dd data-role="osc-status-last-message">{osc_last_message_display.clone()}</dd>
+                                </div>
+                                <div>
+                                    <dt>"Last note"</dt>
+                                    <dd data-role="osc-status-last-note">{osc_last_note_display.clone()}</dd>
+                                </div>
+                            </dl>
+                            <p
+                                class="settings__list-meta settings__list-meta--warning"
+                                data-role="osc-status-error"
+                                data-visible={if osc_last_error.is_some() { "true" } else { "false" }}
+                            >{osc_last_error.clone().map(|err| format!("⚠ {}", err)).unwrap_or_default()}</p>
                         </div>
                     </section>
 
@@ -5065,7 +4970,8 @@ fn SettingsDocument(
 }
 
 fn format_settings_timestamp(value: DateTime<Utc>) -> String {
-    value.format("%Y-%m-%d %H:%M UTC").to_string()
+    let local = value.with_timezone(&Local);
+    local.format("%d.%m.%Y %H:%M:%S").to_string()
 }
 
 #[component]

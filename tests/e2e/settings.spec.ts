@@ -113,9 +113,17 @@ test('resolume settings CRUD with status feedback', async ({ page }) => {
   await page.goto(new URL('/ui/settings', baseURL).toString());
   await page.waitForLoadState('networkidle');
 
+  await expect(page.locator('[data-role="osc-port"]')).toHaveCount(1);
+  await expect(page.locator('[data-role="ableset-form"] [data-role="osc-port"]').first()).toHaveValue(/\d+/);
+
+  const abletonToggle = page.locator('[data-role="ableset-enabled"]');
+  await abletonToggle.check();
+  await page.click('[data-role="ableset-submit"]');
+  await waitForToast(page, 'Ableton settings saved.');
+  await expect(page.locator('[data-role="ableset-status-indicator"]').first()).toHaveAttribute('data-state', /(enabled|tracking)/);
+
   // Ensure the list starts empty.
-  const emptyState = page.locator('[data-role="host-empty"]');
-  await expect(emptyState).toHaveText('No Resolume connections defined yet.');
+  await expect(page.locator('[data-role="resolume-host-list"]').first()).toContainText('No Resolume connections defined yet.');
 
   if (!mockResolume) {
     throw new Error('Mock Resolume server not started');
@@ -187,7 +195,7 @@ test('android stage launchers CRUD', async ({ page }) => {
   await page.goto(new URL('/ui/settings', baseURL).toString());
   await page.waitForLoadState('networkidle');
 
-  await expect(page.locator('[data-role="android-empty"]')).toHaveText(
+  await expect(page.locator(selectors.androidList).first()).toContainText(
     'No Android stage displays configured yet.'
   );
 
@@ -243,7 +251,7 @@ test('android stage launchers CRUD', async ({ page }) => {
 
   const displaysAfterDelete = await getAndroidDisplaysViaApi(page);
   expect(displaysAfterDelete).toHaveLength(0);
-  await expect(page.locator('[data-role="android-empty"]')).toHaveText(
+  await expect(page.locator('[data-role="android-display-list"] [data-role="android-empty"]').first()).toHaveText(
     'No Android stage displays configured yet.'
   );
 });
