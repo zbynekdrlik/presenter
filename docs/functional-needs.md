@@ -23,6 +23,8 @@
 - Remote preview on tablets/phones for production leads.
 - Persistent heartbeat and latency visibility so operators can confirm live links without advancing slides.
 - Live synchronization with Resolume Arena decks, including auto-discovery of clips and alternating A/B lanes for main, translation, and Bible outputs.
+- Automatically relaunch Android stage display clients (Fully Kiosk) whenever TVs reconnect by
+  tracking a configurable list of wireless ADB endpoints with per-device health reporting.
 
 ## External Integrations
 - Manage multiple Resolume Arena connections (DNS hostnames on port 8090 by default) from a

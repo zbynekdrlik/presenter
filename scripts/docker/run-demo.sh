@@ -13,6 +13,7 @@ DISPLAY_NAME=""
 LOG_LEVEL="presenter_server=info"
 FORCE=0
 COMPANION_ENABLED="${PRESENTER_COMPANION_ENABLED:-0}"
+ADB_KEYS_DIR="${ADB_KEYS_DIR:-${XDG_CONFIG_HOME:-${HOME}/.config}/presenter/adb}"
 
 usage() {
   cat <<USAGE
@@ -39,6 +40,8 @@ while [[ $# -gt 0 ]]; do
       PORT="$2"; shift 2 ;;
     --import-root)
       IMPORT_ROOT="$2"; shift 2 ;;
+    --adb-keys)
+      ADB_KEYS_DIR="$2"; shift 2 ;;
     --display-name)
       DISPLAY_NAME="$2"; shift 2 ;;
     --osc-port)
@@ -67,7 +70,11 @@ if [[ -z "$DISPLAY_NAME" ]]; then
   DISPLAY_NAME="$PROJECT"
 fi
 HOST_HTTP_PORT="$(compute_port "$PROJECT" "$PORT")"
-HOST_OSC_PORT="$(compute_port "${PROJECT}-osc" "$OSC_PORT")"
+if [[ -n "$OSC_PORT" ]]; then
+  HOST_OSC_PORT="$OSC_PORT"
+else
+  HOST_OSC_PORT="39051"
+fi
 HOST_COMPANION_PORT="$(compute_port "${PROJECT}-companion" "$COMPANION_PORT")"
 DEMO_DATA_DIR="$DATA_ROOT/$PROJECT"
 
@@ -80,6 +87,9 @@ fi
 
 mkdir -p "$DEMO_DATA_DIR"
 chmod 777 "$DEMO_DATA_DIR"
+
+mkdir -p "$ADB_KEYS_DIR"
+chmod 700 "$ADB_KEYS_DIR"
 
 # Force regeneration of the SQLite database and imports so new settings/data
 # are always reflected in the running demo.
@@ -100,6 +110,7 @@ export PRESENTER_FORCE_IMPORT=1
 export RUST_LOG="$LOG_LEVEL"
 export PRESENTER_COMPANION_ENABLED="$COMPANION_ENABLED"
 export PRESENTER_COMPANION_PORT="$HOST_COMPANION_PORT"
+export ADB_KEYS_DIR
 
 COMPOSE_ARGS=("${DOCKER_CMD[@]}" "compose" "-f" "$REPO_ROOT/docker-compose.demo.yml" "-p" "$PROJECT" up -d)
 if [[ "$FORCE" -eq 1 ]]; then

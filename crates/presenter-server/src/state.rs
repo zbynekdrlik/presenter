@@ -1,5 +1,6 @@
 use crate::{
     ableset::{AbleSetBridge, AbleSetStatusSnapshot},
+    android_stage::{AndroidStageDisplayStatusSnapshot, AndroidStageRegistry},
     live::{LiveEvent, LiveHub},
     osc::{OscBridge, OscStatusSnapshot},
     resolume::{
@@ -13,10 +14,11 @@ use presenter_bible::BibleImportSummary;
 use presenter_core::playlist::PlaylistEntryKind;
 use presenter_core::{
     extract_song_prefix, AbleSetSettings, AbleSetSettingsDraft, AbleSetSongSnapshot,
-    BibleBroadcast, BibleReference, BibleTranslation, Library, LibraryId, LibrarySummary,
-    OscSettings, OscSettingsDraft, Playlist, PlaylistEntry, PlaylistEntryId, PlaylistId,
-    Presentation, PresentationId, ResolumeHost, ResolumeHostDraft, ResolumeHostId, SearchResult,
-    Slide, SlideContent, SlideGroup, SlideId, SlideText, StageDisplayLayout, StageDisplaySlide,
+    AndroidStageDisplay, AndroidStageDisplayDraft, AndroidStageDisplayId, BibleBroadcast,
+    BibleReference, BibleTranslation, Library, LibraryId, LibrarySummary, OscSettings,
+    OscSettingsDraft, Playlist, PlaylistEntry, PlaylistEntryId, PlaylistId, Presentation,
+    PresentationId, ResolumeHost, ResolumeHostDraft, ResolumeHostId, SearchResult, Slide,
+    SlideContent, SlideGroup, SlideId, SlideText, StageDisplayLayout, StageDisplaySlide,
     StageDisplaySnapshot, StageState, TimerCommand, TimerState, TimersOverview, TimersState,
 };
 use presenter_importer::bible::BibleIngestionService;
@@ -144,6 +146,7 @@ pub struct AppState {
     companion_port: Arc<AtomicU16>,
     companion_server: CompanionServerManager,
     resolume_registry: ResolumeRegistry,
+    android_stage_registry: AndroidStageRegistry,
     stage_connections: StageConnections,
     heartbeat_config: StageHeartbeatConfig,
     presentation_cache: Arc<RwLock<HashMap<PresentationId, Arc<Presentation>>>>,
@@ -169,6 +172,7 @@ impl AppState {
         companion_enabled: bool,
         companion_port: u16,
         resolume_registry: ResolumeRegistry,
+        android_stage_registry: AndroidStageRegistry,
         osc_bridge: OscBridge,
         ableset_bridge: AbleSetBridge,
     ) -> Self {
@@ -189,6 +193,7 @@ impl AppState {
             companion_port: Arc::new(AtomicU16::new(companion_port)),
             companion_server: CompanionServerManager::default(),
             resolume_registry,
+            android_stage_registry,
             stage_connections,
             heartbeat_config,
             presentation_cache: Arc::new(RwLock::new(HashMap::new())),
@@ -300,6 +305,7 @@ impl AppState {
         }
 
         let registry = ResolumeRegistry::new();
+        let android_stage_registry = AndroidStageRegistry::new();
         let osc_bridge = OscBridge::new();
         let ableset_bridge = AbleSetBridge::new();
         let state = Self::new(
@@ -308,12 +314,14 @@ impl AppState {
             companion_enabled,
             companion_port,
             registry,
+            android_stage_registry,
             osc_bridge.clone(),
             ableset_bridge.clone(),
         );
         state.ensure_seed_library().await?;
         state.ensure_demo_playlist().await?;
         state.sync_resolume_hosts().await?;
+        state.sync_android_stage_displays().await?;
         let mut osc_settings = state.repository.get_osc_settings().await?;
         if let Ok(port_raw) = env::var("PRESENTER_OSC_LISTEN_PORT") {
             match port_raw.parse::<u16>() {
@@ -362,6 +370,7 @@ impl AppState {
     pub async fn in_memory() -> anyhow::Result<Self> {
         let repo = Repository::connect_in_memory().await?;
         let registry = ResolumeRegistry::new();
+        let android_stage_registry = AndroidStageRegistry::new();
         let osc_bridge = OscBridge::new();
         let ableset_bridge = AbleSetBridge::new();
         let state = Self::new(
@@ -370,11 +379,13 @@ impl AppState {
             false,
             DEFAULT_COMPANION_PORT,
             registry,
+            android_stage_registry,
             osc_bridge.clone(),
             ableset_bridge.clone(),
         );
         state.ensure_seed_library().await?;
         state.ensure_demo_playlist().await?;
+        state.sync_android_stage_displays().await?;
         let mut osc_settings = state.repository.get_osc_settings().await?;
         if let Ok(port_raw) = env::var("PRESENTER_OSC_LISTEN_PORT") {
             match port_raw.parse::<u16>() {
@@ -682,14 +693,31 @@ impl AppState {
         self.repository.list_resolume_hosts().await
     }
 
+    pub async fn list_android_stage_displays(&self) -> anyhow::Result<Vec<AndroidStageDisplay>> {
+        self.repository.list_android_stage_displays().await
+    }
+
     pub async fn resolume_status_snapshot(
         &self,
     ) -> HashMap<ResolumeHostId, ResolumeConnectionSnapshot> {
         self.resolume_registry.snapshot().await
     }
 
+    pub async fn android_stage_status_snapshot(
+        &self,
+    ) -> HashMap<AndroidStageDisplayId, AndroidStageDisplayStatusSnapshot> {
+        self.android_stage_registry.snapshot().await
+    }
+
     pub async fn resolume_status_for(&self, id: ResolumeHostId) -> ResolumeConnectionSnapshot {
         self.resolume_registry.snapshot_for(id).await
+    }
+
+    pub async fn android_stage_status_for(
+        &self,
+        id: AndroidStageDisplayId,
+    ) -> AndroidStageDisplayStatusSnapshot {
+        self.android_stage_registry.snapshot_for(id).await
     }
 
     pub async fn create_resolume_host(
@@ -699,6 +727,15 @@ impl AppState {
         let host = self.repository.create_resolume_host(&draft).await?;
         self.sync_resolume_hosts().await?;
         Ok(host)
+    }
+
+    pub async fn create_android_stage_display(
+        &self,
+        draft: AndroidStageDisplayDraft,
+    ) -> anyhow::Result<AndroidStageDisplay> {
+        let display = self.repository.create_android_stage_display(&draft).await?;
+        self.sync_android_stage_displays().await?;
+        Ok(display)
     }
 
     pub async fn update_resolume_host(
@@ -711,9 +748,30 @@ impl AppState {
         Ok(host)
     }
 
+    pub async fn update_android_stage_display(
+        &self,
+        id: AndroidStageDisplayId,
+        draft: AndroidStageDisplayDraft,
+    ) -> anyhow::Result<AndroidStageDisplay> {
+        let display = self
+            .repository
+            .update_android_stage_display(id, &draft)
+            .await?;
+        self.sync_android_stage_displays().await?;
+        Ok(display)
+    }
+
     pub async fn delete_resolume_host(&self, id: ResolumeHostId) -> anyhow::Result<()> {
         self.repository.delete_resolume_host(id).await?;
         self.sync_resolume_hosts().await
+    }
+
+    pub async fn delete_android_stage_display(
+        &self,
+        id: AndroidStageDisplayId,
+    ) -> anyhow::Result<()> {
+        self.repository.delete_android_stage_display(id).await?;
+        self.sync_android_stage_displays().await
     }
 
     pub async fn refresh_default_bible_translations(
@@ -917,6 +975,12 @@ impl AppState {
     async fn sync_resolume_hosts(&self) -> anyhow::Result<()> {
         let hosts = self.repository.list_resolume_hosts().await?;
         self.resolume_registry.set_hosts(hosts).await;
+        Ok(())
+    }
+
+    async fn sync_android_stage_displays(&self) -> anyhow::Result<()> {
+        let displays = self.repository.list_android_stage_displays().await?;
+        self.android_stage_registry.set_displays(displays).await;
         Ok(())
     }
 

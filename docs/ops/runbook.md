@@ -13,6 +13,28 @@ cd /home/newlevel/devel/presenter/presenter-dev1   # or any checkout in /home/ne
 
 The script installs build essentials, browser/runtime libraries, the Rust toolchain, and Playwright browsers. Re-run it after OS upgrades or when bringing additional dev folders online so every env stays consistent.
 
+## Android Stage Launchers
+
+- Install the Android platform tools on every controller (and CI runner that executes `verify-and-refresh`):
+  ```bash
+  sudo apt install android-tools-adb
+  ```
+- Create a shared key directory so all runtimes reuse the same trusted keypair:
+  ```bash
+  mkdir -p ~/.config/presenter/adb
+  cp ~/.android/adbkey ~/.config/presenter/adb/  # after first successful pairing
+  cp ~/.android/adbkey.pub ~/.config/presenter/adb/
+  ```
+  All docker stacks mount this folder at `/root/.android`, so when one environment authorizes a TV the
+  others piggyback on the same keys automatically.
+- If `adb` lives outside `$PATH`, export `PRESENTER_ANDROID_ADB_BIN=/custom/path/adb` before starting
+  Presenter. The service falls back to the first `adb` on `$PATH` otherwise.
+- Pair each Android TV for wireless debugging (`adb pair HOST:PORT PIN`, then
+  `adb connect HOST:5555`). Presenter automatically retries the connection every 20 s and relaunches
+  Fully Kiosk (`com.fullykiosk.videokiosk/de.ozerov.fully.MainActivity`) once connected.
+- Manage the device roster under **Settings → Android Stage Launchers**; status badges surface last
+  launch, last attempt, and the most recent ADB error so operators can intervene before pre-service.
+
 ## Environment Matrix
 
 | Environment | Service Name             | Port | Database Path                                      | Purpose |
@@ -146,4 +168,4 @@ Keep this document up to date whenever the deployment process changes.
 
 ## Ableton Live OSC bridge
 
-See [docs/ops/ableton-osc-device.md](ableton-osc-device.md) for installing the "Presenter OSC Send" Max for Live device that persists the OSC target when Ableton sets are reopened. The Ableton Bridge card also links the latest patch and defaults to `presenter.lan:39051`, so operators rarely need to change the fields.
+Load Ableton's Connection Kit “OSC Send” Max for Live device on the automation track, point it at the Presenter controller (`presenter.lan` on port 39051 by default), and store a default preset so the host/port survive reopening the Live Set. Step-by-step setup guidance lives in [docs/ops/ableton-osc-device.md](ableton-osc-device.md).

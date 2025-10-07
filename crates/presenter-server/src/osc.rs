@@ -502,7 +502,9 @@ async fn update_status_for_message(inner: &Arc<OscBridgeInner>, note: u8, veloci
     let mut status = inner.status.write().await;
     status.last_message_at = Some(Utc::now());
     status.last_note = Some(note);
-    status.last_velocity = Some(velocity);
+    if velocity > 0 {
+        status.last_velocity = Some(velocity);
+    }
     status.last_error = None;
 }
 

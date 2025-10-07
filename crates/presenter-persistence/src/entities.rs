@@ -227,6 +227,29 @@ pub mod resolume_host {
     impl ActiveModelBehavior for ActiveModel {}
 }
 
+pub mod android_stage_display {
+    use sea_orm::entity::prelude::*;
+
+    #[derive(Clone, Debug, PartialEq, Eq, DeriveEntityModel)]
+    #[sea_orm(table_name = "android_stage_displays")]
+    pub struct Model {
+        #[sea_orm(primary_key)]
+        pub id: String,
+        pub label: String,
+        pub host: String,
+        pub port: i32,
+        pub launch_component: String,
+        pub is_enabled: bool,
+        pub created_at: DateTimeWithTimeZone,
+        pub updated_at: DateTimeWithTimeZone,
+    }
+
+    #[derive(Copy, Clone, Debug, EnumIter, DeriveRelation)]
+    pub enum Relation {}
+
+    impl ActiveModelBehavior for ActiveModel {}
+}
+
 pub mod osc_settings {
     use sea_orm::entity::prelude::*;
 

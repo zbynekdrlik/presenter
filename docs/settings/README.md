@@ -23,3 +23,24 @@ Disable the flag for stack clones that should not host the Companion socket so m
 in parallel without port conflicts.
 
 ![Companion Settings Card](./companion-dashboard.png)
+
+## Android Stage Launchers
+
+- **Purpose:** Presenter keeps each Android TV stage display locked to the Fully Kiosk app by
+  reconnecting over wireless ADB (`adb connect`) and relaunching the configured activity whenever the
+  device appears on the network. This replaces ad-hoc shell loops and removes timing gaps after TVs
+  power-cycle mid-service.
+- **Settings UI:** The **Android Stage Launchers** card under `/ui/settings` lists every stage
+  display with labels, hostnames (or `.lan` DNS), ADB port (default `5555`), the launch component
+  (`com.fullykiosk.videokiosk/de.ozerov.fully.MainActivity` by default), and an enable toggle. Status
+  rows show the last attempt, last successful launch, and any error returned by ADB.
+- **Environment:** Presenter shells out to `adb`. Set `PRESENTER_ANDROID_ADB_BIN` if you install the
+  platform-tools somewhere other than `$PATH` (e.g. `/opt/android-platform-tools/adb`). Install Ubuntu
+  packages with `sudo apt install android-tools-adb` so the background worker is available in dev,
+  test, and production stacks.
+- **Shared keys:** Place your trusted ADB keypair under
+  `${XDG_CONFIG_HOME:-$HOME/.config}/presenter/adb` and the runtime will mount it into each container.
+  Approve the connection once and every docker demo or dev server run reuses the same authorization.
+- **Pairing Workflow:** TVs must be paired for wireless debugging ahead of time (`adb pair` then
+  `adb connect`). Presenter will retry the connection on a 20-second loop; if keys expire, the status
+  column surfaces the failure so operators can re-pair before call time.
