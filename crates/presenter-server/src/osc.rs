@@ -500,9 +500,12 @@ async fn handle_note(
 
 async fn update_status_for_message(inner: &Arc<OscBridgeInner>, note: u8, velocity: u8) {
     let mut status = inner.status.write().await;
+    // Always track when we last received any OSC message.
     status.last_message_at = Some(Utc::now());
-    status.last_note = Some(note);
+    // Product decision: expose only the last note-on pair to the UI so
+    // rapid note-off (velocity 0) events do not overwrite the slide index.
     if velocity > 0 {
+        status.last_note = Some(note);
         status.last_velocity = Some(velocity);
     }
     status.last_error = None;
