@@ -114,8 +114,8 @@ if [[ "$NEEDS_GATEWAY_REBUILD" -eq 1 ]]; then
   echo "[verify] Rebuilding gateway (changes detected under gateway/)"
   PRESENTER_ANDROID_ADB_BIN="$PRESENTER_ANDROID_ADB_BIN" ADB_KEYS_DIR="$ADB_KEYS_DIR" "$REPO_ROOT/scripts/docker/run-gateway.sh" --force
 else
-  echo "[verify] Skipping gateway rebuild (no gateway/ changes on this branch)"
-fi
+  echo "[verify] Rebuilding gateway (always)"
+PRESENTER_ANDROID_ADB_BIN="$PRESENTER_ANDROID_ADB_BIN" ADB_KEYS_DIR="$ADB_KEYS_DIR" "$REPO_ROOT/scripts/docker/run-gateway.sh" --force
 
 echo "[verify] Running Playwright suite"
 RUN_AS_ORIGINAL npm run test:playwright
@@ -123,12 +123,8 @@ RUN_AS_ORIGINAL npm run test:playwright
 echo "[verify] Refreshing Docker demo for project '$REPO_SLUG' (post-tests)"
 PRESENTER_ANDROID_ADB_BIN="$PRESENTER_ANDROID_ADB_BIN" ADB_KEYS_DIR="$ADB_KEYS_DIR" "$REPO_ROOT/scripts/docker/run-demo.sh" "--force" "--name" "$REPO_SLUG" "--display-name" "$DISPLAY_NAME" "--port" "$DEMO_PORT" "--enable-companion"
 
-if [[ "$NEEDS_GATEWAY_REBUILD" -eq 1 ]]; then
-  echo "[verify] Restarting gateway (post-tests)"
-  PRESENTER_ANDROID_ADB_BIN="$PRESENTER_ANDROID_ADB_BIN" ADB_KEYS_DIR="$ADB_KEYS_DIR" "$REPO_ROOT/scripts/docker/run-gateway.sh" --force
-else
-  echo "[verify] Skipping gateway restart (no gateway/ changes)"
-fi
+echo "[verify] Restarting gateway (post-tests)"
+PRESENTER_ANDROID_ADB_BIN="$PRESENTER_ANDROID_ADB_BIN" ADB_KEYS_DIR="$ADB_KEYS_DIR" "$REPO_ROOT/scripts/docker/run-gateway.sh" --force
 
 echo "[verify] Checking demo operator UI at ${DEMO_ORIGIN}/ui/operator"
 curl --fail --silent --show-error "${DEMO_ORIGIN}/ui/operator" >/dev/null
@@ -145,4 +141,14 @@ until curl --fail --silent --show-error "${GATEWAY_URL}" | grep -q "data-project
   echo "[verify] Waiting for gateway card ${PROJECT_SLUG} (attempt ${ATTEMPTS})"
 done
 
+echo "[verify] Validating gateway stage links"
+HTML="$(curl --fail --silent --show-error "${GATEWAY_URL}")"
+if echo "$HTML" | grep -qE ">Stage SNV<|>Stage PP<|>Stage Timer<|>Stage Preach<"; then
+  echo "[verify] Gateway validation failed: legacy stage links detected" >&2
+  exit 1
+fi
+if ! echo "$HTML" | grep -q ">Stage<"; then
+  echo "[verify] Gateway validation failed: missing Stage link" >&2
+  exit 1
+fi
 echo "[verify] ✔ Completed. Demo card should now reflect: $DISPLAY_NAME"
