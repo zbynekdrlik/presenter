@@ -35,6 +35,15 @@ Presenter is a monolithic, production-ready lyrics/Bible/timers display applicat
 - Keep scripts such as `scripts/dev/refresh-dev-data.sh` up to date so they create a clean database and repopulate it automatically after every change.
 
 ## Workflow States
+
+## End-to-End Test Policy (Critical)
+- End-to-end (E2E) tests are the primary acceptance mechanism. Every user‑visible feature or behaviour change must ship with Playwright E2E coverage that exercises the real UI flows and verifies observable side effects (stage updates, Resolume/AbleSet/OSC status, gateway cards).
+- Do not defer E2E tests. If a scenario is hard to simulate, add a mock (HTTP/UDP) in the test harness rather than skipping it.
+- The branch is not ready for review unless `npm run test:playwright` passes with no `.only` or `.skip` in the suite and the verify script completes.
+- For integrations:
+  - AbleSet: mock `/api/setlist` and assert the Settings status reflects the active song; when toggled, the tracker must transition to tracking.
+  - OSC: send `/note` UDP messages and assert both Settings → OSC status and `/stage/snapshot` reflect the change.
+- The verify script always rebuilds the demo and gateway and fails if the gateway layout is incorrect or the demo card is stale.
 1. **Discovery & Research** – Gather requirements from existing docs or stakeholders. When selecting new tools/frameworks, perform current online research to confirm choices represent state-of-the-art 2025 technology, architecture, and design. Summarize findings and sources in the PR description.
 2. **Specification** – Translate requirements into executable tests or clear acceptance criteria before writing production code.
 3. **Implementation (TDD)** – Follow red/green/refactor loops. Keep commits small, descriptive, and focused on a single change.
