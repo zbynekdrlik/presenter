@@ -36,6 +36,12 @@ Presenter is a monolithic, production-ready lyrics/Bible/timers display applicat
 
 ## Workflow States
 
+1. **Discovery & Research** – Gather requirements from existing docs or stakeholders. When selecting new tools/frameworks, perform current online research to confirm choices represent state-of-the-art 2025 technology, architecture, and design. Summarize findings and sources in the PR description.
+2. **Specification** – Translate requirements into executable tests or clear acceptance criteria before writing production code.
+3. **Implementation (TDD)** – Follow red/green/refactor loops. Keep commits small, descriptive, and focused on a single change.
+4. **Verification** – Run automated tests and, when applicable, add integration/end-user simulations that mirror service workflows. Ensure the suites include a health check that pings the always-on port-80 demo instance across every active interface (loopback, LAN, Zerotier) and that they fail if the landing page card for the current branch shows a stale `data-updated-at` timestamp. Update Markdown documentation to stay consistent with behavior. Use `sudo -E ./scripts/dev/verify-and-refresh.sh` so cargo tests, Playwright, the demo rebuild, and the gateway refresh happen together before reporting progress—the script stops at the first failure, so fix issues and rerun until it completes successfully. The helper now always forces Docker rebuilds so the demo and gateway never reuse stale images. After it finishes, verify the change on the live demo (curl the endpoint, load the page, or otherwise exercise the UI) before telling the user it works.
+5. **Review & Iterate** – Use GitHub pull requests for continuous review. Address feedback promptly and document significant decisions (ADRs, PR notes).
+
 
 ## End-to-End Test Policy (Critical)
 - E2E tests are the primary acceptance mechanism for any user‑visible workflow or cross‑process/integration change. Ship new behaviour only with E2E coverage that exercises the real UI and verifies observable side‑effects (network calls, DB writes, stage/gateway updates, device triggers, etc.).
