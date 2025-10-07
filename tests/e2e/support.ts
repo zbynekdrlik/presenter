@@ -27,6 +27,14 @@ export type MockResolumeHandle = {
   close: () => Promise<void>;
 };
 
+
+export type MockAbleSetHandle = {
+  port: number;
+  /** update the active song name returned by the mock */
+  setActiveSong: (name: string, id?: string, order?: number) => void;
+  close: () => Promise<void>;
+};
+
 export type TestConfig = {
   workerIndex: number;
   port: number;
@@ -236,6 +244,54 @@ export async function startMockResolume(): Promise<MockResolumeHandle> {
           if (err) reject(err);
           else resolve();
         });
+      }),
+  };
+}
+
+export async function startMockAbleSet(): Promise<MockAbleSetHandle> {
+  let activeId = 'song-1';
+  let activeName = '148 Vrat ma spat';
+  let activeOrder: number | undefined = 5;
+
+  const server = http.createServer((req, res) => {
+    const { method, url } = req;
+    if (!url) {
+      res.statusCode = 400;
+      return res.end('bad request');
+    }
+    if (method === 'GET' && url.startsWith('/api/setlist')) {
+      res.writeHead(200, { 'content-type': 'application/json' });
+      const payload = {
+        activeSongId: activeId,
+        songs: [
+          {
+            id: activeId,
+            meta: { name: activeName, raw: activeName },
+            internalMeta: activeOrder != null ? { order: activeOrder } : undefined,
+          },
+        ],
+      };
+      res.end(JSON.stringify(payload));
+      return;
+    }
+    res.statusCode = 404;
+    res.end('not found');
+  });
+
+  await new Promise<void>((resolve, reject) => {
+    server.listen(0, '127.0.0.1', (err?: Error) => (err ? reject(err) : resolve()));
+  });
+  const address = server.address() as AddressInfo;
+  return {
+    port: address.port,
+    setActiveSong: (name: string, id = 'song-1', order = 0) => {
+      activeName = name;
+      activeId = id;
+      activeOrder = order;
+    },
+    close: () =>
+      new Promise<void>((resolve, reject) => {
+        server.close((err) => (err ? reject(err) : resolve()));
       }),
   };
 }
