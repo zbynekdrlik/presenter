@@ -52,12 +52,12 @@ impl Default for OscStatusInner {
         Self {
             enabled: false,
             listening: false,
-            listen_port: 9000,
+            listen_port: 39051,
             host_port: std::env::var("PRESENTER_OSC_HOST_PORT")
                 .ok()
                 .and_then(|raw| raw.parse().ok()),
             address_pattern: "/note".to_string(),
-            velocity_mode: VelocityMode::ZeroBased,
+            velocity_mode: VelocityMode::OneBased,
             last_message_at: None,
             last_note: None,
             last_velocity: None,
@@ -500,9 +500,14 @@ async fn handle_note(
 
 async fn update_status_for_message(inner: &Arc<OscBridgeInner>, note: u8, velocity: u8) {
     let mut status = inner.status.write().await;
+    // Always track when we last received any OSC message.
     status.last_message_at = Some(Utc::now());
-    status.last_note = Some(note);
-    status.last_velocity = Some(velocity);
+    // Product decision: expose only the last note-on pair to the UI so
+    // rapid note-off (velocity 0) events do not overwrite the slide index.
+    if velocity > 0 {
+        status.last_note = Some(note);
+        status.last_velocity = Some(velocity);
+    }
     status.last_error = None;
 }
 
@@ -630,7 +635,7 @@ mod tests {
     fn extract_two_arguments_returns_note_and_velocity() {
         let config = ListenerConfig {
             address_pattern: "/note".to_string(),
-            velocity_mode: VelocityMode::ZeroBased,
+            velocity_mode: VelocityMode::OneBased,
         };
         let message = OscMessage {
             addr: "/note".to_string(),
@@ -646,7 +651,7 @@ mod tests {
     fn extract_three_arguments_uses_last_two_values() {
         let config = ListenerConfig {
             address_pattern: "/note".to_string(),
-            velocity_mode: VelocityMode::ZeroBased,
+            velocity_mode: VelocityMode::OneBased,
         };
         let message = OscMessage {
             addr: "/note".to_string(),
@@ -675,7 +680,7 @@ mod tests {
     async fn split_messages_merge_into_single_event() {
         let config = ListenerConfig {
             address_pattern: "/note".to_string(),
-            velocity_mode: VelocityMode::ZeroBased,
+            velocity_mode: VelocityMode::OneBased,
         };
         let accumulator = Arc::new(Mutex::new(HashMap::new()));
 

@@ -94,9 +94,11 @@ RUN_ARGS=("--force" "--name" "$REPO_SLUG" "--display-name" "$DISPLAY_NAME" "--po
 echo "[verify] Refreshing Docker demo for project '$REPO_SLUG' (pre-tests)"
 PRESENTER_ANDROID_ADB_BIN="$PRESENTER_ANDROID_ADB_BIN" ADB_KEYS_DIR="$ADB_KEYS_DIR" "$REPO_ROOT/scripts/docker/run-demo.sh" "${RUN_ARGS[@]}"
 
-echo "[verify] Restarting gateway"
+# Always rebuild gateway so all dev cards reflect the current branch
+echo "[verify] Rebuilding gateway (always)"
 PRESENTER_ANDROID_ADB_BIN="$PRESENTER_ANDROID_ADB_BIN" ADB_KEYS_DIR="$ADB_KEYS_DIR" "$REPO_ROOT/scripts/docker/run-gateway.sh" --force
 
+echo "[verify] Running Playwright suite"
 echo "[verify] Running Playwright suite"
 RUN_AS_ORIGINAL npm run test:playwright
 
@@ -121,4 +123,14 @@ until curl --fail --silent --show-error "${GATEWAY_URL}" | grep -q "data-project
   echo "[verify] Waiting for gateway card ${PROJECT_SLUG} (attempt ${ATTEMPTS})"
 done
 
+echo "[verify] Validating gateway stage links"
+HTML="$(curl --fail --silent --show-error "${GATEWAY_URL}")"
+if echo "$HTML" | grep -qE ">Stage SNV<|>Stage PP<|>Stage Timer<|>Stage Preach<"; then
+  echo "[verify] Gateway validation failed: legacy stage links detected" >&2
+  exit 1
+fi
+if ! echo "$HTML" | grep -q ">Stage<"; then
+  echo "[verify] Gateway validation failed: missing Stage link" >&2
+  exit 1
+fi
 echo "[verify] ✔ Completed. Demo card should now reflect: $DISPLAY_NAME"

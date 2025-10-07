@@ -102,19 +102,13 @@ function render(manifests, baseOrigin) {
     const repoPath = manifest.repoPath || manifest.project;
     const tablet = manifest.port ? `${url}ui/tablet` : '#';
     const bible = manifest.port ? `${url}ui/bible` : '#';
-    const stageSnv = manifest.port ? `${url}stage/worship-snv` : '#';
-    const stagePp = manifest.port ? `${url}stage/worship-pp` : '#';
-    const stageTimer = manifest.port ? `${url}stage/timer` : '#';
-    const stagePreach = manifest.port ? `${url}stage/preach` : '#';
+    const stage = manifest.port ? `${url}stage` : '#';
     const links = [
       { label: 'Open Demo', href: url },
       { label: 'Operator UI', href: operator },
       { label: 'Tablet UI', href: tablet },
       { label: 'Bible UI', href: bible },
-      { label: 'Stage SNV', href: stageSnv },
-      { label: 'Stage PP', href: stagePp },
-      { label: 'Stage Timer', href: stageTimer },
-      { label: 'Stage Preach', href: stagePreach },
+      { label: 'Stage', href: stage },
     ];
     const branchLabel = manifest.displayName || manifest.project;
     const lastUpdated = formatUpdatedAt(manifest.updatedAt);
