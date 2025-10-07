@@ -59,6 +59,22 @@ pub struct StageDisplaySlide {
     pub group: Option<String>,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct StagePlaylistEntry {
+    pub presentation_id: PresentationId,
+    pub name: String,
+    #[serde(default)]
+    pub is_current: bool,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct StagePlaylistSummary {
+    pub name: String,
+    pub entries: Vec<StagePlaylistEntry>,
+}
+
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct StageDisplaySnapshot {
@@ -85,6 +101,8 @@ pub struct StageDisplaySnapshot {
     pub current_position: Option<u32>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub total_slides: Option<u32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub playlist: Option<StagePlaylistSummary>,
 }
 
 impl From<&DomainSlide> for StageDisplaySlide {
@@ -155,6 +173,7 @@ impl StageDisplaySnapshot {
         latency_ms: Option<f64>,
         current_position: Option<u32>,
         total_slides: Option<u32>,
+        playlist: Option<StagePlaylistSummary>,
     ) -> Self {
         Self {
             layout,
@@ -171,6 +190,7 @@ impl StageDisplaySnapshot {
             latency_ms,
             current_position,
             total_slides,
+            playlist,
         }
     }
 }

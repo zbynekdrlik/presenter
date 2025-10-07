@@ -22,6 +22,8 @@
 - Per-display profiles (e.g., main stage monitor vs. choir screen).
 - Remote preview on tablets/phones for production leads.
 - Persistent heartbeat and latency visibility so operators can confirm live links without advancing slides.
+- Stage SNV layout surfaces the sanitized song title beside the current group tag and auto-scales lyrics to the configured two-line character limit.
+- Stage PP layout mirrors the Stage SNV lyric presentation and adds a live playlist sidebar that highlights the current song order.
 - Live synchronization with Resolume Arena decks, including auto-discovery of clips and alternating A/B lanes for main, translation, and Bible outputs.
 - Automatically relaunch Android stage display clients (Fully Kiosk) whenever TVs reconnect by
   tracking a configurable list of wireless ADB endpoints with per-device health reporting.

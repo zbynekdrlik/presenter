@@ -19,7 +19,8 @@ use presenter_core::{
     OscSettingsDraft, Playlist, PlaylistEntry, PlaylistEntryId, PlaylistId, Presentation,
     PresentationId, ResolumeHost, ResolumeHostDraft, ResolumeHostId, SearchResult, Slide,
     SlideContent, SlideGroup, SlideId, SlideText, StageDisplayLayout, StageDisplaySlide,
-    StageDisplaySnapshot, StageState, TimerCommand, TimerState, TimersOverview, TimersState,
+    StageDisplaySnapshot, StagePlaylistEntry, StagePlaylistSummary, StageState, TimerCommand,
+    TimerState, TimersOverview, TimersState,
 };
 use presenter_importer::bible::BibleIngestionService;
 use presenter_persistence::{DatabaseSettings, Repository};
@@ -929,7 +930,23 @@ impl AppState {
     }
 
     async fn ensure_demo_playlist(&self) -> anyhow::Result<()> {
-        if !self.repository.list_playlists().await?.is_empty() {
+        let existing = self.repository.list_playlists().await?;
+        let mut seed_required = existing.is_empty();
+
+        if !seed_required {
+            seed_required = existing.iter().all(|playlist| {
+                playlist
+                    .entries
+                    .iter()
+                    .all(|entry| !matches!(entry.kind, PlaylistEntryKind::Presentation { .. }))
+            });
+        }
+
+        if seed_required {
+            for playlist in existing {
+                let _ = self.repository.delete_playlist(playlist.id).await;
+            }
+        } else {
             return Ok(());
         }
 
@@ -1453,11 +1470,13 @@ impl AppState {
         let now = Utc::now();
         let timers_state = self.load_or_init_timers(now).await?;
         let latency_ms = self.sample_resolume_latency().await;
+        let playlist = self.resolve_stage_playlist(&resolution).await?;
         let context = StageContext {
             generated_at: now,
             overview: timers_state.overview(now),
             resolution,
             latency_ms,
+            playlist,
         };
         self.publish_stage_context(&context).await?;
         let current_main = context
@@ -1526,13 +1545,56 @@ impl AppState {
             return Ok(None);
         };
 
+        let playlist = self.resolve_stage_playlist(&resolution).await?;
         let latency_ms = self.sample_resolume_latency().await;
         Ok(Some(StageContext {
             generated_at: now,
             overview,
             resolution,
             latency_ms,
+            playlist,
         }))
+    }
+    async fn resolve_stage_playlist(
+        &self,
+        resolution: &StageResolution,
+    ) -> anyhow::Result<Option<StagePlaylistSummary>> {
+        let Some(presentation_id) = resolution.presentation_id else {
+            return Ok(None);
+        };
+        let playlists = self.repository.list_playlists().await?;
+        for playlist in playlists {
+            let mut entries = Vec::new();
+            let mut contains_current = false;
+            for entry in playlist.entries {
+                match entry.kind {
+                    PlaylistEntryKind::Presentation {
+                        presentation_id: entry_id,
+                        ..
+                    } => {
+                        let presentation = self.presentation_from_cache(entry_id).await?;
+                        let name = sanitize_song_title(&presentation.name);
+                        let is_current = entry_id == presentation_id;
+                        if is_current {
+                            contains_current = true;
+                        }
+                        entries.push(StagePlaylistEntry {
+                            presentation_id: entry_id,
+                            name,
+                            is_current,
+                        });
+                    }
+                    PlaylistEntryKind::Separator { .. } => continue,
+                }
+            }
+            if contains_current && !entries.is_empty() {
+                return Ok(Some(StagePlaylistSummary {
+                    name: playlist.name,
+                    entries,
+                }));
+            }
+        }
+        Ok(None)
     }
 
     async fn resolve_stage_from_state(
@@ -1617,6 +1679,7 @@ struct StageContext {
     overview: TimersOverview,
     resolution: StageResolution,
     latency_ms: Option<f64>,
+    playlist: Option<StagePlaylistSummary>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -1792,6 +1855,7 @@ fn build_stage_snapshot(
         context.latency_ms,
         context.resolution.current_index,
         context.resolution.total_slides,
+        context.playlist.clone(),
     )
 }
 

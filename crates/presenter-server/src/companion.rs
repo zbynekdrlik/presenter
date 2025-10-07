@@ -1139,6 +1139,7 @@ mod tests {
             None,
             Some(1),
             Some(3),
+            None,
         );
 
         assert!(state.apply_stage_snapshot(snapshot));
@@ -1170,6 +1171,7 @@ mod tests {
             None,
             Some(1),
             Some(2),
+            None,
         );
 
         assert!(state.apply_stage_snapshot(next_snapshot));

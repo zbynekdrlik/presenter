@@ -4681,7 +4681,7 @@ fn SettingsDocument(
                                 />
                             </Show>
                         </ul>
-                        <section class="settings__legend">
+                                                <section class="settings__legend">
                             <h3>"Clip Tokens"</h3>
                             <p class="settings__legend-note">
                                 "Presenter updates every clip whose name contains these tokens (for example, #main-a or #main-a-2) and alternates between A/B lanes so the next look is always preloaded."

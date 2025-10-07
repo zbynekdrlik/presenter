@@ -48,7 +48,6 @@ APT_PACKAGES=(
   libxcb-shm0
   libpangocairo-1.0-0
   libgdk-pixbuf-2.0-0
-  libatk1.0-data
   libfontconfig1
   libfreetype6
   gstreamer1.0-libav

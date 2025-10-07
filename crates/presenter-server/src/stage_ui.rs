@@ -1,5 +1,7 @@
+#![allow(named_arguments_used_positionally)]
 use crate::stage_connections::StageHeartbeatConfig;
 use axum::response::Html;
+use chrono::Local;
 use leptos::prelude::*;
 use leptos::prelude::{AnyView, IntoAny};
 use presenter_core::{StageDisplaySlide, StageDisplaySnapshot, TimerState};
@@ -55,6 +57,17 @@ fn StageDisplayDocument(
     graceMs: parseMs(testConfig.heartbeatGraceMs ?? testConfig.graceMs, heartbeatConfig.graceMs),
     disconnectMs: parseMs(testConfig.disconnectAfterMs ?? testConfig.disconnectMs, heartbeatConfig.disconnectMs),
     suppressReconnect: Boolean(testConfig.suppressReconnect ?? false),
+  }};
+  const clockFormatter = new Intl.DateTimeFormat('sk-SK', {{ hour: '2-digit', minute: '2-digit', hour12: false }});
+  const LYRIC_FIT_CONFIG = {{
+    'worship-snv': [
+      {{ id: 'current-text', baseRem: 14, minRem: 1.8 }},
+      {{ id: 'next-text', baseRem: 11.5, minRem: 1.5 }},
+    ],
+    'worship-pp': [
+      {{ id: 'current-main', baseRem: 13.5, minRem: 1.45 }},
+      {{ id: 'next-main', baseRem: 11.0, minRem: 1.3 }},
+    ],
   }};
   const useLegacyClientId = Boolean(testConfig.forceLegacyClientId);
   const generateClientId = () => {{
@@ -121,6 +134,7 @@ fn StageDisplayDocument(
   let reconnectTimer = null;
   let liveSocket = null;
   let reconnectBlocked = Boolean(config.suppressReconnect);
+  let clockTimer = null;
 
   const setOutputStale = (value) => {{
     document.body.dataset.outputStale = value ? 'true' : 'false';
@@ -214,58 +228,249 @@ fn StageDisplayDocument(
     sendJson({{ type: 'stage_heartbeat_ack', client_id: clientId, heartbeat_id: heartbeatId }});
   }};
 
-  const fitTextElement = (element, baseRem, minRem = 2.4, maxLines = 2) => {{
-    if (!element) return;
-    let size = baseRem;
-    const applySize = (value) => {{
-      size = Math.max(value, minRem);
-      element.style.fontSize = `${{size}}rem`;
-    }};
-    applySize(baseRem);
-
-    const measureLines = () => {{
-      const style = window.getComputedStyle(element);
-      const lineHeight = parseFloat(style.lineHeight || '0');
-      if (!lineHeight) {{
-        return 0;
-      }}
-      return Math.ceil(element.scrollHeight / lineHeight);
-    }};
-
-    let lines = measureLines();
-    let iterations = 0;
-    while (lines > maxLines && size > minRem && iterations < 40) {{
-      applySize(size - 0.15);
-      lines = measureLines();
-      iterations += 1;
-    }}
-  }};
-
-  const fitLyrics = (snapshotLayout) => {{
-    window.requestAnimationFrame(() => {{
-      if (snapshotLayout === 'worship-snv') {{
-        fitTextElement(document.getElementById('current-text'), 6.5, 3.2);
-        fitTextElement(document.getElementById('next-text'), 5.2, 2.6);
-      }} else if (snapshotLayout === 'worship-pp') {{
-        fitTextElement(document.getElementById('current-main'), 5.4, 3.0);
-        fitTextElement(document.getElementById('next-main'), 4.0, 2.4);
-      }}
-    }});
-  }};
-
   const selectPrimary = (slide) => {{
     if (!slide) return '';
     const stage = (slide.stage || '').trim();
     return stage.length ? stage : (slide.main || '');
   }};
 
-  const preferredStage = (slide) => {{
+  const sanitizeSongTitle = (value) => {{
+    if (value == null) return '';
+    const input = String(value).trimStart();
+    if (input.length >= 4 && /[0-9]/.test(input[0]) && /[0-9]/.test(input[1]) && /[0-9]/.test(input[2]) && /\s/.test(input[3])) {{
+      return input.slice(4).trimStart();
+    }}
+    return input;
+  }};
+
+  const stageNoteText = (slide) => {{
     if (!slide) return '';
     const stage = (slide.stage || '').trim();
-    if (stage.length) return stage;
-    const translation = (slide.translation || '').trim();
-    if (translation.length) return translation;
-    return slide.main || '';
+    return stage.length ? stage : '';
+  }};
+
+  const LINE_HEIGHT_FALLBACK_FACTOR = 1.12;
+  const FIT_LINE_TARGET = 2;
+  const FIT_LINE_TOLERANCE = 0.03;
+  const MIN_FONT_PX = 22;
+  const MIN_FONT_SCALE = 0.65;
+
+  const getFitConfig = (layoutCode, elementId) => {{
+    const entries = LYRIC_FIT_CONFIG[layoutCode];
+    if (!entries) return null;
+    return entries.find((entry) => entry.id === elementId) || null;
+  }};
+
+  const computeLyricsFontRem = (element, baseRem, minRem, rawContent, elementId) => {{
+    if (!element) return null;
+    const content = typeof rawContent === 'string' ? rawContent.trim() : '';
+    if (!content) {{
+      return null;
+    }}
+
+    const explicitLines = Math.max(1, content.split(/\r?\n/).length);
+    const effectiveTarget = Math.max(FIT_LINE_TARGET, explicitLines);
+    const maxLinesAllowed = effectiveTarget + FIT_LINE_TOLERANCE;
+
+    const rootFontSize =
+      parseFloat(window.getComputedStyle(document.documentElement).fontSize) || 16;
+    const basePx = Math.max(MIN_FONT_PX, baseRem * rootFontSize);
+    const configuredMinPx =
+      typeof minRem === 'number' && minRem > 0 ? minRem * rootFontSize : null;
+    const scaledBaseMin = basePx * MIN_FONT_SCALE;
+    const absoluteMinPx = Math.max(
+      MIN_FONT_PX,
+      configuredMinPx != null ? configuredMinPx : scaledBaseMin,
+    );
+
+    // Measure available row width using the nearest lyric row container, not the text box itself.
+    const row = element.parentElement || element;
+    const rowRect = row.getBoundingClientRect();
+    const width = Math.max(1, rowRect && rowRect.width ? rowRect.width : (document.documentElement?.clientWidth || 640));
+
+    const referenceStyle = window.getComputedStyle(element);
+    const computedFontSize = parseFloat(referenceStyle.fontSize) || basePx;
+    const computedLineHeight = parseFloat(referenceStyle.lineHeight);
+    const lineHeightRatio =
+      Number.isFinite(computedLineHeight) && computedLineHeight > 0 && Number.isFinite(computedFontSize) && computedFontSize > 0
+        ? computedLineHeight / computedFontSize
+        : LINE_HEIGHT_FALLBACK_FACTOR;
+
+    const clone = document.createElement('div');
+    clone.setAttribute('data-role', 'stage-fit-measure');
+    Object.assign(clone.style, {{
+      position: 'absolute',
+      visibility: 'hidden',
+      pointerEvents: 'none',
+      left: '-9999px',
+      top: '-9999px',
+      whiteSpace: 'pre-wrap',
+      wordBreak: 'break-word',
+      overflowWrap: 'break-word',
+      letterSpacing: referenceStyle.letterSpacing,
+      textTransform: referenceStyle.textTransform,
+      textAlign: referenceStyle.textAlign,
+      fontFamily: referenceStyle.fontFamily,
+      fontWeight: referenceStyle.fontWeight,
+      fontStyle: referenceStyle.fontStyle,
+      fontVariant: referenceStyle.fontVariant,
+      margin: '0',
+      padding: '0',
+      border: '0',
+      maxWidth: 'none',
+      boxSizing: 'border-box',
+    }});
+    clone.style.width = `${{width}}px`;
+    document.body.appendChild(clone);
+
+    const measureLines = (fontPx) => {{
+      const size = Math.max(fontPx, MIN_FONT_PX);
+      clone.style.fontSize = `${{size}}px`;
+      clone.style.lineHeight = `${{lineHeightRatio}}`;
+      clone.textContent = content;
+      const lineHeightPx = size * lineHeightRatio;
+      const height = clone.scrollHeight;
+      const lines = lineHeightPx > 0 ? height / lineHeightPx : 0;
+      return {{ lines, lineHeightPx }};
+    }};
+
+    const baseMeasure = measureLines(basePx);
+    if (baseMeasure.lines <= maxLinesAllowed) {{
+      clone.remove();
+      if (window.PRESENTER_STAGE_TEST_CONFIG && window.PRESENTER_STAGE_TEST_CONFIG.traceFit) {{
+        const log = window.__presenterStageFitLog || [];
+        log.push({{
+          elementId,
+          basePx,
+          absoluteMinPx,
+          effectiveTarget,
+          baseLines: baseMeasure.lines,
+          finalPx: basePx,
+          finalLines: baseMeasure.lines,
+          contentLength: content.length,
+          decision: 'base',
+        }});
+        window.__presenterStageFitLog = log;
+      }}
+      return basePx / rootFontSize;
+    }}
+
+    let targetPx = basePx;
+
+    if (baseMeasure.lines > maxLinesAllowed) {{
+      let low = absoluteMinPx;
+      let high = basePx;
+      let bestPx = low;
+
+      const lowMeasure = measureLines(low);
+      if (lowMeasure.lines <= maxLinesAllowed) {{
+        for (let i = 0; i < 18 && high - low > 0.4; i += 1) {{
+          const mid = (low + high) / 2;
+          const current = measureLines(mid);
+          if (current.lines <= maxLinesAllowed) {{
+            bestPx = mid;
+            low = mid;
+          }} else {{
+            high = mid;
+          }}
+        }}
+      }} else {{
+        const scale = Math.max(
+          0.4,
+          effectiveTarget / Math.max(lowMeasure.lines, effectiveTarget),
+        );
+        bestPx = Math.max(MIN_FONT_PX, low * scale);
+      }}
+
+      targetPx = bestPx;
+    }}
+
+    let finalPx = Math.max(MIN_FONT_PX, Math.min(basePx, targetPx));
+    let finalMeasure = measureLines(finalPx);
+
+    clone.remove();
+
+    const finalRem = finalPx / rootFontSize;
+
+    if (window.PRESENTER_STAGE_TEST_CONFIG && window.PRESENTER_STAGE_TEST_CONFIG.traceFit) {{
+      const log = window.__presenterStageFitLog || [];
+      log.push({{
+        elementId,
+        basePx,
+        absoluteMinPx,
+        effectiveTarget,
+        baseLines: baseMeasure.lines,
+        finalPx,
+        finalLines: finalMeasure.lines,
+        contentLength: content.length,
+        decision: 'shrink',
+      }});
+      window.__presenterStageFitLog = log;
+    }}
+
+    return finalRem;
+  }};
+
+  const applyLyricText = (layoutCode, elementId, value) => {{
+    const element = document.getElementById(elementId);
+    if (!element) return;
+    const textValue = value || '';
+    if (!textValue.trim()) {{
+      element.textContent = '';
+      element.style.fontSize = '';
+      delete element.dataset.fontRem;
+      return;
+    }}
+
+    const config = getFitConfig(layoutCode, elementId);
+    if (!config) {{
+      element.style.fontSize = '';
+      element.textContent = textValue;
+      delete element.dataset.fontRem;
+      return;
+    }}
+
+    const finalRem = computeLyricsFontRem(
+      element,
+      config.baseRem,
+      config.minRem,
+      textValue,
+      elementId,
+    );
+    if (Number.isFinite(finalRem) && finalRem > 0) {{
+      element.style.fontSize = `${{finalRem}}rem`;
+      element.dataset.fontRem = finalRem.toFixed(4);
+    }} else {{
+      element.style.fontSize = '';
+      delete element.dataset.fontRem;
+    }}
+    element.textContent = textValue;
+  }};
+
+  const refitVisibleLyrics = () => {{
+    const entries = LYRIC_FIT_CONFIG[layout];
+    if (!entries) return;
+    entries.forEach((entry) => {{
+      const element = document.getElementById(entry.id);
+      if (!element) return;
+      const currentText = element.textContent || '';
+      if (!currentText.trim()) {{
+        element.style.fontSize = '';
+        delete element.dataset.fontRem;
+        return;
+      }}
+      const finalRem = computeLyricsFontRem(
+        element,
+        entry.baseRem,
+        entry.minRem,
+        currentText,
+        entry.id,
+      );
+      if (Number.isFinite(finalRem) && finalRem > 0) {{
+        element.style.fontSize = `${{finalRem}}rem`;
+        element.dataset.fontRem = finalRem.toFixed(4);
+      }}
+    }});
   }};
 
   const setText = (id, value) => {{
@@ -279,6 +484,38 @@ fn StageDisplayDocument(
     const el = document.getElementById(id);
     if (el) {{
       el.dataset.hidden = hidden ? 'true' : 'false';
+    }}
+  }};
+
+  const updateClockElement = () => {{
+    const el = document.getElementById('stage-clock');
+    if (!el) return;
+    el.textContent = clockFormatter.format(new Date());
+  }};
+
+  const ensureClockTimer = () => {{
+    updateClockElement();
+    if (clockTimer != null) return;
+    clockTimer = window.setInterval(updateClockElement, 1000);
+  }};
+
+  const stopClockTimer = () => {{
+    if (clockTimer != null) {{
+      window.clearInterval(clockTimer);
+      clockTimer = null;
+    }}
+  }};
+
+  const reconcileClock = () => {{
+    const hasClockLayout = layout === 'timer' || layout === 'preach';
+    if (hasClockLayout) {{
+      ensureClockTimer();
+    }} else {{
+      stopClockTimer();
+      const clockEl = document.getElementById('stage-clock');
+      if (clockEl) {{
+        clockEl.textContent = '';
+      }}
     }}
   }};
 
@@ -309,43 +546,87 @@ fn StageDisplayDocument(
       setText('preach-value', formatSeconds(preachSeconds));
       setText('preach-status', preach.state || '');
     }}
+    reconcileClock();
+  }};
+
+  const renderPlaylist = (playlist) => {{
+    const container = document.getElementById('stage-playlist');
+    const titleEl = document.getElementById('stage-playlist-title');
+    const listEl = document.getElementById('stage-playlist-items');
+    if (!container || !titleEl || !listEl) return;
+    listEl.innerHTML = '';
+    if (!playlist || !Array.isArray(playlist.entries) || playlist.entries.length === 0) {{
+      container.dataset.visible = 'false';
+      titleEl.textContent = 'Playlist';
+      return;
+    }}
+    container.dataset.visible = 'true';
+    titleEl.textContent = playlist.name || 'Playlist';
+    playlist.entries.forEach((entry) => {{
+      const item = document.createElement('li');
+      item.className = 'stage__playlist-item';
+      const entryName = entry && entry.name ? sanitizeSongTitle(entry.name) : '';
+      item.textContent = entryName;
+      const isCurrent = Boolean(entry && (entry.isCurrent ?? entry.is_current));
+      item.dataset.current = isCurrent ? 'true' : 'false';
+      listEl.appendChild(item);
+    }});
   }};
 
   const applyStage = (snapshot) => {{
     applyTimers(snapshot.timers);
 
+    const rawSongName = snapshot.presentationName || snapshot.presentation_name || '';
+    const songName = sanitizeSongTitle(rawSongName);
+
     if (layout === 'worship-snv') {{
       const current = snapshot.current;
       const next = snapshot.next;
-      setText('current-text', selectPrimary(current));
+      const currentText = selectPrimary(current);
       const nextText = selectPrimary(next);
-      setText('next-text', nextText || '');
+      applyLyricText(layout, 'current-text', currentText || '');
+      applyLyricText(layout, 'next-text', nextText || '');
 
       const currentGroup = current && current.group ? current.group : '';
       setText('current-group', currentGroup || '');
       setHidden('current-group', !currentGroup);
 
+      setText('current-song', songName || '');
+      setHidden('current-song', !songName);
+
       const nextGroup = next && next.group ? next.group : '';
       setText('next-group', nextGroup || '');
       setHidden('next-group', !nextGroup);
+
+      renderPlaylist(null);
     }} else if (layout === 'worship-pp') {{
       const current = snapshot.current;
       const next = snapshot.next;
-      setText('current-main', current ? current.main : '');
+      const primary = selectPrimary(current);
+      applyLyricText(layout, 'current-main', primary || '');
       const currentGroup = current && current.group ? current.group : '';
       setText('current-group', currentGroup || '');
       setHidden('current-group', !currentGroup);
 
-      const stage = preferredStage(current);
-      setText('current-stage', stage || '');
-      setHidden('current-stage', !stage);
+      setText('current-song', songName || '');
+      setHidden('current-song', !songName);
 
-      setText('next-main', next ? next.main : '');
+      const stageNote = stageNoteText(current);
+      setText('current-stage', stageNote || '');
+      setHidden('current-stage', !stageNote);
+
+      const nextPrimary = selectPrimary(next);
+      applyLyricText(layout, 'next-main', nextPrimary || '');
       const nextGroup = next && next.group ? next.group : '';
       setText('next-group', nextGroup || '');
       setHidden('next-group', !nextGroup);
+
+      const playlistPayload = snapshot.playlist || snapshot.playlistSummary || snapshot.playlist_summary || null;
+      renderPlaylist(playlistPayload);
+    }} else {{
+      renderPlaylist(null);
     }}
-    fitLyrics(layout);
+    reconcileClock();
   }};
 
   const layoutEndpoint = '/stage/snapshot';
@@ -501,7 +782,8 @@ fn StageDisplayDocument(
     }}
   }});
 
-  window.addEventListener('resize', () => fitLyrics(layout));
+  // Do not refit visible lyrics on window resize to avoid on-screen size changes.
+  // We only compute sizes when text changes.
   window.addEventListener('focus', refreshFromServer);
   window.__presenterStageRefresh = refreshFromServer;
   window.__presenterStageReconnect = () => {{
@@ -583,17 +865,30 @@ fn render_worship_snv(snapshot: &StageDisplaySnapshot) -> AnyView {
         .as_ref()
         .and_then(|slide| slide.group.clone())
         .unwrap_or_default();
+    let song_name = snapshot
+        .presentation_name
+        .as_ref()
+        .map(|name| sanitize_display_title(name))
+        .unwrap_or_default();
+    let song_hidden = song_name.is_empty().to_string();
 
     view! {
         <section class="stage__lyrics">
             <div class="stage__lyrics-current">
-                <div class="stage__group-slot">
+                <div class="stage__group-slot stage__group-slot--current">
                     <span
                         id="current-group"
                         class="stage__group"
                         data-hidden={(current_group.is_empty()).to_string()}
                     >
                         {current_group.clone()}
+                    </span>
+                    <span
+                        id="current-song"
+                        class="stage__song"
+                        data-hidden={song_hidden.clone()}
+                    >
+                        {song_name.clone()}
                     </span>
                 </div>
                 <p id="current-text">{current_text}</p>
@@ -616,68 +911,96 @@ fn render_worship_snv(snapshot: &StageDisplaySnapshot) -> AnyView {
 }
 
 fn render_worship_pp(snapshot: &StageDisplaySnapshot) -> AnyView {
-    let current_main = snapshot
+    let current_text = snapshot
         .current
         .as_ref()
-        .map(|slide| slide.main.clone())
+        .map(primary_text)
         .unwrap_or_default();
     let current_group = snapshot
         .current
         .as_ref()
         .and_then(|slide| slide.group.clone())
         .unwrap_or_default();
+    let song_name = snapshot
+        .presentation_name
+        .as_ref()
+        .map(|name| sanitize_display_title(name))
+        .unwrap_or_default();
+    let song_hidden = song_name.is_empty().to_string();
     let current_stage = snapshot
         .current
         .as_ref()
         .map(|slide| stage_text(slide))
         .unwrap_or_else(|| "".to_string());
     let current_stage_hidden = (current_stage.is_empty()).to_string();
-    let current_stage_text = current_stage.clone();
-    let next_main = snapshot
-        .next
-        .as_ref()
-        .map(|slide| slide.main.clone())
-        .unwrap_or_default();
+    let next_text = snapshot.next.as_ref().map(primary_text).unwrap_or_default();
     let next_group = snapshot
         .next
         .as_ref()
         .and_then(|slide| slide.group.clone())
         .unwrap_or_default();
+    let playlist = snapshot.playlist.clone();
+    let playlist_visible = playlist
+        .as_ref()
+        .map(|summary| !summary.entries.is_empty())
+        .unwrap_or(false)
+        .to_string();
+    let playlist_title = playlist
+        .as_ref()
+        .map(|summary| summary.name.clone())
+        .unwrap_or_else(|| "Playlist".to_string());
 
     view! {
-        <section class="stage__split">
-            <div class="stage__split-main">
-                <h2>"Current"</h2>
-                <div class="stage__group-slot">
-                    <span
-                        id="current-group"
-                        class="stage__group"
-                        data-hidden={(current_group.is_empty()).to_string()}
+        <section class="stage__pp">
+            <div class="stage__lyrics stage__lyrics--pp">
+                <div class="stage__lyrics-current stage__lyrics-current--pp">
+                    <div class="stage__group-slot stage__group-slot--current">
+                        <span
+                            id="current-group"
+                            class="stage__group"
+                            data-hidden={(current_group.is_empty()).to_string()}
+                        >
+                            {current_group.clone()}
+                        </span>
+                        <span
+                            id="current-song"
+                            class="stage__song"
+                            data-hidden={song_hidden.clone()}
+                        >
+                            {song_name.clone()}
+                        </span>
+                    </div>
+                    <p id="current-main">{current_text}</p>
+                    <small
+                        id="current-stage"
+                        class="stage__meta stage__meta--stage"
+                        data-hidden={current_stage_hidden.clone()}
                     >
-                        {current_group.clone()}
-                    </span>
+                        {current_stage}
+                    </small>
                 </div>
-                <p id="current-main">{current_main}</p>
-                <small
-                    id="current-stage"
-                    class="stage__meta"
-                    data-hidden={current_stage_hidden}
-                >
-                    {current_stage_text}
-                </small>
+                <div class="stage__lyrics-next stage__lyrics-next--pp">
+                    <div class="stage__group-slot stage__group-slot--next">
+                        <span
+                            id="next-group"
+                            class="stage__group stage__group--next"
+                            data-hidden={(next_group.is_empty()).to_string()}
+                        >
+                            {next_group.clone()}
+                        </span>
+                    </div>
+                    <p id="next-main">{next_text}</p>
+                </div>
             </div>
-            <aside class="stage__split-sidebar">
-                <h3>"Next"</h3>
-                <div class="stage__group-slot stage__group-slot--next">
-                    <span
-                        id="next-group"
-                        class="stage__group stage__group--next"
-                        data-hidden={(next_group.is_empty()).to_string()}
-                    >
-                        {next_group.clone()}
-                    </span>
+            <aside
+                class="stage__playlist"
+                id="stage-playlist"
+                data-visible={playlist_visible.clone()}
+            >
+                <div class="stage__playlist-header">
+                    <h3 id="stage-playlist-title">{playlist_title}</h3>
                 </div>
-                <p id="next-main">{next_main}</p>
+                <ul class="stage__playlist-list" id="stage-playlist-items"></ul>
             </aside>
         </section>
     }
@@ -687,11 +1010,13 @@ fn render_worship_pp(snapshot: &StageDisplaySnapshot) -> AnyView {
 fn render_timer(snapshot: &StageDisplaySnapshot) -> AnyView {
     let countdown = snapshot.timers.countdown_to_start.seconds_remaining;
     let formatted = format_hms(countdown);
+    let clock = Local::now().format("%H:%M").to_string();
 
     view! {
         <section class="stage__timer stage__timer--countdown">
             <div class="stage__timer-value" id="countdown-value">{formatted}</div>
             <p class="stage__timer-label">"Service Countdown"</p>
+            <div class="stage__clock" id="stage-clock">{clock}</div>
         </section>
     }
     .into_any()
@@ -706,14 +1031,31 @@ fn render_preach(snapshot: &StageDisplaySnapshot) -> AnyView {
         TimerState::Idle => "Idle",
         TimerState::Completed => "Completed",
     };
+    let clock = Local::now().format("%H:%M").to_string();
 
     view! {
         <section class="stage__timer stage__timer--preach">
             <div class="stage__timer-value" id="preach-value">{formatted}</div>
             <p class="stage__timer-label">"Preach Timer ("<span id="preach-status">{status}</span>")"</p>
+            <div class="stage__clock stage__clock--preach" id="stage-clock">{clock}</div>
         </section>
     }
     .into_any()
+}
+
+fn sanitize_display_title(name: &str) -> String {
+    let trimmed = name.trim_start();
+    let bytes = trimmed.as_bytes();
+    if bytes.len() >= 4
+        && bytes[0].is_ascii_digit()
+        && bytes[1].is_ascii_digit()
+        && bytes[2].is_ascii_digit()
+        && bytes[3].is_ascii_whitespace()
+    {
+        trimmed[4..].trim_start().to_string()
+    } else {
+        trimmed.to_string()
+    }
 }
 
 fn primary_text(slide: &StageDisplaySlide) -> String {
@@ -748,7 +1090,11 @@ fn format_hms(seconds: i64) -> String {
 
 const STAGE_STYLES: &str = r#"
 * { box-sizing: border-box; }
-body.stage { background: #000; color: #f8fafc; font-family: 'Inter', system-ui, sans-serif; margin: 0; min-height: 100vh; display: flex; align-items: stretch; justify-content: center; padding: 4vh 6vw; }
+/* Ensure the stage always consumes the full viewport width to prevent left-aligned shrink */
+html, body.stage { width: 100vw; min-width: 100vw; overflow-x: hidden; }
+body.stage { background: #000; color: #f8fafc; font-family: 'Inter', system-ui, sans-serif; margin: 0; min-height: 100vh; display: flex; align-items: stretch; justify-content: stretch; padding: 4vh 6vw; }
+/* SNV layout should maximize horizontal space: remove side padding on the body for SNV */
+body.stage[data-layout-code="worship-snv"] { padding-left: 0; padding-right: 0; }
 body.stage[data-output-stale="true"] .stage__body { opacity: 0.55; transition: opacity 0.25s ease; }
 body.stage[data-output-stale="true"] .stage__status { box-shadow: 0 12px 32px -18px rgba(248, 113, 113, 0.55); }
 body.stage[data-output-stale="true"] .stage__lyrics-current,
@@ -759,14 +1105,23 @@ body.stage[data-output-stale="true"] .stage__split-sidebar { opacity: 0.65; tran
 body.stage[data-live-state="reconnecting"] .stage__status-connection { color: #fbbf24; }
 body.stage[data-live-state="disconnected"] .stage__status-connection,
 body.stage[data-live-state="error"] .stage__status-connection { color: #f87171; }
-.stage__body { flex: 1; display: flex; align-items: stretch; justify-content: center; width: 100%; }
+.stage__body { flex: 1; display: flex; align-items: stretch; justify-content: stretch; width: 100%; max-width: 100vw; }
 .stage__lyrics { display: flex; flex-direction: column; justify-content: space-between; gap: 2.5rem; text-align: center; width: 100%; height: 100%; padding: 2vh 4vw; box-sizing: border-box; }
-.stage__lyrics-current { font-size: 6.5rem; font-weight: 700; display: flex; flex-direction: column; gap: 1rem; align-items: center; justify-content: flex-start; letter-spacing: 0.04em; min-height: 0; }
-.stage__lyrics-current p { margin: 0; line-height: 1.06; white-space: pre-wrap; text-transform: none; max-width: 100%; }
-.stage__lyrics-next { font-size: 5.2rem; color: #cbd5f5; letter-spacing: 0.06em; display: flex; flex-direction: column; gap: 1.4rem; align-items: center; justify-content: center; padding-bottom: 4vh; }
-.stage__lyrics-next p { margin: 0; white-space: pre-wrap; text-transform: none; line-height: 1.1; max-width: 100%; }
-.stage__group-slot { min-height: 3.8rem; display: flex; align-items: center; justify-content: center; }
+/* SNV: lock current/next to equal halves so text size never resizes the layout */
+body.stage[data-layout-code="worship-snv"] .stage__lyrics { display: grid; grid-template-rows: 1fr 1fr; align-items: stretch; justify-items: stretch; }
+body.stage[data-layout-code="worship-snv"] .stage__lyrics-current,
+body.stage[data-layout-code="worship-snv"] .stage__lyrics-next { overflow: hidden; display: flex; align-items: center; }
+/* Reduce side padding for SNV to maximize usable width on stage */
+body.stage[data-layout-code="worship-snv"] .stage__lyrics { padding-left: 2vw; padding-right: 2vw; }
+.stage__lyrics-current { font-size: 14rem; font-weight: 700; display: flex; flex-direction: column; gap: 1rem; align-items: stretch; justify-content: flex-start; letter-spacing: 0.04em; min-height: 0; }
+.stage__lyrics-current p { margin: 0; line-height: 1.06; white-space: pre-wrap; text-transform: none; max-width: 100%; width: 100%; }
+.stage__lyrics-next { font-size: 11.5rem; color: #cbd5f5; letter-spacing: 0.06em; display: flex; flex-direction: column; gap: 1rem; align-items: stretch; justify-content: center; padding-bottom: 4vh; }
+.stage__lyrics-next p { margin: 0; white-space: pre-wrap; text-transform: none; line-height: 1.1; max-width: 100%; width: 100%; }
+.stage__group-slot { min-height: 3.8rem; display: flex; align-items: center; justify-content: center; gap: 1rem; flex-wrap: wrap; text-align: center; width: 100%; }
 .stage__group-slot--next { justify-content: center; }
+.stage__group-slot--current { justify-content: space-between; align-items: center; flex-wrap: nowrap; gap: 1rem; width: 100%; }
+.stage__group-slot--current .stage__group { margin-right: auto; }
+.stage__group-slot--current .stage__song { margin-left: auto; }
 .stage__split { display: grid; gap: 2rem; grid-template-columns: minmax(0, 2fr) minmax(0, 1fr); width: 100%; }
 .stage__split-main { background: rgba(15, 23, 42, 0.75); padding: 2rem; border-radius: 1rem; box-shadow: 0 20px 40px -30px rgba(15, 23, 42, 0.9); display: flex; flex-direction: column; gap: 1.25rem; }
 .stage__split-main h2 { margin-top: 0; font-size: 1.5rem; letter-spacing: 0.1em; color: #38bdf8; }
@@ -777,15 +1132,31 @@ body.stage[data-live-state="error"] .stage__status-connection { color: #f87171; 
 .stage__split-sidebar p { margin: 0; white-space: pre-wrap; }
 .stage__split-main .stage__group-slot,
 .stage__split-sidebar .stage__group-slot { justify-content: flex-start; }
-.stage__timer { text-align: center; width: 100%; }
-.stage__timer-value { font-size: 8rem; font-weight: 700; letter-spacing: 0.1em; }
-.stage__timer-label { font-size: 1.5rem; color: #94a3b8; letter-spacing: 0.3em; text-transform: uppercase; }
+.stage__pp { display: grid; gap: 2.5rem; grid-template-columns: minmax(0, 2.6fr) minmax(0, 1fr); width: 100%; align-items: stretch; }
+.stage__lyrics--pp { background: rgba(15, 23, 42, 0.75); padding: 2.5rem 3rem; border-radius: 1.25rem; display: grid; grid-template-rows: 1fr 1fr; gap: 3.4rem; box-shadow: 0 24px 48px -32px rgba(15, 23, 42, 0.9); }
+.stage__lyrics-current--pp { align-items: stretch; gap: 1rem; font-size: 13.5rem; }
+.stage__lyrics-next--pp { align-items: stretch; gap: 1rem; color: #cbd5f5; font-size: 11rem; }
+.stage__lyrics-next--pp p { color: #cbd5f5; }
+.stage__playlist { background: rgba(15, 23, 42, 0.55); padding: 1.8rem; border-radius: 1.25rem; display: flex; flex-direction: column; gap: 1.5rem; min-width: 0; box-shadow: 0 20px 40px -34px rgba(15, 23, 42, 0.9); }
+.stage__playlist[data-visible="false"] { display: none; }
+.stage__playlist-header h3 { margin: 0; letter-spacing: 0.18em; text-transform: uppercase; font-size: 1.1rem; color: #38bdf8; }
+.stage__playlist-list { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 0.85rem; }
+.stage__playlist-item { font-size: 1.35rem; letter-spacing: 0.14em; text-transform: uppercase; color: #94a3b8; opacity: 0.65; transition: opacity 0.2s ease, color 0.2s ease; }
+.stage__playlist-item[data-current="true"] { color: #facc15; opacity: 1; font-weight: 600; }
+.stage__timer { text-align: center; width: 100%; display: flex; flex-direction: column; align-items: center; gap: 1.4rem; }
+.stage__timer-value { font-size: 10rem; font-weight: 700; letter-spacing: 0.1em; }
+.stage__timer-label { font-size: 1.7rem; color: #94a3b8; letter-spacing: 0.28em; text-transform: uppercase; }
 .stage__timer--preach .stage__timer-value { color: #34d399; }
 .stage__timer--countdown .stage__timer-value { color: #38bdf8; }
-.stage__group { display: inline-flex; align-items: center; justify-content: center; padding: 0.75rem 2.8rem; background: rgba(56, 189, 248, 0.35); color: #38bdf8; border-radius: 999px; font-size: 2.4rem; letter-spacing: 0.18em; text-transform: uppercase; font-weight: 700; }
+.stage__clock { font-size: 2.6rem; letter-spacing: 0.22em; text-transform: uppercase; color: #94a3b8; }
+.stage__clock--preach { color: #38bdf8; }
+.stage__group { display: inline-flex; align-items: center; justify-content: center; padding: 0.5rem 1.8rem; background: rgba(56, 189, 248, 0.35); color: #38bdf8; border-radius: 999px; font-size: 1.8rem; letter-spacing: 0.14em; text-transform: uppercase; font-weight: 700; }
+.stage__song { display: inline-flex; align-items: center; justify-content: center; padding: 0.4rem 1.2rem; border-radius: 999px; background: rgba(148, 163, 184, 0.2); color: #dbeafe; letter-spacing: 0.07em; text-transform: uppercase; font-weight: 600; font-size: 1.15rem; margin-left: auto; text-align: right; }
 .stage__group[data-hidden="true"] { display: none; }
+.stage__song[data-hidden="true"] { display: none; }
 .stage__group--next { background: rgba(250, 204, 21, 0.3); color: #facc15; }
 .stage__meta { color: #cbd5f5; display: block; margin-top: 0.5rem; }
+.stage__meta--stage { font-size: 1.6rem; letter-spacing: 0.08em; text-transform: uppercase; opacity: 0.8; }
 .stage__meta[data-hidden="true"] { display: none; }
 .stage__empty { color: #94a3b8; font-size: 2rem; }
 .stage__status { position: fixed; bottom: 2rem; right: 2.5rem; display: inline-flex; align-items: center; gap: 0.75rem; padding: 0.6rem 1.2rem; font-size: 0.85rem; letter-spacing: 0.12em; text-transform: uppercase; background: rgba(15, 23, 42, 0.7); border-radius: 999px; box-shadow: 0 12px 32px -24px rgba(15, 23, 42, 0.95); }
@@ -802,7 +1173,7 @@ mod tests {
     use super::*;
     use crate::stage_connections::StageHeartbeatConfig;
     use chrono::Utc;
-    use presenter_core::{StageDisplayLayout, StageDisplaySlide};
+    use presenter_core::{PresentationId, SlideId, StageDisplayLayout, StageDisplaySlide};
 
     fn worship_layout() -> StageDisplayLayout {
         StageDisplayLayout::built_in()
@@ -829,6 +1200,7 @@ mod tests {
             None,
             None,
             None,
+            None,
         );
 
         let html = render_stage_display(snapshot, StageHeartbeatConfig::default_values()).0;
@@ -851,7 +1223,7 @@ mod tests {
             now,
             Some(presenter_core::PresentationId::new()),
             Some("Sample".into()),
-            None,
+            Some("Sample Library".into()),
             Some("Sample Song".into()),
             Some(presenter_core::SlideId::new()),
             Some(slide),
@@ -861,11 +1233,45 @@ mod tests {
             None,
             None,
             None,
+            None,
         );
 
         let html = render_stage_display(snapshot, StageHeartbeatConfig::default_values()).0;
         assert!(html.contains("Line A\nLine B"));
         assert!(html.contains("Verse"));
+    }
+
+    #[test]
+    fn worship_stage_displays_sanitised_song_title() {
+        let now = Utc::now();
+        let layout = worship_layout();
+        let slide = StageDisplaySlide {
+            main: "Line A".to_string(),
+            translation: String::new(),
+            stage: String::new(),
+            group: Some("Verse".to_string()),
+        };
+        let snapshot = StageDisplaySnapshot::new(
+            layout,
+            now,
+            Some(PresentationId::new()),
+            Some("001 Amazing Grace".into()),
+            Some("New Level".into()),
+            Some("001 Amazing Grace".into()),
+            Some(SlideId::new()),
+            Some(slide),
+            None,
+            None,
+            presenter_core::timer::TimersOverview::demo(now),
+            None,
+            None,
+            None,
+            None,
+        );
+
+        let html = render_stage_display(snapshot, StageHeartbeatConfig::default_values()).0;
+        assert!(html.contains(">Amazing Grace</span>"));
+        assert!(!html.contains(">001 Amazing Grace</span>"));
     }
 
     #[test]
@@ -883,6 +1289,7 @@ mod tests {
             None,
             None,
             presenter_core::timer::TimersOverview::demo(now),
+            None,
             None,
             None,
             None,
