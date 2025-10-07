@@ -108,7 +108,7 @@ function render(manifests, baseOrigin) {
       { label: 'Operator UI', href: operator },
       { label: 'Tablet UI', href: tablet },
       { label: 'Bible UI', href: bible },
-      { label: 'Stage Display', href: stage },
+      { label: 'Stage', href: stage },
     ];
     const branchLabel = manifest.displayName || manifest.project;
     const lastUpdated = formatUpdatedAt(manifest.updatedAt);
