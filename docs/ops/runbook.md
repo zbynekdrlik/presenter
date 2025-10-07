@@ -169,3 +169,8 @@ Keep this document up to date whenever the deployment process changes.
 ## Ableton Live OSC bridge
 
 Load Ableton's Connection Kit “OSC Send” Max for Live device on the automation track, point it at the Presenter controller (`presenter.lan` on port 39051 by default), and store a default preset so the host/port survive reopening the Live Set. Step-by-step setup guidance lives in [docs/ops/ableton-osc-device.md](ableton-osc-device.md).
+
+Pre‑release defaults (intentional)
+- OSC address pattern is fixed to `/note`.
+- Velocity mode is fixed to zero‑based, i.e. velocity values 0,1,2… map directly to slide indices. This matches our E2E tests and library mappings.
+- These defaults simplify the first tuned production build; custom patterns/modes can be added in a later iteration if needed.
