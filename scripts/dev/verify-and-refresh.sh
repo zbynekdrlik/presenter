@@ -94,29 +94,11 @@ RUN_ARGS=("--force" "--name" "$REPO_SLUG" "--display-name" "$DISPLAY_NAME" "--po
 echo "[verify] Refreshing Docker demo for project '$REPO_SLUG' (pre-tests)"
 PRESENTER_ANDROID_ADB_BIN="$PRESENTER_ANDROID_ADB_BIN" ADB_KEYS_DIR="$ADB_KEYS_DIR" "$REPO_ROOT/scripts/docker/run-demo.sh" "${RUN_ARGS[@]}"
 
-NEEDS_GATEWAY_REBUILD=0
-if git rev-parse --verify origin/main >/dev/null 2>&1; then
-  if ! git diff --quiet origin/main..HEAD -- gateway 2>/dev/null; then
-    NEEDS_GATEWAY_REBUILD=1
-  fi
-else
-  # Fallback: if any tracked files exist under gateway/, rebuild
-  if git ls-files --quiet gateway | grep -q .; then
-    NEEDS_GATEWAY_REBUILD=1
-  fi
-fi
-
-if [[ "$PRESENTER_FORCE_GATEWAY" == "1" ]]; then
-  NEEDS_GATEWAY_REBUILD=1
-fi
-
-if [[ "$NEEDS_GATEWAY_REBUILD" -eq 1 ]]; then
-  echo "[verify] Rebuilding gateway (changes detected under gateway/)"
-  PRESENTER_ANDROID_ADB_BIN="$PRESENTER_ANDROID_ADB_BIN" ADB_KEYS_DIR="$ADB_KEYS_DIR" "$REPO_ROOT/scripts/docker/run-gateway.sh" --force
-else
-  echo "[verify] Rebuilding gateway (always)"
+# Always rebuild gateway so all dev cards reflect the current branch
+echo "[verify] Rebuilding gateway (always)"
 PRESENTER_ANDROID_ADB_BIN="$PRESENTER_ANDROID_ADB_BIN" ADB_KEYS_DIR="$ADB_KEYS_DIR" "$REPO_ROOT/scripts/docker/run-gateway.sh" --force
 
+echo "[verify] Running Playwright suite"
 echo "[verify] Running Playwright suite"
 RUN_AS_ORIGINAL npm run test:playwright
 
