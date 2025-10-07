@@ -14,6 +14,7 @@ LOG_LEVEL="presenter_server=info"
 FORCE=0
 COMPANION_ENABLED="${PRESENTER_COMPANION_ENABLED:-0}"
 ADB_KEYS_DIR="${ADB_KEYS_DIR:-${XDG_CONFIG_HOME:-${HOME}/.config}/presenter/adb}"
+PUBLISH_OSC=0
 
 usage() {
   cat <<USAGE
@@ -22,7 +23,8 @@ Usage: $(basename "$0") [options]
   --port PORT          Host port to publish (defaults to derived high port)
   --import-root PATH   Path to ProPresenter library (default: "$DEFAULT_IMPORT_ROOT")
   --display-name TEXT  Display name for landing page (defaults to NAME)
-  --osc-port PORT      Host port to publish for OSC listener (defaults to derived high port)
+  --osc-port PORT      Host port to publish for OSC listener (default: 39051)
+  --publish-osc        Publish OSC UDP/TCP ports (default: off)
   --companion-port PORT  Host port to publish for the Companion websocket (defaults to derived high port)
   --log-level LEVEL   RUST_LOG value for the presenter container (default: presenter_server=info)
   --enable-companion  Expose the /companion/ws socket inside the demo (default: disabled)
@@ -46,6 +48,8 @@ while [[ $# -gt 0 ]]; do
       DISPLAY_NAME="$2"; shift 2 ;;
     --osc-port)
       OSC_PORT="$2"; shift 2 ;;
+    --publish-osc)
+      PUBLISH_OSC=1; shift ;;
     --companion-port)
       COMPANION_PORT="$2"; shift 2 ;;
     --log-level)
@@ -70,6 +74,7 @@ if [[ -z "$DISPLAY_NAME" ]]; then
   DISPLAY_NAME="$PROJECT"
 fi
 HOST_HTTP_PORT="$(compute_port "$PROJECT" "$PORT")"
+# Use static default for OSC host port unless explicitly overridden.
 if [[ -n "$OSC_PORT" ]]; then
   HOST_OSC_PORT="$OSC_PORT"
 else
@@ -112,7 +117,11 @@ export PRESENTER_COMPANION_ENABLED="$COMPANION_ENABLED"
 export PRESENTER_COMPANION_PORT="$HOST_COMPANION_PORT"
 export ADB_KEYS_DIR
 
-COMPOSE_ARGS=("${DOCKER_CMD[@]}" "compose" "-f" "$REPO_ROOT/docker-compose.demo.yml" "-p" "$PROJECT" up -d)
+COMPOSE_FILES=("-f" "$REPO_ROOT/docker-compose.demo.yml")
+if [[ "$PUBLISH_OSC" -eq 1 ]]; then
+  COMPOSE_FILES+=("-f" "$REPO_ROOT/docker-compose.osc.yml")
+fi
+COMPOSE_ARGS=("${DOCKER_CMD[@]}" "compose" "${COMPOSE_FILES[@]}" "-p" "$PROJECT" up -d)
 if [[ "$FORCE" -eq 1 ]]; then
   COMPOSE_ARGS+=("--build")
 fi
@@ -122,7 +131,12 @@ if [[ "$COMPANION_ENABLED" == "1" ]]; then
 else
   companion_status="disabled (reserved $HOST_COMPANION_PORT)"
 fi
-printf '[run-demo] Launching %s on http://localhost:%s (OSC %s, Companion %s)\n' "$PROJECT" "$HOST_HTTP_PORT" "$HOST_OSC_PORT" "$companion_status"
+if [[ "$PUBLISH_OSC" -eq 1 ]]; then
+  osc_status="published on $HOST_OSC_PORT"
+else
+  osc_status="not published (enable with --publish-osc)"
+fi
+printf '[run-demo] Launching %s on http://localhost:%s (OSC %s, Companion %s)\n' "$PROJECT" "$HOST_HTTP_PORT" "$osc_status" "$companion_status"
 "${COMPOSE_ARGS[@]}"
 
 # Wait for health endpoint

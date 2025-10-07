@@ -1,0 +1,5 @@
+services:
+  presenter:
+    ports:
+      - "${HOST_OSC_PORT:-39051}:39051/tcp"
+      - "${HOST_OSC_PORT:-39051}:39051/udp"
