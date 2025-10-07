@@ -110,7 +110,7 @@
       enabled: false,
       listenPort: 39051,
       addressPattern: '/note',
-      velocityMode: 'zero_based',
+      velocityMode: 'one_based',
     };
     if (!input || typeof input !== 'object') {
       return { ...fallback };
@@ -119,7 +119,7 @@
       enabled: Boolean(input.enabled),
       listenPort: Number.isFinite(Number(input.listenPort)) ? Number(input.listenPort) : fallback.listenPort,
       addressPattern: '/note',
-      velocityMode: 'zero_based',
+      velocityMode: 'one_based',
     };
   }
 
@@ -130,7 +130,7 @@
         listening: false,
         listenPort: 39051,
         addressPattern: '/note',
-        velocityMode: 'zero_based',
+        velocityMode: 'one_based',
         lastMessageAt: null,
         lastNote: null,
         lastVelocity: null,
@@ -1042,7 +1042,7 @@
       enabled,
       listenPort,
       addressPattern: '/note',
-      velocityMode: 'zero_based',
+      velocityMode: 'one_based',
     };
 
     setAbleSetBusy(true);

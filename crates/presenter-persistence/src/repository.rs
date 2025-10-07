@@ -2100,7 +2100,7 @@ mod tests {
         assert!(!settings.enabled);
         assert_eq!(settings.listen_port, 39051);
         assert_eq!(settings.address_pattern, "/note");
-        assert_eq!(settings.velocity_mode, VelocityMode::ZeroBased);
+        assert_eq!(settings.velocity_mode, VelocityMode::OneBased);
     }
 
     #[tokio::test]

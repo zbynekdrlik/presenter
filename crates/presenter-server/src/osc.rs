@@ -57,7 +57,7 @@ impl Default for OscStatusInner {
                 .ok()
                 .and_then(|raw| raw.parse().ok()),
             address_pattern: "/note".to_string(),
-            velocity_mode: VelocityMode::ZeroBased,
+            velocity_mode: VelocityMode::OneBased,
             last_message_at: None,
             last_note: None,
             last_velocity: None,
@@ -635,7 +635,7 @@ mod tests {
     fn extract_two_arguments_returns_note_and_velocity() {
         let config = ListenerConfig {
             address_pattern: "/note".to_string(),
-            velocity_mode: VelocityMode::ZeroBased,
+            velocity_mode: VelocityMode::OneBased,
         };
         let message = OscMessage {
             addr: "/note".to_string(),
@@ -651,7 +651,7 @@ mod tests {
     fn extract_three_arguments_uses_last_two_values() {
         let config = ListenerConfig {
             address_pattern: "/note".to_string(),
-            velocity_mode: VelocityMode::ZeroBased,
+            velocity_mode: VelocityMode::OneBased,
         };
         let message = OscMessage {
             addr: "/note".to_string(),
@@ -680,7 +680,7 @@ mod tests {
     async fn split_messages_merge_into_single_event() {
         let config = ListenerConfig {
             address_pattern: "/note".to_string(),
-            velocity_mode: VelocityMode::ZeroBased,
+            velocity_mode: VelocityMode::OneBased,
         };
         let accumulator = Arc::new(Mutex::new(HashMap::new()));
 

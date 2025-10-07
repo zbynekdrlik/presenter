@@ -19,7 +19,7 @@ pub enum VelocityMode {
 
 impl Default for VelocityMode {
     fn default() -> Self {
-        VelocityMode::ZeroBased
+        VelocityMode::OneBased
     }
 }
 
@@ -82,7 +82,7 @@ impl Default for OscSettingsDraft {
             enabled: false,
             listen_port: 39051,
             address_pattern: "/note".to_string(),
-            velocity_mode: VelocityMode::ZeroBased,
+            velocity_mode: VelocityMode::OneBased,
         }
     }
 }

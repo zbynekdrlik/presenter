@@ -471,7 +471,7 @@ impl MigrationTrait for Migration {
                         ColumnDef::new(OscSettings::VelocityMode)
                             .string_len(32)
                             .not_null()
-                            .default("zero_based"),
+                            .default("one_based"),
                     )
                     .col(
                         ColumnDef::new(OscSettings::CreatedAt)
