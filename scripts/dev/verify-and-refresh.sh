@@ -94,8 +94,28 @@ RUN_ARGS=("--force" "--name" "$REPO_SLUG" "--display-name" "$DISPLAY_NAME" "--po
 echo "[verify] Refreshing Docker demo for project '$REPO_SLUG' (pre-tests)"
 PRESENTER_ANDROID_ADB_BIN="$PRESENTER_ANDROID_ADB_BIN" ADB_KEYS_DIR="$ADB_KEYS_DIR" "$REPO_ROOT/scripts/docker/run-demo.sh" "${RUN_ARGS[@]}"
 
-echo "[verify] Restarting gateway"
-PRESENTER_ANDROID_ADB_BIN="$PRESENTER_ANDROID_ADB_BIN" ADB_KEYS_DIR="$ADB_KEYS_DIR" "$REPO_ROOT/scripts/docker/run-gateway.sh" --force
+NEEDS_GATEWAY_REBUILD=0
+if git rev-parse --verify origin/main >/dev/null 2>&1; then
+  if ! git diff --quiet origin/main..HEAD -- gateway 2>/dev/null; then
+    NEEDS_GATEWAY_REBUILD=1
+  fi
+else
+  # Fallback: if any tracked files exist under gateway/, rebuild
+  if git ls-files --quiet gateway | grep -q .; then
+    NEEDS_GATEWAY_REBUILD=1
+  fi
+fi
+
+if [[ "$PRESENTER_FORCE_GATEWAY" == "1" ]]; then
+  NEEDS_GATEWAY_REBUILD=1
+fi
+
+if [[ "$NEEDS_GATEWAY_REBUILD" -eq 1 ]]; then
+  echo "[verify] Rebuilding gateway (changes detected under gateway/)"
+  PRESENTER_ANDROID_ADB_BIN="$PRESENTER_ANDROID_ADB_BIN" ADB_KEYS_DIR="$ADB_KEYS_DIR" "$REPO_ROOT/scripts/docker/run-gateway.sh" --force
+else
+  echo "[verify] Skipping gateway rebuild (no gateway/ changes on this branch)"
+fi
 
 echo "[verify] Running Playwright suite"
 RUN_AS_ORIGINAL npm run test:playwright
@@ -103,8 +123,12 @@ RUN_AS_ORIGINAL npm run test:playwright
 echo "[verify] Refreshing Docker demo for project '$REPO_SLUG' (post-tests)"
 PRESENTER_ANDROID_ADB_BIN="$PRESENTER_ANDROID_ADB_BIN" ADB_KEYS_DIR="$ADB_KEYS_DIR" "$REPO_ROOT/scripts/docker/run-demo.sh" "--force" "--name" "$REPO_SLUG" "--display-name" "$DISPLAY_NAME" "--port" "$DEMO_PORT" "--enable-companion"
 
-echo "[verify] Restarting gateway (post-tests)"
-PRESENTER_ANDROID_ADB_BIN="$PRESENTER_ANDROID_ADB_BIN" ADB_KEYS_DIR="$ADB_KEYS_DIR" "$REPO_ROOT/scripts/docker/run-gateway.sh" --force
+if [[ "$NEEDS_GATEWAY_REBUILD" -eq 1 ]]; then
+  echo "[verify] Restarting gateway (post-tests)"
+  PRESENTER_ANDROID_ADB_BIN="$PRESENTER_ANDROID_ADB_BIN" ADB_KEYS_DIR="$ADB_KEYS_DIR" "$REPO_ROOT/scripts/docker/run-gateway.sh" --force
+else
+  echo "[verify] Skipping gateway restart (no gateway/ changes)"
+fi
 
 echo "[verify] Checking demo operator UI at ${DEMO_ORIGIN}/ui/operator"
 curl --fail --silent --show-error "${DEMO_ORIGIN}/ui/operator" >/dev/null
