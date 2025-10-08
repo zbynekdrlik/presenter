@@ -152,11 +152,6 @@ async fn timer_overlay(
     Ok(html)
 }
 
-#[derive(Debug, Deserialize)]
-struct LibrarySummaryQuery {
-    #[serde(default)]
-    q: Option<String>,
-}
 
 #[derive(Debug, Deserialize)]
 struct SearchQueryParams {
@@ -171,14 +166,6 @@ struct AbleSetFollowPayload {
     enabled: bool,
 }
 
-#[instrument(skip_all)]
-async fn list_library_summaries(
-    State(state): State<AppState>,
-    Query(params): Query<LibrarySummaryQuery>,
-) -> Result<Json<Vec<LibrarySummary>>, AppError> {
-    let summaries = state.library_summaries(params.q.as_deref()).await?;
-    Ok(Json(summaries))
-}
 
 #[instrument(skip_all)]
 async fn search_presenter_endpoint(
@@ -195,89 +182,12 @@ async fn search_presenter_endpoint(
     Ok(Json(results))
 }
 
-#[instrument(skip_all)]
-async fn list_libraries(State(state): State<AppState>) -> Result<Json<Vec<Library>>, AppError> {
-    let libraries = state.libraries().await?;
-    Ok(Json(libraries))
-}
 
-#[instrument(skip_all)]
-async fn create_library(
-    State(state): State<AppState>,
-    Json(payload): Json<CreateLibraryRequest>,
-) -> Result<Json<Library>, AppError> {
-    let name = payload.name.trim();
-    if name.is_empty() {
-        return Err(AppError::bad_request_message("name cannot be empty"));
-    }
-    let library = state.create_library(name).await?;
-    Ok(Json(library))
-}
 
-#[instrument(skip_all)]
-async fn rename_library(
-    State(state): State<AppState>,
-    Path(id): Path<Uuid>,
-    Json(payload): Json<RenameLibraryRequest>,
-) -> Result<StatusCode, AppError> {
-    let name = payload.name.trim();
-    if name.is_empty() {
-        return Err(AppError::bad_request_message("name cannot be empty"));
-    }
-    state.rename_library(LibraryId::from_uuid(id), name).await?;
-    Ok(StatusCode::NO_CONTENT)
-}
 
-#[instrument(skip_all)]
-async fn delete_library(
-    State(state): State<AppState>,
-    Path(id): Path<Uuid>,
-) -> Result<StatusCode, AppError> {
-    state.delete_library(LibraryId::from_uuid(id)).await?;
-    Ok(StatusCode::NO_CONTENT)
-}
 
-#[instrument(skip_all)]
-async fn create_library_presentation(
-    State(state): State<AppState>,
-    Path(id): Path<Uuid>,
-    Json(payload): Json<CreateLibraryPresentationRequest>,
-) -> Result<Json<CreateLibraryPresentationResponse>, AppError> {
-    let name = payload.name.unwrap_or_default().trim().to_string();
-    if name.is_empty() {
-        return Err(AppError::bad_request_message("name cannot be empty"));
-    }
-    let library_id = LibraryId::from_uuid(id);
-    let (created_library_id, _library_name, presentation, summary) =
-        state.create_presentation(library_id, &name).await?;
-    if created_library_id != library_id {
-        return Err(AppError::bad_request_message(
-            "created presentation belongs to a different library",
-        ));
-    }
-    Ok(Json(CreateLibraryPresentationResponse {
-        library_id: created_library_id.into_uuid(),
-        presentation,
-        library_summary: summary,
-    }))
-}
 
-#[derive(Debug, Deserialize)]
-struct UpdateLibraryFavoriteRequest {
-    favorite: bool,
-}
 
-#[instrument(skip_all)]
-async fn set_library_favorite(
-    State(state): State<AppState>,
-    Path(id): Path<Uuid>,
-    Json(payload): Json<UpdateLibraryFavoriteRequest>,
-) -> Result<StatusCode, AppError> {
-    state
-        .set_library_favorite(LibraryId::from_uuid(id), payload.favorite)
-        .await?;
-    Ok(StatusCode::NO_CONTENT)
-}
 
 #[instrument(skip_all)]
 async fn list_playlists(State(state): State<AppState>) -> Result<Json<Vec<Playlist>>, AppError> {
@@ -402,17 +312,7 @@ struct CreatePlaylistRequest {
     show_in_dashboard: bool,
 }
 
-#[derive(Debug, Deserialize)]
-#[serde(rename_all = "camelCase")]
-struct CreateLibraryRequest {
-    name: String,
-}
 
-#[derive(Debug, Deserialize)]
-#[serde(rename_all = "camelCase")]
-struct RenameLibraryRequest {
-    name: String,
-}
 
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -429,12 +329,6 @@ struct UpdatePlaylistEntriesRequest {
     entries: Vec<PlaylistEntryPayload>,
 }
 
-#[derive(Debug, Deserialize)]
-#[serde(rename_all = "camelCase")]
-struct CreateLibraryPresentationRequest {
-    #[serde(default)]
-    name: Option<String>,
-}
 
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -442,14 +336,6 @@ struct RenamePresentationRequest {
     name: String,
 }
 
-#[derive(Debug, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
-struct CreateLibraryPresentationResponse {
-    library_id: Uuid,
-    presentation: Presentation,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    library_summary: Option<LibrarySummary>,
-}
 
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase", tag = "type")]
