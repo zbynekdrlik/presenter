@@ -1920,7 +1920,7 @@ mod tests_old {
 
     #[test]
     fn update_playlist_request_defaults_flags() {
-        let payload: UpdatePlaylistRequest = serde_json::from_str(r#"{}"#).expect("deserialises");
+        let payload: UpdatePlaylistRequest = serde_json::from_str(r"{}").expect("deserialises");
         assert!(payload.name.is_none());
         assert!(payload.show_in_dashboard.is_none());
     }

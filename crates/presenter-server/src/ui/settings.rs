@@ -645,7 +645,7 @@ fn SettingsDocument(
                                 class="settings__list-meta settings__list-meta--warning"
                                 data-role="osc-status-error"
                                 data-visible={if osc_last_error.is_some() { "true" } else { "false" }}
-                            >{osc_last_error.clone().map(|err| format!("⚠ {}", err)).unwrap_or_default()}</p>
+                            >{osc_last_error.clone().map(|err| format!("⚠ {err}")).unwrap_or_default()}</p>
                         </div>
                     </section>
 
@@ -723,12 +723,10 @@ pub async fn render_settings_ui(state: &AppState) -> anyhow::Result<Html<String>
             let updated_display = format_settings_timestamp(display.updated_at);
             let last_attempt_display = status
                 .last_attempt
-                .map(format_settings_timestamp)
-                .unwrap_or_else(|| "\u{2014}".to_string());
+                .map_or_else(|| "\u{2014}".to_string(), format_settings_timestamp);
             let last_success_display = status
                 .last_success
-                .map(format_settings_timestamp)
-                .unwrap_or_else(|| "\u{2014}".to_string());
+                .map_or_else(|| "\u{2014}".to_string(), format_settings_timestamp);
             SettingsAndroidDisplayRow {
                 id: display.id.to_string(),
                 label: display.label,

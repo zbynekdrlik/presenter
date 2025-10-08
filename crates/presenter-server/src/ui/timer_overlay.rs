@@ -15,7 +15,7 @@ pub async fn render_timer_overlay(state: &AppState) -> anyhow::Result<Html<Strin
     let timers_json = timers_json.replace("</script>", r"<\/script>");
 
     let script = format!(
-        r#"(function() {{
+        r"(function() {{
   const initial = {timers_json};
   let overview = initial || {{}};
   let countdown = overview.countdown_to_start || overview.countdownToStart || {{}};
@@ -131,7 +131,7 @@ pub async fn render_timer_overlay(state: &AppState) -> anyhow::Result<Html<Strin
   }};
 
   connect();
-}})();"#,
+}})();",
         timers_json = timers_json
     );
 

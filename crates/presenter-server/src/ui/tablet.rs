@@ -195,9 +195,10 @@ pub async fn render_tablet_ui(state: &AppState) -> anyhow::Result<Html<String>> 
 
     let library_json = to_string(&library_rows).unwrap_or_else(|_| "[]".to_string());
     let playlist_json = to_string(&playlist_rows).unwrap_or_else(|_| "[]".to_string());
-    let stage_json = stage_snapshot
-        .map(|snapshot| to_string(&snapshot).unwrap_or_else(|_| "null".to_string()))
-        .unwrap_or_else(|| "null".to_string());
+    let stage_json = stage_snapshot.map_or_else(
+        || "null".to_string(),
+        |snapshot| to_string(&snapshot).unwrap_or_else(|_| "null".to_string()),
+    );
 
     let owner = Owner::new_root(None);
     let html = owner.with(|| {

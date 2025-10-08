@@ -1048,6 +1048,7 @@ enum OutgoingMessage {
 }
 
 #[cfg(test)]
+#[allow(clippy::similar_names, clippy::needless_continue)]
 mod tests {
     use super::*;
     use crate::live::LiveEvent;

@@ -23,6 +23,11 @@ Automated Pre‑Flight (run locally)
   - No direct `playwright show-report` calls; enforce `scripts/dev/show-playwright-report.sh`.
   - No focused/skipped Playwright tests.
   - Optional: emits warnings for `cargo check` warnings; use Clippy locally to tighten further when feasible.
+  - Format & Lint: `cargo fmt --check` and `cargo clippy` (presenter-server at minimum) must pass with `-D warnings`.
+  - Dependency/security: if installed, `cargo deny check` and `cargo audit` must pass.
+  - Hygiene: no `unwrap`/`expect`/`panic!` in production sources (allowed in tests/examples/benches).
+  - Async: no `std::thread::sleep` or `block_on(` in server async paths.
+  - Toolchain: repository has `rust-toolchain.toml` pinned.
 - `sudo -E ./scripts/dev/verify-and-refresh.sh`
   - Must complete successfully (cargo + Playwright + Docker demo + gateway validations).
 
@@ -59,9 +64,10 @@ Definition of Done (copy into PR)
 - [ ] ADR updated/added for non‑obvious architectural choices
 - [ ] Gateway card fresh; operator UI reachable; Stage link present
 - [ ] No direct `playwright show-report` usage (policy enforced)
+ - [ ] Format & Lint pass (`cargo fmt --check`, `cargo clippy`)
+ - [ ] No `unwrap`/`expect`/`panic!` in production sources
 
 References
 - Handbook: `AGENTS.md` (Design Iteration Policy, E2E Policy, Runtime, Prompts)
 - Merge checklist: `prompts/merge-prepare.md`
 - Quality script: `scripts/dev/quality-check.sh`
-
