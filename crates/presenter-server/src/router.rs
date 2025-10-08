@@ -1,3 +1,4 @@
+mod bible;
 use crate::{
     ableset::AbleSetStatusSnapshot, android_stage::AndroidStageDisplayStatusSnapshot,
     osc::OscStatusSnapshot, resolume::ResolumeConnectionSnapshot,
@@ -42,16 +43,16 @@ pub fn build_router(state: AppState) -> Router {
             "/libraries/{id}/presentations",
             post(create_library_presentation),
         )
-        .route("/bible/translations", get(list_bible_translations))
-        .route("/bible/search", get(search_bible_passages))
-        .route("/bible/passage", get(get_bible_passage))
+        .route("/bible/translations", get(bible::list_bible_translations))
+        .route("/bible/search", get(bible::search_bible_passages))
+        .route("/bible/passage", get(bible::get_bible_passage))
         .route(
             "/bible/translations/refresh",
-            post(refresh_bible_translations),
+            post(bible::refresh_bible_translations),
         )
-        .route("/bible/active", get(get_active_bible_broadcast))
-        .route("/bible/trigger", post(trigger_bible_broadcast))
-        .route("/bible/clear", post(clear_bible_broadcast))
+        .route("/bible/active", get(bible::get_active_bible_broadcast))
+        .route("/bible/trigger", post(bible::trigger_bible_broadcast))
+        .route("/bible/clear", post(bible::clear_bible_broadcast))
         .route("/playlists", get(list_playlists).post(create_playlist))
         .route(
             "/playlists/{id}",
@@ -60,7 +61,7 @@ pub fn build_router(state: AppState) -> Router {
         .route("/playlists/{id}/entries", put(replace_playlist_entries))
         .route("/ui/operator", get(operator_ui))
         .route("/ui/tablet", get(tablet_ui))
-        .route("/ui/bible", get(bible_ui))
+        .route("/ui/bible", get(bible::bible_ui))
         .route("/ui/settings", get(settings_ui))
         .route("/overlays/timer", get(timer_overlay))
         .route("/stage-displays", get(list_stage_displays))
