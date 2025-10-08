@@ -83,6 +83,41 @@ done
 
 DISPLAY_NAME="${CUSTOM_DISPLAY_NAME:-$DISPLAY_NAME_DEFAULT}"
 
+# Ensure no misleading demo remains running during verification. If the process
+# fails at any point, or until we explicitly (re)start the demo after all
+# checks pass, the demo container for this repo stays stopped. The gateway is
+# intentionally left running.
+stop_demo_stack() {
+  echo "[verify] Stopping demo stack for project '$REPO_SLUG' (if running)"
+  # Provide required env vars so compose can parse volumes/ports even on 'down'.
+  local STATE_ROOT_DEFAULT="${PRESENTER_STATE_DIR:-${XDG_DATA_HOME:-$ORIGINAL_HOME/.local/share}/presenter-demos}"
+  local DATA_ROOT="$STATE_ROOT_DEFAULT/data"
+  local DEMO_DATA_DIR="$DATA_ROOT/$REPO_SLUG"
+  local REPO_PARENT
+  REPO_PARENT="$(cd "$REPO_ROOT/.." && pwd)"
+  local IMPORT_ROOT="${PRESENTER_LIBRARY_ROOT:-$REPO_PARENT/presenter-libraries}"
+  local HOST_OSC_PORT="39051"
+  local HOST_COMPANION_PORT="$((DEMO_PORT + 125))" # unused for down; stable filler
+
+  if DEMO_DATA_DIR="$DEMO_DATA_DIR" IMPORT_ROOT="$IMPORT_ROOT" \
+     HOST_HTTP_PORT="$DEMO_PORT" HOST_OSC_PORT="$HOST_OSC_PORT" \
+     HOST_COMPANION_PORT="$HOST_COMPANION_PORT" ADB_KEYS_DIR="$ADB_KEYS_DIR" \
+     docker compose -f "$REPO_ROOT/docker-compose.demo.yml" -p "$REPO_SLUG" down >/dev/null 2>&1; then
+    echo "[verify] Demo stack stopped."
+  else
+    echo "[verify] No running demo stack to stop."
+  fi
+}
+
+on_error() {
+  echo "[verify] Failure detected; ensuring demo is stopped to avoid confusion."
+  stop_demo_stack || true
+}
+trap on_error ERR
+
+# Always stop the demo first so a failing verify never leaves an older demo up.
+stop_demo_stack
+
 echo "[verify] Running cargo test"
 echo "[verify] Running quality-check (strict)"
 RUN_AS_ORIGINAL ./scripts/dev/quality-check.sh --strict --against origin/main
