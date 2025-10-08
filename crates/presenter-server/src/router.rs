@@ -17,18 +17,17 @@ use axum::{
 };
 use chrono::{DateTime, Utc};
 use presenter_core::{
-    playlist::{MidiBinding, PlaylistEntryKind},
     AbleSetSettings, AbleSetSettingsDraft, AndroidStageDisplay, AndroidStageDisplayDraft,
     AndroidStageDisplayId, BiblePassage, BibleReference, BibleTranslation, Library, LibraryId,
-    LibrarySummary, OscSettings, OscSettingsDraft, Playlist, PlaylistEntry, PlaylistEntryId,
-    PlaylistId, Presentation, PresentationId, ResolumeHost, ResolumeHostDraft, ResolumeHostId,
-    SearchResult, Slide, SlideId, StageDisplayLayout, StageDisplaySnapshot, TimersOverview,
-    VelocityMode, DEFAULT_ADB_PORT, DEFAULT_LAUNCH_COMPONENT,
+    LibrarySummary, OscSettings, OscSettingsDraft, Presentation, PresentationId, ResolumeHost,
+    ResolumeHostDraft, ResolumeHostId, SearchResult, Slide, SlideId, StageDisplayLayout,
+    StageDisplaySnapshot, TimersOverview, VelocityMode, DEFAULT_ADB_PORT, DEFAULT_LAUNCH_COMPONENT,
 };
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use tracing::instrument;
 use uuid::Uuid;
+// Feature modules host their own request/DTO types
 
 pub fn build_router(state: AppState) -> Router {
     Router::new()
@@ -189,196 +188,16 @@ async fn search_presenter_endpoint(
 
 
 
-#[instrument(skip_all)]
-async fn list_playlists(State(state): State<AppState>) -> Result<Json<Vec<Playlist>>, AppError> {
-    let playlists = state.playlists().await?;
-    Ok(Json(playlists))
-}
-
-#[instrument(skip_all)]
-async fn create_playlist(
-    State(state): State<AppState>,
-    Json(payload): Json<CreatePlaylistRequest>,
-) -> Result<Json<Playlist>, AppError> {
-    let name = payload.name.trim();
-    if name.is_empty() {
-        return Err(AppError::bad_request_message("name cannot be empty"));
-    }
-    let playlist = state
-        .create_playlist(name, payload.show_in_dashboard)
-        .await?;
-    Ok(Json(playlist))
-}
-
-#[instrument(skip_all)]
-async fn update_playlist(
-    State(state): State<AppState>,
-    Path(id): Path<Uuid>,
-    Json(payload): Json<UpdatePlaylistRequest>,
-) -> Result<Json<Playlist>, AppError> {
-    let playlist_id = PlaylistId::from_uuid(id);
-    if let Some(name) = payload.name.as_ref() {
-        let trimmed = name.trim();
-        if trimmed.is_empty() {
-            return Err(AppError::bad_request_message("name cannot be empty"));
-        }
-        state.rename_playlist(playlist_id, trimmed).await?;
-    }
-
-    if let Some(favorite) = payload.show_in_dashboard {
-        state.set_playlist_favorite(playlist_id, favorite).await?;
-    }
-
-    let updated = state
-        .playlists()
-        .await?
-        .into_iter()
-        .find(|playlist| playlist.id == playlist_id)
-        .ok_or_else(|| AppError::not_found("playlist not found"))?;
-
-    Ok(Json(updated))
-}
-
-#[instrument(skip_all)]
-async fn delete_playlist(
-    State(state): State<AppState>,
-    Path(id): Path<Uuid>,
-) -> Result<StatusCode, AppError> {
-    state.delete_playlist(PlaylistId::from_uuid(id)).await?;
-    Ok(StatusCode::NO_CONTENT)
-}
-
-#[instrument(skip_all)]
-async fn replace_playlist_entries(
-    State(state): State<AppState>,
-    Path(id): Path<Uuid>,
-    Json(payload): Json<UpdatePlaylistEntriesRequest>,
-) -> Result<Json<Playlist>, AppError> {
-    let entries = payload
-        .entries
-        .into_iter()
-        .map(|entry| match entry {
-            PlaylistEntryPayload::Presentation {
-                entry_id,
-                presentation_id,
-                midi_note,
-            } => {
-                let id = entry_id
-                    .map(PlaylistEntryId::from_uuid)
-                    .unwrap_or_else(PlaylistEntryId::new);
-                let binding = midi_note
-                    .map(MidiBinding::new)
-                    .transpose()
-                    .map_err(AppError::bad_request)?;
-                Ok(PlaylistEntry {
-                    id,
-                    kind: PlaylistEntryKind::Presentation {
-                        presentation_id: PresentationId::from_uuid(presentation_id),
-                        midi_binding: binding,
-                    },
-                })
-            }
-            PlaylistEntryPayload::Separator { entry_id, name } => {
-                let trimmed = name.trim();
-                if trimmed.is_empty() {
-                    return Err(AppError::bad_request_message(
-                        "separator name cannot be empty",
-                    ));
-                }
-                let id = entry_id
-                    .map(PlaylistEntryId::from_uuid)
-                    .unwrap_or_else(PlaylistEntryId::new);
-                Ok(PlaylistEntry {
-                    id,
-                    kind: PlaylistEntryKind::Separator {
-                        name: trimmed.to_string(),
-                    },
-                })
-            }
-        })
-        .collect::<Result<Vec<_>, _>>()?;
-    let playlist = state
-        .replace_playlist_entries(PlaylistId::from_uuid(id), entries)
-        .await?;
-    Ok(Json(playlist))
-}
-
-
-#[derive(Debug, Deserialize)]
-#[serde(rename_all = "camelCase")]
-struct CreatePlaylistRequest {
-    name: String,
-    #[serde(default)]
-    show_in_dashboard: bool,
-}
+// Playlist handlers live in router/playlists.rs
 
 
 
-#[derive(Debug, Deserialize)]
-#[serde(rename_all = "camelCase")]
-struct UpdatePlaylistRequest {
-    #[serde(default)]
-    name: Option<String>,
-    #[serde(default)]
-    show_in_dashboard: Option<bool>,
-}
-
-#[derive(Debug, Deserialize)]
-#[serde(rename_all = "camelCase")]
-struct UpdatePlaylistEntriesRequest {
-    entries: Vec<PlaylistEntryPayload>,
-}
 
 
-#[derive(Debug, Deserialize)]
-#[serde(rename_all = "camelCase")]
-struct RenamePresentationRequest {
-    name: String,
-}
 
 
-#[derive(Debug, Deserialize)]
-#[serde(rename_all = "camelCase", tag = "type")]
-enum PlaylistEntryPayload {
-    Presentation {
-        #[serde(default, rename = "entryId")]
-        entry_id: Option<Uuid>,
-        #[serde(rename = "presentationId")]
-        presentation_id: Uuid,
-        #[serde(default, rename = "midiNote")]
-        midi_note: Option<u8>,
-    },
-    Separator {
-        #[serde(default, rename = "entryId")]
-        entry_id: Option<Uuid>,
-        name: String,
-    },
-}
 
-#[derive(Debug, Deserialize)]
-#[serde(rename_all = "camelCase")]
-struct CreateSlideRequest {
-    position: Option<u32>,
-}
-
-#[derive(Debug, Deserialize)]
-#[serde(rename_all = "camelCase")]
-struct ReorderSlidesRequest {
-    slide_ids: Vec<Uuid>,
-}
-
-#[instrument(skip_all)]
-async fn trigger_bible_broadcast(
-    State(state): State<AppState>,
-    Json(payload): Json<bible::BibleTriggerRequest>,
-) -> Result<Json<presenter_core::BibleBroadcast>, AppError> {
-    bible::trigger_bible_broadcast(State(state), Json(payload)).await
-}
-
-#[instrument(skip_all)]
-async fn clear_bible_broadcast(State(state): State<AppState>) -> Result<StatusCode, AppError> {
-    bible::clear_bible_broadcast(State(state)).await
-}
+// Presentation request types and handlers live in router/presentations.rs
 
 #[instrument(skip_all)]
 async fn clear_stage_state(State(state): State<AppState>) -> Result<StatusCode, AppError> {
@@ -606,10 +425,7 @@ async fn tablet_ui(
     Ok(html)
 }
 
-#[instrument(skip_all)]
-async fn bible_ui(State(state): State<AppState>) -> Result<axum::response::Html<String>, AppError> {
-    bible::bible_ui(State(state)).await
-}
+// Bible UI handler is implemented in router/bible.rs
 
 #[instrument(skip_all)]
 async fn stage_display_selected_html(State(state): State<AppState>) -> Result<Response, AppError> {
@@ -733,140 +549,7 @@ async fn update_feature_settings(
     }))
 }
 
-#[instrument(skip_all)]
-async fn get_presentation_detail(
-    Path(id): Path<String>,
-    State(state): State<AppState>,
-) -> Result<Json<PresentationDetailDto>, AppError> {
-    let uuid = Uuid::parse_str(&id)
-        .map_err(|_| AppError::bad_request_message("presentationId must be a valid UUID"))?;
-    let presentation_id = PresentationId::from_uuid(uuid);
-    match state.presentation_detail(presentation_id).await? {
-        Some((library_id, library_name, presentation)) => Ok(Json(PresentationDetailDto {
-            library_id,
-            library_name,
-            presentation,
-        })),
-        None => Err(AppError::not_found(format!(
-            "presentation {} not found",
-            id
-        ))),
-    }
-}
-
-#[instrument(skip_all)]
-async fn update_presentation(
-    State(state): State<AppState>,
-    Path(id): Path<String>,
-    Json(payload): Json<RenamePresentationRequest>,
-) -> Result<StatusCode, AppError> {
-    let name = payload.name.trim();
-    if name.is_empty() {
-        return Err(AppError::bad_request_message("name cannot be empty"));
-    }
-    let presentation_uuid = parse_uuid("presentationId", &id)?;
-    state
-        .rename_presentation(PresentationId::from_uuid(presentation_uuid), name)
-        .await?;
-    Ok(StatusCode::NO_CONTENT)
-}
-
-#[instrument(skip_all)]
-async fn insert_slide_handler(
-    State(state): State<AppState>,
-    Path(presentation_id): Path<String>,
-    Json(payload): Json<CreateSlideRequest>,
-) -> Result<Json<Vec<Slide>>, AppError> {
-    let presentation_uuid = parse_uuid("presentationId", &presentation_id)?;
-    let slides = state
-        .insert_blank_slide(
-            PresentationId::from_uuid(presentation_uuid),
-            payload.position,
-        )
-        .await?;
-    Ok(Json(slides))
-}
-
-#[instrument(skip_all)]
-async fn duplicate_slide_handler(
-    State(state): State<AppState>,
-    Path((presentation_id, slide_id)): Path<(String, String)>,
-) -> Result<Json<Vec<Slide>>, AppError> {
-    let presentation_uuid = parse_uuid("presentationId", &presentation_id)?;
-    let slide_uuid = parse_uuid("slideId", &slide_id)?;
-    let slides = state
-        .duplicate_slide(
-            PresentationId::from_uuid(presentation_uuid),
-            SlideId::from_uuid(slide_uuid),
-        )
-        .await?;
-    Ok(Json(slides))
-}
-
-#[instrument(skip_all)]
-async fn delete_slide_handler(
-    State(state): State<AppState>,
-    Path((presentation_id, slide_id)): Path<(String, String)>,
-) -> Result<Json<Vec<Slide>>, AppError> {
-    let presentation_uuid = parse_uuid("presentationId", &presentation_id)?;
-    let slide_uuid = parse_uuid("slideId", &slide_id)?;
-    let slides = state
-        .delete_slide(
-            PresentationId::from_uuid(presentation_uuid),
-            SlideId::from_uuid(slide_uuid),
-        )
-        .await?;
-    Ok(Json(slides))
-}
-
-#[instrument(skip_all)]
-async fn reorder_slides_handler(
-    State(state): State<AppState>,
-    Path(presentation_id): Path<String>,
-    Json(payload): Json<ReorderSlidesRequest>,
-) -> Result<Json<Vec<Slide>>, AppError> {
-    let presentation_uuid = parse_uuid("presentationId", &presentation_id)?;
-    let order = payload
-        .slide_ids
-        .into_iter()
-        .map(SlideId::from_uuid)
-        .collect();
-    let slides = state
-        .reorder_slides(PresentationId::from_uuid(presentation_uuid), order)
-        .await?;
-    Ok(Json(slides))
-}
-
-#[derive(Debug, Deserialize)]
-#[serde(rename_all = "camelCase")]
-struct SlideContentUpdateRequest {
-    main: String,
-    translation: String,
-    stage: String,
-    #[serde(default)]
-    group: Option<String>,
-}
-
-#[instrument(skip_all)]
-async fn update_slide_content_handler(
-    State(state): State<AppState>,
-    Path((presentation_id, slide_id)): Path<(String, String)>,
-    Json(payload): Json<SlideContentUpdateRequest>,
-) -> Result<Json<Slide>, AppError> {
-    let presentation_uuid = parse_uuid("presentationId", &presentation_id)?;
-    let slide_uuid = parse_uuid("slideId", &slide_id)?;
-    let updated = state
-        .update_slide_content(
-            PresentationId::from_uuid(presentation_uuid),
-            SlideId::from_uuid(slide_uuid),
-            payload.main,
-            payload.translation,
-            payload.stage,
-            payload.group,
-        )
-        .await?;
-    Ok(Json(updated))
-}
+// (implementations removed: moved to router/presentations.rs)
 
 #[derive(Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -1177,6 +860,10 @@ mod tests {
     use serde::Deserialize;
     use serde_json::json;
     use tower::ServiceExt;
+    // Bring types from feature modules and core used only in tests
+    use crate::router::libraries::CreateLibraryPresentationResponse;
+    use crate::router::playlists::UpdatePlaylistRequest;
+    use presenter_core::Playlist;
 
     #[derive(Debug, Deserialize)]
     #[serde(rename_all = "camelCase")]
