@@ -50,7 +50,7 @@ export function deriveTestConfig(testInfo: TestInfo): TestConfig {
   const fileOffset = stableHash(scopeKey) % 50;
   const port = basePort + workerIndex * 100 + fileOffset;
   const explicitDbUrl = process.env.PRESENTER_DB_URL;
-  const defaultDbPath = path.join(REPO_ROOT, 'var', 'tmp', `presenter_e2e_${workerIndex}.db`);
+  const defaultDbPath = path.join('/tmp', `presenter_e2e_${workerIndex}.db`);
   const dbUrl = explicitDbUrl ?? `sqlite://${defaultDbPath}`;
   const baseURL = `http://127.0.0.1:${port}`;
   const oscPort = port + 1;

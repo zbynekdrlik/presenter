@@ -1,0 +1,64 @@
+{
+  "targetHref": "http://presenter.lan:18564/stage",
+  "layout": "worship-snv",
+  "viewportWidth": 2880,
+  "viewportHeight": 1800,
+  "body": {
+    "width": 2880,
+    "paddingLeftPx": 0,
+    "paddingRightPx": 0
+  },
+  "stageBody": {
+    "width": 2880,
+    "height": 4619.4375
+  },
+  "lyrics": {
+    "width": 2880,
+    "height": 4619.4375
+  },
+  "rows": {
+    "current": {
+      "x": 0,
+      "y": 108,
+      "w": 2880,
+      "h": 2253.71875
+    },
+    "next": {
+      "x": 0,
+      "y": 2401.71875,
+      "w": 2880,
+      "h": 2253.71875
+    }
+  },
+  "splitAxis": "vertical",
+  "metrics": {
+    "current-text": {
+      "text": "Nezáleží už na tom čo chcem ja\nKeď vôľu Tvoju hľadám",
+      "fontSizePx": 397.189,
+      "lineHeightPx": 421.02,
+      "lines": 5.142273526198281,
+      "uniqueLines": 1,
+      "containerWidthPx": 2880,
+      "elementWidthPx": 2880,
+      "widthCoverage": 1,
+      "leftGutterPx": 0,
+      "rightGutterPx": 0,
+      "parentHeightPx": 2253.71875,
+      "bottomOverflowPx": 0
+    },
+    "next-text": {
+      "text": "Vyvýšim Ťa nad túžby\nNad všetky záujmy čo mám",
+      "fontSizePx": 382.715,
+      "lineHeightPx": 420.987,
+      "lines": 5.118922912108925,
+      "uniqueLines": 1,
+      "containerWidthPx": 2880,
+      "elementWidthPx": 2880,
+      "widthCoverage": 1,
+      "leftGutterPx": 0,
+      "rightGutterPx": 0,
+      "parentHeightPx": 2253.71875,
+      "bottomOverflowPx": 0
+    }
+  }
+}

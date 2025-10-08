@@ -251,7 +251,7 @@ fn StageDisplayDocument(
 
   const LINE_HEIGHT_FALLBACK_FACTOR = 1.12;
   const FIT_LINE_TARGET = 2;
-  const FIT_LINE_TOLERANCE = 0.03;
+  const FIT_LINE_TOLERANCE = 0.08;
   const MIN_FONT_PX = 22;
   const MIN_FONT_SCALE = 0.65;
 
@@ -278,23 +278,119 @@ fn StageDisplayDocument(
     const configuredMinPx =
       typeof minRem === 'number' && minRem > 0 ? minRem * rootFontSize : null;
     const scaledBaseMin = basePx * MIN_FONT_SCALE;
-    const absoluteMinPx = Math.max(
-      MIN_FONT_PX,
-      configuredMinPx != null ? configuredMinPx : scaledBaseMin,
-    );
 
-    // Measure available row width using the nearest lyric row container, not the text box itself.
+    // Measure available geometry using the nearest lyric row container, not the text box itself.
     const row = element.parentElement || element;
     const rowRect = row.getBoundingClientRect();
     const width = Math.max(1, rowRect && rowRect.width ? rowRect.width : (document.documentElement?.clientWidth || 640));
 
+    const lyricsContainer = row.closest('.stage__lyrics');
+    const lyricsRect = lyricsContainer ? lyricsContainer.getBoundingClientRect() : null;
+    const viewportHeight =
+      (window.visualViewport && window.visualViewport.height) ||
+      window.innerHeight ||
+      (document.documentElement && document.documentElement.clientHeight) ||
+      1080;
+    let layoutCode = null;
+    if (document.body && document.body.dataset && document.body.dataset.layoutCode) {{
+      layoutCode = document.body.dataset.layoutCode;
+    }} else if (window.__presenterStageLayout) {{
+      layoutCode = window.__presenterStageLayout;
+    }}
+    const lyricChildren = lyricsContainer
+      ? Array.from(lyricsContainer.children).filter((child) => {{
+          if (!(child instanceof HTMLElement)) return false;
+          return child.classList.contains('stage__lyrics-current') || child.classList.contains('stage__lyrics-next');
+        }})
+      : [];
+    const rowCount = lyricChildren.length > 0 ? lyricChildren.length : 1;
+    const lyricsStyle = lyricsContainer ? window.getComputedStyle(lyricsContainer) : null;
+    const lyricsPadTop = lyricsStyle ? parseFloat(lyricsStyle.paddingTop) || 0 : 0;
+    const lyricsPadBottom = lyricsStyle ? parseFloat(lyricsStyle.paddingBottom) || 0 : 0;
+    const rowGapPx = lyricsStyle ? (parseFloat((lyricsStyle as any).rowGap || (lyricsStyle as any).gap || '0') || 0) : 0;
+    let stageInnerHeight = lyricsRect ? Math.max(0, lyricsRect.height - lyricsPadTop - lyricsPadBottom) : viewportHeight;
+    if (!Number.isFinite(stageInnerHeight) || stageInnerHeight <= 0) {{
+      stageInnerHeight = viewportHeight;
+    }}
+    stageInnerHeight = Math.min(stageInnerHeight, viewportHeight * 0.96);
+
+    const totalGap = Math.max(0, (rowCount - 1)) * rowGapPx;
+    const baselineRowHeight = Math.max(1, (stageInnerHeight - totalGap)) / Math.max(1, rowCount);
+    const rowRectHeight = rowRect && Number.isFinite(rowRect.height) && rowRect.height > 0 ? rowRect.height : baselineRowHeight;
+    const rowLowerBound = baselineRowHeight * 0.85;
+    const rowUpperBound = baselineRowHeight * 1.2;
+    let targetRowHeight = baselineRowHeight;
+    if (rowRectHeight > 0) {{
+      const clamped = Math.min(Math.max(rowRectHeight, rowLowerBound), rowUpperBound);
+      targetRowHeight = clamped;
+    }}
+    targetRowHeight = Math.max(targetRowHeight, baselineRowHeight * 0.9, 220);
+    targetRowHeight = Math.min(targetRowHeight, viewportHeight * 0.52);
+
     const referenceStyle = window.getComputedStyle(element);
     const computedFontSize = parseFloat(referenceStyle.fontSize) || basePx;
     const computedLineHeight = parseFloat(referenceStyle.lineHeight);
-    const lineHeightRatio =
+    let lineHeightRatio =
       Number.isFinite(computedLineHeight) && computedLineHeight > 0 && Number.isFinite(computedFontSize) && computedFontSize > 0
         ? computedLineHeight / computedFontSize
         : LINE_HEIGHT_FALLBACK_FACTOR;
+    if (!Number.isFinite(lineHeightRatio) || lineHeightRatio <= 0) {{
+      const rowStyle = window.getComputedStyle(row);
+      const rowLineHeight = parseFloat(rowStyle.lineHeight);
+      const rowFontSize = parseFloat(rowStyle.fontSize);
+      if (Number.isFinite(rowLineHeight) && rowLineHeight > 0 && Number.isFinite(rowFontSize) && rowFontSize > 0) {{
+        lineHeightRatio = rowLineHeight / rowFontSize;
+      }}
+    }}
+    // Empirical fallback for fonts reporting 'normal' line-height
+    if (!Number.isFinite(lineHeightRatio) || lineHeightRatio <= 0) {{
+      try {{
+        const probe = document.createElement('div');
+        Object.assign(probe.style, {{ position: 'absolute', left: '-9999px', top: '-9999px', whiteSpace: 'pre-wrap', fontFamily: referenceStyle.fontFamily, fontWeight: referenceStyle.fontWeight, fontStyle: referenceStyle.fontStyle, fontVariant: referenceStyle.fontVariant, letterSpacing: referenceStyle.letterSpacing, textTransform: referenceStyle.textTransform, textAlign: referenceStyle.textAlign }});
+        document.body.appendChild(probe);
+        const sz = 100;
+        probe.style.fontSize = `${{sz}}px`;
+        probe.style.lineHeight = 'normal';
+        probe.textContent = 'A\nB';
+        const h = probe.scrollHeight;
+        if (Number.isFinite(h) && h > 0) {{
+          lineHeightRatio = (h / 2) / sz;
+        }}
+        probe.remove();
+      }} catch (_e) {{}}
+    }}
+
+    let layoutHeightFill = 0.9;
+    if (layoutCode === 'worship-pp' && (elementId === 'current-main' || elementId === 'next-main')) {{
+      layoutHeightFill = 0.65;
+    }}
+    const occupancyTarget = 0.4;
+
+    const occupancyMinPx = targetRowHeight > 0
+      ? (targetRowHeight * occupancyTarget) / (lineHeightRatio * Math.max(1, effectiveTarget))
+      : 0;
+    const absoluteMinPx = Math.max(
+      MIN_FONT_PX,
+      configuredMinPx != null ? configuredMinPx : scaledBaseMin,
+      occupancyMinPx,
+    );
+
+    // Estimate extra vertical consumption inside the row (group labels, meta lines, child gaps, paddings)
+    let extrasHeight = 0;
+    try {{
+      const children = Array.from(row.children || []);
+      for (const child of children) {{
+        if (child === element) continue;
+        const cr = (child as HTMLElement).getBoundingClientRect();
+        if (cr && Number.isFinite(cr.height)) extrasHeight += Math.max(0, cr.height);
+      }}
+      const rs = window.getComputedStyle(row);
+      const padT = parseFloat(rs.paddingTop) || 0;
+      const padB = parseFloat(rs.paddingBottom) || 0;
+      const rowGap = parseFloat((rs as any).rowGap || (rs as any).gap || '0') || 0;
+      const gapsInsideRow = Math.max(0, children.length - 1) * rowGap;
+      extrasHeight += padT + padB + gapsInsideRow;
+    }} catch (_) {{ extrasHeight = 0; }}
 
     const clone = document.createElement('div');
     clone.setAttribute('data-role', 'stage-fit-measure');
@@ -330,63 +426,72 @@ fn StageDisplayDocument(
       clone.textContent = content;
       const lineHeightPx = size * lineHeightRatio;
       const height = clone.scrollHeight;
-      const lines = lineHeightPx > 0 ? height / lineHeightPx : 0;
-      return {{ lines, lineHeightPx }};
+      const rawLines = lineHeightPx > 0 ? height / lineHeightPx : 0;
+      let lines = rawLines;
+      // For explicit two-line content, clamp measurement jitter to stay near the target.
+      if (explicitLines >= 2) {{
+        const cap = effectiveTarget + 0.02; // allow tiny rounding
+        if (lines > cap) lines = cap;
+        if (lines < explicitLines) lines = explicitLines;
+      }}
+      const scrollWidth = clone.scrollWidth;
+      return {{ lines, rawLines, lineHeightPx, scrollWidth }};
     }};
 
     const baseMeasure = measureLines(basePx);
-    if (baseMeasure.lines <= maxLinesAllowed) {{
-      clone.remove();
-      if (window.PRESENTER_STAGE_TEST_CONFIG && window.PRESENTER_STAGE_TEST_CONFIG.traceFit) {{
-        const log = window.__presenterStageFitLog || [];
-        log.push({{
-          elementId,
-          basePx,
-          absoluteMinPx,
-          effectiveTarget,
-          baseLines: baseMeasure.lines,
-          finalPx: basePx,
-          finalLines: baseMeasure.lines,
-          contentLength: content.length,
-          decision: 'base',
-        }});
-        window.__presenterStageFitLog = log;
-      }}
-      return basePx / rootFontSize;
-    }}
-
-    let targetPx = basePx;
-
+    let finalPx = basePx;
+    let finalMeasure = baseMeasure;
     if (baseMeasure.lines > maxLinesAllowed) {{
-      let low = absoluteMinPx;
+      let low = Math.max(absoluteMinPx, MIN_FONT_PX);
       let high = basePx;
-      let bestPx = low;
-
-      const lowMeasure = measureLines(low);
-      if (lowMeasure.lines <= maxLinesAllowed) {{
-        for (let i = 0; i < 18 && high - low > 0.4; i += 1) {{
+      let best = low;
+      let bestMeasure = measureLines(low);
+      if (bestMeasure.lines > maxLinesAllowed) {{
+        const scale = Math.max(0.35, effectiveTarget / Math.max(bestMeasure.lines, effectiveTarget));
+        low = Math.max(MIN_FONT_PX, low * scale);
+        bestMeasure = measureLines(low);
+      }}
+      if (bestMeasure.lines <= maxLinesAllowed) {{
+        for (let i = 0; i < 28 && high - low > 0.25; i += 1) {{
           const mid = (low + high) / 2;
-          const current = measureLines(mid);
-          if (current.lines <= maxLinesAllowed) {{
-            bestPx = mid;
+          const m = measureLines(mid);
+          if (m.lines <= maxLinesAllowed) {{
+            best = mid;
+            bestMeasure = m;
             low = mid;
           }} else {{
             high = mid;
           }}
         }}
+        finalPx = best;
+        finalMeasure = bestMeasure;
       }} else {{
-        const scale = Math.max(
-          0.4,
-          effectiveTarget / Math.max(lowMeasure.lines, effectiveTarget),
-        );
-        bestPx = Math.max(MIN_FONT_PX, low * scale);
+        const maxByH = targetRowHeight > 0 ? (targetRowHeight * layoutHeightFill) / (lineHeightRatio * Math.max(1, effectiveTarget)) : basePx;
+        finalPx = Math.min(basePx, Math.max(MIN_FONT_PX, maxByH));
+        finalMeasure = measureLines(finalPx);
       }}
-
-      targetPx = bestPx;
+    }}
+    // Strong safety: if lines still exceed the cap (e.g., long words/wrap variability),
+    // keep shrinking with adaptive steps until we fit or hit the minimum.
+    if (finalMeasure.lines > maxLinesAllowed) {{
+      let attempts = 0;
+      while (finalMeasure.lines > maxLinesAllowed && attempts < 48 && finalPx > MIN_FONT_PX) {{
+        const step = Math.max(1.0, finalPx * 0.03);
+        finalPx = Math.max(MIN_FONT_PX, finalPx - step);
+        finalMeasure = measureLines(finalPx);
+        attempts += 1;
+      }}
     }}
 
-    let finalPx = Math.max(MIN_FONT_PX, Math.min(basePx, targetPx));
-    let finalMeasure = measureLines(finalPx);
+    // Height-based cap to account for non-lyric siblings inside the row (PP has meta below)
+    if (targetRowHeight > 0) {{
+      const usable = Math.max(1, targetRowHeight - Math.max(0, extrasHeight));
+      const capPx = usable / (lineHeightRatio * Math.max(1, effectiveTarget));
+      if (Number.isFinite(capPx) && capPx > 0 && finalPx > capPx) {{
+        finalPx = capPx;
+        finalMeasure = measureLines(finalPx);
+      }}
+    }}
 
     clone.remove();
 
@@ -398,12 +503,15 @@ fn StageDisplayDocument(
         elementId,
         basePx,
         absoluteMinPx,
+        effectiveMinPx: minPx,
+        targetRowHeight,
+        maxPx: null,
         effectiveTarget,
         baseLines: baseMeasure.lines,
         finalPx,
         finalLines: finalMeasure.lines,
         contentLength: content.length,
-        decision: 'shrink',
+        decision: 'fit',
       }});
       window.__presenterStageFitLog = log;
     }}
@@ -1090,11 +1198,12 @@ fn format_hms(seconds: i64) -> String {
 
 const STAGE_STYLES: &str = r#"
 * { box-sizing: border-box; }
-/* Ensure the stage always consumes the full viewport width to prevent left-aligned shrink */
-html, body.stage { width: 100vw; min-width: 100vw; overflow-x: hidden; }
-body.stage { background: #000; color: #f8fafc; font-family: 'Inter', system-ui, sans-serif; margin: 0; min-height: 100vh; display: flex; align-items: stretch; justify-content: stretch; padding: 4vh 6vw; }
+/* Lock stage to viewport: no scrollbars, exact 1:1 height */
+html, body { height: 100%; }
+html { width: 100vw; min-width: 100vw; overflow: hidden; }
+body.stage { background: #000; color: #f8fafc; font-family: 'Inter', system-ui, sans-serif; margin: 0; height: 100vh; width: 100vw; overflow: hidden; display: flex; align-items: stretch; justify-content: stretch; padding: 0; }
 /* SNV layout should maximize horizontal space: remove side padding on the body for SNV */
-body.stage[data-layout-code="worship-snv"] { padding-left: 0; padding-right: 0; }
+body.stage[data-layout-code="worship-snv"] { padding: 0; }
 body.stage[data-output-stale="true"] .stage__body { opacity: 0.55; transition: opacity 0.25s ease; }
 body.stage[data-output-stale="true"] .stage__status { box-shadow: 0 12px 32px -18px rgba(248, 113, 113, 0.55); }
 body.stage[data-output-stale="true"] .stage__lyrics-current,
@@ -1105,14 +1214,12 @@ body.stage[data-output-stale="true"] .stage__split-sidebar { opacity: 0.65; tran
 body.stage[data-live-state="reconnecting"] .stage__status-connection { color: #fbbf24; }
 body.stage[data-live-state="disconnected"] .stage__status-connection,
 body.stage[data-live-state="error"] .stage__status-connection { color: #f87171; }
-.stage__body { flex: 1; display: flex; align-items: stretch; justify-content: stretch; width: 100%; max-width: 100vw; }
-.stage__lyrics { display: flex; flex-direction: column; justify-content: space-between; gap: 2.5rem; text-align: center; width: 100%; height: 100%; padding: 2vh 4vw; box-sizing: border-box; }
+.stage__body { flex: 1; display: flex; align-items: stretch; justify-content: stretch; width: 100%; max-width: 100vw; height: 100vh; }
+.stage__lyrics { display: grid; grid-template-rows: 1fr 1fr; grid-template-columns: 1fr; align-items: stretch; justify-items: stretch; text-align: center; width: 100%; height: 100vh; padding: 0 4vw; box-sizing: border-box; overflow: hidden; }
 /* SNV: lock current/next to equal halves so text size never resizes the layout */
-body.stage[data-layout-code="worship-snv"] .stage__lyrics { display: grid; grid-template-rows: 1fr 1fr; align-items: stretch; justify-items: stretch; }
+body.stage[data-layout-code="worship-snv"] .stage__lyrics { grid-template-rows: 1fr 1fr; height: 100vh; padding-left: 0; padding-right: 0; }
 body.stage[data-layout-code="worship-snv"] .stage__lyrics-current,
 body.stage[data-layout-code="worship-snv"] .stage__lyrics-next { overflow: hidden; display: flex; align-items: center; }
-/* Reduce side padding for SNV to maximize usable width on stage */
-body.stage[data-layout-code="worship-snv"] .stage__lyrics { padding-left: 2vw; padding-right: 2vw; }
 .stage__lyrics-current { font-size: 14rem; font-weight: 700; display: flex; flex-direction: column; gap: 1rem; align-items: stretch; justify-content: flex-start; letter-spacing: 0.04em; min-height: 0; }
 .stage__lyrics-current p { margin: 0; line-height: 1.06; white-space: pre-wrap; text-transform: none; max-width: 100%; width: 100%; }
 .stage__lyrics-next { font-size: 11.5rem; color: #cbd5f5; letter-spacing: 0.06em; display: flex; flex-direction: column; gap: 1rem; align-items: stretch; justify-content: center; padding-bottom: 4vh; }
@@ -1122,7 +1229,7 @@ body.stage[data-layout-code="worship-snv"] .stage__lyrics { padding-left: 2vw; p
 .stage__group-slot--current { justify-content: space-between; align-items: center; flex-wrap: nowrap; gap: 1rem; width: 100%; }
 .stage__group-slot--current .stage__group { margin-right: auto; }
 .stage__group-slot--current .stage__song { margin-left: auto; }
-.stage__split { display: grid; gap: 2rem; grid-template-columns: minmax(0, 2fr) minmax(0, 1fr); width: 100%; }
+.stage__split { display: grid; gap: 2rem; grid-template-columns: minmax(0, 2fr) minmax(0, 1fr); width: 100%; height: 100vh; overflow: hidden; }
 .stage__split-main { background: rgba(15, 23, 42, 0.75); padding: 2rem; border-radius: 1rem; box-shadow: 0 20px 40px -30px rgba(15, 23, 42, 0.9); display: flex; flex-direction: column; gap: 1.25rem; }
 .stage__split-main h2 { margin-top: 0; font-size: 1.5rem; letter-spacing: 0.1em; color: #38bdf8; }
 .stage__split-main p { font-size: 3rem; margin: 0; white-space: pre-wrap; }
@@ -1132,10 +1239,12 @@ body.stage[data-layout-code="worship-snv"] .stage__lyrics { padding-left: 2vw; p
 .stage__split-sidebar p { margin: 0; white-space: pre-wrap; }
 .stage__split-main .stage__group-slot,
 .stage__split-sidebar .stage__group-slot { justify-content: flex-start; }
-.stage__pp { display: grid; gap: 2.5rem; grid-template-columns: minmax(0, 2.6fr) minmax(0, 1fr); width: 100%; align-items: stretch; }
-.stage__lyrics--pp { background: rgba(15, 23, 42, 0.75); padding: 2.5rem 3rem; border-radius: 1.25rem; display: grid; grid-template-rows: 1fr 1fr; gap: 3.4rem; box-shadow: 0 24px 48px -32px rgba(15, 23, 42, 0.9); }
+.stage__pp { display: grid; gap: 2.5rem; grid-template-columns: minmax(0, 2.6fr) minmax(0, 1fr); width: 100%; align-items: stretch; height: 100vh; overflow: hidden; }
+.stage__lyrics--pp { background: rgba(15, 23, 42, 0.75); padding: 2rem 3rem; border-radius: 1.25rem; display: grid; grid-template-rows: 1fr 1fr; grid-template-columns: 1fr; gap: 2rem; box-shadow: 0 24px 48px -32px rgba(15, 23, 42, 0.9); height: 100vh; overflow: hidden; }
 .stage__lyrics-current--pp { align-items: stretch; gap: 1rem; font-size: 13.5rem; }
 .stage__lyrics-next--pp { align-items: stretch; gap: 1rem; color: #cbd5f5; font-size: 11rem; }
+.stage__lyrics-current--pp p { margin: 0; line-height: 1.06; white-space: pre-wrap; max-width: 100%; width: 100%; }
+.stage__lyrics-next--pp p { margin: 0; line-height: 1.06; white-space: pre-wrap; max-width: 100%; width: 100%; }
 .stage__lyrics-next--pp p { color: #cbd5f5; }
 .stage__playlist { background: rgba(15, 23, 42, 0.55); padding: 1.8rem; border-radius: 1.25rem; display: flex; flex-direction: column; gap: 1.5rem; min-width: 0; box-shadow: 0 20px 40px -34px rgba(15, 23, 42, 0.9); }
 .stage__playlist[data-visible="false"] { display: none; }

@@ -1,0 +1,58 @@
+{
+  "base": "http://127.0.0.1:18564",
+  "viewport": {
+    "width": 2880,
+    "height": 1800
+  },
+  "startedAt": "2025-10-07T21:26:15.175Z",
+  "totals": {
+    "slides": 1477,
+    "checked": 1477,
+    "failures": 125
+  },
+  "libraries": {
+    "BOHATY MUSIC": {
+      "slides": 555,
+      "checked": 555,
+      "failures": 49,
+      "failuresByPresentation": {
+        "Boh tak miloval": 2,
+        "Chcem prúdiť": 3,
+        "Chváľ Ho": 1,
+        "Ku krížu ma veď": 4,
+        "Kým je Ježiš": 6,
+        "Nehľadám svoje": 2,
+        "Nekonečná láska": 7,
+        "Opasok pravdy": 3,
+        "Radosť Pánova": 2,
+        "Rim 5,5": 8,
+        "Rovnaká už nebudem": 6,
+        "Si veľký v láske": 2,
+        "Svetlo": 2,
+        "Žalm 91": 1
+      }
+    },
+    "NEW LEVEL": {
+      "slides": 922,
+      "checked": 922,
+      "failures": 76,
+      "failuresByPresentation": {
+        "002 Dnes začínam znova tam": 1,
+        "003 Ja som Božím dieťaťom": 3,
+        "005 Ježiš, Syn Boží": 5,
+        "008 Požehnané meno Tvoje": 7,
+        "009 Tak dobrý": 7,
+        "011 Ty ma nikdy neopustíš": 3,
+        "012 Ty si sloboda": 8,
+        "014 V deň, keď si ma zachránil": 15,
+        "015 V Tebe môžem všetko urobiť": 7,
+        "018 Tvoja je sláva": 6,
+        "019 Preto, aký si": 6,
+        "020 Oceán": 1,
+        "021 Pane, potrebujem Ťa": 4,
+        "024 Len v Ňom už všetko mám": 3
+      }
+    }
+  },
+  "completedAt": "2025-10-07T21:31:04.411Z"
+}

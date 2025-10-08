@@ -98,9 +98,12 @@ PRESENTER_ANDROID_ADB_BIN="$PRESENTER_ANDROID_ADB_BIN" ADB_KEYS_DIR="$ADB_KEYS_D
 echo "[verify] Rebuilding gateway (always)"
 PRESENTER_ANDROID_ADB_BIN="$PRESENTER_ANDROID_ADB_BIN" ADB_KEYS_DIR="$ADB_KEYS_DIR" "$REPO_ROOT/scripts/docker/run-gateway.sh" --force
 
-echo "[verify] Running Playwright suite"
-echo "[verify] Running Playwright suite"
-RUN_AS_ORIGINAL npm run test:playwright
+echo "[verify] Running Playwright suite${PLAYWRIGHT_GREP:+ (grep: $PLAYWRIGHT_GREP)}"
+if [[ -n "${PLAYWRIGHT_GREP:-}" ]]; then
+  RUN_AS_ORIGINAL AUDIT_LIBS="${AUDIT_LIBS:-BOHATY MUSIC,NEW LEVEL}" AUDIT_MAX_PRESENTATIONS="${AUDIT_MAX_PRESENTATIONS:-0}" AUDIT_MAX_SLIDES="${AUDIT_MAX_SLIDES:-0}" STAGE_NEGATIVE="${STAGE_NEGATIVE:-1}" npx playwright test --grep "$PLAYWRIGHT_GREP"
+else
+  RUN_AS_ORIGINAL AUDIT_LIBS="${AUDIT_LIBS:-BOHATY MUSIC,NEW LEVEL}" AUDIT_MAX_PRESENTATIONS="${AUDIT_MAX_PRESENTATIONS:-0}" AUDIT_MAX_SLIDES="${AUDIT_MAX_SLIDES:-0}" STAGE_NEGATIVE="${STAGE_NEGATIVE:-1}" npm run test:playwright
+fi
 
 echo "[verify] Refreshing Docker demo for project '$REPO_SLUG' (post-tests)"
 PRESENTER_ANDROID_ADB_BIN="$PRESENTER_ANDROID_ADB_BIN" ADB_KEYS_DIR="$ADB_KEYS_DIR" "$REPO_ROOT/scripts/docker/run-demo.sh" "--force" "--name" "$REPO_SLUG" "--display-name" "$DISPLAY_NAME" "--port" "$DEMO_PORT" "--enable-companion"

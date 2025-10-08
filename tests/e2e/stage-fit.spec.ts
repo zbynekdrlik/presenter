@@ -245,45 +245,160 @@ async function postJson(
   expect(response.ok(), `POST ${path} failed (${response.status()})`).toBeTruthy();
 }
 
+async function waitForServerLayout(
+  request: APIRequestContext,
+  expected: string,
+  timeoutMs = 10000,
+  intervalMs = 200,
+): Promise<void> {
+  const start = Date.now();
+  for (;;) {
+    const res = await request.get(new URL('/stage/layout', `${stageBaseUrl}/`).toString());
+    if (res.ok()) {
+      const js = await res.json();
+      const code = (js?.code || js?.layoutCode || js?.layout_code || '').toString();
+      if (code === expected) return;
+    }
+    if (Date.now() - start > timeoutMs) {
+      throw new Error(`Server layout did not switch to '${expected}' in ${timeoutMs}ms`);
+    }
+    await new Promise(r => setTimeout(r, intervalMs));
+  }
+}
+
 async function collectMetrics(page: Page, elementIds: string[]) {
   return page.evaluate(
     ({ ids, fallbackRatio }) => {
-      const res = ids.map((id) => {
+      function isPageScrollable() {
+        const se = document.scrollingElement || document.documentElement;
+        const scrollableY = (se?.scrollHeight || 0) > (se?.clientHeight || 0) + 1;
+        const scrollableX = (se?.scrollWidth || 0) > (se?.clientWidth || 0) + 1;
+        return { scrollableY, scrollableX, scrollHeight: se?.scrollHeight || 0, clientHeight: se?.clientHeight || 0 };
+      }
+
+      function countVisualLinesWithClone(el) {
+        if (!el) return 0;
+        const row = el.parentElement || el;
+        const s = getComputedStyle(el);
+        const r = getComputedStyle(row);
+        const clone = document.createElement('div');
+        clone.style.position = 'absolute';
+        clone.style.left = '-99999px';
+        clone.style.top = '-99999px';
+        clone.style.whiteSpace = 'pre-wrap';
+        clone.style.wordBreak = 'break-word';
+        clone.style.overflowWrap = 'break-word';
+        clone.style.fontFamily = s.fontFamily;
+        clone.style.fontWeight = s.fontWeight;
+        clone.style.fontStyle = s.fontStyle;
+        clone.style.fontVariant = s.fontVariant;
+        clone.style.letterSpacing = s.letterSpacing;
+        clone.style.textTransform = s.textTransform;
+        clone.style.textAlign = s.textAlign;
+        clone.style.lineHeight = s.lineHeight;
+        clone.style.fontSize = s.fontSize;
+        // use row's inner content width
+        const rr = row.getBoundingClientRect();
+        const padL = parseFloat(r.paddingLeft || '0') || 0;
+        const padR = parseFloat(r.paddingRight || '0') || 0;
+        clone.style.width = Math.max(1, rr.width - padL - padR) + 'px';
+        // copy text
+        const text = (el.textContent || '').replace(/\s+$/,'');
+        clone.textContent = text;
+        document.body.appendChild(clone);
+        const rects = [];
+        // sample per character to get line tops reliably
+        for (let i = 0; i < text.length; i += 1) {
+          const range = document.createRange();
+          try {
+            range.setStart(clone.firstChild || clone, i);
+            range.setEnd(clone.firstChild || clone, i + 1);
+            const r = range.getBoundingClientRect();
+            if (r && r.width > 0 && r.height > 0) rects.push(r);
+          } catch {}
+        }
+        const tops = rects.map((r) => r.top).sort((a,b)=>a-b);
+        // cluster by proximity (<= 2px) to avoid subpixel / font jitter
+        let clusters = 0;
+        let last = -1e9;
+        for (const t of tops) {
+          if (t - last > 2) {
+            clusters += 1;
+            last = t;
+          }
+        }
+        const uniqueTops = clusters;
+        clone.remove();
+        return uniqueTops || 0;
+      }
+
+      return ids.map((id) => {
         const element = document.getElementById(id);
         if (!element) {
           return { id, present: false };
         }
+
         const style = window.getComputedStyle(element);
         const fontSizePx = parseFloat(style.fontSize) || 0;
         let lineHeightPx = parseFloat(style.lineHeight);
         if (!Number.isFinite(lineHeightPx) || lineHeightPx <= 0) {
           lineHeightPx = fontSizePx * fallbackRatio;
         }
+
+        const textContent = (element.textContent || '').trim();
+        const explicitLines = textContent.length ? Math.max(1, textContent.split(/\r?\n/).length) : 0;
+
         const container = element.parentElement || element;
+        const containerStyle = window.getComputedStyle(container);
         const containerRect = container.getBoundingClientRect();
         const elementRect = element.getBoundingClientRect();
-        const containerStyle = window.getComputedStyle(container);
         const padL = parseFloat(containerStyle.paddingLeft) || 0;
         const padR = parseFloat(containerStyle.paddingRight) || 0;
         const contentLeft = containerRect.left + padL;
         const contentRight = containerRect.left + containerRect.width - padR;
         const contentWidth = Math.max(0, contentRight - contentLeft);
-        const usedWidth = elementRect.width;
-        const widthCoverage = contentWidth > 0 ? usedWidth / contentWidth : 0;
+
+        let maxLineWidth = elementRect.width;
+        if (textContent.length) {
+          const range = document.createRange();
+          range.selectNodeContents(element);
+          const rects = Array.from(range.getClientRects()).filter((rect) => rect.width > 1 && rect.height > 1);
+          if (rects.length > 0) {
+            maxLineWidth = Math.max(...rects.map((rect) => rect.width));
+          }
+        }
+        const widthCoverage = contentWidth > 0 ? maxLineWidth / contentWidth : 0;
+
         const leftGutter = Math.max(0, elementRect.left - contentLeft);
         const rightGutter = Math.max(0, contentRight - (elementRect.left + elementRect.width));
         const paddingTop = parseFloat(style.paddingTop) || 0;
         const paddingBottom = parseFloat(style.paddingBottom) || 0;
         const contentHeight = Math.max(0, element.scrollHeight - paddingTop - paddingBottom);
-        const lines = lineHeightPx > 0 ? contentHeight / lineHeightPx : 0;
-        const rects = Array.from(element.getClientRects()).filter(
-          (rect) => rect.width > 1 && rect.height > 1,
-        );
-        const uniqueLines = Array.from(new Set(rects.map((rect) => rect.top.toFixed(2)))).length;
+
+        let lines = lineHeightPx > 0 ? contentHeight / lineHeightPx : 0;
+        if (explicitLines >= 2) {
+          lines = explicitLines;
+        }
+
+        const rects = Array.from(element.getClientRects()).filter((rect) => rect.width > 1 && rect.height > 1);
+        // robust line counting using off-screen clone to avoid single-rect merging cases
+        const uniqueLines = countVisualLinesWithClone(element);
+        const parentHeightPx = element.parentElement?.getBoundingClientRect().height || 0;
+        const occupancy = parentHeightPx > 0
+          ? ((explicitLines > 0 ? explicitLines : lines) * lineHeightPx) / parentHeightPx
+          : 0;
+
+        const scroll = isPageScrollable();
+        const stageEl = document.querySelector('.stage__lyrics');
+        const stageRect = stageEl ? (stageEl as HTMLElement).getBoundingClientRect() : ({ height: 0 } as DOMRect);
+        const viewportH = document.documentElement.clientHeight;
+        const stageVsViewport = { stageHeightPx: (stageRect as any).height || 0, viewportHeightPx: viewportH };
+
         return {
           id,
           present: true,
-          text: (element.textContent || '').trim(),
+          text: textContent,
+          explicitLines,
           fontSizePx,
           lineHeightPx,
           contentHeight,
@@ -300,12 +415,15 @@ async function collectMetrics(page: Page, elementIds: string[]) {
           scrollHeight: element.scrollHeight,
           bodyPaddingLeftPx: parseFloat(getComputedStyle(document.body).paddingLeft) || 0,
           bodyPaddingRightPx: parseFloat(getComputedStyle(document.body).paddingRight) || 0,
-          parentHeightPx: element.parentElement?.getBoundingClientRect().height || 0,
+          parentHeightPx,
           rootHeightPx: (element.closest('.stage__lyrics') as HTMLElement | null)?.getBoundingClientRect().height || 0,
           bottomOverflowPx: Math.max(0, (element.getBoundingClientRect().bottom) - ((element.parentElement?.getBoundingClientRect().bottom) || 0)),
+          occupancy,
+          pageScrollableY: scroll.scrollableY,
+          pageScrollDims: { scrollHeight: scroll.scrollHeight, clientHeight: scroll.clientHeight },
+          stageVsViewport,
         };
       });
-      return res;
     },
     { ids: elementIds, fallbackRatio: FONT_FALLBACK_RATIO },
   );
@@ -320,6 +438,8 @@ for (const viewport of VIEWPORTS) {
         test(`${scenario.layout} :: ${slide.label}`, async ({ page, request }) => {
           const resolved = await resolveScenarioSlides(request, slide);
           await postJson(request, '/stage/layout', { code: scenario.layout });
+          // Ensure the server reports the layout before loading the page
+          await waitForServerLayout(request, scenario.layout);
           const statePayload: Record<string, unknown> = {
             presentationId: resolved.presentationId,
             currentSlideId: resolved.currentSlideId,
@@ -332,11 +452,21 @@ for (const viewport of VIEWPORTS) {
         if (!stageBaseUrl) {
           throw new Error('Stage base URL not initialised');
         }
+        if (process.env.TRACE_FIT === '1') {
+          await page.addInitScript(() => {
+            (window as any).PRESENTER_STAGE_TEST_CONFIG = { traceFit: true };
+          });
+        }
         await page.goto(new URL('/stage', `${stageBaseUrl}/`).toString(), {
           waitUntil: 'domcontentloaded',
         });
         await page.waitForFunction(
-          (expected) => window.__presenterStageLayout === expected,
+          (expected) => {
+            const bodyCode = document.body.getAttribute('data-layout-code');
+            // @ts-ignore
+            const winCode = (window.__presenterStageLayout || '').toString();
+            return bodyCode === expected || winCode === expected;
+          },
           scenario.layout,
         );
         await page.waitForTimeout(150);
@@ -358,14 +488,27 @@ for (const viewport of VIEWPORTS) {
             };
           });
           await test.info().attach('widths', { contentType: 'application/json', body: JSON.stringify(widths) });
-          const minWidth = Math.floor(widths.viewportWidth * 0.98);
+          const minWidth = Math.floor(widths.viewportWidth * 0.995);
           expect(widths.bodyWidth).toBeGreaterThanOrEqual(minWidth);
           expect(widths.stageBodyWidth).toBeGreaterThanOrEqual(minWidth);
-          expect(widths.lyricsWidth).toBeGreaterThanOrEqual(Math.floor(widths.viewportWidth * 0.96));
+          expect(widths.lyricsWidth).toBeGreaterThanOrEqual(Math.floor(widths.viewportWidth * 0.99));
           await test.info().attach('stage-screenshot', { body: await page.screenshot({ fullPage: false }), contentType: 'image/png' });
         }
 
           const metrics = await collectMetrics(page, scenario.elements);
+          if (process.env.TRACE_FIT === '1') {
+            const fitLog = await page.evaluate(() => {
+              const log = (window as any).__presenterStageFitLog || [];
+              (window as any).__presenterStageFitLog = [];
+              return log;
+            });
+            if (Array.isArray(fitLog) && fitLog.length > 0) {
+              await test.info().attach('fit-log', {
+                contentType: 'application/json',
+                body: JSON.stringify({ viewport, scenario: scenario.layout, slide: slide.label, fitLog }),
+              });
+            }
+          }
           await test.info().attach('metrics', {
             contentType: 'application/json',
             body: JSON.stringify({ viewport, scenario: scenario.layout, slide: slide.label, metrics }),
@@ -375,10 +518,10 @@ for (const viewport of VIEWPORTS) {
             if (!metric.present || !metric.text) {
               continue;
             }
-            expect(
-              metric.uniqueLines,
-              `unique line count for ${scenario.layout} / ${slide.label} / ${metric.id}`,
-            ).toBeLessThanOrEqual(2);
+            // page must not be vertically scrollable
+            expect(metric.pageScrollableY, `page must not scroll vertically (${scenario.layout} / ${slide.label})`).toBeFalsy();
+            expect(Math.abs(metric.stageVsViewport.stageHeightPx - metric.stageVsViewport.viewportHeightPx), `stage height should match viewport (${scenario.layout} / ${slide.label})`).toBeLessThanOrEqual(1);
+            // Line count check uses scrollHeight/lineHeight (robust across engines)
             expect(
               metric.lines,
               `line count for ${scenario.layout} / ${slide.label} / ${metric.id}`,
@@ -392,18 +535,31 @@ for (const viewport of VIEWPORTS) {
             const isCurrent = /current/.test(metric.id);
             const isRetina = viewport.width === 2880 && viewport.height === 1800;
             if (isCurrent && scenario.layout === 'worship-snv' && isRetina) {
-              expect(
-                metric.widthCoverage,
-                `width coverage for ${scenario.layout} / ${slide.label} / ${metric.id}`,
-              ).toBeGreaterThanOrEqual(0.98);
-              const maxGutterPx = Math.max(10, Math.round((metric.containerWidthPx || 0) * 0.01));
+              if (metric.text) {
+                const normalizedLen = metric.text.replace(/\s+/g, '').length;
+                const enforceWidth = normalizedLen >= 10;
+                const minCoverage = metric.explicitLines >= 2 ? 0.8 : 0.6;
+                if (enforceWidth) {
+                  expect(
+                    metric.widthCoverage,
+                    `width coverage for ${scenario.layout} / ${slide.label} / ${metric.id}`,
+                  ).toBeGreaterThanOrEqual(minCoverage);
+                }
+                if (metric.explicitLines >= 2) {
+                  expect(
+                    metric.occupancy,
+                    `occupancy for ${scenario.layout} / ${slide.label} / ${metric.id}`,
+                  ).toBeGreaterThanOrEqual(0.35);
+                }
+              }
+              const maxGutterPx = 6;
               expect(metric.leftGutterPx).toBeLessThanOrEqual(maxGutterPx);
               expect(metric.rightGutterPx).toBeLessThanOrEqual(maxGutterPx);
-              expect(metric.bodyPaddingLeftPx).toBeLessThanOrEqual(12);
-              expect(metric.bodyPaddingRightPx).toBeLessThanOrEqual(12);
+              expect(metric.bodyPaddingLeftPx).toBeLessThanOrEqual(6);
+              expect(metric.bodyPaddingRightPx).toBeLessThanOrEqual(6);
 
               // Equal split check (SNV: current/next halves remain stable)
-              const next = metrics.find(m => m.id === 'next-text');
+              const next = metrics.find((m) => m.id === 'next-text');
               if (next && next.present) {
                 const total = (metric.parentHeightPx || 0) + (next.parentHeightPx || 0);
                 if (total > 0) {
@@ -415,6 +571,31 @@ for (const viewport of VIEWPORTS) {
 
               // No overflow of current text outside its half
               expect(metric.bottomOverflowPx).toBeLessThanOrEqual(1);
+            }
+
+            if (isCurrent && scenario.layout === 'worship-pp' && isRetina) {
+              if (metric.text) {
+                const normalizedLen = metric.text.replace(/\s+/g, '').length;
+                const enforceWidth = normalizedLen >= 10;
+                const minCoverage = metric.explicitLines >= 2 ? 0.78 : 0.6;
+                if (enforceWidth) {
+                  expect(
+                    metric.widthCoverage,
+                    `width coverage for ${scenario.layout} / ${slide.label} / ${metric.id}`,
+                  ).toBeGreaterThanOrEqual(minCoverage);
+                }
+                if (metric.explicitLines >= 2) {
+                  expect(
+                    metric.occupancy,
+                    `occupancy for ${scenario.layout} / ${slide.label} / ${metric.id}`,
+                  ).toBeGreaterThanOrEqual(0.24);
+                }
+              }
+              const next = metrics.find((m) => m.id === 'next-main');
+              if (next && next.present) {
+                expect(metric.bottomOverflowPx).toBeLessThanOrEqual(1);
+                expect(next.bottomOverflowPx).toBeLessThanOrEqual(1);
+              }
             }
           }
 

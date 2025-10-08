@@ -1,0 +1,19 @@
+[audit] 100 slides checked, failures=0
+[audit] 200 slides checked, failures=0
+[audit] 300 slides checked, failures=0
+[audit] 400 slides checked, failures=0
+[audit] 500 slides checked, failures=0
+[audit] 600 slides checked, failures=0
+[audit] 700 slides checked, failures=0
+[audit] 800 slides checked, failures=0
+[audit] 900 slides checked, failures=0
+[audit] 1000 slides checked, failures=0
+[audit] 1100 slides checked, failures=0
+[audit] 1200 slides checked, failures=0
+[audit] 1300 slides checked, failures=0
+[audit] 1400 slides checked, failures=0
+{
+  "ok": true,
+  "outJsonl": "artifacts/audit-2025-10-07T16-13-11-540Z.jsonl",
+  "outSummary": "artifacts/audit-2025-10-07T16-13-11-540Z-summary.json"
+}

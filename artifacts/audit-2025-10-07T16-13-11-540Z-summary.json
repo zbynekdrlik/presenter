@@ -1,0 +1,28 @@
+{
+  "base": "http://127.0.0.1:18564",
+  "viewport": {
+    "width": 2880,
+    "height": 1800
+  },
+  "startedAt": "2025-10-07T16:13:11.668Z",
+  "totals": {
+    "slides": 1477,
+    "checked": 1477,
+    "failures": 0
+  },
+  "libraries": {
+    "BOHATY MUSIC": {
+      "slides": 555,
+      "checked": 555,
+      "failures": 0,
+      "failuresByPresentation": {}
+    },
+    "NEW LEVEL": {
+      "slides": 922,
+      "checked": 922,
+      "failures": 0,
+      "failuresByPresentation": {}
+    }
+  },
+  "completedAt": "2025-10-07T16:17:05.564Z"
+}
