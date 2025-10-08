@@ -1,4 +1,7 @@
 mod bible;
+mod libraries;
+mod playlists;
+mod presentations;
 use crate::{
     ableset::AbleSetStatusSnapshot, android_stage::AndroidStageDisplayStatusSnapshot,
     osc::OscStatusSnapshot, resolume::ResolumeConnectionSnapshot,
@@ -32,16 +35,16 @@ pub fn build_router(state: AppState) -> Router {
         .route("/healthz", get(health))
         .route("/", get(home))
         .route("/search", get(search_presenter_endpoint))
-        .route("/libraries/summary", get(list_library_summaries))
-        .route("/libraries", get(list_libraries).post(create_library))
+        .route("/libraries/summary", get(libraries::list_library_summaries))
+        .route("/libraries", get(libraries::list_libraries).post(libraries::create_library))
         .route(
             "/libraries/{id}",
-            patch(rename_library).delete(delete_library),
+            patch(libraries::rename_library).delete(libraries::delete_library),
         )
-        .route("/libraries/{id}/favorite", post(set_library_favorite))
+        .route("/libraries/{id}/favorite", post(libraries::set_library_favorite))
         .route(
             "/libraries/{id}/presentations",
-            post(create_library_presentation),
+            post(libraries::create_library_presentation),
         )
         .route("/bible/translations", get(bible::list_bible_translations))
         .route("/bible/search", get(bible::search_bible_passages))
@@ -53,12 +56,12 @@ pub fn build_router(state: AppState) -> Router {
         .route("/bible/active", get(bible::get_active_bible_broadcast))
         .route("/bible/trigger", post(bible::trigger_bible_broadcast))
         .route("/bible/clear", post(bible::clear_bible_broadcast))
-        .route("/playlists", get(list_playlists).post(create_playlist))
+        .route("/playlists", get(playlists::list_playlists).post(playlists::create_playlist))
         .route(
             "/playlists/{id}",
-            patch(update_playlist).delete(delete_playlist),
+            patch(playlists::update_playlist).delete(playlists::delete_playlist),
         )
-        .route("/playlists/{id}/entries", put(replace_playlist_entries))
+        .route("/playlists/{id}/entries", put(playlists::replace_playlist_entries))
         .route("/ui/operator", get(operator_ui))
         .route("/ui/tablet", get(tablet_ui))
         .route("/ui/bible", get(bible::bible_ui))
@@ -103,23 +106,23 @@ pub fn build_router(state: AppState) -> Router {
         .route("/integrations/ableset/follow", post(set_ableset_follow))
         .route(
             "/presentations/{id}",
-            get(get_presentation_detail).patch(update_presentation),
+            get(presentations::get_presentation_detail).patch(presentations::update_presentation),
         )
         .route(
             "/presentations/{presentation_id}/slides",
-            post(insert_slide_handler),
+            post(presentations::insert_slide),
         )
         .route(
             "/presentations/{presentation_id}/slides/{slide_id}/duplicate",
-            post(duplicate_slide_handler),
+            post(presentations::duplicate_slide),
         )
         .route(
             "/presentations/{presentation_id}/slides/{slide_id}",
-            patch(update_slide_content_handler).delete(delete_slide_handler),
+            patch(presentations::update_slide_content).delete(presentations::delete_slide),
         )
         .route(
             "/presentations/{presentation_id}/slides/reorder",
-            post(reorder_slides_handler),
+            post(presentations::reorder_slides),
         )
         .route("/timers/overview", get(get_timers_overview))
         .route("/timers/command", post(execute_timer_command))
