@@ -271,7 +271,10 @@ fn parse_uuid(field: &str, value: &str) -> Result<Uuid, AppError> {
 }
 
 #[cfg(test)]
-mod tests {
+mod tests;
+
+#[cfg(test)]
+mod tests_old {
     use super::*;
     use axum::body::Body;
     use axum::http::{Request, StatusCode};

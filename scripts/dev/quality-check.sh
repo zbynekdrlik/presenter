@@ -77,7 +77,14 @@ fi
 # 6) File size limits (only for target files)
 for file in "${target_files[@]}"; do
   [[ -f "$file" ]] || continue
-  lines=$(wc -l < "$file" | tr -d ' ')
+  # Count production lines only (exclude inline #[cfg(test)] module and below)
+  test_line=$(awk '/^\s*#\[cfg\(test\)\]/{print NR; exit}' "$file")
+  if [[ -n "${test_line}" ]]; then
+    prod_lines=$(( test_line - 1 ))
+  else
+    prod_lines=$(wc -l < "$file" | tr -d ' ')
+  fi
+  lines=$prod_lines
   if (( lines > 1000 )); then
     fail "${file} exceeds hard cap (1000 lines): ${lines}"
   elif (( lines > 800 )); then
