@@ -51,9 +51,10 @@ done
 
 # 4) No direct playwright show-report usages (policy requires helper script)
 if rg -n "playwright show-report" \
+      -g 'scripts/**' -g 'tests/**' -g 'crates/**' -g 'package*.json' \
       -g '!scripts/dev/show-playwright-report.sh' \
-      -g '!docs/**' -g '!prompts/**' -g '!node_modules/**' \
-      -g 'scripts/**' -g 'tests/**' -g 'crates/**' -g 'package*.json' >/dev/null; then
+      -g '!scripts/dev/quality-check.sh' \
+      -g '!docs/**' -g '!prompts/**' -g '!node_modules/**' >/dev/null; then
   fail "Direct 'playwright show-report' usage found; use scripts/dev/show-playwright-report.sh"
 fi
 

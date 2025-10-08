@@ -1,0 +1,3 @@
+/* Timer overlay minimal styles */
+body.timer { margin:0; background:#000; color:#0f0; font-family:system-ui, sans-serif; }
+.timer__value { font-size:8vmin; text-align:center; }

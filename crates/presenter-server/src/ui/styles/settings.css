@@ -1,0 +1,4 @@
+/* Settings UI minimal styles */
+body.settings { margin:0; background:#fafafa; color:#111; }
+.card { background:#fff; border:1px solid rgba(0,0,0,.08); border-radius:8px; padding:1rem; }
+.grid { display:grid; gap:12px; }
