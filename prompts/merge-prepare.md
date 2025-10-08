@@ -13,3 +13,8 @@
    - Reject focused/skipped tests: `rg -n "\.only\(|describe\.only|it\.only|test\.only|\.skip\(" tests/e2e` must return nothing.
    - Ensure E2E covers UI plus side effects for ALL workflows changed in this branch (use mocks where needed). Examples: Resolume, Ableton/AbleSet/OSC, Android Stage, Companion, gateway, stage layouts, Bible imports.
    - Re-run `sudo -E ./scripts/dev/verify-and-refresh.sh` and confirm demo + gateway validations pass.
+
+9. Quality & Architecture Review (Issue #41 rules):
+   - Run `scripts/dev/quality-check.sh --strict --against origin/main` and resolve all reported failures. Warnings should be triaged in the PR notes with follow-up TODOs.
+   - Ensure the PR description includes the “Definition of Done” checklist from `docs/issues/41-recurring-quality-architecture-review.md` and each item is checked.
+   - If architectural changes were introduced, add/update an ADR under `docs/adr/` and link it in the PR.

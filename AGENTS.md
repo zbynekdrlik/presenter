@@ -21,6 +21,7 @@ Presenter is a monolithic, production-ready lyrics/Bible/timers display applicat
 - Reserve `mod.rs` for orchestration and re-exports, never for primary implementations. Use consistent snake_case module names and PascalCase types.
 - Every new module ships with unit tests for pure logic plus E2E coverage for cross-surface workflows; update documentation whenever files move or APIs change.
 - When inspecting Playwright failures, use the helper script `scripts/dev/show-playwright-report.sh` (it auto-kills stale servers, chooses a random free port, and runs detached so the CLI never blocks). Do not run `npx playwright show-report` directly.
+ - Before reviews and merges, run the repository quality gate: `scripts/dev/quality-check.sh --against origin/main` (advisory) and `--strict` before merge. See Issue #41 checklist.
 
 ## Tooling & Dependencies
 - Install any required tool, utility, package, framework, or application immediately using `sudo apt install` (or the appropriate package manager) instead of attempting workarounds or waiting for approval.
@@ -76,6 +77,7 @@ Presenter is a monolithic, production-ready lyrics/Bible/timers display applicat
 - Automated tests cover every new behavior, emphasizing functional and end-user workflows. Add integration/end-to-end coverage where relevant.
 - Update all Markdown documents affected by the change so architecture and functionality references remain accurate and reflect the chosen 2025 design approach.
 - Confirm the implementation aligns with monolithic, high-reliability principles tailored to our church usage and document that rationale in the PR.
+ - Run `scripts/dev/quality-check.sh --strict --against origin/main` and fix all failures; include the “Definition of Done” from `docs/issues/41-recurring-quality-architecture-review.md` in the PR and check off each item.
 
 ## Collaboration & Decision Log
 - Capture architectural decisions in numbered ADRs under `docs/adr/` and cross-reference them from PRs when applicable.
