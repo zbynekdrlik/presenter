@@ -1,9 +1,12 @@
-use axum::{extract::{Query, State}, Json};
+use axum::{
+    extract::{Query, State},
+    Json,
+};
 use serde::Deserialize;
 use tracing::instrument;
 
+use super::AppError;
 use crate::state::AppState;
-use super::{AppError};
 use presenter_core::SearchResult;
 
 #[derive(Debug, Deserialize)]
@@ -22,7 +25,7 @@ pub(super) async fn search_presenter_endpoint(
     let query = params.query.unwrap_or_default();
     let trimmed = query.trim();
     if trimmed.is_empty() {
-        return Ok(Json(Vec::new()))
+        return Ok(Json(Vec::new()));
     }
     let limit = params.limit.unwrap_or(25).clamp(1, 100) as u64;
     let results = state.search_presenter(trimmed, limit).await?;

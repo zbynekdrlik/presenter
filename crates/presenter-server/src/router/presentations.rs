@@ -1,20 +1,30 @@
-use axum::{extract::{Path, State}, http::StatusCode, Json};
-use tracing::instrument;
-use crate::state::AppState;
-use presenter_core::{PresentationId, Slide, SlideId};
 use super::AppError;
+use crate::state::AppState;
+use axum::{
+    extract::{Path, State},
+    http::StatusCode,
+    Json,
+};
+use presenter_core::{PresentationId, Slide, SlideId};
+use tracing::instrument;
 
 #[derive(Debug, serde::Deserialize)]
 #[serde(rename_all = "camelCase")]
-pub(super) struct RenamePresentationRequest { pub(super) name: String }
+pub(super) struct RenamePresentationRequest {
+    pub(super) name: String,
+}
 
 #[derive(Debug, serde::Deserialize)]
 #[serde(rename_all = "camelCase")]
-pub(super) struct CreateSlideRequest { pub(super) position: Option<u32> }
+pub(super) struct CreateSlideRequest {
+    pub(super) position: Option<u32>,
+}
 
 #[derive(Debug, serde::Deserialize)]
 #[serde(rename_all = "camelCase")]
-pub(super) struct ReorderSlidesRequest { pub(super) slide_ids: Vec<uuid::Uuid> }
+pub(super) struct ReorderSlidesRequest {
+    pub(super) slide_ids: Vec<uuid::Uuid>,
+}
 
 #[derive(Debug, serde::Deserialize)]
 #[serde(rename_all = "camelCase")]

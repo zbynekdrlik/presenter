@@ -84,6 +84,9 @@ done
 DISPLAY_NAME="${CUSTOM_DISPLAY_NAME:-$DISPLAY_NAME_DEFAULT}"
 
 echo "[verify] Running cargo test"
+echo "[verify] Running quality-check (strict)"
+RUN_AS_ORIGINAL ./scripts/dev/quality-check.sh --strict --against origin/main
+echo "[verify] Quality-check passed"
 RUN_AS_ORIGINAL cargo test
 
 echo "[verify] Running Companion module unit tests"

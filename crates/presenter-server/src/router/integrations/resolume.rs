@@ -1,11 +1,14 @@
-use axum::{extract::{Path, State}, Json};
+use axum::{
+    extract::{Path, State},
+    Json,
+};
 use serde::{Deserialize, Serialize};
 use tracing::instrument;
 
-use crate::state::AppState;
-use presenter_core::{ResolumeHost, ResolumeHostDraft, ResolumeHostId};
 use super::super::AppError;
 use crate::resolume::ResolumeConnectionSnapshot;
+use crate::state::AppState;
+use presenter_core::{ResolumeHost, ResolumeHostDraft, ResolumeHostId};
 use uuid::Uuid;
 
 #[derive(Debug, Serialize)]
@@ -47,8 +50,12 @@ pub(crate) struct ResolumeHostRequest {
     is_enabled: bool,
 }
 
-const fn default_resolume_port() -> u16 { 8090 }
-const fn default_true() -> bool { true }
+const fn default_resolume_port() -> u16 {
+    8090
+}
+const fn default_true() -> bool {
+    true
+}
 
 #[instrument(skip_all)]
 pub(crate) async fn list_resolume_hosts(

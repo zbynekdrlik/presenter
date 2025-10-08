@@ -1,24 +1,37 @@
-use axum::{extract::{Path, Query, State}, http::StatusCode, Json};
-use uuid::Uuid;
-use tracing::instrument;
-use crate::state::AppState;
-use presenter_core::{Library, LibraryId, LibrarySummary};
 use super::AppError;
+use crate::state::AppState;
+use axum::{
+    extract::{Path, Query, State},
+    http::StatusCode,
+    Json,
+};
+use presenter_core::{Library, LibraryId, LibrarySummary};
+use tracing::instrument;
+use uuid::Uuid;
 
 #[derive(Debug, serde::Deserialize)]
 #[serde(rename_all = "camelCase")]
-pub(super) struct CreateLibraryRequest { pub(super) name: String }
+pub(super) struct CreateLibraryRequest {
+    pub(super) name: String,
+}
 
 #[derive(Debug, serde::Deserialize)]
 #[serde(rename_all = "camelCase")]
-pub(super) struct RenameLibraryRequest { pub(super) name: String }
+pub(super) struct RenameLibraryRequest {
+    pub(super) name: String,
+}
 
 #[derive(Debug, serde::Deserialize)]
 #[serde(rename_all = "camelCase")]
-pub(super) struct UpdateLibraryFavoriteRequest { pub(super) favorite: bool }
+pub(super) struct UpdateLibraryFavoriteRequest {
+    pub(super) favorite: bool,
+}
 
 #[derive(Debug, serde::Deserialize)]
-pub(super) struct LibrarySummaryQuery { #[serde(default)] pub(super) q: Option<String> }
+pub(super) struct LibrarySummaryQuery {
+    #[serde(default)]
+    pub(super) q: Option<String>,
+}
 
 #[instrument(skip_all)]
 pub(super) async fn list_library_summaries(
@@ -75,7 +88,10 @@ pub(super) async fn delete_library(
 
 #[derive(Debug, serde::Deserialize)]
 #[serde(rename_all = "camelCase")]
-pub(super) struct CreateLibraryPresentationRequest { #[serde(default)] pub(super) name: Option<String> }
+pub(super) struct CreateLibraryPresentationRequest {
+    #[serde(default)]
+    pub(super) name: Option<String>,
+}
 
 #[derive(Debug, serde::Serialize, serde::Deserialize)]
 #[serde(rename_all = "camelCase")]

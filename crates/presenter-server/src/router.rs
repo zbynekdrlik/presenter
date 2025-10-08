@@ -1,14 +1,14 @@
 mod bible;
+mod features;
+mod integrations;
 mod libraries;
 mod playlists;
 mod presentations;
-mod ui_routes;
+mod search;
 mod stage;
 mod timers;
-mod search;
-mod features;
-mod integrations;
-use crate::{ state::AppState };
+mod ui_routes;
+use crate::state::AppState;
 use axum::{
     extract::{ws::WebSocketUpgrade, State},
     http::StatusCode,
@@ -16,7 +16,7 @@ use axum::{
     routing::{get, patch, post, put},
     Json, Router,
 };
-use presenter_core::{ LibraryId, Presentation };
+use presenter_core::{LibraryId, Presentation};
 use serde::{Deserialize, Serialize};
 use tracing::instrument;
 use uuid::Uuid;
@@ -28,12 +28,18 @@ pub fn build_router(state: AppState) -> Router {
         .route("/", get(ui_routes::home))
         .route("/search", get(search::search_presenter_endpoint))
         .route("/libraries/summary", get(libraries::list_library_summaries))
-        .route("/libraries", get(libraries::list_libraries).post(libraries::create_library))
+        .route(
+            "/libraries",
+            get(libraries::list_libraries).post(libraries::create_library),
+        )
         .route(
             "/libraries/{id}",
             patch(libraries::rename_library).delete(libraries::delete_library),
         )
-        .route("/libraries/{id}/favorite", post(libraries::set_library_favorite))
+        .route(
+            "/libraries/{id}/favorite",
+            post(libraries::set_library_favorite),
+        )
         .route(
             "/libraries/{id}/presentations",
             post(libraries::create_library_presentation),
@@ -48,12 +54,18 @@ pub fn build_router(state: AppState) -> Router {
         .route("/bible/active", get(bible::get_active_bible_broadcast))
         .route("/bible/trigger", post(bible::trigger_bible_broadcast))
         .route("/bible/clear", post(bible::clear_bible_broadcast))
-        .route("/playlists", get(playlists::list_playlists).post(playlists::create_playlist))
+        .route(
+            "/playlists",
+            get(playlists::list_playlists).post(playlists::create_playlist),
+        )
         .route(
             "/playlists/{id}",
             patch(playlists::update_playlist).delete(playlists::delete_playlist),
         )
-        .route("/playlists/{id}/entries", put(playlists::replace_playlist_entries))
+        .route(
+            "/playlists/{id}/entries",
+            put(playlists::replace_playlist_entries),
+        )
         .route("/ui/operator", get(ui_routes::operator_ui))
         .route("/ui/tablet", get(ui_routes::tablet_ui))
         .route("/ui/bible", get(bible::bible_ui))
@@ -66,7 +78,10 @@ pub fn build_router(state: AppState) -> Router {
         )
         .route("/stage/connections", get(stage::list_stage_connections))
         .route("/stage", get(stage::stage_display_selected_html))
-        .route("/stage/snapshot", get(stage::stage_display_selected_snapshot_json))
+        .route(
+            "/stage/snapshot",
+            get(stage::stage_display_selected_snapshot_json),
+        )
         .route("/stage/state", post(stage::update_stage_state))
         .route("/stage/clear", post(stage::clear_stage_state))
         .route(
@@ -93,14 +108,23 @@ pub fn build_router(state: AppState) -> Router {
             "/integrations/osc/settings",
             get(integrations::osc::get_osc_settings).put(integrations::osc::update_osc_settings),
         )
-        .route("/integrations/osc/status", get(integrations::osc::get_osc_status))
+        .route(
+            "/integrations/osc/status",
+            get(integrations::osc::get_osc_status),
+        )
         .route(
             "/integrations/ableset/settings",
             get(integrations::ableset::get_ableset_settings)
                 .put(integrations::ableset::update_ableset_settings),
         )
-        .route("/integrations/ableset/status", get(integrations::ableset::get_ableset_status))
-        .route("/integrations/ableset/follow", post(integrations::ableset::set_ableset_follow))
+        .route(
+            "/integrations/ableset/status",
+            get(integrations::ableset::get_ableset_status),
+        )
+        .route(
+            "/integrations/ableset/follow",
+            post(integrations::ableset::set_ableset_follow),
+        )
         .route(
             "/presentations/{id}",
             get(presentations::get_presentation_detail).patch(presentations::update_presentation),
@@ -135,51 +159,23 @@ async fn health() -> impl IntoResponse {
     (StatusCode::OK, Json(serde_json::json!({ "status": "ok" })))
 }
 
-
-
 // request structs moved to feature modules
-
-
-
-
-
-
-
-
-
 
 // Playlist handlers live in router/playlists.rs
 
-
-
-
-
-
-
-
 // Presentation request types and handlers live in router/presentations.rs
 
-
-
-
-
-
-
 // Bible UI handler is implemented in router/bible.rs
-
 
 // stage request/response moved to stage.rs
 
 // feature settings moved to features.rs
-
-
 
 // (implementations removed: moved to router/presentations.rs)
 
 // osc settings moved to integrations/osc.rs
 
 // stage state request moved to stage.rs
-
 
 #[instrument(skip_all)]
 async fn live_websocket(ws: WebSocketUpgrade, State(state): State<AppState>) -> impl IntoResponse {
@@ -278,15 +274,18 @@ mod tests_old {
     use axum::body::Body;
     use axum::http::{Request, StatusCode};
     use chrono::{Duration as ChronoDuration, Utc};
-    use presenter_core::{SearchResult, SearchResultKind, TimerState, Library, LibrarySummary, BiblePassage, BibleTranslation, BibleReference, Slide};
+    use presenter_core::{
+        BiblePassage, BibleReference, BibleTranslation, Library, LibrarySummary, SearchResult,
+        SearchResultKind, Slide, TimerState,
+    };
     use serde::Deserialize;
     use serde_json::json;
     use tower::ServiceExt;
     // Bring types from feature modules and core used only in tests
     use crate::router::libraries::CreateLibraryPresentationResponse;
     use crate::router::playlists::UpdatePlaylistRequest;
-    use presenter_core::Playlist;
     use crate::router::stage::StageLayoutResponse;
+    use presenter_core::Playlist;
     use presenter_core::TimersOverview;
     use presenter_core::{StageDisplayLayout, StageDisplaySnapshot};
 

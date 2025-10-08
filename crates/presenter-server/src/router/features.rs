@@ -2,8 +2,8 @@ use axum::{extract::State, Json};
 use serde::{Deserialize, Serialize};
 use tracing::instrument;
 
-use crate::state::AppState;
 use super::AppError;
+use crate::state::AppState;
 
 #[derive(Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -53,4 +53,3 @@ pub(super) async fn update_feature_settings(
         companion_port: state.companion_port(),
     }))
 }
-

@@ -1,8 +1,13 @@
-use axum::{extract::{Query, State}, http::StatusCode, response::Html, Json};
-use crate::state::AppState;
-use presenter_core::{BiblePassage, BibleReference, BibleTranslation};
 use super::{AppError, BibleImportSummaryDto};
+use crate::state::AppState;
 use anyhow::Error as AnyhowError;
+use axum::{
+    extract::{Query, State},
+    http::StatusCode,
+    response::Html,
+    Json,
+};
+use presenter_core::{BiblePassage, BibleReference, BibleTranslation};
 use tracing::instrument;
 
 #[instrument(skip_all)]
@@ -131,9 +136,7 @@ pub(super) async fn clear_bible_broadcast(
 }
 
 #[instrument(skip_all)]
-pub(super) async fn bible_ui(
-    State(state): State<AppState>,
-) -> Result<Html<String>, AppError> {
+pub(super) async fn bible_ui(State(state): State<AppState>) -> Result<Html<String>, AppError> {
     let html = crate::ui::render_bible_ui(&state).await?;
     Ok(html)
 }

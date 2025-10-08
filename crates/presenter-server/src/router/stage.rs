@@ -1,14 +1,20 @@
-use axum::{extract::State, response::{IntoResponse, Response}, Json};
+use axum::{
+    extract::State,
+    response::{IntoResponse, Response},
+    Json,
+};
 use serde::{Deserialize, Serialize};
 use tracing::instrument;
 
-use crate::{state::AppState, stage_ui};
-use presenter_core::{StageDisplayLayout, StageDisplaySnapshot, SlideId, PresentationId};
-use super::{AppError, parse_uuid};
+use super::{parse_uuid, AppError};
+use crate::{stage_ui, state::AppState};
 use axum::http::StatusCode;
+use presenter_core::{PresentationId, SlideId, StageDisplayLayout, StageDisplaySnapshot};
 
 #[instrument(skip_all)]
-pub(super) async fn stage_display_selected_html(State(state): State<AppState>) -> Result<Response, AppError> {
+pub(super) async fn stage_display_selected_html(
+    State(state): State<AppState>,
+) -> Result<Response, AppError> {
     match state.selected_stage_display_snapshot().await? {
         Some(snapshot) => {
             Ok(stage_ui::render_stage_display(snapshot, state.heartbeat_config()).into_response())
@@ -55,7 +61,10 @@ pub(super) async fn get_stage_layout(
                 .next()
                 .expect("stage layouts")
         });
-    Ok(Json(StageLayoutResponse { code: layout.code.clone(), layout }))
+    Ok(Json(StageLayoutResponse {
+        code: layout.code.clone(),
+        layout,
+    }))
 }
 
 #[instrument(skip_all)]
@@ -71,7 +80,10 @@ pub(super) async fn set_stage_layout(
         .set_stage_layout_code(code)
         .await
         .map_err(|err| AppError::not_found(err.to_string()))?;
-    Ok(Json(StageLayoutResponse { code: layout.code.clone(), layout }))
+    Ok(Json(StageLayoutResponse {
+        code: layout.code.clone(),
+        layout,
+    }))
 }
 
 #[derive(Debug, Deserialize)]
@@ -88,8 +100,10 @@ pub(super) async fn update_stage_state(
     State(state): State<AppState>,
     Json(payload): Json<StageStateRequest>,
 ) -> Result<StatusCode, AppError> {
-    let presentation_id = PresentationId::from_uuid(parse_uuid("presentationId", &payload.presentation_id)?);
-    let current_slide_id = SlideId::from_uuid(parse_uuid("currentSlideId", &payload.current_slide_id)?);
+    let presentation_id =
+        PresentationId::from_uuid(parse_uuid("presentationId", &payload.presentation_id)?);
+    let current_slide_id =
+        SlideId::from_uuid(parse_uuid("currentSlideId", &payload.current_slide_id)?);
     let next_slide_id = match payload.next_slide_id {
         Some(value) => Some(SlideId::from_uuid(parse_uuid("nextSlideId", &value)?)),
         None => None,
@@ -118,8 +132,9 @@ pub(super) async fn list_stage_displays(
 }
 
 #[instrument(skip_all)]
-pub(super) async fn clear_stage_state(State(state): State<AppState>) -> Result<StatusCode, AppError> {
+pub(super) async fn clear_stage_state(
+    State(state): State<AppState>,
+) -> Result<StatusCode, AppError> {
     state.clear_stage().await?;
     Ok(StatusCode::NO_CONTENT)
 }
-

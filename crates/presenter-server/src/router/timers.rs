@@ -2,8 +2,8 @@ use axum::{extract::State, Json};
 use serde_json::Value;
 use tracing::instrument;
 
-use crate::state::AppState;
 use super::AppError;
+use crate::state::AppState;
 use anyhow::Error as AnyhowError;
 use presenter_core::TimersOverview;
 
@@ -32,4 +32,3 @@ pub(super) async fn execute_timer_command(
         }
     }
 }
-

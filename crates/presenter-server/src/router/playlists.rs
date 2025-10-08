@@ -1,12 +1,16 @@
-use axum::{extract::{Path, State}, http::StatusCode, Json};
-use uuid::Uuid;
-use tracing::instrument;
+use super::AppError;
 use crate::state::AppState;
+use axum::{
+    extract::{Path, State},
+    http::StatusCode,
+    Json,
+};
 use presenter_core::{
     playlist::{MidiBinding, PlaylistEntryKind},
     Playlist, PlaylistEntry, PlaylistEntryId, PlaylistId, PresentationId,
 };
-use super::AppError;
+use tracing::instrument;
+use uuid::Uuid;
 
 #[derive(Debug, serde::Deserialize)]
 #[serde(rename_all = "camelCase")]

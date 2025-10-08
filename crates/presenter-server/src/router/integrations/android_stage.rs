@@ -1,12 +1,18 @@
-use axum::{extract::{Path, State}, Json};
+use axum::{
+    extract::{Path, State},
+    Json,
+};
 use serde::{Deserialize, Serialize};
 use tracing::instrument;
 use uuid::Uuid;
 
-use crate::state::AppState;
-use presenter_core::{AndroidStageDisplay, AndroidStageDisplayDraft, AndroidStageDisplayId, DEFAULT_ADB_PORT, DEFAULT_LAUNCH_COMPONENT};
-use crate::android_stage::AndroidStageDisplayStatusSnapshot;
 use super::super::AppError;
+use crate::android_stage::AndroidStageDisplayStatusSnapshot;
+use crate::state::AppState;
+use presenter_core::{
+    AndroidStageDisplay, AndroidStageDisplayDraft, AndroidStageDisplayId, DEFAULT_ADB_PORT,
+    DEFAULT_LAUNCH_COMPONENT,
+};
 
 #[derive(Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -54,13 +60,23 @@ pub(crate) struct AndroidStageDisplayRequest {
     is_enabled: bool,
 }
 
-const fn default_android_stage_port() -> u16 { DEFAULT_ADB_PORT }
-fn default_android_stage_launch_component() -> String { DEFAULT_LAUNCH_COMPONENT.to_string() }
-const fn default_true() -> bool { true }
+const fn default_android_stage_port() -> u16 {
+    DEFAULT_ADB_PORT
+}
+fn default_android_stage_launch_component() -> String {
+    DEFAULT_LAUNCH_COMPONENT.to_string()
+}
+const fn default_true() -> bool {
+    true
+}
 
 fn normalize_launch_component(component: &str) -> String {
     let trimmed = component.trim();
-    if trimmed.is_empty() { DEFAULT_LAUNCH_COMPONENT.to_string() } else { trimmed.to_string() }
+    if trimmed.is_empty() {
+        DEFAULT_LAUNCH_COMPONENT.to_string()
+    } else {
+        trimmed.to_string()
+    }
 }
 
 #[instrument(skip_all)]

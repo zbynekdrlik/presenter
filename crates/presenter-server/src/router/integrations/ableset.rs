@@ -2,13 +2,15 @@ use axum::{extract::State, Json};
 use serde::Deserialize;
 use tracing::instrument;
 
+use super::super::AppError;
 use crate::state::AppState;
 use presenter_core::{AbleSetSettings, AbleSetSettingsDraft};
-use super::super::AppError;
 
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
-pub(crate) struct AbleSetFollowPayload { pub(super) enabled: bool }
+pub(crate) struct AbleSetFollowPayload {
+    pub(super) enabled: bool,
+}
 
 #[instrument(skip_all)]
 pub(crate) async fn get_ableset_settings(

@@ -139,17 +139,7 @@ for dirpath, _, filenames in os.walk(os.path.join(root, 'crates')):
 violations.sort(key=lambda v: (-v['length'], v['file'], v['start']))
 print(json.dumps(violations))
 PY
-fn_json=$?
-if [[ $fn_json -eq 3 ]]; then
-  fail "Function length checker crashed"
-else
-  viols=$(python3 - <<'PY'
-import json, sys
-data = sys.stdin.read()
-print(data)
-PY
-  )
-fi
+) || { fail "Function length checker crashed"; viols="[]"; }
 
 if [[ -n "${viols:-}" && "${viols}" != "[]" ]]; then
   while IFS= read -r row; do
@@ -160,7 +150,58 @@ if [[ -n "${viols:-}" && "${viols}" != "[]" ]]; then
   done < <(echo "$viols" | jq -c '.[]')
 fi
 
-# 8) cargo check warnings (non-fatal unless strict policy chosen later)
+# 8) Format & Lint (strict)
+if ! cargo fmt --all -- --check >/dev/null 2>&1; then
+  fail "cargo fmt reported formatting changes (run: cargo fmt --all)"
+fi
+
+if ! cargo clippy --workspace --tests --quiet -- -D warnings >/dev/null 2>&1; then
+  fail "cargo clippy reported warnings (fix or allow with justification)"
+fi
+
+# 9) Dependency and security checks
+if command -v cargo-deny >/dev/null 2>&1; then
+  if ! cargo deny check >/dev/null 2>&1; then
+    fail "cargo-deny policy violations (licenses/bans/duplicates)"
+  fi
+else
+  warn "cargo-deny not installed; skipping (install: cargo install cargo-deny)"
+fi
+
+if command -v cargo-audit >/dev/null 2>&1; then
+  if ! cargo audit -q >/dev/null 2>&1; then
+    fail "cargo-audit found vulnerabilities (update dependencies)"
+  fi
+else
+  warn "cargo-audit not installed; skipping (install: cargo install cargo-audit)"
+fi
+
+# 10) Production code hygiene (no unwrap/expect/panic)
+if rg -n "\\b(panic!)\\(|\\.unwrap\\(|\\.expect\\\(" \
+    -g 'crates/**/src/**/*.rs' \
+    -g '!**/tests/**' -g '!**/benches/**' -g '!**/examples/**' \
+    >/tmp/qc-nounwrap.txt 2>/dev/null; then
+  # Filter out false positives (doc comments / allow lines) – minimal heuristic
+  if [[ -s /tmp/qc-nounwrap.txt ]]; then
+    fail "Found unwrap/expect/panic in production code (see /tmp/qc-nounwrap.txt)"
+  fi
+fi
+
+# 11) Async anti-patterns in server (blocking in async paths)
+if rg -n "std::thread::sleep|block_on\\(" \
+    crates/presenter-server/src \
+    -g '!**/tests/**' >/tmp/qc-async-blocking.txt 2>/dev/null; then
+  if [[ -s /tmp/qc-async-blocking.txt ]]; then
+    fail "Found blocking calls in async paths (see /tmp/qc-async-blocking.txt)"
+  fi
+fi
+
+# 12) Toolchain pin
+if [[ ! -f rust-toolchain.toml ]]; then
+  warn "rust-toolchain.toml is missing; pin toolchain for reproducible builds"
+fi
+
+# 13) cargo check warnings (advisory)
 check_out=$(cargo check 2>&1 || true)
 if echo "$check_out" | grep -q "warning:"; then
   warn "cargo check reported warnings; run clippy/fixes when feasible."
@@ -168,8 +209,19 @@ fi
 
 # Emit results
 if (( EMIT_JSON )); then
-  jq -n --argjson failures "$(printf '%s\n' "${failures[@]:-}" | jq -R . | jq -s .)" \
-        --argjson warnings "$(printf '%s\n' "${warnings[@]:-}" | jq -R . | jq -s .)" \
+  # Serialize bash arrays to JSON arrays correctly (empty arrays => [])
+  to_json_array() {
+    local -n _arr=$1
+    if (( ${#_arr[@]} == 0 )); then
+      echo '[]'
+    else
+      # NUL-delimit to preserve content; drop trailing empty element introduced by printf
+      printf '%s\0' "${_arr[@]}" | jq -Rs 'split("\u0000")[:-1]'
+    fi
+  }
+  fail_json=$(to_json_array failures)
+  warn_json=$(to_json_array warnings)
+  jq -n --argjson failures "$fail_json" --argjson warnings "$warn_json" \
         '{failures: $failures, warnings: $warnings}'
 else
   if ((${#failures[@]})); then

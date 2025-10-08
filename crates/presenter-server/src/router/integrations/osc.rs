@@ -2,9 +2,9 @@ use axum::{extract::State, Json};
 use serde::{Deserialize, Serialize};
 use tracing::instrument;
 
+use super::super::AppError;
 use crate::state::AppState;
 use presenter_core::{OscSettings, OscSettingsDraft, VelocityMode};
-use super::super::AppError;
 
 #[derive(Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -53,10 +53,14 @@ pub(crate) async fn update_osc_settings(
     Json(payload): Json<UpdateOscSettingsRequest>,
 ) -> Result<Json<OscSettingsResponse>, AppError> {
     if payload.address_pattern.trim().is_empty() {
-        return Err(AppError::bad_request_message("address pattern cannot be empty"));
+        return Err(AppError::bad_request_message(
+            "address pattern cannot be empty",
+        ));
     }
     if payload.listen_port == 0 {
-        return Err(AppError::bad_request_message("listener port must be between 1 and 65535"));
+        return Err(AppError::bad_request_message(
+            "listener port must be between 1 and 65535",
+        ));
     }
     let draft = OscSettingsDraft {
         enabled: payload.enabled,
