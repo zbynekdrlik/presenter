@@ -71,11 +71,11 @@ test('slide CRUD, reorder, and content update via presentations API', async ({ r
     },
   );
   expect(updateResp.ok()).toBeTruthy();
-  const updated: { id: string; main: string; translation: string; stage: string; group?: string } = await updateResp.json();
-  expect(updated.main).toBe('Main line');
-  expect(updated.translation).toBe('Preklad');
-  expect(updated.stage).toBe('Stage text');
-  expect(updated.group).toBe('Verse 1');
+  const updated: { id: string; content: { main: { value: string }; translation: { value: string }; stage: { value: string }; group?: { name: string } } } = await updateResp.json();
+  expect(updated.content.main.value).toBe('Main line');
+  expect(updated.content.translation.value).toBe('Preklad');
+  expect(updated.content.stage.value).toBe('Stage text');
+  expect(updated.content.group?.name).toBe('Verse 1');
 
   // Reorder slides (reverse)
   const detailBefore = await request.get(new URL(`/presentations/${presentationId}`, baseURL).toString());
@@ -109,4 +109,3 @@ test('slide CRUD, reorder, and content update via presentations API', async ({ r
   const afterPayload: { presentation: { name: string } } = await detailAfter.json();
   expect(afterPayload.presentation.name).toBe('E2E Song Renamed');
 });
-

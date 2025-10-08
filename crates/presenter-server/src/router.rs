@@ -2,28 +2,23 @@ mod bible;
 mod libraries;
 mod playlists;
 mod presentations;
-use crate::{
-    ableset::AbleSetStatusSnapshot, android_stage::AndroidStageDisplayStatusSnapshot,
-    osc::OscStatusSnapshot, resolume::ResolumeConnectionSnapshot,
-    stage_connections::StageClientSnapshot, stage_ui, state::AppState, ui,
-};
-use anyhow::Error as AnyhowError;
+mod ui_routes;
+mod stage;
+mod timers;
+mod search;
+mod features;
+mod integrations;
+use crate::{ state::AppState };
 use axum::{
-    extract::{ws::WebSocketUpgrade, Path, Query, State},
+    extract::{ws::WebSocketUpgrade, State},
     http::StatusCode,
     response::{IntoResponse, Response},
     routing::{get, patch, post, put},
     Json, Router,
 };
 use chrono::{DateTime, Utc};
-use presenter_core::{
-    AbleSetSettings, AbleSetSettingsDraft, AndroidStageDisplay, AndroidStageDisplayDraft,
-    AndroidStageDisplayId, LibraryId, OscSettings, OscSettingsDraft, Presentation, PresentationId,
-    ResolumeHost, ResolumeHostDraft, ResolumeHostId, SearchResult, SlideId, StageDisplayLayout,
-    StageDisplaySnapshot, TimersOverview, VelocityMode, DEFAULT_ADB_PORT, DEFAULT_LAUNCH_COMPONENT,
-};
+use presenter_core::{ LibraryId, Presentation, PresentationId, SlideId, StageDisplayLayout, StageDisplaySnapshot };
 use serde::{Deserialize, Serialize};
-use serde_json::Value;
 use tracing::instrument;
 use uuid::Uuid;
 // Feature modules host their own request/DTO types
@@ -31,8 +26,8 @@ use uuid::Uuid;
 pub fn build_router(state: AppState) -> Router {
     Router::new()
         .route("/healthz", get(health))
-        .route("/", get(home))
-        .route("/search", get(search_presenter_endpoint))
+        .route("/", get(ui_routes::home))
+        .route("/search", get(search::search_presenter_endpoint))
         .route("/libraries/summary", get(libraries::list_library_summaries))
         .route("/libraries", get(libraries::list_libraries).post(libraries::create_library))
         .route(
@@ -60,48 +55,53 @@ pub fn build_router(state: AppState) -> Router {
             patch(playlists::update_playlist).delete(playlists::delete_playlist),
         )
         .route("/playlists/{id}/entries", put(playlists::replace_playlist_entries))
-        .route("/ui/operator", get(operator_ui))
-        .route("/ui/tablet", get(tablet_ui))
+        .route("/ui/operator", get(ui_routes::operator_ui))
+        .route("/ui/tablet", get(ui_routes::tablet_ui))
         .route("/ui/bible", get(bible::bible_ui))
-        .route("/ui/settings", get(settings_ui))
-        .route("/overlays/timer", get(timer_overlay))
-        .route("/stage-displays", get(list_stage_displays))
+        .route("/ui/settings", get(ui_routes::settings_ui))
+        .route("/overlays/timer", get(ui_routes::timer_overlay))
+        .route("/stage-displays", get(stage::list_stage_displays))
         .route(
             "/stage/layout",
-            get(get_stage_layout).post(set_stage_layout),
+            get(stage::get_stage_layout).post(stage::set_stage_layout),
         )
-        .route("/stage/connections", get(list_stage_connections))
-        .route("/stage", get(stage_display_selected_html))
-        .route("/stage/snapshot", get(stage_display_selected_snapshot_json))
-        .route("/stage/state", post(update_stage_state))
-        .route("/stage/clear", post(clear_stage_state))
+        .route("/stage/connections", get(stage::list_stage_connections))
+        .route("/stage", get(stage::stage_display_selected_html))
+        .route("/stage/snapshot", get(stage::stage_display_selected_snapshot_json))
+        .route("/stage/state", post(stage::update_stage_state))
+        .route("/stage/clear", post(stage::clear_stage_state))
         .route(
             "/integrations/resolume/hosts",
-            get(list_resolume_hosts).post(create_resolume_host),
+            get(integrations::resolume::list_resolume_hosts)
+                .post(integrations::resolume::create_resolume_host),
         )
         .route(
             "/integrations/resolume/hosts/{id}",
-            put(update_resolume_host).delete(delete_resolume_host),
+            put(integrations::resolume::update_resolume_host)
+                .delete(integrations::resolume::delete_resolume_host),
         )
         .route(
             "/integrations/android-stage/displays",
-            get(list_android_stage_displays).post(create_android_stage_display),
+            get(integrations::android_stage::list_android_stage_displays)
+                .post(integrations::android_stage::create_android_stage_display),
         )
         .route(
             "/integrations/android-stage/displays/{id}",
-            put(update_android_stage_display).delete(delete_android_stage_display),
+            put(integrations::android_stage::update_android_stage_display)
+                .delete(integrations::android_stage::delete_android_stage_display),
         )
         .route(
             "/integrations/osc/settings",
-            get(get_osc_settings).put(update_osc_settings),
+            get(integrations::osc::get_osc_settings).put(integrations::osc::update_osc_settings),
         )
-        .route("/integrations/osc/status", get(get_osc_status))
+        .route("/integrations/osc/status", get(integrations::osc::get_osc_status))
         .route(
             "/integrations/ableset/settings",
-            get(get_ableset_settings).put(update_ableset_settings),
+            get(integrations::ableset::get_ableset_settings)
+                .put(integrations::ableset::update_ableset_settings),
         )
-        .route("/integrations/ableset/status", get(get_ableset_status))
-        .route("/integrations/ableset/follow", post(set_ableset_follow))
+        .route("/integrations/ableset/status", get(integrations::ableset::get_ableset_status))
+        .route("/integrations/ableset/follow", post(integrations::ableset::set_ableset_follow))
         .route(
             "/presentations/{id}",
             get(presentations::get_presentation_detail).patch(presentations::update_presentation),
@@ -122,12 +122,12 @@ pub fn build_router(state: AppState) -> Router {
             "/presentations/{presentation_id}/slides/reorder",
             post(presentations::reorder_slides),
         )
-        .route("/timers/overview", get(get_timers_overview))
-        .route("/timers/command", post(execute_timer_command))
+        .route("/timers/overview", get(timers::get_timers_overview))
+        .route("/timers/command", post(timers::execute_timer_command))
         .route("/live/ws", get(live_websocket))
         .route(
             "/settings/features",
-            get(get_feature_settings).post(update_feature_settings),
+            get(features::get_feature_settings).post(features::update_feature_settings),
         )
         .with_state(state)
 }
@@ -136,49 +136,11 @@ async fn health() -> impl IntoResponse {
     (StatusCode::OK, Json(serde_json::json!({ "status": "ok" })))
 }
 
-#[instrument(skip_all)]
-async fn home(State(_state): State<AppState>) -> Result<axum::response::Html<String>, AppError> {
-    let html = ui::render_home_ui().await?;
-    Ok(html)
-}
-
-#[instrument(skip_all)]
-async fn timer_overlay(
-    State(state): State<AppState>,
-) -> Result<axum::response::Html<String>, AppError> {
-    let html = ui::render_timer_overlay(&state).await?;
-    Ok(html)
-}
 
 
-#[derive(Debug, Deserialize)]
-struct SearchQueryParams {
-    #[serde(default, alias = "q", alias = "query")]
-    query: Option<String>,
-    #[serde(default)]
-    limit: Option<u32>,
-}
-
-#[derive(Debug, Deserialize)]
-struct AbleSetFollowPayload {
-    enabled: bool,
-}
+// request structs moved to feature modules
 
 
-#[instrument(skip_all)]
-async fn search_presenter_endpoint(
-    State(state): State<AppState>,
-    Query(params): Query<SearchQueryParams>,
-) -> Result<Json<Vec<SearchResult>>, AppError> {
-    let query = params.query.unwrap_or_default();
-    let trimmed = query.trim();
-    if trimmed.is_empty() {
-        return Ok(Json(Vec::new()));
-    }
-    let limit = params.limit.unwrap_or(25).clamp(1, 100) as u64;
-    let results = state.search_presenter(trimmed, limit).await?;
-    Ok(Json(results))
-}
 
 
 
@@ -198,462 +160,27 @@ async fn search_presenter_endpoint(
 
 // Presentation request types and handlers live in router/presentations.rs
 
-#[instrument(skip_all)]
-async fn clear_stage_state(State(state): State<AppState>) -> Result<StatusCode, AppError> {
-    state.clear_stage().await?;
-    Ok(StatusCode::NO_CONTENT)
-}
 
-#[instrument(skip_all)]
-async fn list_resolume_hosts(
-    State(state): State<AppState>,
-) -> Result<Json<Vec<ResolumeHostDto>>, AppError> {
-    let hosts = state.list_resolume_hosts().await?;
-    let statuses = state.resolume_status_snapshot().await;
-    let payload = hosts
-        .into_iter()
-        .map(|host| {
-            let status = statuses
-                .get(&host.id)
-                .cloned()
-                .unwrap_or_else(ResolumeConnectionSnapshot::disabled);
-            ResolumeHostDto::from_host(host, status)
-        })
-        .collect::<Vec<_>>();
-    Ok(Json(payload))
-}
 
-#[instrument(skip_all)]
-async fn create_resolume_host(
-    State(state): State<AppState>,
-    Json(payload): Json<ResolumeHostRequest>,
-) -> Result<Json<ResolumeHostDto>, AppError> {
-    let draft = ResolumeHostDraft::new(payload.label, payload.host, payload.port)
-        .with_enabled(payload.is_enabled);
-    let host = state.create_resolume_host(draft).await?;
-    let status = state.resolume_status_for(host.id).await;
-    Ok(Json(ResolumeHostDto::from_host(host, status)))
-}
 
-#[instrument(skip_all)]
-async fn update_resolume_host(
-    State(state): State<AppState>,
-    Path(id): Path<Uuid>,
-    Json(payload): Json<ResolumeHostRequest>,
-) -> Result<Json<ResolumeHostDto>, AppError> {
-    let draft = ResolumeHostDraft::new(payload.label, payload.host, payload.port)
-        .with_enabled(payload.is_enabled);
-    let host = state
-        .update_resolume_host(ResolumeHostId::from_uuid(id), draft)
-        .await?;
-    let status = state.resolume_status_for(host.id).await;
-    Ok(Json(ResolumeHostDto::from_host(host, status)))
-}
 
-#[instrument(skip_all)]
-async fn delete_resolume_host(
-    State(state): State<AppState>,
-    Path(id): Path<Uuid>,
-) -> Result<StatusCode, AppError> {
-    state
-        .delete_resolume_host(ResolumeHostId::from_uuid(id))
-        .await?;
-    Ok(StatusCode::NO_CONTENT)
-}
 
-#[instrument(skip_all)]
-async fn list_android_stage_displays(
-    State(state): State<AppState>,
-) -> Result<Json<Vec<AndroidStageDisplayDto>>, AppError> {
-    let displays = state.list_android_stage_displays().await?;
-    let statuses = state.android_stage_status_snapshot().await;
-    let payload = displays
-        .into_iter()
-        .map(|display| {
-            let status = statuses
-                .get(&display.id)
-                .cloned()
-                .unwrap_or_else(AndroidStageDisplayStatusSnapshot::disabled);
-            AndroidStageDisplayDto::from_display(display, status)
-        })
-        .collect();
-    Ok(Json(payload))
-}
-
-#[instrument(skip_all)]
-async fn create_android_stage_display(
-    State(state): State<AppState>,
-    Json(payload): Json<AndroidStageDisplayRequest>,
-) -> Result<Json<AndroidStageDisplayDto>, AppError> {
-    let draft = AndroidStageDisplayDraft::new(payload.label, payload.host)
-        .with_port(payload.port)
-        .with_launch_component(normalize_launch_component(&payload.launch_component))
-        .with_enabled(payload.is_enabled);
-    let display = state.create_android_stage_display(draft).await?;
-    let status = state.android_stage_status_for(display.id).await;
-    Ok(Json(AndroidStageDisplayDto::from_display(display, status)))
-}
-
-#[instrument(skip_all)]
-async fn update_android_stage_display(
-    State(state): State<AppState>,
-    Path(id): Path<Uuid>,
-    Json(payload): Json<AndroidStageDisplayRequest>,
-) -> Result<Json<AndroidStageDisplayDto>, AppError> {
-    let draft = AndroidStageDisplayDraft::new(payload.label, payload.host)
-        .with_port(payload.port)
-        .with_launch_component(normalize_launch_component(&payload.launch_component))
-        .with_enabled(payload.is_enabled);
-    let display = state
-        .update_android_stage_display(AndroidStageDisplayId::from_uuid(id), draft)
-        .await?;
-    let status = state.android_stage_status_for(display.id).await;
-    Ok(Json(AndroidStageDisplayDto::from_display(display, status)))
-}
-
-#[instrument(skip_all)]
-async fn delete_android_stage_display(
-    State(state): State<AppState>,
-    Path(id): Path<Uuid>,
-) -> Result<StatusCode, AppError> {
-    state
-        .delete_android_stage_display(AndroidStageDisplayId::from_uuid(id))
-        .await?;
-    Ok(StatusCode::NO_CONTENT)
-}
-
-#[instrument(skip_all)]
-async fn get_osc_settings(
-    State(state): State<AppState>,
-) -> Result<Json<OscSettingsResponse>, AppError> {
-    let settings = state.osc_settings().await?;
-    Ok(Json(OscSettingsResponse::from(settings)))
-}
-
-#[instrument(skip_all)]
-async fn update_osc_settings(
-    State(state): State<AppState>,
-    Json(payload): Json<UpdateOscSettingsRequest>,
-) -> Result<Json<OscSettingsResponse>, AppError> {
-    if payload.address_pattern.trim().is_empty() {
-        return Err(AppError::bad_request_message(
-            "address pattern cannot be empty",
-        ));
-    }
-    if payload.listen_port == 0 {
-        return Err(AppError::bad_request_message(
-            "listener port must be between 1 and 65535",
-        ));
-    }
-    let draft = OscSettingsDraft {
-        enabled: payload.enabled,
-        listen_port: payload.listen_port,
-        address_pattern: payload.address_pattern.trim().to_string(),
-        velocity_mode: payload.velocity_mode,
-    };
-    let settings = state
-        .update_osc_settings(draft)
-        .await
-        .map_err(|err| AppError::bad_request_message(err.to_string()))?;
-    Ok(Json(OscSettingsResponse::from(settings)))
-}
-
-#[instrument(skip_all)]
-async fn get_osc_status(
-    State(state): State<AppState>,
-) -> Result<Json<OscStatusSnapshot>, AppError> {
-    Ok(Json(state.osc_status_snapshot().await))
-}
-
-#[instrument(skip_all)]
-async fn get_ableset_settings(
-    State(state): State<AppState>,
-) -> Result<Json<AbleSetSettings>, AppError> {
-    let settings = state.ableset_settings().await?;
-    Ok(Json(settings))
-}
-
-#[instrument(skip_all)]
-async fn update_ableset_settings(
-    State(state): State<AppState>,
-    Json(payload): Json<AbleSetSettingsDraft>,
-) -> Result<Json<AbleSetSettings>, AppError> {
-    let settings = state
-        .update_ableset_settings(payload)
-        .await
-        .map_err(|err| AppError::bad_request_message(err.to_string()))?;
-    Ok(Json(settings))
-}
-
-#[instrument(skip_all)]
-async fn get_ableset_status(
-    State(state): State<AppState>,
-) -> Result<Json<AbleSetStatusSnapshot>, AppError> {
-    Ok(Json(state.ableset_status_snapshot().await))
-}
-
-#[instrument(skip_all)]
-async fn set_ableset_follow(
-    State(state): State<AppState>,
-    Json(payload): Json<AbleSetFollowPayload>,
-) -> Result<Json<AbleSetStatusSnapshot>, AppError> {
-    let snapshot = state.set_ableset_follow(payload.enabled).await;
-    Ok(Json(snapshot))
-}
-
-#[instrument(skip_all)]
-async fn operator_ui(
-    State(state): State<AppState>,
-) -> Result<axum::response::Html<String>, AppError> {
-    let html = ui::render_operator_ui(&state).await?;
-    Ok(html)
-}
-
-#[instrument(skip_all)]
-async fn settings_ui(
-    State(state): State<AppState>,
-) -> Result<axum::response::Html<String>, AppError> {
-    let html = ui::render_settings_ui(&state).await?;
-    Ok(html)
-}
-
-async fn tablet_ui(
-    State(state): State<AppState>,
-) -> Result<axum::response::Html<String>, AppError> {
-    let html = ui::render_tablet_ui(&state).await?;
-    Ok(html)
-}
 
 // Bible UI handler is implemented in router/bible.rs
 
-#[instrument(skip_all)]
-async fn stage_display_selected_html(State(state): State<AppState>) -> Result<Response, AppError> {
-    match state.selected_stage_display_snapshot().await? {
-        Some(snapshot) => {
-            Ok(stage_ui::render_stage_display(snapshot, state.heartbeat_config()).into_response())
-        }
-        None => Ok((StatusCode::SERVICE_UNAVAILABLE, "Stage display unavailable").into_response()),
-    }
-}
 
-#[instrument(skip_all)]
-async fn stage_display_selected_snapshot_json(
-    State(state): State<AppState>,
-) -> Result<Json<StageDisplaySnapshot>, AppError> {
-    match state.selected_stage_display_snapshot().await? {
-        Some(snapshot) => Ok(Json(snapshot)),
-        None => Err(AppError::not_found("Stage display unavailable")),
-    }
-}
+// stage request/response moved to stage.rs
 
-#[derive(Debug, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
-struct StageLayoutResponse {
-    code: String,
-    layout: StageDisplayLayout,
-}
+// feature settings moved to features.rs
 
-#[derive(Debug, Deserialize)]
-#[serde(rename_all = "camelCase")]
-struct StageLayoutUpdateRequest {
-    code: String,
-}
 
-#[derive(Debug, Serialize)]
-#[serde(rename_all = "camelCase")]
-struct FeatureSettingsResponse {
-    companion_enabled: bool,
-    companion_port: u16,
-}
-
-#[derive(Debug, Deserialize)]
-#[serde(rename_all = "camelCase")]
-struct FeatureSettingsRequest {
-    #[serde(alias = "enabled", alias = "companion_enabled")]
-    companion_enabled: bool,
-    #[serde(default, alias = "companion_port", alias = "port")]
-    companion_port: Option<u16>,
-}
-
-#[instrument(skip_all)]
-async fn get_stage_layout(
-    State(state): State<AppState>,
-) -> Result<Json<StageLayoutResponse>, AppError> {
-    let code = state.stage_layout_code().await;
-    let layouts = state.stage_displays().await?;
-    let layout = layouts
-        .into_iter()
-        .find(|layout| layout.code == code)
-        .unwrap_or_else(|| {
-            StageDisplayLayout::built_in()
-                .into_iter()
-                .next()
-                .expect("stage layouts")
-        });
-    Ok(Json(StageLayoutResponse {
-        code: layout.code.clone(),
-        layout,
-    }))
-}
-
-#[instrument(skip_all)]
-async fn set_stage_layout(
-    State(state): State<AppState>,
-    Json(payload): Json<StageLayoutUpdateRequest>,
-) -> Result<Json<StageLayoutResponse>, AppError> {
-    let code = payload.code.trim();
-    if code.is_empty() {
-        return Err(AppError::bad_request_message("code cannot be empty"));
-    }
-    let layout = state
-        .set_stage_layout_code(code)
-        .await
-        .map_err(|err| AppError::not_found(err.to_string()))?;
-    Ok(Json(StageLayoutResponse {
-        code: layout.code.clone(),
-        layout,
-    }))
-}
-
-#[instrument(skip_all)]
-async fn get_feature_settings(
-    State(state): State<AppState>,
-) -> Result<Json<FeatureSettingsResponse>, AppError> {
-    Ok(Json(FeatureSettingsResponse {
-        companion_enabled: state.companion_enabled(),
-        companion_port: state.companion_port(),
-    }))
-}
-
-#[instrument(skip_all)]
-async fn update_feature_settings(
-    State(state): State<AppState>,
-    Json(payload): Json<FeatureSettingsRequest>,
-) -> Result<Json<FeatureSettingsResponse>, AppError> {
-    let requested_port = payload
-        .companion_port
-        .unwrap_or_else(|| state.companion_port());
-    if requested_port == 0 {
-        return Err(AppError::bad_request_message(
-            "companionPort must be between 1 and 65535",
-        ));
-    }
-
-    state
-        .set_companion_settings(payload.companion_enabled, requested_port)
-        .await?;
-    Ok(Json(FeatureSettingsResponse {
-        companion_enabled: state.companion_enabled(),
-        companion_port: state.companion_port(),
-    }))
-}
 
 // (implementations removed: moved to router/presentations.rs)
 
-#[derive(Debug, Serialize)]
-#[serde(rename_all = "camelCase")]
-struct OscSettingsResponse {
-    enabled: bool,
-    listen_port: u16,
-    address_pattern: String,
-    velocity_mode: VelocityMode,
-    created_at: DateTime<Utc>,
-    updated_at: DateTime<Utc>,
-}
+// osc settings moved to integrations/osc.rs
 
-impl From<OscSettings> for OscSettingsResponse {
-    fn from(settings: OscSettings) -> Self {
-        Self {
-            enabled: settings.enabled,
-            listen_port: settings.listen_port,
-            address_pattern: settings.address_pattern,
-            velocity_mode: settings.velocity_mode,
-            created_at: settings.created_at,
-            updated_at: settings.updated_at,
-        }
-    }
-}
+// stage state request moved to stage.rs
 
-#[derive(Debug, Deserialize)]
-#[serde(rename_all = "camelCase")]
-struct UpdateOscSettingsRequest {
-    enabled: bool,
-    listen_port: u16,
-    address_pattern: String,
-    velocity_mode: VelocityMode,
-}
-
-#[derive(Debug, Deserialize)]
-#[serde(rename_all = "camelCase")]
-struct StageStateRequest {
-    presentation_id: String,
-    current_slide_id: String,
-    #[serde(default)]
-    next_slide_id: Option<String>,
-}
-
-#[instrument(skip_all)]
-async fn update_stage_state(
-    State(state): State<AppState>,
-    Json(payload): Json<StageStateRequest>,
-) -> Result<StatusCode, AppError> {
-    let presentation_id =
-        PresentationId::from_uuid(parse_uuid("presentationId", &payload.presentation_id)?);
-    let current_slide_id =
-        SlideId::from_uuid(parse_uuid("currentSlideId", &payload.current_slide_id)?);
-    let next_slide_id = match payload.next_slide_id {
-        Some(value) => Some(SlideId::from_uuid(parse_uuid("nextSlideId", &value)?)),
-        None => None,
-    };
-
-    state
-        .update_stage_state(presentation_id, current_slide_id, next_slide_id)
-        .await
-        .map_err(|err| AppError::bad_request(err))?;
-    Ok(StatusCode::NO_CONTENT)
-}
-
-#[instrument(skip_all)]
-async fn list_stage_connections(
-    State(state): State<AppState>,
-) -> Result<Json<Vec<StageClientSnapshot>>, AppError> {
-    let snapshot = state.stage_connections_snapshot().await;
-    Ok(Json(snapshot))
-}
-
-#[instrument(skip_all)]
-async fn list_stage_displays(
-    State(state): State<AppState>,
-) -> Result<Json<Vec<StageDisplayLayout>>, AppError> {
-    let displays = state.stage_displays().await?;
-    Ok(Json(displays))
-}
-
-#[instrument(skip_all)]
-async fn get_timers_overview(
-    State(state): State<AppState>,
-) -> Result<Json<TimersOverview>, AppError> {
-    let overview = state.timers_overview().await?;
-    Ok(Json(overview))
-}
-
-#[instrument(skip_all)]
-async fn execute_timer_command(
-    State(state): State<AppState>,
-    Json(payload): Json<Value>,
-) -> Result<Json<TimersOverview>, AppError> {
-    let command: presenter_core::TimerCommand =
-        serde_json::from_value(payload).map_err(AnyhowError::new)?;
-    match state.execute_timer_command(command).await {
-        Ok(overview) => Ok(Json(overview)),
-        Err(err) => {
-            if let Some(timer_err) = err.downcast_ref::<presenter_core::timer::TimerError>() {
-                return Err(AppError::bad_request_message(timer_err.to_string()));
-            }
-            Err(err.into())
-        }
-    }
-}
 
 #[instrument(skip_all)]
 async fn live_websocket(ws: WebSocketUpgrade, State(state): State<AppState>) -> impl IntoResponse {
@@ -687,115 +214,9 @@ struct PresentationDetailDto {
     presentation: Presentation,
 }
 
-#[derive(Debug, Serialize)]
-#[serde(rename_all = "camelCase")]
-struct ResolumeHostDto {
-    id: ResolumeHostId,
-    label: String,
-    host: String,
-    port: u16,
-    is_enabled: bool,
-    created_at: String,
-    updated_at: String,
-    status: ResolumeConnectionSnapshot,
-}
+// resolume DTOs moved to integrations/resolume.rs
 
-impl ResolumeHostDto {
-    fn from_host(host: ResolumeHost, status: ResolumeConnectionSnapshot) -> Self {
-        Self {
-            id: host.id,
-            label: host.label,
-            host: host.host,
-            port: host.port,
-            is_enabled: host.is_enabled,
-            created_at: host.created_at.to_rfc3339(),
-            updated_at: host.updated_at.to_rfc3339(),
-            status,
-        }
-    }
-}
-
-#[derive(Debug, Deserialize)]
-#[serde(rename_all = "camelCase")]
-struct ResolumeHostRequest {
-    label: String,
-    host: String,
-    #[serde(default = "default_resolume_port")]
-    port: u16,
-    #[serde(default = "default_true")]
-    is_enabled: bool,
-}
-
-const fn default_resolume_port() -> u16 {
-    8090
-}
-
-const fn default_true() -> bool {
-    true
-}
-
-#[derive(Debug, Serialize)]
-#[serde(rename_all = "camelCase")]
-struct AndroidStageDisplayDto {
-    id: AndroidStageDisplayId,
-    label: String,
-    host: String,
-    port: u16,
-    launch_component: String,
-    is_enabled: bool,
-    created_at: String,
-    updated_at: String,
-    status: AndroidStageDisplayStatusSnapshot,
-}
-
-impl AndroidStageDisplayDto {
-    fn from_display(
-        display: AndroidStageDisplay,
-        status: AndroidStageDisplayStatusSnapshot,
-    ) -> Self {
-        Self {
-            id: display.id,
-            label: display.label,
-            host: display.host,
-            port: display.port,
-            launch_component: display.launch_component,
-            is_enabled: display.is_enabled,
-            created_at: display.created_at.to_rfc3339(),
-            updated_at: display.updated_at.to_rfc3339(),
-            status,
-        }
-    }
-}
-
-#[derive(Debug, Deserialize)]
-#[serde(rename_all = "camelCase")]
-struct AndroidStageDisplayRequest {
-    label: String,
-    host: String,
-    #[serde(default = "default_android_stage_port")]
-    port: u16,
-    #[serde(default = "default_android_stage_launch_component")]
-    launch_component: String,
-    #[serde(default = "default_true")]
-    is_enabled: bool,
-}
-
-const fn default_android_stage_port() -> u16 {
-    DEFAULT_ADB_PORT
-}
-
-fn default_android_stage_launch_component() -> String {
-    DEFAULT_LAUNCH_COMPONENT.to_string()
-}
-
-fn normalize_launch_component(component: &str) -> String {
-    let trimmed = component.trim();
-    if trimmed.is_empty() {
-        DEFAULT_LAUNCH_COMPONENT.to_string()
-    } else {
-        trimmed.to_string()
-    }
-}
+// android stage DTOs moved to integrations/android_stage.rs
 
 #[derive(Debug)]
 struct AppError {
@@ -863,6 +284,8 @@ mod tests {
     use crate::router::libraries::CreateLibraryPresentationResponse;
     use crate::router::playlists::UpdatePlaylistRequest;
     use presenter_core::Playlist;
+    use crate::router::stage::StageLayoutResponse;
+    use presenter_core::TimersOverview;
 
     #[derive(Debug, Deserialize)]
     #[serde(rename_all = "camelCase")]
