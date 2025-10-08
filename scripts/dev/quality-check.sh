@@ -93,7 +93,15 @@ for file in "${target_files[@]}"; do
 done
 
 # 7) Function length (naive) — fail > 60 lines
-python3 - "$ROOT_DIR" <<'PY' || exit 3
+# Provide targets to the checker to scope analysis
+if (( ${#target_files[@]} )); then
+  QC_TARGETS=$(printf '%s\n' "${target_files[@]}")
+else
+  QC_TARGETS=""
+fi
+export QC_TARGETS
+
+viols=$(python3 - "$ROOT_DIR" <<'PY'
 import os, re, sys, json
 root = sys.argv[1]
 fn_start = re.compile(r"^\s*(?:pub(?:\([^)]*\))?\s+)?(?:async\s+)?fn\s+[A-Za-z0-9_]+\s*\(")

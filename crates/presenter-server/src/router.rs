@@ -288,6 +288,7 @@ mod tests_old {
     use presenter_core::Playlist;
     use crate::router::stage::StageLayoutResponse;
     use presenter_core::TimersOverview;
+    use presenter_core::{StageDisplayLayout, StageDisplaySnapshot};
 
     #[derive(Debug, Deserialize)]
     #[serde(rename_all = "camelCase")]
