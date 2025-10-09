@@ -257,7 +257,10 @@ pub(super) fn write_stage_layout_variables(
     }
 }
 
-pub(super) fn write_timer_variables(builder: &mut VariableBuilder, overview: Option<&TimersOverview>) {
+pub(super) fn write_timer_variables(
+    builder: &mut VariableBuilder,
+    overview: Option<&TimersOverview>,
+) {
     match overview {
         Some(timers) => {
             builder.set(
@@ -331,7 +334,10 @@ pub(super) fn write_timer_variables(builder: &mut VariableBuilder, overview: Opt
     }
 }
 
-pub(super) fn write_bible_variables(builder: &mut VariableBuilder, broadcast: Option<&BibleBroadcast>) {
+pub(super) fn write_bible_variables(
+    builder: &mut VariableBuilder,
+    broadcast: Option<&BibleBroadcast>,
+) {
     if let Some(broadcast) = broadcast {
         let reference = broadcast.passage.reference.to_human_readable();
         builder.set(

@@ -1,6 +1,6 @@
 // extracted protocol types and parsing
-use super::*;
 use super::variables::*;
+use super::*;
 
 #[derive(Debug, Clone)]
 pub(super) struct HelloAccepted {
@@ -467,7 +467,8 @@ pub(super) enum CompanionSessionError {
     Serialization(#[from] serde_json::Error),
     #[error("connection closed")]
     Closed,
-}#[derive(Debug, Deserialize)]
+}
+#[derive(Debug, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
 enum IncomingMessage {
     Hello {

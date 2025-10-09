@@ -1,8 +1,6 @@
 use crate::state::AppState;
-mod variables;
 mod protocol;
-use variables::*;
-use protocol::*;
+mod variables;
 use axum::{
     extract::{
         ws::{Message, WebSocket, WebSocketUpgrade},
@@ -19,12 +17,14 @@ use presenter_core::{
     BibleBroadcast, BibleReference, PresentationId, SlideId, StageDisplayLayout,
     StageDisplaySnapshot, TimerCommand, TimerState, TimersOverview,
 };
+use protocol::*;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::{collections::HashMap, sync::Arc};
 use tokio::sync::{broadcast::error::RecvError, Mutex};
 use tracing::{debug, info, warn};
 use uuid::Uuid;
+use variables::*;
 
 const COMPANION_SERVER_NAME: &str = "presenter";
 const COMPANION_PROTOCOL_VERSION: &str = env!("CARGO_PKG_VERSION");
@@ -132,7 +132,8 @@ async fn websocket_entry(ws: WebSocketUpgrade, State(state): State<AppState>) ->
     ws.on_upgrade(move |socket| async move {
         serve_companion_socket(state, socket).await;
     })
-}#[cfg(test)]
+}
+#[cfg(test)]
 #[allow(clippy::similar_names, clippy::needless_continue)]
 mod tests {
     use super::*;
