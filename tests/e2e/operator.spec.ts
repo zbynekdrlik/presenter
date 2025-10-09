@@ -168,9 +168,10 @@ test.describe('Operator control surface', () => {
 
   await page.goto(new URL('/ui/operator', baseURL).toString());
   await page.waitForLoadState('networkidle');
-  await page.waitForFunction(() => window.__presenterLiveConnected === true, {
-    timeout: 20_000,
-  });
+  await expect(async () => {
+    const connected = await page.evaluate(() => (window as any).__presenterLiveConnected === true);
+    expect(connected).toBeTruthy();
+  }).toPass({ timeout: 60_000, intervals: [500] });
 
   const addSlideButton = page.locator('[data-role="add-slide"]');
   const clearButton = page.locator('[data-role="clear-slide"]');

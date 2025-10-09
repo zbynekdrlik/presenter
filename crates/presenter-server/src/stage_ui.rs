@@ -35,7 +35,7 @@ fn StageDisplayDocument(
         heartbeat_config.disconnect_ms(),
     );
     let script = format!(
-        r#"(function() {{
+        r"(function() {{
   const initial = {snapshot_json};
   let currentSnapshot = initial;
   let layout = initial.layout.code;
@@ -532,7 +532,7 @@ fn StageDisplayDocument(
   }};
   window.__presenterStageDebug = debugHelpers;
 }})();
-"#,
+",
         snapshot_json = snapshot_json,
         heartbeat_config = heartbeat_config_literal
     );

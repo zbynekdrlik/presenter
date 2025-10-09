@@ -13,6 +13,16 @@ Presenter is a monolithic, production-ready lyrics/Bible/timers display applicat
 - Do **not** preserve compatibility with previous UI code, APIs, database snapshots, or scripts that stem from earlier flawed iterations. Remove or rewrite them freely in favor of the proper design.
 - When refactoring, prefer clean rebuilds over incremental patches that keep legacy artifacts. Strive for the clearest expression of the current requirements, even if that means deleting large portions of prior work.
 
+## Code Organization Guidelines (2025 Baseline)
+- Keep Rust source files below ~800 lines (hard cap 1,000) and functions under ~60 lines; split modules aggressively to stay within those bounds.
+- Structure `crates/presenter-server` by feature: `router/` with sub-routers per domain, `state/` delegating into `state/<feature>.rs`, and dedicated modules for external clients (AbleSet, OSC, Resolume, Android stage, Companion).
+- Lay out Leptos UI pages under `crates/presenter-server/src/ui/` with one page per file (`operator.rs`, `tablet.rs`, `bible.rs`, `settings.rs`, `home.rs`, `timer_overlay.rs`) and keep shared pieces in `ui/components/` and design tokens/styles in `ui/styles.rs`.
+- Avoid large CSS blocks inside router/state logic; store reusable styles in `ui/styles.rs` or static assets and limit gateway styles to <200 lines before moving them to CSS files.
+- Reserve `mod.rs` for orchestration and re-exports, never for primary implementations. Use consistent snake_case module names and PascalCase types.
+- Every new module ships with unit tests for pure logic plus E2E coverage for cross-surface workflows; update documentation whenever files move or APIs change.
+- When inspecting Playwright failures, use the helper script `scripts/dev/show-playwright-report.sh` (it auto-kills stale servers, chooses a random free port, and runs detached so the CLI never blocks). Do not run `npx playwright show-report` directly.
+ - Before reviews and merges, run the repository quality gate: `scripts/dev/quality-check.sh --against origin/main` (advisory) and `--strict` before merge. See Issue #41 checklist.
+
 ## Tooling & Dependencies
 - Install any required tool, utility, package, framework, or application immediately using `sudo apt install` (or the appropriate package manager) instead of attempting workarounds or waiting for approval.
 - On any new host (or after OS upgrades) run `./scripts/ops/bootstrap-host.sh` from a repository checkout to provision build essentials, Playwright browser deps, and the Rust toolchain before starting work.
@@ -67,6 +77,7 @@ Presenter is a monolithic, production-ready lyrics/Bible/timers display applicat
 - Automated tests cover every new behavior, emphasizing functional and end-user workflows. Add integration/end-to-end coverage where relevant.
 - Update all Markdown documents affected by the change so architecture and functionality references remain accurate and reflect the chosen 2025 design approach.
 - Confirm the implementation aligns with monolithic, high-reliability principles tailored to our church usage and document that rationale in the PR.
+ - Run `scripts/dev/quality-check.sh --strict --against origin/main` and fix all failures; include the “Definition of Done” from `docs/issues/41-recurring-quality-architecture-review.md` in the PR and check off each item.
 
 ## Collaboration & Decision Log
 - Capture architectural decisions in numbered ADRs under `docs/adr/` and cross-reference them from PRs when applicable.
