@@ -1,0 +1,8 @@
+# Presenter security policy scaffold
+# TODO(#49): remove ignores once dependencies are upgraded.
+[advisories]
+ignore = []
+
+[output]
+denied = "list"
+quiet = true
