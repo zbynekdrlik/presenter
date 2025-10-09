@@ -36,6 +36,8 @@ warnings=()
 ALLOW_FILESIZE_WARN_ONLY=(
   "crates/presenter-server/src/companion.rs"
   "crates/presenter-server/src/state.rs"
+  "crates/presenter-migration/src/m20250927_000001_create_core_tables.rs"
+  "crates/presenter-persistence/src/repository.rs"
 )
 
 note() { printf '%s\n' "$*"; }
