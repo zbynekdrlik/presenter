@@ -225,7 +225,7 @@ async fn bible_trigger_and_clear_flow_updates_variables() {
     let state = AppState::in_memory().await.unwrap();
 
     let translation = BibleTranslation::new("KJV", "King James Version", "en");
-    let reference = BibleReference::new("John", 3, 16, 16).unwrap();
+    let reference = BibleReference::new_with_code("John", "JHN", 43, 3, 16, 16).unwrap();
     let passage = BiblePassage::new(
         reference.clone(),
         translation.clone(),

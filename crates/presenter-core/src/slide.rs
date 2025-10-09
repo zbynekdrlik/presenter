@@ -55,6 +55,64 @@ impl SlideGroup {
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
+pub struct BibleSlideVerseRef {
+    pub start: u16,
+    pub end: u16,
+}
+
+impl BibleSlideVerseRef {
+    pub fn new(start: u16, end: u16) -> Self {
+        Self { start, end }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct BibleSlideMetadata {
+    pub translation_code: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub secondary_translation_code: Option<String>,
+    pub book: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub book_code: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub book_number: Option<u16>,
+    pub chapter: u16,
+    pub verses: Vec<BibleSlideVerseRef>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub main_reference_label: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub translation_reference_label: Option<String>,
+}
+
+impl BibleSlideMetadata {
+    pub fn verse_span(&self) -> Option<(u16, u16)> {
+        let first = self.verses.first()?;
+        let last = self.verses.last()?;
+        Some((first.start, last.end))
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SlideMetadata {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub bible: Option<BibleSlideMetadata>,
+}
+
+impl SlideMetadata {
+    pub fn new() -> Self {
+        Self { bible: None }
+    }
+
+    pub fn with_bible(mut self, metadata: BibleSlideMetadata) -> Self {
+        self.bible = Some(metadata);
+        self
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct SlideContent {
     pub main: SlideText,
     pub translation: SlideText,
@@ -90,6 +148,8 @@ pub struct Slide {
     pub id: SlideId,
     pub order: u32,
     pub content: SlideContent,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub metadata: Option<SlideMetadata>,
 }
 
 impl Slide {
@@ -98,11 +158,17 @@ impl Slide {
             id: SlideId::new(),
             order,
             content,
+            metadata: None,
         }
     }
 
     pub fn with_id(mut self, id: SlideId) -> Self {
         self.id = id;
+        self
+    }
+
+    pub fn with_metadata(mut self, metadata: Option<SlideMetadata>) -> Self {
+        self.metadata = metadata;
         self
     }
 }
@@ -116,6 +182,8 @@ pub struct ResolvedSlide {
     pub translation: SlideText,
     pub stage: SlideText,
     pub effective_group: Option<SlideGroup>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub metadata: Option<SlideMetadata>,
 }
 
 pub fn resolve_sequence(slides: &[Slide]) -> Vec<ResolvedSlide> {
@@ -133,6 +201,7 @@ pub fn resolve_sequence(slides: &[Slide]) -> Vec<ResolvedSlide> {
                 translation: slide.content.translation.clone(),
                 stage: slide.content.stage.clone(),
                 effective_group: active_group.clone(),
+                metadata: slide.metadata.clone(),
             }
         })
         .collect()

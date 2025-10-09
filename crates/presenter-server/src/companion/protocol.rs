@@ -153,9 +153,25 @@ pub(super) fn parse_command(command: &str, payload: Value) -> Result<CompanionCo
             let data: BibleTriggerPayload = serde_json::from_value(payload)
                 .map_err(|err| format!("invalid bible.trigger payload: {err}"))?;
             let verse_end = data.verse_end.unwrap_or(data.verse_start);
-            let reference =
-                BibleReference::new(data.book, data.chapter, data.verse_start, verse_end)
-                    .map_err(|err| format!("invalid bible reference: {err}"))?;
+            let canonical = data
+                .book_code
+                .as_deref()
+                .and_then(|code| canonical_book_by_code(code))
+                .or_else(|| canonical_book_by_name(&data.book));
+            let reference = if let Some(meta) = canonical {
+                BibleReference::new_with_code(
+                    data.book.clone(),
+                    meta.code,
+                    meta.number,
+                    data.chapter,
+                    data.verse_start,
+                    verse_end,
+                )
+                .map_err(|err| format!("invalid bible reference: {err}"))?
+            } else {
+                BibleReference::new(data.book.clone(), data.chapter, data.verse_start, verse_end)
+                    .map_err(|err| format!("invalid bible reference: {err}"))?
+            };
             Ok(CompanionCommand::BibleTrigger {
                 translation: data.translation,
                 reference,
@@ -260,9 +276,9 @@ pub(super) async fn handle_incoming_message(
 }
 
 #[derive(Default)]
-struct CommandResponse {
-    reply: Option<OutgoingMessage>,
-    refresh_variables: bool,
+pub(super) struct CommandResponse {
+    pub(super) reply: Option<OutgoingMessage>,
+    pub(super) refresh_variables: bool,
 }
 
 impl CommandResponse {
@@ -290,7 +306,7 @@ impl CommandResponse {
     }
 }
 
-enum CompanionCommand {
+pub(super) enum CompanionCommand {
     StageSet {
         presentation_id: PresentationId,
         current_slide_id: SlideId,
@@ -333,6 +349,8 @@ struct TimerTargetPayload {
 struct BibleTriggerPayload {
     translation: String,
     book: String,
+    #[serde(default)]
+    book_code: Option<String>,
     chapter: u16,
     verse_start: u16,
     #[serde(default)]

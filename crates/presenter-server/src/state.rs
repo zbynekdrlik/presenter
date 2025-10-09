@@ -13,12 +13,14 @@ use presenter_bible::BibleImportSummary;
 use presenter_core::playlist::PlaylistEntryKind;
 use presenter_core::{
     extract_song_prefix, AbleSetSettings, AbleSetSettingsDraft, AbleSetSongSnapshot,
-    AndroidStageDisplay, AndroidStageDisplayDraft, AndroidStageDisplayId, BibleBroadcast,
-    BibleReference, BibleTranslation, Library, LibraryId, LibrarySummary, OscSettings,
-    OscSettingsDraft, Playlist, PlaylistEntry, PlaylistEntryId, PlaylistId, Presentation,
-    PresentationId, ResolumeHost, ResolumeHostDraft, ResolumeHostId, SearchResult, Slide,
-    SlideContent, SlideGroup, SlideId, SlideText, StageDisplayLayout, StageDisplaySlide,
-    StageDisplaySnapshot, StageState, TimerCommand, TimerState, TimersOverview, TimersState,
+    AndroidStageDisplay, AndroidStageDisplayDraft, AndroidStageDisplayId, BibleBookChapterSummary,
+    BibleBroadcast, BiblePassage, BiblePreferences, BiblePreferencesDraft, BibleReference,
+    BibleSlideMetadata, BibleSlideVerseRef, BibleTranslation, Library, LibraryCategory, LibraryId,
+    LibrarySummary, OscSettings, OscSettingsDraft, Playlist, PlaylistEntry, PlaylistEntryId,
+    PlaylistId, Presentation, PresentationId, ResolumeHost, ResolumeHostDraft, ResolumeHostId,
+    SearchResult, Slide, SlideContent, SlideGroup, SlideId, SlideMetadata, SlideText,
+    StageDisplayLayout, StageDisplaySlide, StageDisplaySnapshot, StageState, TimerCommand,
+    TimerState, TimersOverview, TimersState,
 };
 use presenter_importer::bible::BibleIngestionService;
 use presenter_persistence::{DatabaseSettings, Repository};
@@ -433,7 +435,9 @@ impl AppState {
     }
 
     pub async fn create_library(&self, name: &str) -> anyhow::Result<Library> {
-        self.repository.create_library(name).await
+        self.repository
+            .create_library(name, LibraryCategory::Worship)
+            .await
     }
 
     pub async fn library_favorites(&self) -> anyhow::Result<Vec<LibraryId>> {
@@ -493,6 +497,211 @@ impl AppState {
 
     pub async fn list_bible_translations(&self) -> anyhow::Result<Vec<BibleTranslation>> {
         self.repository.list_bible_translations().await
+    }
+
+    pub async fn bible_preferences(&self) -> anyhow::Result<BiblePreferences> {
+        self.repository.bible_preferences().await
+    }
+
+    pub async fn update_bible_preferences(
+        &self,
+        draft: BiblePreferencesDraft,
+    ) -> anyhow::Result<BiblePreferences> {
+        self.repository.update_bible_preferences(draft).await
+    }
+
+    pub async fn bible_book_chapter_summaries(
+        &self,
+        translation_code: &str,
+    ) -> anyhow::Result<Vec<BibleBookChapterSummary>> {
+        self.repository
+            .bible_book_chapter_summaries(translation_code)
+            .await
+    }
+
+    pub async fn bible_passage_range(
+        &self,
+        translation_code: &str,
+        book: &str,
+        book_code: Option<&str>,
+        chapter: u16,
+        verse_start: u16,
+        verse_end: u16,
+    ) -> anyhow::Result<Vec<BiblePassage>> {
+        self.repository
+            .bible_passage_range(
+                translation_code,
+                book,
+                book_code,
+                chapter,
+                verse_start,
+                verse_end,
+            )
+            .await
+    }
+
+    async fn ensure_bible_library_id(&self) -> anyhow::Result<LibraryId> {
+        if let Some(library) = self
+            .repository
+            .find_library_by_category(LibraryCategory::Bible)
+            .await?
+        {
+            return Ok(library.id);
+        }
+        let created = self
+            .repository
+            .create_library("Bible Presentations", LibraryCategory::Bible)
+            .await?;
+        Ok(created.id)
+    }
+
+    pub async fn list_bible_presentations(
+        &self,
+    ) -> anyhow::Result<Vec<presenter_core::PresentationSummary>> {
+        let library_id = self.ensure_bible_library_id().await?;
+        self.repository
+            .list_presentations_in_library(library_id)
+            .await
+    }
+
+    pub async fn create_bible_presentation(&self, name: &str) -> anyhow::Result<Presentation> {
+        let library_id = self.ensure_bible_library_id().await?;
+        let (_, _, presentation) = self
+            .repository
+            .create_presentation(library_id, name)
+            .await?;
+        self.repository
+            .replace_presentation_slides(presentation.id, &[])
+            .await?;
+        let detail = self
+            .repository
+            .fetch_presentation_detail(presentation.id)
+            .await?
+            .ok_or_else(|| anyhow::anyhow!("presentation not found after creation"))?;
+        self.cache_presentation_value(detail.2.clone()).await;
+        Ok(detail.2)
+    }
+
+    pub async fn rename_bible_presentation(
+        &self,
+        presentation_id: PresentationId,
+        name: &str,
+    ) -> anyhow::Result<()> {
+        self.rename_presentation(presentation_id, name).await
+    }
+
+    pub async fn bible_presentation_detail(
+        &self,
+        presentation_id: PresentationId,
+    ) -> anyhow::Result<Option<Presentation>> {
+        let detail = self
+            .repository
+            .fetch_presentation_detail(presentation_id)
+            .await?;
+        Ok(detail.map(|(_, _, pres)| pres))
+    }
+
+    pub async fn append_bible_presentation_slides(
+        &self,
+        presentation_id: PresentationId,
+        mut slides: Vec<Slide>,
+    ) -> anyhow::Result<Presentation> {
+        let detail = self
+            .repository
+            .fetch_presentation_detail(presentation_id)
+            .await?;
+        let Some((_, _, mut presentation)) = detail else {
+            return Err(anyhow::anyhow!("presentation not found"));
+        };
+        let mut order = presentation.slides.len() as u32;
+        for slide in &mut slides {
+            slide.order = order;
+            order += 1;
+            presentation.slides.push(slide.clone());
+        }
+        self.repository
+            .replace_presentation_slides(presentation_id, &presentation.slides)
+            .await?;
+        let updated = self
+            .repository
+            .fetch_presentation_detail(presentation_id)
+            .await?
+            .ok_or_else(|| anyhow::anyhow!("presentation missing after append"))?;
+        Ok(updated.2)
+    }
+
+    pub async fn generate_bible_slides(
+        &self,
+        main_translation_code: &str,
+        secondary_translation_code: Option<&str>,
+        book: &str,
+        chapter: u16,
+        verse_start: u16,
+        verse_end: u16,
+        character_limit: u32,
+    ) -> anyhow::Result<(BibleTranslation, Option<BibleTranslation>, Vec<Slide>)> {
+        let translations = self.list_bible_translations().await?;
+        let main_translation = translations
+            .iter()
+            .find(|translation| translation.code.eq_ignore_ascii_case(main_translation_code))
+            .cloned()
+            .ok_or_else(|| anyhow::anyhow!("main translation not found"))?;
+
+        let secondary_translation = match secondary_translation_code {
+            Some(code) if !code.trim().is_empty() => translations
+                .iter()
+                .find(|translation| translation.code.eq_ignore_ascii_case(code))
+                .cloned(),
+            _ => None,
+        };
+
+        let final_verse_end = verse_end.max(verse_start);
+        let main_passages = self
+            .bible_passage_range(
+                &main_translation.code,
+                book,
+                None,
+                chapter,
+                verse_start,
+                final_verse_end,
+            )
+            .await?;
+        if main_passages.is_empty() {
+            return Err(anyhow::anyhow!("no passages found for the requested range"));
+        }
+
+        let canonical_book_code = main_passages
+            .first()
+            .and_then(|passage| passage.reference.book_code.clone());
+
+        let secondary_lookup = if let Some(ref translation) = secondary_translation {
+            let passages = self
+                .bible_passage_range(
+                    &translation.code,
+                    book,
+                    canonical_book_code.as_deref(),
+                    chapter,
+                    verse_start,
+                    final_verse_end,
+                )
+                .await?;
+            passages
+                .into_iter()
+                .map(|passage| (passage.reference.verse_start, passage))
+                .collect()
+        } else {
+            std::collections::HashMap::new()
+        };
+
+        let slides = compose_bible_slides(
+            &main_translation,
+            secondary_translation.as_ref(),
+            &main_passages,
+            &secondary_lookup,
+            character_limit,
+        )?;
+
+        Ok((main_translation, secondary_translation, slides))
     }
 
     pub async fn library_summaries(
@@ -1605,9 +1814,13 @@ fn sample_library() -> Library {
     .unwrap()
     .with_id(PresentationId::new());
 
-    Library::new("Sample Library", vec![presentation])
-        .unwrap()
-        .with_id(LibraryId::new())
+    Library::new(
+        "Sample Library",
+        LibraryCategory::Worship,
+        vec![presentation],
+    )
+    .unwrap()
+    .with_id(LibraryId::new())
 }
 
 #[derive(Debug, Clone)]
@@ -1845,6 +2058,195 @@ impl AbleSetLibraryCache {
         } else {
             false
         }
+    }
+}
+
+fn compose_bible_slides(
+    main_translation: &BibleTranslation,
+    secondary_translation: Option<&BibleTranslation>,
+    main_passages: &[BiblePassage],
+    secondary_lookup: &std::collections::HashMap<u16, BiblePassage>,
+    character_limit: u32,
+) -> anyhow::Result<Vec<Slide>> {
+    if main_passages.is_empty() {
+        return Ok(Vec::new());
+    }
+    let limit = character_limit.max(1) as usize;
+    let book = main_passages[0].reference.book.clone();
+    let chapter = main_passages[0].reference.chapter;
+
+    let canonical_book_code = main_passages
+        .first()
+        .and_then(|passage| passage.reference.book_code.clone());
+    let canonical_book_number = main_passages
+        .first()
+        .and_then(|passage| passage.reference.book_number);
+
+    let mut slides = Vec::new();
+    let mut current_main = String::new();
+    let mut current_translation = String::new();
+    let mut current_stage = String::new();
+    let mut current_verses: Vec<BibleSlideVerseRef> = Vec::new();
+
+    for passage in main_passages {
+        let verse_start = passage.reference.verse_start;
+        let verse_end = passage.reference.verse_end;
+        let verse_label = if verse_start == verse_end {
+            format!("{}.", verse_start)
+        } else {
+            format!("{}-{}.", verse_start, verse_end)
+        };
+        let verse_text = passage.text.trim();
+        let mut main_line = String::new();
+        if !verse_text.is_empty() {
+            main_line.push_str(&verse_label);
+            main_line.push(' ');
+            main_line.push_str(verse_text);
+        } else {
+            main_line.push_str(&verse_label);
+        }
+
+        let prospective_length = if current_main.is_empty() {
+            main_line.chars().count()
+        } else {
+            current_main.chars().count() + 1 + main_line.chars().count()
+        };
+
+        if !current_main.is_empty() && prospective_length > limit {
+            let metadata = build_bible_metadata(
+                main_translation,
+                secondary_translation,
+                &book,
+                canonical_book_code.as_deref(),
+                canonical_book_number,
+                chapter,
+                &current_verses,
+            );
+            slides.push(build_slide(
+                slides.len() as u32,
+                &current_main,
+                &current_translation,
+                &current_stage,
+                &book,
+                chapter,
+                metadata,
+            )?);
+            current_main.clear();
+            current_translation.clear();
+            current_stage.clear();
+            current_verses.clear();
+        }
+
+        if !current_main.is_empty() {
+            current_main.push('\n');
+            current_stage.push('\n');
+        }
+        current_main.push_str(&main_line);
+        current_stage.push_str(&main_line);
+
+        if secondary_translation.is_some() {
+            let secondary_line = secondary_lookup
+                .get(&verse_start)
+                .map(|p| p.text.trim().to_string())
+                .unwrap_or_default();
+            if !current_translation.is_empty() {
+                current_translation.push('\n');
+            }
+            if secondary_line.is_empty() {
+                current_translation.push_str(&verse_label);
+            } else {
+                current_translation.push_str(&verse_label);
+                current_translation.push(' ');
+                current_translation.push_str(&secondary_line);
+            }
+        }
+
+        current_verses.push(BibleSlideVerseRef::new(verse_start, verse_end));
+    }
+
+    if !current_main.is_empty() {
+        let metadata = build_bible_metadata(
+            main_translation,
+            secondary_translation,
+            &book,
+            canonical_book_code.as_deref(),
+            canonical_book_number,
+            chapter,
+            &current_verses,
+        );
+        slides.push(build_slide(
+            slides.len() as u32,
+            &current_main,
+            &current_translation,
+            &current_stage,
+            &book,
+            chapter,
+            metadata,
+        )?);
+    }
+
+    Ok(slides)
+}
+
+fn build_slide(
+    order: u32,
+    main: &str,
+    translation: &str,
+    stage: &str,
+    book: &str,
+    chapter: u16,
+    metadata: SlideMetadata,
+) -> anyhow::Result<Slide> {
+    let content = SlideContent::new(
+        SlideText::new(main.to_string())?,
+        SlideText::new(translation.to_string())?,
+        SlideText::new(stage.to_string())?,
+        Some(SlideGroup::new(format!("{} {}", book, chapter))),
+    );
+    let slide = Slide::new(order, content).with_metadata(Some(metadata));
+    Ok(slide)
+}
+
+fn build_bible_metadata(
+    main_translation: &BibleTranslation,
+    secondary_translation: Option<&BibleTranslation>,
+    book: &str,
+    book_code: Option<&str>,
+    book_number: Option<u16>,
+    chapter: u16,
+    verses: &[BibleSlideVerseRef],
+) -> SlideMetadata {
+    let metadata = SlideMetadata::new();
+    if verses.is_empty() {
+        return metadata;
+    }
+    let start = verses.first().map(|v| v.start).unwrap_or(1);
+    let end = verses.last().map(|v| v.end).unwrap_or(start);
+    let reference = format_reference(book, chapter, start, end);
+    let secondary_reference = if secondary_translation.is_some() {
+        Some(reference.clone())
+    } else {
+        None
+    };
+    let bible_metadata = BibleSlideMetadata {
+        translation_code: main_translation.code.clone(),
+        secondary_translation_code: secondary_translation.map(|t| t.code.clone()),
+        book: book.to_string(),
+        book_code: book_code.map(|code| code.to_string()),
+        book_number,
+        chapter,
+        verses: verses.to_vec(),
+        main_reference_label: Some(reference),
+        translation_reference_label: secondary_reference,
+    };
+    metadata.with_bible(bible_metadata)
+}
+
+fn format_reference(book: &str, chapter: u16, start: u16, end: u16) -> String {
+    if start == end {
+        format!("{} {}:{}", book, chapter, start)
+    } else {
+        format!("{} {}:{}-{}", book, chapter, start, end)
     }
 }
 

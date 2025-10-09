@@ -51,6 +51,24 @@ pub fn build_router(state: AppState) -> Router {
             "/bible/translations/refresh",
             post(bible::refresh_bible_translations),
         )
+        .route(
+            "/bible/preferences",
+            get(bible::get_bible_preferences).put(bible::update_bible_preferences),
+        )
+        .route("/bible/books", get(bible::list_bible_books))
+        .route("/bible/resolve", post(bible::resolve_bible_slides))
+        .route(
+            "/bible/presentations",
+            get(bible::list_bible_presentations).post(bible::create_bible_presentation_handler),
+        )
+        .route(
+            "/bible/presentations/{id}",
+            get(bible::get_bible_presentation).patch(bible::rename_bible_presentation_handler),
+        )
+        .route(
+            "/bible/presentations/{id}/append",
+            post(bible::append_bible_presentation_handler),
+        )
         .route("/bible/active", get(bible::get_active_bible_broadcast))
         .route("/bible/trigger", post(bible::trigger_bible_broadcast))
         .route("/bible/clear", post(bible::clear_bible_broadcast))
@@ -1896,7 +1914,7 @@ mod tests_old {
     fn sample_ingestion_batch() -> presenter_core::bible::BibleIngestionBatch {
         use presenter_core::{BiblePassage, BibleTranslation};
         let translation = BibleTranslation::new("test", "Test", "en");
-        let reference = BibleReference::new("John", 3, 16, 16).unwrap();
+        let reference = BibleReference::new_with_code("John", "JHN", 43, 3, 16, 16).unwrap();
         let passage = BiblePassage::new(reference, translation.clone(), "Text".to_string());
         presenter_core::bible::BibleIngestionBatch::new(translation, vec![passage]).unwrap()
     }

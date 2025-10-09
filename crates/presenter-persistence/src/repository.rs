@@ -1,7 +1,8 @@
 use crate::entities::{
-    ableset_settings, android_stage_display, app_settings, bible_passage, bible_translation,
-    library, library_favorite, osc_settings, playlist, playlist_entry, playlist_favorite,
-    presentation as presentation_entity, resolume_host, slide as slide_entity, stage_state, timers,
+    ableset_settings, android_stage_display, app_settings, bible_passage, bible_preferences,
+    bible_translation, library, library_favorite, osc_settings, playlist, playlist_entry,
+    playlist_favorite, presentation as presentation_entity, resolume_host, slide as slide_entity,
+    stage_state, timers,
 };
 use anyhow::{anyhow, Context};
 use chrono::{DateTime, Duration, Utc};
@@ -10,20 +11,22 @@ use presenter_core::{
     playlist::{MidiBinding, PlaylistEntryKind},
     search::{fold_query, query_tokens},
     AbleSetSettings, AbleSetSettingsDraft, AndroidStageDisplay, AndroidStageDisplayDraft,
-    AndroidStageDisplayId, BiblePassage, BibleReference, BibleTranslation, CountdownTimer, Library,
-    LibraryId, LibrarySummary, OscSettings, OscSettingsDraft, Playlist, PlaylistEntry,
-    PlaylistEntryId, PlaylistId, PreachTimer, Presentation, PresentationId, PresentationSummary,
-    ResolumeHost, ResolumeHostDraft, ResolumeHostId, SearchMatchField, SearchResult,
-    SearchResultKind, Slide, SlideContent, SlideGroup, SlideId, SlideText, StageState, TimerState,
-    TimersState, VelocityMode,
+    AndroidStageDisplayId, BibleBookChapterSummary, BiblePassage, BiblePreferences,
+    BiblePreferencesDraft, BibleReference, BibleTranslation, CountdownTimer, Library,
+    LibraryCategory, LibraryId, LibrarySummary, OscSettings, OscSettingsDraft, Playlist,
+    PlaylistEntry, PlaylistEntryId, PlaylistId, PreachTimer, Presentation, PresentationId,
+    PresentationSummary, ResolumeHost, ResolumeHostDraft, ResolumeHostId, SearchMatchField,
+    SearchResult, SearchResultKind, Slide, SlideContent, SlideGroup, SlideId, SlideMetadata,
+    SlideText, StageState, TimerState, TimersState, VelocityMode,
 };
 use presenter_migration::{Migrator, MigratorTrait};
 use sea_orm::{
     sea_query::{Expr, OnConflict},
     ActiveModelTrait, ColumnTrait, Condition, ConnectionTrait, Database, DatabaseConnection,
-    EntityTrait, IntoActiveModel, PaginatorTrait, QueryFilter, QueryOrder, QuerySelect, Schema,
-    Set, TransactionTrait,
+    EntityTrait, FromQueryResult, IntoActiveModel, PaginatorTrait, QueryFilter, QueryOrder,
+    QuerySelect, Schema, Set, TransactionTrait,
 };
+use serde_json;
 use std::{
     collections::{HashMap, HashSet},
     fmt::Debug,
@@ -41,6 +44,7 @@ const TIMERS_SINGLETON_ID: &str = "timers";
 const STAGE_STATE_SINGLETON_ID: &str = "stage-state";
 const OSC_SETTINGS_SINGLETON_ID: &str = "osc";
 const ABLESET_SETTINGS_SINGLETON_ID: &str = "ableset";
+const BIBLE_PREFERENCES_SINGLETON_ID: &str = "bible";
 
 #[derive(Debug, Clone)]
 pub struct DatabaseSettings {
@@ -119,6 +123,7 @@ impl Repository {
         let lib_model = library::ActiveModel {
             id: Set(library.id.to_string()),
             name: Set(library.name.clone()),
+            category: Set(library.category.as_str().to_string()),
             search_name: Set(fold_query(&library.name)),
             created_at: Set(Utc::now().into()),
         };
@@ -137,6 +142,13 @@ impl Repository {
                 .await?;
 
             for slide in &presentation.slides {
+                let metadata_json = match &slide.metadata {
+                    Some(metadata) => Some(
+                        serde_json::to_string(metadata)
+                            .map_err(|err| anyhow!("failed to serialise slide metadata: {err}"))?,
+                    ),
+                    None => None,
+                };
                 let slide_model = slide_entity::ActiveModel {
                     id: Set(slide.id.to_string()),
                     presentation_id: Set(presentation.id.to_string()),
@@ -148,6 +160,7 @@ impl Repository {
                     stage_text: Set(slide.content.stage.value().to_owned()),
                     stage_text_search: Set(fold_query(slide.content.stage.value())),
                     group_name: Set(slide.content.group.as_ref().map(|g| g.name().to_owned())),
+                    metadata_json: Set(metadata_json),
                     created_at: Set(Utc::now().into()),
                 };
                 slide_entity::Entity::insert(slide_model)
@@ -161,13 +174,18 @@ impl Repository {
     }
 
     #[instrument(skip_all)]
-    pub async fn create_library(&self, name: &str) -> anyhow::Result<Library> {
+    pub async fn create_library(
+        &self,
+        name: &str,
+        category: LibraryCategory,
+    ) -> anyhow::Result<Library> {
         let mut txn = self.db.begin().await?;
         let id = LibraryId::new();
 
         let model = library::ActiveModel {
             id: Set(id.to_string()),
             name: Set(name.to_string()),
+            category: Set(category.as_str().to_string()),
             search_name: Set(fold_query(name)),
             created_at: Set(Utc::now().into()),
         };
@@ -175,8 +193,28 @@ impl Repository {
         library::Entity::insert(model).exec(&mut txn).await?;
         txn.commit().await?;
 
-        let library = Library::new(name.to_string(), Vec::new())?.with_id(id);
+        let library = Library::new(name.to_string(), category, Vec::new())?.with_id(id);
         Ok(library)
+    }
+
+    pub async fn find_library_by_category(
+        &self,
+        category: LibraryCategory,
+    ) -> anyhow::Result<Option<Library>> {
+        let category_str = category.as_str().to_string();
+        let model = library::Entity::find()
+            .filter(library::Column::Category.eq(category_str))
+            .order_by_asc(library::Column::CreatedAt)
+            .one(&self.db)
+            .await?;
+
+        if let Some(model) = model {
+            let library = Library::new(model.name.clone(), category, Vec::new())?
+                .with_id(LibraryId::from_uuid(parse_uuid(&model.id)?));
+            Ok(Some(library))
+        } else {
+            Ok(None)
+        }
     }
 
     #[instrument(skip_all)]
@@ -234,6 +272,7 @@ impl Repository {
             stage_text: Set(String::new()),
             stage_text_search: Set(String::new()),
             group_name: Set(None),
+            metadata_json: Set(None),
             created_at: Set(Utc::now().into()),
         })
         .exec(&mut txn)
@@ -324,7 +363,9 @@ impl Repository {
                 presentation_models.push(presentation);
             }
 
-            let library_domain = Library::new(lib.name.clone(), presentation_models)?
+            let category =
+                LibraryCategory::from_str(&lib.category).unwrap_or(LibraryCategory::Worship);
+            let library_domain = Library::new(lib.name.clone(), category, presentation_models)?
                 .with_id(LibraryId::from_uuid(parse_uuid(&lib.id)?));
             results.push(library_domain);
         }
@@ -377,6 +418,24 @@ impl Repository {
     }
 
     #[instrument(skip_all)]
+    pub async fn list_presentations_in_library(
+        &self,
+        library_id: LibraryId,
+    ) -> anyhow::Result<Vec<PresentationSummary>> {
+        let id = library_id.to_string();
+        let presentations = presentation_entity::Entity::find()
+            .filter(presentation_entity::Column::LibraryId.eq(id))
+            .order_by_asc(presentation_entity::Column::Name)
+            .all(&self.db)
+            .await?;
+        let mut summaries = Vec::with_capacity(presentations.len());
+        for pres in presentations {
+            let pres_id = PresentationId::from_uuid(parse_uuid(&pres.id)?);
+            summaries.push(PresentationSummary::new(pres_id, pres.name));
+        }
+        Ok(summaries)
+    }
+
     pub async fn list_library_summaries(
         &self,
         filter: Option<&str>,
@@ -407,9 +466,12 @@ impl Repository {
             }
 
             let library_id = LibraryId::from_uuid(parse_uuid(&lib.id)?);
+            let category =
+                LibraryCategory::from_str(&lib.category).unwrap_or(LibraryCategory::Worship);
             let summary = LibrarySummary::new(
                 library_id,
                 lib.name.clone(),
+                category,
                 presentation_summaries.len(),
                 presentation_summaries,
             );
@@ -1039,6 +1101,13 @@ impl Repository {
             .await?;
 
         for (index, slide) in slides.iter().enumerate() {
+            let metadata_json = match &slide.metadata {
+                Some(metadata) => Some(
+                    serde_json::to_string(metadata)
+                        .map_err(|err| anyhow!("failed to serialise slide metadata: {err}"))?,
+                ),
+                None => None,
+            };
             let active = slide_entity::ActiveModel {
                 id: Set(slide.id.to_string()),
                 presentation_id: Set(presentation_id.to_string()),
@@ -1054,6 +1123,7 @@ impl Repository {
                     .group
                     .as_ref()
                     .map(|group| group.name().to_owned())),
+                metadata_json: Set(metadata_json),
                 created_at: Set(Utc::now().into()),
             };
             slide_entity::Entity::insert(active).exec(&mut txn).await?;
@@ -1090,10 +1160,24 @@ impl Repository {
         let mut chunk = Vec::with_capacity(BIBLE_INSERT_CHUNK);
         for passage in passages {
             let reference = &passage.reference;
+            let book_code = reference.book_code.clone().ok_or_else(|| {
+                anyhow::anyhow!(
+                    "reference for '{}' missing canonical book code",
+                    reference.book
+                )
+            })?;
+            let book_number = reference.book_number.ok_or_else(|| {
+                anyhow::anyhow!(
+                    "reference for '{}' missing canonical book number",
+                    reference.book
+                )
+            })?;
             let model = bible_passage::ActiveModel {
                 id: Set(Uuid::new_v4().to_string()),
                 translation_code: Set(translation.code.clone()),
                 book: Set(reference.book.clone()),
+                book_code: Set(book_code),
+                book_number: Set(book_number as i32),
                 chapter: Set(reference.chapter as i32),
                 verse_start: Set(reference.verse_start as i32),
                 verse_end: Set(reference.verse_end as i32),
@@ -1127,6 +1211,117 @@ impl Repository {
             .all(&self.db)
             .await?;
         Ok(models.into_iter().map(to_domain_translation).collect())
+    }
+
+    #[instrument(skip_all)]
+    pub async fn bible_preferences(&self) -> anyhow::Result<BiblePreferences> {
+        if let Some(model) =
+            bible_preferences::Entity::find_by_id(BIBLE_PREFERENCES_SINGLETON_ID.to_string())
+                .one(&self.db)
+                .await?
+        {
+            return Ok(to_domain_bible_preferences(model));
+        }
+        let defaults = BiblePreferences::default();
+        self.save_bible_preferences(&defaults).await?;
+        Ok(defaults)
+    }
+
+    #[instrument(skip_all)]
+    pub async fn update_bible_preferences(
+        &self,
+        draft: BiblePreferencesDraft,
+    ) -> anyhow::Result<BiblePreferences> {
+        let current = self.bible_preferences().await?;
+        let merged = draft.apply(current);
+        let character_limit = merged.character_limit.clamp(1, 4000);
+        let preferences = BiblePreferences {
+            main_translation: normalise_translation_code(merged.main_translation),
+            secondary_translation: normalise_translation_code(merged.secondary_translation),
+            character_limit,
+        };
+        self.save_bible_preferences(&preferences).await?;
+        Ok(preferences)
+    }
+
+    async fn save_bible_preferences(&self, preferences: &BiblePreferences) -> anyhow::Result<()> {
+        let now = Utc::now().into();
+        let model = bible_preferences::ActiveModel {
+            id: Set(BIBLE_PREFERENCES_SINGLETON_ID.to_string()),
+            main_translation_code: Set(preferences.main_translation.clone().unwrap_or_default()),
+            secondary_translation_code: Set(preferences
+                .secondary_translation
+                .clone()
+                .unwrap_or_default()),
+            character_limit: Set(preferences.character_limit as i32),
+            created_at: Set(now),
+            updated_at: Set(now),
+        };
+
+        bible_preferences::Entity::insert(model)
+            .on_conflict(
+                OnConflict::column(bible_preferences::Column::Id)
+                    .update_columns([
+                        bible_preferences::Column::MainTranslationCode,
+                        bible_preferences::Column::SecondaryTranslationCode,
+                        bible_preferences::Column::CharacterLimit,
+                        bible_preferences::Column::UpdatedAt,
+                    ])
+                    .to_owned(),
+            )
+            .exec(&self.db)
+            .await?;
+        Ok(())
+    }
+
+    #[instrument(skip_all)]
+    pub async fn bible_book_chapter_summaries(
+        &self,
+        translation_code: &str,
+    ) -> anyhow::Result<Vec<BibleBookChapterSummary>> {
+        #[derive(Debug, FromQueryResult)]
+        struct ChapterRow {
+            book: String,
+            book_code: String,
+            book_number: i32,
+            chapter: i32,
+            verse_count: i32,
+        }
+
+        let rows = bible_passage::Entity::find()
+            .select_only()
+            .column(bible_passage::Column::Book)
+            .column(bible_passage::Column::BookCode)
+            .column(bible_passage::Column::BookNumber)
+            .column(bible_passage::Column::Chapter)
+            .column_as(
+                Expr::col(bible_passage::Column::VerseEnd).max(),
+                "verse_count",
+            )
+            .filter(bible_passage::Column::TranslationCode.eq(translation_code.to_string()))
+            .group_by(bible_passage::Column::Book)
+            .group_by(bible_passage::Column::BookCode)
+            .group_by(bible_passage::Column::BookNumber)
+            .group_by(bible_passage::Column::Chapter)
+            .order_by_asc(bible_passage::Column::Book)
+            .order_by_asc(bible_passage::Column::Chapter)
+            .into_model::<ChapterRow>()
+            .all(&self.db)
+            .await?;
+        let mut summaries = Vec::with_capacity(rows.len());
+        for row in rows {
+            let Ok(book_number) = u16::try_from(row.book_number) else {
+                continue;
+            };
+            summaries.push(BibleBookChapterSummary {
+                book: row.book,
+                book_code: Some(row.book_code),
+                book_number: Some(book_number),
+                chapter: row.chapter.max(0) as u16,
+                verse_count: row.verse_count.max(0) as u16,
+            });
+        }
+        Ok(summaries)
     }
 
     #[instrument(skip_all)]
@@ -1178,18 +1373,62 @@ impl Repository {
             return Ok(None);
         };
 
-        let passage = bible_passage::Entity::find()
+        let mut query = bible_passage::Entity::find()
             .filter(bible_passage::Column::TranslationCode.eq(translation_code.to_string()))
-            .filter(bible_passage::Column::Book.eq(reference.book.clone()))
             .filter(bible_passage::Column::Chapter.eq(reference.chapter as i32))
             .filter(bible_passage::Column::VerseStart.eq(reference.verse_start as i32))
-            .filter(bible_passage::Column::VerseEnd.eq(reference.verse_end as i32))
-            .one(&self.db)
-            .await?;
+            .filter(bible_passage::Column::VerseEnd.eq(reference.verse_end as i32));
+
+        if let Some(code) = reference.book_code.as_ref() {
+            query = query.filter(bible_passage::Column::BookCode.eq(code.to_string()));
+        } else {
+            query = query.filter(bible_passage::Column::Book.eq(reference.book.clone()));
+        }
+
+        let passage = query.one(&self.db).await?;
 
         Ok(passage
             .map(|model| to_domain_passage(model, translation.clone()))
             .transpose()?)
+    }
+
+    #[instrument(skip_all)]
+    pub async fn bible_passage_range(
+        &self,
+        translation_code: &str,
+        book: &str,
+        book_code: Option<&str>,
+        chapter: u16,
+        verse_start: u16,
+        verse_end: u16,
+    ) -> anyhow::Result<Vec<BiblePassage>> {
+        let translation = bible_translation::Entity::find_by_id(translation_code.to_string())
+            .one(&self.db)
+            .await?;
+        let Some(translation) = translation else {
+            return Ok(Vec::new());
+        };
+
+        let mut query = bible_passage::Entity::find()
+            .filter(bible_passage::Column::TranslationCode.eq(translation_code.to_string()))
+            .filter(bible_passage::Column::Chapter.eq(chapter as i32))
+            .filter(bible_passage::Column::VerseStart.gte(verse_start as i32))
+            .filter(bible_passage::Column::VerseEnd.lte(verse_end as i32))
+            .order_by_asc(bible_passage::Column::VerseStart);
+
+        query = if let Some(code) = book_code {
+            query.filter(bible_passage::Column::BookCode.eq(code.to_string()))
+        } else {
+            query.filter(bible_passage::Column::Book.eq(book.to_string()))
+        };
+
+        let rows = query.all(&self.db).await?;
+
+        let mut passages = Vec::with_capacity(rows.len());
+        for row in rows {
+            passages.push(to_domain_passage(row, translation.clone())?);
+        }
+        Ok(passages)
     }
 
     #[instrument(skip_all)]
@@ -1628,6 +1867,8 @@ enum RepositoryError {
     UnknownTimerState(String),
     #[error("unknown playlist entry type '{0}' in persistence layer")]
     UnknownPlaylistEntryType(String),
+    #[error("invalid slide metadata: {0}")]
+    InvalidSlideMetadata(String),
     #[error("osc port {0} out of range")]
     InvalidOscPort(i32),
     #[error("ableset port {0} out of range")]
@@ -1636,6 +1877,8 @@ enum RepositoryError {
     InvalidAbleSetPrefix(i32),
     #[error("unknown osc velocity mode '{0}' in persistence layer")]
     UnknownOscVelocityMode(String),
+    #[error("invalid bible book number {0} in persistence layer")]
+    InvalidBookNumber(i32),
 }
 
 fn parse_uuid(id: &str) -> Result<Uuid, RepositoryError> {
@@ -1649,9 +1892,36 @@ fn to_domain_slide(model: slide_entity::Model) -> Result<Slide, RepositoryError>
         SlideText::new(model.stage_text)?,
         model.group_name.map(SlideGroup::new),
     );
+    let metadata = match model.metadata_json {
+        Some(json) if !json.trim().is_empty() => Some(
+            serde_json::from_str::<SlideMetadata>(&json)
+                .map_err(|err| RepositoryError::InvalidSlideMetadata(err.to_string()))?,
+        ),
+        _ => None,
+    };
     let slide = Slide::new(model.position as u32, content)
-        .with_id(SlideId::from_uuid(parse_uuid(&model.id)?));
+        .with_id(SlideId::from_uuid(parse_uuid(&model.id)?))
+        .with_metadata(metadata);
     Ok(slide)
+}
+
+fn to_domain_bible_preferences(model: bible_preferences::Model) -> BiblePreferences {
+    BiblePreferences {
+        main_translation: normalise_translation_code(Some(model.main_translation_code)),
+        secondary_translation: normalise_translation_code(Some(model.secondary_translation_code)),
+        character_limit: model.character_limit.max(1) as u32,
+    }
+}
+
+fn normalise_translation_code(code: Option<String>) -> Option<String> {
+    code.and_then(|value| {
+        let trimmed = value.trim();
+        if trimmed.is_empty() {
+            None
+        } else {
+            Some(trimmed.to_uppercase())
+        }
+    })
 }
 
 fn to_domain_playlist_entry(
@@ -1791,8 +2061,12 @@ fn to_domain_passage(
     model: bible_passage::Model,
     translation: bible_translation::Model,
 ) -> Result<BiblePassage, RepositoryError> {
-    let reference = BibleReference::new(
+    let book_number = u16::try_from(model.book_number)
+        .map_err(|_| RepositoryError::InvalidBookNumber(model.book_number))?;
+    let reference = BibleReference::new_with_code(
         model.book,
+        model.book_code,
+        book_number,
         model.chapter as u16,
         model.verse_start as u16,
         model.verse_end as u16,
@@ -1911,8 +2185,8 @@ mod tests {
     use super::*;
     use presenter_core::{
         bible::BibleIngestionBatch, playlist::PlaylistEntryKind, BiblePassage, BibleReference,
-        BibleTranslation, PlaylistEntryId, ResolumeHostDraft, SearchResultKind, StageState,
-        DEFAULT_ADB_PORT, DEFAULT_LAUNCH_COMPONENT,
+        BibleTranslation, LibraryCategory, PlaylistEntryId, ResolumeHostDraft, SearchResultKind,
+        StageState, DEFAULT_ADB_PORT, DEFAULT_LAUNCH_COMPONENT,
     };
     fn sample_library() -> Library {
         let presentation = Presentation::new(
@@ -1942,7 +2216,7 @@ mod tests {
         )
         .unwrap()
         .with_id(PresentationId::new());
-        Library::new("Default", vec![presentation])
+        Library::new("Default", LibraryCategory::Worship, vec![presentation])
             .unwrap()
             .with_id(LibraryId::new())
     }
@@ -2036,7 +2310,7 @@ mod tests {
         let repo = Repository::connect_in_memory().await.unwrap();
         let translation = BibleTranslation::new("en-kjv", "King James Version", "en")
             .with_source("https://example.org/kjv");
-        let reference = BibleReference::new("John", 3, 16, 16).unwrap();
+        let reference = BibleReference::new_with_code("John", "JHN", 43, 3, 16, 16).unwrap();
         let passage = BiblePassage::new(
             reference.clone(),
             translation.clone(),
@@ -2059,6 +2333,8 @@ mod tests {
         assert_eq!(fetched.translation, translation);
         assert_eq!(fetched.reference, reference);
         assert_eq!(fetched.text, passage.text);
+        assert_eq!(fetched.reference.book_code.as_deref(), Some("JHN"));
+        assert_eq!(fetched.reference.book_number, Some(43));
     }
 
     #[tokio::test]
@@ -2067,7 +2343,8 @@ mod tests {
         let translation = BibleTranslation::new("en-load", "Load Test", "en");
         let mut passages = Vec::new();
         for verse in 1..=1_200u16 {
-            let reference = BibleReference::new("Psalm", 119, verse, verse).unwrap();
+            let reference =
+                BibleReference::new_with_code("Psalm", "PSA", 19, 119, verse, verse).unwrap();
             let passage =
                 BiblePassage::new(reference, translation.clone(), format!("Verse {verse}"));
             passages.push(passage);
@@ -2078,19 +2355,28 @@ mod tests {
             .await
             .unwrap();
 
-        let tail_reference = BibleReference::new("Psalm", 119, 1_200, 1_200).unwrap();
+        let tail_reference =
+            BibleReference::new_with_code("Psalm", "PSA", 19, 119, 1_200, 1_200).unwrap();
         let tail = repo
             .find_bible_passage(&translation.code, &tail_reference)
             .await
             .unwrap();
         assert!(tail.is_some());
+        if let Some(passage) = tail {
+            assert_eq!(passage.reference.book_code.as_deref(), Some("PSA"));
+            assert_eq!(passage.reference.book_number, Some(19));
+        }
 
-        let head_reference = BibleReference::new("Psalm", 119, 1, 1).unwrap();
+        let head_reference = BibleReference::new_with_code("Psalm", "PSA", 19, 119, 1, 1).unwrap();
         let head = repo
             .find_bible_passage(&translation.code, &head_reference)
             .await
             .unwrap();
         assert!(head.is_some());
+        if let Some(passage) = head {
+            assert_eq!(passage.reference.book_code.as_deref(), Some("PSA"));
+            assert_eq!(passage.reference.book_number, Some(19));
+        }
     }
 
     #[tokio::test]
@@ -2267,7 +2553,10 @@ mod tests {
     #[tokio::test]
     async fn create_library_persists_new_row() {
         let repo = Repository::connect_in_memory().await.unwrap();
-        let created = repo.create_library("Autotest Library").await.unwrap();
+        let created = repo
+            .create_library("Autotest Library", LibraryCategory::Worship)
+            .await
+            .unwrap();
         assert_eq!(created.name, "Autotest Library");
         assert!(created.presentations.is_empty());
 
@@ -2280,7 +2569,10 @@ mod tests {
     #[tokio::test]
     async fn rename_library_updates_name() {
         let repo = Repository::connect_in_memory().await.unwrap();
-        let created = repo.create_library("Original").await.unwrap();
+        let created = repo
+            .create_library("Original", LibraryCategory::Worship)
+            .await
+            .unwrap();
 
         repo.rename_library(created.id, "Renamed").await.unwrap();
 
@@ -2367,7 +2659,12 @@ mod tests {
             ),
         );
         let accent_presentation = Presentation::new("Ježiš, ja", vec![accent_slide]).unwrap();
-        let accent_library = Library::new("TYMY Worship", vec![accent_presentation]).unwrap();
+        let accent_library = Library::new(
+            "TYMY Worship",
+            LibraryCategory::Worship,
+            vec![accent_presentation],
+        )
+        .unwrap();
         repo.upsert_library(&accent_library).await.unwrap();
 
         let results = repo.search_presenter("Chvaly", 10).await.unwrap();

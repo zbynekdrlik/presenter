@@ -7,7 +7,9 @@ use std::path::{Path, PathBuf};
 
 use anyhow::{anyhow, Context, Result};
 use encoding_rs::{Encoding, WINDOWS_1250, WINDOWS_1251, WINDOWS_1252, WINDOWS_1254};
-use presenter_core::{Library, Presentation, Slide, SlideContent, SlideGroup, SlideText};
+use presenter_core::{
+    Library, LibraryCategory, Presentation, Slide, SlideContent, SlideGroup, SlideText,
+};
 use presenter_persistence::Repository;
 use prost::Message;
 use proto::presentation::CueGroup;
@@ -202,7 +204,7 @@ fn load_library_from_directory(dir: &Path) -> Result<Option<Library>> {
         return Ok(None);
     }
 
-    let library = Library::new(name, presentations)?;
+    let library = Library::new(name, LibraryCategory::Worship, presentations)?;
     Ok(Some(library))
 }
 
