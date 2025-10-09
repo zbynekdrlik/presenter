@@ -3,8 +3,8 @@ use super::*;
 
 #[derive(Debug, Clone, Serialize)]
 pub(super) struct CompanionVariable {
-    name: String,
-    value: String,
+    pub(super) name: String,
+    pub(super) value: String,
 }
 
 #[derive(Default, Clone)]
@@ -120,20 +120,20 @@ impl CompanionVariableState {
 
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
 pub(super) struct StageVariables {
-    presentation_id: Option<String>,
-    presentation_name: String,
-    band_name: String,
-    song_name: String,
-    current_slide_id: Option<String>,
-    current_main: String,
-    current_translation: String,
-    current_stage: String,
-    current_group: String,
-    next_slide_id: Option<String>,
-    next_main: String,
-    next_translation: String,
-    next_stage: String,
-    next_group: String,
+    pub(super) presentation_id: Option<String>,
+    pub(super) presentation_name: String,
+    pub(super) band_name: String,
+    pub(super) song_name: String,
+    pub(super) current_slide_id: Option<String>,
+    pub(super) current_main: String,
+    pub(super) current_translation: String,
+    pub(super) current_stage: String,
+    pub(super) current_group: String,
+    pub(super) next_slide_id: Option<String>,
+    pub(super) next_main: String,
+    pub(super) next_translation: String,
+    pub(super) next_stage: String,
+    pub(super) next_group: String,
 }
 
 impl StageVariables {

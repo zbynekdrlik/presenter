@@ -339,7 +339,7 @@ struct BibleTriggerPayload {
     verse_end: Option<u16>,
 }
 
-async fn handle_command(
+pub(super) async fn handle_command(
     state: &AppState,
     variables: &mut CompanionVariableState,
     command: &str,
