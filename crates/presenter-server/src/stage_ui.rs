@@ -1414,11 +1414,11 @@ body.stage[data-live-state="error"] .stage__status-connection { color: #f87171; 
 body.stage[data-layout-code="worship-snv"] .stage__lyrics { grid-template-rows: 1fr 1fr; height: 100vh; padding-left: 0; padding-right: 0; }
 body.stage[data-layout-code="worship-snv"] .stage__lyrics-current,
 body.stage[data-layout-code="worship-snv"] .stage__lyrics-next { overflow: hidden; display: flex; align-items: center; }
-.stage__lyrics-current { font-size: 14rem; font-weight: 700; display: flex; flex-direction: column; gap: 1rem; align-items: stretch; justify-content: flex-start; letter-spacing: 0.04em; min-height: 0; }
+.stage__lyrics-current { font-size: 14rem; font-weight: 700; display: flex; flex-direction: column; gap: 0.8rem; align-items: stretch; justify-content: flex-start; letter-spacing: 0.04em; min-height: 0; }
 .stage__lyrics-current p { margin: 0; line-height: 1.08; white-space: pre-wrap; text-transform: none; max-width: 100%; width: 100%; }
 .stage__lyrics-next { font-size: 11.5rem; color: #cbd5f5; letter-spacing: 0.06em; display: flex; flex-direction: column; gap: 1rem; align-items: stretch; justify-content: center; padding-bottom: 4vh; }
 .stage__lyrics-next p { margin: 0; white-space: pre-wrap; text-transform: none; line-height: 1.12; max-width: 100%; width: 100%; }
-.stage__group-slot { min-height: 3.8rem; display: flex; align-items: center; justify-content: center; gap: 1rem; flex-wrap: wrap; text-align: center; width: 100%; }
+.stage__group-slot { min-height: 3.0rem; display: flex; align-items: center; justify-content: center; gap: 0.75rem; flex-wrap: wrap; text-align: center; width: 100%; }
 .stage__group-slot--next { justify-content: center; }
 .stage__group-slot--current { justify-content: space-between; align-items: center; flex-wrap: nowrap; gap: 1rem; width: 100%; }
 .stage__group-slot--current .stage__group { margin-right: auto; }
