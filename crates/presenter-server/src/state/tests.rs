@@ -1,6 +1,7 @@
 use super::*;
 use crate::live::LiveEvent;
 use chrono::Utc;
+use presenter_core::LibraryCategory;
 use presenter_core::{
     bible::BibleIngestionBatch, BiblePassage, BibleReference, BibleTranslation, Library, LibraryId,
     Presentation, Slide, SlideContent, SlideId, SlideText, TimerCommand, TimerState,
