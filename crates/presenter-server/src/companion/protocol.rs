@@ -277,8 +277,8 @@ pub(super) async fn handle_incoming_message(
 
 #[derive(Default)]
 pub(super) struct CommandResponse {
-    pub(super) reply: Option<OutgoingMessage>,
-    pub(super) refresh_variables: bool,
+    reply: Option<OutgoingMessage>,
+    refresh_variables: bool,
 }
 
 impl CommandResponse {
@@ -303,6 +303,16 @@ impl CommandResponse {
     fn with_refresh(mut self, refresh: bool) -> Self {
         self.refresh_variables = refresh;
         self
+    }
+
+    #[cfg(test)]
+    pub(super) fn reply(&self) -> Option<&OutgoingMessage> {
+        self.reply.as_ref()
+    }
+
+    #[cfg(test)]
+    pub(super) fn refresh_variables(&self) -> bool {
+        self.refresh_variables
     }
 }
 

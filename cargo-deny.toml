@@ -1,0 +1,42 @@
+# Presenter quality policy scaffold
+# TODO(#48): tighten licence and ban policies once codebase is refactored
+[graph]
+all-features = true
+features = "all"
+include-dev = true
+
+[advisories]
+ignore = []
+
+[licenses]
+allow = [
+  "Apache-2.0",
+  "MIT",
+  "BSD-2-Clause",
+  "BSD-3-Clause",
+  "ISC",
+  "Unicode-DFS-2016"
+]
+confidence-threshold = 0.8
+
+exceptions = []
+
+[[licenses.clarify]]
+name = "ring"
+expression = "ISC"
+license-files = ["LICENSE"]
+
+[bans]
+multiple-versions = "warn"
+wildcards = "deny"
+
+[ban-dev-dependencies]
+deny = []
+allow = []
+
+[sources]
+unknown-registry = "deny"
+unknown-git = "warn"
+
+[output]
+feature-depth = 1
