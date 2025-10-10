@@ -8,7 +8,6 @@ pub mod library {
         #[sea_orm(primary_key, auto_increment = false)]
         pub id: String,
         pub name: String,
-        pub category: String,
         pub search_name: String,
         pub created_at: DateTimeWithTimeZone,
     }
@@ -122,7 +121,6 @@ pub mod slide {
         pub stage_text: String,
         pub stage_text_search: String,
         pub group_name: Option<String>,
-        pub metadata_json: Option<String>,
         pub created_at: DateTimeWithTimeZone,
     }
 
@@ -367,8 +365,6 @@ pub mod bible_passage {
         pub id: String,
         pub translation_code: String,
         pub book: String,
-        pub book_code: String,
-        pub book_number: i32,
         pub chapter: i32,
         pub verse_start: i32,
         pub verse_end: i32,
@@ -399,7 +395,6 @@ pub mod bible_passage {
 
 pub use app_settings::Entity as AppSettingsEntity;
 pub use bible_passage::Entity as BiblePassageEntity;
-pub use bible_preferences::Entity as BiblePreferencesEntity;
 pub use bible_translation::Entity as BibleTranslationEntity;
 pub use library::Entity as LibraryEntity;
 pub use playlist::Entity as PlaylistEntity;
@@ -459,27 +454,6 @@ pub mod stage_state {
         pub presentation_id: Option<String>,
         pub current_slide_id: Option<String>,
         pub next_slide_id: Option<String>,
-        pub updated_at: DateTimeWithTimeZone,
-    }
-
-    #[derive(Copy, Clone, Debug, EnumIter, DeriveRelation)]
-    pub enum Relation {}
-
-    impl ActiveModelBehavior for ActiveModel {}
-}
-
-pub mod bible_preferences {
-    use sea_orm::entity::prelude::*;
-
-    #[derive(Clone, Debug, PartialEq, Eq, DeriveEntityModel)]
-    #[sea_orm(table_name = "bible_preferences")]
-    pub struct Model {
-        #[sea_orm(primary_key, auto_increment = false)]
-        pub id: String,
-        pub main_translation_code: String,
-        pub secondary_translation_code: String,
-        pub character_limit: i32,
-        pub created_at: DateTimeWithTimeZone,
         pub updated_at: DateTimeWithTimeZone,
     }
 

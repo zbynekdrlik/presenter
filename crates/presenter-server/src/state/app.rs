@@ -10,12 +10,12 @@ use chrono::Utc;
 use presenter_bible::BibleImportSummary;
 use presenter_core::playlist::PlaylistEntryKind;
 use presenter_core::{
-    BibleBookChapterSummary, BibleBroadcast, BiblePreferences, BiblePreferencesDraft,
-    BibleReference, BibleTranslation, Library, LibraryCategory, LibraryId, LibrarySummary,
-    OscSettings, OscSettingsDraft, Playlist, PlaylistEntry, PlaylistEntryId, PlaylistId,
-    Presentation, PresentationId, PresentationSummary, SearchResult, Slide, SlideContent,
-    SlideGroup, SlideId, SlideMetadata, SlideText, StageDisplayLayout,
+    BibleBroadcast, Library, LibraryId, LibrarySummary, OscSettings, OscSettingsDraft, Playlist,
+    PlaylistEntry, PlaylistEntryId, PlaylistId, Presentation, PresentationId, PresentationSummary,
+    SearchResult, Slide, SlideContent, SlideGroup, SlideId, SlideText, StageDisplayLayout,
 };
+use presenter_core::bible::{BibleBookChapterSummary, BiblePreferences, BiblePreferencesDraft, BibleReference, BibleTranslation};
+use presenter_core::slide::{SlideMetadata, BibleSlideMetadata, BibleSlideVerseRef};
 use presenter_importer::bible::BibleIngestionService;
 use presenter_persistence::{DatabaseSettings, Repository};
 use serde::Serialize;
@@ -344,7 +344,7 @@ impl AppState {
         // Default new libraries to the Worship category unless a specific flow
         // (e.g., Bible) chooses otherwise.
         self.repository
-            .create_library(name, LibraryCategory::Worship)
+            .create_library(name)
             .await
     }
 
@@ -424,14 +424,26 @@ impl AppState {
 
     // Bible preferences and summaries
     pub async fn bible_preferences(&self) -> anyhow::Result<BiblePreferences> {
-        self.repository.bible_preferences().await
+        let main = self.repository.get_app_setting("bible.main_translation").await?;
+        let secondary = self.repository.get_app_setting("bible.secondary_translation").await?;
+        let char_str = self.repository.get_app_setting("bible.character_limit").await?;
+        let mut prefs = BiblePreferences::default();
+        if let Some(m) = main { if !m.trim().is_empty() { prefs = prefs.with_main_translation(Some(m)); } }
+        if let Some(s) = secondary { if !s.trim().is_empty() { prefs = prefs.with_secondary_translation(Some(s)); } }
+        if let Some(c) = char_str { if let Ok(v) = c.parse::<u32>() { prefs = prefs.with_character_limit(v); } }
+        Ok(prefs)
     }
 
     pub async fn update_bible_preferences(
         &self,
         draft: BiblePreferencesDraft,
     ) -> anyhow::Result<BiblePreferences> {
-        self.repository.update_bible_preferences(draft).await
+        let current = self.bible_preferences().await?;
+        let next = draft.apply(current);
+        if let Some(ref m) = next.main_translation { self.repository.set_app_setting("bible.main_translation", m).await?; } else { self.repository.set_app_setting("bible.main_translation", "").await?; }
+        if let Some(ref s) = next.secondary_translation { self.repository.set_app_setting("bible.secondary_translation", s).await?; } else { self.repository.set_app_setting("bible.secondary_translation", "").await?; }
+        self.repository.set_app_setting("bible.character_limit", &next.character_limit.to_string()).await?;
+        Ok(next)
     }
 
     pub async fn bible_book_chapter_summaries(
@@ -629,7 +641,7 @@ impl AppState {
         let libraries = self.repository.fetch_libraries().await?;
         if let Some(bible_lib) = libraries
             .into_iter()
-            .find(|l| l.category == LibraryCategory::Bible)
+            .find(|l| l.name.eq_ignore_ascii_case("Bible"))
         {
             let summaries = bible_lib
                 .presentations
@@ -654,16 +666,11 @@ impl AppState {
 
     pub async fn create_bible_presentation(&self, name: &str) -> anyhow::Result<Presentation> {
         // Ensure a Bible library exists
-        let library = if let Some(existing) = self
-            .repository
-            .find_library_by_category(LibraryCategory::Bible)
-            .await?
-        {
+        let libraries = self.repository.fetch_libraries().await?;
+        let library = if let Some(existing) = libraries.into_iter().find(|l| l.name.eq_ignore_ascii_case("Bible")) {
             existing
         } else {
-            self.repository
-                .create_library("Bible", LibraryCategory::Bible)
-                .await?
+            self.repository.create_library("Bible").await?
         };
 
         let (_lib_id, _lib_name, presentation) = self
@@ -875,11 +882,7 @@ fn sample_library() -> Library {
     .unwrap()
     .with_id(PresentationId::new());
 
-    Library::new(
-        "Sample Library",
-        LibraryCategory::Worship,
-        vec![presentation],
-    )
+    Library::new("Sample Library", vec![presentation])
     .unwrap()
     .with_id(LibraryId::new())
 }
@@ -921,7 +924,7 @@ pub(crate) fn compose_bible_slides(
             SlideText::new(&main)?,
             None,
         );
-        let metadata = SlideMetadata::new().with_bible(presenter_core::BibleSlideMetadata {
+        let metadata = SlideMetadata::new().with_bible(BibleSlideMetadata {
             translation_code: main_translation.code.clone(),
             secondary_translation_code: secondary_translation.map(|t| t.code.clone()),
             book: book.clone(),
@@ -930,7 +933,7 @@ pub(crate) fn compose_bible_slides(
             chapter,
             verses: verses
                 .iter()
-                .map(|(s, e)| presenter_core::BibleSlideVerseRef::new(*s, *e))
+                .map(|(s, e)| BibleSlideVerseRef::new(*s, *e))
                 .collect(),
             main_reference_label: None,
             translation_reference_label: None,

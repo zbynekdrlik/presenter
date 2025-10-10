@@ -3,39 +3,6 @@ use crate::presentation::Presentation;
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
 
-#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
-#[serde(rename_all = "snake_case")]
-pub enum LibraryCategory {
-    Worship,
-    Bible,
-    System,
-}
-
-impl Default for LibraryCategory {
-    fn default() -> Self {
-        LibraryCategory::Worship
-    }
-}
-
-impl LibraryCategory {
-    pub fn as_str(&self) -> &'static str {
-        match self {
-            LibraryCategory::Worship => "worship",
-            LibraryCategory::Bible => "bible",
-            LibraryCategory::System => "system",
-        }
-    }
-
-    pub fn from_str(value: &str) -> Option<Self> {
-        match value {
-            "worship" => Some(LibraryCategory::Worship),
-            "bible" => Some(LibraryCategory::Bible),
-            "system" => Some(LibraryCategory::System),
-            _ => None,
-        }
-    }
-}
-
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
 pub struct PresentationSummary {
@@ -60,7 +27,6 @@ pub enum LibraryError {
 pub struct Library {
     pub id: LibraryId,
     pub name: String,
-    pub category: LibraryCategory,
     pub presentations: Vec<Presentation>,
 }
 
@@ -69,7 +35,6 @@ pub struct Library {
 pub struct LibrarySummary {
     pub id: LibraryId,
     pub name: String,
-    pub category: LibraryCategory,
     pub presentation_count: usize,
     pub presentations: Vec<PresentationSummary>,
 }
@@ -78,14 +43,12 @@ impl LibrarySummary {
     pub fn new(
         id: LibraryId,
         name: String,
-        category: LibraryCategory,
         presentation_count: usize,
         presentations: Vec<PresentationSummary>,
     ) -> Self {
         Self {
             id,
             name,
-            category,
             presentation_count,
             presentations,
         }
@@ -95,13 +58,11 @@ impl LibrarySummary {
 impl Library {
     pub fn new<T: Into<String>>(
         name: T,
-        category: LibraryCategory,
         presentations: Vec<Presentation>,
     ) -> Result<Self, LibraryError> {
         Ok(Self {
             id: LibraryId::new(),
             name: name.into(),
-            category,
             presentations,
         })
     }
@@ -159,12 +120,7 @@ mod tests {
 
     #[test]
     fn remove_presentation_returns_removed_entity() {
-        let mut library = Library::new(
-            "Songs",
-            LibraryCategory::Worship,
-            vec![presentation_named("Song", 0)],
-        )
-        .unwrap();
+        let mut library = Library::new("Songs", vec![presentation_named("Song", 0)]).unwrap();
         let id = library.presentations[0].id;
         let removed = library.remove_presentation(id).unwrap();
         assert_eq!(removed.id, id);
@@ -175,7 +131,6 @@ mod tests {
     fn duplicate_presentation_names_are_allowed() {
         let library = Library::new(
             "Songs",
-            LibraryCategory::Worship,
             vec![presentation_named("Song", 0), presentation_named("Song", 1)],
         )
         .unwrap();
@@ -184,12 +139,7 @@ mod tests {
 
     #[test]
     fn remove_missing_presentation_errors() {
-        let mut library = Library::new(
-            "Songs",
-            LibraryCategory::Worship,
-            vec![presentation_named("Song", 0)],
-        )
-        .unwrap();
+        let mut library = Library::new("Songs", vec![presentation_named("Song", 0)]).unwrap();
         let err = library
             .remove_presentation(PresentationId::new())
             .unwrap_err();

@@ -1,7 +1,6 @@
 use super::*;
 use crate::live::LiveEvent;
 use chrono::Utc;
-use presenter_core::LibraryCategory;
 use presenter_core::{
     bible::BibleIngestionBatch, BiblePassage, BibleReference, BibleTranslation, Library, LibraryId,
     Presentation, Slide, SlideContent, SlideId, SlideText, TimerCommand, TimerState,
@@ -160,7 +159,6 @@ async fn stage_snapshot_defaults_to_first_presentation() {
     .unwrap();
     let library = Library::new(
         "Fallback",
-        LibraryCategory::Worship,
         vec![presentation.clone()],
     )
     .unwrap()

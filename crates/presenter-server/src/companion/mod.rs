@@ -13,8 +13,8 @@ use axum::{
 };
 use chrono::{DateTime, Utc};
 use futures_util::{SinkExt, StreamExt};
-use presenter_core::{
-    canonical_book_by_code, canonical_book_by_name, BibleBroadcast, BibleReference, PresentationId,
+use presenter_core::bible::{canonical_book_by_code, canonical_book_by_name, BibleBroadcast, BibleReference};
+use presenter_core::{ PresentationId,
     SlideId, StageDisplayLayout, StageDisplaySnapshot, TimerCommand, TimerState, TimersOverview,
 };
 use protocol::*;

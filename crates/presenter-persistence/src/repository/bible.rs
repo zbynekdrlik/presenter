@@ -139,3 +139,80 @@ impl Repository {
             .transpose()?)
     }
 }
+
+
+use presenter_core::bible::BibleBookChapterSummary;
+use sea_orm::FromQueryResult;
+use sea_orm::sea_query::Expr;
+
+impl Repository {
+    #[instrument(skip_all)]
+    pub async fn bible_passage_range(
+        &self,
+        translation_code: &str,
+        book: &str,
+        book_code: Option<&str>,
+        chapter: u16,
+        verse_start: u16,
+        verse_end: u16,
+    ) -> anyhow::Result<Vec<BiblePassage>> {
+        let translation = bible_translation::Entity::find_by_id(translation_code.to_string())
+            .one(&self.db)
+            .await?;
+        let Some(translation) = translation else { return Ok(Vec::new()); };
+
+        let mut query = bible_passage::Entity::find()
+            .filter(bible_passage::Column::TranslationCode.eq(translation_code.to_string()))
+            .filter(bible_passage::Column::Chapter.eq(chapter as i32))
+            .filter(bible_passage::Column::VerseStart.gte(verse_start as i32))
+            .filter(bible_passage::Column::VerseEnd.lte(verse_end as i32))
+            .order_by_asc(bible_passage::Column::VerseStart);
+
+        query = query.filter(bible_passage::Column::Book.eq(book.to_string()));
+
+        let rows = query.all(&self.db).await?;
+        let mut passages = Vec::with_capacity(rows.len());
+        for row in rows {
+            passages.push(super::util::to_domain_passage(row, translation.clone())?);
+        }
+        Ok(passages)
+    }
+
+    #[instrument(skip_all)]
+    pub async fn bible_book_chapter_summaries(
+        &self,
+        translation_code: &str,
+    ) -> anyhow::Result<Vec<BibleBookChapterSummary>> {
+        #[derive(Debug, FromQueryResult)]
+        struct ChapterRow {
+            book: String,
+            chapter: i32,
+            verse_count: i32,
+        }
+
+        let rows = bible_passage::Entity::find()
+            .select_only()
+            .column(bible_passage::Column::Book)
+            .column(bible_passage::Column::Chapter)
+            .column_as(Expr::col(bible_passage::Column::VerseEnd).max(), "verse_count")
+            .filter(bible_passage::Column::TranslationCode.eq(translation_code.to_string()))
+            .group_by(bible_passage::Column::Book)
+            .group_by(bible_passage::Column::Chapter)
+            .order_by_asc(bible_passage::Column::Book)
+            .order_by_asc(bible_passage::Column::Chapter)
+            .into_model::<ChapterRow>()
+            .all(&self.db)
+            .await?;
+        let mut summaries = Vec::with_capacity(rows.len());
+        for row in rows {
+            summaries.push(BibleBookChapterSummary {
+                book: row.book,
+                book_code: None,
+                book_number: None,
+                chapter: row.chapter.max(0) as u16,
+                verse_count: row.verse_count.max(0) as u16,
+            });
+        }
+        Ok(summaries)
+    }
+}

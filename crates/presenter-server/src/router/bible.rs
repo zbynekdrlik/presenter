@@ -8,9 +8,10 @@ use axum::{
     Json,
 };
 use presenter_core::{
-    BiblePassage, BiblePreferences, BiblePreferencesDraft, BibleReference, BibleTranslation,
-    Presentation, PresentationId, Slide, SlideContent, SlideGroup, SlideMetadata, SlideText,
+    presentation::Presentation, PresentationId, Slide, SlideContent, SlideGroup, SlideText,
 };
+use presenter_core::bible::{BiblePassage, BiblePreferences, BiblePreferencesDraft, BibleReference, BibleTranslation, canonical_book_by_code};
+use presenter_core::slide::SlideMetadata;
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 use tracing::instrument;
@@ -69,7 +70,7 @@ pub(super) async fn get_bible_passage(
 ) -> Result<Json<Option<BiblePassage>>, AppError> {
     let verse_end = query.verse_end.unwrap_or(query.verse_start);
     let reference = if let Some(code) = query.book_code.as_deref() {
-        match presenter_core::canonical_book_by_code(code) {
+        match canonical_book_by_code(code) {
             Some(meta) => BibleReference::new_with_code(
                 query.book,
                 meta.code,
@@ -473,7 +474,7 @@ pub(super) async fn trigger_bible_broadcast(
 ) -> Result<Json<presenter_core::BibleBroadcast>, AppError> {
     let verse_end = payload.verse_end.unwrap_or(payload.verse_start);
     let reference = if let Some(code) = payload.book_code.as_deref() {
-        match presenter_core::canonical_book_by_code(code) {
+        match canonical_book_by_code(code) {
             Some(meta) => BibleReference::new_with_code(
                 payload.book,
                 meta.code,
