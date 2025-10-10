@@ -691,6 +691,19 @@ fn StageDisplayDocument(
           lh = computeLineHeightPx(element, fontPx);
           attempts += 1;
         }}
+        // Final deterministic scale to hit the cap if still above tolerance
+        const padT2 = parseFloat(style.paddingTop || '0') || 0;
+        const padB2 = parseFloat(style.paddingBottom || '0') || 0;
+        const linesNow = lh > 0 ? Math.max(0, element.scrollHeight - padT2 - padB2) / lh : 0;
+        const cap = (FIT_LINE_TARGET + FIT_LINE_TOLERANCE);
+        if (Number.isFinite(linesNow) && linesNow > cap) {{
+          const scale = cap / linesNow;
+          fontPx = Math.max(MIN_FONT_PX, fontPx * scale);
+          const rootSize = parseFloat(getComputedStyle(document.documentElement).fontSize) || 16;
+          const rem2 = fontPx / rootSize;
+          element.style.fontSize = `${{rem2}}rem`;
+          element.dataset.fontRem = rem2.toFixed(4);
+        }}
       }} catch (_e) {{}}
       // Final async safety pass
       enforceActualLineLimit(element, FIT_LINE_TARGET + FIT_LINE_TOLERANCE);
