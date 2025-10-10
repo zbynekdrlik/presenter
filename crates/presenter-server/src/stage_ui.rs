@@ -255,7 +255,7 @@ fn StageDisplayDocument(
 
   const LINE_HEIGHT_FALLBACK_FACTOR = 1.12;
   const FIT_LINE_TARGET = 2;
-  const FIT_LINE_TOLERANCE = 0.08;
+  const FIT_LINE_TOLERANCE = 0.12;
   const MIN_FONT_PX = 22;
   const MIN_FONT_SCALE = 0.65;
 
