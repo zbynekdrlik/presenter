@@ -453,12 +453,12 @@ fn StageDisplayDocument(
     const approxLinesForLimit = Math.max(1, effectiveTarget);
     const approxCharsPerLine = content.length / approxLinesForLimit;
     const limitCpl = Math.max(10, Math.min(120, Number(stageLineLimit) || 32));
-    if (approxCharsPerLine > limitCpl) {
+    if (approxCharsPerLine > limitCpl) {{
       const boost = Math.min(1.5, Math.max(1.0, approxCharsPerLine / limitCpl));
       basePx = Math.max(MIN_FONT_PX, basePx * boost);
       scaledBaseMin = basePx * MIN_FONT_SCALE;
       baseMinPx = Math.max(MIN_FONT_PX, configuredMinPx != null ? configuredMinPx : 0, scaledBaseMin);
-    }
+    }}
 
     const baseMeasure = measureLines(basePx);
     let finalPx = basePx;
