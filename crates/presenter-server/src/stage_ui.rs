@@ -559,7 +559,7 @@ fn StageDisplayDocument(
       }}
       if (finalMeasure.widthCoverage < coverageTarget) {{
         let low = finalPx;
-        let high = Math.max(finalPx, basePx * 1.35, absoluteMinPx * 1.35);
+        let high = Math.max(finalPx, basePx * 1.6, absoluteMinPx * 1.6);
         let bestPx = finalPx;
         let bestMeasure = finalMeasure;
         for (let i = 0; i < 30 && high - low > 0.25; i += 1) {{
