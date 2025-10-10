@@ -450,11 +450,12 @@ fn StageDisplayDocument(
     }};
     // Character-per-line limit boost: if average characters per line exceed the configured
     // line limit, gently increase the starting font so fewer characters fit per line.
+    // Global baseline scaling from configured characters-per-line limit: lower limit => larger text.
     const approxLinesForLimit = Math.max(1, effectiveTarget);
-    const approxCharsPerLine = content.length / approxLinesForLimit;
     const limitCpl = Math.max(10, Math.min(120, Number(stageLineLimit) || 32));
-    if (approxCharsPerLine > limitCpl) {{
-      const boost = Math.min(1.5, Math.max(1.0, approxCharsPerLine / limitCpl));
+    const referenceCpl = 32; // design baseline
+    const boost = Math.min(1.8, Math.max(0.8, referenceCpl / limitCpl));
+    if (Number.isFinite(boost) && boost > 0 && boost !== 1) {{
       basePx = Math.max(MIN_FONT_PX, basePx * boost);
       scaledBaseMin = basePx * MIN_FONT_SCALE;
       baseMinPx = Math.max(MIN_FONT_PX, configuredMinPx != null ? configuredMinPx : 0, scaledBaseMin);
