@@ -603,6 +603,28 @@ fn StageDisplayDocument(
     return fontPx * LINE_HEIGHT_FALLBACK_FACTOR;
   }};
 
+  const countVisualLines = (el) => {{
+    try {{
+      if (!(el && el.firstChild)) return 0;
+      const range = document.createRange();
+      const rects = [];
+      const text = (el.textContent || '').replace(/\s+$/,'');
+      for (let i = 0; i < text.length; i += 1) {{
+        range.setStart(el.firstChild, i);
+        range.setEnd(el.firstChild, i + 1);
+        const r = range.getBoundingClientRect();
+        if (r && r.width > 0 && r.height > 0) rects.push(r);
+      }}
+      rects.sort((a,b)=>a.top-b.top);
+      let clusters = 0;
+      let last = -1e9;
+      for (const r of rects) {{
+        if (r.top - last > 2) {{ clusters += 1; last = r.top; }}
+      }}
+      return clusters;
+    }} catch (_) {{ return 0; }}
+  }};
+
   const enforceActualLineLimit = (element, maxLinesAllowed) => {{
     if (!(element instanceof HTMLElement)) return;
     let attempts = 0;
@@ -696,6 +718,7 @@ fn StageDisplayDocument(
         const padB2 = parseFloat(style.paddingBottom || '0') || 0;
         const linesNow = lh > 0 ? Math.max(0, element.scrollHeight - padT2 - padB2) / lh : 0;
         const cap = (FIT_LINE_TARGET + FIT_LINE_TOLERANCE);
+        let visual = countVisualLines(element);
         if (Number.isFinite(linesNow) && linesNow > cap) {{
           const scale = cap / linesNow;
           fontPx = Math.max(MIN_FONT_PX, fontPx * scale);
@@ -703,6 +726,16 @@ fn StageDisplayDocument(
           const rem2 = fontPx / rootSize;
           element.style.fontSize = `${{rem2}}rem`;
           element.dataset.fontRem = rem2.toFixed(4);
+        }
+        // One more pass using visual lines if available
+        visual = countVisualLines(element);
+        if (visual > FIT_LINE_TARGET) {
+          const scale = FIT_LINE_TARGET / Math.max(visual, FIT_LINE_TARGET + 0.0001);
+          fontPx = Math.max(MIN_FONT_PX, fontPx * scale);
+          const rootSize = parseFloat(getComputedStyle(document.documentElement).fontSize) || 16;
+          const rem3 = fontPx / rootSize;
+          element.style.fontSize = `${{rem3}}rem`;
+          element.dataset.fontRem = rem3.toFixed(4);
         }}
       }} catch (_e) {{}}
       // Final async safety pass
