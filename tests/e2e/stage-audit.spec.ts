@@ -140,8 +140,16 @@ describeFn('Stage Audit (SNV, Retina, width coverage, equal split)', () => {
       const getRect = (e: Element | null) => (e ? (e as HTMLElement).getBoundingClientRect() : ({ left:0, top:0, width:0, height:0, right:0, bottom:0 } as DOMRect));
       const style = el ? getComputedStyle(el as HTMLElement) : ({} as CSSStyleDeclaration);
       const fs = parseFloat((style as any).fontSize || '0') || 0;
-      let lh = parseFloat((style as any).lineHeight || '0');
-      if (!Number.isFinite(lh) || lh <= 0) lh = fs * 1.12;
+      const lhRaw = (style as any).lineHeight || '';
+      let lh = parseFloat(lhRaw as any);
+      if (Number.isFinite(lh) && lh > 0) {
+        // If unitless (e.g., '1.2'), convert to pixels via font size
+        if (!/px\b/i.test(String(lhRaw)) && lh < 4) {
+          lh = lh * fs;
+        }
+      } else {
+        lh = fs * 1.12;
+      }
       const text = (el?.textContent || '').trim();
       const explicitLines = text.length ? Math.max(1, text.split(/\r?\n/).length) : 0;
       const rect = el ? getRect(el) : ({} as DOMRect);

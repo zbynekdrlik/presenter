@@ -334,11 +334,18 @@ fn StageDisplayDocument(
 
     const referenceStyle = window.getComputedStyle(element);
     const computedFontSize = parseFloat(referenceStyle.fontSize) || basePx;
-    const computedLineHeight = parseFloat(referenceStyle.lineHeight);
-    let lineHeightRatio =
-      Number.isFinite(computedLineHeight) && computedLineHeight > 0 && Number.isFinite(computedFontSize) && computedFontSize > 0
-        ? computedLineHeight / computedFontSize
-        : LINE_HEIGHT_FALLBACK_FACTOR;
+    const lineHeightRaw = referenceStyle.lineHeight || '';
+    const computedLineHeightNum = parseFloat(lineHeightRaw);
+    let lineHeightRatio = LINE_HEIGHT_FALLBACK_FACTOR;
+    if (Number.isFinite(computedLineHeightNum) && computedLineHeightNum > 0 && Number.isFinite(computedFontSize) && computedFontSize > 0) {
+      // If the browser reports a unitless number (e.g., "1.2"), treat it as a ratio.
+      // Otherwise assume pixels and convert to a ratio via font size.
+      if (!(typeof lineHeightRaw === 'string' && lineHeightRaw.toLowerCase().includes('px')) && computedLineHeightNum < 4) {
+        lineHeightRatio = computedLineHeightNum;
+      } else {
+        lineHeightRatio = computedLineHeightNum / computedFontSize;
+      }
+    }
     if (!Number.isFinite(lineHeightRatio) || lineHeightRatio <= 0) {{
       const rowStyle = window.getComputedStyle(row);
       const rowLineHeight = parseFloat(rowStyle.lineHeight);
@@ -583,6 +590,19 @@ fn StageDisplayDocument(
     return finalRem;
   }};
 
+  const computeLineHeightPx = (el, fontPx) => {
+    const s = window.getComputedStyle(el);
+    const raw = s.lineHeight || '';
+    let lh = parseFloat(raw);
+    if (Number.isFinite(lh) && lh > 0) {
+      if (!(typeof raw === 'string' && raw.toLowerCase().includes('px')) && lh < 4) {
+        return lh * fontPx;
+      }
+      return lh;
+    }
+    return fontPx * LINE_HEIGHT_FALLBACK_FACTOR;
+  };
+
   const enforceActualLineLimit = (element, maxLinesAllowed) => {{
     if (!(element instanceof HTMLElement)) return;
     let attempts = 0;
@@ -590,10 +610,7 @@ fn StageDisplayDocument(
       if (!(element instanceof HTMLElement)) return;
       const style = window.getComputedStyle(element);
       const fontPx = parseFloat(style.fontSize) || MIN_FONT_PX;
-      let lineHeightPx = parseFloat(style.lineHeight) || 0;
-      if (!Number.isFinite(lineHeightPx) || lineHeightPx <= 0) {{
-        lineHeightPx = fontPx * LINE_HEIGHT_FALLBACK_FACTOR;
-      }}
+      let lineHeightPx = computeLineHeightPx(element, fontPx);
       const padTop = parseFloat(style.paddingTop || '0') || 0;
       const padBottom = parseFloat(style.paddingBottom || '0') || 0;
       const rawLines = lineHeightPx > 0 ? Math.max(0, element.scrollHeight - padTop - padBottom) / lineHeightPx : 0;
@@ -656,7 +673,7 @@ fn StageDisplayDocument(
       try {{
         const style = window.getComputedStyle(element);
         let fontPx = parseFloat(style.fontSize) || MIN_FONT_PX;
-        let lh = parseFloat(style.lineHeight) || (fontPx * LINE_HEIGHT_FALLBACK_FACTOR);
+        let lh = computeLineHeightPx(element, fontPx);
         let attempts = 0;
         while (attempts < 50) {{
           const padT = parseFloat(style.paddingTop || '0') || 0;
@@ -671,7 +688,7 @@ fn StageDisplayDocument(
           element.dataset.fontRem = rem.toFixed(4);
           // refresh style refs
           const s2 = window.getComputedStyle(element);
-          lh = parseFloat(s2.lineHeight) || (fontPx * LINE_HEIGHT_FALLBACK_FACTOR);
+          lh = computeLineHeightPx(element, fontPx);
           attempts += 1;
         }}
       }} catch (_e) {{}}
