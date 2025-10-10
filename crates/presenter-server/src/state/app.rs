@@ -692,6 +692,16 @@ impl AppState {
     ) -> anyhow::Result<Presentation> {
         let arc = self.presentation_from_cache(presentation_id).await?;
         let mut presentation = arc.as_ref().clone();
+        if presentation.slides.len() == 1 {
+            let s = &presentation.slides[0];
+            let is_blank = s.content.main.is_empty()
+                && s.content.translation.is_empty()
+                && s.content.stage.is_empty()
+                && s.metadata.is_none();
+            if is_blank {
+                presentation.slides.clear();
+            }
+        }
         presentation.slides.extend(new_slides.drain(..));
         Self::reindex_slides(&mut presentation.slides);
         self.repository

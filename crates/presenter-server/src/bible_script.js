@@ -32,6 +32,7 @@
     loadedPassages: [],
     liveSocket: null,
     liveReconnectTimer: null,
+    activePollTimer: null,
     toastTimer: null,
     loadingSlides: false,
     savingPreferences: false,
@@ -1026,6 +1027,29 @@
     });
   }
 
+  async function refreshActiveFromServer() {
+    try {
+      const active = await apiFetch('/bible/active');
+      // Avoid unnecessary re-renders if unchanged
+      const prev = state.activeBroadcast && JSON.stringify(state.activeBroadcast);
+      const next = active && JSON.stringify(active);
+      if (prev !== next) {
+        state.activeBroadcast = active || null;
+        renderActive();
+      }
+    } catch (_) {
+      /* ignore transient errors */
+    }
+  }
+
+  function ensureActivePoller() {
+    if (state.activePollTimer) return;
+    state.activePollTimer = setInterval(() => {
+      // Poll as a fallback so external triggers (HTTP) still reflect in UI
+      refreshActiveFromServer();
+    }, 1000);
+  }
+
   async function triggerSlideById(slideId) {
     const slide = state.slides.find((entry) => entry.id === slideId);
     if (!slide || !slide.metadata || !slide.metadata.bible) {
@@ -1322,6 +1346,7 @@
     updateMode();
     await loadPresentations();
     connectLiveSocket();
+    ensureActivePoller();
   }
 
   window.__presenterBibleState = state;
