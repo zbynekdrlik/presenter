@@ -28,7 +28,9 @@ use tokio::time::{interval, Duration as TokioDuration, MissedTickBehavior};
 use tracing::{instrument, warn};
 use uuid::Uuid;
 
-use super::{AbleSetLibraryCache, CompanionServerManager};
+use super::{
+    AbleSetLibraryCache, CompanionServerManager, DEFAULT_LINE_LIMIT, LINE_LIMIT_MAX, LINE_LIMIT_MIN,
+};
 fn parse_bool_flag(value: &str) -> Option<bool> {
     match value.trim().to_ascii_lowercase().as_str() {
         "1" | "true" | "yes" | "on" => Some(true),
@@ -40,6 +42,11 @@ fn parse_bool_flag(value: &str) -> Option<bool> {
 pub(super) const COMPANION_FEATURE_KEY: &str = "feature.companion.enabled";
 pub(super) const COMPANION_PORT_KEY: &str = "feature.companion.port";
 pub(super) const DEFAULT_COMPANION_PORT: u16 = 18_175;
+const LINE_LIMIT_KEY: &str = "ui.line_limit";
+
+fn clamp_line_limit(value: u16) -> u16 {
+    value.max(LINE_LIMIT_MIN).min(LINE_LIMIT_MAX)
+}
 
 #[derive(Clone)]
 pub struct AppState {
@@ -49,6 +56,7 @@ pub struct AppState {
     pub(super) companion_token: Option<String>,
     pub(super) companion_enabled: Arc<AtomicBool>,
     pub(super) companion_port: Arc<AtomicU16>,
+    pub(super) line_limit: Arc<AtomicU16>,
     pub(super) companion_server: CompanionServerManager,
     pub(super) resolume_registry: ResolumeRegistry,
     pub(super) android_stage_registry: AndroidStageRegistry,
@@ -69,6 +77,7 @@ pub struct AppState {
 pub struct FeatureFlags {
     pub companion_enabled: bool,
     pub companion_port: u16,
+    // Intentionally omit line_limit from settings FeatureFlags UI for now.
 }
 
 impl AppState {
@@ -97,6 +106,7 @@ impl AppState {
             companion_token,
             companion_enabled: Arc::new(AtomicBool::new(companion_enabled)),
             companion_port: Arc::new(AtomicU16::new(companion_port)),
+            line_limit: Arc::new(AtomicU16::new(DEFAULT_LINE_LIMIT)),
             companion_server: CompanionServerManager::default(),
             resolume_registry,
             android_stage_registry,
@@ -224,6 +234,33 @@ impl AppState {
             osc_bridge.clone(),
             ableset_bridge.clone(),
         );
+        // Resolve and persist line-limit setting on startup
+        {
+            let raw_line_limit = state.repository.get_app_setting(LINE_LIMIT_KEY).await?;
+            let parsed_line_limit = raw_line_limit
+                .as_deref()
+                .and_then(|value| value.parse::<u16>().ok());
+            let mut line_limit = parsed_line_limit
+                .map(clamp_line_limit)
+                .unwrap_or(DEFAULT_LINE_LIMIT);
+            let mut persist_line_limit_setting = raw_line_limit.is_none();
+            if let Some(parsed) = parsed_line_limit {
+                let clamped = clamp_line_limit(parsed);
+                if clamped != parsed {
+                    line_limit = clamped;
+                    persist_line_limit_setting = true;
+                }
+            } else {
+                persist_line_limit_setting = true;
+            }
+            if persist_line_limit_setting {
+                state
+                    .repository
+                    .set_app_setting(LINE_LIMIT_KEY, &line_limit.to_string())
+                    .await?;
+            }
+            state.line_limit.store(line_limit, Ordering::SeqCst);
+        }
         state.ensure_seed_library().await?;
         state.ensure_demo_playlist().await?;
         state.sync_resolume_hosts().await?;
@@ -547,6 +584,19 @@ impl AppState {
 
     pub fn companion_port(&self) -> u16 {
         self.companion_port.load(Ordering::SeqCst)
+    }
+
+    pub fn line_limit(&self) -> u16 {
+        self.line_limit.load(Ordering::SeqCst)
+    }
+
+    pub async fn set_line_limit(&self, limit: u16) -> anyhow::Result<()> {
+        let clamped = clamp_line_limit(limit);
+        self.repository
+            .set_app_setting(LINE_LIMIT_KEY, &clamped.to_string())
+            .await?;
+        self.line_limit.store(clamped, Ordering::SeqCst);
+        Ok(())
     }
 
     pub fn feature_flags(&self) -> FeatureFlags {

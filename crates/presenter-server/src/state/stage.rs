@@ -488,6 +488,7 @@ pub(crate) fn build_stage_snapshot(
         context.latency_ms,
         context.resolution.current_index,
         context.resolution.total_slides,
+        None,
     )
 }
 
