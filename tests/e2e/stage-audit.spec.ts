@@ -263,9 +263,7 @@ describeFn('Stage Audit (SNV, Retina, width coverage, equal split)', () => {
             // Two-line cap only (≤ 2 lines) when the slide has ≤ 2 explicit lines
             if ((m.explicitLines || 0) <= 2) {
               const linesForAssert = (m.uniqueLines && m.uniqueLines > 0) ? m.uniqueLines : m.lines;
-              const knownOutlier = library === 'NEW LEVEL' && /Vyznanie viery/i.test(name || '') && i === 1;
-              const cap = knownOutlier ? 3.02 : 2.02;
-              expect(linesForAssert, `${library} / ${name} [${i}] lines`).toBeLessThanOrEqual(cap);
+              expect(linesForAssert, `${library} / ${name} [${i}] lines`).toBeLessThanOrEqual(2.02);
             }
           }
         }

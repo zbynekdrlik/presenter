@@ -434,8 +434,6 @@ fn StageDisplayDocument(
       targetEl.style.lineHeight = `${{lineHeightRatio}}`;
       targetEl.style.maxWidth = '100%';
       targetEl.style.whiteSpace = 'pre-wrap';
-      targetEl.style.wordBreak = 'break-word';
-      targetEl.style.overflowWrap = 'break-word';
       const computed = window.getComputedStyle(targetEl);
       const padTop = parseFloat(computed.paddingTop || '0') || 0;
       const padBottom = parseFloat(computed.paddingBottom || '0') || 0;
@@ -726,10 +724,10 @@ fn StageDisplayDocument(
           const rem2 = fontPx / rootSize;
           element.style.fontSize = `${{rem2}}rem`;
           element.dataset.fontRem = rem2.toFixed(4);
-        }
+        }}
         // One more pass using visual lines if available
         visual = countVisualLines(element);
-        if (visual > FIT_LINE_TARGET) {
+        if (visual > FIT_LINE_TARGET) {{
           const scale = FIT_LINE_TARGET / Math.max(visual, FIT_LINE_TARGET + 0.0001);
           fontPx = Math.max(MIN_FONT_PX, fontPx * scale);
           const rootSize = parseFloat(getComputedStyle(document.documentElement).fontSize) || 16;
