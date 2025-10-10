@@ -369,7 +369,7 @@ fn StageDisplayDocument(
     if (layoutCode === 'worship-pp' && (elementId === 'current-main' || elementId === 'next-main')) {{
       layoutHeightFill = 0.65;
     }}
-    const occupancyTarget = 0.4;
+  const occupancyTarget = 0.5;
 
     const occupancyMinPx = targetRowHeight > 0
       ? (targetRowHeight * occupancyTarget) / (lineHeightRatio * Math.max(1, effectiveTarget))
