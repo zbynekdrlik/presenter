@@ -706,7 +706,10 @@ fn StageDisplayDocument(
     );
     if (Number.isFinite(finalRem) && finalRem > 0) {{
       element.style.fontSize = `${{finalRem}}rem`;
-      if (/current-text/.test(elementId)) {{ element.style.lineHeight = '1.22'; }}
+      if (/current-text/.test(elementId)) {{
+        const len = (textValue || '').replace(/\s+/g, '').length;
+        element.style.lineHeight = len < 20 ? '1.30' : '1.22';
+      }}
       element.dataset.fontRem = finalRem.toFixed(4);
       enforceActualLineLimit(element, FIT_LINE_TARGET + FIT_LINE_TOLERANCE);
     }} else {{
