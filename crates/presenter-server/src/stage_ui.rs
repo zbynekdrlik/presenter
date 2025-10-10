@@ -708,7 +708,7 @@ fn StageDisplayDocument(
       element.style.fontSize = `${{finalRem}}rem`;
       if (/current-text/.test(elementId)) {{
         const len = (textValue || '').replace(/\s+/g, '').length;
-        element.style.lineHeight = len < 20 ? '1.36' : '1.22';
+        element.style.lineHeight = len < 20 ? '1.50' : '1.22';
       }}
       element.dataset.fontRem = finalRem.toFixed(4);
       enforceActualLineLimit(element, FIT_LINE_TARGET + FIT_LINE_TOLERANCE);
