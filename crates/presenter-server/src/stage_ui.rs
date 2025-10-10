@@ -337,15 +337,15 @@ fn StageDisplayDocument(
     const lineHeightRaw = referenceStyle.lineHeight || '';
     const computedLineHeightNum = parseFloat(lineHeightRaw);
     let lineHeightRatio = LINE_HEIGHT_FALLBACK_FACTOR;
-    if (Number.isFinite(computedLineHeightNum) && computedLineHeightNum > 0 && Number.isFinite(computedFontSize) && computedFontSize > 0) {
+    if (Number.isFinite(computedLineHeightNum) && computedLineHeightNum > 0 && Number.isFinite(computedFontSize) && computedFontSize > 0) {{
       // If the browser reports a unitless number (e.g., '1.2'), treat it as a ratio.
       // Otherwise assume pixels and convert to a ratio via font size.
-      if (!(typeof lineHeightRaw === 'string' && lineHeightRaw.toLowerCase().includes('px')) && computedLineHeightNum < 4) {
+      if (!(typeof lineHeightRaw === 'string' && lineHeightRaw.toLowerCase().includes('px')) && computedLineHeightNum < 4) {{
         lineHeightRatio = computedLineHeightNum;
-      } else {
+      }} else {{
         lineHeightRatio = computedLineHeightNum / computedFontSize;
-      }
-    }
+      }}
+    }}
     if (!Number.isFinite(lineHeightRatio) || lineHeightRatio <= 0) {{
       const rowStyle = window.getComputedStyle(row);
       const rowLineHeight = parseFloat(rowStyle.lineHeight);
@@ -590,18 +590,18 @@ fn StageDisplayDocument(
     return finalRem;
   }};
 
-  const computeLineHeightPx = (el, fontPx) => {
+  const computeLineHeightPx = (el, fontPx) => {{
     const s = window.getComputedStyle(el);
     const raw = s.lineHeight || '';
     let lh = parseFloat(raw);
-    if (Number.isFinite(lh) && lh > 0) {
-      if (!(typeof raw === 'string' && raw.toLowerCase().includes('px')) && lh < 4) {
+    if (Number.isFinite(lh) && lh > 0) {{
+      if (!(typeof raw === 'string' && raw.toLowerCase().includes('px')) && lh < 4) {{
         return lh * fontPx;
-      }
+      }}
       return lh;
-    }
+    }}
     return fontPx * LINE_HEIGHT_FALLBACK_FACTOR;
-  };
+  }};
 
   const enforceActualLineLimit = (element, maxLinesAllowed) => {{
     if (!(element instanceof HTMLElement)) return;
