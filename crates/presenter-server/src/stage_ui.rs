@@ -40,7 +40,7 @@ fn StageDisplayDocument(
     );
     let initial_line_limit = line_limit.clamp(10, 120);
     let script = format!(
-        r#"(function() {{
+        r"(function() {{
   const initial = {snapshot_json};
   let currentSnapshot = initial;
   let layout = initial.layout.code;
@@ -1092,7 +1092,7 @@ fn StageDisplayDocument(
   }};
   window.__presenterStageDebug = debugHelpers;
 }})();
-"#,
+",
         snapshot_json = snapshot_json,
         heartbeat_config = heartbeat_config_literal,
         initial_line_limit = initial_line_limit
