@@ -281,8 +281,8 @@ fn StageDisplayDocument(
     let basePx = Math.max(MIN_FONT_PX, baseRem * rootFontSize);
     const configuredMinPx =
       typeof minRem === 'number' && minRem > 0 ? minRem * rootFontSize : null;
-    const scaledBaseMin = basePx * MIN_FONT_SCALE;
-    const baseMinPx = Math.max(MIN_FONT_PX, configuredMinPx != null ? configuredMinPx : 0, scaledBaseMin);
+    let scaledBaseMin = basePx * MIN_FONT_SCALE;
+    let baseMinPx = Math.max(MIN_FONT_PX, configuredMinPx != null ? configuredMinPx : 0, scaledBaseMin);
 
     // Measure available geometry using the nearest lyric row container, not the text box itself.
     const row = element.parentElement || element;
@@ -448,6 +448,18 @@ fn StageDisplayDocument(
       rowClone.remove();
       return {{ lines, rawLines, lineHeightPx, scrollWidth, widthCoverage }};
     }};
+    // Character-per-line limit boost: if average characters per line exceed the configured
+    // line limit, gently increase the starting font so fewer characters fit per line.
+    const approxLinesForLimit = Math.max(1, effectiveTarget);
+    const approxCharsPerLine = content.length / approxLinesForLimit;
+    const limitCpl = Math.max(10, Math.min(120, Number(stageLineLimit) || 32));
+    if (approxCharsPerLine > limitCpl) {
+      const boost = Math.min(1.5, Math.max(1.0, approxCharsPerLine / limitCpl));
+      basePx = Math.max(MIN_FONT_PX, basePx * boost);
+      scaledBaseMin = basePx * MIN_FONT_SCALE;
+      baseMinPx = Math.max(MIN_FONT_PX, configuredMinPx != null ? configuredMinPx : 0, scaledBaseMin);
+    }
+
     const baseMeasure = measureLines(basePx);
     let finalPx = basePx;
     let finalMeasure = baseMeasure;
