@@ -47,9 +47,17 @@ fn parse_bool_flag(value: &str) -> Option<bool> {
     }
 }
 
+fn clamp_line_limit(value: u16) -> u16 {
+    value.max(LINE_LIMIT_MIN).min(LINE_LIMIT_MAX)
+}
+
 const COMPANION_FEATURE_KEY: &str = "feature.companion.enabled";
 const COMPANION_PORT_KEY: &str = "feature.companion.port";
 const DEFAULT_COMPANION_PORT: u16 = 18_175;
+const LINE_LIMIT_KEY: &str = "ui.line_limit";
+pub const LINE_LIMIT_MIN: u16 = 10;
+pub const LINE_LIMIT_MAX: u16 = 120;
+pub const DEFAULT_LINE_LIMIT: u16 = 32;
 
 #[derive(Clone, Default)]
 struct CompanionServerManager {
@@ -145,6 +153,7 @@ pub struct AppState {
     companion_token: Option<String>,
     companion_enabled: Arc<AtomicBool>,
     companion_port: Arc<AtomicU16>,
+    line_limit: Arc<AtomicU16>,
     companion_server: CompanionServerManager,
     resolume_registry: ResolumeRegistry,
     android_stage_registry: AndroidStageRegistry,
@@ -164,6 +173,7 @@ pub struct AppState {
 pub struct FeatureFlags {
     pub companion_enabled: bool,
     pub companion_port: u16,
+    pub line_limit: u16,
 }
 
 impl AppState {
@@ -172,6 +182,7 @@ impl AppState {
         companion_token: Option<String>,
         companion_enabled: bool,
         companion_port: u16,
+        line_limit: u16,
         resolume_registry: ResolumeRegistry,
         android_stage_registry: AndroidStageRegistry,
         osc_bridge: OscBridge,
@@ -192,6 +203,7 @@ impl AppState {
             companion_token,
             companion_enabled: Arc::new(AtomicBool::new(companion_enabled)),
             companion_port: Arc::new(AtomicU16::new(companion_port)),
+            line_limit: Arc::new(AtomicU16::new(line_limit)),
             companion_server: CompanionServerManager::default(),
             resolume_registry,
             android_stage_registry,
@@ -305,6 +317,28 @@ impl AppState {
                 .await?;
         }
 
+        let raw_line_limit = repo.get_app_setting(LINE_LIMIT_KEY).await?;
+        let parsed_line_limit = raw_line_limit
+            .as_deref()
+            .and_then(|value| value.parse::<u16>().ok());
+        let mut line_limit = parsed_line_limit
+            .map(clamp_line_limit)
+            .unwrap_or(DEFAULT_LINE_LIMIT);
+        let mut persist_line_limit_setting = raw_line_limit.is_none();
+        if let Some(parsed) = parsed_line_limit {
+            let clamped = clamp_line_limit(parsed);
+            if clamped != parsed {
+                line_limit = clamped;
+                persist_line_limit_setting = true;
+            }
+        } else {
+            persist_line_limit_setting = true;
+        }
+        if persist_line_limit_setting {
+            repo.set_app_setting(LINE_LIMIT_KEY, &line_limit.to_string())
+                .await?;
+        }
+
         let registry = ResolumeRegistry::new();
         let android_stage_registry = AndroidStageRegistry::new();
         let osc_bridge = OscBridge::new();
@@ -314,6 +348,7 @@ impl AppState {
             companion_token,
             companion_enabled,
             companion_port,
+            line_limit,
             registry,
             android_stage_registry,
             osc_bridge.clone(),
@@ -379,6 +414,7 @@ impl AppState {
             None,
             false,
             DEFAULT_COMPANION_PORT,
+            DEFAULT_LINE_LIMIT,
             registry,
             android_stage_registry,
             osc_bridge.clone(),
@@ -820,10 +856,24 @@ impl AppState {
         self.companion_port.load(Ordering::SeqCst)
     }
 
+    pub fn line_limit(&self) -> u16 {
+        self.line_limit.load(Ordering::SeqCst)
+    }
+
+    pub async fn set_line_limit(&self, value: u16) -> anyhow::Result<()> {
+        let clamped = clamp_line_limit(value);
+        self.repository
+            .set_app_setting(LINE_LIMIT_KEY, &clamped.to_string())
+            .await?;
+        self.line_limit.store(clamped, Ordering::SeqCst);
+        Ok(())
+    }
+
     pub fn feature_flags(&self) -> FeatureFlags {
         FeatureFlags {
             companion_enabled: self.companion_enabled(),
             companion_port: self.companion_port(),
+            line_limit: self.line_limit(),
         }
     }
 

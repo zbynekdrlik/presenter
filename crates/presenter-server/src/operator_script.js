@@ -13,9 +13,12 @@
   const CATALOG_MIN_HEIGHT = 200;
   const CATALOG_MAX_HEIGHT = 520;
 
-  const storedLineLimit = Number(window.localStorage.getItem('presenter.lineLimit'));
-  const resolvedLineLimit = Number.isFinite(storedLineLimit) && storedLineLimit >= 10
-    ? Math.min(storedLineLimit, 120)
+  const bodyDataset = document.body ? document.body.dataset || {} : {};
+  const attrLineLimit = bodyDataset && typeof bodyDataset.lineLimit === 'string'
+    ? Number(bodyDataset.lineLimit)
+    : Number.NaN;
+  const resolvedLineLimit = Number.isFinite(attrLineLimit) && attrLineLimit >= 10
+    ? Math.min(Math.round(attrLineLimit), 120)
     : DEFAULT_LINE_LIMIT;
   const storedCatalogHeight = Number(window.localStorage.getItem('presenter.catalogTopHeight'));
   const resolvedCatalogHeight = Number.isFinite(storedCatalogHeight)
@@ -225,7 +228,43 @@
     const target = document.body || document.documentElement;
     if (!target) return;
     const value = Number.isFinite(state.lineLimit) && state.lineLimit > 0 ? state.lineLimit : DEFAULT_LINE_LIMIT;
+    if (target.dataset) {
+      target.dataset.lineLimit = String(value);
+    }
     target.style.setProperty('--operator-line-limit-ch', String(value));
+  }
+
+  let lineLimitSavePromise = null;
+
+  async function persistLineLimit(value, previousValue, inputEl) {
+    if (lineLimitSavePromise) {
+      try {
+        await lineLimitSavePromise;
+      } catch (_) { /* ignore */ }
+    }
+    const request = apiFetch('/settings/features', {
+      method: 'POST',
+      body: JSON.stringify({ lineLimit: value }),
+    });
+    lineLimitSavePromise = request;
+    try {
+      await request;
+      if (document.body && document.body.dataset) {
+        document.body.dataset.lineLimit = String(value);
+      }
+      showToast(`Line limit saved (${value})`, 'success');
+    } catch (error) {
+      console.error('Failed to persist line limit', error);
+      if (inputEl) {
+        inputEl.value = String(previousValue);
+      }
+      state.lineLimit = previousValue;
+      updateLineLimitStyle();
+      repaintSlideWarnings();
+      showToast('Failed to save line limit.', 'error');
+    } finally {
+      lineLimitSavePromise = null;
+    }
   }
 
   updateLineLimitStyle();
@@ -3165,17 +3204,16 @@ function updateCardWarnings(card) {
   }
 
   function handleLineLimitChange(event) {
+    const previous = state.lineLimit;
     const value = parseLineLimitValue(event.target.value);
-    const finalValue = value === null ? state.lineLimit : value;
+    const finalValue = value === null ? previous : value;
     state.lineLimit = finalValue;
     event.target.value = String(finalValue);
-    try {
-      window.localStorage.setItem('presenter.lineLimit', String(finalValue));
-    } catch (error) {
-      console.warn('failed to persist line limit', error);
-    }
     updateLineLimitStyle();
     repaintSlideWarnings();
+    if (finalValue !== previous) {
+      persistLineLimit(finalValue, previous, event.target);
+    }
   }
 
   async function removePlaylistEntry(index) {

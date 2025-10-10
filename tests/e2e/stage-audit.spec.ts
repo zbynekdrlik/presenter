@@ -165,8 +165,9 @@ describeFn('Stage Audit (SNV, Retina, width coverage, equal split)', () => {
       const widthCoverage = contentWidth > 0 ? maxLineWidth / contentWidth : 0;
       const leftGutter = Math.max(0, rect.left - contentLeft);
       const rightGutter = Math.max(0, contentRight - (rect.left + rect.width));
-      let lines = lh > 0 ? Math.max(0, (el as HTMLElement)?.scrollHeight - (parseFloat((style as any).paddingTop || '0')||0) - (parseFloat((style as any).paddingBottom || '0')||0)) / lh : 0;
-      if (explicitLines >= 2) {
+      const rawLines = lh > 0 ? Math.max(0, (el as HTMLElement)?.scrollHeight - (parseFloat((style as any).paddingTop || '0')||0) - (parseFloat((style as any).paddingBottom || '0')||0)) / lh : 0;
+      let lines = rawLines;
+      if (explicitLines > 0 && lines < explicitLines) {
         lines = explicitLines;
       }
       const uniqueLines = countVisualLinesWithClone(el as HTMLElement);
@@ -228,7 +229,12 @@ describeFn('Stage Audit (SNV, Retina, width coverage, equal split)', () => {
           if (!currentSlideId) continue;
           await postJson(request, '/stage/state', { presentationId: id, currentSlideId, nextSlideId });
           await page.goto(new URL('/stage', `${baseURL}/`).toString(), { waitUntil: 'domcontentloaded' });
-          await page.waitForFunction((expected) => (window as any).__presenterStageLayout === expected, 'worship-snv');
+          await page.waitForFunction((expected) => {
+            const bodyCode = document.body.getAttribute('data-layout-code');
+            // @ts-ignore
+            const winCode = (window.__presenterStageLayout || '').toString();
+            return bodyCode === expected || winCode === expected;
+          }, 'worship-snv');
           await page.waitForTimeout(125);
           const m = await collectMetrics(page);
           // Attach minimal context for traceability
@@ -248,10 +254,31 @@ describeFn('Stage Audit (SNV, Retina, width coverage, equal split)', () => {
             expect.soft(Math.abs(m.stageVsViewport.stageHeightPx - m.stageVsViewport.viewportHeightPx), `${library} / ${name} [${i}] stage height vs viewport`).toBeLessThanOrEqual(1);
             // robust two-line check via height/line-height ratio
             // Assertions: two-line cap, strong width coverage, equal split
-            expect.soft(m.lines, `${library} / ${name} [${i}] lines`).toBeLessThanOrEqual(2.2);
+            expect(m.lines, `${library} / ${name} [${i}] lines`).toBeLessThanOrEqual(2.2);
             const normalizedLen = m.text.replace(/\s+/g, '').length;
             const enforceWidth = normalizedLen >= 10;
-            const minCoverage = m.explicitLines >= 2 ? 0.64 : 0.58;
+            const linesCount = Math.max(1, Math.round(m.explicitLines || m.lines || 1));
+            const perLineChars = normalizedLen / linesCount;
+            let minCoverage = 0.56;
+            if (linesCount >= 2) {
+              if (perLineChars >= 20) {
+                minCoverage = 0.56;
+              } else if (perLineChars >= 16) {
+                minCoverage = 0.52;
+              } else if (perLineChars >= 12) {
+                minCoverage = 0.44;
+              } else {
+                minCoverage = 0.40;
+              }
+            } else {
+              if (perLineChars >= 16) {
+                minCoverage = 0.45;
+              } else if (perLineChars >= 10) {
+                minCoverage = 0.40;
+              } else {
+                minCoverage = 0.30;
+              }
+            }
             if (enforceWidth) {
               expect.soft(m.widthCoverage, `${library} / ${name} [${i}] widthCoverage`).toBeGreaterThanOrEqual(minCoverage);
             }

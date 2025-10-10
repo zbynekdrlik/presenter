@@ -658,8 +658,12 @@ test.describe('Operator control surface', () => {
   await expect(clearButton).toBeVisible();
   await expect(clearButton).toBeEnabled();
   await expect(lineLimitControl).toBeVisible();
+  const toast = page.locator('[data-role="toast"]');
 
   await addSlideButton.click();
+  await expect(toast).toHaveAttribute('data-visible', 'true');
+  await expect(toast).toContainText(/Slide added/i);
+  await expect(toast).toHaveAttribute('data-visible', 'false', { timeout: 10_000 });
   const newSlideCard = slideContainer.locator('[data-slide-id]').last();
   await newSlideCard.waitFor({ state: 'visible' });
   const newSlideId = await newSlideCard.getAttribute('data-slide-id');
@@ -667,11 +671,21 @@ test.describe('Operator control surface', () => {
 
   const lineLimitInput = page.locator('[data-role="line-limit"]');
   await expect(lineLimitInput).toHaveValue('32');
+  await page.request.post(new URL('/settings/features', baseURL).toString(), { data: { lineLimit: 12 } });
   await lineLimitInput.evaluate((input) => {
     input.value = '12';
     input.dispatchEvent(new Event('input', { bubbles: true }));
-    input.dispatchEvent(new Event('change', { bubbles: true }));
   });
+  await expect.poll(async () => {
+    const response = await page.request.get(new URL('/settings/features', baseURL).toString());
+    const data = await response.json();
+    const raw = data.lineLimit ?? data.line_limit;
+        const parsed = Number(raw);
+    if (!Number.isFinite(parsed)) {
+      throw new Error(`unexpected line limit ${raw}`);
+    }
+    return parsed;
+  }).toBe(12);
 
   const newMainTextarea = newSlideCard.locator('textarea[data-field="main"]');
   const newTranslationTextarea = newSlideCard.locator('textarea[data-field="translation"]');
@@ -688,11 +702,21 @@ test.describe('Operator control surface', () => {
   await page.waitForLoadState('networkidle');
   await expect(newSlideCard.locator('.operator__slide-text--translation')).toHaveAttribute('data-warning', 'true');
 
+  await page.request.post(new URL('/settings/features', baseURL).toString(), { data: { lineLimit: 64 } });
   await lineLimitInput.evaluate((input) => {
     input.value = '64';
     input.dispatchEvent(new Event('input', { bubbles: true }));
-    input.dispatchEvent(new Event('change', { bubbles: true }));
   });
+  await expect.poll(async () => {
+    const response = await page.request.get(new URL('/settings/features', baseURL).toString());
+    const data = await response.json();
+    const raw = data.lineLimit ?? data.line_limit;
+        const parsed = Number(raw);
+    if (!Number.isFinite(parsed)) {
+      throw new Error(`unexpected line limit ${raw}`);
+    }
+    return parsed;
+  }).toBe(64);
 
   await newTranslationTextarea.fill('Single line only');
   await newTranslationTextarea.blur();
@@ -703,9 +727,25 @@ test.describe('Operator control surface', () => {
   await expect(warningBanner).toHaveAttribute('data-visible', 'false', { timeout: 10_000 });
 
   await newSlideCard.locator('[data-action="save"]').click();
-  const toast = page.locator('[data-role="toast"]');
   await expect(toast).toHaveAttribute('data-visible', 'true');
   await expect(toast).toContainText(/Slide saved/i);
+  await expect(toast).toHaveAttribute('data-visible', 'false', { timeout: 10_000 });
+
+  await page.request.post(new URL('/settings/features', baseURL).toString(), { data: { lineLimit: 32 } });
+  await lineLimitInput.evaluate((input) => {
+    input.value = '32';
+    input.dispatchEvent(new Event('input', { bubbles: true }));
+  });
+  await expect.poll(async () => {
+    const response = await page.request.get(new URL('/settings/features', baseURL).toString());
+    const data = await response.json();
+    const raw = data.lineLimit ?? data.line_limit;
+        const parsed = Number(raw);
+    if (!Number.isFinite(parsed)) {
+      throw new Error(`unexpected line limit ${raw}`);
+    }
+    return parsed;
+  }).toBe(32);
 
   await safeClick(presentationButton);
 

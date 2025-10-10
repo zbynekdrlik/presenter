@@ -11,10 +11,11 @@ use serde_json::to_string;
 pub fn render_stage_display(
     snapshot: StageDisplaySnapshot,
     heartbeat_config: StageHeartbeatConfig,
+    line_limit: u16,
 ) -> Html<String> {
     let owner = Owner::new_root(None);
     let html = owner.with(|| {
-        view! { <StageDisplayDocument snapshot=snapshot heartbeat_config=heartbeat_config /> }
+        view! { <StageDisplayDocument snapshot=snapshot heartbeat_config=heartbeat_config line_limit=line_limit /> }
             .into_view()
             .to_html()
     });
@@ -25,6 +26,7 @@ pub fn render_stage_display(
 fn StageDisplayDocument(
     snapshot: StageDisplaySnapshot,
     heartbeat_config: StageHeartbeatConfig,
+    line_limit: u16,
 ) -> impl IntoView {
     let layout = snapshot.layout.clone();
     let layout_view = render_layout(&snapshot);
@@ -36,6 +38,7 @@ fn StageDisplayDocument(
         heartbeat_config.grace_ms(),
         heartbeat_config.disconnect_ms(),
     );
+    let initial_line_limit = line_limit.clamp(10, 120);
     let script = format!(
         r#"(function() {{
   const initial = {snapshot_json};
@@ -69,6 +72,7 @@ fn StageDisplayDocument(
       {{ id: 'next-main', baseRem: 11.0, minRem: 1.3 }},
     ],
   }};
+  let stageLineLimit = {initial_line_limit};
   const useLegacyClientId = Boolean(testConfig.forceLegacyClientId);
   const generateClientId = () => {{
     if (!useLegacyClientId && typeof crypto !== 'undefined') {{
@@ -274,10 +278,11 @@ fn StageDisplayDocument(
 
     const rootFontSize =
       parseFloat(window.getComputedStyle(document.documentElement).fontSize) || 16;
-    const basePx = Math.max(MIN_FONT_PX, baseRem * rootFontSize);
+    let basePx = Math.max(MIN_FONT_PX, baseRem * rootFontSize);
     const configuredMinPx =
       typeof minRem === 'number' && minRem > 0 ? minRem * rootFontSize : null;
     const scaledBaseMin = basePx * MIN_FONT_SCALE;
+    const baseMinPx = Math.max(MIN_FONT_PX, configuredMinPx != null ? configuredMinPx : 0, scaledBaseMin);
 
     // Measure available geometry using the nearest lyric row container, not the text box itself.
     const row = element.parentElement || element;
@@ -307,7 +312,7 @@ fn StageDisplayDocument(
     const lyricsStyle = lyricsContainer ? window.getComputedStyle(lyricsContainer) : null;
     const lyricsPadTop = lyricsStyle ? parseFloat(lyricsStyle.paddingTop) || 0 : 0;
     const lyricsPadBottom = lyricsStyle ? parseFloat(lyricsStyle.paddingBottom) || 0 : 0;
-    const rowGapPx = lyricsStyle ? (parseFloat((lyricsStyle as any).rowGap || (lyricsStyle as any).gap || '0') || 0) : 0;
+    const rowGapPx = lyricsStyle ? (parseFloat((lyricsStyle).rowGap || (lyricsStyle).gap || '0') || 0) : 0;
     let stageInnerHeight = lyricsRect ? Math.max(0, lyricsRect.height - lyricsPadTop - lyricsPadBottom) : viewportHeight;
     if (!Number.isFinite(stageInnerHeight) || stageInnerHeight <= 0) {{
       stageInnerHeight = viewportHeight;
@@ -369,11 +374,10 @@ fn StageDisplayDocument(
     const occupancyMinPx = targetRowHeight > 0
       ? (targetRowHeight * occupancyTarget) / (lineHeightRatio * Math.max(1, effectiveTarget))
       : 0;
-    const absoluteMinPx = Math.max(
-      MIN_FONT_PX,
-      configuredMinPx != null ? configuredMinPx : scaledBaseMin,
-      occupancyMinPx,
-    );
+    let absoluteMinPx = baseMinPx;
+    if (Number.isFinite(occupancyMinPx) && occupancyMinPx > baseMinPx) {{
+      absoluteMinPx = Math.max(baseMinPx, occupancyMinPx);
+    }}
 
     // Estimate extra vertical consumption inside the row (group labels, meta lines, child gaps, paddings)
     let extrasHeight = 0;
@@ -381,94 +385,183 @@ fn StageDisplayDocument(
       const children = Array.from(row.children || []);
       for (const child of children) {{
         if (child === element) continue;
-        const cr = (child as HTMLElement).getBoundingClientRect();
+        const cr = (child).getBoundingClientRect();
         if (cr && Number.isFinite(cr.height)) extrasHeight += Math.max(0, cr.height);
       }}
       const rs = window.getComputedStyle(row);
       const padT = parseFloat(rs.paddingTop) || 0;
       const padB = parseFloat(rs.paddingBottom) || 0;
-      const rowGap = parseFloat((rs as any).rowGap || (rs as any).gap || '0') || 0;
+      const rowGap = parseFloat((rs).rowGap || (rs).gap || '0') || 0;
       const gapsInsideRow = Math.max(0, children.length - 1) * rowGap;
       extrasHeight += padT + padB + gapsInsideRow;
     }} catch (_) {{ extrasHeight = 0; }}
 
-    const clone = document.createElement('div');
-    clone.setAttribute('data-role', 'stage-fit-measure');
-    Object.assign(clone.style, {{
-      position: 'absolute',
-      visibility: 'hidden',
-      pointerEvents: 'none',
-      left: '-9999px',
-      top: '-9999px',
-      whiteSpace: 'pre-wrap',
-      wordBreak: 'break-word',
-      overflowWrap: 'break-word',
-      letterSpacing: referenceStyle.letterSpacing,
-      textTransform: referenceStyle.textTransform,
-      textAlign: referenceStyle.textAlign,
-      fontFamily: referenceStyle.fontFamily,
-      fontWeight: referenceStyle.fontWeight,
-      fontStyle: referenceStyle.fontStyle,
-      fontVariant: referenceStyle.fontVariant,
-      margin: '0',
-      padding: '0',
-      border: '0',
-      maxWidth: 'none',
-      boxSizing: 'border-box',
-    }});
-    clone.style.width = `${{width}}px`;
-    document.body.appendChild(clone);
-
     const measureLines = (fontPx) => {{
       const size = Math.max(fontPx, MIN_FONT_PX);
-      clone.style.fontSize = `${{size}}px`;
-      clone.style.lineHeight = `${{lineHeightRatio}}`;
-      clone.textContent = content;
-      const lineHeightPx = size * lineHeightRatio;
-      const height = clone.scrollHeight;
-      const rawLines = lineHeightPx > 0 ? height / lineHeightPx : 0;
-      let lines = rawLines;
-      // For explicit two-line content, clamp measurement jitter to stay near the target.
-      if (explicitLines >= 2) {{
-        const cap = effectiveTarget + 0.02; // allow tiny rounding
-        if (lines > cap) lines = cap;
-        if (lines < explicitLines) lines = explicitLines;
+      const rowWidth = Math.max(1, width);
+      const rowClone = row.cloneNode(true);
+      if (rowClone instanceof HTMLElement) {{
+        rowClone.removeAttribute('id');
+        rowClone.setAttribute('data-role', 'stage-fit-row');
+        Object.assign(rowClone.style, {{
+          position: 'absolute',
+          visibility: 'hidden',
+          pointerEvents: 'none',
+          left: '-99999px',
+          top: '-99999px',
+          width: `${{rowWidth}}px`,
+          maxWidth: 'none',
+        }});
       }}
-      const scrollWidth = clone.scrollWidth;
-      return {{ lines, rawLines, lineHeightPx, scrollWidth }};
+      document.body.appendChild(rowClone);
+      let targetEl = null;
+      try {{
+        if (typeof CSS !== 'undefined' && CSS && typeof CSS.escape === 'function') {{
+          targetEl = rowClone.querySelector(`#${{CSS.escape(elementId)}}`);
+        }} else {{
+          targetEl = rowClone.querySelector(`#${{elementId.replace(/[^a-zA-Z0-9_-]/g, '')}}`);
+        }}
+      }} catch (_) {{
+        targetEl = rowClone.querySelector(`#${{elementId}}`);
+      }}
+      if (!(targetEl instanceof HTMLElement)) {{
+        targetEl = rowClone;
+      }}
+      targetEl.textContent = content;
+      targetEl.style.fontSize = `${{size}}px`;
+      targetEl.style.lineHeight = `${{lineHeightRatio}}`;
+      targetEl.style.maxWidth = '100%';
+      targetEl.style.whiteSpace = 'pre-wrap';
+      targetEl.style.wordBreak = 'break-word';
+      targetEl.style.overflowWrap = 'break-word';
+      const computed = window.getComputedStyle(targetEl);
+      const padTop = parseFloat(computed.paddingTop || '0') || 0;
+      const padBottom = parseFloat(computed.paddingBottom || '0') || 0;
+      const lineHeightPx = size * lineHeightRatio;
+      const height = targetEl.scrollHeight;
+      const rawLines = lineHeightPx > 0 ? Math.max(0, height - padTop - padBottom) / lineHeightPx : 0;
+      let lines = rawLines;
+      const minLines = explicitLines > 0 ? explicitLines : 0;
+      if (lines < minLines) lines = minLines;
+      const scrollWidth = targetEl.scrollWidth;
+      const widthCoverage = rowWidth > 0 ? Math.min(1, scrollWidth / rowWidth) : 0;
+      rowClone.remove();
+      return {{ lines, rawLines, lineHeightPx, scrollWidth, widthCoverage }};
     }};
-
     const baseMeasure = measureLines(basePx);
     let finalPx = basePx;
     let finalMeasure = baseMeasure;
+    if (baseMeasure.lines > maxLinesAllowed && absoluteMinPx > baseMinPx) {{
+      absoluteMinPx = baseMinPx;
+    }}
     if (baseMeasure.lines > maxLinesAllowed) {{
-      let low = Math.max(absoluteMinPx, MIN_FONT_PX);
-      let high = basePx;
-      let best = low;
+      let effectiveMinPx = Math.max(absoluteMinPx, MIN_FONT_PX);
+      let low = effectiveMinPx;
+      let high = Math.max(effectiveMinPx, basePx);
+      let bestPx = low;
       let bestMeasure = measureLines(low);
       if (bestMeasure.lines > maxLinesAllowed) {{
-        const scale = Math.max(0.35, effectiveTarget / Math.max(bestMeasure.lines, effectiveTarget));
-        low = Math.max(MIN_FONT_PX, low * scale);
-        bestMeasure = measureLines(low);
+        for (let decay = 0; decay < 6 && bestMeasure.lines > maxLinesAllowed && low > MIN_FONT_PX; decay += 1) {{
+          const next = Math.max(MIN_FONT_PX, low * 0.85);
+          if (next === low) break;
+          low = next;
+          bestMeasure = measureLines(low);
+        }}
       }}
       if (bestMeasure.lines <= maxLinesAllowed) {{
-        for (let i = 0; i < 28 && high - low > 0.25; i += 1) {{
+        bestPx = low;
+      }}
+      for (let i = 0; i < 40 && high - low > 0.25; i += 1) {{
+        const mid = (low + high) / 2;
+        const measure = measureLines(mid);
+        if (measure.lines <= maxLinesAllowed) {{
+          bestPx = mid;
+          bestMeasure = measure;
+          low = mid;
+        }} else {{
+          high = mid;
+        }}
+      }}
+      if (bestMeasure.lines > maxLinesAllowed) {{
+        let attempts = 0;
+        let nextPx = bestPx;
+        let nextMeasure = bestMeasure;
+        while (nextMeasure.lines > maxLinesAllowed && attempts < 36 && nextPx > MIN_FONT_PX) {{
+          const ratio = Math.max(nextMeasure.lines / maxLinesAllowed, 1.0001);
+          const candidate = Math.max(MIN_FONT_PX, nextPx / ratio);
+          if (Math.abs(candidate - nextPx) < 0.5) {{
+            nextPx = Math.max(MIN_FONT_PX, nextPx - Math.max(1, nextPx * 0.05));
+          }} else {{
+            nextPx = candidate;
+          }}
+          nextMeasure = measureLines(nextPx);
+          attempts += 1;
+        }}
+        bestPx = nextPx;
+        bestMeasure = nextMeasure;
+      }}
+      finalPx = bestPx;
+      finalMeasure = bestMeasure;
+    }} else if (finalMeasure.lines <= maxLinesAllowed) {{
+      let growLow = finalPx;
+      let growHigh = Math.max(finalPx, basePx * 1.2, absoluteMinPx * 1.2);
+      let growBestPx = finalPx;
+      let growBestMeasure = finalMeasure;
+      for (let i = 0; i < 24 && growHigh - growLow > 0.25; i += 1) {{
+        const mid = (growLow + growHigh) / 2;
+        const measure = measureLines(mid);
+        if (measure.lines <= maxLinesAllowed + 0.01) {{
+          growBestPx = mid;
+          growBestMeasure = measure;
+          growLow = mid;
+        }} else {{
+          growHigh = mid;
+        }}
+      }}
+      finalPx = growBestPx;
+      finalMeasure = growBestMeasure;
+    }}
+    if (finalMeasure.lines <= maxLinesAllowed) {{
+      const approxLines = Math.max(1, effectiveTarget);
+      const perLineChars = content.length / approxLines;
+      let coverageTarget = 0.58;
+      if (approxLines >= 2) {{
+        if (perLineChars >= 30) {{
+          coverageTarget = 0.65;
+        }} else if (perLineChars >= 22) {{
+          coverageTarget = 0.6;
+        }} else if (perLineChars >= 16) {{
+          coverageTarget = 0.56;
+        }} else {{
+          coverageTarget = 0.52;
+        }}
+      }} else {{
+        if (perLineChars >= 18) {{
+          coverageTarget = 0.55;
+        }} else if (perLineChars >= 12) {{
+          coverageTarget = 0.5;
+        }} else {{
+          coverageTarget = 0.45;
+        }}
+      }}
+      if (finalMeasure.widthCoverage < coverageTarget - 0.005) {{
+        let low = finalPx;
+        let high = Math.max(finalPx, basePx * 1.35, absoluteMinPx * 1.35);
+        let bestPx = finalPx;
+        let bestMeasure = finalMeasure;
+        for (let i = 0; i < 30 && high - low > 0.25; i += 1) {{
           const mid = (low + high) / 2;
-          const m = measureLines(mid);
-          if (m.lines <= maxLinesAllowed) {{
-            best = mid;
-            bestMeasure = m;
+          const measure = measureLines(mid);
+          if (measure.lines <= maxLinesAllowed + 0.01 && measure.widthCoverage >= bestMeasure.widthCoverage) {{
+            bestPx = mid;
+            bestMeasure = measure;
             low = mid;
           }} else {{
             high = mid;
           }}
         }}
-        finalPx = best;
+        finalPx = bestPx;
         finalMeasure = bestMeasure;
-      }} else {{
-        const maxByH = targetRowHeight > 0 ? (targetRowHeight * layoutHeightFill) / (lineHeightRatio * Math.max(1, effectiveTarget)) : basePx;
-        finalPx = Math.min(basePx, Math.max(MIN_FONT_PX, maxByH));
-        finalMeasure = measureLines(finalPx);
       }}
     }}
     // Strong safety: if lines still exceed the cap (e.g., long words/wrap variability),
@@ -493,7 +586,11 @@ fn StageDisplayDocument(
       }}
     }}
 
-    clone.remove();
+    // Enforce absolute floor to avoid tiny fonts when measurement jitter suggests >2 lines even at reasonable sizes.
+    if (Number.isFinite(absoluteMinPx) && absoluteMinPx > 0 && finalPx < absoluteMinPx) {{
+      finalPx = absoluteMinPx;
+      finalMeasure = measureLines(finalPx);
+    }}
 
     const finalRem = finalPx / rootFontSize;
 
@@ -502,14 +599,17 @@ fn StageDisplayDocument(
       log.push({{
         elementId,
         basePx,
+        baseMinPx,
+        occupancyMinPx,
         absoluteMinPx,
-        effectiveMinPx: minPx,
+        effectiveMinPx: absoluteMinPx,
         targetRowHeight,
         maxPx: null,
         effectiveTarget,
         baseLines: baseMeasure.lines,
         finalPx,
         finalLines: finalMeasure.lines,
+        widthCoverage: finalMeasure.widthCoverage,
         contentLength: content.length,
         decision: 'fit',
       }});
@@ -517,6 +617,37 @@ fn StageDisplayDocument(
     }}
 
     return finalRem;
+  }};
+
+  const enforceActualLineLimit = (element, maxLinesAllowed) => {{
+    if (!(element instanceof HTMLElement)) return;
+    let attempts = 0;
+    const tick = () => {{
+      if (!(element instanceof HTMLElement)) return;
+      const style = window.getComputedStyle(element);
+      const fontPx = parseFloat(style.fontSize) || MIN_FONT_PX;
+      let lineHeightPx = parseFloat(style.lineHeight) || 0;
+      if (!Number.isFinite(lineHeightPx) || lineHeightPx <= 0) {{
+        lineHeightPx = fontPx * LINE_HEIGHT_FALLBACK_FACTOR;
+      }}
+      const padTop = parseFloat(style.paddingTop || '0') || 0;
+      const padBottom = parseFloat(style.paddingBottom || '0') || 0;
+      const rawLines = lineHeightPx > 0 ? Math.max(0, element.scrollHeight - padTop - padBottom) / lineHeightPx : 0;
+      if (!Number.isFinite(rawLines) || rawLines <= maxLinesAllowed + 0.01) return;
+      const ratio = Math.max(rawLines / maxLinesAllowed, 1.0001);
+      const candidatePx = Math.max(MIN_FONT_PX, fontPx / ratio);
+      if (!Number.isFinite(candidatePx) || Math.abs(candidatePx - fontPx) < 0.25) return;
+      const rootSize = parseFloat(getComputedStyle(document.documentElement).fontSize) || 16;
+      const candidateRem = candidatePx / rootSize;
+      element.style.fontSize = `${{candidateRem}}rem`;
+      element.dataset.fontRem = candidateRem.toFixed(4);
+      attempts += 1;
+      if (attempts < 8 && typeof window !== 'undefined') {{
+        const raf = window.requestAnimationFrame || window.setTimeout;
+        raf(() => tick());
+      }}
+    }};
+    tick();
   }};
 
   const applyLyricText = (layoutCode, elementId, value) => {{
@@ -530,12 +661,17 @@ fn StageDisplayDocument(
       return;
     }}
 
-    const config = getFitConfig(layoutCode, elementId);
+    let config = getFitConfig(layoutCode, elementId);
+    // Robust fallback: if config missing (shouldn't happen), derive base/min from computed style.
     if (!config) {{
-      element.style.fontSize = '';
-      element.textContent = textValue;
-      delete element.dataset.fontRem;
-      return;
+      const rootSize = parseFloat(getComputedStyle(document.documentElement).fontSize) || 16;
+      const style = getComputedStyle(element);
+      const computedPx = parseFloat(style.fontSize) || (14 * rootSize);
+      const inferredBaseRem = computedPx / rootSize;
+      let inferredMinRem = inferredBaseRem * 0.12; // small floor; clamped by absolute min px
+      if (/current/.test(elementId)) inferredMinRem = Math.max(inferredMinRem, 1.8);
+      if (/next/.test(elementId)) inferredMinRem = Math.max(inferredMinRem, 1.5);
+      config = {{ id: elementId, baseRem: inferredBaseRem, minRem: inferredMinRem }};
     }}
 
     const finalRem = computeLyricsFontRem(
@@ -548,6 +684,7 @@ fn StageDisplayDocument(
     if (Number.isFinite(finalRem) && finalRem > 0) {{
       element.style.fontSize = `${{finalRem}}rem`;
       element.dataset.fontRem = finalRem.toFixed(4);
+      enforceActualLineLimit(element, FIT_LINE_TARGET + FIT_LINE_TOLERANCE);
     }} else {{
       element.style.fontSize = '';
       delete element.dataset.fontRem;
@@ -580,6 +717,39 @@ fn StageDisplayDocument(
       }}
     }});
   }};
+
+  const refreshLineLimit = () => {{
+    try {{
+      const controller = new AbortController();
+      const timeout = window.setTimeout(() => controller.abort(), 4500);
+      fetch('/settings/features', {{ headers: {{ Accept: 'application/json' }}, signal: controller.signal }})
+        .then((response) => {{
+          window.clearTimeout(timeout);
+          if (!response || !response.ok) return null;
+          return response.json();
+        }})
+        .then((data) => {{
+          if (!data) return;
+          const raw = Number(data.lineLimit ?? data.line_limit);
+          if (!Number.isFinite(raw) || raw <= 0) return;
+          const next = Math.min(Math.max(Math.round(raw), 10), 120);
+          if (next !== stageLineLimit) {{
+            stageLineLimit = next;
+            refitVisibleLyrics();
+          }}
+        }})
+        .catch(() => {{}});
+    }} catch (_error) {{}}
+  }};
+
+  const scheduleLineLimitRefresh = () => {{
+    const testConfig = window.PRESENTER_STAGE_TEST_CONFIG || {{}};
+    if (testConfig.disableLineLimitFetch) return;
+    refreshLineLimit();
+    window.setInterval(refreshLineLimit, 60000);
+  }};
+
+  scheduleLineLimitRefresh();
 
   const setText = (id, value) => {{
     const el = document.getElementById(id);
@@ -924,7 +1094,8 @@ fn StageDisplayDocument(
 }})();
 "#,
         snapshot_json = snapshot_json,
-        heartbeat_config = heartbeat_config_literal
+        heartbeat_config = heartbeat_config_literal,
+        initial_line_limit = initial_line_limit
     );
 
     view! {
@@ -1312,7 +1483,7 @@ mod tests {
             None,
         );
 
-        let html = render_stage_display(snapshot, StageHeartbeatConfig::default_values()).0;
+        let html = render_stage_display(snapshot, StageHeartbeatConfig::default_values(), 32).0;
         assert!(!html.contains("No next slide"));
         assert!(!html.contains("No active slide"));
     }
@@ -1345,7 +1516,7 @@ mod tests {
             None,
         );
 
-        let html = render_stage_display(snapshot, StageHeartbeatConfig::default_values()).0;
+        let html = render_stage_display(snapshot, StageHeartbeatConfig::default_values(), 32).0;
         assert!(html.contains("Line A\nLine B"));
         assert!(html.contains("Verse"));
     }
@@ -1378,7 +1549,7 @@ mod tests {
             None,
         );
 
-        let html = render_stage_display(snapshot, StageHeartbeatConfig::default_values()).0;
+        let html = render_stage_display(snapshot, StageHeartbeatConfig::default_values(), 32).0;
         assert!(html.contains(">Amazing Grace</span>"));
         assert!(!html.contains(">001 Amazing Grace</span>"));
     }
@@ -1404,7 +1575,7 @@ mod tests {
             None,
         );
 
-        let html = render_stage_display(snapshot, StageHeartbeatConfig::default_values()).0;
+        let html = render_stage_display(snapshot, StageHeartbeatConfig::default_values(), 32).0;
         assert!(html.contains("id=\"stage-status\""));
         assert!(html.contains("id=\"stage-status-connection\""));
         assert!(html.contains("id=\"stage-status-latency\""));

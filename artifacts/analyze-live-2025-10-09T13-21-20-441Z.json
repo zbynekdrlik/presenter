@@ -1,0 +1,64 @@
+{
+  "targetHref": "http://presenter.lan:18564/stage",
+  "layout": "worship-snv",
+  "viewportWidth": 2880,
+  "viewportHeight": 1800,
+  "body": {
+    "width": 2880,
+    "paddingLeftPx": 0,
+    "paddingRightPx": 0
+  },
+  "stageBody": {
+    "width": 2880,
+    "height": 1800
+  },
+  "lyrics": {
+    "width": 2880,
+    "height": 1800
+  },
+  "rows": {
+    "current": {
+      "x": 0,
+      "y": 0,
+      "w": 2880,
+      "h": 900
+    },
+    "next": {
+      "x": 0,
+      "y": 900,
+      "w": 2880,
+      "h": 900
+    }
+  },
+  "splitAxis": "vertical",
+  "metrics": {
+    "current-text": {
+      "text": "Zachránil si ma, z hriechu rozviazal\nTvoja pieseň vedie ma",
+      "fontSizePx": 169.811,
+      "lineHeightPx": 180,
+      "lines": 3.1444444444444444,
+      "uniqueLines": 1,
+      "containerWidthPx": 2880,
+      "elementWidthPx": 2880,
+      "widthCoverage": 1,
+      "leftGutterPx": 0,
+      "rightGutterPx": 0,
+      "parentHeightPx": 900,
+      "bottomOverflowPx": 0
+    },
+    "next-text": {
+      "text": "Zo všetkých hrozieb si ma vytrhol \nkým strach celkom zmizol.",
+      "fontSizePx": 163.636,
+      "lineHeightPx": 180,
+      "lines": 3.1166666666666667,
+      "uniqueLines": 1,
+      "containerWidthPx": 2880,
+      "elementWidthPx": 2880,
+      "widthCoverage": 1,
+      "leftGutterPx": 0,
+      "rightGutterPx": 0,
+      "parentHeightPx": 900,
+      "bottomOverflowPx": 0
+    }
+  }
+}

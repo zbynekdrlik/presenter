@@ -13,6 +13,9 @@
   const initialAbleSetConfig = __ABLESET_CONFIG__ || null;
   const initialAbleSetStatus = __ABLESET_STATUS__ || null;
   const initialFeatures = __FEATURE_FLAGS__ || null;
+  const LINE_LIMIT_MIN = 10;
+  const LINE_LIMIT_MAX = 120;
+  const DEFAULT_LINE_LIMIT = 32;
   const state = {
     hosts: Array.isArray(initialHosts) ? initialHosts : [],
     android: {
@@ -91,6 +94,7 @@
     featureForm: document.querySelector('[data-role="feature-companion-form"]'),
     featureToggle: document.querySelector('[data-role="feature-companion-toggle"]'),
     featurePort: document.querySelector('[data-role="feature-companion-port"]'),
+    featureLineLimit: document.querySelector('[data-role="feature-line-limit"]'),
     featureSubmit: document.querySelector('[data-role="feature-submit"]'),
     featureStatus: document.querySelector('[data-role="feature-status"]'),
   };
@@ -266,6 +270,7 @@
     const fallback = {
       companionEnabled: false,
       companionPort: 18175,
+      lineLimit: DEFAULT_LINE_LIMIT,
     };
     if (!input || typeof input !== 'object') {
       return { ...fallback };
@@ -276,9 +281,13 @@
     const rawPort = input.companion_port ?? input.companionPort ?? input.port;
     const parsed = Number(rawPort);
     const port = Number.isFinite(parsed) ? parsed : fallback.companionPort;
+    const rawLimit = input.lineLimit ?? input.line_limit;
+    const parsedLimit = Number(rawLimit);
+    const lineLimit = Number.isFinite(parsedLimit) ? Math.min(Math.max(Math.round(parsedLimit), LINE_LIMIT_MIN), LINE_LIMIT_MAX) : fallback.lineLimit;
     return {
       companionEnabled: enabled,
       companionPort: port > 0 && port <= 65535 ? port : fallback.companionPort,
+      lineLimit,
     };
   }
 
@@ -337,6 +346,9 @@
     if (els.featurePort) {
       els.featurePort.disabled = busy;
     }
+    if (els.featureLineLimit) {
+      els.featureLineLimit.disabled = busy;
+    }
     if (els.featureSubmit) {
       els.featureSubmit.disabled = busy;
     }
@@ -344,12 +356,15 @@
 
   function renderFeatureForm() {
     if (!els.featureForm) return;
-    const config = state.features.config || { companionEnabled: false, companionPort: 18175 };
+    const config = state.features.config || { companionEnabled: false, companionPort: 18175, lineLimit: DEFAULT_LINE_LIMIT };
     if (els.featureToggle) {
       els.featureToggle.checked = Boolean(config.companionEnabled);
     }
     if (els.featurePort && document.activeElement !== els.featurePort) {
       els.featurePort.value = String(config.companionPort);
+    }
+    if (els.featureLineLimit && document.activeElement !== els.featureLineLimit) {
+      els.featureLineLimit.value = String(config.lineLimit ?? DEFAULT_LINE_LIMIT);
     }
   }
 
@@ -366,6 +381,15 @@
       }
       return;
     }
+    const rawLineLimit = els.featureLineLimit ? els.featureLineLimit.value.trim() : '';
+    const lineLimit = Number.parseInt(rawLineLimit, 10);
+    if (!Number.isInteger(lineLimit) || lineLimit < LINE_LIMIT_MIN || lineLimit > LINE_LIMIT_MAX) {
+      setFeatureStatus(`Line limit must be between ${LINE_LIMIT_MIN} and ${LINE_LIMIT_MAX}.`, 'error');
+      if (els.featureLineLimit) {
+        els.featureLineLimit.focus();
+      }
+      return;
+    }
     setFeatureBusy(true);
     setFeatureStatus('Saving…', 'info');
     try {
@@ -375,6 +399,7 @@
         body: JSON.stringify({
           companionEnabled: enabled,
           companionPort: port,
+          lineLimit,
         }),
       });
       if (!response.ok) {
@@ -385,8 +410,8 @@
       renderFeatureForm();
       setFeatureStatus('Saved.', 'success');
     } catch (error) {
-      console.error('Failed to update Companion settings', error);
-      setFeatureStatus(error.message || 'Unable to save Companion settings.', 'error');
+      console.error('Failed to update feature settings', error);
+      setFeatureStatus(error.message || 'Unable to save feature settings.', 'error');
     } finally {
       setFeatureBusy(false);
     }

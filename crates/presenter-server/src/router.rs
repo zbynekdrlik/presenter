@@ -1,7 +1,12 @@
 use crate::{
-    ableset::AbleSetStatusSnapshot, android_stage::AndroidStageDisplayStatusSnapshot,
-    osc::OscStatusSnapshot, resolume::ResolumeConnectionSnapshot,
-    stage_connections::StageClientSnapshot, stage_ui, state::AppState, ui,
+    ableset::AbleSetStatusSnapshot,
+    android_stage::AndroidStageDisplayStatusSnapshot,
+    osc::OscStatusSnapshot,
+    resolume::ResolumeConnectionSnapshot,
+    stage_connections::StageClientSnapshot,
+    stage_ui,
+    state::{AppState, LINE_LIMIT_MAX, LINE_LIMIT_MIN},
+    ui,
 };
 use anyhow::Error as AnyhowError;
 use axum::{
@@ -834,9 +839,12 @@ async fn bible_ui(State(state): State<AppState>) -> Result<axum::response::Html<
 #[instrument(skip_all)]
 async fn stage_display_selected_html(State(state): State<AppState>) -> Result<Response, AppError> {
     match state.selected_stage_display_snapshot().await? {
-        Some(snapshot) => {
-            Ok(stage_ui::render_stage_display(snapshot, state.heartbeat_config()).into_response())
-        }
+        Some(snapshot) => Ok(stage_ui::render_stage_display(
+            snapshot,
+            state.heartbeat_config(),
+            state.line_limit(),
+        )
+        .into_response()),
         None => Ok((StatusCode::SERVICE_UNAVAILABLE, "Stage display unavailable").into_response()),
     }
 }
@@ -869,15 +877,18 @@ struct StageLayoutUpdateRequest {
 struct FeatureSettingsResponse {
     companion_enabled: bool,
     companion_port: u16,
+    line_limit: u16,
 }
 
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
 struct FeatureSettingsRequest {
-    #[serde(alias = "enabled", alias = "companion_enabled")]
-    companion_enabled: bool,
+    #[serde(default, alias = "enabled", alias = "companion_enabled")]
+    companion_enabled: Option<bool>,
     #[serde(default, alias = "companion_port", alias = "port")]
     companion_port: Option<u16>,
+    #[serde(default, alias = "line_limit", alias = "lineLimit")]
+    line_limit: Option<u16>,
 }
 
 #[instrument(skip_all)]
@@ -927,6 +938,7 @@ async fn get_feature_settings(
     Ok(Json(FeatureSettingsResponse {
         companion_enabled: state.companion_enabled(),
         companion_port: state.companion_port(),
+        line_limit: state.line_limit(),
     }))
 }
 
@@ -935,21 +947,52 @@ async fn update_feature_settings(
     State(state): State<AppState>,
     Json(payload): Json<FeatureSettingsRequest>,
 ) -> Result<Json<FeatureSettingsResponse>, AppError> {
-    let requested_port = payload
-        .companion_port
-        .unwrap_or_else(|| state.companion_port());
-    if requested_port == 0 {
-        return Err(AppError::bad_request_message(
-            "companionPort must be between 1 and 65535",
-        ));
+    let mut companion_enabled = state.companion_enabled();
+    let mut companion_port = state.companion_port();
+    let mut companion_dirty = false;
+
+    if let Some(value) = payload.companion_enabled {
+        companion_enabled = value;
+        companion_dirty = true;
+    }
+    if let Some(value) = payload.companion_port {
+        if value == 0 {
+            return Err(AppError::bad_request_message(
+                "companionPort must be between 1 and 65535",
+            ));
+        }
+        companion_port = value;
+        companion_dirty = true;
     }
 
-    state
-        .set_companion_settings(payload.companion_enabled, requested_port)
-        .await?;
+    if companion_dirty {
+        if companion_port < 1 || companion_port > 65_535 {
+            return Err(AppError::bad_request_message(
+                "companionPort must be between 1 and 65535",
+            ));
+        }
+        state
+            .set_companion_settings(companion_enabled, companion_port)
+            .await?;
+    }
+
+    if let Some(limit) = payload.line_limit {
+        if limit < LINE_LIMIT_MIN || limit > LINE_LIMIT_MAX {
+            return Err(AppError::bad_request_message(format!(
+                "lineLimit must be between {} and {}",
+                LINE_LIMIT_MIN, LINE_LIMIT_MAX
+            )));
+        }
+        state
+            .set_line_limit(limit)
+            .await
+            .map_err(|err| AppError::bad_request_message(err.to_string()))?;
+    }
+
     Ok(Json(FeatureSettingsResponse {
         companion_enabled: state.companion_enabled(),
         companion_port: state.companion_port(),
+        line_limit: state.line_limit(),
     }))
 }
 

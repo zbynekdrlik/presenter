@@ -3,11 +3,13 @@ import { defineConfig, devices } from '@playwright/test';
 const TEST_PORT = process.env.PRESENTER_PORT ?? '8899';
 const TEST_DB_URL = process.env.PRESENTER_DB_URL ?? 'sqlite://presenter_e2e.db';
 
+const WORKERS = Number(process.env.PLAYWRIGHT_WORKERS || '1');
+
 export default defineConfig({
   testDir: './tests/e2e',
   fullyParallel: false,
   timeout: 600_000,
-  workers: 1,
+  workers: WORKERS,
   expect: {
     timeout: 20_000,
   },

@@ -147,6 +147,8 @@ pub fn OperatorDocument(
     playlists_json: String,
     stage_layouts_json: String,
     stage_layout_code: String,
+    features: FeatureFlags,
+    line_limit: u16,
 ) -> impl IntoView {
     let initial_library_id = libraries.first().map(|library| library.id.clone());
     let initial_playlist_id = playlists.first().map(|playlist| playlist.id.clone());
@@ -179,13 +181,21 @@ pub fn OperatorDocument(
         .unwrap_or_else(|_| "{}".to_string())
         .replace("</script>", r"<\/script>");
 
+    let line_limit_text = line_limit.to_string();
+    let line_limit_style = format!("--operator-line-limit-ch: {};", line_limit);
+
+    let feature_flags_json = to_string(&features)
+        .unwrap_or_else(|_| "{}".to_string())
+        .replace("</script>", r"<\/script>");
+
     let operator_script = OPERATOR_SCRIPT_TEMPLATE
         .replace("__LIBRARIES__", &libraries_json)
         .replace("__PLAYLISTS__", &playlists_json)
         .replace("__TIMERS__", &timers_json)
         .replace("__STAGE_LAYOUTS__", &stage_layouts_json)
         .replace("__STAGE_LAYOUT_CODE__", &stage_layout_code_safe)
-        .replace("__ABLESET_STATUS__", &ableset_status_json);
+        .replace("__ABLESET_STATUS__", &ableset_status_json)
+        .replace("__FEATURE_FLAGS__", &feature_flags_json);
 
     view! {
             <html lang="en">
@@ -194,7 +204,7 @@ pub fn OperatorDocument(
                     <title>"Presenter Operator"</title>
                     <style>{OPERATOR_STYLES}</style>
                 </head>
-                <body class="operator" data-view="worship" data-mode="live">
+                <body class="operator" data-view="worship" data-mode="live" data-line-limit={line_limit_text.clone()} style={line_limit_style.clone()}>
                     <header class="operator__header">
                         <div class="operator__header-left">
                             <h1>"Presenter Operator"</h1>
@@ -437,7 +447,7 @@ pub fn OperatorDocument(
                                             min="10"
                                             max="120"
                                             step="1"
-                                            value="32"
+                                            value={line_limit_text.clone()}
                                             data-role="line-limit"
                                         />
                                     </label>
@@ -647,6 +657,8 @@ pub async fn render_operator_ui(state: &AppState) -> anyhow::Result<Html<String>
     let stage_layouts = state.stage_displays().await?;
     let stage_layout_code = state.stage_layout_code().await;
     let ableset_status = state.ableset_status_snapshot().await;
+    let feature_flags = state.feature_flags();
+    let line_limit = feature_flags.line_limit;
 
     let mut presentation_lookup: HashMap<String, String> = HashMap::new();
 
@@ -730,6 +742,8 @@ pub async fn render_operator_ui(state: &AppState) -> anyhow::Result<Html<String>
                 playlists_json=playlists_json.clone()
                 stage_layouts_json=stage_layouts_json.clone()
                 stage_layout_code=stage_layout_code.clone()
+                features=feature_flags.clone()
+                line_limit=line_limit
             />
         }
         .into_view()
@@ -4389,6 +4403,7 @@ fn SettingsDocument(
     let android_count_text = android_displays.len().to_string();
     let companion_enabled = features.companion_enabled;
     let companion_port_text = features.companion_port.to_string();
+    let line_limit_text = features.line_limit.to_string();
     let osc_port_value = osc_settings.listen_port.to_string();
     let osc_status_state = if !osc_status.enabled {
         "disabled".to_string()
@@ -4497,6 +4512,17 @@ fn SettingsDocument(
                                         max="65535"
                                         value={companion_port_text.clone()}
                                         data-role="feature-companion-port"
+                                        required
+                                    />
+                                </label>
+                                <label class="settings__form-control--tiny">
+                                    <span>"Line limit"</span>
+                                    <input
+                                        type="number"
+                                        min="10"
+                                        max="120"
+                                        value={line_limit_text.clone()}
+                                        data-role="feature-line-limit"
                                         required
                                     />
                                 </label>
