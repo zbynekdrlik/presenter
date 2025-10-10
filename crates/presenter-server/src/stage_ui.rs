@@ -338,7 +338,7 @@ fn StageDisplayDocument(
     const computedLineHeightNum = parseFloat(lineHeightRaw);
     let lineHeightRatio = LINE_HEIGHT_FALLBACK_FACTOR;
     if (Number.isFinite(computedLineHeightNum) && computedLineHeightNum > 0 && Number.isFinite(computedFontSize) && computedFontSize > 0) {
-      // If the browser reports a unitless number (e.g., "1.2"), treat it as a ratio.
+      // If the browser reports a unitless number (e.g., '1.2'), treat it as a ratio.
       // Otherwise assume pixels and convert to a ratio via font size.
       if (!(typeof lineHeightRaw === 'string' && lineHeightRaw.toLowerCase().includes('px')) && computedLineHeightNum < 4) {
         lineHeightRatio = computedLineHeightNum;
