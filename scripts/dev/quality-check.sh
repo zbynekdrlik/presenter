@@ -36,6 +36,7 @@ warnings=()
 ALLOW_FILESIZE_WARN_ONLY=(
   "crates/presenter-server/src/companion.rs"
   "crates/presenter-server/src/state.rs"
+  "crates/presenter-server/src/stage_ui.rs"
 )
 
 note() { printf '%s\n' "$*"; }

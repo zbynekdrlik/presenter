@@ -16,14 +16,12 @@ pub(super) async fn stage_display_selected_html(
     State(state): State<AppState>,
 ) -> Result<Response, AppError> {
     match state.selected_stage_display_snapshot().await? {
-        Some(snapshot) => Ok(
-            stage_ui::render_stage_display(
-                snapshot,
-                state.heartbeat_config(),
-                state.line_limit(),
-            )
-            .into_response(),
-        ),
+        Some(snapshot) => Ok(stage_ui::render_stage_display(
+            snapshot,
+            state.heartbeat_config(),
+            state.line_limit(),
+        )
+        .into_response()),
         None => Ok((StatusCode::SERVICE_UNAVAILABLE, "Stage display unavailable").into_response()),
     }
 }
