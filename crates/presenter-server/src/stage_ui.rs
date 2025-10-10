@@ -64,7 +64,7 @@ fn StageDisplayDocument(
   const clockFormatter = new Intl.DateTimeFormat('sk-SK', {{ hour: '2-digit', minute: '2-digit', hour12: false }});
   const LYRIC_FIT_CONFIG = {{
     'worship-snv': [
-      {{ id: 'current-text', baseRem: 14.8, minRem: 1.9 }},
+      {{ id: 'current-text', baseRem: 15.2, minRem: 2.0 }},
       {{ id: 'next-text', baseRem: 12.0, minRem: 1.6 }},
     ],
     'worship-pp': [
@@ -708,7 +708,7 @@ fn StageDisplayDocument(
       element.style.fontSize = `${{finalRem}}rem`;
       if (/current-text/.test(elementId)) {{
         const len = (textValue || '').replace(/\s+/g, '').length;
-        element.style.lineHeight = len < 20 ? '1.30' : '1.22';
+        element.style.lineHeight = len < 20 ? '1.36' : '1.22';
       }}
       element.dataset.fontRem = finalRem.toFixed(4);
       enforceActualLineLimit(element, FIT_LINE_TARGET + FIT_LINE_TOLERANCE);
