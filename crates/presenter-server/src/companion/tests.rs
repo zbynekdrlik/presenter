@@ -90,6 +90,7 @@ fn stage_variables_update_across_layouts() {
         None,
         Some(1),
         Some(3),
+        None,
     );
 
     assert!(state.apply_stage_snapshot(snapshot));
@@ -121,6 +122,7 @@ fn stage_variables_update_across_layouts() {
         None,
         Some(1),
         Some(2),
+        None,
     );
 
     assert!(state.apply_stage_snapshot(next_snapshot));
