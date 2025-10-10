@@ -71,3 +71,4 @@ References
 - Handbook: `AGENTS.md` (Design Iteration Policy, E2E Policy, Runtime, Prompts)
 - Merge checklist: `prompts/merge-prepare.md`
 - Quality script: `scripts/dev/quality-check.sh`
+- Backlog tracker: `docs/quality/2025-10-roadmap.md`

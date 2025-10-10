@@ -260,7 +260,7 @@ pub(super) async fn handle_incoming_message(
 }
 
 #[derive(Default)]
-struct CommandResponse {
+pub(super) struct CommandResponse {
     reply: Option<OutgoingMessage>,
     refresh_variables: bool,
 }
@@ -288,9 +288,19 @@ impl CommandResponse {
         self.refresh_variables = refresh;
         self
     }
+
+    #[cfg(test)]
+    pub(super) fn reply(&self) -> Option<&OutgoingMessage> {
+        self.reply.as_ref()
+    }
+
+    #[cfg(test)]
+    pub(super) fn refresh_variables(&self) -> bool {
+        self.refresh_variables
+    }
 }
 
-enum CompanionCommand {
+pub(super) enum CompanionCommand {
     StageSet {
         presentation_id: PresentationId,
         current_slide_id: SlideId,

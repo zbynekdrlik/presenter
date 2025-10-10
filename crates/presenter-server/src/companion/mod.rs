@@ -24,7 +24,6 @@ use std::{collections::HashMap, sync::Arc};
 use tokio::sync::{broadcast::error::RecvError, Mutex};
 use tracing::{debug, info, warn};
 use uuid::Uuid;
-use variables::*;
 
 const COMPANION_SERVER_NAME: &str = "presenter";
 const COMPANION_PROTOCOL_VERSION: &str = env!("CARGO_PKG_VERSION");
