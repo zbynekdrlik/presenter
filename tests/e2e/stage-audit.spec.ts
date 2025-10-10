@@ -243,7 +243,29 @@ describeFn('Stage Audit (SNV, Retina, width coverage, equal split)', () => {
             const winCode = (window.__presenterStageLayout || '').toString();
             return bodyCode === expected || winCode === expected;
           }, 'worship-snv');
-          await page.waitForTimeout(125);
+          await page.waitForFunction(() => {
+            const el = document.getElementById('current-text') || document.getElementById('current-main');
+            if (!el) return true;
+            const text = (el.textContent || '').trim();
+            if (!text) return true;
+            const explicitLines = Math.max(1, text.split(/\r?\n/).length);
+            const style = getComputedStyle(el as HTMLElement);
+            const fs = parseFloat(style.fontSize || '0') || 0;
+            let lh = parseFloat(style.lineHeight || '0');
+            if (Number.isFinite(lh) && lh > 0) {
+              if (!/px\b/i.test(String(style.lineHeight)) && lh < 4) { lh = lh * fs; }
+            } else {
+              lh = fs * 1.12;
+            }
+            const padT = parseFloat(style.paddingTop || '0') || 0;
+            const padB = parseFloat(style.paddingBottom || '0') || 0;
+            const rawLines = lh > 0 ? Math.max(0, (el as HTMLElement).scrollHeight - padT - padB) / lh : 0;
+            const lines = Math.max(rawLines, explicitLines);
+            if (explicitLines <= 2) {
+              return lines <= 2.02;
+            }
+            return true;
+          }, { timeout: 2000 });
           const m = await collectMetrics(page);
           // Attach minimal context for traceability
           await testInfo.attach('metrics', { contentType: 'application/json', body: JSON.stringify({ library, name, slideIndex: i, metrics: m }) });
