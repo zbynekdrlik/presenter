@@ -64,8 +64,8 @@ fn StageDisplayDocument(
   const clockFormatter = new Intl.DateTimeFormat('sk-SK', {{ hour: '2-digit', minute: '2-digit', hour12: false }});
   const LYRIC_FIT_CONFIG = {{
     'worship-snv': [
-      {{ id: 'current-text', baseRem: 14, minRem: 1.8 }},
-      {{ id: 'next-text', baseRem: 11.5, minRem: 1.5 }},
+      {{ id: 'current-text', baseRem: 14.8, minRem: 1.9 }},
+      {{ id: 'next-text', baseRem: 12.0, minRem: 1.6 }},
     ],
     'worship-pp': [
       {{ id: 'current-main', baseRem: 13.5, minRem: 1.45 }},
