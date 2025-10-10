@@ -16,8 +16,8 @@ pub(super) struct FeatureSettingsResponse {
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub(super) struct FeatureSettingsRequest {
-    #[serde(alias = "enabled", alias = "companion_enabled")]
-    pub(super) companion_enabled: bool,
+    #[serde(default, alias = "enabled", alias = "companion_enabled")]
+    pub(super) companion_enabled: Option<bool>,
     #[serde(default, alias = "companion_port", alias = "port")]
     pub(super) companion_port: Option<u16>,
     #[serde(default, alias = "line_limit", alias = "line")]
@@ -49,8 +49,11 @@ pub(super) async fn update_feature_settings(
         ));
     }
 
+    let requested_enabled = payload
+        .companion_enabled
+        .unwrap_or_else(|| state.companion_enabled());
     state
-        .set_companion_settings(payload.companion_enabled, requested_port)
+        .set_companion_settings(requested_enabled, requested_port)
         .await?;
 
     if let Some(limit) = payload.line_limit {
