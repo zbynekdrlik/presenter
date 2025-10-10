@@ -588,6 +588,80 @@ fn StageDisplayDocument(
     return finalRem;
   }};
 
+
+
+  const fitUsingActualElement = (element, baseRem, minRem, elementId) => {
+    try {
+      const rootSize = parseFloat(getComputedStyle(document.documentElement).fontSize) || 16;
+      const basePxRaw = Math.max(MIN_FONT_PX, (baseRem || 14) * rootSize);
+      const minPxRaw = Math.max(MIN_FONT_PX, (minRem || 1.0) * rootSize);
+      // Baseline booster from stageLineLimit (lower limit -> larger baseline)
+      const limitCpl = Math.max(10, Math.min(120, Number(stageLineLimit) || 32));
+      const referenceCpl = 32;
+      const boost = referenceCpl / limitCpl;
+      let basePx = Math.max(MIN_FONT_PX, basePxRaw * boost);
+      let minPx = Math.max(MIN_FONT_PX, minPxRaw * Math.min(1, boost));
+
+      const linesFor = (px) => {
+        if (!(element instanceof HTMLElement)) return 0;
+        const fs = Math.max(MIN_FONT_PX, px);
+        const rem = fs / rootSize;
+        element.style.fontSize = `${rem}rem`;
+        element.dataset.fontRem = rem.toFixed(4);
+        // Measure visual lines using ranges; fallback to raw line calc
+        let visual = countVisualLines(element);
+        if (visual && visual > 0) return visual;
+        const style = getComputedStyle(element);
+        let lh = parseFloat(style.lineHeight || '0');
+        const fspx = parseFloat(style.fontSize || String(fs)) || fs;
+        if (!Number.isFinite(lh) || lh <= 0) {
+          lh = fspx * LINE_HEIGHT_FALLBACK_FACTOR;
+        } else if (!/px\b/i.test(String(style.lineHeight)) && lh < 4) {
+          lh = lh * fspx;
+        }
+        const padT = parseFloat(style.paddingTop || '0') || 0;
+        const padB = parseFloat(style.paddingBottom || '0') || 0;
+        const raw = lh > 0 ? Math.max(0, element.scrollHeight - padT - padB) / lh : 0;
+        return raw;
+      };
+
+      const cap = FIT_LINE_TARGET + FIT_LINE_TOLERANCE;
+      let low = minPx;
+      let high = basePx;
+      // Ensure we never upsize over current baseline in refits
+      if (element.dataset && element.dataset.fontRem) {
+        const currentPx = Number(element.dataset.fontRem) * rootSize;
+        if (Number.isFinite(currentPx) && currentPx > 0) {
+          high = Math.min(high, currentPx);
+        }
+      }
+
+      let l = linesFor(basePx);
+      if (l <= cap) {
+        return basePx / rootSize;
+      }
+      // Binary search using actual element
+      let best = low;
+      // Pre-check at min
+      if (linesFor(low) > cap) {
+        // Even min is too tall; stick to min
+        return low / rootSize;
+      }
+      for (let i = 0; i < 36 && high - low > 0.5; i += 1) {
+        const mid = (low + high) / 2;
+        const x = linesFor(mid);
+        if (x <= cap) {
+          best = mid;
+          low = mid;
+        } else {
+          high = mid;
+        }
+      }
+      return best / rootSize;
+    } catch (_) {
+      return null;
+    }
+  };
   const computeLineHeightPx = (el, fontPx) => {{
     const s = window.getComputedStyle(el);
     const raw = s.lineHeight || '';
@@ -678,13 +752,7 @@ fn StageDisplayDocument(
     // Ensure new text is in the DOM before measurement
     element.textContent = textValue;
 
-    const finalRem = computeLyricsFontRem(
-      element,
-      config.baseRem,
-      config.minRem,
-      textValue,
-      elementId,
-    );
+    const finalRem = fitUsingActualElement(element, config.baseRem, config.minRem, elementId);
     if (Number.isFinite(finalRem) && finalRem > 0) {{
       element.style.fontSize = `${{finalRem}}rem`;
       // no dynamic line-height
@@ -756,13 +824,7 @@ fn StageDisplayDocument(
         delete element.dataset.fontRem;
         return;
       }}
-      const finalRem = computeLyricsFontRem(
-        element,
-        entry.baseRem,
-        entry.minRem,
-        currentText,
-        entry.id,
-      );
+      const finalRem = fitUsingActualElement(element, entry.baseRem, entry.minRem, entry.id);
       if (Number.isFinite(finalRem) && finalRem > 0) {{
         element.style.fontSize = `${{finalRem}}rem`;
         element.dataset.fontRem = finalRem.toFixed(4);
