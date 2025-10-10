@@ -35,7 +35,6 @@ warnings=()
 # these modules below the 1000-line cap.
 ALLOW_FILESIZE_WARN_ONLY=(
   "crates/presenter-server/src/companion.rs"
-  "crates/presenter-server/src/state.rs"
   "crates/presenter-migration/src/m20250927_000001_create_core_tables.rs"
   "crates/presenter-persistence/src/repository.rs"
 )
@@ -179,8 +178,7 @@ if [[ -n "${viols:-}" && "${viols}" != "[]" ]]; then
   # Treat long functions in companion/ and state/ as warnings for this branch
   allow_longfn_prefixes=(
     "crates/presenter-server/src/companion.rs"
-    "crates/presenter-server/src/state.rs"
-  )
+    )
   while IFS= read -r row; do
     file=$(echo "$row" | jq -r '.file')
     start=$(echo "$row" | jq -r '.start')
