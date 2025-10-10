@@ -64,8 +64,8 @@ fn StageDisplayDocument(
   const clockFormatter = new Intl.DateTimeFormat('sk-SK', {{ hour: '2-digit', minute: '2-digit', hour12: false }});
   const LYRIC_FIT_CONFIG = {{
     'worship-snv': [
-      {{ id: 'current-text', baseRem: 15.2, minRem: 2.0 }},
-      {{ id: 'next-text', baseRem: 12.0, minRem: 1.6 }},
+      {{ id: 'current-text', baseRem: 14.0, minRem: 1.8 }},
+      {{ id: 'next-text', baseRem: 11.9, minRem: 1.5 }},
     ],
     'worship-pp': [
       {{ id: 'current-main', baseRem: 13.5, minRem: 1.45 }},
@@ -255,8 +255,8 @@ fn StageDisplayDocument(
 
   const LINE_HEIGHT_FALLBACK_FACTOR = 1.12;
   const FIT_LINE_TARGET = 2;
-  const FIT_LINE_TOLERANCE = 0.12;
-  const MIN_FONT_PX = 22;
+  const FIT_LINE_TOLERANCE = 0.02;
+  const MIN_FONT_PX = 8;
   const MIN_FONT_SCALE = 0.65;
 
   const getFitConfig = (layoutCode, elementId) => {{
@@ -371,13 +371,8 @@ fn StageDisplayDocument(
     }}
   const occupancyTarget = 0.5;
 
-    const occupancyMinPx = targetRowHeight > 0
-      ? (targetRowHeight * occupancyTarget) / (lineHeightRatio * Math.max(1, effectiveTarget))
-      : 0;
-    let absoluteMinPx = baseMinPx;
-    if (Number.isFinite(occupancyMinPx) && occupancyMinPx > baseMinPx) {{
-      absoluteMinPx = Math.max(baseMinPx, occupancyMinPx);
-    }}
+    // Do not raise minimum based on occupancy; allow shrinking as needed to reach ≤ 2 lines
+    let absoluteMinPx = MIN_FONT_PX;
 
     // Estimate extra vertical consumption inside the row (group labels, meta lines, child gaps, paddings)
     let extrasHeight = 0;
@@ -448,18 +443,13 @@ fn StageDisplayDocument(
       rowClone.remove();
       return {{ lines, rawLines, lineHeightPx, scrollWidth, widthCoverage }};
     }};
-    // Character-per-line limit boost: if average characters per line exceed the configured
-    // line limit, gently increase the starting font so fewer characters fit per line.
-    // Global baseline scaling from configured characters-per-line limit: lower limit => larger text.
-    const approxLinesForLimit = Math.max(1, effectiveTarget);
+    // Baseline derived strictly from character line limit: lower limit => larger baseline.
     const limitCpl = Math.max(10, Math.min(120, Number(stageLineLimit) || 32));
     const referenceCpl = 32; // design baseline
-    const boost = Math.min(1.8, Math.max(0.8, referenceCpl / limitCpl));
-    if (Number.isFinite(boost) && boost > 0 && boost !== 1) {{
-      basePx = Math.max(MIN_FONT_PX, basePx * boost);
-      scaledBaseMin = basePx * MIN_FONT_SCALE;
-      baseMinPx = Math.max(MIN_FONT_PX, configuredMinPx != null ? configuredMinPx : 0, scaledBaseMin);
-    }}
+    const boost = referenceCpl / limitCpl;
+    basePx = Math.max(MIN_FONT_PX, basePx * boost);
+    scaledBaseMin = basePx * MIN_FONT_SCALE;
+    baseMinPx = Math.max(MIN_FONT_PX, configuredMinPx != null ? configuredMinPx : 0, scaledBaseMin);
 
     const baseMeasure = measureLines(basePx);
     let finalPx = basePx;
@@ -517,7 +507,7 @@ fn StageDisplayDocument(
       finalMeasure = bestMeasure;
     }} else if (finalMeasure.lines <= maxLinesAllowed) {{
       let growLow = finalPx;
-      let growHigh = Math.max(finalPx, basePx * 1.2, absoluteMinPx * 1.2);
+      let growHigh = basePx; // never exceed baseline
       let growBestPx = finalPx;
       let growBestMeasure = finalMeasure;
       for (let i = 0; i < 24 && growHigh - growLow > 0.25; i += 1) {{
@@ -534,48 +524,7 @@ fn StageDisplayDocument(
       finalPx = growBestPx;
       finalMeasure = growBestMeasure;
     }}
-    if (finalMeasure.lines <= maxLinesAllowed) {{
-      const approxLines = Math.max(1, effectiveTarget);
-      const perLineChars = content.length / approxLines;
-      let coverageTarget = 0.58;
-      if (approxLines >= 2) {{
-        if (perLineChars >= 30) {{
-          coverageTarget = 0.65;
-        }} else if (perLineChars >= 22) {{
-          coverageTarget = 0.6;
-        }} else if (perLineChars >= 16) {{
-          coverageTarget = 0.56;
-        }} else {{
-          coverageTarget = 0.52;
-        }}
-      }} else {{
-        if (perLineChars >= 18) {{
-          coverageTarget = 0.55;
-        }} else if (perLineChars >= 12) {{
-          coverageTarget = 0.5;
-        }} else {{
-          coverageTarget = 0.45;
-        }}
-      }}
-      if (finalMeasure.widthCoverage < coverageTarget) {{
-        let low = finalPx;
-        let high = Math.max(finalPx, basePx * 1.6, absoluteMinPx * 1.6);
-        let bestPx = finalPx;
-        let bestMeasure = finalMeasure;
-        for (let i = 0; i < 30 && high - low > 0.25; i += 1) {{
-          const mid = (low + high) / 2;
-          const measure = measureLines(mid);
-          if (measure.lines <= maxLinesAllowed + 0.01 && measure.widthCoverage >= bestMeasure.widthCoverage) {{
-            bestPx = mid;
-            bestMeasure = measure;
-            low = mid;
-          }} else {{
-            high = mid;
-          }}
-        }}
-        finalPx = bestPx;
-        finalMeasure = bestMeasure;
-      }}
+    // No width coverage growth phase — we do not upsize beyond baseline
     }}
     // Strong safety: if lines still exceed the cap (e.g., long words/wrap variability),
     // keep shrinking with adaptive steps until we fit or hit the minimum.
@@ -605,15 +554,7 @@ fn StageDisplayDocument(
       finalMeasure = measureLines(finalPx);
     }}
 
-    // Final gentle nudge for two-line cases to avoid borderline underfill in audits
-    if (effectiveTarget >= 2 && finalMeasure.lines <= maxLinesAllowed) {{
-      const bumped = Math.max(finalPx, finalPx * 1.0125);
-      const bumpMeasure = measureLines(bumped);
-      if (bumpMeasure.lines <= maxLinesAllowed + 0.005) {{
-        finalPx = bumped;
-        finalMeasure = bumpMeasure;
-      }}
-    }}
+    // No final nudge — keep result strictly at/under baseline
 
     const finalRem = finalPx / rootFontSize;
 
@@ -659,13 +600,13 @@ fn StageDisplayDocument(
       if (!Number.isFinite(rawLines) || rawLines <= maxLinesAllowed + 0.01) return;
       const ratio = Math.max(rawLines / maxLinesAllowed, 1.0001);
       const candidatePx = Math.max(MIN_FONT_PX, fontPx / ratio);
-      if (!Number.isFinite(candidatePx) || Math.abs(candidatePx - fontPx) < 0.25) return;
+      if (!Number.isFinite(candidatePx) || Math.abs(candidatePx - fontPx) < 0.05) return;
       const rootSize = parseFloat(getComputedStyle(document.documentElement).fontSize) || 16;
       const candidateRem = candidatePx / rootSize;
       element.style.fontSize = `${{candidateRem}}rem`;
       element.dataset.fontRem = candidateRem.toFixed(4);
       attempts += 1;
-      if (attempts < 8 && typeof window !== 'undefined') {{
+      if (attempts < 36 && typeof window !== 'undefined') {{
         const raf = window.requestAnimationFrame || window.setTimeout;
         raf(() => tick());
       }}
@@ -697,6 +638,9 @@ fn StageDisplayDocument(
       config = {{ id: elementId, baseRem: inferredBaseRem, minRem: inferredMinRem }};
     }}
 
+    // Ensure new text is in the DOM before measurement
+    element.textContent = textValue;
+
     const finalRem = computeLyricsFontRem(
       element,
       config.baseRem,
@@ -706,17 +650,37 @@ fn StageDisplayDocument(
     );
     if (Number.isFinite(finalRem) && finalRem > 0) {{
       element.style.fontSize = `${{finalRem}}rem`;
-      if (/current-text/.test(elementId)) {{
-        const len = (textValue || '').replace(/\s+/g, '').length;
-        element.style.lineHeight = len < 20 ? '1.50' : '1.22';
-      }}
+      // no dynamic line-height
       element.dataset.fontRem = finalRem.toFixed(4);
+      // Synchronous clamp to ≤ 2 lines (no animations)
+      try {{
+        const style = window.getComputedStyle(element);
+        let fontPx = parseFloat(style.fontSize) || MIN_FONT_PX;
+        let lh = parseFloat(style.lineHeight) || (fontPx * LINE_HEIGHT_FALLBACK_FACTOR);
+        let attempts = 0;
+        while (attempts < 50) {{
+          const padT = parseFloat(style.paddingTop || '0') || 0;
+          const padB = parseFloat(style.paddingBottom || '0') || 0;
+          const rawLinesNow = lh > 0 ? Math.max(0, element.scrollHeight - padT - padB) / lh : 0;
+          if (!Number.isFinite(rawLinesNow) || rawLinesNow <= (FIT_LINE_TARGET + FIT_LINE_TOLERANCE)) break;
+          const ratio = Math.max(rawLinesNow / (FIT_LINE_TARGET + FIT_LINE_TOLERANCE), 1.0001);
+          fontPx = Math.max(MIN_FONT_PX, fontPx / ratio);
+          const rootSize = parseFloat(getComputedStyle(document.documentElement).fontSize) || 16;
+          const rem = fontPx / rootSize;
+          element.style.fontSize = `${{rem}}rem`;
+          element.dataset.fontRem = rem.toFixed(4);
+          // refresh style refs
+          const s2 = window.getComputedStyle(element);
+          lh = parseFloat(s2.lineHeight) || (fontPx * LINE_HEIGHT_FALLBACK_FACTOR);
+          attempts += 1;
+        }}
+      }} catch (_e) {{}}
+      // Final async safety pass
       enforceActualLineLimit(element, FIT_LINE_TARGET + FIT_LINE_TOLERANCE);
     }} else {{
       element.style.fontSize = '';
       delete element.dataset.fontRem;
     }}
-    element.textContent = textValue;
   }};
 
   const refitVisibleLyrics = () => {{
@@ -762,7 +726,7 @@ fn StageDisplayDocument(
           const next = Math.min(Math.max(Math.round(raw), 10), 120);
           if (next !== stageLineLimit) {{
             stageLineLimit = next;
-            refitVisibleLyrics();
+            // defer refit until next trigger/resize
           }}
         }})
         .catch(() => {{}});
@@ -1087,8 +1051,8 @@ fn StageDisplayDocument(
     }}
   }});
 
-  // Do not refit visible lyrics on window resize to avoid on-screen size changes.
-  // We only compute sizes when text changes.
+  // Refit on viewport resize per operator requirement
+  window.addEventListener('resize', () => {{ try {{ refitVisibleLyrics(); }} catch (_e) {{}} }});
   window.addEventListener('focus', refreshFromServer);
   window.__presenterStageRefresh = refreshFromServer;
   window.__presenterStageReconnect = () => {{

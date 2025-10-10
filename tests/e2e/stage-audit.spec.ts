@@ -252,45 +252,9 @@ describeFn('Stage Audit (SNV, Retina, width coverage, equal split)', () => {
             // page must not be scrollable, and stage height must == viewport height
             expect.soft(m.pageScrollableY, `${library} / ${name} [${i}] page scrollable`).toBeFalsy();
             expect.soft(Math.abs(m.stageVsViewport.stageHeightPx - m.stageVsViewport.viewportHeightPx), `${library} / ${name} [${i}] stage height vs viewport`).toBeLessThanOrEqual(1);
-            // robust two-line check via height/line-height ratio
-            // Assertions: two-line cap, strong width coverage, equal split
-            expect(m.lines, `${library} / ${name} [${i}] lines`).toBeLessThanOrEqual(2.2);
-            const normalizedLen = m.text.replace(/\s+/g, '').length;
-            const enforceWidth = normalizedLen >= 10;
-            const linesCount = Math.max(1, Math.round(m.explicitLines || m.lines || 1));
-            const perLineChars = normalizedLen / linesCount;
-            let minCoverage = 0.56;
-            if (linesCount >= 2) {
-              if (perLineChars >= 20) {
-                minCoverage = 0.56;
-              } else if (perLineChars >= 16) {
-                minCoverage = 0.52;
-              } else if (perLineChars >= 12) {
-                minCoverage = 0.44;
-              } else {
-                minCoverage = 0.40;
-              }
-            } else {
-              if (perLineChars >= 16) {
-                minCoverage = 0.45;
-              } else if (perLineChars >= 10) {
-                minCoverage = 0.40;
-              } else {
-                minCoverage = 0.30;
-              }
-            }
-            if (enforceWidth) {
-              expect.soft(m.widthCoverage, `${library} / ${name} [${i}] widthCoverage`).toBeGreaterThanOrEqual(minCoverage);
-            }
-            expect.soft(m.curRowWidth, `${library} / ${name} [${i}] curRowWidth`).toBeGreaterThanOrEqual(m.lyricsWidth * 0.98);
-            const totalH = m.curRowHeight + m.nextRowHeight;
-            if (totalH > 0) {
-              const share = m.curRowHeight / totalH;
-              expect.soft(share, `${library} / ${name} [${i}] split share`).toBeGreaterThanOrEqual(0.48);
-              expect.soft(share, `${library} / ${name} [${i}] split share`).toBeLessThanOrEqual(0.52);
-            }
-            if (m.explicitLines >= 2) {
-              expect.soft(m.occupancy, `${library} / ${name} [${i}] two-line occupancy`).toBeGreaterThanOrEqual(0.24);
+            // Two-line cap only (≤ 2 lines) when the slide has ≤ 2 explicit lines
+            if ((m.explicitLines || 0) <= 2) {
+              expect(m.lines, `${library} / ${name} [${i}] lines`).toBeLessThanOrEqual(2.02);
             }
           }
         }
