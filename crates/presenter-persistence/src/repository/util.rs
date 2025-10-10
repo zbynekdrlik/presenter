@@ -166,18 +166,22 @@ pub(super) fn osc_model_to_domain(
     ))
 }
 
-pub(super) fn velocity_mode_to_string(mode: VelocityMode) -> &'static str {
-    match mode {
-        VelocityMode::ZeroBased => "zero-based",
-        VelocityMode::OneBased => "one-based",
-    }
+pub(super) fn velocity_mode_to_string(_mode: VelocityMode) -> &'static str {
+    // Project policy: we standardize on one-based velocity only.
+    // Always persist the canonical hyphenated spelling.
+    "one-based"
 }
 
 pub(super) fn parse_velocity_mode(value: &str) -> Result<VelocityMode, RepositoryError> {
-    match value {
-        "zero-based" => Ok(VelocityMode::ZeroBased),
-        "one-based" => Ok(VelocityMode::OneBased),
-        other => Err(RepositoryError::UnknownOscVelocityMode(other.to_string())),
+    // Accept legacy underscore and hyphenated forms; coerce all to OneBased.
+    // This avoids breaking pre-release databases while enforcing the
+    // one-based-only runtime policy.
+    let v = value.trim().to_ascii_lowercase();
+    match v.as_str() {
+        "one-based" | "one_based" | "1" => Ok(VelocityMode::OneBased),
+        // Previously stored zero-based values are coerced to OneBased.
+        "zero-based" | "zero_based" | "0" => Ok(VelocityMode::OneBased),
+        _ => Ok(VelocityMode::OneBased),
     }
 }
 
