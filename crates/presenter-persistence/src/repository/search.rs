@@ -8,12 +8,13 @@ use crate::entities::{
 use presenter_core::{
     playlist::{MidiBinding, PlaylistEntryKind},
     search::{fold_query, query_tokens},
-    LibraryId, Playlist, PlaylistEntry, PlaylistEntryId, PlaylistId, PresentationId, SlideId,
-    SearchMatchField, SearchResult, SearchResultKind,
+    LibraryId, Playlist, PlaylistEntry, PlaylistEntryId, PlaylistId, PresentationId,
+    SearchMatchField, SearchResult, SearchResultKind, SlideId,
 };
 use sea_orm::{ColumnTrait, Condition, EntityTrait, QueryFilter, QueryOrder, QuerySelect};
 
-use super::{parse_uuid, Repository, RepositoryError};
+use super::util::parse_uuid;
+use super::Repository;
 
 impl Repository {
     #[instrument(skip_all)]

@@ -15,7 +15,10 @@ use crate::entities::{
     stage_state,
 };
 
-use super::{parse_uuid, to_domain_slide, Repository, RepositoryError, STAGE_STATE_SINGLETON_ID};
+use super::util::{parse_uuid, to_domain_slide, RepositoryError};
+use super::Repository;
+
+const STAGE_STATE_SINGLETON_ID: &str = "stage-state";
 
 impl Repository {
     #[instrument(skip_all)]
