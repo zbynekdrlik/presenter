@@ -596,7 +596,13 @@ mod tests {
             .unwrap()
             .expect("passage to exist");
         assert_eq!(fetched.translation, translation);
-        assert_eq!(fetched.reference, reference);
+        // Reference should carry canonical code/number after round-trip
+        assert_eq!(fetched.reference.book, reference.book);
+        assert_eq!(fetched.reference.chapter, reference.chapter);
+        assert_eq!(fetched.reference.verse_start, reference.verse_start);
+        assert_eq!(fetched.reference.verse_end, reference.verse_end);
+        assert_eq!(fetched.reference.book_code.as_deref(), Some("JHN"));
+        assert_eq!(fetched.reference.book_number, Some(43));
         assert_eq!(fetched.text, passage.text);
     }
 

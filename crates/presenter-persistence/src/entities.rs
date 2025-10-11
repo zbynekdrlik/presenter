@@ -122,6 +122,7 @@ pub mod slide {
         pub stage_text_search: String,
         pub group_name: Option<String>,
         pub created_at: DateTimeWithTimeZone,
+        pub metadata_json: Option<String>,
     }
 
     #[derive(Copy, Clone, Debug, EnumIter, DeriveRelation)]
