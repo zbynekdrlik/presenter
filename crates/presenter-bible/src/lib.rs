@@ -1,6 +1,10 @@
 use anyhow::{anyhow, Context, Result};
 use async_trait::async_trait;
-use presenter_core::{bible::BibleIngestionBatch, BiblePassage, BibleReference, BibleTranslation};
+use presenter_core::bible::{
+    canonical_book_by_code, canonical_book_by_name, canonical_book_by_number, BibleBookCanonical,
+    BibleIngestionBatch,
+};
+use presenter_core::{BiblePassage, BibleReference, BibleTranslation};
 use rusqlite::{types::ValueRef, Connection};
 use std::collections::HashMap;
 use std::convert::TryFrom;
@@ -514,17 +518,59 @@ fn parse_mysword_sqlite_zip(
             )
         })?;
 
+        let canonical_number = match u16::try_from(book_index) {
+            Ok(value) if value >= 1 => Some(value),
+            _ => {
+                warn!(
+                    book_index,
+                    "skipping MySword row with unsupported book index"
+                );
+                None
+            }
+        };
+        let canonical_meta = canonical_book_by_name(&book)
+            .or_else(|| canonical_number.and_then(canonical_book_by_number));
+
         let text = sanitize_mysword_text(&scripture);
         if text.is_empty() {
             continue;
         }
 
-        let reference = BibleReference::new(book, chapter, verse, verse)?;
+        let reference = if let Some(meta) = canonical_meta {
+            BibleReference::new_with_code(
+                book.clone(),
+                meta.code,
+                meta.number,
+                chapter,
+                verse,
+                verse,
+            )?
+        } else {
+            warn!(
+                book_index,
+                "canonical mapping missing for MySword book index"
+            );
+            BibleReference::new(book.clone(), chapter, verse, verse)?
+        };
         let passage = BiblePassage::new(reference, translation.clone(), text);
         passages.push(passage);
     }
 
     Ok(passages)
+}
+
+fn canonical_number_from_dataset(code: i64) -> Option<u16> {
+    if code <= 0 {
+        return None;
+    }
+    let mut value = code;
+    while value > 66 && value % 10 == 0 {
+        value /= 10;
+    }
+    if (1..=66).contains(&value) {
+        return u16::try_from(value).ok();
+    }
+    None
 }
 
 fn parse_obohu_sqlite_zip(
@@ -595,7 +641,23 @@ fn parse_obohu_sqlite_zip(
         if content.is_empty() {
             continue;
         }
-        let reference = BibleReference::new(book.clone(), chapter, verse, verse)?;
+
+        let canonical_meta = canonical_book_by_name(book)
+            .or_else(|| canonical_number_from_dataset(code).and_then(canonical_book_by_number));
+        let reference = if let Some(meta) = canonical_meta {
+            BibleReference::new_with_code(
+                book.clone(),
+                meta.code,
+                meta.number,
+                chapter,
+                verse,
+                verse,
+            )?
+        } else {
+            warn!(code, "canonical mapping missing for Slovak book number");
+            BibleReference::new(book.clone(), chapter, verse, verse)?
+        };
+
         let passage = BiblePassage::new(reference, translation.clone(), content);
         passages.push(passage);
     }
@@ -609,6 +671,7 @@ fn parse_usfm_document(
     format: &BibleSourceFormat,
 ) -> Result<Vec<BiblePassage>> {
     let mut book_name: Option<String> = None;
+    let mut book_meta: Option<BibleBookCanonical> = None;
     let mut current_chapter: Option<u16> = None;
     let mut current_builder: Option<PassageBuilder> = None;
     let mut passages = Vec::new();
@@ -623,6 +686,7 @@ fn parse_usfm_document(
                 &mut passages,
                 &mut current_builder,
                 &book_name,
+                &book_meta,
                 current_chapter,
                 translation,
             )?;
@@ -631,11 +695,22 @@ fn parse_usfm_document(
             let code = parts
                 .next()
                 .ok_or_else(|| anyhow!("USFM document missing book code in \\id marker"))?;
+            book_meta = canonical_book_by_code(code);
             match format.book_name(code) {
-                Some(name) => book_name = Some(name),
+                Some(name) => {
+                    if book_meta.is_none() {
+                        if let Some(meta) = canonical_book_by_name(&name) {
+                            book_meta = Some(meta);
+                        } else {
+                            warn!(%code, "USFM book code lacks canonical mapping; alignment may be degraded");
+                        }
+                    }
+                    book_name = Some(name);
+                }
                 None => {
                     warn!(%code, "skipping unsupported USFM book code");
                     book_name = None;
+                    book_meta = None;
                 }
             }
             continue;
@@ -646,6 +721,7 @@ fn parse_usfm_document(
                 &mut passages,
                 &mut current_builder,
                 &book_name,
+                &book_meta,
                 current_chapter,
                 translation,
             )?;
@@ -670,6 +746,7 @@ fn parse_usfm_document(
                 &mut passages,
                 &mut current_builder,
                 &book_name,
+                &book_meta,
                 current_chapter,
                 translation,
             )?;
@@ -694,6 +771,7 @@ fn parse_usfm_document(
         &mut passages,
         &mut current_builder,
         &book_name,
+        &book_meta,
         current_chapter,
         translation,
     )?;
@@ -729,6 +807,7 @@ fn flush_current_passage(
     passages: &mut Vec<BiblePassage>,
     builder: &mut Option<PassageBuilder>,
     book_name: &Option<String>,
+    book_meta: &Option<BibleBookCanonical>,
     chapter: Option<u16>,
     translation: &BibleTranslation,
 ) -> Result<()> {
@@ -741,7 +820,19 @@ fn flush_current_passage(
             warn!(%book, "dropping passage without chapter context");
             return Ok(());
         };
-        let reference = BibleReference::new(book, chapter, current.start, current.end)?;
+        let reference = if let Some(meta) = book_meta {
+            BibleReference::new_with_code(
+                book.clone(),
+                meta.code,
+                meta.number,
+                chapter,
+                current.start,
+                current.end,
+            )?
+        } else {
+            warn!(book = %book, "canonical mapping missing; falling back to name-only reference");
+            BibleReference::new(book.clone(), chapter, current.start, current.end)?
+        };
         let passage = BiblePassage::new(reference, translation.clone(), current.text);
         passages.push(passage);
     }
@@ -887,75 +978,7 @@ impl PassageBuilder {
 }
 
 fn default_book_name(code: &str) -> Option<&'static str> {
-    match code {
-        "GEN" => Some("Genesis"),
-        "EXO" => Some("Exodus"),
-        "LEV" => Some("Leviticus"),
-        "NUM" => Some("Numbers"),
-        "DEU" => Some("Deuteronomy"),
-        "JOS" => Some("Joshua"),
-        "JDG" => Some("Judges"),
-        "RUT" => Some("Ruth"),
-        "1SA" => Some("1 Samuel"),
-        "2SA" => Some("2 Samuel"),
-        "1KI" => Some("1 Kings"),
-        "2KI" => Some("2 Kings"),
-        "1CH" => Some("1 Chronicles"),
-        "2CH" => Some("2 Chronicles"),
-        "EZR" => Some("Ezra"),
-        "NEH" => Some("Nehemiah"),
-        "EST" => Some("Esther"),
-        "JOB" => Some("Job"),
-        "PSA" => Some("Psalm"),
-        "PRO" => Some("Proverbs"),
-        "ECC" => Some("Ecclesiastes"),
-        "SNG" => Some("Song of Songs"),
-        "ISA" => Some("Isaiah"),
-        "JER" => Some("Jeremiah"),
-        "LAM" => Some("Lamentations"),
-        "EZK" => Some("Ezekiel"),
-        "DAN" => Some("Daniel"),
-        "HOS" => Some("Hosea"),
-        "JOL" => Some("Joel"),
-        "AMO" => Some("Amos"),
-        "OBA" => Some("Obadiah"),
-        "JON" => Some("Jonah"),
-        "MIC" => Some("Micah"),
-        "NAM" => Some("Nahum"),
-        "HAB" => Some("Habakkuk"),
-        "ZEP" => Some("Zephaniah"),
-        "HAG" => Some("Haggai"),
-        "ZEC" => Some("Zechariah"),
-        "MAL" => Some("Malachi"),
-        "MAT" => Some("Matthew"),
-        "MRK" => Some("Mark"),
-        "LUK" => Some("Luke"),
-        "JHN" => Some("John"),
-        "ACT" => Some("Acts"),
-        "ROM" => Some("Romans"),
-        "1CO" => Some("1 Corinthians"),
-        "2CO" => Some("2 Corinthians"),
-        "GAL" => Some("Galatians"),
-        "EPH" => Some("Ephesians"),
-        "PHP" => Some("Philippians"),
-        "COL" => Some("Colossians"),
-        "1TH" => Some("1 Thessalonians"),
-        "2TH" => Some("2 Thessalonians"),
-        "1TI" => Some("1 Timothy"),
-        "2TI" => Some("2 Timothy"),
-        "TIT" => Some("Titus"),
-        "PHM" => Some("Philemon"),
-        "HEB" => Some("Hebrews"),
-        "JAS" => Some("James"),
-        "1PE" => Some("1 Peter"),
-        "2PE" => Some("2 Peter"),
-        "1JN" => Some("1 John"),
-        "2JN" => Some("2 John"),
-        "3JN" => Some("3 John"),
-        "JUD" => Some("Jude"),
-        "REV" => Some("Revelation"),
-        _ => None,
-    }
+    canonical_book_by_code(code).map(|meta| meta.english_name)
 }
 
 #[cfg(test)]

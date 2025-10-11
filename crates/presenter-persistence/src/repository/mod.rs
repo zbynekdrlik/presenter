@@ -308,12 +308,34 @@ fn to_domain_passage(
     model: bible_passage::Model,
     translation: bible_translation::Model,
 ) -> Result<BiblePassage, RepositoryError> {
-    let reference = BibleReference::new(
-        model.book,
-        model.chapter as u16,
-        model.verse_start as u16,
-        model.verse_end as u16,
-    )?;
+    let reference = if let (Some(code), Some(number)) =
+        (Some(model.book_code.clone()), Some(model.book_number))
+    {
+        if !code.is_empty() && number > 0 {
+            BibleReference::new_with_code(
+                model.book.clone(),
+                code,
+                number as u16,
+                model.chapter as u16,
+                model.verse_start as u16,
+                model.verse_end as u16,
+            )?
+        } else {
+            BibleReference::new(
+                model.book.clone(),
+                model.chapter as u16,
+                model.verse_start as u16,
+                model.verse_end as u16,
+            )?
+        }
+    } else {
+        BibleReference::new(
+            model.book.clone(),
+            model.chapter as u16,
+            model.verse_start as u16,
+            model.verse_end as u16,
+        )?
+    };
     let translation = to_domain_translation(translation);
     Ok(BiblePassage::new(reference, translation, model.content))
 }
@@ -574,7 +596,13 @@ mod tests {
             .unwrap()
             .expect("passage to exist");
         assert_eq!(fetched.translation, translation);
-        assert_eq!(fetched.reference, reference);
+        // Reference should carry canonical code/number after round-trip
+        assert_eq!(fetched.reference.book, reference.book);
+        assert_eq!(fetched.reference.chapter, reference.chapter);
+        assert_eq!(fetched.reference.verse_start, reference.verse_start);
+        assert_eq!(fetched.reference.verse_end, reference.verse_end);
+        assert_eq!(fetched.reference.book_code.as_deref(), Some("JHN"));
+        assert_eq!(fetched.reference.book_number, Some(43));
         assert_eq!(fetched.text, passage.text);
     }
 

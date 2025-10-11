@@ -1,10 +1,14 @@
 use super::protocol::*;
 use super::variables::CompanionVariableState;
-use super::*;
+use super::{handle_command, validate_token};
 use crate::live::LiveEvent;
+use crate::state::AppState;
 use chrono::{TimeZone, Utc};
-use presenter_core::{bible::BibleIngestionBatch, BiblePassage, BibleTranslation};
-use serde_json::json;
+use presenter_core::{
+    bible::BibleIngestionBatch, BiblePassage, BibleReference, BibleTranslation, StageDisplayLayout,
+    StageDisplaySnapshot, TimerState, TimersOverview,
+};
+use serde_json::{json, Value};
 use tokio::time::{timeout, Duration};
 
 #[test]
@@ -224,7 +228,7 @@ async fn bible_trigger_and_clear_flow_updates_variables() {
     let state = AppState::in_memory().await.unwrap();
 
     let translation = BibleTranslation::new("KJV", "King James Version", "en");
-    let reference = BibleReference::new("John", 3, 16, 16).unwrap();
+    let reference = BibleReference::new_with_code("John", "JHN", 43, 3, 16, 16).unwrap();
     let passage = BiblePassage::new(
         reference.clone(),
         translation.clone(),

@@ -127,7 +127,19 @@ RUN_AS_ORIGINAL cargo test
 echo "[verify] Running Companion module unit tests"
 RUN_AS_ORIGINAL npm run test:companion
 
-RUN_ARGS=("--force" "--name" "$REPO_SLUG" "--display-name" "$DISPLAY_NAME" "--port" "$DEMO_PORT" "--enable-companion")
+# Derive a stable but conflict-aware OSC host port. Prefer 39051; if busy, pick the next free.
+OSC_PORT_BASE=39051
+HOST_OSC_PORT="$OSC_PORT_BASE"
+if ss -lntup 2>/dev/null | grep -q ":${HOST_OSC_PORT}\\b"; then
+  for p in $(seq $((OSC_PORT_BASE+1)) $((OSC_PORT_BASE+200))); do
+    if ! ss -lntup 2>/dev/null | grep -q ":${p}\\b"; then
+      HOST_OSC_PORT="$p"
+      break
+    fi
+  done
+fi
+
+RUN_ARGS=("--force" "--name" "$REPO_SLUG" "--display-name" "$DISPLAY_NAME" "--port" "$DEMO_PORT" "--osc-port" "$HOST_OSC_PORT" "--enable-companion")
 
 echo "[verify] Refreshing Docker demo for project '$REPO_SLUG' (pre-tests)"
 PRESENTER_ANDROID_ADB_BIN="$PRESENTER_ANDROID_ADB_BIN" ADB_KEYS_DIR="$ADB_KEYS_DIR" "$REPO_ROOT/scripts/docker/run-demo.sh" "${RUN_ARGS[@]}"
@@ -141,7 +153,7 @@ echo "[verify] Running Playwright suite"
 RUN_AS_ORIGINAL npm run test:playwright
 
 echo "[verify] Refreshing Docker demo for project '$REPO_SLUG' (post-tests)"
-PRESENTER_ANDROID_ADB_BIN="$PRESENTER_ANDROID_ADB_BIN" ADB_KEYS_DIR="$ADB_KEYS_DIR" "$REPO_ROOT/scripts/docker/run-demo.sh" "--force" "--name" "$REPO_SLUG" "--display-name" "$DISPLAY_NAME" "--port" "$DEMO_PORT" "--enable-companion"
+PRESENTER_ANDROID_ADB_BIN="$PRESENTER_ANDROID_ADB_BIN" ADB_KEYS_DIR="$ADB_KEYS_DIR" "$REPO_ROOT/scripts/docker/run-demo.sh" "--force" "--name" "$REPO_SLUG" "--display-name" "$DISPLAY_NAME" "--port" "$DEMO_PORT" "--osc-port" "$HOST_OSC_PORT" "--enable-companion"
 
 echo "[verify] Restarting gateway (post-tests)"
 PRESENTER_ANDROID_ADB_BIN="$PRESENTER_ANDROID_ADB_BIN" ADB_KEYS_DIR="$ADB_KEYS_DIR" "$REPO_ROOT/scripts/docker/run-gateway.sh" --force

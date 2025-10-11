@@ -1,5 +1,6 @@
 use anyhow::anyhow;
 use chrono::{DateTime, Utc};
+use presenter_core::slide::SlideMetadata;
 use presenter_core::{
     bible::BibleReference,
     playlist::{MidiBinding, PlaylistEntryKind},
@@ -59,11 +60,17 @@ pub(super) fn to_domain_slide(model: slide_entity::Model) -> Result<Slide, Repos
         SlideText::new(model.stage_text)?,
         model.group_name.map(SlideGroup::new),
     );
-    let slide = Slide::new(model.position as u32, content)
+    let mut slide = Slide::new(model.position as u32, content)
         .with_id(SlideId::from_uuid(parse_uuid(&model.id)?));
+    if let Some(raw) = model.metadata_json.as_deref() {
+        if !raw.trim().is_empty() {
+            if let Ok(meta) = serde_json::from_str::<SlideMetadata>(raw) {
+                slide = slide.with_metadata(Some(meta));
+            }
+        }
+    }
     Ok(slide)
 }
-
 pub(super) fn to_domain_playlist_entry(
     model: playlist_entry::Model,
 ) -> Result<PlaylistEntry, RepositoryError> {
@@ -197,16 +204,27 @@ pub(super) fn to_domain_passage(
     model: bible_passage::Model,
     translation: bible_translation::Model,
 ) -> Result<BiblePassage, RepositoryError> {
-    let reference = BibleReference::new(
-        model.book,
-        model.chapter as u16,
-        model.verse_start as u16,
-        model.verse_end as u16,
-    )?;
+    // Prefer canonical code/number when the row contains them; fall back otherwise.
+    let reference = if !model.book_code.is_empty() && model.book_number > 0 {
+        BibleReference::new_with_code(
+            model.book,
+            model.book_code,
+            model.book_number as u16,
+            model.chapter as u16,
+            model.verse_start as u16,
+            model.verse_end as u16,
+        )?
+    } else {
+        BibleReference::new(
+            model.book,
+            model.chapter as u16,
+            model.verse_start as u16,
+            model.verse_end as u16,
+        )?
+    };
     let translation = to_domain_translation(translation);
     Ok(BiblePassage::new(reference, translation, model.content))
 }
-
 pub(super) fn android_stage_display_model_to_domain(
     model: android_stage_display::Model,
 ) -> anyhow::Result<AndroidStageDisplay> {
