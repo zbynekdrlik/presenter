@@ -7,11 +7,14 @@ use axum::{
     response::Html,
     Json,
 };
+use presenter_core::bible::{
+    canonical_book_by_code, BiblePassage, BiblePreferences, BiblePreferencesDraft, BibleReference,
+    BibleTranslation,
+};
+use presenter_core::slide::SlideMetadata;
 use presenter_core::{
     presentation::Presentation, PresentationId, Slide, SlideContent, SlideGroup, SlideText,
 };
-use presenter_core::bible::{BiblePassage, BiblePreferences, BiblePreferencesDraft, BibleReference, BibleTranslation, canonical_book_by_code};
-use presenter_core::slide::SlideMetadata;
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 use tracing::instrument;

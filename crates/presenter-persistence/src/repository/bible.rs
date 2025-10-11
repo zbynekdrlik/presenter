@@ -3,7 +3,10 @@ use sea_orm::{ColumnTrait, EntityTrait, QueryFilter, QueryOrder, QuerySelect, Tr
 use tracing::instrument;
 
 use crate::entities::{bible_passage, bible_translation};
-use presenter_core::{bible::BibleIngestionBatch, BiblePassage, BibleReference, BibleTranslation};
+use presenter_core::{
+    bible::{canonical_book_by_name, BibleIngestionBatch},
+    BiblePassage, BibleReference, BibleTranslation,
+};
 use sea_orm::Set;
 
 use super::util::{to_domain_passage, to_domain_translation, BIBLE_INSERT_CHUNK};
@@ -37,10 +40,19 @@ impl Repository {
         let mut chunk = Vec::with_capacity(BIBLE_INSERT_CHUNK);
         for passage in passages {
             let reference = &passage.reference;
+            let (code, number) = match &reference.book_code {
+                Some(c) => (c.clone(), reference.book_number.unwrap_or(0) as i32),
+                None => match canonical_book_by_name(&reference.book) {
+                    Some(meta) => (meta.code.to_string(), meta.number as i32),
+                    None => (reference.book.clone(), 0),
+                },
+            };
             let model = bible_passage::ActiveModel {
                 id: Set(uuid::Uuid::new_v4().to_string()),
                 translation_code: Set(translation.code.clone()),
                 book: Set(reference.book.clone()),
+                book_code: Set(code),
+                book_number: Set(number),
                 chapter: Set(reference.chapter as i32),
                 verse_start: Set(reference.verse_start as i32),
                 verse_end: Set(reference.verse_end as i32),
@@ -140,10 +152,9 @@ impl Repository {
     }
 }
 
-
 use presenter_core::bible::BibleBookChapterSummary;
-use sea_orm::FromQueryResult;
 use sea_orm::sea_query::Expr;
+use sea_orm::FromQueryResult;
 
 impl Repository {
     #[instrument(skip_all)]
@@ -159,7 +170,9 @@ impl Repository {
         let translation = bible_translation::Entity::find_by_id(translation_code.to_string())
             .one(&self.db)
             .await?;
-        let Some(translation) = translation else { return Ok(Vec::new()); };
+        let Some(translation) = translation else {
+            return Ok(Vec::new());
+        };
 
         let mut query = bible_passage::Entity::find()
             .filter(bible_passage::Column::TranslationCode.eq(translation_code.to_string()))
@@ -186,6 +199,8 @@ impl Repository {
         #[derive(Debug, FromQueryResult)]
         struct ChapterRow {
             book: String,
+            book_code: String,
+            book_number: i32,
             chapter: i32,
             verse_count: i32,
         }
@@ -193,10 +208,17 @@ impl Repository {
         let rows = bible_passage::Entity::find()
             .select_only()
             .column(bible_passage::Column::Book)
+            .column(bible_passage::Column::BookCode)
+            .column(bible_passage::Column::BookNumber)
             .column(bible_passage::Column::Chapter)
-            .column_as(Expr::col(bible_passage::Column::VerseEnd).max(), "verse_count")
+            .column_as(
+                Expr::col(bible_passage::Column::VerseEnd).max(),
+                "verse_count",
+            )
             .filter(bible_passage::Column::TranslationCode.eq(translation_code.to_string()))
             .group_by(bible_passage::Column::Book)
+            .group_by(bible_passage::Column::BookCode)
+            .group_by(bible_passage::Column::BookNumber)
             .group_by(bible_passage::Column::Chapter)
             .order_by_asc(bible_passage::Column::Book)
             .order_by_asc(bible_passage::Column::Chapter)
@@ -207,8 +229,8 @@ impl Repository {
         for row in rows {
             summaries.push(BibleBookChapterSummary {
                 book: row.book,
-                book_code: None,
-                book_number: None,
+                book_code: Some(row.book_code),
+                book_number: Some((row.book_number.max(0)) as u16),
                 chapter: row.chapter.max(0) as u16,
                 verse_count: row.verse_count.max(0) as u16,
             });

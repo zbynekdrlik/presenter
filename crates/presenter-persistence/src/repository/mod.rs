@@ -308,12 +308,34 @@ fn to_domain_passage(
     model: bible_passage::Model,
     translation: bible_translation::Model,
 ) -> Result<BiblePassage, RepositoryError> {
-    let reference = BibleReference::new(
-        model.book,
-        model.chapter as u16,
-        model.verse_start as u16,
-        model.verse_end as u16,
-    )?;
+    let reference = if let (Some(code), Some(number)) =
+        (Some(model.book_code.clone()), Some(model.book_number))
+    {
+        if !code.is_empty() && number > 0 {
+            BibleReference::new_with_code(
+                model.book.clone(),
+                code,
+                number as u16,
+                model.chapter as u16,
+                model.verse_start as u16,
+                model.verse_end as u16,
+            )?
+        } else {
+            BibleReference::new(
+                model.book.clone(),
+                model.chapter as u16,
+                model.verse_start as u16,
+                model.verse_end as u16,
+            )?
+        }
+    } else {
+        BibleReference::new(
+            model.book.clone(),
+            model.chapter as u16,
+            model.verse_start as u16,
+            model.verse_end as u16,
+        )?
+    };
     let translation = to_domain_translation(translation);
     Ok(BiblePassage::new(reference, translation, model.content))
 }

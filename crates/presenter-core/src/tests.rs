@@ -23,12 +23,7 @@ fn library_and_playlist_share_ids_without_collision() {
     let first_presentation = Presentation::new("Test", vec![sample_slide(0, None)]).unwrap();
     let second_presentation = Presentation::new("Second", vec![sample_slide(0, None)]).unwrap();
 
-    let mut library = Library::new(
-        "Lib",
-        LibraryCategory::Worship,
-        vec![first_presentation.clone()],
-    )
-    .unwrap();
+    let mut library = Library::new("Lib", vec![first_presentation.clone()]).unwrap();
     library
         .add_presentation(second_presentation.clone())
         .unwrap();

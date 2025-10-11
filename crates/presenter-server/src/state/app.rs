@@ -8,14 +8,17 @@ use crate::{
 };
 use chrono::Utc;
 use presenter_bible::BibleImportSummary;
+use presenter_core::bible::{
+    BibleBookChapterSummary, BiblePreferences, BiblePreferencesDraft, BibleReference,
+    BibleTranslation,
+};
 use presenter_core::playlist::PlaylistEntryKind;
+use presenter_core::slide::{BibleSlideMetadata, BibleSlideVerseRef, SlideMetadata};
 use presenter_core::{
     BibleBroadcast, Library, LibraryId, LibrarySummary, OscSettings, OscSettingsDraft, Playlist,
     PlaylistEntry, PlaylistEntryId, PlaylistId, Presentation, PresentationId, PresentationSummary,
     SearchResult, Slide, SlideContent, SlideGroup, SlideId, SlideText, StageDisplayLayout,
 };
-use presenter_core::bible::{BibleBookChapterSummary, BiblePreferences, BiblePreferencesDraft, BibleReference, BibleTranslation};
-use presenter_core::slide::{SlideMetadata, BibleSlideMetadata, BibleSlideVerseRef};
 use presenter_importer::bible::BibleIngestionService;
 use presenter_persistence::{DatabaseSettings, Repository};
 use serde::Serialize;
@@ -343,9 +346,7 @@ impl AppState {
     pub async fn create_library(&self, name: &str) -> anyhow::Result<Library> {
         // Default new libraries to the Worship category unless a specific flow
         // (e.g., Bible) chooses otherwise.
-        self.repository
-            .create_library(name)
-            .await
+        self.repository.create_library(name).await
     }
 
     pub async fn library_favorites(&self) -> anyhow::Result<Vec<LibraryId>> {
@@ -424,13 +425,34 @@ impl AppState {
 
     // Bible preferences and summaries
     pub async fn bible_preferences(&self) -> anyhow::Result<BiblePreferences> {
-        let main = self.repository.get_app_setting("bible.main_translation").await?;
-        let secondary = self.repository.get_app_setting("bible.secondary_translation").await?;
-        let char_str = self.repository.get_app_setting("bible.character_limit").await?;
+        let main = self
+            .repository
+            .get_app_setting("bible.main_translation")
+            .await?;
+        let secondary = self
+            .repository
+            .get_app_setting("bible.secondary_translation")
+            .await?;
+        let char_str = self
+            .repository
+            .get_app_setting("bible.character_limit")
+            .await?;
         let mut prefs = BiblePreferences::default();
-        if let Some(m) = main { if !m.trim().is_empty() { prefs = prefs.with_main_translation(Some(m)); } }
-        if let Some(s) = secondary { if !s.trim().is_empty() { prefs = prefs.with_secondary_translation(Some(s)); } }
-        if let Some(c) = char_str { if let Ok(v) = c.parse::<u32>() { prefs = prefs.with_character_limit(v); } }
+        if let Some(m) = main {
+            if !m.trim().is_empty() {
+                prefs = prefs.with_main_translation(Some(m));
+            }
+        }
+        if let Some(s) = secondary {
+            if !s.trim().is_empty() {
+                prefs = prefs.with_secondary_translation(Some(s));
+            }
+        }
+        if let Some(c) = char_str {
+            if let Ok(v) = c.parse::<u32>() {
+                prefs = prefs.with_character_limit(v);
+            }
+        }
         Ok(prefs)
     }
 
@@ -440,9 +462,27 @@ impl AppState {
     ) -> anyhow::Result<BiblePreferences> {
         let current = self.bible_preferences().await?;
         let next = draft.apply(current);
-        if let Some(ref m) = next.main_translation { self.repository.set_app_setting("bible.main_translation", m).await?; } else { self.repository.set_app_setting("bible.main_translation", "").await?; }
-        if let Some(ref s) = next.secondary_translation { self.repository.set_app_setting("bible.secondary_translation", s).await?; } else { self.repository.set_app_setting("bible.secondary_translation", "").await?; }
-        self.repository.set_app_setting("bible.character_limit", &next.character_limit.to_string()).await?;
+        if let Some(ref m) = next.main_translation {
+            self.repository
+                .set_app_setting("bible.main_translation", m)
+                .await?;
+        } else {
+            self.repository
+                .set_app_setting("bible.main_translation", "")
+                .await?;
+        }
+        if let Some(ref s) = next.secondary_translation {
+            self.repository
+                .set_app_setting("bible.secondary_translation", s)
+                .await?;
+        } else {
+            self.repository
+                .set_app_setting("bible.secondary_translation", "")
+                .await?;
+        }
+        self.repository
+            .set_app_setting("bible.character_limit", &next.character_limit.to_string())
+            .await?;
         Ok(next)
     }
 
@@ -667,7 +707,10 @@ impl AppState {
     pub async fn create_bible_presentation(&self, name: &str) -> anyhow::Result<Presentation> {
         // Ensure a Bible library exists
         let libraries = self.repository.fetch_libraries().await?;
-        let library = if let Some(existing) = libraries.into_iter().find(|l| l.name.eq_ignore_ascii_case("Bible")) {
+        let library = if let Some(existing) = libraries
+            .into_iter()
+            .find(|l| l.name.eq_ignore_ascii_case("Bible"))
+        {
             existing
         } else {
             self.repository.create_library("Bible").await?
@@ -883,8 +926,8 @@ fn sample_library() -> Library {
     .with_id(PresentationId::new());
 
     Library::new("Sample Library", vec![presentation])
-    .unwrap()
-    .with_id(LibraryId::new())
+        .unwrap()
+        .with_id(LibraryId::new())
 }
 
 // Compose Bible slides from a passage sequence, batching contiguous verses

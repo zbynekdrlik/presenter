@@ -157,12 +157,9 @@ async fn stage_snapshot_defaults_to_first_presentation() {
         .with_id(SlideId::new())],
     )
     .unwrap();
-    let library = Library::new(
-        "Fallback",
-        vec![presentation.clone()],
-    )
-    .unwrap()
-    .with_id(LibraryId::new());
+    let library = Library::new("Fallback", vec![presentation.clone()])
+        .unwrap()
+        .with_id(LibraryId::new());
     state.repository().upsert_library(&library).await.unwrap();
 
     let snapshot = state
@@ -302,7 +299,13 @@ async fn trigger_bible_passage_publishes_event_and_state() {
         .trigger_bible_passage("test", &reference)
         .await
         .unwrap();
-    assert_eq!(broadcast.passage.reference, reference);
+    assert_eq!(broadcast.passage.reference.book, reference.book);
+    assert_eq!(broadcast.passage.reference.chapter, reference.chapter);
+    assert_eq!(
+        broadcast.passage.reference.verse_start,
+        reference.verse_start
+    );
+    assert_eq!(broadcast.passage.reference.verse_end, reference.verse_end);
     assert!(state.active_bible_broadcast().await.is_some());
 
     match rx.recv().await.unwrap() {
