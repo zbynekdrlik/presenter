@@ -47,7 +47,7 @@ impl AppState {
         draft: AbleSetSettingsDraft,
     ) -> anyhow::Result<AbleSetSettings> {
         let settings = self.repository.upsert_ableset_settings(&draft).await?;
-        self.ableset_bridge.apply_settings(settings.clone()).await?;
+        self.ableset_client.apply_settings(settings.clone()).await?;
         {
             let mut cache = self.ableset_cache.write().await;
             cache.invalidate();
@@ -58,15 +58,15 @@ impl AppState {
     }
 
     pub async fn ableset_status_snapshot(&self) -> AbleSetStatusSnapshot {
-        self.ableset_bridge.status_snapshot().await
+        self.ableset_client.status_snapshot().await
     }
 
     pub async fn set_ableset_follow(&self, enabled: bool) -> AbleSetStatusSnapshot {
-        self.ableset_bridge.set_follow_enabled(enabled).await
+        self.ableset_client.set_follow_enabled(enabled).await
     }
 
     pub async fn current_ableset_song(&self) -> Option<AbleSetSongSnapshot> {
-        self.ableset_bridge.song_snapshot().await
+        self.ableset_client.song_snapshot().await
     }
 
     pub async fn resolve_ableset_presentation(
@@ -77,7 +77,7 @@ impl AppState {
         if key.is_empty() {
             return Ok(None);
         }
-        let settings = self.ableset_bridge.status_snapshot().await;
+        let settings = self.ableset_client.status_snapshot().await;
         if !settings.enabled {
             return Ok(None);
         }

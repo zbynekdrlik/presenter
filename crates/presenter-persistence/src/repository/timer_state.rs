@@ -2,7 +2,7 @@ use sea_orm::{EntityTrait, Set};
 use tracing::instrument;
 
 use crate::entities::timers;
-use presenter_core::{TimerState, TimersState};
+use presenter_core::TimersState;
 
 use super::util::{timer_state_to_string, timers_model_to_state};
 use super::Repository;

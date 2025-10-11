@@ -7,6 +7,7 @@ use serde_json::to_string;
 use super::styles;
 use super::utils::format_seconds_compact;
 
+#[allow(clippy::too_many_lines, clippy::uninlined_format_args)]
 pub async fn render_timer_overlay(state: &AppState) -> anyhow::Result<Html<String>> {
     let overview = state.timers_overview().await?;
     let initial_seconds = overview.countdown_to_start.seconds_remaining;

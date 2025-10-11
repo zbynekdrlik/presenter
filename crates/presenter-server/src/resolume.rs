@@ -7,7 +7,9 @@ use serde::Serialize;
 use std::{
     borrow::Cow,
     collections::HashMap,
+    future::Future,
     net::{IpAddr, SocketAddr},
+    pin::Pin,
     sync::Arc,
     time::Duration,
 };
@@ -89,6 +91,19 @@ pub struct ResolumeRegistry {
     client: Client,
     hosts: Arc<RwLock<HashMap<ResolumeHostId, HostEntry>>>,
 }
+
+type ResolumeFuture<'a, T> = Pin<Box<dyn Future<Output = T> + Send + 'a>>;
+
+pub trait ResolumeClient: Send + Sync {
+    fn set_hosts(&self, hosts: Vec<ResolumeHost>) -> ResolumeFuture<'_, ()>;
+    fn snapshot(&self) -> ResolumeFuture<'_, HashMap<ResolumeHostId, ResolumeConnectionSnapshot>>;
+    fn snapshot_for(&self, id: ResolumeHostId) -> ResolumeFuture<'_, ResolumeConnectionSnapshot>;
+    fn stage_update(&self, update: StageUpdate) -> ResolumeFuture<'_, ()>;
+    fn bible_update(&self, update: BibleUpdate) -> ResolumeFuture<'_, ()>;
+    fn timer_update(&self, frame: TimerFrame) -> ResolumeFuture<'_, ()>;
+}
+
+pub type DynResolumeClient = Arc<dyn ResolumeClient>;
 
 #[derive(Debug)]
 struct HostEntry {
@@ -226,6 +241,137 @@ impl ResolumeRegistry {
         } else {
             ResolumeConnectionSnapshot::disabled()
         }
+    }
+}
+
+impl ResolumeClient for ResolumeRegistry {
+    fn set_hosts(&self, hosts: Vec<ResolumeHost>) -> ResolumeFuture<'_, ()> {
+        let registry = self.clone();
+        Box::pin(async move {
+            ResolumeRegistry::set_hosts(&registry, hosts).await;
+        })
+    }
+
+    fn snapshot(&self) -> ResolumeFuture<'_, HashMap<ResolumeHostId, ResolumeConnectionSnapshot>> {
+        let registry = self.clone();
+        Box::pin(async move { ResolumeRegistry::snapshot(&registry).await })
+    }
+
+    fn snapshot_for(&self, id: ResolumeHostId) -> ResolumeFuture<'_, ResolumeConnectionSnapshot> {
+        let registry = self.clone();
+        Box::pin(async move { ResolumeRegistry::snapshot_for(&registry, id).await })
+    }
+
+    fn stage_update(&self, update: StageUpdate) -> ResolumeFuture<'_, ()> {
+        let registry = self.clone();
+        Box::pin(async move {
+            ResolumeRegistry::stage_update(&registry, update).await;
+        })
+    }
+
+    fn bible_update(&self, update: BibleUpdate) -> ResolumeFuture<'_, ()> {
+        let registry = self.clone();
+        Box::pin(async move {
+            ResolumeRegistry::bible_update(&registry, update).await;
+        })
+    }
+
+    fn timer_update(&self, frame: TimerFrame) -> ResolumeFuture<'_, ()> {
+        let registry = self.clone();
+        Box::pin(async move {
+            ResolumeRegistry::timer_update(&registry, frame).await;
+        })
+    }
+}
+
+#[cfg(test)]
+#[allow(dead_code)]
+#[derive(Clone, Default)]
+pub struct MockResolumeClient {
+    hosts: Arc<RwLock<HashMap<ResolumeHostId, (ResolumeHost, ResolumeConnectionSnapshot)>>>,
+    stage_events: Arc<RwLock<Vec<StageUpdate>>>,
+    bible_events: Arc<RwLock<Vec<BibleUpdate>>>,
+    timer_events: Arc<RwLock<Vec<TimerFrame>>>,
+}
+
+#[cfg(test)]
+#[allow(dead_code)]
+impl MockResolumeClient {
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    pub async fn stage_events(&self) -> Vec<StageUpdate> {
+        self.stage_events.read().await.clone()
+    }
+}
+
+#[cfg(test)]
+impl ResolumeClient for MockResolumeClient {
+    fn set_hosts(&self, hosts: Vec<ResolumeHost>) -> ResolumeFuture<'_, ()> {
+        let state = self.hosts.clone();
+        Box::pin(async move {
+            let mut guard = state.write().await;
+            guard.clear();
+            for host in hosts {
+                let snapshot = if host.is_enabled {
+                    ResolumeConnectionSnapshot {
+                        state: ResolumeConnectionState::Connecting,
+                        last_success: None,
+                        last_latency_ms: None,
+                        last_error: None,
+                    }
+                } else {
+                    ResolumeConnectionSnapshot::disabled()
+                };
+                guard.insert(host.id, (host, snapshot));
+            }
+        })
+    }
+
+    fn snapshot(&self) -> ResolumeFuture<'_, HashMap<ResolumeHostId, ResolumeConnectionSnapshot>> {
+        let state = self.hosts.clone();
+        Box::pin(async move {
+            state
+                .read()
+                .await
+                .iter()
+                .map(|(id, (_host, status))| (*id, status.clone()))
+                .collect()
+        })
+    }
+
+    fn snapshot_for(&self, id: ResolumeHostId) -> ResolumeFuture<'_, ResolumeConnectionSnapshot> {
+        let state = self.hosts.clone();
+        Box::pin(async move {
+            state
+                .read()
+                .await
+                .get(&id)
+                .map(|(_, status)| status.clone())
+                .unwrap_or_else(ResolumeConnectionSnapshot::disabled)
+        })
+    }
+
+    fn stage_update(&self, update: StageUpdate) -> ResolumeFuture<'_, ()> {
+        let events = self.stage_events.clone();
+        Box::pin(async move {
+            events.write().await.push(update);
+        })
+    }
+
+    fn bible_update(&self, update: BibleUpdate) -> ResolumeFuture<'_, ()> {
+        let events = self.bible_events.clone();
+        Box::pin(async move {
+            events.write().await.push(update);
+        })
+    }
+
+    fn timer_update(&self, frame: TimerFrame) -> ResolumeFuture<'_, ()> {
+        let events = self.timer_events.clone();
+        Box::pin(async move {
+            events.write().await.push(frame);
+        })
     }
 }
 

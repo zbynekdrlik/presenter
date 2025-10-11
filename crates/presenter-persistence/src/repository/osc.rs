@@ -1,4 +1,4 @@
-use sea_orm::{EntityTrait, Set};
+use sea_orm::EntityTrait;
 use tracing::instrument;
 
 use crate::entities::osc_settings;

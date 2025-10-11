@@ -1,8 +1,12 @@
+use crate::config::AndroidConfig;
 use anyhow::{anyhow, Context};
 use chrono::{DateTime, Utc};
 use presenter_core::{AndroidStageDisplay, AndroidStageDisplayId};
 use serde::Serialize;
-use std::{collections::HashMap, env, ffi::OsString, process::Output, sync::Arc, time::Duration};
+use std::{
+    collections::HashMap, ffi::OsString, future::Future, pin::Pin, process::Output, sync::Arc,
+    time::Duration,
+};
 use tokio::{
     process::Command,
     sync::{mpsc, RwLock},
@@ -51,6 +55,21 @@ pub struct AndroidStageRegistry {
     displays: Arc<RwLock<HashMap<AndroidStageDisplayId, DeviceEntry>>>,
 }
 
+type AndroidStageFuture<'a, T> = Pin<Box<dyn Future<Output = T> + Send + 'a>>;
+
+pub trait AndroidStageClient: Send + Sync {
+    fn set_displays(&self, displays: Vec<AndroidStageDisplay>) -> AndroidStageFuture<'_, ()>;
+    fn snapshot(
+        &self,
+    ) -> AndroidStageFuture<'_, HashMap<AndroidStageDisplayId, AndroidStageDisplayStatusSnapshot>>;
+    fn snapshot_for(
+        &self,
+        id: AndroidStageDisplayId,
+    ) -> AndroidStageFuture<'_, AndroidStageDisplayStatusSnapshot>;
+}
+
+pub type DynAndroidStageClient = Arc<dyn AndroidStageClient>;
+
 struct DeviceEntry {
     config: AndroidStageDisplay,
     status: Arc<RwLock<AndroidStageDisplayStatusSnapshot>>,
@@ -66,9 +85,11 @@ enum DeviceCommand {
 }
 
 impl AndroidStageRegistry {
-    pub fn new() -> Self {
-        let adb_path = env::var_os("PRESENTER_ANDROID_ADB_BIN")
-            .map(Arc::from)
+    pub fn from_config(config: &AndroidConfig) -> Self {
+        let adb_path = config
+            .adb_path
+            .as_ref()
+            .map(|path| Arc::new(path.clone()))
             .unwrap_or_else(|| Arc::new(OsString::from("adb")));
         Self {
             adb_path,
@@ -170,6 +191,107 @@ impl AndroidStageRegistry {
             command_tx,
             handle,
         }
+    }
+}
+
+impl AndroidStageClient for AndroidStageRegistry {
+    fn set_displays(&self, displays: Vec<AndroidStageDisplay>) -> AndroidStageFuture<'_, ()> {
+        let registry = self.clone();
+        Box::pin(async move {
+            AndroidStageRegistry::set_displays(&registry, displays).await;
+        })
+    }
+
+    fn snapshot(
+        &self,
+    ) -> AndroidStageFuture<'_, HashMap<AndroidStageDisplayId, AndroidStageDisplayStatusSnapshot>>
+    {
+        let registry = self.clone();
+        Box::pin(async move { AndroidStageRegistry::snapshot(&registry).await })
+    }
+
+    fn snapshot_for(
+        &self,
+        id: AndroidStageDisplayId,
+    ) -> AndroidStageFuture<'_, AndroidStageDisplayStatusSnapshot> {
+        let registry = self.clone();
+        Box::pin(async move { AndroidStageRegistry::snapshot_for(&registry, id).await })
+    }
+}
+
+#[cfg(test)]
+#[allow(dead_code)]
+#[derive(Clone, Default)]
+pub struct MockAndroidStageClient {
+    state: Arc<
+        RwLock<
+            HashMap<
+                AndroidStageDisplayId,
+                (AndroidStageDisplay, AndroidStageDisplayStatusSnapshot),
+            >,
+        >,
+    >,
+}
+
+#[cfg(test)]
+#[allow(dead_code)]
+impl MockAndroidStageClient {
+    pub fn new() -> Self {
+        Self::default()
+    }
+}
+
+#[cfg(test)]
+impl AndroidStageClient for MockAndroidStageClient {
+    fn set_displays(&self, displays: Vec<AndroidStageDisplay>) -> AndroidStageFuture<'_, ()> {
+        let state = self.state.clone();
+        Box::pin(async move {
+            let mut guard = state.write().await;
+            guard.clear();
+            for display in displays {
+                let status = if display.is_enabled {
+                    AndroidStageDisplayStatusSnapshot {
+                        state: AndroidStageDisplayState::Connecting,
+                        last_attempt: None,
+                        last_success: None,
+                        last_error: None,
+                    }
+                } else {
+                    AndroidStageDisplayStatusSnapshot::disabled()
+                };
+                guard.insert(display.id, (display, status));
+            }
+        })
+    }
+
+    fn snapshot(
+        &self,
+    ) -> AndroidStageFuture<'_, HashMap<AndroidStageDisplayId, AndroidStageDisplayStatusSnapshot>>
+    {
+        let state = self.state.clone();
+        Box::pin(async move {
+            state
+                .read()
+                .await
+                .iter()
+                .map(|(id, (_display, status))| (*id, status.clone()))
+                .collect()
+        })
+    }
+
+    fn snapshot_for(
+        &self,
+        id: AndroidStageDisplayId,
+    ) -> AndroidStageFuture<'_, AndroidStageDisplayStatusSnapshot> {
+        let state = self.state.clone();
+        Box::pin(async move {
+            state
+                .read()
+                .await
+                .get(&id)
+                .map(|(_, status)| status.clone())
+                .unwrap_or_else(AndroidStageDisplayStatusSnapshot::disabled)
+        })
     }
 }
 

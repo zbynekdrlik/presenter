@@ -4,11 +4,10 @@ use presenter_core::{
     bible::BibleReference,
     playlist::{MidiBinding, PlaylistEntryKind},
     AbleSetSettings, AndroidStageDisplay, AndroidStageDisplayId, BiblePassage, BibleTranslation,
-    CountdownTimer, LibraryId, OscSettings, Playlist, PlaylistEntry, PlaylistEntryId, PlaylistId,
-    PreachTimer, PresentationId, ResolumeHost, ResolumeHostId, Slide, SlideContent, SlideGroup,
-    SlideId, SlideText, StageState, TimerState, TimersState, VelocityMode,
+    CountdownTimer, OscSettings, Playlist, PlaylistEntry, PlaylistEntryId, PlaylistId, PreachTimer,
+    PresentationId, ResolumeHost, ResolumeHostId, Slide, SlideContent, SlideGroup, SlideId,
+    SlideText, StageState, TimerState, TimersState, VelocityMode,
 };
-use sea_orm::Set;
 use std::collections::HashSet;
 use thiserror::Error;
 use uuid::Uuid;
@@ -44,8 +43,6 @@ pub(super) enum RepositoryError {
     InvalidAbleSetPort(i32),
     #[error("ableset song prefix length {0} out of range")]
     InvalidAbleSetPrefix(i32),
-    #[error("unknown osc velocity mode '{0}' in persistence layer")]
-    UnknownOscVelocityMode(String),
 }
 
 pub(super) fn parse_uuid(id: &str) -> Result<Uuid, RepositoryError> {
@@ -173,9 +170,6 @@ pub(super) fn velocity_mode_to_string(_mode: VelocityMode) -> &'static str {
 }
 
 pub(super) fn parse_velocity_mode(value: &str) -> Result<VelocityMode, RepositoryError> {
-    // Accept legacy underscore and hyphenated forms; coerce all to OneBased.
-    // This avoids breaking pre-release databases while enforcing the
-    // one-based-only runtime policy.
     let v = value.trim().to_ascii_lowercase();
     match v.as_str() {
         "one-based" | "one_based" | "1" => Ok(VelocityMode::OneBased),

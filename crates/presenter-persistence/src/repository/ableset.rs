@@ -1,4 +1,4 @@
-use sea_orm::{ActiveModelTrait, ConnectionTrait, EntityTrait, Schema, Set};
+use sea_orm::{ActiveModelTrait, ConnectionTrait, EntityTrait, Schema};
 use tracing::instrument;
 
 use crate::entities::ableset_settings;

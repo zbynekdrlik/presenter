@@ -1,3 +1,5 @@
+#![allow(clippy::too_many_lines)]
+
 use sea_orm_migration::prelude::*;
 use sea_orm_migration::sea_query::{Query, SimpleExpr, Value};
 

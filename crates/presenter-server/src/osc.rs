@@ -1,9 +1,12 @@
 use std::{
     collections::HashMap,
+    future::Future,
+    pin::Pin,
     sync::Arc,
     time::{Duration, Instant},
 };
 
+use crate::{config::OscConfig, state::AppState};
 use anyhow::{anyhow, Context};
 use chrono::{DateTime, Utc};
 use presenter_core::{OscSettings, VelocityMode};
@@ -16,16 +19,28 @@ use tokio::{
 };
 use tracing::{debug, info, warn};
 
-use crate::state::AppState;
-
 #[derive(Clone)]
 pub struct OscBridge {
     inner: Arc<OscBridgeInner>,
 }
 
+type OscFuture<'a, T> = Pin<Box<dyn Future<Output = T> + Send + 'a>>;
+
+pub trait OscClient: Send + Sync {
+    fn apply_settings(
+        &self,
+        settings: OscSettings,
+        app_state: AppState,
+    ) -> OscFuture<'_, anyhow::Result<()>>;
+    fn status(&self) -> OscFuture<'_, OscStatusSnapshot>;
+}
+
+pub type DynOscClient = Arc<dyn OscClient>;
+
 struct OscBridgeInner {
     status: RwLock<OscStatusInner>,
     listener: Mutex<Option<ListenerGuard>>,
+    host_port_override: Option<u16>,
 }
 
 struct ListenerGuard {
@@ -53,9 +68,7 @@ impl Default for OscStatusInner {
             enabled: false,
             listening: false,
             listen_port: 39051,
-            host_port: std::env::var("PRESENTER_OSC_HOST_PORT")
-                .ok()
-                .and_then(|raw| raw.parse().ok()),
+            host_port: None,
             address_pattern: "/note".to_string(),
             velocity_mode: VelocityMode::OneBased,
             last_message_at: None,
@@ -63,6 +76,14 @@ impl Default for OscStatusInner {
             last_velocity: None,
             last_error: None,
         }
+    }
+}
+
+impl OscStatusInner {
+    fn with_host_override(host_port: Option<u16>) -> Self {
+        let mut status = Self::default();
+        status.host_port = host_port;
+        status
     }
 }
 
@@ -107,11 +128,12 @@ const DEDUPE_WINDOW: Duration = Duration::from_millis(75);
 const NOTE_OFF_WINDOW: Duration = Duration::from_millis(300);
 
 impl OscBridge {
-    pub fn new() -> Self {
+    pub fn new(config: &OscConfig) -> Self {
         Self {
             inner: Arc::new(OscBridgeInner {
-                status: RwLock::new(OscStatusInner::default()),
+                status: RwLock::new(OscStatusInner::with_host_override(config.host_port)),
                 listener: Mutex::new(None),
+                host_port_override: config.host_port,
             }),
         }
     }
@@ -125,9 +147,7 @@ impl OscBridge {
             let mut status = self.inner.status.write().await;
             status.enabled = settings.enabled;
             status.listen_port = settings.listen_port;
-            status.host_port = std::env::var("PRESENTER_OSC_HOST_PORT")
-                .ok()
-                .and_then(|raw| raw.parse().ok());
+            status.host_port = self.inner.host_port_override;
             status.address_pattern = settings.address_pattern.clone();
             status.velocity_mode = settings.velocity_mode;
             status.last_error = None;
@@ -202,6 +222,93 @@ impl OscBridge {
         }
         let mut status = self.inner.status.write().await;
         status.listening = false;
+    }
+}
+
+impl OscClient for OscBridge {
+    fn apply_settings(
+        &self,
+        settings: OscSettings,
+        app_state: AppState,
+    ) -> OscFuture<'_, anyhow::Result<()>> {
+        let bridge = self.clone();
+        Box::pin(async move { OscBridge::apply_settings(&bridge, settings, app_state).await })
+    }
+
+    fn status(&self) -> OscFuture<'_, OscStatusSnapshot> {
+        let bridge = self.clone();
+        Box::pin(async move { OscBridge::status(&bridge).await })
+    }
+}
+
+#[cfg(test)]
+#[allow(dead_code)]
+#[derive(Clone, Default)]
+pub struct MockOscClient {
+    state: Arc<Mutex<MockOscState>>,
+}
+
+#[cfg(test)]
+#[allow(dead_code)]
+#[derive(Debug)]
+struct MockOscState {
+    settings: Option<OscSettings>,
+    status: OscStatusSnapshot,
+}
+
+#[cfg(test)]
+impl Default for MockOscState {
+    fn default() -> Self {
+        Self {
+            settings: None,
+            status: OscStatusSnapshot {
+                enabled: false,
+                listening: false,
+                listen_port: 39051,
+                host_port: None,
+                address_pattern: "/note".to_string(),
+                velocity_mode: VelocityMode::OneBased,
+                last_message_at: None,
+                last_note: None,
+                last_velocity: None,
+                last_error: None,
+            },
+        }
+    }
+}
+
+#[cfg(test)]
+#[allow(dead_code)]
+impl MockOscClient {
+    pub fn new() -> Self {
+        Self::default()
+    }
+}
+
+#[cfg(test)]
+impl OscClient for MockOscClient {
+    fn apply_settings(
+        &self,
+        settings: OscSettings,
+        _app_state: AppState,
+    ) -> OscFuture<'_, anyhow::Result<()>> {
+        let state = self.state.clone();
+        Box::pin(async move {
+            let mut guard = state.lock().await;
+            guard.status.enabled = settings.enabled;
+            guard.status.listen_port = settings.listen_port;
+            guard.status.address_pattern = settings.address_pattern.clone();
+            guard.status.velocity_mode = settings.velocity_mode;
+            guard.status.listening = settings.enabled;
+            guard.status.last_error = None;
+            guard.settings = Some(settings);
+            Ok(())
+        })
+    }
+
+    fn status(&self) -> OscFuture<'_, OscStatusSnapshot> {
+        let state = self.state.clone();
+        Box::pin(async move { state.lock().await.status.clone() })
     }
 }
 

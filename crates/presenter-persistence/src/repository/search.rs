@@ -1,15 +1,10 @@
 use std::collections::{HashMap, HashSet};
 use tracing::instrument;
 
-use crate::entities::{
-    library, playlist, playlist_entry, playlist_favorite, presentation as presentation_entity,
-    slide as slide_entity,
-};
+use crate::entities::{library, presentation as presentation_entity, slide as slide_entity};
 use presenter_core::{
-    playlist::{MidiBinding, PlaylistEntryKind},
     search::{fold_query, query_tokens},
-    LibraryId, Playlist, PlaylistEntry, PlaylistEntryId, PlaylistId, PresentationId,
-    SearchMatchField, SearchResult, SearchResultKind, SlideId,
+    LibraryId, PresentationId, SearchMatchField, SearchResult, SearchResultKind, SlideId,
 };
 use sea_orm::{ColumnTrait, Condition, EntityTrait, QueryFilter, QueryOrder, QuerySelect};
 

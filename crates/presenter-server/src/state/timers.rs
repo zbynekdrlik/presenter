@@ -45,7 +45,7 @@ impl AppState {
         }
 
         let formatted = format_countdown_text(overview.countdown_to_start.seconds_remaining);
-        self.resolume_registry
+        self.resolume_client
             .timer_update(TimerFrame::new(formatted))
             .await;
 

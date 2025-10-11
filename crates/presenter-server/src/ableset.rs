@@ -3,7 +3,7 @@ use chrono::{DateTime, Utc};
 use presenter_core::{extract_song_prefix, AbleSetSettings, AbleSetSongSnapshot};
 use reqwest::Client;
 use serde::{Deserialize, Serialize};
-use std::{sync::Arc, time::Duration};
+use std::{future::Future, pin::Pin, sync::Arc, time::Duration};
 use tokio::{
     sync::{oneshot, Mutex, RwLock},
     task::JoinHandle,
@@ -18,6 +18,17 @@ const POLL_INTERVAL_MS: u64 = 250;
 pub struct AbleSetBridge {
     inner: Arc<AbleSetInner>,
 }
+
+type AbleSetFuture<'a, T> = Pin<Box<dyn Future<Output = T> + Send + 'a>>;
+
+pub trait AbleSetClient: Send + Sync {
+    fn apply_settings(&self, settings: AbleSetSettings) -> AbleSetFuture<'_, anyhow::Result<()>>;
+    fn status_snapshot(&self) -> AbleSetFuture<'_, AbleSetStatusSnapshot>;
+    fn set_follow_enabled(&self, enabled: bool) -> AbleSetFuture<'_, AbleSetStatusSnapshot>;
+    fn song_snapshot(&self) -> AbleSetFuture<'_, Option<AbleSetSongSnapshot>>;
+}
+
+pub type DynAbleSetClient = Arc<dyn AbleSetClient>;
 
 struct AbleSetInner {
     status: RwLock<AbleSetStatusInner>,
@@ -250,6 +261,110 @@ impl AbleSetBridge {
         }
         let mut status = self.inner.status.write().await;
         status.tracking = false;
+    }
+}
+
+impl AbleSetClient for AbleSetBridge {
+    fn apply_settings(&self, settings: AbleSetSettings) -> AbleSetFuture<'_, anyhow::Result<()>> {
+        let bridge = self.clone();
+        Box::pin(async move { AbleSetBridge::apply_settings(&bridge, settings).await })
+    }
+
+    fn status_snapshot(&self) -> AbleSetFuture<'_, AbleSetStatusSnapshot> {
+        let bridge = self.clone();
+        Box::pin(async move { AbleSetBridge::status_snapshot(&bridge).await })
+    }
+
+    fn set_follow_enabled(&self, enabled: bool) -> AbleSetFuture<'_, AbleSetStatusSnapshot> {
+        let bridge = self.clone();
+        Box::pin(async move { AbleSetBridge::set_follow_enabled(&bridge, enabled).await })
+    }
+
+    fn song_snapshot(&self) -> AbleSetFuture<'_, Option<AbleSetSongSnapshot>> {
+        let bridge = self.clone();
+        Box::pin(async move { AbleSetBridge::song_snapshot(&bridge).await })
+    }
+}
+
+#[cfg(test)]
+#[allow(dead_code)]
+#[derive(Clone, Default)]
+pub struct MockAbleSetClient {
+    inner: Arc<Mutex<MockAbleSetState>>,
+}
+
+#[cfg(test)]
+#[allow(dead_code)]
+#[derive(Default, Clone)]
+struct MockAbleSetState {
+    settings: Option<AbleSetSettings>,
+    follow_enabled: bool,
+    last_song: Option<AbleSetSongSnapshot>,
+}
+
+#[cfg(test)]
+fn mock_status_from_state(state: &MockAbleSetState) -> AbleSetStatusSnapshot {
+    if let Some(settings) = &state.settings {
+        AbleSetStatusSnapshot {
+            enabled: settings.enabled,
+            tracking: settings.enabled,
+            follow_enabled: state.follow_enabled,
+            host: settings.host.clone(),
+            http_port: settings.http_port,
+            osc_port: settings.osc_port,
+            library_name: settings.library_name.clone(),
+            song_prefix_length: settings.song_prefix_length,
+            last_song: state.last_song.clone(),
+            last_error: None,
+        }
+    } else {
+        AbleSetStatusSnapshot {
+            enabled: false,
+            tracking: false,
+            follow_enabled: state.follow_enabled,
+            host: "mock.local".into(),
+            http_port: 80,
+            osc_port: 39051,
+            library_name: "Mock".into(),
+            song_prefix_length: 3,
+            last_song: state.last_song.clone(),
+            last_error: None,
+        }
+    }
+}
+
+#[cfg(test)]
+impl AbleSetClient for MockAbleSetClient {
+    fn apply_settings(&self, settings: AbleSetSettings) -> AbleSetFuture<'_, anyhow::Result<()>> {
+        let state = self.inner.clone();
+        Box::pin(async move {
+            let mut guard = state.lock().await;
+            guard.follow_enabled = settings.enabled && guard.follow_enabled;
+            guard.settings = Some(settings);
+            Ok(())
+        })
+    }
+
+    fn status_snapshot(&self) -> AbleSetFuture<'_, AbleSetStatusSnapshot> {
+        let state = self.inner.clone();
+        Box::pin(async move {
+            let guard = state.lock().await;
+            mock_status_from_state(&guard)
+        })
+    }
+
+    fn set_follow_enabled(&self, enabled: bool) -> AbleSetFuture<'_, AbleSetStatusSnapshot> {
+        let state = self.inner.clone();
+        Box::pin(async move {
+            let mut guard = state.lock().await;
+            guard.follow_enabled = enabled;
+            mock_status_from_state(&guard)
+        })
+    }
+
+    fn song_snapshot(&self) -> AbleSetFuture<'_, Option<AbleSetSongSnapshot>> {
+        let state = self.inner.clone();
+        Box::pin(async move { state.lock().await.last_song.clone() })
     }
 }
 
