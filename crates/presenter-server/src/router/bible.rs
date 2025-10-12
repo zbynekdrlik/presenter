@@ -187,6 +187,9 @@ pub(super) async fn list_bible_books(
         let Some(number) = summary.book_number else {
             continue;
         };
+        if number == 0 {
+            continue;
+        };
         grouped
             .entry((number, summary.book.clone(), code))
             .or_default()
