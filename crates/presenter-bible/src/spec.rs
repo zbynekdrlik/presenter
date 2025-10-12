@@ -59,7 +59,7 @@ pub fn default_translation_specs() -> Vec<BibleTranslationSpec> {
 
 pub const KING_JAMES_SOURCE: &str = "https://ebible.org/Scriptures/eng-kjv_usfm.zip";
 pub const SLOVAK_ECUMENICKY_SOURCE: &str =
-    "https://github.com/obohu/mysword/releases/download/2023-08-20/SEB-S.txt.bbl.mybible.zip";
+    "https://mysword-bible.info/download/getfile.php?file=SlovakEcumenicalTranslation.bbl.mybible.zip";
 pub const SLOVAK_ROHACEK_SOURCE: &str =
     "https://github.com/otvorenie/obohu-sqlite/releases/download/2023-08-17/ROH-AV.SQLite3.zip";
 pub const SLOVAK_EVANGELICKY_SOURCE: &str =
