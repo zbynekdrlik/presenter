@@ -150,6 +150,12 @@ pub(super) async fn update_bible_preferences(
 }
 
 #[derive(Debug, Deserialize)]
+pub(super) struct BibleUiQuery {
+    #[serde(default)]
+    pub embed: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub(super) struct BibleBooksQuery {
     pub(super) translation: String,
@@ -531,8 +537,15 @@ pub(super) async fn clear_bible_broadcast(
 }
 
 #[instrument(skip_all)]
-pub(super) async fn bible_ui(State(state): State<AppState>) -> Result<Html<String>, AppError> {
-    let html = crate::ui::render_bible_ui(&state).await?;
+pub(super) async fn bible_ui(
+    State(state): State<AppState>,
+    Query(query): Query<BibleUiQuery>,
+) -> Result<Html<String>, AppError> {
+    let embed = match query.embed.as_deref() {
+        Some(value) => matches!(value, "1" | "true" | "yes" | "on"),
+        None => false,
+    };
+    let html = crate::ui::render_bible_ui(&state, embed).await?;
     Ok(html)
 }
 

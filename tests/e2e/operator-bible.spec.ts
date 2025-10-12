@@ -47,6 +47,7 @@ test('operator bible surface drives live passage broadcast', async ({ page, requ
   }
 
   const bibleFrame = page.frameLocator('section[data-view-panel="bible"] iframe');
+  await expect(bibleFrame.locator('header.operator__header')).toHaveCount(0);
 
   await expect(async () => {
     const state = await bibleFrame.locator('body').evaluate(() => (window as any).__presenterBibleState);
