@@ -157,8 +157,7 @@ mod tests {
             .collect();
         assert!(codes.contains("eng-kjv"));
         assert!(codes.contains("slk-seb"));
-        assert!(codes.contains("slk-roh"));
-        assert!(codes.contains("slk-sevp"));
+        // Note: slk-roh and slk-sevp will be re-added once stable sources are confirmed.
     }
 
     #[tokio::test]
