@@ -47,9 +47,17 @@ BRANCH_SLUG="$(echo "$BRANCH_NAME" | tr '[:upper:]' '[:lower:]' | sed -E 's/[^a-
 REPO_SLUG="$(basename "$REPO_ROOT")"
 REPO_SLUG="$(echo "$REPO_SLUG" | tr '[:upper:]' '[:lower:]' | sed -E 's/[^a-z0-9]+/-/g; s/^-+|-+$//g')"
 PROJECT_SLUG="$REPO_SLUG"
-PORT_HASH=$(printf '%s' "$REPO_SLUG" | md5sum | cut -c1-4)
-DEMO_PORT=$((0x$PORT_HASH))
-DEMO_PORT=$((18000 + (DEMO_PORT % 1000)))
+derive_port() {
+  local key="$1"
+  local hash
+  hash=$(printf '%s' "$key" | md5sum | cut -c1-4)
+  local base=$((0x$hash))
+  echo $((18000 + (base % 1000)))
+}
+
+DEMO_PORT=$(derive_port "$REPO_SLUG")
+DEMO_OSC_PORT=$(derive_port "${REPO_SLUG}-osc")
+DEMO_COMPANION_PORT=$(derive_port "${REPO_SLUG}-companion")
 DEMO_ORIGIN="http://127.0.0.1:${DEMO_PORT}"
 GATEWAY_URL="http://127.0.0.1/"
 
@@ -96,8 +104,8 @@ stop_demo_stack() {
   local REPO_PARENT
   REPO_PARENT="$(cd "$REPO_ROOT/.." && pwd)"
   local IMPORT_ROOT="${PRESENTER_LIBRARY_ROOT:-$REPO_PARENT/presenter-libraries}"
-  local HOST_OSC_PORT="39051"
-  local HOST_COMPANION_PORT="$((DEMO_PORT + 125))" # unused for down; stable filler
+  local HOST_OSC_PORT="$DEMO_OSC_PORT"
+  local HOST_COMPANION_PORT="$DEMO_COMPANION_PORT"
 
   if DEMO_DATA_DIR="$DEMO_DATA_DIR" IMPORT_ROOT="$IMPORT_ROOT" \
      HOST_HTTP_PORT="$DEMO_PORT" HOST_OSC_PORT="$HOST_OSC_PORT" \
@@ -127,19 +135,15 @@ RUN_AS_ORIGINAL cargo test
 echo "[verify] Running Companion module unit tests"
 RUN_AS_ORIGINAL npm run test:companion
 
-# Derive a stable but conflict-aware OSC host port. Prefer 39051; if busy, pick the next free.
-OSC_PORT_BASE=39051
-HOST_OSC_PORT="$OSC_PORT_BASE"
-if ss -lntup 2>/dev/null | grep -q ":${HOST_OSC_PORT}\\b"; then
-  for p in $(seq $((OSC_PORT_BASE+1)) $((OSC_PORT_BASE+200))); do
-    if ! ss -lntup 2>/dev/null | grep -q ":${p}\\b"; then
-      HOST_OSC_PORT="$p"
-      break
-    fi
-  done
-fi
-
-RUN_ARGS=("--force" "--name" "$REPO_SLUG" "--display-name" "$DISPLAY_NAME" "--port" "$DEMO_PORT" "--osc-port" "$HOST_OSC_PORT" "--enable-companion")
+RUN_ARGS=(
+  "--force"
+  "--name" "$REPO_SLUG"
+  "--display-name" "$DISPLAY_NAME"
+  "--port" "$DEMO_PORT"
+  "--osc-port" "$DEMO_OSC_PORT"
+  "--companion-port" "$DEMO_COMPANION_PORT"
+  "--enable-companion"
+)
 
 echo "[verify] Refreshing Docker demo for project '$REPO_SLUG' (pre-tests)"
 PRESENTER_ANDROID_ADB_BIN="$PRESENTER_ANDROID_ADB_BIN" ADB_KEYS_DIR="$ADB_KEYS_DIR" "$REPO_ROOT/scripts/docker/run-demo.sh" "${RUN_ARGS[@]}"
@@ -153,7 +157,7 @@ echo "[verify] Running Playwright suite"
 RUN_AS_ORIGINAL npm run test:playwright
 
 echo "[verify] Refreshing Docker demo for project '$REPO_SLUG' (post-tests)"
-PRESENTER_ANDROID_ADB_BIN="$PRESENTER_ANDROID_ADB_BIN" ADB_KEYS_DIR="$ADB_KEYS_DIR" "$REPO_ROOT/scripts/docker/run-demo.sh" "--force" "--name" "$REPO_SLUG" "--display-name" "$DISPLAY_NAME" "--port" "$DEMO_PORT" "--osc-port" "$HOST_OSC_PORT" "--enable-companion"
+PRESENTER_ANDROID_ADB_BIN="$PRESENTER_ANDROID_ADB_BIN" ADB_KEYS_DIR="$ADB_KEYS_DIR" "$REPO_ROOT/scripts/docker/run-demo.sh" "--force" "--name" "$REPO_SLUG" "--display-name" "$DISPLAY_NAME" "--port" "$DEMO_PORT" "--osc-port" "$DEMO_OSC_PORT" "--companion-port" "$DEMO_COMPANION_PORT" "--enable-companion"
 
 echo "[verify] Restarting gateway (post-tests)"
 PRESENTER_ANDROID_ADB_BIN="$PRESENTER_ANDROID_ADB_BIN" ADB_KEYS_DIR="$ADB_KEYS_DIR" "$REPO_ROOT/scripts/docker/run-gateway.sh" --force
