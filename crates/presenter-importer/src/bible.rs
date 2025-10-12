@@ -244,6 +244,7 @@ mod tests {
             .collect();
         assert!(codes.contains("eng-kjv"));
         assert!(codes.contains("slk-seb"));
-        // Temporarily not asserting ROH/SEVP until stable sources are restored in defaults.
+        assert!(codes.contains("slk-roh"));
+        assert!(codes.contains("slk-sevp"));
     }
 }
