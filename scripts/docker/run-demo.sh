@@ -73,7 +73,7 @@ HOST_HTTP_PORT="$(compute_port "$PROJECT" "$PORT")"
 if [[ -n "$OSC_PORT" ]]; then
   HOST_OSC_PORT="$OSC_PORT"
 else
-  HOST_OSC_PORT="39051"
+  HOST_OSC_PORT="$(compute_port "${PROJECT}-osc")"
 fi
 HOST_COMPANION_PORT="$(compute_port "${PROJECT}-companion" "$COMPANION_PORT")"
 DEMO_DATA_DIR="$DATA_ROOT/$PROJECT"
