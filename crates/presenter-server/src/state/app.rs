@@ -1,9 +1,10 @@
 use crate::{
-    ableset::AbleSetBridge,
-    android_stage::AndroidStageRegistry,
+    ableset::{AbleSetBridge, DynAbleSetClient},
+    android_stage::{AndroidStageRegistry, DynAndroidStageClient},
+    config::{parse_bool_flag, ServerConfig},
     live::{LiveEvent, LiveHub},
-    osc::{OscBridge, OscStatusSnapshot},
-    resolume::{BibleUpdate, ResolumeRegistry},
+    osc::{DynOscClient, OscBridge, OscStatusSnapshot},
+    resolume::{BibleUpdate, DynResolumeClient, ResolumeRegistry},
     stage_connections::{StageClientSnapshot, StageConnections, StageHeartbeatConfig},
 };
 use chrono::Utc;
@@ -21,11 +22,9 @@ use presenter_core::{
 };
 use presenter_importer::bible::BibleIngestionService;
 use presenter_persistence::{DatabaseSettings, Repository};
-use serde::Serialize;
 use std::{
     collections::HashMap,
-    env,
-    sync::{atomic::AtomicBool, atomic::AtomicU16, atomic::Ordering, Arc},
+    sync::{atomic::AtomicBool, atomic::AtomicU16, Arc},
 };
 use tokio::sync::RwLock;
 use tokio::time::{interval, Duration as TokioDuration, MissedTickBehavior};
@@ -33,13 +32,6 @@ use tracing::{instrument, warn};
 use uuid::Uuid;
 
 use super::{AbleSetLibraryCache, CompanionServerManager};
-fn parse_bool_flag(value: &str) -> Option<bool> {
-    match value.trim().to_ascii_lowercase().as_str() {
-        "1" | "true" | "yes" | "on" => Some(true),
-        "0" | "false" | "no" | "off" => Some(false),
-        _ => None,
-    }
-}
 
 pub(super) const COMPANION_FEATURE_KEY: &str = "feature.companion.enabled";
 pub(super) const COMPANION_PORT_KEY: &str = "feature.companion.port";
@@ -54,25 +46,18 @@ pub struct AppState {
     pub(super) companion_enabled: Arc<AtomicBool>,
     pub(super) companion_port: Arc<AtomicU16>,
     pub(super) companion_server: CompanionServerManager,
-    pub(super) resolume_registry: ResolumeRegistry,
-    pub(super) android_stage_registry: AndroidStageRegistry,
+    pub(super) resolume_client: DynResolumeClient,
+    pub(super) android_stage_client: DynAndroidStageClient,
     pub(super) stage_connections: StageConnections,
     pub(super) heartbeat_config: StageHeartbeatConfig,
     pub(super) presentation_cache: Arc<RwLock<HashMap<PresentationId, Arc<Presentation>>>>,
     pub(super) stage_layout: Arc<RwLock<String>>,
-    pub(super) osc_bridge: OscBridge,
-    pub(super) ableset_bridge: AbleSetBridge,
+    pub(super) osc_client: DynOscClient,
+    pub(super) ableset_client: DynAbleSetClient,
     pub(super) ableset_cache: Arc<RwLock<AbleSetLibraryCache>>,
     #[cfg(test)]
     pub(super) bible_ingestion_override:
         Option<std::sync::Arc<dyn TestBibleIngestion + Send + Sync>>,
-}
-
-#[derive(Debug, Clone, Serialize)]
-#[serde(rename_all = "camelCase")]
-pub struct FeatureFlags {
-    pub companion_enabled: bool,
-    pub companion_port: u16,
 }
 
 impl AppState {
@@ -81,13 +66,13 @@ impl AppState {
         companion_token: Option<String>,
         companion_enabled: bool,
         companion_port: u16,
-        resolume_registry: ResolumeRegistry,
-        android_stage_registry: AndroidStageRegistry,
-        osc_bridge: OscBridge,
-        ableset_bridge: AbleSetBridge,
+        resolume_client: DynResolumeClient,
+        android_stage_client: DynAndroidStageClient,
+        osc_client: DynOscClient,
+        ableset_client: DynAbleSetClient,
+        heartbeat_config: StageHeartbeatConfig,
     ) -> Self {
         let stage_connections = StageConnections::new();
-        let heartbeat_config = StageHeartbeatConfig::from_env();
         let default_layout = StageDisplayLayout::built_in()
             .into_iter()
             .map(|layout| layout.code)
@@ -102,14 +87,14 @@ impl AppState {
             companion_enabled: Arc::new(AtomicBool::new(companion_enabled)),
             companion_port: Arc::new(AtomicU16::new(companion_port)),
             companion_server: CompanionServerManager::default(),
-            resolume_registry,
-            android_stage_registry,
+            resolume_client,
+            android_stage_client,
             stage_connections,
             heartbeat_config,
             presentation_cache: Arc::new(RwLock::new(HashMap::new())),
             stage_layout: Arc::new(RwLock::new(default_layout)),
-            osc_bridge,
-            ableset_bridge,
+            osc_client,
+            ableset_client,
             ableset_cache,
             #[cfg(test)]
             bible_ingestion_override: None,
@@ -165,104 +150,127 @@ impl AppState {
     }
 
     #[instrument(skip_all)]
-    pub async fn from_env() -> anyhow::Result<Self> {
-        let db_url = env::var("PRESENTER_DB_URL")
-            .unwrap_or_else(|_| "sqlite://presenter_dev.db".to_string());
-        let repo = Repository::connect(&DatabaseSettings::new(&db_url)).await?;
-        let companion_token = env::var("PRESENTER_COMPANION_TOKEN").ok();
+    pub async fn from_config(config: ServerConfig) -> anyhow::Result<Self> {
+        let db_url = config.database.url.clone();
+        let repository = Repository::connect(&DatabaseSettings::new(&db_url)).await?;
+        Self::build_with_repository(repository, Arc::new(config), true).await
+    }
 
-        let stored_companion = repo
+    #[cfg(test)]
+    #[instrument(skip_all)]
+    pub async fn in_memory() -> anyhow::Result<Self> {
+        let config = ServerConfig::load()?;
+        Self::in_memory_with_config(config).await
+    }
+
+    #[cfg(test)]
+    #[instrument(skip_all)]
+    pub async fn in_memory_with_config(config: ServerConfig) -> anyhow::Result<Self> {
+        let repository = Repository::connect_in_memory().await?;
+        Self::build_with_repository(repository, Arc::new(config), false).await
+    }
+
+    async fn build_with_repository(
+        repository: Repository,
+        config: Arc<ServerConfig>,
+        spawn_background_tasks: bool,
+    ) -> anyhow::Result<Self> {
+        let companion_token = config.companion.token.clone();
+        let stored_companion = repository
             .get_app_setting(COMPANION_FEATURE_KEY)
             .await?
             .and_then(|value| parse_bool_flag(&value))
             .unwrap_or(false);
-
-        let env_override = env::var("PRESENTER_COMPANION_ENABLED")
-            .ok()
-            .and_then(|value| parse_bool_flag(&value));
-
+        let env_override = config.companion.enabled_override;
         let companion_enabled = env_override.unwrap_or(stored_companion);
+        let persist_enabled = env_override.is_some();
 
-        if let Some(value) = env_override {
-            repo.set_app_setting(COMPANION_FEATURE_KEY, if value { "1" } else { "0" })
-                .await?;
-        }
-
-        let raw_port = repo.get_app_setting(COMPANION_PORT_KEY).await?;
-        let mut persist_port = false;
+        let raw_port = repository.get_app_setting(COMPANION_PORT_KEY).await?;
         let stored_port = raw_port
             .as_deref()
             .and_then(|value| value.parse::<u16>().ok())
             .filter(|port| *port >= 1 && *port <= u16::MAX);
         let mut companion_port = stored_port.unwrap_or(DEFAULT_COMPANION_PORT);
-        if stored_port.is_none() {
-            persist_port = true;
-        }
+        let mut persist_port = stored_port.is_none();
 
-        let env_port_override = env::var("PRESENTER_COMPANION_PORT")
-            .ok()
-            .and_then(|value| value.parse::<u16>().ok())
-            .filter(|port| *port >= 1 && *port <= u16::MAX);
-
-        if let Some(port_override) = env_port_override {
+        if let Some(port_override) = config.companion.port_override {
             companion_port = port_override;
             persist_port = true;
         }
 
-        if persist_port {
-            repo.set_app_setting(COMPANION_PORT_KEY, &companion_port.to_string())
-                .await?;
-        }
-
-        let registry = ResolumeRegistry::new();
-        let android_stage_registry = AndroidStageRegistry::new();
-        let osc_bridge = OscBridge::new();
-        let ableset_bridge = AbleSetBridge::new();
+        let heartbeat_config = config.stage.heartbeat;
+        let resolume_client: DynResolumeClient = Arc::new(ResolumeRegistry::new());
+        let android_stage_client: DynAndroidStageClient =
+            Arc::new(AndroidStageRegistry::from_config(&config.android));
+        let osc_client: DynOscClient = Arc::new(OscBridge::new(&config.osc));
+        let ableset_client: DynAbleSetClient = Arc::new(AbleSetBridge::new());
         let state = Self::new(
-            repo,
+            repository,
             companion_token,
             companion_enabled,
             companion_port,
-            registry,
-            android_stage_registry,
-            osc_bridge.clone(),
-            ableset_bridge.clone(),
+            resolume_client,
+            android_stage_client,
+            osc_client,
+            ableset_client,
+            heartbeat_config,
         );
+
+        if persist_enabled {
+            state
+                .repository
+                .set_app_setting(
+                    COMPANION_FEATURE_KEY,
+                    if companion_enabled { "1" } else { "0" },
+                )
+                .await?;
+        }
+
+        if persist_port {
+            state
+                .repository
+                .set_app_setting(COMPANION_PORT_KEY, &companion_port.to_string())
+                .await?;
+        }
+
         state.ensure_seed_library().await?;
         state.ensure_demo_playlist().await?;
-        state.sync_resolume_hosts().await?;
+        if spawn_background_tasks {
+            state.sync_resolume_hosts().await?;
+        }
         state.sync_android_stage_displays().await?;
+
         let mut osc_settings = state.repository.get_osc_settings().await?;
-        if let Ok(port_raw) = env::var("PRESENTER_OSC_LISTEN_PORT") {
-            match port_raw.parse::<u16>() {
-                Ok(port) if port != 0 && port != osc_settings.listen_port => {
-                    let draft = OscSettingsDraft {
-                        enabled: osc_settings.enabled,
-                        listen_port: port,
-                        address_pattern: osc_settings.address_pattern.clone(),
-                        velocity_mode: osc_settings.velocity_mode,
-                    };
-                    osc_settings = state.repository.upsert_osc_settings(&draft).await?;
-                }
-                Ok(_) => {}
-                Err(err) => {
-                    tracing::warn!(value = %port_raw, ?err, "invalid PRESENTER_OSC_LISTEN_PORT")
-                }
+        if let Some(invalid) = config.osc.listen_port_invalid.as_ref() {
+            tracing::warn!(value = %invalid, "invalid PRESENTER_OSC_LISTEN_PORT");
+        }
+        if let Some(port_override) = config.osc.listen_port_override {
+            if port_override != 0 && port_override != osc_settings.listen_port {
+                let draft = OscSettingsDraft {
+                    enabled: osc_settings.enabled,
+                    listen_port: port_override,
+                    address_pattern: osc_settings.address_pattern.clone(),
+                    velocity_mode: osc_settings.velocity_mode,
+                };
+                osc_settings = state.repository.upsert_osc_settings(&draft).await?;
             }
         }
-        if let Err(err) = osc_bridge
+
+        if let Err(err) = state
+            .osc_client
             .apply_settings(osc_settings.clone(), state.clone())
             .await
         {
             tracing::warn!(?err, "failed to initialise OSC listener");
         }
         let ableset_settings = state.repository.get_ableset_settings().await?;
-        match ableset_bridge
+        match state
+            .ableset_client
             .apply_settings(ableset_settings.clone())
             .await
         {
             Ok(()) => {
-                let snapshot = state.ableset_bridge.status_snapshot().await;
+                let snapshot = state.ableset_client.status_snapshot().await;
                 if let Err(err) = state.refresh_ableset_cache(&snapshot).await {
                     tracing::warn!(?err, "failed to seed AbleSet cache");
                 }
@@ -272,70 +280,11 @@ impl AppState {
         state
             .configure_companion_service(companion_enabled, companion_port)
             .await?;
-        state.spawn_background_tasks();
-        Ok(state)
-    }
-    #[cfg(test)]
-    #[instrument(skip_all)]
-    pub async fn in_memory() -> anyhow::Result<Self> {
-        let repo = Repository::connect_in_memory().await?;
-        let registry = ResolumeRegistry::new();
-        let android_stage_registry = AndroidStageRegistry::new();
-        let osc_bridge = OscBridge::new();
-        let ableset_bridge = AbleSetBridge::new();
-        let state = Self::new(
-            repo,
-            None,
-            false,
-            DEFAULT_COMPANION_PORT,
-            registry,
-            android_stage_registry,
-            osc_bridge.clone(),
-            ableset_bridge.clone(),
-        );
-        state.ensure_seed_library().await?;
-        state.ensure_demo_playlist().await?;
-        state.sync_android_stage_displays().await?;
-        let mut osc_settings = state.repository.get_osc_settings().await?;
-        if let Ok(port_raw) = env::var("PRESENTER_OSC_LISTEN_PORT") {
-            match port_raw.parse::<u16>() {
-                Ok(port) if port != 0 && port != osc_settings.listen_port => {
-                    let draft = OscSettingsDraft {
-                        enabled: osc_settings.enabled,
-                        listen_port: port,
-                        address_pattern: osc_settings.address_pattern.clone(),
-                        velocity_mode: osc_settings.velocity_mode,
-                    };
-                    osc_settings = state.repository.upsert_osc_settings(&draft).await?;
-                }
-                Ok(_) => {}
-                Err(err) => {
-                    tracing::warn!(value = %port_raw, ?err, "invalid PRESENTER_OSC_LISTEN_PORT")
-                }
-            }
+
+        if spawn_background_tasks {
+            state.spawn_background_tasks();
         }
-        if let Err(err) = osc_bridge
-            .apply_settings(osc_settings.clone(), state.clone())
-            .await
-        {
-            tracing::warn!(?err, "failed to initialise OSC listener");
-        }
-        let ableset_settings = state.repository.get_ableset_settings().await?;
-        match ableset_bridge
-            .apply_settings(ableset_settings.clone())
-            .await
-        {
-            Ok(()) => {
-                let snapshot = state.ableset_bridge.status_snapshot().await;
-                if let Err(err) = state.refresh_ableset_cache(&snapshot).await {
-                    tracing::warn!(?err, "failed to seed AbleSet cache");
-                }
-            }
-            Err(err) => tracing::warn!(?err, "failed to initialise AbleSet tracker"),
-        }
-        state
-            .configure_companion_service(false, DEFAULT_COMPANION_PORT)
-            .await?;
+
         Ok(state)
     }
 
@@ -572,14 +521,14 @@ impl AppState {
         draft: OscSettingsDraft,
     ) -> anyhow::Result<OscSettings> {
         let settings = self.repository.upsert_osc_settings(&draft).await?;
-        self.osc_bridge
+        self.osc_client
             .apply_settings(settings.clone(), self.clone())
             .await?;
         Ok(settings)
     }
 
     pub async fn osc_status_snapshot(&self) -> OscStatusSnapshot {
-        self.osc_bridge.status().await
+        self.osc_client.status().await
     }
 
     pub async fn refresh_default_bible_translations(
@@ -619,21 +568,6 @@ impl AppState {
         self.companion_token.as_deref()
     }
 
-    pub fn companion_enabled(&self) -> bool {
-        self.companion_enabled.load(Ordering::SeqCst)
-    }
-
-    pub fn companion_port(&self) -> u16 {
-        self.companion_port.load(Ordering::SeqCst)
-    }
-
-    pub fn feature_flags(&self) -> FeatureFlags {
-        FeatureFlags {
-            companion_enabled: self.companion_enabled(),
-            companion_port: self.companion_port(),
-        }
-    }
-
     pub async fn active_bible_broadcast(&self) -> Option<BibleBroadcast> {
         self.bible_broadcast.read().await.clone()
     }
@@ -657,7 +591,7 @@ impl AppState {
         self.live_hub.publish(LiveEvent::Bible {
             broadcast: broadcast.clone(),
         });
-        self.resolume_registry
+        self.resolume_client
             .bible_update(BibleUpdate {
                 passage: Some(broadcast.clone()),
             })
@@ -671,7 +605,7 @@ impl AppState {
             *guard = None;
         }
         self.live_hub.publish(LiveEvent::BibleCleared);
-        self.resolume_registry
+        self.resolume_client
             .bible_update(BibleUpdate { passage: None })
             .await;
     }

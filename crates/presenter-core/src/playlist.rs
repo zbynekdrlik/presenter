@@ -1,3 +1,5 @@
+#![allow(clippy::collapsible_match)]
+
 use crate::id::{PlaylistEntryId, PlaylistId, PresentationId};
 use serde::{Deserialize, Serialize};
 use thiserror::Error;

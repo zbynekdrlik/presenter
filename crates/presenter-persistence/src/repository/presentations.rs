@@ -6,8 +6,7 @@ use tracing::instrument;
 
 use crate::entities::{library, presentation as presentation_entity, slide as slide_entity};
 use presenter_core::{
-    search::fold_query, LibraryId, Presentation, PresentationId, Slide, SlideContent, SlideGroup,
-    SlideId, SlideText,
+    search::fold_query, LibraryId, Presentation, PresentationId, Slide, SlideContent, SlideId,
 };
 use sea_orm::Set;
 

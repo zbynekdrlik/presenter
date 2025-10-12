@@ -1,3 +1,4 @@
+#![allow(clippy::too_many_lines)]
 use sea_orm_migration::prelude::*;
 use sea_orm_migration::sea_query::{Query, SimpleExpr, Value};
 
@@ -1025,7 +1026,6 @@ enum Timers {
     CreatedAt,
     UpdatedAt,
 }
-
 #[derive(DeriveIden)]
 enum StageState {
     Table,
@@ -1035,7 +1035,6 @@ enum StageState {
     NextSlideId,
     UpdatedAt,
 }
-
 #[derive(DeriveIden)]
 enum BiblePreferences {
     Table,
@@ -1056,7 +1055,6 @@ enum BibleTranslations {
     Source,
     CreatedAt,
 }
-
 #[derive(DeriveIden)]
 enum BiblePassages {
     Table,
@@ -1071,7 +1069,6 @@ enum BiblePassages {
     Content,
     CreatedAt,
 }
-
 #[derive(DeriveIden)]
 enum AppSettings {
     Table,

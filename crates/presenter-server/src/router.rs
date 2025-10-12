@@ -1,10 +1,10 @@
 mod bible;
-mod features;
 mod integrations;
 mod libraries;
 mod playlists;
 mod presentations;
 mod search;
+mod settings;
 mod stage;
 mod timers;
 mod ui_routes;
@@ -168,7 +168,7 @@ pub fn build_router(state: AppState) -> Router {
         .route("/live/ws", get(live_websocket))
         .route(
             "/settings/features",
-            get(features::get_feature_settings).post(features::update_feature_settings),
+            get(settings::get_feature_settings).post(settings::update_feature_settings),
         )
         .with_state(state)
 }

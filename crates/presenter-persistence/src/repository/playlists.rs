@@ -7,9 +7,7 @@ use sea_orm::{
 use tracing::instrument;
 
 use crate::entities::{playlist, playlist_entry, playlist_favorite};
-use presenter_core::{
-    playlist::PlaylistEntryKind, Playlist, PlaylistEntry, PlaylistEntryId, PlaylistId,
-};
+use presenter_core::{playlist::PlaylistEntryKind, Playlist, PlaylistEntry, PlaylistId};
 
 use super::Repository;
 use sea_orm::Set;
