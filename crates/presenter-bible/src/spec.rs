@@ -51,12 +51,7 @@ pub struct BibleImportSummary {
 pub fn default_translation_specs() -> Vec<BibleTranslationSpec> {
     // Temporary: limit defaults to sources verified working in CI as of 2025-10-12.
     // Follow-up: re-add Roháček and Evanjelický once reliable mirrors are confirmed.
-    vec![
-        king_james_spec(),
-        slovak_ekumenicky_spec(),
-        slovak_rohacek_spec(),
-        slovak_evangelicky_spec(),
-    ]
+    vec![king_james_spec(), slovak_ekumenicky_spec()]
 }
 
 pub const KING_JAMES_SOURCE: &str = "https://ebible.org/Scriptures/eng-kjv_usfm.zip";
