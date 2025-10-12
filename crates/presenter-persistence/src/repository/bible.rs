@@ -137,14 +137,17 @@ impl Repository {
             return Ok(None);
         };
 
-        let passage = bible_passage::Entity::find()
+        let mut query = bible_passage::Entity::find()
             .filter(bible_passage::Column::TranslationCode.eq(translation_code.to_string()))
-            .filter(bible_passage::Column::Book.eq(reference.book.clone()))
             .filter(bible_passage::Column::Chapter.eq(reference.chapter as i32))
             .filter(bible_passage::Column::VerseStart.eq(reference.verse_start as i32))
-            .filter(bible_passage::Column::VerseEnd.eq(reference.verse_end as i32))
-            .one(&self.db)
-            .await?;
+            .filter(bible_passage::Column::VerseEnd.eq(reference.verse_end as i32));
+        if let Some(code) = reference.book_code.as_deref() {
+            query = query.filter(bible_passage::Column::BookCode.eq(code.to_string()));
+        } else {
+            query = query.filter(bible_passage::Column::Book.eq(reference.book.clone()));
+        }
+        let passage = query.one(&self.db).await?;
 
         Ok(passage
             .map(|model| to_domain_passage(model, translation.clone()))

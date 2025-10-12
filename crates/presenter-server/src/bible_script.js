@@ -1080,6 +1080,8 @@
     const verseStart = verses[0].start;
     const verseEnd = verses[verses.length - 1].end;
     const book = bibleMeta.book || state.selectedBook;
+    const bookCode = bibleMeta.book_code || bibleMeta.bookCode || state.selectedBookCode || null;
+    const bookNumber = bibleMeta.book_number || bibleMeta.bookNumber || state.selectedBookNumber || null;
     const chapter = typeof bibleMeta.chapter === 'number' ? bibleMeta.chapter : state.selectedChapter;
     try {
       const payload = {
@@ -1089,6 +1091,12 @@
         verseStart,
         verseEnd,
       };
+      if (bookCode) {
+        payload.bookCode = bookCode;
+      }
+      if (bookNumber) {
+        payload.bookNumber = bookNumber;
+      }
       const response = await apiFetch('/bible/trigger', {
         method: 'POST',
         body: JSON.stringify(payload),

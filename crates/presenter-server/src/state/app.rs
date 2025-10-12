@@ -16,9 +16,10 @@ use presenter_core::bible::{
 use presenter_core::playlist::PlaylistEntryKind;
 use presenter_core::slide::{BibleSlideMetadata, BibleSlideVerseRef, SlideMetadata};
 use presenter_core::{
-    BibleBroadcast, Library, LibraryId, LibrarySummary, OscSettings, OscSettingsDraft, Playlist,
-    PlaylistEntry, PlaylistEntryId, PlaylistId, Presentation, PresentationId, PresentationSummary,
-    SearchResult, Slide, SlideContent, SlideGroup, SlideId, SlideText, StageDisplayLayout,
+    BibleBroadcast, BiblePassage, Library, LibraryId, LibrarySummary, OscSettings,
+    OscSettingsDraft, Playlist, PlaylistEntry, PlaylistEntryId, PlaylistId, Presentation,
+    PresentationId, PresentationSummary, SearchResult, Slide, SlideContent, SlideGroup, SlideId,
+    SlideText, StageDisplayLayout,
 };
 use presenter_importer::bible::BibleIngestionService;
 use presenter_persistence::{DatabaseSettings, Repository};
@@ -577,11 +578,63 @@ impl AppState {
         translation_code: &str,
         reference: &BibleReference,
     ) -> anyhow::Result<BibleBroadcast> {
-        let passage = self
+        let range = self
             .repository
-            .find_bible_passage(translation_code, reference)
+            .bible_passage_range(
+                translation_code,
+                reference.book.as_str(),
+                reference.book_code.as_deref(),
+                reference.chapter,
+                reference.verse_start,
+                reference.verse_end,
+            )
             .await?
-            .ok_or_else(|| anyhow::anyhow!("passage not found"))?;
+            .into_iter()
+            .collect::<Vec<_>>();
+
+        let passage = if range.is_empty() {
+            self.repository
+                .find_bible_passage(translation_code, reference)
+                .await?
+                .ok_or_else(|| anyhow::anyhow!("passage not found"))?
+        } else {
+            let mut combined_text = String::new();
+            for entry in &range {
+                if !combined_text.is_empty() {
+                    combined_text.push_str(
+                        "
+
+",
+                    );
+                }
+                combined_text.push_str(entry.text.as_str());
+            }
+            let translation = range[0].translation.clone();
+            let combined_reference = if let Some(code) = reference.book_code.clone() {
+                let number = reference
+                    .book_number
+                    .or(range[0].reference.book_number)
+                    .ok_or_else(|| {
+                        anyhow::anyhow!("missing book number for canonical reference")
+                    })?;
+                BibleReference::new_with_code(
+                    reference.book.clone(),
+                    code,
+                    number,
+                    reference.chapter,
+                    reference.verse_start,
+                    reference.verse_end,
+                )?
+            } else {
+                BibleReference::new(
+                    reference.book.clone(),
+                    reference.chapter,
+                    reference.verse_start,
+                    reference.verse_end,
+                )?
+            };
+            BiblePassage::new(combined_reference, translation, combined_text)
+        };
 
         let broadcast = BibleBroadcast::new(passage, Utc::now());
         {
