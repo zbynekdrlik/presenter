@@ -22,7 +22,7 @@ mod tests {
     use tempfile::NamedTempFile;
     use zip::write::FileOptions;
 
-    use std::collections::HashSet;
+    use std::collections::{HashMap, HashSet};
     use std::io::{Cursor, Write};
 
     struct StubProvider {
@@ -147,6 +147,41 @@ mod tests {
         assert_eq!(passages[0].reference.verse_start, 16);
         assert_eq!(passages[0].text, "For God so loved the world");
         assert_eq!(passages[1].text, "that He gave");
+    }
+
+    #[tokio::test]
+    async fn parses_usfm_archive_with_bare_id_marker() {
+        let mut archive = Vec::new();
+        {
+            use zip::write::FileOptions;
+            let cursor = Cursor::new(&mut archive);
+            let mut writer = zip::ZipWriter::new(cursor);
+            let options = FileOptions::default();
+            let content = "\\id JHN\n\\c 3\n\\v 16 For God so loved the world\n";
+            writer.start_file("JHN.usfm", options).unwrap();
+            writer.write_all(content.as_bytes()).unwrap();
+            writer.finish().unwrap();
+        }
+
+        let provider = StubProvider { payload: archive };
+        let scraper = BibleScraper::new(provider);
+        let translation = sample_translation();
+        let spec = BibleTranslationSpec {
+            translation: translation.clone(),
+            source: BibleSource::Url {
+                url: "memory".to_string(),
+            },
+            format: BibleSourceFormat::UsfmZip {
+                book_name_overrides: HashMap::new(),
+            },
+        };
+
+        let (batch, _) = scraper.scrape(&spec).await.unwrap();
+        let passages = batch.passages();
+        assert_eq!(passages.len(), 1);
+        assert_eq!(passages[0].reference.book, "John");
+        assert_eq!(passages[0].reference.chapter, 3);
+        assert_eq!(passages[0].reference.verse_start, 16);
     }
 
     #[test]

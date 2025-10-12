@@ -316,15 +316,25 @@ fn parse_usfm_document(
         }
 
         if let Some(rest) = line.strip_prefix("\\id ") {
-            let (code, rest) = rest
-                .split_once(' ')
+            let mut parts = rest.split_whitespace();
+            let code = parts
+                .next()
                 .ok_or_else(|| anyhow!("missing book code in \\id marker"))?;
             let code = code.trim();
             if code.len() < 3 {
                 return Err(anyhow!("invalid USFM book code '{code}'"));
             }
+            let trailing_name = parts.collect::<Vec<_>>().join(" ");
             book_code = Some(code.to_string());
-            book_name = format.book_name(code);
+            let mut resolved_name = if trailing_name.is_empty() {
+                format.book_name(code)
+            } else {
+                Some(trailing_name)
+            };
+            if resolved_name.is_none() {
+                resolved_name = format.book_name(code);
+            }
+            book_name = resolved_name;
             book_meta = canonical_book_by_code(code);
             continue;
         }
