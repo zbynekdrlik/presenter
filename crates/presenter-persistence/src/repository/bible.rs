@@ -181,7 +181,11 @@ impl Repository {
             .filter(bible_passage::Column::VerseEnd.lte(verse_end as i32))
             .order_by_asc(bible_passage::Column::VerseStart);
 
-        query = query.filter(bible_passage::Column::Book.eq(book.to_string()));
+        if let Some(code) = book_code {
+            query = query.filter(bible_passage::Column::BookCode.eq(code.to_string()));
+        } else {
+            query = query.filter(bible_passage::Column::Book.eq(book.to_string()));
+        }
 
         let rows = query.all(&self.db).await?;
         let mut passages = Vec::with_capacity(rows.len());

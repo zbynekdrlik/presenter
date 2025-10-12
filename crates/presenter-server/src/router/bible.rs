@@ -303,6 +303,7 @@ pub(super) async fn resolve_bible_slides(
             main_translation_code,
             payload.secondary_translation.as_deref(),
             book,
+            book_code,
             payload.chapter,
             payload.verse_start,
             verse_end,

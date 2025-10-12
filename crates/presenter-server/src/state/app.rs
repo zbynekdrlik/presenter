@@ -701,6 +701,7 @@ impl AppState {
         main_translation_code: &str,
         secondary_translation_code: Option<&str>,
         book: &str,
+        book_code: Option<&str>,
         chapter: u16,
         verse_start: u16,
         verse_end: u16,
@@ -726,7 +727,7 @@ impl AppState {
             .bible_passage_range(
                 &main_translation.code,
                 book,
-                None,
+                book_code,
                 chapter,
                 verse_start,
                 verse_end,
