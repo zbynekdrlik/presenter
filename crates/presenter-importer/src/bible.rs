@@ -244,6 +244,8 @@ mod tests {
             .collect();
         assert!(codes.contains("eng-kjv"));
         assert!(codes.contains("slk-seb"));
+        assert!(codes.contains("slk-roh"));
+        assert!(codes.contains("slk-sevp"));
         // Not asserting ROH/SEVP here; defaults may be limited in CI.
     }
 }
