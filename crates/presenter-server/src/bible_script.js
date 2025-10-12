@@ -406,8 +406,16 @@
     return chapterEntry ? chapterEntry.verseCount || chapterEntry.verse_count || 1 : 1;
   }
 
+  function normalizeForSearch(input) {
+    if (!input) return "";
+    return String(input)
+      .normalize("NFD")
+      .replace(/[\u0300-\u036f]/g, "")
+      .toLowerCase();
+  }
+
   function filterBooks(value) {
-    const term = value.trim().toLowerCase();
+    const term = normalizeForSearch(value.trim());
     if (!term) {
       if (state.bookSelectionLocked && state.selectedBook) {
         state.filteredBooks = state.books.filter((entry) => {
@@ -424,8 +432,10 @@
       }
     } else {
       state.filteredBooks = state.books.filter((entry) => {
-        const nameMatch = entry.name && entry.name.toLowerCase().includes(term);
-        const codeMatch = entry.code && entry.code.toLowerCase().includes(term);
+        const nameKey = normalizeForSearch(entry.name || "");
+          const codeKey = normalizeForSearch(entry.code || "");
+          const nameMatch = nameKey.includes(term);
+          const codeMatch = codeKey.includes(term);
         return nameMatch || codeMatch;
       });
       state.bookSelectionLocked = false;
