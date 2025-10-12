@@ -4,7 +4,7 @@ use tracing::instrument;
 use crate::entities::stage_state;
 use presenter_core::StageState;
 
-use super::util::{stage_state_model_to_state, timer_state_to_string};
+use super::util::stage_state_model_to_state;
 use super::Repository;
 
 const STAGE_STATE_SINGLETON_ID: &str = "stage-state";

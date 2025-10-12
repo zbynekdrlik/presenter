@@ -4,10 +4,12 @@ mod app;
 mod companion_server;
 mod presentations;
 mod resolume;
+mod settings;
 mod stage;
 mod timers;
 
 pub use app::*;
+pub use settings::FeatureFlags;
 
 pub(super) use ableset::AbleSetLibraryCache;
 pub(super) use companion_server::CompanionServerManager;

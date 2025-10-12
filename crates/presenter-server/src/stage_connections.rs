@@ -270,22 +270,6 @@ impl StageHeartbeatConfig {
         )
     }
 
-    pub fn from_env() -> Self {
-        fn read_duration(var: &str) -> Option<std::time::Duration> {
-            std::env::var(var)
-                .ok()
-                .and_then(|value| value.parse::<u64>().ok())
-                .map(std::time::Duration::from_millis)
-        }
-
-        let default = Self::default_values();
-        let interval = read_duration("PRESENTER_HEARTBEAT_INTERVAL_MS").unwrap_or(default.interval);
-        let grace = read_duration("PRESENTER_HEARTBEAT_GRACE_MS").unwrap_or(default.grace);
-        let disconnect_after =
-            read_duration("PRESENTER_HEARTBEAT_DISCONNECT_MS").unwrap_or(default.disconnect_after);
-        Self::new(interval, grace, disconnect_after)
-    }
-
     pub fn grace_duration(&self) -> Duration {
         Duration::from_std(self.grace).unwrap_or_else(|_| {
             let millis = self.grace.as_millis().min(i64::MAX as u128) as i64;

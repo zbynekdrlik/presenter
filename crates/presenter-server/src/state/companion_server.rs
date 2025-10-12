@@ -1,4 +1,4 @@
-use std::sync::{atomic::Ordering, Arc};
+use std::sync::Arc;
 
 use tokio::{
     net::TcpListener,
@@ -7,7 +7,7 @@ use tokio::{
 };
 use tracing::{debug, error, info};
 
-use super::{AppState, COMPANION_FEATURE_KEY, COMPANION_PORT_KEY};
+use super::AppState;
 
 #[derive(Clone, Default)]
 pub(crate) struct CompanionServerManager {
@@ -107,47 +107,5 @@ impl AppState {
         self.companion_server
             .reconfigure(self.clone(), enabled, port)
             .await
-    }
-
-    pub async fn set_companion_settings(&self, enabled: bool, port: u16) -> anyhow::Result<()> {
-        if port == 0 {
-            return Err(anyhow::anyhow!(
-                "companion port must be between 1 and 65535"
-            ));
-        }
-        let previous_enabled = self.companion_enabled();
-        let previous_port = self.companion_port();
-
-        self.configure_companion_service(enabled, port).await?;
-
-        if let Err(err) = self
-            .repository
-            .set_app_setting(COMPANION_PORT_KEY, &port.to_string())
-            .await
-        {
-            let _ = self
-                .configure_companion_service(previous_enabled, previous_port)
-                .await;
-            return Err(err);
-        }
-
-        if let Err(err) = self
-            .repository
-            .set_app_setting(COMPANION_FEATURE_KEY, if enabled { "1" } else { "0" })
-            .await
-        {
-            let _ = self
-                .repository
-                .set_app_setting(COMPANION_PORT_KEY, &previous_port.to_string())
-                .await;
-            let _ = self
-                .configure_companion_service(previous_enabled, previous_port)
-                .await;
-            return Err(err);
-        }
-
-        self.companion_enabled.store(enabled, Ordering::SeqCst);
-        self.companion_port.store(port, Ordering::SeqCst);
-        Ok(())
     }
 }

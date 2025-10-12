@@ -14,14 +14,14 @@ impl AppState {
     pub async fn android_stage_status_snapshot(
         &self,
     ) -> HashMap<AndroidStageDisplayId, AndroidStageDisplayStatusSnapshot> {
-        self.android_stage_registry.snapshot().await
+        self.android_stage_client.snapshot().await
     }
 
     pub async fn android_stage_status_for(
         &self,
         id: AndroidStageDisplayId,
     ) -> AndroidStageDisplayStatusSnapshot {
-        self.android_stage_registry.snapshot_for(id).await
+        self.android_stage_client.snapshot_for(id).await
     }
 
     pub async fn create_android_stage_display(
@@ -56,7 +56,7 @@ impl AppState {
 
     pub(super) async fn sync_android_stage_displays(&self) -> anyhow::Result<()> {
         let displays = self.repository.list_android_stage_displays().await?;
-        self.android_stage_registry.set_displays(displays).await;
+        self.android_stage_client.set_displays(displays).await;
         Ok(())
     }
 }

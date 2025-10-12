@@ -1,3 +1,5 @@
+#![allow(clippy::needless_pass_by_value, clippy::too_many_lines)]
+
 use crate::{ableset::AbleSetStatusSnapshot, state::AppState};
 use axum::response::Html;
 use leptos::prelude::*;
@@ -13,6 +15,7 @@ use super::styles::OPERATOR as OPERATOR_STYLES;
 use super::utils::{format_seconds, format_timer_state};
 
 #[component]
+#[allow(clippy::needless_pass_by_value, clippy::too_many_lines)]
 pub fn OperatorDocument(
     libraries: Vec<LibraryRow>,
     playlists: Vec<PlaylistRow>,
@@ -196,7 +199,7 @@ pub fn OperatorDocument(
                                                     let initial = initial_library_id.clone();
                                                     move |library: LibraryRow| {
                                                         let is_active =
-                                                            initial.as_ref().map(|id| id == &library.id).unwrap_or(false);
+                                                            initial.as_ref() == Some(&library.id);
                                                         view! {
                                                             <li class="operator__list-item">
                                                                 <button
@@ -254,7 +257,7 @@ pub fn OperatorDocument(
                                                     let initial = initial_playlist_id.clone();
                                                     move |playlist: PlaylistRow| {
                                                         let is_active =
-                                                            initial.as_ref().map(|id| id == &playlist.id).unwrap_or(false);
+                                                            initial.as_ref() == Some(&playlist.id);
                                                         view! {
                                                             <li class="operator__list-item">
                                                                 <button

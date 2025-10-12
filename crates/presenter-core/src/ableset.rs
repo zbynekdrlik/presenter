@@ -29,6 +29,7 @@ pub struct AbleSetSettings {
 
 impl AbleSetSettings {
     #[allow(clippy::too_many_arguments)]
+    #[must_use]
     pub fn new(
         enabled: bool,
         host: String,
@@ -65,6 +66,11 @@ pub struct AbleSetSettingsDraft {
 }
 
 impl AbleSetSettingsDraft {
+    /// Ensures all required `AbleSet` fields are present and within allowed ranges.
+    ///
+    /// # Errors
+    ///
+    /// Returns an [`AbleSetSettingsValidationError`] when any field is empty or out of range.
     pub fn validate(&self) -> Result<(), AbleSetSettingsValidationError> {
         if self.host.trim().is_empty() {
             return Err(AbleSetSettingsValidationError::EmptyHost);
@@ -111,6 +117,7 @@ pub struct AbleSetSongSnapshot {
 }
 
 impl AbleSetSongSnapshot {
+    #[must_use]
     pub fn new(
         name: String,
         prefix: String,
@@ -131,7 +138,7 @@ pub fn extract_song_prefix(name: &str, length: u8) -> Option<String> {
         return None;
     }
     let trimmed = name.trim_start();
-    let digits: String = trimmed.chars().take_while(|c| c.is_ascii_digit()).collect();
+    let digits: String = trimmed.chars().take_while(char::is_ascii_digit).collect();
     if digits.len() >= length as usize {
         return Some(digits[..length as usize].to_string());
     }
