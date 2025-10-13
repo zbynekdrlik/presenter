@@ -152,10 +152,9 @@ PRESENTER_ANDROID_ADB_BIN="$PRESENTER_ANDROID_ADB_BIN" ADB_KEYS_DIR="$ADB_KEYS_D
 echo "[verify] Rebuilding gateway (always)"
 PRESENTER_ANDROID_ADB_BIN="$PRESENTER_ANDROID_ADB_BIN" ADB_KEYS_DIR="$ADB_KEYS_DIR" "$REPO_ROOT/scripts/docker/run-gateway.sh" --force
 
-DEFAULT_GREP="audit library|^Negative:"
-GREP_EXPR="${PLAYWRIGHT_GREP:-$DEFAULT_GREP}"
-echo "[verify] Running Playwright (workers=${PLAYWRIGHT_WORKERS:-2}) (grep: ${GREP_EXPR}) against demo ${DEMO_ORIGIN}"
-RUN_AS_ORIGINAL STAGE_URL="${DEMO_ORIGIN}" AUDIT_LIBS="${AUDIT_LIBS:-NEW LEVEL,BOHATY MUSIC}" AUDIT_MAX_PRESENTATIONS="${AUDIT_MAX_PRESENTATIONS:-0}" AUDIT_MAX_SLIDES="${AUDIT_MAX_SLIDES:-0}" STAGE_NEGATIVE="${STAGE_NEGATIVE:-1}" PLAYWRIGHT_WORKERS="${PLAYWRIGHT_WORKERS:-2}" npx playwright test --grep "$GREP_EXPR" --workers "${PLAYWRIGHT_WORKERS:-2}"
+echo "[verify] Running Playwright suite"
+echo "[verify] Running Playwright suite"
+RUN_AS_ORIGINAL npm run test:playwright
 
 echo "[verify] Refreshing Docker demo for project '$REPO_SLUG' (post-tests)"
 PRESENTER_ANDROID_ADB_BIN="$PRESENTER_ANDROID_ADB_BIN" ADB_KEYS_DIR="$ADB_KEYS_DIR" "$REPO_ROOT/scripts/docker/run-demo.sh" "--force" "--name" "$REPO_SLUG" "--display-name" "$DISPLAY_NAME" "--port" "$DEMO_PORT" "--osc-port" "$DEMO_OSC_PORT" "--companion-port" "$DEMO_COMPANION_PORT" "--enable-companion"
