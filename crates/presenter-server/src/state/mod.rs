@@ -22,9 +22,3 @@ pub(crate) use stage::{sanitize_song_title, stage_resolution_from_presentation};
 
 #[cfg(test)]
 mod tests;
-
-// UI line-limit policy shared between server and scripts.
-// Exposed here so router handlers can validate inputs without depending on app internals.
-pub const LINE_LIMIT_MIN: u16 = 10;
-pub const LINE_LIMIT_MAX: u16 = 120;
-pub const DEFAULT_LINE_LIMIT: u16 = 32;
