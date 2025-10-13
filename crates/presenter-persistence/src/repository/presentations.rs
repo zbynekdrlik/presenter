@@ -45,6 +45,7 @@ impl Repository {
             stage_text: Set(String::new()),
             stage_text_search: Set(String::new()),
             group_name: Set(None),
+            metadata_json: Set(None),
             created_at: Set(Utc::now().into()),
         })
         .exec(&mut txn)
@@ -218,6 +219,10 @@ impl Repository {
                     .group
                     .as_ref()
                     .map(|group| group.name().to_owned())),
+                metadata_json: Set(slide
+                    .metadata
+                    .as_ref()
+                    .and_then(|m| serde_json::to_string(m).ok())),
                 created_at: Set(Utc::now().into()),
             };
             slide_entity::Entity::insert(active).exec(&mut txn).await?;

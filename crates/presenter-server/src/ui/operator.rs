@@ -327,7 +327,7 @@ pub fn OperatorDocument(
                             </section>
                         </section>
     <section class="operator__panel operator__panel--bible" data-view-panel="bible">
-                            <iframe src="/ui/bible" title="Bible Control"></iframe>
+                            <iframe src="/ui/bible?embed=1" title="Bible Control"></iframe>
                         </section>
                         <section class="operator__panel operator__panel--timers" data-view-panel="timers">
                             <div class="operator__timers" data-role="timer-cards">

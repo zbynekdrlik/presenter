@@ -14,6 +14,7 @@ LOG_LEVEL="presenter_server=info"
 FORCE=0
 COMPANION_ENABLED="${PRESENTER_COMPANION_ENABLED:-0}"
 ADB_KEYS_DIR="${ADB_KEYS_DIR:-${XDG_CONFIG_HOME:-${HOME}/.config}/presenter/adb}"
+BIBLE_CACHE_DIR_DEFAULT="${XDG_CACHE_HOME:-${HOME}/.cache}/presenter/bibles"
 
 usage() {
   cat <<USAGE
@@ -111,6 +112,7 @@ export RUST_LOG="$LOG_LEVEL"
 export PRESENTER_COMPANION_ENABLED="$COMPANION_ENABLED"
 export PRESENTER_COMPANION_PORT="$HOST_COMPANION_PORT"
 export ADB_KEYS_DIR
+export BIBLE_CACHE_DIR="$BIBLE_CACHE_DIR_DEFAULT"
 
 COMPOSE_ARGS=("${DOCKER_CMD[@]}" "compose" "-f" "$REPO_ROOT/docker-compose.demo.yml" "-p" "$PROJECT" up -d)
 if [[ "$FORCE" -eq 1 ]]; then

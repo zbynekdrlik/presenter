@@ -60,6 +60,10 @@ impl Repository {
                     translation_text_search: Set(fold_query(slide.content.translation.value())),
                     stage_text: Set(slide.content.stage.value().to_owned()),
                     stage_text_search: Set(fold_query(slide.content.stage.value())),
+                    metadata_json: Set(slide
+                        .metadata
+                        .as_ref()
+                        .and_then(|m| serde_json::to_string(m).ok())),
                     group_name: Set(slide.content.group.as_ref().map(|g| g.name().to_owned())),
                     created_at: Set(Utc::now().into()),
                 };

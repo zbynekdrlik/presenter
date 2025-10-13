@@ -1266,14 +1266,6 @@ body.operator[data-view="settings"] [data-view-panel="settings"] {
     background: #ffffff;
 }
 
-.operator__panel--bible iframe {
-    width: 100%;
-    height: 100%;
-    border: none;
-    border-radius: var(--operator-radius);
-    background: #ffffff;
-    box-shadow: var(--shadow-soft);
-}
 
 .operator__timers {
     display: flex;
@@ -1862,3 +1854,15 @@ body.operator[data-view="settings"] [data-view-panel="settings"] {
     font-weight: 500;
 }
 
+.operator__panel--bible {
+    padding: 0;
+}
+
+.operator__panel--bible iframe {
+    width: 100%;
+    height: 100%;
+    border: none;
+    border-radius: var(--operator-radius);
+    background: #ffffff;
+    box-shadow: var(--shadow-soft);
+}
