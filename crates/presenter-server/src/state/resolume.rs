@@ -14,11 +14,11 @@ impl AppState {
     pub async fn resolume_status_snapshot(
         &self,
     ) -> HashMap<ResolumeHostId, ResolumeConnectionSnapshot> {
-        self.resolume_registry.snapshot().await
+        self.resolume_client.snapshot().await
     }
 
     pub async fn resolume_status_for(&self, id: ResolumeHostId) -> ResolumeConnectionSnapshot {
-        self.resolume_registry.snapshot_for(id).await
+        self.resolume_client.snapshot_for(id).await
     }
 
     pub async fn create_resolume_host(
@@ -47,7 +47,7 @@ impl AppState {
 
     pub(super) async fn sync_resolume_hosts(&self) -> anyhow::Result<()> {
         let hosts = self.repository.list_resolume_hosts().await?;
-        self.resolume_registry.set_hosts(hosts).await;
+        self.resolume_client.set_hosts(hosts).await;
         Ok(())
     }
 }

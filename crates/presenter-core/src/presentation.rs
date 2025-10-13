@@ -1,3 +1,5 @@
+#![allow(clippy::cast_possible_truncation)]
+
 use crate::id::{PresentationId, SlideId};
 use crate::slide::{resolve_sequence, ResolvedSlide, Slide};
 use serde::{Deserialize, Serialize};

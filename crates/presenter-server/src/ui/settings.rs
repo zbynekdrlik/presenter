@@ -4,6 +4,10 @@ use crate::{
     osc::OscStatusSnapshot,
     resolume::{ResolumeConnectionSnapshot, ResolumeConnectionState},
     state::{AppState, FeatureFlags},
+    ui::components::settings::{
+        AbleSetOscSettingsCard, AndroidStageSettingsCard, CompanionSettingsCard,
+        ResolumeConnectionsCard,
+    },
 };
 use axum::response::Html;
 use chrono::{DateTime, Local, Utc};
@@ -60,6 +64,17 @@ pub struct SettingsAndroidDisplayRow {
     pub status: Option<AndroidStageDisplayStatusSnapshot>,
 }
 
+#[derive(Clone)]
+struct SettingsViewModel {
+    hosts: Vec<SettingsHostRow>,
+    android_displays: Vec<SettingsAndroidDisplayRow>,
+    osc_settings: OscSettings,
+    osc_status: OscStatusSnapshot,
+    ableset_settings: AbleSetSettings,
+    ableset_status: AbleSetStatusSnapshot,
+    features: FeatureFlags,
+}
+
 #[component]
 fn SettingsDocument(
     hosts: Vec<SettingsHostRow>,
@@ -90,24 +105,22 @@ fn SettingsDocument(
         osc_status_state
             .chars()
             .next()
-            .map(|c| c.to_uppercase().collect::<String>())
-            .unwrap_or_else(String::new),
+            .map_or_else(String::new, |c| c.to_uppercase().collect::<String>()),
         osc_status_state.chars().skip(1).collect::<String>()
     );
     let osc_last_message_display = osc_status
         .last_message_at
-        .map(format_settings_timestamp)
-        .unwrap_or_else(|| "\u{2014}".to_string());
-    let osc_last_note_display = osc_status
-        .last_note
-        .map(|note| {
+        .map_or_else(|| "—".to_string(), format_settings_timestamp);
+    let osc_last_note_display = osc_status.last_note.map_or_else(
+        || "—".to_string(),
+        |note| {
             if let Some(velocity) = osc_status.last_velocity {
                 format!("note {note} (vel {velocity})")
             } else {
                 format!("note {note}")
             }
-        })
-        .unwrap_or_else(|| "\u{2014}".to_string());
+        },
+    );
     let osc_last_error = osc_status.last_error.clone();
     let ableset_host_value = ableset_settings.host.clone();
     let ableset_http_port_value = ableset_settings.http_port.to_string();
@@ -116,28 +129,25 @@ fn SettingsDocument(
     let ableset_last_song_name = ableset_status
         .last_song
         .as_ref()
-        .map(|song| song.name.clone())
-        .unwrap_or_else(|| "\u{2014}".to_string());
+        .map_or_else(|| "—".to_string(), |song| song.name.clone());
     let ableset_last_song_seen = ableset_status
         .last_song
         .as_ref()
         .and_then(|song| song.last_seen_at)
-        .map(format_settings_timestamp)
-        .unwrap_or_else(|| "\u{2014}".to_string());
+        .map_or_else(|| "—".to_string(), format_settings_timestamp);
     let ableset_status_state = if !ableset_status.enabled {
-        "disabled"
+        "disabled".to_string()
     } else if ableset_status.tracking {
-        "tracking"
+        "tracking".to_string()
     } else {
-        "enabled"
+        "enabled".to_string()
     };
     let ableset_status_label = format!(
         "{}{}",
         ableset_status_state
             .chars()
             .next()
-            .map(|c| c.to_uppercase().collect::<String>())
-            .unwrap_or_else(String::new),
+            .map_or_else(String::new, |c| c.to_uppercase().collect::<String>()),
         ableset_status_state.chars().skip(1).collect::<String>()
     );
     let ableset_last_error = ableset_status.last_error.clone();
@@ -161,494 +171,35 @@ fn SettingsDocument(
                     </nav>
                 </header>
                 <main class="settings__main">
-                    <section class="settings__card settings__card--feature">
-                        <header class="settings__card-header">
-                            <div>
-                                <h2>"Companion"</h2>
-                            </div>
-                        </header>
-                        <form class="settings__form settings__form--compact" data-role="feature-companion-form" autocomplete="off">
-                            <div class="settings__form-row settings__form-row--compact settings__form-row--inline">
-                                <label class="settings__form-checkbox settings__form-checkbox--inline">
-                                    <input
-                                        type="checkbox"
-                                        data-role="feature-companion-toggle"
-                                        checked={companion_enabled}
-                                    />
-                                    <span>"Enable"</span>
-                                </label>
-                                <label class="settings__form-control--tiny">
-                                    <span>"Port"</span>
-                                    <input
-                                        type="number"
-                                        min="1"
-                                        max="65535"
-                                        value={companion_port_text.clone()}
-                                        data-role="feature-companion-port"
-                                        required
-                                    />
-                                </label>
-                                <button
-                                    type="submit"
-                                    class="settings__button settings__button--primary settings__button--compact"
-                                    data-role="feature-submit"
-                                >"Save"</button>
-                            </div>
-                            <p class="settings__form-status" data-role="feature-status" data-state="idle"></p>
-                        </form>
-                    </section>
-                    <section class="settings__card">
-                        <header class="settings__card-header">
-                            <div>
-                                <h2>"Resolume Arena Connections"</h2>
-                                <p>
-                                    "Define Resolume web servers Presenter should control."
-                                </p>
-                            </div>
-                            <div class="settings__badge-group">
-                                <span class="settings__badge" data-role="host-count">{host_count_text.clone()}</span>
-                                <span class="settings__badge-label">"Hosts"</span>
-                            </div>
-                        </header>
-                        <form class="settings__form" data-role="host-form" autocomplete="off">
-                            <input type="hidden" data-role="host-id" />
-                            <div class="settings__form-header">
-                                <div>
-                                    <h3 data-role="form-title">"Add Resolume Connection"</h3>
-                                    <p data-role="form-subtitle">"Specify hostname, port, and availability."</p>
-                                </div>
-                            </div>
-                            <div class="settings__form-row">
-                                <label>
-                                    <span>"Label"</span>
-                                    <input
-                                        type="text"
-                                        name="label"
-                                        data-role="host-label"
-                                        placeholder="Main Arena"
-                                        required
-                                    />
-                                </label>
-                                <label>
-                                    <span>"Hostname or DNS"</span>
-                                    <input
-                                        type="text"
-                                        name="host"
-                                        data-role="host-host"
-                                        placeholder="resolume.lan"
-                                        required
-                                    />
-                                </label>
-                                <label class="settings__form-control--small">
-                                    <span>"Port"</span>
-                                    <input
-                                        type="number"
-                                        name="port"
-                                        data-role="host-port"
-                                        min="1"
-                                        max="65535"
-                                        value="8090"
-                                        required
-                                    />
-                                </label>
-                            </div>
-                            <div class="settings__form-row settings__form-row--single">
-                                <label class="settings__form-checkbox settings__form-checkbox--block">
-                                    <input type="checkbox" name="isEnabled" data-role="host-enabled" checked />
-                                    <span>"Enabled"</span>
-                                </label>
-                            </div>
-                            <div class="settings__form-actions">
-                                <button
-                                    type="submit"
-                                    class="settings__button settings__button--primary"
-                                    data-role="host-submit"
-                                >"Add Connection"</button>
-                                <button
-                                    type="button"
-                                    class="settings__button settings__button--ghost"
-                                    data-role="host-reset"
-                                >"Cancel"</button>
-                            </div>
-                            <p class="settings__form-status" data-role="form-status" data-state="idle"></p>
-                        </form>
-                        <ul class="settings__list" data-role="resolume-host-list">
-                            <Show
-                                when={
-                                    let hosts = Arc::clone(&hosts);
-                                    move || !hosts.is_empty()
-                                }
-                                fallback={move || view! {
-                                    <li class="settings__list-empty" data-role="host-empty">"No Resolume connections defined yet."</li>
-                                }}
-                            >
-                                <For
-                                    each={
-                                        let hosts = Arc::clone(&hosts);
-                                        move || (*hosts).clone()
-                                    }
-                                    key=|host: &SettingsHostRow| host.id.clone()
-                                    children={|host: SettingsHostRow| {
-                                        let raw_state = if host.status_state.is_empty() {
-                                            "disabled".to_string()
-                                        } else {
-                                            host.status_state.to_lowercase()
-                                        };
-                                        let status_class =
-                                            format!("settings__status settings__status--{}", raw_state);
-                                        let status_label = format!(
-                                            "{}{}",
-                                            raw_state
-                                                .chars()
-                                                .next()
-                                                .map(|c| c.to_uppercase().collect::<String>())
-                                                .unwrap_or_else(String::new),
-                                            raw_state.chars().skip(1).collect::<String>()
-                                        );
-                                        let latency_text = host
-                                            .last_latency_ms
-                                            .map(|ms| format!("{ms:.1} ms"))
-                                            .unwrap_or_else(|| "—".to_string());
-                                        let warning_text = host.status_message.clone().unwrap_or_default();
-                                        let warning_view = (!warning_text.is_empty()).then(|| {
-                                            view! { <p class="settings__list-meta settings__list-meta--warning">{format!("⚠ {warning_text}")}</p> }
-                                        });
-                                        let host_id_edit = host.id.clone();
-                                        let host_id_delete = host.id.clone();
-                                        view! {
-                                            <li
-                                                class="settings__list-item"
-                                                data-id={host.id.clone()}
-                                                data-enabled={host.is_enabled.to_string()}
-                                            >
-                                                <div class="settings__list-primary">
-                                                    <div class="settings__list-title">
-                                                        <span class="settings__host-label">{host.label.clone()}</span>
-                                                        <span class={status_class}>{status_label.clone()}</span>
-                                                    </div>
-                                                    <p class="settings__list-line">
-                                                        <code>{host.host.clone()}</code>
-                                                        <span class="settings__host-port">{format!(":{}", host.port)}</span>
-                                                    </p>
-                                                    <p class="settings__list-meta">{"Updated "}{host.updated_at_display.clone()}</p>
-                                                    <p class="settings__list-meta">{"Created "}{host.created_at_display.clone()}</p>
-                                                    <p class="settings__list-meta">{"Latency "}{latency_text}</p>
-                                                    {warning_view}
-                                                </div>
-                                                <div class="settings__list-actions">
-                                                    <button
-                                                        type="button"
-                                                        class="settings__button settings__button--ghost"
-                                                        data-role="host-edit"
-                                                        data-id={host_id_edit}
-                                                    >"Edit"</button>
-                                                    <button
-                                                        type="button"
-                                                        class="settings__button settings__button--danger"
-                                                        data-role="host-delete"
-                                                        data-id={host_id_delete}
-                                                    >"Delete"</button>
-                                                </div>
-                                            </li>
-                                        }
-                                    }}
-                                />
-                            </Show>
-                        </ul>
-                        <section class="settings__legend">
-                            <h3>"Clip Tokens"</h3>
-                            <p class="settings__legend-note">
-                                "Presenter updates every clip whose name contains these tokens (for example, #main-a or #main-a-2) and alternates between A/B lanes so the next look is always preloaded."
-                            </p>
-                            <dl>
-                                <div>
-                                    <dt>"#main-a / #main-b"</dt>
-                                    <dd>"Main lyric text, alternating between A and B for seamless cuts."</dd>
-                                </div>
-                                <div>
-                                    <dt>"#translate-a / #translate-b"</dt>
-                                    <dd>"Translation lyric text matched to each lane."</dd>
-                                </div>
-                                <div>
-                                    <dt>"#bible-a / #bible-b"</dt>
-                                    <dd>"Bible verse text for scripture cues."</dd>
-                                </div>
-                                <div>
-                                    <dt>"#bible-translate-a / #bible-translate-b"</dt>
-                                    <dd>"Bible translation label accompanying the verse."</dd>
-                                </div>
-                                <div>
-                                    <dt>"#bible-clear"</dt>
-                                    <dd>"Clears the Bible layer when triggered."</dd>
-                                </div>
-                                <div>
-                                    <dt>"#song-name"</dt>
-                                    <dd>"Displays the active song title (numeric prefixes like '001 ' are removed automatically)."</dd>
-                                </div>
-                                <div>
-                                    <dt>"#band-name"</dt>
-                                    <dd>"Displays the library/band the current song belongs to."</dd>
-                                </div>
-                                <div>
-                                    <dt>"Suffixes: -u / -re"</dt>
-                                    <dd>"Append -u to force uppercase and -re to collapse multi-line text into a single space-delimited line. Combine them (e.g., #translate-b-u-re) for stacked transforms."</dd>
-                                </div>
-                            </dl>
-                        </section>
-                    </section>
-                    <section class="settings__card">
-                        <header class="settings__card-header">
-                            <div>
-                                <h2>"Android Stage Launchers"</h2>
-                                <p>"Keep each Android TV pinned to the Fully Kiosk stage display."</p>
-                            </div>
-                            <div class="settings__badge-group">
-                                <span class="settings__badge" data-role="android-count">{android_count_text.clone()}</span>
-                                <span class="settings__badge-label">"Displays"</span>
-                            </div>
-                        </header>
-                        <form class="settings__form" data-role="android-form" autocomplete="off">
-                            <input type="hidden" data-role="android-id" />
-                            <div class="settings__form-header">
-                                <div>
-                                    <h3 data-role="android-form-title">"Add Android Stage Display"</h3>
-                                    <p data-role="android-form-subtitle">"Presenter reconnects and relaunches Fully Kiosk whenever the device appears."</p>
-                                </div>
-                            </div>
-                            <div class="settings__form-row">
-                                <label>
-                                    <span>"Label"</span>
-                                    <input type="text" name="label" data-role="android-label" placeholder="Stage Left" required />
-                                </label>
-                                <label>
-                                    <span>"Hostname or DNS"</span>
-                                    <input type="text" name="host" data-role="android-host" placeholder="sd1l.lan" required />
-                                </label>
-                                <label class="settings__form-control--small">
-                                    <span>"Port"</span>
-                                    <input type="number" name="port" data-role="android-port" min="1" max="65535" value="5555" required />
-                                </label>
-                            </div>
-                            <div class="settings__form-row settings__form-row--single">
-                                <label>
-                                    <span>"Launch Component"</span>
-                                    <input
-                                        type="text"
-                                        name="launchComponent"
-                                        data-role="android-component"
-                                        placeholder="com.fullykiosk.videokiosk/de.ozerov.fully.MainActivity"
-                                        required
-                                    />
-                                </label>
-                            </div>
-                            <div class="settings__form-row settings__form-row--single">
-                                <label class="settings__form-checkbox settings__form-checkbox--block">
-                                    <input type="checkbox" name="isEnabled" data-role="android-enabled" checked />
-                                    <span>"Enabled"</span>
-                                </label>
-                            </div>
-                            <div class="settings__form-actions">
-                                <button
-                                    type="submit"
-                                    class="settings__button settings__button--primary"
-                                    data-role="android-submit"
-                                >"Add Android Display"</button>
-                                <button
-                                    type="button"
-                                    class="settings__button settings__button--ghost"
-                                    data-role="android-reset"
-                                >"Cancel"</button>
-                            </div>
-                            <p class="settings__form-status" data-role="android-form-status" data-state="idle"></p>
-                        </form>
-                        <ul class="settings__list" data-role="android-display-list">
-                            <Show
-                                when={
-                                    let displays = Arc::clone(&android_displays);
-                                    move || !displays.is_empty()
-                                }
-                                fallback={move || view! {
-                                    <li class="settings__list-empty" data-role="android-empty">"No Android stage displays configured yet."</li>
-                                }}
-                            >
-                                <For
-                                    each={
-                                        let displays = Arc::clone(&android_displays);
-                                        move || (*displays).clone()
-                                    }
-                                    key=|display: &SettingsAndroidDisplayRow| display.id.clone()
-                                    children={|display: SettingsAndroidDisplayRow| {
-                                        let raw_state = if display.status_state.is_empty() {
-                                            "disabled".to_string()
-                                        } else {
-                                            display.status_state.to_lowercase().replace(' ', "-")
-                                        };
-                                        let status_class =
-                                            format!("settings__status settings__status--{}", raw_state);
-                                        let status_label = display.status_state.clone();
-                                        let warning_text = display.status_message.clone().unwrap_or_default();
-                                        let warning_view = (!warning_text.is_empty()).then(|| {
-                                            view! { <p class="settings__list-meta settings__list-meta--warning">{format!("⚠ {}", warning_text)}</p> }
-                                        });
-                                        let display_id_edit = display.id.clone();
-                                        let display_id_delete = display.id.clone();
-                                        view! {
-                                            <li
-                                                class="settings__list-item"
-                                                data-id={display.id.clone()}
-                                                data-enabled={display.is_enabled.to_string()}
-                                            >
-                                                <div class="settings__list-primary">
-                                                    <div class="settings__list-title">
-                                                        <span class="settings__host-label">{display.label.clone()}</span>
-                                                        <span class={status_class}>{status_label}</span>
-                                                    </div>
-                                                    <p class="settings__list-line">
-                                                        <code>{display.host.clone()}</code>
-                                                        <span class="settings__host-port">{format!(":{}", display.port)}</span>
-                                                    </p>
-                                                    <p class="settings__list-meta">{"Component "}{display.launch_component.clone()}</p>
-                                                    <p class="settings__list-meta">{"Last attempt "}{display.last_attempt_display.clone()}</p>
-                                                    <p class="settings__list-meta">{"Last success "}{display.last_success_display.clone()}</p>
-                                                    <p class="settings__list-meta">{"Updated "}{display.updated_at_display.clone()}</p>
-                                                    <p class="settings__list-meta">{"Created "}{display.created_at_display.clone()}</p>
-                                                    {warning_view}
-                                                </div>
-                                                <div class="settings__list-actions">
-                                                    <button
-                                                        type="button"
-                                                        class="settings__button settings__button--ghost"
-                                                        data-role="android-edit"
-                                                        data-id={display_id_edit}
-                                                    >"Edit"</button>
-                                                    <button
-                                                        type="button"
-                                                        class="settings__button settings__button--danger"
-                                                        data-role="android-delete"
-                                                        data-id={display_id_delete}
-                                                    >"Delete"</button>
-                                                </div>
-                                            </li>
-                                        }
-                                    }}
-                                />
-                            </Show>
-                        </ul>
-                    </section>
-                    <section class="settings__card settings__card--ableton">
-                        <header class="settings__card-header">
-                            <div>
-                                <h2>"Ableton Control"</h2>
-                                <p>"Configure AbleSet tracking and Presenter's OSC listener."</p>
-                            </div>
-                        </header>
-                        <form
-                            class="settings__form settings__form--ableset"
-                            data-role="ableset-form"
-                            autocomplete="off"
-                            data-mode={if ableset_enabled { "enabled" } else { "disabled" }}
-                        >
-                            <div class="settings__form-row settings__form-row--single">
-                                <label class="settings__form-checkbox settings__form-checkbox--block">
-                                    <input type="checkbox" data-role="ableset-enabled" checked={ableset_enabled} />
-                                    <span>"Enable Ableton automation"</span>
-                                </label>
-                            </div>
-                            <div class="settings__form-row">
-                                <label>
-                                    <span>"AbleSet Host"</span>
-                                    <input
-                                        type="text"
-                                        data-role="ableset-host"
-                                        value={ableset_host_value.clone()}
-                                        required
-                                    />
-                                </label>
-                                <label class="settings__form-control settings__form-control--small">
-                                    <span>"HTTP Port"</span>
-                                    <input
-                                        type="number"
-                                        data-role="ableset-http-port"
-                                        min="1"
-                                        max="65535"
-                                        value={ableset_http_port_value.clone()}
-                                        required
-                                    />
-                                </label>
-                                <label>
-                                    <span>"Library Name"</span>
-                                    <input
-                                        type="text"
-                                        data-role="ableset-library"
-                                        value={ableset_library_value.clone()}
-                                        required
-                                    />
-                                </label>
-                            </div>
-                            <div class="settings__form-row settings__form-row--single">
-                                <label class="settings__form-control settings__form-control--small">
-                                    <span>"OSC Listener Port"</span>
-                                    <input
-                                        type="number"
-                                        data-role="osc-port"
-                                        min="1"
-                                        max="65535"
-                                        value={osc_port_value.clone()}
-                                        required
-                                    />
-                                </label>
-                            </div>
-                            <div class="settings__form-actions">
-                                <button
-                                    type="submit"
-                                    class="settings__button settings__button--primary"
-                                    data-role="ableset-submit"
-                                >"Save AbleSet Settings"</button>
-                            </div>
-                            <p class="settings__form-status" data-role="ableset-form-status" data-state="idle"></p>
-                        </form>
-                        <div class="settings__status-panel">
-                            <span
-                                class={format!("settings__status settings__status--{}", ableset_status_state)}
-                                data-role="ableset-status-indicator"
-                            >{ableset_status_label.clone()}</span>
-                            <dl class="settings__status-list">
-                                <div>
-                                    <dt>"Current song"</dt>
-                                    <dd data-role="ableset-status-song">{ableset_last_song_name.clone()}</dd>
-                                </div>
-                                <div>
-                                    <dt>"Last update"</dt>
-                                    <dd data-role="ableset-status-updated">{ableset_last_song_seen.clone()}</dd>
-                                </div>
-                            </dl>
-                            <p class="settings__list-meta settings__list-meta--warning" data-role="ableset-status-error">
-                                {ableset_last_error.clone().unwrap_or_default()}
-                            </p>
-                        </div>
-                        <div class="settings__status-panel">
-                            <span
-                                class={format!("settings__status settings__status--{}", osc_status_state)}
-                                data-role="osc-status-indicator"
-                            >{osc_status_label.clone()}</span>
-                            <dl class="settings__status-list">
-                                <div>
-                                    <dt>"Last event"</dt>
-                                    <dd data-role="osc-status-last-message">{osc_last_message_display.clone()}</dd>
-                                </div>
-                                <div>
-                                    <dt>"Last note"</dt>
-                                    <dd data-role="osc-status-last-note">{osc_last_note_display.clone()}</dd>
-                                </div>
-                            </dl>
-                            <p
-                                class="settings__list-meta settings__list-meta--warning"
-                                data-role="osc-status-error"
-                                data-visible={if osc_last_error.is_some() { "true" } else { "false" }}
-                            >{osc_last_error.clone().map(|err| format!("⚠ {err}")).unwrap_or_default()}</p>
-                        </div>
-                    </section>
-
+                    <CompanionSettingsCard
+                        enabled=companion_enabled
+                        port_text=companion_port_text.clone()
+                    />
+                    <ResolumeConnectionsCard
+                        hosts=Arc::clone(&hosts)
+                        host_count_text=host_count_text.clone()
+                    />
+                    <AndroidStageSettingsCard
+                        displays=Arc::clone(&android_displays)
+                        display_count_text=android_count_text.clone()
+                    />
+                    <AbleSetOscSettingsCard
+                        ableset_host_value=ableset_host_value.clone()
+                        ableset_http_port_value=ableset_http_port_value.clone()
+                        ableset_library_value=ableset_library_value.clone()
+                        ableset_enabled
+                        osc_port_value=osc_port_value.clone()
+                        ableset_status_state=ableset_status_state.clone()
+                        ableset_status_label=ableset_status_label.clone()
+                        ableset_last_song_name=ableset_last_song_name.clone()
+                        ableset_last_song_seen=ableset_last_song_seen.clone()
+                        ableset_last_error=ableset_last_error.clone()
+                        osc_status_state=osc_status_state.clone()
+                        osc_status_label=osc_status_label.clone()
+                        osc_last_message_display=osc_last_message_display.clone()
+                        osc_last_note_display=osc_last_note_display.clone()
+                        osc_last_error=osc_last_error.clone()
+                    />
                 </main>
                 <div class="settings__toast" data-role="toast" data-visible="false"></div>
                 <script>{script}</script>
@@ -658,31 +209,30 @@ fn SettingsDocument(
 }
 
 pub async fn render_settings_ui(state: &AppState) -> anyhow::Result<Html<String>> {
-    let hosts = state.list_resolume_hosts().await?;
-    let statuses = state.resolume_status_snapshot().await;
-    let android_displays = state.list_android_stage_displays().await?;
-    let android_statuses = state.android_stage_status_snapshot().await;
-    let osc_settings = state.osc_settings().await?;
-    let osc_status = state.osc_status_snapshot().await;
-    let ableset_settings = state.ableset_settings().await?;
-    let ableset_status = state.ableset_status_snapshot().await;
-    let feature_flags = state.feature_flags();
+    let view = load_settings_view_model(state).await?;
+    let script = build_settings_script(&view);
+    Ok(render_settings_html(&view, &script))
+}
 
-    let host_rows: Vec<SettingsHostRow> = hosts
+async fn load_settings_view_model(state: &AppState) -> anyhow::Result<SettingsViewModel> {
+    let hosts = state.list_resolume_hosts().await?;
+    let host_statuses = state.resolume_status_snapshot().await;
+    let host_rows = hosts
         .into_iter()
         .map(|host| {
             let created_display = format_settings_timestamp(host.created_at);
             let updated_display = format_settings_timestamp(host.updated_at);
-            let status = statuses
+            let status = host_statuses
                 .get(&host.id)
                 .cloned()
                 .unwrap_or_else(ResolumeConnectionSnapshot::disabled);
             let status_state = match status.state {
-                ResolumeConnectionState::Disabled => "Disabled".to_string(),
-                ResolumeConnectionState::Connecting => "Connecting".to_string(),
-                ResolumeConnectionState::Connected => "Connected".to_string(),
-                ResolumeConnectionState::Error => "Error".to_string(),
-            };
+                ResolumeConnectionState::Disabled => "Disabled",
+                ResolumeConnectionState::Connecting => "Connecting",
+                ResolumeConnectionState::Connected => "Connected",
+                ResolumeConnectionState::Error => "Error",
+            }
+            .to_string();
             SettingsHostRow {
                 id: host.id.to_string(),
                 label: host.label,
@@ -701,7 +251,9 @@ pub async fn render_settings_ui(state: &AppState) -> anyhow::Result<Html<String>
         })
         .collect();
 
-    let android_rows: Vec<SettingsAndroidDisplayRow> = android_displays
+    let android_displays = state.list_android_stage_displays().await?;
+    let android_statuses = state.android_stage_status_snapshot().await;
+    let android_rows = android_displays
         .into_iter()
         .map(|display| {
             let status = android_statuses
@@ -709,16 +261,13 @@ pub async fn render_settings_ui(state: &AppState) -> anyhow::Result<Html<String>
                 .cloned()
                 .unwrap_or_else(AndroidStageDisplayStatusSnapshot::disabled);
             let status_state = match status.state {
-                crate::android_stage::AndroidStageDisplayState::Disabled => "Disabled".to_string(),
-                crate::android_stage::AndroidStageDisplayState::Connecting => {
-                    "Connecting".to_string()
-                }
-                crate::android_stage::AndroidStageDisplayState::Launching => {
-                    "Launching".to_string()
-                }
-                crate::android_stage::AndroidStageDisplayState::Running => "Running".to_string(),
-                crate::android_stage::AndroidStageDisplayState::Error => "Error".to_string(),
-            };
+                crate::android_stage::AndroidStageDisplayState::Disabled => "Disabled",
+                crate::android_stage::AndroidStageDisplayState::Connecting => "Connecting",
+                crate::android_stage::AndroidStageDisplayState::Launching => "Launching",
+                crate::android_stage::AndroidStageDisplayState::Running => "Running",
+                crate::android_stage::AndroidStageDisplayState::Error => "Error",
+            }
+            .to_string();
             let created_display = format_settings_timestamp(display.created_at);
             let updated_display = format_settings_timestamp(display.updated_at);
             let last_attempt_display = status
@@ -747,69 +296,84 @@ pub async fn render_settings_ui(state: &AppState) -> anyhow::Result<Html<String>
         })
         .collect();
 
-    let hosts_json = to_string(&host_rows).unwrap_or_else(|_| "[]".to_string());
-    let hosts_json = hosts_json.replace("</script>", r"<\/script>");
-    let android_json = to_string(&android_rows).unwrap_or_else(|_| "[]".to_string());
-    let android_json = android_json.replace("</script>", r"<\/script>");
+    let osc_settings = state.osc_settings().await?;
+    let osc_status = state.osc_status_snapshot().await;
+    let ableset_settings = state.ableset_settings().await?;
+    let ableset_status = state.ableset_status_snapshot().await;
+    let features = state.feature_flags();
+
+    Ok(SettingsViewModel {
+        hosts: host_rows,
+        android_displays: android_rows,
+        osc_settings,
+        osc_status,
+        ableset_settings,
+        ableset_status,
+        features,
+    })
+}
+
+fn build_settings_script(view: &SettingsViewModel) -> String {
+    let hosts_json = json_for_script(&view.hosts, "[]");
+    let android_json = json_for_script(&view.android_displays, "[]");
 
     let osc_config_json = json!({
-        "enabled": osc_settings.enabled,
-        "listenPort": osc_settings.listen_port,
-        "addressPattern": osc_settings.address_pattern,
-        "velocityMode": osc_settings.velocity_mode,
+        "enabled": view.osc_settings.enabled,
+        "listenPort": view.osc_settings.listen_port,
+        "addressPattern": view.osc_settings.address_pattern,
+        "velocityMode": view.osc_settings.velocity_mode,
     });
-    let osc_config_json = to_string(&osc_config_json)
-        .unwrap_or_else(|_| "{}".to_string())
-        .replace("</script>", r"<\/script>");
-    let osc_status_json = to_string(&osc_status)
-        .unwrap_or_else(|_| "{}".to_string())
-        .replace("</script>", r"<\/script>");
-    let ableset_config_json = json!({
-        "enabled": ableset_settings.enabled,
-        "host": ableset_settings.host,
-        "httpPort": ableset_settings.http_port,
-        "oscPort": ableset_settings.osc_port,
-        "libraryName": ableset_settings.library_name,
-        "songPrefixLength": ableset_settings.song_prefix_length,
-    });
-    let ableset_config_json = to_string(&ableset_config_json)
-        .unwrap_or_else(|_| "{}".to_string())
-        .replace("</script>", r"<\/script>");
-    let ableset_status_json = to_string(&ableset_status)
-        .unwrap_or_else(|_| "{}".to_string())
-        .replace("</script>", r"<\/script>");
-    let feature_json = to_string(&feature_flags)
-        .unwrap_or_else(|_| "{}".to_string())
-        .replace("</script>", r"<\/script>");
+    let osc_config_json = json_for_script(&osc_config_json, "{}");
+    let osc_status_json = json_for_script(&view.osc_status, "{}");
 
-    let script = scripts::SETTINGS
+    let ableset_config_json = json!({
+        "enabled": view.ableset_settings.enabled,
+        "host": view.ableset_settings.host,
+        "httpPort": view.ableset_settings.http_port,
+        "oscPort": view.ableset_settings.osc_port,
+        "libraryName": view.ableset_settings.library_name,
+        "songPrefixLength": view.ableset_settings.song_prefix_length,
+    });
+    let ableset_config_json = json_for_script(&ableset_config_json, "{}");
+    let ableset_status_json = json_for_script(&view.ableset_status, "{}");
+    let feature_json = json_for_script(&view.features, "{}");
+
+    scripts::SETTINGS
         .replace("__RESOLUME_HOSTS__", &hosts_json)
         .replace("__ANDROID_STAGE_DISPLAYS__", &android_json)
         .replace("__OSC_CONFIG__", &osc_config_json)
         .replace("__OSC_STATUS__", &osc_status_json)
         .replace("__ABLESET_CONFIG__", &ableset_config_json)
         .replace("__ABLESET_STATUS__", &ableset_status_json)
-        .replace("__FEATURE_FLAGS__", &feature_json);
+        .replace("__FEATURE_FLAGS__", &feature_json)
+}
 
+fn render_settings_html(view: &SettingsViewModel, script: &str) -> Html<String> {
     let owner = Owner::new_root(None);
+    let script_owned = script.to_string();
     let html = owner.with(|| {
         view! {
             <SettingsDocument
-                hosts=host_rows.clone()
-                android_displays=android_rows.clone()
-                osc_settings=osc_settings.clone()
-                osc_status=osc_status.clone()
-                ableset_settings=ableset_settings.clone()
-                ableset_status=ableset_status.clone()
-                features=feature_flags.clone()
-                script=script.clone()
+                hosts=view.hosts.clone()
+                android_displays=view.android_displays.clone()
+                osc_settings=view.osc_settings.clone()
+                osc_status=view.osc_status.clone()
+                ableset_settings=view.ableset_settings.clone()
+                ableset_status=view.ableset_status.clone()
+                features=view.features.clone()
+                script=script_owned.clone()
             />
         }
         .into_view()
         .to_html()
     });
+    Html(format!("<!DOCTYPE html>{html}"))
+}
 
-    Ok(Html(format!("<!DOCTYPE html>{html}")))
+fn json_for_script<T: Serialize>(value: &T, fallback: &str) -> String {
+    to_string(value)
+        .unwrap_or_else(|_| fallback.to_string())
+        .replace("</script>", r"<\/script>")
 }
 
 fn format_settings_timestamp(value: DateTime<Utc>) -> String {

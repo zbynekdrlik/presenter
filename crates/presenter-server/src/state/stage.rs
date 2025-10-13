@@ -101,6 +101,8 @@ impl AppState {
         Ok(layout)
     }
 
+    // Keep async signature to match other AppState accessors used in tests/handlers.
+    #[allow(clippy::unused_async)]
     pub async fn stage_displays(&self) -> anyhow::Result<Vec<StageDisplayLayout>> {
         Ok(StageDisplayLayout::built_in())
     }
@@ -230,14 +232,12 @@ impl AppState {
             .resolution
             .current
             .as_ref()
-            .map(|slide| slide.main.clone())
-            .unwrap_or_else(String::new);
+            .map_or_else(String::new, |slide| slide.main.clone());
         let current_translation = context
             .resolution
             .current
             .as_ref()
-            .map(|slide| slide.translation.clone())
-            .unwrap_or_else(String::new);
+            .map_or_else(String::new, |slide| slide.translation.clone());
         let song_name = context
             .resolution
             .presentation_name
@@ -251,7 +251,7 @@ impl AppState {
             song_name: Some(song_name),
             band_name: Some(band_name),
         };
-        self.resolume_registry.stage_update(stage_update).await;
+        self.resolume_client.stage_update(stage_update).await;
         Ok(())
     }
 
@@ -335,7 +335,7 @@ impl AppState {
     }
 
     pub(super) async fn sample_resolume_latency(&self) -> Option<f64> {
-        let snapshot = self.resolume_registry.snapshot().await;
+        let snapshot = self.resolume_client.snapshot().await;
         snapshot
             .values()
             .filter_map(|status| status.last_latency_ms)
