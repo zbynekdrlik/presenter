@@ -122,6 +122,7 @@ pub mod slide {
         pub stage_text_search: String,
         pub group_name: Option<String>,
         pub created_at: DateTimeWithTimeZone,
+        pub metadata_json: Option<String>,
     }
 
     #[derive(Copy, Clone, Debug, EnumIter, DeriveRelation)]
@@ -365,6 +366,8 @@ pub mod bible_passage {
         pub id: String,
         pub translation_code: String,
         pub book: String,
+        pub book_code: String,
+        pub book_number: i32,
         pub chapter: i32,
         pub verse_start: i32,
         pub verse_end: i32,

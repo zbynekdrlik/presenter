@@ -22,6 +22,12 @@ impl MigrationTrait for Migration {
                     )
                     .col(ColumnDef::new(Libraries::Name).string().not_null())
                     .col(
+                        ColumnDef::new(Libraries::Category)
+                            .string_len(32)
+                            .not_null()
+                            .default("worship"),
+                    )
+                    .col(
                         ColumnDef::new(Libraries::SearchName)
                             .string()
                             .not_null()
@@ -161,6 +167,7 @@ impl MigrationTrait for Migration {
                             .default(""),
                     )
                     .col(ColumnDef::new(Slides::GroupName).string().null())
+                    .col(ColumnDef::new(Slides::MetadataJson).text().null())
                     .col(
                         ColumnDef::new(Slides::CreatedAt)
                             .timestamp_with_time_zone()
@@ -645,6 +652,51 @@ impl MigrationTrait for Migration {
         manager
             .create_table(
                 Table::create()
+                    .table(BiblePreferences::Table)
+                    .if_not_exists()
+                    .col(
+                        ColumnDef::new(BiblePreferences::Id)
+                            .string_len(36)
+                            .not_null()
+                            .primary_key(),
+                    )
+                    .col(
+                        ColumnDef::new(BiblePreferences::MainTranslationCode)
+                            .string()
+                            .not_null()
+                            .default(""),
+                    )
+                    .col(
+                        ColumnDef::new(BiblePreferences::SecondaryTranslationCode)
+                            .string()
+                            .not_null()
+                            .default(""),
+                    )
+                    .col(
+                        ColumnDef::new(BiblePreferences::CharacterLimit)
+                            .integer()
+                            .not_null()
+                            .default(320),
+                    )
+                    .col(
+                        ColumnDef::new(BiblePreferences::CreatedAt)
+                            .timestamp_with_time_zone()
+                            .not_null()
+                            .extra("DEFAULT CURRENT_TIMESTAMP"),
+                    )
+                    .col(
+                        ColumnDef::new(BiblePreferences::UpdatedAt)
+                            .timestamp_with_time_zone()
+                            .not_null()
+                            .extra("DEFAULT CURRENT_TIMESTAMP"),
+                    )
+                    .to_owned(),
+            )
+            .await?;
+
+        manager
+            .create_table(
+                Table::create()
                     .table(BibleTranslations::Table)
                     .if_not_exists()
                     .col(
@@ -687,6 +739,12 @@ impl MigrationTrait for Migration {
                             .not_null(),
                     )
                     .col(ColumnDef::new(BiblePassages::Book).string().not_null())
+                    .col(ColumnDef::new(BiblePassages::BookCode).string().not_null())
+                    .col(
+                        ColumnDef::new(BiblePassages::BookNumber)
+                            .integer()
+                            .not_null(),
+                    )
                     .col(ColumnDef::new(BiblePassages::Chapter).integer().not_null())
                     .col(
                         ColumnDef::new(BiblePassages::VerseStart)
@@ -719,6 +777,8 @@ impl MigrationTrait for Migration {
                     .table(BiblePassages::Table)
                     .col(BiblePassages::TranslationCode)
                     .col(BiblePassages::Book)
+                    .col(BiblePassages::BookCode)
+                    .col(BiblePassages::BookNumber)
                     .col(BiblePassages::Chapter)
                     .col(BiblePassages::VerseStart)
                     .col(BiblePassages::VerseEnd)
@@ -790,6 +850,9 @@ impl MigrationTrait for Migration {
             .drop_table(Table::drop().table(BibleTranslations::Table).to_owned())
             .await?;
         manager
+            .drop_table(Table::drop().table(BiblePreferences::Table).to_owned())
+            .await?;
+        manager
             .drop_table(Table::drop().table(StageState::Table).to_owned())
             .await?;
         manager
@@ -836,6 +899,7 @@ enum Libraries {
     Table,
     Id,
     Name,
+    Category,
     SearchName,
     CreatedAt,
 }
@@ -869,6 +933,7 @@ enum Slides {
     StageText,
     StageTextSearch,
     GroupName,
+    MetadataJson,
     CreatedAt,
 }
 
@@ -971,6 +1036,17 @@ enum StageState {
     UpdatedAt,
 }
 #[derive(DeriveIden)]
+enum BiblePreferences {
+    Table,
+    Id,
+    MainTranslationCode,
+    SecondaryTranslationCode,
+    CharacterLimit,
+    CreatedAt,
+    UpdatedAt,
+}
+
+#[derive(DeriveIden)]
 enum BibleTranslations {
     Table,
     Code,
@@ -985,6 +1061,8 @@ enum BiblePassages {
     Id,
     TranslationCode,
     Book,
+    BookCode,
+    BookNumber,
     Chapter,
     VerseStart,
     VerseEnd,

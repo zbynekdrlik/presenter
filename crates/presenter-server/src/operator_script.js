@@ -4802,6 +4802,11 @@ function updateCardWarnings(card) {
   function handleViewToggle(event) {
     const button = event.target.closest('[data-role="view-toggle"]');
     if (!button) return;
+    const href = button.dataset.href;
+    if (href) {
+      window.location.href = href;
+      return;
+    }
     const view = button.dataset.view;
     if (!view || view === state.view) return;
     setView(view);

@@ -1,0 +1,39 @@
+[advisories]
+ignore = [
+  "RUSTSEC-2024-0421", # idna <1.0.0 vulnerability; upstream validator pins 0.5.0
+  "RUSTSEC-2024-0436", # paste crate unmaintained; required by leptos dependency chain
+  "RUSTSEC-2024-0370", # proc-macro-error unmaintained; required by validator_derive
+]
+
+[bans]
+multiple-versions = "warn"
+
+[licenses]
+allow = [
+  "MIT",
+  "Apache-2.0",
+  "ISC",
+  "BSD-2-Clause",
+  "BSD-3-Clause",
+  "0BSD",
+  "Unicode-3.0",
+  "Zlib",
+  "CDLA-Permissive-2.0",
+  "BSL-1.0",
+]
+
+[[licenses.exceptions]]
+name = "ring"
+allow = ["BSD-3-Clause", "ISC", "MIT", "OpenSSL"]
+
+[[licenses.exceptions]]
+name = "const_format"
+allow = ["Zlib"]
+
+[[licenses.exceptions]]
+name = "const_format_proc_macros"
+allow = ["Zlib"]
+
+[[licenses.exceptions]]
+name = "foldhash"
+allow = ["Zlib"]
