@@ -25,7 +25,10 @@ use presenter_importer::bible::BibleIngestionService;
 use presenter_persistence::{DatabaseSettings, Repository};
 use std::{
     collections::HashMap,
-    sync::{atomic::AtomicBool, atomic::AtomicU16, Arc},
+    sync::{
+        atomic::{AtomicBool, AtomicU16, Ordering},
+        Arc,
+    },
 };
 use tokio::sync::RwLock;
 use tokio::time::{interval, Duration as TokioDuration, MissedTickBehavior};
@@ -37,6 +40,7 @@ use super::{AbleSetLibraryCache, CompanionServerManager};
 pub(super) const COMPANION_FEATURE_KEY: &str = "feature.companion.enabled";
 pub(super) const COMPANION_PORT_KEY: &str = "feature.companion.port";
 pub(super) const DEFAULT_COMPANION_PORT: u16 = 18_175;
+pub(super) const BIBLE_DASHBOARD_BOOTSTRAP_KEY: &str = "bible.dashboard.bootstrapped";
 
 #[derive(Clone)]
 pub struct AppState {
@@ -56,6 +60,7 @@ pub struct AppState {
     pub(super) osc_client: DynOscClient,
     pub(super) ableset_client: DynAbleSetClient,
     pub(super) ableset_cache: Arc<RwLock<AbleSetLibraryCache>>,
+    pub(super) bible_dashboard_bootstrapped: Arc<AtomicBool>,
     #[cfg(test)]
     pub(super) bible_ingestion_override:
         Option<std::sync::Arc<dyn TestBibleIngestion + Send + Sync>>,
@@ -97,6 +102,7 @@ impl AppState {
             osc_client,
             ableset_client,
             ableset_cache,
+            bible_dashboard_bootstrapped: Arc::new(AtomicBool::new(false)),
             #[cfg(test)]
             bible_ingestion_override: None,
         };
@@ -355,7 +361,62 @@ impl AppState {
     }
 
     pub async fn list_bible_translations(&self) -> anyhow::Result<Vec<BibleTranslation>> {
-        self.repository.list_bible_translations().await
+        let mut translations = self.repository.list_bible_translations().await?;
+        if translations.is_empty() {
+            return Ok(translations);
+        }
+        if self.bible_dashboard_bootstrapped.load(Ordering::Relaxed) {
+            return Ok(translations);
+        }
+        let already_bootstrapped = self
+            .repository
+            .get_app_setting(BIBLE_DASHBOARD_BOOTSTRAP_KEY)
+            .await?
+            .map(|value| value == "true")
+            .unwrap_or(false);
+        if already_bootstrapped {
+            self.bible_dashboard_bootstrapped
+                .store(true, Ordering::Relaxed);
+            return Ok(translations);
+        }
+        let all_pinned = translations
+            .iter()
+            .all(|translation| translation.show_in_dashboard);
+        if !all_pinned {
+            self.repository.set_all_bible_dashboard_pins(true).await?;
+            translations = self.repository.list_bible_translations().await?;
+        }
+        self.repository
+            .set_app_setting(BIBLE_DASHBOARD_BOOTSTRAP_KEY, "true")
+            .await?;
+        self.bible_dashboard_bootstrapped
+            .store(true, Ordering::Relaxed);
+        Ok(translations)
+    }
+
+    pub async fn update_bible_translation(
+        &self,
+        code: &str,
+        name: Option<&str>,
+        language: Option<&str>,
+        show_in_dashboard: Option<bool>,
+    ) -> anyhow::Result<Option<BibleTranslation>> {
+        let updated = self
+            .repository
+            .update_bible_translation(code, name, language, show_in_dashboard)
+            .await?;
+        if show_in_dashboard.is_some() && updated.is_some() {
+            self.repository
+                .set_app_setting(BIBLE_DASHBOARD_BOOTSTRAP_KEY, "true")
+                .await?;
+            self.bible_dashboard_bootstrapped
+                .store(true, Ordering::Relaxed);
+        }
+        Ok(updated)
+    }
+
+    pub async fn delete_bible_translation(&self, code: &str) -> anyhow::Result<bool> {
+        self.repository.delete_bible_translation(code).await
     }
 
     pub async fn library_summaries(

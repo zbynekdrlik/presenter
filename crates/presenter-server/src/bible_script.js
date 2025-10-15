@@ -4,10 +4,56 @@
   const translations = Array.isArray(__TRANSLATIONS__) ? __TRANSLATIONS__ : [];
   const initialBroadcast = __ACTIVE__ || null;
 
+  function coerceDashboardFlag(value) {
+    if (typeof value === 'boolean') return value;
+    if (typeof value === 'number') return value !== 0;
+    if (typeof value === 'string') {
+      const normalized = value.trim().toLowerCase();
+      if (!normalized) return true;
+      return !['false', '0', 'no', 'off'].includes(normalized);
+    }
+    return true;
+  }
+
+  function normalizeTranslation(raw) {
+    if (!raw || typeof raw !== 'object') {
+      return {
+        code: '',
+        name: '',
+        language: '',
+        showInDashboard: true,
+        source: null,
+      };
+    }
+    const code = typeof raw.code === 'string' ? raw.code : String(raw.code || '');
+    const name = typeof raw.name === 'string' ? raw.name : String(raw.name || '');
+    const language =
+      typeof raw.language === 'string' ? raw.language : String(raw.language || '');
+    const showInDashboard = coerceDashboardFlag(
+      raw.showInDashboard ?? raw.show_in_dashboard
+    );
+    const source =
+      raw.source == null || raw.source === ''
+        ? null
+        : typeof raw.source === 'string'
+        ? raw.source
+        : String(raw.source);
+    return {
+      code,
+      name,
+      language,
+      showInDashboard,
+      source,
+    };
+  }
+
+  const normalizedTranslations = translations.map(normalizeTranslation);
+
   const state = {
-    translations,
+    translations: normalizedTranslations,
+    refreshingTranslations: false,
     preferences: {
-      mainTranslation: translations.length ? translations[0].code : '',
+      mainTranslation: normalizedTranslations.length ? normalizedTranslations[0].code : '',
       secondaryTranslation: '',
       characterLimit: 320,
     },
@@ -36,6 +82,14 @@
     toastTimer: null,
     loadingSlides: false,
     savingPreferences: false,
+    bibleEdit: {
+      open: false,
+      submitting: false,
+      translationCode: '',
+      name: '',
+      language: '',
+      showInDashboard: false,
+    },
   };
 
   const loadedPassageKeys = new Map();
@@ -65,7 +119,37 @@
     clearButton: document.querySelector('[data-role="clear-button"]'),
     activeContainer: document.querySelector('[data-role="active-passage"]'),
     toast: document.querySelector('[data-role="toast"]'),
+    bibleCount: document.querySelector('[data-role="bible-dashboard"]'),
+    bibleImport: document.querySelector('[data-role="bible-import"]'),
+    bibleModal: document.querySelector('[data-role="bible-modal"]'),
+    bibleModalList: document.querySelector('[data-role="bible-modal-list"]'),
+    bibleModalClose: document.querySelector('[data-role="bible-modal-close"]'),
+    bibleEditModal: document.querySelector('[data-role="bible-edit-modal"]'),
+    bibleEditForm: document.querySelector('[data-role="bible-edit-form"]'),
+    bibleEditName: document.querySelector('[data-role="bible-edit-name"]'),
+    bibleEditLanguage: document.querySelector('[data-role="bible-edit-language"]'),
+    bibleEditDashboard: document.querySelector('[data-role="bible-edit-dashboard"]'),
+    bibleEditDelete: document.querySelector('[data-role="bible-edit-delete"]'),
+    bibleEditCancel: document.querySelector('[data-role="bible-edit-cancel"]'),
+    bibleEditTitle: document.querySelector('[data-role="bible-edit-title"]'),
   };
+
+  function normalizeTranslationCode(code) {
+    if (!code) return '';
+    return String(code).trim().toLowerCase();
+  }
+
+  function isTranslationPinned(code) {
+    const translation = findTranslationByCode(code);
+    if (!translation) return false;
+    return Boolean(translation.showInDashboard);
+  }
+
+  function setTranslationPinState(code, pinned) {
+    const translation = findTranslationByCode(code);
+    if (!translation) return;
+    translation.showInDashboard = Boolean(pinned);
+  }
 
   function showToast(message, variant) {
     if (!els.toast) return;
@@ -151,31 +235,458 @@
     state.preferences.mainTranslation = state.translations[state.translationIndex].code;
   }
 
+  function updateTranslationHeader() {
+    if (!els.bibleCount) return;
+    const count = Array.isArray(state.translations) ? state.translations.length : 0;
+    els.bibleCount.textContent = `(${count})`;
+    els.bibleCount.dataset.empty = count === 0 ? 'true' : 'false';
+    els.bibleCount.setAttribute('aria-label', `Show all Bibles (${count} available)`);
+    els.bibleCount.disabled = count === 0;
+  }
+
   function renderTranslationList() {
     if (!els.translationList) return;
+    updateTranslationHeader();
     if (!Array.isArray(state.translations) || !state.translations.length) {
       els.translationList.innerHTML =
         '<li class=\"operator__list-item operator__list-item--empty\">No translations available.</li>';
+      renderBibleModal();
       return;
     }
-    const html = state.translations
-      .map((translation, index) => {
+    const activeCode = state.preferences.mainTranslation || (state.translations[0]?.code || '');
+    const activeNormalized = normalizeTranslationCode(activeCode);
+    const seen = new Set();
+    const displayTranslations = state.translations.filter((translation) => {
+      if (!translation || !translation.code) {
+        return false;
+      }
+      const code = String(translation.code);
+      const normalized = normalizeTranslationCode(code);
+      if (seen.has(normalized)) {
+        return false;
+      }
+      const pinned = Boolean(translation.showInDashboard);
+      const isActive = activeNormalized && normalized === activeNormalized;
+      if (!pinned && !isActive) {
+        return false;
+      }
+      seen.add(normalized);
+      return true;
+    });
+
+    if (!displayTranslations.length) {
+      els.translationList.innerHTML =
+        '<li class=\"operator__list-item operator__list-item--empty\">Star Bibles to keep them handy.</li>';
+      renderBibleModal();
+      return;
+    }
+
+    const html = displayTranslations
+      .map((translation) => {
+        const code = String(translation.code);
         const label = translation.language
           ? `${translation.name} (${translation.language})`
           : translation.name;
-        const active = index === state.translationIndex;
-        const activeAttr = active ? ' data-active=\"true\" aria-pressed=\"true\"' : ' aria-pressed=\"false\"';
-        return `<li class=\"operator__list-item\" data-index=\"${index}\">
+        const normalized = normalizeTranslationCode(code);
+        const active = activeNormalized && normalized === activeNormalized;
+        const activeAttr = active ? 'true' : 'false';
+        const ariaCurrent = active ? ' aria-current=\"true\"' : '';
+        const dashboardAttr = isTranslationPinned(code) ? ' data-dashboard=\"true\"' : '';
+        return `<li class=\"operator__list-item\" data-translation-code=\"${escapeHtml(code)}\"${dashboardAttr}>
             <button type=\"button\" class=\"operator__list-button\" data-translation-code=\"${escapeHtml(
-          translation.code
-        )}\"${activeAttr}>
+          code
+        )}\" data-active=\"${activeAttr}\"${ariaCurrent}>
               <span class=\"operator__list-label\">${escapeHtml(label)}</span>
-              <span class=\"operator__list-meta\">${escapeHtml(translation.code)}</span>
             </button>
+            <div class=\"operator__list-actions\">
+              <button type=\"button\" class=\"operator__list-action operator__list-action--icon operator__list-action--menu\" data-action=\"bible-edit\" data-translation-code=\"${escapeHtml(
+                code
+              )}\" aria-label=\"Edit ${escapeHtml(label)}\">⋮</button>
+            </div>
           </li>`;
       })
       .join('');
     els.translationList.innerHTML = html;
+    renderBibleModal();
+  }
+
+  function renderBibleModal() {
+    if (!els.bibleModalList) return;
+    if (!Array.isArray(state.translations) || !state.translations.length) {
+      els.bibleModalList.innerHTML =
+        '<p class="operator__slides-empty">No Bible translations available.</p>';
+      return;
+    }
+    const html = state.translations
+      .map((translation) => {
+        if (!translation) {
+          return '';
+        }
+        const code = translation.code ? String(translation.code) : '';
+        const label = translation.language
+          ? `${translation.name} (${translation.language})`
+          : translation.name;
+        const pinned = Boolean(translation.showInDashboard);
+        const star = pinned ? '★' : '☆';
+        const ariaLabel = pinned
+          ? `Remove ${label} from dashboard`
+          : `Show ${label} on dashboard`;
+        return `
+          <div class="operator__list-item operator__list-row operator__list-row--modal" data-role="bible-row" data-translation-code="${escapeHtml(
+            code
+          )}">
+            <button type="button" class="operator__list-favorite operator__list-favorite--inline" data-action="bible-dashboard-toggle" data-translation-code="${escapeHtml(
+              code
+            )}" aria-pressed="${pinned ? 'true' : 'false'}" aria-label="${escapeHtml(ariaLabel)}">${star}</button>
+            <button type="button" class="operator__list-button" data-role="bible-item" data-translation-code="${escapeHtml(
+              code
+            )}">
+              <span class="operator__list-label">${escapeHtml(label)}</span>
+            </button>
+            <div class="operator__list-actions">
+              <button type="button" class="operator__list-action operator__list-action--icon operator__list-action--menu" data-action="bible-edit" data-translation-code="${escapeHtml(
+                code
+              )}" aria-label="Edit ${escapeHtml(label)}">⋮</button>
+            </div>
+          </div>
+        `;
+      })
+      .join('');
+    els.bibleModalList.innerHTML = html;
+  }
+
+  function openBibleModal() {
+    if (!els.bibleModal) return;
+    renderBibleModal();
+    els.bibleModal.dataset.open = 'true';
+    document.body.dataset.modalOpen = 'bible-list';
+  }
+
+  function closeBibleModal() {
+    if (!els.bibleModal) return;
+    els.bibleModal.dataset.open = 'false';
+    if (document.body.dataset.modalOpen === 'bible-list') {
+      delete document.body.dataset.modalOpen;
+    }
+  }
+
+  async function toggleBibleDashboard(code) {
+    if (!code) return;
+    const translation = findTranslationByCode(code);
+    if (!translation) {
+      showToast('Bible not found', 'error');
+      return;
+    }
+    const normalizedCode = translation.code;
+    const wasPinned = Boolean(translation.showInDashboard);
+    const nextPinned = !wasPinned;
+    setTranslationPinState(normalizedCode, nextPinned);
+    renderTranslationList();
+    try {
+      const updated = await apiFetch(`/bible/translations/${encodeURIComponent(normalizedCode)}`, {
+        method: 'PATCH',
+        body: JSON.stringify({ showInDashboard: nextPinned }),
+      });
+      if (updated && typeof updated.showInDashboard === 'boolean') {
+        updateTranslationInState(updated);
+      }
+      if (
+        els.bibleEditDashboard &&
+        state.bibleEdit.open &&
+        state.bibleEdit.translationCode &&
+        normalizeTranslationCode(state.bibleEdit.translationCode) ===
+          normalizeTranslationCode(normalizedCode)
+      ) {
+        const pinnedValue = isTranslationPinned(normalizedCode);
+        els.bibleEditDashboard.checked = pinnedValue;
+        state.bibleEdit.showInDashboard = pinnedValue;
+      }
+      renderTranslationList();
+      const message = nextPinned ? 'Bible pinned to dashboard' : 'Bible removed from dashboard';
+      showToast(message, 'success');
+    } catch (error) {
+      console.error('Failed to update Bible dashboard pin', error);
+      setTranslationPinState(normalizedCode, wasPinned);
+      renderTranslationList();
+      if (
+        els.bibleEditDashboard &&
+        state.bibleEdit.open &&
+        state.bibleEdit.translationCode &&
+        normalizeTranslationCode(state.bibleEdit.translationCode) ===
+          normalizeTranslationCode(normalizedCode)
+      ) {
+        els.bibleEditDashboard.checked = wasPinned;
+        state.bibleEdit.showInDashboard = wasPinned;
+      }
+      showToast('Failed to update Bible dashboard pin', 'error');
+    }
+  }
+
+  function findTranslationByCode(code) {
+    if (!code || !Array.isArray(state.translations)) {
+      return null;
+    }
+    const target = String(code).toLowerCase();
+    return state.translations.find(
+      (translation) =>
+        translation && typeof translation.code === 'string' && translation.code.toLowerCase() === target
+    ) || null;
+  }
+
+  function updateTranslationInState(updated) {
+    if (!updated || typeof updated !== 'object') {
+      return null;
+    }
+    const normalized = normalizeTranslation(updated);
+    if (!normalized.code) {
+      return null;
+    }
+    const index = state.translations.findIndex(
+      (entry) => entry && entry.code === normalized.code
+    );
+    if (index >= 0) {
+      state.translations[index] = normalized;
+      return state.translations[index];
+    }
+    state.translations.push(normalized);
+    return normalized;
+  }
+
+  function openBibleEdit(code) {
+    const translation = findTranslationByCode(code);
+    if (!translation) {
+      showToast('Bible not found', 'error');
+      return;
+    }
+    state.bibleEdit.open = true;
+    state.bibleEdit.submitting = false;
+    state.bibleEdit.translationCode = translation.code;
+    state.bibleEdit.name = translation.name;
+    state.bibleEdit.language = translation.language;
+    state.bibleEdit.showInDashboard = Boolean(translation.showInDashboard);
+
+    if (els.bibleEditForm) {
+      els.bibleEditForm.dataset.submitting = 'false';
+    }
+    if (els.bibleEditName) {
+      els.bibleEditName.value = translation.name;
+      els.bibleEditName.disabled = false;
+    }
+    if (els.bibleEditLanguage) {
+      els.bibleEditLanguage.value = translation.language;
+      els.bibleEditLanguage.disabled = false;
+    }
+    if (els.bibleEditDashboard) {
+      els.bibleEditDashboard.checked = state.bibleEdit.showInDashboard;
+      els.bibleEditDashboard.disabled = false;
+    }
+    if (els.bibleEditDelete) {
+      els.bibleEditDelete.disabled = false;
+      els.bibleEditDelete.removeAttribute('hidden');
+    }
+    if (els.bibleEditTitle) {
+      els.bibleEditTitle.textContent = `Edit ${translation.name}`;
+    }
+    if (els.bibleEditModal) {
+      els.bibleEditModal.dataset.open = 'true';
+      document.body.dataset.modalOpen = 'bible-edit';
+      window.setTimeout(() => {
+        if (els.bibleEditName) {
+          els.bibleEditName.focus();
+          els.bibleEditName.select();
+        }
+      }, 15);
+    }
+  }
+
+  function closeBibleEdit() {
+    state.bibleEdit.open = false;
+    state.bibleEdit.submitting = false;
+    state.bibleEdit.translationCode = '';
+    state.bibleEdit.name = '';
+    state.bibleEdit.language = '';
+    state.bibleEdit.showInDashboard = false;
+    if (els.bibleEditModal) {
+      els.bibleEditModal.dataset.open = 'false';
+    }
+    if (els.bibleEditDashboard) {
+      els.bibleEditDashboard.checked = false;
+    }
+    if (els.bibleModal && els.bibleModal.dataset.open === 'true') {
+      document.body.dataset.modalOpen = 'bible-list';
+    } else {
+      delete document.body.dataset.modalOpen;
+    }
+  }
+
+  function setBibleEditSubmitting(submitting) {
+    state.bibleEdit.submitting = submitting;
+    if (els.bibleEditForm) {
+      els.bibleEditForm.dataset.submitting = submitting ? 'true' : 'false';
+    }
+    if (els.bibleEditName) {
+      els.bibleEditName.disabled = submitting;
+    }
+    if (els.bibleEditLanguage) {
+      els.bibleEditLanguage.disabled = submitting;
+    }
+    if (els.bibleEditDashboard) {
+      els.bibleEditDashboard.disabled = submitting;
+    }
+    if (els.bibleEditDelete) {
+      els.bibleEditDelete.disabled = submitting;
+    }
+  }
+
+  async function handleBibleEditSubmit(event) {
+    event.preventDefault();
+    if (state.bibleEdit.submitting) return;
+    const nameInput = els.bibleEditName;
+    const languageInput = els.bibleEditLanguage;
+    const name = nameInput ? nameInput.value.trim() : '';
+    const language = languageInput ? languageInput.value.trim() : '';
+    if (!name) {
+      showToast('Bible name cannot be empty', 'warning');
+      if (nameInput) {
+        nameInput.focus();
+      }
+      return;
+    }
+    if (!language) {
+      showToast('Language cannot be empty', 'warning');
+      if (languageInput) {
+        languageInput.focus();
+      }
+      return;
+    }
+    const code = state.bibleEdit.translationCode;
+    if (!code) {
+      showToast('Bible not selected', 'error');
+      return;
+    }
+    const wantsDashboard = els.bibleEditDashboard
+      ? Boolean(els.bibleEditDashboard.checked)
+      : isTranslationPinned(code);
+    setBibleEditSubmitting(true);
+    try {
+      const payload = {
+        name,
+        language,
+        showInDashboard: wantsDashboard,
+      };
+      const updated = await apiFetch(`/bible/translations/${encodeURIComponent(code)}`, {
+        method: 'PATCH',
+        body: JSON.stringify(payload),
+      });
+      if (!updated) {
+        throw new Error('Empty response');
+      }
+      const stored = updateTranslationInState(updated);
+      state.bibleEdit.showInDashboard = Boolean(
+        stored ? stored.showInDashboard : wantsDashboard
+      );
+      renderTranslationList();
+      renderTranslationSelect(els.secondaryTranslation, state.preferences.secondaryTranslation);
+      showToast('Bible updated', 'success');
+      closeBibleEdit();
+    } catch (error) {
+      console.error('Failed to update Bible', error);
+      showToast('Failed to update Bible', 'error');
+    } finally {
+      setBibleEditSubmitting(false);
+    }
+  }
+
+  async function handleBibleDelete() {
+    if (state.bibleEdit.submitting) return;
+    const code = state.bibleEdit.translationCode;
+    if (!code) {
+      showToast('Bible not selected', 'error');
+      return;
+    }
+    const confirmMessage = 'Delete this Bible? This removes the translation and all passages.';
+    // eslint-disable-next-line no-alert
+    if (!window.confirm(confirmMessage)) {
+      return;
+    }
+    setBibleEditSubmitting(true);
+    try {
+      await apiFetch(`/bible/translations/${encodeURIComponent(code)}`, {
+        method: 'DELETE',
+      });
+      state.translations = state.translations.filter(
+        (translation) => translation && translation.code !== code
+      );
+      if (state.preferences.mainTranslation === code) {
+        const next = state.translations.length ? state.translations[0].code : '';
+        state.preferences.mainTranslation = next;
+        state.translationIndex = next ? 0 : -1;
+      } else {
+        state.translationIndex = findTranslationIndex(state.preferences.mainTranslation);
+      }
+      if (state.preferences.secondaryTranslation === code) {
+        state.preferences.secondaryTranslation = '';
+      }
+      alignMainTranslation(state.preferences.mainTranslation);
+      renderTranslationList();
+      renderTranslationSelect(els.secondaryTranslation, state.preferences.secondaryTranslation);
+      closeBibleEdit();
+      showToast('Bible deleted', 'success');
+      await loadBooks();
+    } catch (error) {
+      console.error('Failed to delete Bible', error);
+      showToast('Failed to delete Bible', 'error');
+    } finally {
+      setBibleEditSubmitting(false);
+    }
+  }
+
+  async function refreshBibleTranslations() {
+    if (state.refreshingTranslations) return;
+    state.refreshingTranslations = true;
+    if (els.bibleImport) {
+      els.bibleImport.disabled = true;
+      els.bibleImport.dataset.loading = 'true';
+    }
+    try {
+      const summaries = await apiFetch('/bible/translations/refresh', { method: 'POST' });
+      const imported = Array.isArray(summaries) ? summaries.length : 0;
+      if (imported > 0) {
+        showToast(
+          `Imported ${imported} Bible translation${imported === 1 ? '' : 's'}`,
+          'success'
+        );
+      } else {
+        showToast('No additional Bible translations available', 'info');
+      }
+      await reloadTranslations();
+    } catch (error) {
+      console.error('Failed to refresh Bible translations', error);
+      showToast('Failed to import Bible translations', 'error');
+    } finally {
+      state.refreshingTranslations = false;
+      if (els.bibleImport) {
+        els.bibleImport.disabled = false;
+        els.bibleImport.dataset.loading = 'false';
+      }
+    }
+  }
+
+  async function reloadTranslations() {
+    try {
+      const next = await apiFetch('/bible/translations');
+      if (!Array.isArray(next)) {
+        return;
+      }
+      state.translations = next.map(normalizeTranslation);
+      alignMainTranslation(state.preferences.mainTranslation);
+      renderTranslationList();
+      renderTranslationSelect(els.secondaryTranslation, state.preferences.secondaryTranslation);
+      await loadBooks();
+    } catch (error) {
+      console.error('Failed to reload Bible translations', error);
+      showToast('Failed to reload Bible translations', 'error');
+    }
   }
 
   function escapeHtml(value) {
@@ -1188,6 +1699,12 @@
     });
     if (els.translationList) {
       els.translationList.addEventListener('click', async (event) => {
+        const editControl = event.target.closest('[data-action="bible-edit"]');
+        if (editControl && editControl.dataset.translationCode) {
+          event.preventDefault();
+          openBibleEdit(editControl.dataset.translationCode);
+          return;
+        }
         const button = event.target.closest('[data-translation-code]');
         if (!button) return;
         const code = button.getAttribute('data-translation-code');
@@ -1204,6 +1721,101 @@
         await loadBooks();
       });
     }
+    if (els.bibleCount) {
+      els.bibleCount.addEventListener('click', (event) => {
+        event.preventDefault();
+        if (els.bibleCount.disabled) return;
+        openBibleModal();
+      });
+    }
+    if (els.bibleModalList) {
+      els.bibleModalList.addEventListener('click', async (event) => {
+        const toggle = event.target.closest('[data-action="bible-dashboard-toggle"]');
+        if (toggle && toggle.dataset.translationCode) {
+          event.preventDefault();
+          await toggleBibleDashboard(toggle.dataset.translationCode);
+          return;
+        }
+        const item = event.target.closest('[data-role="bible-item"]');
+        if (item && item.dataset.translationCode) {
+          event.preventDefault();
+          const code = item.dataset.translationCode;
+          if (code && code !== state.preferences.mainTranslation) {
+            alignMainTranslation(code);
+            renderTranslationList();
+            try {
+              await savePreferences();
+            } catch (error) {
+              console.warn('Failed to persist Bible preferences', error);
+            }
+            await loadBooks();
+          }
+          closeBibleModal();
+        }
+        const editButton = event.target.closest('[data-action="bible-edit"]');
+        if (editButton && editButton.dataset.translationCode) {
+          event.preventDefault();
+          openBibleEdit(editButton.dataset.translationCode);
+        }
+      });
+    }
+    if (els.bibleModalClose) {
+      els.bibleModalClose.addEventListener('click', (event) => {
+        event.preventDefault();
+        closeBibleModal();
+      });
+    }
+    if (els.bibleModal) {
+      els.bibleModal.addEventListener('click', (event) => {
+        if (event.target === els.bibleModal) {
+          closeBibleModal();
+        }
+      });
+    }
+    if (els.bibleImport) {
+      els.bibleImport.addEventListener('click', async (event) => {
+        event.preventDefault();
+        await refreshBibleTranslations();
+      });
+    }
+    if (els.bibleEditModal) {
+      els.bibleEditModal.addEventListener('click', (event) => {
+        if (event.target === els.bibleEditModal) {
+          closeBibleEdit();
+        }
+      });
+    }
+    if (els.bibleEditForm) {
+      els.bibleEditForm.addEventListener('submit', handleBibleEditSubmit);
+    }
+    if (els.bibleEditCancel) {
+      els.bibleEditCancel.addEventListener('click', (event) => {
+        event.preventDefault();
+        closeBibleEdit();
+      });
+    }
+    if (els.bibleEditDelete) {
+      els.bibleEditDelete.addEventListener('click', async (event) => {
+        event.preventDefault();
+        await handleBibleDelete();
+      });
+    }
+    if (els.bibleEditDashboard) {
+      els.bibleEditDashboard.addEventListener('change', (event) => {
+        state.bibleEdit.showInDashboard = Boolean(event.target.checked);
+      });
+    }
+    window.addEventListener('keydown', (event) => {
+      if (event.key === 'Escape') {
+        if (els.bibleEditModal && els.bibleEditModal.dataset.open === 'true') {
+          closeBibleEdit();
+          return;
+        }
+        if (els.bibleModal && els.bibleModal.dataset.open === 'true') {
+          closeBibleModal();
+        }
+      }
+    });
     if (els.secondaryTranslation) {
       els.secondaryTranslation.addEventListener('change', (event) => {
         state.preferences.secondaryTranslation = event.target.value;

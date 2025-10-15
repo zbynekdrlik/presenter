@@ -336,6 +336,7 @@ pub mod bible_translation {
         pub code: String,
         pub name: String,
         pub language: String,
+        pub show_in_dashboard: bool,
         pub source: Option<String>,
         pub created_at: DateTimeWithTimeZone,
     }

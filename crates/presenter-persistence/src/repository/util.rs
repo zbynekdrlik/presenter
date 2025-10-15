@@ -188,6 +188,7 @@ pub(super) fn parse_velocity_mode(value: &str) -> Result<VelocityMode, Repositor
 
 pub(super) fn to_domain_translation(model: bible_translation::Model) -> BibleTranslation {
     let mut translation = BibleTranslation::new(model.code, model.name, model.language);
+    translation = translation.with_show_in_dashboard(model.show_in_dashboard);
     if let Some(source) = model.source.clone() {
         translation = translation.with_source(source);
     }

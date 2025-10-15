@@ -150,6 +150,64 @@ pub(super) async fn update_bible_preferences(
 }
 
 #[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub(super) struct UpdateBibleTranslationRequest {
+    #[serde(default)]
+    pub(super) name: Option<String>,
+    #[serde(default)]
+    pub(super) language: Option<String>,
+    #[serde(default)]
+    pub(super) show_in_dashboard: Option<bool>,
+}
+
+#[instrument(skip_all)]
+pub(super) async fn update_bible_translation(
+    State(state): State<AppState>,
+    Path(code): Path<String>,
+    Json(payload): Json<UpdateBibleTranslationRequest>,
+) -> Result<Json<BibleTranslation>, AppError> {
+    let name = payload
+        .name
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| !value.is_empty());
+    let language = payload
+        .language
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| !value.is_empty());
+    let show_in_dashboard = payload.show_in_dashboard;
+    if name.is_none() && language.is_none() && show_in_dashboard.is_none() {
+        return Err(AppError::bad_request_message(
+            "name, language, or showInDashboard must be provided",
+        ));
+    }
+    let updated = state
+        .update_bible_translation(&code, name, language, show_in_dashboard)
+        .await
+        .map_err(AppError::from)?;
+    let Some(result) = updated else {
+        return Err(AppError::not_found(format!("Bible {code} not found")));
+    };
+    Ok(Json(result))
+}
+
+#[instrument(skip_all)]
+pub(super) async fn delete_bible_translation(
+    State(state): State<AppState>,
+    Path(code): Path<String>,
+) -> Result<StatusCode, AppError> {
+    let removed = state
+        .delete_bible_translation(&code)
+        .await
+        .map_err(AppError::from)?;
+    if !removed {
+        return Err(AppError::not_found(format!("Bible {code} not found")));
+    }
+    Ok(StatusCode::NO_CONTENT)
+}
+
+#[derive(Debug, Deserialize)]
 pub(super) struct BibleUiQuery {
     #[serde(default)]
     pub embed: Option<String>,

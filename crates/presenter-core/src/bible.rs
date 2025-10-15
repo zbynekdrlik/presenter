@@ -91,12 +91,18 @@ pub struct BibleTranslation {
     pub code: String,
     pub name: String,
     pub language: String,
+    #[serde(default = "BibleTranslation::default_show_in_dashboard")]
+    pub show_in_dashboard: bool,
     #[serde(default)]
     #[serde(skip_serializing_if = "Option::is_none")]
     pub source: Option<String>,
 }
 
 impl BibleTranslation {
+    const fn default_show_in_dashboard() -> bool {
+        true
+    }
+
     pub fn new(
         code: impl Into<String>,
         name: impl Into<String>,
@@ -106,12 +112,18 @@ impl BibleTranslation {
             code: code.into(),
             name: name.into(),
             language: language.into(),
+            show_in_dashboard: Self::default_show_in_dashboard(),
             source: None,
         }
     }
 
     pub fn with_source(mut self, source: impl Into<String>) -> Self {
         self.source = Some(source.into());
+        self
+    }
+
+    pub fn with_show_in_dashboard(mut self, show: bool) -> Self {
+        self.show_in_dashboard = show;
         self
     }
 }
