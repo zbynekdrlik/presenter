@@ -1655,6 +1655,19 @@ body.operator[data-view="settings"] [data-view-panel="settings"] {
     margin-top: 0.85rem;
 }
 
+.operator__catalog--bible {
+    --catalog-top-size: auto;
+}
+
+.operator__catalog--bible .operator__catalog-top {
+    flex: 1 1 auto;
+    padding-right: 0;
+}
+
+.operator__catalog--bible .operator__catalog-bottom {
+    padding-right: 0;
+}
+
 .operator__presentations-header {
     display: flex;
     align-items: center;
