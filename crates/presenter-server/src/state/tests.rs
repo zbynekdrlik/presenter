@@ -324,6 +324,66 @@ async fn trigger_bible_passage_publishes_event_and_state() {
     assert!(state.active_bible_broadcast().await.is_none());
 }
 
+#[tokio::test]
+async fn list_bible_translations_bootstraps_dashboard_once() {
+    let state = AppState::in_memory().await.unwrap();
+    let reference = BibleReference::new("John", 1, 1, 1).unwrap();
+    let translation_one = BibleTranslation::new("en-one", "One", "en");
+    let translation_two =
+        BibleTranslation::new("sk-two", "Two", "sk").with_show_in_dashboard(false);
+
+    let passage_one = BiblePassage::new(
+        reference.clone(),
+        translation_one.clone(),
+        "Verse one".to_string(),
+    );
+    let passage_two = BiblePassage::new(
+        reference.clone(),
+        translation_two.clone(),
+        "Verse two".to_string(),
+    );
+
+    let batch_one = BibleIngestionBatch::new(translation_one.clone(), vec![passage_one]).unwrap();
+    let batch_two = BibleIngestionBatch::new(translation_two.clone(), vec![passage_two]).unwrap();
+
+    state
+        .repository()
+        .replace_bible_translation_passages(&batch_one)
+        .await
+        .unwrap();
+    state
+        .repository()
+        .replace_bible_translation_passages(&batch_two)
+        .await
+        .unwrap();
+
+    let bootstrapped = state.list_bible_translations().await.unwrap();
+    assert_eq!(bootstrapped.len(), 2);
+    assert!(
+        bootstrapped
+            .iter()
+            .all(|translation| translation.show_in_dashboard),
+        "expected initial bootstrap to pin all Bibles"
+    );
+
+    // Simulate operator unpinning a translation after bootstrap.
+    state
+        .repository()
+        .update_bible_translation("sk-two", None, None, Some(false))
+        .await
+        .unwrap();
+
+    let after_unpin = state.list_bible_translations().await.unwrap();
+    let sk_two = after_unpin
+        .iter()
+        .find(|translation| translation.code == "sk-two")
+        .expect("sk-two translation present");
+    assert!(
+        !sk_two.show_in_dashboard,
+        "expected subsequent calls to respect operator dashboard choices"
+    );
+}
+
 #[test]
 fn compose_bible_slides_respects_character_limit() {
     let translation = BibleTranslation::new("svk", "Slovak", "sk");

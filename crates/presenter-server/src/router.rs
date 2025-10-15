@@ -45,6 +45,10 @@ pub fn build_router(state: AppState) -> Router {
             post(libraries::create_library_presentation),
         )
         .route("/bible/translations", get(bible::list_bible_translations))
+        .route(
+            "/bible/translations/{code}",
+            patch(bible::update_bible_translation).delete(bible::delete_bible_translation),
+        )
         .route("/bible/search", get(bible::search_bible_passages))
         .route("/bible/passage", get(bible::get_bible_passage))
         .route(
@@ -290,7 +294,7 @@ mod tests;
 mod tests_old {
     use super::*;
     use axum::body::Body;
-    use axum::http::{Request, StatusCode};
+    use axum::http::{Method, Request, StatusCode};
     use chrono::{Duration as ChronoDuration, Utc};
     use presenter_core::{
         BiblePassage, BibleReference, BibleTranslation, Library, LibrarySummary, SearchResult,
@@ -1132,6 +1136,121 @@ mod tests_old {
         let payload: Vec<BibleTranslation> = serde_json::from_slice(&bytes).unwrap();
         assert_eq!(payload.len(), 1);
         assert_eq!(payload[0].code, "test");
+    }
+
+    #[tokio::test]
+    async fn update_bible_translation_endpoint_updates_fields() {
+        let state = AppState::in_memory().await.unwrap();
+        state
+            .repository()
+            .replace_bible_translation_passages(&sample_ingestion_batch())
+            .await
+            .unwrap();
+        let app = build_router(state.clone());
+        let body = json!({
+            "name": "Updated Bible",
+            "language": "Updated Language",
+        });
+        let response = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method(Method::PATCH)
+                    .uri("/bible/translations/test")
+                    .header("content-type", "application/json")
+                    .body(Body::from(body.to_string()))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+        let bytes = axum::body::to_bytes(response.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        let payload: BibleTranslation = serde_json::from_slice(&bytes).unwrap();
+        assert_eq!(payload.name, "Updated Bible");
+        assert_eq!(payload.language, "Updated Language");
+        assert!(payload.show_in_dashboard);
+
+        let list = state.list_bible_translations().await.unwrap();
+        assert_eq!(list.len(), 1);
+        assert_eq!(list[0].name, "Updated Bible");
+        assert_eq!(list[0].language, "Updated Language");
+        assert!(list[0].show_in_dashboard);
+    }
+
+    #[tokio::test]
+    async fn update_bible_translation_endpoint_updates_dashboard_flag() {
+        let state = AppState::in_memory().await.unwrap();
+        state
+            .repository()
+            .replace_bible_translation_passages(&sample_ingestion_batch())
+            .await
+            .unwrap();
+        let app = build_router(state.clone());
+        let body = json!({
+            "showInDashboard": false,
+        });
+        let response = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method(Method::PATCH)
+                    .uri("/bible/translations/test")
+                    .header("content-type", "application/json")
+                    .body(Body::from(body.to_string()))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+        let bytes = axum::body::to_bytes(response.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        let payload: BibleTranslation = serde_json::from_slice(&bytes).unwrap();
+        assert!(!payload.show_in_dashboard);
+
+        let list = state.list_bible_translations().await.unwrap();
+        assert_eq!(list.len(), 1);
+        assert!(!list[0].show_in_dashboard);
+    }
+
+    #[tokio::test]
+    async fn delete_bible_translation_endpoint_removes_translation() {
+        let state = AppState::in_memory().await.unwrap();
+        state
+            .repository()
+            .replace_bible_translation_passages(&sample_ingestion_batch())
+            .await
+            .unwrap();
+        let app = build_router(state.clone());
+        let response = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method(Method::DELETE)
+                    .uri("/bible/translations/test")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::NO_CONTENT);
+
+        let list = state.list_bible_translations().await.unwrap();
+        assert!(list.is_empty());
+
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .method(Method::DELETE)
+                    .uri("/bible/translations/test")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::NOT_FOUND);
     }
 
     #[tokio::test]

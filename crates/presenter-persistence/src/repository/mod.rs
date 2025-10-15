@@ -259,6 +259,91 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn bible_translation_dashboard_flag_persists_across_reingest() {
+        let repo = Repository::connect_in_memory().await.unwrap();
+        let translation = BibleTranslation::new("en-seed", "Seed Translation", "en")
+            .with_show_in_dashboard(false);
+        let reference = BibleReference::new("John", 1, 1, 1).unwrap();
+        let passage = BiblePassage::new(
+            reference.clone(),
+            translation.clone(),
+            "In the beginning".into(),
+        );
+        let batch = BibleIngestionBatch::new(translation.clone(), vec![passage.clone()]).unwrap();
+
+        repo.replace_bible_translation_passages(&batch)
+            .await
+            .unwrap();
+
+        let initial = repo.list_bible_translations().await.unwrap();
+        assert_eq!(initial.len(), 1);
+        assert!(!initial[0].show_in_dashboard);
+
+        // Reimport the same translation (default builder marks it as shown) and ensure the preference is kept.
+        let refreshed_translation = BibleTranslation::new("en-seed", "Seed Translation", "en");
+        let refreshed = BiblePassage::new(
+            reference.clone(),
+            refreshed_translation.clone(),
+            "In the beginning".into(),
+        );
+        let refreshed_batch =
+            BibleIngestionBatch::new(refreshed_translation, vec![refreshed]).unwrap();
+        repo.replace_bible_translation_passages(&refreshed_batch)
+            .await
+            .unwrap();
+
+        let after = repo.list_bible_translations().await.unwrap();
+        assert_eq!(after.len(), 1);
+        assert!(!after[0].show_in_dashboard);
+    }
+
+    #[tokio::test]
+    async fn bible_dashboard_can_be_bootstrapped() {
+        let repo = Repository::connect_in_memory().await.unwrap();
+        let reference = BibleReference::new("John", 1, 1, 1).unwrap();
+        let passages = vec![BiblePassage::new(
+            reference.clone(),
+            BibleTranslation::new("en-one", "One", "en").with_show_in_dashboard(false),
+            "Verse one".into(),
+        )];
+        let batch = BibleIngestionBatch::new(
+            BibleTranslation::new("en-one", "One", "en").with_show_in_dashboard(false),
+            passages.clone(),
+        )
+        .unwrap();
+        repo.replace_bible_translation_passages(&batch)
+            .await
+            .unwrap();
+
+        let second = BibleIngestionBatch::new(
+            BibleTranslation::new("sk-two", "Two", "sk").with_show_in_dashboard(false),
+            vec![BiblePassage::new(
+                reference.clone(),
+                BibleTranslation::new("sk-two", "Two", "sk").with_show_in_dashboard(false),
+                "Verse two".into(),
+            )],
+        )
+        .unwrap();
+        repo.replace_bible_translation_passages(&second)
+            .await
+            .unwrap();
+
+        let initial = repo.list_bible_translations().await.unwrap();
+        assert_eq!(initial.len(), 2);
+        assert!(initial
+            .iter()
+            .all(|translation| !translation.show_in_dashboard));
+
+        let updated = repo.set_all_bible_dashboard_pins(true).await.unwrap();
+        assert_eq!(updated, 2);
+
+        let final_state = repo.list_bible_translations().await.unwrap();
+        assert!(final_state
+            .iter()
+            .all(|translation| translation.show_in_dashboard));
+    }
+
+    #[tokio::test]
     async fn bible_translation_large_batch_is_persisted() {
         let repo = Repository::connect_in_memory().await.unwrap();
         let translation = BibleTranslation::new("en-load", "Load Test", "en");

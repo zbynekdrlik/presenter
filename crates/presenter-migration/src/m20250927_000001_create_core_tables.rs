@@ -711,6 +711,12 @@ impl MigrationTrait for Migration {
                             .string()
                             .not_null(),
                     )
+                    .col(
+                        ColumnDef::new(BibleTranslations::ShowInDashboard)
+                            .boolean()
+                            .not_null()
+                            .default(true),
+                    )
                     .col(ColumnDef::new(BibleTranslations::Source).string().null())
                     .col(
                         ColumnDef::new(BibleTranslations::CreatedAt)
@@ -1052,6 +1058,7 @@ enum BibleTranslations {
     Code,
     Name,
     Language,
+    ShowInDashboard,
     Source,
     CreatedAt,
 }

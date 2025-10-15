@@ -5,8 +5,7 @@ use presenter_core::{BibleBroadcast, BibleTranslation};
 use reactive_graph::owner::Owner;
 use serde_json::to_string;
 
-use super::scripts;
-use super::styles;
+use super::{scripts, styles};
 
 #[component]
 fn BibleDocument(
@@ -23,6 +22,7 @@ fn BibleDocument(
         .replace("__ACTIVE__", &active_json_safe);
     let combined_styles = format!("{}{}", styles::OPERATOR, styles::BIBLE);
     let translations_for_view = translations.clone();
+    let translation_count = translations_for_view.len();
     let broadcast_for_view = active.clone();
     let body_class = if embed {
         "operator operator--bible operator--embedded"
@@ -119,9 +119,25 @@ fn BibleDocument(
                             <div class="operator__catalog-top">
                                 <section class="operator__group operator__group--translations">
                                     <header class="operator__group-header">
-                                        <div>
-                                            <h2>"Translations"</h2>
-                                            <p>"Choose the primary language for scripture."</p>
+                                        <h2>"Bibles"</h2>
+                                        <div class="operator__group-controls">
+                                            <button
+                                                type="button"
+                                                class="operator__group-count"
+                                                data-role="bible-dashboard"
+                                                aria-label={format!("Show all Bibles ({} available)", translation_count)}
+                                                data-empty={if translation_count == 0 { "true" } else { "false" }}
+                                            >
+                                                {format!("({translation_count})")}
+                                            </button>
+                                            <button
+                                                type="button"
+                                                data-role="bible-import"
+                                                aria-label="Import Bible translation"
+                                                title="Import Bible translation"
+                                            >
+                                                "+"
+                                            </button>
                                         </div>
                                     </header>
                                     <ul class="operator__list operator__list--tight" data-role="translation-list">
@@ -131,11 +147,32 @@ fn BibleDocument(
                                             } else {
                                                 format!("{} ({})", translation.name, translation.language)
                                             };
+                                            let edit_label = label.clone();
                                             view! {
-                                                <li class="operator__list-item" data-role="translation-item" data-translation-code={translation.code.clone()} data-index={i.to_string()}>
-                                                    <button type="button" class="operator__list-button">
+                                                <li
+                                                    class="operator__list-item"
+                                                    data-role="translation-item"
+                                                    data-translation-code={translation.code.clone()}
+                                                    data-index={i.to_string()}
+                                                >
+                                                    <button
+                                                        type="button"
+                                                        class="operator__list-button"
+                                                        data-translation-code={translation.code.clone()}
+                                                    >
                                                         <span class="operator__list-label">{label}</span>
                                                     </button>
+                                                    <div class="operator__list-actions">
+                                                        <button
+                                                            type="button"
+                                                            class="operator__list-action operator__list-action--icon operator__list-action--menu"
+                                                            data-action="bible-edit"
+                                                            data-translation-code={translation.code.clone()}
+                                                            aria-label={format!("Edit {}", edit_label)}
+                                                        >
+                                                            "⋮"
+                                                        </button>
+                                                    </div>
                                                 </li>
                                             }
                                         }).collect::<Vec<_>>() }
@@ -274,6 +311,72 @@ fn BibleDocument(
                         </aside>
                     </main>
                     <div class="operator__toast" data-role="toast" data-visible="false"></div>
+                    <div class="operator__library-modal operator__library-modal--bible" data-role="bible-modal">
+                        <div class="operator__library-modal-panel">
+                            <header class="operator__library-modal-header">
+                                <h3>"All Bibles"</h3>
+                                <button
+                                    type="button"
+                                    class="operator__library-modal-close"
+                                    data-role="bible-modal-close"
+                                    aria-label="Close"
+                                >
+                                    "×"
+                                </button>
+                            </header>
+                            <div class="operator__library-modal-body" data-role="bible-modal-list"></div>
+                        </div>
+                    </div>
+                    <div class="operator__library-edit operator__library-edit--bible" data-role="bible-edit-modal" data-mode="edit">
+                        <div class="operator__library-edit-panel">
+                            <form class="operator__library-edit-form" data-role="bible-edit-form">
+                                <header class="operator__library-edit-header">
+                                    <h3 data-role="bible-edit-title">"Edit Bible"</h3>
+                                </header>
+                                <div class="operator__library-edit-body">
+                                    <label>
+                                        <span>"Bible name"</span>
+                                        <input
+                                            type="text"
+                                            data-role="bible-edit-name"
+                                            autocomplete="off"
+                                            required
+                                            minlength="1"
+                                            maxlength="160"
+                                        />
+                                    </label>
+                                    <label>
+                                        <span>"Language"</span>
+                                        <input
+                                            type="text"
+                                            data-role="bible-edit-language"
+                                            autocomplete="off"
+                                            required
+                                            minlength="1"
+                                            maxlength="60"
+                                        />
+                                    </label>
+                                    <label class="operator__library-edit-favorite">
+                                        <input type="checkbox" data-role="bible-edit-dashboard" />
+                                        <span>"Show in dashboard"</span>
+                                    </label>
+                                </div>
+                                <footer class="operator__library-edit-footer">
+                                    <button
+                                        type="button"
+                                        class="operator__library-edit-delete"
+                                        data-role="bible-edit-delete"
+                                    >
+                                        "Delete Bible"
+                                    </button>
+                                    <div class="operator__library-edit-actions">
+                                        <button type="button" data-role="bible-edit-cancel">"Cancel"</button>
+                                        <button type="submit" data-role="bible-edit-save">"Save changes"</button>
+                                    </div>
+                                </footer>
+                            </form>
+                        </div>
+                    </div>
                     <script>{script}</script>
                 </body>
             </html>
