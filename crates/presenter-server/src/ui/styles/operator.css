@@ -1625,6 +1625,11 @@ body.operator[data-view="settings"] [data-view-panel="settings"] {
     top: calc(4.75rem);
 }
 
+.operator.operator--embedded .operator__catalog {
+    top: 0;
+    max-height: calc(100vh - 1.5rem);
+}
+
 .operator__catalog-top {
     display: flex;
     flex-direction: column;
@@ -1657,11 +1662,16 @@ body.operator[data-view="settings"] [data-view-panel="settings"] {
 
 .operator__catalog--bible {
     --catalog-top-size: auto;
+    padding-top: 1rem;
 }
 
 .operator__catalog--bible .operator__catalog-top {
     flex: 1 1 auto;
     padding-right: 0;
+}
+
+.operator__catalog--bible .operator__group--translations {
+    margin-top: 0;
 }
 
 .operator__catalog--bible .operator__catalog-bottom {
