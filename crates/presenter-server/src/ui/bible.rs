@@ -115,7 +115,7 @@ fn BibleDocument(
                         view! { <></> }.into_any()
                     }}
                     <main class="operator__main">
-                        <aside class="operator__sidebar operator__sidebar--primary" data-role="catalog">
+                        <aside class="operator__catalog operator__catalog--bible" data-role="catalog">
                             <div class="operator__catalog-top">
                                 <section class="operator__group operator__group--translations">
                                     <header class="operator__group-header">

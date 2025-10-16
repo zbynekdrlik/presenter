@@ -56,7 +56,7 @@ mod tests {
     }
 
     fn make_mysword_archive() -> Vec<u8> {
-        let mut temp = NamedTempFile::new().unwrap();
+        let temp = NamedTempFile::new().unwrap();
         let conn = Connection::open(temp.path()).unwrap();
         conn.execute(
             "CREATE TABLE Bible (Book INTEGER, Chapter INTEGER, Verse INTEGER, Scripture TEXT)",
@@ -84,7 +84,7 @@ mod tests {
     }
 
     fn make_obohu_archive(primary_name: &str) -> Vec<u8> {
-        let mut temp = NamedTempFile::new().unwrap();
+        let temp = NamedTempFile::new().unwrap();
         let conn = Connection::open(temp.path()).unwrap();
         conn.execute(
             "CREATE TABLE books (book_number INTEGER PRIMARY KEY, long_name TEXT)",
