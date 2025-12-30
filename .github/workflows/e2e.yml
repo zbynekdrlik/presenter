@@ -13,8 +13,6 @@ concurrency:
 
 env:
   CARGO_TERM_COLOR: always
-  PRESENTER_PORT: 8899
-  PRESENTER_DB_URL: sqlite://presenter_e2e.db
   # Self-hosted runner has test data at a fixed location
   PRESENTER_LIBRARY_ROOT: /home/newlevel/devel/presenter/presenter-libraries
 
@@ -52,35 +50,15 @@ jobs:
           path: ~/.cache/ms-playwright
           key: playwright-${{ runner.os }}-${{ hashFiles('**/package-lock.json') }}
 
-      - name: Build presenter-server
-        run: cargo build --release -p presenter-server
-
-      - name: Setup test database
+      - name: Build binaries
         run: |
-          ./scripts/dev/refresh-dev-data.sh || true
-
-      - name: Start server in background
-        run: |
-          ./target/release/presenter-server &
-          echo $! > /tmp/presenter.pid
-          # Wait for server to be ready
-          timeout 60 bash -c 'until curl -s http://127.0.0.1:${{ env.PRESENTER_PORT }}/healthz; do sleep 1; done'
-        env:
-          PRESENTER_PORT: ${{ env.PRESENTER_PORT }}
-          PRESENTER_DB_URL: ${{ env.PRESENTER_DB_URL }}
-          RUST_LOG: presenter_server=info
+          cargo build -p presenter-server
+          cargo build -p presenter-importer
 
       - name: Run Playwright tests
         run: npm run test:playwright
         env:
           CI: true
-
-      - name: Stop server
-        if: always()
-        run: |
-          if [ -f /tmp/presenter.pid ]; then
-            kill $(cat /tmp/presenter.pid) || true
-          fi
 
       - name: Upload Playwright report
         uses: actions/upload-artifact@v4
