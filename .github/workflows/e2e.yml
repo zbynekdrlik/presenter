@@ -15,6 +15,8 @@ env:
   CARGO_TERM_COLOR: always
   PRESENTER_PORT: 8899
   PRESENTER_DB_URL: sqlite://presenter_e2e.db
+  # Self-hosted runner has test data at a fixed location
+  PRESENTER_LIBRARY_ROOT: /home/newlevel/devel/presenter/presenter-libraries
 
 jobs:
   playwright:
