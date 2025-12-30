@@ -1,9 +1,6 @@
 import './stub-network';
 import { test, expect } from '@playwright/test';
 import fs from 'node:fs/promises';
-
-// Skip demo server tests in CI - they require Docker which may not be available
-test.skip(({ }, testInfo) => Boolean(process.env.CI), 'Demo server tests require Docker - skipped in CI');
 import os from 'node:os';
 import path from 'node:path';
 
