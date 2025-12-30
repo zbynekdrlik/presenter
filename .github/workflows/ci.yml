@@ -68,8 +68,8 @@ jobs:
       matrix:
         toolchain: [stable, beta]
         include:
-          # MSRV check
-          - toolchain: "1.75"
+          # MSRV check (1.85+ required for edition 2024 crates)
+          - toolchain: "1.85"
             msrv: true
           # Nightly for feature testing (allowed to fail)
           - toolchain: nightly
