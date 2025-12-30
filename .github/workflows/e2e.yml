@@ -13,8 +13,6 @@ concurrency:
 
 env:
   CARGO_TERM_COLOR: always
-  SCCACHE_GHA_ENABLED: true
-  RUSTC_WRAPPER: sccache
   PRESENTER_PORT: 8899
   PRESENTER_DB_URL: sqlite://presenter_e2e.db
 
@@ -29,13 +27,10 @@ jobs:
       - name: Install Rust toolchain
         uses: dtolnay/rust-toolchain@stable
 
-      - name: Setup sccache
-        uses: mozilla-actions/sccache-action@v0.0.7
-
       - name: Setup Rust cache
         uses: Swatinem/rust-cache@v2
         with:
-          shared-key: e2e-${{ hashFiles('**/Cargo.lock') }}
+          shared-key: e2e
 
       - name: Setup Node.js
         uses: actions/setup-node@v4

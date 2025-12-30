@@ -15,8 +15,6 @@ env:
   CARGO_TERM_COLOR: always
   CARGO_INCREMENTAL: 0
   RUST_BACKTRACE: short
-  SCCACHE_GHA_ENABLED: true
-  RUSTC_WRAPPER: sccache
 
 jobs:
   # ============================================
@@ -51,13 +49,10 @@ jobs:
         with:
           components: clippy
 
-      - name: Setup sccache
-        uses: mozilla-actions/sccache-action@v0.0.7
-
       - name: Setup Rust cache
         uses: Swatinem/rust-cache@v2
         with:
-          shared-key: clippy-${{ hashFiles('**/Cargo.lock') }}
+          shared-key: clippy
 
       - name: Run Clippy
         run: cargo clippy --workspace --all-targets --all-features -- -D warnings
@@ -89,13 +84,10 @@ jobs:
         with:
           toolchain: ${{ matrix.toolchain }}
 
-      - name: Setup sccache
-        uses: mozilla-actions/sccache-action@v0.0.7
-
       - name: Setup Rust cache
         uses: Swatinem/rust-cache@v2
         with:
-          shared-key: test-${{ matrix.toolchain }}-${{ hashFiles('**/Cargo.lock') }}
+          shared-key: test-${{ matrix.toolchain }}
 
       - name: Build workspace
         run: cargo build --workspace --all-features
@@ -122,9 +114,6 @@ jobs:
 
       - name: Install Rust toolchain
         uses: dtolnay/rust-toolchain@stable
-
-      - name: Setup sccache
-        uses: mozilla-actions/sccache-action@v0.0.7
 
       - name: Setup Rust cache
         uses: Swatinem/rust-cache@v2
@@ -173,9 +162,6 @@ jobs:
         uses: dtolnay/rust-toolchain@stable
         with:
           components: llvm-tools-preview
-
-      - name: Setup sccache
-        uses: mozilla-actions/sccache-action@v0.0.7
 
       - name: Setup Rust cache
         uses: Swatinem/rust-cache@v2
