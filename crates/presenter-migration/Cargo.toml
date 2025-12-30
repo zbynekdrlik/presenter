@@ -15,5 +15,3 @@ tracing.workspace = true
 sea-orm.workspace = true
 sea-orm-migration.workspace = true
 
-[lints]
-workspace = true

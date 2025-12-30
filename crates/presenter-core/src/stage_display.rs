@@ -140,6 +140,7 @@ impl StageState {
 }
 
 impl StageDisplaySnapshot {
+    #[allow(clippy::too_many_arguments)]
     pub fn new(
         layout: StageDisplayLayout,
         generated_at: DateTime<Utc>,

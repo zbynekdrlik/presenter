@@ -10,17 +10,12 @@ pub enum OscSettingsValidationError {
     InvalidPort,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum VelocityMode {
     ZeroBased,
+    #[default]
     OneBased,
-}
-
-impl Default for VelocityMode {
-    fn default() -> Self {
-        VelocityMode::OneBased
-    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]

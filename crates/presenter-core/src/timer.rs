@@ -87,6 +87,12 @@ pub struct PreachTimer {
     accumulated: Duration,
 }
 
+impl Default for PreachTimer {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl PreachTimer {
     pub fn new() -> Self {
         Self {

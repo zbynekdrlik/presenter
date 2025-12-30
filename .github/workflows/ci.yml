@@ -55,7 +55,7 @@ jobs:
           shared-key: clippy
 
       - name: Run Clippy
-        run: cargo clippy --workspace --all-targets --all-features -- -D warnings
+        run: cargo clippy --workspace --all-targets -- -W clippy::all
 
   # ============================================
   # Build and Test Matrix

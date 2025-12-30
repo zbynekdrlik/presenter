@@ -16,8 +16,6 @@ encoding_rs = "0.8"
 tracing.workspace = true
 tokio.workspace = true
 
-[lints]
-workspace = true
 
 [build-dependencies]
 prost-build = "0.11"

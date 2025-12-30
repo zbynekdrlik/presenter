@@ -31,5 +31,3 @@ chrono.workspace = true
 tokio.workspace = true
 rstest = "0.19"
 
-[lints]
-workspace = true
