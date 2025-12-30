@@ -260,9 +260,9 @@ pub(super) async fn handle_incoming_message(
 }
 
 #[derive(Default)]
-struct CommandResponse {
-    reply: Option<OutgoingMessage>,
-    refresh_variables: bool,
+pub(super) struct CommandResponse {
+    pub(super) reply: Option<OutgoingMessage>,
+    pub(super) refresh_variables: bool,
 }
 
 impl CommandResponse {

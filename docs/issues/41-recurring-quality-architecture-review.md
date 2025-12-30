@@ -53,7 +53,7 @@ Manual Review Rubric
   - Adjust initial migration/schema directly when model changes; regenerate SQLite; refresh dev data scripts.
 - Documentation
   - ADRs added/updated for significant decisions.
-  - README/AGENTS/docs remain consistent with behavior and layout.
+  - README/CLAUDE.md/docs remain consistent with behavior and layout.
 
 Definition of Done (copy into PR)
 - [ ] Ran `scripts/dev/quality-check.sh --strict` — result: PASS
@@ -68,6 +68,6 @@ Definition of Done (copy into PR)
  - [ ] No `unwrap`/`expect`/`panic!` in production sources
 
 References
-- Handbook: `AGENTS.md` (Design Iteration Policy, E2E Policy, Runtime, Prompts)
+- Handbook: `CLAUDE.md` (Design Iteration Policy, E2E Policy, Runtime, Prompts)
 - Merge checklist: `prompts/merge-prepare.md`
 - Quality script: `scripts/dev/quality-check.sh`

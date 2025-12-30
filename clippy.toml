@@ -1,0 +1,23 @@
+# SOTA 2025 Clippy configuration
+# See: https://rust-lang.github.io/rust-clippy/master/index.html
+
+# Maximum lines per function (aligns with quality-check.sh 60-line limit)
+too-many-lines-threshold = 60
+
+# Cognitive complexity threshold
+cognitive-complexity-threshold = 25
+
+# Maximum function arguments
+too-many-arguments-threshold = 8
+
+# Match thresholds with project style
+single-char-binding-names-threshold = 4
+max-trait-bounds = 5
+max-struct-bools = 5
+max-fn-params-bools = 4
+
+# API stability
+avoid-breaking-exported-api = true
+
+# MSRV for compatibility lints
+msrv = "1.75.0"

@@ -1,0 +1,97 @@
+name: Security
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main, dev]
+  schedule:
+    # Run weekly on Sundays at midnight UTC
+    - cron: '0 0 * * 0'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  security-events: write
+
+jobs:
+  # ============================================
+  # Rust Security Audit
+  # ============================================
+  audit:
+    name: Cargo Audit
+    runs-on: self-hosted
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install cargo-binstall
+        uses: cargo-bins/cargo-binstall@main
+
+      - name: Install cargo-audit
+        run: cargo binstall --no-confirm cargo-audit
+
+      - name: Run cargo audit
+        run: cargo audit --deny warnings
+
+  # ============================================
+  # Dependency Policy (cargo-deny)
+  # ============================================
+  deny:
+    name: Cargo Deny
+    runs-on: self-hosted
+    strategy:
+      matrix:
+        checks:
+          - advisories
+          - bans licenses sources
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Run cargo-deny
+        uses: EmbarkStudios/cargo-deny-action@v2
+        with:
+          command: check ${{ matrix.checks }}
+          arguments: --all-features
+
+  # ============================================
+  # npm Audit
+  # ============================================
+  npm-audit:
+    name: npm Audit
+    runs-on: self-hosted
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: 'npm'
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Run npm audit
+        run: npm audit --audit-level=moderate
+        continue-on-error: true
+
+  # ============================================
+  # CodeQL Analysis
+  # ============================================
+  codeql:
+    name: CodeQL
+    runs-on: self-hosted
+    permissions:
+      security-events: write
+      actions: read
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Initialize CodeQL
+        uses: github/codeql-action/init@v3
+        with:
+          languages: javascript
+
+      - name: Perform CodeQL Analysis
+        uses: github/codeql-action/analyze@v3

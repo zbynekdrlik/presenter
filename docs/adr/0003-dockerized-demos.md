@@ -57,7 +57,7 @@ not interfere.
 ## Consequences
 - Repository root gains a Dockerfile, `docker-compose.demo.yml`, gateway stack,
   and helper scripts under `scripts/docker/`.
-- `AGENTS.md` & README will be updated with new workflows for starting/stopping
+- `CLAUDE.md` & README will be updated with new workflows for starting/stopping
   demos and running tests in Dockerised mode.
 - Systemd units for the old bare-metal demo (`presenter-demo.service`) become
   optional / deprecated.
