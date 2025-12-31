@@ -55,12 +55,8 @@ pub(super) async fn get_stage_layout(
     let layout = layouts
         .into_iter()
         .find(|layout| layout.code == code)
-        .unwrap_or_else(|| {
-            StageDisplayLayout::built_in()
-                .into_iter()
-                .next()
-                .expect("stage layouts")
-        });
+        .or_else(|| StageDisplayLayout::built_in().into_iter().next())
+        .ok_or_else(|| AppError::internal("no stage layouts available"))?;
     Ok(Json(StageLayoutResponse {
         code: layout.code.clone(),
         layout,

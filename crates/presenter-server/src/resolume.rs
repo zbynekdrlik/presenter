@@ -110,15 +110,15 @@ enum HostCommand {
 use clip_map::ClipMapping;
 
 impl ResolumeRegistry {
-    pub fn new() -> Self {
+    pub fn new() -> anyhow::Result<Self> {
         let client = Client::builder()
             .timeout(DEFAULT_TIMEOUT)
             .build()
-            .expect("failed to build reqwest client");
-        Self {
+            .map_err(|e| anyhow::anyhow!("failed to build reqwest client: {e}"))?;
+        Ok(Self {
             client,
             hosts: Arc::new(RwLock::new(HashMap::new())),
-        }
+        })
     }
 
     pub async fn set_hosts(&self, hosts: Vec<ResolumeHost>) {

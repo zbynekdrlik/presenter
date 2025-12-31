@@ -238,6 +238,13 @@ impl AppError {
     fn not_found(message: impl Into<String>) -> Self {
         Self::new(StatusCode::NOT_FOUND, anyhow::anyhow!(message.into()))
     }
+
+    fn internal(message: impl Into<String>) -> Self {
+        Self::new(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            anyhow::anyhow!(message.into()),
+        )
+    }
 }
 
 impl From<anyhow::Error> for AppError {

@@ -61,12 +61,19 @@ Code → Commit → Push to dev → Monitor CI → Fix failures → Repeat until
 | `std::thread::sleep` | Blocks async runtime | Use `tokio::time::sleep` |
 | `.only` / `.skip` | Leaves incomplete test coverage | Remove before commit |
 
+**Note:** Test code (`#[cfg(test)]` modules) is exempt from panic rules.
+
 ### File/Function Limits (Enforced by CI)
 
-| Metric | Warning | Hard Fail |
-|--------|---------|-----------|
-| File lines | >800 | >1000 |
-| Function lines | - | >60 |
+| Metric | Warning | Hard Fail | Exempt |
+|--------|---------|-----------|--------|
+| File lines | >800 | >1000 | Migrations, tests |
+| Function lines | - | >60 | Migrations, UI renders, router builders |
+
+**Exempt patterns:**
+- `m*_create_*.rs` - Migration files (declarative schema definitions)
+- `render_*_ui` functions - Leptos component renders (HTML-like DSL)
+- `build_router` functions - Route declarations
 
 ---
 

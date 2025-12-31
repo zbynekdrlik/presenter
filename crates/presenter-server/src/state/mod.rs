@@ -219,7 +219,7 @@ impl AppState {
                 .await?;
         }
 
-        let registry = ResolumeRegistry::new();
+        let registry = ResolumeRegistry::new()?;
         let android_stage_registry = AndroidStageRegistry::new();
         let osc_bridge = OscBridge::new();
         let ableset_bridge = AbleSetBridge::new();
@@ -300,7 +300,7 @@ impl AppState {
     #[instrument(skip_all)]
     pub async fn in_memory() -> anyhow::Result<Self> {
         let repo = Repository::connect_in_memory().await?;
-        let registry = ResolumeRegistry::new();
+        let registry = ResolumeRegistry::new()?;
         let android_stage_registry = AndroidStageRegistry::new();
         let osc_bridge = OscBridge::new();
         let ableset_bridge = AbleSetBridge::new();
