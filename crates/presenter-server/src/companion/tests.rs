@@ -1,6 +1,5 @@
 use super::protocol::*;
-use super::variables::*;
-use super::*;
+use super::variables::CompanionVariableState;
 use super::*;
 use crate::live::LiveEvent;
 use chrono::{TimeZone, Utc};

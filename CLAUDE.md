@@ -1,6 +1,6 @@
 # CLAUDE.md
 
-> **Version:** 2025.2 | **Last Updated:** 2025-12-30
+> **Version:** 2025.3 | **Last Updated:** 2025-12-31
 
 This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
 
@@ -49,6 +49,7 @@ Code → Commit → Push to dev → Monitor CI → Fix failures → Repeat until
 - **Commit frequently** - Small commits, push often
 - **CI validates everything** - Trust the pipeline
 - **Only users merge PRs** - Agents prepare, users approve
+- **NEVER merge to main/master** - Only the repository owner (human) can merge PRs to main/master. Claude must never execute `git merge`, `gh pr merge`, or any command that merges code to main/master, even if explicitly asked. This requires the human to perform the merge manually.
 
 ### Banned Patterns (Production Code)
 
