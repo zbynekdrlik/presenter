@@ -147,6 +147,78 @@ Full API reference in [README.md](../README.md#http-api-snapshot).
 
 All environment variables and feature flags documented in [configuration.md](configuration.md).
 
+## Versioning and Release Strategy
+
+### Semantic Versioning
+
+All crates use **Semantic Versioning** (SemVer) with workspace-level version management:
+
+```toml
+# Cargo.toml (workspace root)
+[workspace.package]
+version = "0.1.0-dev.1"  # dev branch
+version = "0.1.0"        # main branch (releases)
+```
+
+### Version Format by Branch
+
+| Branch | Version Pattern | Example | Description |
+|--------|-----------------|---------|-------------|
+| `dev` | `X.Y.Z-dev.N` | `0.1.0-dev.5` | Development versions, N increments per merge |
+| `main` | `X.Y.Z` | `0.1.0` | Clean release versions |
+
+### Branch Strategy
+
+```
+main (protected)           ← releases, tags, production-ready
+  ↑
+  └── PR (requires CI pass)
+      ↑
+dev (development)          ← daily work, CI validates each push
+```
+
+**Rules:**
+- `main`: Protected, no direct commits, requires PR with passing CI
+- `dev`: Primary development branch, all work happens here
+- Feature branches: Optional, merge to `dev` via PR
+
+### Release Flow
+
+1. **Development**: Work on `dev` branch with `-dev.N` versions
+2. **Ready to release**: Create PR from `dev` to `main`
+3. **release-please**: Automatically creates release PR, bumps version, updates CHANGELOG
+4. **Merge**: After approval, merge to `main` triggers:
+   - Git tag creation (`v0.1.0`)
+   - Release artifact build
+   - Docker image push to GHCR
+5. **Post-release**: Increment `dev` version to next `-dev.1`
+
+### Version Display
+
+The application version is available at runtime:
+- `/healthz` endpoint includes `version` field
+- UI footer displays current version
+- Logs include version on startup
+
+### CI Validation
+
+The `version-check.yml` workflow enforces:
+- Dev branch: version must match `X.Y.Z-dev.N`
+- Main branch: version must be clean semver `X.Y.Z`
+- PRs to main: warns if not from `dev` branch
+
+## Branch Protection
+
+### Main Branch Rules
+- Require pull request before merging
+- Require status checks to pass (CI, E2E, Quality)
+- Require linear history
+- Do not allow bypassing the above settings
+
+### Dev Branch Rules
+- Require status checks to pass (CI, E2E)
+- Allow direct pushes (for autonomous agents)
+
 ## Quality Standards
 
 - Files: ≤800 lines (warn), ≤1000 lines (fail)

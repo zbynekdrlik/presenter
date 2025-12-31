@@ -1,6 +1,6 @@
 # CLAUDE.md
 
-> **Version:** 2025.3 | **Last Updated:** 2025-12-31
+> **Version:** 2025.4 | **Last Updated:** 2025-12-31
 
 This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
 
@@ -77,6 +77,25 @@ Code → Commit → Push to dev → Monitor CI → Fix failures → Repeat until
 
 ---
 
+## Versioning
+
+The project uses **Semantic Versioning** with branch-specific formats:
+
+| Branch | Version Format | Example |
+|--------|----------------|---------|
+| `dev` | `X.Y.Z-dev.N` | `0.1.0-dev.1` |
+| `main` | `X.Y.Z` | `0.1.0` |
+
+**Version location:** `Cargo.toml` workspace `[workspace.package].version`
+
+**Version display:** Available at `/healthz` endpoint and in UI footer.
+
+**CI enforcement:** `version-check.yml` validates version format matches the branch.
+
+See `docs/architecture.md` for full versioning and release strategy.
+
+---
+
 ## GitHub Actions (Primary CI/CD)
 
 ### Self-Hosted Runner
@@ -97,8 +116,9 @@ All workflows run on the local runner, providing:
 |----------|---------|---------|
 | `ci.yml` | Push to `dev`/`main`, PRs | Format, lint, test, quality |
 | `e2e.yml` | Push to `dev`/`main`, PRs | Playwright E2E tests |
+| `version-check.yml` | Push to `dev`/`main`, PRs | Validate version format |
 | `security.yml` | Weekly + manual | Vulnerability scanning |
-| `release.yml` | Release tags | Build artifacts, Docker image |
+| `release.yml` | Push to `main` | release-please, artifacts, Docker |
 
 ### Monitoring CI
 

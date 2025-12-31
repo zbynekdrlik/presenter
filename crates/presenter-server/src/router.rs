@@ -155,8 +155,17 @@ pub fn build_router(state: AppState) -> Router {
         .with_state(state)
 }
 
+/// Application version from Cargo.toml
+pub const VERSION: &str = env!("CARGO_PKG_VERSION");
+
 async fn health() -> impl IntoResponse {
-    (StatusCode::OK, Json(serde_json::json!({ "status": "ok" })))
+    (
+        StatusCode::OK,
+        Json(serde_json::json!({
+            "status": "ok",
+            "version": VERSION
+        })),
+    )
 }
 
 // request structs moved to feature modules
