@@ -22,13 +22,11 @@ pub(super) async fn receive_hello(
                     instance_name,
                 }) => {
                     if let Err(err) = validate_token(expected_token, token.as_deref()) {
-                        let _ = sender
-                            .send(Message::Text(
-                                serde_json::to_string(&OutgoingMessage::Error { message: err })
-                                    .unwrap()
-                                    .into(),
-                            ))
-                            .await;
+                        if let Ok(json) =
+                            serde_json::to_string(&OutgoingMessage::Error { message: err })
+                        {
+                            let _ = sender.send(Message::Text(json.into())).await;
+                        }
                         let _ = sender.send(Message::Close(None)).await;
                         return Err(());
                     }
@@ -38,29 +36,21 @@ pub(super) async fn receive_hello(
                     });
                 }
                 Ok(_) => {
-                    let _ = sender
-                        .send(Message::Text(
-                            serde_json::to_string(&OutgoingMessage::Error {
-                                message: "expected hello".into(),
-                            })
-                            .unwrap()
-                            .into(),
-                        ))
-                        .await;
+                    if let Ok(json) = serde_json::to_string(&OutgoingMessage::Error {
+                        message: "expected hello".into(),
+                    }) {
+                        let _ = sender.send(Message::Text(json.into())).await;
+                    }
                     let _ = sender.send(Message::Close(None)).await;
                     return Err(());
                 }
                 Err(err) => {
                     warn!(?err, "failed to parse companion hello payload");
-                    let _ = sender
-                        .send(Message::Text(
-                            serde_json::to_string(&OutgoingMessage::Error {
-                                message: "invalid handshake".into(),
-                            })
-                            .unwrap()
-                            .into(),
-                        ))
-                        .await;
+                    if let Ok(json) = serde_json::to_string(&OutgoingMessage::Error {
+                        message: "invalid handshake".into(),
+                    }) {
+                        let _ = sender.send(Message::Text(json.into())).await;
+                    }
                     let _ = sender.send(Message::Close(None)).await;
                     return Err(());
                 }
@@ -70,15 +60,11 @@ pub(super) async fn receive_hello(
             }
             Ok(Message::Close(_)) => return Err(()),
             Ok(Message::Binary(_)) => {
-                let _ = sender
-                    .send(Message::Text(
-                        serde_json::to_string(&OutgoingMessage::Error {
-                            message: "binary messages not supported during handshake".into(),
-                        })
-                        .unwrap()
-                        .into(),
-                    ))
-                    .await;
+                if let Ok(json) = serde_json::to_string(&OutgoingMessage::Error {
+                    message: "binary messages not supported during handshake".into(),
+                }) {
+                    let _ = sender.send(Message::Text(json.into())).await;
+                }
                 let _ = sender.send(Message::Close(None)).await;
                 return Err(());
             }
