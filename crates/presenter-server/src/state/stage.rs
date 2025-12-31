@@ -1,7 +1,7 @@
 use chrono::{DateTime, Utc};
 use presenter_core::{
-    Presentation, PresentationId, Slide, SlideContent, SlideId, SlideText,
-    StageDisplayLayout, StageDisplaySlide, StageDisplaySnapshot, TimersOverview,
+    Presentation, PresentationId, Slide, SlideContent, SlideId, SlideText, StageDisplayLayout,
+    StageDisplaySlide, StageDisplaySnapshot, TimersOverview,
 };
 use serde::{Deserialize, Serialize};
 

@@ -1,7 +1,6 @@
 use chrono::{DateTime, Utc};
 use presenter_core::{
-    extract_song_prefix, AbleSetSettings, AbleSetSettingsDraft, AbleSetSongSnapshot,
-    PresentationId,
+    extract_song_prefix, AbleSetSettings, AbleSetSettingsDraft, AbleSetSongSnapshot, PresentationId,
 };
 use std::collections::HashMap;
 
@@ -97,7 +96,10 @@ impl AppState {
         Ok(())
     }
 
-    pub(super) async fn refresh_ableset_cache(&self, settings: &AbleSetStatusSnapshot) -> anyhow::Result<()> {
+    pub(super) async fn refresh_ableset_cache(
+        &self,
+        settings: &AbleSetStatusSnapshot,
+    ) -> anyhow::Result<()> {
         let summaries = self.repository.list_library_summaries(None).await?;
         let target = summaries
             .into_iter()

@@ -5,9 +5,9 @@ mod integrations;
 mod seed;
 mod slides;
 mod stage;
-mod timers;
 #[cfg(test)]
 mod tests;
+mod timers;
 
 use crate::{
     ableset::AbleSetBridge,
@@ -46,9 +46,9 @@ use companion::{
     parse_bool_flag, CompanionServerManager, COMPANION_FEATURE_KEY, COMPANION_PORT_KEY,
     DEFAULT_COMPANION_PORT,
 };
+use seed::sample_library;
 #[cfg(test)]
 pub use seed::TestBibleIngestion;
-use seed::sample_library;
 use stage::{build_stage_snapshot, stage_resolution_from_presentation, StageResolution};
 
 #[derive(Clone)]

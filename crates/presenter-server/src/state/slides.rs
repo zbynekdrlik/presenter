@@ -1,4 +1,4 @@
-use presenter_core::{Slide, SlideContent, SlideId, SlideText, PresentationId};
+use presenter_core::{PresentationId, Slide, SlideContent, SlideId, SlideText};
 use std::collections::HashMap;
 
 use super::stage::blank_slide_content;
