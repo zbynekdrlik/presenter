@@ -58,7 +58,7 @@ jobs:
         run: cargo clippy --workspace --all-targets -- -W clippy::all
 
   # ============================================
-  # Build and Test Matrix
+  # Build and Test (Optimized for self-hosted runner)
   # ============================================
   test:
     name: Test (${{ matrix.toolchain }})
@@ -66,16 +66,12 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        toolchain: [stable, beta]
+        toolchain: [stable]
         include:
           # MSRV check (1.85+ required for edition 2024 crates)
           - toolchain: "1.85"
             msrv: true
-          # Nightly for feature testing (allowed to fail)
-          - toolchain: nightly
-            experimental: true
     runs-on: self-hosted
-    continue-on-error: ${{ matrix.experimental || false }}
     steps:
       - uses: actions/checkout@v4
 
@@ -148,51 +144,13 @@ jobs:
         run: npm run test:companion
 
   # ============================================
-  # Coverage Report
-  # ============================================
-  coverage:
-    name: Code Coverage
-    runs-on: self-hosted
-    needs: test
-    if: github.event_name == 'pull_request'
-    steps:
-      - uses: actions/checkout@v4
-
-      - name: Install Rust toolchain
-        uses: dtolnay/rust-toolchain@stable
-        with:
-          components: llvm-tools-preview
-
-      - name: Setup Rust cache
-        uses: Swatinem/rust-cache@v2
-
-      - name: Install cargo-binstall
-        uses: cargo-bins/cargo-binstall@main
-
-      - name: Install cargo-llvm-cov
-        run: cargo binstall --no-confirm cargo-llvm-cov
-
-      - name: Generate coverage report
-        run: |
-          cargo llvm-cov --workspace --all-features \
-            --codecov --output-path codecov.json
-
-      - name: Upload coverage to Codecov
-        uses: codecov/codecov-action@v4
-        with:
-          files: codecov.json
-          fail_ci_if_error: false
-          verbose: true
-        env:
-          CODECOV_TOKEN: ${{ secrets.CODECOV_TOKEN }}
-
-  # ============================================
-  # Docker Build Test
+  # Docker Build Test (main branch only)
   # ============================================
   docker:
     name: Docker Build
     runs-on: self-hosted
     needs: [test, quality]
+    if: github.ref == 'refs/heads/main'
     steps:
       - uses: actions/checkout@v4
 
