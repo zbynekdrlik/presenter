@@ -1,0 +1,59 @@
+# SOTA 2025 Cargo build configuration
+
+[build]
+# Enable incremental compilation
+incremental = true
+
+# Use LLD linker for faster linking on Linux
+[target.x86_64-unknown-linux-gnu]
+linker = "clang"
+rustflags = ["-C", "link-arg=-fuse-ld=lld"]
+
+# Environment variables for build
+[env]
+CARGO_INCREMENTAL = "1"
+
+# Alias definitions for common tasks
+[alias]
+# Testing aliases
+t = "test"
+tt = "test --all-targets"
+
+# Linting aliases
+lint = "clippy --all-targets --all-features -- -D warnings"
+lint-fix = "clippy --all-targets --all-features --fix --allow-dirty"
+
+# Code quality
+fmt-check = "fmt --all -- --check"
+
+# Documentation
+doc-open = "doc --open --no-deps"
+
+# Build profiles
+[profile.dev]
+opt-level = 0
+debug = true
+incremental = true
+
+[profile.dev.package."*"]
+opt-level = 2  # Optimize dependencies even in dev
+
+[profile.release]
+opt-level = 3
+lto = "thin"
+codegen-units = 1
+panic = "abort"
+strip = "symbols"
+
+[profile.test]
+opt-level = 1  # Slight optimization for faster test execution
+debug = true
+
+# Profile for CI (faster builds, some optimization)
+[profile.ci]
+inherits = "dev"
+incremental = false
+opt-level = 1
+
+[registries.crates-io]
+protocol = "sparse"

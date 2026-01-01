@@ -1,0 +1,209 @@
+name: CI
+
+on:
+  push:
+    branches: [main, dev]
+  pull_request:
+    branches: [main, dev]
+  workflow_dispatch:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  CARGO_TERM_COLOR: always
+  CARGO_INCREMENTAL: 0
+  RUST_BACKTRACE: short
+
+jobs:
+  # ============================================
+  # Format Check (fast, runs first)
+  # ============================================
+  fmt:
+    name: Format
+    runs-on: self-hosted
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt
+
+      - name: Check formatting
+        run: cargo fmt --all -- --check
+
+  # ============================================
+  # Clippy Linting
+  # ============================================
+  clippy:
+    name: Clippy
+    runs-on: self-hosted
+    needs: fmt
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy
+
+      - name: Setup Rust cache
+        uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: clippy
+
+      - name: Run Clippy
+        run: cargo clippy --workspace --all-targets -- -W clippy::all
+
+  # ============================================
+  # Build and Test Matrix
+  # ============================================
+  test:
+    name: Test (${{ matrix.toolchain }})
+    needs: [fmt, clippy]
+    strategy:
+      fail-fast: false
+      matrix:
+        toolchain: [stable, beta]
+        include:
+          # MSRV check (1.85+ required for edition 2024 crates)
+          - toolchain: "1.85"
+            msrv: true
+          # Nightly for feature testing (allowed to fail)
+          - toolchain: nightly
+            experimental: true
+    runs-on: self-hosted
+    continue-on-error: ${{ matrix.experimental || false }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: ${{ matrix.toolchain }}
+
+      - name: Setup Rust cache
+        uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: test-${{ matrix.toolchain }}
+
+      - name: Build workspace
+        run: cargo build --workspace --all-features
+
+      - name: Run tests
+        run: cargo test --workspace --all-features --no-fail-fast
+        env:
+          RUST_LOG: debug
+
+      - name: Run doc tests
+        run: cargo test --doc --workspace
+
+  # ============================================
+  # Quality Checks (matches scripts/dev/quality-check.sh)
+  # ============================================
+  quality:
+    name: Quality Checks
+    runs-on: self-hosted
+    needs: [fmt, clippy]
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Setup Rust cache
+        uses: Swatinem/rust-cache@v2
+
+      - name: Install required tools
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y ripgrep jq python3
+
+      - name: Run quality checks
+        run: ./scripts/dev/quality-check.sh --strict --against origin/${{ github.base_ref || 'main' }}
+
+  # ============================================
+  # Companion (Node.js) Tests
+  # ============================================
+  companion-tests:
+    name: Companion Tests
+    runs-on: self-hosted
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: 'npm'
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Run companion tests
+        run: npm run test:companion
+
+  # ============================================
+  # Coverage Report
+  # ============================================
+  coverage:
+    name: Code Coverage
+    runs-on: self-hosted
+    needs: test
+    if: github.event_name == 'pull_request'
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          components: llvm-tools-preview
+
+      - name: Setup Rust cache
+        uses: Swatinem/rust-cache@v2
+
+      - name: Install cargo-binstall
+        uses: cargo-bins/cargo-binstall@main
+
+      - name: Install cargo-llvm-cov
+        run: cargo binstall --no-confirm cargo-llvm-cov
+
+      - name: Generate coverage report
+        run: |
+          cargo llvm-cov --workspace --all-features \
+            --codecov --output-path codecov.json
+
+      - name: Upload coverage to Codecov
+        uses: codecov/codecov-action@v4
+        with:
+          files: codecov.json
+          fail_ci_if_error: false
+          verbose: true
+        env:
+          CODECOV_TOKEN: ${{ secrets.CODECOV_TOKEN }}
+
+  # ============================================
+  # Docker Build Test
+  # ============================================
+  docker:
+    name: Docker Build
+    runs-on: self-hosted
+    needs: [test, quality]
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Build Docker image
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          push: false
+          tags: presenter:ci-${{ github.sha }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max

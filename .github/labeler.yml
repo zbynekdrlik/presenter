@@ -1,0 +1,70 @@
+# Labels based on file paths
+
+rust:
+  - changed-files:
+      - any-glob-to-any-file: 'crates/**/*.rs'
+
+core:
+  - changed-files:
+      - any-glob-to-any-file: 'crates/presenter-core/**'
+
+server:
+  - changed-files:
+      - any-glob-to-any-file: 'crates/presenter-server/**'
+
+persistence:
+  - changed-files:
+      - any-glob-to-any-file: 'crates/presenter-persistence/**'
+
+migration:
+  - changed-files:
+      - any-glob-to-any-file: 'crates/presenter-migration/**'
+
+importer:
+  - changed-files:
+      - any-glob-to-any-file: 'crates/presenter-importer/**'
+
+bible:
+  - changed-files:
+      - any-glob-to-any-file: 'crates/presenter-bible/**'
+
+tests:
+  - changed-files:
+      - any-glob-to-any-file:
+          - 'tests/**'
+          - '**/*test*'
+          - '**/*.spec.ts'
+
+e2e:
+  - changed-files:
+      - any-glob-to-any-file: 'tests/e2e/**'
+
+documentation:
+  - changed-files:
+      - any-glob-to-any-file:
+          - 'docs/**'
+          - '**/*.md'
+
+ci:
+  - changed-files:
+      - any-glob-to-any-file:
+          - '.github/**'
+          - 'scripts/**'
+
+docker:
+  - changed-files:
+      - any-glob-to-any-file:
+          - 'Dockerfile*'
+          - 'docker-compose*.yml'
+          - 'docker/**'
+
+companion:
+  - changed-files:
+      - any-glob-to-any-file: 'ops/companion/**'
+
+javascript:
+  - changed-files:
+      - any-glob-to-any-file:
+          - '**/*.js'
+          - '**/*.ts'
+          - 'package*.json'

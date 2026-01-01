@@ -1,0 +1,24 @@
+# CODEOWNERS - Define code ownership for automatic review requests
+# https://docs.github.com/en/repositories/managing-your-repositorys-settings-and-features/customizing-your-repository/about-code-owners
+
+# Default owner for all files
+* @zbynekdrlik
+
+# Rust crates
+/crates/ @zbynekdrlik
+
+# CI/CD and infrastructure
+/.github/ @zbynekdrlik
+/scripts/ @zbynekdrlik
+/Dockerfile @zbynekdrlik
+/docker-compose*.yml @zbynekdrlik
+
+# Documentation
+/docs/ @zbynekdrlik
+/*.md @zbynekdrlik
+
+# Companion integration
+/ops/companion/ @zbynekdrlik
+
+# Tests
+/tests/ @zbynekdrlik

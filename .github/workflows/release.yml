@@ -1,0 +1,110 @@
+name: Release
+
+on:
+  push:
+    branches: [main]
+
+permissions:
+  contents: write
+  pull-requests: write
+
+jobs:
+  release-please:
+    name: Release Please
+    runs-on: self-hosted
+    outputs:
+      release_created: ${{ steps.release.outputs.release_created }}
+      tag_name: ${{ steps.release.outputs.tag_name }}
+      version: ${{ steps.release.outputs.version }}
+    steps:
+      - uses: googleapis/release-please-action@v4
+        id: release
+        with:
+          release-type: rust
+          package-name: presenter
+          changelog-types: |
+            [
+              {"type": "feat", "section": "Features", "hidden": false},
+              {"type": "fix", "section": "Bug Fixes", "hidden": false},
+              {"type": "perf", "section": "Performance", "hidden": false},
+              {"type": "refactor", "section": "Refactoring", "hidden": false},
+              {"type": "docs", "section": "Documentation", "hidden": false},
+              {"type": "test", "section": "Tests", "hidden": false},
+              {"type": "ci", "section": "CI/CD", "hidden": false},
+              {"type": "chore", "section": "Chores", "hidden": true}
+            ]
+
+  # ============================================
+  # Build Release Artifacts
+  # ============================================
+  build-release:
+    name: Build Release
+    needs: release-please
+    if: needs.release-please.outputs.release_created
+    runs-on: self-hosted
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Build release binary
+        run: cargo build --release -p presenter-server
+
+      - name: Create release archive
+        run: |
+          mkdir -p release
+          cp target/release/presenter-server release/
+          cp target/release/import_propresenter release/ || true
+          cp target/release/ingest_bibles release/ || true
+          tar -czvf presenter-${{ needs.release-please.outputs.version }}-linux-x64.tar.gz -C release .
+
+      - name: Upload release artifact
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ needs.release-please.outputs.tag_name }}
+          files: presenter-${{ needs.release-please.outputs.version }}-linux-x64.tar.gz
+
+  # ============================================
+  # Build and Push Docker Image
+  # ============================================
+  docker-release:
+    name: Docker Release
+    needs: release-please
+    if: needs.release-please.outputs.release_created
+    runs-on: self-hosted
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Login to GitHub Container Registry
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Extract metadata
+        id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: ghcr.io/${{ github.repository }}
+          tags: |
+            type=semver,pattern={{version}},value=${{ needs.release-please.outputs.version }}
+            type=semver,pattern={{major}}.{{minor}},value=${{ needs.release-please.outputs.version }}
+            type=raw,value=latest
+
+      - name: Build and push
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          push: true
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
