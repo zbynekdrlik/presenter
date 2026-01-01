@@ -276,7 +276,7 @@ impl CommandResponse {
     }
 }
 
-enum CompanionCommand {
+pub(super) enum CompanionCommand {
     StageSet {
         presentation_id: PresentationId,
         current_slide_id: SlideId,

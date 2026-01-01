@@ -48,7 +48,7 @@ fn tokens_from_normalised(normalised: &str) -> Vec<String> {
     normalised
         .split(|ch: char| !ch.is_ascii_alphanumeric())
         .filter(|segment| !segment.is_empty())
-        .map(|segment| segment.to_string())
+        .map(ToString::to_string)
         .collect()
 }
 

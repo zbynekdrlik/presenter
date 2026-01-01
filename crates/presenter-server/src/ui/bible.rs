@@ -112,7 +112,7 @@ fn BibleDocument(
                     </header>
                         }.into_any()
                     } else {
-                        view! { <></> }.into_any()
+                        ().into_view().into_any()
                     }}
                     <main class="operator__main">
                         <aside class="operator__catalog operator__catalog--bible" data-role="catalog">
@@ -125,7 +125,7 @@ fn BibleDocument(
                                                 type="button"
                                                 class="operator__group-count"
                                                 data-role="bible-dashboard"
-                                                aria-label={format!("Show all Bibles ({} available)", translation_count)}
+                                                aria-label={format!("Show all Bibles ({translation_count} available)")}
                                                 data-empty={if translation_count == 0 { "true" } else { "false" }}
                                             >
                                                 {format!("({translation_count})")}
@@ -168,7 +168,7 @@ fn BibleDocument(
                                                             class="operator__list-action operator__list-action--icon operator__list-action--menu"
                                                             data-action="bible-edit"
                                                             data-translation-code={translation.code.clone()}
-                                                            aria-label={format!("Edit {}", edit_label)}
+                                                            aria-label={format!("Edit {edit_label}")}
                                                         >
                                                             "⋮"
                                                         </button>

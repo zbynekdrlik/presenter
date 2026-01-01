@@ -1,5 +1,5 @@
-use once_cell::sync::Lazy;
 use std::collections::HashMap;
+use std::sync::LazyLock;
 
 use super::search::normalise_book_key;
 
@@ -493,7 +493,7 @@ const ENGLISH_EXTRA_ALIASES: &[(&str, &str)] = &[
     ("Acts", "ACT"),
 ];
 
-static BOOK_NAME_ALIASES: Lazy<HashMap<String, BibleBookCanonical>> = Lazy::new(|| {
+static BOOK_NAME_ALIASES: LazyLock<HashMap<String, BibleBookCanonical>> = LazyLock::new(|| {
     let mut map: HashMap<String, BibleBookCanonical> = HashMap::new();
 
     for meta in CANONICAL_BOOKS.iter().copied() {
@@ -502,13 +502,17 @@ static BOOK_NAME_ALIASES: Lazy<HashMap<String, BibleBookCanonical>> = Lazy::new(
         register_alias_variants(&mut map, meta.code.to_ascii_lowercase(), meta);
     }
 
+    #[allow(clippy::cast_possible_truncation)]
     for (index, alias) in SLOVAK_ECUMENICKY_NAMES.iter().enumerate() {
+        // SAFETY: Array has fixed size < 100 elements, so index fits in u16
         if let Some(meta) = canonical_book_by_number((index as u16) + 1) {
             register_alias_variants(&mut map, alias, meta);
         }
     }
 
+    #[allow(clippy::cast_possible_truncation)]
     for (index, alias) in SLOVAK_OBOHU_NAMES.iter().enumerate() {
+        // SAFETY: Array has fixed size < 100 elements, so index fits in u16
         if let Some(meta) = canonical_book_by_number((index as u16) + 1) {
             register_alias_variants(&mut map, alias, meta);
         }

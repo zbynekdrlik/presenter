@@ -139,9 +139,12 @@ impl<P: BibleContentProvider> BibleScraper<P> {
         crate::spec::BibleImportSummary,
     )> {
         match (&spec.source, &spec.format) {
-            (BibleSource::Url { url }, BibleSourceFormat::UsfmZip { .. })
-            | (BibleSource::Url { url }, BibleSourceFormat::MySwordSqlite { .. })
-            | (BibleSource::Url { url }, BibleSourceFormat::ObohuSqlite) => {
+            (
+                BibleSource::Url { url },
+                BibleSourceFormat::UsfmZip { .. }
+                | BibleSourceFormat::MySwordSqlite { .. }
+                | BibleSourceFormat::ObohuSqlite,
+            ) => {
                 let bytes = self
                     .provider
                     .fetch_bytes(url)

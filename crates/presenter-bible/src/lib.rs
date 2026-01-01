@@ -1,4 +1,13 @@
-// Modularized interface for presenter-bible (#46)
+//! Bible content parsing and scraping module.
+
+#![allow(
+    clippy::missing_errors_doc,
+    clippy::missing_panics_doc,
+    clippy::must_use_candidate,
+    clippy::redundant_closure_for_method_calls,
+    clippy::uninlined_format_args,
+    clippy::cast_sign_loss
+)]
 
 mod parse;
 mod provider;

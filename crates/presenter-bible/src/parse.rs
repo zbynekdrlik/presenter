@@ -1,3 +1,12 @@
+#![allow(
+    clippy::missing_errors_doc,
+    clippy::ref_option,
+    clippy::match_wildcard_for_single_variants,
+    clippy::cast_possible_truncation,
+    clippy::needless_borrow,
+    clippy::single_match_else
+)]
+
 use crate::spec::{BibleImportSummary, BibleSourceFormat, BibleTranslationSpec};
 use anyhow::{anyhow, Context, Result};
 use presenter_core::bible::{
@@ -50,7 +59,10 @@ pub fn parse_usfm_zip(
             continue;
         }
         let name = file.name().to_string();
-        if !name.ends_with(".usfm") {
+        if !std::path::Path::new(&name)
+            .extension()
+            .is_some_and(|ext| ext.eq_ignore_ascii_case("usfm"))
+        {
             continue;
         }
         let mut contents = String::new();
@@ -62,6 +74,7 @@ pub fn parse_usfm_zip(
     Ok(passages)
 }
 
+#[allow(clippy::too_many_lines)]
 pub fn parse_mysword_sqlite_zip(
     bytes: &[u8],
     translation: &BibleTranslation,
@@ -202,6 +215,7 @@ fn canonical_number_from_dataset(code: i64) -> Option<u16> {
     None
 }
 
+#[allow(clippy::too_many_lines)]
 pub fn parse_obohu_sqlite_zip(
     bytes: &[u8],
     translation: &BibleTranslation,
@@ -296,6 +310,7 @@ pub fn parse_obohu_sqlite_zip(
     Ok(passages)
 }
 
+#[allow(clippy::too_many_lines)]
 fn parse_usfm_document(
     text: &str,
     translation: &BibleTranslation,
@@ -538,9 +553,8 @@ fn sanitize_mysword_text(input: &str) -> String {
             if let Some(end) = rest.find('>') {
                 i += end + 1;
                 continue;
-            } else {
-                break;
             }
+            break;
         }
         let ch = rest.chars().next().unwrap();
         output.push(ch);
@@ -581,7 +595,7 @@ fn starts_with_ci(haystack: &str, needle: &str) -> bool {
         return false;
     }
     for (hb, nb) in h_bytes.iter().zip(n_bytes.iter()) {
-        if hb.to_ascii_lowercase() != nb.to_ascii_lowercase() {
+        if !hb.eq_ignore_ascii_case(nb) {
             return false;
         }
     }
