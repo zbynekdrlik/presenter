@@ -58,43 +58,27 @@ jobs:
         run: cargo clippy --workspace --all-targets -- -W clippy::all
 
   # ============================================
-  # Build and Test (Optimized for self-hosted runner)
+  # Build and Test (Single job for self-hosted runner efficiency)
   # ============================================
   test:
-    name: Test (${{ matrix.toolchain }})
+    name: Test
     needs: [fmt, clippy]
-    strategy:
-      fail-fast: false
-      matrix:
-        toolchain: [stable]
-        include:
-          # MSRV check (1.85+ required for edition 2024 crates)
-          - toolchain: "1.85"
-            msrv: true
     runs-on: self-hosted
     steps:
       - uses: actions/checkout@v4
 
       - name: Install Rust toolchain
-        uses: dtolnay/rust-toolchain@master
-        with:
-          toolchain: ${{ matrix.toolchain }}
+        uses: dtolnay/rust-toolchain@stable
 
       - name: Setup Rust cache
         uses: Swatinem/rust-cache@v2
         with:
-          shared-key: test-${{ matrix.toolchain }}
+          shared-key: test
 
-      - name: Build workspace
-        run: cargo build --workspace --all-features
-
-      - name: Run tests
+      - name: Build and test
         run: cargo test --workspace --all-features --no-fail-fast
         env:
           RUST_LOG: debug
-
-      - name: Run doc tests
-        run: cargo test --doc --workspace
 
   # ============================================
   # Quality Checks (matches scripts/dev/quality-check.sh)
