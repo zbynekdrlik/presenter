@@ -81,12 +81,30 @@ jobs:
           RUST_LOG: debug
 
   # ============================================
-  # Quality Checks (matches scripts/dev/quality-check.sh)
+  # MSRV Check (ensures minimum Rust version compatibility)
+  # ============================================
+  msrv:
+    name: MSRV (1.85)
+    needs: [fmt]
+    runs-on: self-hosted
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install MSRV toolchain
+        uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: "1.85"
+
+      - name: Check MSRV compatibility
+        run: cargo check --workspace --all-features
+
+  # ============================================
+  # Quality Checks (code patterns, file sizes, hygiene)
   # ============================================
   quality:
     name: Quality Checks
     runs-on: self-hosted
-    needs: [fmt, clippy]
+    needs: [fmt]
     steps:
       - uses: actions/checkout@v4
         with:
@@ -95,9 +113,6 @@ jobs:
       - name: Install Rust toolchain
         uses: dtolnay/rust-toolchain@stable
 
-      - name: Setup Rust cache
-        uses: Swatinem/rust-cache@v2
-
       - name: Install required tools
         run: |
           sudo apt-get update
@@ -105,6 +120,25 @@ jobs:
 
       - name: Run quality checks
         run: ./scripts/dev/quality-check.sh --strict --against origin/${{ github.base_ref || 'main' }}
+
+  # ============================================
+  # Security Audit (fast dependency vulnerability check)
+  # ============================================
+  security:
+    name: Security Audit
+    runs-on: self-hosted
+    needs: [fmt]
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install cargo-binstall
+        uses: cargo-bins/cargo-binstall@main
+
+      - name: Install cargo-audit
+        run: cargo binstall --no-confirm cargo-audit
+
+      - name: Run cargo audit
+        run: cargo audit
 
   # ============================================
   # Companion (Node.js) Tests
