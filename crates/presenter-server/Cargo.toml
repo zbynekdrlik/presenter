@@ -29,7 +29,7 @@ tokio-stream.workspace = true
 futures-util.workspace = true
 serde_with.workspace = true
 reqwest.workspace = true
-rosc = "0.10"
+rosc = "0.11"
 
 [dev-dependencies]
 axum.workspace = true
