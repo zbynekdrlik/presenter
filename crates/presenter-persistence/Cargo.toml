@@ -30,7 +30,7 @@ presenter-core = { path = "../presenter-core" }
 presenter-migration = { path = "../presenter-migration" }
 chrono.workspace = true
 tokio.workspace = true
-rstest = "0.19"
+rstest = "0.26"
 
 [lints]
 workspace = true

@@ -19,7 +19,7 @@ once_cell.workspace = true
 
 [dev-dependencies]
 insta.workspace = true
-rstest = "0.19"
+rstest = "0.26"
 serde_json.workspace = true
 
 [lints]
