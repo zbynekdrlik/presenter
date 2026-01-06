@@ -1,9 +1,10 @@
 [package]
 name = "presenter-core"
-version = "0.1.0"
-edition = "2021"
+version.workspace = true
+edition.workspace = true
 authors.workspace = true
 license.workspace = true
+repository.workspace = true
 
 [dependencies]
 anyhow.workspace = true

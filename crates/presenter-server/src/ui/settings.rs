@@ -215,13 +215,26 @@ pub async fn render_settings_ui(state: &AppState) -> anyhow::Result<Html<String>
 }
 
 async fn load_settings_view_model(state: &AppState) -> anyhow::Result<SettingsViewModel> {
+    let host_rows = build_host_rows(state).await?;
+    let android_rows = build_android_rows(state).await?;
+
+    Ok(SettingsViewModel {
+        hosts: host_rows,
+        android_displays: android_rows,
+        osc_settings: state.osc_settings().await?,
+        osc_status: state.osc_status_snapshot().await,
+        ableset_settings: state.ableset_settings().await?,
+        ableset_status: state.ableset_status_snapshot().await,
+        features: state.feature_flags(),
+    })
+}
+
+async fn build_host_rows(state: &AppState) -> anyhow::Result<Vec<SettingsHostRow>> {
     let hosts = state.list_resolume_hosts().await?;
     let host_statuses = state.resolume_status_snapshot().await;
-    let host_rows = hosts
+    Ok(hosts
         .into_iter()
         .map(|host| {
-            let created_display = format_settings_timestamp(host.created_at);
-            let updated_display = format_settings_timestamp(host.updated_at);
             let status = host_statuses
                 .get(&host.id)
                 .cloned()
@@ -240,20 +253,22 @@ async fn load_settings_view_model(state: &AppState) -> anyhow::Result<SettingsVi
                 port: host.port,
                 is_enabled: host.is_enabled,
                 created_at: host.created_at.to_rfc3339(),
-                created_at_display: created_display,
+                created_at_display: format_settings_timestamp(host.created_at),
                 updated_at: host.updated_at.to_rfc3339(),
-                updated_at_display: updated_display,
+                updated_at_display: format_settings_timestamp(host.updated_at),
                 status_state,
                 status_message: status.last_error.clone(),
                 last_latency_ms: status.last_latency_ms,
                 status: Some(status),
             }
         })
-        .collect();
+        .collect())
+}
 
+async fn build_android_rows(state: &AppState) -> anyhow::Result<Vec<SettingsAndroidDisplayRow>> {
     let android_displays = state.list_android_stage_displays().await?;
     let android_statuses = state.android_stage_status_snapshot().await;
-    let android_rows = android_displays
+    Ok(android_displays
         .into_iter()
         .map(|display| {
             let status = android_statuses
@@ -268,14 +283,6 @@ async fn load_settings_view_model(state: &AppState) -> anyhow::Result<SettingsVi
                 crate::android_stage::AndroidStageDisplayState::Error => "Error",
             }
             .to_string();
-            let created_display = format_settings_timestamp(display.created_at);
-            let updated_display = format_settings_timestamp(display.updated_at);
-            let last_attempt_display = status
-                .last_attempt
-                .map_or_else(|| "\u{2014}".to_string(), format_settings_timestamp);
-            let last_success_display = status
-                .last_success
-                .map_or_else(|| "\u{2014}".to_string(), format_settings_timestamp);
             SettingsAndroidDisplayRow {
                 id: display.id.to_string(),
                 label: display.label,
@@ -284,33 +291,21 @@ async fn load_settings_view_model(state: &AppState) -> anyhow::Result<SettingsVi
                 launch_component: display.launch_component,
                 is_enabled: display.is_enabled,
                 created_at: display.created_at.to_rfc3339(),
-                created_at_display: created_display,
+                created_at_display: format_settings_timestamp(display.created_at),
                 updated_at: display.updated_at.to_rfc3339(),
-                updated_at_display: updated_display,
+                updated_at_display: format_settings_timestamp(display.updated_at),
                 status_state,
-                last_attempt_display,
-                last_success_display,
+                last_attempt_display: status
+                    .last_attempt
+                    .map_or_else(|| "\u{2014}".to_string(), format_settings_timestamp),
+                last_success_display: status
+                    .last_success
+                    .map_or_else(|| "\u{2014}".to_string(), format_settings_timestamp),
                 status_message: status.last_error.clone(),
                 status: Some(status),
             }
         })
-        .collect();
-
-    let osc_settings = state.osc_settings().await?;
-    let osc_status = state.osc_status_snapshot().await;
-    let ableset_settings = state.ableset_settings().await?;
-    let ableset_status = state.ableset_status_snapshot().await;
-    let features = state.feature_flags();
-
-    Ok(SettingsViewModel {
-        hosts: host_rows,
-        android_displays: android_rows,
-        osc_settings,
-        osc_status,
-        ableset_settings,
-        ableset_status,
-        features,
-    })
+        .collect())
 }
 
 fn build_settings_script(view: &SettingsViewModel) -> String {

@@ -22,13 +22,11 @@ pub(super) async fn receive_hello(
                     instance_name,
                 }) => {
                     if let Err(err) = validate_token(expected_token, token.as_deref()) {
-                        let _ = sender
-                            .send(Message::Text(
-                                serde_json::to_string(&OutgoingMessage::Error { message: err })
-                                    .unwrap()
-                                    .into(),
-                            ))
-                            .await;
+                        if let Ok(json) =
+                            serde_json::to_string(&OutgoingMessage::Error { message: err })
+                        {
+                            let _ = sender.send(Message::Text(json.into())).await;
+                        }
                         let _ = sender.send(Message::Close(None)).await;
                         return Err(());
                     }
@@ -38,29 +36,21 @@ pub(super) async fn receive_hello(
                     });
                 }
                 Ok(_) => {
-                    let _ = sender
-                        .send(Message::Text(
-                            serde_json::to_string(&OutgoingMessage::Error {
-                                message: "expected hello".into(),
-                            })
-                            .unwrap()
-                            .into(),
-                        ))
-                        .await;
+                    if let Ok(json) = serde_json::to_string(&OutgoingMessage::Error {
+                        message: "expected hello".into(),
+                    }) {
+                        let _ = sender.send(Message::Text(json.into())).await;
+                    }
                     let _ = sender.send(Message::Close(None)).await;
                     return Err(());
                 }
                 Err(err) => {
                     warn!(?err, "failed to parse companion hello payload");
-                    let _ = sender
-                        .send(Message::Text(
-                            serde_json::to_string(&OutgoingMessage::Error {
-                                message: "invalid handshake".into(),
-                            })
-                            .unwrap()
-                            .into(),
-                        ))
-                        .await;
+                    if let Ok(json) = serde_json::to_string(&OutgoingMessage::Error {
+                        message: "invalid handshake".into(),
+                    }) {
+                        let _ = sender.send(Message::Text(json.into())).await;
+                    }
                     let _ = sender.send(Message::Close(None)).await;
                     return Err(());
                 }
@@ -70,15 +60,11 @@ pub(super) async fn receive_hello(
             }
             Ok(Message::Close(_)) => return Err(()),
             Ok(Message::Binary(_)) => {
-                let _ = sender
-                    .send(Message::Text(
-                        serde_json::to_string(&OutgoingMessage::Error {
-                            message: "binary messages not supported during handshake".into(),
-                        })
-                        .unwrap()
-                        .into(),
-                    ))
-                    .await;
+                if let Ok(json) = serde_json::to_string(&OutgoingMessage::Error {
+                    message: "binary messages not supported during handshake".into(),
+                }) {
+                    let _ = sender.send(Message::Text(json.into())).await;
+                }
                 let _ = sender.send(Message::Close(None)).await;
                 return Err(());
             }
@@ -153,25 +139,9 @@ pub(super) fn parse_command(command: &str, payload: Value) -> Result<CompanionCo
             let data: BibleTriggerPayload = serde_json::from_value(payload)
                 .map_err(|err| format!("invalid bible.trigger payload: {err}"))?;
             let verse_end = data.verse_end.unwrap_or(data.verse_start);
-            let canonical = data
-                .book_code
-                .as_deref()
-                .and_then(|code| canonical_book_by_code(code))
-                .or_else(|| canonical_book_by_name(&data.book));
-            let reference = if let Some(meta) = canonical {
-                BibleReference::new_with_code(
-                    data.book.clone(),
-                    meta.code,
-                    meta.number,
-                    data.chapter,
-                    data.verse_start,
-                    verse_end,
-                )
-                .map_err(|err| format!("invalid bible reference: {err}"))?
-            } else {
-                BibleReference::new(data.book.clone(), data.chapter, data.verse_start, verse_end)
-                    .map_err(|err| format!("invalid bible reference: {err}"))?
-            };
+            let reference =
+                BibleReference::new(data.book, data.chapter, data.verse_start, verse_end)
+                    .map_err(|err| format!("invalid bible reference: {err}"))?;
             Ok(CompanionCommand::BibleTrigger {
                 translation: data.translation,
                 reference,
@@ -277,8 +247,8 @@ pub(super) async fn handle_incoming_message(
 
 #[derive(Default)]
 pub(super) struct CommandResponse {
-    reply: Option<OutgoingMessage>,
-    refresh_variables: bool,
+    pub(super) reply: Option<OutgoingMessage>,
+    pub(super) refresh_variables: bool,
 }
 
 impl CommandResponse {
@@ -303,16 +273,6 @@ impl CommandResponse {
     fn with_refresh(mut self, refresh: bool) -> Self {
         self.refresh_variables = refresh;
         self
-    }
-
-    #[cfg(test)]
-    pub(super) fn reply(&self) -> Option<&OutgoingMessage> {
-        self.reply.as_ref()
-    }
-
-    #[cfg(test)]
-    pub(super) fn refresh_variables(&self) -> bool {
-        self.refresh_variables
     }
 }
 
@@ -359,8 +319,6 @@ struct TimerTargetPayload {
 struct BibleTriggerPayload {
     translation: String,
     book: String,
-    #[serde(default)]
-    book_code: Option<String>,
     chapter: u16,
     verse_start: u16,
     #[serde(default)]

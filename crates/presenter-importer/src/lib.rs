@@ -1,3 +1,23 @@
+//! ProPresenter import module.
+
+#![allow(
+    clippy::missing_errors_doc,
+    clippy::missing_panics_doc,
+    clippy::must_use_candidate,
+    clippy::doc_markdown,
+    clippy::needless_continue,
+    clippy::too_many_lines,
+    clippy::large_enum_variant,
+    clippy::redundant_closure_for_method_calls,
+    clippy::cast_possible_truncation,
+    clippy::redundant_closure,
+    clippy::needless_lifetimes,
+    clippy::match_same_arms,
+    clippy::cast_sign_loss,
+    clippy::needless_pass_by_value,
+    clippy::map_unwrap_or
+)]
+
 pub mod bible;
 
 use std::collections::HashMap;

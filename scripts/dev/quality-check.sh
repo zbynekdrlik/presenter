@@ -199,30 +199,30 @@ if [[ -n "${viols:-}" && "${viols}" != "[]" ]]; then
   done < <(echo "$viols" | jq -c '.[]')
 fi
 
-# 8) Format & Lint (strict)
-if ! cargo fmt --all -- --check >/dev/null 2>&1; then
-  fail "cargo fmt reported formatting changes (run: cargo fmt --all)"
-fi
-
-if ! cargo clippy -p presenter-server --tests --no-deps --quiet -- -D warnings >/dev/null 2>&1; then
-  warn "cargo clippy (presenter-server) reported warnings (advisory for this branch; will be enforced next)"
-fi
-
-# 9) Dependency and security checks
-if command -v cargo-deny >/dev/null 2>&1; then
-  if ! cargo deny check >/dev/null 2>&1; then
-    warn "cargo-deny policy violations (see docs/quality/2025-10-roadmap.md)"
+# 8) Format & Lint - Skip in CI (handled by separate jobs)
+if [[ -z "${CI:-}" ]]; then
+  if ! cargo fmt --all -- --check >/dev/null 2>&1; then
+    fail "cargo fmt reported formatting changes (run: cargo fmt --all)"
   fi
-else
-  warn "cargo-deny not installed; skipping (install: cargo install cargo-deny)"
+
+  if ! cargo clippy -p presenter-server --tests --no-deps --quiet -- -D warnings >/dev/null 2>&1; then
+    warn "cargo clippy (presenter-server) reported warnings"
+  fi
 fi
 
-if command -v cargo-audit >/dev/null 2>&1; then
-  if ! cargo audit -q >/dev/null 2>&1; then
-    warn "cargo-audit found vulnerabilities (tracked in docs/quality/2025-10-roadmap.md)"
+# 9) Dependency and security checks - Skip in CI (handled by security.yml)
+if [[ -z "${CI:-}" ]]; then
+  if command -v cargo-deny >/dev/null 2>&1; then
+    if ! cargo deny check >/dev/null 2>&1; then
+      warn "cargo-deny policy violations"
+    fi
   fi
-else
-  warn "cargo-audit not installed; skipping (install: cargo install cargo-audit)"
+
+  if command -v cargo-audit >/dev/null 2>&1; then
+    if ! cargo audit -q >/dev/null 2>&1; then
+      warn "cargo-audit found vulnerabilities"
+    fi
+  fi
 fi
 
 # 10) Production code hygiene (no unwrap/expect/panic)
@@ -250,10 +250,12 @@ if [[ ! -f rust-toolchain.toml ]]; then
   warn "rust-toolchain.toml is missing; pin toolchain for reproducible builds"
 fi
 
-# 13) cargo check warnings (advisory)
-check_out=$(cargo check 2>&1 || true)
-if echo "$check_out" | grep -q "warning:"; then
-  warn "cargo check reported warnings; run clippy/fixes when feasible."
+# 13) cargo check warnings (advisory) - Skip in CI (build already done)
+if [[ -z "${CI:-}" ]]; then
+  check_out=$(cargo check 2>&1 || true)
+  if echo "$check_out" | grep -q "warning:"; then
+    warn "cargo check reported warnings; run clippy/fixes when feasible."
+  fi
 fi
 
 # Emit results

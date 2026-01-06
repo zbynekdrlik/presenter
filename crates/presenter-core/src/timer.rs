@@ -87,13 +87,19 @@ pub struct PreachTimer {
     accumulated: Duration,
 }
 
-impl PreachTimer {
-    pub fn new() -> Self {
+impl Default for PreachTimer {
+    fn default() -> Self {
         Self {
             state: TimerState::Idle,
             started_at: None,
             accumulated: Duration::zero(),
         }
+    }
+}
+
+impl PreachTimer {
+    pub fn new() -> Self {
+        Self::default()
     }
 
     pub fn start(&mut self, now: DateTime<Utc>) {

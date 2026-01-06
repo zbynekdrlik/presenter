@@ -160,11 +160,11 @@ async fn stage_set_command_updates_state_and_emits_event() {
         .await
         .unwrap();
 
-    match response.reply() {
-        Some(OutgoingMessage::Ack { ref command }) => assert_eq!(command, "stage.set"),
+    match &response.reply {
+        Some(OutgoingMessage::Ack { command }) => assert_eq!(command, "stage.set"),
         other => panic!("unexpected response: {other:?}"),
     }
-    assert!(response.refresh_variables());
+    assert!(response.refresh_variables);
     let stage = variables.stage.as_ref().expect("stage variables present");
     assert_eq!(stage.current_slide_id.as_deref(), Some(current_id.as_str()));
 
@@ -199,13 +199,13 @@ async fn timer_command_updates_overview_and_broadcasts() {
     .await
     .unwrap();
 
-    match response.reply() {
-        Some(OutgoingMessage::Ack { ref command }) => {
+    match &response.reply {
+        Some(OutgoingMessage::Ack { command }) => {
             assert_eq!(command, "timer.set_countdown_target")
         }
         other => panic!("unexpected response: {other:?}"),
     }
-    assert!(response.refresh_variables());
+    assert!(response.refresh_variables);
     let timers = variables.timers.as_ref().expect("timers populated");
     assert_eq!(timers.countdown_to_start.target.to_rfc3339(), target);
 
@@ -256,10 +256,10 @@ async fn bible_trigger_and_clear_flow_updates_variables() {
         .await
         .unwrap();
     assert!(matches!(
-        trigger_response.reply(),
-        Some(OutgoingMessage::Ack { ref command }) if command == "bible.trigger"
+        &trigger_response.reply,
+        Some(OutgoingMessage::Ack { command }) if command == "bible.trigger"
     ));
-    assert!(trigger_response.refresh_variables());
+    assert!(trigger_response.refresh_variables);
     assert!(variables.bible.is_some());
 
     let mut saw_bible = false;
@@ -282,10 +282,10 @@ async fn bible_trigger_and_clear_flow_updates_variables() {
         .await
         .unwrap();
     assert!(matches!(
-        clear_response.reply(),
-        Some(OutgoingMessage::Ack { ref command }) if command == "bible.clear"
+        &clear_response.reply,
+        Some(OutgoingMessage::Ack { command }) if command == "bible.clear"
     ));
-    assert!(clear_response.refresh_variables());
+    assert!(clear_response.refresh_variables);
     assert!(variables.bible.is_none());
 
     let mut saw_clear = false;

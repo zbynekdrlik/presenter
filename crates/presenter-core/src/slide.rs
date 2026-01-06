@@ -93,7 +93,7 @@ impl BibleSlideMetadata {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct SlideMetadata {
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -102,7 +102,7 @@ pub struct SlideMetadata {
 
 impl SlideMetadata {
     pub fn new() -> Self {
-        Self { bible: None }
+        Self::default()
     }
 
     pub fn with_bible(mut self, metadata: BibleSlideMetadata) -> Self {

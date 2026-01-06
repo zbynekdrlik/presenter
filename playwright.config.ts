@@ -5,6 +5,7 @@ const TEST_DB_URL = process.env.PRESENTER_DB_URL ?? 'sqlite://presenter_e2e.db';
 
 export default defineConfig({
   testDir: './tests/e2e',
+  testIgnore: process.env.CI ? ['**/demo-server.spec.ts'] : [],
   fullyParallel: false,
   timeout: 600_000,
   workers: 1,

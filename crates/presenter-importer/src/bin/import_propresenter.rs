@@ -1,3 +1,5 @@
+#![allow(clippy::println_empty_string)]
+
 use std::path::PathBuf;
 use std::{env, process};
 
