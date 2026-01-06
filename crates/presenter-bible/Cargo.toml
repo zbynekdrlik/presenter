@@ -12,7 +12,7 @@ async-trait.workspace = true
 presenter-core = { path = "../presenter-core" }
 reqwest.workspace = true
 tokio.workspace = true
-zip = { version = "0.6", default-features = false, features = ["deflate"] }
+zip = { version = "7.0", default-features = false, features = ["deflate"] }
 tracing.workspace = true
 rusqlite = { version = "0.32", features = ["bundled"] }
 tempfile = "3.10"
