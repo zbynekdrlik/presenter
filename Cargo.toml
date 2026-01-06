@@ -41,7 +41,7 @@ utoipa = { version = "4.2", features = ["axum_extras", "chrono", "uuid", "yaml"]
 utoipa-swagger-ui = { version = "4.2", features = ["axum"] }
 sea-orm-migration = "1.1"
 once_cell = "1.20"
-leptos = { version = "0.7", default-features = false, features = ["ssr"] }
+leptos = { version = "0.8", default-features = false, features = ["ssr"] }
 reactive_graph = "0.1.8"
 futures-util = "0.3"
 unicode-normalization = "0.1"
