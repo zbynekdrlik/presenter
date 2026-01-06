@@ -45,11 +45,17 @@ Code → Commit → Push to dev → Monitor CI → Fix failures → Repeat until
 
 ## Git Rules
 
-- **Always push to `dev` branch** - Never to main/master
+- **Always push to `dev` branch** - Never commit directly to main/master
 - **Commit frequently** - Small commits, push often
 - **CI validates everything** - Trust the pipeline
-- **Only users merge PRs** - Agents prepare, users approve
-- **NEVER merge to main/master** - Only the repository owner (human) can merge PRs to main/master. Claude must never execute `git merge`, `gh pr merge`, or any command that merges code to main/master, even if explicitly asked. This requires the human to perform the merge manually.
+- **Merging to main is allowed** only when ALL conditions are met:
+  1. All CI checks are green (passing)
+  2. No skipped, ignored, or disabled tests
+  3. PR has been reviewed or is from dev branch
+  ```bash
+  gh pr merge <number> --squash
+  ```
+- **NEVER commit directly to main/master** - All changes must go through PR process
 
 ### Banned Patterns (Production Code)
 
