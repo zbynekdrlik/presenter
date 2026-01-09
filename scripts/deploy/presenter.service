@@ -17,8 +17,9 @@ Environment=PRESENTER_DB_URL=sqlite:///opt/presenter/presenter.db
 Environment=PRESENTER_LIBRARY_ROOT=/home/newlevel/devel/presenter/presenter-libraries
 Environment=RUST_LOG=info,tower_http=debug
 
-# Security hardening
-NoNewPrivileges=true
+# Security hardening - allow binding to port 80
+AmbientCapabilities=CAP_NET_BIND_SERVICE
+CapabilityBoundingSet=CAP_NET_BIND_SERVICE
 ProtectSystem=strict
 ProtectHome=read-only
 ReadWritePaths=/opt/presenter
