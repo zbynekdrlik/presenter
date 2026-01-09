@@ -33,7 +33,13 @@ jobs:
         run: cargo build --release -p presenter-server
 
       - name: Create deploy directory
-        run: sudo mkdir -p ${{ env.DEPLOY_DIR }}
+        run: |
+          sudo mkdir -p ${{ env.DEPLOY_DIR }}
+          sudo chown newlevel:newlevel ${{ env.DEPLOY_DIR }}
+          # Initialize database if it doesn't exist
+          if [ ! -f ${{ env.DEPLOY_DIR }}/presenter.db ]; then
+            touch ${{ env.DEPLOY_DIR }}/presenter.db
+          fi
 
       - name: Stop service (if running)
         run: |

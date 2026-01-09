@@ -108,13 +108,26 @@ See `docs/architecture.md` for full versioning and release strategy.
 
 This project uses a **local self-hosted runner** to save GitHub Actions costs.
 
-**Runner location:** This machine
+**Runner location:** This machine (same machine where Claude runs)
 **Runner label:** `self-hosted`
+**Runner service:** `actions.runner.zbynekdrlik-presenter.presenter-dev.service`
 
 All workflows run on the local runner, providing:
 - Faster builds (local caching)
 - No GitHub minutes consumed
 - Full access to local resources
+
+**IMPORTANT: Claude manages the local runner.** Since the runner runs on this machine:
+- Only ONE job can run at a time (single runner)
+- Avoid long blocking `sleep` commands that could interfere with job execution
+- If runner appears stuck, check/restart the service:
+  ```bash
+  sudo systemctl restart actions.runner.zbynekdrlik-presenter.presenter-dev.service
+  ```
+- Cancel dependabot runs if they block important PRs:
+  ```bash
+  gh run list --status queued --json databaseId,headBranch | jq -r '.[] | select(.headBranch | startswith("dependabot")) | .databaseId' | xargs -I {} gh run cancel {}
+  ```
 
 ### Workflows
 
