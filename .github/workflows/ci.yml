@@ -24,7 +24,7 @@ jobs:
     name: Format
     runs-on: self-hosted
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
 
       - name: Install Rust toolchain
         uses: dtolnay/rust-toolchain@stable
@@ -42,7 +42,7 @@ jobs:
     runs-on: self-hosted
     needs: fmt
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
 
       - name: Install Rust toolchain
         uses: dtolnay/rust-toolchain@stable
@@ -65,7 +65,7 @@ jobs:
     needs: [fmt, clippy]
     runs-on: self-hosted
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
 
       - name: Install Rust toolchain
         uses: dtolnay/rust-toolchain@stable
@@ -88,7 +88,7 @@ jobs:
     needs: [fmt]
     runs-on: self-hosted
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
 
       - name: Install MSRV toolchain
         uses: dtolnay/rust-toolchain@master
@@ -106,7 +106,7 @@ jobs:
     runs-on: self-hosted
     needs: [fmt]
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
         with:
           fetch-depth: 0
 
@@ -129,7 +129,7 @@ jobs:
     runs-on: self-hosted
     needs: [fmt]
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
 
       - name: Install Rust toolchain
         uses: dtolnay/rust-toolchain@stable
@@ -146,7 +146,7 @@ jobs:
     name: Companion Tests
     runs-on: self-hosted
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
 
       - name: Setup Node.js
         uses: actions/setup-node@v4
@@ -169,7 +169,7 @@ jobs:
     needs: [test, quality]
     if: github.ref == 'refs/heads/main'
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
 
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v3
