@@ -20,3 +20,73 @@ target line count, using binary search for efficient convergence.
 Co-Authored-By: Claude Opus 4.5 <noreply@anthropic.com>
 EOF
 )"
+[2026-01-14 08:33:40] git push origin dev 2>&1
+[2026-01-14 08:33:45] gh run list --limit 5 2>&1
+[2026-01-14 08:33:51] gh run watch 20986152998 2>&1
+[2026-01-14 08:38:59] tail -50 /tmp/claude/-home-newlevel-devel-presenter-presenter-dev2/tasks/b1d9c28.output
+[2026-01-14 08:44:10] gh run list --limit 3 2>&1
+[2026-01-14 08:44:22] tail -100 /tmp/claude/-home-newlevel-devel-presenter-presenter-dev2/tasks/b1d9c28.output 2>/dev/null | tail -50
+[2026-01-14 08:45:44] gh run list --limit 5 2>&1
+[2026-01-14 08:45:50] tail -80 /tmp/claude/-home-newlevel-devel-presenter-presenter-dev2/tasks/b1d9c28.output 2>/dev/null
+[2026-01-14 08:45:55] gh run watch 20986152998 --exit-status 2>&1
+[2026-01-14 09:10:19] gh run list --limit 5 2>&1
+[2026-01-14 09:10:26] gh run view 20986152998 --json jobs --jq '.jobs[] | "\(.name): \(.status) \(.conclusion // "")"' 2>&1
+[2026-01-14 09:10:32] gh run watch 20986152998 --exit-status 2>&1
+[2026-01-14 09:15:39] tail -30 /tmp/claude/-home-newlevel-devel-presenter-presenter-dev2/tasks/b1f7230.output 2>/dev/null
+[2026-01-14 09:15:44] sleep 60 && tail -50 /tmp/claude/-home-newlevel-devel-presenter-presenter-dev2/tasks/b1f7230.output 2>/dev/null
+[2026-01-14 09:16:49] sleep 90 && gh run view 20986152998 --json conclusion,status 2>&1
+[2026-01-14 09:18:26] tail -80 /tmp/claude/-home-newlevel-devel-presenter-presenter-dev2/tasks/b1f7230.output 2>/dev/null
+[2026-01-14 09:18:31] sleep 120 && gh run view 20986152998 --json conclusion,status --jq '"Status: \(.status), Conclusion: \(.conclusion)"' 2>&1
+[2026-01-14 09:20:38] gh run view 20986152998 --json jobs --jq '.jobs[] | "\(.name): \(.status) \(.conclusion // "")"' 2>&1
+[2026-01-14 09:20:46] sleep 180 && gh run view 20986152998 --json jobs --jq '.jobs[] | "\(.name): \(.status) \(.conclusion // "")"' 2>&1
+[2026-01-14 09:23:53] sleep 180 && gh run view 20986152998 --json jobs --jq '.jobs[] | "\(.name): \(.status) \(.conclusion // "")"' 2>&1
+[2026-01-14 09:26:59] tail -40 /tmp/claude/-home-newlevel-devel-presenter-presenter-dev2/tasks/b1f7230.output 2>/dev/null
+[2026-01-14 09:27:05] sleep 180 && gh run view 20986152998 --json jobs --jq '.jobs[] | "\(.name): \(.status) \(.conclusion // "")"' 2>&1
+[2026-01-14 09:30:11] tail -50 /tmp/claude/-home-newlevel-devel-presenter-presenter-dev2/tasks/b1f7230.output 2>/dev/null
+[2026-01-14 09:30:16] sleep 120 && gh run view 20986152998 --json jobs --jq '.jobs[] | "\(.name): \(.status) \(.conclusion // "")"' 2>&1
+[2026-01-14 09:32:22] sleep 120 && gh run view 20986152998 --json jobs --jq '.jobs[] | "\(.name): \(.status) \(.conclusion // "")"' 2>&1
+[2026-01-14 09:34:27] tail -30 /tmp/claude/-home-newlevel-devel-presenter-presenter-dev2/tasks/b1f7230.output 2>/dev/null
+[2026-01-14 09:34:32] sleep 300 && gh run view 20986152998 --json conclusion,status --jq '"Status: \(.status), Conclusion: \(.conclusion)"' 2>&1
+[2026-01-14 09:39:40] gh run view 20986152998 --json jobs --jq '.jobs[] | "\(.name): \(.status) \(.conclusion // "")"' 2>&1
+[2026-01-14 09:39:52] tail -50 /tmp/claude/-home-newlevel-devel-presenter-presenter-dev2/tasks/b1f7230.output 2>/dev/null
+[2026-01-14 09:39:58] gh api repos/zbynekdrlik/presenter/branches/dev/protection 2>&1 | head -40
+[2026-01-14 09:40:08] gh run list --workflow=e2e.yml --limit 3 2>&1
+[2026-01-14 09:40:21] ls -la /home/newlevel/devel/presenter/
+[2026-01-14 09:40:27] rm -rf /home/newlevel/devel/presenter/presenter-dev1 /home/newlevel/devel/presenter/presenter-dev3 /home/newlevel/devel/presenter/presenter-dev4 /home/newlevel/devel/presenter/presenter-main && echo "Deleted: presenter-dev1, presenter-dev3, presenter-dev4, presenter-main"
+[2026-01-14 09:41:05] chmod -R u+w /home/newlevel/devel/presenter/presenter-dev1 /home/newlevel/devel/presenter/presenter-dev3 /home/newlevel/devel/presenter/presenter-dev4 /home/newlevel/devel/presenter/presenter-main 2>/dev/null; rm -rf /home/newlevel/devel/presenter/presenter-dev1 /home/newlevel/devel/presenter/presenter-dev3 /home/newlevel/devel/presenter/presenter-dev4 /home/newlevel/devel/presenter/presenter-main && echo "Successfully deleted folders"
+[2026-01-14 09:41:10] ls -la /home/newlevel/devel/presenter/presenter-dev3/playwright-report/
+[2026-01-14 09:41:16] sudo rm -rf /home/newlevel/devel/presenter/presenter-dev1 /home/newlevel/devel/presenter/presenter-dev3 /home/newlevel/devel/presenter/presenter-dev4 /home/newlevel/devel/presenter/presenter-main && echo "Successfully deleted folders"
+[2026-01-14 09:41:24] ls -la /home/newlevel/devel/presenter/
+[2026-01-14 09:41:35] gh run view 20986152998 --json jobs --jq '.jobs[] | "\(.name): \(.conclusion // .status)"' 2>&1
+[2026-01-14 09:42:53] tail -100 /tmp/claude/-home-newlevel-devel-presenter-presenter-dev2/tasks/b3f8c5a.output 2>/dev/null
+[2026-01-14 09:42:59] gh run view 20986152998 --json conclusion,status 2>&1
+[2026-01-14 09:43:06] sleep 60 && gh run view 20986152998 --json conclusion,status 2>&1
+[2026-01-14 09:44:13] gh api rate_limit 2>&1 | head -20
+[2026-01-14 09:44:21] echo "Rate limit resets at: $(date -d @1768381552)" && echo "Current time: $(date)" && echo "Minutes until reset: $(( (1768381552 - $(date +%s)) / 60 ))"
+[2026-01-14 20:40:12] sleep 300 && gh run view 20986152998 --json conclusion,status,jobs --jq '{status: .status, conclusion: .conclusion, jobs: [.jobs[] | {name: .name, conclusion: .conclusion}]}' 2>&1
+[2026-01-14 20:45:29] gh run view 20986152998 --log-failed 2>&1 | tail -80
+[2026-01-14 20:45:47] gh run list --workflow=ci.yml --limit 5 --json conclusion,headBranch,databaseId,displayTitle --jq '.[] | "\(.databaseId) \(.headBranch) \(.conclusion) \(.displayTitle)"' 2>&1
+[2026-01-14 20:45:58] gh run view 20974980112 --json jobs --jq '.jobs[] | "\(.name): \(.conclusion)"' 2>&1
+[2026-01-14 21:43:29] find /home/newlevel/devel/presenter/presenter-dev2 -name "*docker*" -o -name "*Docker*" 2>/dev/null | head -20
+[2026-01-14 21:44:49] rm -f Dockerfile docker-compose.demo.yml docker-compose.gateway.yml && rm -rf gateway && echo "Removed Docker files"
+[2026-01-14 21:44:56] rm -rf docker scripts/docker var/docker && echo "Removed Docker directories"
+[2026-01-14 21:45:15] rm -f docs/adr/0003-dockerized-demos.md && echo "Removed Docker ADR"
+[2026-01-14 21:45:20] git status --short
+[2026-01-14 21:45:28] git add -A && git commit -m "$(cat <<'EOF'
+chore: remove Docker infrastructure
+
+Docker adds unnecessary complexity for a single-binary Rust application.
+Deployment is simplified to downloading the release binary via curl.
+
+Removed:
+- Dockerfile and docker-compose files
+- Gateway service (Node.js demo landing page)
+- Docker helper scripts
+- ADR-0003 (dockerized demos)
+- Docker Build CI job
+
+🤖 Generated with [Claude Code](https://claude.com/claude-code)
+
+Co-Authored-By: Claude Opus 4.5 <noreply@anthropic.com>
+EOF
+)"
