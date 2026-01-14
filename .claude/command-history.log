@@ -90,3 +90,30 @@ Removed:
 Co-Authored-By: Claude Opus 4.5 <noreply@anthropic.com>
 EOF
 )"
+[2026-01-14 21:45:33] git push origin dev 2>&1
+[2026-01-14 21:45:42] gh run list --limit 3 2>&1
+[2026-01-14 21:45:49] gh run watch 21009257123 --exit-status 2>&1 &
+echo "Monitoring CI run 21009257123 in background"
+[2026-01-14 21:51:18] gh run view 21009257123 --json jobs --jq '.jobs[] | "\(.name): \(.status) \(.conclusion // "")"' 2>&1
+[2026-01-14 21:51:25] tail -30 /tmp/claude/-home-newlevel-devel-presenter-presenter-dev2/tasks/be7df6f.output 2>/dev/null
+[2026-01-14 21:52:02] chmod +x scripts/install.sh
+[2026-01-14 21:52:11] gh run view 21009257123 --json jobs --jq '.jobs[] | "\(.name): \(.status) \(.conclusion // "")"' 2>&1
+[2026-01-14 21:52:20] git add -A && git commit -m "$(cat <<'EOF'
+feat: add curl one-liner install script
+
+Adds scripts/install.sh for simple installation:
+  curl -fsSL https://raw.githubusercontent.com/.../install.sh | bash
+
+Features:
+- Auto-detects OS and architecture
+- Downloads latest release from GitHub
+- Installs binary to /usr/local/bin (configurable)
+- Creates data directory
+
+Also removes Docker release job from release workflow.
+
+🤖 Generated with [Claude Code](https://claude.com/claude-code)
+
+Co-Authored-By: Claude Opus 4.5 <noreply@anthropic.com>
+EOF
+)" && git push origin dev 2>&1
