@@ -214,31 +214,92 @@ fn StageDisplayDocument(
     sendJson({{ type: 'stage_heartbeat_ack', client_id: clientId, heartbeat_id: heartbeatId }});
   }};
 
+  // SNV Scaler constants
+  const MIN_FONT_PX = 8;
+  const FIT_LINE_TARGET = 2;
+  const FIT_LINE_TOLERANCE = 0.02;
+  const LINE_HEIGHT_FALLBACK = 1.12;
+
+  // Count visual lines using DOM range measurement (more accurate than scrollHeight)
+  const countVisualLines = (el) => {{
+    try {{
+      if (!(el && el.firstChild)) return 0;
+      const range = document.createRange();
+      const rects = [];
+      const text = (el.textContent || '').replace(/\s+$/, '');
+      for (let i = 0; i < text.length; i += 1) {{
+        range.setStart(el.firstChild, i);
+        range.setEnd(el.firstChild, i + 1);
+        const r = range.getBoundingClientRect();
+        if (r && r.width > 0 && r.height > 0) rects.push(r);
+      }}
+      rects.sort((a, b) => a.top - b.top);
+      let clusters = 0;
+      let last = -1e9;
+      for (const r of rects) {{
+        if (r.top - last > 2) {{ clusters += 1; last = r.top; }}
+      }}
+      return clusters;
+    }} catch (_) {{ return 0; }}
+  }};
+
+  // Binary search font fitting (O(log n) convergence)
   const fitTextElement = (element, baseRem, minRem = 2.4, maxLines = 2) => {{
     if (!element) return;
-    let size = baseRem;
-    const applySize = (value) => {{
-      size = Math.max(value, minRem);
-      element.style.fontSize = `${{size}}rem`;
-    }};
-    applySize(baseRem);
+    const rootSize = parseFloat(getComputedStyle(document.documentElement).fontSize) || 16;
+    const basePx = Math.max(MIN_FONT_PX, (baseRem || 14) * rootSize);
+    const minPx = Math.max(MIN_FONT_PX, (minRem || 1.0) * rootSize);
+    const cap = maxLines + FIT_LINE_TOLERANCE;
 
-    const measureLines = () => {{
-      const style = window.getComputedStyle(element);
-      const lineHeight = parseFloat(style.lineHeight || '0');
-      if (!lineHeight) {{
-        return 0;
+    const measureLines = (px) => {{
+      const fs = Math.max(MIN_FONT_PX, px);
+      const rem = fs / rootSize;
+      element.style.fontSize = `${{rem}}rem`;
+      // Try visual line counting first (more accurate)
+      const visual = countVisualLines(element);
+      if (visual > 0) return visual;
+      // Fallback to scrollHeight calculation
+      const style = getComputedStyle(element);
+      let lh = parseFloat(style.lineHeight || '0');
+      const fspx = parseFloat(style.fontSize || String(fs)) || fs;
+      if (!Number.isFinite(lh) || lh <= 0) {{
+        lh = fspx * LINE_HEIGHT_FALLBACK;
+      }} else if (!/px\b/i.test(String(style.lineHeight)) && lh < 4) {{
+        lh = lh * fspx;
       }}
-      return Math.ceil(element.scrollHeight / lineHeight);
+      const padT = parseFloat(style.paddingTop || '0') || 0;
+      const padB = parseFloat(style.paddingBottom || '0') || 0;
+      return lh > 0 ? Math.max(0, element.scrollHeight - padT - padB) / lh : 0;
     }};
 
-    let lines = measureLines();
-    let iterations = 0;
-    while (lines > maxLines && size > minRem && iterations < 40) {{
-      applySize(size - 0.15);
-      lines = measureLines();
-      iterations += 1;
+    // Check if base size already fits
+    if (measureLines(basePx) <= cap) {{
+      element.style.fontSize = `${{baseRem}}rem`;
+      return;
     }}
+
+    // Binary search for optimal font size
+    let low = minPx;
+    let high = basePx;
+    let best = low;
+
+    // Pre-check at minimum
+    if (measureLines(low) > cap) {{
+      element.style.fontSize = `${{minRem}}rem`;
+      return;
+    }}
+
+    for (let i = 0; i < 36 && high - low > 0.5; i += 1) {{
+      const mid = (low + high) / 2;
+      if (measureLines(mid) <= cap) {{
+        best = mid;
+        low = mid;
+      }} else {{
+        high = mid;
+      }}
+    }}
+
+    element.style.fontSize = `${{best / rootSize}}rem`;
   }};
 
   const fitLyrics = (snapshotLayout) => {{

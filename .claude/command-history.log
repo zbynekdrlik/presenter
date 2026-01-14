@@ -1,0 +1,22 @@
+[2026-01-14 08:32:50] git checkout -B dev origin/dev && git log --oneline -3
+[2026-01-14 08:32:55] grep -n "fitTextElement" crates/presenter-server/src/stage_ui.rs | head -5
+[2026-01-14 08:33:27] git diff --stat
+[2026-01-14 08:33:35] git add -A && git commit -m "$(cat <<'EOF'
+feat(stage): add SNV scaler binary search algorithm for text fitting
+
+Extracts the binary search font fitting algorithm from presenter-dev1's
+SNV scaler feature branch. Key improvements:
+
+- Binary search convergence (O(log n) vs linear O(n))
+- Visual line counting using DOM ranges (more accurate than scrollHeight)
+- Proper line-height handling (unitless vs px)
+- Tolerance-based fitting (FIT_LINE_TARGET + FIT_LINE_TOLERANCE)
+
+The algorithm finds the largest font size that keeps text within the
+target line count, using binary search for efficient convergence.
+
+🤖 Generated with [Claude Code](https://claude.com/claude-code)
+
+Co-Authored-By: Claude Opus 4.5 <noreply@anthropic.com>
+EOF
+)"
