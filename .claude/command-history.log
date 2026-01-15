@@ -222,3 +222,16 @@ chore: bump version to 0.1.0-dev.2 and fix LAN IP
 Co-Authored-By: Claude Opus 4.5 <noreply@anthropic.com>
 EOF
 )" && git push origin dev 2>&1
+[2026-01-15 07:09:37] git add -A && git commit -m "$(cat <<'EOF'
+ci(version): enforce version must be greater than latest release
+
+Adds check that compares current Cargo.toml version against latest
+GitHub release. Fails CI if version is not increasing.
+
+This ensures curl install script always gets newer versions.
+
+🤖 Generated with [Claude Code](https://claude.com/claude-code)
+
+Co-Authored-By: Claude Opus 4.5 <noreply@anthropic.com>
+EOF
+)" && git push origin dev 2>&1
