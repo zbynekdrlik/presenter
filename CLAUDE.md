@@ -323,14 +323,14 @@ cargo clippy -- -D warnings    # Must pass
 
 ## User Preferences
 
-### Public IP (NOT localhost)
+### LAN IP (NOT localhost)
 
-The user accesses the server remotely. **Always provide public IP URLs, never localhost.**
+The user accesses the server from another machine on the same network. **Always provide LAN IP URLs, never localhost.**
 
-**Public IP:** `85.248.11.235`
+**LAN IP:** `10.77.9.205` (default route interface)
 
 When providing URLs, use:
 
-- http://85.248.11.235/ui/operator (NOT http://localhost/ui/operator)
-- http://85.248.11.235/stage (NOT http://localhost/stage)
-- http://85.248.11.235/healthz (NOT http://localhost/healthz)
+- http://10.77.9.205/ui/operator (NOT http://localhost/ui/operator)
+- http://10.77.9.205/stage (NOT http://localhost/stage)
+- http://10.77.9.205/healthz (NOT http://localhost/healthz)

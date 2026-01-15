@@ -117,3 +117,108 @@ Also removes Docker release job from release workflow.
 Co-Authored-By: Claude Opus 4.5 <noreply@anthropic.com>
 EOF
 )" && git push origin dev 2>&1
+[2026-01-14 21:52:27] gh run list --limit 3 2>&1
+[2026-01-14 21:52:36] gh run cancel 21009257123 2>&1 || true
+[2026-01-14 21:52:42] cargo build -p presenter-server 2>&1
+[2026-01-14 21:52:48] cargo run -p presenter-server 2>&1 &
+sleep 3
+echo "Server started in background"
+[2026-01-14 21:52:53] sleep 5 && curl -s http://localhost:80/healthz 2>&1 || curl -s http://localhost:8080/healthz 2>&1 || echo "Checking server output..."
+[2026-01-14 21:53:03] gh run view 21009439678 --json jobs --jq '.jobs[] | "\(.name): \(.status) \(.conclusion // "")"' 2>&1
+[2026-01-14 21:53:12] gh run watch 21009439678 --exit-status 2>&1 &
+echo "Monitoring CI in background"
+[2026-01-14 21:55:16] tail -20 /tmp/claude/-home-newlevel-devel-presenter-presenter-dev2/tasks/b47dc2a.output 2>/dev/null
+[2026-01-14 21:55:23] pkill -f "presenter-server" 2>/dev/null || true
+PRESENTER_PORT=8080 cargo run -p presenter-server 2>&1 &
+sleep 3
+curl -s http://localhost:8080/healthz
+[2026-01-14 21:55:29] sleep 5 && curl -s http://localhost:8080/healthz 2>&1
+[2026-01-14 21:55:35] tail -20 /tmp/claude/-home-newlevel-devel-presenter-presenter-dev2/tasks/b7fc21b.output 2>/dev/null
+[2026-01-14 21:55:40] tail -30 /tmp/claude/-home-newlevel-devel-presenter-presenter-dev2/tasks/ba0dd81.output 2>/dev/null
+[2026-01-14 21:55:44] pgrep -f "presenter-server" && echo "Server is running" || echo "Server not running"
+[2026-01-14 21:55:50] pkill -9 -f "presenter-server" 2>/dev/null; sleep 1; PRESENTER_PORT=8080 cargo run -p presenter-server 2>&1 &
+sleep 5
+curl -s http://localhost:8080/healthz
+[2026-01-14 21:55:54] sleep 5 && curl -s http://localhost:8080/healthz 2>&1 || ps aux | grep presenter
+[2026-01-14 21:56:11] ss -tlnp 2>/dev/null | grep -E "(8080|80|presenter)" || netstat -tlnp 2>/dev/null | grep -E "(8080|80)"
+[2026-01-14 21:56:19] curl -s http://localhost:80/healthz
+[2026-01-14 21:56:27] gh run view 21009439678 --json jobs --jq '.jobs[] | "\(.name): \(.status) \(.conclusion // "")"' 2>&1
+[2026-01-14 21:56:34] sleep 60 && gh run view 21009439678 --json jobs --jq '.jobs[] | "\(.name): \(.status) \(.conclusion // "")"' 2>&1
+[2026-01-14 21:57:41] tail -30 /tmp/claude/-home-newlevel-devel-presenter-presenter-dev2/tasks/b7fc21b.output 2>/dev/null
+[2026-01-14 21:57:46] sleep 120 && gh run view 21009439678 --json jobs --jq '.jobs[] | "\(.name): \(.status) \(.conclusion // "")"' 2>&1
+[2026-01-14 22:01:53] gh run list --limit 5 2>&1
+[2026-01-14 22:02:09] sleep 180 && gh run list --limit 3 --json status,conclusion,databaseId,displayTitle --jq '.[] | "\(.databaseId): \(.status) \(.conclusion // "")"' 2>&1
+[2026-01-14 22:05:15] tail -40 /tmp/claude/-home-newlevel-devel-presenter-presenter-dev2/tasks/b7fc21b.output 2>/dev/null
+[2026-01-14 22:05:21] gh run view 21009439720 --json jobs --jq '.jobs[] | "\(.name): \(.status) \(.conclusion // "")"' 2>&1
+[2026-01-14 22:08:05] gh run list --limit 3 --json status,conclusion,databaseId,displayTitle --jq '.[] | "\(.databaseId): \(.status) \(.conclusion // "") - \(.displayTitle)"' 2>&1
+[2026-01-14 22:08:11] gh run view 21009439678 --json jobs --jq '.jobs[] | "\(.name): \(.status) \(.conclusion // "")"' 2>&1
+[2026-01-14 22:08:18] sleep 300 && gh run view 21009439678 --json conclusion,status,jobs --jq '{status: .status, conclusion: .conclusion, jobs: [.jobs[] | {name: .name, conclusion: .conclusion}]}' 2>&1
+[2026-01-14 22:13:32] gh run view 21009439678 --json jobs --jq '.jobs[] | "\(.name): \(.status) \(.conclusion // "")"' 2>&1
+[2026-01-14 22:13:39] sleep 600 && gh run view 21009439678 --json conclusion,status --jq '"Status: \(.status), Conclusion: \(.conclusion)"' 2>&1
+[2026-01-14 22:23:46] gh run view 21009439678 --json jobs --jq '.jobs[] | "\(.name): \(.status) \(.conclusion // "")"' 2>&1
+[2026-01-14 22:23:54] sleep 600 && gh run view 21009439678 --json conclusion,status,jobs --jq '{status: .status, conclusion: .conclusion, jobs: [.jobs[] | {name: .name, status: .status, conclusion: .conclusion}]}' 2>&1
+[2026-01-14 22:34:02] sleep 600 && gh run view 21009439678 --json conclusion,status --jq '"Status: \(.status), Conclusion: \(.conclusion)"' 2>&1
+[2026-01-14 22:44:16] gh release list --limit 3 2>&1
+[2026-01-14 22:44:24] pkill -9 -f "presenter-server" 2>/dev/null || true; sleep 2
+[2026-01-14 22:44:32] curl -s http://localhost:80/healthz 2>&1 || echo "Server not running"
+[2026-01-15 00:20:54] cargo build --release -p presenter-server 2>&1
+[2026-01-15 00:22:58] mkdir -p /tmp/presenter-release && cp target/release/presenter-server /tmp/presenter-release/ && cp target/release/import_propresenter /tmp/presenter-release/ 2>/dev/null || true && cp target/release/ingest_bibles /tmp/presenter-release/ 2>/dev/null || true && tar -czvf /tmp/presenter-0.1.0-dev.1-linux-x64.tar.gz -C /tmp/presenter-release . && ls -la /tmp/presenter-0.1.0-dev.1-linux-x64.tar.gz
+[2026-01-15 00:23:05] gh release create v0.1.0-dev.1 \
+  /tmp/presenter-0.1.0-dev.1-linux-x64.tar.gz \
+  --title "v0.1.0-dev.1 (Development Preview)" \
+  --notes "Development preview release for testing curl installer.
+
+Install with:
+\`\`\`bash
+curl -fsSL https://raw.githubusercontent.com/zbynekdrlik/presenter/main/scripts/install.sh | bash
+\`\`\`
+
+Or specify this version:
+\`\`\`bash
+PRESENTER_VERSION=0.1.0-dev.1 curl -fsSL https://raw.githubusercontent.com/zbynekdrlik/presenter/main/scripts/install.sh | bash
+\`\`\`" \
+  --prerelease 2>&1
+[2026-01-15 00:23:17] pkill -9 -f "presenter-server" 2>/dev/null || true; sleep 2
+rm -f /usr/local/bin/presenter-server 2>/dev/null || true
+PRESENTER_VERSION=0.1.0-dev.1 PRESENTER_DIR=/tmp/presenter-test bash -c "$(curl -fsSL https://raw.githubusercontent.com/zbynekdrlik/presenter/dev/scripts/install.sh)" 2>&1
+[2026-01-15 00:23:21] curl -fsSL https://raw.githubusercontent.com/zbynekdrlik/presenter/dev/scripts/install.sh 2>&1 | head -20
+[2026-01-15 00:23:28] PRESENTER_VERSION=0.1.0-dev.1 PRESENTER_DIR=/tmp/presenter-test bash scripts/install.sh 2>&1
+[2026-01-15 00:23:35] gh release view v0.1.0-dev.1 --json assets --jq '.assets[].name' 2>&1
+[2026-01-15 00:23:40] gh release view v0.1.0-dev.1 --json assets --jq '.assets[].url' 2>&1
+[2026-01-15 00:23:46] curl -fsSL -I "https://github.com/zbynekdrlik/presenter/releases/download/v0.1.0-dev.1/presenter-0.1.0-dev.1-linux-x64.tar.gz" 2>&1 | head -10
+[2026-01-15 00:23:51] gh release view v0.1.0-dev.1 2>&1
+[2026-01-15 00:23:59] gh release download v0.1.0-dev.1 --pattern "*.tar.gz" --dir /tmp/test-download 2>&1 && ls -la /tmp/test-download/
+[2026-01-15 00:24:06] curl -L -o /tmp/test.tar.gz "https://github.com/zbynekdrlik/presenter/releases/download/v0.1.0-dev.1/presenter-0.1.0-dev.1-linux-x64.tar.gz" 2>&1 && ls -la /tmp/test.tar.gz
+[2026-01-15 00:24:11] cat /tmp/test.tar.gz
+[2026-01-15 00:24:16] gh repo view zbynekdrlik/presenter --json visibility 2>&1
+[2026-01-15 00:24:27] pkill -9 -f "presenter-server" 2>/dev/null; sleep 2
+sudo /home/newlevel/devel/presenter/presenter-dev2/target/release/presenter-server 2>&1 &
+sleep 3
+curl -s http://localhost:80/healthz
+[2026-01-15 00:24:31] sleep 2 && curl -s http://localhost:80/healthz 2>&1 || ps aux | grep presenter
+[2026-01-15 07:06:06] curl -s ifconfig.me 2>/dev/null || curl -s icanhazip.com 2>/dev/null
+[2026-01-15 07:06:25] git add CLAUDE.md && git commit -m "$(cat <<'EOF'
+docs(claude): add user preference for public IP URLs
+
+User accesses server remotely - always provide public IP (85.248.11.235)
+instead of localhost URLs.
+
+🤖 Generated with [Claude Code](https://claude.com/claude-code)
+
+Co-Authored-By: Claude Opus 4.5 <noreply@anthropic.com>
+EOF
+)" && git push origin dev 2>&1
+[2026-01-15 07:07:41] ip route get 1 | awk '{print $7; exit}'
+[2026-01-15 07:07:42] grep -E "^version" Cargo.toml | head -1
+[2026-01-15 07:08:01] git add -A && git commit -m "$(cat <<'EOF'
+chore: bump version to 0.1.0-dev.2 and fix LAN IP
+
+- Increment dev version (CI should enforce increasing versions)
+- Fix CLAUDE.md to use LAN IP (10.77.9.205) not public IP
+- User is on same network, different machine
+
+🤖 Generated with [Claude Code](https://claude.com/claude-code)
+
+Co-Authored-By: Claude Opus 4.5 <noreply@anthropic.com>
+EOF
+)" && git push origin dev 2>&1
