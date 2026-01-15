@@ -1862,3 +1862,14 @@ body.operator[data-view="settings"] [data-view-panel="settings"] {
     font-weight: 500;
 }
 
+
+/* Version footer */
+.operator__version {
+    position: fixed;
+    bottom: 0.5rem;
+    right: 0.75rem;
+    font-size: 0.7rem;
+    color: rgba(255, 255, 255, 0.35);
+    pointer-events: none;
+    z-index: 9999;
+}

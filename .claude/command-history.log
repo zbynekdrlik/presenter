@@ -235,3 +235,53 @@ This ensures curl install script always gets newer versions.
 Co-Authored-By: Claude Opus 4.5 <noreply@anthropic.com>
 EOF
 )" && git push origin dev 2>&1
+[2026-01-15 07:09:45] gh run list --limit 1 --json databaseId,status --jq '.[0] | "\(.databaseId): \(.status)"' 2>&1
+[2026-01-15 07:09:52] sleep 30 && gh run view 21021616574 --json jobs --jq '.jobs[] | "\(.name): \(.status) \(.conclusion // "")"' 2>&1
+[2026-01-15 07:10:30] gh run list --workflow=version-check.yml --limit 1 --json databaseId,status,conclusion --jq '.[0]' 2>&1
+[2026-01-15 07:17:41] gh release view v0.1.0-dev.1 --json targetCommitish,tagName --jq '.' 2>&1
+[2026-01-15 07:19:18] curl -s http://10.77.9.205/healthz 2>&1
+[2026-01-15 07:19:25] cargo build --release -p presenter-server 2>&1 | tail -5
+[2026-01-15 07:21:43] sudo pkill -9 -f "presenter-server" 2>/dev/null; sleep 2
+sudo /home/newlevel/devel/presenter/presenter-dev2/target/release/presenter-server &
+sleep 3
+curl -s http://10.77.9.205/healthz
+[2026-01-15 07:21:47] sleep 3 && curl -s http://10.77.9.205/healthz 2>&1
+[2026-01-15 07:21:56] ps aux | grep presenter-server | grep -v grep
+[2026-01-15 07:22:02] sudo pkill -9 -f "presenter-server"; sudo pkill -9 -f "demo-entrypoint"; sleep 2
+ps aux | grep presenter | grep -v grep || echo "All presenter processes killed"
+[2026-01-15 07:22:08] ps aux | grep presenter-server | grep -v grep || echo "No presenter-server running"
+[2026-01-15 07:22:15] systemctl list-units --type=service | grep -i presenter || docker ps | grep -i presenter || echo "Not a systemd/docker service"
+[2026-01-15 07:22:21] sudo systemctl cat presenter.service 2>&1
+[2026-01-15 07:22:27] sudo cp /home/newlevel/devel/presenter/presenter-dev2/target/release/presenter-server /opt/presenter/presenter-server && sudo systemctl restart presenter.service && sleep 3 && curl -s http://10.77.9.205/healthz
+[2026-01-15 07:22:44] sudo systemctl stop presenter.service && sleep 2 && sudo cp /home/newlevel/devel/presenter/presenter-dev2/target/release/presenter-server /opt/presenter/presenter-server && sudo systemctl start presenter.service && sleep 3 && curl -s http://10.77.9.205/healthz
+[2026-01-15 07:23:01] grep -n "version\|footer\|VERSION" crates/presenter-server/src/ui/operator.rs | head -20
+[2026-01-15 07:23:18] grep -n "</body>\|</html>" crates/presenter-server/src/ui/operator.rs | head -5
+[2026-01-15 07:23:39] grep -n "\.operator__" crates/presenter-server/src/ui/styles/operator.css | tail -5
+[2026-01-15 07:23:50] tail -10 crates/presenter-server/src/ui/styles/operator.css
+[2026-01-15 07:23:56] cat >> crates/presenter-server/src/ui/styles/operator.css << 'EOF'
+
+/* Version footer */
+.operator__version {
+    position: fixed;
+    bottom: 0.5rem;
+    right: 0.75rem;
+    font-size: 0.7rem;
+    color: rgba(255, 255, 255, 0.35);
+    pointer-events: none;
+    z-index: 9999;
+}
+EOF
+echo "CSS added"
+[2026-01-15 07:24:01] cargo build --release -p presenter-server 2>&1 | tail -3
+[2026-01-15 07:26:38] sudo systemctl stop presenter.service && sleep 1 && sudo cp target/release/presenter-server /opt/presenter/presenter-server && sudo systemctl start presenter.service && sleep 3 && curl -s http://10.77.9.205/healthz
+[2026-01-15 07:26:50] git add -A && git commit -m "$(cat <<'EOF'
+feat(ui): display version in operator UI footer
+
+Shows version number in bottom-right corner of operator UI.
+Helps identify which version is running on the server.
+
+🤖 Generated with [Claude Code](https://claude.com/claude-code)
+
+Co-Authored-By: Claude Opus 4.5 <noreply@anthropic.com>
+EOF
+)" && git push origin dev 2>&1

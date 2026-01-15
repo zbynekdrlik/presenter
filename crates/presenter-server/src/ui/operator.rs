@@ -1,4 +1,4 @@
-use crate::{ableset::AbleSetStatusSnapshot, state::AppState};
+use crate::{ableset::AbleSetStatusSnapshot, router::VERSION, state::AppState};
 use axum::response::Html;
 use leptos::prelude::*;
 use presenter_core::{playlist::PlaylistEntryKind, TimersOverview};
@@ -504,6 +504,7 @@ pub fn OperatorDocument(
                         </div>
                     </div>
                     <script>{operator_script}</script>
+                    <footer class="operator__version">"v"{VERSION}</footer>
                 </body>
             </html>
         }
