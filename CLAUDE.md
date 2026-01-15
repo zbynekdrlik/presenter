@@ -17,16 +17,19 @@ Code → Commit → Push to dev → Monitor CI → Fix failures → Repeat until
 ### The Loop (execute without asking)
 
 1. **Commit and push immediately** - No confirmation needed
+
    ```bash
    git add -A && git commit -m "..." && git push origin dev
    ```
 
 2. **Monitor CI until completion**
+
    ```bash
    gh run watch
    ```
 
 3. **If CI fails: fix and repeat from step 1**
+
    ```bash
    gh run view --log-failed  # See what failed
    # Fix the issue
@@ -53,24 +56,25 @@ Code → Commit → Push to dev → Monitor CI → Fix failures → Repeat until
 
 ### Banned Patterns (Production Code)
 
-| Pattern | Why Banned | Alternative |
-|---------|------------|-------------|
-| `unwrap()` | Panics in production | Use `?`, `ok_or()`, or handle `None`/`Err` |
-| `expect()` | Panics in production | Use `?` with context via `anyhow`/`thiserror` |
-| `panic!` | Crashes the service | Return `Result` or `Option` |
-| `std::thread::sleep` | Blocks async runtime | Use `tokio::time::sleep` |
-| `.only` / `.skip` | Leaves incomplete test coverage | Remove before commit |
+| Pattern              | Why Banned                      | Alternative                                   |
+| -------------------- | ------------------------------- | --------------------------------------------- |
+| `unwrap()`           | Panics in production            | Use `?`, `ok_or()`, or handle `None`/`Err`    |
+| `expect()`           | Panics in production            | Use `?` with context via `anyhow`/`thiserror` |
+| `panic!`             | Crashes the service             | Return `Result` or `Option`                   |
+| `std::thread::sleep` | Blocks async runtime            | Use `tokio::time::sleep`                      |
+| `.only` / `.skip`    | Leaves incomplete test coverage | Remove before commit                          |
 
 **Note:** Test code (`#[cfg(test)]` modules) is exempt from panic rules.
 
 ### File/Function Limits (Enforced by CI)
 
-| Metric | Warning | Hard Fail | Exempt |
-|--------|---------|-----------|--------|
-| File lines | >800 | >1000 | Migrations, tests |
-| Function lines | - | >60 | Migrations, UI renders, router builders |
+| Metric         | Warning | Hard Fail | Exempt                                  |
+| -------------- | ------- | --------- | --------------------------------------- |
+| File lines     | >800    | >1000     | Migrations, tests                       |
+| Function lines | -       | >60       | Migrations, UI renders, router builders |
 
 **Exempt patterns:**
+
 - `m*_create_*.rs` - Migration files (declarative schema definitions)
 - `render_*_ui` functions - Leptos component renders (HTML-like DSL)
 - `build_router` functions - Route declarations
@@ -81,10 +85,10 @@ Code → Commit → Push to dev → Monitor CI → Fix failures → Repeat until
 
 The project uses **Semantic Versioning** with branch-specific formats:
 
-| Branch | Version Format | Example |
-|--------|----------------|---------|
-| `dev` | `X.Y.Z-dev.N` | `0.1.0-dev.1` |
-| `main` | `X.Y.Z` | `0.1.0` |
+| Branch | Version Format | Example       |
+| ------ | -------------- | ------------- |
+| `dev`  | `X.Y.Z-dev.N`  | `0.1.0-dev.1` |
+| `main` | `X.Y.Z`        | `0.1.0`       |
 
 **Version location:** `Cargo.toml` workspace `[workspace.package].version`
 
@@ -106,19 +110,20 @@ This project uses a **local self-hosted runner** to save GitHub Actions costs.
 **Runner label:** `self-hosted`
 
 All workflows run on the local runner, providing:
+
 - Faster builds (local caching)
 - No GitHub minutes consumed
 - Full access to local resources
 
 ### Workflows
 
-| Workflow | Trigger | Purpose |
-|----------|---------|---------|
-| `ci.yml` | Push to `dev`/`main`, PRs | Format, lint, test, quality |
-| `e2e.yml` | Push to `dev`/`main`, PRs | Playwright E2E tests |
-| `version-check.yml` | Push to `dev`/`main`, PRs | Validate version format |
-| `security.yml` | Weekly + manual | Vulnerability scanning |
-| `release.yml` | Push to `main` | release-please, artifacts, Docker |
+| Workflow            | Trigger                   | Purpose                           |
+| ------------------- | ------------------------- | --------------------------------- |
+| `ci.yml`            | Push to `dev`/`main`, PRs | Format, lint, test, quality       |
+| `e2e.yml`           | Push to `dev`/`main`, PRs | Playwright E2E tests              |
+| `version-check.yml` | Push to `dev`/`main`, PRs | Validate version format           |
+| `security.yml`      | Weekly + manual           | Vulnerability scanning            |
+| `release.yml`       | Push to `main`            | release-please, artifacts, Docker |
 
 ### Monitoring CI
 
@@ -143,6 +148,7 @@ gh run rerun <run-id> --failed
 Presenter is a monolithic Rust application for church worship services, providing lyrics display, Bible passages, timers, and stage displays.
 
 **Key Documentation:**
+
 - Domain specifics: `docs/functional-needs.md`
 - System architecture: `docs/architecture.md`
 - Configuration reference: `docs/configuration.md`
@@ -209,27 +215,27 @@ crates/
 
 ### Key HTTP Endpoints
 
-| Endpoint | Purpose |
-|----------|---------|
-| `/healthz` | Readiness probe |
-| `/ui/operator` | Desktop control surface |
-| `/ui/tablet` | Touch-optimized controller |
-| `/ui/bible` | Bible search/trigger UI |
-| `/stage` | HTML stage display |
-| `/live/ws` | Live updates (timers, stage) |
-| `/companion/ws` | Bitfocus Companion control |
+| Endpoint        | Purpose                      |
+| --------------- | ---------------------------- |
+| `/healthz`      | Readiness probe              |
+| `/ui/operator`  | Desktop control surface      |
+| `/ui/tablet`    | Touch-optimized controller   |
+| `/ui/bible`     | Bible search/trigger UI      |
+| `/stage`        | HTML stage display           |
+| `/live/ws`      | Live updates (timers, stage) |
+| `/companion/ws` | Bitfocus Companion control   |
 
 ---
 
 ## Environment Variables
 
-| Variable | Default | Purpose |
-|----------|---------|---------|
-| `PRESENTER_PORT` | 80 | Server port |
-| `PRESENTER_DB_URL` | `sqlite://presenter.db` | Database connection |
-| `PRESENTER_COMPANION_ENABLED` | 0 | Enable Companion socket |
-| `PRESENTER_COMPANION_PORT` | 18175 | Companion listen port |
-| `RUST_LOG` | `info,tower_http=debug` | Tracing filter |
+| Variable                      | Default                 | Purpose                 |
+| ----------------------------- | ----------------------- | ----------------------- |
+| `PRESENTER_PORT`              | 80                      | Server port             |
+| `PRESENTER_DB_URL`            | `sqlite://presenter.db` | Database connection     |
+| `PRESENTER_COMPANION_ENABLED` | 0                       | Enable Companion socket |
+| `PRESENTER_COMPANION_PORT`    | 18175                   | Companion listen port   |
+| `RUST_LOG`                    | `info,tower_http=debug` | Tracing filter          |
 
 ---
 
@@ -312,3 +318,19 @@ cargo clippy -- -D warnings    # Must pass
 - **Church-specific**: Solve exact requirements for our workflows
 - **Greenfield redesigns**: Treat redesigns as fresh starts
 - **CI-first**: GitHub Actions validates everything, local testing confirms
+
+---
+
+## User Preferences
+
+### Public IP (NOT localhost)
+
+The user accesses the server remotely. **Always provide public IP URLs, never localhost.**
+
+**Public IP:** `85.248.11.235`
+
+When providing URLs, use:
+
+- http://85.248.11.235/ui/operator (NOT http://localhost/ui/operator)
+- http://85.248.11.235/stage (NOT http://localhost/stage)
+- http://85.248.11.235/healthz (NOT http://localhost/healthz)
