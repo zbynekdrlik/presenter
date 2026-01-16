@@ -30,11 +30,12 @@ impl Repository {
 
         let cap = limit.clamp(1, 100) as usize;
         let mut results = Vec::with_capacity(cap);
-        let mut library_names: HashMap<String, String> = HashMap::new();
-        let mut seen_library_ids: HashSet<String> = HashSet::new();
-        let mut seen_presentation_ids: HashSet<String> = HashSet::new();
-        let mut seen_slide_ids: HashSet<String> = HashSet::new();
-        let mut matched_library_ids: HashSet<String> = HashSet::new();
+        // Pre-allocate collections based on expected result count to avoid rehashing
+        let mut library_names: HashMap<String, String> = HashMap::with_capacity(cap);
+        let mut seen_library_ids: HashSet<String> = HashSet::with_capacity(cap);
+        let mut seen_presentation_ids: HashSet<String> = HashSet::with_capacity(cap);
+        let mut seen_slide_ids: HashSet<String> = HashSet::with_capacity(cap);
+        let mut matched_library_ids: HashSet<String> = HashSet::with_capacity(cap);
 
         let mut remaining = cap;
 
@@ -339,17 +340,21 @@ impl Repository {
     }
 }
 
+/// Builds a context snippet around the matched query.
+/// Optimized to avoid Vec<char> allocation using char_indices() for byte slicing.
 fn build_snippet(text: &str, query: &str) -> Option<String> {
     let trimmed = text.trim();
     if trimmed.is_empty() {
         return None;
     }
 
-    let chars: Vec<char> = trimmed.chars().collect();
-    if chars.len() <= 160 {
+    // Count chars and collect byte indices only if needed
+    let char_count = trimmed.chars().count();
+    if char_count <= 160 {
         return Some(trimmed.to_string());
     }
 
+    // Find match position in lowercase text (byte index)
     let lower_text = trimmed.to_lowercase();
     let lower_query = query.to_lowercase();
     let match_char_index = lower_text
@@ -357,14 +362,30 @@ fn build_snippet(text: &str, query: &str) -> Option<String> {
         .map(|byte_index| trimmed[..byte_index].chars().count())
         .unwrap_or(0);
 
-    let start = match_char_index.saturating_sub(20);
-    let end = (start + 160).min(chars.len());
+    // Calculate char range for snippet
+    let start_char = match_char_index.saturating_sub(20);
+    let end_char = (start_char + 160).min(char_count);
 
-    let mut snippet: String = chars[start..end].iter().collect();
-    if start > 0 {
-        snippet.insert(0, '…');
+    // Convert char indices to byte indices using char_indices() - zero allocation
+    let mut char_indices = trimmed.char_indices();
+    let start_byte = char_indices
+        .nth(start_char)
+        .map(|(idx, _)| idx)
+        .unwrap_or(0);
+    // Reset iterator and skip to end position
+    let end_byte = trimmed
+        .char_indices()
+        .nth(end_char)
+        .map(|(idx, _)| idx)
+        .unwrap_or(trimmed.len());
+
+    // Build snippet from byte slice
+    let mut snippet = String::with_capacity(164); // 160 chars + potential ellipses
+    if start_char > 0 {
+        snippet.push('…');
     }
-    if end < chars.len() {
+    snippet.push_str(&trimmed[start_byte..end_byte]);
+    if end_char < char_count {
         snippet.push('…');
     }
     Some(snippet)

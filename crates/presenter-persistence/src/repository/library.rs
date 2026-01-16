@@ -11,6 +11,7 @@ use sea_orm::{
     sea_query::OnConflict, ActiveModelTrait, ColumnTrait, EntityTrait, IntoActiveModel,
     QueryFilter, QueryOrder, Set, TransactionTrait,
 };
+use std::collections::HashMap;
 use tracing::instrument;
 
 use super::helpers::{parse_uuid, to_domain_slide, RepositoryError};
@@ -110,28 +111,71 @@ impl Repository {
         Ok(())
     }
 
+    /// Fetches all libraries with presentations and slides using batch queries.
+    /// Optimized to use 3 queries total instead of 1 + n + (n*m) queries.
     #[instrument(skip_all)]
     pub async fn fetch_libraries(&self) -> anyhow::Result<Vec<Library>> {
+        // Query 1: Fetch all libraries
         let libraries = library::Entity::find()
             .order_by_asc(library::Column::Name)
             .all(&self.db)
             .await?;
 
+        if libraries.is_empty() {
+            return Ok(Vec::new());
+        }
+
+        let library_ids: Vec<String> = libraries.iter().map(|lib| lib.id.clone()).collect();
+
+        // Query 2: Batch fetch all presentations for these libraries
+        let all_presentations = presentation_entity::Entity::find()
+            .filter(presentation_entity::Column::LibraryId.is_in(library_ids))
+            .order_by_asc(presentation_entity::Column::Name)
+            .all(&self.db)
+            .await?;
+
+        let presentation_ids: Vec<String> =
+            all_presentations.iter().map(|p| p.id.clone()).collect();
+
+        // Query 3: Batch fetch all slides for these presentations
+        let all_slides = if presentation_ids.is_empty() {
+            Vec::new()
+        } else {
+            slide_entity::Entity::find()
+                .filter(slide_entity::Column::PresentationId.is_in(presentation_ids))
+                .order_by_asc(slide_entity::Column::Position)
+                .all(&self.db)
+                .await?
+        };
+
+        // Group slides by presentation_id in memory
+        let mut slides_by_presentation: HashMap<String, Vec<slide_entity::Model>> =
+            HashMap::with_capacity(all_presentations.len());
+        for slide in all_slides {
+            slides_by_presentation
+                .entry(slide.presentation_id.clone())
+                .or_default()
+                .push(slide);
+        }
+
+        // Group presentations by library_id in memory
+        let mut presentations_by_library: HashMap<String, Vec<presentation_entity::Model>> =
+            HashMap::with_capacity(libraries.len());
+        for pres in all_presentations {
+            presentations_by_library
+                .entry(pres.library_id.clone())
+                .or_default()
+                .push(pres);
+        }
+
+        // Build domain models
         let mut results = Vec::with_capacity(libraries.len());
         for lib in libraries {
-            let presentations = presentation_entity::Entity::find()
-                .filter(presentation_entity::Column::LibraryId.eq(lib.id.clone()))
-                .order_by_asc(presentation_entity::Column::Name)
-                .all(&self.db)
-                .await?;
+            let presentations = presentations_by_library.remove(&lib.id).unwrap_or_default();
 
             let mut presentation_models = Vec::with_capacity(presentations.len());
             for pres in presentations {
-                let slides = slide_entity::Entity::find()
-                    .filter(slide_entity::Column::PresentationId.eq(pres.id.clone()))
-                    .order_by_asc(slide_entity::Column::Position)
-                    .all(&self.db)
-                    .await?;
+                let slides = slides_by_presentation.remove(&pres.id).unwrap_or_default();
 
                 let slide_models = slides
                     .into_iter()
@@ -195,11 +239,14 @@ impl Repository {
         Ok(())
     }
 
+    /// Lists library summaries with presentation counts using batch queries.
+    /// Optimized to use 2 queries total instead of 1 + n queries.
     #[instrument(skip_all)]
     pub async fn list_library_summaries(
         &self,
         filter: Option<&str>,
     ) -> anyhow::Result<Vec<LibrarySummary>> {
+        // Query 1: Fetch libraries (with optional filter)
         let mut query = library::Entity::find();
         if let Some(filter) = filter {
             let pattern = format!("%{}%", filter);
@@ -211,16 +258,36 @@ impl Repository {
             .all(&self.db)
             .await?;
 
+        if libraries.is_empty() {
+            return Ok(Vec::new());
+        }
+
+        let library_ids: Vec<String> = libraries.iter().map(|lib| lib.id.clone()).collect();
+
+        // Query 2: Batch fetch all presentations for these libraries
+        let all_presentations = presentation_entity::Entity::find()
+            .filter(presentation_entity::Column::LibraryId.is_in(library_ids))
+            .order_by_asc(presentation_entity::Column::Name)
+            .all(&self.db)
+            .await?;
+
+        // Group presentations by library_id in memory
+        let mut presentations_by_library: HashMap<String, Vec<presentation_entity::Model>> =
+            HashMap::with_capacity(libraries.len());
+        for pres in all_presentations {
+            presentations_by_library
+                .entry(pres.library_id.clone())
+                .or_default()
+                .push(pres);
+        }
+
+        // Build summaries
         let mut summaries = Vec::with_capacity(libraries.len());
         for lib in libraries {
-            let presentation_models = presentation_entity::Entity::find()
-                .filter(presentation_entity::Column::LibraryId.eq(lib.id.clone()))
-                .order_by_asc(presentation_entity::Column::Name)
-                .all(&self.db)
-                .await?;
+            let presentations = presentations_by_library.remove(&lib.id).unwrap_or_default();
 
-            let mut presentation_summaries = Vec::with_capacity(presentation_models.len());
-            for pres in &presentation_models {
+            let mut presentation_summaries = Vec::with_capacity(presentations.len());
+            for pres in &presentations {
                 let pres_id = PresentationId::from_uuid(parse_uuid(&pres.id)?);
                 presentation_summaries.push(PresentationSummary::new(pres_id, pres.name.clone()));
             }
