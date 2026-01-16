@@ -234,7 +234,7 @@ async fn connect_and_launch(
         guard.last_error = None;
     }
 
-    let adb_bin = (&*adb_path).as_os_str();
+    let adb_bin = adb_path.as_os_str();
     let connect_output = Command::new(adb_bin)
         .arg("connect")
         .arg(&serial)

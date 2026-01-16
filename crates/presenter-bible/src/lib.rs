@@ -140,7 +140,7 @@ pub enum BibleSourceFormat {
 }
 
 impl BibleSourceFormat {
-    fn book_name<'a>(&'a self, code: &str) -> Option<String> {
+    fn book_name(&self, code: &str) -> Option<String> {
         match self {
             BibleSourceFormat::UsfmZip {
                 book_name_overrides,
@@ -496,8 +496,8 @@ fn parse_mysword_sqlite_zip(
             }
         };
 
-        let chapter = read_u16(&row, 1, "Chapter")?;
-        let verse = read_u16(&row, 2, "Verse")?;
+        let chapter = read_u16(row, 1, "Chapter")?;
+        let verse = read_u16(row, 2, "Verse")?;
         let scripture: String = row.get(3)?;
 
         if book_index < 1 {
@@ -582,9 +582,9 @@ fn parse_obohu_sqlite_zip(
     let mut passages = Vec::new();
 
     while let Some(row) = verse_rows.next()? {
-        let code = read_i64(&row, 0, "book_number")?;
-        let chapter = read_u16(&row, 1, "chapter")?;
-        let verse = read_u16(&row, 2, "verse")?;
+        let code = read_i64(row, 0, "book_number")?;
+        let chapter = read_u16(row, 1, "chapter")?;
+        let verse = read_u16(row, 2, "verse")?;
         let text: String = row.get(3)?;
 
         let Some(book) = book_map.get(&code) else {
@@ -820,9 +820,13 @@ fn sanitize_mysword_text(input: &str) -> String {
                 break;
             }
         }
-        let ch = rest.chars().next().unwrap();
-        output.push(ch);
-        i += ch.len_utf8();
+        // Safety: rest is non-empty since i < input.len() and we slice at valid UTF-8 boundaries
+        if let Some(ch) = rest.chars().next() {
+            output.push(ch);
+            i += ch.len_utf8();
+        } else {
+            break;
+        }
     }
 
     sanitize_markup_text(&output)
@@ -858,12 +862,10 @@ fn starts_with_ci(haystack: &str, needle: &str) -> bool {
     if h_bytes.len() < n_bytes.len() {
         return false;
     }
-    for (hb, nb) in h_bytes.iter().zip(n_bytes.iter()) {
-        if hb.to_ascii_lowercase() != nb.to_ascii_lowercase() {
-            return false;
-        }
-    }
-    true
+    h_bytes
+        .iter()
+        .zip(n_bytes.iter())
+        .all(|(hb, nb)| hb.eq_ignore_ascii_case(nb))
 }
 
 #[derive(Debug, Clone)]

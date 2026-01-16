@@ -566,12 +566,7 @@ impl HostDriver {
             }
 
             let text = frame.formatted;
-            if self
-                .last_timer_payload
-                .as_ref()
-                .map(|previous| previous.as_str())
-                == Some(text.as_str())
-            {
+            if self.last_timer_payload.as_deref() == Some(text.as_str()) {
                 return Ok(());
             }
 
@@ -942,16 +937,11 @@ struct SlotState {
     bible_translation_next: LaneTarget,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 enum LaneTarget {
+    #[default]
     A,
     B,
-}
-
-impl Default for LaneTarget {
-    fn default() -> Self {
-        LaneTarget::A
-    }
 }
 
 impl LaneTarget {

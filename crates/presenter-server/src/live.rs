@@ -53,6 +53,7 @@ enum InboundMessage {
 
 #[derive(Debug, Clone, Serialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
+#[allow(clippy::large_enum_variant)]
 pub enum LiveEvent {
     Timers { overview: TimersOverview },
     Stage { snapshot: StageDisplaySnapshot },

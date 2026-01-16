@@ -381,9 +381,7 @@ fn parse_split_message(message: &OscMessage) -> Option<(String, SplitKind, u8)> 
         OscType::Float(value) => *value as f64,
         _ => return None,
     };
-    let Some(value) = normalise_single(value) else {
-        return None;
-    };
+    let value = normalise_single(value)?;
 
     let addr = message.addr.to_ascii_lowercase();
     if !addr.starts_with('/') {

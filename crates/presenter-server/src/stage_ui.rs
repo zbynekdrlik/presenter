@@ -690,8 +690,8 @@ fn render_worship_pp(snapshot: &StageDisplaySnapshot) -> AnyView {
     let current_stage = snapshot
         .current
         .as_ref()
-        .map(|slide| stage_text(slide))
-        .unwrap_or_else(|| "".to_string());
+        .map(stage_text)
+        .unwrap_or_default();
     let current_stage_hidden = (current_stage.is_empty()).to_string();
     let current_stage_text = current_stage.clone();
     let next_main = snapshot

@@ -107,7 +107,7 @@ pub(super) async fn update_stage_state(
     state
         .update_stage_state(presentation_id, current_slide_id, next_slide_id)
         .await
-        .map_err(|err| AppError::bad_request(err))?;
+        .map_err(AppError::bad_request)?;
     Ok(StatusCode::NO_CONTENT)
 }
 

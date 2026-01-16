@@ -110,10 +110,10 @@ impl Repository {
 
     #[instrument(skip_all)]
     pub async fn upsert_library(&self, library: &Library) -> anyhow::Result<()> {
-        let mut txn = self.db.begin().await?;
+        let txn = self.db.begin().await?;
 
         library::Entity::delete_by_id(library.id.to_string())
-            .exec(&mut txn)
+            .exec(&txn)
             .await?;
 
         let lib_model = library::ActiveModel {
@@ -122,7 +122,7 @@ impl Repository {
             search_name: Set(fold_query(&library.name)),
             created_at: Set(Utc::now().into()),
         };
-        library::Entity::insert(lib_model).exec(&mut txn).await?;
+        library::Entity::insert(lib_model).exec(&txn).await?;
 
         for presentation in &library.presentations {
             let pres_model = presentation_entity::ActiveModel {
@@ -133,7 +133,7 @@ impl Repository {
                 created_at: Set(Utc::now().into()),
             };
             presentation_entity::Entity::insert(pres_model)
-                .exec(&mut txn)
+                .exec(&txn)
                 .await?;
 
             for slide in &presentation.slides {
@@ -150,9 +150,7 @@ impl Repository {
                     group_name: Set(slide.content.group.as_ref().map(|g| g.name().to_owned())),
                     created_at: Set(Utc::now().into()),
                 };
-                slide_entity::Entity::insert(slide_model)
-                    .exec(&mut txn)
-                    .await?;
+                slide_entity::Entity::insert(slide_model).exec(&txn).await?;
             }
         }
 
@@ -162,7 +160,7 @@ impl Repository {
 
     #[instrument(skip_all)]
     pub async fn create_library(&self, name: &str) -> anyhow::Result<Library> {
-        let mut txn = self.db.begin().await?;
+        let txn = self.db.begin().await?;
         let id = LibraryId::new();
 
         let model = library::ActiveModel {
@@ -172,7 +170,7 @@ impl Repository {
             created_at: Set(Utc::now().into()),
         };
 
-        library::Entity::insert(model).exec(&mut txn).await?;
+        library::Entity::insert(model).exec(&txn).await?;
         txn.commit().await?;
 
         let library = Library::new(name.to_string(), Vec::new())?.with_id(id);
@@ -211,7 +209,7 @@ impl Repository {
     ) -> anyhow::Result<(LibraryId, String, Presentation)> {
         let presentation_uuid = Uuid::new_v4();
         let library_uuid = library_id.to_string();
-        let mut txn = self.db.begin().await?;
+        let txn = self.db.begin().await?;
 
         presentation_entity::Entity::insert(presentation_entity::ActiveModel {
             id: Set(presentation_uuid.to_string()),
@@ -220,7 +218,7 @@ impl Repository {
             search_name: Set(fold_query(name)),
             created_at: Set(Utc::now().into()),
         })
-        .exec(&mut txn)
+        .exec(&txn)
         .await?;
 
         slide_entity::Entity::insert(slide_entity::ActiveModel {
@@ -236,7 +234,7 @@ impl Repository {
             group_name: Set(None),
             created_at: Set(Utc::now().into()),
         })
-        .exec(&mut txn)
+        .exec(&txn)
         .await?;
 
         txn.commit().await?;
@@ -276,15 +274,15 @@ impl Repository {
 
     #[instrument(skip_all)]
     pub async fn purge_presentation_content(&self) -> anyhow::Result<()> {
-        let mut txn = self.db.begin().await?;
+        let txn = self.db.begin().await?;
 
-        slide_entity::Entity::delete_many().exec(&mut txn).await?;
+        slide_entity::Entity::delete_many().exec(&txn).await?;
         presentation_entity::Entity::delete_many()
-            .exec(&mut txn)
+            .exec(&txn)
             .await?;
-        library::Entity::delete_many().exec(&mut txn).await?;
+        library::Entity::delete_many().exec(&txn).await?;
         stage_state::Entity::delete_by_id(STAGE_STATE_SINGLETON_ID.to_string())
-            .exec(&mut txn)
+            .exec(&txn)
             .await?;
 
         txn.commit().await?;
@@ -316,7 +314,7 @@ impl Repository {
 
                 let slide_models = slides
                     .into_iter()
-                    .map(|slide| to_domain_slide(slide))
+                    .map(to_domain_slide)
                     .collect::<Result<Vec<_>, RepositoryError>>()?;
 
                 let presentation = Presentation::new(pres.name.clone(), slide_models)?
@@ -352,7 +350,7 @@ impl Repository {
         library_id: LibraryId,
         favorite: bool,
     ) -> anyhow::Result<()> {
-        let mut txn = self.db.begin().await?;
+        let txn = self.db.begin().await?;
         let id_string = library_id.to_string();
 
         if favorite {
@@ -364,11 +362,11 @@ impl Repository {
                     .do_nothing()
                     .to_owned(),
             )
-            .exec(&mut txn)
+            .exec(&txn)
             .await?;
         } else {
             library_favorite::Entity::delete_by_id(id_string.clone())
-                .exec(&mut txn)
+                .exec(&txn)
                 .await?;
         }
 
@@ -832,7 +830,7 @@ impl Repository {
         playlist_id: PlaylistId,
         favorite: bool,
     ) -> anyhow::Result<()> {
-        let mut txn = self.db.begin().await?;
+        let txn = self.db.begin().await?;
         let id_string = playlist_id.to_string();
         if favorite {
             playlist_favorite::Entity::insert(playlist_favorite::ActiveModel {
@@ -843,11 +841,11 @@ impl Repository {
                     .do_nothing()
                     .to_owned(),
             )
-            .exec(&mut txn)
+            .exec(&txn)
             .await?;
         } else {
             playlist_favorite::Entity::delete_by_id(id_string)
-                .exec(&mut txn)
+                .exec(&txn)
                 .await?;
         }
         txn.commit().await?;
@@ -880,11 +878,11 @@ impl Repository {
         playlist_id: PlaylistId,
         entries: &[PlaylistEntry],
     ) -> anyhow::Result<()> {
-        let mut txn = self.db.begin().await?;
+        let txn = self.db.begin().await?;
 
         playlist_entry::Entity::delete_many()
             .filter(playlist_entry::Column::PlaylistId.eq(playlist_id.to_string()))
-            .exec(&mut txn)
+            .exec(&txn)
             .await?;
 
         for (index, entry) in entries.iter().enumerate() {
@@ -912,9 +910,7 @@ impl Repository {
                 midi_note: Set(midi_note),
                 label: Set(label),
             };
-            playlist_entry::Entity::insert(active)
-                .exec(&mut txn)
-                .await?;
+            playlist_entry::Entity::insert(active).exec(&txn).await?;
         }
 
         txn.commit().await?;
@@ -941,7 +937,7 @@ impl Repository {
 
         let slide_models = slides
             .into_iter()
-            .map(|slide| to_domain_slide(slide))
+            .map(to_domain_slide)
             .collect::<Result<Vec<_>, RepositoryError>>()?;
 
         let presentation = Presentation::new(pres_model.name.clone(), slide_models)?
@@ -1031,11 +1027,11 @@ impl Repository {
         presentation_id: PresentationId,
         slides: &[Slide],
     ) -> anyhow::Result<()> {
-        let mut txn = self.db.begin().await?;
+        let txn = self.db.begin().await?;
 
         slide_entity::Entity::delete_many()
             .filter(slide_entity::Column::PresentationId.eq(presentation_id.to_string()))
-            .exec(&mut txn)
+            .exec(&txn)
             .await?;
 
         for (index, slide) in slides.iter().enumerate() {
@@ -1056,7 +1052,7 @@ impl Repository {
                     .map(|group| group.name().to_owned())),
                 created_at: Set(Utc::now().into()),
             };
-            slide_entity::Entity::insert(active).exec(&mut txn).await?;
+            slide_entity::Entity::insert(active).exec(&txn).await?;
         }
 
         txn.commit().await?;
@@ -1069,10 +1065,10 @@ impl Repository {
         batch: &BibleIngestionBatch,
     ) -> anyhow::Result<()> {
         let (translation, passages) = batch.clone().into_parts();
-        let mut txn = self.db.begin().await?;
+        let txn = self.db.begin().await?;
 
         bible_translation::Entity::delete_by_id(translation.code.clone())
-            .exec(&mut txn)
+            .exec(&txn)
             .await?;
 
         let translation_model = bible_translation::ActiveModel {
@@ -1084,7 +1080,7 @@ impl Repository {
         };
 
         bible_translation::Entity::insert(translation_model)
-            .exec(&mut txn)
+            .exec(&txn)
             .await?;
 
         let mut chunk = Vec::with_capacity(BIBLE_INSERT_CHUNK);
@@ -1105,15 +1101,13 @@ impl Repository {
             if chunk.len() == BIBLE_INSERT_CHUNK {
                 let to_insert = std::mem::take(&mut chunk);
                 bible_passage::Entity::insert_many(to_insert)
-                    .exec(&mut txn)
+                    .exec(&txn)
                     .await?;
             }
         }
 
         if !chunk.is_empty() {
-            bible_passage::Entity::insert_many(chunk)
-                .exec(&mut txn)
-                .await?;
+            bible_passage::Entity::insert_many(chunk).exec(&txn).await?;
         }
 
         txn.commit().await?;

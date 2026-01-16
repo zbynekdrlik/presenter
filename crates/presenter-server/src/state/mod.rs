@@ -198,7 +198,7 @@ impl AppState {
         let stored_port = raw_port
             .as_deref()
             .and_then(|value| value.parse::<u16>().ok())
-            .filter(|port| *port >= 1 && *port <= u16::MAX);
+            .filter(|port| *port >= 1);
         let mut companion_port = stored_port.unwrap_or(DEFAULT_COMPANION_PORT);
         if stored_port.is_none() {
             persist_port = true;
@@ -207,7 +207,7 @@ impl AppState {
         let env_port_override = env::var("PRESENTER_COMPANION_PORT")
             .ok()
             .and_then(|value| value.parse::<u16>().ok())
-            .filter(|port| *port >= 1 && *port <= u16::MAX);
+            .filter(|port| *port >= 1);
 
         if let Some(port_override) = env_port_override {
             companion_port = port_override;
@@ -891,7 +891,7 @@ impl AppState {
     // Timer methods are in timers.rs
     // Broadcasting methods are in broadcasting.rs
 
-    fn reindex_slides(slides: &mut Vec<Slide>) {
+    fn reindex_slides(slides: &mut [Slide]) {
         for (index, slide) in slides.iter_mut().enumerate() {
             slide.order = index as u32;
         }
@@ -920,7 +920,7 @@ impl AppState {
 
         let mut changed = false;
         let contains = |id: Option<SlideId>| {
-            id.map_or(true, |target| slides.iter().any(|slide| slide.id == target))
+            id.is_none_or(|target| slides.iter().any(|slide| slide.id == target))
         };
         if !contains(state.current_slide_id) {
             state.current_slide_id = Some(slides[0].id);

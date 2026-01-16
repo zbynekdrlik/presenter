@@ -51,13 +51,13 @@ impl AppState {
             .current
             .as_ref()
             .map(|slide| slide.main.clone())
-            .unwrap_or_else(String::new);
+            .unwrap_or_default();
         let current_translation = context
             .resolution
             .current
             .as_ref()
             .map(|slide| slide.translation.clone())
-            .unwrap_or_else(String::new);
+            .unwrap_or_default();
         let song_name = context
             .resolution
             .presentation_name

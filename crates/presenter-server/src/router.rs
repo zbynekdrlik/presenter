@@ -1576,7 +1576,7 @@ mod tests_old {
             .clone()
             .oneshot(
                 Request::builder()
-                    .uri(&format!("/presentations/{}", presentation.id))
+                    .uri(format!("/presentations/{}", presentation.id))
                     .body(Body::empty())
                     .unwrap(),
             )
