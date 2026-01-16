@@ -171,9 +171,38 @@ cargo build --release -p presenter-server
 
 ---
 
-## Testing
+## Testing (CRITICAL - READ CAREFULLY)
 
-GitHub Actions runs all tests automatically. For local debugging:
+### Absolute Rules (NO EXCEPTIONS)
+
+1. **ALL tests MUST pass** - Unit, integration, E2E - every single one
+2. **NEVER skip tests** - No `.skip()`, `.only()`, `#[ignore]`, `testIgnore`, or any mechanism
+3. **Fix failures IMMEDIATELY** - CI failures block everything until resolved
+4. **E2E tests are PRIMARY** - They are the acceptance gate, not optional
+
+### CI Test Failures = STOP EVERYTHING
+
+When any test fails in CI:
+
+1. **Stop all other work immediately**
+2. **Diagnose the failure** - `gh run view --log-failed`
+3. **Fix the root cause** - Not workarounds, not skips
+4. **Push and verify green** - Only then continue other work
+
+**There is NO "fix later" or "known issue" or "flaky test" excuse. Fix it NOW.**
+
+### Banned Test Patterns
+
+| Pattern                       | Why Banned         | What To Do Instead       |
+| ----------------------------- | ------------------ | ------------------------ |
+| `.skip()` / `.only()`         | Hides failures     | Remove and fix the test  |
+| `#[ignore]`                   | Skips silently     | Remove and fix the test  |
+| `testIgnore` in config        | Hides entire files | Remove and fix the tests |
+| `continue-on-error` for tests | Masks failures     | Remove, tests must pass  |
+| Timeouts that "cancel"        | Hides slow tests   | Fix the slowness         |
+| Conditional test runs         | Reduces coverage   | Run all tests always     |
+
+### Test Commands
 
 ```bash
 # Rust unit tests
@@ -182,7 +211,7 @@ cargo test
 # Single test
 cargo test test_name
 
-# Playwright E2E
+# Playwright E2E (MUST pass before any merge)
 npm run test:playwright
 npm run test:playwright:headed  # Browser visible
 
@@ -190,12 +219,13 @@ npm run test:playwright:headed  # Browser visible
 scripts/dev/show-playwright-report.sh
 ```
 
-### E2E Test Policy
+### E2E Test Standards
 
 - E2E tests are the **primary acceptance mechanism**
 - Ship new behavior only with E2E coverage
 - Tests must be deterministic: fixed seeds, stable timeouts
 - Prefer retry-with-assert poll helpers over arbitrary sleeps
+- **E2E timeout = build failure** - Optimize build caching, not extend timeouts
 
 ---
 

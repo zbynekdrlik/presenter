@@ -285,3 +285,112 @@ Helps identify which version is running on the server.
 Co-Authored-By: Claude Opus 4.5 <noreply@anthropic.com>
 EOF
 )" && git push origin dev 2>&1
+[2026-01-15 11:48:36] ls -la /opt/presenter/*.db 2>/dev/null || echo "No db files"
+[2026-01-15 11:48:36] ls scripts/dev/*.sh 2>/dev/null | head -10
+[2026-01-15 11:48:48] sudo systemctl stop presenter.service
+PRESENTER_DB_URL="sqlite:///opt/presenter/presenter.db" ./scripts/dev/refresh-dev-data.sh 2>&1
+[2026-01-15 11:48:55] rm Cargo.lock && cargo generate-lockfile 2>&1 | tail -3
+[2026-01-15 11:49:15] PRESENTER_DB_URL="sqlite:///opt/presenter/presenter.db" ./scripts/dev/refresh-dev-data.sh 2>&1
+[2026-01-15 11:49:22] rustc --version && cargo --version
+[2026-01-15 11:49:34] which rustup && rustup show 2>&1 | head -20
+[2026-01-15 11:49:50] ls -la ~/.cargo/bin/rustc 2>/dev/null || ls -la /usr/local/bin/rustc 2>/dev/null || ls -la /opt/rust*/bin/rustc 2>/dev/null || echo "Checking other locations..."
+type -a rustc 2>/dev/null
+[2026-01-15 11:49:58] ~/.cargo/bin/rustup show 2>&1 | head -15
+[2026-01-15 11:50:06] /opt/presenter/presenter-server --version 2>&1 || strings /opt/presenter/presenter-server | grep -i rust | head -5
+[2026-01-15 11:50:14] ls -la target/release/import_propresenter target/release/ingest_bibles 2>&1
+[2026-01-15 11:50:20] cargo build --release -p presenter-importer 2>&1 | tail -10
+[2026-01-15 11:50:27] cat /home/newlevel/actions-runner/_work/_tool/*/manifest.json 2>/dev/null | head -20 || ls -la /home/newlevel/actions-runner/_work/_tool/ 2>/dev/null
+[2026-01-15 11:50:34] find /home/newlevel -name "rustc" -type f 2>/dev/null | head -5
+[2026-01-15 11:50:43] cat ~/.cargo/config.toml 2>/dev/null || cat ~/.cargo/config 2>/dev/null || echo "No cargo config"
+[2026-01-15 11:50:50] export PATH="$HOME/.rustup/toolchains/stable-x86_64-unknown-linux-gnu/bin:$PATH" && rustc --version && cargo --version
+[2026-01-15 11:50:57] export PATH="$HOME/.rustup/toolchains/stable-x86_64-unknown-linux-gnu/bin:$PATH"
+PRESENTER_DB_URL="sqlite:///opt/presenter/presenter.db" ./scripts/dev/refresh-dev-data.sh 2>&1
+[2026-01-15 11:57:41] sudo systemctl start presenter.service && sleep 3 && curl -s http://10.77.9.205/healthz
+[2026-01-15 12:01:01] gh pr list
+[2026-01-15 12:01:07] gh pr list --state all --limit 10
+[2026-01-15 12:01:14] git status && echo "---" && git log main..HEAD --oneline 2>/dev/null || git log origin/main..HEAD --oneline 2>/dev/null || echo "No commits ahead of main"
+[2026-01-15 12:01:19] git diff main..HEAD -- '*.rs' --stat | tail -20
+[2026-01-15 12:01:19] git diff main..HEAD --stat | head -100
+[2026-01-15 12:01:24] git diff main..HEAD -- '*.yml' '*.yaml'
+[2026-01-15 12:01:29] git diff main..HEAD -- scripts/install.sh 2>/dev/null | head -100
+[2026-01-15 12:01:29] git diff main..HEAD -- 'crates/presenter-server/src/state/*.rs' --stat
+[2026-01-15 12:01:38] git diff main..HEAD -- 'crates/presenter-server/src/stage_ui.rs' | head -150
+[2026-01-15 12:34:23] rm -f /home/newlevel/devel/presenter/presenter-dev2/tmp_old_router.rs && ls /home/newlevel/devel/presenter/presenter-dev2/tmp_old_router.rs 2>&1 || echo "File deleted"
+[2026-01-15 12:34:28] git status --short
+[2026-01-15 12:34:35] git add Cargo.lock tmp_old_router.rs && git commit -m "$(cat <<'EOF'
+chore: cleanup orphan file and commit lockfile
+
+- Delete empty tmp_old_router.rs (leftover from refactoring)
+- Commit Cargo.lock (required for reproducible builds)
+
+🤖 Generated with [Claude Code](https://claude.com/claude-code)
+
+Co-Authored-By: Claude Opus 4.5 <noreply@anthropic.com>
+EOF
+)"
+[2026-01-15 12:34:39] git push origin dev
+[2026-01-15 12:34:45] gh run watch --exit-status
+[2026-01-15 12:34:49] gh run list --limit 5
+[2026-01-15 12:34:54] gh run watch 21029864889 --exit-status
+[2026-01-15 12:40:02] gh run list --limit 5
+[2026-01-15 12:40:07] sleep 60 && gh run list --limit 5
+[2026-01-15 12:41:13] sleep 120 && gh run list --limit 5
+[2026-01-15 12:43:21] sleep 180 && gh run list --limit 5
+[2026-01-15 12:46:27] gh run view 21029864866 2>/dev/null | head -50
+[2026-01-15 12:46:36] sleep 300 && gh run list --limit 5
+[2026-01-15 12:51:46] sleep 300 && gh run list --limit 5
+[2026-01-15 12:56:51] sleep 300 && gh run list --limit 5
+[2026-01-15 13:01:58] sleep 300 && gh run list --limit 5
+[2026-01-15 13:07:02] sleep 300 && gh run list --limit 5
+[2026-01-15 13:12:09] sleep 300 && gh run list --limit 5
+[2026-01-15 13:17:14] sleep 300 && gh run list --limit 5
+[2026-01-15 13:22:21] gh run view 21029864866 --log-failed 2>/dev/null | tail -50
+[2026-01-15 13:22:25] sleep 60 && gh run list --limit 5
+[2026-01-15 13:23:31] sleep 300 && gh run list --limit 5
+[2026-01-15 13:28:37] gh run view 21029864889 2>/dev/null | head -30
+[2026-01-15 13:28:44] sleep 300 && gh run list --limit 5
+[2026-01-15 13:33:49] gh run view 21029864889 2>/dev/null | head -40
+[2026-01-15 13:33:57] sleep 600 && gh run list --limit 5
+[2026-01-15 13:44:05] gh run view 21029864889 2>/dev/null | head -50
+[2026-01-15 13:44:13] sleep 600 && gh run view 21029864889 2>/dev/null
+[2026-01-15 13:54:26] sleep 600 && gh run view 21029864889 2>/dev/null
+[2026-01-15 14:04:34] sleep 600 && gh run view 21029864889 2>/dev/null
+[2026-01-15 14:14:43] sleep 600 && gh run view 21029864889 2>/dev/null
+[2026-01-15 14:24:51] sleep 900 && gh run view 21029864889 2>/dev/null
+[2026-01-15 14:40:02] sleep 900 && gh run view 21029864889 2>/dev/null
+[2026-01-15 14:55:13] sleep 900 && gh run view 21029864889 2>/dev/null
+[2026-01-15 15:10:24] sleep 600 && gh run list --limit 5
+[2026-01-16 09:10:51] gh run view 21029864866 --log 2>/dev/null | tail -100
+[2026-01-16 09:10:51] gh run view 21029864866 --log 2>/dev/null | tail -100
+[2026-01-16 09:11:55] git add -A && git commit -m "$(cat <<'EOF'
+fix(ci): share cache between CI and E2E, add strict testing rules
+
+- E2E now uses shared-key: test-stable to reuse CI build cache
+- Add comprehensive testing rules to CLAUDE.md:
+  - ALL tests must pass - no exceptions
+  - NEVER skip tests via any mechanism
+  - Fix CI failures IMMEDIATELY
+  - E2E tests are primary acceptance gate
+  - Banned patterns: .skip(), .only(), #[ignore], testIgnore, etc.
+
+🤖 Generated with [Claude Code](https://claude.com/claude-code)
+
+Co-Authored-By: Claude Opus 4.5 <noreply@anthropic.com>
+EOF
+)" && git push origin dev
+[2026-01-16 09:11:55] git add -A && git commit -m "$(cat <<'EOF'
+fix(ci): share cache between CI and E2E, add strict testing rules
+
+- E2E now uses shared-key: test-stable to reuse CI build cache
+- Add comprehensive testing rules to CLAUDE.md:
+  - ALL tests must pass - no exceptions
+  - NEVER skip tests via any mechanism
+  - Fix CI failures IMMEDIATELY
+  - E2E tests are primary acceptance gate
+  - Banned patterns: .skip(), .only(), #[ignore], testIgnore, etc.
+
+🤖 Generated with [Claude Code](https://claude.com/claude-code)
+
+Co-Authored-By: Claude Opus 4.5 <noreply@anthropic.com>
+EOF
+)" && git push origin dev
