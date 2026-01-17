@@ -360,10 +360,7 @@ async fn connect_and_launch(
     let adb_bin = (&*adb_path).as_os_str();
     let connect_output = timeout(
         ADB_COMMAND_TIMEOUT,
-        Command::new(adb_bin)
-            .arg("connect")
-            .arg(&serial)
-            .output(),
+        Command::new(adb_bin).arg("connect").arg(&serial).output(),
     )
     .await
     .with_context(|| format!("adb connect timed out for {}", serial))?
