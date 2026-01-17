@@ -1393,3 +1393,30 @@ language, and showInDashboard fields for updating Bible translations.
 Co-Authored-By: Claude Opus 4.5 <noreply@anthropic.com>
 EOF
 )" && git push origin dev
+[2026-01-17 22:51:34] gh run list --limit 5
+[2026-01-17 22:51:40] gh run watch 21101411146
+[2026-01-17 22:51:45] sleep 300 && gh run view 21101411146 --json status,conclusion
+[2026-01-17 22:56:55] tail -30 /tmp/claude/-home-newlevel-devel-presenter-presenter-dev2/tasks/b6ed16f.output
+[2026-01-17 22:57:02] gh run list --limit 10 --json status,name,databaseId,conclusion,headSha 2>&1 | head -30
+[2026-01-17 22:57:13] sleep 600 && gh run view 21101410639 --json status,conclusion
+[2026-01-17 23:07:22] gh run view 21101410639 --json status,conclusion,jobs
+[2026-01-17 23:07:29] sleep 300 && gh run view 21101410639 --json status,conclusion
+[2026-01-17 23:12:42] gh run view 21101410639 --json jobs | jq '.jobs[0].steps[] | select(.status == "in_progress" or .status == "pending") | {name, status}'
+[2026-01-17 23:12:49] sleep 300 && gh run view 21101410639 --json status,conclusion
+[2026-01-17 23:17:58] gh run view 21101410639 --json jobs | jq '.jobs[0].steps[] | select(.status == "in_progress" or .status == "completed") | {name, status, conclusion}'
+[2026-01-17 23:18:03] sleep 300 && gh run view 21101410639 --json status,conclusion
+[2026-01-17 23:23:13] gh run view 21101410639 --log-failed 2>&1 | tail -80
+[2026-01-17 23:28:51] cargo check -p presenter-server 2>&1
+[2026-01-17 23:29:10] git add -A && git commit -m "$(cat <<'EOF'
+fix(bible): add bookCode and bookNumber to trigger endpoint
+
+The BibleTriggerRequest was missing book_code and book_number fields
+that the JavaScript client was sending. Without these fields, the
+server couldn't find passages stored with canonical book codes (e.g.
+"JHN" for John), causing "passage not found" errors.
+
+🤖 Generated with [Claude Code](https://claude.com/claude-code)
+
+Co-Authored-By: Claude Opus 4.5 <noreply@anthropic.com>
+EOF
+)"

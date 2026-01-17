@@ -210,6 +210,10 @@ pub(super) async fn get_active_bible_broadcast(
 pub(super) struct BibleTriggerRequest {
     pub(super) translation: String,
     pub(super) book: String,
+    #[serde(default)]
+    pub(super) book_code: Option<String>,
+    #[serde(default)]
+    pub(super) book_number: Option<u16>,
     pub(super) chapter: u16,
     pub(super) verse_start: u16,
     #[serde(default)]
@@ -222,13 +226,24 @@ pub(super) async fn trigger_bible_broadcast(
     Json(payload): Json<BibleTriggerRequest>,
 ) -> Result<Json<presenter_core::BibleBroadcast>, AppError> {
     let verse_end = payload.verse_end.unwrap_or(payload.verse_start);
-    let reference = BibleReference::new(
-        payload.book,
-        payload.chapter,
-        payload.verse_start,
-        verse_end,
-    )
-    .map_err(AnyhowError::new)?;
+    let reference = match (payload.book_code, payload.book_number) {
+        (Some(code), Some(number)) => BibleReference::new_with_code(
+            payload.book,
+            code,
+            number,
+            payload.chapter,
+            payload.verse_start,
+            verse_end,
+        )
+        .map_err(AnyhowError::new)?,
+        _ => BibleReference::new(
+            payload.book,
+            payload.chapter,
+            payload.verse_start,
+            verse_end,
+        )
+        .map_err(AnyhowError::new)?,
+    };
     match state
         .trigger_bible_passage(&payload.translation, &reference)
         .await
