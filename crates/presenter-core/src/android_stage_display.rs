@@ -12,10 +12,14 @@ pub enum AndroidStageDisplayValidationError {
     EmptyLabel,
     #[error("host cannot be empty")]
     EmptyHost,
+    #[error("host contains invalid characters (only alphanumeric, dots, and hyphens allowed)")]
+    InvalidHostCharacters,
     #[error("port must be between 1 and 65535")]
     InvalidPort,
     #[error("launch component cannot be empty")]
     EmptyLaunchComponent,
+    #[error("launch component must be in format 'package/activity' with valid characters")]
+    InvalidLaunchComponent,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -101,19 +105,43 @@ impl AndroidStageDisplayDraft {
     ///
     /// # Errors
     ///
-    /// Returns an [`AndroidStageDisplayValidationError`] when any field is empty or the port is out of range.
+    /// Returns an [`AndroidStageDisplayValidationError`] when any field is empty, contains
+    /// invalid characters, or the port is out of range.
+    ///
+    /// # Security
+    ///
+    /// This validation prevents command injection by restricting host and `launch_component`
+    /// to safe character sets. The host is used in ADB commands and must not contain
+    /// shell metacharacters.
     pub fn validate(&self) -> Result<(), AndroidStageDisplayValidationError> {
         if self.label.trim().is_empty() {
             return Err(AndroidStageDisplayValidationError::EmptyLabel);
         }
-        if self.host.trim().is_empty() {
+        let host = self.host.trim();
+        if host.is_empty() {
             return Err(AndroidStageDisplayValidationError::EmptyHost);
+        }
+        // Host must only contain alphanumeric, dots, and hyphens (no shell metacharacters)
+        if !host
+            .chars()
+            .all(|c| c.is_ascii_alphanumeric() || c == '.' || c == '-')
+        {
+            return Err(AndroidStageDisplayValidationError::InvalidHostCharacters);
         }
         if self.port == 0 {
             return Err(AndroidStageDisplayValidationError::InvalidPort);
         }
-        if self.launch_component.trim().is_empty() {
+        let component = self.launch_component.trim();
+        if component.is_empty() {
             return Err(AndroidStageDisplayValidationError::EmptyLaunchComponent);
+        }
+        // Launch component must be in package/activity format with valid characters
+        if !component.contains('/')
+            || !component
+                .chars()
+                .all(|c| c.is_ascii_alphanumeric() || c == '.' || c == '_' || c == '/')
+        {
+            return Err(AndroidStageDisplayValidationError::InvalidLaunchComponent);
         }
         Ok(())
     }
