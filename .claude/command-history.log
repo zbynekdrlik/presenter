@@ -1103,3 +1103,83 @@ EOF
 )"
 )"
 [2026-01-17 16:32:04] git add -A && git status | grep -E "(Unmerged|conflict)" || echo "All conflicts resolved"
+[2026-01-17 18:04:32] cargo check -p presenter-server 2>&1 | tail -30
+[2026-01-17 18:05:03] cargo check -p presenter-server 2>&1 | tail -40
+[2026-01-17 18:05:41] cargo check -p presenter-persistence 2>&1 | tail -40
+[2026-01-17 18:05:50] cargo check -p presenter-server 2>&1 | tail -30
+[2026-01-17 18:06:14] git add crates/presenter-server/src/state/mod.rs crates/presenter-server/src/router.rs crates/presenter-server/src/router/bible.rs crates/presenter-persistence/src/repository/mod.rs && git status
+[2026-01-17 18:06:24] git commit -m "$(cat <<'EOF'
+fix(bible): add missing /bible/books endpoint
+
+The Bible UI was failing to load books because the /bible/books API endpoint
+was missing. This fix adds:
+
+- New list_bible_books state method to fetch Bible book chapter summaries
+- New list_bible_books handler in router/bible.rs with proper DTO types
+- New /bible/books route in the router
+
+The endpoint aggregates chapter-level data from the database into a book-level
+response expected by the Bible UI frontend.
+
+🤖 Generated with [Claude Code](https://claude.com/claude-code)
+
+Co-Authored-By: Claude Opus 4.5 <noreply@anthropic.com>
+EOF
+)"
+[2026-01-17 18:06:29] git push origin dev
+[2026-01-17 18:06:37] gh run watch --exit-status 2>&1 | head -50
+[2026-01-17 18:06:42] gh run list --limit 3
+[2026-01-17 18:06:49] gh run list --workflow=e2e.yml --limit 3
+[2026-01-17 18:06:55] gh run watch 21097877472 --exit-status 2>&1
+[2026-01-17 18:07:00] gh run list --workflow=ci.yml --limit 3
+[2026-01-17 18:12:17] gh run view 21097877472 --json status,conclusion 2>&1
+[2026-01-17 18:12:25] gh run list --limit 10 --json status,name,conclusion 2>&1 | jq -r '.[] | [.status, .conclusion, .name] | @tsv'
+[2026-01-17 18:52:59] gh run list --limit 5 --json status,name,conclusion,databaseId,headBranch 2>&1 | jq -r '.[] | [.status, .conclusion // "pending", .name, .databaseId, .headBranch] | @tsv'
+[2026-01-17 18:53:07] gh run view 21097877966 --log-failed 2>&1 | tail -100
+[2026-01-17 18:53:16] gh run view 21097877472 --json status,conclusion 2>&1
+[2026-01-17 18:53:23] gh run watch 21097877472 --exit-status 2>&1
+[2026-01-17 18:53:28] sleep 30 && gh run view 21097877472 --json status,conclusion 2>&1
+[2026-01-17 18:54:04] gh run list --status in_progress --json name,databaseId,headBranch 2>&1
+[2026-01-17 18:54:09] gh run list --status queued --json name,databaseId,headBranch 2>&1
+[2026-01-17 18:54:16] gh run view 21097877467 --json status,conclusion,jobs 2>&1 | jq '.'
+[2026-01-17 18:59:31] gh run view 21097877472 --json status,conclusion,jobs 2>&1 | jq '.'
+[2026-01-17 19:00:26] gh run list --limit 5
+[2026-01-17 19:00:32] gh run view 21097877966 --log-failed 2>&1 | head -100
+[2026-01-17 19:00:38] gh run view 21097877966 --log-failed 2>&1 | tail -100
+[2026-01-17 19:00:52] cargo build --release -p presenter-server 2>&1 | tail -50
+[2026-01-17 19:03:38] ls -la /home/newlevel/devel/presenter/presenter-dev2/crates/presenter-server/src/ui/
+[2026-01-17 19:04:33] git log --oneline --all -- crates/presenter-server/src/ui/bible.rs | head -10
+[2026-01-17 19:04:39] git show 2b89cad:crates/presenter-server/src/ui/bible.rs 2>/dev/null | head -200
+[2026-01-17 19:04:45] git show 2b89cad:crates/presenter-server/src/ui/bible.rs 2>/dev/null | wc -l
+[2026-01-17 19:04:52] git show 3dfee39:crates/presenter-server/src/ui/bible.rs 2>/dev/null | wc -l
+[2026-01-17 19:04:52] git log --oneline --all -- crates/presenter-server/src/ui/bible.rs | head -3
+[2026-01-17 19:04:56] git log --oneline HEAD -- crates/presenter-server/src/ui/bible.rs | head -5
+[2026-01-17 19:05:00] git branch -v | head -5
+[2026-01-17 19:05:04] git log --oneline dev -- crates/presenter-server/src/ui/bible.rs | head -5
+[2026-01-17 19:05:09] git log --oneline origin/main -- crates/presenter-server/src/ui/bible.rs | head -5
+[2026-01-17 19:05:14] git show origin/main:crates/presenter-server/src/ui/bible.rs 2>/dev/null | head -50
+[2026-01-17 19:05:21] git show origin/main:crates/presenter-server/src/ui/bible.rs > /home/newlevel/devel/presenter/presenter-dev2/crates/presenter-server/src/ui/bible.rs
+[2026-01-17 19:05:26] git diff origin/main -- crates/presenter-server/src/ui/styles/bible.css | head -50
+[2026-01-17 19:05:31] git diff origin/main -- crates/presenter-server/src/bible_script.js | wc -l
+[2026-01-17 19:05:31] git show origin/main:crates/presenter-server/src/ui/styles/bible.css > /home/newlevel/devel/presenter/presenter-dev2/crates/presenter-server/src/ui/styles/bible.css
+[2026-01-17 19:05:36] cargo build --release -p presenter-server 2>&1 | tail -40
+[2026-01-17 19:05:50] git show origin/main:crates/presenter-server/src/router/bible.rs 2>/dev/null | grep -A20 "pub(super) async fn bible_ui"
+[2026-01-17 19:05:55] git show origin/main:crates/presenter-server/src/router/bible.rs 2>/dev/null | grep -B2 "BibleUiQuery"
+[2026-01-17 19:05:59] git show origin/main:crates/presenter-server/src/router/bible.rs 2>/dev/null | grep -A5 "struct BibleUiQuery"
+[2026-01-17 19:06:19] cargo build --release -p presenter-server 2>&1 | tail -30
+[2026-01-17 19:08:59] git add -A && git commit -m "$(cat <<'EOF'
+fix(bible): sync Bible UI template with origin/main
+
+The dev branch was missing the full operator-style Bible UI template
+that includes the translation-list, book-list, and other operator
+elements required by bible_script.js and the E2E tests.
+
+Synced bible.rs and bible.css from origin/main to fix:
+- bible.spec.ts waiting for translation-list buttons
+- operator-bible.spec.ts waiting for translation-list
+
+🤖 Generated with [Claude Code](https://claude.com/claude-code)
+
+Co-Authored-By: Claude Opus 4.5 <noreply@anthropic.com>
+EOF
+)"
