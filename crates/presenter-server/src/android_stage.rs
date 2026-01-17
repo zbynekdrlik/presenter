@@ -7,9 +7,11 @@ use tokio::{
     process::Command,
     sync::{mpsc, RwLock},
     task::JoinHandle,
-    time::{interval, MissedTickBehavior},
+    time::{interval, timeout, MissedTickBehavior},
 };
 use tracing::{debug, error};
+
+const ADB_COMMAND_TIMEOUT: Duration = Duration::from_secs(10);
 
 const COMMAND_CHANNEL_CAPACITY: usize = 8;
 const RETRY_INTERVAL: Duration = Duration::from_secs(20);
@@ -235,12 +237,13 @@ async fn connect_and_launch(
     }
 
     let adb_bin = adb_path.as_os_str();
-    let connect_output = Command::new(adb_bin)
-        .arg("connect")
-        .arg(&serial)
-        .output()
-        .await
-        .with_context(|| format!("failed to execute adb connect for {}", serial))?;
+    let connect_output = timeout(
+        ADB_COMMAND_TIMEOUT,
+        Command::new(adb_bin).arg("connect").arg(&serial).output(),
+    )
+    .await
+    .with_context(|| format!("adb connect timed out for {}", serial))?
+    .with_context(|| format!("failed to execute adb connect for {}", serial))?;
     if let Err(msg) = ensure_success(&connect_output) {
         let err = anyhow!("adb connect error for {}: {}", serial, msg);
         record_error(status, err.to_string()).await;
@@ -252,17 +255,21 @@ async fn connect_and_launch(
         guard.state = AndroidStageDisplayState::Launching;
     }
 
-    let launch_output = Command::new(adb_bin)
-        .arg("-s")
-        .arg(&serial)
-        .arg("shell")
-        .arg("am")
-        .arg("start")
-        .arg("-n")
-        .arg(&config.launch_component)
-        .output()
-        .await
-        .with_context(|| format!("failed to execute adb shell am start for {}", serial))?;
+    let launch_output = timeout(
+        ADB_COMMAND_TIMEOUT,
+        Command::new(adb_bin)
+            .arg("-s")
+            .arg(&serial)
+            .arg("shell")
+            .arg("am")
+            .arg("start")
+            .arg("-n")
+            .arg(&config.launch_component)
+            .output(),
+    )
+    .await
+    .with_context(|| format!("adb shell am start timed out for {}", serial))?
+    .with_context(|| format!("failed to execute adb shell am start for {}", serial))?;
     if let Err(msg) = ensure_success(&launch_output) {
         let err = anyhow!("adb shell error for {}: {}", serial, msg);
         record_error(status, err.to_string()).await;

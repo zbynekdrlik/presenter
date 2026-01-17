@@ -1,3 +1,24 @@
+//! Application state management for the presenter server.
+//!
+//! # Lock Acquisition Policy
+//!
+//! This module uses several `RwLock` fields for shared state. To prevent deadlocks:
+//!
+//! 1. **Single lock acquisition**: Each operation acquires at most one lock at a time.
+//!    Locks are released before acquiring another lock.
+//!
+//! 2. **Scoped guards**: Lock guards are always held within explicit scope blocks `{ ... }`
+//!    and dropped before performing other async operations or acquiring other locks.
+//!
+//! 3. **Lock inventory**:
+//!    - `bible_broadcast`: Current active Bible passage broadcast
+//!    - `presentation_cache`: Cached presentation data for stage display
+//!    - `stage_layout`: Selected stage display layout code
+//!    - `ableset_cache`: Cached AbleSet library-to-playlist mapping
+//!
+//! If future changes require holding multiple locks, establish and document a consistent
+//! acquisition order (e.g., alphabetical by field name) to prevent deadlocks.
+
 mod ableset;
 mod broadcasting;
 mod companion;

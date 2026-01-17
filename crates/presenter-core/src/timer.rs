@@ -30,8 +30,22 @@ pub struct CountdownTimer {
 }
 
 impl CountdownTimer {
+    /// Creates a new countdown timer with the given target time.
+    ///
+    /// # Errors
+    /// Returns `TimerError::TargetInPast` if the target is not in the future.
+    ///
+    /// Note: For deterministic testing, prefer `new_with_now()` to avoid clock-dependent behavior.
     pub fn new(target: DateTime<Utc>) -> Result<Self, TimerError> {
-        if target <= Utc::now() {
+        Self::new_with_now(target, Utc::now())
+    }
+
+    /// Creates a new countdown timer with explicit current time for deterministic testing.
+    ///
+    /// # Errors
+    /// Returns `TimerError::TargetInPast` if the target is not after `now`.
+    pub fn new_with_now(target: DateTime<Utc>, now: DateTime<Utc>) -> Result<Self, TimerError> {
+        if target <= now {
             return Err(TimerError::TargetInPast);
         }
         Ok(Self {
@@ -54,8 +68,26 @@ impl CountdownTimer {
         self.state = TimerState::Idle;
     }
 
+    /// Sets a new target time for the countdown.
+    ///
+    /// # Errors
+    /// Returns `TimerError::TargetInPast` if the target is not in the future.
+    ///
+    /// Note: For deterministic testing, prefer `set_target_with_now()`.
     pub fn set_target(&mut self, target: DateTime<Utc>) -> Result<(), TimerError> {
-        if target <= Utc::now() {
+        self.set_target_with_now(target, Utc::now())
+    }
+
+    /// Sets a new target time with explicit current time for deterministic testing.
+    ///
+    /// # Errors
+    /// Returns `TimerError::TargetInPast` if the target is not after `now`.
+    pub fn set_target_with_now(
+        &mut self,
+        target: DateTime<Utc>,
+        now: DateTime<Utc>,
+    ) -> Result<(), TimerError> {
+        if target <= now {
             return Err(TimerError::TargetInPast);
         }
         self.target = target;
@@ -290,20 +322,42 @@ mod tests {
 
     #[test]
     fn countdown_cannot_target_past() {
-        let past = Utc::now() - TimeDelta::try_seconds(10).unwrap();
-        let err = CountdownTimer::new(past).unwrap_err();
+        let now = Utc::now();
+        let past = now - TimeDelta::try_seconds(10).unwrap();
+        let err = CountdownTimer::new_with_now(past, now).unwrap_err();
+        assert_eq!(err, TimerError::TargetInPast);
+    }
+
+    #[test]
+    fn countdown_cannot_target_exact_now() {
+        let now = Utc::now();
+        let err = CountdownTimer::new_with_now(now, now).unwrap_err();
         assert_eq!(err, TimerError::TargetInPast);
     }
 
     #[test]
     fn countdown_reports_remaining_and_completion() {
-        let target = Utc::now() + TimeDelta::try_minutes(5).unwrap();
-        let mut timer = CountdownTimer::new(target).unwrap();
+        let now = Utc::now();
+        let target = now + TimeDelta::try_minutes(5).unwrap();
+        let mut timer = CountdownTimer::new_with_now(target, now).unwrap();
         timer.start();
-        let remaining = timer.remaining(Utc::now() + TimeDelta::try_minutes(1).unwrap());
-        assert!(remaining.num_seconds() <= 4 * 60 + 1);
+        let remaining = timer.remaining(now + TimeDelta::try_minutes(1).unwrap());
+        assert_eq!(remaining.num_seconds(), 4 * 60);
         timer.update_state(target + TimeDelta::try_seconds(1).unwrap());
         assert_eq!(timer.state, TimerState::Completed);
+    }
+
+    #[test]
+    fn set_target_with_now_is_deterministic() {
+        let now = Utc::now();
+        let initial_target = now + TimeDelta::try_minutes(5).unwrap();
+        let mut timer = CountdownTimer::new_with_now(initial_target, now).unwrap();
+        timer.start();
+
+        let new_target = now + TimeDelta::try_minutes(10).unwrap();
+        timer.set_target_with_now(new_target, now).unwrap();
+        assert_eq!(timer.target, new_target);
+        assert_eq!(timer.state, TimerState::Idle);
     }
 
     #[test]
