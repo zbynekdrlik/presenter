@@ -1,43 +1,47 @@
-'use strict';
+"use strict";
 
 (function () {
   const translations = Array.isArray(__TRANSLATIONS__) ? __TRANSLATIONS__ : [];
   const initialBroadcast = __ACTIVE__ || null;
 
   function coerceDashboardFlag(value) {
-    if (typeof value === 'boolean') return value;
-    if (typeof value === 'number') return value !== 0;
-    if (typeof value === 'string') {
+    if (typeof value === "boolean") return value;
+    if (typeof value === "number") return value !== 0;
+    if (typeof value === "string") {
       const normalized = value.trim().toLowerCase();
       if (!normalized) return true;
-      return !['false', '0', 'no', 'off'].includes(normalized);
+      return !["false", "0", "no", "off"].includes(normalized);
     }
     return true;
   }
 
   function normalizeTranslation(raw) {
-    if (!raw || typeof raw !== 'object') {
+    if (!raw || typeof raw !== "object") {
       return {
-        code: '',
-        name: '',
-        language: '',
+        code: "",
+        name: "",
+        language: "",
         showInDashboard: true,
         source: null,
       };
     }
-    const code = typeof raw.code === 'string' ? raw.code : String(raw.code || '');
-    const name = typeof raw.name === 'string' ? raw.name : String(raw.name || '');
+    const code =
+      typeof raw.code === "string" ? raw.code : String(raw.code || "");
+    const name =
+      typeof raw.name === "string" ? raw.name : String(raw.name || "");
     const language =
-      typeof raw.language === 'string' ? raw.language : String(raw.language || '');
+      typeof raw.language === "string"
+        ? raw.language
+        : String(raw.language || "");
     const showInDashboard = coerceDashboardFlag(
-      raw.showInDashboard ?? raw.show_in_dashboard
+      raw.showInDashboard ?? raw.show_in_dashboard,
     );
     const source =
-      raw.source == null || raw.source === ''
+      raw.source == null || raw.source === ""
         ? null
-        : typeof raw.source === 'string'
-        ? raw.source
-        : String(raw.source);
+        : typeof raw.source === "string"
+          ? raw.source
+          : String(raw.source);
     return {
       code,
       name,
@@ -53,15 +57,17 @@
     translations: normalizedTranslations,
     refreshingTranslations: false,
     preferences: {
-      mainTranslation: normalizedTranslations.length ? normalizedTranslations[0].code : '',
-      secondaryTranslation: '',
+      mainTranslation: normalizedTranslations.length
+        ? normalizedTranslations[0].code
+        : "",
+      secondaryTranslation: "",
       characterLimit: 320,
     },
     translationIndex: 0,
     books: [],
     filteredBooks: [],
-    selectedBook: '',
-    selectedBookCode: '',
+    selectedBook: "",
+    selectedBookCode: "",
     selectedBookNumber: 0,
     chapters: [],
     selectedChapter: 1,
@@ -73,7 +79,7 @@
     editMode: false,
     selectedSlides: new Set(),
     presentations: [],
-    activePresentationId: '',
+    activePresentationId: "",
     activeBroadcast: initialBroadcast,
     loadedPassages: [],
     liveSocket: null,
@@ -85,9 +91,9 @@
     bibleEdit: {
       open: false,
       submitting: false,
-      translationCode: '',
-      name: '',
-      language: '',
+      translationCode: "",
+      name: "",
+      language: "",
       showInDashboard: false,
     },
   };
@@ -97,7 +103,9 @@
 
   const els = {
     translationList: document.querySelector('[data-role="translation-list"]'),
-    secondaryTranslation: document.querySelector('[data-role="secondary-translation"]'),
+    secondaryTranslation: document.querySelector(
+      '[data-role="secondary-translation"]',
+    ),
     charLimit: document.querySelector('[data-role="char-limit"]'),
     savePreferences: document.querySelector('[data-role="save-preferences"]'),
     bookFilter: document.querySelector('[data-role="book-filter"]'),
@@ -111,11 +119,17 @@
     selectAllSlides: document.querySelector('[data-role="select-all-slides"]'),
     toggleMode: document.querySelector('[data-role="toggle-mode"]'),
     selectionCount: document.querySelector('[data-role="selection-count"]'),
-    presentationSelect: document.querySelector('[data-role="presentation-select"]'),
+    presentationSelect: document.querySelector(
+      '[data-role="presentation-select"]',
+    ),
     presentationName: document.querySelector('[data-role="presentation-name"]'),
     addToPresentation: document.querySelector('[data-role="presentation-add"]'),
-    refreshPresentations: document.querySelector('[data-role="refresh-presentations"]'),
-    presentationsList: document.querySelector('[data-role="presentations-list"]'),
+    refreshPresentations: document.querySelector(
+      '[data-role="refresh-presentations"]',
+    ),
+    presentationsList: document.querySelector(
+      '[data-role="presentations-list"]',
+    ),
     clearButton: document.querySelector('[data-role="clear-button"]'),
     activeContainer: document.querySelector('[data-role="active-passage"]'),
     toast: document.querySelector('[data-role="toast"]'),
@@ -127,15 +141,19 @@
     bibleEditModal: document.querySelector('[data-role="bible-edit-modal"]'),
     bibleEditForm: document.querySelector('[data-role="bible-edit-form"]'),
     bibleEditName: document.querySelector('[data-role="bible-edit-name"]'),
-    bibleEditLanguage: document.querySelector('[data-role="bible-edit-language"]'),
-    bibleEditDashboard: document.querySelector('[data-role="bible-edit-dashboard"]'),
+    bibleEditLanguage: document.querySelector(
+      '[data-role="bible-edit-language"]',
+    ),
+    bibleEditDashboard: document.querySelector(
+      '[data-role="bible-edit-dashboard"]',
+    ),
     bibleEditDelete: document.querySelector('[data-role="bible-edit-delete"]'),
     bibleEditCancel: document.querySelector('[data-role="bible-edit-cancel"]'),
     bibleEditTitle: document.querySelector('[data-role="bible-edit-title"]'),
   };
 
   function normalizeTranslationCode(code) {
-    if (!code) return '';
+    if (!code) return "";
     return String(code).trim().toLowerCase();
   }
 
@@ -154,34 +172,36 @@
   function showToast(message, variant) {
     if (!els.toast) return;
     els.toast.textContent = message;
-    els.toast.dataset.variant = variant || 'info';
-    els.toast.dataset.visible = 'true';
+    els.toast.dataset.variant = variant || "info";
+    els.toast.dataset.visible = "true";
     clearTimeout(state.toastTimer);
     state.toastTimer = setTimeout(() => {
-      els.toast.dataset.visible = 'false';
+      els.toast.dataset.visible = "false";
     }, 2500);
   }
 
   function apiFetch(path, options) {
-    const url = path.startsWith('http') ? path : `${window.location.origin}${path}`;
+    const url = path.startsWith("http")
+      ? path
+      : `${window.location.origin}${path}`;
     const opts = Object.assign(
       {
-        method: 'GET',
+        method: "GET",
         headers: {
-          'Content-Type': 'application/json',
-          Accept: 'application/json',
+          "Content-Type": "application/json",
+          Accept: "application/json",
         },
       },
-      options || {}
+      options || {},
     );
     return fetch(url, opts).then(async (response) => {
-      const contentType = response.headers.get('content-type') || '';
+      const contentType = response.headers.get("content-type") || "";
       if (!response.ok) {
-        let details = '';
-        if (contentType.includes('application/json')) {
+        let details = "";
+        if (contentType.includes("application/json")) {
           try {
             const data = await response.json();
-            details = data && data.message ? data.message : '';
+            details = data && data.message ? data.message : "";
           } catch (_) {
             details = await response.text();
           }
@@ -191,7 +211,7 @@
         const message = details || `Request failed with ${response.status}`;
         throw new Error(message);
       }
-      if (contentType.includes('application/json')) {
+      if (contentType.includes("application/json")) {
         return response.json();
       }
       return null;
@@ -202,13 +222,13 @@
     if (!selectEl) return;
     const html = state.translations
       .map((translation) => {
-        const selected = translation.code === selectedCode ? ' selected' : '';
+        const selected = translation.code === selectedCode ? " selected" : "";
         const label = translation.language
           ? `${translation.name} (${translation.language})`
           : translation.name;
         return `<option value="${translation.code}"${selected}>${escapeHtml(label)}</option>`;
       })
-      .join('');
+      .join("");
     selectEl.innerHTML = html;
   }
 
@@ -219,28 +239,35 @@
     if (!code) {
       return 0;
     }
-    return state.translations.findIndex((translation) =>
-      translation.code.toLowerCase() === String(code).toLowerCase()
+    return state.translations.findIndex(
+      (translation) =>
+        translation.code.toLowerCase() === String(code).toLowerCase(),
     );
   }
 
   function alignMainTranslation(code) {
     if (!Array.isArray(state.translations) || !state.translations.length) {
-      state.preferences.mainTranslation = '';
+      state.preferences.mainTranslation = "";
       state.translationIndex = 0;
       return;
     }
     const index = findTranslationIndex(code);
     state.translationIndex = index >= 0 ? index : 0;
-    state.preferences.mainTranslation = state.translations[state.translationIndex].code;
+    state.preferences.mainTranslation =
+      state.translations[state.translationIndex].code;
   }
 
   function updateTranslationHeader() {
     if (!els.bibleCount) return;
-    const count = Array.isArray(state.translations) ? state.translations.length : 0;
+    const count = Array.isArray(state.translations)
+      ? state.translations.length
+      : 0;
     els.bibleCount.textContent = `(${count})`;
-    els.bibleCount.dataset.empty = count === 0 ? 'true' : 'false';
-    els.bibleCount.setAttribute('aria-label', `Show all Bibles (${count} available)`);
+    els.bibleCount.dataset.empty = count === 0 ? "true" : "false";
+    els.bibleCount.setAttribute(
+      "aria-label",
+      `Show all Bibles (${count} available)`,
+    );
     els.bibleCount.disabled = count === 0;
   }
 
@@ -253,7 +280,8 @@
       renderBibleModal();
       return;
     }
-    const activeCode = state.preferences.mainTranslation || (state.translations[0]?.code || '');
+    const activeCode =
+      state.preferences.mainTranslation || state.translations[0]?.code || "";
     const activeNormalized = normalizeTranslationCode(activeCode);
     const seen = new Set();
     const displayTranslations = state.translations.filter((translation) => {
@@ -289,23 +317,25 @@
           : translation.name;
         const normalized = normalizeTranslationCode(code);
         const active = activeNormalized && normalized === activeNormalized;
-        const activeAttr = active ? 'true' : 'false';
-        const ariaCurrent = active ? ' aria-current=\"true\"' : '';
-        const dashboardAttr = isTranslationPinned(code) ? ' data-dashboard=\"true\"' : '';
+        const activeAttr = active ? "true" : "false";
+        const ariaCurrent = active ? ' aria-current=\"true\"' : "";
+        const dashboardAttr = isTranslationPinned(code)
+          ? ' data-dashboard=\"true\"'
+          : "";
         return `<li class=\"operator__list-item\" data-translation-code=\"${escapeHtml(code)}\"${dashboardAttr}>
             <button type=\"button\" class=\"operator__list-button\" data-translation-code=\"${escapeHtml(
-          code
-        )}\" data-active=\"${activeAttr}\"${ariaCurrent}>
+              code,
+            )}\" data-active=\"${activeAttr}\"${ariaCurrent}>
               <span class=\"operator__list-label\">${escapeHtml(label)}</span>
             </button>
             <div class=\"operator__list-actions\">
               <button type=\"button\" class=\"operator__list-action operator__list-action--icon operator__list-action--menu\" data-action=\"bible-edit\" data-translation-code=\"${escapeHtml(
-                code
+                code,
               )}\" aria-label=\"Edit ${escapeHtml(label)}\">⋮</button>
             </div>
           </li>`;
       })
-      .join('');
+      .join("");
     els.translationList.innerHTML = html;
     renderBibleModal();
   }
@@ -320,52 +350,52 @@
     const html = state.translations
       .map((translation) => {
         if (!translation) {
-          return '';
+          return "";
         }
-        const code = translation.code ? String(translation.code) : '';
+        const code = translation.code ? String(translation.code) : "";
         const label = translation.language
           ? `${translation.name} (${translation.language})`
           : translation.name;
         const pinned = Boolean(translation.showInDashboard);
-        const star = pinned ? '★' : '☆';
+        const star = pinned ? "★" : "☆";
         const ariaLabel = pinned
           ? `Remove ${label} from dashboard`
           : `Show ${label} on dashboard`;
         return `
           <div class="operator__list-item operator__list-row operator__list-row--modal" data-role="bible-row" data-translation-code="${escapeHtml(
-            code
+            code,
           )}">
             <button type="button" class="operator__list-favorite operator__list-favorite--inline" data-action="bible-dashboard-toggle" data-translation-code="${escapeHtml(
-              code
-            )}" aria-pressed="${pinned ? 'true' : 'false'}" aria-label="${escapeHtml(ariaLabel)}">${star}</button>
+              code,
+            )}" aria-pressed="${pinned ? "true" : "false"}" aria-label="${escapeHtml(ariaLabel)}">${star}</button>
             <button type="button" class="operator__list-button" data-role="bible-item" data-translation-code="${escapeHtml(
-              code
+              code,
             )}">
               <span class="operator__list-label">${escapeHtml(label)}</span>
             </button>
             <div class="operator__list-actions">
               <button type="button" class="operator__list-action operator__list-action--icon operator__list-action--menu" data-action="bible-edit" data-translation-code="${escapeHtml(
-                code
+                code,
               )}" aria-label="Edit ${escapeHtml(label)}">⋮</button>
             </div>
           </div>
         `;
       })
-      .join('');
+      .join("");
     els.bibleModalList.innerHTML = html;
   }
 
   function openBibleModal() {
     if (!els.bibleModal) return;
     renderBibleModal();
-    els.bibleModal.dataset.open = 'true';
-    document.body.dataset.modalOpen = 'bible-list';
+    els.bibleModal.dataset.open = "true";
+    document.body.dataset.modalOpen = "bible-list";
   }
 
   function closeBibleModal() {
     if (!els.bibleModal) return;
-    els.bibleModal.dataset.open = 'false';
-    if (document.body.dataset.modalOpen === 'bible-list') {
+    els.bibleModal.dataset.open = "false";
+    if (document.body.dataset.modalOpen === "bible-list") {
       delete document.body.dataset.modalOpen;
     }
   }
@@ -374,7 +404,7 @@
     if (!code) return;
     const translation = findTranslationByCode(code);
     if (!translation) {
-      showToast('Bible not found', 'error');
+      showToast("Bible not found", "error");
       return;
     }
     const normalizedCode = translation.code;
@@ -382,12 +412,16 @@
     const nextPinned = !wasPinned;
     setTranslationPinState(normalizedCode, nextPinned);
     renderTranslationList();
+    renderBibleModal();
     try {
-      const updated = await apiFetch(`/bible/translations/${encodeURIComponent(normalizedCode)}`, {
-        method: 'PATCH',
-        body: JSON.stringify({ showInDashboard: nextPinned }),
-      });
-      if (updated && typeof updated.showInDashboard === 'boolean') {
+      const updated = await apiFetch(
+        `/bible/translations/${encodeURIComponent(normalizedCode)}`,
+        {
+          method: "PATCH",
+          body: JSON.stringify({ showInDashboard: nextPinned }),
+        },
+      );
+      if (updated && typeof updated.showInDashboard === "boolean") {
         updateTranslationInState(updated);
       }
       if (
@@ -402,10 +436,12 @@
         state.bibleEdit.showInDashboard = pinnedValue;
       }
       renderTranslationList();
-      const message = nextPinned ? 'Bible pinned to dashboard' : 'Bible removed from dashboard';
-      showToast(message, 'success');
+      const message = nextPinned
+        ? "Bible pinned to dashboard"
+        : "Bible removed from dashboard";
+      showToast(message, "success");
     } catch (error) {
-      console.error('Failed to update Bible dashboard pin', error);
+      console.error("Failed to update Bible dashboard pin", error);
       setTranslationPinState(normalizedCode, wasPinned);
       renderTranslationList();
       if (
@@ -418,7 +454,7 @@
         els.bibleEditDashboard.checked = wasPinned;
         state.bibleEdit.showInDashboard = wasPinned;
       }
-      showToast('Failed to update Bible dashboard pin', 'error');
+      showToast("Failed to update Bible dashboard pin", "error");
     }
   }
 
@@ -427,14 +463,18 @@
       return null;
     }
     const target = String(code).toLowerCase();
-    return state.translations.find(
-      (translation) =>
-        translation && typeof translation.code === 'string' && translation.code.toLowerCase() === target
-    ) || null;
+    return (
+      state.translations.find(
+        (translation) =>
+          translation &&
+          typeof translation.code === "string" &&
+          translation.code.toLowerCase() === target,
+      ) || null
+    );
   }
 
   function updateTranslationInState(updated) {
-    if (!updated || typeof updated !== 'object') {
+    if (!updated || typeof updated !== "object") {
       return null;
     }
     const normalized = normalizeTranslation(updated);
@@ -442,7 +482,7 @@
       return null;
     }
     const index = state.translations.findIndex(
-      (entry) => entry && entry.code === normalized.code
+      (entry) => entry && entry.code === normalized.code,
     );
     if (index >= 0) {
       state.translations[index] = normalized;
@@ -455,7 +495,7 @@
   function openBibleEdit(code) {
     const translation = findTranslationByCode(code);
     if (!translation) {
-      showToast('Bible not found', 'error');
+      showToast("Bible not found", "error");
       return;
     }
     state.bibleEdit.open = true;
@@ -466,7 +506,7 @@
     state.bibleEdit.showInDashboard = Boolean(translation.showInDashboard);
 
     if (els.bibleEditForm) {
-      els.bibleEditForm.dataset.submitting = 'false';
+      els.bibleEditForm.dataset.submitting = "false";
     }
     if (els.bibleEditName) {
       els.bibleEditName.value = translation.name;
@@ -482,14 +522,14 @@
     }
     if (els.bibleEditDelete) {
       els.bibleEditDelete.disabled = false;
-      els.bibleEditDelete.removeAttribute('hidden');
+      els.bibleEditDelete.removeAttribute("hidden");
     }
     if (els.bibleEditTitle) {
       els.bibleEditTitle.textContent = `Edit ${translation.name}`;
     }
     if (els.bibleEditModal) {
-      els.bibleEditModal.dataset.open = 'true';
-      document.body.dataset.modalOpen = 'bible-edit';
+      els.bibleEditModal.dataset.open = "true";
+      document.body.dataset.modalOpen = "bible-edit";
       window.setTimeout(() => {
         if (els.bibleEditName) {
           els.bibleEditName.focus();
@@ -502,18 +542,18 @@
   function closeBibleEdit() {
     state.bibleEdit.open = false;
     state.bibleEdit.submitting = false;
-    state.bibleEdit.translationCode = '';
-    state.bibleEdit.name = '';
-    state.bibleEdit.language = '';
+    state.bibleEdit.translationCode = "";
+    state.bibleEdit.name = "";
+    state.bibleEdit.language = "";
     state.bibleEdit.showInDashboard = false;
     if (els.bibleEditModal) {
-      els.bibleEditModal.dataset.open = 'false';
+      els.bibleEditModal.dataset.open = "false";
     }
     if (els.bibleEditDashboard) {
       els.bibleEditDashboard.checked = false;
     }
-    if (els.bibleModal && els.bibleModal.dataset.open === 'true') {
-      document.body.dataset.modalOpen = 'bible-list';
+    if (els.bibleModal && els.bibleModal.dataset.open === "true") {
+      document.body.dataset.modalOpen = "bible-list";
     } else {
       delete document.body.dataset.modalOpen;
     }
@@ -522,7 +562,7 @@
   function setBibleEditSubmitting(submitting) {
     state.bibleEdit.submitting = submitting;
     if (els.bibleEditForm) {
-      els.bibleEditForm.dataset.submitting = submitting ? 'true' : 'false';
+      els.bibleEditForm.dataset.submitting = submitting ? "true" : "false";
     }
     if (els.bibleEditName) {
       els.bibleEditName.disabled = submitting;
@@ -543,17 +583,17 @@
     if (state.bibleEdit.submitting) return;
     const nameInput = els.bibleEditName;
     const languageInput = els.bibleEditLanguage;
-    const name = nameInput ? nameInput.value.trim() : '';
-    const language = languageInput ? languageInput.value.trim() : '';
+    const name = nameInput ? nameInput.value.trim() : "";
+    const language = languageInput ? languageInput.value.trim() : "";
     if (!name) {
-      showToast('Bible name cannot be empty', 'warning');
+      showToast("Bible name cannot be empty", "warning");
       if (nameInput) {
         nameInput.focus();
       }
       return;
     }
     if (!language) {
-      showToast('Language cannot be empty', 'warning');
+      showToast("Language cannot be empty", "warning");
       if (languageInput) {
         languageInput.focus();
       }
@@ -561,7 +601,7 @@
     }
     const code = state.bibleEdit.translationCode;
     if (!code) {
-      showToast('Bible not selected', 'error');
+      showToast("Bible not selected", "error");
       return;
     }
     const wantsDashboard = els.bibleEditDashboard
@@ -574,24 +614,30 @@
         language,
         showInDashboard: wantsDashboard,
       };
-      const updated = await apiFetch(`/bible/translations/${encodeURIComponent(code)}`, {
-        method: 'PATCH',
-        body: JSON.stringify(payload),
-      });
+      const updated = await apiFetch(
+        `/bible/translations/${encodeURIComponent(code)}`,
+        {
+          method: "PATCH",
+          body: JSON.stringify(payload),
+        },
+      );
       if (!updated) {
-        throw new Error('Empty response');
+        throw new Error("Empty response");
       }
       const stored = updateTranslationInState(updated);
       state.bibleEdit.showInDashboard = Boolean(
-        stored ? stored.showInDashboard : wantsDashboard
+        stored ? stored.showInDashboard : wantsDashboard,
       );
       renderTranslationList();
-      renderTranslationSelect(els.secondaryTranslation, state.preferences.secondaryTranslation);
-      showToast('Bible updated', 'success');
+      renderTranslationSelect(
+        els.secondaryTranslation,
+        state.preferences.secondaryTranslation,
+      );
+      showToast("Bible updated", "success");
       closeBibleEdit();
     } catch (error) {
-      console.error('Failed to update Bible', error);
-      showToast('Failed to update Bible', 'error');
+      console.error("Failed to update Bible", error);
+      showToast("Failed to update Bible", "error");
     } finally {
       setBibleEditSubmitting(false);
     }
@@ -601,10 +647,11 @@
     if (state.bibleEdit.submitting) return;
     const code = state.bibleEdit.translationCode;
     if (!code) {
-      showToast('Bible not selected', 'error');
+      showToast("Bible not selected", "error");
       return;
     }
-    const confirmMessage = 'Delete this Bible? This removes the translation and all passages.';
+    const confirmMessage =
+      "Delete this Bible? This removes the translation and all passages.";
     // eslint-disable-next-line no-alert
     if (!window.confirm(confirmMessage)) {
       return;
@@ -612,30 +659,37 @@
     setBibleEditSubmitting(true);
     try {
       await apiFetch(`/bible/translations/${encodeURIComponent(code)}`, {
-        method: 'DELETE',
+        method: "DELETE",
       });
       state.translations = state.translations.filter(
-        (translation) => translation && translation.code !== code
+        (translation) => translation && translation.code !== code,
       );
       if (state.preferences.mainTranslation === code) {
-        const next = state.translations.length ? state.translations[0].code : '';
+        const next = state.translations.length
+          ? state.translations[0].code
+          : "";
         state.preferences.mainTranslation = next;
         state.translationIndex = next ? 0 : -1;
       } else {
-        state.translationIndex = findTranslationIndex(state.preferences.mainTranslation);
+        state.translationIndex = findTranslationIndex(
+          state.preferences.mainTranslation,
+        );
       }
       if (state.preferences.secondaryTranslation === code) {
-        state.preferences.secondaryTranslation = '';
+        state.preferences.secondaryTranslation = "";
       }
       alignMainTranslation(state.preferences.mainTranslation);
       renderTranslationList();
-      renderTranslationSelect(els.secondaryTranslation, state.preferences.secondaryTranslation);
+      renderTranslationSelect(
+        els.secondaryTranslation,
+        state.preferences.secondaryTranslation,
+      );
       closeBibleEdit();
-      showToast('Bible deleted', 'success');
+      showToast("Bible deleted", "success");
       await loadBooks();
     } catch (error) {
-      console.error('Failed to delete Bible', error);
-      showToast('Failed to delete Bible', 'error');
+      console.error("Failed to delete Bible", error);
+      showToast("Failed to delete Bible", "error");
     } finally {
       setBibleEditSubmitting(false);
     }
@@ -646,57 +700,62 @@
     state.refreshingTranslations = true;
     if (els.bibleImport) {
       els.bibleImport.disabled = true;
-      els.bibleImport.dataset.loading = 'true';
+      els.bibleImport.dataset.loading = "true";
     }
     try {
-      const summaries = await apiFetch('/bible/translations/refresh', { method: 'POST' });
+      const summaries = await apiFetch("/bible/translations/refresh", {
+        method: "POST",
+      });
       const imported = Array.isArray(summaries) ? summaries.length : 0;
       if (imported > 0) {
         showToast(
-          `Imported ${imported} Bible translation${imported === 1 ? '' : 's'}`,
-          'success'
+          `Imported ${imported} Bible translation${imported === 1 ? "" : "s"}`,
+          "success",
         );
       } else {
-        showToast('No additional Bible translations available', 'info');
+        showToast("No additional Bible translations available", "info");
       }
       await reloadTranslations();
     } catch (error) {
-      console.error('Failed to refresh Bible translations', error);
-      showToast('Failed to import Bible translations', 'error');
+      console.error("Failed to refresh Bible translations", error);
+      showToast("Failed to import Bible translations", "error");
     } finally {
       state.refreshingTranslations = false;
       if (els.bibleImport) {
         els.bibleImport.disabled = false;
-        els.bibleImport.dataset.loading = 'false';
+        els.bibleImport.dataset.loading = "false";
       }
     }
   }
 
   async function reloadTranslations() {
     try {
-      const next = await apiFetch('/bible/translations');
+      const next = await apiFetch("/bible/translations");
       if (!Array.isArray(next)) {
         return;
       }
       state.translations = next.map(normalizeTranslation);
       alignMainTranslation(state.preferences.mainTranslation);
       renderTranslationList();
-      renderTranslationSelect(els.secondaryTranslation, state.preferences.secondaryTranslation);
+      renderTranslationSelect(
+        els.secondaryTranslation,
+        state.preferences.secondaryTranslation,
+      );
       await loadBooks();
     } catch (error) {
-      console.error('Failed to reload Bible translations', error);
-      showToast('Failed to reload Bible translations', 'error');
+      console.error("Failed to reload Bible translations", error);
+      showToast("Failed to reload Bible translations", "error");
     }
   }
 
   function escapeHtml(value) {
-    if (typeof value !== 'string') return value;
+    if (typeof value !== "string") return value;
     return value
-      .replace(/&/g, '&amp;')
-      .replace(/</g, '&lt;')
-      .replace(/>/g, '&gt;')
-      .replace(/"/g, '&quot;')
-      .replace(/'/g, '&#039;');
+      .replace(/&/g, "&amp;")
+      .replace(/</g, "&lt;")
+      .replace(/>/g, "&gt;")
+      .replace(/"/g, "&quot;")
+      .replace(/'/g, "&#039;");
   }
 
   function formatReference(book, chapter, start, end) {
@@ -710,7 +769,7 @@
     state.loadingSlides = loading;
     if (els.loadButton) {
       els.loadButton.disabled = loading;
-      els.loadButton.dataset.loading = loading ? 'true' : 'false';
+      els.loadButton.dataset.loading = loading ? "true" : "false";
     }
   }
 
@@ -718,21 +777,24 @@
     state.savingPreferences = saving;
     if (els.savePreferences) {
       els.savePreferences.disabled = saving;
-      els.savePreferences.dataset.loading = saving ? 'true' : 'false';
+      els.savePreferences.dataset.loading = saving ? "true" : "false";
     }
   }
 
   async function fetchPreferences() {
     try {
-      const prefs = await apiFetch('/bible/preferences');
+      const prefs = await apiFetch("/bible/preferences");
       if (prefs) {
-        state.preferences.mainTranslation = prefs.mainTranslation || state.preferences.mainTranslation;
-        state.preferences.secondaryTranslation = prefs.secondaryTranslation || '';
-        state.preferences.characterLimit = Number(prefs.characterLimit) || state.preferences.characterLimit;
+        state.preferences.mainTranslation =
+          prefs.mainTranslation || state.preferences.mainTranslation;
+        state.preferences.secondaryTranslation =
+          prefs.secondaryTranslation || "";
+        state.preferences.characterLimit =
+          Number(prefs.characterLimit) || state.preferences.characterLimit;
       }
     } catch (error) {
-      console.warn('Failed to load Bible preferences', error);
-      showToast('Failed to load saved preferences', 'warning');
+      console.warn("Failed to load Bible preferences", error);
+      showToast("Failed to load saved preferences", "warning");
     }
     alignMainTranslation(state.preferences.mainTranslation);
     renderPreferences();
@@ -740,7 +802,10 @@
 
   function renderPreferences() {
     renderTranslationList();
-    renderTranslationSelect(els.secondaryTranslation, state.preferences.secondaryTranslation);
+    renderTranslationSelect(
+      els.secondaryTranslation,
+      state.preferences.secondaryTranslation,
+    );
     if (els.charLimit) {
       els.charLimit.value = state.preferences.characterLimit;
     }
@@ -754,14 +819,14 @@
         secondaryTranslation: state.preferences.secondaryTranslation || null,
         characterLimit: state.preferences.characterLimit,
       };
-      await apiFetch('/bible/preferences', {
-        method: 'PUT',
+      await apiFetch("/bible/preferences", {
+        method: "PUT",
         body: JSON.stringify(payload),
       });
-      showToast('Preferences saved', 'success');
+      showToast("Preferences saved", "success");
     } catch (error) {
-      console.error('Failed to save preferences', error);
-      showToast('Failed to save preferences', 'error');
+      console.error("Failed to save preferences", error);
+      showToast("Failed to save preferences", "error");
     } finally {
       setSavingPreferences(false);
     }
@@ -770,14 +835,20 @@
   async function loadBooks(preserveSelection = true) {
     if (!state.preferences.mainTranslation) return;
     try {
-      const data = await apiFetch(`/bible/books?translation=${encodeURIComponent(state.preferences.mainTranslation)}`);
-      const previousBook = preserveSelection ? state.selectedBook : '';
-      const previousBookCode = preserveSelection ? state.selectedBookCode : '';
-      const previousBookNumber = preserveSelection ? state.selectedBookNumber : 0;
+      const data = await apiFetch(
+        `/bible/books?translation=${encodeURIComponent(state.preferences.mainTranslation)}`,
+      );
+      const previousBook = preserveSelection ? state.selectedBook : "";
+      const previousBookCode = preserveSelection ? state.selectedBookCode : "";
+      const previousBookNumber = preserveSelection
+        ? state.selectedBookNumber
+        : 0;
       const previousChapter = preserveSelection ? state.selectedChapter : 1;
       const previousVerseStart = preserveSelection ? state.verseStart : 1;
       const previousVerseEnd = preserveSelection ? state.verseEnd : 1;
-      const previousVerseEndCustom = preserveSelection ? state.verseEndCustom : false;
+      const previousVerseEndCustom = preserveSelection
+        ? state.verseEndCustom
+        : false;
 
       const rawBooks = Array.isArray(data) ? data : [];
       state.books = rawBooks.map((entry) => {
@@ -785,12 +856,17 @@
           ? entry.chapters.map((chapter) => ({
               number: Number(chapter.number) || 1,
               verseCount:
-                Number(chapter.verse_count ?? chapter.verseCount ?? chapter.verse_count ?? 0) || 0,
+                Number(
+                  chapter.verse_count ??
+                    chapter.verseCount ??
+                    chapter.verse_count ??
+                    0,
+                ) || 0,
             }))
           : [];
         return {
-          name: entry.book || '',
-          code: entry.code || '',
+          name: entry.book || "",
+          code: entry.code || "",
           number: Number(entry.number) || 0,
           chapters,
         };
@@ -810,20 +886,23 @@
         });
         const target = matchedEntry || state.books[0];
         state.selectedBook = target.name;
-        state.selectedBookCode = target.code || '';
+        state.selectedBookCode = target.code || "";
         state.selectedBookNumber = target.number || 0;
         state.chapters = target.chapters || [];
         const maxChapter = state.chapters.length
           ? state.chapters[state.chapters.length - 1].number || 1
           : 1;
-        state.selectedChapter = Math.min(Math.max(previousChapter, 1), maxChapter);
+        state.selectedChapter = Math.min(
+          Math.max(previousChapter, 1),
+          maxChapter,
+        );
         state.verseStart = Math.max(previousVerseStart, 1);
         state.verseEnd = Math.max(previousVerseEnd, state.verseStart);
         state.verseEndCustom = previousVerseEndCustom;
         applyChapterDefaults();
       } else {
-        state.selectedBook = '';
-        state.selectedBookCode = '';
+        state.selectedBook = "";
+        state.selectedBookCode = "";
         state.selectedBookNumber = 0;
         state.chapters = [];
         state.selectedChapter = 1;
@@ -835,8 +914,8 @@
       renderBookList();
       updateReferenceInputs();
     } catch (error) {
-      console.error('Failed to load books', error);
-      showToast('Failed to load books', 'error');
+      console.error("Failed to load books", error);
+      showToast("Failed to load books", "error");
     }
   }
 
@@ -850,32 +929,45 @@
     const html = state.filteredBooks
       .map((entry) => {
         const isSelected = entry.name === state.selectedBook;
-        const chapterCount = Array.isArray(entry.chapters) ? entry.chapters.length : 0;
+        const chapterCount = Array.isArray(entry.chapters)
+          ? entry.chapters.length
+          : 0;
         const meta = chapterCount
           ? `<span class=\"operator__list-meta\">${chapterCount} ch.</span>`
-          : '';
-        const activeAttr = isSelected ? ' data-active=\"true\"' : '';
+          : "";
+        const activeAttr = isSelected ? ' data-active=\"true\"' : "";
         return `<div class=\"operator__list-item\">
           <button type=\"button\" class=\"operator__list-button\"${activeAttr} data-book=\"${escapeHtml(
-          entry.name
-        )}\" data-book-code=\"${escapeHtml(entry.code || '')}\" data-book-number=\"${entry.number}\">\n            <span class=\"operator__list-label\">${escapeHtml(entry.name)}</span>
+            entry.name,
+          )}\" data-book-code=\"${escapeHtml(entry.code || "")}\" data-book-number=\"${entry.number}\">\n            <span class=\"operator__list-label\">${escapeHtml(entry.name)}</span>
             ${meta}
           </button>
         </div>`;
       })
-      .join('');
+      .join("");
     els.bookList.innerHTML = html;
   }
 
   function applyChapterDefaults() {
-    const chapterEntry = (state.chapters || []).find((c) => c.number === state.selectedChapter);
-    const maxChapter = state.chapters.length ? state.chapters[state.chapters.length - 1].number : 1;
-    state.selectedChapter = Math.min(Math.max(state.selectedChapter, 1), maxChapter || 1);
+    const chapterEntry = (state.chapters || []).find(
+      (c) => c.number === state.selectedChapter,
+    );
+    const maxChapter = state.chapters.length
+      ? state.chapters[state.chapters.length - 1].number
+      : 1;
+    state.selectedChapter = Math.min(
+      Math.max(state.selectedChapter, 1),
+      maxChapter || 1,
+    );
     if (chapterEntry) {
-      const verseCount = chapterEntry.verseCount || chapterEntry.verse_count || 1;
+      const verseCount =
+        chapterEntry.verseCount || chapterEntry.verse_count || 1;
       state.verseStart = Math.min(Math.max(state.verseStart, 1), verseCount);
       if (state.verseEndCustom) {
-        state.verseEnd = Math.min(Math.max(state.verseEnd, state.verseStart), verseCount);
+        state.verseEnd = Math.min(
+          Math.max(state.verseEnd, state.verseStart),
+          verseCount,
+        );
       } else {
         state.verseEnd = verseCount;
       }
@@ -889,7 +981,9 @@
 
   function updateReferenceInputs() {
     if (els.chapterInput) {
-      const maxChapter = state.chapters.length ? state.chapters[state.chapters.length - 1].number : 1;
+      const maxChapter = state.chapters.length
+        ? state.chapters[state.chapters.length - 1].number
+        : 1;
       els.chapterInput.value = state.selectedChapter;
       els.chapterInput.min = 1;
       els.chapterInput.max = Math.max(1, maxChapter);
@@ -904,17 +998,21 @@
       if (state.verseEndCustom) {
         els.verseEndInput.value = state.verseEnd;
       } else {
-        els.verseEndInput.value = '';
+        els.verseEndInput.value = "";
       }
-      els.verseEndInput.placeholder = 'All';
+      els.verseEndInput.placeholder = "All";
       els.verseEndInput.min = state.verseStart;
       els.verseEndInput.max = verseCount;
     }
   }
 
   function getCurrentVerseCount() {
-    const chapterEntry = (state.chapters || []).find((c) => c.number === state.selectedChapter);
-    return chapterEntry ? chapterEntry.verseCount || chapterEntry.verse_count || 1 : 1;
+    const chapterEntry = (state.chapters || []).find(
+      (c) => c.number === state.selectedChapter,
+    );
+    return chapterEntry
+      ? chapterEntry.verseCount || chapterEntry.verse_count || 1
+      : 1;
   }
 
   function normalizeForSearch(input) {
@@ -944,17 +1042,20 @@
     } else {
       state.filteredBooks = state.books.filter((entry) => {
         const nameKey = normalizeForSearch(entry.name || "");
-          const codeKey = normalizeForSearch(entry.code || "");
-          const nameMatch = nameKey.includes(term);
-          const codeMatch = codeKey.includes(term);
+        const codeKey = normalizeForSearch(entry.code || "");
+        const nameMatch = nameKey.includes(term);
+        const codeMatch = codeKey.includes(term);
         return nameMatch || codeMatch;
       });
       state.bookSelectionLocked = false;
     }
-    if (!state.filteredBooks.find((entry) => entry.name === state.selectedBook) && state.filteredBooks.length) {
+    if (
+      !state.filteredBooks.find((entry) => entry.name === state.selectedBook) &&
+      state.filteredBooks.length
+    ) {
       const next = state.filteredBooks[0];
       state.selectedBook = next.name;
-      state.selectedBookCode = next.code || '';
+      state.selectedBookCode = next.code || "";
       state.selectedBookNumber = next.number || 0;
       state.chapters = next.chapters || [];
       state.selectedChapter = 1;
@@ -969,25 +1070,38 @@
 
   async function loadSlides() {
     if (!state.selectedBook) {
-      showToast('Select a book first', 'warning');
+      showToast("Select a book first", "warning");
       return;
     }
-    const chapterValue = Number(els.chapterInput ? els.chapterInput.value : state.selectedChapter) || state.selectedChapter;
+    const chapterValue =
+      Number(
+        els.chapterInput ? els.chapterInput.value : state.selectedChapter,
+      ) || state.selectedChapter;
     state.selectedChapter = Math.max(1, chapterValue);
     const verseCount = getCurrentVerseCount();
-    const verseStartRaw = els.verseStartInput ? els.verseStartInput.value : `${state.verseStart}`;
-    const verseEndRaw = els.verseEndInput ? els.verseEndInput.value : '';
+    const verseStartRaw = els.verseStartInput
+      ? els.verseStartInput.value
+      : `${state.verseStart}`;
+    const verseEndRaw = els.verseEndInput ? els.verseEndInput.value : "";
     const candidateStart = Number(verseStartRaw);
-    const verseStartValue = Number.isFinite(candidateStart) ? candidateStart : state.verseStart;
-    const candidateEnd = verseEndRaw && verseEndRaw.trim().length ? Number(verseEndRaw) : null;
+    const verseStartValue = Number.isFinite(candidateStart)
+      ? candidateStart
+      : state.verseStart;
+    const candidateEnd =
+      verseEndRaw && verseEndRaw.trim().length ? Number(verseEndRaw) : null;
     state.verseStart = Math.min(Math.max(verseStartValue, 1), verseCount);
     if (candidateEnd === null) {
       state.verseEndCustom = false;
       state.verseEnd = verseCount;
     } else {
       state.verseEndCustom = true;
-      const safeEnd = Number.isFinite(candidateEnd) ? candidateEnd : state.verseStart;
-      state.verseEnd = Math.min(Math.max(safeEnd, state.verseStart), verseCount);
+      const safeEnd = Number.isFinite(candidateEnd)
+        ? candidateEnd
+        : state.verseStart;
+      state.verseEnd = Math.min(
+        Math.max(safeEnd, state.verseStart),
+        verseCount,
+      );
     }
     updateReferenceInputs();
     setLoadingSlides(true);
@@ -1003,15 +1117,18 @@
       characterLimit: state.preferences.characterLimit,
     };
     try {
-      const response = await apiFetch('/bible/resolve', {
-        method: 'POST',
+      const response = await apiFetch("/bible/resolve", {
+        method: "POST",
         body: JSON.stringify(payload),
       });
       state.slides = Array.isArray(response.slides)
         ? response.slides.map((slide) => {
             const metadata = slide.metadata || null;
-            const mainReference = slide.main_reference || deriveReferenceFromMetadata(metadata);
-            const translationReference = slide.translation_reference || deriveReferenceFromMetadata(metadata);
+            const mainReference =
+              slide.main_reference || deriveReferenceFromMetadata(metadata);
+            const translationReference =
+              slide.translation_reference ||
+              deriveReferenceFromMetadata(metadata);
             return {
               id: slide.id,
               order: slide.order,
@@ -1031,10 +1148,10 @@
       renderSlides();
       updateSelectionLabel();
       recordLoadedPassage(payload);
-      showToast('Slides loaded', 'success');
+      showToast("Slides loaded", "success");
     } catch (error) {
-      console.error('Failed to load slides', error);
-      showToast(error.message || 'Failed to load slides', 'error');
+      console.error("Failed to load slides", error);
+      showToast(error.message || "Failed to load slides", "error");
     } finally {
       setLoadingSlides(false);
     }
@@ -1043,17 +1160,18 @@
   function renderSlides() {
     if (!els.slidesContainer) return;
     if (!state.slides.length) {
-      els.slidesContainer.innerHTML = "<p class='operator__slides-empty'>Load a passage to populate slides.</p>";
+      els.slidesContainer.innerHTML =
+        "<p class='operator__slides-empty'>Load a passage to populate slides.</p>";
       return;
     }
     const html = state.slides
       .map((slide, index) => renderSlideCard(slide, index))
-      .join('');
+      .join("");
     els.slidesContainer.innerHTML = html;
   }
 
   function renderSlideCard(slide, index) {
-    const checked = state.selectedSlides.has(slide.id) ? ' checked' : '';
+    const checked = state.selectedSlides.has(slide.id) ? " checked" : "";
     const header = `
       <header class='operator__slide-header'>
         <div class='operator__slide-header-left'>
@@ -1074,29 +1192,30 @@
           <section class='operator__slide-editor operator__slide-editor--bible'>
             <label>
               <span>Main</span>
-              <textarea data-role='slide-main'>${escapeHtml(slide.main || '')}</textarea>
+              <textarea data-role='slide-main'>${escapeHtml(slide.main || "")}</textarea>
             </label>
             <label>
               <span>Translation</span>
-              <textarea data-role='slide-translation'>${escapeHtml(slide.translation || '')}</textarea>
+              <textarea data-role='slide-translation'>${escapeHtml(slide.translation || "")}</textarea>
             </label>
             <div class='operator__slide-editor-grid'>
               <label>
                 <span>Main Reference</span>
-                <input type='text' data-role='slide-main-ref' value='${escapeHtml(slide.mainReference || '')}' />
+                <input type='text' data-role='slide-main-ref' value='${escapeHtml(slide.mainReference || "")}' />
               </label>
               <label>
                 <span>Translation Reference</span>
-                <input type='text' data-role='slide-translation-ref' value='${escapeHtml(slide.translationReference || '')}' />
+                <input type='text' data-role='slide-translation-ref' value='${escapeHtml(slide.translationReference || "")}' />
               </label>
             </div>
           </section>
         </article>
       `;
     }
-    const translationMarkup = slide.translation && slide.translation.trim().length
-      ? `<div class='operator__slide-text operator__slide-text--translation operator__slide-text--secondary'>${lineBreakHtml(slide.translation)}</div>`
-      : '';
+    const translationMarkup =
+      slide.translation && slide.translation.trim().length
+        ? `<div class='operator__slide-text operator__slide-text--translation operator__slide-text--secondary'>${lineBreakHtml(slide.translation)}</div>`
+        : "";
     const references = buildReferenceHtml(slide);
     return `
       <article class='operator__slide-card operator__slide-card--bible' data-slide-id='${slide.id}' data-index='${index}'>
@@ -1113,70 +1232,83 @@
   function buildReferenceHtml(slide) {
     const pieces = [];
     if (slide.mainReference) {
-      pieces.push(`<span class='operator__slide-reference'>${escapeHtml(slide.mainReference)}</span>`);
+      pieces.push(
+        `<span class='operator__slide-reference'>${escapeHtml(slide.mainReference)}</span>`,
+      );
     } else if (slide.metadata && slide.metadata.bible) {
       const verses = slide.metadata.bible.verses || [];
       if (verses.length) {
         const start = verses[0].start;
         const end = verses[verses.length - 1].end;
-        pieces.push(`<span class='operator__slide-reference'>${escapeHtml(formatReference(slide.metadata.bible.book, slide.metadata.bible.chapter, start, end))}</span>`);
+        pieces.push(
+          `<span class='operator__slide-reference'>${escapeHtml(formatReference(slide.metadata.bible.book, slide.metadata.bible.chapter, start, end))}</span>`,
+        );
       }
     }
     if (slide.translationReference) {
-      pieces.push(`<span class='operator__slide-reference operator__slide-reference--secondary'>${escapeHtml(slide.translationReference)}</span>`);
+      pieces.push(
+        `<span class='operator__slide-reference operator__slide-reference--secondary'>${escapeHtml(slide.translationReference)}</span>`,
+      );
     }
     if (!pieces.length) {
-      return '';
+      return "";
     }
-    return `<footer class='operator__slide-footer'>${pieces.join('')}</footer>`;
+    return `<footer class='operator__slide-footer'>${pieces.join("")}</footer>`;
   }
 
   function lineBreakHtml(value) {
-    return escapeHtml(value || '').replace(/\n/g, '<br />');
+    return escapeHtml(value || "").replace(/\n/g, "<br />");
   }
   function resolveTranslationByCode(code) {
     if (!code) return null;
     const target = String(code).toLowerCase();
-    return state.translations.find((translation) => translation.code.toLowerCase() === target) || null;
+    return (
+      state.translations.find(
+        (translation) => translation.code.toLowerCase() === target,
+      ) || null
+    );
   }
 
   function buildLoadedPassageKey(entry) {
     if (!entry) return null;
-    const endValue = entry.verseEnd === null ? 'all' : entry.verseEnd;
+    const endValue = entry.verseEnd === null ? "all" : entry.verseEnd;
     return [
-      entry.mainTranslation || '',
-      entry.secondaryTranslation || '',
-      entry.bookCode || entry.book || '',
+      entry.mainTranslation || "",
+      entry.secondaryTranslation || "",
+      entry.bookCode || entry.book || "",
       entry.bookNumber || 0,
       entry.chapter || 0,
       entry.verseStart || 0,
       endValue,
       entry.characterLimit || 0,
-    ].join('|');
+    ].join("|");
   }
 
   function recordLoadedPassage(payload) {
     if (!payload) return;
     const normalized = {
-      mainTranslation: payload.mainTranslation || '',
-      secondaryTranslation: payload.secondaryTranslation || '',
-      book: payload.book || '',
-      bookCode: payload.bookCode || '',
-      bookNumber: typeof payload.bookNumber === 'number' ? payload.bookNumber : null,
+      mainTranslation: payload.mainTranslation || "",
+      secondaryTranslation: payload.secondaryTranslation || "",
+      book: payload.book || "",
+      bookCode: payload.bookCode || "",
+      bookNumber:
+        typeof payload.bookNumber === "number" ? payload.bookNumber : null,
       chapter: payload.chapter || 1,
       verseStart: payload.verseStart || 1,
-      verseEnd: typeof payload.verseEnd === 'number' ? payload.verseEnd : null,
-      characterLimit: payload.characterLimit || state.preferences.characterLimit,
+      verseEnd: typeof payload.verseEnd === "number" ? payload.verseEnd : null,
+      characterLimit:
+        payload.characterLimit || state.preferences.characterLimit,
     };
     const key = buildLoadedPassageKey(normalized);
     if (!key) return;
     const existingIndex = loadedPassageKeys.get(key);
-    if (typeof existingIndex === 'number') {
+    if (typeof existingIndex === "number") {
       state.loadedPassages.splice(existingIndex, 1);
     }
     const main = resolveTranslationByCode(normalized.mainTranslation);
     const secondary = resolveTranslationByCode(normalized.secondaryTranslation);
-    const referenceEnd = normalized.verseEnd === null ? state.verseEnd : normalized.verseEnd;
+    const referenceEnd =
+      normalized.verseEnd === null ? state.verseEnd : normalized.verseEnd;
     const entry = {
       key,
       translationCode: normalized.mainTranslation,
@@ -1200,26 +1332,35 @@
         loadedPassageKeys.delete(removed.key);
       }
     }
-    state.loadedPassages.forEach((item, index) => loadedPassageKeys.set(item.key, index));
+    state.loadedPassages.forEach((item, index) =>
+      loadedPassageKeys.set(item.key, index),
+    );
     renderLoadedPassages();
   }
 
   function renderLoadedPassages() {
     if (!els.loadedPassages) return;
     if (!state.loadedPassages.length) {
-      els.loadedPassages.innerHTML = "<li class='operator__list-item operator__list-item--empty'>Load a passage to populate this list.</li>";
+      els.loadedPassages.innerHTML =
+        "<li class='operator__list-item operator__list-item--empty'>Load a passage to populate this list.</li>";
       return;
     }
     const html = state.loadedPassages
       .map((entry) => {
         const reference = entry.includeFullChapter
           ? `${entry.book} ${entry.chapter}`
-          : formatReference(entry.book, entry.chapter, entry.verseStart, entry.verseEnd);
+          : formatReference(
+              entry.book,
+              entry.chapter,
+              entry.verseStart,
+              entry.verseEnd,
+            );
         const translationLabel = entry.translationName || entry.translationCode;
-        const secondaryLabel = entry.secondaryTranslationName || entry.secondaryTranslationCode;
+        const secondaryLabel =
+          entry.secondaryTranslationName || entry.secondaryTranslationCode;
         const secondaryBadge = secondaryLabel
           ? `<span class='operator__list-meta operator__list-meta--secondary'>${escapeHtml(secondaryLabel)}</span>`
-          : '';
+          : "";
         return `<li class='operator__list-item' data-loaded-key='${entry.key}'>
           <button type='button' class='operator__list-button'>
             <span class='operator__list-label'>${escapeHtml(reference)}</span>
@@ -1228,13 +1369,15 @@
           </button>
         </li>`;
       })
-      .join('');
+      .join("");
     els.loadedPassages.innerHTML = html;
   }
 
   async function applyLoadedPassage(entry) {
     if (!entry) return;
-    const translationChanged = entry.translationCode && entry.translationCode !== state.preferences.mainTranslation;
+    const translationChanged =
+      entry.translationCode &&
+      entry.translationCode !== state.preferences.mainTranslation;
     if (translationChanged) {
       alignMainTranslation(entry.translationCode);
       renderTranslationList();
@@ -1242,9 +1385,13 @@
     } else {
       await loadBooks();
     }
-    state.preferences.secondaryTranslation = entry.secondaryTranslationCode || '';
-    renderTranslationSelect(els.secondaryTranslation, state.preferences.secondaryTranslation);
-    if (typeof entry.characterLimit === 'number' && entry.characterLimit > 0) {
+    state.preferences.secondaryTranslation =
+      entry.secondaryTranslationCode || "";
+    renderTranslationSelect(
+      els.secondaryTranslation,
+      state.preferences.secondaryTranslation,
+    );
+    if (typeof entry.characterLimit === "number" && entry.characterLimit > 0) {
       state.preferences.characterLimit = entry.characterLimit;
       if (els.charLimit) {
         els.charLimit.value = entry.characterLimit;
@@ -1261,17 +1408,17 @@
     });
     if (bookEntry) {
       state.selectedBook = bookEntry.name;
-      state.selectedBookCode = bookEntry.code || '';
+      state.selectedBookCode = bookEntry.code || "";
       state.selectedBookNumber = bookEntry.number || 0;
       state.chapters = bookEntry.chapters || [];
     } else if (state.books.length) {
       const fallback = state.books[0];
       state.selectedBook = fallback.name;
-      state.selectedBookCode = fallback.code || '';
+      state.selectedBookCode = fallback.code || "";
       state.selectedBookNumber = fallback.number || 0;
       state.chapters = fallback.chapters || [];
     } else {
-      showToast('No books available for the selected translation', 'error');
+      showToast("No books available for the selected translation", "error");
       return;
     }
     state.bookSelectionLocked = true;
@@ -1287,7 +1434,9 @@
     state.selectedChapter = entry.chapter;
     state.verseStart = entry.verseStart;
     state.verseEndCustom = !entry.includeFullChapter;
-    state.verseEnd = entry.includeFullChapter ? getCurrentVerseCount() : entry.verseEnd;
+    state.verseEnd = entry.includeFullChapter
+      ? getCurrentVerseCount()
+      : entry.verseEnd;
     applyChapterDefaults();
     renderBookList();
     updateReferenceInputs();
@@ -1301,11 +1450,13 @@
   }
 
   function updateMode() {
-    if (typeof document !== 'undefined' && document.body) {
-      document.body.dataset.mode = state.editMode ? 'edit' : 'live';
+    if (typeof document !== "undefined" && document.body) {
+      document.body.dataset.mode = state.editMode ? "edit" : "live";
     }
     if (els.toggleMode) {
-      els.toggleMode.textContent = state.editMode ? 'Switch to Live Mode' : 'Switch to Edit Mode';
+      els.toggleMode.textContent = state.editMode
+        ? "Switch to Live Mode"
+        : "Switch to Edit Mode";
     }
   }
 
@@ -1316,13 +1467,13 @@
   }
 
   function ensureBibleMetadata(slide) {
-    if (!slide || typeof slide !== 'object') {
+    if (!slide || typeof slide !== "object") {
       return {};
     }
-    if (!slide.metadata || typeof slide.metadata !== 'object') {
+    if (!slide.metadata || typeof slide.metadata !== "object") {
       slide.metadata = {};
     }
-    if (!slide.metadata.bible || typeof slide.metadata.bible !== 'object') {
+    if (!slide.metadata.bible || typeof slide.metadata.bible !== "object") {
       slide.metadata.bible = {};
     }
     return slide.metadata.bible;
@@ -1344,36 +1495,45 @@
 
   async function appendSlidesToPresentation() {
     if (!state.selectedSlides.size) {
-      showToast('Select at least one slide', 'warning');
+      showToast("Select at least one slide", "warning");
       return;
     }
-    let targetPresentationId = els.presentationSelect && els.presentationSelect.value;
-    const newName = els.presentationName ? els.presentationName.value.trim() : '';
+    let targetPresentationId =
+      els.presentationSelect && els.presentationSelect.value;
+    const newName = els.presentationName
+      ? els.presentationName.value.trim()
+      : "";
     try {
       let presentationDetail = null;
       if (newName) {
-        presentationDetail = await apiFetch('/bible/presentations', {
-          method: 'POST',
+        presentationDetail = await apiFetch("/bible/presentations", {
+          method: "POST",
           body: JSON.stringify({ name: newName }),
         });
         await loadPresentations();
         targetPresentationId = presentationDetail.id;
         if (els.presentationName) {
-          els.presentationName.value = '';
+          els.presentationName.value = "";
         }
       }
       if (!targetPresentationId) {
-        showToast('Select or create a presentation', 'warning');
+        showToast("Select or create a presentation", "warning");
         return;
       }
       const slides = state.slides
         .filter((slide) => state.selectedSlides.has(slide.id))
         .map(slideToPayload);
-      const detail = await apiFetch(`/bible/presentations/${targetPresentationId}/append`, {
-        method: 'POST',
-        body: JSON.stringify({ slides }),
-      });
-      showToast(`Added ${slides.length} slide${slides.length === 1 ? '' : 's'}`, 'success');
+      const detail = await apiFetch(
+        `/bible/presentations/${targetPresentationId}/append`,
+        {
+          method: "POST",
+          body: JSON.stringify({ slides }),
+        },
+      );
+      showToast(
+        `Added ${slides.length} slide${slides.length === 1 ? "" : "s"}`,
+        "success",
+      );
       if (presentationDetail === null) {
         // fetch detail to keep UI fresh
         await loadPresentations();
@@ -1382,18 +1542,27 @@
       renderSlides();
       updateSelectionLabel();
     } catch (error) {
-      console.error('Failed to append slides', error);
-      showToast(error.message || 'Failed to append slides', 'error');
+      console.error("Failed to append slides", error);
+      showToast(error.message || "Failed to append slides", "error");
     }
   }
 
   function slideToPayload(slide) {
-    const metadata = slide.metadata ? JSON.parse(JSON.stringify(slide.metadata)) : null;
+    const metadata = slide.metadata
+      ? JSON.parse(JSON.stringify(slide.metadata))
+      : null;
     if (metadata && metadata.bible) {
       const bibleMeta = metadata.bible;
-      const mainLabel = slide.mainReference || bibleMeta.mainReferenceLabel || bibleMeta.main_reference_label || null;
+      const mainLabel =
+        slide.mainReference ||
+        bibleMeta.mainReferenceLabel ||
+        bibleMeta.main_reference_label ||
+        null;
       const translationLabel =
-        slide.translationReference || bibleMeta.translationReferenceLabel || bibleMeta.translation_reference_label || null;
+        slide.translationReference ||
+        bibleMeta.translationReferenceLabel ||
+        bibleMeta.translation_reference_label ||
+        null;
       bibleMeta.mainReferenceLabel = mainLabel;
       bibleMeta.main_reference_label = mainLabel;
       bibleMeta.translationReferenceLabel = translationLabel;
@@ -1401,7 +1570,7 @@
     }
     return {
       main: slide.main,
-      translation: slide.translation || '',
+      translation: slide.translation || "",
       stage: slide.stage || slide.main,
       group: slide.group || null,
       metadata,
@@ -1410,20 +1579,21 @@
 
   async function loadPresentations() {
     try {
-      const data = await apiFetch('/bible/presentations');
+      const data = await apiFetch("/bible/presentations");
       state.presentations = Array.isArray(data) ? data : [];
       renderPresentationSelect();
       renderPresentations();
     } catch (error) {
-      console.error('Failed to load presentations', error);
-      showToast('Failed to load presentations', 'error');
+      console.error("Failed to load presentations", error);
+      showToast("Failed to load presentations", "error");
     }
   }
 
   async function renamePresentation(presentationId, currentName) {
-    const next = typeof window !== 'undefined'
-      ? window.prompt('Rename presentation', currentName || '')
-      : null;
+    const next =
+      typeof window !== "undefined"
+        ? window.prompt("Rename presentation", currentName || "")
+        : null;
     if (next === null) {
       return;
     }
@@ -1433,29 +1603,33 @@
     }
     try {
       await apiFetch(`/bible/presentations/${presentationId}`, {
-        method: 'PATCH',
+        method: "PATCH",
         body: JSON.stringify({ name: trimmed }),
       });
-      showToast('Presentation renamed', 'success');
+      showToast("Presentation renamed", "success");
       await loadPresentations();
     } catch (error) {
-      console.error('Failed to rename presentation', error);
-      showToast(error.message || 'Failed to rename presentation', 'error');
+      console.error("Failed to rename presentation", error);
+      showToast(error.message || "Failed to rename presentation", "error");
     }
   }
 
   function renderPresentationSelect() {
     if (!els.presentationSelect) return;
     const options = state.presentations
-      .map((presentation) => `<option value="${presentation.id}">${escapeHtml(presentation.name)}</option>`)
-      .join('');
+      .map(
+        (presentation) =>
+          `<option value="${presentation.id}">${escapeHtml(presentation.name)}</option>`,
+      )
+      .join("");
     els.presentationSelect.innerHTML = `<option value="">Select existing…</option>${options}`;
   }
 
   function renderPresentations() {
     if (!els.presentationsList) return;
     if (!state.presentations.length) {
-      els.presentationsList.innerHTML = "<p class='operator__slides-empty'>No Bible presentations yet.</p>";
+      els.presentationsList.innerHTML =
+        "<p class='operator__slides-empty'>No Bible presentations yet.</p>";
       return;
     }
     const html = state.presentations
@@ -1467,11 +1641,11 @@
               <strong>${escapedName}</strong>
               <button type='button' class='operator__list-action operator__list-action--secondary' data-role='presentation-rename' data-presentation-id='${presentation.id}' data-presentation-name='${escapedName}'>Rename</button>
             </header>
-            <p>${presentation.slide_count || 0} slide${presentation.slide_count === 1 ? '' : 's'}</p>
+            <p>${presentation.slide_count || 0} slide${presentation.slide_count === 1 ? "" : "s"}</p>
           </article>
         `;
       })
-      .join('');
+      .join("");
     els.presentationsList.innerHTML = html;
   }
 
@@ -1493,15 +1667,22 @@
     const verses = broadcast.reference;
     const verseStart = verses.verse_start ?? verses.verseStart;
     const verseEnd = verses.verse_end ?? verses.verseEnd ?? verseStart;
-    const reference = formatReference(verses.book, verses.chapter, verseStart, verseEnd);
-    const translationLabel = broadcast.translation ? broadcast.translation.name : '';
+    const reference = formatReference(
+      verses.book,
+      verses.chapter,
+      verseStart,
+      verseEnd,
+    );
+    const translationLabel = broadcast.translation
+      ? broadcast.translation.name
+      : "";
     els.activeContainer.innerHTML = `
       <article class='operator__active-card'>
         <header>
           <strong>${escapeHtml(reference)}</strong>
           <span>${escapeHtml(translationLabel)}</span>
         </header>
-        <p>${escapeHtml(broadcast.text || '')}</p>
+        <p>${escapeHtml(broadcast.text || "")}</p>
       </article>
     `;
   }
@@ -1514,32 +1695,37 @@
         /* ignore */
       }
     }
-    const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
-    const socket = new WebSocket(`${protocol}//${window.location.host}/live/ws`);
+    const protocol = window.location.protocol === "https:" ? "wss:" : "ws:";
+    const socket = new WebSocket(
+      `${protocol}//${window.location.host}/live/ws`,
+    );
     state.liveSocket = socket;
-    socket.addEventListener('message', (event) => {
+    socket.addEventListener("message", (event) => {
       try {
         const payload = JSON.parse(event.data);
-        if (payload.type === 'bible' || payload.type === 'Bible') {
+        if (payload.type === "bible" || payload.type === "Bible") {
           state.activeBroadcast = payload.broadcast || null;
           renderActive();
-        } else if (payload.type === 'bible_cleared' || payload.type === 'BibleCleared') {
+        } else if (
+          payload.type === "bible_cleared" ||
+          payload.type === "BibleCleared"
+        ) {
           state.activeBroadcast = null;
           renderActive();
         }
       } catch (error) {
-        console.warn('Failed to parse bible payload', error);
+        console.warn("Failed to parse bible payload", error);
       }
     });
-    socket.addEventListener('close', () => {
+    socket.addEventListener("close", () => {
       if (state.liveReconnectTimer) return;
       state.liveReconnectTimer = setTimeout(() => {
         state.liveReconnectTimer = null;
         connectLiveSocket();
       }, 2000);
     });
-    socket.addEventListener('error', (error) => {
-      console.error('Bible live socket error', error);
+    socket.addEventListener("error", (error) => {
+      console.error("Bible live socket error", error);
       try {
         socket.close();
       } catch (_) {
@@ -1550,9 +1736,10 @@
 
   async function refreshActiveFromServer() {
     try {
-      const active = await apiFetch('/bible/active');
+      const active = await apiFetch("/bible/active");
       // Avoid unnecessary re-renders if unchanged
-      const prev = state.activeBroadcast && JSON.stringify(state.activeBroadcast);
+      const prev =
+        state.activeBroadcast && JSON.stringify(state.activeBroadcast);
       const next = active && JSON.stringify(active);
       if (prev !== next) {
         state.activeBroadcast = active || null;
@@ -1574,26 +1761,38 @@
   async function triggerSlideById(slideId) {
     const slide = state.slides.find((entry) => entry.id === slideId);
     if (!slide || !slide.metadata || !slide.metadata.bible) {
-      showToast('Slide metadata missing', 'error');
+      showToast("Slide metadata missing", "error");
       return;
     }
     const bibleMeta = ensureBibleMetadata(slide);
     const verses = Array.isArray(bibleMeta.verses) ? bibleMeta.verses : [];
     if (!verses.length) {
-      showToast('Verse metadata missing', 'error');
+      showToast("Verse metadata missing", "error");
       return;
     }
-    const translationCode = bibleMeta.translation_code || bibleMeta.translationCode;
+    const translationCode =
+      bibleMeta.translation_code || bibleMeta.translationCode;
     if (!translationCode) {
-      showToast('Translation metadata missing', 'error');
+      showToast("Translation metadata missing", "error");
       return;
     }
     const verseStart = verses[0].start;
     const verseEnd = verses[verses.length - 1].end;
     const book = bibleMeta.book || state.selectedBook;
-    const bookCode = bibleMeta.book_code || bibleMeta.bookCode || state.selectedBookCode || null;
-    const bookNumber = bibleMeta.book_number || bibleMeta.bookNumber || state.selectedBookNumber || null;
-    const chapter = typeof bibleMeta.chapter === 'number' ? bibleMeta.chapter : state.selectedChapter;
+    const bookCode =
+      bibleMeta.book_code ||
+      bibleMeta.bookCode ||
+      state.selectedBookCode ||
+      null;
+    const bookNumber =
+      bibleMeta.book_number ||
+      bibleMeta.bookNumber ||
+      state.selectedBookNumber ||
+      null;
+    const chapter =
+      typeof bibleMeta.chapter === "number"
+        ? bibleMeta.chapter
+        : state.selectedChapter;
     try {
       const payload = {
         translation: translationCode,
@@ -1608,35 +1807,35 @@
       if (bookNumber) {
         payload.bookNumber = bookNumber;
       }
-      const response = await apiFetch('/bible/trigger', {
-        method: 'POST',
+      const response = await apiFetch("/bible/trigger", {
+        method: "POST",
         body: JSON.stringify(payload),
       });
       state.activeBroadcast = response;
       renderActive();
-      showToast('Slide triggered', 'success');
+      showToast("Slide triggered", "success");
     } catch (error) {
-      console.error('Failed to trigger slide', error);
-      showToast(error.message || 'Failed to trigger slide', 'error');
+      console.error("Failed to trigger slide", error);
+      showToast(error.message || "Failed to trigger slide", "error");
     }
   }
 
   async function clearBroadcast() {
     try {
-      await apiFetch('/bible/clear', { method: 'POST' });
+      await apiFetch("/bible/clear", { method: "POST" });
       state.activeBroadcast = null;
       renderActive();
-      showToast('Broadcast cleared', 'success');
+      showToast("Broadcast cleared", "success");
     } catch (error) {
-      console.error('Failed to clear broadcast', error);
-      showToast('Failed to clear broadcast', 'error');
+      console.error("Failed to clear broadcast", error);
+      showToast("Failed to clear broadcast", "error");
     }
   }
 
   function onSlidesContainerClick(event) {
-    const card = event.target.closest('[data-slide-id]');
+    const card = event.target.closest("[data-slide-id]");
     if (!card) return;
-    const slideId = card.getAttribute('data-slide-id');
+    const slideId = card.getAttribute("data-slide-id");
     if (!slideId) return;
     if (event.target.matches('[data-role="slide-select"]')) {
       if (event.target.checked) {
@@ -1653,9 +1852,9 @@
   }
 
   function onSlidesContainerInput(event) {
-    const wrapper = event.target.closest('[data-slide-id]');
+    const wrapper = event.target.closest("[data-slide-id]");
     if (!wrapper) return;
-    const slideId = wrapper.getAttribute('data-slide-id');
+    const slideId = wrapper.getAttribute("data-slide-id");
     const slide = state.slides.find((entry) => entry.id === slideId);
     if (!slide) return;
     if (event.target.matches('[data-role="slide-main"]')) {
@@ -1673,7 +1872,8 @@
       slide.translationReference = value;
       const bibleMeta = ensureBibleMetadata(slide);
       bibleMeta.translationReferenceLabel = value || null;
-      bibleMeta.translation_reference_label = bibleMeta.translationReferenceLabel;
+      bibleMeta.translation_reference_label =
+        bibleMeta.translationReferenceLabel;
     }
   }
 
@@ -1691,23 +1891,23 @@
 
   function initialiseEvents() {
     document.querySelectorAll('[data-role="view-toggle"]').forEach((button) => {
-      const href = button.getAttribute('data-href');
+      const href = button.getAttribute("data-href");
       if (!href) return;
-      button.addEventListener('click', () => {
+      button.addEventListener("click", () => {
         window.location.href = href;
       });
     });
     if (els.translationList) {
-      els.translationList.addEventListener('click', async (event) => {
+      els.translationList.addEventListener("click", async (event) => {
         const editControl = event.target.closest('[data-action="bible-edit"]');
         if (editControl && editControl.dataset.translationCode) {
           event.preventDefault();
           openBibleEdit(editControl.dataset.translationCode);
           return;
         }
-        const button = event.target.closest('[data-translation-code]');
+        const button = event.target.closest("[data-translation-code]");
         if (!button) return;
-        const code = button.getAttribute('data-translation-code');
+        const code = button.getAttribute("data-translation-code");
         if (!code || code === state.preferences.mainTranslation) {
           return;
         }
@@ -1716,21 +1916,23 @@
         try {
           await savePreferences();
         } catch (error) {
-          console.warn('Failed to persist Bible preferences', error);
+          console.warn("Failed to persist Bible preferences", error);
         }
         await loadBooks();
       });
     }
     if (els.bibleCount) {
-      els.bibleCount.addEventListener('click', (event) => {
+      els.bibleCount.addEventListener("click", (event) => {
         event.preventDefault();
         if (els.bibleCount.disabled) return;
         openBibleModal();
       });
     }
     if (els.bibleModalList) {
-      els.bibleModalList.addEventListener('click', async (event) => {
-        const toggle = event.target.closest('[data-action="bible-dashboard-toggle"]');
+      els.bibleModalList.addEventListener("click", async (event) => {
+        const toggle = event.target.closest(
+          '[data-action="bible-dashboard-toggle"]',
+        );
         if (toggle && toggle.dataset.translationCode) {
           event.preventDefault();
           await toggleBibleDashboard(toggle.dataset.translationCode);
@@ -1746,7 +1948,7 @@
             try {
               await savePreferences();
             } catch (error) {
-              console.warn('Failed to persist Bible preferences', error);
+              console.warn("Failed to persist Bible preferences", error);
             }
             await loadBooks();
           }
@@ -1760,89 +1962,90 @@
       });
     }
     if (els.bibleModalClose) {
-      els.bibleModalClose.addEventListener('click', (event) => {
+      els.bibleModalClose.addEventListener("click", (event) => {
         event.preventDefault();
         closeBibleModal();
       });
     }
     if (els.bibleModal) {
-      els.bibleModal.addEventListener('click', (event) => {
+      els.bibleModal.addEventListener("click", (event) => {
         if (event.target === els.bibleModal) {
           closeBibleModal();
         }
       });
     }
     if (els.bibleImport) {
-      els.bibleImport.addEventListener('click', async (event) => {
+      els.bibleImport.addEventListener("click", async (event) => {
         event.preventDefault();
         await refreshBibleTranslations();
       });
     }
     if (els.bibleEditModal) {
-      els.bibleEditModal.addEventListener('click', (event) => {
+      els.bibleEditModal.addEventListener("click", (event) => {
         if (event.target === els.bibleEditModal) {
           closeBibleEdit();
         }
       });
     }
     if (els.bibleEditForm) {
-      els.bibleEditForm.addEventListener('submit', handleBibleEditSubmit);
+      els.bibleEditForm.addEventListener("submit", handleBibleEditSubmit);
     }
     if (els.bibleEditCancel) {
-      els.bibleEditCancel.addEventListener('click', (event) => {
+      els.bibleEditCancel.addEventListener("click", (event) => {
         event.preventDefault();
         closeBibleEdit();
       });
     }
     if (els.bibleEditDelete) {
-      els.bibleEditDelete.addEventListener('click', async (event) => {
+      els.bibleEditDelete.addEventListener("click", async (event) => {
         event.preventDefault();
         await handleBibleDelete();
       });
     }
     if (els.bibleEditDashboard) {
-      els.bibleEditDashboard.addEventListener('change', (event) => {
+      els.bibleEditDashboard.addEventListener("change", (event) => {
         state.bibleEdit.showInDashboard = Boolean(event.target.checked);
       });
     }
-    window.addEventListener('keydown', (event) => {
-      if (event.key === 'Escape') {
-        if (els.bibleEditModal && els.bibleEditModal.dataset.open === 'true') {
+    window.addEventListener("keydown", (event) => {
+      if (event.key === "Escape") {
+        if (els.bibleEditModal && els.bibleEditModal.dataset.open === "true") {
           closeBibleEdit();
           return;
         }
-        if (els.bibleModal && els.bibleModal.dataset.open === 'true') {
+        if (els.bibleModal && els.bibleModal.dataset.open === "true") {
           closeBibleModal();
         }
       }
     });
     if (els.secondaryTranslation) {
-      els.secondaryTranslation.addEventListener('change', (event) => {
+      els.secondaryTranslation.addEventListener("change", (event) => {
         state.preferences.secondaryTranslation = event.target.value;
       });
     }
     if (els.charLimit) {
-      els.charLimit.addEventListener('input', (event) => {
+      els.charLimit.addEventListener("input", (event) => {
         const value = Number(event.target.value) || 0;
         state.preferences.characterLimit = Math.min(Math.max(value, 1), 4000);
       });
     }
     if (els.savePreferences) {
-      els.savePreferences.addEventListener('click', savePreferences);
+      els.savePreferences.addEventListener("click", savePreferences);
     }
     if (els.bookFilter) {
-      els.bookFilter.addEventListener('input', (event) => {
+      els.bookFilter.addEventListener("input", (event) => {
         filterBooks(event.target.value);
       });
     }
     if (els.bookList) {
-      els.bookList.addEventListener('click', (event) => {
-        const button = event.target.closest('[data-book]');
+      els.bookList.addEventListener("click", (event) => {
+        const button = event.target.closest("[data-book]");
         if (!button) return;
-        const nextBook = button.getAttribute('data-book');
+        const nextBook = button.getAttribute("data-book");
         if (!nextBook) return;
-        const nextCode = button.getAttribute('data-book-code') || '';
-        const nextNumber = Number(button.getAttribute('data-book-number') || '0') || 0;
+        const nextCode = button.getAttribute("data-book-code") || "";
+        const nextNumber =
+          Number(button.getAttribute("data-book-number") || "0") || 0;
         state.selectedBook = nextBook;
         state.selectedBookCode = nextCode;
         state.selectedBookNumber = nextNumber;
@@ -1875,31 +2078,36 @@
       });
     }
     if (els.loadedPassages) {
-      els.loadedPassages.addEventListener('click', async (event) => {
-        const item = event.target.closest('[data-loaded-key]');
+      els.loadedPassages.addEventListener("click", async (event) => {
+        const item = event.target.closest("[data-loaded-key]");
         if (!item) return;
-        const key = item.getAttribute('data-loaded-key');
+        const key = item.getAttribute("data-loaded-key");
         if (!key) return;
-        const entry = state.loadedPassages.find((candidate) => candidate.key === key);
+        const entry = state.loadedPassages.find(
+          (candidate) => candidate.key === key,
+        );
         if (!entry) return;
         try {
           await applyLoadedPassage(entry);
         } catch (error) {
-          console.error('Failed to apply saved passage', error);
-          showToast('Failed to load saved passage', 'error');
+          console.error("Failed to apply saved passage", error);
+          showToast("Failed to load saved passage", "error");
         }
       });
     }
     if (els.chapterInput) {
-      els.chapterInput.addEventListener('input', (event) => {
+      els.chapterInput.addEventListener("input", (event) => {
         const value = Number(event.target.value) || 1;
         state.selectedChapter = value;
         applyChapterDefaults();
       });
     }
     if (els.verseStartInput) {
-      els.verseStartInput.addEventListener('input', (event) => {
-        const raw = typeof event.target.value === 'string' ? event.target.value.trim() : '';
+      els.verseStartInput.addEventListener("input", (event) => {
+        const raw =
+          typeof event.target.value === "string"
+            ? event.target.value.trim()
+            : "";
         const candidate = Number(raw);
         const verseCount = getCurrentVerseCount();
         const value = Number.isFinite(candidate) ? candidate : 1;
@@ -1915,52 +2123,65 @@
       });
     }
     if (els.verseEndInput) {
-      els.verseEndInput.addEventListener('input', (event) => {
-        const raw = typeof event.target.value === 'string' ? event.target.value.trim() : '';
+      els.verseEndInput.addEventListener("input", (event) => {
+        const raw =
+          typeof event.target.value === "string"
+            ? event.target.value.trim()
+            : "";
         const verseCount = getCurrentVerseCount();
         if (!raw) {
           state.verseEndCustom = false;
           state.verseEnd = verseCount;
         } else {
           const candidate = Number(raw);
-          const value = Number.isFinite(candidate) ? candidate : state.verseStart;
+          const value = Number.isFinite(candidate)
+            ? candidate
+            : state.verseStart;
           state.verseEndCustom = true;
-          state.verseEnd = Math.min(Math.max(value, state.verseStart), verseCount);
+          state.verseEnd = Math.min(
+            Math.max(value, state.verseStart),
+            verseCount,
+          );
         }
         updateReferenceInputs();
       });
     }
     if (els.loadButton) {
-      els.loadButton.addEventListener('click', loadSlides);
+      els.loadButton.addEventListener("click", loadSlides);
     }
     if (els.toggleMode) {
-      els.toggleMode.addEventListener('click', toggleMode);
+      els.toggleMode.addEventListener("click", toggleMode);
     }
     if (els.selectAllSlides) {
-      els.selectAllSlides.addEventListener('click', selectAllSlides);
+      els.selectAllSlides.addEventListener("click", selectAllSlides);
     }
     if (els.slidesContainer) {
-      els.slidesContainer.addEventListener('click', onSlidesContainerClick);
-      els.slidesContainer.addEventListener('input', onSlidesContainerInput);
+      els.slidesContainer.addEventListener("click", onSlidesContainerClick);
+      els.slidesContainer.addEventListener("input", onSlidesContainerInput);
     }
     if (els.addToPresentation) {
-      els.addToPresentation.addEventListener('click', appendSlidesToPresentation);
+      els.addToPresentation.addEventListener(
+        "click",
+        appendSlidesToPresentation,
+      );
     }
     if (els.refreshPresentations) {
-      els.refreshPresentations.addEventListener('click', loadPresentations);
+      els.refreshPresentations.addEventListener("click", loadPresentations);
     }
     if (els.presentationsList) {
-      els.presentationsList.addEventListener('click', (event) => {
-        const button = event.target.closest('[data-role="presentation-rename"]');
+      els.presentationsList.addEventListener("click", (event) => {
+        const button = event.target.closest(
+          '[data-role="presentation-rename"]',
+        );
         if (!button) return;
-        const presentationId = button.getAttribute('data-presentation-id');
+        const presentationId = button.getAttribute("data-presentation-id");
         if (!presentationId) return;
-        const currentName = button.getAttribute('data-presentation-name') || '';
+        const currentName = button.getAttribute("data-presentation-name") || "";
         renamePresentation(presentationId, currentName);
       });
     }
     if (els.clearButton) {
-      els.clearButton.addEventListener('click', clearBroadcast);
+      els.clearButton.addEventListener("click", clearBroadcast);
     }
   }
 

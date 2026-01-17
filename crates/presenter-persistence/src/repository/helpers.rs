@@ -6,6 +6,7 @@ use anyhow::anyhow;
 use chrono::{DateTime, Duration, Utc};
 use presenter_core::{
     playlist::{MidiBinding, PlaylistEntryKind},
+    slide::SlideMetadata,
     AbleSetSettings, AndroidStageDisplay, AndroidStageDisplayId, BiblePassage, BibleReference,
     BibleTranslation, CountdownTimer, OscSettings, Playlist, PlaylistEntry, PlaylistEntryId,
     PlaylistId, PreachTimer, PresentationId, ResolumeHost, ResolumeHostId, Slide, SlideContent,
@@ -54,8 +55,15 @@ pub fn to_domain_slide(model: slide_entity::Model) -> Result<Slide, RepositoryEr
         SlideText::new(model.stage_text)?,
         model.group_name.map(SlideGroup::new),
     );
-    let slide = Slide::new(model.position as u32, content)
+    let mut slide = Slide::new(model.position as u32, content)
         .with_id(SlideId::from_uuid(parse_uuid(&model.id)?));
+    if let Some(raw) = model.metadata_json.as_deref() {
+        if !raw.trim().is_empty() {
+            if let Ok(meta) = serde_json::from_str::<SlideMetadata>(raw) {
+                slide = slide.with_metadata(Some(meta));
+            }
+        }
+    }
     Ok(slide)
 }
 
