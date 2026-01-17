@@ -609,6 +609,89 @@ impl AppState {
             .await
     }
 
+    pub async fn bible_book_chapter_summaries(
+        &self,
+        translation_code: &str,
+    ) -> anyhow::Result<Vec<presenter_core::bible::BibleBookChapterSummary>> {
+        self.repository
+            .bible_book_chapter_summaries(translation_code)
+            .await
+    }
+
+    pub async fn generate_bible_slides(
+        &self,
+        main_translation_code: &str,
+        secondary_translation_code: Option<&str>,
+        book: &str,
+        book_code: Option<&str>,
+        chapter: u16,
+        verse_start: u16,
+        verse_end: u16,
+        character_limit: u32,
+    ) -> anyhow::Result<(BibleTranslation, Option<BibleTranslation>, Vec<Slide>)> {
+        let translations = self.list_bible_translations().await?;
+        let main_translation = translations
+            .iter()
+            .find(|t| t.code.eq_ignore_ascii_case(main_translation_code))
+            .cloned()
+            .ok_or_else(|| anyhow::anyhow!("unknown main translation"))?;
+
+        let secondary_translation = if let Some(code) = secondary_translation_code {
+            translations
+                .into_iter()
+                .find(|t| t.code.eq_ignore_ascii_case(code))
+        } else {
+            None
+        };
+
+        let main_passages = self
+            .repository
+            .bible_passage_range(
+                &main_translation.code,
+                book,
+                book_code,
+                chapter,
+                verse_start,
+                verse_end,
+            )
+            .await?;
+
+        let canonical_book_code = main_passages
+            .first()
+            .and_then(|p| p.reference.book_code.clone());
+
+        let secondary_lookup: HashMap<u16, presenter_core::BiblePassage> =
+            if let Some(ref tr) = secondary_translation {
+                let passages = self
+                    .repository
+                    .bible_passage_range(
+                        &tr.code,
+                        book,
+                        canonical_book_code.as_deref(),
+                        chapter,
+                        verse_start,
+                        verse_end,
+                    )
+                    .await?;
+                passages
+                    .into_iter()
+                    .map(|p| (p.reference.verse_start, p))
+                    .collect()
+            } else {
+                HashMap::new()
+            };
+
+        let slides = slides::compose_bible_slides(
+            &main_translation,
+            secondary_translation.as_ref(),
+            &main_passages,
+            &secondary_lookup,
+            character_limit,
+        )?;
+
+        Ok((main_translation, secondary_translation, slides))
+    }
+
     // OSC methods
     pub async fn osc_settings(&self) -> anyhow::Result<OscSettings> {
         self.repository.get_osc_settings().await

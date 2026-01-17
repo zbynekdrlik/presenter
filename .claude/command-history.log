@@ -1183,3 +1183,70 @@ Synced bible.rs and bible.css from origin/main to fix:
 Co-Authored-By: Claude Opus 4.5 <noreply@anthropic.com>
 EOF
 )"
+[2026-01-17 19:09:04] git push origin dev
+[2026-01-17 19:09:11] gh run list --limit 5
+[2026-01-17 19:09:16] gh run watch 21098689051 2>&1
+[2026-01-17 19:09:22] sleep 120 && gh run view 21098689051 --json conclusion,status 2>&1
+[2026-01-17 19:11:28] gh run list --json status,conclusion,name,startedAt,createdAt | head -20
+[2026-01-17 19:11:36] sleep 300 && gh run view 21098689051 --json conclusion,status 2>&1
+[2026-01-17 19:16:43] gh run list --status in_progress --limit 5
+[2026-01-17 19:16:49] gh run view 21098688446 --json conclusion,status,startedAt 2>&1
+[2026-01-17 19:16:54] for i in 1 2 3 4 5; do sleep 120 && echo "Check $i:" && gh run view 21098688446 --json conclusion,status 2>&1; done
+[2026-01-17 19:27:05] for i in 1 2 3 4 5 6; do sleep 120 && echo "Check $i:" && gh run view 21098688446 --json conclusion,status 2>&1; done
+[2026-01-17 19:39:15] for i in 1 2 3 4 5 6; do sleep 120 && echo "Check $i:" && gh run view 21098688446 --json conclusion,status 2>&1; done
+[2026-01-17 19:51:23] gh run view 21098688446 --log-failed 2>&1 | tail -150
+[2026-01-17 19:51:57] git show origin/main:crates/presenter-server/src/router/bible.rs 2>/dev/null | grep -n "bible.resolve\|resolve"
+[2026-01-17 19:52:01] git show origin/main:crates/presenter-server/src/router.rs 2>/dev/null | grep "/bible"
+[2026-01-17 19:52:08] git show origin/main:crates/presenter-server/src/router/bible.rs 2>/dev/null > /tmp/bible_main.rs && wc -l /tmp/bible_main.rs
+[2026-01-17 19:52:13] git show origin/main:crates/presenter-server/src/router/bible.rs > /home/newlevel/devel/presenter/presenter-dev2/crates/presenter-server/src/router/bible.rs
+[2026-01-17 19:52:17] git show origin/main:crates/presenter-server/src/router.rs > /home/newlevel/devel/presenter/presenter-dev2/crates/presenter-server/src/router.rs
+[2026-01-17 19:52:21] cargo build --release -p presenter-server 2>&1 | tail -50
+[2026-01-17 19:52:39] git diff dev origin/main -- crates/presenter-server/src/state/mod.rs | head -100
+[2026-01-17 19:52:46] git fetch origin && git merge origin/main --no-edit -m "Merge origin/main into dev to sync Bible functionality" 2>&1 | head -50
+[2026-01-17 19:52:54] git log --oneline -5 dev && echo "---" && git log --oneline -5 origin/main
+[2026-01-17 19:52:59] git show 34e7b8d --stat | head -30
+[2026-01-17 19:53:05] git checkout HEAD~ -- crates/presenter-server/src/router.rs crates/presenter-server/src/router/bible.rs
+[2026-01-17 19:53:10] git diff 34e7b8d HEAD --stat crates/presenter-server/
+[2026-01-17 19:53:15] git show 34e7b8d:crates/presenter-server/src/ui/bible.rs | wc -l
+[2026-01-17 19:53:19] git log --oneline 34e7b8d^..HEAD
+[2026-01-17 19:53:26] git log --oneline 08abe38 | head -20
+[2026-01-17 19:53:34] git show 08abe38:crates/presenter-server/src/ui/bible.rs | wc -l
+[2026-01-17 19:53:42] git show 08abe38:crates/presenter-server/src/ui/bible.rs > /home/newlevel/devel/presenter/presenter-dev2/crates/presenter-server/src/ui/bible.rs
+git show 08abe38:crates/presenter-server/src/ui/styles/bible.css > /home/newlevel/devel/presenter/presenter-dev2/crates/presenter-server/src/ui/styles/bible.css
+git show 08abe38:crates/presenter-server/src/router/bible.rs > /home/newlevel/devel/presenter/presenter-dev2/crates/presenter-server/src/router/bible.rs
+git show 08abe38:crates/presenter-server/src/router.rs > /home/newlevel/devel/presenter/presenter-dev2/crates/presenter-server/src/router.rs
+git show 08abe38:crates/presenter-server/src/state/mod.rs > /home/newlevel/devel/presenter/presenter-dev2/crates/presenter-server/src/state/mod.rs
+[2026-01-17 19:53:46] cargo build --release -p presenter-server 2>&1 | tail -80
+[2026-01-17 19:54:15] git checkout HEAD -- crates/presenter-server/src/router.rs crates/presenter-server/src/router/bible.rs crates/presenter-server/src/state/mod.rs
+[2026-01-17 19:54:20] cargo build --release -p presenter-server 2>&1 | tail -30
+[2026-01-17 19:55:38] git show 08abe38:crates/presenter-server/src/router/bible.rs | grep -A100 "resolve_bible_slides"
+[2026-01-17 19:55:45] git show 08abe38:crates/presenter-server/src/router/bible.rs | grep -B5 "BibleResolveRequest"
+[2026-01-17 19:55:49] git show 08abe38:crates/presenter-server/src/router/bible.rs | grep -A20 "struct BibleResolveRequest"
+[2026-01-17 19:55:59] git show 08abe38:crates/presenter-server/src/state/mod.rs 2>/dev/null | grep -A60 "async fn generate_bible_slides"
+[2026-01-17 19:56:03] git show 08abe38:crates/presenter-server/src/state/app.rs 2>/dev/null | grep -A60 "generate_bible_slides"
+[2026-01-17 19:56:09] git show 08abe38:crates/presenter-server/src/state/ 2>&1 | head -20
+[2026-01-17 19:56:13] ls -la crates/presenter-server/src/state/
+[2026-01-17 19:56:53] git show 08abe38:crates/presenter-server/src/router/bible.rs | grep -A50 "fn bible_slide_to_dto"
+[2026-01-17 19:56:57] git show 08abe38:crates/presenter-server/src/router/bible.rs | grep -B3 -A25 "struct BibleSlideDto"
+[2026-01-17 19:57:45] cargo build --release -p presenter-server 2>&1 | tail -50
+[2026-01-17 19:58:56] grep -n "compose_bible_slides" crates/presenter-server/src/state/app.rs
+[2026-01-17 19:59:33] cargo build --release -p presenter-server 2>&1 | tail -50
+[2026-01-17 20:02:55] git add -A && git commit -m "$(cat <<'EOF'
+fix(bible): add missing /bible/resolve endpoint and compose_bible_slides
+
+The merge at 34e7b8d incorrectly resolved conflicts, keeping older dev
+versions of Bible-related files instead of the newer main versions.
+
+This commit adds the missing pieces:
+- /bible/resolve endpoint for generating Bible slides
+- compose_bible_slides function in slides.rs
+- generate_bible_slides and bible_book_chapter_summaries methods in AppState
+- BibleResolveRequest/Response and BibleSlideDto DTOs
+
+These were present on origin/main but lost during the merge.
+
+🤖 Generated with [Claude Code](https://claude.com/claude-code)
+
+Co-Authored-By: Claude Opus 4.5 <noreply@anthropic.com>
+EOF
+)" && git push origin dev

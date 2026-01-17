@@ -1,8 +1,105 @@
-use presenter_core::{PresentationId, Slide, SlideContent, SlideId, SlideText};
+use presenter_core::slide::{BibleSlideMetadata, BibleSlideVerseRef, SlideMetadata};
+use presenter_core::{
+    BiblePassage, BibleTranslation, PresentationId, Slide, SlideContent, SlideId, SlideText,
+};
 use std::collections::HashMap;
 
 use super::stage::blank_slide_content;
 use super::AppState;
+
+pub(crate) fn compose_bible_slides(
+    main_translation: &BibleTranslation,
+    secondary_translation: Option<&BibleTranslation>,
+    main_passages: &[BiblePassage],
+    secondary_lookup: &HashMap<u16, BiblePassage>,
+    character_limit: u32,
+) -> anyhow::Result<Vec<Slide>> {
+    let mut slides: Vec<Slide> = Vec::new();
+    if main_passages.is_empty() {
+        return Ok(slides);
+    }
+
+    let book = main_passages[0].reference.book.clone();
+    let book_code = main_passages[0].reference.book_code.clone();
+    let book_number = main_passages[0].reference.book_number;
+    let chapter = main_passages[0].reference.chapter;
+
+    let mut current_main = String::new();
+    let mut current_tr = String::new();
+    let mut verses_meta: Vec<(u16, u16)> = Vec::new();
+
+    let push_slide = |slides: &mut Vec<Slide>,
+                      main: String,
+                      tr: String,
+                      verses: &[(u16, u16)]|
+     -> anyhow::Result<()> {
+        if main.trim().is_empty() {
+            return Ok(());
+        }
+        let content = SlideContent::new(
+            SlideText::new(&main)?,
+            SlideText::new(&tr)?,
+            SlideText::new(&main)?,
+            None,
+        );
+        let metadata = SlideMetadata::new().with_bible(BibleSlideMetadata {
+            translation_code: main_translation.code.clone(),
+            secondary_translation_code: secondary_translation.map(|t| t.code.clone()),
+            book: book.clone(),
+            book_code: book_code.clone(),
+            book_number,
+            chapter,
+            verses: verses
+                .iter()
+                .map(|(s, e)| BibleSlideVerseRef::new(*s, *e))
+                .collect(),
+            main_reference_label: None,
+            translation_reference_label: None,
+        });
+        slides.push(Slide::new(slides.len() as u32, content).with_metadata(Some(metadata)));
+        Ok(())
+    };
+
+    for p in main_passages {
+        let label = format!("{}. ", p.reference.verse_start);
+        let line = format!("{}{}", label, p.text);
+        let prospective_len =
+            current_main.len() + if current_main.is_empty() { 0 } else { 1 } + line.len();
+        if prospective_len > character_limit as usize && !current_main.is_empty() {
+            // flush
+            push_slide(
+                &mut slides,
+                current_main.clone(),
+                current_tr.clone(),
+                &verses_meta,
+            )?;
+            current_main.clear();
+            current_tr.clear();
+            verses_meta.clear();
+        }
+        if !current_main.is_empty() {
+            current_main.push('\n');
+        }
+        current_main.push_str(&line);
+        // translation (secondary)
+        if let Some(sec) = secondary_lookup.get(&p.reference.verse_start) {
+            let tr_label = format!("{}. ", sec.reference.verse_start);
+            let tr_line = format!("{}{}", tr_label, sec.text);
+            if !current_tr.is_empty() {
+                current_tr.push('\n');
+            }
+            current_tr.push_str(&tr_line);
+        }
+        verses_meta.push((p.reference.verse_start, p.reference.verse_end));
+    }
+
+    // final flush
+    if !current_main.is_empty() {
+        push_slide(&mut slides, current_main, current_tr, &verses_meta)?;
+    }
+
+    Ok(slides)
+}
 
 impl AppState {
     pub async fn update_slide_content(

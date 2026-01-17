@@ -7,7 +7,8 @@ use axum::{
     response::Html,
     Json,
 };
-use presenter_core::{BiblePassage, BibleReference, BibleTranslation};
+use presenter_core::slide::SlideMetadata;
+use presenter_core::{BiblePassage, BibleReference, BibleTranslation, Slide};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use tracing::instrument;
@@ -235,4 +236,143 @@ pub(super) async fn bible_ui(
     };
     let html = crate::ui::render_bible_ui(&state, embed).await?;
     Ok(html)
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub(super) struct BibleResolveRequest {
+    pub(super) main_translation: String,
+    #[serde(default)]
+    pub(super) secondary_translation: Option<String>,
+    pub(super) book: String,
+    #[serde(default)]
+    pub(super) book_code: Option<String>,
+    pub(super) chapter: u16,
+    pub(super) verse_start: u16,
+    #[serde(default)]
+    pub(super) verse_end: Option<u16>,
+    #[serde(default)]
+    pub(super) character_limit: Option<u32>,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub(super) struct BibleResolveResponse {
+    main_translation: BibleTranslation,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    secondary_translation: Option<BibleTranslation>,
+    slides: Vec<BibleSlideDto>,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub(super) struct BibleSlideDto {
+    id: String,
+    order: u32,
+    main: String,
+    translation: String,
+    stage: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    group: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    metadata: Option<SlideMetadata>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    main_reference: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    translation_reference: Option<String>,
+}
+
+fn bible_slide_to_dto(slide: &Slide) -> Result<BibleSlideDto, AppError> {
+    let metadata = slide.metadata.clone();
+    let (main_reference, translation_reference) = metadata
+        .as_ref()
+        .and_then(|meta| meta.bible.as_ref())
+        .map(|meta| {
+            (
+                meta.main_reference_label.clone(),
+                meta.translation_reference_label.clone(),
+            )
+        })
+        .unwrap_or((None, None));
+
+    Ok(BibleSlideDto {
+        id: slide.id.to_string(),
+        order: slide.order,
+        main: slide.content.main.value().to_string(),
+        translation: slide.content.translation.value().to_string(),
+        stage: slide.content.stage.value().to_string(),
+        group: slide
+            .content
+            .group
+            .as_ref()
+            .map(|group| group.name().to_string()),
+        metadata,
+        main_reference,
+        translation_reference,
+    })
+}
+
+#[instrument(skip_all)]
+pub(super) async fn resolve_bible_slides(
+    State(state): State<AppState>,
+    Json(payload): Json<BibleResolveRequest>,
+) -> Result<Json<BibleResolveResponse>, AppError> {
+    if payload.main_translation.trim().is_empty() {
+        return Err(AppError::bad_request_message("mainTranslation is required"));
+    }
+    let main_translation_code = payload.main_translation.trim();
+    let book = payload.book.trim();
+    let book_code = payload
+        .book_code
+        .as_deref()
+        .map(|value| value.trim())
+        .filter(|value| !value.is_empty());
+    let verse_end = if let Some(end) = payload.verse_end {
+        end
+    } else {
+        let summaries = state
+            .bible_book_chapter_summaries(main_translation_code)
+            .await?;
+        summaries
+            .into_iter()
+            .find(|summary| {
+                if summary.chapter != payload.chapter {
+                    return false;
+                }
+                if let Some(code) = book_code {
+                    summary
+                        .book_code
+                        .as_deref()
+                        .map(|candidate| candidate.eq_ignore_ascii_case(code))
+                        .unwrap_or(false)
+                } else {
+                    summary.book.eq_ignore_ascii_case(book)
+                }
+            })
+            .map(|summary| summary.verse_count)
+            .unwrap_or(payload.verse_start)
+    }
+    .max(payload.verse_start);
+    let character_limit = payload.character_limit.unwrap_or(320);
+    let (main_translation, secondary_translation, slides) = state
+        .generate_bible_slides(
+            main_translation_code,
+            payload.secondary_translation.as_deref(),
+            book,
+            book_code,
+            payload.chapter,
+            payload.verse_start,
+            verse_end,
+            character_limit,
+        )
+        .await?;
+    let mut slide_dtos = Vec::with_capacity(slides.len());
+    for slide in slides {
+        slide_dtos.push(bible_slide_to_dto(&slide)?);
+    }
+    Ok(Json(BibleResolveResponse {
+        main_translation,
+        secondary_translation,
+        slides: slide_dtos,
+    }))
 }

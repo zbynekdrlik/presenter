@@ -47,6 +47,7 @@ pub fn build_router(state: AppState) -> Router {
         .route("/bible/books", get(bible::list_bible_books))
         .route("/bible/search", get(bible::search_bible_passages))
         .route("/bible/passage", get(bible::get_bible_passage))
+        .route("/bible/resolve", post(bible::resolve_bible_slides))
         .route(
             "/bible/translations/refresh",
             post(bible::refresh_bible_translations),
