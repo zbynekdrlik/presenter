@@ -146,6 +146,7 @@ impl Repository {
             stage_text_search: Set(String::new()),
             group_name: Set(None),
             created_at: Set(Utc::now().into()),
+            metadata_json: Set(None),
         })
         .exec(&txn)
         .await?;
@@ -339,6 +340,11 @@ impl Repository {
                     .as_ref()
                     .map(|group| group.name().to_owned())),
                 created_at: Set(Utc::now().into()),
+                metadata_json: Set(slide
+                    .metadata
+                    .as_ref()
+                    .map(|m| serde_json::to_string(m).ok())
+                    .flatten()),
             };
             slide_entity::Entity::insert(active).exec(&txn).await?;
         }
@@ -363,6 +369,7 @@ impl Repository {
             code: Set(translation.code.clone()),
             name: Set(translation.name.clone()),
             language: Set(translation.language.clone()),
+            show_in_dashboard: Set(true),
             source: Set(translation.source.clone()),
             created_at: Set(Utc::now().into()),
         };
@@ -378,6 +385,8 @@ impl Repository {
                 id: Set(Uuid::new_v4().to_string()),
                 translation_code: Set(translation.code.clone()),
                 book: Set(reference.book.clone()),
+                book_code: Set(reference.book_code.clone().unwrap_or_default()),
+                book_number: Set(reference.book_number.unwrap_or(0) as i32),
                 chapter: Set(reference.chapter as i32),
                 verse_start: Set(reference.verse_start as i32),
                 verse_end: Set(reference.verse_end as i32),

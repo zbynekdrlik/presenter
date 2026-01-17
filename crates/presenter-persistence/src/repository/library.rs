@@ -59,6 +59,10 @@ impl Repository {
                     stage_text_search: Set(fold_query(slide.content.stage.value())),
                     group_name: Set(slide.content.group.as_ref().map(|g| g.name().to_owned())),
                     created_at: Set(Utc::now().into()),
+                    metadata_json: Set(slide
+                        .metadata
+                        .as_ref()
+                        .and_then(|m| serde_json::to_string(m).ok())),
                 };
                 slide_entity::Entity::insert(slide_model).exec(&txn).await?;
             }

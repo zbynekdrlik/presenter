@@ -33,6 +33,7 @@ mod timers;
 use crate::{
     ableset::AbleSetBridge,
     android_stage::AndroidStageRegistry,
+    config::{OscConfig, ServerConfig},
     live::{LiveEvent, LiveHub},
     osc::{OscBridge, OscStatusSnapshot},
     resolume::{BibleUpdate, ResolumeRegistry},
@@ -112,8 +113,32 @@ impl AppState {
         osc_bridge: OscBridge,
         ableset_bridge: AbleSetBridge,
     ) -> Self {
+        let heartbeat_config = StageHeartbeatConfig::default_values();
+        Self::new_with_heartbeat(
+            repository,
+            companion_token,
+            companion_enabled,
+            companion_port,
+            resolume_registry,
+            android_stage_registry,
+            osc_bridge,
+            ableset_bridge,
+            heartbeat_config,
+        )
+    }
+
+    pub fn new_with_heartbeat(
+        repository: Repository,
+        companion_token: Option<String>,
+        companion_enabled: bool,
+        companion_port: u16,
+        resolume_registry: ResolumeRegistry,
+        android_stage_registry: AndroidStageRegistry,
+        osc_bridge: OscBridge,
+        ableset_bridge: AbleSetBridge,
+        heartbeat_config: StageHeartbeatConfig,
+    ) -> Self {
         let stage_connections = StageConnections::new();
-        let heartbeat_config = StageHeartbeatConfig::from_env();
         let default_layout = StageDisplayLayout::built_in()
             .into_iter()
             .map(|layout| layout.code)
@@ -242,7 +267,7 @@ impl AppState {
 
         let registry = ResolumeRegistry::new()?;
         let android_stage_registry = AndroidStageRegistry::new();
-        let osc_bridge = OscBridge::new();
+        let osc_bridge = OscBridge::new(&OscConfig::default());
         let ableset_bridge = AbleSetBridge::new();
         let state = Self::new(
             repo,
@@ -253,6 +278,80 @@ impl AppState {
             android_stage_registry,
             osc_bridge.clone(),
             ableset_bridge.clone(),
+        );
+        state.ensure_seed_library().await?;
+        state.ensure_demo_playlist().await?;
+        state.sync_resolume_hosts().await?;
+        state.sync_android_stage_displays().await?;
+
+        Self::apply_osc_settings(&state, &osc_bridge).await?;
+        Self::apply_ableset_settings(&state, &ableset_bridge).await?;
+
+        state
+            .configure_companion_service(companion_enabled, companion_port)
+            .await?;
+        state.spawn_background_tasks();
+        Ok(state)
+    }
+
+    #[instrument(skip_all)]
+    pub async fn from_config(config: ServerConfig) -> anyhow::Result<Self> {
+        let db_url = config.database.url;
+        let repo = Repository::connect(&DatabaseSettings::new(&db_url)).await?;
+        let companion_token = config.companion.token;
+
+        let stored_companion = repo
+            .get_app_setting(COMPANION_FEATURE_KEY)
+            .await?
+            .and_then(|value| parse_bool_flag(&value))
+            .unwrap_or(false);
+
+        let companion_enabled = config
+            .companion
+            .enabled_override
+            .unwrap_or(stored_companion);
+
+        if let Some(value) = config.companion.enabled_override {
+            repo.set_app_setting(COMPANION_FEATURE_KEY, if value { "1" } else { "0" })
+                .await?;
+        }
+
+        let raw_port = repo.get_app_setting(COMPANION_PORT_KEY).await?;
+        let mut persist_port = false;
+        let stored_port = raw_port
+            .as_deref()
+            .and_then(|value| value.parse::<u16>().ok())
+            .filter(|port| *port >= 1);
+        let mut companion_port = stored_port.unwrap_or(DEFAULT_COMPANION_PORT);
+        if stored_port.is_none() {
+            persist_port = true;
+        }
+
+        if let Some(port_override) = config.companion.port_override {
+            companion_port = port_override;
+            persist_port = true;
+        }
+
+        if persist_port {
+            repo.set_app_setting(COMPANION_PORT_KEY, &companion_port.to_string())
+                .await?;
+        }
+
+        let registry = ResolumeRegistry::new()?;
+        let android_stage_registry = AndroidStageRegistry::new();
+        let osc_bridge = OscBridge::new(&config.osc);
+        let ableset_bridge = AbleSetBridge::new();
+        let heartbeat_config = config.stage.heartbeat;
+        let state = Self::new_with_heartbeat(
+            repo,
+            companion_token,
+            companion_enabled,
+            companion_port,
+            registry,
+            android_stage_registry,
+            osc_bridge.clone(),
+            ableset_bridge.clone(),
+            heartbeat_config,
         );
         state.ensure_seed_library().await?;
         state.ensure_demo_playlist().await?;
@@ -323,7 +422,7 @@ impl AppState {
         let repo = Repository::connect_in_memory().await?;
         let registry = ResolumeRegistry::new()?;
         let android_stage_registry = AndroidStageRegistry::new();
-        let osc_bridge = OscBridge::new();
+        let osc_bridge = OscBridge::new(&OscConfig::default());
         let ableset_bridge = AbleSetBridge::new();
         let state = Self::new(
             repo,
