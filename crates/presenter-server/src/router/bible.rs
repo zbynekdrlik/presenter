@@ -376,3 +376,165 @@ pub(super) async fn resolve_bible_slides(
         slides: slide_dtos,
     }))
 }
+
+// Bible Presentations
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub(super) struct BiblePresentationSummaryDto {
+    id: String,
+    name: String,
+    slide_count: usize,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub(super) struct BiblePresentationDetailDto {
+    id: String,
+    name: String,
+    slides: Vec<BibleSlideDto>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub(super) struct BiblePresentationCreateRequest {
+    name: String,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub(super) struct RenameBiblePresentationRequest {
+    name: String,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub(super) struct AppendBibleSlidesRequest {
+    slides: Vec<BibleSlideInput>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub(super) struct BibleSlideInput {
+    main: String,
+    translation: String,
+    stage: String,
+    #[serde(default)]
+    group: Option<String>,
+    #[serde(default)]
+    metadata: Option<SlideMetadata>,
+}
+
+fn request_slide_to_domain(input: BibleSlideInput) -> Result<Slide, AppError> {
+    let content = presenter_core::SlideContent::new(
+        presenter_core::SlideText::new(&input.main)
+            .map_err(|e| AppError::bad_request_message(e.to_string()))?,
+        presenter_core::SlideText::new(&input.translation)
+            .map_err(|e| AppError::bad_request_message(e.to_string()))?,
+        presenter_core::SlideText::new(&input.stage)
+            .map_err(|e| AppError::bad_request_message(e.to_string()))?,
+        input.group.map(presenter_core::SlideGroup::new),
+    );
+    let mut slide = Slide::new(0, content);
+    if let Some(meta) = input.metadata {
+        slide = slide.with_metadata(Some(meta));
+    }
+    Ok(slide)
+}
+
+fn bible_presentation_to_detail(
+    presentation: &presenter_core::Presentation,
+) -> Result<BiblePresentationDetailDto, AppError> {
+    let mut slides = Vec::with_capacity(presentation.slides.len());
+    for slide in &presentation.slides {
+        slides.push(bible_slide_to_dto(slide)?);
+    }
+    Ok(BiblePresentationDetailDto {
+        id: presentation.id.to_string(),
+        name: presentation.name.clone(),
+        slides,
+    })
+}
+
+#[instrument(skip_all)]
+pub(super) async fn list_bible_presentations(
+    State(state): State<AppState>,
+) -> Result<Json<Vec<BiblePresentationSummaryDto>>, AppError> {
+    let summaries = state.list_bible_presentations().await?;
+    let mut result = Vec::with_capacity(summaries.len());
+    for summary in summaries {
+        let slide_count = state
+            .bible_presentation_detail(summary.id)
+            .await?
+            .map(|presentation| presentation.slides.len())
+            .unwrap_or(0);
+        result.push(BiblePresentationSummaryDto {
+            id: summary.id.to_string(),
+            name: summary.name,
+            slide_count,
+        });
+    }
+    Ok(Json(result))
+}
+
+#[instrument(skip_all)]
+pub(super) async fn create_bible_presentation_handler(
+    State(state): State<AppState>,
+    Json(payload): Json<BiblePresentationCreateRequest>,
+) -> Result<Json<BiblePresentationDetailDto>, AppError> {
+    let name = payload.name.trim();
+    if name.is_empty() {
+        return Err(AppError::bad_request_message("name cannot be empty"));
+    }
+    let presentation = state.create_bible_presentation(name).await?;
+    let dto = bible_presentation_to_detail(&presentation)?;
+    Ok(Json(dto))
+}
+
+#[instrument(skip_all)]
+pub(super) async fn get_bible_presentation(
+    State(state): State<AppState>,
+    axum::extract::Path(id): axum::extract::Path<uuid::Uuid>,
+) -> Result<Json<BiblePresentationDetailDto>, AppError> {
+    let presentation = state
+        .bible_presentation_detail(presenter_core::PresentationId::from_uuid(id))
+        .await?
+        .ok_or_else(|| AppError::not_found("presentation not found"))?;
+    let dto = bible_presentation_to_detail(&presentation)?;
+    Ok(Json(dto))
+}
+
+#[instrument(skip_all)]
+pub(super) async fn rename_bible_presentation_handler(
+    State(state): State<AppState>,
+    axum::extract::Path(id): axum::extract::Path<uuid::Uuid>,
+    Json(payload): Json<RenameBiblePresentationRequest>,
+) -> Result<axum::http::StatusCode, AppError> {
+    let name = payload.name.trim();
+    if name.is_empty() {
+        return Err(AppError::bad_request_message("name cannot be empty"));
+    }
+    state
+        .rename_bible_presentation(presenter_core::PresentationId::from_uuid(id), name)
+        .await?;
+    Ok(axum::http::StatusCode::NO_CONTENT)
+}
+
+#[instrument(skip_all)]
+pub(super) async fn append_bible_presentation_handler(
+    State(state): State<AppState>,
+    axum::extract::Path(id): axum::extract::Path<uuid::Uuid>,
+    Json(payload): Json<AppendBibleSlidesRequest>,
+) -> Result<Json<BiblePresentationDetailDto>, AppError> {
+    if payload.slides.is_empty() {
+        return Err(AppError::bad_request_message("slides cannot be empty"));
+    }
+    let mut slides = Vec::with_capacity(payload.slides.len());
+    for input in payload.slides {
+        slides.push(request_slide_to_domain(input)?);
+    }
+    let presentation = state
+        .append_bible_presentation_slides(presenter_core::PresentationId::from_uuid(id), slides)
+        .await?;
+    let dto = bible_presentation_to_detail(&presentation)?;
+    Ok(Json(dto))
+}

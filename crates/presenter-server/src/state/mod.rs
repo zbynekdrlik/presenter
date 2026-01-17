@@ -692,6 +692,81 @@ impl AppState {
         Ok((main_translation, secondary_translation, slides))
     }
 
+    // Bible presentations methods
+    pub async fn list_bible_presentations(
+        &self,
+    ) -> anyhow::Result<Vec<presenter_core::PresentationSummary>> {
+        let libraries = self.repository.fetch_libraries().await?;
+        if let Some(bible_lib) = libraries
+            .into_iter()
+            .find(|l| l.name.eq_ignore_ascii_case("Bible"))
+        {
+            let summaries = bible_lib
+                .presentations
+                .into_iter()
+                .map(|p| presenter_core::PresentationSummary::new(p.id, p.name))
+                .collect();
+            Ok(summaries)
+        } else {
+            Ok(Vec::new())
+        }
+    }
+
+    pub async fn bible_presentation_detail(
+        &self,
+        id: PresentationId,
+    ) -> anyhow::Result<Option<Presentation>> {
+        let result = self.repository.fetch_presentation_detail(id).await?;
+        Ok(result.map(|(_, _, presentation)| presentation))
+    }
+
+    pub async fn create_bible_presentation(&self, name: &str) -> anyhow::Result<Presentation> {
+        // Ensure a Bible library exists
+        let libraries = self.repository.fetch_libraries().await?;
+        let library = if let Some(existing) = libraries
+            .into_iter()
+            .find(|l| l.name.eq_ignore_ascii_case("Bible"))
+        {
+            existing
+        } else {
+            self.repository.create_library("Bible").await?
+        };
+        let (_lib_id, _lib_name, presentation) = self
+            .repository
+            .create_presentation(library.id, name)
+            .await?;
+        Ok(presentation)
+    }
+
+    pub async fn rename_bible_presentation(
+        &self,
+        id: PresentationId,
+        name: &str,
+    ) -> anyhow::Result<()> {
+        self.repository.rename_presentation(id, name).await
+    }
+
+    pub async fn append_bible_presentation_slides(
+        &self,
+        id: PresentationId,
+        new_slides: Vec<Slide>,
+    ) -> anyhow::Result<Presentation> {
+        let (_, _, mut presentation) = self
+            .repository
+            .fetch_presentation_detail(id)
+            .await?
+            .ok_or_else(|| anyhow::anyhow!("presentation not found"))?;
+        let start_order = presentation.slides.len() as u32;
+        for (i, mut slide) in new_slides.into_iter().enumerate() {
+            slide.order = start_order + i as u32;
+            presentation.slides.push(slide);
+        }
+        self.repository
+            .replace_presentation_slides(id, &presentation.slides)
+            .await?;
+        Ok(presentation)
+    }
+
     // OSC methods
     pub async fn osc_settings(&self) -> anyhow::Result<OscSettings> {
         self.repository.get_osc_settings().await

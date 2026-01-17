@@ -52,6 +52,18 @@ pub fn build_router(state: AppState) -> Router {
             "/bible/translations/refresh",
             post(bible::refresh_bible_translations),
         )
+        .route(
+            "/bible/presentations",
+            get(bible::list_bible_presentations).post(bible::create_bible_presentation_handler),
+        )
+        .route(
+            "/bible/presentations/{id}",
+            get(bible::get_bible_presentation).patch(bible::rename_bible_presentation_handler),
+        )
+        .route(
+            "/bible/presentations/{id}/append",
+            post(bible::append_bible_presentation_handler),
+        )
         .route("/bible/active", get(bible::get_active_bible_broadcast))
         .route("/bible/trigger", post(bible::trigger_bible_broadcast))
         .route("/bible/clear", post(bible::clear_bible_broadcast))
