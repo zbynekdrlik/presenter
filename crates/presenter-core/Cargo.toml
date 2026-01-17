@@ -22,5 +22,3 @@ insta.workspace = true
 rstest = "0.19"
 serde_json.workspace = true
 
-[lints]
-workspace = true

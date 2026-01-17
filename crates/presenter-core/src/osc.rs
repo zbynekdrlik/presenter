@@ -10,7 +10,7 @@ pub enum OscSettingsValidationError {
     InvalidPort,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum VelocityMode {
     ZeroBased,
@@ -30,7 +30,6 @@ pub struct OscSettings {
 }
 
 impl OscSettings {
-    #[must_use]
     pub fn new(
         enabled: bool,
         listen_port: u16,
@@ -61,11 +60,6 @@ pub struct OscSettingsDraft {
 }
 
 impl OscSettingsDraft {
-    /// Verifies the draft contains a non-empty address pattern and a valid port.
-    ///
-    /// # Errors
-    ///
-    /// Returns [`OscSettingsValidationError`] when the port is zero or the pattern is blank.
     pub fn validate(&self) -> Result<(), OscSettingsValidationError> {
         if self.listen_port == 0 {
             return Err(OscSettingsValidationError::InvalidPort);

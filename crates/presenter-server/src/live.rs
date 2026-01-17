@@ -16,7 +16,9 @@ pub struct LiveHub {
 
 impl LiveHub {
     pub fn new() -> Self {
-        let (tx, _rx) = broadcast::channel(64);
+        // Buffer sized for high-activity live events (timers, stage updates, integrations)
+        // Prevents event drops during peak broadcast periods
+        let (tx, _rx) = broadcast::channel(256);
         Self { tx }
     }
 
@@ -53,6 +55,7 @@ enum InboundMessage {
 
 #[derive(Debug, Clone, Serialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
+#[allow(clippy::large_enum_variant)]
 pub enum LiveEvent {
     Timers { overview: TimersOverview },
     Stage { snapshot: StageDisplaySnapshot },

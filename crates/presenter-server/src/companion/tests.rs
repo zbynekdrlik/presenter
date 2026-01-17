@@ -1,14 +1,10 @@
 use super::protocol::*;
 use super::variables::CompanionVariableState;
-use super::{handle_command, validate_token};
+use super::*;
 use crate::live::LiveEvent;
-use crate::state::AppState;
 use chrono::{TimeZone, Utc};
-use presenter_core::{
-    bible::BibleIngestionBatch, BiblePassage, BibleReference, BibleTranslation, StageDisplayLayout,
-    StageDisplaySnapshot, TimerState, TimersOverview,
-};
-use serde_json::{json, Value};
+use presenter_core::{bible::BibleIngestionBatch, BiblePassage, BibleTranslation};
+use serde_json::json;
 use tokio::time::{timeout, Duration};
 
 #[test]
@@ -160,8 +156,8 @@ async fn stage_set_command_updates_state_and_emits_event() {
         .await
         .unwrap();
 
-    match &response.reply {
-        Some(OutgoingMessage::Ack { command }) => assert_eq!(command, "stage.set"),
+    match response.reply {
+        Some(OutgoingMessage::Ack { ref command }) => assert_eq!(command, "stage.set"),
         other => panic!("unexpected response: {other:?}"),
     }
     assert!(response.refresh_variables);
@@ -199,8 +195,8 @@ async fn timer_command_updates_overview_and_broadcasts() {
     .await
     .unwrap();
 
-    match &response.reply {
-        Some(OutgoingMessage::Ack { command }) => {
+    match response.reply {
+        Some(OutgoingMessage::Ack { ref command }) => {
             assert_eq!(command, "timer.set_countdown_target")
         }
         other => panic!("unexpected response: {other:?}"),
@@ -228,7 +224,7 @@ async fn bible_trigger_and_clear_flow_updates_variables() {
     let state = AppState::in_memory().await.unwrap();
 
     let translation = BibleTranslation::new("KJV", "King James Version", "en");
-    let reference = BibleReference::new_with_code("John", "JHN", 43, 3, 16, 16).unwrap();
+    let reference = BibleReference::new("John", 3, 16, 16).unwrap();
     let passage = BiblePassage::new(
         reference.clone(),
         translation.clone(),
@@ -256,8 +252,8 @@ async fn bible_trigger_and_clear_flow_updates_variables() {
         .await
         .unwrap();
     assert!(matches!(
-        &trigger_response.reply,
-        Some(OutgoingMessage::Ack { command }) if command == "bible.trigger"
+        trigger_response.reply,
+        Some(OutgoingMessage::Ack { ref command }) if command == "bible.trigger"
     ));
     assert!(trigger_response.refresh_variables);
     assert!(variables.bible.is_some());
@@ -282,8 +278,8 @@ async fn bible_trigger_and_clear_flow_updates_variables() {
         .await
         .unwrap();
     assert!(matches!(
-        &clear_response.reply,
-        Some(OutgoingMessage::Ack { command }) if command == "bible.clear"
+        clear_response.reply,
+        Some(OutgoingMessage::Ack { ref command }) if command == "bible.clear"
     ));
     assert!(clear_response.refresh_variables);
     assert!(variables.bible.is_none());

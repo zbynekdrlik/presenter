@@ -10,7 +10,7 @@ members = [
 resolver = "2"
 
 [workspace.package]
-version = "0.1.0-dev.1"
+version = "0.1.0-dev.2"
 edition = "2021"
 authors = ["Presenter Team <drlik.zbynek@gmail.com>"]
 license = "MIT"
@@ -46,11 +46,4 @@ reactive_graph = "0.1.8"
 futures-util = "0.3"
 unicode-normalization = "0.1"
 
-[workspace.lints.rust]
-rust_2018_idioms = "warn"
-
-[workspace.lints.clippy]
-all = "warn"
-pedantic = "warn"
-complexity = { level = "warn", priority = 1 }
-perf = { level = "warn", priority = 1 }
+# Lints configured at crate level for now

@@ -13,10 +13,9 @@ use axum::{
 };
 use chrono::{DateTime, Utc};
 use futures_util::{SinkExt, StreamExt};
-use presenter_core::bible::{BibleBroadcast, BibleReference};
 use presenter_core::{
-    PresentationId, SlideId, StageDisplayLayout, StageDisplaySnapshot, TimerCommand, TimerState,
-    TimersOverview,
+    BibleBroadcast, BibleReference, PresentationId, SlideId, StageDisplayLayout,
+    StageDisplaySnapshot, TimerCommand, TimerState, TimersOverview,
 };
 use protocol::*;
 use serde::{Deserialize, Serialize};

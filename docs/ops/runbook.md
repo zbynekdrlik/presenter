@@ -1,6 +1,6 @@
 # Presenter Operations Runbook
 
-This runbook captures the day-to-day commands for operating the Presenter environments on the Intel N100 controller. All paths assume the repository lives at `/home/newlevel/marek/presenter`; adjust if you relocate the checkout.
+This runbook captures the day-to-day commands for operating the Presenter environments on the Intel N100 controller. All paths are relative to your repository checkout; adjust commands accordingly.
 
 ## Host Bootstrap
 
@@ -117,7 +117,7 @@ Set `PRESENTER_BACKUP_ROOT` (e.g., `/var/lib/presenter/backups`) before calling 
 
 ## Promotion Workflow
 
-1. Merge the feature branch into `main` after review per AGENTS.md.
+1. Merge the feature branch into `main` after review per CLAUDE.md.
 2. Pull `main` on the controller and restart the **testing** service:
    ```bash
    git switch main && git pull --ff-only

@@ -1,21 +1,47 @@
-mod ableset;
-mod android_stage;
-mod app_settings;
-mod bible;
-mod libraries;
-mod osc;
-mod playlists;
-mod presentations;
-mod resolume;
+mod helpers;
+mod library;
+mod playlist;
 mod search;
-mod stage;
-mod timer_state;
-mod util;
+#[cfg(test)]
+mod tests;
 
-use anyhow::Context;
+pub use helpers::RepositoryError;
+use helpers::{
+    ableset_model_to_domain, android_stage_display_model_to_domain, osc_model_to_domain,
+    parse_uuid, resolume_model_to_domain, stage_state_model_to_state, timer_state_to_string,
+    timers_model_to_state, to_domain_passage, to_domain_slide, to_domain_translation,
+    velocity_mode_to_string,
+};
+
+use crate::entities::{
+    ableset_settings, android_stage_display, app_settings, bible_passage, bible_translation,
+    osc_settings, presentation as presentation_entity, resolume_host, slide as slide_entity,
+    stage_state, timers,
+};
+use anyhow::{anyhow, Context};
+use chrono::Utc;
+use presenter_core::{
+    bible::BibleIngestionBatch, search::fold_query, AbleSetSettings, AbleSetSettingsDraft,
+    AndroidStageDisplay, AndroidStageDisplayDraft, AndroidStageDisplayId, BiblePassage,
+    BibleReference, BibleTranslation, LibraryId, OscSettings, OscSettingsDraft, Presentation,
+    PresentationId, ResolumeHost, ResolumeHostDraft, ResolumeHostId, Slide, SlideContent, SlideId,
+    StageState, TimersState,
+};
 use presenter_migration::{Migrator, MigratorTrait};
-use sea_orm::{Database, DatabaseConnection};
+use sea_orm::{
+    sea_query::{Expr, OnConflict},
+    ActiveModelTrait, ColumnTrait, ConnectionTrait, Database, DatabaseConnection, EntityTrait,
+    IntoActiveModel, QueryFilter, QueryOrder, QuerySelect, Schema, Set, TransactionTrait,
+};
+use std::fmt::Debug;
 use tracing::instrument;
+use uuid::Uuid;
+
+const TIMERS_SINGLETON_ID: &str = "timers";
+const STAGE_STATE_SINGLETON_ID: &str = "stage-state";
+const OSC_SETTINGS_SINGLETON_ID: &str = "osc";
+const ABLESET_SETTINGS_SINGLETON_ID: &str = "ableset";
+const BIBLE_INSERT_CHUNK: usize = 500;
 
 #[derive(Debug, Clone)]
 pub struct Repository {
@@ -61,639 +87,775 @@ impl Repository {
         &self.db
     }
 
-    // bible ingestion moved to bible.rs
-
-    // bible list translations moved to bible.rs
-
-    // bible search moved to bible.rs
-
-    // bible-specific functions moved to bible.rs
-
-    // osc + ableset moved to osc.rs and ableset.rs
-
-    // resolume list moved to resolume.rs
-
-    // android stage moved to android_stage.rs
-
-    // resolume create moved to resolume.rs
-
-    // android stage create moved to android_stage.rs
-
-    // resolume update moved to resolume.rs
-
-    // android stage update moved to android_stage.rs
-
-    // resolume + android deletion moved to resolume.rs and android_stage.rs
-
-    // stage state moved to stage.rs
-
-    // stage state moved to stage.rs
-
-    // timers moved to timer_state.rs
-
-    // timers moved to timer_state.rs
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use chrono::{Duration, Utc};
-    use presenter_core::{
-        bible::BibleIngestionBatch, playlist::PlaylistEntryKind, AndroidStageDisplayDraft,
-        BiblePassage, BibleReference, BibleTranslation, CountdownTimer, Library, LibraryId,
-        OscSettingsDraft, PlaylistEntry, PlaylistEntryId, PreachTimer, Presentation,
-        PresentationId, ResolumeHostDraft, SearchResultKind, Slide, SlideContent, SlideGroup,
-        SlideId, SlideText, StageState, TimerState, TimersState, VelocityMode, DEFAULT_ADB_PORT,
-        DEFAULT_LAUNCH_COMPONENT,
-    };
-    fn sample_library() -> Library {
-        let presentation = Presentation::new(
-            "Welcome",
-            vec![
-                Slide::new(
-                    0,
-                    SlideContent::new(
-                        SlideText::new("Nádej v Pánovi").unwrap(),
-                        SlideText::new("Hope in the Lord").unwrap(),
-                        SlideText::new("Stage").unwrap(),
-                        Some(SlideGroup::new("Intro")),
-                    ),
-                )
-                .with_id(SlideId::new()),
-                Slide::new(
-                    1,
-                    SlideContent::new(
-                        SlideText::new("Second").unwrap(),
-                        SlideText::new("Druga").unwrap(),
-                        SlideText::new("Stage 2").unwrap(),
-                        None,
-                    ),
-                )
-                .with_id(SlideId::new()),
-            ],
-        )
-        .unwrap()
-        .with_id(PresentationId::new());
-        Library::new("Default", vec![presentation])
-            .unwrap()
-            .with_id(LibraryId::new())
+    #[instrument(skip_all)]
+    pub async fn get_app_setting(&self, key: &str) -> anyhow::Result<Option<String>> {
+        let result = app_settings::Entity::find_by_id(key.to_string())
+            .one(&self.db)
+            .await?;
+        Ok(result.map(|model| model.value))
     }
 
-    #[tokio::test]
-    async fn round_trip_library() {
-        let repo = Repository::connect_in_memory().await.unwrap();
-        let library = sample_library();
-        repo.upsert_library(&library).await.unwrap();
-        let libraries = repo.fetch_libraries().await.unwrap();
-        assert_eq!(libraries.len(), 1);
-        assert_eq!(libraries[0].name, "Default");
-        assert_eq!(libraries[0].presentations.len(), 1);
-        assert_eq!(libraries[0].presentations[0].slides.len(), 2);
+    #[instrument(skip_all)]
+    pub async fn set_app_setting(&self, key: &str, value: &str) -> anyhow::Result<()> {
+        let model = app_settings::ActiveModel {
+            key: Set(key.to_string()),
+            value: Set(value.to_string()),
+            updated_at: Set(Utc::now().into()),
+        };
+
+        app_settings::Entity::insert(model)
+            .on_conflict(
+                OnConflict::column(app_settings::Column::Key)
+                    .update_columns([app_settings::Column::Value, app_settings::Column::UpdatedAt])
+                    .to_owned(),
+            )
+            .exec(&self.db)
+            .await?;
+        Ok(())
     }
 
-    #[tokio::test]
-    async fn fetch_first_presentation_detail_returns_sample() {
-        let repo = Repository::connect_in_memory().await.unwrap();
-        let library = sample_library();
-        repo.upsert_library(&library).await.unwrap();
+    #[instrument(skip_all)]
+    pub async fn create_presentation(
+        &self,
+        library_id: LibraryId,
+        name: &str,
+    ) -> anyhow::Result<(LibraryId, String, Presentation)> {
+        let presentation_uuid = Uuid::new_v4();
+        let library_uuid = library_id.to_string();
+        let txn = self.db.begin().await?;
 
-        let detail = repo.fetch_first_presentation_detail().await.unwrap();
-        assert!(detail.is_some());
-        let (_, name, presentation) = detail.unwrap();
-        assert_eq!(name, "Default");
-        assert_eq!(presentation.slides.len(), 2);
+        presentation_entity::Entity::insert(presentation_entity::ActiveModel {
+            id: Set(presentation_uuid.to_string()),
+            library_id: Set(library_uuid.clone()),
+            name: Set(name.to_string()),
+            search_name: Set(fold_query(name)),
+            created_at: Set(Utc::now().into()),
+        })
+        .exec(&txn)
+        .await?;
+
+        slide_entity::Entity::insert(slide_entity::ActiveModel {
+            id: Set(Uuid::new_v4().to_string()),
+            presentation_id: Set(presentation_uuid.to_string()),
+            position: Set(0),
+            main_text: Set(String::new()),
+            main_text_search: Set(String::new()),
+            translation_text: Set(String::new()),
+            translation_text_search: Set(String::new()),
+            stage_text: Set(String::new()),
+            stage_text_search: Set(String::new()),
+            group_name: Set(None),
+            created_at: Set(Utc::now().into()),
+        })
+        .exec(&txn)
+        .await?;
+
+        txn.commit().await?;
+
+        let detail = self
+            .fetch_presentation_detail(PresentationId::from_uuid(presentation_uuid))
+            .await?;
+
+        detail.ok_or_else(|| anyhow!("failed to load newly created presentation"))
     }
 
-    #[tokio::test]
-    async fn update_slide_content_persists_changes() {
-        let repo = Repository::connect_in_memory().await.unwrap();
-        let library = sample_library();
-        let presentation = library.presentations[0].clone();
-        let slide = presentation.slides[0].clone();
-        repo.upsert_library(&library).await.unwrap();
-
-        let new_content = SlideContent::new(
-            SlideText::new("Updated main").unwrap(),
-            SlideText::new("Updated translation").unwrap(),
-            SlideText::new("Updated stage").unwrap(),
-            Some(SlideGroup::new("Updated Group")),
-        );
-
-        repo.update_slide_content(presentation.id, slide.id, &new_content)
-            .await
-            .unwrap();
-
-        let detail = repo
-            .fetch_presentation_detail(presentation.id)
-            .await
-            .unwrap()
-            .expect("presentation detail");
-        let updated = detail
-            .2
-            .slides
-            .iter()
-            .find(|candidate| candidate.id == slide.id)
-            .expect("slide present");
-
-        assert_eq!(updated.content.main.value(), "Updated main");
-        assert_eq!(updated.content.translation.value(), "Updated translation");
-        assert_eq!(updated.content.stage.value(), "Updated stage");
-        assert_eq!(
-            updated.content.group.as_ref().map(|group| group.name()),
-            Some("Updated Group")
-        );
+    #[instrument(skip_all)]
+    pub async fn rename_presentation(
+        &self,
+        presentation_id: PresentationId,
+        name: &str,
+    ) -> anyhow::Result<()> {
+        let trimmed = name.trim();
+        if trimmed.is_empty() {
+            return Err(anyhow!("presentation name cannot be empty"));
+        }
+        let id = presentation_id.to_string();
+        let result = presentation_entity::Entity::update_many()
+            .col_expr(presentation_entity::Column::Name, Expr::value(trimmed))
+            .col_expr(
+                presentation_entity::Column::SearchName,
+                Expr::value(fold_query(trimmed)),
+            )
+            .filter(presentation_entity::Column::Id.eq(id.clone()))
+            .exec(&self.db)
+            .await?;
+        if result.rows_affected == 0 {
+            return Err(anyhow!("presentation not found"));
+        }
+        Ok(())
     }
 
-    #[tokio::test]
-    async fn purge_presentation_content_clears_tables() {
-        let repo = Repository::connect_in_memory().await.unwrap();
-        let library = sample_library();
-        repo.upsert_library(&library).await.unwrap();
+    #[instrument(skip_all)]
+    pub async fn purge_presentation_content(&self) -> anyhow::Result<()> {
+        let txn = self.db.begin().await?;
 
-        let presentation = &library.presentations[0];
-        let current = presentation.slides[0].id;
-        let state = StageState::new(Some(presentation.id), Some(current), None);
-        repo.upsert_stage_state(&state).await.unwrap();
+        slide_entity::Entity::delete_many().exec(&txn).await?;
+        presentation_entity::Entity::delete_many()
+            .exec(&txn)
+            .await?;
+        crate::entities::library::Entity::delete_many()
+            .exec(&txn)
+            .await?;
+        stage_state::Entity::delete_by_id(STAGE_STATE_SINGLETON_ID.to_string())
+            .exec(&txn)
+            .await?;
 
-        repo.purge_presentation_content().await.unwrap();
-
-        let libraries = repo.fetch_libraries().await.unwrap();
-        assert!(libraries.is_empty());
-        let stage = repo.get_stage_state().await.unwrap();
-        assert!(stage.is_none());
+        txn.commit().await?;
+        Ok(())
     }
 
-    #[tokio::test]
-    async fn bible_translation_round_trip() {
-        let repo = Repository::connect_in_memory().await.unwrap();
-        let translation = BibleTranslation::new("en-kjv", "King James Version", "en")
-            .with_source("https://example.org/kjv");
-        let reference = BibleReference::new("John", 3, 16, 16).unwrap();
-        let passage = BiblePassage::new(
-            reference.clone(),
-            translation.clone(),
-            "For God so loved the world".to_string(),
-        );
-        let batch = BibleIngestionBatch::new(translation.clone(), vec![passage.clone()]).unwrap();
-        repo.replace_bible_translation_passages(&batch)
-            .await
-            .unwrap();
+    #[instrument(skip_all)]
+    pub async fn fetch_presentation_detail(
+        &self,
+        presentation_id: PresentationId,
+    ) -> anyhow::Result<Option<(LibraryId, String, Presentation)>> {
+        let pres_model = presentation_entity::Entity::find_by_id(presentation_id.to_string())
+            .one(&self.db)
+            .await?;
+        let Some(pres_model) = pres_model else {
+            return Ok(None);
+        };
 
-        let translations = repo.list_bible_translations().await.unwrap();
-        assert_eq!(translations.len(), 1);
-        assert_eq!(translations[0], translation);
+        let slides = slide_entity::Entity::find()
+            .filter(slide_entity::Column::PresentationId.eq(pres_model.id.clone()))
+            .order_by_asc(slide_entity::Column::Position)
+            .all(&self.db)
+            .await?;
 
-        let fetched = repo
-            .find_bible_passage(&translation.code, &reference)
-            .await
-            .unwrap()
-            .expect("passage to exist");
-        assert_eq!(fetched.translation, translation);
-        assert_eq!(fetched.reference.book, reference.book);
-        assert_eq!(fetched.reference.chapter, reference.chapter);
-        assert_eq!(fetched.reference.verse_start, reference.verse_start);
-        assert_eq!(fetched.reference.verse_end, reference.verse_end);
-        assert_eq!(fetched.reference.book_code.as_deref(), Some("JHN"));
-        assert_eq!(fetched.reference.book_number, Some(43));
-        assert_eq!(fetched.text, passage.text);
+        let slide_models = slides
+            .into_iter()
+            .map(to_domain_slide)
+            .collect::<Result<Vec<_>, RepositoryError>>()?;
+
+        let presentation = Presentation::new(pres_model.name.clone(), slide_models)?
+            .with_id(PresentationId::from_uuid(parse_uuid(&pres_model.id)?));
+
+        let library_id = LibraryId::from_uuid(parse_uuid(&pres_model.library_id)?);
+        let library_name =
+            crate::entities::library::Entity::find_by_id(pres_model.library_id.clone())
+                .one(&self.db)
+                .await?
+                .map(|lib| lib.name)
+                .unwrap_or_default();
+
+        Ok(Some((library_id, library_name, presentation)))
     }
 
-    #[tokio::test]
-    async fn bible_translation_dashboard_flag_persists_across_reingest() {
-        let repo = Repository::connect_in_memory().await.unwrap();
-        let translation = BibleTranslation::new("en-seed", "Seed Translation", "en")
-            .with_show_in_dashboard(false);
-        let reference = BibleReference::new("John", 1, 1, 1).unwrap();
-        let passage = BiblePassage::new(
-            reference.clone(),
-            translation.clone(),
-            "In the beginning".into(),
-        );
-        let batch = BibleIngestionBatch::new(translation.clone(), vec![passage.clone()]).unwrap();
-
-        repo.replace_bible_translation_passages(&batch)
-            .await
-            .unwrap();
-
-        let initial = repo.list_bible_translations().await.unwrap();
-        assert_eq!(initial.len(), 1);
-        assert!(!initial[0].show_in_dashboard);
-
-        // Reimport the same translation (default builder marks it as shown) and ensure the preference is kept.
-        let refreshed_translation = BibleTranslation::new("en-seed", "Seed Translation", "en");
-        let refreshed = BiblePassage::new(
-            reference.clone(),
-            refreshed_translation.clone(),
-            "In the beginning".into(),
-        );
-        let refreshed_batch =
-            BibleIngestionBatch::new(refreshed_translation, vec![refreshed]).unwrap();
-        repo.replace_bible_translation_passages(&refreshed_batch)
-            .await
-            .unwrap();
-
-        let after = repo.list_bible_translations().await.unwrap();
-        assert_eq!(after.len(), 1);
-        assert!(!after[0].show_in_dashboard);
+    #[instrument(skip_all)]
+    pub async fn fetch_first_presentation_detail(
+        &self,
+    ) -> anyhow::Result<Option<(LibraryId, String, Presentation)>> {
+        let presentation = presentation_entity::Entity::find()
+            .order_by_asc(presentation_entity::Column::CreatedAt)
+            .one(&self.db)
+            .await?;
+        let Some(model) = presentation else {
+            return Ok(None);
+        };
+        let presentation_id = PresentationId::from_uuid(parse_uuid(&model.id)?);
+        self.fetch_presentation_detail(presentation_id).await
     }
 
-    #[tokio::test]
-    async fn bible_dashboard_can_be_bootstrapped() {
-        let repo = Repository::connect_in_memory().await.unwrap();
-        let reference = BibleReference::new("John", 1, 1, 1).unwrap();
-        let passages = vec![BiblePassage::new(
-            reference.clone(),
-            BibleTranslation::new("en-one", "One", "en").with_show_in_dashboard(false),
-            "Verse one".into(),
-        )];
-        let batch = BibleIngestionBatch::new(
-            BibleTranslation::new("en-one", "One", "en").with_show_in_dashboard(false),
-            passages.clone(),
-        )
-        .unwrap();
-        repo.replace_bible_translation_passages(&batch)
-            .await
-            .unwrap();
+    #[instrument(skip_all)]
+    pub async fn update_slide_content(
+        &self,
+        presentation_id: PresentationId,
+        slide_id: SlideId,
+        content: &SlideContent,
+    ) -> anyhow::Result<()> {
+        let main_text = content.main.value().to_owned();
+        let translation_text = content.translation.value().to_owned();
+        let stage_text = content.stage.value().to_owned();
+        let main_search = fold_query(content.main.value());
+        let translation_search = fold_query(content.translation.value());
+        let stage_search = fold_query(content.stage.value());
 
-        let second = BibleIngestionBatch::new(
-            BibleTranslation::new("sk-two", "Two", "sk").with_show_in_dashboard(false),
-            vec![BiblePassage::new(
-                reference.clone(),
-                BibleTranslation::new("sk-two", "Two", "sk").with_show_in_dashboard(false),
-                "Verse two".into(),
-            )],
-        )
-        .unwrap();
-        repo.replace_bible_translation_passages(&second)
-            .await
-            .unwrap();
+        let result = slide_entity::Entity::update_many()
+            .col_expr(slide_entity::Column::MainText, Expr::value(main_text))
+            .col_expr(
+                slide_entity::Column::MainTextSearch,
+                Expr::value(main_search),
+            )
+            .col_expr(
+                slide_entity::Column::TranslationText,
+                Expr::value(translation_text),
+            )
+            .col_expr(
+                slide_entity::Column::TranslationTextSearch,
+                Expr::value(translation_search),
+            )
+            .col_expr(slide_entity::Column::StageText, Expr::value(stage_text))
+            .col_expr(
+                slide_entity::Column::StageTextSearch,
+                Expr::value(stage_search),
+            )
+            .col_expr(
+                slide_entity::Column::GroupName,
+                Expr::value(content.group.as_ref().map(|group| group.name().to_owned())),
+            )
+            .filter(slide_entity::Column::Id.eq(slide_id.to_string()))
+            .filter(slide_entity::Column::PresentationId.eq(presentation_id.to_string()))
+            .exec(&self.db)
+            .await?;
 
-        let initial = repo.list_bible_translations().await.unwrap();
-        assert_eq!(initial.len(), 2);
-        assert!(initial
-            .iter()
-            .all(|translation| !translation.show_in_dashboard));
-
-        let updated = repo.set_all_bible_dashboard_pins(true).await.unwrap();
-        assert_eq!(updated, 2);
-
-        let final_state = repo.list_bible_translations().await.unwrap();
-        assert!(final_state
-            .iter()
-            .all(|translation| translation.show_in_dashboard));
-    }
-
-    #[tokio::test]
-    async fn bible_translation_large_batch_is_persisted() {
-        let repo = Repository::connect_in_memory().await.unwrap();
-        let translation = BibleTranslation::new("en-load", "Load Test", "en");
-        let mut passages = Vec::new();
-        for verse in 1..=1_200u16 {
-            let reference = BibleReference::new("Psalm", 119, verse, verse).unwrap();
-            let passage =
-                BiblePassage::new(reference, translation.clone(), format!("Verse {verse}"));
-            passages.push(passage);
+        if result.rows_affected == 0 {
+            return Err(anyhow!(
+                "slide {} not found in presentation {}",
+                slide_id,
+                presentation_id
+            ));
         }
 
-        let batch = BibleIngestionBatch::new(translation.clone(), passages).unwrap();
-        repo.replace_bible_translation_passages(&batch)
-            .await
-            .unwrap();
-
-        let tail_reference = BibleReference::new("Psalm", 119, 1_200, 1_200).unwrap();
-        let tail = repo
-            .find_bible_passage(&translation.code, &tail_reference)
-            .await
-            .unwrap();
-        assert!(tail.is_some());
-
-        let head_reference = BibleReference::new("Psalm", 119, 1, 1).unwrap();
-        let head = repo
-            .find_bible_passage(&translation.code, &head_reference)
-            .await
-            .unwrap();
-        assert!(head.is_some());
+        Ok(())
     }
 
-    #[tokio::test]
-    async fn osc_settings_default_is_seeded() {
-        let repo = Repository::connect_in_memory().await.unwrap();
-        let settings = repo.get_osc_settings().await.unwrap();
-        assert!(!settings.enabled);
-        assert_eq!(settings.listen_port, 39051);
-        assert_eq!(settings.address_pattern, "/note");
-        assert_eq!(settings.velocity_mode, VelocityMode::OneBased);
+    #[instrument(skip_all)]
+    pub async fn replace_presentation_slides(
+        &self,
+        presentation_id: PresentationId,
+        slides: &[Slide],
+    ) -> anyhow::Result<()> {
+        let txn = self.db.begin().await?;
+
+        slide_entity::Entity::delete_many()
+            .filter(slide_entity::Column::PresentationId.eq(presentation_id.to_string()))
+            .exec(&txn)
+            .await?;
+
+        for (index, slide) in slides.iter().enumerate() {
+            let active = slide_entity::ActiveModel {
+                id: Set(slide.id.to_string()),
+                presentation_id: Set(presentation_id.to_string()),
+                position: Set(index as i32),
+                main_text: Set(slide.content.main.value().to_owned()),
+                main_text_search: Set(fold_query(slide.content.main.value())),
+                translation_text: Set(slide.content.translation.value().to_owned()),
+                translation_text_search: Set(fold_query(slide.content.translation.value())),
+                stage_text: Set(slide.content.stage.value().to_owned()),
+                stage_text_search: Set(fold_query(slide.content.stage.value())),
+                group_name: Set(slide
+                    .content
+                    .group
+                    .as_ref()
+                    .map(|group| group.name().to_owned())),
+                created_at: Set(Utc::now().into()),
+            };
+            slide_entity::Entity::insert(active).exec(&txn).await?;
+        }
+
+        txn.commit().await?;
+        Ok(())
     }
 
-    #[tokio::test]
-    async fn osc_settings_upsert_updates_values() {
-        let repo = Repository::connect_in_memory().await.unwrap();
-        let draft = OscSettingsDraft {
-            enabled: true,
-            listen_port: 10023,
-            address_pattern: "/presenter/trigger".to_string(),
-            velocity_mode: VelocityMode::OneBased,
+    #[instrument(skip_all)]
+    pub async fn replace_bible_translation_passages(
+        &self,
+        batch: &BibleIngestionBatch,
+    ) -> anyhow::Result<()> {
+        let (translation, passages) = batch.clone().into_parts();
+        let txn = self.db.begin().await?;
+
+        bible_translation::Entity::delete_by_id(translation.code.clone())
+            .exec(&txn)
+            .await?;
+
+        let translation_model = bible_translation::ActiveModel {
+            code: Set(translation.code.clone()),
+            name: Set(translation.name.clone()),
+            language: Set(translation.language.clone()),
+            source: Set(translation.source.clone()),
+            created_at: Set(Utc::now().into()),
         };
-        let updated = repo.upsert_osc_settings(&draft).await.unwrap();
-        assert!(updated.enabled);
-        assert_eq!(updated.listen_port, 10023);
-        assert_eq!(updated.address_pattern, "/presenter/trigger");
-        assert_eq!(updated.velocity_mode, VelocityMode::OneBased);
 
-        // upsert idempotency
-        let second = repo.get_osc_settings().await.unwrap();
-        assert_eq!(second.address_pattern, updated.address_pattern);
-        assert_eq!(second.listen_port, updated.listen_port);
+        bible_translation::Entity::insert(translation_model)
+            .exec(&txn)
+            .await?;
+
+        let mut chunk = Vec::with_capacity(BIBLE_INSERT_CHUNK);
+        for passage in passages {
+            let reference = &passage.reference;
+            let model = bible_passage::ActiveModel {
+                id: Set(Uuid::new_v4().to_string()),
+                translation_code: Set(translation.code.clone()),
+                book: Set(reference.book.clone()),
+                chapter: Set(reference.chapter as i32),
+                verse_start: Set(reference.verse_start as i32),
+                verse_end: Set(reference.verse_end as i32),
+                content: Set(passage.text.clone()),
+                created_at: Set(Utc::now().into()),
+            };
+
+            chunk.push(model);
+            if chunk.len() == BIBLE_INSERT_CHUNK {
+                let to_insert = std::mem::take(&mut chunk);
+                bible_passage::Entity::insert_many(to_insert)
+                    .exec(&txn)
+                    .await?;
+            }
+        }
+
+        if !chunk.is_empty() {
+            bible_passage::Entity::insert_many(chunk).exec(&txn).await?;
+        }
+
+        txn.commit().await?;
+        Ok(())
     }
 
-    #[tokio::test]
-    async fn resolume_host_crud_round_trip() {
-        let repo = Repository::connect_in_memory().await.unwrap();
-        let draft = ResolumeHostDraft::new("Arena", "resolume.lan", 8090);
-        let created = repo.create_resolume_host(&draft).await.unwrap();
-        assert_eq!(created.label, "Arena");
-        assert_eq!(created.host, "resolume.lan");
-        assert_eq!(created.port, 8090);
-        assert!(created.is_enabled);
-
-        let hosts = repo.list_resolume_hosts().await.unwrap();
-        assert_eq!(hosts.len(), 1);
-
-        let updated_draft =
-            ResolumeHostDraft::new("Arena North", "resolume.lan", 8090).with_enabled(false);
-        let updated = repo
-            .update_resolume_host(created.id, &updated_draft)
-            .await
-            .unwrap();
-        assert_eq!(updated.label, "Arena North");
-        assert!(!updated.is_enabled);
-
-        repo.delete_resolume_host(created.id).await.unwrap();
-        let after_delete = repo.list_resolume_hosts().await.unwrap();
-        assert!(after_delete.is_empty());
+    #[instrument(skip_all)]
+    pub async fn list_bible_translations(&self) -> anyhow::Result<Vec<BibleTranslation>> {
+        let models = bible_translation::Entity::find()
+            .order_by_asc(bible_translation::Column::Name)
+            .all(&self.db)
+            .await?;
+        Ok(models.into_iter().map(to_domain_translation).collect())
     }
 
-    #[tokio::test]
-    async fn android_stage_display_crud_round_trip() {
-        let repo = Repository::connect_in_memory().await.unwrap();
-        let draft = AndroidStageDisplayDraft::new("Stage Left", "sd1l.lan");
-        let created = repo.create_android_stage_display(&draft).await.unwrap();
-        assert_eq!(created.label, "Stage Left");
-        assert_eq!(created.host, "sd1l.lan");
-        assert_eq!(created.port, DEFAULT_ADB_PORT);
-        assert_eq!(
-            created.launch_component,
-            DEFAULT_LAUNCH_COMPONENT.to_string()
-        );
-        assert!(created.is_enabled);
+    #[instrument(skip_all)]
+    pub async fn search_bible_passages(
+        &self,
+        translation_code: &str,
+        query: &str,
+        limit: u32,
+    ) -> anyhow::Result<Vec<BiblePassage>> {
+        if query.trim().is_empty() {
+            return Ok(Vec::new());
+        }
 
-        let displays = repo.list_android_stage_displays().await.unwrap();
-        assert_eq!(displays.len(), 1);
+        let translation = bible_translation::Entity::find_by_id(translation_code.to_string())
+            .one(&self.db)
+            .await?;
+        let Some(translation) = translation else {
+            return Ok(Vec::new());
+        };
 
-        let updated_draft = AndroidStageDisplayDraft::new("Stage Right", "sd2l.lan")
-            .with_port(5566)
-            .with_launch_component("com.example/.Main")
-            .with_enabled(false);
-        let updated = repo
-            .update_android_stage_display(created.id, &updated_draft)
-            .await
-            .unwrap();
-        assert_eq!(updated.label, "Stage Right");
-        assert_eq!(updated.host, "sd2l.lan");
-        assert_eq!(updated.port, 5566);
-        assert_eq!(updated.launch_component, "com.example/.Main");
-        assert!(!updated.is_enabled);
+        let pattern = format!("%{}%", query);
+        let rows = bible_passage::Entity::find()
+            .filter(bible_passage::Column::TranslationCode.eq(translation_code.to_string()))
+            .filter(bible_passage::Column::Content.like(pattern))
+            .order_by_asc(bible_passage::Column::Book)
+            .order_by_asc(bible_passage::Column::Chapter)
+            .order_by_asc(bible_passage::Column::VerseStart)
+            .limit(limit as u64)
+            .all(&self.db)
+            .await?;
 
-        repo.delete_android_stage_display(created.id).await.unwrap();
-        let after_delete = repo.list_android_stage_displays().await.unwrap();
-        assert!(after_delete.is_empty());
+        let mut results = Vec::with_capacity(rows.len());
+        for row in rows {
+            results.push(to_domain_passage(row, translation.clone())?);
+        }
+        Ok(results)
     }
 
-    #[tokio::test]
-    async fn timers_state_round_trip() {
-        let repo = Repository::connect_in_memory().await.unwrap();
+    #[instrument(skip_all)]
+    pub async fn find_bible_passage(
+        &self,
+        translation_code: &str,
+        reference: &BibleReference,
+    ) -> anyhow::Result<Option<BiblePassage>> {
+        let translation = bible_translation::Entity::find_by_id(translation_code.to_string())
+            .one(&self.db)
+            .await?;
+        let Some(translation) = translation else {
+            return Ok(None);
+        };
+
+        let passage = bible_passage::Entity::find()
+            .filter(bible_passage::Column::TranslationCode.eq(translation_code.to_string()))
+            .filter(bible_passage::Column::Book.eq(reference.book.clone()))
+            .filter(bible_passage::Column::Chapter.eq(reference.chapter as i32))
+            .filter(bible_passage::Column::VerseStart.eq(reference.verse_start as i32))
+            .filter(bible_passage::Column::VerseEnd.eq(reference.verse_end as i32))
+            .one(&self.db)
+            .await?;
+
+        Ok(passage
+            .map(|model| to_domain_passage(model, translation.clone()))
+            .transpose()?)
+    }
+
+    #[instrument(skip_all)]
+    pub async fn get_osc_settings(&self) -> anyhow::Result<OscSettings> {
+        if let Some(model) = osc_settings::Entity::find_by_id(OSC_SETTINGS_SINGLETON_ID.to_string())
+            .one(&self.db)
+            .await?
+        {
+            return Ok(osc_model_to_domain(model)?);
+        }
+        self.insert_osc_settings(OscSettingsDraft::default()).await
+    }
+
+    #[instrument(skip_all)]
+    pub async fn upsert_osc_settings(
+        &self,
+        draft: &OscSettingsDraft,
+    ) -> anyhow::Result<OscSettings> {
+        draft.validate().map_err(|err| anyhow!(err))?;
+        self.insert_osc_settings(draft.clone()).await
+    }
+
+    async fn ensure_ableset_settings_table(&self) -> anyhow::Result<()> {
+        let backend = self.db.get_database_backend();
+        let builder = Schema::new(backend);
+        let table = builder
+            .create_table_from_entity(ableset_settings::Entity)
+            .if_not_exists()
+            .to_owned();
+        let statement = backend.build(&table);
+        self.db.execute(statement).await?;
+        Ok(())
+    }
+
+    async fn insert_osc_settings(&self, draft: OscSettingsDraft) -> anyhow::Result<OscSettings> {
         let now = Utc::now();
-        let target = now + Duration::minutes(10);
-        let countdown = CountdownTimer {
-            target,
-            state: TimerState::Running,
+        let address = draft.address_pattern.trim().to_string();
+        let mode = velocity_mode_to_string(draft.velocity_mode).to_string();
+        let active = osc_settings::ActiveModel {
+            id: sea_orm::ActiveValue::set(OSC_SETTINGS_SINGLETON_ID.to_string()),
+            enabled: sea_orm::ActiveValue::set(draft.enabled),
+            listen_port: sea_orm::ActiveValue::set(draft.listen_port as i32),
+            address_pattern: sea_orm::ActiveValue::set(address.clone()),
+            velocity_mode: sea_orm::ActiveValue::set(mode.clone()),
+            created_at: sea_orm::ActiveValue::set(now.into()),
+            updated_at: sea_orm::ActiveValue::set(now.into()),
         };
-        let mut preach = PreachTimer::new();
-        preach.start(now);
-        let pause_instant = now + Duration::minutes(1);
-        preach.pause(pause_instant);
-        let expected_preach = preach.clone();
-        let state = TimersState::new(countdown, preach);
 
-        repo.upsert_timers_state(&state).await.unwrap();
+        osc_settings::Entity::insert(active)
+            .on_conflict(
+                OnConflict::column(osc_settings::Column::Id)
+                    .update_columns([
+                        osc_settings::Column::Enabled,
+                        osc_settings::Column::ListenPort,
+                        osc_settings::Column::AddressPattern,
+                        osc_settings::Column::VelocityMode,
+                        osc_settings::Column::UpdatedAt,
+                    ])
+                    .to_owned(),
+            )
+            .exec(&self.db)
+            .await?;
 
-        let stored = repo.get_timers_state().await.unwrap().unwrap();
-        assert_eq!(stored.countdown.state, TimerState::Running);
-        assert_eq!(stored.countdown.target, target);
-        assert_eq!(stored.preach.state, expected_preach.state);
-        assert!(stored.preach.elapsed(pause_instant).num_seconds() >= 60);
+        let model = osc_settings::Entity::find_by_id(OSC_SETTINGS_SINGLETON_ID.to_string())
+            .one(&self.db)
+            .await?
+            .ok_or_else(|| anyhow!("osc settings missing after upsert"))?;
+        Ok(osc_model_to_domain(model)?)
     }
 
-    #[tokio::test]
-    async fn playlist_round_trip_with_separator() {
-        let repo = Repository::connect_in_memory().await.unwrap();
-        let library = sample_library();
-        let presentation = library.presentations[0].clone();
-        repo.upsert_library(&library).await.unwrap();
-
-        let playlist = repo
-            .create_playlist("Good Fest Friday", true)
-            .await
-            .unwrap();
-
-        let entries = vec![
-            PlaylistEntry {
-                id: PlaylistEntryId::new(),
-                kind: PlaylistEntryKind::Separator {
-                    name: "Doors Open".to_string(),
-                },
-            },
-            PlaylistEntry {
-                id: PlaylistEntryId::new(),
-                kind: PlaylistEntryKind::Presentation {
-                    presentation_id: presentation.id,
-                    midi_binding: None,
-                },
-            },
-        ];
-
-        repo.replace_playlist_entries(playlist.id, &entries)
-            .await
-            .unwrap();
-
-        let playlists = repo.list_playlists().await.unwrap();
-        assert_eq!(playlists.len(), 1);
-
-        let fetched = &playlists[0];
-        assert_eq!(fetched.name, "Good Fest Friday");
-        assert!(fetched.show_in_dashboard);
-        assert_eq!(fetched.entries.len(), 2);
-        assert!(matches!(
-            fetched.entries[0].kind,
-            PlaylistEntryKind::Separator { .. }
-        ));
-        assert!(matches!(
-            fetched.entries[1].kind,
-            PlaylistEntryKind::Presentation {
-                presentation_id,
-                ..
-            } if presentation_id == presentation.id
-        ));
-    }
-
-    #[tokio::test]
-    async fn create_library_persists_new_row() {
-        let repo = Repository::connect_in_memory().await.unwrap();
-        let created = repo.create_library("Autotest Library").await.unwrap();
-        assert_eq!(created.name, "Autotest Library");
-        assert!(created.presentations.is_empty());
-
-        let libraries = repo.fetch_libraries().await.unwrap();
-        assert_eq!(libraries.len(), 1);
-        assert_eq!(libraries[0].id, created.id);
-        assert_eq!(libraries[0].name, "Autotest Library");
-    }
-
-    #[tokio::test]
-    async fn rename_library_updates_name() {
-        let repo = Repository::connect_in_memory().await.unwrap();
-        let created = repo.create_library("Original").await.unwrap();
-
-        repo.rename_library(created.id, "Renamed").await.unwrap();
-
-        let libraries = repo.fetch_libraries().await.unwrap();
-        assert_eq!(libraries.len(), 1);
-        assert_eq!(libraries[0].name, "Renamed");
-    }
-
-    #[tokio::test]
-    async fn delete_library_removes_presentations_and_slides() {
-        let repo = Repository::connect_in_memory().await.unwrap();
-        let library = sample_library();
-        let presentation = library.presentations[0].clone();
-        repo.upsert_library(&library).await.unwrap();
-
-        repo.delete_library(library.id).await.unwrap();
-
-        let libraries = repo.fetch_libraries().await.unwrap();
-        assert!(libraries.is_empty());
-
-        let detail = repo
-            .fetch_presentation_detail(presentation.id)
-            .await
-            .unwrap();
-        assert!(detail.is_none());
-    }
-
-    #[tokio::test]
-    async fn replace_presentation_slides_overwrites_rows() {
-        let repo = Repository::connect_in_memory().await.unwrap();
-        let library = sample_library();
-        let presentation = library.presentations[0].clone();
-        repo.upsert_library(&library).await.unwrap();
-
-        let mut slides = presentation.slides.clone();
-        let new_slide = Slide::new(
-            slides.len() as u32,
-            SlideContent::new(
-                SlideText::new("New main").unwrap(),
-                SlideText::new("New translation").unwrap(),
-                SlideText::new("New stage").unwrap(),
-                None,
-            ),
-        );
-        slides.push(new_slide);
-        for (index, slide) in slides.iter_mut().enumerate() {
-            slide.order = index as u32;
+    #[instrument(skip_all)]
+    pub async fn get_ableset_settings(&self) -> anyhow::Result<AbleSetSettings> {
+        self.ensure_ableset_settings_table().await?;
+        if let Some(mut model) =
+            ableset_settings::Entity::find_by_id(ABLESET_SETTINGS_SINGLETON_ID.to_string())
+                .one(&self.db)
+                .await?
+        {
+            let defaults = AbleSetSettingsDraft::default();
+            let mut needs_update = false;
+            if model.http_port == 5950 {
+                model.http_port = defaults.http_port as i32;
+                needs_update = true;
+            }
+            if model.osc_port == 5950 {
+                model.osc_port = defaults.osc_port as i32;
+                needs_update = true;
+            }
+            if model.library_name.trim().eq_ignore_ascii_case("NEWLEVEL") {
+                model.library_name = defaults.library_name.clone();
+                needs_update = true;
+            }
+            if needs_update {
+                let mut active: ableset_settings::ActiveModel = model.clone().into();
+                active.http_port = sea_orm::ActiveValue::set(model.http_port);
+                active.osc_port = sea_orm::ActiveValue::set(model.osc_port);
+                active.updated_at = sea_orm::ActiveValue::set(Utc::now().into());
+                active.update(&self.db).await?;
+                model =
+                    ableset_settings::Entity::find_by_id(ABLESET_SETTINGS_SINGLETON_ID.to_string())
+                        .one(&self.db)
+                        .await?
+                        .ok_or_else(|| anyhow!("ableset settings missing after migration"))?;
+            }
+            return Ok(ableset_model_to_domain(model)?);
         }
-
-        repo.replace_presentation_slides(presentation.id, &slides)
+        self.insert_ableset_settings(AbleSetSettingsDraft::default())
             .await
-            .unwrap();
-
-        let detail = repo
-            .fetch_presentation_detail(presentation.id)
-            .await
-            .unwrap()
-            .expect("detail");
-        assert_eq!(detail.2.slides.len(), slides.len());
-        assert_eq!(
-            detail.2.slides.last().unwrap().content.main.value(),
-            "New main",
-        );
     }
 
-    #[tokio::test]
-    async fn search_presenter_returns_hits() {
-        let repo = Repository::connect_in_memory().await.unwrap();
-        let mut library = sample_library();
-        library.name = "Chvály Nedeľa".to_string();
-        repo.upsert_library(&library).await.unwrap();
-
-        let mut other = sample_library();
-        other.name = "Youth Set".to_string();
-        repo.upsert_library(&other).await.unwrap();
-
-        let accent_slide = Slide::new(
-            0,
-            SlideContent::new(
-                SlideText::new("Ježiš, ja Ťa chválim").unwrap(),
-                SlideText::new("Jesus I praise you").unwrap(),
-                SlideText::new("Stage cue").unwrap(),
-                None,
-            ),
-        );
-        let accent_presentation = Presentation::new("Ježiš, ja", vec![accent_slide]).unwrap();
-        let accent_library = Library::new("TYMY Worship", vec![accent_presentation]).unwrap();
-        repo.upsert_library(&accent_library).await.unwrap();
-
-        let results = repo.search_presenter("Chvaly", 10).await.unwrap();
-        assert!(!results.is_empty());
-        assert!(results
-            .iter()
-            .any(|result| matches!(result.kind, SearchResultKind::Library)
-                && result.library_name == "Chvály Nedeľa"));
-
-        let presentation_results = repo.search_presenter("Welcome", 10).await.unwrap();
-        assert!(presentation_results
-            .iter()
-            .any(|result| matches!(result.kind, SearchResultKind::Presentation)));
-
-        let slide_results = repo.search_presenter("Nadej", 10).await.unwrap();
-        assert!(slide_results
-            .iter()
-            .any(|result| matches!(result.kind, SearchResultKind::Slide)));
-
-        let compound_results = repo.search_presenter("jezis, ja tymy", 10).await.unwrap();
-        assert!(compound_results.iter().any(|result| {
-            matches!(
-                result.kind,
-                SearchResultKind::Slide | SearchResultKind::Presentation
-            ) && result.library_name == "TYMY Worship"
-        }));
+    #[instrument(skip_all)]
+    pub async fn upsert_ableset_settings(
+        &self,
+        draft: &AbleSetSettingsDraft,
+    ) -> anyhow::Result<AbleSetSettings> {
+        draft.validate().map_err(|err| anyhow!(err))?;
+        self.insert_ableset_settings(draft.clone()).await
     }
 
-    #[tokio::test]
-    async fn stage_state_round_trip() {
-        let repo = Repository::connect_in_memory().await.unwrap();
-        let library = sample_library();
-        let presentation = library.presentations[0].clone();
-        repo.upsert_library(&library).await.unwrap();
+    async fn insert_ableset_settings(
+        &self,
+        draft: AbleSetSettingsDraft,
+    ) -> anyhow::Result<AbleSetSettings> {
+        self.ensure_ableset_settings_table().await?;
+        let now = Utc::now();
+        let active = ableset_settings::ActiveModel {
+            id: sea_orm::ActiveValue::set(ABLESET_SETTINGS_SINGLETON_ID.to_string()),
+            enabled: sea_orm::ActiveValue::set(draft.enabled),
+            host: sea_orm::ActiveValue::set(draft.host.trim().to_string()),
+            osc_port: sea_orm::ActiveValue::set(draft.osc_port as i32),
+            http_port: sea_orm::ActiveValue::set(draft.http_port as i32),
+            library_name: sea_orm::ActiveValue::set(draft.library_name.trim().to_string()),
+            song_prefix_length: sea_orm::ActiveValue::set(draft.song_prefix_length as i32),
+            created_at: sea_orm::ActiveValue::set(now.into()),
+            updated_at: sea_orm::ActiveValue::set(now.into()),
+        };
 
-        let current = presentation.slides[0].id;
-        let next = presentation.slides.get(1).map(|slide| slide.id);
-        let state = StageState::new(Some(presentation.id), Some(current), next);
+        ableset_settings::Entity::insert(active)
+            .on_conflict(
+                OnConflict::column(ableset_settings::Column::Id)
+                    .update_columns([
+                        ableset_settings::Column::Enabled,
+                        ableset_settings::Column::Host,
+                        ableset_settings::Column::OscPort,
+                        ableset_settings::Column::HttpPort,
+                        ableset_settings::Column::LibraryName,
+                        ableset_settings::Column::SongPrefixLength,
+                        ableset_settings::Column::UpdatedAt,
+                    ])
+                    .to_owned(),
+            )
+            .exec(&self.db)
+            .await?;
 
-        repo.upsert_stage_state(&state).await.unwrap();
+        let model = ableset_settings::Entity::find_by_id(ABLESET_SETTINGS_SINGLETON_ID.to_string())
+            .one(&self.db)
+            .await?
+            .ok_or_else(|| anyhow!("ableset settings missing after upsert"))?;
 
-        let stored = repo.get_stage_state().await.unwrap().unwrap();
-        assert_eq!(stored.presentation_id, Some(presentation.id));
-        assert_eq!(stored.current_slide_id, Some(current));
-        assert_eq!(stored.next_slide_id, next);
+        Ok(ableset_model_to_domain(model)?)
+    }
+
+    pub async fn list_resolume_hosts(&self) -> anyhow::Result<Vec<ResolumeHost>> {
+        let models = resolume_host::Entity::find()
+            .order_by_asc(resolume_host::Column::Label)
+            .all(&self.db)
+            .await?;
+        models.into_iter().map(resolume_model_to_domain).collect()
+    }
+
+    pub async fn list_android_stage_displays(&self) -> anyhow::Result<Vec<AndroidStageDisplay>> {
+        let models = android_stage_display::Entity::find()
+            .order_by_asc(android_stage_display::Column::Label)
+            .all(&self.db)
+            .await?;
+        models
+            .into_iter()
+            .map(android_stage_display_model_to_domain)
+            .collect()
+    }
+
+    #[instrument(skip_all)]
+    pub async fn create_resolume_host(
+        &self,
+        draft: &ResolumeHostDraft,
+    ) -> anyhow::Result<ResolumeHost> {
+        draft.validate().map_err(|err| anyhow!(err))?;
+        let id = ResolumeHostId::new();
+        let now = Utc::now();
+        let model = resolume_host::ActiveModel {
+            id: Set(id.to_string()),
+            label: Set(draft.label.trim().to_string()),
+            host: Set(draft.host.trim().to_string()),
+            port: Set(draft.port as i32),
+            is_enabled: Set(draft.is_enabled),
+            created_at: Set(now.into()),
+            updated_at: Set(now.into()),
+        };
+
+        resolume_host::Entity::insert(model).exec(&self.db).await?;
+
+        let inserted = resolume_host::Entity::find_by_id(id.to_string())
+            .one(&self.db)
+            .await?
+            .ok_or_else(|| anyhow!("resolume host missing after insert"))?;
+        resolume_model_to_domain(inserted)
+    }
+
+    pub async fn create_android_stage_display(
+        &self,
+        draft: &AndroidStageDisplayDraft,
+    ) -> anyhow::Result<AndroidStageDisplay> {
+        draft.validate().map_err(|err| anyhow!(err))?;
+        let id = AndroidStageDisplayId::new();
+        let now = Utc::now();
+        let model = android_stage_display::ActiveModel {
+            id: Set(id.to_string()),
+            label: Set(draft.label.trim().to_string()),
+            host: Set(draft.host.trim().to_string()),
+            port: Set(draft.port as i32),
+            launch_component: Set(draft.launch_component.trim().to_string()),
+            is_enabled: Set(draft.is_enabled),
+            created_at: Set(now.into()),
+            updated_at: Set(now.into()),
+        };
+
+        android_stage_display::Entity::insert(model)
+            .exec(&self.db)
+            .await?;
+
+        let inserted = android_stage_display::Entity::find_by_id(id.to_string())
+            .one(&self.db)
+            .await?
+            .ok_or_else(|| anyhow!("android stage display missing after insert"))?;
+        android_stage_display_model_to_domain(inserted)
+    }
+
+    #[instrument(skip_all)]
+    pub async fn update_resolume_host(
+        &self,
+        id: ResolumeHostId,
+        draft: &ResolumeHostDraft,
+    ) -> anyhow::Result<ResolumeHost> {
+        draft.validate().map_err(|err| anyhow!(err))?;
+        let existing = resolume_host::Entity::find_by_id(id.to_string())
+            .one(&self.db)
+            .await?
+            .ok_or_else(|| anyhow!("resolume host not found"))?;
+
+        let mut model = existing.into_active_model();
+        model.label = Set(draft.label.trim().to_string());
+        model.host = Set(draft.host.trim().to_string());
+        model.port = Set(draft.port as i32);
+        model.is_enabled = Set(draft.is_enabled);
+        model.updated_at = Set(Utc::now().into());
+
+        let updated = model.update(&self.db).await?;
+        resolume_model_to_domain(updated)
+    }
+
+    pub async fn update_android_stage_display(
+        &self,
+        id: AndroidStageDisplayId,
+        draft: &AndroidStageDisplayDraft,
+    ) -> anyhow::Result<AndroidStageDisplay> {
+        draft.validate().map_err(|err| anyhow!(err))?;
+        let existing = android_stage_display::Entity::find_by_id(id.to_string())
+            .one(&self.db)
+            .await?
+            .ok_or_else(|| anyhow!("android stage display not found"))?;
+
+        let mut model = existing.into_active_model();
+        model.label = Set(draft.label.trim().to_string());
+        model.host = Set(draft.host.trim().to_string());
+        model.port = Set(draft.port as i32);
+        model.launch_component = Set(draft.launch_component.trim().to_string());
+        model.is_enabled = Set(draft.is_enabled);
+        model.updated_at = Set(Utc::now().into());
+
+        let updated = model.update(&self.db).await?;
+        android_stage_display_model_to_domain(updated)
+    }
+
+    #[instrument(skip_all)]
+    pub async fn delete_resolume_host(&self, id: ResolumeHostId) -> anyhow::Result<()> {
+        let result = resolume_host::Entity::delete_by_id(id.to_string())
+            .exec(&self.db)
+            .await?;
+        if result.rows_affected == 0 {
+            return Err(anyhow!("resolume host not found"));
+        }
+        Ok(())
+    }
+
+    pub async fn delete_android_stage_display(
+        &self,
+        id: AndroidStageDisplayId,
+    ) -> anyhow::Result<()> {
+        let result = android_stage_display::Entity::delete_by_id(id.to_string())
+            .exec(&self.db)
+            .await?;
+        if result.rows_affected == 0 {
+            return Err(anyhow!("android stage display not found"));
+        }
+        Ok(())
+    }
+
+    #[instrument(skip_all)]
+    pub async fn get_stage_state(&self) -> anyhow::Result<Option<StageState>> {
+        let model = stage_state::Entity::find_by_id(STAGE_STATE_SINGLETON_ID.to_string())
+            .one(&self.db)
+            .await?;
+        model
+            .map(|record| stage_state_model_to_state(record).map_err(anyhow::Error::from))
+            .transpose()
+    }
+
+    #[instrument(skip_all)]
+    pub async fn upsert_stage_state(&self, state: &StageState) -> anyhow::Result<()> {
+        let now = Utc::now();
+        let model = stage_state::ActiveModel {
+            id: Set(STAGE_STATE_SINGLETON_ID.to_string()),
+            presentation_id: Set(state.presentation_id.map(|id| id.into_uuid().to_string())),
+            current_slide_id: Set(state.current_slide_id.map(|id| id.into_uuid().to_string())),
+            next_slide_id: Set(state.next_slide_id.map(|id| id.into_uuid().to_string())),
+            updated_at: Set(now.into()),
+        };
+
+        stage_state::Entity::insert(model)
+            .on_conflict(
+                OnConflict::column(stage_state::Column::Id)
+                    .update_columns([
+                        stage_state::Column::PresentationId,
+                        stage_state::Column::CurrentSlideId,
+                        stage_state::Column::NextSlideId,
+                        stage_state::Column::UpdatedAt,
+                    ])
+                    .to_owned(),
+            )
+            .exec(&self.db)
+            .await?;
+
+        Ok(())
+    }
+
+    pub async fn get_timers_state(&self) -> anyhow::Result<Option<TimersState>> {
+        let model = timers::Entity::find_by_id(TIMERS_SINGLETON_ID.to_string())
+            .one(&self.db)
+            .await?;
+        model
+            .map(|record| timers_model_to_state(record).map_err(anyhow::Error::from))
+            .transpose()
+    }
+
+    #[instrument(skip_all)]
+    pub async fn upsert_timers_state(&self, state: &TimersState) -> anyhow::Result<()> {
+        let now = Utc::now();
+        let model = timers::ActiveModel {
+            id: Set(TIMERS_SINGLETON_ID.to_string()),
+            countdown_target: Set(state.countdown.target.into()),
+            countdown_state: Set(timer_state_to_string(state.countdown.state)),
+            preach_state: Set(timer_state_to_string(state.preach.state)),
+            preach_started_at: Set(state.preach.started_at().map(Into::into)),
+            preach_accumulated_seconds: Set(state.preach.accumulated_duration().num_seconds()),
+            created_at: Set(now.into()),
+            updated_at: Set(now.into()),
+        };
+
+        timers::Entity::insert(model)
+            .on_conflict(
+                OnConflict::column(timers::Column::Id)
+                    .update_columns([
+                        timers::Column::CountdownTarget,
+                        timers::Column::CountdownState,
+                        timers::Column::PreachState,
+                        timers::Column::PreachStartedAt,
+                        timers::Column::PreachAccumulatedSeconds,
+                        timers::Column::UpdatedAt,
+                    ])
+                    .to_owned(),
+            )
+            .exec(&self.db)
+            .await?;
+
+        Ok(())
     }
 }

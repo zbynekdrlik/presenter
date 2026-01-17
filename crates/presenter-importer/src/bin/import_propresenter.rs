@@ -52,7 +52,7 @@ fn print_usage() {
     eprintln!("  --keep             Retain existing libraries and append new ones");
     eprintln!("  --root PATH        Explicit path to the ProPresenter library root");
     eprintln!("  -h, --help         Show this help message");
-    eprintln!("");
+    eprintln!();
     eprintln!(
         "When ROOT_PATH is supplied as a positional argument it overrides --root, e.g.\n  import_propresenter /home/youruser/propresenter-libraries",
     );

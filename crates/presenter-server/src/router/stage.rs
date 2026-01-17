@@ -55,12 +55,8 @@ pub(super) async fn get_stage_layout(
     let layout = layouts
         .into_iter()
         .find(|layout| layout.code == code)
-        .unwrap_or_else(|| {
-            StageDisplayLayout::built_in()
-                .into_iter()
-                .next()
-                .expect("stage layouts")
-        });
+        .or_else(|| StageDisplayLayout::built_in().into_iter().next())
+        .ok_or_else(|| AppError::internal("no stage layouts available"))?;
     Ok(Json(StageLayoutResponse {
         code: layout.code.clone(),
         layout,
@@ -111,7 +107,7 @@ pub(super) async fn update_stage_state(
     state
         .update_stage_state(presentation_id, current_slide_id, next_slide_id)
         .await
-        .map_err(|err| AppError::bad_request(err))?;
+        .map_err(AppError::bad_request)?;
     Ok(StatusCode::NO_CONTENT)
 }
 

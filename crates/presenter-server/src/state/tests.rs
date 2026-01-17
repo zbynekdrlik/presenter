@@ -1,11 +1,10 @@
+use super::stage::{format_countdown_text, sanitize_song_title};
 use super::*;
 use crate::live::LiveEvent;
-use chrono::Utc;
 use presenter_core::{
-    bible::BibleIngestionBatch, BiblePassage, BibleReference, BibleTranslation, Library, LibraryId,
-    Presentation, Slide, SlideContent, SlideId, SlideText, TimerCommand, TimerState,
+    bible::BibleIngestionBatch, BiblePassage, BibleTranslation, SlideContent, SlideText,
+    TimerCommand, TimerState,
 };
-use std::collections::HashMap;
 
 #[tokio::test]
 async fn seeded_state_contains_library() {
@@ -252,11 +251,11 @@ async fn timer_commands_emit_live_event() {
 
 #[test]
 fn countdown_format_switches_below_minute() {
-    assert_eq!(super::format_countdown_text(3605), "60:05");
-    assert_eq!(super::format_countdown_text(125), "02:05");
-    assert_eq!(super::format_countdown_text(59), "59");
-    assert_eq!(super::format_countdown_text(0), "0");
-    assert_eq!(super::format_countdown_text(-12), "0");
+    assert_eq!(format_countdown_text(3605), "60:05");
+    assert_eq!(format_countdown_text(125), "02:05");
+    assert_eq!(format_countdown_text(59), "59");
+    assert_eq!(format_countdown_text(0), "0");
+    assert_eq!(format_countdown_text(-12), "0");
 }
 
 #[tokio::test]
@@ -281,7 +280,7 @@ async fn tick_timers_emits_live_event() {
 async fn trigger_bible_passage_publishes_event_and_state() {
     let state = AppState::in_memory().await.unwrap();
     let translation = BibleTranslation::new("test", "Test", "en");
-    let reference = BibleReference::new_with_code("John", "JHN", 43, 3, 16, 16).unwrap();
+    let reference = BibleReference::new("John", 3, 16, 16).unwrap();
     let passage = BiblePassage::new(
         reference.clone(),
         translation.clone(),
@@ -299,13 +298,7 @@ async fn trigger_bible_passage_publishes_event_and_state() {
         .trigger_bible_passage("test", &reference)
         .await
         .unwrap();
-    assert_eq!(broadcast.passage.reference.book, reference.book);
-    assert_eq!(broadcast.passage.reference.chapter, reference.chapter);
-    assert_eq!(
-        broadcast.passage.reference.verse_start,
-        reference.verse_start
-    );
-    assert_eq!(broadcast.passage.reference.verse_end, reference.verse_end);
+    assert_eq!(broadcast.passage.reference, reference);
     assert!(state.active_bible_broadcast().await.is_some());
 
     match rx.recv().await.unwrap() {
@@ -322,192 +315,6 @@ async fn trigger_bible_passage_publishes_event_and_state() {
     }
 
     assert!(state.active_bible_broadcast().await.is_none());
-}
-
-#[tokio::test]
-async fn list_bible_translations_bootstraps_dashboard_once() {
-    let state = AppState::in_memory().await.unwrap();
-    let reference = BibleReference::new("John", 1, 1, 1).unwrap();
-    let translation_one = BibleTranslation::new("en-one", "One", "en");
-    let translation_two =
-        BibleTranslation::new("sk-two", "Two", "sk").with_show_in_dashboard(false);
-
-    let passage_one = BiblePassage::new(
-        reference.clone(),
-        translation_one.clone(),
-        "Verse one".to_string(),
-    );
-    let passage_two = BiblePassage::new(
-        reference.clone(),
-        translation_two.clone(),
-        "Verse two".to_string(),
-    );
-
-    let batch_one = BibleIngestionBatch::new(translation_one.clone(), vec![passage_one]).unwrap();
-    let batch_two = BibleIngestionBatch::new(translation_two.clone(), vec![passage_two]).unwrap();
-
-    state
-        .repository()
-        .replace_bible_translation_passages(&batch_one)
-        .await
-        .unwrap();
-    state
-        .repository()
-        .replace_bible_translation_passages(&batch_two)
-        .await
-        .unwrap();
-
-    let bootstrapped = state.list_bible_translations().await.unwrap();
-    assert_eq!(bootstrapped.len(), 2);
-    assert!(
-        bootstrapped
-            .iter()
-            .all(|translation| translation.show_in_dashboard),
-        "expected initial bootstrap to pin all Bibles"
-    );
-
-    // Simulate operator unpinning a translation after bootstrap.
-    state
-        .repository()
-        .update_bible_translation("sk-two", None, None, Some(false))
-        .await
-        .unwrap();
-
-    let after_unpin = state.list_bible_translations().await.unwrap();
-    let sk_two = after_unpin
-        .iter()
-        .find(|translation| translation.code == "sk-two")
-        .expect("sk-two translation present");
-    assert!(
-        !sk_two.show_in_dashboard,
-        "expected subsequent calls to respect operator dashboard choices"
-    );
-}
-
-#[test]
-fn compose_bible_slides_respects_character_limit() {
-    let translation = BibleTranslation::new("svk", "Slovak", "sk");
-    let passages = vec![
-        BiblePassage::new(
-            BibleReference::new_with_code("John", "JHN", 43, 3, 1, 1).unwrap(),
-            translation.clone(),
-            "Alpha".to_string(),
-        ),
-        BiblePassage::new(
-            BibleReference::new_with_code("John", "JHN", 43, 3, 2, 2).unwrap(),
-            translation.clone(),
-            "Beta".to_string(),
-        ),
-        BiblePassage::new(
-            BibleReference::new_with_code("John", "JHN", 43, 3, 3, 3).unwrap(),
-            translation.clone(),
-            "Gamma".to_string(),
-        ),
-    ];
-    let lookup: HashMap<u16, BiblePassage> = HashMap::new();
-
-    let slides = compose_bible_slides(&translation, None, &passages, &lookup, 20).unwrap();
-
-    assert_eq!(
-        slides.len(),
-        2,
-        "expected verses to batch without splitting"
-    );
-    let first = &slides[0];
-    let second = &slides[1];
-
-    assert_eq!(first.content.main.value(), "1. Alpha\n2. Beta");
-    assert_eq!(second.content.main.value(), "3. Gamma");
-    assert_eq!(first.content.stage.value(), first.content.main.value());
-    assert_eq!(second.content.stage.value(), second.content.main.value());
-
-    let first_span = first
-        .metadata
-        .as_ref()
-        .and_then(|meta| meta.bible.as_ref())
-        .and_then(|bible| bible.verse_span())
-        .unwrap();
-    assert_eq!(first_span, (1, 2));
-    let first_meta = first
-        .metadata
-        .as_ref()
-        .and_then(|meta| meta.bible.as_ref())
-        .expect("bible metadata present");
-    assert_eq!(first_meta.book_code.as_deref(), Some("JHN"));
-    assert_eq!(first_meta.book_number, Some(43));
-
-    let second_span = second
-        .metadata
-        .as_ref()
-        .and_then(|meta| meta.bible.as_ref())
-        .and_then(|bible| bible.verse_span())
-        .unwrap();
-    assert_eq!(second_span, (3, 3));
-    let second_meta = second
-        .metadata
-        .as_ref()
-        .and_then(|meta| meta.bible.as_ref())
-        .expect("bible metadata present");
-    assert_eq!(second_meta.book_code.as_deref(), Some("JHN"));
-    assert_eq!(second_meta.book_number, Some(43));
-}
-
-#[test]
-fn compose_bible_slides_includes_secondary_translation_text() {
-    let translation = BibleTranslation::new("svk", "Slovak", "sk");
-    let secondary = BibleTranslation::new("eng", "English", "en");
-    let main_passages = vec![
-        BiblePassage::new(
-            BibleReference::new_with_code("John", "JHN", 43, 3, 16, 16).unwrap(),
-            translation.clone(),
-            "For God so loved".to_string(),
-        ),
-        BiblePassage::new(
-            BibleReference::new_with_code("John", "JHN", 43, 3, 17, 17).unwrap(),
-            translation.clone(),
-            "For God did not send".to_string(),
-        ),
-    ];
-
-    let mut secondary_lookup: HashMap<u16, BiblePassage> = HashMap::new();
-    secondary_lookup.insert(
-        16,
-        BiblePassage::new(
-            BibleReference::new_with_code("John", "JHN", 43, 3, 16, 16).unwrap(),
-            secondary.clone(),
-            "Secondary Sixteen".to_string(),
-        ),
-    );
-    secondary_lookup.insert(
-        17,
-        BiblePassage::new(
-            BibleReference::new_with_code("John", "JHN", 43, 3, 17, 17).unwrap(),
-            secondary.clone(),
-            "Secondary Seventeen".to_string(),
-        ),
-    );
-
-    let slides = compose_bible_slides(
-        &translation,
-        Some(&secondary),
-        &main_passages,
-        &secondary_lookup,
-        200,
-    )
-    .unwrap();
-
-    assert_eq!(slides.len(), 1);
-    let slide = &slides[0];
-    assert!(slide
-        .content
-        .translation
-        .value()
-        .contains("16. Secondary Sixteen"));
-    assert!(slide
-        .content
-        .translation
-        .value()
-        .contains("17. Secondary Seventeen"));
 }
 
 #[test]

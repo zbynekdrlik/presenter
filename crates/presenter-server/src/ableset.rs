@@ -180,7 +180,6 @@ impl AbleSetBridge {
         }
     }
 
-    #[allow(dead_code)]
     pub async fn song_snapshot(&self) -> Option<AbleSetSongSnapshot> {
         let status = self.inner.status.read().await;
         status.last_song.as_ref().map(|song| {
@@ -464,7 +463,7 @@ async fn fetch_active_song(
                 .internal_meta
                 .as_ref()
                 .and_then(|meta| meta.order)
-                .or_else(|| Some(idx as u32));
+                .or(Some(idx as u32));
             return Ok(Some((name, index)));
         }
         return Ok(None);

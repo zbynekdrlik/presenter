@@ -1,36 +1,49 @@
-
-.operator.operator--bible {
-    background: #f5f6f8;
-    color: #0f172a;
+body.bible {
+    margin: 0;
     min-height: 100vh;
     display: flex;
     flex-direction: column;
     font-family: "Inter", "Segoe UI", system-ui, sans-serif;
-}
-
-.operator.operator--bible .operator__main {
-    flex: 1;
-    overflow-y: auto;
     background: #f8fafc;
+    color: #0f172a;
 }
 
-.bible__content {
-    width: min(1080px, 100%);
-    margin: 0 auto;
-    padding: 2rem 2rem 3rem;
+.bible__header {
     display: flex;
-    flex-direction: column;
-    gap: 1.75rem;
+    justify-content: space-between;
+    align-items: center;
+    padding: 1.5rem 2rem;
+    background: #0f172a;
+    color: #f8fafc;
+    box-shadow: 0 14px 24px rgba(15, 23, 42, 0.25);
+}
+
+.bible__header h1 {
+    margin: 0;
+    font-size: 1.4rem;
+}
+
+.bible__header p {
+    margin: 0.4rem 0 0;
+    color: #cbd5f5;
+}
+
+.bible__clear {
+    border: none;
+    background: rgba(99, 102, 241, 0.2);
+    color: #eef2ff;
+    padding: 0.6rem 1.2rem;
+    border-radius: 10px;
+    cursor: pointer;
+    font-size: 0.95rem;
 }
 
 .bible__search {
     display: grid;
     gap: 1rem;
     grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
-    padding: 1.5rem 1.75rem;
+    padding: 1.5rem 2rem;
     background: #eef2ff;
-    border-radius: 18px;
-    box-shadow: 0 14px 30px rgba(15, 23, 42, 0.08);
 }
 
 .bible__search label {
@@ -51,11 +64,6 @@
     background: #ffffff;
 }
 
-.bible__search select:disabled,
-.bible__search input:disabled {
-    opacity: 0.7;
-}
-
 .bible__search-button {
     align-self: end;
     border: none;
@@ -69,7 +77,7 @@
 }
 
 .bible__active {
-    padding: 0;
+    padding: 1.5rem 2rem;
 }
 
 .bible__active-card {
@@ -105,7 +113,7 @@
 }
 
 .bible__results {
-    padding: 0;
+    padding: 0 2rem 2.5rem;
     display: grid;
     gap: 1rem;
 }
@@ -167,13 +175,13 @@
     transform: translateY(0);
 }
 
-@media (max-width: 900px) {
-    .bible__content {
-        padding: 1.5rem 1.25rem 2.5rem;
-    }
-}
-
 @media (max-width: 720px) {
+    .bible__header {
+        flex-direction: column;
+        align-items: flex-start;
+        gap: 0.75rem;
+    }
+
     .bible__search {
         grid-template-columns: 1fr;
     }

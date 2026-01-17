@@ -107,6 +107,7 @@ impl Playlist {
         })
     }
 
+    #[allow(clippy::collapsible_match)]
     fn ensure_unique_midi(&self) -> Result<(), PlaylistError> {
         let mut seen = [false; 128];
         for entry in &self.entries {

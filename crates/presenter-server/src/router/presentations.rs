@@ -5,10 +5,19 @@ use axum::{
     http::StatusCode,
     Json,
 };
-use presenter_core::{PresentationId, Slide, SlideId};
+use presenter_core::{LibraryId, Presentation, PresentationId, Slide, SlideId};
+use serde::{Deserialize, Serialize};
 use tracing::instrument;
 
-#[derive(Debug, serde::Deserialize)]
+#[derive(Debug, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub(super) struct PresentationDetailDto {
+    pub(super) library_id: LibraryId,
+    pub(super) library_name: String,
+    pub(super) presentation: Presentation,
+}
+
+#[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub(super) struct RenamePresentationRequest {
     pub(super) name: String,
@@ -40,12 +49,12 @@ pub(super) struct SlideContentUpdateRequest {
 pub(super) async fn get_presentation_detail(
     Path(id): Path<String>,
     State(state): State<AppState>,
-) -> Result<Json<super::PresentationDetailDto>, AppError> {
+) -> Result<Json<PresentationDetailDto>, AppError> {
     let uuid = uuid::Uuid::parse_str(&id)
         .map_err(|_| AppError::bad_request_message("presentationId must be a valid UUID"))?;
     let presentation_id = PresentationId::from_uuid(uuid);
     match state.presentation_detail(presentation_id).await? {
-        Some((library_id, library_name, presentation)) => Ok(Json(super::PresentationDetailDto {
+        Some((library_id, library_name, presentation)) => Ok(Json(PresentationDetailDto {
             library_id,
             library_name,
             presentation,

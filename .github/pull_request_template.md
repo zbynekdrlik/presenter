@@ -31,7 +31,7 @@ Code Organization & Limits (2025 guidelines)
 - [ ] CSS kept in small constants or `ui/styles.rs`/static file; no large inline CSS with router/state logic
 
 Docs
-- [ ] Markdown updated for any behaviour/structure changes (runbook, AGENTS.md, ADRs)
+- [ ] Markdown updated for any behaviour/structure changes (runbook, CLAUDE.md, ADRs)
 - [ ] PR body includes brief rationale and testing evidence (screenshots/logs where useful)
 
 Operational Notes

@@ -1,26 +1,23 @@
-use std::collections::HashMap;
-
 use chrono::{DateTime, Utc};
 use presenter_core::{
-    extract_song_prefix, AbleSetSettings, AbleSetSettingsDraft, AbleSetSongSnapshot,
-    LibrarySummary, PresentationId,
+    extract_song_prefix, AbleSetSettings, AbleSetSettingsDraft, AbleSetSongSnapshot, PresentationId,
 };
-
-use crate::ableset::AbleSetStatusSnapshot;
+use std::collections::HashMap;
 
 use super::AppState;
+use crate::ableset::AbleSetStatusSnapshot;
 
 #[derive(Default)]
 pub(crate) struct AbleSetLibraryCache {
-    pub(super) library_name: Option<String>,
-    pub(super) song_prefix_length: u8,
-    pub(super) entries: HashMap<String, PresentationId>,
-    pub(super) last_updated: Option<DateTime<Utc>>,
-    pub(super) last_error: Option<String>,
+    pub(crate) library_name: Option<String>,
+    pub(crate) song_prefix_length: u8,
+    pub(crate) entries: HashMap<String, PresentationId>,
+    pub(crate) last_updated: Option<DateTime<Utc>>,
+    pub(crate) last_error: Option<String>,
 }
 
 impl AbleSetLibraryCache {
-    pub(super) fn invalidate(&mut self) {
+    pub(crate) fn invalidate(&mut self) {
         self.entries.clear();
         self.library_name = None;
         self.song_prefix_length = 0;
@@ -28,7 +25,7 @@ impl AbleSetLibraryCache {
         self.last_error = None;
     }
 
-    pub(super) fn matches(&self, library_name: &str, prefix_len: u8) -> bool {
+    pub(crate) fn matches(&self, library_name: &str, prefix_len: u8) -> bool {
         if let Some(current) = &self.library_name {
             current.eq_ignore_ascii_case(library_name) && self.song_prefix_length == prefix_len
         } else {
@@ -47,7 +44,7 @@ impl AppState {
         draft: AbleSetSettingsDraft,
     ) -> anyhow::Result<AbleSetSettings> {
         let settings = self.repository.upsert_ableset_settings(&draft).await?;
-        self.ableset_client.apply_settings(settings.clone()).await?;
+        self.ableset_bridge.apply_settings(settings.clone()).await?;
         {
             let mut cache = self.ableset_cache.write().await;
             cache.invalidate();
@@ -58,15 +55,15 @@ impl AppState {
     }
 
     pub async fn ableset_status_snapshot(&self) -> AbleSetStatusSnapshot {
-        self.ableset_client.status_snapshot().await
+        self.ableset_bridge.status_snapshot().await
     }
 
     pub async fn set_ableset_follow(&self, enabled: bool) -> AbleSetStatusSnapshot {
-        self.ableset_client.set_follow_enabled(enabled).await
+        self.ableset_bridge.set_follow_enabled(enabled).await
     }
 
     pub async fn current_ableset_song(&self) -> Option<AbleSetSongSnapshot> {
-        self.ableset_client.song_snapshot().await
+        self.ableset_bridge.song_snapshot().await
     }
 
     pub async fn resolve_ableset_presentation(
@@ -77,7 +74,7 @@ impl AppState {
         if key.is_empty() {
             return Ok(None);
         }
-        let settings = self.ableset_client.status_snapshot().await;
+        let settings = self.ableset_bridge.status_snapshot().await;
         if !settings.enabled {
             return Ok(None);
         }
@@ -87,10 +84,7 @@ impl AppState {
         Ok(cache.entries.get(&lookup).copied())
     }
 
-    pub(super) async fn ensure_ableset_cache(
-        &self,
-        settings: &AbleSetStatusSnapshot,
-    ) -> anyhow::Result<()> {
+    async fn ensure_ableset_cache(&self, settings: &AbleSetStatusSnapshot) -> anyhow::Result<()> {
         let needs_refresh = {
             let cache = self.ableset_cache.read().await;
             !cache.matches(&settings.library_name, settings.song_prefix_length)
@@ -107,9 +101,9 @@ impl AppState {
         settings: &AbleSetStatusSnapshot,
     ) -> anyhow::Result<()> {
         let summaries = self.repository.list_library_summaries(None).await?;
-        let target = summaries.into_iter().find(|summary: &LibrarySummary| {
-            summary.name.eq_ignore_ascii_case(&settings.library_name)
-        });
+        let target = summaries
+            .into_iter()
+            .find(|summary| summary.name.eq_ignore_ascii_case(&settings.library_name));
         let mut cache = self.ableset_cache.write().await;
         cache.library_name = Some(settings.library_name.clone());
         cache.song_prefix_length = settings.song_prefix_length;

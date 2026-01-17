@@ -34,6 +34,7 @@ use proto::presentation::CueGroup;
 use rtf_parser::RtfDocument;
 use tracing::instrument;
 
+#[allow(clippy::large_enum_variant)]
 pub mod proto {
     include!(concat!(env!("OUT_DIR"), "/rv.data.rs"));
 }
@@ -309,7 +310,7 @@ fn slide_content_from_proto(
                 .map(|(_, text)| text.clone())
         })
         .unwrap_or_default();
-    let translation = select_text(&buckets, TextRole::Translation).unwrap_or_else(|| String::new());
+    let translation = select_text(&buckets, TextRole::Translation).unwrap_or_default();
     let stage = select_text(&buckets, TextRole::Stage).unwrap_or_default();
 
     Ok(SlideContent::new(
@@ -330,9 +331,9 @@ fn select_text(buckets: &[(TextRole, String)], role: TextRole) -> Option<String>
     })
 }
 
-fn extract_presentation_slides<'a>(
-    cue: &'a proto::Cue,
-) -> impl Iterator<Item = &'a proto::PresentationSlide> {
+fn extract_presentation_slides(
+    cue: &proto::Cue,
+) -> impl Iterator<Item = &proto::PresentationSlide> {
     cue.actions.iter().filter_map(|action| {
         if matches!(
             proto::action::ActionType::from_i32(action.r#type),
@@ -737,7 +738,7 @@ fn is_placeholder_text(text: &str) -> bool {
     matches!(text, "." | "0")
 }
 
-fn resolve_cue_sequence<'a>(raw: &'a proto::Presentation) -> Vec<&'a proto::Cue> {
+fn resolve_cue_sequence(raw: &proto::Presentation) -> Vec<&proto::Cue> {
     use std::collections::{HashMap, HashSet};
 
     let mut cues_by_uuid: HashMap<&str, &proto::Cue> = HashMap::new();
@@ -892,12 +893,16 @@ mod tests {
 
     #[test]
     fn slide_content_treats_single_dot_as_blank() {
-        let mut text = proto::graphics::Text::default();
-        text.rtf_data = b".".to_vec();
+        let text = proto::graphics::Text {
+            rtf_data: b".".to_vec(),
+            ..Default::default()
+        };
 
-        let mut element = proto::graphics::Element::default();
-        element.name = "Main".into();
-        element.text = Some(text);
+        let element = proto::graphics::Element {
+            name: "Main".into(),
+            text: Some(text),
+            ..Default::default()
+        };
 
         let slide = proto::Slide {
             elements: vec![proto::slide::Element {
@@ -913,19 +918,27 @@ mod tests {
 
     #[test]
     fn slide_content_preserves_real_text_when_stage_placeholder_removed() {
-        let mut main = proto::graphics::Text::default();
-        main.rtf_data = b"Verse".to_vec();
+        let main = proto::graphics::Text {
+            rtf_data: b"Verse".to_vec(),
+            ..Default::default()
+        };
 
-        let mut stage = proto::graphics::Text::default();
-        stage.rtf_data = b".".to_vec();
+        let stage = proto::graphics::Text {
+            rtf_data: b".".to_vec(),
+            ..Default::default()
+        };
 
-        let mut main_element = proto::graphics::Element::default();
-        main_element.name = "Main".into();
-        main_element.text = Some(main);
+        let main_element = proto::graphics::Element {
+            name: "Main".into(),
+            text: Some(main),
+            ..Default::default()
+        };
 
-        let mut stage_element = proto::graphics::Element::default();
-        stage_element.name = "Stage".into();
-        stage_element.text = Some(stage);
+        let stage_element = proto::graphics::Element {
+            name: "Stage".into(),
+            text: Some(stage),
+            ..Default::default()
+        };
 
         let slide = proto::Slide {
             elements: vec![
