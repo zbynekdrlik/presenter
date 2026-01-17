@@ -1,0 +1,17 @@
+[2026-01-17 12:07:57] cargo build --release 2>&1 | tail -15
+[2026-01-17 12:13:40] cargo test 2>&1 | tail -30
+[2026-01-17 12:16:03] cargo clippy -- -D warnings 2>&1 | tail -20
+[2026-01-17 12:16:14] cargo clippy -- -D warnings 2>&1 | tail -10
+[2026-01-17 12:16:40] git add -A && git commit -m "$(cat <<'EOF'
+fix(security): prevent command injection in Android stage display
+
+- Add input validation for host field (alphanumeric, dots, hyphens only)
+- Add validation for launch_component format (package/activity pattern)
+- Add 10-second timeout for ADB commands to prevent hangs
+- Document security rationale in validation function
+
+🤖 Generated with [Claude Code](https://claude.com/claude-code)
+
+Co-Authored-By: Claude Opus 4.5 <noreply@anthropic.com>
+EOF
+)"
