@@ -169,7 +169,6 @@ impl AbleSetBridge {
         }
     }
 
-    #[allow(dead_code)]
     pub async fn song_snapshot(&self) -> Option<AbleSetSongSnapshot> {
         let status = self.inner.status.read().await;
         status.last_song.as_ref().map(|song| {

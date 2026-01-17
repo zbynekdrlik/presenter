@@ -1,4 +1,4 @@
-use super::{AppError, BibleImportSummaryDto};
+use super::AppError;
 use crate::state::AppState;
 use anyhow::Error as AnyhowError;
 use axum::{
@@ -8,7 +8,23 @@ use axum::{
     Json,
 };
 use presenter_core::{BiblePassage, BibleReference, BibleTranslation};
+use serde::{Deserialize, Serialize};
 use tracing::instrument;
+
+#[derive(Debug, Serialize, Deserialize)]
+pub(super) struct BibleImportSummaryDto {
+    pub(super) translation_code: String,
+    pub(super) passage_count: usize,
+}
+
+impl From<presenter_bible::BibleImportSummary> for BibleImportSummaryDto {
+    fn from(summary: presenter_bible::BibleImportSummary) -> Self {
+        Self {
+            translation_code: summary.translation_code,
+            passage_count: summary.passage_count,
+        }
+    }
+}
 
 #[instrument(skip_all)]
 pub(super) async fn list_bible_translations(
