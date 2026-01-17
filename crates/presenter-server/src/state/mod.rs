@@ -600,6 +600,15 @@ impl AppState {
             .await
     }
 
+    pub async fn list_bible_books(
+        &self,
+        translation_code: &str,
+    ) -> anyhow::Result<Vec<presenter_core::bible::BibleBookChapterSummary>> {
+        self.repository
+            .bible_book_chapter_summaries(translation_code)
+            .await
+    }
+
     // OSC methods
     pub async fn osc_settings(&self) -> anyhow::Result<OscSettings> {
         self.repository.get_osc_settings().await

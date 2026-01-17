@@ -9,6 +9,7 @@ use axum::{
 };
 use presenter_core::{BiblePassage, BibleReference, BibleTranslation};
 use serde::{Deserialize, Serialize};
+use std::collections::HashMap;
 use tracing::instrument;
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -32,6 +33,72 @@ pub(super) async fn list_bible_translations(
 ) -> Result<Json<Vec<BibleTranslation>>, AppError> {
     let translations = state.list_bible_translations().await?;
     Ok(Json(translations))
+}
+
+#[derive(Debug, serde::Deserialize)]
+pub(super) struct BibleBooksQuery {
+    pub(super) translation: String,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub(super) struct BibleBookDto {
+    pub(super) book: String,
+    pub(super) code: String,
+    pub(super) number: u16,
+    pub(super) chapters: Vec<BibleChapterDto>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub(super) struct BibleChapterDto {
+    pub(super) number: u16,
+    pub(super) verse_count: u16,
+}
+
+#[instrument(skip_all)]
+pub(super) async fn list_bible_books(
+    State(state): State<AppState>,
+    Query(params): Query<BibleBooksQuery>,
+) -> Result<Json<Vec<BibleBookDto>>, AppError> {
+    let summaries = state.list_bible_books(&params.translation).await?;
+
+    // Aggregate flat chapter summaries into books with chapter arrays
+    let mut books_map: HashMap<String, BibleBookDto> = HashMap::new();
+    let mut book_order: Vec<String> = Vec::new();
+
+    for summary in summaries {
+        let key = summary
+            .book_code
+            .clone()
+            .unwrap_or_else(|| summary.book.clone());
+        if !books_map.contains_key(&key) {
+            book_order.push(key.clone());
+            books_map.insert(
+                key.clone(),
+                BibleBookDto {
+                    book: summary.book.clone(),
+                    code: summary.book_code.clone().unwrap_or_default(),
+                    number: summary.book_number.unwrap_or(0),
+                    chapters: Vec::new(),
+                },
+            );
+        }
+        if let Some(book) = books_map.get_mut(&key) {
+            book.chapters.push(BibleChapterDto {
+                number: summary.chapter,
+                verse_count: summary.verse_count,
+            });
+        }
+    }
+
+    // Preserve book order from the database query
+    let books: Vec<BibleBookDto> = book_order
+        .into_iter()
+        .filter_map(|key| books_map.remove(&key))
+        .collect();
+
+    Ok(Json(books))
 }
 
 #[derive(Debug, serde::Deserialize)]
