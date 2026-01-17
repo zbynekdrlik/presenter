@@ -943,11 +943,45 @@ impl AppState {
         translation_code: &str,
         reference: &BibleReference,
     ) -> anyhow::Result<BibleBroadcast> {
-        let passage = self
+        // Try to find a range of verses first (for multi-verse slides)
+        let range = self
             .repository
-            .find_bible_passage(translation_code, reference)
-            .await?
-            .ok_or_else(|| anyhow::anyhow!("passage not found"))?;
+            .bible_passage_range(
+                translation_code,
+                reference.book.as_str(),
+                reference.book_code.as_deref(),
+                reference.chapter,
+                reference.verse_start,
+                reference.verse_end,
+            )
+            .await?;
+
+        let passage = if range.is_empty() {
+            // Fall back to exact match for single-verse passages
+            self.repository
+                .find_bible_passage(translation_code, reference)
+                .await?
+                .ok_or_else(|| anyhow::anyhow!("passage not found"))?
+        } else {
+            // Combine multiple verses into a single passage
+            let mut combined_text = String::new();
+            for entry in &range {
+                if !combined_text.is_empty() {
+                    combined_text.push_str("\n\n");
+                }
+                combined_text.push_str(entry.text.as_str());
+            }
+            let translation = range[0].translation.clone();
+            let combined_reference = presenter_core::BibleReference::new_with_code(
+                reference.book.clone(),
+                reference.book_code.clone().unwrap_or_default(),
+                reference.book_number.unwrap_or(0),
+                reference.chapter,
+                reference.verse_start,
+                reference.verse_end,
+            )?;
+            presenter_core::BiblePassage::new(combined_reference, translation, combined_text)
+        };
 
         let broadcast = BibleBroadcast::new(passage, Utc::now());
         {
