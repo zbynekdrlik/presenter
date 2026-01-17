@@ -444,6 +444,7 @@
       console.error("Failed to update Bible dashboard pin", error);
       setTranslationPinState(normalizedCode, wasPinned);
       renderTranslationList();
+      renderBibleModal();
       if (
         els.bibleEditDashboard &&
         state.bibleEdit.open &&

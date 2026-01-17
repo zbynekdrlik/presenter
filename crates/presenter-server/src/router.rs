@@ -44,6 +44,10 @@ pub fn build_router(state: AppState) -> Router {
             post(libraries::create_library_presentation),
         )
         .route("/bible/translations", get(bible::list_bible_translations))
+        .route(
+            "/bible/translations/{code}",
+            patch(bible::update_bible_translation),
+        )
         .route("/bible/books", get(bible::list_bible_books))
         .route("/bible/search", get(bible::search_bible_passages))
         .route("/bible/passage", get(bible::get_bible_passage))

@@ -515,6 +515,16 @@ impl AppState {
         self.repository.list_bible_translations().await
     }
 
+    pub async fn update_bible_translation(
+        &self,
+        code: &str,
+        show_in_dashboard: Option<bool>,
+    ) -> anyhow::Result<Option<BibleTranslation>> {
+        self.repository
+            .update_bible_translation(code, None, None, show_in_dashboard)
+            .await
+    }
+
     pub async fn library_summaries(
         &self,
         query: Option<&str>,
@@ -756,6 +766,13 @@ impl AppState {
             .fetch_presentation_detail(id)
             .await?
             .ok_or_else(|| anyhow::anyhow!("presentation not found"))?;
+        // Filter out empty placeholder slides created by default
+        // (empty main, translation, and stage text)
+        presentation.slides.retain(|s| {
+            !s.content.main.value().is_empty()
+                || !s.content.translation.value().is_empty()
+                || !s.content.stage.value().is_empty()
+        });
         let start_order = presentation.slides.len() as u32;
         for (i, mut slide) in new_slides.into_iter().enumerate() {
             slide.order = start_order + i as u32;

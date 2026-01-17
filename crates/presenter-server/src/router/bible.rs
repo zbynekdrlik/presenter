@@ -43,6 +43,25 @@ pub(super) async fn list_bible_translations(
 }
 
 #[derive(Debug, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub(super) struct UpdateBibleTranslationRequest {
+    pub(super) show_in_dashboard: Option<bool>,
+}
+
+#[instrument(skip_all)]
+pub(super) async fn update_bible_translation(
+    State(state): State<AppState>,
+    axum::extract::Path(code): axum::extract::Path<String>,
+    Json(payload): Json<UpdateBibleTranslationRequest>,
+) -> Result<Json<BibleTranslation>, AppError> {
+    let translation = state
+        .update_bible_translation(&code, payload.show_in_dashboard)
+        .await?
+        .ok_or_else(|| AppError::not_found("translation not found"))?;
+    Ok(Json(translation))
+}
+
+#[derive(Debug, serde::Deserialize)]
 pub(super) struct BibleBooksQuery {
     pub(super) translation: String,
 }

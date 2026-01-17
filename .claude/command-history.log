@@ -1250,3 +1250,121 @@ These were present on origin/main but lost during the merge.
 Co-Authored-By: Claude Opus 4.5 <noreply@anthropic.com>
 EOF
 )" && git push origin dev
+[2026-01-17 20:03:03] sleep 30 && gh run list --limit 5
+[2026-01-17 20:03:41] gh run watch 21099365381 2>&1 &
+sleep 180 && gh run view 21099365381 --json conclusion,status 2>&1
+[2026-01-17 20:03:45] sleep 120 && gh run view 21099365381 --json conclusion,status 2>&1
+[2026-01-17 20:05:51] for i in 1 2 3 4 5 6 7 8 9 10; do sleep 120 && echo "Check $i:" && gh run view 21099365381 --json conclusion,status 2>&1; done
+[2026-01-17 20:16:05] for i in 1 2 3 4 5; do sleep 120 && echo "Check $i:" && gh run view 21099365381 --json conclusion,status 2>&1; done
+[2026-01-17 20:26:16] for i in 1 2 3 4 5 6; do sleep 120 && echo "Check $i:" && gh run view 21099365381 --json conclusion,status 2>&1; done
+[2026-01-17 20:38:26] gh run view 21099365381 --log-failed 2>&1 | tail -100
+[2026-01-17 20:38:58] git show 08abe38:crates/presenter-server/src/router.rs | grep -A3 "/bible/presentations"
+[2026-01-17 20:39:02] git show 08abe38:crates/presenter-server/src/router/bible.rs | grep -A150 "list_bible_presentations" | head -200
+[2026-01-17 20:40:10] grep -rn "presentation" crates/presenter-persistence/src/repository/*.rs | grep "pub async fn" | head -20
+[2026-01-17 20:40:37] git show 08abe38:crates/presenter-core/src/presentation.rs | grep -A10 "fn bible"
+[2026-01-17 20:40:44] grep -A5 "create_bible_presentation" crates/presenter-server/src/state/app.rs
+[2026-01-17 20:40:55] grep -A10 "pub async fn create_presentation" crates/presenter-persistence/src/repository/mod.rs | head -15
+[2026-01-17 20:41:12] grep -rn "fetch_presentations\|list_presentations" crates/presenter-persistence/src/repository/ | head -10
+[2026-01-17 20:41:17] grep -A15 "async fn list_bible_presentations" crates/presenter-server/src/state/app.rs
+[2026-01-17 20:42:10] cargo build --release -p presenter-server 2>&1 | tail -80
+[2026-01-17 20:42:43] cargo build --release -p presenter-server 2>&1 | tail -40
+[2026-01-17 20:42:57] grep -A5 "fn fetch_presentation_detail" crates/presenter-persistence/src/repository/mod.rs | head -10
+[2026-01-17 20:44:12] cargo build --release -p presenter-server 2>&1 | tail -50
+[2026-01-17 20:47:26] git status
+[2026-01-17 20:47:31] git diff --stat crates/presenter-server/src/
+[2026-01-17 20:47:39] git add crates/presenter-server/src/router.rs crates/presenter-server/src/router/bible.rs crates/presenter-server/src/state/mod.rs && git commit -m "$(cat <<'EOF'
+fix(bible): add missing Bible presentations endpoints
+
+Add endpoints that were lost in the merge conflict resolution:
+- GET/POST /bible/presentations - list and create
+- GET/PATCH /bible/presentations/{id} - get details and rename
+- POST /bible/presentations/{id}/append - append slides
+
+These are required for bible.spec.ts E2E tests to pass.
+
+🤖 Generated with [Claude Code](https://claude.com/claude-code)
+
+Co-Authored-By: Claude Opus 4.5 <noreply@anthropic.com>
+EOF
+)"
+[2026-01-17 20:47:44] git push origin dev
+[2026-01-17 20:47:50] gh run watch --exit-status 2>&1 &
+sleep 5 && gh run list --limit 3
+[2026-01-17 20:48:01] gh run list --limit 10 --json workflowName,conclusion,status,databaseId,createdAt --jq '.[] | "\(.status)\t\(.conclusion // "-")\t\(.workflowName)\t\(.databaseId)"'
+[2026-01-17 20:48:08] gh run watch 21099919852 --exit-status
+[2026-01-17 21:08:20] gh run view 21099919852 --json status,conclusion,jobs --jq '.status + " " + (.conclusion // "pending") + " - " + (.jobs | map(.name + ": " + .status + " " + (.conclusion // "-")) | join(", "))'
+[2026-01-17 21:08:27] gh run list --limit 10 --json workflowName,conclusion,status,databaseId,headBranch --jq '.[] | "\(.status)\t\(.conclusion // "-")\t\(.workflowName)\t\(.databaseId)"'
+[2026-01-17 21:08:36] gh run watch 21099920381 --exit-status
+[2026-01-17 21:15:08] gh run view 21099920381 --log-failed 2>&1 | tail -100
+[2026-01-17 21:18:13] sed -n '7,13p' /home/newlevel/devel/presenter/presenter-dev2/crates/presenter-persistence/src/repository/helpers.rs | cat -A
+[2026-01-17 21:19:14] cargo build --release -p presenter-server 2>&1 | tail -30
+[2026-01-17 21:21:17] git status
+[2026-01-17 21:21:26] git add crates/presenter-persistence/src/repository/helpers.rs crates/presenter-server/src/bible_script.js && git commit -m "$(cat <<'EOF'
+fix(bible): restore slide metadata and re-render modal on toggle
+
+Two fixes for E2E test failures:
+
+1. helpers.rs: to_domain_slide was missing metadata_json parsing,
+   causing mainReferenceLabel to be lost when slides were stored
+   and retrieved from the database.
+
+2. bible_script.js: toggleBibleDashboard wasn't calling renderBibleModal()
+   after state change, so aria-pressed attribute wasn't updating.
+
+🤖 Generated with [Claude Code](https://claude.com/claude-code)
+
+Co-Authored-By: Claude Opus 4.5 <noreply@anthropic.com>
+EOF
+)" && git push origin dev
+[2026-01-17 21:21:36] gh run list --limit 8 --json workflowName,conclusion,status,databaseId --jq '.[] | "\(.status)\t\(.conclusion // "-")\t\(.workflowName)\t\(.databaseId)"'
+[2026-01-17 21:21:42] gh run watch 21100314515 --exit-status
+[2026-01-17 21:41:59] gh run view 21100314515 --json status,conclusion --jq '"\(.status) \(.conclusion // "-")"'
+[2026-01-17 21:42:58] gh run view 21100314515 --json status,conclusion,jobs
+[2026-01-17 21:43:04] gh run watch 21100314515
+[2026-01-17 21:53:10] tail -50 /tmp/claude/-home-newlevel-devel-presenter-presenter-dev2/tasks/bd2feb4.output
+[2026-01-17 21:53:15] sleep 60 && gh run view 21100314515 --json status,conclusion
+[2026-01-17 21:54:22] tail -30 /tmp/claude/-home-newlevel-devel-presenter-presenter-dev2/tasks/bd2feb4.output
+[2026-01-17 21:54:27] sleep 90 && gh run view 21100314515 --json status,conclusion
+[2026-01-17 21:56:03] tail -30 /tmp/claude/-home-newlevel-devel-presenter-presenter-dev2/tasks/bd2feb4.output
+[2026-01-17 21:56:06] sleep 120 && gh run view 21100314515 --json status,conclusion
+[2026-01-17 21:58:11] tail -30 /tmp/claude/-home-newlevel-devel-presenter-presenter-dev2/tasks/bd2feb4.output
+[2026-01-17 21:58:16] sleep 120 && gh run view 21100314515 --json status,conclusion
+[2026-01-17 22:00:20] tail -30 /tmp/claude/-home-newlevel-devel-presenter-presenter-dev2/tasks/bd2feb4.output
+[2026-01-17 22:00:24] sleep 120 && tail -35 /tmp/claude/-home-newlevel-devel-presenter-presenter-dev2/tasks/bd2feb4.output
+[2026-01-17 22:02:29] sleep 120 && gh run view 21100314515 --json status,conclusion
+[2026-01-17 22:04:34] tail -30 /tmp/claude/-home-newlevel-devel-presenter-presenter-dev2/tasks/bd2feb4.output
+[2026-01-17 22:04:38] sleep 180 && gh run view 21100314515 --json status,conclusion
+[2026-01-17 22:07:45] tail -30 /tmp/claude/-home-newlevel-devel-presenter-presenter-dev2/tasks/bd2feb4.output
+[2026-01-17 22:07:49] sleep 180 && gh run view 21100314515 --json status,conclusion
+[2026-01-17 22:10:54] tail -30 /tmp/claude/-home-newlevel-devel-presenter-presenter-dev2/tasks/bd2feb4.output
+[2026-01-17 22:10:58] sleep 180 && gh run view 21100314515 --json status,conclusion
+[2026-01-17 22:14:03] gh run view 21100314515 --log-failed 2>&1 | head -200
+[2026-01-17 22:14:13] gh run view 21100314515 --log-failed 2>&1 | tail -100
+[2026-01-17 22:15:01] git log --oneline -5
+[2026-01-17 22:15:05] git show 6e2c826 --stat
+[2026-01-17 22:16:03] grep -n "renderBibleModal" /home/newlevel/devel/presenter/presenter-dev2/crates/presenter-server/src/bible_script.js | head -20
+[2026-01-17 22:21:04] ls /home/newlevel/devel/presenter/presenter-dev2/crates/presenter-persistence/src/entities/
+[2026-01-17 22:23:07] cargo check -p presenter-server 2>&1 | head -60
+[2026-01-17 22:23:16] cargo check -p presenter-server 2>&1 | grep -E "^error"
+[2026-01-17 22:23:49] git add -A && git commit -m "$(cat <<'EOF'
+fix(bible): add PATCH endpoint and fix slide duplication
+
+Two fixes for E2E test failures:
+
+1. Add PATCH /bible/translations/{code} endpoint to update
+   showInDashboard setting. Previously this endpoint was missing,
+   causing toggle clicks to fail with 404.
+
+2. Filter empty placeholder slides in append_bible_presentation_slides
+   before adding new slides. The create_presentation function creates
+   an initial empty slide that was being counted, causing slide count
+   mismatch (expected 3, got 4).
+
+3. Add renderBibleModal() call in toggleBibleDashboard error handler
+   to properly update modal UI when API fails.
+
+🤖 Generated with [Claude Code](https://claude.com/claude-code)
+
+Co-Authored-By: Claude Opus 4.5 <noreply@anthropic.com>
+EOF
+)" && git push origin dev
