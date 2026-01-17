@@ -518,10 +518,12 @@ impl AppState {
     pub async fn update_bible_translation(
         &self,
         code: &str,
+        name: Option<&str>,
+        language: Option<&str>,
         show_in_dashboard: Option<bool>,
     ) -> anyhow::Result<Option<BibleTranslation>> {
         self.repository
-            .update_bible_translation(code, None, None, show_in_dashboard)
+            .update_bible_translation(code, name, language, show_in_dashboard)
             .await
     }
 
