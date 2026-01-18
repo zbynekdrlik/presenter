@@ -1447,3 +1447,90 @@ works.
 Co-Authored-By: Claude Opus 4.5 <noreply@anthropic.com>
 EOF
 )" && git push origin dev 2>&1
+[2026-01-18 00:01:06] gh run list --limit 5 2>&1
+[2026-01-18 00:01:11] gh run list --limit 10 --event push 2>&1
+[2026-01-18 00:01:18] gh run watch 21102209822 --exit-status 2>&1
+[2026-01-18 00:21:29] gh run list --limit 5 --event push 2>&1
+[2026-01-18 00:21:38] tail -30 /tmp/claude/-home-newlevel-devel-presenter-presenter-dev2/tasks/be25a51.output
+[2026-01-18 00:21:48] sleep 60 && gh run list --limit 5 --event push 2>&1
+[2026-01-18 00:22:55] gh run list --limit 10 --workflow e2e.yml 2>&1
+[2026-01-18 00:23:02] gh run watch 21102210406 --exit-status 2>&1
+[2026-01-18 00:34:57] gh pr view 108 --json state,statusCheckRollup,mergeable,title
+[2026-01-18 00:35:04] gh run watch 21102209822 --exit-status
+[2026-01-18 00:45:09] tail -100 /tmp/claude/-home-newlevel-devel-presenter-presenter-dev2/tasks/b703142.output
+[2026-01-18 00:55:19] gh run view 21102209822 --json conclusion,status
+[2026-01-18 00:55:26] tail -50 /tmp/claude/-home-newlevel-devel-presenter-presenter-dev2/tasks/b703142.output
+[2026-01-18 01:00:38] gh run view 21102209822 --json conclusion,status
+[2026-01-18 01:01:23] gh run view 21102209822 --json status,conclusion,jobs 2>/dev/null | jq '{status, conclusion, jobs: [.jobs[] | {name, status, conclusion}]}'
+[2026-01-18 01:01:26] gh pr view 108 --json state,mergeable,statusCheckRollup 2>/dev/null | jq '{state, mergeable, checks: [.statusCheckRollup[] | {name: .name, status: .status, conclusion: .conclusion}]}'
+[2026-01-18 01:01:37] gh run list --limit 10 --json databaseId,status,conclusion,event,headBranch,workflowName 2>/dev/null | jq '.[] | select(.headBranch == "dev" or .headBranch == "main")'
+[2026-01-18 01:01:39] gh pr view 108 --json title 2>/dev/null | jq -r '.title'
+[2026-01-18 01:01:50] gh run watch 21102210383 --exit-status 2>&1 || true
+[2026-01-18 01:06:55] tail -50 /tmp/claude/-home-newlevel-devel-presenter-presenter-dev2/tasks/bd79fef.output
+[2026-01-18 01:07:00] gh run view 21102210383 --json status,conclusion,jobs 2>/dev/null | jq '{status, conclusion, jobs: [.jobs[] | {name, status, conclusion}]}'
+[2026-01-18 01:07:08] gh run list --limit 15 --json databaseId,status,conclusion,workflowName,headBranch 2>/dev/null | jq '.[] | select(.status == "in_progress" or .status == "queued")'
+[2026-01-18 01:07:15] gh run view 21102209810 --json status,conclusion,jobs 2>/dev/null | jq '{status, conclusion, jobs: [.jobs[] | {name, status, conclusion}]}'
+[2026-01-18 01:07:24] gh run watch 21102209810 --exit-status 2>&1 || true
+[2026-01-18 01:12:30] tail -30 /tmp/claude/-home-newlevel-devel-presenter-presenter-dev2/tasks/be93356.output
+[2026-01-18 01:12:36] sleep 60 && tail -50 /tmp/claude/-home-newlevel-devel-presenter-presenter-dev2/tasks/be93356.output
+[2026-01-18 01:13:40] sleep 90 && tail -60 /tmp/claude/-home-newlevel-devel-presenter-presenter-dev2/tasks/be93356.output
+[2026-01-18 01:15:15] gh run view 21102209810 --json status,conclusion,jobs 2>/dev/null | jq '{status, conclusion, jobs: [.jobs[] | {name, status, conclusion}]}'
+[2026-01-18 01:15:21] gh run list --limit 20 --json databaseId,status,workflowName,headBranch,createdAt 2>/dev/null | jq '.[] | select(.status == "in_progress")'
+[2026-01-18 01:15:28] gh run view 21102210383 --json status,conclusion,jobs 2>/dev/null | jq '{status, conclusion, jobs: [.jobs[] | {name, status, conclusion}]}'
+[2026-01-18 01:15:35] sleep 120 && gh run view 21102210383 --json status,conclusion,jobs 2>/dev/null | jq '{status, conclusion, jobs: [.jobs[] | {name, status, conclusion}]}'
+[2026-01-18 01:17:42] tail -40 /tmp/claude/-home-newlevel-devel-presenter-presenter-dev2/tasks/be93356.output
+[2026-01-18 01:17:47] sleep 120 && tail -60 /tmp/claude/-home-newlevel-devel-presenter-presenter-dev2/tasks/be93356.output
+[2026-01-18 01:19:52] sleep 180 && gh run view 21102209810 --json status,conclusion,jobs 2>/dev/null | jq '{status, conclusion, jobs: [.jobs[] | {name, status, conclusion}]}'
+[2026-01-18 01:22:59] sleep 180 && gh run view 21102209810 --json status,conclusion,jobs 2>/dev/null | jq '{status, conclusion, jobs: [.jobs[] | {name, status, conclusion}]}'
+[2026-01-18 01:26:06] sleep 300 && gh run view 21102209810 --json status,conclusion,jobs 2>/dev/null | jq '{status, conclusion, jobs: [.jobs[] | {name, status, conclusion}]}'
+[2026-01-18 01:31:13] gh run list --limit 15 --json databaseId,status,conclusion,workflowName,headBranch 2>/dev/null | jq '.[] | select(.status == "in_progress")'
+[2026-01-18 01:31:18] tail -70 /tmp/claude/-home-newlevel-devel-presenter-presenter-dev2/tasks/be93356.output
+[2026-01-18 01:31:23] gh run list --limit 10 --json databaseId,status,conclusion,workflowName 2>/dev/null | jq '.'
+[2026-01-18 01:31:34] gh run view 21102209810 --json jobs 2>/dev/null | jq '.jobs[] | select(.status == "in_progress") | {name, status}'
+[2026-01-18 01:31:42] sleep 120 && gh run view 21102209810 --json status,conclusion,jobs 2>/dev/null | jq '{status, conclusion, jobs: [.jobs[] | {name, status, conclusion}]}'
+[2026-01-18 01:33:56] gh pr checks 108 2>/dev/null | head -30
+[2026-01-18 01:34:08] sleep 180 && gh run view 21102209810 --json status,conclusion 2>/dev/null | jq '.'
+[2026-01-18 01:37:15] tail -60 /tmp/claude/-home-newlevel-devel-presenter-presenter-dev2/tasks/be93356.output 2>/dev/null || echo "Watch may have ended"
+[2026-01-18 02:29:42] tail -80 /tmp/claude/-home-newlevel-devel-presenter-presenter-dev2/tasks/be93356.output
+[2026-01-18 02:29:50] sleep 5 && gh run view 21102209810 --log-failed 2>/dev/null | head -200
+[2026-01-18 02:30:02] sleep 10 && gh run view 21102209810 --log-failed 2>&1 | head -300
+[2026-01-18 02:30:19] sleep 60 && gh run view 21102209810 --log-failed 2>&1 | head -400
+[2026-01-18 02:31:33] sleep 120 && gh run view 21102209810 --json status,conclusion,jobs 2>&1
+[2026-01-18 02:33:41] gh api rate_limit 2>&1 | jq '.resources.core' 2>/dev/null || echo "Rate limit check failed"
+[2026-01-18 02:33:48] date -d "@1768700105" 2>/dev/null || date -r 1768700105 2>/dev/null
+[2026-01-18 02:33:56] sleep 150 && gh run view 21102209810 --log-failed 2>&1 | head -500
+[2026-01-18 02:36:34] gh run view 21102209810 --json status,conclusion,jobs 2>/dev/null | jq '{status, conclusion, jobs: [.jobs[] | {name, status, conclusion}]}'
+[2026-01-18 02:36:42] gh run view 21102209810 --job 60689821425 --log 2>&1 | grep -A 50 "error\[" | head -100
+[2026-01-18 02:36:50] gh run view 21102209810 --job 60689821425 --log 2>&1 | grep -E "(FAILED|error|failed|panicked)" | head -50
+[2026-01-18 02:36:56] gh run view 21102209810 --job 60689821425 --log 2>&1 | tail -200
+[2026-01-18 02:37:03] gh run watch 21102209810 --exit-status 2>&1 || true
+[2026-01-18 02:47:08] tail -100 /tmp/claude/-home-newlevel-devel-presenter-presenter-dev2/tasks/ba81bea.output
+[2026-01-18 02:47:15] sleep 180 && gh run view 21102209810 --json status,conclusion 2>/dev/null | jq '.'
+[2026-01-18 02:50:21] tail -50 /tmp/claude/-home-newlevel-devel-presenter-presenter-dev2/tasks/ba81bea.output
+[2026-01-18 02:50:27] sleep 180 && tail -80 /tmp/claude/-home-newlevel-devel-presenter-presenter-dev2/tasks/ba81bea.output
+[2026-01-18 02:53:32] sleep 300 && gh run view 21102209810 --json status,conclusion,jobs 2>/dev/null | jq '{status, conclusion, jobs: [.jobs[] | {name, status, conclusion}]}'
+[2026-01-18 02:58:41] sleep 240 && gh run view 21102209810 --json status,conclusion 2>/dev/null | jq '.'
+[2026-01-18 03:02:47] tail -40 /tmp/claude/-home-newlevel-devel-presenter-presenter-dev2/tasks/ba81bea.output
+[2026-01-18 03:02:54] sleep 180 && gh run view 21102209810 --json status,conclusion,jobs 2>/dev/null | jq '{status, conclusion, jobs: [.jobs[] | {name, conclusion}]}'
+[2026-01-18 03:06:05] gh run view 21102209810 --log-failed 2>&1 | head -500
+[2026-01-18 03:06:15] gh run view 21102209810 --log-failed 2>&1 | grep -E "(FAILED|failed|thread.*panicked|assertion|error\[E)" | head -50
+[2026-01-18 03:08:45] cargo test -p presenter-persistence bible_translation_round_trip -- --nocapture 2>&1 | tail -50
+[2026-01-18 03:10:11] cargo test -p presenter-persistence bible_translation_round_trip -- --nocapture 2>&1 | tail -20
+[2026-01-18 03:10:32] cargo test -p presenter-server trigger_bible_passage_publishes_event_and_state -- --nocapture 2>&1 | tail -30
+[2026-01-18 03:12:42] sleep 60 && tail -40 /tmp/claude/-home-newlevel-devel-presenter-presenter-dev2/tasks/b4a9319.output
+[2026-01-18 03:15:52] cargo test --workspace 2>&1 | tail -50
+[2026-01-18 07:42:03] cargo test --workspace 2>&1 | tail -50
+[2026-01-18 07:43:58] cargo clean -p presenter-persistence && cargo test -p presenter-persistence -p presenter-server 2>&1 | tail -60
+[2026-01-18 07:44:41] git add -A && git commit -m "$(cat <<'EOF'
+fix(bible): preserve original reference in trigger and fix test expectations
+
+- Use original reference directly in trigger_bible_passage when combining
+  multi-verse passages, preserving book_code/book_number None values
+- Update bible_translation_round_trip test to account for canonical book
+  enrichment behavior (None → Some("JHN") is expected)
+
+🤖 Generated with [Claude Code](https://claude.com/claude-code)
+
+Co-Authored-By: Claude Opus 4.5 <noreply@anthropic.com>
+EOF
+)"

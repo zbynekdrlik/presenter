@@ -151,7 +151,12 @@ async fn bible_translation_round_trip() {
         .unwrap()
         .expect("passage to exist");
     assert_eq!(fetched.translation, translation);
-    assert_eq!(fetched.reference, reference);
+    // Persistence layer enriches references with canonical book codes
+    assert_eq!(fetched.reference.book, reference.book);
+    assert_eq!(fetched.reference.chapter, reference.chapter);
+    assert_eq!(fetched.reference.verse_start, reference.verse_start);
+    assert_eq!(fetched.reference.verse_end, reference.verse_end);
+    // book_code and book_number may be enriched from canonical lookup
     assert_eq!(fetched.text, passage.text);
 }
 

@@ -972,15 +972,8 @@ impl AppState {
                 combined_text.push_str(entry.text.as_str());
             }
             let translation = range[0].translation.clone();
-            let combined_reference = presenter_core::BibleReference::new_with_code(
-                reference.book.clone(),
-                reference.book_code.clone().unwrap_or_default(),
-                reference.book_number.unwrap_or(0),
-                reference.chapter,
-                reference.verse_start,
-                reference.verse_end,
-            )?;
-            presenter_core::BiblePassage::new(combined_reference, translation, combined_text)
+            // Use the original reference directly - it already has the correct range
+            presenter_core::BiblePassage::new(reference.clone(), translation, combined_text)
         };
 
         let broadcast = BibleBroadcast::new(passage, Utc::now());
