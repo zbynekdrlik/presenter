@@ -1671,3 +1671,15 @@ Co-Authored-By: Claude Opus 4.5 <noreply@anthropic.com>" && git push origin dev
 🤖 Generated with [Claude Code](https://claude.com/claude-code)
 
 Co-Authored-By: Claude Opus 4.5 <noreply@anthropic.com>" && git push origin dev
+[2026-01-27 12:44:59] sleep 30 && gh run list --limit 5
+[2026-01-27 12:45:35] gh run watch 21395897327 --exit-status 2>&1 | tail -50
+[2026-01-27 13:05:45] gh run list --limit 8 2>&1
+[2026-01-27 13:05:53] gh run view 21395897483
+[2026-01-27 13:06:45] git add -A && git commit -m "fix(ci): skip PR title validation for release PRs
+
+Release PRs (dev -> main) often use 'Release X.Y.Z' format which doesn't
+follow conventional commits. Skip validation for these PRs.
+
+🤖 Generated with [Claude Code](https://claude.com/claude-code)
+
+Co-Authored-By: Claude Opus 4.5 <noreply@anthropic.com>" && git push origin dev
