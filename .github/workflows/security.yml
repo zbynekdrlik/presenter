@@ -56,7 +56,7 @@ jobs:
           cargo install cargo-deny --locked || cargo install cargo-deny
 
       - name: Run cargo-deny
-        run: cargo deny check ${{ matrix.checks }} --all-features
+        run: cargo deny --all-features check ${{ matrix.checks }}
 
   # ============================================
   # npm Audit
