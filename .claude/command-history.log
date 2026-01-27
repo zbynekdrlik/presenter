@@ -1638,3 +1638,36 @@ All workflows now consistently use the self-hosted runner.
 🤖 Generated with [Claude Code](https://claude.com/claude-code)
 
 Co-Authored-By: Claude Opus 4.5 <noreply@anthropic.com>" && git push origin dev
+[2026-01-27 11:44:28] sleep 10 && gh run list --limit 8
+[2026-01-27 11:44:44] gh run watch 21394113960 --exit-status 2>&1
+[2026-01-27 12:03:30] sleep 30 && gh run list --limit 10
+[2026-01-27 12:04:06] sleep 60 && gh run list --limit 5
+[2026-01-27 12:05:11] sleep 120 && gh run list --limit 5
+[2026-01-27 12:07:18] gh run watch 21394113960 --exit-status 2>&1 | tail -30
+[2026-01-27 12:26:18] gh run view 21394113960 --log-failed 2>&1 | head -100
+[2026-01-27 12:26:51] cargo deny --all-features check advisories 2>&1 | head -50
+[2026-01-27 12:27:01] cargo deny --all-features check advisories 2>&1 | head -50
+[2026-01-27 12:27:34] cargo update -p idna 2>&1
+[2026-01-27 12:27:41] cargo search validator --limit 5 2>&1
+[2026-01-27 12:27:59] cargo update 2>&1 | head -50
+[2026-01-27 12:28:09] cargo deny --all-features check advisories 2>&1 | head -50
+[2026-01-27 12:28:25] cargo deny --all-features check advisories 2>&1
+[2026-01-27 12:28:31] cargo deny --all-features check bans licenses sources 2>&1 | head -100
+[2026-01-27 12:28:37] cargo deny --all-features check bans licenses sources 2>&1 | tail -20
+[2026-01-27 12:28:43] cargo deny --all-features check bans licenses sources 2>&1 | grep -E "(error|FAILED)"
+[2026-01-27 12:28:49] cargo deny --all-features check licenses 2>&1 | grep -A 20 "error\[rejected\]"
+[2026-01-27 12:29:12] cargo deny --all-features check advisories bans licenses sources 2>&1 | tail -10
+[2026-01-27 12:29:19] cargo test 2>&1 | tail -20
+[2026-01-27 12:39:30] tail -50 /tmp/claude/-home-newlevel-devel-presenter-presenter-dev2/tasks/b695c86.output
+[2026-01-27 12:44:40] tail -100 /tmp/claude/-home-newlevel-devel-presenter-presenter-dev2/tasks/b695c86.output
+[2026-01-27 12:44:49] git add -A && git commit -m "fix(deps): update validator and fix cargo-deny config
+
+- Update validator from 0.18 to 0.20 to fix idna vulnerability
+- Update deny.toml to cargo-deny v2 config format
+- Add CDLA-Permissive-2.0 license (webpki-roots)
+- Ignore RUSTSEC-2024-0436 (paste unmaintained, no upgrade path)
+- Allow wildcards for workspace internal dependencies
+
+🤖 Generated with [Claude Code](https://claude.com/claude-code)
+
+Co-Authored-By: Claude Opus 4.5 <noreply@anthropic.com>" && git push origin dev

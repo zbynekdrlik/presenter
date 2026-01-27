@@ -32,7 +32,7 @@ tracing-subscriber = { version = "0.3", features = ["fmt", "env-filter"] }
 uuid = { version = "1.8", features = ["serde", "v4"] }
 async-trait = "0.1"
 serde_with = "3.0"
-validator = { version = "0.18", features = ["derive"] }
+validator = { version = "0.20", features = ["derive"] }
 insta = { version = "1.39", features = ["yaml"] }
 reqwest = { version = "0.12", features = ["json", "rustls-tls"] }
 sea-orm = { version = "1.1", features = ["sqlx-sqlite", "runtime-tokio-native-tls", "macros"] }
