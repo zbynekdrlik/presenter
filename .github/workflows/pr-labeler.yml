@@ -11,7 +11,7 @@ permissions:
 jobs:
   labeler:
     name: Label PR
-    runs-on: ubuntu-latest
+    runs-on: self-hosted
     steps:
       - uses: actions/checkout@v4
 
@@ -25,20 +25,20 @@ jobs:
         uses: codelytv/pr-size-labeler@v1
         with:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          xs_label: 'size/xs'
+          xs_label: "size/xs"
           xs_max_size: 10
-          s_label: 'size/s'
+          s_label: "size/s"
           s_max_size: 100
-          m_label: 'size/m'
+          m_label: "size/m"
           m_max_size: 500
-          l_label: 'size/l'
+          l_label: "size/l"
           l_max_size: 1000
-          xl_label: 'size/xl'
+          xl_label: "size/xl"
           fail_if_xl: false
 
   conventional-commits:
     name: Validate PR Title
-    runs-on: ubuntu-latest
+    runs-on: self-hosted
     steps:
       - name: Check conventional commit format
         uses: amannn/action-semantic-pull-request@v5

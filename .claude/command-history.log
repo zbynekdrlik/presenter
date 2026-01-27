@@ -1626,3 +1626,15 @@ Move --all-features before check subcommand as required by cargo-deny CLI.
 🤖 Generated with [Claude Code](https://claude.com/claude-code)
 
 Co-Authored-By: Claude Opus 4.5 <noreply@anthropic.com>" && git push origin dev
+[2026-01-27 11:43:25] gh run watch --exit-status 2>&1 | head -100
+[2026-01-27 11:43:30] gh run list --limit 5
+[2026-01-27 11:43:36] gh run view 21394081925 --log-failed 2>&1 | head -50
+[2026-01-27 11:43:43] gh run view 21394081925
+[2026-01-27 11:44:22] git add -A && git commit -m "fix(ci): switch PR Automation to self-hosted runner
+
+Fix GitHub billing issue by using self-hosted runner instead of ubuntu-latest.
+All workflows now consistently use the self-hosted runner.
+
+🤖 Generated with [Claude Code](https://claude.com/claude-code)
+
+Co-Authored-By: Claude Opus 4.5 <noreply@anthropic.com>" && git push origin dev
