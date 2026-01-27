@@ -51,8 +51,6 @@ ignore = true
 multiple-versions = "warn"
 wildcards = "deny"
 highlight = "all"
-workspace-default-features = "allow"
-external-default-features = "allow"
 
 skip = []
 skip-tree = []

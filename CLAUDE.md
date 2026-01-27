@@ -171,25 +171,39 @@ cargo build --release -p presenter-server
 
 ---
 
-## Testing (CRITICAL - READ CAREFULLY)
+## Testing & CI (CRITICAL - READ CAREFULLY)
 
 ### Absolute Rules (NO EXCEPTIONS)
 
-1. **ALL tests MUST pass** - Unit, integration, E2E - every single one
-2. **NEVER skip tests** - No `.skip()`, `.only()`, `#[ignore]`, `testIgnore`, or any mechanism
-3. **Fix failures IMMEDIATELY** - CI failures block everything until resolved
-4. **E2E tests are PRIMARY** - They are the acceptance gate, not optional
+1. **ALL CI workflows MUST be green** - Every workflow, every job, every check
+2. **ALL tests MUST pass** - Unit, integration, E2E, security scans - every single one
+3. **NEVER skip tests** - No `.skip()`, `.only()`, `#[ignore]`, `testIgnore`, or any mechanism
+4. **Fix failures IMMEDIATELY** - CI failures block everything until resolved
+5. **E2E tests are PRIMARY** - They are the acceptance gate, not optional
 
-### CI Test Failures = STOP EVERYTHING
+### CI Failures = STOP EVERYTHING
 
-When any test fails in CI:
+When ANY CI workflow or check fails:
 
 1. **Stop all other work immediately**
 2. **Diagnose the failure** - `gh run view --log-failed`
 3. **Fix the root cause** - Not workarounds, not skips
 4. **Push and verify green** - Only then continue other work
 
-**There is NO "fix later" or "known issue" or "flaky test" excuse. Fix it NOW.**
+**There is NO "fix later" or "known issue" or "flaky test" or "pre-existing issue" excuse. Fix it NOW.**
+
+### No "Non-Blocking" Failures
+
+**NEVER classify any CI failure as "non-blocking" or "acceptable":**
+
+- No "pre-existing infrastructure issues" excuse
+- No "this workflow was already broken" excuse
+- No "nightly Rust is flaky" excuse
+- No "security scans are optional" excuse
+
+**If a workflow cannot pass, either FIX IT or REMOVE IT. Do not leave broken workflows in the repository.**
+
+**When uncertain whether something should block merge, ALWAYS ask the user. Never assume.**
 
 ### Banned Test Patterns
 
