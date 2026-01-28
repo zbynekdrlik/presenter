@@ -17,16 +17,19 @@ Code → Commit → Push to dev → Monitor CI → Fix failures → Repeat until
 ### The Loop (execute without asking)
 
 1. **Commit and push immediately** - No confirmation needed
+
    ```bash
    git add -A && git commit -m "..." && git push origin dev
    ```
 
 2. **Monitor CI until completion**
+
    ```bash
    gh run watch
    ```
 
 3. **If CI fails: fix and repeat from step 1**
+
    ```bash
    gh run view --log-failed  # See what failed
    # Fix the issue
@@ -45,38 +48,33 @@ Code → Commit → Push to dev → Monitor CI → Fix failures → Repeat until
 
 ## Git Rules
 
-- **Always push to `dev` branch** - Never commit directly to main/master
+- **Always push to `dev` branch** - Never to main/master
 - **Commit frequently** - Small commits, push often
 - **CI validates everything** - Trust the pipeline
-- **Merging to main is allowed** only when ALL conditions are met:
-  1. All CI checks are green (passing)
-  2. No skipped, ignored, or disabled tests
-  3. PR has been reviewed or is from dev branch
-  ```bash
-  gh pr merge <number> --squash
-  ```
-- **NEVER commit directly to main/master** - All changes must go through PR process
+- **Only users merge PRs** - Agents prepare, users approve
+- **NEVER merge to main/master** - Only the repository owner (human) can merge PRs to main/master. Claude must never execute `git merge`, `gh pr merge`, or any command that merges code to main/master, even if explicitly asked. This requires the human to perform the merge manually.
 
 ### Banned Patterns (Production Code)
 
-| Pattern | Why Banned | Alternative |
-|---------|------------|-------------|
-| `unwrap()` | Panics in production | Use `?`, `ok_or()`, or handle `None`/`Err` |
-| `expect()` | Panics in production | Use `?` with context via `anyhow`/`thiserror` |
-| `panic!` | Crashes the service | Return `Result` or `Option` |
-| `std::thread::sleep` | Blocks async runtime | Use `tokio::time::sleep` |
-| `.only` / `.skip` | Leaves incomplete test coverage | Remove before commit |
+| Pattern              | Why Banned                      | Alternative                                   |
+| -------------------- | ------------------------------- | --------------------------------------------- |
+| `unwrap()`           | Panics in production            | Use `?`, `ok_or()`, or handle `None`/`Err`    |
+| `expect()`           | Panics in production            | Use `?` with context via `anyhow`/`thiserror` |
+| `panic!`             | Crashes the service             | Return `Result` or `Option`                   |
+| `std::thread::sleep` | Blocks async runtime            | Use `tokio::time::sleep`                      |
+| `.only` / `.skip`    | Leaves incomplete test coverage | Remove before commit                          |
 
 **Note:** Test code (`#[cfg(test)]` modules) is exempt from panic rules.
 
 ### File/Function Limits (Enforced by CI)
 
-| Metric | Warning | Hard Fail | Exempt |
-|--------|---------|-----------|--------|
-| File lines | >800 | >1000 | Migrations, tests |
-| Function lines | - | >60 | Migrations, UI renders, router builders |
+| Metric         | Warning | Hard Fail | Exempt                                  |
+| -------------- | ------- | --------- | --------------------------------------- |
+| File lines     | >800    | >1000     | Migrations, tests                       |
+| Function lines | -       | >60       | Migrations, UI renders, router builders |
 
 **Exempt patterns:**
+
 - `m*_create_*.rs` - Migration files (declarative schema definitions)
 - `render_*_ui` functions - Leptos component renders (HTML-like DSL)
 - `build_router` functions - Route declarations
@@ -87,10 +85,10 @@ Code → Commit → Push to dev → Monitor CI → Fix failures → Repeat until
 
 The project uses **Semantic Versioning** with branch-specific formats:
 
-| Branch | Version Format | Example |
-|--------|----------------|---------|
-| `dev` | `X.Y.Z-dev.N` | `0.1.0-dev.1` |
-| `main` | `X.Y.Z` | `0.1.0` |
+| Branch | Version Format | Example       |
+| ------ | -------------- | ------------- |
+| `dev`  | `X.Y.Z-dev.N`  | `0.1.0-dev.1` |
+| `main` | `X.Y.Z`        | `0.1.0`       |
 
 **Version location:** `Cargo.toml` workspace `[workspace.package].version`
 
@@ -108,36 +106,24 @@ See `docs/architecture.md` for full versioning and release strategy.
 
 This project uses a **local self-hosted runner** to save GitHub Actions costs.
 
-**Runner location:** This machine (same machine where Claude runs)
+**Runner location:** This machine
 **Runner label:** `self-hosted`
-**Runner service:** `actions.runner.zbynekdrlik-presenter.presenter-dev.service`
 
 All workflows run on the local runner, providing:
+
 - Faster builds (local caching)
 - No GitHub minutes consumed
 - Full access to local resources
 
-**IMPORTANT: Claude manages the local runner.** Since the runner runs on this machine:
-- Only ONE job can run at a time (single runner)
-- Avoid long blocking `sleep` commands that could interfere with job execution
-- If runner appears stuck, check/restart the service:
-  ```bash
-  sudo systemctl restart actions.runner.zbynekdrlik-presenter.presenter-dev.service
-  ```
-- Cancel dependabot runs if they block important PRs:
-  ```bash
-  gh run list --status queued --json databaseId,headBranch | jq -r '.[] | select(.headBranch | startswith("dependabot")) | .databaseId' | xargs -I {} gh run cancel {}
-  ```
-
 ### Workflows
 
-| Workflow | Trigger | Purpose |
-|----------|---------|---------|
-| `ci.yml` | Push to `dev`/`main`, PRs | Format, lint, test, quality |
-| `e2e.yml` | Push to `dev`/`main`, PRs | Playwright E2E tests |
-| `version-check.yml` | Push to `dev`/`main`, PRs | Validate version format |
-| `security.yml` | Weekly + manual | Vulnerability scanning |
-| `release.yml` | Push to `main` | release-please, artifacts, Docker |
+| Workflow            | Trigger                   | Purpose                           |
+| ------------------- | ------------------------- | --------------------------------- |
+| `ci.yml`            | Push to `dev`/`main`, PRs | Format, lint, test, quality       |
+| `e2e.yml`           | Push to `dev`/`main`, PRs | Playwright E2E tests              |
+| `version-check.yml` | Push to `dev`/`main`, PRs | Validate version format           |
+| `security.yml`      | Weekly + manual           | Vulnerability scanning            |
+| `release.yml`       | Push to `main`            | release-please, artifacts, Docker |
 
 ### Monitoring CI
 
@@ -162,6 +148,7 @@ gh run rerun <run-id> --failed
 Presenter is a monolithic Rust application for church worship services, providing lyrics display, Bible passages, timers, and stage displays.
 
 **Key Documentation:**
+
 - Domain specifics: `docs/functional-needs.md`
 - System architecture: `docs/architecture.md`
 - Configuration reference: `docs/configuration.md`
@@ -184,9 +171,52 @@ cargo build --release -p presenter-server
 
 ---
 
-## Testing
+## Testing & CI (CRITICAL - READ CAREFULLY)
 
-GitHub Actions runs all tests automatically. For local debugging:
+### Absolute Rules (NO EXCEPTIONS)
+
+1. **ALL CI workflows MUST be green** - Every workflow, every job, every check
+2. **ALL tests MUST pass** - Unit, integration, E2E, security scans - every single one
+3. **NEVER skip tests** - No `.skip()`, `.only()`, `#[ignore]`, `testIgnore`, or any mechanism
+4. **Fix failures IMMEDIATELY** - CI failures block everything until resolved
+5. **E2E tests are PRIMARY** - They are the acceptance gate, not optional
+
+### CI Failures = STOP EVERYTHING
+
+When ANY CI workflow or check fails:
+
+1. **Stop all other work immediately**
+2. **Diagnose the failure** - `gh run view --log-failed`
+3. **Fix the root cause** - Not workarounds, not skips
+4. **Push and verify green** - Only then continue other work
+
+**There is NO "fix later" or "known issue" or "flaky test" or "pre-existing issue" excuse. Fix it NOW.**
+
+### No "Non-Blocking" Failures
+
+**NEVER classify any CI failure as "non-blocking" or "acceptable":**
+
+- No "pre-existing infrastructure issues" excuse
+- No "this workflow was already broken" excuse
+- No "nightly Rust is flaky" excuse
+- No "security scans are optional" excuse
+
+**If a workflow cannot pass, either FIX IT or REMOVE IT. Do not leave broken workflows in the repository.**
+
+**When uncertain whether something should block merge, ALWAYS ask the user. Never assume.**
+
+### Banned Test Patterns
+
+| Pattern                       | Why Banned         | What To Do Instead       |
+| ----------------------------- | ------------------ | ------------------------ |
+| `.skip()` / `.only()`         | Hides failures     | Remove and fix the test  |
+| `#[ignore]`                   | Skips silently     | Remove and fix the test  |
+| `testIgnore` in config        | Hides entire files | Remove and fix the tests |
+| `continue-on-error` for tests | Masks failures     | Remove, tests must pass  |
+| Timeouts that "cancel"        | Hides slow tests   | Fix the slowness         |
+| Conditional test runs         | Reduces coverage   | Run all tests always     |
+
+### Test Commands
 
 ```bash
 # Rust unit tests
@@ -195,7 +225,7 @@ cargo test
 # Single test
 cargo test test_name
 
-# Playwright E2E
+# Playwright E2E (MUST pass before any merge)
 npm run test:playwright
 npm run test:playwright:headed  # Browser visible
 
@@ -203,12 +233,13 @@ npm run test:playwright:headed  # Browser visible
 scripts/dev/show-playwright-report.sh
 ```
 
-### E2E Test Policy
+### E2E Test Standards
 
 - E2E tests are the **primary acceptance mechanism**
 - Ship new behavior only with E2E coverage
 - Tests must be deterministic: fixed seeds, stable timeouts
 - Prefer retry-with-assert poll helpers over arbitrary sleeps
+- **E2E timeout = build failure** - Optimize build caching, not extend timeouts
 
 ---
 
@@ -228,27 +259,27 @@ crates/
 
 ### Key HTTP Endpoints
 
-| Endpoint | Purpose |
-|----------|---------|
-| `/healthz` | Readiness probe |
-| `/ui/operator` | Desktop control surface |
-| `/ui/tablet` | Touch-optimized controller |
-| `/ui/bible` | Bible search/trigger UI |
-| `/stage` | HTML stage display |
-| `/live/ws` | Live updates (timers, stage) |
-| `/companion/ws` | Bitfocus Companion control |
+| Endpoint        | Purpose                      |
+| --------------- | ---------------------------- |
+| `/healthz`      | Readiness probe              |
+| `/ui/operator`  | Desktop control surface      |
+| `/ui/tablet`    | Touch-optimized controller   |
+| `/ui/bible`     | Bible search/trigger UI      |
+| `/stage`        | HTML stage display           |
+| `/live/ws`      | Live updates (timers, stage) |
+| `/companion/ws` | Bitfocus Companion control   |
 
 ---
 
 ## Environment Variables
 
-| Variable | Default | Purpose |
-|----------|---------|---------|
-| `PRESENTER_PORT` | 80 | Server port |
-| `PRESENTER_DB_URL` | `sqlite://presenter.db` | Database connection |
-| `PRESENTER_COMPANION_ENABLED` | 0 | Enable Companion socket |
-| `PRESENTER_COMPANION_PORT` | 18175 | Companion listen port |
-| `RUST_LOG` | `info,tower_http=debug` | Tracing filter |
+| Variable                      | Default                 | Purpose                 |
+| ----------------------------- | ----------------------- | ----------------------- |
+| `PRESENTER_PORT`              | 80                      | Server port             |
+| `PRESENTER_DB_URL`            | `sqlite://presenter.db` | Database connection     |
+| `PRESENTER_COMPANION_ENABLED` | 0                       | Enable Companion socket |
+| `PRESENTER_COMPANION_PORT`    | 18175                   | Companion listen port   |
+| `RUST_LOG`                    | `info,tower_http=debug` | Tracing filter          |
 
 ---
 
@@ -331,3 +362,19 @@ cargo clippy -- -D warnings    # Must pass
 - **Church-specific**: Solve exact requirements for our workflows
 - **Greenfield redesigns**: Treat redesigns as fresh starts
 - **CI-first**: GitHub Actions validates everything, local testing confirms
+
+---
+
+## User Preferences
+
+### LAN IP (NOT localhost)
+
+The user accesses the server from another machine on the same network. **Always provide LAN IP URLs, never localhost.**
+
+**LAN IP:** `10.77.9.205` (default route interface)
+
+When providing URLs, use:
+
+- http://10.77.9.205/ui/operator (NOT http://localhost/ui/operator)
+- http://10.77.9.205/stage (NOT http://localhost/stage)
+- http://10.77.9.205/healthz (NOT http://localhost/healthz)

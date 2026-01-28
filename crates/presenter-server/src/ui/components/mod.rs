@@ -1,3 +1,3 @@
 //! Shared UI components for Presenter pages.
 
-pub mod settings;
+// Placeholder module to anchor shared components as we break the legacy UI apart.

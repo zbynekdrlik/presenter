@@ -117,31 +117,9 @@ fn TabletDocument(
 }
 
 pub async fn render_tablet_ui(state: &AppState) -> anyhow::Result<Html<String>> {
-    let (library_rows, presentation_lookup) = build_library_rows(state).await?;
-    let playlist_rows = build_playlist_rows(state, &presentation_lookup).await?;
-    let stage_snapshot = state.stage_display_snapshot("worship-snv").await?;
-
-    let library_json = to_string(&library_rows).unwrap_or_else(|_| "[]".to_string());
-    let playlist_json = to_string(&playlist_rows).unwrap_or_else(|_| "[]".to_string());
-    let stage_json = stage_snapshot.map_or_else(
-        || "null".to_string(),
-        |snapshot| to_string(&snapshot).unwrap_or_else(|_| "null".to_string()),
-    );
-
-    let owner = Owner::new_root(None);
-    let html = owner.with(|| {
-        view! { <TabletDocument library_json=library_json.clone() playlist_json=playlist_json.clone() stage_json=stage_json.clone() /> }
-            .into_view()
-            .to_html()
-    });
-
-    Ok(Html(format!("<!DOCTYPE html>{html}")))
-}
-
-async fn build_library_rows(
-    state: &AppState,
-) -> anyhow::Result<(Vec<LibraryRow>, HashMap<String, String>)> {
     let library_summaries = state.library_summaries(None).await?;
+    let playlists = state.playlists().await?;
+    let stage_snapshot = state.stage_display_snapshot("worship-snv").await?;
     let favorite_ids: HashSet<_> = state
         .library_favorites()
         .await?
@@ -151,7 +129,7 @@ async fn build_library_rows(
 
     let mut presentation_lookup: HashMap<String, String> = HashMap::new();
 
-    let rows = library_summaries
+    let library_rows: Vec<LibraryRow> = library_summaries
         .into_iter()
         .map(|summary| {
             let presentations: Vec<PresentationRow> = summary
@@ -176,15 +154,7 @@ async fn build_library_rows(
         })
         .collect();
 
-    Ok((rows, presentation_lookup))
-}
-
-async fn build_playlist_rows(
-    state: &AppState,
-    presentation_lookup: &HashMap<String, String>,
-) -> anyhow::Result<Vec<PlaylistRow>> {
-    let playlists = state.playlists().await?;
-    Ok(playlists
+    let playlist_rows: Vec<PlaylistRow> = playlists
         .into_iter()
         .map(|playlist| {
             let entries = playlist
@@ -221,5 +191,21 @@ async fn build_playlist_rows(
                 show_in_dashboard: playlist.show_in_dashboard,
             }
         })
-        .collect())
+        .collect();
+
+    let library_json = to_string(&library_rows).unwrap_or_else(|_| "[]".to_string());
+    let playlist_json = to_string(&playlist_rows).unwrap_or_else(|_| "[]".to_string());
+    let stage_json = stage_snapshot.map_or_else(
+        || "null".to_string(),
+        |snapshot| to_string(&snapshot).unwrap_or_else(|_| "null".to_string()),
+    );
+
+    let owner = Owner::new_root(None);
+    let html = owner.with(|| {
+        view! { <TabletDocument library_json=library_json.clone() playlist_json=playlist_json.clone() stage_json=stage_json.clone() /> }
+            .into_view()
+            .to_html()
+    });
+
+    Ok(Html(format!("<!DOCTYPE html>{html}")))
 }

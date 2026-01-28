@@ -1,24 +1,38 @@
-use super::{AppError, BibleImportSummaryDto};
+use super::AppError;
 use crate::state::AppState;
 use anyhow::Error as AnyhowError;
 use axum::{
-    extract::{Path, Query, State},
+    extract::{Query, State},
     http::StatusCode,
     response::Html,
     Json,
 };
-use presenter_core::bible::{
-    canonical_book_by_code, BiblePassage, BiblePreferences, BiblePreferencesDraft, BibleReference,
-    BibleTranslation,
-};
 use presenter_core::slide::SlideMetadata;
-use presenter_core::{
-    presentation::Presentation, PresentationId, Slide, SlideContent, SlideGroup, SlideText,
-};
+use presenter_core::{BiblePassage, BibleReference, BibleTranslation, Slide};
 use serde::{Deserialize, Serialize};
-use std::collections::BTreeMap;
+use std::collections::HashMap;
 use tracing::instrument;
-use uuid::Uuid;
+
+#[derive(Debug, Deserialize)]
+pub(super) struct BibleUiQuery {
+    #[serde(default)]
+    pub embed: Option<String>,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+pub(super) struct BibleImportSummaryDto {
+    pub(super) translation_code: String,
+    pub(super) passage_count: usize,
+}
+
+impl From<presenter_bible::BibleImportSummary> for BibleImportSummaryDto {
+    fn from(summary: presenter_bible::BibleImportSummary) -> Self {
+        Self {
+            translation_code: summary.translation_code,
+            passage_count: summary.passage_count,
+        }
+    }
+}
 
 #[instrument(skip_all)]
 pub(super) async fn list_bible_translations(
@@ -28,7 +42,99 @@ pub(super) async fn list_bible_translations(
     Ok(Json(translations))
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub(super) struct UpdateBibleTranslationRequest {
+    pub(super) name: Option<String>,
+    pub(super) language: Option<String>,
+    pub(super) show_in_dashboard: Option<bool>,
+}
+
+#[instrument(skip_all)]
+pub(super) async fn update_bible_translation(
+    State(state): State<AppState>,
+    axum::extract::Path(code): axum::extract::Path<String>,
+    Json(payload): Json<UpdateBibleTranslationRequest>,
+) -> Result<Json<BibleTranslation>, AppError> {
+    let translation = state
+        .update_bible_translation(
+            &code,
+            payload.name.as_deref(),
+            payload.language.as_deref(),
+            payload.show_in_dashboard,
+        )
+        .await?
+        .ok_or_else(|| AppError::not_found("translation not found"))?;
+    Ok(Json(translation))
+}
+
+#[derive(Debug, serde::Deserialize)]
+pub(super) struct BibleBooksQuery {
+    pub(super) translation: String,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub(super) struct BibleBookDto {
+    pub(super) book: String,
+    pub(super) code: String,
+    pub(super) number: u16,
+    pub(super) chapters: Vec<BibleChapterDto>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub(super) struct BibleChapterDto {
+    pub(super) number: u16,
+    pub(super) verse_count: u16,
+}
+
+#[instrument(skip_all)]
+pub(super) async fn list_bible_books(
+    State(state): State<AppState>,
+    Query(params): Query<BibleBooksQuery>,
+) -> Result<Json<Vec<BibleBookDto>>, AppError> {
+    let summaries = state.list_bible_books(&params.translation).await?;
+
+    // Aggregate flat chapter summaries into books with chapter arrays
+    let mut books_map: HashMap<String, BibleBookDto> = HashMap::new();
+    let mut book_order: Vec<String> = Vec::new();
+
+    for summary in summaries {
+        let key = summary
+            .book_code
+            .clone()
+            .unwrap_or_else(|| summary.book.clone());
+        if !books_map.contains_key(&key) {
+            book_order.push(key.clone());
+            books_map.insert(
+                key.clone(),
+                BibleBookDto {
+                    book: summary.book.clone(),
+                    code: summary.book_code.clone().unwrap_or_default(),
+                    number: summary.book_number.unwrap_or(0),
+                    chapters: Vec::new(),
+                },
+            );
+        }
+        if let Some(book) = books_map.get_mut(&key) {
+            book.chapters.push(BibleChapterDto {
+                number: summary.chapter,
+                verse_count: summary.verse_count,
+            });
+        }
+    }
+
+    // Preserve book order from the database query
+    let books: Vec<BibleBookDto> = book_order
+        .into_iter()
+        .filter_map(|key| books_map.remove(&key))
+        .collect();
+
+    Ok(Json(books))
+}
+
+#[derive(Debug, serde::Deserialize)]
 pub(super) struct BibleSearchQuery {
     pub(super) translation: String,
     pub(super) query: String,
@@ -54,12 +160,10 @@ pub(super) async fn search_bible_passages(
     Ok(Json(passages))
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, serde::Deserialize)]
 pub(super) struct BiblePassageQuery {
     pub(super) translation: String,
     pub(super) book: String,
-    #[serde(default)]
-    pub(super) book_code: Option<String>,
     pub(super) chapter: u16,
     pub(super) verse_start: u16,
     #[serde(default)]
@@ -72,24 +176,8 @@ pub(super) async fn get_bible_passage(
     Query(query): Query<BiblePassageQuery>,
 ) -> Result<Json<Option<BiblePassage>>, AppError> {
     let verse_end = query.verse_end.unwrap_or(query.verse_start);
-    let reference = if let Some(code) = query.book_code.as_deref() {
-        match canonical_book_by_code(code) {
-            Some(meta) => BibleReference::new_with_code(
-                query.book,
-                meta.code,
-                meta.number,
-                query.chapter,
-                query.verse_start,
-                verse_end,
-            )
-            .map_err(AnyhowError::new)?,
-            None => BibleReference::new(query.book, query.chapter, query.verse_start, verse_end)
-                .map_err(AnyhowError::new)?,
-        }
-    } else {
-        BibleReference::new(query.book, query.chapter, query.verse_start, verse_end)
-            .map_err(AnyhowError::new)?
-    };
+    let reference = BibleReference::new(query.book, query.chapter, query.verse_start, verse_end)
+        .map_err(AnyhowError::new)?;
     let passage = state
         .find_bible_passage(&query.translation, &reference)
         .await?;
@@ -109,171 +197,86 @@ pub(super) async fn refresh_bible_translations(
     ))
 }
 
-#[derive(Debug, Deserialize, Serialize)]
+#[instrument(skip_all)]
+pub(super) async fn get_active_bible_broadcast(
+    State(state): State<AppState>,
+) -> Result<Json<Option<presenter_core::BibleBroadcast>>, AppError> {
+    let active = state.active_bible_broadcast().await;
+    Ok(Json(active))
+}
+
+#[derive(Debug, serde::Deserialize)]
 #[serde(rename_all = "camelCase")]
-pub(super) struct UpdateBiblePreferencesRequest {
+pub(super) struct BibleTriggerRequest {
+    pub(super) translation: String,
+    pub(super) book: String,
     #[serde(default)]
-    pub(super) main_translation: Option<String>,
+    pub(super) book_code: Option<String>,
     #[serde(default)]
-    pub(super) secondary_translation: Option<String>,
+    pub(super) book_number: Option<u16>,
+    pub(super) chapter: u16,
+    pub(super) verse_start: u16,
     #[serde(default)]
-    pub(super) character_limit: Option<u32>,
+    pub(super) verse_end: Option<u16>,
 }
 
 #[instrument(skip_all)]
-pub(super) async fn get_bible_preferences(
+pub(super) async fn trigger_bible_broadcast(
     State(state): State<AppState>,
-) -> Result<Json<BiblePreferences>, AppError> {
-    let prefs = state.bible_preferences().await?;
-    Ok(Json(prefs))
-}
-
-#[instrument(skip_all)]
-pub(super) async fn update_bible_preferences(
-    State(state): State<AppState>,
-    Json(payload): Json<UpdateBiblePreferencesRequest>,
-) -> Result<Json<BiblePreferences>, AppError> {
-    if let Some(limit) = payload.character_limit {
-        if limit == 0 || limit > 4000 {
-            return Err(AppError::bad_request_message(
-                "characterLimit must be between 1 and 4000",
-            ));
+    Json(payload): Json<BibleTriggerRequest>,
+) -> Result<Json<presenter_core::BibleBroadcast>, AppError> {
+    let verse_end = payload.verse_end.unwrap_or(payload.verse_start);
+    let reference = match (payload.book_code, payload.book_number) {
+        (Some(code), Some(number)) => BibleReference::new_with_code(
+            payload.book,
+            code,
+            number,
+            payload.chapter,
+            payload.verse_start,
+            verse_end,
+        )
+        .map_err(AnyhowError::new)?,
+        _ => BibleReference::new(
+            payload.book,
+            payload.chapter,
+            payload.verse_start,
+            verse_end,
+        )
+        .map_err(AnyhowError::new)?,
+    };
+    match state
+        .trigger_bible_passage(&payload.translation, &reference)
+        .await
+    {
+        Ok(broadcast) => Ok(Json(broadcast)),
+        Err(err) => {
+            if err.to_string().contains("passage not found") {
+                return Err(AppError::not_found("passage not found"));
+            }
+            Err(err.into())
         }
     }
-    let draft = BiblePreferencesDraft {
-        main_translation: payload.main_translation,
-        secondary_translation: payload.secondary_translation,
-        character_limit: payload.character_limit,
-    };
-    let prefs = state.update_bible_preferences(draft).await?;
-    Ok(Json(prefs))
-}
-
-#[derive(Debug, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub(super) struct UpdateBibleTranslationRequest {
-    #[serde(default)]
-    pub(super) name: Option<String>,
-    #[serde(default)]
-    pub(super) language: Option<String>,
-    #[serde(default)]
-    pub(super) show_in_dashboard: Option<bool>,
 }
 
 #[instrument(skip_all)]
-pub(super) async fn update_bible_translation(
+pub(super) async fn clear_bible_broadcast(
     State(state): State<AppState>,
-    Path(code): Path<String>,
-    Json(payload): Json<UpdateBibleTranslationRequest>,
-) -> Result<Json<BibleTranslation>, AppError> {
-    let name = payload
-        .name
-        .as_deref()
-        .map(str::trim)
-        .filter(|value| !value.is_empty());
-    let language = payload
-        .language
-        .as_deref()
-        .map(str::trim)
-        .filter(|value| !value.is_empty());
-    let show_in_dashboard = payload.show_in_dashboard;
-    if name.is_none() && language.is_none() && show_in_dashboard.is_none() {
-        return Err(AppError::bad_request_message(
-            "name, language, or showInDashboard must be provided",
-        ));
-    }
-    let updated = state
-        .update_bible_translation(&code, name, language, show_in_dashboard)
-        .await
-        .map_err(AppError::from)?;
-    let Some(result) = updated else {
-        return Err(AppError::not_found(format!("Bible {code} not found")));
-    };
-    Ok(Json(result))
-}
-
-#[instrument(skip_all)]
-pub(super) async fn delete_bible_translation(
-    State(state): State<AppState>,
-    Path(code): Path<String>,
 ) -> Result<StatusCode, AppError> {
-    let removed = state
-        .delete_bible_translation(&code)
-        .await
-        .map_err(AppError::from)?;
-    if !removed {
-        return Err(AppError::not_found(format!("Bible {code} not found")));
-    }
+    state.clear_bible_broadcast().await;
     Ok(StatusCode::NO_CONTENT)
 }
 
-#[derive(Debug, Deserialize)]
-pub(super) struct BibleUiQuery {
-    #[serde(default)]
-    pub embed: Option<String>,
-}
-
-#[derive(Debug, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub(super) struct BibleBooksQuery {
-    pub(super) translation: String,
-}
-
-#[derive(Debug, Serialize)]
-#[serde(rename_all = "camelCase")]
-pub(super) struct BibleChapterDto {
-    number: u16,
-    verse_count: u16,
-}
-
-#[derive(Debug, Serialize)]
-#[serde(rename_all = "camelCase")]
-pub(super) struct BibleBookDto {
-    book: String,
-    code: String,
-    number: u16,
-    chapters: Vec<BibleChapterDto>,
-}
-
 #[instrument(skip_all)]
-pub(super) async fn list_bible_books(
+pub(super) async fn bible_ui(
     State(state): State<AppState>,
-    Query(params): Query<BibleBooksQuery>,
-) -> Result<Json<Vec<BibleBookDto>>, AppError> {
-    let summaries = state
-        .bible_book_chapter_summaries(&params.translation)
-        .await?;
-    let mut grouped: BTreeMap<(u16, String, String), Vec<BibleChapterDto>> = BTreeMap::new();
-    for summary in summaries {
-        let Some(code) = summary.book_code.clone() else {
-            continue;
-        };
-        let Some(number) = summary.book_number else {
-            continue;
-        };
-        if number == 0 {
-            continue;
-        };
-        grouped
-            .entry((number, summary.book.clone(), code))
-            .or_default()
-            .push(BibleChapterDto {
-                number: summary.chapter,
-                verse_count: summary.verse_count,
-            });
-    }
-
-    let mut books: Vec<BibleBookDto> = Vec::with_capacity(grouped.len());
-    for ((number, book, code), mut chapters) in grouped {
-        chapters.sort_by_key(|chapter| chapter.number);
-        books.push(BibleBookDto {
-            book,
-            code,
-            number,
-            chapters,
-        });
-    }
-    Ok(Json(books))
+    Query(query): Query<BibleUiQuery>,
+) -> Result<Html<String>, AppError> {
+    let embed = match query.embed.as_deref() {
+        Some(value) => matches!(value, "1" | "true" | "yes" | "on"),
+        None => false,
+    };
+    let html = crate::ui::render_bible_ui(&state, embed).await?;
+    Ok(html)
 }
 
 #[derive(Debug, Deserialize)]
@@ -318,6 +321,36 @@ pub(super) struct BibleSlideDto {
     main_reference: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     translation_reference: Option<String>,
+}
+
+fn bible_slide_to_dto(slide: &Slide) -> Result<BibleSlideDto, AppError> {
+    let metadata = slide.metadata.clone();
+    let (main_reference, translation_reference) = metadata
+        .as_ref()
+        .and_then(|meta| meta.bible.as_ref())
+        .map(|meta| {
+            (
+                meta.main_reference_label.clone(),
+                meta.translation_reference_label.clone(),
+            )
+        })
+        .unwrap_or((None, None));
+
+    Ok(BibleSlideDto {
+        id: slide.id.to_string(),
+        order: slide.order,
+        main: slide.content.main.value().to_string(),
+        translation: slide.content.translation.value().to_string(),
+        stage: slide.content.stage.value().to_string(),
+        group: slide
+            .content
+            .group
+            .as_ref()
+            .map(|group| group.name().to_string()),
+        metadata,
+        main_reference,
+        translation_reference,
+    })
 }
 
 #[instrument(skip_all)]
@@ -385,6 +418,7 @@ pub(super) async fn resolve_bible_slides(
     }))
 }
 
+// Bible Presentations
 #[derive(Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub(super) struct BiblePresentationSummaryDto {
@@ -423,14 +457,43 @@ pub(super) struct AppendBibleSlidesRequest {
 #[serde(rename_all = "camelCase")]
 pub(super) struct BibleSlideInput {
     main: String,
-    #[serde(default)]
     translation: String,
-    #[serde(default)]
-    stage: Option<String>,
+    stage: String,
     #[serde(default)]
     group: Option<String>,
     #[serde(default)]
     metadata: Option<SlideMetadata>,
+}
+
+fn request_slide_to_domain(input: BibleSlideInput) -> Result<Slide, AppError> {
+    let content = presenter_core::SlideContent::new(
+        presenter_core::SlideText::new(&input.main)
+            .map_err(|e| AppError::bad_request_message(e.to_string()))?,
+        presenter_core::SlideText::new(&input.translation)
+            .map_err(|e| AppError::bad_request_message(e.to_string()))?,
+        presenter_core::SlideText::new(&input.stage)
+            .map_err(|e| AppError::bad_request_message(e.to_string()))?,
+        input.group.map(presenter_core::SlideGroup::new),
+    );
+    let mut slide = Slide::new(0, content);
+    if let Some(meta) = input.metadata {
+        slide = slide.with_metadata(Some(meta));
+    }
+    Ok(slide)
+}
+
+fn bible_presentation_to_detail(
+    presentation: &presenter_core::Presentation,
+) -> Result<BiblePresentationDetailDto, AppError> {
+    let mut slides = Vec::with_capacity(presentation.slides.len());
+    for slide in &presentation.slides {
+        slides.push(bible_slide_to_dto(slide)?);
+    }
+    Ok(BiblePresentationDetailDto {
+        id: presentation.id.to_string(),
+        name: presentation.name.clone(),
+        slides,
+    })
 }
 
 #[instrument(skip_all)]
@@ -471,10 +534,10 @@ pub(super) async fn create_bible_presentation_handler(
 #[instrument(skip_all)]
 pub(super) async fn get_bible_presentation(
     State(state): State<AppState>,
-    Path(id): Path<Uuid>,
+    axum::extract::Path(id): axum::extract::Path<uuid::Uuid>,
 ) -> Result<Json<BiblePresentationDetailDto>, AppError> {
     let presentation = state
-        .bible_presentation_detail(PresentationId::from_uuid(id))
+        .bible_presentation_detail(presenter_core::PresentationId::from_uuid(id))
         .await?
         .ok_or_else(|| AppError::not_found("presentation not found"))?;
     let dto = bible_presentation_to_detail(&presentation)?;
@@ -484,23 +547,23 @@ pub(super) async fn get_bible_presentation(
 #[instrument(skip_all)]
 pub(super) async fn rename_bible_presentation_handler(
     State(state): State<AppState>,
-    Path(id): Path<Uuid>,
+    axum::extract::Path(id): axum::extract::Path<uuid::Uuid>,
     Json(payload): Json<RenameBiblePresentationRequest>,
-) -> Result<StatusCode, AppError> {
+) -> Result<axum::http::StatusCode, AppError> {
     let name = payload.name.trim();
     if name.is_empty() {
         return Err(AppError::bad_request_message("name cannot be empty"));
     }
     state
-        .rename_bible_presentation(PresentationId::from_uuid(id), name)
+        .rename_bible_presentation(presenter_core::PresentationId::from_uuid(id), name)
         .await?;
-    Ok(StatusCode::NO_CONTENT)
+    Ok(axum::http::StatusCode::NO_CONTENT)
 }
 
 #[instrument(skip_all)]
 pub(super) async fn append_bible_presentation_handler(
     State(state): State<AppState>,
-    Path(id): Path<Uuid>,
+    axum::extract::Path(id): axum::extract::Path<uuid::Uuid>,
     Json(payload): Json<AppendBibleSlidesRequest>,
 ) -> Result<Json<BiblePresentationDetailDto>, AppError> {
     if payload.slides.is_empty() {
@@ -511,163 +574,8 @@ pub(super) async fn append_bible_presentation_handler(
         slides.push(request_slide_to_domain(input)?);
     }
     let presentation = state
-        .append_bible_presentation_slides(PresentationId::from_uuid(id), slides)
+        .append_bible_presentation_slides(presenter_core::PresentationId::from_uuid(id), slides)
         .await?;
     let dto = bible_presentation_to_detail(&presentation)?;
     Ok(Json(dto))
-}
-
-#[instrument(skip_all)]
-pub(super) async fn get_active_bible_broadcast(
-    State(state): State<AppState>,
-) -> Result<Json<Option<presenter_core::BibleBroadcast>>, AppError> {
-    let active = state.active_bible_broadcast().await;
-    Ok(Json(active))
-}
-
-#[derive(Debug, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub(super) struct BibleTriggerRequest {
-    pub(super) translation: String,
-    pub(super) book: String,
-    #[serde(default)]
-    pub(super) book_code: Option<String>,
-    pub(super) chapter: u16,
-    pub(super) verse_start: u16,
-    #[serde(default)]
-    pub(super) verse_end: Option<u16>,
-}
-
-#[instrument(skip_all)]
-pub(super) async fn trigger_bible_broadcast(
-    State(state): State<AppState>,
-    Json(payload): Json<BibleTriggerRequest>,
-) -> Result<Json<presenter_core::BibleBroadcast>, AppError> {
-    let verse_end = payload.verse_end.unwrap_or(payload.verse_start);
-    let reference = if let Some(code) = payload.book_code.as_deref() {
-        match canonical_book_by_code(code) {
-            Some(meta) => BibleReference::new_with_code(
-                payload.book,
-                meta.code,
-                meta.number,
-                payload.chapter,
-                payload.verse_start,
-                verse_end,
-            )
-            .map_err(AnyhowError::new)?,
-            None => BibleReference::new(
-                payload.book,
-                payload.chapter,
-                payload.verse_start,
-                verse_end,
-            )
-            .map_err(AnyhowError::new)?,
-        }
-    } else {
-        BibleReference::new(
-            payload.book,
-            payload.chapter,
-            payload.verse_start,
-            verse_end,
-        )
-        .map_err(AnyhowError::new)?
-    };
-    match state
-        .trigger_bible_passage(&payload.translation, &reference)
-        .await
-    {
-        Ok(broadcast) => Ok(Json(broadcast)),
-        Err(err) => {
-            if err.to_string().contains("passage not found") {
-                return Err(AppError::not_found("passage not found"));
-            }
-            Err(err.into())
-        }
-    }
-}
-
-#[instrument(skip_all)]
-pub(super) async fn clear_bible_broadcast(
-    State(state): State<AppState>,
-) -> Result<StatusCode, AppError> {
-    state.clear_bible_broadcast().await;
-    Ok(StatusCode::NO_CONTENT)
-}
-
-#[instrument(skip_all)]
-pub(super) async fn bible_ui(
-    State(state): State<AppState>,
-    Query(query): Query<BibleUiQuery>,
-) -> Result<Html<String>, AppError> {
-    let embed = match query.embed.as_deref() {
-        Some(value) => matches!(value, "1" | "true" | "yes" | "on"),
-        None => false,
-    };
-    let html = crate::ui::render_bible_ui(&state, embed).await?;
-    Ok(html)
-}
-
-fn bible_slide_to_dto(slide: &Slide) -> Result<BibleSlideDto, AppError> {
-    let metadata = slide.metadata.clone();
-    let (main_reference, translation_reference) = metadata
-        .as_ref()
-        .and_then(|meta| meta.bible.as_ref())
-        .map(|meta| {
-            (
-                meta.main_reference_label.clone(),
-                meta.translation_reference_label.clone(),
-            )
-        })
-        .unwrap_or((None, None));
-
-    Ok(BibleSlideDto {
-        id: slide.id.to_string(),
-        order: slide.order,
-        main: slide.content.main.value().to_string(),
-        translation: slide.content.translation.value().to_string(),
-        stage: slide.content.stage.value().to_string(),
-        group: slide
-            .content
-            .group
-            .as_ref()
-            .map(|group| group.name().to_string()),
-        metadata,
-        main_reference,
-        translation_reference,
-    })
-}
-
-fn bible_presentation_to_detail(
-    presentation: &Presentation,
-) -> Result<BiblePresentationDetailDto, AppError> {
-    let mut slides = Vec::with_capacity(presentation.slides.len());
-    for slide in &presentation.slides {
-        slides.push(bible_slide_to_dto(slide)?);
-    }
-    Ok(BiblePresentationDetailDto {
-        id: presentation.id.to_string(),
-        name: presentation.name.clone(),
-        slides,
-    })
-}
-
-fn request_slide_to_domain(input: BibleSlideInput) -> Result<Slide, AppError> {
-    let BibleSlideInput {
-        main,
-        translation,
-        stage,
-        group,
-        metadata,
-    } = input;
-    let stage_text = stage.unwrap_or_else(|| main.clone());
-    let main_text = SlideText::new(main).map_err(AppError::bad_request)?;
-    let translation_text = SlideText::new(translation).map_err(AppError::bad_request)?;
-    let stage_text = SlideText::new(stage_text).map_err(AppError::bad_request)?;
-    let content = SlideContent::new(
-        main_text,
-        translation_text,
-        stage_text,
-        group.map(SlideGroup::new),
-    );
-    Ok(Slide::new(0, content).with_metadata(metadata))
 }

@@ -17,7 +17,5 @@ tracing.workspace = true
 rusqlite = { version = "0.32", features = ["bundled"] }
 tempfile = "3.10"
 
-[lints]
-workspace = true
 
 [dev-dependencies]

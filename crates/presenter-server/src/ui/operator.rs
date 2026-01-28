@@ -1,6 +1,4 @@
-#![allow(clippy::needless_pass_by_value, clippy::too_many_lines)]
-
-use crate::{ableset::AbleSetStatusSnapshot, state::AppState};
+use crate::{ableset::AbleSetStatusSnapshot, router::VERSION, state::AppState};
 use axum::response::Html;
 use leptos::prelude::*;
 use presenter_core::{playlist::PlaylistEntryKind, TimersOverview};
@@ -15,7 +13,6 @@ use super::styles::OPERATOR as OPERATOR_STYLES;
 use super::utils::{format_seconds, format_timer_state};
 
 #[component]
-#[allow(clippy::needless_pass_by_value, clippy::too_many_lines)]
 pub fn OperatorDocument(
     libraries: Vec<LibraryRow>,
     playlists: Vec<PlaylistRow>,
@@ -199,7 +196,7 @@ pub fn OperatorDocument(
                                                     let initial = initial_library_id.clone();
                                                     move |library: LibraryRow| {
                                                         let is_active =
-                                                            initial.as_ref() == Some(&library.id);
+                                                            initial.as_ref().map(|id| id == &library.id).unwrap_or(false);
                                                         view! {
                                                             <li class="operator__list-item">
                                                                 <button
@@ -257,7 +254,7 @@ pub fn OperatorDocument(
                                                     let initial = initial_playlist_id.clone();
                                                     move |playlist: PlaylistRow| {
                                                         let is_active =
-                                                            initial.as_ref() == Some(&playlist.id);
+                                                            initial.as_ref().map(|id| id == &playlist.id).unwrap_or(false);
                                                         view! {
                                                             <li class="operator__list-item">
                                                                 <button
@@ -327,7 +324,7 @@ pub fn OperatorDocument(
                             </section>
                         </section>
     <section class="operator__panel operator__panel--bible" data-view-panel="bible">
-                            <iframe src="/ui/bible?embed=1" title="Bible Control"></iframe>
+                            <iframe src="/ui/bible" title="Bible Control"></iframe>
                         </section>
                         <section class="operator__panel operator__panel--timers" data-view-panel="timers">
                             <div class="operator__timers" data-role="timer-cards">
@@ -507,6 +504,7 @@ pub fn OperatorDocument(
                         </div>
                     </div>
                     <script>{operator_script}</script>
+                    <footer class="operator__version">"v"{VERSION}</footer>
                 </body>
             </html>
         }

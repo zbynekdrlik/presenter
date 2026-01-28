@@ -6,6 +6,7 @@ test-results/
 .DS_Store
 .idea/
 .vscode/
+.claude/command-history.log
 *.swp
 Propresenter library/
 Libraries/
@@ -18,3 +19,6 @@ var/
 gateway/node_modules/
 
 ops/companion/generated/
+
+test
+test2

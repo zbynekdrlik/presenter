@@ -37,7 +37,6 @@ pub struct AndroidStageDisplay {
 
 impl AndroidStageDisplay {
     #[allow(clippy::too_many_arguments)]
-    #[must_use]
     pub fn new(
         id: AndroidStageDisplayId,
         label: String,
@@ -72,7 +71,6 @@ pub struct AndroidStageDisplayDraft {
 }
 
 impl AndroidStageDisplayDraft {
-    #[must_use]
     pub fn new(label: impl Into<String>, host: impl Into<String>) -> Self {
         Self {
             label: label.into(),
@@ -83,36 +81,21 @@ impl AndroidStageDisplayDraft {
         }
     }
 
-    #[must_use]
     pub fn with_port(mut self, port: u16) -> Self {
         self.port = port;
         self
     }
 
-    #[must_use]
     pub fn with_launch_component(mut self, launch_component: impl Into<String>) -> Self {
         self.launch_component = launch_component.into();
         self
     }
 
-    #[must_use]
     pub fn with_enabled(mut self, enabled: bool) -> Self {
         self.is_enabled = enabled;
         self
     }
 
-    /// Rejects drafts whose label, host, port, or launch component are invalid.
-    ///
-    /// # Errors
-    ///
-    /// Returns an [`AndroidStageDisplayValidationError`] when any field is empty, contains
-    /// invalid characters, or the port is out of range.
-    ///
-    /// # Security
-    ///
-    /// This validation prevents command injection by restricting host and `launch_component`
-    /// to safe character sets. The host is used in ADB commands and must not contain
-    /// shell metacharacters.
     pub fn validate(&self) -> Result<(), AndroidStageDisplayValidationError> {
         if self.label.trim().is_empty() {
             return Err(AndroidStageDisplayValidationError::EmptyLabel);
@@ -135,11 +118,12 @@ impl AndroidStageDisplayDraft {
         if component.is_empty() {
             return Err(AndroidStageDisplayValidationError::EmptyLaunchComponent);
         }
-        // Launch component must be in package/activity format with valid characters
+        // Launch component must be package/activity format with valid Android identifier chars
+        // Valid: alphanumeric, dots, underscores, slashes, dollar signs (inner classes)
         if !component.contains('/')
             || !component
                 .chars()
-                .all(|c| c.is_ascii_alphanumeric() || c == '.' || c == '_' || c == '/')
+                .all(|c| c.is_ascii_alphanumeric() || c == '.' || c == '_' || c == '/' || c == '$')
         {
             return Err(AndroidStageDisplayValidationError::InvalidLaunchComponent);
         }

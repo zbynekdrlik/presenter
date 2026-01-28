@@ -1,17 +1,12 @@
 use chrono::{DateTime, Utc};
 use presenter_core::{TimerCommand, TimerState, TimersOverview, TimersState};
 
-use crate::{live::LiveEvent, resolume::TimerFrame};
-
+use super::stage::format_countdown_text;
 use super::AppState;
+use crate::live::LiveEvent;
+use crate::resolume::TimerFrame;
 
 impl AppState {
-    pub async fn timers_overview(&self) -> anyhow::Result<TimersOverview> {
-        let now = Utc::now();
-        let state = self.load_or_init_timers(now).await?;
-        Ok(state.overview(now))
-    }
-
     pub async fn execute_timer_command(
         &self,
         command: TimerCommand,
@@ -45,7 +40,7 @@ impl AppState {
         }
 
         let formatted = format_countdown_text(overview.countdown_to_start.seconds_remaining);
-        self.resolume_client
+        self.resolume_registry
             .timer_update(TimerFrame::new(formatted))
             .await;
 
@@ -68,16 +63,5 @@ impl AppState {
             });
             Ok(state)
         }
-    }
-}
-
-pub(crate) fn format_countdown_text(seconds_remaining: i64) -> String {
-    let total = seconds_remaining.max(0);
-    if total < 60 {
-        total.to_string()
-    } else {
-        let minutes = total / 60;
-        let seconds = total % 60;
-        format!("{minutes:02}:{seconds:02}")
     }
 }

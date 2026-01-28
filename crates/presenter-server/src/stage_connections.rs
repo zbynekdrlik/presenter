@@ -77,9 +77,9 @@ impl StageConnectionTracker {
         now: DateTime<Utc>,
     ) -> StageClientSnapshot {
         let connection = StageConnection::new(layout_code, now);
+        let snapshot = connection.snapshot(id);
         self.connections.insert(id, connection);
-        self.snapshot_for(id)
-            .expect("registered connection should have snapshot")
+        snapshot
     }
 
     pub fn note_heartbeat_sent(&mut self, heartbeat_id: Uuid, now: DateTime<Utc>) {

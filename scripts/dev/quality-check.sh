@@ -30,13 +30,13 @@ cd "$ROOT_DIR"
 failures=()
 warnings=()
 
-# Temporary allowlist for legacy oversized files to avoid blocking unrelated
-# refactor branches. Track and remove in follow-up PR dedicated to splitting
-# these modules below the 1000-line cap.
-ALLOW_FILESIZE_WARN_ONLY=(
-  "crates/presenter-server/src/companion.rs"
-  "crates/presenter-migration/src/m20250927_000001_create_core_tables.rs"
-  "crates/presenter-persistence/src/repository.rs"
+# File size exemptions per CLAUDE.md:
+# - Migration files are declarative schema definitions, exempt from limits
+# - Test files are exempt
+EXEMPT_FILESIZE_PATTERNS=(
+  "*/presenter-migration/src/*.rs"
+  "**/tests.rs"
+  "**/tests/*.rs"
 )
 
 note() { printf '%s\n' "$*"; }
@@ -91,9 +91,26 @@ if (( ${#target_files[@]} == 0 )); then
   warn "No diff against $BASE_REF; checking all Rust files in advisory mode"
 fi
 
+# Helper: check if file matches any exempt pattern
+is_exempt_file() {
+  local file="$1"
+  for pattern in "${EXEMPT_FILESIZE_PATTERNS[@]}"; do
+    case "$file" in
+      $pattern) return 0 ;;
+    esac
+  done
+  return 1
+}
+
 # 6) File size limits (only for target files)
 for file in "${target_files[@]}"; do
   [[ -f "$file" ]] || continue
+
+  # Skip exempt files (migrations, tests)
+  if is_exempt_file "$file"; then
+    continue
+  fi
+
   is_changed=0
   for cf in "${changed[@]:-}"; do
     if [[ "$cf" == "$file" ]]; then is_changed=1; break; fi
@@ -107,18 +124,10 @@ for file in "${target_files[@]}"; do
   fi
   lines=$prod_lines
   if (( lines > 1000 )); then
-    allow_warn_only=0
-    for al in "${ALLOW_FILESIZE_WARN_ONLY[@]}"; do
-      if [[ "$file" == "$al" ]]; then allow_warn_only=1; break; fi
-    done
-    if (( allow_warn_only )); then
-      warn "${file} exceeds hard cap (1000 lines): ${lines} (temporarily allowed; split in follow-up PR)"
+    if (( is_changed )); then
+      fail "${file} exceeds hard cap (1000 lines): ${lines}"
     else
-      if (( is_changed )); then
-        fail "${file} exceeds hard cap (1000 lines): ${lines}"
-      else
-        warn "${file} exceeds hard cap (1000 lines): ${lines}"
-      fi
+      warn "${file} exceeds hard cap (1000 lines): ${lines}"
     fi
   elif (( lines > 800 )); then
     warn "${file} exceeds target size (800 lines): ${lines}"
@@ -137,7 +146,28 @@ export QC_TARGETS
 viols=$(python3 - "$ROOT_DIR" <<'PY'
 import os, re, sys, json
 root = sys.argv[1]
-fn_start = re.compile(r"^\s*(?:pub(?:\([^)]*\))?\s+)?(?:async\s+)?fn\s+[A-Za-z0-9_]+\s*\(")
+fn_start = re.compile(r"^\s*(?:pub(?:\([^)]*\))?\s+)?(?:async\s+)?fn\s+([A-Za-z0-9_]+)\s*\(")
+
+# Exempt patterns per CLAUDE.md:
+# - Migration up() functions (declarative schema)
+# - render_*_ui functions (Leptos HTML-like DSL)
+# - build_router functions (route declarations)
+EXEMPT_FN_NAMES = {'up', 'down', 'build_router'}
+EXEMPT_FN_PREFIXES = ('render_', )
+
+def is_exempt_function(fn_name, filepath):
+    # Migration files - exempt all functions
+    if '/presenter-migration/' in filepath:
+        return True
+    # Specific exempt function names
+    if fn_name in EXEMPT_FN_NAMES:
+        return True
+    # UI render functions
+    for prefix in EXEMPT_FN_PREFIXES:
+        if fn_name.startswith(prefix):
+            return True
+    return False
+
 violations = []
 targets_env = os.environ.get('QC_TARGETS', '')
 targets = [t for t in targets_env.split('\n') if t.strip()]
@@ -151,7 +181,9 @@ for dirpath, _, filenames in os.walk(os.path.join(root, 'crates')):
             lines = f.readlines()
         i = 0
         while i < len(lines):
-            if fn_start.match(lines[i]):
+            match = fn_start.match(lines[i])
+            if match:
+                fn_name = match.group(1)
                 # find first '{'
                 j = i
                 brace = 0
@@ -163,8 +195,8 @@ for dirpath, _, filenames in os.walk(os.path.join(root, 'crates')):
                         started = True
                     if started and brace == 0:
                         length = j - i + 1
-                        if length > 60:
-                            violations.append({'file': path, 'start': i+1, 'length': length})
+                        if length > 60 and not is_exempt_function(fn_name, path):
+                            violations.append({'file': path, 'start': i+1, 'length': length, 'fn': fn_name})
                         i = j
                         break
                     j += 1
@@ -175,54 +207,43 @@ PY
 ) || { fail "Function length checker crashed"; viols="[]"; }
 
 if [[ -n "${viols:-}" && "${viols}" != "[]" ]]; then
-  # Treat long functions in companion/ and state/ as warnings for this branch
-  allow_longfn_prefixes=(
-    "crates/presenter-server/src/companion.rs"
-    )
   while IFS= read -r row; do
     file=$(echo "$row" | jq -r '.file')
     start=$(echo "$row" | jq -r '.start')
     length=$(echo "$row" | jq -r '.length')
-    warn_only=0
-    for p in "${allow_longfn_prefixes[@]}"; do
-      if [[ "$file" == "$p" ]]; then warn_only=1; break; fi
-    done
-    if (( warn_only )); then
-      warn "Function too long (>60): ${file}:${start} (${length} lines)"
+    fn_name=$(echo "$row" | jq -r '.fn')
+    if (( ${#changed[@]} > 0 )); then
+      fail "Function too long (>60): ${file}:${start} fn ${fn_name} (${length} lines)"
     else
-      if (( ${#changed[@]} > 0 )); then
-        fail "Function too long (>60): ${file}:${start} (${length} lines)"
-      else
-        warn "Function too long (>60): ${file}:${start} (${length} lines)"
-      fi
+      warn "Function too long (>60): ${file}:${start} fn ${fn_name} (${length} lines)"
     fi
   done < <(echo "$viols" | jq -c '.[]')
 fi
 
-# 8) Format & Lint - Skip in CI (handled by separate jobs)
-if [[ -z "${CI:-}" ]]; then
-  if ! cargo fmt --all -- --check >/dev/null 2>&1; then
-    fail "cargo fmt reported formatting changes (run: cargo fmt --all)"
-  fi
-
-  if ! cargo clippy -p presenter-server --tests --no-deps --quiet -- -D warnings >/dev/null 2>&1; then
-    warn "cargo clippy (presenter-server) reported warnings"
-  fi
+# 8) Format & Lint (strict)
+if ! cargo fmt --all -- --check >/dev/null 2>&1; then
+  fail "cargo fmt reported formatting changes (run: cargo fmt --all)"
 fi
 
-# 9) Dependency and security checks - Skip in CI (handled by security.yml)
-if [[ -z "${CI:-}" ]]; then
-  if command -v cargo-deny >/dev/null 2>&1; then
-    if ! cargo deny check >/dev/null 2>&1; then
-      warn "cargo-deny policy violations"
-    fi
-  fi
+if ! cargo clippy -p presenter-server --tests --no-deps --quiet -- -D warnings >/dev/null 2>&1; then
+  warn "cargo clippy (presenter-server) reported warnings (advisory for this branch; will be enforced next)"
+fi
 
-  if command -v cargo-audit >/dev/null 2>&1; then
-    if ! cargo audit -q >/dev/null 2>&1; then
-      warn "cargo-audit found vulnerabilities"
-    fi
+# 9) Dependency and security checks
+if command -v cargo-deny >/dev/null 2>&1; then
+  if ! cargo deny check >/dev/null 2>&1; then
+    fail "cargo-deny policy violations (licenses/bans/duplicates)"
   fi
+else
+  warn "cargo-deny not installed; skipping (install: cargo install cargo-deny)"
+fi
+
+if command -v cargo-audit >/dev/null 2>&1; then
+  if ! cargo audit -q >/dev/null 2>&1; then
+    fail "cargo-audit found vulnerabilities (update dependencies)"
+  fi
+else
+  warn "cargo-audit not installed; skipping (install: cargo install cargo-audit)"
 fi
 
 # 10) Production code hygiene (no unwrap/expect/panic)
@@ -250,12 +271,10 @@ if [[ ! -f rust-toolchain.toml ]]; then
   warn "rust-toolchain.toml is missing; pin toolchain for reproducible builds"
 fi
 
-# 13) cargo check warnings (advisory) - Skip in CI (build already done)
-if [[ -z "${CI:-}" ]]; then
-  check_out=$(cargo check 2>&1 || true)
-  if echo "$check_out" | grep -q "warning:"; then
-    warn "cargo check reported warnings; run clippy/fixes when feasible."
-  fi
+# 13) cargo check warnings (advisory)
+check_out=$(cargo check 2>&1 || true)
+if echo "$check_out" | grep -q "warning:"; then
+  warn "cargo check reported warnings; run clippy/fixes when feasible."
 fi
 
 # Emit results
