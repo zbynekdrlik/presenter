@@ -24,6 +24,6 @@ walkdir = "2"
 
 [dev-dependencies]
 async-trait.workspace = true
-zip = { version = "0.6", default-features = false, features = ["deflate"] }
+zip = { version = "7.2", default-features = false, features = ["deflate"] }
 rusqlite = { version = "0.32", features = ["bundled"] }
 tempfile = "3.10"
