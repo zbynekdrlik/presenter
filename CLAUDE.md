@@ -48,6 +48,39 @@ Code → Commit → Push to dev → Monitor CI → Fix failures → Repeat until
 
 ## Git Rules
 
+### Branch Policy (STRICT)
+
+**Only two branches exist:** `main` and `dev`. No exceptions.
+
+- `dev` - All development happens here
+- `main` - Production releases only (merged from dev by human)
+
+**Before starting any work**, verify no stale branches exist:
+
+```bash
+git fetch --prune && git branch -r | grep -v -E '(main|dev|HEAD)'
+```
+
+If any branches exist, delete them first: `git push origin --delete <branch>`
+
+### PR Policy (STRICT)
+
+**Only ONE pull request at a time.** No exceptions.
+
+- Before creating a new PR, close any existing open PRs
+- Dependabot PRs must be closed and handled manually via dev branch
+- Release PRs (dev → main) are the only PRs that should exist
+
+**Check before any PR work:**
+
+```bash
+gh pr list --state open
+```
+
+If any PRs exist (other than the one you're working on), close them first.
+
+### Core Rules
+
 - **Always push to `dev` branch** - Never to main/master
 - **Commit frequently** - Small commits, push often
 - **CI validates everything** - Trust the pipeline
