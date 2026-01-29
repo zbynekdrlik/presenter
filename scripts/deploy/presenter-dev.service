@@ -1,0 +1,33 @@
+[Unit]
+Description=Presenter Dev - Church Worship Display System (Development)
+After=network.target
+
+[Service]
+Type=simple
+User=newlevel
+Group=newlevel
+WorkingDirectory=/opt/presenter-dev
+ExecStart=/opt/presenter-dev/presenter-server
+Restart=always
+RestartSec=5
+
+# Environment
+Environment=PRESENTER_PORT=8080
+Environment=PRESENTER_DB_URL=sqlite:///opt/presenter-dev/presenter.db
+Environment=PRESENTER_LIBRARY_ROOT=/home/newlevel/devel/presenter/presenter-libraries
+Environment=RUST_LOG=info,tower_http=debug
+# Offset integration ports to avoid conflicts with production
+Environment=PRESENTER_COMPANION_ENABLED=0
+Environment=PRESENTER_COMPANION_PORT=28175
+Environment=PRESENTER_OSC_LISTEN_PORT=49051
+
+# Security hardening - no CAP_NET_BIND_SERVICE needed for port 8080
+ProtectSystem=strict
+ProtectHome=read-only
+ReadWritePaths=/opt/presenter-dev
+
+# Resource limits
+LimitNOFILE=65536
+
+[Install]
+WantedBy=multi-user.target

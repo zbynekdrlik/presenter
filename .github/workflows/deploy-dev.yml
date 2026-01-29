@@ -1,0 +1,87 @@
+name: Deploy Dev
+
+on:
+  push:
+    branches: [dev]
+  workflow_dispatch:
+
+concurrency:
+  group: deploy-dev
+  cancel-in-progress: false
+
+env:
+  CARGO_TERM_COLOR: always
+  DEPLOY_DIR: /opt/presenter-dev
+  SERVICE_NAME: presenter-dev
+
+jobs:
+  deploy:
+    name: Deploy to Dev
+    runs-on: self-hosted
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Setup Rust cache
+        uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: release-dev
+
+      - name: Build release binary
+        run: cargo build --release -p presenter-server
+
+      - name: Create deploy directory
+        run: |
+          sudo mkdir -p ${{ env.DEPLOY_DIR }}
+          sudo chown newlevel:newlevel ${{ env.DEPLOY_DIR }}
+          # Initialize database if it doesn't exist
+          if [ ! -f ${{ env.DEPLOY_DIR }}/presenter.db ]; then
+            touch ${{ env.DEPLOY_DIR }}/presenter.db
+          fi
+
+      - name: Stop service (if running)
+        run: |
+          if systemctl is-active --quiet ${{ env.SERVICE_NAME }}; then
+            sudo systemctl stop ${{ env.SERVICE_NAME }}
+            echo "Service stopped"
+          else
+            echo "Service not running"
+          fi
+
+      - name: Deploy binary
+        run: |
+          sudo cp target/release/presenter-server ${{ env.DEPLOY_DIR }}/
+          sudo chmod +x ${{ env.DEPLOY_DIR }}/presenter-server
+
+      - name: Deploy systemd service
+        run: |
+          sudo cp scripts/deploy/presenter-dev.service /etc/systemd/system/
+          sudo systemctl daemon-reload
+
+      - name: Start service
+        run: |
+          sudo systemctl enable ${{ env.SERVICE_NAME }}
+          sudo systemctl start ${{ env.SERVICE_NAME }}
+
+      - name: Verify deployment
+        run: |
+          sleep 5
+          if systemctl is-active --quiet ${{ env.SERVICE_NAME }}; then
+            echo "Service is running"
+            curl -sf http://localhost:8080/healthz || echo "Warning: healthz check failed"
+          else
+            echo "Service failed to start"
+            sudo journalctl -u ${{ env.SERVICE_NAME }} -n 50 --no-pager
+            exit 1
+          fi
+
+      - name: Show deployment info
+        run: |
+          echo "=== Dev Deployment Complete ==="
+          echo "Version: $(grep -m1 '^version' Cargo.toml | cut -d'"' -f2)"
+          echo "Binary: ${{ env.DEPLOY_DIR }}/presenter-server"
+          echo "Service: ${{ env.SERVICE_NAME }}"
+          echo "URL: http://10.77.9.205:8080"
+          systemctl status ${{ env.SERVICE_NAME }} --no-pager || true

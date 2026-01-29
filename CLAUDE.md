@@ -150,13 +150,14 @@ All workflows run on the local runner, providing:
 
 ### Workflows
 
-| Workflow            | Trigger                   | Purpose                            |
-| ------------------- | ------------------------- | ---------------------------------- |
-| `ci.yml`            | Push to `dev`/`main`, PRs | Format, lint, test, quality        |
-| `e2e.yml`           | Push to `dev`/`main`, PRs | Playwright E2E tests               |
-| `version-check.yml` | Push to `dev`/`main`, PRs | Validate version format            |
-| `security.yml`      | Weekly + manual           | Vulnerability scanning             |
-| `release.yml`       | GitHub Release published  | Build and upload release artifacts |
+| Workflow            | Trigger                   | Purpose                                 |
+| ------------------- | ------------------------- | --------------------------------------- |
+| `ci.yml`            | Push to `dev`/`main`, PRs | Format, lint, test, quality             |
+| `e2e.yml`           | Push to `dev`/`main`, PRs | Playwright E2E tests                    |
+| `version-check.yml` | Push to `dev`/`main`, PRs | Validate version format                 |
+| `security.yml`      | Weekly + manual           | Vulnerability scanning                  |
+| `deploy-dev.yml`    | Push to `dev`             | Deploy dev binary to /opt/presenter-dev |
+| `release.yml`       | GitHub Release published  | Build and upload release artifacts      |
 
 ### Monitoring CI
 
@@ -200,6 +201,26 @@ PRESENTER_PORT=8080 cargo run -p presenter-server
 # Release build (what CI produces)
 cargo build --release -p presenter-server
 ./target/release/presenter-server
+```
+
+### Deployed Instances
+
+Two instances run simultaneously on the self-hosted runner:
+
+| Instance   | URL                     | Port | Service                 | Deploy Dir           | Branch |
+| ---------- | ----------------------- | ---- | ----------------------- | -------------------- | ------ |
+| Production | http://10.77.9.205      | 80   | `presenter.service`     | `/opt/presenter`     | `main` |
+| Dev        | http://10.77.9.205:8080 | 8080 | `presenter-dev.service` | `/opt/presenter-dev` | `dev`  |
+
+```bash
+# Check both services
+systemctl status presenter presenter-dev
+
+# View dev logs
+sudo journalctl -u presenter-dev -f
+
+# Restart dev only
+sudo systemctl restart presenter-dev
 ```
 
 ---
@@ -408,6 +429,9 @@ The user accesses the server from another machine on the same network. **Always 
 
 When providing URLs, use:
 
-- http://10.77.9.205/ui/operator (NOT http://localhost/ui/operator)
-- http://10.77.9.205/stage (NOT http://localhost/stage)
-- http://10.77.9.205/healthz (NOT http://localhost/healthz)
+- http://10.77.9.205/ui/operator (Production)
+- http://10.77.9.205:8080/ui/operator (Dev)
+- http://10.77.9.205/stage (Production stage)
+- http://10.77.9.205:8080/stage (Dev stage)
+
+**Never use localhost** — always use the LAN IP.
