@@ -55,12 +55,10 @@ Code → Commit → Push to dev → Monitor CI → Fix failures → Repeat until
 - `dev` - All development happens here
 - `main` - Production releases only (merged from dev by human)
 
-**Note:** `release-please` (bot) temporarily creates a `release-please--branches--main` branch when it opens a release PR. This branch is auto-deleted after merge. Do NOT delete it manually — it would kill the release PR.
-
 **Before starting any work**, verify no stale branches exist:
 
 ```bash
-git fetch --prune && git branch -r | grep -v -E '(main|dev|HEAD|release-please)'
+git fetch --prune && git branch -r | grep -v -E '(main|dev|HEAD)'
 ```
 
 If any branches exist, delete them first: `git push origin --delete <branch>`
@@ -71,7 +69,7 @@ If any branches exist, delete them first: `git push origin --delete <branch>`
 
 - Before creating a new PR, close any existing open PRs
 - Dependabot PRs must be closed and handled manually via dev branch
-- Release PRs: either `dev → main` (manual) or release-please auto-PRs (version bump + changelog)
+- The only PRs are `dev → main` for releases
 
 **Check before any PR work:**
 
@@ -152,13 +150,13 @@ All workflows run on the local runner, providing:
 
 ### Workflows
 
-| Workflow            | Trigger                   | Purpose                           |
-| ------------------- | ------------------------- | --------------------------------- |
-| `ci.yml`            | Push to `dev`/`main`, PRs | Format, lint, test, quality       |
-| `e2e.yml`           | Push to `dev`/`main`, PRs | Playwright E2E tests              |
-| `version-check.yml` | Push to `dev`/`main`, PRs | Validate version format           |
-| `security.yml`      | Weekly + manual           | Vulnerability scanning            |
-| `release.yml`       | Push to `main`            | release-please, artifacts, Docker |
+| Workflow            | Trigger                   | Purpose                            |
+| ------------------- | ------------------------- | ---------------------------------- |
+| `ci.yml`            | Push to `dev`/`main`, PRs | Format, lint, test, quality        |
+| `e2e.yml`           | Push to `dev`/`main`, PRs | Playwright E2E tests               |
+| `version-check.yml` | Push to `dev`/`main`, PRs | Validate version format            |
+| `security.yml`      | Weekly + manual           | Vulnerability scanning             |
+| `release.yml`       | GitHub Release published  | Build and upload release artifacts |
 
 ### Monitoring CI
 
