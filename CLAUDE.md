@@ -55,10 +55,12 @@ Code → Commit → Push to dev → Monitor CI → Fix failures → Repeat until
 - `dev` - All development happens here
 - `main` - Production releases only (merged from dev by human)
 
+**Note:** `release-please` (bot) temporarily creates a `release-please--branches--main` branch when it opens a release PR. This branch is auto-deleted after merge. Do NOT delete it manually — it would kill the release PR.
+
 **Before starting any work**, verify no stale branches exist:
 
 ```bash
-git fetch --prune && git branch -r | grep -v -E '(main|dev|HEAD)'
+git fetch --prune && git branch -r | grep -v -E '(main|dev|HEAD|release-please)'
 ```
 
 If any branches exist, delete them first: `git push origin --delete <branch>`
@@ -69,7 +71,7 @@ If any branches exist, delete them first: `git push origin --delete <branch>`
 
 - Before creating a new PR, close any existing open PRs
 - Dependabot PRs must be closed and handled manually via dev branch
-- Release PRs (dev → main) are the only PRs that should exist
+- Release PRs: either `dev → main` (manual) or release-please auto-PRs (version bump + changelog)
 
 **Check before any PR work:**
 
