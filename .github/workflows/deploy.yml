@@ -13,6 +13,8 @@ env:
   CARGO_TERM_COLOR: always
   DEPLOY_DIR: /opt/presenter
   SERVICE_NAME: presenter
+  DEPLOY_HOST: 10.77.9.191
+  DEPLOY_USER: newlevel
   PRESENTER_LIBRARY_ROOT: /home/newlevel/devel/presenter/presenter-libraries
 
 jobs:
@@ -33,69 +35,80 @@ jobs:
       - name: Build release binaries
         run: cargo build --release -p presenter-server -p presenter-importer
 
+      - name: Setup SSH for deployment
+        run: |
+          mkdir -p ~/.ssh
+          echo "${{ secrets.DEPLOY_SSH_KEY }}" > ~/.ssh/id_deploy
+          chmod 600 ~/.ssh/id_deploy
+          ssh-keyscan ${{ env.DEPLOY_HOST }} >> ~/.ssh/known_hosts 2>/dev/null
+          cat > ~/.ssh/config <<EOF
+          Host deploy-target
+              HostName ${{ env.DEPLOY_HOST }}
+              User ${{ env.DEPLOY_USER }}
+              IdentityFile ~/.ssh/id_deploy
+              StrictHostKeyChecking no
+          EOF
+
       - name: Create deploy directory
         run: |
-          sudo mkdir -p ${{ env.DEPLOY_DIR }}
-          sudo chown newlevel:newlevel ${{ env.DEPLOY_DIR }}
+          ssh deploy-target "sudo mkdir -p ${{ env.DEPLOY_DIR }} && sudo chown ${{ env.DEPLOY_USER }}:${{ env.DEPLOY_USER }} ${{ env.DEPLOY_DIR }}"
 
       - name: Stop service (if running)
         run: |
-          if systemctl is-active --quiet ${{ env.SERVICE_NAME }}; then
-            sudo systemctl stop ${{ env.SERVICE_NAME }}
-            echo "Service stopped"
-          else
-            echo "Service not running"
-          fi
+          ssh deploy-target "if systemctl is-active --quiet ${{ env.SERVICE_NAME }}; then sudo systemctl stop ${{ env.SERVICE_NAME }}; echo 'Service stopped'; else echo 'Service not running'; fi"
 
       - name: Deploy binaries
         run: |
-          sudo cp target/release/presenter-server ${{ env.DEPLOY_DIR }}/
-          sudo cp target/release/import_propresenter ${{ env.DEPLOY_DIR }}/
-          sudo cp target/release/ingest_bibles ${{ env.DEPLOY_DIR }}/
-          sudo chmod +x ${{ env.DEPLOY_DIR }}/presenter-server
-          sudo chmod +x ${{ env.DEPLOY_DIR }}/import_propresenter
-          sudo chmod +x ${{ env.DEPLOY_DIR }}/ingest_bibles
+          scp -i ~/.ssh/id_deploy \
+            target/release/presenter-server \
+            target/release/import_propresenter \
+            target/release/ingest_bibles \
+            deploy-target:${{ env.DEPLOY_DIR }}/
+          ssh deploy-target "chmod +x ${{ env.DEPLOY_DIR }}/presenter-server ${{ env.DEPLOY_DIR }}/import_propresenter ${{ env.DEPLOY_DIR }}/ingest_bibles"
 
       - name: Import data (fresh database)
         run: |
+          ssh deploy-target << 'REMOTE_SCRIPT'
+          set -e
           echo "Resetting database..."
-          rm -f ${{ env.DEPLOY_DIR }}/presenter.db ${{ env.DEPLOY_DIR }}/presenter.db-shm ${{ env.DEPLOY_DIR }}/presenter.db-wal
-          touch ${{ env.DEPLOY_DIR }}/presenter.db
+          rm -f /opt/presenter/presenter.db /opt/presenter/presenter.db-shm /opt/presenter/presenter.db-wal
+          touch /opt/presenter/presenter.db
 
           echo "Importing ProPresenter libraries..."
-          PRESENTER_DB_URL=sqlite://${{ env.DEPLOY_DIR }}/presenter.db \
-            ${{ env.DEPLOY_DIR }}/import_propresenter --root "${{ env.PRESENTER_LIBRARY_ROOT }}"
+          PRESENTER_DB_URL=sqlite:///opt/presenter/presenter.db \
+            /opt/presenter/import_propresenter --root "/home/newlevel/devel/presenter/presenter-libraries"
 
           echo "Importing Bible translations..."
-          PRESENTER_DB_URL=sqlite://${{ env.DEPLOY_DIR }}/presenter.db \
-            ${{ env.DEPLOY_DIR }}/ingest_bibles
+          PRESENTER_DB_URL=sqlite:///opt/presenter/presenter.db \
+            /opt/presenter/ingest_bibles
+          REMOTE_SCRIPT
 
       - name: Deploy systemd service
         run: |
-          sudo cp scripts/deploy/presenter.service /etc/systemd/system/
-          sudo systemctl daemon-reload
+          scp -i ~/.ssh/id_deploy scripts/deploy/presenter.service deploy-target:/tmp/presenter.service
+          ssh deploy-target "sudo cp /tmp/presenter.service /etc/systemd/system/ && sudo systemctl daemon-reload"
 
       - name: Start service
         run: |
-          sudo systemctl enable ${{ env.SERVICE_NAME }}
-          sudo systemctl start ${{ env.SERVICE_NAME }}
+          ssh deploy-target "sudo systemctl enable ${{ env.SERVICE_NAME }} && sudo systemctl start ${{ env.SERVICE_NAME }}"
 
       - name: Verify deployment
         run: |
           sleep 5
-          if systemctl is-active --quiet ${{ env.SERVICE_NAME }}; then
+          ssh deploy-target << 'REMOTE_SCRIPT'
+          if systemctl is-active --quiet presenter; then
             echo "Service is running"
             curl -sf http://localhost:80/healthz || echo "Warning: healthz check failed"
           else
             echo "Service failed to start"
-            sudo journalctl -u ${{ env.SERVICE_NAME }} -n 50 --no-pager
+            sudo journalctl -u presenter -n 50 --no-pager
             exit 1
           fi
+          REMOTE_SCRIPT
 
       - name: Show deployment info
         run: |
           echo "=== Deployment Complete ==="
           echo "Version: $(grep -m1 '^version' Cargo.toml | cut -d'"' -f2)"
-          echo "Binary: ${{ env.DEPLOY_DIR }}/presenter-server"
           echo "Service: ${{ env.SERVICE_NAME }}"
-          systemctl status ${{ env.SERVICE_NAME }} --no-pager || true
+          ssh deploy-target "systemctl status ${{ env.SERVICE_NAME }} --no-pager" || true
