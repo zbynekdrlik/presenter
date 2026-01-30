@@ -1,11 +1,11 @@
+use super::utils::escape_script_tag;
+use super::{scripts, styles};
 use crate::state::AppState;
 use axum::response::Html;
 use leptos::prelude::*;
-use presenter_core::{BibleBroadcast, BibleTranslation};
+use presenter_core::{BibleBroadcast, BibleTranslation, DEFAULT_STAGE_LAYOUT_CODE};
 use reactive_graph::owner::Owner;
 use serde_json::to_string;
-
-use super::{scripts, styles};
 
 #[component]
 fn BibleDocument(
@@ -15,8 +15,8 @@ fn BibleDocument(
     active_json: String,
     embed: bool,
 ) -> impl IntoView {
-    let translations_json_safe = translations_json.replace("</script>", r"<\/script>");
-    let active_json_safe = active_json.replace("</script>", r"<\/script>");
+    let translations_json_safe = escape_script_tag(&translations_json);
+    let active_json_safe = escape_script_tag(&active_json);
     let script = scripts::BIBLE
         .replace("__TRANSLATIONS__", &translations_json_safe)
         .replace("__ACTIVE__", &active_json_safe);
@@ -70,7 +70,7 @@ fn BibleDocument(
                             <div class="operator__stage-layout" aria-label="Stage display mode">
                                 <label class="operator__stage-layout-label" for="bible-stage-layout">"Stage Output"</label>
                                 <select id="bible-stage-layout" data-role="stage-layout-select" disabled>
-                                    <option value="worship-snv">"Worship"</option>
+                                    <option value={DEFAULT_STAGE_LAYOUT_CODE}>"Worship"</option>
                                 </select>
                             </div>
                         </div>

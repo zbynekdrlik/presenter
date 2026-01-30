@@ -15,7 +15,7 @@ use chrono::{DateTime, Utc};
 use futures_util::{SinkExt, StreamExt};
 use presenter_core::{
     BibleBroadcast, BibleReference, PresentationId, SlideId, StageDisplayLayout,
-    StageDisplaySnapshot, TimerCommand, TimerState, TimersOverview,
+    StageDisplaySnapshot, TimerCommand, TimerState, TimersOverview, DEFAULT_STAGE_LAYOUT_CODE,
 };
 use protocol::*;
 use serde::{Deserialize, Serialize};

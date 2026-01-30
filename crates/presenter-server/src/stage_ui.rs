@@ -1,10 +1,12 @@
 use crate::stage_connections::StageHeartbeatConfig;
+use crate::ui::utils::json_safe;
 use axum::response::Html;
 use leptos::prelude::*;
 use leptos::prelude::{AnyView, IntoAny};
-use presenter_core::{StageDisplaySlide, StageDisplaySnapshot, TimerState};
+use presenter_core::{
+    StageDisplaySlide, StageDisplaySnapshot, TimerState, DEFAULT_STAGE_LAYOUT_CODE,
+};
 use reactive_graph::owner::Owner;
-use serde_json::to_string;
 
 pub fn render_stage_display(
     snapshot: StageDisplaySnapshot,
@@ -27,7 +29,7 @@ fn StageDisplayDocument(
     let layout = snapshot.layout.clone();
     let layout_view = render_layout(&snapshot);
     let layout_code = layout.code.clone();
-    let snapshot_json = to_string(&snapshot).unwrap_or_else(|_| "{}".to_string());
+    let snapshot_json = json_safe(&snapshot);
     let heartbeat_config_literal = format!(
         "{{ intervalMs: {}, graceMs: {}, disconnectMs: {} }}",
         heartbeat_config.interval_ms(),
@@ -619,7 +621,7 @@ fn StageDisplayDocument(
 
 fn render_layout(snapshot: &StageDisplaySnapshot) -> AnyView {
     match snapshot.layout.code.as_str() {
-        "worship-snv" => render_worship_snv(snapshot),
+        DEFAULT_STAGE_LAYOUT_CODE => render_worship_snv(snapshot),
         "worship-pp" => render_worship_pp(snapshot),
         "timer" => render_timer(snapshot),
         "preach" => render_preach(snapshot),
@@ -868,7 +870,7 @@ mod tests {
     fn worship_layout() -> StageDisplayLayout {
         StageDisplayLayout::built_in()
             .into_iter()
-            .find(|layout| layout.code == "worship-snv")
+            .find(|layout| layout.code == DEFAULT_STAGE_LAYOUT_CODE)
             .expect("worship layout")
     }
 

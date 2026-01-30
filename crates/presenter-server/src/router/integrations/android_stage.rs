@@ -56,7 +56,7 @@ pub(crate) struct AndroidStageDisplayRequest {
     port: u16,
     #[serde(default = "default_android_stage_launch_component")]
     launch_component: String,
-    #[serde(default = "default_true")]
+    #[serde(default = "super::default_true")]
     is_enabled: bool,
 }
 
@@ -65,9 +65,6 @@ const fn default_android_stage_port() -> u16 {
 }
 fn default_android_stage_launch_component() -> String {
     DEFAULT_LAUNCH_COMPONENT.to_string()
-}
-const fn default_true() -> bool {
-    true
 }
 
 fn normalize_launch_component(component: &str) -> String {

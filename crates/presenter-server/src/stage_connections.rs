@@ -300,18 +300,19 @@ impl StageHeartbeatConfig {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use presenter_core::DEFAULT_STAGE_LAYOUT_CODE;
 
     #[test]
     fn registers_connection_and_reports_connected_after_heartbeat() {
         let mut tracker = StageConnectionTracker::new();
         let now = Utc::now();
         let id = Uuid::new_v4();
-        tracker.register(id, "worship-snv", now);
+        tracker.register(id, DEFAULT_STAGE_LAYOUT_CODE, now);
 
         let initial = tracker.snapshot();
         assert_eq!(initial.len(), 1);
         assert_eq!(initial[0].status, StageClientStatus::Connecting);
-        assert_eq!(initial[0].layout_code, "worship-snv");
+        assert_eq!(initial[0].layout_code, DEFAULT_STAGE_LAYOUT_CODE);
         assert_eq!(initial[0].latency_ms, None);
 
         let later = now + Duration::milliseconds(120);

@@ -1,5 +1,4 @@
 mod bible;
-mod helpers;
 mod library;
 mod playlist;
 mod search;
@@ -7,33 +6,30 @@ mod search;
 mod tests;
 mod util;
 
-pub use helpers::RepositoryError;
-use helpers::{
+pub use util::RepositoryError;
+use util::{
     ableset_model_to_domain, android_stage_display_model_to_domain, osc_model_to_domain,
     parse_uuid, resolume_model_to_domain, stage_state_model_to_state, timer_state_to_string,
-    timers_model_to_state, to_domain_passage, to_domain_slide, to_domain_translation,
-    velocity_mode_to_string,
+    timers_model_to_state, to_domain_slide, velocity_mode_to_string,
 };
 
 use crate::entities::{
-    ableset_settings, android_stage_display, app_settings, bible_passage, bible_translation,
-    osc_settings, presentation as presentation_entity, resolume_host, slide as slide_entity,
-    stage_state, timers,
+    ableset_settings, android_stage_display, app_settings, osc_settings,
+    presentation as presentation_entity, resolume_host, slide as slide_entity, stage_state, timers,
 };
 use anyhow::{anyhow, Context};
 use chrono::Utc;
 use presenter_core::{
-    bible::BibleIngestionBatch, search::fold_query, AbleSetSettings, AbleSetSettingsDraft,
-    AndroidStageDisplay, AndroidStageDisplayDraft, AndroidStageDisplayId, BiblePassage,
-    BibleReference, BibleTranslation, LibraryId, OscSettings, OscSettingsDraft, Presentation,
-    PresentationId, ResolumeHost, ResolumeHostDraft, ResolumeHostId, Slide, SlideContent, SlideId,
-    StageState, TimersState,
+    search::fold_query, AbleSetSettings, AbleSetSettingsDraft, AndroidStageDisplay,
+    AndroidStageDisplayDraft, AndroidStageDisplayId, LibraryId, OscSettings, OscSettingsDraft,
+    Presentation, PresentationId, ResolumeHost, ResolumeHostDraft, ResolumeHostId, Slide,
+    SlideContent, SlideId, StageState, TimersState,
 };
 use presenter_migration::{Migrator, MigratorTrait};
 use sea_orm::{
     sea_query::{Expr, OnConflict},
     ActiveModelTrait, ColumnTrait, ConnectionTrait, Database, DatabaseConnection, EntityTrait,
-    IntoActiveModel, QueryFilter, QueryOrder, QuerySelect, Schema, Set, TransactionTrait,
+    IntoActiveModel, QueryFilter, QueryOrder, Schema, Set, TransactionTrait,
 };
 use std::fmt::Debug;
 use tracing::instrument;
@@ -43,8 +39,6 @@ const TIMERS_SINGLETON_ID: &str = "timers";
 const STAGE_STATE_SINGLETON_ID: &str = "stage-state";
 const OSC_SETTINGS_SINGLETON_ID: &str = "osc";
 const ABLESET_SETTINGS_SINGLETON_ID: &str = "ableset";
-const BIBLE_INSERT_CHUNK: usize = 500;
-
 #[derive(Debug, Clone)]
 pub struct Repository {
     db: DatabaseConnection,
@@ -345,8 +339,7 @@ impl Repository {
                 metadata_json: Set(slide
                     .metadata
                     .as_ref()
-                    .map(|m| serde_json::to_string(m).ok())
-                    .flatten()),
+                    .and_then(|m| serde_json::to_string(m).ok())),
             };
             slide_entity::Entity::insert(active).exec(&txn).await?;
         }

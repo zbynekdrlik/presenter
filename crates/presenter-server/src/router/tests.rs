@@ -4,7 +4,7 @@ use axum::http::{Request, StatusCode};
 use chrono::{Duration as ChronoDuration, Utc};
 use presenter_core::{
     BiblePassage, BibleReference, BibleTranslation, Library, LibrarySummary, SearchResult,
-    SearchResultKind, Slide, TimerState,
+    SearchResultKind, Slide, TimerState, DEFAULT_STAGE_LAYOUT_CODE,
 };
 use serde::Deserialize;
 use serde_json::json;
@@ -1102,7 +1102,9 @@ async fn stage_displays_endpoint_returns_builtins() {
         .unwrap();
     let payload: Vec<StageDisplayLayout> = serde_json::from_slice(&bytes).unwrap();
     assert_eq!(payload.len(), 4);
-    assert!(payload.iter().any(|layout| layout.code == "worship-snv"));
+    assert!(payload
+        .iter()
+        .any(|layout| layout.code == DEFAULT_STAGE_LAYOUT_CODE));
 
     let response = app
         .clone()
@@ -1181,7 +1183,7 @@ async fn stage_layout_endpoint_reports_and_sets_layout() {
         .await
         .unwrap();
     let mut payload: StageLayoutResponse = serde_json::from_slice(&bytes).unwrap();
-    assert_eq!(payload.code, "worship-snv");
+    assert_eq!(payload.code, DEFAULT_STAGE_LAYOUT_CODE);
 
     let response = app
         .clone()
@@ -1226,7 +1228,7 @@ async fn stage_clear_endpoint_blanks_outputs() {
     assert_eq!(response.status(), StatusCode::NO_CONTENT);
 
     let snapshot = state
-        .stage_display_snapshot("worship-snv")
+        .stage_display_snapshot(DEFAULT_STAGE_LAYOUT_CODE)
         .await
         .unwrap()
         .expect("snapshot");

@@ -2,8 +2,8 @@ use super::stage::{format_countdown_text, sanitize_song_title};
 use super::*;
 use crate::live::LiveEvent;
 use presenter_core::{
-    bible::BibleIngestionBatch, BiblePassage, BibleTranslation, SlideContent, SlideText,
-    TimerCommand, TimerState,
+    bible::BibleIngestionBatch, BiblePassage, BibleReference, BibleTranslation, Library, LibraryId,
+    SlideContent, SlideText, TimerCommand, TimerState,
 };
 
 #[tokio::test]
@@ -78,7 +78,7 @@ async fn clear_stage_emits_blank_snapshot() {
     assert!(saw_stage, "expected stage event after clearing");
 
     let snapshot = state
-        .stage_display_snapshot("worship-snv")
+        .stage_display_snapshot(DEFAULT_STAGE_LAYOUT_CODE)
         .await
         .unwrap()
         .expect("snapshot available");
@@ -162,7 +162,7 @@ async fn stage_snapshot_defaults_to_first_presentation() {
     state.repository().upsert_library(&library).await.unwrap();
 
     let snapshot = state
-        .stage_display_snapshot("worship-snv")
+        .stage_display_snapshot(DEFAULT_STAGE_LAYOUT_CODE)
         .await
         .unwrap()
         .expect("snapshot");

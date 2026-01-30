@@ -5,6 +5,9 @@ use crate::{
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 
+/// Default stage layout code used across the application.
+pub const DEFAULT_STAGE_LAYOUT_CODE: &str = "worship-snv";
+
 /// Built-in stage display layouts exposed by the Presenter server.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -19,7 +22,7 @@ impl StageDisplayLayout {
     pub fn built_in() -> Vec<Self> {
         vec![
             Self::new(
-                "worship-snv",
+                DEFAULT_STAGE_LAYOUT_CODE,
                 "WORSHIP SNV",
                 "Lyrics current/next line with group labels",
             ),
@@ -185,7 +188,7 @@ mod tests {
         let layouts = StageDisplayLayout::built_in();
         assert_eq!(layouts.len(), 4);
         let codes: Vec<_> = layouts.iter().map(|layout| layout.code.as_str()).collect();
-        assert!(codes.contains(&"worship-snv"));
+        assert!(codes.contains(&DEFAULT_STAGE_LAYOUT_CODE));
         assert!(codes.contains(&"worship-pp"));
         assert!(codes.contains(&"timer"));
         assert!(codes.contains(&"preach"));

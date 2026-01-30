@@ -14,7 +14,7 @@ use sea_orm::{
 use std::collections::HashMap;
 use tracing::instrument;
 
-use super::helpers::{parse_uuid, to_domain_slide, RepositoryError};
+use super::util::{parse_uuid, to_domain_slide, RepositoryError};
 use super::Repository;
 
 impl Repository {

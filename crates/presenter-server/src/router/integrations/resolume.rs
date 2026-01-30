@@ -46,15 +46,12 @@ pub(crate) struct ResolumeHostRequest {
     host: String,
     #[serde(default = "default_resolume_port")]
     port: u16,
-    #[serde(default = "default_true")]
+    #[serde(default = "super::default_true")]
     is_enabled: bool,
 }
 
 const fn default_resolume_port() -> u16 {
     8090
-}
-const fn default_true() -> bool {
-    true
 }
 
 #[instrument(skip_all)]

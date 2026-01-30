@@ -16,6 +16,7 @@ use std::sync::Arc;
 
 use super::scripts;
 use super::styles;
+use super::utils::{escape_script_tag, json_safe};
 
 #[derive(Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -747,40 +748,27 @@ pub async fn render_settings_ui(state: &AppState) -> anyhow::Result<Html<String>
         })
         .collect();
 
-    let hosts_json = to_string(&host_rows).unwrap_or_else(|_| "[]".to_string());
-    let hosts_json = hosts_json.replace("</script>", r"<\/script>");
-    let android_json = to_string(&android_rows).unwrap_or_else(|_| "[]".to_string());
-    let android_json = android_json.replace("</script>", r"<\/script>");
+    let hosts_json = escape_script_tag(&to_string(&host_rows).unwrap_or_else(|_| "[]".to_string()));
+    let android_json =
+        escape_script_tag(&to_string(&android_rows).unwrap_or_else(|_| "[]".to_string()));
 
-    let osc_config_json = json!({
+    let osc_config_json = json_safe(&json!({
         "enabled": osc_settings.enabled,
         "listenPort": osc_settings.listen_port,
         "addressPattern": osc_settings.address_pattern,
         "velocityMode": osc_settings.velocity_mode,
-    });
-    let osc_config_json = to_string(&osc_config_json)
-        .unwrap_or_else(|_| "{}".to_string())
-        .replace("</script>", r"<\/script>");
-    let osc_status_json = to_string(&osc_status)
-        .unwrap_or_else(|_| "{}".to_string())
-        .replace("</script>", r"<\/script>");
-    let ableset_config_json = json!({
+    }));
+    let osc_status_json = json_safe(&osc_status);
+    let ableset_config_json = json_safe(&json!({
         "enabled": ableset_settings.enabled,
         "host": ableset_settings.host,
         "httpPort": ableset_settings.http_port,
         "oscPort": ableset_settings.osc_port,
         "libraryName": ableset_settings.library_name,
         "songPrefixLength": ableset_settings.song_prefix_length,
-    });
-    let ableset_config_json = to_string(&ableset_config_json)
-        .unwrap_or_else(|_| "{}".to_string())
-        .replace("</script>", r"<\/script>");
-    let ableset_status_json = to_string(&ableset_status)
-        .unwrap_or_else(|_| "{}".to_string())
-        .replace("</script>", r"<\/script>");
-    let feature_json = to_string(&feature_flags)
-        .unwrap_or_else(|_| "{}".to_string())
-        .replace("</script>", r"<\/script>");
+    }));
+    let ableset_status_json = json_safe(&ableset_status);
+    let feature_json = json_safe(&feature_flags);
 
     let script = scripts::SETTINGS
         .replace("__RESOLUME_HOSTS__", &hosts_json)
