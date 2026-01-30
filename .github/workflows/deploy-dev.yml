@@ -51,7 +51,7 @@ jobs:
 
       - name: Create deploy directory
         run: |
-          ssh deploy-target "sudo mkdir -p ${{ env.DEPLOY_DIR }} && sudo chown ${{ env.DEPLOY_USER }}:${{ env.DEPLOY_USER }} ${{ env.DEPLOY_DIR }}"
+          ssh deploy-target "sudo mkdir -p ${{ env.DEPLOY_DIR }} && sudo chown -R ${{ env.DEPLOY_USER }}:${{ env.DEPLOY_USER }} ${{ env.DEPLOY_DIR }}"
 
       - name: Stop service (if running)
         run: |
