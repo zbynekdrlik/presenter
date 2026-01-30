@@ -209,8 +209,8 @@ Two instances run simultaneously on the self-hosted runner:
 
 | Instance   | URL                     | Port | Service                 | Deploy Dir           | Branch |
 | ---------- | ----------------------- | ---- | ----------------------- | -------------------- | ------ |
-| Production | http://10.77.9.205      | 80   | `presenter.service`     | `/opt/presenter`     | `main` |
-| Dev        | http://10.77.9.205:8080 | 8080 | `presenter-dev.service` | `/opt/presenter-dev` | `dev`  |
+| Production | http://10.77.9.191      | 80   | `presenter.service`     | `/opt/presenter`     | `main` |
+| Dev        | http://10.77.9.191:8080 | 8080 | `presenter-dev.service` | `/opt/presenter-dev` | `dev`  |
 
 ```bash
 # Check both services
@@ -425,13 +425,13 @@ cargo clippy -- -D warnings    # Must pass
 
 The user accesses the server from another machine on the same network. **Always provide LAN IP URLs, never localhost.**
 
-**LAN IP:** `10.77.9.205` (default route interface)
+**LAN IP:** `10.77.9.191` (default route interface)
 
 When providing URLs, use:
 
-- http://10.77.9.205/ui/operator (Production)
-- http://10.77.9.205:8080/ui/operator (Dev)
-- http://10.77.9.205/stage (Production stage)
-- http://10.77.9.205:8080/stage (Dev stage)
+- http://10.77.9.191/ui/operator (Production)
+- http://10.77.9.191:8080/ui/operator (Dev)
+- http://10.77.9.191/stage (Production stage)
+- http://10.77.9.191:8080/stage (Dev stage)
 
 **Never use localhost** — always use the LAN IP.
