@@ -13,6 +13,7 @@ env:
   CARGO_TERM_COLOR: always
   DEPLOY_DIR: /opt/presenter
   SERVICE_NAME: presenter
+  PRESENTER_LIBRARY_ROOT: /home/newlevel/devel/presenter/presenter-libraries
 
 jobs:
   deploy:
@@ -29,17 +30,13 @@ jobs:
         with:
           shared-key: release
 
-      - name: Build release binary
-        run: cargo build --release -p presenter-server
+      - name: Build release binaries
+        run: cargo build --release -p presenter-server -p presenter-importer
 
       - name: Create deploy directory
         run: |
           sudo mkdir -p ${{ env.DEPLOY_DIR }}
           sudo chown newlevel:newlevel ${{ env.DEPLOY_DIR }}
-          # Initialize database if it doesn't exist
-          if [ ! -f ${{ env.DEPLOY_DIR }}/presenter.db ]; then
-            touch ${{ env.DEPLOY_DIR }}/presenter.db
-          fi
 
       - name: Stop service (if running)
         run: |
@@ -50,10 +47,28 @@ jobs:
             echo "Service not running"
           fi
 
-      - name: Deploy binary
+      - name: Deploy binaries
         run: |
           sudo cp target/release/presenter-server ${{ env.DEPLOY_DIR }}/
+          sudo cp target/release/import_propresenter ${{ env.DEPLOY_DIR }}/
+          sudo cp target/release/ingest_bibles ${{ env.DEPLOY_DIR }}/
           sudo chmod +x ${{ env.DEPLOY_DIR }}/presenter-server
+          sudo chmod +x ${{ env.DEPLOY_DIR }}/import_propresenter
+          sudo chmod +x ${{ env.DEPLOY_DIR }}/ingest_bibles
+
+      - name: Import data (fresh database)
+        run: |
+          echo "Resetting database..."
+          rm -f ${{ env.DEPLOY_DIR }}/presenter.db ${{ env.DEPLOY_DIR }}/presenter.db-shm ${{ env.DEPLOY_DIR }}/presenter.db-wal
+          touch ${{ env.DEPLOY_DIR }}/presenter.db
+
+          echo "Importing ProPresenter libraries..."
+          PRESENTER_DB_URL=sqlite://${{ env.DEPLOY_DIR }}/presenter.db \
+            ${{ env.DEPLOY_DIR }}/import_propresenter --root "${{ env.PRESENTER_LIBRARY_ROOT }}"
+
+          echo "Importing Bible translations..."
+          PRESENTER_DB_URL=sqlite://${{ env.DEPLOY_DIR }}/presenter.db \
+            ${{ env.DEPLOY_DIR }}/ingest_bibles
 
       - name: Deploy systemd service
         run: |
@@ -69,10 +84,10 @@ jobs:
         run: |
           sleep 5
           if systemctl is-active --quiet ${{ env.SERVICE_NAME }}; then
-            echo "✓ Service is running"
+            echo "Service is running"
             curl -sf http://localhost:80/healthz || echo "Warning: healthz check failed"
           else
-            echo "✗ Service failed to start"
+            echo "Service failed to start"
             sudo journalctl -u ${{ env.SERVICE_NAME }} -n 50 --no-pager
             exit 1
           fi
@@ -80,7 +95,7 @@ jobs:
       - name: Show deployment info
         run: |
           echo "=== Deployment Complete ==="
-          echo "Version: $(cat Cargo.toml | grep -m1 '^version' | cut -d'"' -f2)"
+          echo "Version: $(grep -m1 '^version' Cargo.toml | cut -d'"' -f2)"
           echo "Binary: ${{ env.DEPLOY_DIR }}/presenter-server"
           echo "Service: ${{ env.SERVICE_NAME }}"
           systemctl status ${{ env.SERVICE_NAME }} --no-pager || true
