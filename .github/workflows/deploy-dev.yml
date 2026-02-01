@@ -27,10 +27,14 @@ jobs:
       - name: Install Rust toolchain
         uses: dtolnay/rust-toolchain@stable
 
+      - name: Clean stale build artifacts
+        run: rm -rf target
+
       - name: Setup Rust cache
         uses: Swatinem/rust-cache@v2
         with:
           shared-key: release-dev
+          cache-on-failure: false
 
       - name: Build release binaries
         run: cargo build --release -p presenter-server -p presenter-importer

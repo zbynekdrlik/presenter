@@ -18,11 +18,39 @@ env:
 
 jobs:
   # ============================================
+  # Version Check (gate - fails fast before any builds)
+  # ============================================
+  version-check:
+    name: Version Check
+    runs-on: self-hosted
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Extract and validate version
+        run: |
+          VERSION=$(grep -m1 '^version = ' Cargo.toml | sed 's/version = "\(.*\)"/\1/')
+          echo "Version: $VERSION"
+          BRANCH="${GITHUB_REF#refs/heads/}"
+          if [[ "$GITHUB_REF" == refs/heads/dev ]]; then
+            if [[ ! "$VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+-dev\.[0-9]+$ ]]; then
+              echo "::error::Dev branch version must match X.Y.Z-dev.N (got: $VERSION)"
+              exit 1
+            fi
+          elif [[ "$GITHUB_REF" == refs/heads/main ]]; then
+            if [[ ! "$VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+              echo "::error::Main branch version must be clean X.Y.Z (got: $VERSION)"
+              exit 1
+            fi
+          fi
+          echo "Version $VERSION is valid for $BRANCH"
+
+  # ============================================
   # Format Check (fast, runs first)
   # ============================================
   fmt:
     name: Format
     runs-on: self-hosted
+    needs: version-check
     steps:
       - uses: actions/checkout@v4
 
@@ -49,10 +77,25 @@ jobs:
         with:
           components: clippy
 
+      - name: Clean stale build artifacts
+        run: rm -rf target
+
       - name: Setup Rust cache
         uses: Swatinem/rust-cache@v2
         with:
           shared-key: clippy
+          cache-on-failure: false
+
+      - name: Validate restored cache
+        run: |
+          if [ -d target ] && find target -name '*.d' -print -quit 2>/dev/null | grep -q .; then
+            sample=$(find target -name '*.d' -print -quit)
+            dep=$(head -1 "$sample" 2>/dev/null | tr -d ':')
+            if [ -n "$dep" ] && [ ! -e "$dep" ]; then
+              echo "::warning::Stale cache detected, cleaning target"
+              rm -rf target
+            fi
+          fi
 
       - name: Run Clippy
         run: cargo clippy --workspace --all-targets -- -W clippy::all
@@ -84,10 +127,25 @@ jobs:
         with:
           toolchain: ${{ matrix.toolchain }}
 
+      - name: Clean stale build artifacts
+        run: rm -rf target
+
       - name: Setup Rust cache
         uses: Swatinem/rust-cache@v2
         with:
           shared-key: test-${{ matrix.toolchain }}
+          cache-on-failure: false
+
+      - name: Validate restored cache
+        run: |
+          if [ -d target ] && find target -name '*.d' -print -quit 2>/dev/null | grep -q .; then
+            sample=$(find target -name '*.d' -print -quit)
+            dep=$(head -1 "$sample" 2>/dev/null | tr -d ':')
+            if [ -n "$dep" ] && [ ! -e "$dep" ]; then
+              echo "::warning::Stale cache detected, cleaning target"
+              rm -rf target
+            fi
+          fi
 
       - name: Build workspace
         run: cargo build --workspace --all-features
@@ -115,8 +173,14 @@ jobs:
       - name: Install Rust toolchain
         uses: dtolnay/rust-toolchain@stable
 
+      - name: Clean stale build artifacts
+        run: rm -rf target
+
       - name: Setup Rust cache
         uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: quality
+          cache-on-failure: false
 
       - name: Install required tools
         run: |
@@ -132,6 +196,7 @@ jobs:
   companion-tests:
     name: Companion Tests
     runs-on: self-hosted
+    needs: version-check
     steps:
       - uses: actions/checkout@v4
 
@@ -163,8 +228,14 @@ jobs:
         with:
           components: llvm-tools-preview
 
+      - name: Clean stale build artifacts
+        run: rm -rf target
+
       - name: Setup Rust cache
         uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: coverage
+          cache-on-failure: false
 
       - name: Install cargo-llvm-cov
         run: |
