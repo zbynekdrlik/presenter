@@ -44,6 +44,14 @@ Code → Commit → Push to dev → Monitor CI → Fix failures → Repeat until
 
 **Never ask "should I commit?" or "should I push?" - just do it.**
 
+### Deliverables (ALWAYS provide at end of task)
+
+When a task is complete, **always** provide these links:
+
+- **Dev environment:** http://10.77.9.191:8080/ui/operator (verify healthy)
+- **PR to main:** GitHub PR URL (must be green and mergeable)
+- **Production environment:** http://10.77.9.191/ui/operator (verify healthy)
+
 ---
 
 ## Git Rules
