@@ -1,35 +1,15 @@
 name: Release
 
 on:
-  push:
-    branches: [main]
+  release:
+    types: [published]
 
 permissions:
   contents: write
-  pull-requests: write
 
 jobs:
-  release-please:
-    name: Release Please
-    runs-on: self-hosted
-    outputs:
-      release_created: ${{ steps.release.outputs.release_created }}
-      tag_name: ${{ steps.release.outputs.tag_name }}
-      version: ${{ steps.release.outputs.version }}
-    steps:
-      - uses: googleapis/release-please-action@v4
-        id: release
-        with:
-          config-file: release-please-config.json
-          manifest-file: .release-please-manifest.json
-
-  # ============================================
-  # Build Release Artifacts
-  # ============================================
   build-release:
     name: Build Release
-    needs: release-please
-    if: needs.release-please.outputs.release_created
     runs-on: self-hosted
     steps:
       - uses: actions/checkout@v4
@@ -46,10 +26,10 @@ jobs:
           cp target/release/presenter-server release/
           cp target/release/import_propresenter release/ || true
           cp target/release/ingest_bibles release/ || true
-          tar -czvf presenter-${{ needs.release-please.outputs.version }}-linux-x64.tar.gz -C release .
+          tar -czvf presenter-${{ github.event.release.tag_name }}-linux-x64.tar.gz -C release .
 
       - name: Upload release artifact
         uses: softprops/action-gh-release@v2
         with:
-          tag_name: ${{ needs.release-please.outputs.tag_name }}
-          files: presenter-${{ needs.release-please.outputs.version }}-linux-x64.tar.gz
+          tag_name: ${{ github.event.release.tag_name }}
+          files: presenter-${{ github.event.release.tag_name }}-linux-x64.tar.gz

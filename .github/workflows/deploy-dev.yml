@@ -1,25 +1,25 @@
-name: Deploy
+name: Deploy Dev
 
 on:
   push:
-    branches: [main]
+    branches: [dev]
   workflow_dispatch:
 
 concurrency:
-  group: deploy
+  group: deploy-dev
   cancel-in-progress: false
 
 env:
   CARGO_TERM_COLOR: always
-  DEPLOY_DIR: /opt/presenter
-  SERVICE_NAME: presenter
+  DEPLOY_DIR: /opt/presenter-dev
+  SERVICE_NAME: presenter-dev
   DEPLOY_HOST: 10.77.9.191
   DEPLOY_USER: newlevel
   PRESENTER_LIBRARY_ROOT: /home/newlevel/devel/presenter/presenter-libraries
 
 jobs:
   deploy:
-    name: Deploy to Production
+    name: Deploy to Dev
     runs-on: self-hosted
     steps:
       - uses: actions/checkout@v4
@@ -30,7 +30,7 @@ jobs:
       - name: Setup Rust cache
         uses: Swatinem/rust-cache@v2
         with:
-          shared-key: release
+          shared-key: release-dev
 
       - name: Build release binaries
         run: cargo build --release -p presenter-server -p presenter-importer
@@ -71,22 +71,22 @@ jobs:
           ssh deploy-target << 'REMOTE_SCRIPT'
           set -e
           echo "Resetting database..."
-          rm -f /opt/presenter/presenter.db /opt/presenter/presenter.db-shm /opt/presenter/presenter.db-wal
-          touch /opt/presenter/presenter.db
+          rm -f /opt/presenter-dev/presenter.db /opt/presenter-dev/presenter.db-shm /opt/presenter-dev/presenter.db-wal
+          touch /opt/presenter-dev/presenter.db
 
           echo "Importing ProPresenter libraries..."
-          PRESENTER_DB_URL=sqlite:///opt/presenter/presenter.db \
-            /opt/presenter/import_propresenter --root "/home/newlevel/devel/presenter/presenter-libraries"
+          PRESENTER_DB_URL=sqlite:///opt/presenter-dev/presenter.db \
+            /opt/presenter-dev/import_propresenter --root "/home/newlevel/devel/presenter/presenter-libraries"
 
           echo "Importing Bible translations..."
-          PRESENTER_DB_URL=sqlite:///opt/presenter/presenter.db \
-            /opt/presenter/ingest_bibles
+          PRESENTER_DB_URL=sqlite:///opt/presenter-dev/presenter.db \
+            /opt/presenter-dev/ingest_bibles
           REMOTE_SCRIPT
 
       - name: Deploy systemd service
         run: |
-          scp -i ~/.ssh/id_deploy scripts/deploy/presenter.service deploy-target:/tmp/presenter.service
-          ssh deploy-target "sudo cp /tmp/presenter.service /etc/systemd/system/ && sudo systemctl daemon-reload"
+          scp -i ~/.ssh/id_deploy scripts/deploy/presenter-dev.service deploy-target:/tmp/presenter-dev.service
+          ssh deploy-target "sudo cp /tmp/presenter-dev.service /etc/systemd/system/ && sudo systemctl daemon-reload"
 
       - name: Start service
         run: |
@@ -96,19 +96,20 @@ jobs:
         run: |
           sleep 5
           ssh deploy-target << 'REMOTE_SCRIPT'
-          if systemctl is-active --quiet presenter; then
+          if systemctl is-active --quiet presenter-dev; then
             echo "Service is running"
-            curl -sf http://localhost:80/healthz || echo "Warning: healthz check failed"
+            curl -sf http://localhost:8080/healthz || echo "Warning: healthz check failed"
           else
             echo "Service failed to start"
-            sudo journalctl -u presenter -n 50 --no-pager
+            sudo journalctl -u presenter-dev -n 50 --no-pager
             exit 1
           fi
           REMOTE_SCRIPT
 
       - name: Show deployment info
         run: |
-          echo "=== Deployment Complete ==="
+          echo "=== Dev Deployment Complete ==="
           echo "Version: $(grep -m1 '^version' Cargo.toml | cut -d'"' -f2)"
           echo "Service: ${{ env.SERVICE_NAME }}"
+          echo "URL: http://10.77.9.191:8080"
           ssh deploy-target "systemctl status ${{ env.SERVICE_NAME }} --no-pager" || true

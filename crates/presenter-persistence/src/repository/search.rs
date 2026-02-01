@@ -7,7 +7,7 @@ use sea_orm::{ColumnTrait, Condition, EntityTrait, QueryFilter, QueryOrder, Quer
 use std::collections::{HashMap, HashSet};
 use tracing::instrument;
 
-use super::helpers::parse_uuid;
+use super::util::parse_uuid;
 use super::Repository;
 
 impl Repository {

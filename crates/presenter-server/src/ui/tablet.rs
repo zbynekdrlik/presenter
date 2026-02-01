@@ -2,13 +2,15 @@ use crate::state::AppState;
 use axum::response::Html;
 use leptos::prelude::*;
 use presenter_core::playlist::PlaylistEntryKind;
+use presenter_core::DEFAULT_STAGE_LAYOUT_CODE;
 use reactive_graph::owner::Owner;
-use serde_json::to_string;
 use std::collections::{HashMap, HashSet};
 
 use super::models::{LibraryRow, PlaylistEntryRow, PlaylistRow, PresentationRow};
 use super::scripts::TABLET as TABLET_SCRIPT_TEMPLATE;
 use super::styles::TABLET as TABLET_STYLES;
+use super::utils::escape_script_tag;
+use serde_json::to_string;
 
 #[component]
 fn TabletDocument(
@@ -16,9 +18,9 @@ fn TabletDocument(
     playlist_json: String,
     stage_json: String,
 ) -> impl IntoView {
-    let library_json_safe = library_json.replace("</script>", r"<\/script>");
-    let playlist_json_safe = playlist_json.replace("</script>", r"<\/script>");
-    let stage_json_safe = stage_json.replace("</script>", r"<\/script>");
+    let library_json_safe = escape_script_tag(&library_json);
+    let playlist_json_safe = escape_script_tag(&playlist_json);
+    let stage_json_safe = escape_script_tag(&stage_json);
     let script = TABLET_SCRIPT_TEMPLATE
         .replace("__LIBRARIES__", &library_json_safe)
         .replace("__PLAYLISTS__", &playlist_json_safe)
@@ -119,7 +121,9 @@ fn TabletDocument(
 pub async fn render_tablet_ui(state: &AppState) -> anyhow::Result<Html<String>> {
     let library_summaries = state.library_summaries(None).await?;
     let playlists = state.playlists().await?;
-    let stage_snapshot = state.stage_display_snapshot("worship-snv").await?;
+    let stage_snapshot = state
+        .stage_display_snapshot(DEFAULT_STAGE_LAYOUT_CODE)
+        .await?;
     let favorite_ids: HashSet<_> = state
         .library_favorites()
         .await?

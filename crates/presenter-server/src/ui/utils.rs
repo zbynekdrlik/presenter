@@ -1,4 +1,18 @@
 use presenter_core::TimerState;
+use serde::Serialize;
+
+/// Serialize a value to JSON and escape `</script>` tags for safe embedding
+/// in HTML `<script>` blocks.
+pub fn json_safe<T: Serialize>(value: &T) -> String {
+    serde_json::to_string(value)
+        .unwrap_or_else(|_| "{}".to_string())
+        .replace("</script>", r"<\/script>")
+}
+
+/// Escape `</script>` tags in a pre-serialized JSON string for safe HTML embedding.
+pub fn escape_script_tag(json: &str) -> String {
+    json.replace("</script>", r"<\/script>")
+}
 
 pub fn format_timer_state(state: TimerState) -> &'static str {
     match state {

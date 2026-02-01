@@ -1,50 +1,145 @@
-use std::{collections::HashMap, sync::Arc};
+//! Library, playlist, and presentation methods for [`AppState`].
 
-use anyhow::{anyhow, Result};
+use super::AppState;
+use presenter_core::playlist::PlaylistEntryKind;
 use presenter_core::{
-    LibraryId, Presentation, PresentationId, Slide, SlideContent, SlideGroup, SlideId, SlideText,
+    Library, LibraryId, LibrarySummary, Playlist, PlaylistEntry, PlaylistEntryId, PlaylistId,
+    Presentation, PresentationId, SearchResult,
 };
 
-use super::{blank_slide_content, AppState};
-
 impl AppState {
-    pub(super) async fn presentation_from_cache(
+    // Library methods
+    pub async fn libraries(&self) -> anyhow::Result<Vec<Library>> {
+        self.repository.fetch_libraries().await
+    }
+
+    pub async fn create_library(&self, name: &str) -> anyhow::Result<Library> {
+        self.repository.create_library(name).await
+    }
+
+    pub async fn library_favorites(&self) -> anyhow::Result<Vec<LibraryId>> {
+        self.repository.list_library_favorites().await
+    }
+
+    pub async fn set_library_favorite(
+        &self,
+        library_id: LibraryId,
+        favorite: bool,
+    ) -> anyhow::Result<()> {
+        self.repository
+            .set_library_favorite(library_id, favorite)
+            .await
+    }
+
+    pub async fn rename_library(&self, library_id: LibraryId, name: &str) -> anyhow::Result<()> {
+        self.repository.rename_library(library_id, name).await
+    }
+
+    pub async fn delete_library(&self, library_id: LibraryId) -> anyhow::Result<()> {
+        self.repository.delete_library(library_id).await
+    }
+
+    pub async fn create_presentation(
+        &self,
+        library_id: LibraryId,
+        name: &str,
+    ) -> anyhow::Result<(LibraryId, String, Presentation, Option<LibrarySummary>)> {
+        let (id, lib_name, presentation) = self
+            .repository
+            .create_presentation(library_id, name)
+            .await?;
+        self.cache_presentation_ref(&presentation).await;
+        let summaries = self.repository.list_library_summaries(None).await?;
+        let summary = summaries.into_iter().find(|summary| summary.id == id);
+        Ok((id, lib_name, presentation, summary))
+    }
+
+    pub async fn rename_presentation(
         &self,
         presentation_id: PresentationId,
-    ) -> Result<Arc<Presentation>> {
-        if let Some(cached) = {
-            let guard = self.presentation_cache.read().await;
-            guard.get(&presentation_id).cloned()
-        } {
-            return Ok(cached);
-        }
-        let detail = self
-            .repository
-            .fetch_presentation_detail(presentation_id)
+        name: &str,
+    ) -> anyhow::Result<()> {
+        self.repository
+            .rename_presentation(presentation_id, name)
             .await?;
-        let Some((_, _, presentation)) = detail else {
-            return Err(anyhow!("presentation not found"));
-        };
-        let arc = Arc::new(presentation);
-        let mut guard = self.presentation_cache.write().await;
-        guard.insert(presentation_id, arc.clone());
-        Ok(arc)
+        {
+            let mut guard = self.presentation_cache.write().await;
+            if let Some(entry) = guard.get_mut(&presentation_id) {
+                let pres = std::sync::Arc::make_mut(entry);
+                pres.name = name.to_string();
+            }
+        }
+        Ok(())
     }
 
-    pub(super) async fn cache_presentation_ref(&self, presentation: &Presentation) {
-        let mut guard = self.presentation_cache.write().await;
-        guard.insert(presentation.id, Arc::new(presentation.clone()));
+    pub async fn library_summaries(
+        &self,
+        query: Option<&str>,
+    ) -> anyhow::Result<Vec<LibrarySummary>> {
+        self.repository.list_library_summaries(query).await
     }
 
-    pub(super) async fn cache_presentation_value(&self, presentation: Presentation) {
-        let mut guard = self.presentation_cache.write().await;
-        guard.insert(presentation.id, Arc::new(presentation));
+    pub async fn search_presenter(
+        &self,
+        query: &str,
+        limit: u64,
+    ) -> anyhow::Result<Vec<SearchResult>> {
+        self.repository.search_presenter(query, limit).await
     }
 
+    // Playlist methods
+    pub async fn playlists(&self) -> anyhow::Result<Vec<Playlist>> {
+        self.repository.list_playlists().await
+    }
+
+    pub async fn create_playlist(
+        &self,
+        name: &str,
+        show_in_dashboard: bool,
+    ) -> anyhow::Result<Playlist> {
+        self.repository
+            .create_playlist(name, show_in_dashboard)
+            .await
+    }
+
+    pub async fn rename_playlist(&self, playlist_id: PlaylistId, name: &str) -> anyhow::Result<()> {
+        self.repository.rename_playlist(playlist_id, name).await
+    }
+
+    pub async fn set_playlist_favorite(
+        &self,
+        playlist_id: PlaylistId,
+        favorite: bool,
+    ) -> anyhow::Result<()> {
+        self.repository
+            .set_playlist_favorite(playlist_id, favorite)
+            .await
+    }
+
+    pub async fn delete_playlist(&self, playlist_id: PlaylistId) -> anyhow::Result<()> {
+        self.repository.delete_playlist(playlist_id).await
+    }
+
+    pub async fn replace_playlist_entries(
+        &self,
+        playlist_id: PlaylistId,
+        entries: Vec<PlaylistEntry>,
+    ) -> anyhow::Result<Playlist> {
+        self.repository
+            .replace_playlist_entries(playlist_id, &entries)
+            .await?;
+        let playlists = self.repository.list_playlists().await?;
+        playlists
+            .into_iter()
+            .find(|playlist| playlist.id == playlist_id)
+            .ok_or_else(|| anyhow::anyhow!("playlist not found after update"))
+    }
+
+    // Presentation detail and cache
     pub async fn presentation_detail(
         &self,
         presentation_id: PresentationId,
-    ) -> Result<Option<(LibraryId, String, Presentation)>> {
+    ) -> anyhow::Result<Option<(LibraryId, String, Presentation)>> {
         let detail = self
             .repository
             .fetch_presentation_detail(presentation_id)
@@ -57,183 +152,41 @@ impl AppState {
         }
     }
 
-    pub async fn update_slide_content(
-        &self,
-        presentation_id: PresentationId,
-        slide_id: SlideId,
-        main: String,
-        translation: String,
-        stage: String,
-        group: Option<String>,
-    ) -> Result<Slide> {
-        let presentation_arc = self.presentation_from_cache(presentation_id).await?;
-        let presentation = presentation_arc.as_ref();
+    // Demo/seed data
+    pub(super) async fn ensure_demo_playlist(&self) -> anyhow::Result<()> {
+        if !self.repository.list_playlists().await?.is_empty() {
+            return Ok(());
+        }
 
-        let existing_slide = presentation
-            .slides
+        let libraries = self.repository.fetch_libraries().await?;
+        let Some(library) = libraries.first() else {
+            return Ok(());
+        };
+
+        let entries: Vec<PlaylistEntry> = library
+            .presentations
             .iter()
-            .find(|slide| slide.id == slide_id)
-            .ok_or_else(|| anyhow!("slide not found"))?
-            .clone();
+            .take(5)
+            .map(|presentation| PlaylistEntry {
+                id: PlaylistEntryId::new(),
+                kind: PlaylistEntryKind::Presentation {
+                    presentation_id: presentation.id,
+                    midi_binding: None,
+                },
+            })
+            .collect();
 
-        let main_text = SlideText::new(main).map_err(|err| anyhow!(err))?;
-        let translation_text = SlideText::new(translation).map_err(|err| anyhow!(err))?;
-        let stage_text = SlideText::new(stage).map_err(|err| anyhow!(err))?;
-        let group = group.and_then(|value| {
-            let trimmed = value.trim();
-            if trimmed.is_empty() {
-                None
-            } else {
-                Some(SlideGroup::new(trimmed.to_string()))
-            }
-        });
+        if entries.is_empty() {
+            return Ok(());
+        }
 
-        let content = SlideContent::new(
-            main_text.clone(),
-            translation_text.clone(),
-            stage_text.clone(),
-            group.clone(),
-        );
-        let updated_slide = Slide::new(existing_slide.order, content.clone()).with_id(slide_id);
-
+        let playlist = self
+            .repository
+            .create_playlist("Ableton Demo", true)
+            .await?;
         self.repository
-            .update_slide_content(presentation_id, slide_id, &content)
+            .replace_playlist_entries(playlist.id, &entries)
             .await?;
-
-        let mut updated_presentation = presentation.clone();
-        if let Some(slot) = updated_presentation
-            .slides
-            .iter_mut()
-            .find(|slide| slide.id == slide_id)
-        {
-            *slot = updated_slide.clone();
-        }
-        self.cache_presentation_value(updated_presentation).await;
-
-        self.broadcast_stage_snapshots().await?;
-
-        Ok(updated_slide)
-    }
-
-    pub async fn insert_blank_slide(
-        &self,
-        presentation_id: PresentationId,
-        position: Option<u32>,
-    ) -> Result<Vec<Slide>> {
-        let presentation_arc = self.presentation_from_cache(presentation_id).await?;
-        let presentation = presentation_arc.as_ref();
-        let mut slides = presentation.slides.clone();
-        let insert_at = position
-            .map(|value| value as usize)
-            .unwrap_or(slides.len())
-            .min(slides.len());
-        slides.insert(insert_at, Slide::new(0, blank_slide_content()));
-        Self::reindex_slides(&mut slides);
-        self.repository
-            .replace_presentation_slides(presentation_id, &slides)
-            .await?;
-        self.reconcile_stage_state_after_edit(presentation_id, &slides)
-            .await?;
-        let mut updated_presentation = presentation.clone();
-        updated_presentation.slides = slides.clone();
-        self.cache_presentation_value(updated_presentation).await;
-        self.broadcast_stage_snapshots().await?;
-        Ok(slides)
-    }
-
-    pub async fn duplicate_slide(
-        &self,
-        presentation_id: PresentationId,
-        slide_id: SlideId,
-    ) -> Result<Vec<Slide>> {
-        let presentation_arc = self.presentation_from_cache(presentation_id).await?;
-        let presentation = presentation_arc.as_ref();
-        let mut slides = presentation.slides.clone();
-        let index = slides
-            .iter()
-            .position(|slide| slide.id == slide_id)
-            .ok_or_else(|| anyhow!("slide not found"))?;
-        let source = slides[index].clone();
-        slides.insert(index + 1, Slide::new(0, source.content.clone()));
-        Self::reindex_slides(&mut slides);
-        self.repository
-            .replace_presentation_slides(presentation_id, &slides)
-            .await?;
-        self.reconcile_stage_state_after_edit(presentation_id, &slides)
-            .await?;
-        let mut updated_presentation = presentation.clone();
-        updated_presentation.slides = slides.clone();
-        self.cache_presentation_value(updated_presentation).await;
-        self.broadcast_stage_snapshots().await?;
-        Ok(slides)
-    }
-
-    pub async fn delete_slide(
-        &self,
-        presentation_id: PresentationId,
-        slide_id: SlideId,
-    ) -> Result<Vec<Slide>> {
-        let presentation_arc = self.presentation_from_cache(presentation_id).await?;
-        let presentation = presentation_arc.as_ref();
-        let mut slides = presentation.slides.clone();
-        let index = slides
-            .iter()
-            .position(|slide| slide.id == slide_id)
-            .ok_or_else(|| anyhow!("slide not found"))?;
-        slides.remove(index);
-        if slides.is_empty() {
-            slides.push(Slide::new(0, blank_slide_content()));
-        }
-        Self::reindex_slides(&mut slides);
-        self.repository
-            .replace_presentation_slides(presentation_id, &slides)
-            .await?;
-        self.reconcile_stage_state_after_edit(presentation_id, &slides)
-            .await?;
-        let mut updated_presentation = presentation.clone();
-        updated_presentation.slides = slides.clone();
-        self.cache_presentation_value(updated_presentation).await;
-        self.broadcast_stage_snapshots().await?;
-        Ok(slides)
-    }
-
-    pub async fn reorder_slides(
-        &self,
-        presentation_id: PresentationId,
-        order: Vec<SlideId>,
-    ) -> Result<Vec<Slide>> {
-        let presentation_arc = self.presentation_from_cache(presentation_id).await?;
-        let presentation = presentation_arc.as_ref();
-        let mut map = HashMap::new();
-        for slide in presentation.slides.clone() {
-            map.insert(slide.id, slide);
-        }
-        if order.len() != map.len() {
-            return Err(anyhow!("slide order length mismatch"));
-        }
-        let mut slides = Vec::with_capacity(order.len());
-        for id in order {
-            let slide = map
-                .remove(&id)
-                .ok_or_else(|| anyhow!("unknown slide in reorder request"))?;
-            slides.push(slide);
-        }
-        Self::reindex_slides(&mut slides);
-        self.repository
-            .replace_presentation_slides(presentation_id, &slides)
-            .await?;
-        self.reconcile_stage_state_after_edit(presentation_id, &slides)
-            .await?;
-        let mut updated_presentation = presentation.clone();
-        updated_presentation.slides = slides.clone();
-        self.cache_presentation_value(updated_presentation).await;
-        self.broadcast_stage_snapshots().await?;
-        Ok(slides)
-    }
-
-    pub(super) fn reindex_slides(slides: &mut Vec<Slide>) {
-        for (index, slide) in slides.iter_mut().enumerate() {
-            slide.order = index as u32;
-        }
+        Ok(())
     }
 }

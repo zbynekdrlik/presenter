@@ -3,14 +3,14 @@ use axum::response::Html;
 use leptos::prelude::*;
 use presenter_core::{playlist::PlaylistEntryKind, TimersOverview};
 use reactive_graph::owner::Owner;
-use serde_json::to_string;
 use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 
 use super::models::{LibraryRow, PlaylistEntryRow, PlaylistRow, PresentationRow};
 use super::scripts::OPERATOR as OPERATOR_SCRIPT_TEMPLATE;
 use super::styles::OPERATOR as OPERATOR_STYLES;
-use super::utils::{format_seconds, format_timer_state};
+use super::utils::{escape_script_tag, format_seconds, format_timer_state, json_safe};
+use serde_json::to_string;
 
 #[component]
 pub fn OperatorDocument(
@@ -42,17 +42,14 @@ pub fn OperatorDocument(
         "Follow OFF"
     }
     .to_string();
-    let libraries_json = libraries_json.replace("</script>", r"<\/script>");
-    let playlists_json = playlists_json.replace("</script>", r"<\/script>");
-    let timers_json = to_string(&*timers).unwrap_or_else(|_| "{}".to_string());
-    let timers_json = timers_json.replace("</script>", r"<\/script>");
-    let stage_layouts_json = stage_layouts_json.replace("</script>", r"<\/script>");
+    let libraries_json = escape_script_tag(&libraries_json);
+    let playlists_json = escape_script_tag(&playlists_json);
+    let timers_json = json_safe(&*timers);
+    let stage_layouts_json = escape_script_tag(&stage_layouts_json);
 
     let stage_layout_code_safe = stage_layout_code.replace('"', "\\\"");
 
-    let ableset_status_json = to_string(&ableset_status)
-        .unwrap_or_else(|_| "{}".to_string())
-        .replace("</script>", r"<\/script>");
+    let ableset_status_json = json_safe(&ableset_status);
 
     let operator_script = OPERATOR_SCRIPT_TEMPLATE
         .replace("__LIBRARIES__", &libraries_json)

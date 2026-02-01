@@ -48,6 +48,39 @@ Code → Commit → Push to dev → Monitor CI → Fix failures → Repeat until
 
 ## Git Rules
 
+### Branch Policy (STRICT)
+
+**Only two branches exist:** `main` and `dev`. No exceptions.
+
+- `dev` - All development happens here
+- `main` - Production releases only (merged from dev by human)
+
+**Before starting any work**, verify no stale branches exist:
+
+```bash
+git fetch --prune && git branch -r | grep -v -E '(main|dev|HEAD)'
+```
+
+If any branches exist, delete them first: `git push origin --delete <branch>`
+
+### PR Policy (STRICT)
+
+**Only ONE pull request at a time.** No exceptions.
+
+- Before creating a new PR, close any existing open PRs
+- Dependabot PRs must be closed and handled manually via dev branch
+- The only PRs are `dev → main` for releases
+
+**Check before any PR work:**
+
+```bash
+gh pr list --state open
+```
+
+If any PRs exist (other than the one you're working on), close them first.
+
+### Core Rules
+
 - **Always push to `dev` branch** - Never to main/master
 - **Commit frequently** - Small commits, push often
 - **CI validates everything** - Trust the pipeline
@@ -102,28 +135,57 @@ See `docs/architecture.md` for full versioning and release strategy.
 
 ## GitHub Actions (Primary CI/CD)
 
-### Self-Hosted Runner
+### Self-Hosted Runners
 
-This project uses a **local self-hosted runner** to save GitHub Actions costs.
+This project uses **3 Docker-based self-hosted runners** on a remote machine to save GitHub Actions costs.
 
-**Runner location:** This machine
+**Runner host:** `10.77.8.189`
+**Runner names:** `presenter-runner-1`, `presenter-runner-2`, `presenter-runner-3`
 **Runner label:** `self-hosted`
+**Config location:** `~/presenter-runners/` on 10.77.8.189
 
-All workflows run on the local runner, providing:
+All workflows run on the Docker runners, providing:
 
-- Faster builds (local caching)
+- Faster builds (local caching, shared cargo volumes)
 - No GitHub minutes consumed
-- Full access to local resources
+- 3 parallel runners for concurrent workflow execution
+- Reproducible environment (Docker image with Rust, Node.js, Playwright, Docker CLI)
+
+**Deploy workflows** use SSH to deploy binaries from runners back to the application host (`10.77.9.191`).
+
+#### Runner Management
+
+```bash
+# SSH to runner host
+ssh 10.77.8.189
+
+# Check runner status
+cd ~/presenter-runners && docker compose ps
+
+# View runner logs
+docker compose logs -f presenter-runner-1
+
+# Restart all runners (requires fresh registration token)
+gh api -X POST repos/zbynekdrlik/presenter/actions/runners/registration-token --jq '.token'
+# Update .env with new RUNNER_TOKEN, then:
+docker compose down --timeout 5 && docker compose up -d
+
+# Rebuild image after Dockerfile changes
+docker build -t presenter-runner:latest .
+docker compose down --timeout 5 && docker compose up -d
+```
 
 ### Workflows
 
-| Workflow            | Trigger                   | Purpose                           |
-| ------------------- | ------------------------- | --------------------------------- |
-| `ci.yml`            | Push to `dev`/`main`, PRs | Format, lint, test, quality       |
-| `e2e.yml`           | Push to `dev`/`main`, PRs | Playwright E2E tests              |
-| `version-check.yml` | Push to `dev`/`main`, PRs | Validate version format           |
-| `security.yml`      | Weekly + manual           | Vulnerability scanning            |
-| `release.yml`       | Push to `main`            | release-please, artifacts, Docker |
+| Workflow            | Trigger                   | Purpose                                         |
+| ------------------- | ------------------------- | ----------------------------------------------- |
+| `ci.yml`            | Push to `dev`/`main`, PRs | Format, lint, test, quality                     |
+| `e2e.yml`           | Push to `dev`/`main`, PRs | Playwright E2E tests                            |
+| `version-check.yml` | Push to `dev`/`main`, PRs | Validate version format                         |
+| `security.yml`      | Weekly + manual           | Vulnerability scanning                          |
+| `deploy-dev.yml`    | Push to `dev`             | Deploy dev binary via SSH to /opt/presenter-dev |
+| `deploy.yml`        | Push to `main`            | Deploy prod binary via SSH to /opt/presenter    |
+| `release.yml`       | GitHub Release published  | Build and upload release artifacts              |
 
 ### Monitoring CI
 
@@ -167,6 +229,26 @@ PRESENTER_PORT=8080 cargo run -p presenter-server
 # Release build (what CI produces)
 cargo build --release -p presenter-server
 ./target/release/presenter-server
+```
+
+### Deployed Instances
+
+Two instances run simultaneously on the self-hosted runner:
+
+| Instance   | URL                     | Port | Service                 | Deploy Dir           | Branch |
+| ---------- | ----------------------- | ---- | ----------------------- | -------------------- | ------ |
+| Production | http://10.77.9.191      | 80   | `presenter.service`     | `/opt/presenter`     | `main` |
+| Dev        | http://10.77.9.191:8080 | 8080 | `presenter-dev.service` | `/opt/presenter-dev` | `dev`  |
+
+```bash
+# Check both services
+systemctl status presenter presenter-dev
+
+# View dev logs
+sudo journalctl -u presenter-dev -f
+
+# Restart dev only
+sudo systemctl restart presenter-dev
 ```
 
 ---
@@ -371,10 +453,13 @@ cargo clippy -- -D warnings    # Must pass
 
 The user accesses the server from another machine on the same network. **Always provide LAN IP URLs, never localhost.**
 
-**LAN IP:** `10.77.9.205` (default route interface)
+**LAN IP:** `10.77.9.191` (default route interface)
 
 When providing URLs, use:
 
-- http://10.77.9.205/ui/operator (NOT http://localhost/ui/operator)
-- http://10.77.9.205/stage (NOT http://localhost/stage)
-- http://10.77.9.205/healthz (NOT http://localhost/healthz)
+- http://10.77.9.191/ui/operator (Production)
+- http://10.77.9.191:8080/ui/operator (Dev)
+- http://10.77.9.191/stage (Production stage)
+- http://10.77.9.191:8080/stage (Dev stage)
+
+**Never use localhost** — always use the LAN IP.

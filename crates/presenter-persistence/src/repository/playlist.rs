@@ -10,7 +10,7 @@ use std::collections::HashSet;
 use tracing::instrument;
 use uuid::Uuid;
 
-use super::helpers::{parse_uuid, to_domain_playlist, to_domain_playlist_entry, RepositoryError};
+use super::util::{parse_uuid, to_domain_playlist, to_domain_playlist_entry, RepositoryError};
 use super::Repository;
 
 impl Repository {

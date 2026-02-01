@@ -13,8 +13,8 @@ concurrency:
 
 env:
   CARGO_TERM_COLOR: always
-  # Self-hosted runner has test data at a fixed location
-  PRESENTER_LIBRARY_ROOT: /home/newlevel/devel/presenter/presenter-libraries
+  # Docker runners have test data copied into the image
+  PRESENTER_LIBRARY_ROOT: /home/runner/presenter-libraries
 
 jobs:
   playwright:

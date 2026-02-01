@@ -21,7 +21,7 @@ use crate::entities::{
 // Shared error and helpers for repository modules
 
 #[derive(Debug, Error)]
-pub(super) enum RepositoryError {
+pub enum RepositoryError {
     #[error("invalid uuid stored in database: {0}")]
     InvalidUuid(String),
     #[error(transparent)]

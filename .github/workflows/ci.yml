@@ -166,11 +166,11 @@ jobs:
       - name: Setup Rust cache
         uses: Swatinem/rust-cache@v2
 
-      - name: Install cargo-binstall
-        uses: cargo-bins/cargo-binstall@main
-
       - name: Install cargo-llvm-cov
-        run: cargo binstall --no-confirm cargo-llvm-cov
+        run: |
+          if ! command -v cargo-llvm-cov &>/dev/null; then
+            cargo install cargo-llvm-cov --locked
+          fi
 
       - name: Generate coverage report
         run: |

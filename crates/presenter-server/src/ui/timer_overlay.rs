@@ -1,18 +1,15 @@
+use super::styles;
+use super::utils::{format_seconds_compact, json_safe};
 use crate::state::AppState;
 use axum::response::Html;
 use leptos::prelude::*;
 use reactive_graph::owner::Owner;
-use serde_json::to_string;
-
-use super::styles;
-use super::utils::format_seconds_compact;
 
 pub async fn render_timer_overlay(state: &AppState) -> anyhow::Result<Html<String>> {
     let overview = state.timers_overview().await?;
     let initial_seconds = overview.countdown_to_start.seconds_remaining;
     let initial_display = format_seconds_compact(initial_seconds);
-    let timers_json = to_string(&overview).unwrap_or_else(|_| "{}".to_string());
-    let timers_json = timers_json.replace("</script>", r"<\/script>");
+    let timers_json = json_safe(&overview);
 
     let script = format!(
         r"(function() {{

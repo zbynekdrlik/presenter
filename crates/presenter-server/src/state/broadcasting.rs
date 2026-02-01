@@ -1,7 +1,9 @@
 use std::collections::HashMap;
 
 use chrono::Utc;
-use presenter_core::{StageDisplayLayout, StageDisplaySnapshot, StageState};
+use presenter_core::{
+    StageDisplayLayout, StageDisplaySnapshot, StageState, DEFAULT_STAGE_LAYOUT_CODE,
+};
 
 use super::stage::{
     build_stage_snapshot, sanitize_song_title, stage_resolution_from_presentation, StageContext,
@@ -83,7 +85,7 @@ impl AppState {
             .collect::<HashMap<_, _>>();
         let Some(layout) = layouts
             .remove(&code)
-            .or_else(|| layouts.remove("worship-snv"))
+            .or_else(|| layouts.remove(DEFAULT_STAGE_LAYOUT_CODE))
         else {
             return Ok(());
         };

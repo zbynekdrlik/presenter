@@ -164,7 +164,10 @@ pub(super) async fn initialise_variable_state(state: &AppState) -> CompanionVari
         Err(err) => warn!(?err, "failed to load stage layout directory for companion"),
     }
 
-    match state.stage_display_snapshot("worship-snv").await {
+    match state
+        .stage_display_snapshot(DEFAULT_STAGE_LAYOUT_CODE)
+        .await
+    {
         Ok(Some(snapshot)) => {
             variables.apply_stage_snapshot(snapshot);
         }
@@ -346,7 +349,10 @@ pub(super) async fn handle_command(
             .await
         {
             Ok(()) => {
-                let refresh = match state.stage_display_snapshot("worship-snv").await {
+                let refresh = match state
+                    .stage_display_snapshot(DEFAULT_STAGE_LAYOUT_CODE)
+                    .await
+                {
                     Ok(Some(snapshot)) => variables.apply_stage_snapshot(snapshot),
                     Ok(None) => false,
                     Err(err) => {
@@ -365,8 +371,11 @@ pub(super) async fn handle_command(
             Ok(layout) => {
                 let mut refresh = variables.apply_stage_layout(layout.clone());
 
-                if layout.code == "worship-snv" {
-                    match state.stage_display_snapshot("worship-snv").await {
+                if layout.code == DEFAULT_STAGE_LAYOUT_CODE {
+                    match state
+                        .stage_display_snapshot(DEFAULT_STAGE_LAYOUT_CODE)
+                        .await
+                    {
                         Ok(Some(snapshot)) => {
                             if variables.apply_stage_snapshot(snapshot) {
                                 refresh = true;
