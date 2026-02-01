@@ -54,10 +54,13 @@ jobs:
       - name: Install Rust toolchain
         uses: dtolnay/rust-toolchain@stable
 
+      - name: Clean stale build artifacts
+        run: rm -rf target
+
       - name: Setup Rust cache
         uses: Swatinem/rust-cache@v2
         with:
-          shared-key: test-stable
+          shared-key: e2e
 
       - name: Setup Node.js
         uses: actions/setup-node@v4

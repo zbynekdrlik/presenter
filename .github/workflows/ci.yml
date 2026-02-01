@@ -77,6 +77,9 @@ jobs:
         with:
           components: clippy
 
+      - name: Clean stale build artifacts
+        run: rm -rf target
+
       - name: Setup Rust cache
         uses: Swatinem/rust-cache@v2
         with:
@@ -112,6 +115,9 @@ jobs:
         with:
           toolchain: ${{ matrix.toolchain }}
 
+      - name: Clean stale build artifacts
+        run: rm -rf target
+
       - name: Setup Rust cache
         uses: Swatinem/rust-cache@v2
         with:
@@ -143,8 +149,13 @@ jobs:
       - name: Install Rust toolchain
         uses: dtolnay/rust-toolchain@stable
 
+      - name: Clean stale build artifacts
+        run: rm -rf target
+
       - name: Setup Rust cache
         uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: quality
 
       - name: Install required tools
         run: |
@@ -192,8 +203,13 @@ jobs:
         with:
           components: llvm-tools-preview
 
+      - name: Clean stale build artifacts
+        run: rm -rf target
+
       - name: Setup Rust cache
         uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: coverage
 
       - name: Install cargo-llvm-cov
         run: |
