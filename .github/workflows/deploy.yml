@@ -34,7 +34,7 @@ jobs:
         uses: Swatinem/rust-cache@v2
         with:
           shared-key: release
-          save-if: ${{ !cancelled() }}
+          cache-on-failure: false
 
       - name: Build release binaries
         run: cargo build --release -p presenter-server -p presenter-importer

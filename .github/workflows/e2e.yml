@@ -61,7 +61,18 @@ jobs:
         uses: Swatinem/rust-cache@v2
         with:
           shared-key: e2e
-          save-if: ${{ !cancelled() }}
+          cache-on-failure: false
+
+      - name: Validate restored cache
+        run: |
+          if [ -d target ] && find target -name '*.d' -print -quit 2>/dev/null | grep -q .; then
+            sample=$(find target -name '*.d' -print -quit)
+            dep=$(head -1 "$sample" 2>/dev/null | tr -d ':')
+            if [ -n "$dep" ] && [ ! -e "$dep" ]; then
+              echo "::warning::Stale cache detected, cleaning target"
+              rm -rf target
+            fi
+          fi
 
       - name: Setup Node.js
         uses: actions/setup-node@v4

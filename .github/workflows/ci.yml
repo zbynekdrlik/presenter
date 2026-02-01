@@ -84,7 +84,18 @@ jobs:
         uses: Swatinem/rust-cache@v2
         with:
           shared-key: clippy
-          save-if: ${{ !cancelled() }}
+          cache-on-failure: false
+
+      - name: Validate restored cache
+        run: |
+          if [ -d target ] && find target -name '*.d' -print -quit 2>/dev/null | grep -q .; then
+            sample=$(find target -name '*.d' -print -quit)
+            dep=$(head -1 "$sample" 2>/dev/null | tr -d ':')
+            if [ -n "$dep" ] && [ ! -e "$dep" ]; then
+              echo "::warning::Stale cache detected, cleaning target"
+              rm -rf target
+            fi
+          fi
 
       - name: Run Clippy
         run: cargo clippy --workspace --all-targets -- -W clippy::all
@@ -123,7 +134,18 @@ jobs:
         uses: Swatinem/rust-cache@v2
         with:
           shared-key: test-${{ matrix.toolchain }}
-          save-if: ${{ !cancelled() }}
+          cache-on-failure: false
+
+      - name: Validate restored cache
+        run: |
+          if [ -d target ] && find target -name '*.d' -print -quit 2>/dev/null | grep -q .; then
+            sample=$(find target -name '*.d' -print -quit)
+            dep=$(head -1 "$sample" 2>/dev/null | tr -d ':')
+            if [ -n "$dep" ] && [ ! -e "$dep" ]; then
+              echo "::warning::Stale cache detected, cleaning target"
+              rm -rf target
+            fi
+          fi
 
       - name: Build workspace
         run: cargo build --workspace --all-features
@@ -158,7 +180,7 @@ jobs:
         uses: Swatinem/rust-cache@v2
         with:
           shared-key: quality
-          save-if: ${{ !cancelled() }}
+          cache-on-failure: false
 
       - name: Install required tools
         run: |
@@ -213,7 +235,7 @@ jobs:
         uses: Swatinem/rust-cache@v2
         with:
           shared-key: coverage
-          save-if: ${{ !cancelled() }}
+          cache-on-failure: false
 
       - name: Install cargo-llvm-cov
         run: |
