@@ -175,12 +175,19 @@ pub fn build_router(state: AppState) -> Router {
 /// Application version from Cargo.toml
 pub const VERSION: &str = env!("CARGO_PKG_VERSION");
 
+/// Build channel: "dev" (default) or "release" (set via PRESENTER_BUILD_CHANNEL env at compile time)
+pub const BUILD_CHANNEL: &str = match option_env!("PRESENTER_BUILD_CHANNEL") {
+    Some(ch) => ch,
+    None => "dev",
+};
+
 async fn health() -> impl IntoResponse {
     (
         StatusCode::OK,
         Json(serde_json::json!({
             "status": "ok",
-            "version": VERSION
+            "version": VERSION,
+            "channel": BUILD_CHANNEL
         })),
     )
 }
