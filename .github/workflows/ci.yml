@@ -84,6 +84,7 @@ jobs:
         uses: Swatinem/rust-cache@v2
         with:
           shared-key: clippy
+          save-if: ${{ !cancelled() }}
 
       - name: Run Clippy
         run: cargo clippy --workspace --all-targets -- -W clippy::all
@@ -122,6 +123,7 @@ jobs:
         uses: Swatinem/rust-cache@v2
         with:
           shared-key: test-${{ matrix.toolchain }}
+          save-if: ${{ !cancelled() }}
 
       - name: Build workspace
         run: cargo build --workspace --all-features
@@ -156,6 +158,7 @@ jobs:
         uses: Swatinem/rust-cache@v2
         with:
           shared-key: quality
+          save-if: ${{ !cancelled() }}
 
       - name: Install required tools
         run: |
@@ -210,6 +213,7 @@ jobs:
         uses: Swatinem/rust-cache@v2
         with:
           shared-key: coverage
+          save-if: ${{ !cancelled() }}
 
       - name: Install cargo-llvm-cov
         run: |

@@ -61,6 +61,7 @@ jobs:
         uses: Swatinem/rust-cache@v2
         with:
           shared-key: e2e
+          save-if: ${{ !cancelled() }}
 
       - name: Setup Node.js
         uses: actions/setup-node@v4
