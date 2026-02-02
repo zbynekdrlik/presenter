@@ -38,6 +38,8 @@ jobs:
 
       - name: Build release binaries
         run: cargo build --release -p presenter-server -p presenter-importer
+        env:
+          PRESENTER_BUILD_CHANNEL: dev
 
       - name: Setup SSH for deployment
         run: |

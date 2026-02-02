@@ -20,17 +20,14 @@ jobs:
           echo "version=$VERSION" >> $GITHUB_OUTPUT
           echo "Extracted version: $VERSION"
 
-      - name: Validate dev branch version
-        if: github.ref == 'refs/heads/dev'
+      - name: Validate version format
         run: |
           VERSION="${{ steps.version.outputs.version }}"
-          if [[ ! "$VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+-dev\.[0-9]+$ ]]; then
-            echo "::error::Dev branch version must match pattern X.Y.Z-dev.N"
-            echo "Current version: $VERSION"
-            echo "Expected pattern: X.Y.Z-dev.N (e.g., 0.1.0-dev.1)"
+          if [[ ! "$VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+            echo "::error::Version must be clean semver X.Y.Z (got: $VERSION)"
             exit 1
           fi
-          echo "Version $VERSION is valid for dev branch"
+          echo "Version $VERSION is valid semver"
 
       - name: Check version is increasing
         env:
@@ -72,33 +69,12 @@ jobs:
 
           echo "Version $VERSION is greater than latest release $LATEST"
 
-      - name: Validate main branch version
-        if: github.ref == 'refs/heads/main'
-        run: |
-          VERSION="${{ steps.version.outputs.version }}"
-          if [[ ! "$VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
-            echo "::error::Main branch version must be clean semver (no pre-release suffix)"
-            echo "Current version: $VERSION"
-            echo "Expected pattern: X.Y.Z (e.g., 0.1.0)"
-            exit 1
-          fi
-          echo "Version $VERSION is valid for main branch"
-
       - name: Validate PR to main
         if: github.event_name == 'pull_request' && github.base_ref == 'main'
         run: |
-          # PRs to main should come from dev or release-please branches
           SOURCE_BRANCH="${{ github.head_ref }}"
-          if [[ "$SOURCE_BRANCH" != "dev" && ! "$SOURCE_BRANCH" =~ ^release-please ]]; then
-            echo "::warning::PRs to main should typically come from 'dev' branch"
+          if [[ "$SOURCE_BRANCH" != "dev" ]]; then
+            echo "::warning::PRs to main should come from 'dev' branch"
             echo "Source branch: $SOURCE_BRANCH"
           fi
-
-          # Version in PR to main should be clean semver (release-please will handle this)
-          VERSION="${{ steps.version.outputs.version }}"
-          echo "PR version: $VERSION"
-
-          # Allow pre-release versions in PR (release-please will update)
-          if [[ "$VERSION" =~ -dev\. ]]; then
-            echo "::notice::Version has dev suffix - release-please will update this"
-          fi
+          echo "PR version: ${{ steps.version.outputs.version }}"

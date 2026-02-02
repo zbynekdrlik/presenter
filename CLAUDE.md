@@ -124,18 +124,25 @@ If any PRs exist (other than the one you're working on), close them first.
 
 ## Versioning
 
-The project uses **Semantic Versioning** with branch-specific formats:
+The project uses **Semantic Versioning** with a single `X.Y.Z` format on both branches.
 
-| Branch | Version Format | Example       |
-| ------ | -------------- | ------------- |
-| `dev`  | `X.Y.Z-dev.N`  | `0.1.0-dev.1` |
-| `main` | `X.Y.Z`        | `0.1.0`       |
+**Version location:** `Cargo.toml` workspace `[workspace.package].version` (always clean semver `X.Y.Z`)
 
-**Version location:** `Cargo.toml` workspace `[workspace.package].version`
+**Build channel:** Dev vs production is distinguished via a compile-time `PRESENTER_BUILD_CHANNEL` env var (defaults to `"dev"`). Deploy workflows set this to `"dev"` or `"release"`.
 
-**Version display:** Available at `/healthz` endpoint and in UI footer.
+**Version display:**
 
-**CI enforcement:** `version-check.yml` validates version format matches the branch.
+- `/healthz` returns `{"status":"ok","version":"0.1.2","channel":"dev"}`
+- UI footer shows `v0.1.2 (dev)` or `v0.1.2` (release)
+
+**CI enforcement:** `version-check.yml` validates version is valid semver and greater than the latest GitHub release.
+
+**Release lifecycle:**
+
+1. Dev work: version is `X.Y.Z`, push to dev, CI passes, dev deploy shows `vX.Y.Z (dev)`
+2. Release: create PR dev->main, no version change needed, all checks green
+3. Merge: human merges, main deploys, production shows `vX.Y.Z`
+4. Post-release: bump to next version on dev, continue
 
 See `docs/architecture.md` for full versioning and release strategy.
 

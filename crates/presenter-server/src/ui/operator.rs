@@ -1,4 +1,8 @@
-use crate::{ableset::AbleSetStatusSnapshot, router::VERSION, state::AppState};
+use crate::{
+    ableset::AbleSetStatusSnapshot,
+    router::{BUILD_CHANNEL, VERSION},
+    state::AppState,
+};
 use axum::response::Html;
 use leptos::prelude::*;
 use presenter_core::{playlist::PlaylistEntryKind, TimersOverview};
@@ -501,7 +505,10 @@ pub fn OperatorDocument(
                         </div>
                     </div>
                     <script>{operator_script}</script>
-                    <footer class="operator__version">"v"{VERSION}</footer>
+                    <footer class="operator__version">
+                        "v"{VERSION}
+                        {if BUILD_CHANNEL != "release" { format!(" ({})", BUILD_CHANNEL) } else { String::new() }}
+                    </footer>
                 </body>
             </html>
         }

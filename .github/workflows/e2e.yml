@@ -17,36 +17,9 @@ env:
   PRESENTER_LIBRARY_ROOT: /home/runner/presenter-libraries
 
 jobs:
-  # ============================================
-  # Version Check (gate - fails fast before any builds)
-  # ============================================
-  version-check:
-    name: Version Check
-    runs-on: self-hosted
-    steps:
-      - uses: actions/checkout@v4
-
-      - name: Extract and validate version
-        run: |
-          VERSION=$(grep -m1 '^version = ' Cargo.toml | sed 's/version = "\(.*\)"/\1/')
-          echo "Version: $VERSION"
-          if [[ "$GITHUB_REF" == refs/heads/dev ]]; then
-            if [[ ! "$VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+-dev\.[0-9]+$ ]]; then
-              echo "::error::Dev branch version must match X.Y.Z-dev.N (got: $VERSION)"
-              exit 1
-            fi
-          elif [[ "$GITHUB_REF" == refs/heads/main ]]; then
-            if [[ ! "$VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
-              echo "::error::Main branch version must be clean X.Y.Z (got: $VERSION)"
-              exit 1
-            fi
-          fi
-          echo "Version $VERSION is valid"
-
   playwright:
     name: Playwright E2E
     runs-on: self-hosted
-    needs: version-check
     timeout-minutes: 45
     steps:
       - uses: actions/checkout@v4
