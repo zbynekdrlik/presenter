@@ -1,4 +1,4 @@
-'use strict';
+"use strict";
 
 (function () {
   const libraries = __LIBRARIES__;
@@ -13,21 +13,29 @@
   const CATALOG_MIN_HEIGHT = 200;
   const CATALOG_MAX_HEIGHT = 520;
 
-  const storedLineLimit = Number(window.localStorage.getItem('presenter.lineLimit'));
-  const resolvedLineLimit = Number.isFinite(storedLineLimit) && storedLineLimit >= 10
-    ? Math.min(storedLineLimit, 120)
-    : DEFAULT_LINE_LIMIT;
-  const storedCatalogHeight = Number(window.localStorage.getItem('presenter.catalogTopHeight'));
+  const storedLineLimit = Number(
+    window.localStorage.getItem("presenter.lineLimit"),
+  );
+  const resolvedLineLimit =
+    Number.isFinite(storedLineLimit) && storedLineLimit >= 10
+      ? Math.min(storedLineLimit, 120)
+      : DEFAULT_LINE_LIMIT;
+  const storedCatalogHeight = Number(
+    window.localStorage.getItem("presenter.catalogTopHeight"),
+  );
   const resolvedCatalogHeight = Number.isFinite(storedCatalogHeight)
-    ? Math.min(Math.max(Math.round(storedCatalogHeight), CATALOG_MIN_HEIGHT), CATALOG_MAX_HEIGHT)
+    ? Math.min(
+        Math.max(Math.round(storedCatalogHeight), CATALOG_MIN_HEIGHT),
+        CATALOG_MAX_HEIGHT,
+      )
     : DEFAULT_CATALOG_HEIGHT;
 
   const state = {
     libraries: Array.isArray(libraries) ? libraries : [],
     playlists: Array.isArray(playlistsData) ? playlistsData : [],
     timers: timersOverview || null,
-    view: document.body.dataset.view || 'worship',
-    mode: document.body.dataset.mode || 'live',
+    view: document.body.dataset.view || "worship",
+    mode: document.body.dataset.mode || "live",
     activeLibraryId: null,
     activePlaylistId: null,
     currentPresentationId: null,
@@ -49,12 +57,12 @@
     libraryModalOpen: false,
     libraryEditModalOpen: false,
     libraryBeingEditedId: null,
-    libraryEditMode: 'edit',
+    libraryEditMode: "edit",
     libraryEditSubmitting: false,
     playlistModalOpen: false,
     playlistEditModalOpen: false,
     playlistBeingEditedId: null,
-    playlistEditMode: 'edit',
+    playlistEditMode: "edit",
     playlistEditSubmitting: false,
     playlistEditInitial: null,
     presentationEditModalOpen: false,
@@ -62,7 +70,7 @@
     presentationEditSubmitting: false,
     lineLimit: resolvedLineLimit,
     pendingFocus: null,
-    searchQuery: '',
+    searchQuery: "",
     searchResults: [],
     searchLoading: false,
     searchTimer: null,
@@ -82,7 +90,8 @@
     stageBaseline: new Set(),
     stageMonitorRefreshTimer: null,
     stageLayouts: Array.isArray(stageLayouts) ? stageLayouts : [],
-    stageLayoutCode: typeof stageLayoutCodeSeed === 'string' ? stageLayoutCodeSeed : '',
+    stageLayoutCode:
+      typeof stageLayoutCodeSeed === "string" ? stageLayoutCodeSeed : "",
     stageLayoutLoading: false,
     countdownInputActive: false,
     countdownInputDirty: false,
@@ -93,7 +102,7 @@
     },
   };
 
-  const STAGE_MONITOR_BASELINE_KEY = 'presenter.stageMonitorBaseline';
+  const STAGE_MONITOR_BASELINE_KEY = "presenter.stageMonitorBaseline";
   const STAGE_MONITOR_REFRESH_MS = 60_000;
 
   const els = {
@@ -104,14 +113,24 @@
     catalog: document.querySelector('[data-role="catalog"]'),
     catalogResizer: document.querySelector('[data-role="catalog-resizer"]'),
     contextTitle: document.querySelector('[data-role="context-title"]'),
-    presentationDropzone: document.querySelector('[data-dropzone-target="presentations"]'),
+    presentationDropzone: document.querySelector(
+      '[data-dropzone-target="presentations"]',
+    ),
     presentationList: document.querySelector('[data-role="presentation-list"]'),
-    presentationCount: document.querySelector('[data-role="presentation-count"]'),
-    presentationCreate: document.querySelector('[data-role="presentation-create"]'),
+    presentationCount: document.querySelector(
+      '[data-role="presentation-count"]',
+    ),
+    presentationCreate: document.querySelector(
+      '[data-role="presentation-create"]',
+    ),
     slides: document.querySelector('[data-role="slides"]'),
     stageMonitor: document.querySelector('[data-role="stage-monitor"]'),
-    stageMonitorConnected: document.querySelector('[data-role="stage-monitor-connected"]'),
-    stageMonitorIssues: document.querySelector('[data-role="stage-monitor-issues"]'),
+    stageMonitorConnected: document.querySelector(
+      '[data-role="stage-monitor-connected"]',
+    ),
+    stageMonitorIssues: document.querySelector(
+      '[data-role="stage-monitor-issues"]',
+    ),
     addSlide: document.querySelector('[data-role="add-slide"]'),
     ablesetEnable: document.querySelector('[data-role="ableset-enable"]'),
     ablesetFollow: document.querySelector('[data-role="ableset-follow"]'),
@@ -121,61 +140,132 @@
     toast: document.querySelector('[data-role="toast"]'),
     viewButtons: document.querySelectorAll('[data-role="view-toggle"]'),
     modeButtons: document.querySelectorAll('[data-role="mode-toggle"]'),
-    countdownInput: document.querySelector('[data-role="countdown-target-input"]'),
-    timerOverlayOpen: document.querySelector('[data-role="timer-overlay-open"]'),
-    timerOverlayCopy: document.querySelector('[data-role="timer-overlay-copy"]'),
+    countdownInput: document.querySelector(
+      '[data-role="countdown-target-input"]',
+    ),
+    timerOverlayOpen: document.querySelector(
+      '[data-role="timer-overlay-open"]',
+    ),
+    timerOverlayCopy: document.querySelector(
+      '[data-role="timer-overlay-copy"]',
+    ),
     countdownStart: document.querySelector('[data-role="countdown-start"]'),
-    countdownOffsetMinus: document.querySelector('[data-role="countdown-offset-minus"]'),
-    countdownOffsetPlus: document.querySelector('[data-role="countdown-offset-plus"]'),
-    stageLayoutSelect: document.querySelector('[data-role="stage-layout-select"]'),
+    countdownOffsetMinus: document.querySelector(
+      '[data-role="countdown-offset-minus"]',
+    ),
+    countdownOffsetPlus: document.querySelector(
+      '[data-role="countdown-offset-plus"]',
+    ),
+    stageLayoutSelect: document.querySelector(
+      '[data-role="stage-layout-select"]',
+    ),
     timerCards: document.querySelector('[data-role="timer-cards"]'),
     libraryModal: document.querySelector('[data-role="library-modal"]'),
-    libraryModalList: document.querySelector('[data-role="library-modal-list"]'),
-    libraryModalClose: document.querySelector('[data-role="library-modal-close"]'),
+    libraryModalList: document.querySelector(
+      '[data-role="library-modal-list"]',
+    ),
+    libraryModalClose: document.querySelector(
+      '[data-role="library-modal-close"]',
+    ),
     libraryCount: document.querySelector('[data-role="library-more"]'),
-    libraryEditModal: document.querySelector('[data-role="library-edit-modal"]'),
+    libraryEditModal: document.querySelector(
+      '[data-role="library-edit-modal"]',
+    ),
     libraryEditForm: document.querySelector('[data-role="library-edit-form"]'),
     libraryEditName: document.querySelector('[data-role="library-edit-name"]'),
-    libraryEditFavorite: document.querySelector('[data-role="library-edit-favorite"]'),
-    libraryEditDelete: document.querySelector('[data-role="library-edit-delete"]'),
-    libraryEditCancel: document.querySelector('[data-role="library-edit-cancel"]'),
-    libraryEditTitle: document.querySelector('[data-role="library-edit-title"]'),
+    libraryEditFavorite: document.querySelector(
+      '[data-role="library-edit-favorite"]',
+    ),
+    libraryEditDelete: document.querySelector(
+      '[data-role="library-edit-delete"]',
+    ),
+    libraryEditCancel: document.querySelector(
+      '[data-role="library-edit-cancel"]',
+    ),
+    libraryEditTitle: document.querySelector(
+      '[data-role="library-edit-title"]',
+    ),
     playlistModal: document.querySelector('[data-role="playlist-modal"]'),
-    playlistModalList: document.querySelector('[data-role="playlist-modal-list"]'),
-    playlistModalClose: document.querySelector('[data-role="playlist-modal-close"]'),
+    playlistModalList: document.querySelector(
+      '[data-role="playlist-modal-list"]',
+    ),
+    playlistModalClose: document.querySelector(
+      '[data-role="playlist-modal-close"]',
+    ),
     playlistCount: document.querySelector('[data-role="playlist-more"]'),
-    playlistEditModal: document.querySelector('[data-role="playlist-edit-modal"]'),
-    playlistEditForm: document.querySelector('[data-role="playlist-edit-form"]'),
-    playlistEditName: document.querySelector('[data-role="playlist-edit-name"]'),
-    playlistEditDashboard: document.querySelector('[data-role="playlist-edit-dashboard"]'),
-    playlistEditDelete: document.querySelector('[data-role="playlist-edit-delete"]'),
-    playlistEditCancel: document.querySelector('[data-role="playlist-edit-cancel"]'),
-    playlistEditSave: document.querySelector('[data-role="playlist-edit-save"]'),
-    playlistEditTitle: document.querySelector('[data-role="playlist-edit-title"]'),
-    presentationEditModal: document.querySelector('[data-role="presentation-edit-modal"]'),
-    presentationEditForm: document.querySelector('[data-role="presentation-edit-form"]'),
-    presentationEditName: document.querySelector('[data-role="presentation-edit-name"]'),
-    presentationEditCancel: document.querySelector('[data-role="presentation-edit-cancel"]'),
-    presentationEditSave: document.querySelector('[data-role="presentation-edit-save"]'),
-    presentationEditTitle: document.querySelector('[data-role="presentation-edit-title"]'),
-    presentationEditLabel: document.querySelector('[data-role="presentation-edit-label"]'),
+    playlistEditModal: document.querySelector(
+      '[data-role="playlist-edit-modal"]',
+    ),
+    playlistEditForm: document.querySelector(
+      '[data-role="playlist-edit-form"]',
+    ),
+    playlistEditName: document.querySelector(
+      '[data-role="playlist-edit-name"]',
+    ),
+    playlistEditDashboard: document.querySelector(
+      '[data-role="playlist-edit-dashboard"]',
+    ),
+    playlistEditDelete: document.querySelector(
+      '[data-role="playlist-edit-delete"]',
+    ),
+    playlistEditCancel: document.querySelector(
+      '[data-role="playlist-edit-cancel"]',
+    ),
+    playlistEditSave: document.querySelector(
+      '[data-role="playlist-edit-save"]',
+    ),
+    playlistEditTitle: document.querySelector(
+      '[data-role="playlist-edit-title"]',
+    ),
+    presentationEditModal: document.querySelector(
+      '[data-role="presentation-edit-modal"]',
+    ),
+    presentationEditForm: document.querySelector(
+      '[data-role="presentation-edit-form"]',
+    ),
+    presentationEditName: document.querySelector(
+      '[data-role="presentation-edit-name"]',
+    ),
+    presentationEditCancel: document.querySelector(
+      '[data-role="presentation-edit-cancel"]',
+    ),
+    presentationEditSave: document.querySelector(
+      '[data-role="presentation-edit-save"]',
+    ),
+    presentationEditTitle: document.querySelector(
+      '[data-role="presentation-edit-title"]',
+    ),
+    presentationEditLabel: document.querySelector(
+      '[data-role="presentation-edit-label"]',
+    ),
     searchForm: document.querySelector('[data-role="global-search-form"]'),
     searchInput: document.querySelector('[data-role="global-search-query"]'),
     searchClear: document.querySelector('[data-role="global-search-clear"]'),
-    searchResults: document.querySelector('[data-role="global-search-results"]'),
+    searchResults: document.querySelector(
+      '[data-role="global-search-results"]',
+    ),
   };
 
   function normalizeAbleSetStatus(input) {
-    if (!input || typeof input !== 'object') {
-      return { enabled: false, tracking: false, followEnabled: false, lastSong: null, lastError: null };
+    if (!input || typeof input !== "object") {
+      return {
+        enabled: false,
+        tracking: false,
+        followEnabled: false,
+        lastSong: null,
+        lastError: null,
+      };
     }
     const rawSong = input.lastSong || input.last_song || null;
-    const song = rawSong && typeof rawSong === 'object' ? {
-      name: (rawSong.name || '').toString(),
-      prefix: (rawSong.prefix || '').toString(),
-      index: typeof rawSong.index === 'number' ? rawSong.index : null,
-      lastSeenAt: rawSong.lastSeenAt || rawSong.last_seen_at || null,
-    } : null;
+    const song =
+      rawSong && typeof rawSong === "object"
+        ? {
+            name: (rawSong.name || "").toString(),
+            prefix: (rawSong.prefix || "").toString(),
+            index: typeof rawSong.index === "number" ? rawSong.index : null,
+            lastSeenAt: rawSong.lastSeenAt || rawSong.last_seen_at || null,
+          }
+        : null;
     return {
       enabled: Boolean(input.enabled),
       tracking: Boolean(input.tracking),
@@ -184,7 +274,6 @@
       lastError: input.lastError || input.last_error || null,
     };
   }
-
 
   state.libraries = state.libraries.map((library) => ({
     ...library,
@@ -206,7 +295,7 @@
         }
         presentationIndex.set(presentation.id, {
           id: presentation.id,
-          name: presentation.name || 'Untitled presentation',
+          name: presentation.name || "Untitled presentation",
           libraryId: library.id,
           libraryName: library.name,
         });
@@ -224,18 +313,24 @@
   function updateLineLimitStyle() {
     const target = document.body || document.documentElement;
     if (!target) return;
-    const value = Number.isFinite(state.lineLimit) && state.lineLimit > 0 ? state.lineLimit : DEFAULT_LINE_LIMIT;
-    target.style.setProperty('--operator-line-limit-ch', String(value));
+    const value =
+      Number.isFinite(state.lineLimit) && state.lineLimit > 0
+        ? state.lineLimit
+        : DEFAULT_LINE_LIMIT;
+    target.style.setProperty("--operator-line-limit-ch", String(value));
   }
 
   updateLineLimitStyle();
 
   function stageLayoutByCode(code) {
-    return state.stageLayouts.find((layout) => layout && layout.code === code) || null;
+    return (
+      state.stageLayouts.find((layout) => layout && layout.code === code) ||
+      null
+    );
   }
 
   function applyStageLayoutSelection(code) {
-    if (typeof code !== 'string') {
+    if (typeof code !== "string") {
       return;
     }
     state.stageLayoutCode = code;
@@ -263,11 +358,15 @@
     state.stageLayouts.forEach((layout) => {
       if (!layout || !layout.code) return;
       existing.add(layout.code);
-      if (!Array.from(select.options).some((option) => option.value === layout.code)) {
-        const option = document.createElement('option');
+      if (
+        !Array.from(select.options).some(
+          (option) => option.value === layout.code,
+        )
+      ) {
+        const option = document.createElement("option");
         option.value = layout.code;
         option.textContent = layout.name || layout.code;
-        option.title = layout.description || '';
+        option.title = layout.description || "";
         select.appendChild(option);
       }
     });
@@ -276,11 +375,13 @@
         option.remove();
       }
     });
-    applyStageLayoutSelection(state.stageLayoutCode || (select.options[0]?.value ?? ''));
+    applyStageLayoutSelection(
+      state.stageLayoutCode || (select.options[0]?.value ?? ""),
+    );
   }
 
   async function submitStageLayout(code) {
-    const trimmed = (code || '').trim();
+    const trimmed = (code || "").trim();
     if (!trimmed || state.stageLayoutLoading) {
       return;
     }
@@ -289,16 +390,16 @@
       els.stageLayoutSelect.disabled = true;
     }
     try {
-      const response = await apiFetch('/stage/layout', {
-        method: 'POST',
+      const response = await apiFetch("/stage/layout", {
+        method: "POST",
         body: JSON.stringify({ code: trimmed }),
       });
       if (response && response.code) {
         applyStageLayoutSelection(response.code);
       }
     } catch (error) {
-      console.error('Failed to set stage layout', error);
-      showToast('Failed to switch stage output', 'error');
+      console.error("Failed to set stage layout", error);
+      showToast("Failed to switch stage output", "error");
       applyStageLayoutSelection(state.stageLayoutCode);
     } finally {
       state.stageLayoutLoading = false;
@@ -308,47 +409,48 @@
     }
   }
 
-  const clockFormatter = typeof Intl !== 'undefined' && typeof Intl.DateTimeFormat === 'function'
-    ? new Intl.DateTimeFormat('sk-SK', { hour: '2-digit', minute: '2-digit' })
-    : null;
+  const clockFormatter =
+    typeof Intl !== "undefined" && typeof Intl.DateTimeFormat === "function"
+      ? new Intl.DateTimeFormat("sk-SK", { hour: "2-digit", minute: "2-digit" })
+      : null;
 
   function formatClock(date) {
     if (!(date instanceof Date)) {
-      return '';
+      return "";
     }
     if (Number.isNaN(date.getTime())) {
-      return '';
+      return "";
     }
     if (clockFormatter) {
       return clockFormatter.format(date);
     }
-    const hours = String(date.getHours()).padStart(2, '0');
-    const minutes = String(date.getMinutes()).padStart(2, '0');
+    const hours = String(date.getHours()).padStart(2, "0");
+    const minutes = String(date.getMinutes()).padStart(2, "0");
     return `${hours}:${minutes}`;
   }
 
   function hideSearchResults() {
     if (els.searchResults) {
-      els.searchResults.dataset.visible = 'false';
-      els.searchResults.innerHTML = '';
+      els.searchResults.dataset.visible = "false";
+      els.searchResults.innerHTML = "";
     }
     state.searchOpen = false;
   }
 
   function clearSearchResults() {
-    state.searchQuery = '';
+    state.searchQuery = "";
     state.searchResults = [];
     state.searchLoading = false;
     if (state.searchTimer) {
       clearTimeout(state.searchTimer);
       state.searchTimer = null;
     }
-    if (state.searchAbort && typeof state.searchAbort.cancel === 'function') {
+    if (state.searchAbort && typeof state.searchAbort.cancel === "function") {
       state.searchAbort.cancel();
     }
     state.searchAbort = null;
     if (els.searchInput) {
-      els.searchInput.value = '';
+      els.searchInput.value = "";
     }
     updateSearchClearVisibility();
     hideSearchResults();
@@ -356,53 +458,58 @@
 
   function updateSearchClearVisibility() {
     if (!els.searchClear) return;
-    const hasQuery = Boolean(state.searchQuery && state.searchQuery.trim().length > 0);
+    const hasQuery = Boolean(
+      state.searchQuery && state.searchQuery.trim().length > 0,
+    );
     els.searchClear.hidden = !hasQuery;
   }
 
   function formatMatchField(field) {
-    const value = String(field || '').toLowerCase();
+    const value = String(field || "").toLowerCase();
     switch (value) {
-      case 'maintext':
-      case 'main_text':
-        return 'Main text';
-      case 'translationtext':
-      case 'translation_text':
-        return 'Translation';
-      case 'stagetext':
-      case 'stage_text':
-        return 'Stage';
-      case 'presentationname':
-      case 'presentation_name':
-        return 'Presentation';
-      case 'libraryname':
-      case 'library_name':
-        return 'Library';
+      case "maintext":
+      case "main_text":
+        return "Main text";
+      case "translationtext":
+      case "translation_text":
+        return "Translation";
+      case "stagetext":
+      case "stage_text":
+        return "Stage";
+      case "presentationname":
+      case "presentation_name":
+        return "Presentation";
+      case "libraryname":
+      case "library_name":
+        return "Library";
       default:
-        return value ? value.charAt(0).toUpperCase() + value.slice(1) : '';
+        return value ? value.charAt(0).toUpperCase() + value.slice(1) : "";
     }
   }
 
   function renderSearchResultRow(result) {
-    const kind = String(result.kind || '').toLowerCase();
-    const libraryId = String(result.libraryId || result.library_id || '');
-    const presentationId = String(result.presentationId || result.presentation_id || '');
-    const slideId = String(result.slideId || result.slide_id || '');
-    const libraryName = result.libraryName || result.library_name || '';
-    const presentationName = result.presentationName || result.presentation_name || '';
-    const snippet = result.snippet || '';
-    const field = result.matchField || result.match_field || '';
+    const kind = String(result.kind || "").toLowerCase();
+    const libraryId = String(result.libraryId || result.library_id || "");
+    const presentationId = String(
+      result.presentationId || result.presentation_id || "",
+    );
+    const slideId = String(result.slideId || result.slide_id || "");
+    const libraryName = result.libraryName || result.library_name || "";
+    const presentationName =
+      result.presentationName || result.presentation_name || "";
+    const snippet = result.snippet || "";
+    const field = result.matchField || result.match_field || "";
 
     let title;
-    let meta = '';
-    if (kind === 'library') {
-      title = libraryName || 'Library';
-      meta = '';
-    } else if (kind === 'presentation') {
-      title = presentationName || 'Presentation';
-      meta = libraryName || '';
-    } else if (kind === 'slide') {
-      title = presentationName || 'Slide';
+    let meta = "";
+    if (kind === "library") {
+      title = libraryName || "Library";
+      meta = "";
+    } else if (kind === "presentation") {
+      title = presentationName || "Presentation";
+      meta = libraryName || "";
+    } else if (kind === "slide") {
+      title = presentationName || "Slide";
       const fieldLabel = formatMatchField(field);
       if (libraryName && fieldLabel) {
         meta = `${libraryName} • ${fieldLabel}`;
@@ -412,22 +519,22 @@
         meta = fieldLabel;
       }
     } else {
-      title = presentationName || libraryName || 'Result';
+      title = presentationName || libraryName || "Result";
     }
 
     const metaMarkup = meta
       ? `<span class="operator__search-result-meta">${escapeHtml(meta)}</span>`
-      : '';
+      : "";
     const snippetMarkup = snippet
       ? `<span class="operator__search-result-snippet">${escapeHtml(snippet)}</span>`
-      : '';
+      : "";
 
     const safeKind = escapeHtml(kind);
     const safeLibraryId = escapeHtml(libraryId);
     const safePresentationId = escapeHtml(presentationId);
     const safeSlideId = escapeHtml(slideId);
 
-    const draggable = safePresentationId ? 'true' : 'false';
+    const draggable = safePresentationId ? "true" : "false";
     return `
       <li class="operator__search-result-item" data-role="search-result-item" data-kind="${safeKind}" data-library-id="${safeLibraryId}" data-presentation-id="${safePresentationId}" data-slide-id="${safeSlideId}" draggable="${draggable}">
         <button type="button" data-role="search-result" data-kind="${safeKind}" data-library-id="${safeLibraryId}" data-presentation-id="${safePresentationId}" data-slide-id="${safeSlideId}">
@@ -439,6 +546,15 @@
     `;
   }
 
+  function positionSearchResults() {
+    if (!els.searchResults) return;
+    var header = document.querySelector(".operator__header");
+    if (header) {
+      els.searchResults.style.top =
+        header.getBoundingClientRect().bottom + "px";
+    }
+  }
+
   function renderSearchResults() {
     if (!els.searchResults) return;
     const query = state.searchQuery.trim();
@@ -446,20 +562,23 @@
       hideSearchResults();
       return;
     }
+    positionSearchResults();
 
     if (state.searchLoading) {
       els.searchResults.innerHTML =
         '<section class="operator__search-group"><p class="operator__search-empty">Searching…</p></section>';
-      els.searchResults.dataset.visible = 'true';
+      els.searchResults.dataset.visible = "true";
       state.searchOpen = true;
       return;
     }
 
-    const results = Array.isArray(state.searchResults) ? state.searchResults : [];
+    const results = Array.isArray(state.searchResults)
+      ? state.searchResults
+      : [];
     if (!results.length) {
       els.searchResults.innerHTML =
         '<section class="operator__search-group"><p class="operator__search-empty">No matches found.</p></section>';
-      els.searchResults.dataset.visible = 'true';
+      els.searchResults.dataset.visible = "true";
       state.searchOpen = true;
       return;
     }
@@ -470,7 +589,7 @@
       slide: [],
     };
     results.forEach((item) => {
-      const key = String(item.kind || '').toLowerCase();
+      const key = String(item.kind || "").toLowerCase();
       if (grouped[key]) {
         grouped[key].push(item);
       }
@@ -478,9 +597,9 @@
 
     const sections = [];
     const order = [
-      { key: 'library', label: 'Libraries' },
-      { key: 'presentation', label: 'Presentations' },
-      { key: 'slide', label: 'Slides' },
+      { key: "library", label: "Libraries" },
+      { key: "presentation", label: "Presentations" },
+      { key: "slide", label: "Slides" },
     ];
 
     order.forEach(({ key, label }) => {
@@ -488,14 +607,14 @@
       if (!items || !items.length) {
         return;
       }
-      const rows = items.map((item) => renderSearchResultRow(item)).join('');
+      const rows = items.map((item) => renderSearchResultRow(item)).join("");
       sections.push(
-        `<section class="operator__search-group"><h3>${escapeHtml(label)}</h3><ul class="operator__search-result">${rows}</ul></section>`
+        `<section class="operator__search-group"><h3>${escapeHtml(label)}</h3><ul class="operator__search-result">${rows}</ul></section>`,
       );
     });
 
-    els.searchResults.innerHTML = sections.join('');
-    els.searchResults.dataset.visible = 'true';
+    els.searchResults.innerHTML = sections.join("");
+    els.searchResults.dataset.visible = "true";
     state.searchOpen = true;
   }
 
@@ -523,14 +642,14 @@
       clearSearchResults();
       return;
     }
-    if (state.searchAbort && typeof state.searchAbort.cancel === 'function') {
+    if (state.searchAbort && typeof state.searchAbort.cancel === "function") {
       state.searchAbort.cancel();
     }
     state.searchLoading = true;
     renderSearchResults();
     try {
       const url = `/search?query=${encodeURIComponent(query)}&limit=30`;
-      const request = apiFetch(url, { method: 'GET' });
+      const request = apiFetch(url, { method: "GET" });
       state.searchAbort = request;
       const response = await request;
       if (state.searchQuery.trim() !== query) {
@@ -538,11 +657,11 @@
       }
       state.searchResults = Array.isArray(response) ? response : [];
     } catch (error) {
-      if (error.name === 'AbortError') {
+      if (error.name === "AbortError") {
         return;
       }
-      console.error('Search request failed', error);
-      showToast('Search failed', 'error');
+      console.error("Search request failed", error);
+      showToast("Search failed", "error");
     } finally {
       state.searchLoading = false;
       state.searchAbort = null;
@@ -551,13 +670,13 @@
   }
 
   function handleSearchInput(event) {
-    const value = event.target.value || '';
+    const value = event.target.value || "";
     scheduleSearch(value);
   }
 
   function handleSearchSubmit(event) {
     event.preventDefault();
-    const value = els.searchInput ? els.searchInput.value : '';
+    const value = els.searchInput ? els.searchInput.value : "";
     const trimmed = value.trim();
     if (!trimmed) {
       clearSearchResults();
@@ -580,7 +699,12 @@
     }
   }
 
-  async function activateSearchResult(kind, libraryId, presentationId, slideId) {
+  async function activateSearchResult(
+    kind,
+    libraryId,
+    presentationId,
+    slideId,
+  ) {
     if (!libraryId) return;
 
     state.activeLibraryId = libraryId;
@@ -600,7 +724,7 @@
     try {
       await loadPresentation(presentationId);
     } catch (error) {
-      console.error('Failed to load presentation from search', error);
+      console.error("Failed to load presentation from search", error);
       return;
     }
 
@@ -615,12 +739,12 @@
         const card = els.slides
           ? els.slides.querySelector(`[data-slide-id="${slideId}"]`)
           : null;
-        if (card && typeof card.scrollIntoView === 'function') {
-          card.scrollIntoView({ block: 'center', behavior: 'smooth' });
+        if (card && typeof card.scrollIntoView === "function") {
+          card.scrollIntoView({ block: "center", behavior: "smooth" });
         }
-        if (state.mode === 'edit') {
+        if (state.mode === "edit") {
           const textarea = card?.querySelector('[data-field="main"]');
-          if (textarea && typeof textarea.focus === 'function') {
+          if (textarea && typeof textarea.focus === "function") {
             textarea.focus({ preventScroll: true });
           }
         }
@@ -636,19 +760,24 @@
     const button = event.target.closest('[data-role="search-result"]');
     if (!button) return;
     event.preventDefault();
-    const kind = button.dataset.kind || '';
-    const libraryId = button.dataset.libraryId || '';
-    const presentationId = button.dataset.presentationId || '';
-    const slideId = button.dataset.slideId || '';
-    els.searchResults.dataset.visible = 'false';
+    const kind = button.dataset.kind || "";
+    const libraryId = button.dataset.libraryId || "";
+    const presentationId = button.dataset.presentationId || "";
+    const slideId = button.dataset.slideId || "";
+    els.searchResults.dataset.visible = "false";
     state.searchOpen = false;
     state.searchResults = [];
-    state.searchQuery = '';
+    state.searchQuery = "";
     if (els.searchInput) {
-      els.searchInput.value = '';
+      els.searchInput.value = "";
     }
     updateSearchClearVisibility();
-    activateSearchResult(kind, libraryId, presentationId || null, slideId || null);
+    activateSearchResult(
+      kind,
+      libraryId,
+      presentationId || null,
+      slideId || null,
+    );
   }
 
   function handleSearchResultDragStart(event) {
@@ -656,19 +785,22 @@
     if (!item || !event.dataTransfer) {
       return;
     }
-    const presentationId = item.dataset.presentationId || '';
+    const presentationId = item.dataset.presentationId || "";
     if (!presentationId) {
-      event.dataTransfer.effectAllowed = 'none';
+      event.dataTransfer.effectAllowed = "none";
       return;
     }
-    event.dataTransfer.effectAllowed = 'copy';
-    event.dataTransfer.setData('application/x-presenter-presentation', presentationId);
-    event.dataTransfer.setData('text/plain', presentationId);
-    event.dataTransfer.setData('application/x-presenter-search', 'true');
+    event.dataTransfer.effectAllowed = "copy";
+    event.dataTransfer.setData(
+      "application/x-presenter-presentation",
+      presentationId,
+    );
+    event.dataTransfer.setData("text/plain", presentationId);
+    event.dataTransfer.setData("application/x-presenter-search", "true");
     state.searchDragging = true;
     state.draggingPresentationId = presentationId;
     state.draggingFromSearch = true;
-    const title = item.querySelector('.operator__search-result-title');
+    const title = item.querySelector(".operator__search-result-title");
     if (title) {
       const rect = title.getBoundingClientRect();
       event.dataTransfer.setDragImage(title, rect.width / 2, rect.height / 2);
@@ -679,6 +811,7 @@
     state.searchDragging = false;
     state.draggingPresentationId = null;
     state.draggingFromSearch = false;
+    hideSearchResults();
   }
 
   function handleSearchOutsideClick(event) {
@@ -686,7 +819,8 @@
       return;
     }
     const withinForm = els.searchForm && els.searchForm.contains(event.target);
-    const withinResults = els.searchResults && els.searchResults.contains(event.target);
+    const withinResults =
+      els.searchResults && els.searchResults.contains(event.target);
     if (withinForm || withinResults) {
       return;
     }
@@ -703,19 +837,24 @@
 
   function escapeHtml(value) {
     return value
-      .replace(/&/g, '&amp;')
-      .replace(/</g, '&lt;')
-      .replace(/>/g, '&gt;')
-      .replace(/"/g, '&quot;')
-      .replace(/'/g, '&#039;');
+      .replace(/&/g, "&amp;")
+      .replace(/</g, "&lt;")
+      .replace(/>/g, "&gt;")
+      .replace(/"/g, "&quot;")
+      .replace(/'/g, "&#039;");
   }
 
-  function formatMultiline(text, lint = null, { highlightOverflow = false } = {}) {
-    const normalised = (text || '').replace(/\r?\n/g, '\n');
-    const lines = normalised.split('\n');
-    const overflowCounts = lint && Array.isArray(lint.overflowCharacterCounts)
-      ? lint.overflowCharacterCounts
-      : [];
+  function formatMultiline(
+    text,
+    lint = null,
+    { highlightOverflow = false } = {},
+  ) {
+    const normalised = (text || "").replace(/\r?\n/g, "\n");
+    const lines = normalised.split("\n");
+    const overflowCounts =
+      lint && Array.isArray(lint.overflowCharacterCounts)
+        ? lint.overflowCharacterCounts
+        : [];
     return lines
       .map((line, index) => {
         const overflowChars = overflowCounts[index] || 0;
@@ -737,21 +876,25 @@
         }
         return safeHtml;
       })
-      .join('<br />');
+      .join("<br />");
   }
 
   function lintField(value) {
-    const normalised = (value || '').replace(/\r?\n/g, '\n');
-    const lines = normalised.split('\n');
+    const normalised = (value || "").replace(/\r?\n/g, "\n");
+    const lines = normalised.split("\n");
     const nonEmptyLines = lines.filter((line) => line.trim().length > 0);
-    const hasTooManyLines = MAX_SLIDE_LINES > 0 && nonEmptyLines.length > MAX_SLIDE_LINES;
+    const hasTooManyLines =
+      MAX_SLIDE_LINES > 0 && nonEmptyLines.length > MAX_SLIDE_LINES;
     const overflowCharacterCounts = lines.map((line) => {
       if (state.lineLimit <= 0) {
         return 0;
       }
       return Math.max(0, line.length - state.lineLimit);
     });
-    const totalOverflowCharacters = overflowCharacterCounts.reduce((sum, count) => sum + count, 0);
+    const totalOverflowCharacters = overflowCharacterCounts.reduce(
+      (sum, count) => sum + count,
+      0,
+    );
     const totalOverflowLines = hasTooManyLines
       ? Math.max(0, nonEmptyLines.length - MAX_SLIDE_LINES)
       : 0;
@@ -780,32 +923,32 @@
     if (mainLint.hasLineTooLong) {
       const extra = mainLint.totalOverflowCharacters || 0;
       messages.push(
-        `Main text exceeds ${state.lineLimit} characters${extra > 0 ? ` (+${extra})` : ''}`,
+        `Main text exceeds ${state.lineLimit} characters${extra > 0 ? ` (+${extra})` : ""}`,
       );
     }
     if (mainLint.hasTooManyLines) {
       const extraLines = mainLint.totalOverflowLines || 0;
       messages.push(
-        `Main text exceeds ${MAX_SLIDE_LINES} lines${extraLines > 0 ? ` (+${extraLines})` : ''}`,
+        `Main text exceeds ${MAX_SLIDE_LINES} lines${extraLines > 0 ? ` (+${extraLines})` : ""}`,
       );
     }
     if (translationLint.hasLineTooLong) {
       const extra = translationLint.totalOverflowCharacters || 0;
       messages.push(
-        `Translation exceeds ${state.lineLimit} characters${extra > 0 ? ` (+${extra})` : ''}`,
+        `Translation exceeds ${state.lineLimit} characters${extra > 0 ? ` (+${extra})` : ""}`,
       );
     }
     if (translationLint.hasTooManyLines) {
       const extraLines = translationLint.totalOverflowLines || 0;
       messages.push(
-        `Translation exceeds ${MAX_SLIDE_LINES} lines${extraLines > 0 ? ` (+${extraLines})` : ''}`,
+        `Translation exceeds ${MAX_SLIDE_LINES} lines${extraLines > 0 ? ` (+${extraLines})` : ""}`,
       );
     }
-    return messages.join(' • ');
+    return messages.join(" • ");
   }
 
   function formatTimerState(state) {
-    if (!state) return 'Idle';
+    if (!state) return "Idle";
     const normalized = String(state).toLowerCase();
     return normalized.charAt(0).toUpperCase() + normalized.slice(1);
   }
@@ -815,28 +958,28 @@
     const hours = Math.floor(total / 3600);
     const minutes = Math.floor((total % 3600) / 60);
     const seconds = total % 60;
-    const mm = String(minutes).padStart(2, '0');
-    const ss = String(seconds).padStart(2, '0');
+    const mm = String(minutes).padStart(2, "0");
+    const ss = String(seconds).padStart(2, "0");
     if (hours > 0) {
-      const hh = String(hours).padStart(2, '0');
+      const hh = String(hours).padStart(2, "0");
       return `${hh}:${mm}:${ss}`;
     }
     return `${mm}:${ss}`;
   }
 
   function cloneTextField(field) {
-    if (!field || typeof field !== 'object') {
-      return { value: typeof field === 'string' ? field : '' };
+    if (!field || typeof field !== "object") {
+      return { value: typeof field === "string" ? field : "" };
     }
     return { ...field };
   }
 
   function cloneSlideContent(content) {
-    if (!content || typeof content !== 'object') {
+    if (!content || typeof content !== "object") {
       return {
-        main: { value: '' },
-        translation: { value: '' },
-        stage: { value: '' },
+        main: { value: "" },
+        translation: { value: "" },
+        stage: { value: "" },
         group: undefined,
       };
     }
@@ -850,7 +993,7 @@
   }
 
   function cloneSlide(slide) {
-    if (!slide || typeof slide !== 'object') {
+    if (!slide || typeof slide !== "object") {
       return slide;
     }
     return {
@@ -860,24 +1003,25 @@
   }
 
   function getExplicitGroup(slide) {
-    if (!slide) return '';
-    const possible = slide.content && slide.content.group ? slide.content.group : slide.group;
-    if (!possible) return '';
-    if (typeof possible === 'string') return possible;
-    if (possible && typeof possible === 'object') {
-      if (typeof possible.value === 'string' && possible.value.trim()) {
+    if (!slide) return "";
+    const possible =
+      slide.content && slide.content.group ? slide.content.group : slide.group;
+    if (!possible) return "";
+    if (typeof possible === "string") return possible;
+    if (possible && typeof possible === "object") {
+      if (typeof possible.value === "string" && possible.value.trim()) {
         return possible.value;
       }
-      if (typeof possible.name === 'string' && possible.name.trim()) {
+      if (typeof possible.name === "string" && possible.name.trim()) {
         return possible.name;
       }
     }
-    return '';
+    return "";
   }
 
   function normaliseSlides(rawSlides) {
     if (!Array.isArray(rawSlides)) return [];
-    let activeGroup = '';
+    let activeGroup = "";
     return rawSlides.map((slide) => {
       const clone = cloneSlide(slide);
       const explicit = getExplicitGroup(clone);
@@ -891,49 +1035,56 @@
   }
 
   function extractField(slide, key) {
-    if (!slide) return '';
+    if (!slide) return "";
     const direct = slide[key];
-    if (typeof direct === 'string') return direct || '';
-    if (direct && typeof direct === 'object') {
-      if (typeof direct.value === 'string') return direct.value || '';
-      if (typeof direct.name === 'string') return direct.name || '';
+    if (typeof direct === "string") return direct || "";
+    if (direct && typeof direct === "object") {
+      if (typeof direct.value === "string") return direct.value || "";
+      if (typeof direct.name === "string") return direct.name || "";
     }
     if (slide.content && slide.content[key]) {
       const nested = slide.content[key];
-      if (typeof nested === 'string') return nested || '';
-      if (nested && typeof nested === 'object' && typeof nested.value === 'string') {
-        return nested.value || '';
+      if (typeof nested === "string") return nested || "";
+      if (
+        nested &&
+        typeof nested === "object" &&
+        typeof nested.value === "string"
+      ) {
+        return nested.value || "";
       }
     }
-    return '';
+    return "";
   }
 
   function extractGroup(slide) {
-    if (!slide) return '';
-    if (typeof slide.effectiveGroup === 'string' && slide.effectiveGroup.trim()) {
+    if (!slide) return "";
+    if (
+      typeof slide.effectiveGroup === "string" &&
+      slide.effectiveGroup.trim()
+    ) {
       return slide.effectiveGroup;
     }
-    if (typeof slide.explicitGroup === 'string' && slide.explicitGroup.trim()) {
+    if (typeof slide.explicitGroup === "string" && slide.explicitGroup.trim()) {
       return slide.explicitGroup;
     }
-    if (typeof slide.group === 'string') return slide.group || '';
-    if (slide.group && typeof slide.group === 'object') {
-      if (typeof slide.group.name === 'string') return slide.group.name || '';
-      if (typeof slide.group.value === 'string') return slide.group.value || '';
+    if (typeof slide.group === "string") return slide.group || "";
+    if (slide.group && typeof slide.group === "object") {
+      if (typeof slide.group.name === "string") return slide.group.name || "";
+      if (typeof slide.group.value === "string") return slide.group.value || "";
     }
     if (slide.content && slide.content.group) {
       const group = slide.content.group;
-      if (typeof group === 'string') return group || '';
-      if (group && typeof group === 'object') {
-        if (typeof group.name === 'string') return group.name || '';
-        if (typeof group.value === 'string') return group.value || '';
+      if (typeof group === "string") return group || "";
+      if (group && typeof group === "object") {
+        if (typeof group.name === "string") return group.name || "";
+        if (typeof group.value === "string") return group.value || "";
       }
     }
-    return '';
+    return "";
   }
 
   function stagePrimaryText(slide) {
-    return extractField(slide, 'main').trim();
+    return extractField(slide, "main").trim();
   }
 
   function renderStageStatus() {
@@ -944,7 +1095,10 @@
     const nextEl = qs('[data-role="stage-next"]', container);
 
     let snapshot = state.stageSnapshot;
-    let presentationId = snapshot && snapshot.presentationId ? snapshot.presentationId : state.stagePresentationId;
+    let presentationId =
+      snapshot && snapshot.presentationId
+        ? snapshot.presentationId
+        : state.stagePresentationId;
 
     let currentSlide = snapshot ? snapshot.current : null;
     let nextSlide = snapshot ? snapshot.next : null;
@@ -952,22 +1106,25 @@
     if (presentationId && !currentSlide) {
       const slides = getSlidesForPresentation(presentationId);
       if (slides.length) {
-        const index = slides.findIndex((slide) => slide.id === state.stageSlideId);
+        const index = slides.findIndex(
+          (slide) => slide.id === state.stageSlideId,
+        );
         currentSlide = index >= 0 ? slides[index] : slides[0];
-        nextSlide = index >= 0 ? slides[index + 1] || null : slides[1] || nextSlide;
+        nextSlide =
+          index >= 0 ? slides[index + 1] || null : slides[1] || nextSlide;
       }
     }
 
     const hasActive = Boolean(presentationId && (currentSlide || nextSlide));
-    container.dataset.active = hasActive ? 'true' : 'false';
+    container.dataset.active = hasActive ? "true" : "false";
 
-    const currentText = stagePrimaryText(currentSlide) || '—';
+    const currentText = stagePrimaryText(currentSlide) || "—";
     if (currentEl) {
-      currentEl.textContent = currentText || '—';
+      currentEl.textContent = currentText || "—";
     }
-    const nextText = stagePrimaryText(nextSlide) || '—';
+    const nextText = stagePrimaryText(nextSlide) || "—";
     if (nextEl) {
-      nextEl.textContent = nextText || '—';
+      nextEl.textContent = nextText || "—";
     }
 
     if (els.stageSongLine) {
@@ -976,16 +1133,16 @@
   }
 
   function parseStageConnectionSnapshot(raw) {
-    if (!raw || typeof raw !== 'object') return null;
+    if (!raw || typeof raw !== "object") return null;
     const id = raw.id || raw.clientId || raw.client_id;
     if (!id) return null;
-    const status = (raw.status || '').toString().toLowerCase();
+    const status = (raw.status || "").toString().toLowerCase();
     const latency = raw.latencyMs ?? raw.latency_ms;
     return {
       id: String(id),
       status,
-      layoutCode: raw.layoutCode ?? raw.layout_code ?? '',
-      latencyMs: typeof latency === 'number' ? latency : null,
+      layoutCode: raw.layoutCode ?? raw.layout_code ?? "",
+      latencyMs: typeof latency === "number" ? latency : null,
       lastHeartbeat: raw.lastHeartbeat ?? raw.last_heartbeat ?? null,
     };
   }
@@ -1000,7 +1157,7 @@
         return new Set(parsed.map((value) => String(value)));
       }
     } catch (error) {
-      console.warn('Failed to load stage monitor baseline', error);
+      console.warn("Failed to load stage monitor baseline", error);
     }
     return new Set();
   }
@@ -1009,26 +1166,34 @@
     try {
       if (!window.localStorage) return;
       const values = Array.from(state.stageBaseline);
-      window.localStorage.setItem(STAGE_MONITOR_BASELINE_KEY, JSON.stringify(values));
+      window.localStorage.setItem(
+        STAGE_MONITOR_BASELINE_KEY,
+        JSON.stringify(values),
+      );
     } catch (error) {
-      console.warn('Failed to persist stage monitor baseline', error);
+      console.warn("Failed to persist stage monitor baseline", error);
     }
   }
 
   function updateStageMonitorUI() {
-    if (!els.stageMonitor || !els.stageMonitorConnected || !els.stageMonitorIssues) return;
+    if (
+      !els.stageMonitor ||
+      !els.stageMonitorConnected ||
+      !els.stageMonitorIssues
+    )
+      return;
 
     const baselineIds = state.stageBaseline.size
       ? Array.from(state.stageBaseline)
       : [];
 
     if (baselineIds.length === 0) {
-      els.stageMonitorConnected.textContent = '0';
-      els.stageMonitorIssues.textContent = '0';
-      els.stageMonitor.dataset.connected = '0';
-      els.stageMonitor.dataset.issues = '0';
-      els.stageMonitor.classList.remove('operator__stage-monitor--alert');
-      els.stageMonitor.title = 'Stage displays – baseline empty';
+      els.stageMonitorConnected.textContent = "0";
+      els.stageMonitorIssues.textContent = "0";
+      els.stageMonitor.dataset.connected = "0";
+      els.stageMonitor.dataset.issues = "0";
+      els.stageMonitor.classList.remove("operator__stage-monitor--alert");
+      els.stageMonitor.title = "Stage displays – baseline empty";
       return;
     }
 
@@ -1037,7 +1202,7 @@
 
     for (const id of baselineIds) {
       const snapshot = state.stageConnections.get(id);
-      if (snapshot && snapshot.status === 'connected') {
+      if (snapshot && snapshot.status === "connected") {
         connectedCount += 1;
       } else {
         issueCount += 1;
@@ -1048,7 +1213,10 @@
     els.stageMonitorIssues.textContent = String(issueCount);
     els.stageMonitor.dataset.connected = String(connectedCount);
     els.stageMonitor.dataset.issues = String(issueCount);
-    els.stageMonitor.classList.toggle('operator__stage-monitor--alert', issueCount > 0);
+    els.stageMonitor.classList.toggle(
+      "operator__stage-monitor--alert",
+      issueCount > 0,
+    );
 
     const totalKnown = baselineIds.length;
     if (issueCount > 0) {
@@ -1063,7 +1231,10 @@
     if (!snapshot) return;
     state.stageConnections.set(snapshot.id, snapshot);
     let baselineChanged = false;
-    if (!state.stageBaseline.has(snapshot.id) && snapshot.status === 'connected') {
+    if (
+      !state.stageBaseline.has(snapshot.id) &&
+      snapshot.status === "connected"
+    ) {
       state.stageBaseline.add(snapshot.id);
       baselineChanged = true;
     }
@@ -1075,8 +1246,11 @@
 
   async function refreshStageConnections() {
     try {
-      const response = await fetch('/stage/connections', { cache: 'no-store' });
-      if (!response.ok) throw new Error(`stage connections request failed (${response.status})`);
+      const response = await fetch("/stage/connections", { cache: "no-store" });
+      if (!response.ok)
+        throw new Error(
+          `stage connections request failed (${response.status})`,
+        );
       const payload = await response.json();
       if (!Array.isArray(payload)) return;
       const map = new Map();
@@ -1087,7 +1261,10 @@
       }
       let baselineChanged = false;
       for (const snapshot of map.values()) {
-        if (snapshot.status === 'connected' && !state.stageBaseline.has(snapshot.id)) {
+        if (
+          snapshot.status === "connected" &&
+          !state.stageBaseline.has(snapshot.id)
+        ) {
           state.stageBaseline.add(snapshot.id);
           baselineChanged = true;
         }
@@ -1098,14 +1275,14 @@
       }
       updateStageMonitorUI();
     } catch (error) {
-      console.warn('Failed to refresh stage connections', error);
+      console.warn("Failed to refresh stage connections", error);
     }
   }
 
   function resetStageMonitorBaseline(showToast = true) {
     const connectedIds = [];
     for (const [id, snapshot] of state.stageConnections) {
-      if (snapshot.status === 'connected') {
+      if (snapshot.status === "connected") {
         connectedIds.push(id);
       }
     }
@@ -1113,14 +1290,14 @@
     persistStageMonitorBaseline();
     updateStageMonitorUI();
     if (showToast) {
-      showToast('Stage monitor baseline reset', 'info');
+      showToast("Stage monitor baseline reset", "info");
     }
   }
 
   function initialiseStageMonitor() {
     state.stageBaseline = loadStageMonitorBaseline();
     if (els.stageMonitor) {
-      els.stageMonitor.addEventListener('click', (event) => {
+      els.stageMonitor.addEventListener("click", (event) => {
         event.preventDefault();
         resetStageMonitorBaseline(true);
       });
@@ -1130,33 +1307,40 @@
     if (state.stageMonitorRefreshTimer) {
       clearInterval(state.stageMonitorRefreshTimer);
     }
-    state.stageMonitorRefreshTimer = window.setInterval(refreshStageConnections, STAGE_MONITOR_REFRESH_MS);
+    state.stageMonitorRefreshTimer = window.setInterval(
+      refreshStageConnections,
+      STAGE_MONITOR_REFRESH_MS,
+    );
   }
 
   function showToast(message, variant) {
     if (!els.toast) return;
     els.toast.textContent = message;
-    els.toast.dataset.visible = 'true';
-    els.toast.dataset.variant = variant || 'info';
+    els.toast.dataset.visible = "true";
+    els.toast.dataset.variant = variant || "info";
     clearTimeout(state.toastTimer);
     state.toastTimer = setTimeout(() => {
-      els.toast.dataset.visible = 'false';
+      els.toast.dataset.visible = "false";
     }, 3500);
   }
 
-  function setView(view) {
+  function setView(view, pushState) {
     state.view = view;
     document.body.dataset.view = view;
     els.viewButtons.forEach((button) => {
-      button.dataset.active = button.dataset.view === view ? 'true' : 'false';
+      button.dataset.active = button.dataset.view === view ? "true" : "false";
     });
+    if (pushState !== false) {
+      var url = view === "worship" ? "/ui/operator" : "/ui/operator/" + view;
+      history.pushState({ view: view }, "", url);
+    }
   }
 
   function setMode(mode) {
     state.mode = mode;
     document.body.dataset.mode = mode;
     els.modeButtons.forEach((button) => {
-      button.dataset.active = button.dataset.mode === mode ? 'true' : 'false';
+      button.dataset.active = button.dataset.mode === mode ? "true" : "false";
     });
     updateAddSlideAvailability();
     updateClearSlideAvailability();
@@ -1169,7 +1353,7 @@
 
   function updateAddSlideAvailability() {
     if (!els.addSlide) return;
-    const isEdit = state.mode === 'edit';
+    const isEdit = state.mode === "edit";
     els.addSlide.hidden = !isEdit;
     els.addSlide.disabled = !isEdit;
   }
@@ -1182,11 +1366,11 @@
 
   function updateLineLimitControl() {
     if (!els.lineLimit) return;
-    const isEdit = state.mode === 'edit';
+    const isEdit = state.mode === "edit";
     els.lineLimit.disabled = !isEdit;
-    const wrapper = els.lineLimit.closest('.operator__line-limit');
+    const wrapper = els.lineLimit.closest(".operator__line-limit");
     if (wrapper) {
-      wrapper.dataset.disabled = isEdit ? 'false' : 'true';
+      wrapper.dataset.disabled = isEdit ? "false" : "true";
       wrapper.hidden = !isEdit;
     }
   }
@@ -1207,17 +1391,19 @@
 
   function renderLibraries() {
     if (!els.libraryList) return;
-    const totalLibraries = Array.isArray(state.libraries) ? state.libraries.length : 0;
+    const totalLibraries = Array.isArray(state.libraries)
+      ? state.libraries.length
+      : 0;
     if (els.libraryCount) {
       els.libraryCount.textContent = String(totalLibraries);
-      els.libraryCount.dataset.empty = totalLibraries === 0 ? 'true' : 'false';
+      els.libraryCount.dataset.empty = totalLibraries === 0 ? "true" : "false";
       els.libraryCount.disabled = totalLibraries === 0;
     }
     if (!Array.isArray(state.libraries) || totalLibraries === 0) {
       els.libraryList.innerHTML =
         '<div class="operator__favorites-empty" data-role="library-empty">No libraries yet. Create one to start building songs.</div>';
       if (els.libraryModalList) {
-        els.libraryModalList.innerHTML = '';
+        els.libraryModalList.innerHTML = "";
       }
       return;
     }
@@ -1235,9 +1421,13 @@
       }
     });
 
-    favorites.sort((a, b) => a.name.localeCompare(b.name, undefined, { sensitivity: 'base' }));
+    favorites.sort((a, b) =>
+      a.name.localeCompare(b.name, undefined, { sensitivity: "base" }),
+    );
 
-    const favoritesMarkup = favorites.map((library) => renderLibraryRow(library, false)).join('');
+    const favoritesMarkup = favorites
+      .map((library) => renderLibraryRow(library, false))
+      .join("");
     const favoritesSection = favoritesMarkup
       ? `<div class="operator__favorites" data-role="favorites">${favoritesMarkup}</div>`
       : '<div class="operator__favorites-empty" data-role="favorites-empty">Star libraries in settings to keep them handy.</div>';
@@ -1247,7 +1437,7 @@
     if (els.libraryModalList) {
       els.libraryModalList.innerHTML = state.libraries
         .map((library) => renderLibraryRow(library, true))
-        .join('');
+        .join("");
     }
   }
 
@@ -1265,15 +1455,15 @@
   function openLibraryModal() {
     if (!els.libraryModal) return;
     state.libraryModalOpen = true;
-    els.libraryModal.dataset.open = 'true';
-    document.body.dataset.modalOpen = 'library-list';
+    els.libraryModal.dataset.open = "true";
+    document.body.dataset.modalOpen = "library-list";
   }
 
   function closeLibraryModal() {
     if (!els.libraryModal) return;
     state.libraryModalOpen = false;
     delete document.body.dataset.modalOpen;
-    els.libraryModal.dataset.open = 'false';
+    els.libraryModal.dataset.open = "false";
   }
 
   function configureLibraryEditModal({ mode, name, favorite, showDelete }) {
@@ -1282,10 +1472,10 @@
       els.libraryEditModal.dataset.mode = mode;
     }
     if (els.libraryEditForm) {
-      els.libraryEditForm.dataset.submitting = 'false';
+      els.libraryEditForm.dataset.submitting = "false";
     }
     if (els.libraryEditName) {
-      els.libraryEditName.value = name || '';
+      els.libraryEditName.value = name || "";
       els.libraryEditName.disabled = false;
     }
     if (els.libraryEditFavorite) {
@@ -1294,10 +1484,10 @@
     }
     if (els.libraryEditDelete) {
       if (showDelete) {
-        els.libraryEditDelete.removeAttribute('hidden');
+        els.libraryEditDelete.removeAttribute("hidden");
         els.libraryEditDelete.disabled = false;
       } else {
-        els.libraryEditDelete.setAttribute('hidden', 'true');
+        els.libraryEditDelete.setAttribute("hidden", "true");
         els.libraryEditDelete.disabled = true;
       }
     }
@@ -1305,13 +1495,14 @@
       ? els.libraryEditForm.querySelector('[data-role="library-edit-save"]')
       : null;
     if (saveButton) {
-      saveButton.textContent = mode === 'create' ? 'Create Library' : 'Save changes';
+      saveButton.textContent =
+        mode === "create" ? "Create Library" : "Save changes";
     }
     const cancelButton = els.libraryEditForm
       ? els.libraryEditForm.querySelector('[data-role="library-edit-cancel"]')
       : null;
     if (cancelButton) {
-      cancelButton.textContent = 'Cancel';
+      cancelButton.textContent = "Cancel";
     }
   }
 
@@ -1322,7 +1513,7 @@
     const nextFavorite = !state.favoriteLibraryIds.has(libraryId);
     try {
       await apiFetch(`/libraries/${libraryId}/favorite`, {
-        method: 'POST',
+        method: "POST",
         body: JSON.stringify({ favorite: nextFavorite }),
       });
       if (nextFavorite) {
@@ -1336,8 +1527,8 @@
       }
       renderLibraries();
     } catch (error) {
-      console.error('Failed to toggle library favorite', error);
-      showToast('Failed to update favorite', 'error');
+      console.error("Failed to toggle library favorite", error);
+      showToast("Failed to update favorite", "error");
     }
   }
 
@@ -1349,7 +1540,7 @@
     const nextFavorite = !(current && current.showInDashboard);
     try {
       const response = await apiFetch(`/playlists/${playlistId}`, {
-        method: 'PATCH',
+        method: "PATCH",
         body: JSON.stringify({ showInDashboard: nextFavorite }),
       });
       const normalised = normalisePlaylist(response);
@@ -1357,12 +1548,14 @@
         renderPlaylists();
       }
       showToast(
-        nextFavorite ? 'Playlist pinned to dashboard' : 'Playlist removed from dashboard',
-        'success',
+        nextFavorite
+          ? "Playlist pinned to dashboard"
+          : "Playlist removed from dashboard",
+        "success",
       );
     } catch (error) {
-      console.error('Failed to toggle playlist favorite', error);
-      showToast('Failed to update playlist pin', 'error');
+      console.error("Failed to toggle playlist favorite", error);
+      showToast("Failed to update playlist pin", "error");
     }
   }
 
@@ -1374,7 +1567,9 @@
     }
     if (!library) {
       library = state.libraries.find((item) =>
-        (item.presentations || []).some((presentation) => presentation.id === presentationId),
+        (item.presentations || []).some(
+          (presentation) => presentation.id === presentationId,
+        ),
       );
     }
     const presentation = library
@@ -1384,26 +1579,26 @@
     const currentName = presentation
       ? presentation.name
       : indexMeta
-      ? indexMeta.name
-      : 'Untitled presentation';
+        ? indexMeta.name
+        : "Untitled presentation";
     const libraryId = library ? library.id : indexMeta?.libraryId || null;
 
     state.presentationEditTarget = {
-      type: 'presentation',
+      type: "presentation",
       presentationId,
       libraryId,
     };
     if (els.presentationEditModal) {
-      els.presentationEditModal.dataset.mode = 'presentation';
-      els.presentationEditModal.dataset.open = 'true';
+      els.presentationEditModal.dataset.mode = "presentation";
+      els.presentationEditModal.dataset.open = "true";
     }
     state.presentationEditModalOpen = true;
     configurePresentationEditModal({
-      title: 'Rename Presentation',
-      label: 'Presentation name',
-      name: currentName || '',
+      title: "Rename Presentation",
+      label: "Presentation name",
+      name: currentName || "",
     });
-    document.body.dataset.modalOpen = 'presentation-edit';
+    document.body.dataset.modalOpen = "presentation-edit";
     window.setTimeout(() => {
       if (els.presentationEditName) {
         els.presentationEditName.focus();
@@ -1418,30 +1613,30 @@
     }
     const playlist = state.playlists.find((item) => item.id === playlistId);
     if (!playlist) {
-      showToast('Playlist not found', 'error');
+      showToast("Playlist not found", "error");
       return;
     }
     const entry = playlist.entries.find((item) => item.entryId === entryId);
-    if (!entry || entry.entryType !== 'separator') {
-      showToast('Separator not found', 'error');
+    if (!entry || entry.entryType !== "separator") {
+      showToast("Separator not found", "error");
       return;
     }
     state.presentationEditTarget = {
-      type: 'separator',
+      type: "separator",
       playlistId,
       entryId,
     };
     if (els.presentationEditModal) {
-      els.presentationEditModal.dataset.mode = 'separator';
-      els.presentationEditModal.dataset.open = 'true';
+      els.presentationEditModal.dataset.mode = "separator";
+      els.presentationEditModal.dataset.open = "true";
     }
     state.presentationEditModalOpen = true;
     configurePresentationEditModal({
-      title: 'Rename Separator',
-      label: 'Separator name',
-      name: entry.name || 'Separator',
+      title: "Rename Separator",
+      label: "Separator name",
+      name: entry.name || "Separator",
     });
-    document.body.dataset.modalOpen = 'presentation-edit';
+    document.body.dataset.modalOpen = "presentation-edit";
     window.setTimeout(() => {
       if (els.presentationEditName) {
         els.presentationEditName.focus();
@@ -1452,19 +1647,19 @@
 
   function closePresentationEdit() {
     if (!els.presentationEditModal) return;
-    els.presentationEditModal.dataset.open = 'false';
-    els.presentationEditModal.dataset.mode = 'presentation';
+    els.presentationEditModal.dataset.open = "false";
+    els.presentationEditModal.dataset.mode = "presentation";
     state.presentationEditModalOpen = false;
     state.presentationEditTarget = null;
     setPresentationEditSubmitting(false);
     if (state.libraryEditModalOpen) {
-      document.body.dataset.modalOpen = 'library-edit';
+      document.body.dataset.modalOpen = "library-edit";
     } else if (state.playlistEditModalOpen) {
-      document.body.dataset.modalOpen = 'playlist-edit';
+      document.body.dataset.modalOpen = "playlist-edit";
     } else if (state.libraryModalOpen) {
-      document.body.dataset.modalOpen = 'library-list';
+      document.body.dataset.modalOpen = "library-list";
     } else if (state.playlistModalOpen) {
-      document.body.dataset.modalOpen = 'playlist-list';
+      document.body.dataset.modalOpen = "playlist-list";
     } else {
       delete document.body.dataset.modalOpen;
     }
@@ -1482,7 +1677,7 @@
     state.libraryEditModalOpen = true;
     state.libraryEditSubmitting = false;
     configureLibraryEditModal({
-      mode: 'edit',
+      mode: "edit",
       name: library.name,
       favorite: state.favoriteLibraryIds.has(libraryId),
       showDelete: true,
@@ -1490,8 +1685,8 @@
     if (els.libraryEditTitle) {
       els.libraryEditTitle.textContent = `Edit ${library.name}`;
     }
-    els.libraryEditModal.dataset.open = 'true';
-    document.body.dataset.modalOpen = 'library-edit';
+    els.libraryEditModal.dataset.open = "true";
+    document.body.dataset.modalOpen = "library-edit";
     window.setTimeout(() => {
       if (els.libraryEditName) {
         els.libraryEditName.focus();
@@ -1507,12 +1702,17 @@
     state.libraryBeingEditedId = null;
     state.libraryEditModalOpen = true;
     state.libraryEditSubmitting = false;
-    configureLibraryEditModal({ mode: 'create', name: '', favorite: true, showDelete: false });
+    configureLibraryEditModal({
+      mode: "create",
+      name: "",
+      favorite: true,
+      showDelete: false,
+    });
     if (els.libraryEditTitle) {
-      els.libraryEditTitle.textContent = 'Create Library';
+      els.libraryEditTitle.textContent = "Create Library";
     }
-    els.libraryEditModal.dataset.open = 'true';
-    document.body.dataset.modalOpen = 'library-edit';
+    els.libraryEditModal.dataset.open = "true";
+    document.body.dataset.modalOpen = "library-edit";
     window.setTimeout(() => {
       if (els.libraryEditName) {
         els.libraryEditName.focus();
@@ -1525,35 +1725,42 @@
     if (!els.libraryEditModal) return;
     state.libraryBeingEditedId = null;
     state.libraryEditSubmitting = false;
-    state.libraryEditMode = 'edit';
+    state.libraryEditMode = "edit";
     state.libraryEditModalOpen = false;
-    els.libraryEditModal.dataset.open = 'false';
-    els.libraryEditModal.dataset.mode = 'edit';
+    els.libraryEditModal.dataset.open = "false";
+    els.libraryEditModal.dataset.mode = "edit";
     if (!state.libraryModalOpen) {
       delete document.body.dataset.modalOpen;
     } else {
-      document.body.dataset.modalOpen = 'library-list';
+      document.body.dataset.modalOpen = "library-list";
     }
   }
 
   function setLibraryEditSubmitting(submitting) {
     state.libraryEditSubmitting = submitting;
     if (!els.libraryEditForm) return;
-    els.libraryEditForm.dataset.submitting = submitting ? 'true' : 'false';
+    els.libraryEditForm.dataset.submitting = submitting ? "true" : "false";
     if (els.libraryEditName) {
       els.libraryEditName.disabled = submitting;
     }
     if (els.libraryEditFavorite) {
       els.libraryEditFavorite.disabled = submitting;
     }
-    if (els.libraryEditDelete && !els.libraryEditDelete.hasAttribute('hidden')) {
+    if (
+      els.libraryEditDelete &&
+      !els.libraryEditDelete.hasAttribute("hidden")
+    ) {
       els.libraryEditDelete.disabled = submitting;
     }
-    const submitButton = els.libraryEditForm.querySelector('[data-role="library-edit-save"]');
+    const submitButton = els.libraryEditForm.querySelector(
+      '[data-role="library-edit-save"]',
+    );
     if (submitButton) {
       submitButton.disabled = submitting;
     }
-    const cancelButton = els.libraryEditForm.querySelector('[data-role="library-edit-cancel"]');
+    const cancelButton = els.libraryEditForm.querySelector(
+      '[data-role="library-edit-cancel"]',
+    );
     if (cancelButton) {
       cancelButton.disabled = submitting;
     }
@@ -1562,7 +1769,7 @@
   function setPresentationEditSubmitting(submitting) {
     state.presentationEditSubmitting = submitting;
     if (!els.presentationEditForm) return;
-    els.presentationEditForm.dataset.submitting = submitting ? 'true' : 'false';
+    els.presentationEditForm.dataset.submitting = submitting ? "true" : "false";
     if (els.presentationEditName) {
       els.presentationEditName.disabled = submitting;
     }
@@ -1577,10 +1784,10 @@
       els.playlistEditModal.dataset.mode = mode;
     }
     if (els.playlistEditForm) {
-      els.playlistEditForm.dataset.submitting = 'false';
+      els.playlistEditForm.dataset.submitting = "false";
     }
     if (els.playlistEditName) {
-      els.playlistEditName.value = name || '';
+      els.playlistEditName.value = name || "";
       els.playlistEditName.disabled = false;
     }
     if (els.playlistEditDashboard) {
@@ -1588,34 +1795,34 @@
       els.playlistEditDashboard.disabled = false;
     }
     if (els.playlistEditDelete) {
-      if (mode === 'edit') {
-        els.playlistEditDelete.removeAttribute('hidden');
+      if (mode === "edit") {
+        els.playlistEditDelete.removeAttribute("hidden");
         els.playlistEditDelete.disabled = false;
       } else {
-        els.playlistEditDelete.setAttribute('hidden', 'true');
+        els.playlistEditDelete.setAttribute("hidden", "true");
         els.playlistEditDelete.disabled = true;
       }
     }
     if (els.playlistEditTitle) {
       els.playlistEditTitle.textContent =
-        mode === 'create' ? 'Create Playlist' : `Edit ${name || 'Playlist'}`;
+        mode === "create" ? "Create Playlist" : `Edit ${name || "Playlist"}`;
     }
     if (els.playlistEditSave) {
       els.playlistEditSave.textContent =
-        mode === 'create' ? 'Create Playlist' : 'Save changes';
+        mode === "create" ? "Create Playlist" : "Save changes";
       els.playlistEditSave.disabled = false;
     }
   }
 
   function configurePresentationEditModal({ title, label, name }) {
     if (els.presentationEditTitle) {
-      els.presentationEditTitle.textContent = title || 'Rename';
+      els.presentationEditTitle.textContent = title || "Rename";
     }
     if (els.presentationEditLabel) {
-      els.presentationEditLabel.textContent = label || 'Name';
+      els.presentationEditLabel.textContent = label || "Name";
     }
     if (els.presentationEditName) {
-      els.presentationEditName.value = name || '';
+      els.presentationEditName.value = name || "";
       els.presentationEditName.disabled = false;
     }
     if (els.presentationEditSave) {
@@ -1627,7 +1834,7 @@
   function openPlaylistEdit(playlistId) {
     const playlist = state.playlistLookup.get(playlistId);
     if (!playlist) {
-      showToast('Playlist not found', 'error');
+      showToast("Playlist not found", "error");
       return;
     }
     if (state.playlistModalOpen) {
@@ -1635,19 +1842,19 @@
     }
     state.playlistBeingEditedId = playlistId;
     state.playlistEditInitial = {
-      name: playlist.name || '',
+      name: playlist.name || "",
       showInDashboard: Boolean(playlist.showInDashboard),
     };
     configurePlaylistEditModal({
-      mode: 'edit',
+      mode: "edit",
       name: playlist.name,
       showInDashboard: playlist.showInDashboard,
     });
     if (els.playlistEditModal) {
-      els.playlistEditModal.dataset.open = 'true';
+      els.playlistEditModal.dataset.open = "true";
     }
     state.playlistEditModalOpen = true;
-    document.body.dataset.modalOpen = 'playlist-edit';
+    document.body.dataset.modalOpen = "playlist-edit";
     window.setTimeout(() => {
       if (els.playlistEditName) {
         els.playlistEditName.focus();
@@ -1662,19 +1869,19 @@
     }
     state.playlistBeingEditedId = null;
     state.playlistEditInitial = {
-      name: '',
+      name: "",
       showInDashboard: true,
     };
     configurePlaylistEditModal({
-      mode: 'create',
-      name: '',
+      mode: "create",
+      name: "",
       showInDashboard: true,
     });
     if (els.playlistEditModal) {
-      els.playlistEditModal.dataset.open = 'true';
+      els.playlistEditModal.dataset.open = "true";
     }
     state.playlistEditModalOpen = true;
-    document.body.dataset.modalOpen = 'playlist-edit';
+    document.body.dataset.modalOpen = "playlist-edit";
     window.setTimeout(() => {
       if (els.playlistEditName) {
         els.playlistEditName.focus();
@@ -1689,10 +1896,10 @@
     state.playlistEditSubmitting = false;
     state.playlistEditInitial = null;
     state.playlistEditModalOpen = false;
-    els.playlistEditModal.dataset.open = 'false';
+    els.playlistEditModal.dataset.open = "false";
     if (!state.playlistModalOpen) {
       if (state.libraryModalOpen) {
-        document.body.dataset.modalOpen = 'library-list';
+        document.body.dataset.modalOpen = "library-list";
       } else {
         delete document.body.dataset.modalOpen;
       }
@@ -1702,14 +1909,17 @@
   function setPlaylistEditSubmitting(submitting) {
     state.playlistEditSubmitting = submitting;
     if (!els.playlistEditForm) return;
-    els.playlistEditForm.dataset.submitting = submitting ? 'true' : 'false';
+    els.playlistEditForm.dataset.submitting = submitting ? "true" : "false";
     if (els.playlistEditName) {
       els.playlistEditName.disabled = submitting;
     }
     if (els.playlistEditDashboard) {
       els.playlistEditDashboard.disabled = submitting;
     }
-    if (els.playlistEditDelete && !els.playlistEditDelete.hasAttribute('hidden')) {
+    if (
+      els.playlistEditDelete &&
+      !els.playlistEditDelete.hasAttribute("hidden")
+    ) {
       els.playlistEditDelete.disabled = submitting;
     }
     if (els.playlistEditSave) {
@@ -1723,39 +1933,35 @@
   function openPlaylistModal() {
     if (!els.playlistModal) return;
     state.playlistModalOpen = true;
-    els.playlistModal.dataset.open = 'true';
-    document.body.dataset.modalOpen = 'playlist-list';
+    els.playlistModal.dataset.open = "true";
+    document.body.dataset.modalOpen = "playlist-list";
   }
 
   function closePlaylistModal() {
     if (!els.playlistModal) return;
     state.playlistModalOpen = false;
-    els.playlistModal.dataset.open = 'false';
-    if (!state.libraryModalOpen && !state.libraryEditModalOpen && !state.playlistEditModalOpen) {
+    els.playlistModal.dataset.open = "false";
+    if (
+      !state.libraryModalOpen &&
+      !state.libraryEditModalOpen &&
+      !state.playlistEditModalOpen
+    ) {
       delete document.body.dataset.modalOpen;
     }
   }
-
-  
-
-  
-
-  
-
-  
 
   async function handlePlaylistEditSubmit(event) {
     event.preventDefault();
     if (state.playlistEditSubmitting) return;
     if (!els.playlistEditForm) return;
 
-    const name = els.playlistEditName ? els.playlistEditName.value.trim() : '';
+    const name = els.playlistEditName ? els.playlistEditName.value.trim() : "";
     const showInDashboard = els.playlistEditDashboard
       ? Boolean(els.playlistEditDashboard.checked)
       : false;
 
     if (!name) {
-      showToast('Playlist name cannot be empty', 'warning');
+      showToast("Playlist name cannot be empty", "warning");
       if (els.playlistEditName) {
         els.playlistEditName.focus();
       }
@@ -1763,23 +1969,23 @@
     }
 
     const initial = state.playlistEditInitial || {
-      name: '',
+      name: "",
       showInDashboard: false,
     };
 
     setPlaylistEditSubmitting(true);
 
     try {
-      if (state.playlistEditMode === 'create') {
-        const playlist = await apiFetch('/playlists', {
-          method: 'POST',
+      if (state.playlistEditMode === "create") {
+        const playlist = await apiFetch("/playlists", {
+          method: "POST",
           body: JSON.stringify({
             name,
             showInDashboard,
           }),
         });
         if (!playlist || !playlist.id) {
-          throw new Error('Unexpected response creating playlist');
+          throw new Error("Unexpected response creating playlist");
         }
         const normalized = normalisePlaylist(playlist);
         upsertPlaylist(normalized);
@@ -1791,7 +1997,7 @@
         renderPresentationList();
         updateContextTitleFromPlaylist(normalized.id);
         closePlaylistEdit();
-        showToast('Playlist created', 'success');
+        showToast("Playlist created", "success");
       } else if (state.playlistBeingEditedId) {
         const playlistId = state.playlistBeingEditedId;
         const payload = {};
@@ -1806,11 +2012,11 @@
           return;
         }
         const playlist = await apiFetch(`/playlists/${playlistId}`, {
-          method: 'PATCH',
+          method: "PATCH",
           body: JSON.stringify(payload),
         });
         if (!playlist || !playlist.id) {
-          throw new Error('Unexpected response updating playlist');
+          throw new Error("Unexpected response updating playlist");
         }
         const normalized = normalisePlaylist(playlist);
         upsertPlaylist(normalized);
@@ -1820,16 +2026,15 @@
           renderPresentationList();
         }
         closePlaylistEdit();
-        showToast('Playlist updated', 'success');
+        showToast("Playlist updated", "success");
       }
     } catch (error) {
-      console.error('Failed to save playlist', error);
-      showToast('Failed to save playlist', 'error');
+      console.error("Failed to save playlist", error);
+      showToast("Failed to save playlist", "error");
     } finally {
       setPlaylistEditSubmitting(false);
     }
   }
-
 
   async function handlePlaylistEditDelete(event) {
     event.preventDefault();
@@ -1840,14 +2045,14 @@
       return;
     }
     const playlist = state.playlistLookup.get(playlistId);
-    const name = playlist ? playlist.name : 'playlist';
+    const name = playlist ? playlist.name : "playlist";
     const confirmed = window.confirm(`Delete playlist "${name}"?`);
     if (!confirmed) {
       return;
     }
     setPlaylistEditSubmitting(true);
     try {
-      await apiFetch(`/playlists/${playlistId}`, { method: 'DELETE' });
+      await apiFetch(`/playlists/${playlistId}`, { method: "DELETE" });
       removePlaylistFromState(playlistId);
       indexPlaylists();
       renderPlaylists();
@@ -1858,17 +2063,19 @@
         renderPresentationList();
       }
       closePlaylistEdit();
-      showToast('Playlist deleted', 'success');
+      showToast("Playlist deleted", "success");
     } catch (error) {
-      console.error('Failed to delete playlist', error);
-      showToast('Failed to delete playlist', 'error');
+      console.error("Failed to delete playlist", error);
+      showToast("Failed to delete playlist", "error");
     } finally {
       setPlaylistEditSubmitting(false);
     }
   }
 
   function handlePlaylistModalClick(event) {
-    const favoriteToggle = event.target.closest('[data-action="playlist-favorite"]');
+    const favoriteToggle = event.target.closest(
+      '[data-action="playlist-favorite"]',
+    );
     if (favoriteToggle && favoriteToggle.dataset.playlistId) {
       event.preventDefault();
       event.stopPropagation();
@@ -1898,27 +2105,29 @@
   }
 
   function renderPlaylistRow(playlist, { forModal = false } = {}) {
-    const entryCount = Array.isArray(playlist.entries) ? playlist.entries.length : 0;
-    const isActive = playlist.id === state.activePlaylistId ? 'true' : 'false';
+    const entryCount = Array.isArray(playlist.entries)
+      ? playlist.entries.length
+      : 0;
+    const isActive = playlist.id === state.activePlaylistId ? "true" : "false";
     const isFavorite = Boolean(playlist.showInDashboard);
-    const wrapperClasses = ['operator__list-item', 'operator__list-row'];
+    const wrapperClasses = ["operator__list-item", "operator__list-row"];
     if (forModal) {
-      wrapperClasses.push('operator__list-row--modal');
+      wrapperClasses.push("operator__list-row--modal");
     }
     const buttonAttrs = forModal
       ? `class="operator__list-button" data-role="playlist-item" data-playlist-id="${playlist.id}"`
       : `class="operator__list-button" data-role="playlist-item" data-playlist-id="${playlist.id}" data-active="${isActive}"`;
-    const wrapperAttrs = `class="${wrapperClasses.join(' ')}" data-role="playlist-row" data-playlist-id="${playlist.id}"`;
+    const wrapperAttrs = `class="${wrapperClasses.join(" ")}" data-role="playlist-row" data-playlist-id="${playlist.id}"`;
     const favoriteButton = forModal
-      ? `<button type="button" class="operator__list-favorite operator__list-favorite--inline" data-action="playlist-favorite" data-playlist-id="${playlist.id}" aria-pressed="${isFavorite ? 'true' : 'false'}" aria-label="${isFavorite ? 'Remove playlist from dashboard' : 'Show in dashboard'}">${isFavorite ? '★' : '☆'}</button>`
-      : '';
+      ? `<button type="button" class="operator__list-favorite operator__list-favorite--inline" data-action="playlist-favorite" data-playlist-id="${playlist.id}" aria-pressed="${isFavorite ? "true" : "false"}" aria-label="${isFavorite ? "Remove playlist from dashboard" : "Show in dashboard"}">${isFavorite ? "★" : "☆"}</button>`
+      : "";
     const editButton = `<button type="button" class="operator__list-action operator__list-action--icon operator__list-action--menu" data-action="playlist-edit" data-playlist-id="${playlist.id}" aria-label="Edit playlist">⋮</button>`;
 
     return `
       <div ${wrapperAttrs}>
         ${favoriteButton}
         <button ${buttonAttrs}>
-          <span class="operator__list-label">${escapeHtml(playlist.name || 'Untitled playlist')}</span>
+          <span class="operator__list-label">${escapeHtml(playlist.name || "Untitled playlist")}</span>
           <span class="operator__list-meta" data-role="playlist-count">${entryCount}</span>
         </button>
         <div class="operator__list-actions">
@@ -1930,23 +2139,28 @@
 
   function renderPlaylists() {
     if (!els.playlistList) return;
-    const totalPlaylists = Array.isArray(state.playlists) ? state.playlists.length : 0;
+    const totalPlaylists = Array.isArray(state.playlists)
+      ? state.playlists.length
+      : 0;
     if (els.playlistCount) {
       els.playlistCount.textContent = String(totalPlaylists);
-      els.playlistCount.dataset.empty = totalPlaylists === 0 ? 'true' : 'false';
+      els.playlistCount.dataset.empty = totalPlaylists === 0 ? "true" : "false";
       els.playlistCount.disabled = totalPlaylists === 0;
     }
     if (!Array.isArray(state.playlists) || totalPlaylists === 0) {
       els.playlistList.innerHTML =
         '<div class="empty" data-role="playlist-empty">No playlists yet. Create one to build a run sheet.</div>';
       if (els.playlistModalList) {
-        els.playlistModalList.innerHTML = '<p class="empty">No playlists yet.</p>';
+        els.playlistModalList.innerHTML =
+          '<p class="empty">No playlists yet.</p>';
       }
       return;
     }
 
-    const collator = new Intl.Collator(undefined, { sensitivity: 'base' });
-    const sorted = state.playlists.slice().sort((a, b) => collator.compare(a.name, b.name));
+    const collator = new Intl.Collator(undefined, { sensitivity: "base" });
+    const sorted = state.playlists
+      .slice()
+      .sort((a, b) => collator.compare(a.name, b.name));
     const dashboard = [];
     sorted.forEach((playlist) => {
       const pinned = Boolean(playlist.showInDashboard);
@@ -1959,12 +2173,14 @@
 
     const favoritesMarkup = dashboard
       .map((playlist) => renderPlaylistRow(playlist))
-      .join('');
+      .join("");
 
     if (favoritesMarkup) {
       els.playlistList.innerHTML = `<div class="operator__favorites" data-role="playlist-favorites">${favoritesMarkup}</div>`;
     } else {
-      const fullList = sorted.map((playlist) => renderPlaylistRow(playlist)).join('');
+      const fullList = sorted
+        .map((playlist) => renderPlaylistRow(playlist))
+        .join("");
       els.playlistList.innerHTML = fullList
         ? `<div class="operator__list" data-role="playlist-fallback">${fullList}</div>`
         : '<div class="operator__favorites-empty" data-role="playlist-empty">No playlists yet. Create one to build a run sheet.</div>';
@@ -1973,31 +2189,30 @@
     if (els.playlistModalList) {
       const modalEntries = sorted
         .map((playlist) => renderPlaylistRow(playlist, { forModal: true }))
-        .join('');
+        .join("");
       els.playlistModalList.innerHTML = sorted.length
         ? `<ul class="operator__list">${modalEntries}</ul>`
         : '<p class="empty">No playlists yet.</p>';
     }
   }
 
-
   function renderLibraryRow(library, forModal) {
     const count = Array.isArray(library.presentations)
       ? library.presentations.length
       : library.presentation_count || 0;
-    const active = library.id === state.activeLibraryId ? 'true' : 'false';
+    const active = library.id === state.activeLibraryId ? "true" : "false";
     const favorite = state.favoriteLibraryIds.has(library.id);
-    const classes = ['operator__list-item', 'operator__list-row'];
+    const classes = ["operator__list-item", "operator__list-row"];
     if (forModal) {
-      classes.push('operator__list-row--modal');
+      classes.push("operator__list-row--modal");
     }
-    const rowAttrs = `class="${classes.join(' ')}" data-role="library-row" data-library-id="${library.id}"`;
+    const rowAttrs = `class="${classes.join(" ")}" data-role="library-row" data-library-id="${library.id}"`;
     const buttonAttrs = forModal
       ? `class="operator__list-button" data-role="library-item" data-library-id="${library.id}"`
       : `class="operator__list-button" data-role="library-item" data-library-id="${library.id}" data-active="${active}"`;
     const favoriteButton = forModal
-      ? `<button type="button" class="operator__list-favorite operator__list-favorite--inline" data-action="library-favorite" data-library-id="${library.id}" aria-pressed="${favorite ? 'true' : 'false'}" aria-label="${favorite ? 'Remove from dashboard' : 'Show in dashboard'}">${favorite ? '★' : '☆'}</button>`
-      : '';
+      ? `<button type="button" class="operator__list-favorite operator__list-favorite--inline" data-action="library-favorite" data-library-id="${library.id}" aria-pressed="${favorite ? "true" : "false"}" aria-label="${favorite ? "Remove from dashboard" : "Show in dashboard"}">${favorite ? "★" : "☆"}</button>`
+      : "";
     const editButton = `<button type="button" class="operator__list-action operator__list-action--icon operator__list-action--menu" data-action="library-edit" data-library-id="${library.id}" aria-label="Edit library">⋮</button>`;
 
     return `
@@ -2017,32 +2232,41 @@
   function renderPresentationList() {
     if (!els.presentationList) return;
     const container = els.presentationList;
-    let html = '';
+    let html = "";
     let count = 0;
-    const isEditMode = state.mode === 'edit';
+    const isEditMode = state.mode === "edit";
 
     if (els.presentationCreate) {
-      const canCreate = Boolean(state.activeLibraryId || state.activePlaylistId);
+      const canCreate = Boolean(
+        state.activeLibraryId || state.activePlaylistId,
+      );
       els.presentationCreate.disabled = !canCreate;
       const label = state.activePlaylistId
-        ? 'Add separator to playlist'
-        : 'Create presentation';
-      els.presentationCreate.setAttribute('aria-label', label);
+        ? "Add separator to playlist"
+        : "Create presentation";
+      els.presentationCreate.setAttribute("aria-label", label);
     }
 
     if (state.activeLibraryId) {
-      const library = state.libraries.find((item) => item.id === state.activeLibraryId);
+      const library = state.libraries.find(
+        (item) => item.id === state.activeLibraryId,
+      );
       if (!library || library.presentations.length === 0) {
         html = '<li class="empty">No presentations in this library.</li>';
         count = 0;
       } else {
         const sortedPresentations = library.presentations
           .slice()
-          .sort((a, b) => a.name.localeCompare(b.name, undefined, { sensitivity: 'base' }));
+          .sort((a, b) =>
+            a.name.localeCompare(b.name, undefined, { sensitivity: "base" }),
+          );
         count = sortedPresentations.length;
         html = sortedPresentations
           .map((presentation) => {
-            const active = state.currentPresentationId === presentation.id ? ' is-active' : '';
+            const active =
+              state.currentPresentationId === presentation.id
+                ? " is-active"
+                : "";
             const meta = presentationIndex.get(presentation.id);
             const libraryName = meta ? meta.libraryName : library.name;
             const renameAction = `
@@ -2057,23 +2281,26 @@
             return `
               <li class="operator__presentation-item${active}" data-role="presentation-item" data-type="presentation" data-presentation-id="${presentation.id}" draggable="true">
                 <span>${escapeHtml(presentation.name)}</span>
-                <span class="operator__presentation-meta">${escapeHtml(libraryName || '')}</span>
+                <span class="operator__presentation-meta">${escapeHtml(libraryName || "")}</span>
                 ${actions}
               </li>
             `;
           })
-          .join('');
+          .join("");
       }
     } else if (state.activePlaylistId) {
-      const playlist = state.playlists.find((item) => item.id === state.activePlaylistId);
+      const playlist = state.playlists.find(
+        (item) => item.id === state.activePlaylistId,
+      );
       if (!playlist || playlist.entries.length === 0) {
-        html = '<li class="empty">Playlist is empty. Drag songs from a library or add a separator with the + button.</li>';
+        html =
+          '<li class="empty">Playlist is empty. Drag songs from a library or add a separator with the + button.</li>';
         count = 0;
       } else {
         count = playlist.entries.length;
         html = playlist.entries
           .map((entry, index) => {
-            if (entry.entryType === 'separator') {
+            if (entry.entryType === "separator") {
               const actions = isEditMode
                 ? `<div class="operator__presentation-actions">
                     <button type="button" class="operator__presentation-action" data-action="separator-rename" data-playlist-id="${playlist.id}" data-entry-id="${entry.entryId}" title="Rename separator">
@@ -2081,7 +2308,7 @@
                       <span class="sr-only">Rename separator</span>
                     </button>
                   </div>`
-                : '';
+                : "";
               return `
                 <li class="operator__presentation-item" data-role="presentation-item" data-type="separator" data-entry-index="${index}" data-entry-id="${entry.entryId}">
                   <span>${escapeHtml(entry.name)}</span>
@@ -2091,15 +2318,20 @@
               `;
             }
             const presentationId = entry.presentationId;
-            const meta = presentationId ? presentationIndex.get(presentationId) : null;
-            const label = meta ? meta.libraryName : 'Unknown library';
-            const active = presentationId && state.currentPresentationId === presentationId ? ' is-active' : '';
+            const meta = presentationId
+              ? presentationIndex.get(presentationId)
+              : null;
+            const label = meta ? meta.libraryName : "Unknown library";
+            const active =
+              presentationId && state.currentPresentationId === presentationId
+                ? " is-active"
+                : "";
             const renameAction = presentationId
-              ? `<button type="button" class="operator__presentation-action" data-action="presentation-rename" data-presentation-id="${presentationId || ''}" data-library-id="${meta ? meta.libraryId || '' : ''}" title="Rename presentation">
+              ? `<button type="button" class="operator__presentation-action" data-action="presentation-rename" data-presentation-id="${presentationId || ""}" data-library-id="${meta ? meta.libraryId || "" : ""}" title="Rename presentation">
                     <span aria-hidden="true">✎</span>
                     <span class="sr-only">Rename presentation</span>
                   </button>`
-              : '';
+              : "";
             const removeAction = `<button type="button" data-action="playlist-remove" title="Remove from playlist">×</button>`;
             const hasActions = Boolean(renameAction || removeAction);
             const actions = hasActions
@@ -2107,19 +2339,20 @@
                   ${renameAction}
                   ${removeAction}
                 </div>`
-              : '';
+              : "";
             return `
-              <li class="operator__presentation-item${active}" data-role="presentation-item" data-type="presentation" data-entry-id="${entry.entryId}" data-presentation-id="${presentationId || ''}" data-entry-index="${index}" draggable="true">
+              <li class="operator__presentation-item${active}" data-role="presentation-item" data-type="presentation" data-entry-id="${entry.entryId}" data-presentation-id="${presentationId || ""}" data-entry-index="${index}" draggable="true">
                 <span>${escapeHtml(entry.name)}</span>
-                <span class="operator__presentation-meta">${escapeHtml(label || '')}</span>
+                <span class="operator__presentation-meta">${escapeHtml(label || "")}</span>
                 ${actions}
               </li>
             `;
           })
-          .join('');
+          .join("");
       }
     } else {
-      html = '<li class="empty">Select a library or playlist to view presentations.</li>';
+      html =
+        '<li class="empty">Select a library or playlist to view presentations.</li>';
       count = 0;
     }
 
@@ -2135,10 +2368,10 @@
       return;
     }
     const target = els.presentationList.querySelector(
-      `[data-role="presentation-item"][data-presentation-id="${presentationId}"]`
+      `[data-role="presentation-item"][data-presentation-id="${presentationId}"]`,
     );
-    if (target && typeof target.scrollIntoView === 'function') {
-      target.scrollIntoView({ block: 'center', behavior: 'smooth' });
+    if (target && typeof target.scrollIntoView === "function") {
+      target.scrollIntoView({ block: "center", behavior: "smooth" });
     }
   }
 
@@ -2147,11 +2380,10 @@
       return;
     }
     const card = els.slides.querySelector(`[data-slide-id="${slideId}"]`);
-    if (card && typeof card.scrollIntoView === 'function') {
-      card.scrollIntoView({ block: 'center', behavior: 'smooth' });
+    if (card && typeof card.scrollIntoView === "function") {
+      card.scrollIntoView({ block: "center", behavior: "smooth" });
     }
   }
-
 
   function updateActivePresentationIndicators() {
     if (!els.presentationList) return;
@@ -2160,14 +2392,14 @@
       const presentationId = item.dataset.presentationId;
       const isActive = state.currentPresentationId === presentationId;
       const isStage = state.stagePresentationId === presentationId;
-      item.classList.toggle('is-active', isActive);
-      item.classList.toggle('is-stage-active', isStage);
+      item.classList.toggle("is-active", isActive);
+      item.classList.toggle("is-stage-active", isStage);
     });
   }
 
   function updateSlidesPlaceholder(presentationId) {
     if (!els.slides) return;
-    els.slides.setAttribute('data-slides-placeholder', presentationId || '');
+    els.slides.setAttribute("data-slides-placeholder", presentationId || "");
   }
 
   function getSlidesForPresentation(presentationId) {
@@ -2180,55 +2412,78 @@
     const slides = getSlidesForPresentation(presentationId);
     updateSlidesPlaceholder(presentationId);
     if (!slides || slides.length === 0) {
-      els.slides.innerHTML = '<p class="empty">No slides yet. Use "Add Slide" to create one.</p>';
+      els.slides.innerHTML =
+        '<p class="empty">No slides yet. Use "Add Slide" to create one.</p>';
       return;
     }
-    const lintEnabled = state.mode === 'edit';
+    const lintEnabled = state.mode === "edit";
     const html = slides
       .map((slide, index) => {
         const { content } = slide;
-        const active = state.stagePresentationId === presentationId && state.stageSlideId === slide.id ? ' is-active' : '';
-        const focused = state.focusedSlideId === slide.id ? ' is-focused' : '';
-        const effectiveGroup = (slide.effectiveGroup || '').trim();
-        const hasExplicitGroup = Boolean(slide.explicitGroup && slide.explicitGroup.trim());
-        const groupPlaceholder = !hasExplicitGroup && effectiveGroup
-          ? ` placeholder="${escapeHtml(effectiveGroup)}"`
-          : '';
+        const active =
+          state.stagePresentationId === presentationId &&
+          state.stageSlideId === slide.id
+            ? " is-active"
+            : "";
+        const focused = state.focusedSlideId === slide.id ? " is-focused" : "";
+        const effectiveGroup = (slide.effectiveGroup || "").trim();
+        const hasExplicitGroup = Boolean(
+          slide.explicitGroup && slide.explicitGroup.trim(),
+        );
+        const groupPlaceholder =
+          !hasExplicitGroup && effectiveGroup
+            ? ` placeholder="${escapeHtml(effectiveGroup)}"`
+            : "";
         const mainLint = lintField(content.main.value);
         const translationLint = lintField(content.translation.value);
         const hasWarning = mainLint.hasWarning || translationLint.hasWarning;
-        const warningMessage = lintEnabled ? buildWarningMessage(mainLint, translationLint) : '';
-        const cardWarningAttr = hasWarning ? ' data-warning="true"' : '';
+        const warningMessage = lintEnabled
+          ? buildWarningMessage(mainLint, translationLint)
+          : "";
+        const cardWarningAttr = hasWarning ? ' data-warning="true"' : "";
         const warningMarkup = lintEnabled
-          ? `<div class="operator__slide-warning" data-role="slide-warning" data-visible="${warningMessage ? 'true' : 'false'}">${warningMessage ? escapeHtml(warningMessage) : ''}</div>`
-          : '';
-        const mainWarningClass = lintEnabled && mainLint.hasWarning ? ' is-warning' : '';
-        const translationWarningClass = lintEnabled && translationLint.hasWarning ? ' is-warning' : '';
-        const mainWarningAttr = lintEnabled && mainLint.hasWarning ? ' data-warning="true"' : '';
-        const translationWarningAttr = lintEnabled && translationLint.hasWarning ? ' data-warning="true"' : '';
-        const controlsMarkup = state.mode === 'edit'
-          ? `<div class="operator__slide-controls">
+          ? `<div class="operator__slide-warning" data-role="slide-warning" data-visible="${warningMessage ? "true" : "false"}">${warningMessage ? escapeHtml(warningMessage) : ""}</div>`
+          : "";
+        const mainWarningClass =
+          lintEnabled && mainLint.hasWarning ? " is-warning" : "";
+        const translationWarningClass =
+          lintEnabled && translationLint.hasWarning ? " is-warning" : "";
+        const mainWarningAttr =
+          lintEnabled && mainLint.hasWarning ? ' data-warning="true"' : "";
+        const translationWarningAttr =
+          lintEnabled && translationLint.hasWarning
+            ? ' data-warning="true"'
+            : "";
+        const controlsMarkup =
+          state.mode === "edit"
+            ? `<div class="operator__slide-controls">
               <button type="button" tabindex="-1" data-action="save" title="Save slide">Save</button>
               <button type="button" tabindex="-1" data-action="duplicate" title="Duplicate slide">Duplicate</button>
               <button type="button" tabindex="-1" data-action="delete" title="Delete slide">Delete</button>
             </div>`
-          : '';
-        const footerMarkup = '';
-        const showGroup = state.mode === 'live' && Boolean(effectiveGroup);
-        const groupBadge = `<div class="operator__slide-group" data-role="slide-group" data-hidden="${showGroup ? 'false' : 'true'}">${showGroup ? escapeHtml(effectiveGroup) : ''}</div>`;
+            : "";
+        const footerMarkup = "";
+        const showGroup = state.mode === "live" && Boolean(effectiveGroup);
+        const groupBadge = `<div class="operator__slide-group" data-role="slide-group" data-hidden="${showGroup ? "false" : "true"}">${showGroup ? escapeHtml(effectiveGroup) : ""}</div>`;
         const highlightOptions = { highlightOverflow: lintEnabled };
-        const mainTextHtml = formatMultiline(content.main.value, mainLint, highlightOptions);
+        const mainTextHtml = formatMultiline(
+          content.main.value,
+          mainLint,
+          highlightOptions,
+        );
         const translationTextHtml = formatMultiline(
           content.translation.value,
           translationLint,
           highlightOptions,
         );
         const stageTextHtml = formatMultiline(content.stage.value);
-        const overLimitBadge = !lintEnabled && hasWarning
-          ? `<span class="operator__slide-warning-dot" role="img" aria-label="Slide exceeds configured limits" title="Slide exceeds configured limits">&#9888;</span>`
-          : '';
-        const editorMarkup = state.mode === 'edit'
-          ? `<div class="operator__slide-editor">
+        const overLimitBadge =
+          !lintEnabled && hasWarning
+            ? `<span class="operator__slide-warning-dot" role="img" aria-label="Slide exceeds configured limits" title="Slide exceeds configured limits">&#9888;</span>`
+            : "";
+        const editorMarkup =
+          state.mode === "edit"
+            ? `<div class="operator__slide-editor">
                 <label>
                   <span>Main</span>
                   <textarea data-field="main" rows="2"${mainWarningAttr}>${escapeHtml(content.main.value)}</textarea>
@@ -2243,12 +2498,12 @@
                 </label>
                 <label>
                   <span>Group</span>
-                  <input type="text" data-field="group" value="${hasExplicitGroup ? escapeHtml(slide.explicitGroup) : ''}"${groupPlaceholder} />
+                  <input type="text" data-field="group" value="${hasExplicitGroup ? escapeHtml(slide.explicitGroup) : ""}"${groupPlaceholder} />
                 </label>
               </div>`
-          : '';
+            : "";
         return `
-          <article class="operator__slide-card stage-control__slide${active}${focused}" data-slide-id="${slide.id}" data-slide-index="${index}" data-group-inherited="${hasExplicitGroup ? 'false' : 'true'}"${cardWarningAttr}>
+          <article class="operator__slide-card stage-control__slide${active}${focused}" data-slide-id="${slide.id}" data-slide-index="${index}" data-group-inherited="${hasExplicitGroup ? "false" : "true"}"${cardWarningAttr}>
             <header class="operator__slide-header">
               <div class="operator__slide-header-left">
                 <button type="button" class="operator__slide-handle" data-role="slide-drag-handle" draggable="true" tabindex="-1" aria-label="Reorder slide">↕</button>
@@ -2257,8 +2512,8 @@
               ${controlsMarkup}
             </header>
             <section class="operator__slide-bodies">
-              <div class="operator__slide-text operator__slide-text--main${mainWarningClass}" data-field-display="main" data-warning="${lintEnabled && mainLint.hasWarning ? 'true' : 'false'}">${mainTextHtml}</div>
-              <div class="operator__slide-text operator__slide-text--translation${translationWarningClass}" data-field-display="translation" data-warning="${lintEnabled && translationLint.hasWarning ? 'true' : 'false'}">${translationTextHtml}</div>
+              <div class="operator__slide-text operator__slide-text--main${mainWarningClass}" data-field-display="main" data-warning="${lintEnabled && mainLint.hasWarning ? "true" : "false"}">${mainTextHtml}</div>
+              <div class="operator__slide-text operator__slide-text--translation${translationWarningClass}" data-field-display="translation" data-warning="${lintEnabled && translationLint.hasWarning ? "true" : "false"}">${translationTextHtml}</div>
               <div class="operator__slide-text operator__slide-text--stage" data-field-display="stage">${stageTextHtml}</div>
               ${warningMarkup}
               ${groupBadge}
@@ -2267,8 +2522,8 @@
             ${footerMarkup}
           </article>
         `;
-    })
-    .join('');
+      })
+      .join("");
     els.slides.innerHTML = html;
     if (lintEnabled) {
       repaintSlideWarnings();
@@ -2278,161 +2533,187 @@
     restorePendingFocus();
   }
 
-function updateActiveSlideIndicators() {
-  if (!els.slides) return;
-  const cards = qsa('[data-slide-id]', els.slides);
-  cards.forEach((card) => {
-    const slideId = card.dataset.slideId;
-    const presentationId = state.currentPresentationId;
-    const isActive = presentationId && state.stagePresentationId === presentationId && state.stageSlideId === slideId;
-    card.classList.toggle('is-active', Boolean(isActive));
-    card.classList.toggle('is-focused', state.focusedSlideId === slideId);
-  });
-}
+  function updateActiveSlideIndicators() {
+    if (!els.slides) return;
+    const cards = qsa("[data-slide-id]", els.slides);
+    cards.forEach((card) => {
+      const slideId = card.dataset.slideId;
+      const presentationId = state.currentPresentationId;
+      const isActive =
+        presentationId &&
+        state.stagePresentationId === presentationId &&
+        state.stageSlideId === slideId;
+      card.classList.toggle("is-active", Boolean(isActive));
+      card.classList.toggle("is-focused", state.focusedSlideId === slideId);
+    });
+  }
 
-function restorePendingFocus() {
-  if (!state.pendingFocus || state.mode !== 'edit') {
+  function restorePendingFocus() {
+    if (!state.pendingFocus || state.mode !== "edit") {
+      state.pendingFocus = null;
+      return;
+    }
+    const target = state.pendingFocus;
+    const slideId = target.slideId;
+    const field = target.field;
     state.pendingFocus = null;
-    return;
-  }
-  const target = state.pendingFocus;
-  const slideId = target.slideId;
-  const field = target.field;
-  state.pendingFocus = null;
-  if (!slideId || !field || !els.slides) {
-    return;
-  }
-  const card = els.slides.querySelector(`[data-slide-id="${slideId}"]`);
-  if (!card) {
-    return;
-  }
-  const control = card.querySelector(`[data-field="${field}"]`);
-  if (!control) {
-    return;
-  }
-  const caretMode = target.caret || 'end';
-  if (typeof control.focus === 'function') {
-    control.focus({ preventScroll: false });
-  }
-  if (typeof control.setSelectionRange === 'function') {
-    if (caretMode === 'preserve') {
-      const start = typeof target.selectionStart === 'number' ? target.selectionStart : control.value.length;
-      const end = typeof target.selectionEnd === 'number' ? target.selectionEnd : start;
-      control.setSelectionRange(start, end);
-    } else {
-      const length = control.value.length;
-      control.setSelectionRange(length, length);
+    if (!slideId || !field || !els.slides) {
+      return;
+    }
+    const card = els.slides.querySelector(`[data-slide-id="${slideId}"]`);
+    if (!card) {
+      return;
+    }
+    const control = card.querySelector(`[data-field="${field}"]`);
+    if (!control) {
+      return;
+    }
+    const caretMode = target.caret || "end";
+    if (typeof control.focus === "function") {
+      control.focus({ preventScroll: false });
+    }
+    if (typeof control.setSelectionRange === "function") {
+      if (caretMode === "preserve") {
+        const start =
+          typeof target.selectionStart === "number"
+            ? target.selectionStart
+            : control.value.length;
+        const end =
+          typeof target.selectionEnd === "number" ? target.selectionEnd : start;
+        control.setSelectionRange(start, end);
+      } else {
+        const length = control.value.length;
+        control.setSelectionRange(length, length);
+      }
     }
   }
-}
 
-function repaintSlideWarnings() {
-  if (!els.slides) return;
-  qsa('[data-slide-id]', els.slides).forEach((card) => updateCardWarnings(card));
-}
+  function repaintSlideWarnings() {
+    if (!els.slides) return;
+    qsa("[data-slide-id]", els.slides).forEach((card) =>
+      updateCardWarnings(card),
+    );
+  }
 
-function updateCardWarnings(card) {
-  if (!card) return;
-  if (state.mode !== 'edit') {
-    card.dataset.warning = 'false';
-    const warningEl = card.querySelector('[data-role="slide-warning"]');
-    if (warningEl) {
-      warningEl.dataset.visible = 'false';
-      warningEl.textContent = '';
-    }
-    const mainTextEl = card.querySelector('[data-field-display="main"]');
-    if (mainTextEl) {
-      mainTextEl.classList.remove('is-warning');
-      mainTextEl.dataset.warning = 'false';
-    }
-    const translationTextEl = card.querySelector('[data-field-display="translation"]');
-    if (translationTextEl) {
-      translationTextEl.classList.remove('is-warning');
-      translationTextEl.dataset.warning = 'false';
+  function updateCardWarnings(card) {
+    if (!card) return;
+    if (state.mode !== "edit") {
+      card.dataset.warning = "false";
+      const warningEl = card.querySelector('[data-role="slide-warning"]');
+      if (warningEl) {
+        warningEl.dataset.visible = "false";
+        warningEl.textContent = "";
+      }
+      const mainTextEl = card.querySelector('[data-field-display="main"]');
+      if (mainTextEl) {
+        mainTextEl.classList.remove("is-warning");
+        mainTextEl.dataset.warning = "false";
+      }
+      const translationTextEl = card.querySelector(
+        '[data-field-display="translation"]',
+      );
+      if (translationTextEl) {
+        translationTextEl.classList.remove("is-warning");
+        translationTextEl.dataset.warning = "false";
+      }
+      const mainInput = card.querySelector('[data-field="main"]');
+      if (mainInput) {
+        mainInput.removeAttribute("data-warning");
+      }
+      const translationInput = card.querySelector('[data-field="translation"]');
+      if (translationInput) {
+        translationInput.removeAttribute("data-warning");
+      }
+      return;
     }
     const mainInput = card.querySelector('[data-field="main"]');
-    if (mainInput) {
-      mainInput.removeAttribute('data-warning');
-    }
     const translationInput = card.querySelector('[data-field="translation"]');
-    if (translationInput) {
-      translationInput.removeAttribute('data-warning');
+    const stageInput = card.querySelector('[data-field="stage"]');
+    const mainValue = mainInput
+      ? mainInput.value
+      : card.querySelector('[data-field-display="main"]')?.textContent || "";
+    const translationValue = translationInput
+      ? translationInput.value
+      : card.querySelector('[data-field-display="translation"]')?.textContent ||
+        "";
+    const stageValue = stageInput
+      ? stageInput.value
+      : card.querySelector('[data-field-display="stage"]')?.textContent || "";
+
+    const mainLint = lintField(mainValue);
+    const translationLint = lintField(translationValue);
+    const warningMessage = buildWarningMessage(mainLint, translationLint);
+
+    card.dataset.warning = warningMessage ? "true" : "false";
+
+    const mainTextEl = card.querySelector('[data-field-display="main"]');
+    if (mainTextEl) {
+      mainTextEl.innerHTML = formatMultiline(mainValue, mainLint, {
+        highlightOverflow: true,
+      });
+      mainTextEl.dataset.warning = mainLint.hasWarning ? "true" : "false";
+      mainTextEl.classList.toggle("is-warning", mainLint.hasWarning);
     }
-    return;
-  }
-  const mainInput = card.querySelector('[data-field="main"]');
-  const translationInput = card.querySelector('[data-field="translation"]');
-  const stageInput = card.querySelector('[data-field="stage"]');
-  const mainValue = mainInput ? mainInput.value : card.querySelector('[data-field-display="main"]')?.textContent || '';
-  const translationValue = translationInput
-    ? translationInput.value
-    : card.querySelector('[data-field-display="translation"]')?.textContent || '';
-  const stageValue = stageInput
-    ? stageInput.value
-    : card.querySelector('[data-field-display="stage"]')?.textContent || '';
 
-  const mainLint = lintField(mainValue);
-  const translationLint = lintField(translationValue);
-  const warningMessage = buildWarningMessage(mainLint, translationLint);
-
-  card.dataset.warning = warningMessage ? 'true' : 'false';
-
-  const mainTextEl = card.querySelector('[data-field-display="main"]');
-  if (mainTextEl) {
-    mainTextEl.innerHTML = formatMultiline(mainValue, mainLint, { highlightOverflow: true });
-    mainTextEl.dataset.warning = mainLint.hasWarning ? 'true' : 'false';
-    mainTextEl.classList.toggle('is-warning', mainLint.hasWarning);
-  }
-
-  const translationTextEl = card.querySelector('[data-field-display="translation"]');
-  if (translationTextEl) {
-    translationTextEl.innerHTML = formatMultiline(
-      translationValue,
-      translationLint,
-      { highlightOverflow: true },
+    const translationTextEl = card.querySelector(
+      '[data-field-display="translation"]',
     );
-    translationTextEl.dataset.warning = translationLint.hasWarning ? 'true' : 'false';
-    translationTextEl.classList.toggle('is-warning', translationLint.hasWarning);
-  }
+    if (translationTextEl) {
+      translationTextEl.innerHTML = formatMultiline(
+        translationValue,
+        translationLint,
+        { highlightOverflow: true },
+      );
+      translationTextEl.dataset.warning = translationLint.hasWarning
+        ? "true"
+        : "false";
+      translationTextEl.classList.toggle(
+        "is-warning",
+        translationLint.hasWarning,
+      );
+    }
 
-  const stageTextEl = card.querySelector('[data-field-display="stage"]');
-  if (stageTextEl) {
-    stageTextEl.innerHTML = formatMultiline(stageValue);
-  }
+    const stageTextEl = card.querySelector('[data-field-display="stage"]');
+    if (stageTextEl) {
+      stageTextEl.innerHTML = formatMultiline(stageValue);
+    }
 
-  if (mainInput) {
-    if (mainLint.hasWarning) {
-      mainInput.setAttribute('data-warning', 'true');
-    } else {
-      mainInput.removeAttribute('data-warning');
+    if (mainInput) {
+      if (mainLint.hasWarning) {
+        mainInput.setAttribute("data-warning", "true");
+      } else {
+        mainInput.removeAttribute("data-warning");
+      }
+    }
+
+    if (translationInput) {
+      if (translationLint.hasWarning) {
+        translationInput.setAttribute("data-warning", "true");
+      } else {
+        translationInput.removeAttribute("data-warning");
+      }
+    }
+
+    const warningEl = card.querySelector('[data-role="slide-warning"]');
+    if (warningEl) {
+      if (warningMessage) {
+        warningEl.dataset.visible = "true";
+        warningEl.textContent = warningMessage;
+      } else {
+        warningEl.dataset.visible = "false";
+        warningEl.textContent = "";
+      }
     }
   }
-
-  if (translationInput) {
-    if (translationLint.hasWarning) {
-      translationInput.setAttribute('data-warning', 'true');
-    } else {
-      translationInput.removeAttribute('data-warning');
-    }
-  }
-
-  const warningEl = card.querySelector('[data-role="slide-warning"]');
-  if (warningEl) {
-    if (warningMessage) {
-      warningEl.dataset.visible = 'true';
-      warningEl.textContent = warningMessage;
-    } else {
-      warningEl.dataset.visible = 'false';
-      warningEl.textContent = '';
-    }
-  }
-}
 
   function normaliseLibrary(raw) {
     if (!raw) return null;
     const presentations = (raw.presentations || []).map((presentation) => ({
-      id: presentation.id || presentation.presentationId || presentation.presentation_id,
-      name: presentation.name || 'Untitled presentation',
+      id:
+        presentation.id ||
+        presentation.presentationId ||
+        presentation.presentation_id,
+      name: presentation.name || "Untitled presentation",
     }));
     return {
       id: raw.id,
@@ -2448,20 +2729,29 @@ function updateCardWarnings(card) {
   function normalisePlaylist(raw) {
     if (!raw) return null;
     const entries = (raw.entries || []).map((entry) => {
-      const entryId = entry.entryId || entry.entry_id || entry.entryid || entry.id;
-      const entryType = String(entry.type || entry.entryType || 'presentation').toLowerCase();
-      const presentationId = entry.presentationId || entry.presentation_id || null;
-      const baseName = entry.name || (presentationId ? (presentationIndex.get(presentationId) || {}).name : null);
+      const entryId =
+        entry.entryId || entry.entry_id || entry.entryid || entry.id;
+      const entryType = String(
+        entry.type || entry.entryType || "presentation",
+      ).toLowerCase();
+      const presentationId =
+        entry.presentationId || entry.presentation_id || null;
+      const baseName =
+        entry.name ||
+        (presentationId
+          ? (presentationIndex.get(presentationId) || {}).name
+          : null);
       return {
         entryId,
         entryType,
         presentationId: presentationId || null,
-        name: baseName || (entryType === 'separator' ? 'Separator' : 'Untitled'),
+        name:
+          baseName || (entryType === "separator" ? "Separator" : "Untitled"),
       };
     });
     return {
       id: raw.id,
-      name: raw.name || 'Untitled playlist',
+      name: raw.name || "Untitled playlist",
       entries,
       showInDashboard: Boolean(
         raw.showInDashboard ?? raw.show_in_dashboard ?? false,
@@ -2475,7 +2765,7 @@ function updateCardWarnings(card) {
     state.playlists.forEach((playlist) => {
       lookup.set(playlist.id, playlist);
       (playlist.entries || []).forEach((entry, index) => {
-        if (entry.entryType === 'presentation' && entry.presentationId) {
+        if (entry.entryType === "presentation" && entry.presentationId) {
           if (!presentationMap.has(entry.presentationId)) {
             presentationMap.set(entry.presentationId, {
               playlistId: playlist.id,
@@ -2529,21 +2819,26 @@ function updateCardWarnings(card) {
   function apiFetch(path, options) {
     const controller = new AbortController();
     const headers = {
-      'Content-Type': 'application/json',
-      Accept: 'application/json',
+      "Content-Type": "application/json",
+      Accept: "application/json",
     };
-    const merged = Object.assign({ method: 'GET', headers }, options || {}, {
-      headers: Object.assign(headers, options && options.headers ? options.headers : {}),
+    const merged = Object.assign({ method: "GET", headers }, options || {}, {
+      headers: Object.assign(
+        headers,
+        options && options.headers ? options.headers : {},
+      ),
       signal: controller.signal,
     });
-    const url = path.startsWith('http') ? path : `${window.location.origin}${path}`;
+    const url = path.startsWith("http")
+      ? path
+      : `${window.location.origin}${path}`;
     const promise = fetch(url, merged).then(async (response) => {
       if (!response.ok) {
         const text = await response.text();
         throw new Error(text || `Request failed with ${response.status}`);
       }
-      const contentType = response.headers.get('content-type') || '';
-      if (contentType.includes('application/json')) {
+      const contentType = response.headers.get("content-type") || "";
+      if (contentType.includes("application/json")) {
         return response.json();
       }
       return null;
@@ -2566,13 +2861,13 @@ function updateCardWarnings(card) {
     state.slideFetchAbort = controller;
     try {
       const detail = await fetch(`/presentations/${presentationId}`, {
-        method: 'GET',
-        headers: { Accept: 'application/json' },
+        method: "GET",
+        headers: { Accept: "application/json" },
         signal: controller.signal,
       }).then(async (response) => {
         if (!response.ok) {
           const text = await response.text();
-          throw new Error(text || 'Failed to load presentation');
+          throw new Error(text || "Failed to load presentation");
         }
         return response.json();
       });
@@ -2585,7 +2880,7 @@ function updateCardWarnings(card) {
       });
       state.slidesCache.set(
         presentation.id,
-        normaliseSlides(presentation.slides || [])
+        normaliseSlides(presentation.slides || []),
       );
       state.presentationMeta.set(presentation.id, presentation);
       state.currentPresentationId = presentation.id;
@@ -2593,11 +2888,11 @@ function updateCardWarnings(card) {
       renderSlides(presentation.id);
       renderStageStatus();
     } catch (error) {
-      if (error.name === 'AbortError') {
+      if (error.name === "AbortError") {
         return;
       }
-      console.error('Failed to load presentation', error);
-      showToast('Failed to load presentation', 'error');
+      console.error("Failed to load presentation", error);
+      showToast("Failed to load presentation", "error");
     } finally {
       state.slideFetchAbort = null;
     }
@@ -2614,12 +2909,15 @@ function updateCardWarnings(card) {
 
   function navigateSlides(offset) {
     if (!offset) return;
-    const presentationId = state.currentPresentationId || state.stagePresentationId;
+    const presentationId =
+      state.currentPresentationId || state.stagePresentationId;
     if (!presentationId) return;
     if (!state.slidesCache.has(presentationId)) {
       loadPresentation(presentationId)
         .then(() => navigateSlides(offset))
-        .catch((error) => console.error('Failed to preload presentation for navigation', error));
+        .catch((error) =>
+          console.error("Failed to preload presentation for navigation", error),
+        );
       return;
     }
     const slides = getSlidesForPresentation(presentationId);
@@ -2654,19 +2952,20 @@ function updateCardWarnings(card) {
     if (!Array.isArray(entries)) return [];
     return entries.map((entry) => {
       if (!entry) {
-        return { type: 'presentation' };
+        return { type: "presentation" };
       }
-      if (entry.entryType === 'separator') {
+      if (entry.entryType === "separator") {
         return {
-          type: 'separator',
+          type: "separator",
           entryId: entry.entryId || null,
-          name: entry.name || 'Separator',
+          name: entry.name || "Separator",
         };
       }
       return {
-        type: 'presentation',
+        type: "presentation",
         entryId: entry.entryId || null,
-        presentationId: entry.presentationId || entry.presentation_id || entry.id || null,
+        presentationId:
+          entry.presentationId || entry.presentation_id || entry.id || null,
       };
     });
   }
@@ -2674,12 +2973,12 @@ function updateCardWarnings(card) {
   async function triggerSlide(presentationId, slideId, card) {
     if (!presentationId || !slideId) return;
     if (card) {
-      card.classList.add('is-loading');
+      card.classList.add("is-loading");
     }
     const nextSlideId = computeNextSlideId(presentationId, slideId);
     try {
-      await apiFetch('/stage/state', {
-        method: 'POST',
+      await apiFetch("/stage/state", {
+        method: "POST",
         body: JSON.stringify({
           presentationId,
           currentSlideId: slideId,
@@ -2693,23 +2992,24 @@ function updateCardWarnings(card) {
       if (slides.length) {
         const index = slides.findIndex((slide) => slide.id === slideId);
         const currentSlide = index >= 0 ? slides[index] : slides[0];
-        const followingSlide = index >= 0 ? slides[index + 1] || null : slides[1] || null;
+        const followingSlide =
+          index >= 0 ? slides[index + 1] || null : slides[1] || null;
         state.stageSnapshot = {
           presentationId,
-          presentationName: presentationIndex.get(presentationId)?.name || '',
+          presentationName: presentationIndex.get(presentationId)?.name || "",
           current: currentSlide
             ? {
-                main: extractField(currentSlide, 'main'),
-                translation: extractField(currentSlide, 'translation'),
-                stage: extractField(currentSlide, 'stage'),
+                main: extractField(currentSlide, "main"),
+                translation: extractField(currentSlide, "translation"),
+                stage: extractField(currentSlide, "stage"),
                 group: extractGroup(currentSlide) || null,
               }
             : null,
           next: followingSlide
             ? {
-                main: extractField(followingSlide, 'main'),
-                translation: extractField(followingSlide, 'translation'),
-                stage: extractField(followingSlide, 'stage'),
+                main: extractField(followingSlide, "main"),
+                translation: extractField(followingSlide, "translation"),
+                stage: extractField(followingSlide, "stage"),
                 group: extractGroup(followingSlide) || null,
               }
             : null,
@@ -2724,12 +3024,12 @@ function updateCardWarnings(card) {
       renderStageStatus();
       renderAbleSetPanel();
     } catch (error) {
-      console.error('Failed to trigger slide', error);
-      showToast('Failed to trigger slide', 'error');
+      console.error("Failed to trigger slide", error);
+      showToast("Failed to trigger slide", "error");
     } finally {
       if (card) {
-        card.classList.remove('is-loading');
-        card.classList.add('is-active');
+        card.classList.remove("is-loading");
+        card.classList.add("is-active");
       }
     }
   }
@@ -2739,12 +3039,12 @@ function updateCardWarnings(card) {
     state.clearingSlide = true;
     updateClearSlideAvailability();
     try {
-      await apiFetch('/stage/clear', { method: 'POST' });
+      await apiFetch("/stage/clear", { method: "POST" });
       state.stagePresentationId = null;
       state.stageSlideId = null;
       state.stageSnapshot = {
         presentationId: null,
-        presentationName: '',
+        presentationName: "",
         current: null,
         next: null,
         timers: state.timers,
@@ -2756,10 +3056,10 @@ function updateCardWarnings(card) {
       updateActiveSlideIndicators();
       renderStageStatus();
       renderAbleSetPanel();
-      showToast('Slide outputs cleared', 'success');
+      showToast("Slide outputs cleared", "success");
     } catch (error) {
-      console.error('Failed to clear slide', error);
-      showToast('Failed to clear slide', 'error');
+      console.error("Failed to clear slide", error);
+      showToast("Failed to clear slide", "error");
     } finally {
       state.clearingSlide = false;
       updateClearSlideAvailability();
@@ -2773,58 +3073,77 @@ function updateCardWarnings(card) {
     const stageInput = card.querySelector('[data-field="stage"]');
     const groupInput = card.querySelector('[data-field="group"]');
     const payload = {
-      main: mainInput ? mainInput.value : '',
-      translation: translationInput ? translationInput.value : '',
-      stage: stageInput ? stageInput.value : '',
+      main: mainInput ? mainInput.value : "",
+      translation: translationInput ? translationInput.value : "",
+      stage: stageInput ? stageInput.value : "",
       group: groupInput && groupInput.value ? groupInput.value : null,
     };
     const activeElement = document.activeElement;
-    if (activeElement && card.contains(activeElement) && activeElement.matches('[data-field]')) {
-      const value = typeof activeElement.value === 'string' ? activeElement.value : '';
-      const start = typeof activeElement.selectionStart === 'number' ? activeElement.selectionStart : value.length;
-      const end = typeof activeElement.selectionEnd === 'number' ? activeElement.selectionEnd : start;
+    if (
+      activeElement &&
+      card.contains(activeElement) &&
+      activeElement.matches("[data-field]")
+    ) {
+      const value =
+        typeof activeElement.value === "string" ? activeElement.value : "";
+      const start =
+        typeof activeElement.selectionStart === "number"
+          ? activeElement.selectionStart
+          : value.length;
+      const end =
+        typeof activeElement.selectionEnd === "number"
+          ? activeElement.selectionEnd
+          : start;
       state.pendingFocus = {
         slideId,
-        field: activeElement.dataset.field || 'main',
-        caret: 'preserve',
+        field: activeElement.dataset.field || "main",
+        caret: "preserve",
         selectionStart: start,
         selectionEnd: end,
       };
     } else {
       state.pendingFocus = {
         slideId,
-        field: 'main',
-        caret: 'end',
+        field: "main",
+        caret: "end",
       };
     }
     updateSlideContent(presentationId, slideId, payload);
-    showToast('Slide saved', 'success');
+    showToast("Slide saved", "success");
   }
 
   async function updateSlideContent(presentationId, slideId, payload) {
     try {
-      const updated = await apiFetch(`/presentations/${presentationId}/slides/${slideId}`, {
-        method: 'PATCH',
-        body: JSON.stringify(payload),
-      });
+      const updated = await apiFetch(
+        `/presentations/${presentationId}/slides/${slideId}`,
+        {
+          method: "PATCH",
+          body: JSON.stringify(payload),
+        },
+      );
       const slides = getSlidesForPresentation(presentationId).map((slide) =>
-        slide.id === slideId ? Object.assign({}, slide, { content: updated.content }) : slide
+        slide.id === slideId
+          ? Object.assign({}, slide, { content: updated.content })
+          : slide,
       );
       const normalised = normaliseSlides(slides);
       state.slidesCache.set(presentationId, normalised);
       renderSlides(presentationId);
     } catch (error) {
-      console.error('Failed to update slide', error);
-      showToast('Failed to update slide', 'error');
+      console.error("Failed to update slide", error);
+      showToast("Failed to update slide", "error");
     }
   }
 
   async function insertSlide(presentationId, position) {
     try {
-      const response = await apiFetch(`/presentations/${presentationId}/slides`, {
-        method: 'POST',
-        body: JSON.stringify({ position }),
-      });
+      const response = await apiFetch(
+        `/presentations/${presentationId}/slides`,
+        {
+          method: "POST",
+          body: JSON.stringify({ position }),
+        },
+      );
       const normalised = normaliseSlides(response);
       state.slidesCache.set(presentationId, normalised);
       const inserted = normalised[position || normalised.length - 1] || null;
@@ -2832,23 +3151,26 @@ function updateCardWarnings(card) {
       if (inserted) {
         state.pendingFocus = {
           slideId: inserted.id,
-          field: 'main',
-          caret: 'end',
+          field: "main",
+          caret: "end",
         };
       }
       renderSlides(presentationId);
-      showToast('Slide added', 'success');
+      showToast("Slide added", "success");
     } catch (error) {
-      console.error('Failed to create slide', error);
-      showToast('Failed to create slide', 'error');
+      console.error("Failed to create slide", error);
+      showToast("Failed to create slide", "error");
     }
   }
 
   async function duplicateSlide(presentationId, slideId) {
     try {
-      const response = await apiFetch(`/presentations/${presentationId}/slides/${slideId}/duplicate`, {
-        method: 'POST',
-      });
+      const response = await apiFetch(
+        `/presentations/${presentationId}/slides/${slideId}/duplicate`,
+        {
+          method: "POST",
+        },
+      );
       const normalised = normaliseSlides(response);
       state.slidesCache.set(presentationId, normalised);
       const index = normalised.findIndex((slide) => slide.id === slideId);
@@ -2857,60 +3179,74 @@ function updateCardWarnings(card) {
       if (duplicate) {
         state.pendingFocus = {
           slideId: duplicate.id,
-          field: 'main',
-          caret: 'end',
+          field: "main",
+          caret: "end",
         };
       }
       renderSlides(presentationId);
-      showToast('Slide duplicated', 'success');
+      showToast("Slide duplicated", "success");
     } catch (error) {
-      console.error('Failed to duplicate slide', error);
-      showToast('Failed to duplicate slide', 'error');
+      console.error("Failed to duplicate slide", error);
+      showToast("Failed to duplicate slide", "error");
     }
   }
 
   async function deleteSlide(presentationId, slideId) {
     try {
-      const response = await apiFetch(`/presentations/${presentationId}/slides/${slideId}`, {
-        method: 'DELETE',
-      });
+      const response = await apiFetch(
+        `/presentations/${presentationId}/slides/${slideId}`,
+        {
+          method: "DELETE",
+        },
+      );
       const normalised = normaliseSlides(response);
       state.slidesCache.set(presentationId, normalised);
       state.focusedSlideId = null;
       renderSlides(presentationId);
-      showToast('Slide deleted', 'success');
+      showToast("Slide deleted", "success");
     } catch (error) {
-      console.error('Failed to delete slide', error);
-      showToast('Failed to delete slide', 'error');
+      console.error("Failed to delete slide", error);
+      showToast("Failed to delete slide", "error");
     }
   }
 
   async function reorderSlides(presentationId, ordered) {
     try {
-      const response = await apiFetch(`/presentations/${presentationId}/slides/reorder`, {
-        method: 'POST',
-        body: JSON.stringify({ slideIds: ordered }),
-      });
+      const response = await apiFetch(
+        `/presentations/${presentationId}/slides/reorder`,
+        {
+          method: "POST",
+          body: JSON.stringify({ slideIds: ordered }),
+        },
+      );
       const normalised = normaliseSlides(response);
       state.slidesCache.set(presentationId, normalised);
       renderSlides(presentationId);
     } catch (error) {
-      console.error('Failed to reorder slides', error);
-      showToast('Failed to reorder slides', 'error');
+      console.error("Failed to reorder slides", error);
+      showToast("Failed to reorder slides", "error");
     }
   }
 
   async function reorderPlaylistEntries(playlistId, orderedEntryIds) {
-    if (!playlistId || !Array.isArray(orderedEntryIds) || !orderedEntryIds.length) {
+    if (
+      !playlistId ||
+      !Array.isArray(orderedEntryIds) ||
+      !orderedEntryIds.length
+    ) {
       return;
     }
-    const playlist = state.playlists.find((item) => item.id === playlistId) || state.playlistLookup.get(playlistId);
+    const playlist =
+      state.playlists.find((item) => item.id === playlistId) ||
+      state.playlistLookup.get(playlistId);
     if (!playlist) return;
     const reordered = orderedEntryIds
-      .map((entryId) => playlist.entries.find((entry) => entry.entryId === entryId))
+      .map((entryId) =>
+        playlist.entries.find((entry) => entry.entryId === entryId),
+      )
       .filter(Boolean);
     if (reordered.length !== playlist.entries.length) {
-      console.warn('Mismatch in playlist reorder payload; aborting', {
+      console.warn("Mismatch in playlist reorder payload; aborting", {
         orderedEntryIds,
         playlistEntries: playlist.entries.map((entry) => entry.entryId),
       });
@@ -2919,14 +3255,14 @@ function updateCardWarnings(card) {
     }
     try {
       const response = await apiFetch(`/playlists/${playlistId}/entries`, {
-        method: 'PUT',
+        method: "PUT",
         body: JSON.stringify({ entries: serialisePlaylistEntries(reordered) }),
       });
       refreshPlaylistState(response);
-      showToast('Playlist order updated', 'success');
+      showToast("Playlist order updated", "success");
     } catch (error) {
-      console.error('Failed to reorder playlist', error);
-      showToast('Failed to reorder playlist', 'error');
+      console.error("Failed to reorder playlist", error);
+      showToast("Failed to reorder playlist", "error");
       renderPresentationList();
     }
   }
@@ -2938,14 +3274,16 @@ function updateCardWarnings(card) {
     options = {},
   ) {
     if (!playlistId) {
-      showToast('Select a playlist before adding presentations.', 'warning');
+      showToast("Select a playlist before adding presentations.", "warning");
       state.draggingFromSearch = false;
       state.draggingPresentationId = null;
       return;
     }
-    const playlist = state.playlists.find((item) => item.id === playlistId) || state.playlistLookup.get(playlistId);
+    const playlist =
+      state.playlists.find((item) => item.id === playlistId) ||
+      state.playlistLookup.get(playlistId);
     if (!playlist) {
-      showToast('Playlist not found.', 'error');
+      showToast("Playlist not found.", "error");
       return;
     }
     const entries = playlist.entries.slice();
@@ -2954,54 +3292,62 @@ function updateCardWarnings(card) {
       : entries.length;
     entries.splice(insertionPoint, 0, {
       entryId: null,
-      entryType: 'presentation',
+      entryType: "presentation",
       presentationId,
-      name: presentationIndex.get(presentationId)?.name || 'Untitled',
+      name: presentationIndex.get(presentationId)?.name || "Untitled",
     });
     try {
-      const response = await apiFetch(`/playlists/${playlist.id || playlistId}/entries`, {
-        method: 'PUT',
-        body: JSON.stringify({ entries: serialisePlaylistEntries(entries) }),
-      });
+      const response = await apiFetch(
+        `/playlists/${playlist.id || playlistId}/entries`,
+        {
+          method: "PUT",
+          body: JSON.stringify({ entries: serialisePlaylistEntries(entries) }),
+        },
+      );
       refreshPlaylistState(response);
-      showToast('Presentation added to playlist', 'success');
+      showToast("Presentation added to playlist", "success");
       if (options && options.clearSearch) {
         clearSearchResults();
       }
     } catch (error) {
-      console.error('Failed to add to playlist', error);
-      showToast('Failed to add to playlist', 'error');
+      console.error("Failed to add to playlist", error);
+      showToast("Failed to add to playlist", "error");
     }
   }
 
   async function handleCreatePresentation() {
     if (!state.activeLibraryId) {
-      showToast('Select a library first', 'warning');
+      showToast("Select a library first", "warning");
       return;
     }
     const defaultName = `New Presentation ${new Date().toLocaleTimeString([], {
-      hour: '2-digit',
-      minute: '2-digit',
+      hour: "2-digit",
+      minute: "2-digit",
     })}`;
-    const nameInput = window.prompt('Presentation name', defaultName);
+    const nameInput = window.prompt("Presentation name", defaultName);
     if (nameInput === null) {
       return;
     }
     const trimmed = nameInput.trim() || defaultName;
     try {
-      const response = await apiFetch(`/libraries/${state.activeLibraryId}/presentations`, {
-        method: 'POST',
-        body: JSON.stringify({ name: trimmed }),
-      });
+      const response = await apiFetch(
+        `/libraries/${state.activeLibraryId}/presentations`,
+        {
+          method: "POST",
+          body: JSON.stringify({ name: trimmed }),
+        },
+      );
       if (!response || !response.presentation) {
-        throw new Error('Unexpected response creating presentation');
+        throw new Error("Unexpected response creating presentation");
       }
       const libraryId = response.libraryId || state.activeLibraryId;
       if (response.librarySummary) {
         state.libraries = state.libraries
           .filter((library) => library.id !== response.librarySummary.id)
           .concat(response.librarySummary)
-          .sort((a, b) => a.name.localeCompare(b.name, undefined, { sensitivity: 'base' }));
+          .sort((a, b) =>
+            a.name.localeCompare(b.name, undefined, { sensitivity: "base" }),
+          );
       }
       const presentation = response.presentation;
       presentationIndex.set(presentation.id, {
@@ -3009,9 +3355,15 @@ function updateCardWarnings(card) {
         name: presentation.name,
         libraryId,
         libraryName:
-          response.librarySummary?.name || presentation.libraryName || presentation.library_name || '',
+          response.librarySummary?.name ||
+          presentation.libraryName ||
+          presentation.library_name ||
+          "",
       });
-      state.slidesCache.set(presentation.id, normaliseSlides(presentation.slides || []));
+      state.slidesCache.set(
+        presentation.id,
+        normaliseSlides(presentation.slides || []),
+      );
       rebuildPresentationIndex();
       renderLibraries();
       state.activeLibraryId = libraryId;
@@ -3019,52 +3371,52 @@ function updateCardWarnings(card) {
       state.focusedSlideId = null;
       renderPresentationList();
       loadPresentation(presentation.id);
-      showToast('Presentation created', 'success');
+      showToast("Presentation created", "success");
     } catch (error) {
-      console.error('Failed to create presentation', error);
-      showToast('Failed to create presentation', 'error');
+      console.error("Failed to create presentation", error);
+      showToast("Failed to create presentation", "error");
     }
   }
 
   async function handleAddSeparator() {
     if (!state.activePlaylistId) {
-      showToast('Select a playlist first', 'warning');
+      showToast("Select a playlist first", "warning");
       return;
     }
     const playlist =
       state.playlists.find((item) => item.id === state.activePlaylistId) ||
       state.playlistLookup.get(state.activePlaylistId);
     if (!playlist) {
-      showToast('Playlist not found', 'error');
+      showToast("Playlist not found", "error");
       return;
     }
-    const nameInput = window.prompt('Separator name', 'Section');
+    const nameInput = window.prompt("Separator name", "Section");
     if (nameInput === null) {
       return;
     }
-    const label = nameInput.trim() || 'Section';
+    const label = nameInput.trim() || "Section";
     const entries = playlist.entries.slice();
     entries.push({
       entryId: null,
-      entryType: 'separator',
+      entryType: "separator",
       name: label,
     });
     try {
       const response = await apiFetch(`/playlists/${playlist.id}/entries`, {
-        method: 'PUT',
+        method: "PUT",
         body: JSON.stringify({ entries: serialisePlaylistEntries(entries) }),
       });
       refreshPlaylistState(response);
-      showToast('Separator added', 'success');
+      showToast("Separator added", "success");
     } catch (error) {
-      console.error('Failed to add separator', error);
-      showToast('Failed to add separator', 'error');
+      console.error("Failed to add separator", error);
+      showToast("Failed to add separator", "error");
     }
   }
 
   function applySlideSize() {
     if (els.slides) {
-      els.slides.dataset.size = 'medium';
+      els.slides.dataset.size = "medium";
     }
   }
 
@@ -3075,7 +3427,7 @@ function updateCardWarnings(card) {
       CATALOG_MAX_HEIGHT,
     );
     state.catalogTopHeight = height;
-    els.catalog.style.setProperty('--catalog-top-size', `${height}px`);
+    els.catalog.style.setProperty("--catalog-top-size", `${height}px`);
   }
 
   function handleCatalogResizePointerDown(event) {
@@ -3087,15 +3439,18 @@ function updateCardWarnings(card) {
     state.catalogResizePointerId = event.pointerId;
     state.catalogResizeStartY = event.clientY;
     state.catalogResizeStartHeight = state.catalogTopHeight;
-    if (els.catalogResizer && typeof els.catalogResizer.setPointerCapture === 'function') {
+    if (
+      els.catalogResizer &&
+      typeof els.catalogResizer.setPointerCapture === "function"
+    ) {
       try {
         els.catalogResizer.setPointerCapture(event.pointerId);
       } catch (error) {
-        console.warn('failed to capture pointer for catalog resize', error);
+        console.warn("failed to capture pointer for catalog resize", error);
       }
     }
-    document.addEventListener('pointermove', handleCatalogResizePointerMove);
-    document.addEventListener('pointerup', handleCatalogResizePointerUp);
+    document.addEventListener("pointermove", handleCatalogResizePointerMove);
+    document.addEventListener("pointerup", handleCatalogResizePointerUp);
   }
 
   function handleCatalogResizePointerMove(event) {
@@ -3127,19 +3482,25 @@ function updateCardWarnings(card) {
 
     state.catalogResizeActive = false;
     state.catalogResizePointerId = null;
-    if (els.catalogResizer && typeof els.catalogResizer.releasePointerCapture === 'function') {
+    if (
+      els.catalogResizer &&
+      typeof els.catalogResizer.releasePointerCapture === "function"
+    ) {
       try {
         els.catalogResizer.releasePointerCapture(event.pointerId);
       } catch (error) {
-        console.warn('failed to release pointer capture', error);
+        console.warn("failed to release pointer capture", error);
       }
     }
-    document.removeEventListener('pointermove', handleCatalogResizePointerMove);
-    document.removeEventListener('pointerup', handleCatalogResizePointerUp);
+    document.removeEventListener("pointermove", handleCatalogResizePointerMove);
+    document.removeEventListener("pointerup", handleCatalogResizePointerUp);
     try {
-      window.localStorage.setItem('presenter.catalogTopHeight', String(Math.round(state.catalogTopHeight)));
+      window.localStorage.setItem(
+        "presenter.catalogTopHeight",
+        String(Math.round(state.catalogTopHeight)),
+      );
     } catch (error) {
-      console.warn('failed to persist catalog height', error);
+      console.warn("failed to persist catalog height", error);
     }
   }
 
@@ -3170,9 +3531,9 @@ function updateCardWarnings(card) {
     state.lineLimit = finalValue;
     event.target.value = String(finalValue);
     try {
-      window.localStorage.setItem('presenter.lineLimit', String(finalValue));
+      window.localStorage.setItem("presenter.lineLimit", String(finalValue));
     } catch (error) {
-      console.warn('failed to persist line limit', error);
+      console.warn("failed to persist line limit", error);
     }
     updateLineLimitStyle();
     repaintSlideWarnings();
@@ -3180,41 +3541,47 @@ function updateCardWarnings(card) {
 
   async function removePlaylistEntry(index) {
     if (!state.activePlaylistId) return;
-    const playlist = state.playlists.find((item) => item.id === state.activePlaylistId);
+    const playlist = state.playlists.find(
+      (item) => item.id === state.activePlaylistId,
+    );
     if (!playlist) return;
     const entries = playlist.entries.slice();
     entries.splice(index, 1);
     try {
       const response = await apiFetch(`/playlists/${playlist.id}/entries`, {
-        method: 'PUT',
+        method: "PUT",
         body: JSON.stringify({ entries: serialisePlaylistEntries(entries) }),
       });
       refreshPlaylistState(response);
-      showToast('Removed from playlist', 'success');
+      showToast("Removed from playlist", "success");
     } catch (error) {
-      console.error('Failed to remove playlist entry', error);
-      showToast('Failed to update playlist', 'error');
+      console.error("Failed to remove playlist entry", error);
+      showToast("Failed to update playlist", "error");
     }
   }
 
   async function deleteLibrary(libraryId, options = {}) {
     const library = state.libraries.find((item) => item.id === libraryId);
     if (!library) return;
-    const count = Array.isArray(library.presentations) ? library.presentations.length : library.presentation_count || 0;
+    const count = Array.isArray(library.presentations)
+      ? library.presentations.length
+      : library.presentation_count || 0;
     if (!options.skipConfirm) {
       const confirmed = window.confirm(
-        `Delete library "${library.name}"? This will remove ${count} presentation${count === 1 ? '' : 's'}.`
+        `Delete library "${library.name}"? This will remove ${count} presentation${count === 1 ? "" : "s"}.`,
       );
       if (!confirmed) return;
     }
     try {
-      await apiFetch(`/libraries/${libraryId}`, { method: 'DELETE' });
+      await apiFetch(`/libraries/${libraryId}`, { method: "DELETE" });
       const removedPresentationIds = new Set(
-        (library.presentations || []).map((presentation) => presentation.id)
+        (library.presentations || []).map((presentation) => presentation.id),
       );
       state.libraries = state.libraries
         .filter((item) => item.id !== libraryId)
-        .sort((a, b) => a.name.localeCompare(b.name, undefined, { sensitivity: 'base' }));
+        .sort((a, b) =>
+          a.name.localeCompare(b.name, undefined, { sensitivity: "base" }),
+        );
       state.favoriteLibraryIds.delete(libraryId);
 
       // prune caches pointing to deleted presentations
@@ -3225,24 +3592,35 @@ function updateCardWarnings(card) {
       });
 
       state.playlists = state.playlists.map((playlist) => {
-        const filtered = playlist.entries.filter((entry) => !entry.presentationId || !removedPresentationIds.has(entry.presentationId));
+        const filtered = playlist.entries.filter(
+          (entry) =>
+            !entry.presentationId ||
+            !removedPresentationIds.has(entry.presentationId),
+        );
         const updated = Object.assign({}, playlist, { entries: filtered });
         state.playlistLookup.set(updated.id, updated);
         return updated;
       });
 
-      if (state.currentPresentationId && removedPresentationIds.has(state.currentPresentationId)) {
+      if (
+        state.currentPresentationId &&
+        removedPresentationIds.has(state.currentPresentationId)
+      ) {
         state.currentPresentationId = null;
       }
-      if (state.stagePresentationId && removedPresentationIds.has(state.stagePresentationId)) {
-      state.stagePresentationId = null;
-      state.stageSlideId = null;
-      state.stageSnapshot = null;
-      renderAbleSetPanel();
+      if (
+        state.stagePresentationId &&
+        removedPresentationIds.has(state.stagePresentationId)
+      ) {
+        state.stagePresentationId = null;
+        state.stageSlideId = null;
+        state.stageSnapshot = null;
+        renderAbleSetPanel();
       }
 
       if (state.activeLibraryId === libraryId) {
-        state.activeLibraryId = state.libraries.length > 0 ? state.libraries[0].id : null;
+        state.activeLibraryId =
+          state.libraries.length > 0 ? state.libraries[0].id : null;
         if (!state.activeLibraryId && state.playlists.length > 0) {
           state.activePlaylistId = state.playlists[0].id;
         } else if (!state.activeLibraryId) {
@@ -3260,58 +3638,62 @@ function updateCardWarnings(card) {
       } else if (state.activePlaylistId) {
         updateContextTitleFromPlaylist(state.activePlaylistId);
       } else if (els.contextTitle) {
-        els.contextTitle.textContent = 'Presentations';
+        els.contextTitle.textContent = "Presentations";
       }
 
       if (!state.currentPresentationId && els.slides) {
-        els.slides.innerHTML = '<p class="empty">Select a presentation to load slides.</p>';
-        els.slides.removeAttribute('data-slides-placeholder');
+        els.slides.innerHTML =
+          '<p class="empty">Select a presentation to load slides.</p>';
+        els.slides.removeAttribute("data-slides-placeholder");
       }
 
       renderStageStatus();
       if (!options.silent) {
-        showToast('Library deleted', 'success');
+        showToast("Library deleted", "success");
       }
     } catch (error) {
-      console.error('Failed to delete library', error);
-      showToast('Failed to delete library', 'error');
+      console.error("Failed to delete library", error);
+      showToast("Failed to delete library", "error");
     }
   }
 
   async function executeTimerCommand(command, payload) {
     try {
       const body = Object.assign({ command }, payload || {});
-      const response = await apiFetch('/timers/command', {
-        method: 'POST',
+      const response = await apiFetch("/timers/command", {
+        method: "POST",
         body: JSON.stringify(body),
       });
       state.timers = response;
       applyTimers(response);
-      if (command === 'set_countdown_target') {
+      if (command === "set_countdown_target") {
         state.countdownInputDirty = false;
       }
     } catch (error) {
-      console.error('Timer command failed', error);
-      if (command === 'set_countdown_target') {
+      console.error("Timer command failed", error);
+      if (command === "set_countdown_target") {
         state.countdownInputDirty = true;
       }
-      showToast('Timer command failed', 'error');
+      showToast("Timer command failed", "error");
     }
   }
 
   function applyTimers(overview) {
     if (!overview) return;
     window.__presenterTimers = overview;
-    const countdown = overview.countdownToStart || overview.countdown_to_start || {};
+    const countdown =
+      overview.countdownToStart || overview.countdown_to_start || {};
     const preach = overview.preachTimer || overview.preach_timer || {};
-    const countdownState = formatTimerState(countdown.state || 'idle');
-    const countdownSeconds = countdown.secondsRemaining ?? countdown.seconds_remaining ?? 0;
-    const target = countdown.target || countdown.targetUtc || countdown.target_utc;
-    const preachState = formatTimerState(preach.state || 'idle');
+    const countdownState = formatTimerState(countdown.state || "idle");
+    const countdownSeconds =
+      countdown.secondsRemaining ?? countdown.seconds_remaining ?? 0;
+    const target =
+      countdown.target || countdown.targetUtc || countdown.target_utc;
+    const preachState = formatTimerState(preach.state || "idle");
     const preachSeconds = preach.secondsElapsed ?? preach.seconds_elapsed ?? 0;
 
-    const countdownValueEl = qs('#countdown-value');
-    const countdownTargetEl = qs('#countdown-target');
+    const countdownValueEl = qs("#countdown-value");
+    const countdownTargetEl = qs("#countdown-target");
     window.__presenterCountdownDisplay = countdownState;
     if (countdownValueEl) {
       countdownValueEl.textContent = formatSeconds(countdownSeconds);
@@ -3333,7 +3715,7 @@ function updateCardWarnings(card) {
       } else if (target) {
         countdownTargetEl.textContent = `Target ${target}`;
       } else {
-        countdownTargetEl.textContent = 'Target —';
+        countdownTargetEl.textContent = "Target —";
       }
     }
     if (
@@ -3342,16 +3724,16 @@ function updateCardWarnings(card) {
       !state.countdownInputDirty
     ) {
       if (targetDate instanceof Date && !Number.isNaN(targetDate.getTime())) {
-        const hours = String(targetDate.getHours()).padStart(2, '0');
-        const minutes = String(targetDate.getMinutes()).padStart(2, '0');
+        const hours = String(targetDate.getHours()).padStart(2, "0");
+        const minutes = String(targetDate.getMinutes()).padStart(2, "0");
         els.countdownInput.value = `${hours}:${minutes}`;
       } else {
-        els.countdownInput.value = '';
+        els.countdownInput.value = "";
       }
     }
 
-    const preachStateEl = qs('#preach-state');
-    const preachValueEl = qs('#preach-value');
+    const preachStateEl = qs("#preach-state");
+    const preachValueEl = qs("#preach-value");
     if (preachStateEl) {
       preachStateEl.textContent = preachState;
     }
@@ -3366,7 +3748,7 @@ function updateCardWarnings(card) {
       updateActiveSlideIndicators();
       return;
     }
-    const isLiveMode = state.mode === 'live';
+    const isLiveMode = state.mode === "live";
     if (!isLiveMode || !state.ableset.status.followEnabled) {
       updateActiveSlideIndicators();
       return;
@@ -3389,8 +3771,10 @@ function updateCardWarnings(card) {
     } else {
       let libraryMatched = false;
       if (Array.isArray(state.libraries)) {
-        const library = state.libraries.find((item) =>
-          Array.isArray(item.presentations) && item.presentations.some((entry) => entry.id === presentationId)
+        const library = state.libraries.find(
+          (item) =>
+            Array.isArray(item.presentations) &&
+            item.presentations.some((entry) => entry.id === presentationId),
         );
         if (library) {
           libraryMatched = true;
@@ -3404,12 +3788,18 @@ function updateCardWarnings(card) {
           updateContextTitleFromLibrary(library.id);
         }
       }
-      if (!libraryMatched && state.stageSnapshot && state.stageSnapshot.presentationName && els.contextTitle) {
+      if (
+        !libraryMatched &&
+        state.stageSnapshot &&
+        state.stageSnapshot.presentationName &&
+        els.contextTitle
+      ) {
         els.contextTitle.textContent = `Live: ${state.stageSnapshot.presentationName}`;
       }
     }
 
-    const presentationChanged = isLiveMode && state.currentPresentationId !== presentationId;
+    const presentationChanged =
+      isLiveMode && state.currentPresentationId !== presentationId;
     listNeedsRender = listNeedsRender && !presentationChanged;
     if (presentationChanged) {
       state.currentPresentationId = presentationId;
@@ -3433,7 +3823,9 @@ function updateCardWarnings(card) {
               }
             }
           })
-          .catch((error) => console.error('Failed to load presentation for stage sync', error));
+          .catch((error) =>
+            console.error("Failed to load presentation for stage sync", error),
+          );
       }
       updateActivePresentationIndicators();
     } else {
@@ -3456,50 +3848,55 @@ function updateCardWarnings(card) {
       try {
         state.liveSocket.close();
       } catch (error) {
-        console.warn('Error closing live socket', error);
+        console.warn("Error closing live socket", error);
       }
     }
-    const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
-    const socket = new WebSocket(`${protocol}//${window.location.host}/live/ws`);
+    const protocol = window.location.protocol === "https:" ? "wss:" : "ws:";
+    const socket = new WebSocket(
+      `${protocol}//${window.location.host}/live/ws`,
+    );
     state.liveSocket = socket;
-    socket.addEventListener('open', () => {
+    socket.addEventListener("open", () => {
       window.__presenterLiveConnected = true;
       if (state.liveReconnectTimer) {
         clearTimeout(state.liveReconnectTimer);
         state.liveReconnectTimer = null;
       }
     });
-    socket.addEventListener('message', (event) => {
+    socket.addEventListener("message", (event) => {
       try {
         const payload = JSON.parse(event.data);
-        if (payload.type === 'timers' || payload.type === 'Timers') {
+        if (payload.type === "timers" || payload.type === "Timers") {
           state.timers = payload.overview;
           applyTimers(payload.overview);
-        } else if (payload.type === 'stage' || payload.type === 'Stage') {
+        } else if (payload.type === "stage" || payload.type === "Stage") {
           const snapshot = payload.snapshot || {};
-          const presentationId = snapshot.presentationId ?? snapshot.presentation_id ?? null;
-          const currentSlideId = snapshot.currentSlideId ?? snapshot.current_slide_id ?? null;
+          const presentationId =
+            snapshot.presentationId ?? snapshot.presentation_id ?? null;
+          const currentSlideId =
+            snapshot.currentSlideId ?? snapshot.current_slide_id ?? null;
           const latencyMsValue =
-            typeof snapshot.latencyMs === 'number'
+            typeof snapshot.latencyMs === "number"
               ? snapshot.latencyMs
-              : typeof snapshot.latency_ms === 'number'
-              ? snapshot.latency_ms
-              : null;
+              : typeof snapshot.latency_ms === "number"
+                ? snapshot.latency_ms
+                : null;
           const currentPositionValue =
-            typeof snapshot.currentPosition === 'number'
+            typeof snapshot.currentPosition === "number"
               ? snapshot.currentPosition
-              : typeof snapshot.current_position === 'number'
-              ? snapshot.current_position
-              : null;
+              : typeof snapshot.current_position === "number"
+                ? snapshot.current_position
+                : null;
           const totalSlidesValue =
-            typeof snapshot.totalSlides === 'number'
+            typeof snapshot.totalSlides === "number"
               ? snapshot.totalSlides
-              : typeof snapshot.total_slides === 'number'
-              ? snapshot.total_slides
-              : null;
+              : typeof snapshot.total_slides === "number"
+                ? snapshot.total_slides
+                : null;
           state.stageSnapshot = {
             presentationId,
-            presentationName: snapshot.presentationName ?? snapshot.presentation_name ?? '',
+            presentationName:
+              snapshot.presentationName ?? snapshot.presentation_name ?? "",
             current: snapshot.current || null,
             next: snapshot.next || null,
             timers: snapshot.timers || null,
@@ -3516,22 +3913,28 @@ function updateCardWarnings(card) {
           }
           renderStageStatus();
           renderAbleSetPanel();
-        } else if (payload.type === 'stage_layout' || payload.type === 'StageLayout') {
-          const nextCode = String(payload.code || '').trim();
+        } else if (
+          payload.type === "stage_layout" ||
+          payload.type === "StageLayout"
+        ) {
+          const nextCode = String(payload.code || "").trim();
           if (nextCode.length > 0) {
             state.stageLayoutCode = nextCode;
             applyStageLayoutSelection(nextCode);
           }
-        } else if (payload.type === 'stage_connection' || payload.type === 'StageConnection') {
+        } else if (
+          payload.type === "stage_connection" ||
+          payload.type === "StageConnection"
+        ) {
           handleStageConnectionSnapshot(payload.snapshot || payload);
-        } else if (payload.type === 'bible' || payload.type === 'Bible') {
+        } else if (payload.type === "bible" || payload.type === "Bible") {
           // no-op for operator for now
         }
       } catch (error) {
-        console.error('Failed to parse live payload', error);
+        console.error("Failed to parse live payload", error);
       }
     });
-    socket.addEventListener('close', () => {
+    socket.addEventListener("close", () => {
       window.__presenterLiveConnected = false;
       if (!state.liveReconnectTimer) {
         state.liveReconnectTimer = setTimeout(() => {
@@ -3539,12 +3942,12 @@ function updateCardWarnings(card) {
         }, 2000);
       }
     });
-    socket.addEventListener('error', (error) => {
-      console.error('Live websocket error', error);
+    socket.addEventListener("error", (error) => {
+      console.error("Live websocket error", error);
       try {
         socket.close();
       } catch (err) {
-        console.error('Failed to close socket after error', err);
+        console.error("Failed to close socket after error", err);
       }
     });
   }
@@ -3557,7 +3960,9 @@ function updateCardWarnings(card) {
       return;
     }
 
-    const favoriteToggle = event.target.closest('[data-action="library-favorite"]');
+    const favoriteToggle = event.target.closest(
+      '[data-action="library-favorite"]',
+    );
     if (favoriteToggle && favoriteToggle.dataset.libraryId) {
       event.preventDefault();
       event.stopPropagation();
@@ -3588,7 +3993,9 @@ function updateCardWarnings(card) {
       return;
     }
 
-    const favoriteToggle = event.target.closest('[data-action="playlist-favorite"]');
+    const favoriteToggle = event.target.closest(
+      '[data-action="playlist-favorite"]',
+    );
     if (favoriteToggle && favoriteToggle.dataset.playlistId) {
       event.preventDefault();
       event.stopPropagation();
@@ -3617,20 +4024,25 @@ function updateCardWarnings(card) {
     renderPlaylists();
     renderPresentationList();
     if (els.slides) {
-      els.slides.innerHTML = '<p class="empty">Select a presentation to load slides.</p>';
-      els.slides.removeAttribute('data-slides-placeholder');
+      els.slides.innerHTML =
+        '<p class="empty">Select a presentation to load slides.</p>';
+      els.slides.removeAttribute("data-slides-placeholder");
     }
   }
 
   function handleLibraryModalClick(event) {
-    const closeButton = event.target.closest('[data-role="library-modal-close"]');
+    const closeButton = event.target.closest(
+      '[data-role="library-modal-close"]',
+    );
     if (closeButton) {
       event.preventDefault();
       closeLibraryModal();
       return;
     }
 
-    const favoriteToggle = event.target.closest('[data-action="library-favorite"]');
+    const favoriteToggle = event.target.closest(
+      '[data-action="library-favorite"]',
+    );
     if (favoriteToggle && favoriteToggle.dataset.libraryId) {
       event.preventDefault();
       event.stopPropagation();
@@ -3659,10 +4071,10 @@ function updateCardWarnings(card) {
     if (state.libraryEditSubmitting) return;
     const nameInput = els.libraryEditName;
     const favoriteInput = els.libraryEditFavorite;
-    const mode = state.libraryEditMode || 'edit';
-    const name = nameInput ? nameInput.value.trim() : '';
+    const mode = state.libraryEditMode || "edit";
+    const name = nameInput ? nameInput.value.trim() : "";
     if (!name) {
-      showToast('Library name cannot be empty', 'warning');
+      showToast("Library name cannot be empty", "warning");
       if (nameInput) {
         nameInput.focus();
       }
@@ -3672,22 +4084,24 @@ function updateCardWarnings(card) {
 
     setLibraryEditSubmitting(true);
     try {
-      if (mode === 'create') {
-        const library = await apiFetch('/libraries', {
-          method: 'POST',
+      if (mode === "create") {
+        const library = await apiFetch("/libraries", {
+          method: "POST",
           body: JSON.stringify({ name }),
         });
         const normalised = normaliseLibrary(library);
         if (normalised) {
           normalised.isFavorite = favorite;
           state.libraries.push(normalised);
-          state.libraries.sort((a, b) => a.name.localeCompare(b.name, undefined, { sensitivity: 'base' }));
+          state.libraries.sort((a, b) =>
+            a.name.localeCompare(b.name, undefined, { sensitivity: "base" }),
+          );
           state.activeLibraryId = normalised.id;
           state.activePlaylistId = null;
           rebuildPresentationIndex();
           if (favorite) {
             await apiFetch(`/libraries/${normalised.id}/favorite`, {
-              method: 'POST',
+              method: "POST",
               body: JSON.stringify({ favorite: true }),
             });
             state.favoriteLibraryIds.add(normalised.id);
@@ -3698,7 +4112,7 @@ function updateCardWarnings(card) {
           renderPlaylists();
           renderPresentationList();
           updateContextTitleFromLibrary(normalised.id);
-          showToast('Library created', 'success');
+          showToast("Library created", "success");
         }
         closeLibraryEdit();
         return;
@@ -3722,7 +4136,7 @@ function updateCardWarnings(card) {
 
       if (name !== library.name) {
         await apiFetch(`/libraries/${libraryId}`, {
-          method: 'PATCH',
+          method: "PATCH",
           body: JSON.stringify({ name }),
         });
         library.name = name;
@@ -3730,7 +4144,7 @@ function updateCardWarnings(card) {
 
       if (favorite !== previousFavorite) {
         await apiFetch(`/libraries/${libraryId}/favorite`, {
-          method: 'POST',
+          method: "POST",
           body: JSON.stringify({ favorite }),
         });
         if (favorite) {
@@ -3741,7 +4155,9 @@ function updateCardWarnings(card) {
       }
 
       library.isFavorite = favorite;
-      state.libraries.sort((a, b) => a.name.localeCompare(b.name, undefined, { sensitivity: 'base' }));
+      state.libraries.sort((a, b) =>
+        a.name.localeCompare(b.name, undefined, { sensitivity: "base" }),
+      );
       rebuildPresentationIndex();
       renderLibraries();
       renderPlaylists();
@@ -3749,11 +4165,11 @@ function updateCardWarnings(card) {
         updateContextTitleFromLibrary(libraryId);
         renderPresentationList();
       }
-      showToast('Library updated', 'success');
+      showToast("Library updated", "success");
       closeLibraryEdit();
     } catch (error) {
-      console.error('Failed to update library', error);
-      showToast('Failed to update library', 'error');
+      console.error("Failed to update library", error);
+      showToast("Failed to update library", "error");
     } finally {
       setLibraryEditSubmitting(false);
     }
@@ -3762,7 +4178,7 @@ function updateCardWarnings(card) {
   async function handleLibraryEditDelete(event) {
     event.preventDefault();
     if (state.libraryEditSubmitting) return;
-    if (state.libraryEditMode !== 'edit') return;
+    if (state.libraryEditMode !== "edit") return;
     const libraryId = state.libraryBeingEditedId;
     if (!libraryId) {
       closeLibraryEdit();
@@ -3777,7 +4193,7 @@ function updateCardWarnings(card) {
       ? library.presentations.length
       : library.presentation_count || 0;
     const confirmed = window.confirm(
-      `Delete library "${library.name}"? This will remove ${count} presentation${count === 1 ? '' : 's'}.`
+      `Delete library "${library.name}"? This will remove ${count} presentation${count === 1 ? "" : "s"}.`,
     );
     if (!confirmed) {
       return;
@@ -3787,8 +4203,8 @@ function updateCardWarnings(card) {
       await deleteLibrary(libraryId, { skipConfirm: true });
       closeLibraryEdit();
     } catch (error) {
-      console.error('Failed to delete library', error);
-      showToast('Failed to delete library', 'error');
+      console.error("Failed to delete library", error);
+      showToast("Failed to delete library", "error");
     } finally {
       setLibraryEditSubmitting(false);
     }
@@ -3803,9 +4219,9 @@ function updateCardWarnings(card) {
       return;
     }
     const nameInput = els.presentationEditName;
-    const name = nameInput ? nameInput.value.trim() : '';
+    const name = nameInput ? nameInput.value.trim() : "";
     if (!name) {
-      showToast('Name cannot be empty', 'warning');
+      showToast("Name cannot be empty", "warning");
       if (nameInput) {
         nameInput.focus();
         nameInput.select();
@@ -3815,18 +4231,22 @@ function updateCardWarnings(card) {
 
     setPresentationEditSubmitting(true);
     try {
-      if (target.type === 'presentation') {
+      if (target.type === "presentation") {
         await apiFetch(`/presentations/${target.presentationId}`, {
-          method: 'PATCH',
+          method: "PATCH",
           body: JSON.stringify({ name }),
         });
         let library = null;
         if (target.libraryId) {
-          library = state.libraries.find((item) => item.id === target.libraryId);
+          library = state.libraries.find(
+            (item) => item.id === target.libraryId,
+          );
         }
         if (!library) {
           library = state.libraries.find((item) =>
-            (item.presentations || []).some((presentation) => presentation.id === target.presentationId),
+            (item.presentations || []).some(
+              (presentation) => presentation.id === target.presentationId,
+            ),
           );
         }
         if (library) {
@@ -3839,7 +4259,7 @@ function updateCardWarnings(card) {
         }
         if (state.presentationMeta.has(target.presentationId)) {
           const cached = state.presentationMeta.get(target.presentationId);
-          if (cached && typeof cached === 'object') {
+          if (cached && typeof cached === "object") {
             cached.name = name;
           }
         }
@@ -3849,7 +4269,10 @@ function updateCardWarnings(card) {
             return;
           }
           playlist.entries.forEach((entry) => {
-            if (entry.entryType === 'presentation' && entry.presentationId === target.presentationId) {
+            if (
+              entry.entryType === "presentation" &&
+              entry.presentationId === target.presentationId
+            ) {
               entry.name = name;
             }
           });
@@ -3877,20 +4300,26 @@ function updateCardWarnings(card) {
           renderStageStatus();
           renderAbleSetPanel();
         }
-        showToast('Presentation renamed', 'success');
-      } else if (target.type === 'separator') {
-        const playlist = state.playlists.find((item) => item.id === target.playlistId);
+        showToast("Presentation renamed", "success");
+      } else if (target.type === "separator") {
+        const playlist = state.playlists.find(
+          (item) => item.id === target.playlistId,
+        );
         if (!playlist) {
-          throw new Error('Playlist not found');
+          throw new Error("Playlist not found");
         }
-        const entryIndex = playlist.entries.findIndex((item) => item.entryId === target.entryId);
+        const entryIndex = playlist.entries.findIndex(
+          (item) => item.entryId === target.entryId,
+        );
         if (entryIndex < 0) {
-          throw new Error('Separator not found');
+          throw new Error("Separator not found");
         }
         playlist.entries[entryIndex].name = name;
         const response = await apiFetch(`/playlists/${playlist.id}/entries`, {
-          method: 'PUT',
-          body: JSON.stringify({ entries: serialisePlaylistEntries(playlist.entries) }),
+          method: "PUT",
+          body: JSON.stringify({
+            entries: serialisePlaylistEntries(playlist.entries),
+          }),
         });
         const updated = normalisePlaylist(response);
         if (updated) {
@@ -3900,12 +4329,12 @@ function updateCardWarnings(card) {
         if (state.activePlaylistId === playlist.id) {
           renderPresentationList();
         }
-        showToast('Separator renamed', 'success');
+        showToast("Separator renamed", "success");
       }
       closePresentationEdit();
     } catch (error) {
-      console.error('Failed to save changes', error);
-      showToast('Failed to save changes', 'error');
+      console.error("Failed to save changes", error);
+      showToast("Failed to save changes", "error");
     } finally {
       setPresentationEditSubmitting(false);
     }
@@ -3913,12 +4342,12 @@ function updateCardWarnings(card) {
 
   function handleGlobalKeydown(event) {
     const target = event.target;
-    const tag = target && target.tagName ? target.tagName.toLowerCase() : '';
+    const tag = target && target.tagName ? target.tagName.toLowerCase() : "";
     const isEditable = Boolean(
       (target && target.isContentEditable) ||
-      tag === 'input' ||
-      tag === 'textarea' ||
-      tag === 'select'
+      tag === "input" ||
+      tag === "textarea" ||
+      tag === "select",
     );
     const modalOpen =
       state.libraryModalOpen ||
@@ -3928,7 +4357,10 @@ function updateCardWarnings(card) {
       state.presentationEditModalOpen;
 
     if (!isEditable && !modalOpen) {
-      if ((event.key === ' ' || event.key === 'Space') && state.mode === 'live') {
+      if (
+        (event.key === " " || event.key === "Space") &&
+        state.mode === "live"
+      ) {
         if (els.searchInput) {
           event.preventDefault();
           els.searchInput.focus();
@@ -3939,19 +4371,19 @@ function updateCardWarnings(card) {
         }
         return;
       }
-      if (event.key === 'ArrowRight') {
+      if (event.key === "ArrowRight") {
         event.preventDefault();
         navigateSlides(1);
         return;
       }
-      if (event.key === 'ArrowLeft') {
+      if (event.key === "ArrowLeft") {
         event.preventDefault();
         navigateSlides(-1);
         return;
       }
     }
 
-    if (event.key === 'Escape') {
+    if (event.key === "Escape") {
       if (state.searchOpen) {
         hideSearchResults();
         return;
@@ -3990,13 +4422,16 @@ function updateCardWarnings(card) {
   }
 
   function handlePresentationClick(event) {
-    const renamePresentationButton = event.target.closest('[data-action="presentation-rename"]');
+    const renamePresentationButton = event.target.closest(
+      '[data-action="presentation-rename"]',
+    );
     if (renamePresentationButton) {
       event.preventDefault();
       event.stopPropagation();
       const presentationId =
         renamePresentationButton.dataset.presentationId ||
-        renamePresentationButton.closest('[data-presentation-id]')?.dataset.presentationId;
+        renamePresentationButton.closest("[data-presentation-id]")?.dataset
+          .presentationId;
       if (!presentationId) {
         return;
       }
@@ -4005,12 +4440,16 @@ function updateCardWarnings(card) {
       return;
     }
 
-    const renameSeparatorButton = event.target.closest('[data-action="separator-rename"]');
+    const renameSeparatorButton = event.target.closest(
+      '[data-action="separator-rename"]',
+    );
     if (renameSeparatorButton) {
       event.preventDefault();
       event.stopPropagation();
       const playlistId =
-        renameSeparatorButton.dataset.playlistId || state.activePlaylistId || null;
+        renameSeparatorButton.dataset.playlistId ||
+        state.activePlaylistId ||
+        null;
       const entryId = renameSeparatorButton.dataset.entryId || null;
       if (playlistId && entryId) {
         openSeparatorRename(playlistId, entryId);
@@ -4018,7 +4457,9 @@ function updateCardWarnings(card) {
       return;
     }
 
-    const removeButton = event.target.closest('[data-action="playlist-remove"]');
+    const removeButton = event.target.closest(
+      '[data-action="playlist-remove"]',
+    );
     if (removeButton) {
       event.stopPropagation();
       const item = removeButton.closest('[data-role="presentation-item"]');
@@ -4032,8 +4473,8 @@ function updateCardWarnings(card) {
 
     const item = event.target.closest('[data-role="presentation-item"]');
     if (!item) return;
-    const itemType = item.dataset.type || 'presentation';
-    if (itemType === 'separator') {
+    const itemType = item.dataset.type || "presentation";
+    if (itemType === "separator") {
       state.currentPresentationId = null;
       state.focusedSlideId = null;
       renderPresentationList();
@@ -4055,9 +4496,15 @@ function updateCardWarnings(card) {
     state.draggingFromSearch = false;
     const entryIndex = item.dataset.entryIndex;
     const isPlaylistEntry =
-      entryId && typeof entryIndex !== 'undefined' && entryIndex !== null && entryIndex !== '' && state.activePlaylistId;
+      entryId &&
+      typeof entryIndex !== "undefined" &&
+      entryIndex !== null &&
+      entryIndex !== "" &&
+      state.activePlaylistId;
     if (isPlaylistEntry) {
-      const playlist = state.playlists.find((list) => list.id === state.activePlaylistId);
+      const playlist = state.playlists.find(
+        (list) => list.id === state.activePlaylistId,
+      );
       if (playlist) {
         state.playlistReorderSnapshot = {
           playlistId: playlist.id,
@@ -4065,9 +4512,15 @@ function updateCardWarnings(card) {
           initialOrder: playlist.entries.map((entry) => entry.entryId),
         };
       }
-      event.dataTransfer.effectAllowed = 'move';
-      event.dataTransfer.setData('application/x-presenter-playlist-entry', entryId);
-      event.dataTransfer.setData('application/x-presenter-playlist-id', state.activePlaylistId);
+      event.dataTransfer.effectAllowed = "move";
+      event.dataTransfer.setData(
+        "application/x-presenter-playlist-entry",
+        entryId,
+      );
+      event.dataTransfer.setData(
+        "application/x-presenter-playlist-id",
+        state.activePlaylistId,
+      );
       state.draggingPresentationId = null;
       return;
     }
@@ -4077,11 +4530,21 @@ function updateCardWarnings(card) {
       return;
     }
     state.draggingPresentationId = presentationId;
-    event.dataTransfer.effectAllowed = 'copyMove';
-    event.dataTransfer.setData('application/x-presenter-presentation', presentationId);
-    event.dataTransfer.setData('text/plain', presentationId);
-    event.dataTransfer.setData('application/x-presenter-presentation', presentationId);
-    event.dataTransfer.setDragImage(item, item.clientWidth / 2, item.clientHeight / 2);
+    event.dataTransfer.effectAllowed = "copyMove";
+    event.dataTransfer.setData(
+      "application/x-presenter-presentation",
+      presentationId,
+    );
+    event.dataTransfer.setData("text/plain", presentationId);
+    event.dataTransfer.setData(
+      "application/x-presenter-presentation",
+      presentationId,
+    );
+    event.dataTransfer.setDragImage(
+      item,
+      item.clientWidth / 2,
+      item.clientHeight / 2,
+    );
   }
 
   function resolvePlaylistTargetFromEvent(event) {
@@ -4098,14 +4561,16 @@ function updateCardWarnings(card) {
       return;
     }
     if (
-      event.dataTransfer.types.includes('application/x-presenter-presentation') ||
-      event.dataTransfer.types.includes('text/plain')
+      event.dataTransfer.types.includes(
+        "application/x-presenter-presentation",
+      ) ||
+      event.dataTransfer.types.includes("text/plain")
     ) {
       event.preventDefault();
       const isReorder =
         state.playlistReorderSnapshot &&
         state.playlistReorderSnapshot.playlistId === playlistId;
-      event.dataTransfer.dropEffect = isReorder ? 'move' : 'copy';
+      event.dataTransfer.dropEffect = isReorder ? "move" : "copy";
     }
   }
 
@@ -4115,13 +4580,14 @@ function updateCardWarnings(card) {
     }
     const playlistId = resolvePlaylistTargetFromEvent(event);
     if (!playlistId) {
-      showToast('Select a playlist before adding presentations.', 'warning');
+      showToast("Select a playlist before adding presentations.", "warning");
       return;
     }
     const transfer = event.dataTransfer;
     let id = transfer
-      ? transfer.getData('application/x-presenter-presentation') || transfer.getData('text/plain')
-      : '';
+      ? transfer.getData("application/x-presenter-presentation") ||
+        transfer.getData("text/plain")
+      : "";
     if (!id && state.draggingPresentationId) {
       id = state.draggingPresentationId;
     }
@@ -4136,10 +4602,16 @@ function updateCardWarnings(card) {
       state.searchDragging ||
       state.draggingFromSearch ||
       (transfer
-        ? Array.from(transfer.types || []).includes('application/x-presenter-search')
+        ? Array.from(transfer.types || []).includes(
+            "application/x-presenter-search",
+          )
         : false) ||
-      (state.searchOpen && typeof state.searchQuery === 'string' && state.searchQuery.trim().length > 0);
-    await handlePlaylistInsertion(id, playlistId, null, { clearSearch: fromSearch });
+      (state.searchOpen &&
+        typeof state.searchQuery === "string" &&
+        state.searchQuery.trim().length > 0);
+    await handlePlaylistInsertion(id, playlistId, null, {
+      clearSearch: fromSearch,
+    });
     if (fromSearch) {
       clearSearchResults();
     }
@@ -4151,13 +4623,15 @@ function updateCardWarnings(card) {
 
   function handleAddSlide() {
     if (!state.currentPresentationId) {
-      showToast('Select a presentation first', 'warning');
+      showToast("Select a presentation first", "warning");
       return;
     }
     const slides = getSlidesForPresentation(state.currentPresentationId);
     let position = slides.length;
     if (state.focusedSlideId) {
-      const index = slides.findIndex((slide) => slide.id === state.focusedSlideId);
+      const index = slides.findIndex(
+        (slide) => slide.id === state.focusedSlideId,
+      );
       if (index >= 0) {
         position = index + 1;
       }
@@ -4174,12 +4648,18 @@ function updateCardWarnings(card) {
   }
 
   function handleSlidesClick(event) {
-    const card = event.target.closest('[data-slide-id]');
+    const card = event.target.closest("[data-slide-id]");
     if (!card) return;
     const slideId = card.dataset.slideId;
-    const now = typeof performance !== 'undefined' && performance.now ? performance.now() : Date.now();
-    if (state.mode === 'live' && state.skipClickTrigger) {
-      if (state.skipClickTrigger.slideId === slideId && state.skipClickTrigger.expiresAt >= now) {
+    const now =
+      typeof performance !== "undefined" && performance.now
+        ? performance.now()
+        : Date.now();
+    if (state.mode === "live" && state.skipClickTrigger) {
+      if (
+        state.skipClickTrigger.slideId === slideId &&
+        state.skipClickTrigger.expiresAt >= now
+      ) {
         state.skipClickTrigger = null;
         event.preventDefault();
         event.stopPropagation();
@@ -4191,20 +4671,20 @@ function updateCardWarnings(card) {
     }
     const presentationId = state.currentPresentationId;
     if (!presentationId) return;
-    const actionButton = event.target.closest('[data-action]');
+    const actionButton = event.target.closest("[data-action]");
     if (actionButton) {
       const action = actionButton.dataset.action;
       switch (action) {
-        case 'trigger':
+        case "trigger":
           triggerSlide(presentationId, slideId, card);
           break;
-        case 'save':
+        case "save":
           saveSlide(presentationId, slideId, card);
           break;
-        case 'duplicate':
+        case "duplicate":
           duplicateSlide(presentationId, slideId);
           break;
-        case 'delete':
+        case "delete":
           deleteSlide(presentationId, slideId);
           break;
         default:
@@ -4215,13 +4695,15 @@ function updateCardWarnings(card) {
       return;
     }
 
-    const isTextField = event.target.matches('textarea, input, textarea *, input *');
+    const isTextField = event.target.matches(
+      "textarea, input, textarea *, input *",
+    );
     if (isTextField) {
       return;
     }
 
     state.focusedSlideId = slideId;
-    if (state.mode === 'live') {
+    if (state.mode === "live") {
       triggerSlide(presentationId, slideId, card);
     } else {
       updateActiveSlideIndicators();
@@ -4229,22 +4711,26 @@ function updateCardWarnings(card) {
   }
 
   function handleSlidesPointerDown(event) {
-    if (state.mode === 'live') {
+    if (state.mode === "live") {
       if (event.button !== 0) {
         state.pendingFocus = null;
         return;
       }
-      const actionButton = event.target.closest('[data-action]');
-      const editableField = event.target.closest('[data-field]');
+      const actionButton = event.target.closest("[data-action]");
+      const editableField = event.target.closest("[data-field]");
       if (actionButton || editableField) {
         state.pendingFocus = null;
         return;
       }
-      const card = event.target.closest('[data-slide-id]');
-      const presentationId = state.currentPresentationId || state.stagePresentationId;
+      const card = event.target.closest("[data-slide-id]");
+      const presentationId =
+        state.currentPresentationId || state.stagePresentationId;
       const slideId = card ? card.dataset.slideId : null;
       if (card && presentationId && slideId) {
-        const now = typeof performance !== 'undefined' && performance.now ? performance.now() : Date.now();
+        const now =
+          typeof performance !== "undefined" && performance.now
+            ? performance.now()
+            : Date.now();
         state.skipClickTrigger = { slideId, expiresAt: now + 250 };
         state.currentPresentationId = presentationId;
         state.focusedSlideId = slideId;
@@ -4256,47 +4742,53 @@ function updateCardWarnings(card) {
       state.pendingFocus = null;
       return;
     }
-    const field = event.target.closest('[data-field]');
+    const field = event.target.closest("[data-field]");
     if (!field) {
       state.pendingFocus = null;
       return;
     }
-    const card = field.closest('[data-slide-id]');
+    const card = field.closest("[data-slide-id]");
     if (!card) {
       state.pendingFocus = null;
       return;
     }
-    const fieldName = field.dataset.field || 'main';
-    const selectionStart = typeof field.selectionStart === 'number'
-      ? field.selectionStart
-      : field.value.length;
-    const selectionEnd = typeof field.selectionEnd === 'number'
-      ? field.selectionEnd
-      : selectionStart;
+    const fieldName = field.dataset.field || "main";
+    const selectionStart =
+      typeof field.selectionStart === "number"
+        ? field.selectionStart
+        : field.value.length;
+    const selectionEnd =
+      typeof field.selectionEnd === "number"
+        ? field.selectionEnd
+        : selectionStart;
     state.pendingFocus = {
       slideId: card.dataset.slideId,
       field: fieldName,
-      caret: 'preserve',
+      caret: "preserve",
       selectionStart,
       selectionEnd,
     };
   }
 
   function handleSlideFieldFocus(event) {
-    const field = event.target.closest('[data-field]');
+    const field = event.target.closest("[data-field]");
     if (!field) return;
-    const card = field.closest('[data-slide-id]');
+    const card = field.closest("[data-slide-id]");
     if (!card) return;
     const slideId = card.dataset.slideId;
-    const fieldName = field.dataset.field || 'main';
+    const fieldName = field.dataset.field || "main";
     state.focusedSlideId = slideId;
     const updateSelection = () => {
-      const start = typeof field.selectionStart === 'number' ? field.selectionStart : field.value.length;
-      const end = typeof field.selectionEnd === 'number' ? field.selectionEnd : start;
+      const start =
+        typeof field.selectionStart === "number"
+          ? field.selectionStart
+          : field.value.length;
+      const end =
+        typeof field.selectionEnd === "number" ? field.selectionEnd : start;
       state.pendingFocus = {
         slideId,
         field: fieldName,
-        caret: 'preserve',
+        caret: "preserve",
         selectionStart: start,
         selectionEnd: end,
       };
@@ -4311,24 +4803,33 @@ function updateCardWarnings(card) {
       event.preventDefault();
       return;
     }
-    const card = handle.closest('[data-slide-id]');
+    const card = handle.closest("[data-slide-id]");
     if (!card) return;
     state.reorderSnapshot = {
       sourceId: card.dataset.slideId,
-      initialOrder: qsa('[data-slide-id]', els.slides).map((node) => node.dataset.slideId),
+      initialOrder: qsa("[data-slide-id]", els.slides).map(
+        (node) => node.dataset.slideId,
+      ),
     };
-    event.dataTransfer.effectAllowed = 'move';
-    event.dataTransfer.setData('application/x-presenter-slide', card.dataset.slideId);
-    event.dataTransfer.setDragImage(card, card.clientWidth / 2, card.clientHeight / 2);
+    event.dataTransfer.effectAllowed = "move";
+    event.dataTransfer.setData(
+      "application/x-presenter-slide",
+      card.dataset.slideId,
+    );
+    event.dataTransfer.setDragImage(
+      card,
+      card.clientWidth / 2,
+      card.clientHeight / 2,
+    );
   }
 
   function handleSlideDragOver(event) {
-    const target = event.target.closest('[data-slide-id]');
+    const target = event.target.closest("[data-slide-id]");
     if (!target || !state.reorderSnapshot) return;
     event.preventDefault();
     const draggingId = state.reorderSnapshot.sourceId;
     if (target.dataset.slideId === draggingId) return;
-    const cards = qsa('[data-slide-id]', els.slides);
+    const cards = qsa("[data-slide-id]", els.slides);
     const dragging = cards.find((card) => card.dataset.slideId === draggingId);
     if (!dragging) return;
     const targetRect = target.getBoundingClientRect();
@@ -4343,9 +4844,11 @@ function updateCardWarnings(card) {
   function handleSlideDrop(event) {
     if (!state.reorderSnapshot) return;
     event.preventDefault();
-    const newOrder = qsa('[data-slide-id]', els.slides).map((card) => card.dataset.slideId);
+    const newOrder = qsa("[data-slide-id]", els.slides).map(
+      (card) => card.dataset.slideId,
+    );
     if (!state.currentPresentationId) return;
-    if (newOrder.join(',') === state.reorderSnapshot.initialOrder.join(',')) {
+    if (newOrder.join(",") === state.reorderSnapshot.initialOrder.join(",")) {
       state.reorderSnapshot = null;
       return;
     }
@@ -4379,8 +4882,11 @@ function updateCardWarnings(card) {
 
   function clearPlaylistDropIndicators() {
     if (els.presentationList) {
-      qsa('[data-role="presentation-item"][data-drop-position]', els.presentationList).forEach((node) => {
-        node.removeAttribute('data-drop-position');
+      qsa(
+        '[data-role="presentation-item"][data-drop-position]',
+        els.presentationList,
+      ).forEach((node) => {
+        node.removeAttribute("data-drop-position");
       });
     }
     setPresentationDropzoneState(null);
@@ -4394,12 +4900,13 @@ function updateCardWarnings(card) {
     const transfer = event.dataTransfer;
     const types = transfer ? Array.from(transfer.types || []) : [];
     const isPresentationDrag =
-      types.includes('application/x-presenter-presentation') || types.includes('text/plain');
+      types.includes("application/x-presenter-presentation") ||
+      types.includes("text/plain");
     const isReorder =
       !!state.playlistReorderSnapshot &&
       state.activePlaylistId &&
       state.activePlaylistId === state.playlistReorderSnapshot.playlistId &&
-      types.includes('application/x-presenter-playlist-entry');
+      types.includes("application/x-presenter-playlist-entry");
 
     const target = event.target.closest('[data-role="presentation-item"]');
 
@@ -4409,8 +4916,13 @@ function updateCardWarnings(card) {
       clearPlaylistDropIndicators();
       const draggingId = state.playlistReorderSnapshot.sourceId;
       if (target.dataset.entryId === draggingId) return;
-      const items = qsa('[data-role="presentation-item"]', els.presentationList);
-      const dragging = items.find((node) => node.dataset.entryId === draggingId);
+      const items = qsa(
+        '[data-role="presentation-item"]',
+        els.presentationList,
+      );
+      const dragging = items.find(
+        (node) => node.dataset.entryId === draggingId,
+      );
       if (!dragging) return;
       const rect = target.getBoundingClientRect();
       const isBefore = event.clientY < rect.top + rect.height / 2;
@@ -4431,18 +4943,21 @@ function updateCardWarnings(card) {
     event.stopPropagation();
     if (!target) {
       if (els.presentationList) {
-        qsa('[data-role="presentation-item"][data-drop-position]', els.presentationList).forEach((node) => {
-          node.removeAttribute('data-drop-position');
+        qsa(
+          '[data-role="presentation-item"][data-drop-position]',
+          els.presentationList,
+        ).forEach((node) => {
+          node.removeAttribute("data-drop-position");
         });
       }
-      setPresentationDropzoneState('append');
+      setPresentationDropzoneState("append");
       return;
     }
     const rect = target.getBoundingClientRect();
     const isBefore = event.clientY < rect.top + rect.height / 2;
     clearPlaylistDropIndicators();
     setPresentationDropzoneState(null);
-    target.dataset.dropPosition = isBefore ? 'before' : 'after';
+    target.dataset.dropPosition = isBefore ? "before" : "after";
   }
 
   async function handlePlaylistEntryDrop(event) {
@@ -4455,8 +4970,9 @@ function updateCardWarnings(card) {
     const transfer = event.dataTransfer;
     const types = transfer ? Array.from(transfer.types || []) : [];
     let presentationId = transfer
-      ? transfer.getData('application/x-presenter-presentation') || transfer.getData('text/plain')
-      : '';
+      ? transfer.getData("application/x-presenter-presentation") ||
+        transfer.getData("text/plain")
+      : "";
     if (!presentationId && state.draggingPresentationId) {
       presentationId = state.draggingPresentationId;
     }
@@ -4470,13 +4986,17 @@ function updateCardWarnings(card) {
     ) {
       event.preventDefault();
       event.stopPropagation();
-      const ordered = qsa('[data-role="presentation-item"]', els.presentationList)
+      const ordered = qsa(
+        '[data-role="presentation-item"]',
+        els.presentationList,
+      )
         .map((node) => node.dataset.entryId)
         .filter(Boolean);
       if (
         ordered.length &&
         state.playlistReorderSnapshot.initialOrder &&
-        ordered.join(',') === state.playlistReorderSnapshot.initialOrder.join(',')
+        ordered.join(",") ===
+          state.playlistReorderSnapshot.initialOrder.join(",")
       ) {
         state.playlistReorderSnapshot = null;
         clearPlaylistDropIndicators();
@@ -4490,17 +5010,18 @@ function updateCardWarnings(card) {
 
     if (presentationId) {
       const playlistId = state.activePlaylistId;
-    if (!playlistId) {
-      clearPlaylistDropIndicators();
-      state.draggingFromSearch = false;
-      state.draggingPresentationId = null;
-      return;
-    }
+      if (!playlistId) {
+        clearPlaylistDropIndicators();
+        state.draggingFromSearch = false;
+        state.draggingPresentationId = null;
+        return;
+      }
       const playlist =
-        state.playlists.find((item) => item.id === playlistId) || state.playlistLookup.get(playlistId);
+        state.playlists.find((item) => item.id === playlistId) ||
+        state.playlistLookup.get(playlistId);
       if (!playlist) {
         clearPlaylistDropIndicators();
-        showToast('Playlist not found.', 'error');
+        showToast("Playlist not found.", "error");
         state.draggingPresentationId = null;
         state.draggingFromSearch = false;
         return;
@@ -4520,8 +5041,10 @@ function updateCardWarnings(card) {
       const fromSearch =
         state.searchDragging ||
         state.draggingFromSearch ||
-        types.includes('application/x-presenter-search');
-      await handlePlaylistInsertion(presentationId, playlistId, insertIndex, { clearSearch: fromSearch });
+        types.includes("application/x-presenter-search");
+      await handlePlaylistInsertion(presentationId, playlistId, insertIndex, {
+        clearSearch: fromSearch,
+      });
       if (fromSearch) {
         clearSearchResults();
       }
@@ -4558,9 +5081,9 @@ function updateCardWarnings(card) {
 
   function handleSlideInputBlur(event) {
     const field = event.target;
-    if (!field.matches('[data-field]')) return;
+    if (!field.matches("[data-field]")) return;
     if (!state.currentPresentationId) return;
-    const card = field.closest('[data-slide-id]');
+    const card = field.closest("[data-slide-id]");
     if (!card) return;
     const slideId = card.dataset.slideId;
     const slides = getSlidesForPresentation(state.currentPresentationId);
@@ -4581,7 +5104,7 @@ function updateCardWarnings(card) {
       original.main.value === payload.main &&
       original.translation.value === payload.translation &&
       original.stage.value === payload.stage &&
-      ((original.group && original.group.value) || '') === (payload.group || '')
+      ((original.group && original.group.value) || "") === (payload.group || "")
     ) {
       updateCardWarnings(card);
       return;
@@ -4589,21 +5112,24 @@ function updateCardWarnings(card) {
     if (!state.pendingFocus) {
       const activeElement = document.activeElement;
       if (activeElement) {
-        const targetField = activeElement.closest('[data-field]');
+        const targetField = activeElement.closest("[data-field]");
         if (targetField) {
-          const targetCard = targetField.closest('[data-slide-id]');
+          const targetCard = targetField.closest("[data-slide-id]");
           if (targetCard) {
-            const value = typeof targetField.value === 'string' ? targetField.value : '';
-            const start = typeof targetField.selectionStart === 'number'
-              ? targetField.selectionStart
-              : value.length;
-            const end = typeof targetField.selectionEnd === 'number'
-              ? targetField.selectionEnd
-              : start;
+            const value =
+              typeof targetField.value === "string" ? targetField.value : "";
+            const start =
+              typeof targetField.selectionStart === "number"
+                ? targetField.selectionStart
+                : value.length;
+            const end =
+              typeof targetField.selectionEnd === "number"
+                ? targetField.selectionEnd
+                : start;
             state.pendingFocus = {
               slideId: targetCard.dataset.slideId,
-              field: targetField.dataset.field || 'main',
-              caret: 'preserve',
+              field: targetField.dataset.field || "main",
+              caret: "preserve",
               selectionStart: start,
               selectionEnd: end,
             };
@@ -4616,14 +5142,14 @@ function updateCardWarnings(card) {
 
   function handleSlideInputChange(event) {
     const field = event.target;
-    if (!field.matches('[data-field]')) return;
-    const card = field.closest('[data-slide-id]');
+    if (!field.matches("[data-field]")) return;
+    const card = field.closest("[data-slide-id]");
     if (!card) return;
     updateCardWarnings(card);
   }
 
   function parseCountdownTarget(rawValue) {
-    const trimmed = (rawValue || '').replace(/\s+/g, '');
+    const trimmed = (rawValue || "").replace(/\s+/g, "");
     if (!trimmed) {
       return null;
     }
@@ -4632,8 +5158,11 @@ function updateCardWarnings(card) {
     let minutes = 0;
     let seconds = 0;
 
-    if (trimmed.includes(':')) {
-      const parts = trimmed.split(':').map((part) => part.trim()).filter(Boolean);
+    if (trimmed.includes(":")) {
+      const parts = trimmed
+        .split(":")
+        .map((part) => part.trim())
+        .filter(Boolean);
       if (parts.length < 2 || parts.length > 3) {
         return null;
       }
@@ -4675,32 +5204,34 @@ function updateCardWarnings(card) {
       target.setDate(target.getDate() + 1);
     }
 
-    const display = `${String(hours).padStart(2, '0')}:${String(minutes).padStart(2, '0')}`;
+    const display = `${String(hours).padStart(2, "0")}:${String(minutes).padStart(2, "0")}`;
     return { target, display };
   }
 
   async function submitCountdownTarget() {
     if (!els.countdownInput) {
-      showToast('Countdown input missing', 'error');
+      showToast("Countdown input missing", "error");
       return false;
     }
     const result = parseCountdownTarget(els.countdownInput.value);
     if (!result) {
-      showToast('Invalid time format', 'error');
+      showToast("Invalid time format", "error");
       return false;
     }
     els.countdownInput.value = result.display;
     state.countdownInputDirty = false;
-    await executeTimerCommand('set_countdown_target', { target: result.target.toISOString() });
+    await executeTimerCommand("set_countdown_target", {
+      target: result.target.toISOString(),
+    });
     return true;
   }
 
   function handleTimerButtonClick(event) {
-    const button = event.target.closest('[data-command]');
+    const button = event.target.closest("[data-command]");
     if (!button) return;
     const command = button.dataset.command;
     if (!command) return;
-    if (command === 'set_countdown_target') {
+    if (command === "set_countdown_target") {
       submitCountdownTarget();
       return;
     }
@@ -4711,14 +5242,15 @@ function updateCardWarnings(card) {
     const currentTargetIso = state.timers?.countdownToStart?.target || null;
     const updated = await submitCountdownTarget();
     if (!updated && !currentTargetIso) {
-      showToast('Set a target time first', 'warning');
+      showToast("Set a target time first", "warning");
       return;
     }
-    await executeTimerCommand('start_countdown', {});
+    await executeTimerCommand("start_countdown", {});
   }
 
   async function offsetCountdown(minutesDelta) {
-    const overview = state.timers?.countdownToStart || state.timers?.countdown_to_start;
+    const overview =
+      state.timers?.countdownToStart || state.timers?.countdown_to_start;
     let targetDate = null;
     if (overview && overview.target) {
       const parsed = new Date(overview.target);
@@ -4728,9 +5260,11 @@ function updateCardWarnings(card) {
     }
 
     if (!targetDate) {
-      const parsedInput = parseCountdownTarget(els.countdownInput ? els.countdownInput.value : '');
+      const parsedInput = parseCountdownTarget(
+        els.countdownInput ? els.countdownInput.value : "",
+      );
       if (!parsedInput) {
-        showToast('Set a target time first', 'warning');
+        showToast("Set a target time first", "warning");
         return;
       }
       targetDate = parsedInput.target;
@@ -4744,12 +5278,14 @@ function updateCardWarnings(card) {
     }
 
     if (els.countdownInput && !state.countdownInputActive) {
-      const hours = String(targetDate.getHours()).padStart(2, '0');
-      const minutes = String(targetDate.getMinutes()).padStart(2, '0');
+      const hours = String(targetDate.getHours()).padStart(2, "0");
+      const minutes = String(targetDate.getMinutes()).padStart(2, "0");
       els.countdownInput.value = `${hours}:${minutes}`;
     }
 
-    await executeTimerCommand('set_countdown_target', { target: targetDate.toISOString() });
+    await executeTimerCommand("set_countdown_target", {
+      target: targetDate.toISOString(),
+    });
   }
 
   function handleModeToggle(event) {
@@ -4772,6 +5308,21 @@ function updateCardWarnings(card) {
     const view = button.dataset.view;
     if (!view || view === state.view) return;
     setView(view);
+    closeMobileNav();
+  }
+
+  function toggleMobileNav() {
+    document.body.classList.toggle("operator--mobile-nav-open");
+  }
+
+  function closeMobileNav() {
+    document.body.classList.remove("operator--mobile-nav-open");
+  }
+
+  function handleMobileMenuToggle(event) {
+    const button = event.target.closest('[data-role="mobile-menu-toggle"]');
+    if (!button) return;
+    toggleMobileNav();
   }
 
   function renderAbleSetPanel() {
@@ -4784,19 +5335,24 @@ function updateCardWarnings(card) {
     };
 
     if (els.ablesetEnable) {
-      const label = status.enabled ? 'Ableton ON' : 'Ableton OFF';
+      const label = status.enabled ? "Ableton ON" : "Ableton OFF";
       els.ablesetEnable.textContent = label;
-      els.ablesetEnable.dataset.state = status.enabled ? 'on' : 'off';
-      els.ablesetEnable.dataset.loading = state.ableset.enableLoading ? 'true' : 'false';
+      els.ablesetEnable.dataset.state = status.enabled ? "on" : "off";
+      els.ablesetEnable.dataset.loading = state.ableset.enableLoading
+        ? "true"
+        : "false";
       els.ablesetEnable.disabled = state.ableset.enableLoading;
     }
 
     if (els.ablesetFollow) {
-      const label = status.followEnabled ? 'Follow ON' : 'Follow OFF';
+      const label = status.followEnabled ? "Follow ON" : "Follow OFF";
       els.ablesetFollow.textContent = label;
-      els.ablesetFollow.dataset.state = status.followEnabled ? 'on' : 'off';
-      els.ablesetFollow.dataset.loading = state.ableset.followLoading ? 'true' : 'false';
-      els.ablesetFollow.disabled = !status.enabled || state.ableset.followLoading;
+      els.ablesetFollow.dataset.state = status.followEnabled ? "on" : "off";
+      els.ablesetFollow.dataset.loading = state.ableset.followLoading
+        ? "true"
+        : "false";
+      els.ablesetFollow.disabled =
+        !status.enabled || state.ableset.followLoading;
     }
 
     const snapshot = state.stageSnapshot;
@@ -4806,13 +5362,13 @@ function updateCardWarnings(card) {
   }
 
   function resolvePresentationNameByPrefix(prefix) {
-    const raw = (prefix || '').toString().trim();
+    const raw = (prefix || "").toString().trim();
     if (!raw) return null;
     const normalized = raw.toLowerCase();
 
     for (const entry of presentationIndex.values()) {
       if (!entry) continue;
-      const name = (entry.name || '').toString().trim();
+      const name = (entry.name || "").toString().trim();
       if (!name) continue;
       if (name.toLowerCase().startsWith(normalized)) {
         return name;
@@ -4821,9 +5377,11 @@ function updateCardWarnings(card) {
 
     if (Array.isArray(state.libraries)) {
       for (const library of state.libraries) {
-        const presentations = Array.isArray(library?.presentations) ? library.presentations : [];
+        const presentations = Array.isArray(library?.presentations)
+          ? library.presentations
+          : [];
         for (const presentation of presentations) {
-          const name = (presentation?.name || '').toString().trim();
+          const name = (presentation?.name || "").toString().trim();
           if (!name) continue;
           if (name.toLowerCase().startsWith(normalized)) {
             return name;
@@ -4837,47 +5395,56 @@ function updateCardWarnings(card) {
 
   function resolveSongLine(snapshot) {
     const status = state.ableset.status || {};
-    let presentationName = snapshot && snapshot.presentationName ? snapshot.presentationName.toString().trim() : '';
+    let presentationName =
+      snapshot && snapshot.presentationName
+        ? snapshot.presentationName.toString().trim()
+        : "";
     if (!presentationName && status.lastSong) {
-      const prefix = status.lastSong.prefix || '';
+      const prefix = status.lastSong.prefix || "";
       const fromPrefix = resolvePresentationNameByPrefix(prefix);
       if (fromPrefix) {
         presentationName = fromPrefix;
-      } else if (typeof status.lastSong.name === 'string') {
+      } else if (typeof status.lastSong.name === "string") {
         presentationName = status.lastSong.name;
       }
     }
-    if (!presentationName && status.lastSong && typeof status.lastSong.name === 'string') {
+    if (
+      !presentationName &&
+      status.lastSong &&
+      typeof status.lastSong.name === "string"
+    ) {
       presentationName = status.lastSong.name;
     }
     if (!presentationName) {
-      presentationName = '';
+      presentationName = "";
     }
 
     let slideIndex = null;
-    if (snapshot && typeof snapshot.currentPosition === 'number') {
+    if (snapshot && typeof snapshot.currentPosition === "number") {
       slideIndex = snapshot.currentPosition;
-    } else if (status.lastSong && typeof status.lastSong.index === 'number') {
+    } else if (status.lastSong && typeof status.lastSong.index === "number") {
       slideIndex = status.lastSong.index + 1;
     }
 
     if (!presentationName && slideIndex == null) {
-      return '—';
+      return "—";
     }
 
-    const slideSuffix = slideIndex != null ? ` (${slideIndex})` : '';
+    const slideSuffix = slideIndex != null ? ` (${slideIndex})` : "";
     if (presentationName) {
       return `${presentationName}${slideSuffix}`.trim();
     }
     if (slideIndex != null) {
       return `Slide ${slideIndex}`;
     }
-    return '—';
+    return "—";
   }
 
   async function refreshAbleSetStatus(showError) {
     try {
-      const response = await fetch('/integrations/ableset/status', { headers: { Accept: 'application/json' } });
+      const response = await fetch("/integrations/ableset/status", {
+        headers: { Accept: "application/json" },
+      });
       if (!response.ok) {
         throw new Error(`Failed to load AbleSet status (${response.status})`);
       }
@@ -4886,7 +5453,7 @@ function updateCardWarnings(card) {
       renderAbleSetPanel();
     } catch (error) {
       if (showError) {
-        console.warn('Unable to refresh AbleSet status', error);
+        console.warn("Unable to refresh AbleSet status", error);
       }
     }
   }
@@ -4896,23 +5463,42 @@ function updateCardWarnings(card) {
     state.ableset.enableLoading = true;
     renderAbleSetPanel();
     try {
-      const response = await fetch('/integrations/ableset/settings', { headers: { Accept: 'application/json' } });
+      const response = await fetch("/integrations/ableset/settings", {
+        headers: { Accept: "application/json" },
+      });
       if (!response.ok) {
-        throw new Error(`Failed to fetch AbleSet settings (${response.status})`);
+        throw new Error(
+          `Failed to fetch AbleSet settings (${response.status})`,
+        );
       }
       const settings = await response.json();
-      const config = settings && typeof settings === 'object' ? settings : {};
+      const config = settings && typeof settings === "object" ? settings : {};
       const payload = {
         enabled: !Boolean(config.enabled),
-        host: (config.host || 'fohabl.lan').toString(),
-        httpPort: Number.isFinite(Number(config.httpPort ?? config.http_port)) ? Number(config.httpPort ?? config.http_port) : 80,
-        oscPort: Number.isFinite(Number(config.oscPort ?? config.osc_port)) ? Number(config.oscPort ?? config.osc_port) : 39051,
-        libraryName: (config.libraryName || config.library_name || 'NEW LEVEL').toString(),
-        songPrefixLength: Number.isFinite(Number(config.songPrefixLength ?? config.song_prefix_length)) ? Number(config.songPrefixLength ?? config.song_prefix_length) : 3,
+        host: (config.host || "fohabl.lan").toString(),
+        httpPort: Number.isFinite(Number(config.httpPort ?? config.http_port))
+          ? Number(config.httpPort ?? config.http_port)
+          : 80,
+        oscPort: Number.isFinite(Number(config.oscPort ?? config.osc_port))
+          ? Number(config.oscPort ?? config.osc_port)
+          : 39051,
+        libraryName: (
+          config.libraryName ||
+          config.library_name ||
+          "NEW LEVEL"
+        ).toString(),
+        songPrefixLength: Number.isFinite(
+          Number(config.songPrefixLength ?? config.song_prefix_length),
+        )
+          ? Number(config.songPrefixLength ?? config.song_prefix_length)
+          : 3,
       };
-      const update = await fetch('/integrations/ableset/settings', {
-        method: 'PUT',
-        headers: { 'Content-Type': 'application/json', Accept: 'application/json' },
+      const update = await fetch("/integrations/ableset/settings", {
+        method: "PUT",
+        headers: {
+          "Content-Type": "application/json",
+          Accept: "application/json",
+        },
         body: JSON.stringify(payload),
       });
       if (!update.ok) {
@@ -4921,10 +5507,13 @@ function updateCardWarnings(card) {
       const updated = await update.json();
       state.ableset.status = normalizeAbleSetStatus(updated);
       renderAbleSetPanel();
-      showToast(`Ableton automation ${state.ableset.status.enabled ? 'enabled' : 'disabled'}.`, 'info');
+      showToast(
+        `Ableton automation ${state.ableset.status.enabled ? "enabled" : "disabled"}.`,
+        "info",
+      );
     } catch (error) {
-      console.error('Unable to toggle AbleSet automation', error);
-      showToast('Unable to toggle Ableton automation.', 'error');
+      console.error("Unable to toggle AbleSet automation", error);
+      showToast("Unable to toggle Ableton automation.", "error");
     } finally {
       state.ableset.enableLoading = false;
       renderAbleSetPanel();
@@ -4935,16 +5524,19 @@ function updateCardWarnings(card) {
   async function toggleAbleSetFollow() {
     const status = state.ableset.status;
     if (!status.enabled) {
-      showToast('Enable Ableton automation first.', 'warning');
+      showToast("Enable Ableton automation first.", "warning");
       return;
     }
     if (state.ableset.followLoading) return;
     state.ableset.followLoading = true;
     renderAbleSetPanel();
     try {
-      const response = await fetch('/integrations/ableset/follow', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json', Accept: 'application/json' },
+      const response = await fetch("/integrations/ableset/follow", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          Accept: "application/json",
+        },
         body: JSON.stringify({ enabled: !Boolean(status.followEnabled) }),
       });
       if (!response.ok) {
@@ -4953,13 +5545,19 @@ function updateCardWarnings(card) {
       const snapshot = await response.json();
       state.ableset.status = normalizeAbleSetStatus(snapshot);
       renderAbleSetPanel();
-      showToast(`Ableton follow ${state.ableset.status.followEnabled ? 'enabled' : 'disabled'}.`, 'info');
+      showToast(
+        `Ableton follow ${state.ableset.status.followEnabled ? "enabled" : "disabled"}.`,
+        "info",
+      );
       if (state.ableset.status.followEnabled && state.stageSnapshot) {
-        syncOperatorSelectionFromStage(state.stageSnapshot.presentationId, state.stageSlideId);
+        syncOperatorSelectionFromStage(
+          state.stageSnapshot.presentationId,
+          state.stageSlideId,
+        );
       }
     } catch (error) {
-      console.error('Unable to toggle AbleSet follow', error);
-      showToast('Unable to toggle Ableton follow.', 'error');
+      console.error("Unable to toggle AbleSet follow", error);
+      showToast("Unable to toggle Ableton follow.", "error");
     } finally {
       state.ableset.followLoading = false;
       renderAbleSetPanel();
@@ -4969,38 +5567,38 @@ function updateCardWarnings(card) {
 
   function bindEvents() {
     if (els.ablesetEnable) {
-      els.ablesetEnable.addEventListener('click', toggleAbleSetAutomation);
+      els.ablesetEnable.addEventListener("click", toggleAbleSetAutomation);
     }
     if (els.ablesetFollow) {
-      els.ablesetFollow.addEventListener('click', toggleAbleSetFollow);
+      els.ablesetFollow.addEventListener("click", toggleAbleSetFollow);
     }
 
     if (els.libraryList) {
-      els.libraryList.addEventListener('click', handleLibraryClick);
-      els.libraryList.addEventListener('dragover', handlePlaylistDragOver);
-      els.libraryList.addEventListener('drop', handlePlaylistDrop);
+      els.libraryList.addEventListener("click", handleLibraryClick);
+      els.libraryList.addEventListener("dragover", handlePlaylistDragOver);
+      els.libraryList.addEventListener("drop", handlePlaylistDrop);
     }
     if (els.libraryModalList) {
-      els.libraryModalList.addEventListener('click', handleLibraryModalClick);
+      els.libraryModalList.addEventListener("click", handleLibraryModalClick);
     }
     if (els.libraryModalClose) {
-      els.libraryModalClose.addEventListener('click', (event) => {
+      els.libraryModalClose.addEventListener("click", (event) => {
         event.preventDefault();
         closeLibraryModal();
       });
     }
     if (els.libraryModal) {
-      els.libraryModal.addEventListener('click', (event) => {
+      els.libraryModal.addEventListener("click", (event) => {
         if (event.target === els.libraryModal) {
           closeLibraryModal();
         }
       });
     }
     if (els.libraryEditForm) {
-      els.libraryEditForm.addEventListener('submit', handleLibraryEditSubmit);
+      els.libraryEditForm.addEventListener("submit", handleLibraryEditSubmit);
     }
     if (els.libraryEditCancel) {
-      els.libraryEditCancel.addEventListener('click', (event) => {
+      els.libraryEditCancel.addEventListener("click", (event) => {
         event.preventDefault();
         if (!state.libraryEditSubmitting) {
           closeLibraryEdit();
@@ -5008,20 +5606,26 @@ function updateCardWarnings(card) {
       });
     }
     if (els.libraryEditDelete) {
-      els.libraryEditDelete.addEventListener('click', handleLibraryEditDelete);
+      els.libraryEditDelete.addEventListener("click", handleLibraryEditDelete);
     }
     if (els.libraryEditModal) {
-      els.libraryEditModal.addEventListener('click', (event) => {
-        if (event.target === els.libraryEditModal && !state.libraryEditSubmitting) {
+      els.libraryEditModal.addEventListener("click", (event) => {
+        if (
+          event.target === els.libraryEditModal &&
+          !state.libraryEditSubmitting
+        ) {
           closeLibraryEdit();
         }
       });
     }
     if (els.presentationEditForm) {
-      els.presentationEditForm.addEventListener('submit', handlePresentationEditSubmit);
+      els.presentationEditForm.addEventListener(
+        "submit",
+        handlePresentationEditSubmit,
+      );
     }
     if (els.presentationEditCancel) {
-      els.presentationEditCancel.addEventListener('click', (event) => {
+      els.presentationEditCancel.addEventListener("click", (event) => {
         event.preventDefault();
         if (!state.presentationEditSubmitting) {
           closePresentationEdit();
@@ -5029,141 +5633,147 @@ function updateCardWarnings(card) {
       });
     }
     if (els.presentationEditModal) {
-      els.presentationEditModal.addEventListener('click', (event) => {
-        if (event.target === els.presentationEditModal && !state.presentationEditSubmitting) {
+      els.presentationEditModal.addEventListener("click", (event) => {
+        if (
+          event.target === els.presentationEditModal &&
+          !state.presentationEditSubmitting
+        ) {
           closePresentationEdit();
         }
       });
     }
     if (els.countdownInput) {
-      els.countdownInput.addEventListener('focus', () => {
+      els.countdownInput.addEventListener("focus", () => {
         state.countdownInputActive = true;
       });
-      els.countdownInput.addEventListener('blur', () => {
+      els.countdownInput.addEventListener("blur", () => {
         state.countdownInputActive = false;
         if (!state.countdownInputDirty && state.timers) {
           applyTimers(state.timers);
         }
       });
-      els.countdownInput.addEventListener('input', () => {
+      els.countdownInput.addEventListener("input", () => {
         state.countdownInputDirty = true;
       });
-      els.countdownInput.addEventListener('keydown', (event) => {
-        if (event.key === 'Enter') {
+      els.countdownInput.addEventListener("keydown", (event) => {
+        if (event.key === "Enter") {
           event.preventDefault();
           submitCountdownTarget();
         }
       });
     }
     if (els.countdownStart) {
-      els.countdownStart.addEventListener('click', (event) => {
+      els.countdownStart.addEventListener("click", (event) => {
         event.preventDefault();
         startCountdownFromInput();
       });
     }
     if (els.countdownOffsetMinus) {
-      els.countdownOffsetMinus.addEventListener('click', (event) => {
+      els.countdownOffsetMinus.addEventListener("click", (event) => {
         event.preventDefault();
         offsetCountdown(-5);
       });
     }
     if (els.countdownOffsetPlus) {
-      els.countdownOffsetPlus.addEventListener('click', (event) => {
+      els.countdownOffsetPlus.addEventListener("click", (event) => {
         event.preventDefault();
         offsetCountdown(5);
       });
     }
     if (els.stageLayoutSelect) {
-      els.stageLayoutSelect.addEventListener('change', (event) => {
-        submitStageLayout(event.target.value || '');
+      els.stageLayoutSelect.addEventListener("change", (event) => {
+        submitStageLayout(event.target.value || "");
       });
-      els.stageLayoutSelect.addEventListener('keydown', (event) => {
-        if (event.key === 'Enter') {
+      els.stageLayoutSelect.addEventListener("keydown", (event) => {
+        if (event.key === "Enter") {
           event.preventDefault();
-          submitStageLayout(event.target.value || '');
+          submitStageLayout(event.target.value || "");
         }
       });
     }
     if (els.timerOverlayOpen) {
-      els.timerOverlayOpen.addEventListener('click', (event) => {
+      els.timerOverlayOpen.addEventListener("click", (event) => {
         event.preventDefault();
-        const url = new URL('/overlays/timer', window.location.href);
-        window.open(url.toString(), '_blank', 'noopener');
+        const url = new URL("/overlays/timer", window.location.href);
+        window.open(url.toString(), "_blank", "noopener");
       });
     }
     if (els.timerOverlayCopy) {
-      els.timerOverlayCopy.addEventListener('click', async (event) => {
+      els.timerOverlayCopy.addEventListener("click", async (event) => {
         event.preventDefault();
-        const url = new URL('/overlays/timer', window.location.href).toString();
+        const url = new URL("/overlays/timer", window.location.href).toString();
         try {
           if (navigator.clipboard && navigator.clipboard.writeText) {
             await navigator.clipboard.writeText(url);
           } else {
-            const temp = document.createElement('input');
+            const temp = document.createElement("input");
             temp.value = url;
             document.body.appendChild(temp);
             temp.select();
-            document.execCommand('copy');
+            document.execCommand("copy");
             document.body.removeChild(temp);
           }
-          showToast('Overlay link copied', 'success');
+          showToast("Overlay link copied", "success");
         } catch (copyError) {
-          console.error('Failed to copy overlay URL', copyError);
-          showToast('Failed to copy link', 'error');
+          console.error("Failed to copy overlay URL", copyError);
+          showToast("Failed to copy link", "error");
         }
       });
     }
     if (els.libraryCreate) {
-      els.libraryCreate.addEventListener('click', (event) => {
+      els.libraryCreate.addEventListener("click", (event) => {
         event.preventDefault();
         openLibraryCreate();
       });
     }
     if (els.libraryCount) {
-      els.libraryCount.addEventListener('click', (event) => {
+      els.libraryCount.addEventListener("click", (event) => {
         event.preventDefault();
         openLibraryModal();
       });
     }
     if (els.presentationCreate) {
-      els.presentationCreate.addEventListener('click', (event) => {
+      els.presentationCreate.addEventListener("click", (event) => {
         event.preventDefault();
         if (state.activePlaylistId) {
           handleAddSeparator();
         } else if (state.activeLibraryId) {
           handleCreatePresentation();
         } else {
-          showToast('Select a library or playlist first', 'warning');
+          showToast("Select a library or playlist first", "warning");
         }
       });
     }
     if (els.playlistModalList) {
-      els.playlistModalList.addEventListener('click', handlePlaylistModalClick);
+      els.playlistModalList.addEventListener("click", handlePlaylistModalClick);
     }
     if (els.playlistCount) {
-      els.playlistCount.addEventListener('click', (event) => {
+      els.playlistCount.addEventListener("click", (event) => {
         event.preventDefault();
         openPlaylistModal();
       });
     }
     if (els.playlistModalClose) {
-      els.playlistModalClose.addEventListener('click', (event) => {
+      els.playlistModalClose.addEventListener("click", (event) => {
         event.preventDefault();
         closePlaylistModal();
       });
     }
     if (els.playlistModal) {
-      els.playlistModal.addEventListener('click', (event) => {
-        if (event.target === els.playlistModal && !state.playlistEditModalOpen) {
+      els.playlistModal.addEventListener("click", (event) => {
+        if (
+          event.target === els.playlistModal &&
+          !state.playlistEditModalOpen
+        ) {
           closePlaylistModal();
         }
       });
     }
     if (els.playlistEditForm) {
-      els.playlistEditForm.addEventListener('submit', handlePlaylistEditSubmit);
+      els.playlistEditForm.addEventListener("submit", handlePlaylistEditSubmit);
     }
     if (els.playlistEditCancel) {
-      els.playlistEditCancel.addEventListener('click', (event) => {
+      els.playlistEditCancel.addEventListener("click", (event) => {
         event.preventDefault();
         if (!state.playlistEditSubmitting) {
           closePlaylistEdit();
@@ -5171,97 +5781,138 @@ function updateCardWarnings(card) {
       });
     }
     if (els.playlistEditDelete) {
-      els.playlistEditDelete.addEventListener('click', handlePlaylistEditDelete);
+      els.playlistEditDelete.addEventListener(
+        "click",
+        handlePlaylistEditDelete,
+      );
     }
     if (els.playlistEditModal) {
-      els.playlistEditModal.addEventListener('click', (event) => {
-        if (event.target === els.playlistEditModal && !state.playlistEditSubmitting) {
+      els.playlistEditModal.addEventListener("click", (event) => {
+        if (
+          event.target === els.playlistEditModal &&
+          !state.playlistEditSubmitting
+        ) {
           closePlaylistEdit();
         }
       });
     }
     if (els.playlistList) {
-      els.playlistList.addEventListener('click', handlePlaylistClick);
-      els.playlistList.addEventListener('dragover', handlePlaylistDragOver);
-      els.playlistList.addEventListener('drop', handlePlaylistDrop);
+      els.playlistList.addEventListener("click", handlePlaylistClick);
+      els.playlistList.addEventListener("dragover", handlePlaylistDragOver);
+      els.playlistList.addEventListener("drop", handlePlaylistDrop);
     }
     if (els.playlistCount) {
-      els.playlistCount.addEventListener('click', (event) => {
+      els.playlistCount.addEventListener("click", (event) => {
         event.preventDefault();
         openPlaylistModal();
       });
     }
     if (els.presentationList) {
-      els.presentationList.addEventListener('click', handlePresentationClick);
-      els.presentationList.addEventListener('dragstart', handlePresentationDragStart);
-      els.presentationList.addEventListener('dragover', handlePlaylistEntryDragOver);
-      els.presentationList.addEventListener('drop', handlePlaylistEntryDrop);
-      els.presentationList.addEventListener('dragend', handlePlaylistEntryDragEnd);
+      els.presentationList.addEventListener("click", handlePresentationClick);
+      els.presentationList.addEventListener(
+        "dragstart",
+        handlePresentationDragStart,
+      );
+      els.presentationList.addEventListener(
+        "dragover",
+        handlePlaylistEntryDragOver,
+      );
+      els.presentationList.addEventListener("drop", handlePlaylistEntryDrop);
+      els.presentationList.addEventListener(
+        "dragend",
+        handlePlaylistEntryDragEnd,
+      );
     }
     if (els.presentationDropzone) {
-      els.presentationDropzone.addEventListener('dragover', handlePlaylistEntryDragOver);
-      els.presentationDropzone.addEventListener('drop', handlePlaylistEntryDrop);
-      els.presentationDropzone.addEventListener('dragleave', handlePresentationDropzoneDragLeave);
+      els.presentationDropzone.addEventListener(
+        "dragover",
+        handlePlaylistEntryDragOver,
+      );
+      els.presentationDropzone.addEventListener(
+        "drop",
+        handlePlaylistEntryDrop,
+      );
+      els.presentationDropzone.addEventListener(
+        "dragleave",
+        handlePresentationDropzoneDragLeave,
+      );
     }
     if (els.slides) {
-      els.slides.addEventListener('click', handleSlidesClick);
-      els.slides.addEventListener('pointerdown', handleSlidesPointerDown);
-      els.slides.addEventListener('dragstart', handleSlideDragStart);
-      els.slides.addEventListener('dragover', handleSlideDragOver);
-      els.slides.addEventListener('drop', handleSlideDrop);
-      els.slides.addEventListener('dragend', handleSlideDragEnd);
-      els.slides.addEventListener('blur', handleSlideInputBlur, true);
-      els.slides.addEventListener('input', handleSlideInputChange, true);
-      els.slides.addEventListener('focusin', handleSlideFieldFocus, true);
+      els.slides.addEventListener("click", handleSlidesClick);
+      els.slides.addEventListener("pointerdown", handleSlidesPointerDown);
+      els.slides.addEventListener("dragstart", handleSlideDragStart);
+      els.slides.addEventListener("dragover", handleSlideDragOver);
+      els.slides.addEventListener("drop", handleSlideDrop);
+      els.slides.addEventListener("dragend", handleSlideDragEnd);
+      els.slides.addEventListener("blur", handleSlideInputBlur, true);
+      els.slides.addEventListener("input", handleSlideInputChange, true);
+      els.slides.addEventListener("focusin", handleSlideFieldFocus, true);
     }
     if (els.addSlide) {
-      els.addSlide.addEventListener('click', handleAddSlide);
+      els.addSlide.addEventListener("click", handleAddSlide);
     }
     if (els.clearSlide) {
-      els.clearSlide.addEventListener('click', handleClearSlide);
+      els.clearSlide.addEventListener("click", handleClearSlide);
     }
     if (els.lineLimit) {
       els.lineLimit.value = String(state.lineLimit);
-      els.lineLimit.addEventListener('change', handleLineLimitChange);
-      els.lineLimit.addEventListener('input', handleLineLimitPreview);
+      els.lineLimit.addEventListener("change", handleLineLimitChange);
+      els.lineLimit.addEventListener("input", handleLineLimitPreview);
     }
     if (els.searchForm) {
-      els.searchForm.addEventListener('submit', handleSearchSubmit);
+      els.searchForm.addEventListener("submit", handleSearchSubmit);
     }
     if (els.searchInput) {
-      els.searchInput.addEventListener('input', handleSearchInput);
-      els.searchInput.addEventListener('focus', () => {
+      els.searchInput.addEventListener("input", handleSearchInput);
+      els.searchInput.addEventListener("focus", () => {
         if (state.searchQuery.trim()) {
           renderSearchResults();
         }
       });
     }
     if (els.searchClear) {
-      els.searchClear.addEventListener('click', handleSearchClear);
+      els.searchClear.addEventListener("click", handleSearchClear);
     }
     if (els.searchResults) {
-      els.searchResults.addEventListener('click', handleSearchResultClick);
-      els.searchResults.addEventListener('dragstart', handleSearchResultDragStart, true);
-      els.searchResults.addEventListener('dragend', handleSearchResultDragEnd, true);
+      els.searchResults.addEventListener("click", handleSearchResultClick);
+      els.searchResults.addEventListener(
+        "dragstart",
+        handleSearchResultDragStart,
+        true,
+      );
+      els.searchResults.addEventListener(
+        "dragend",
+        handleSearchResultDragEnd,
+        true,
+      );
     }
     if (els.playlistCreate) {
-      els.playlistCreate.addEventListener('click', (event) => {
+      els.playlistCreate.addEventListener("click", (event) => {
         event.preventDefault();
         openPlaylistCreate();
       });
     }
     if (els.catalogResizer) {
-      els.catalogResizer.addEventListener('pointerdown', handleCatalogResizePointerDown);
+      els.catalogResizer.addEventListener(
+        "pointerdown",
+        handleCatalogResizePointerDown,
+      );
     }
-    document.addEventListener('click', handleSearchOutsideClick);
-    document.addEventListener('click', handleTimerButtonClick);
-    document.addEventListener('click', handleModeToggle);
-    document.addEventListener('click', handleViewToggle);
-    document.addEventListener('keydown', handleGlobalKeydown);
+    document.addEventListener("click", handleSearchOutsideClick);
+    document.addEventListener("click", handleTimerButtonClick);
+    document.addEventListener("click", handleModeToggle);
+    document.addEventListener("click", handleViewToggle);
+    document.addEventListener("click", handleMobileMenuToggle);
+    document.addEventListener("keydown", handleGlobalKeydown);
+    window.addEventListener("popstate", function (event) {
+      var view = (event.state && event.state.view) || "worship";
+      setView(view, false);
+    });
   }
 
   function initialise() {
     bindEvents();
+    history.replaceState({ view: state.view }, "");
     updateSearchClearVisibility();
     updateAddSlideAvailability();
     updateClearSlideAvailability();
@@ -5278,12 +5929,14 @@ function updateCardWarnings(card) {
     applySlideSize();
 
     if (state.activeLibraryId) {
-      const library = state.libraries.find((entry) => entry.id === state.activeLibraryId);
+      const library = state.libraries.find(
+        (entry) => entry.id === state.activeLibraryId,
+      );
       if (library && library.presentations.length > 0) {
         state.currentPresentationId = library.presentations[0].id;
         renderPresentationList();
         loadPresentation(state.currentPresentationId).catch((error) => {
-          console.error('Failed to auto-load presentation', error);
+          console.error("Failed to auto-load presentation", error);
         });
       } else {
         renderPresentationList();
@@ -5304,7 +5957,7 @@ function updateCardWarnings(card) {
     connectLiveSocket();
   }
 
-  window.addEventListener('beforeunload', () => {
+  window.addEventListener("beforeunload", () => {
     if (state.stageMonitorRefreshTimer) {
       clearInterval(state.stageMonitorRefreshTimer);
       state.stageMonitorRefreshTimer = null;
@@ -5314,17 +5967,23 @@ function updateCardWarnings(card) {
   window.__presenterOperatorState = state;
   window.__presenterOperatorTestHelpers = {
     addPresentationToPlaylist: (presentationId, playlistId) =>
-      handlePlaylistInsertion(presentationId, playlistId, null, { clearSearch: false }),
+      handlePlaylistInsertion(presentationId, playlistId, null, {
+        clearSearch: false,
+      }),
     playlistPresentationCount: (playlistId) => {
       if (!playlistId) return -1;
-      const playlist = state.playlists.find((item) => item.id === playlistId)
-        || state.playlistLookup.get(playlistId);
+      const playlist =
+        state.playlists.find((item) => item.id === playlistId) ||
+        state.playlistLookup.get(playlistId);
       if (!playlist || !Array.isArray(playlist.entries)) {
         return -1;
       }
-      return playlist.entries.filter((entry) => entry.entryType === 'presentation').length;
+      return playlist.entries.filter(
+        (entry) => entry.entryType === "presentation",
+      ).length;
     },
-    reorderSlides: (presentationId, orderedIds) => reorderSlides(presentationId, orderedIds),
+    reorderSlides: (presentationId, orderedIds) =>
+      reorderSlides(presentationId, orderedIds),
     slideOrder: (presentationId) => {
       if (!presentationId) return [];
       const slides = getSlidesForPresentation(presentationId);
@@ -5341,15 +6000,15 @@ function updateCardWarnings(card) {
     resetStageMonitorBaseline: () => resetStageMonitorBaseline(false),
     clearSearch: () => {
       if (els.searchInput) {
-        els.searchInput.value = '';
+        els.searchInput.value = "";
         try {
-          els.searchInput.dispatchEvent(new Event('input', { bubbles: true }));
-          els.searchInput.dispatchEvent(new Event('change', { bubbles: true }));
+          els.searchInput.dispatchEvent(new Event("input", { bubbles: true }));
+          els.searchInput.dispatchEvent(new Event("change", { bubbles: true }));
         } catch (error) {
-          console.warn('dispatch search clear events failed', error);
+          console.warn("dispatch search clear events failed", error);
         }
       }
-      state.searchQuery = '';
+      state.searchQuery = "";
       state.searchOpen = false;
       clearSearchResults();
       updateSearchClearVisibility();

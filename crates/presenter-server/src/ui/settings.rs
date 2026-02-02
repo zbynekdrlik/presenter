@@ -152,6 +152,7 @@ fn SettingsDocument(
                 <style>{styles::SETTINGS}</style>
             </head>
             <body class="settings" data-mode="create">
+                <script>"if(window!==window.parent)document.body.classList.add('in-iframe');"</script>
                 <header class="settings__header">
                     <div class="settings__header-title">
                         <h1>"Presenter Settings"</h1>

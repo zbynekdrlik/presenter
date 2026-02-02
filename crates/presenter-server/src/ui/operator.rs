@@ -26,6 +26,7 @@ pub fn OperatorDocument(
     playlists_json: String,
     stage_layouts_json: String,
     stage_layout_code: String,
+    initial_view: String,
 ) -> impl IntoView {
     let initial_library_id = libraries.first().map(|library| library.id.clone());
     let initial_playlist_id = playlists.first().map(|playlist| playlist.id.clone());
@@ -70,27 +71,41 @@ pub fn OperatorDocument(
                     <title>"Presenter Operator"</title>
                     <style>{OPERATOR_STYLES}</style>
                 </head>
-                <body class="operator" data-view="worship" data-mode="live">
+                <body class="operator" data-view={initial_view.clone()} data-mode="live">
                     <header class="operator__header">
-                        <div class="operator__header-left">
-                            <h1>"Presenter Operator"</h1>
+                        <div class="operator__header-row1">
+                            <div class="operator__header-brand">
+                                <h1>"Presenter"</h1>
+                                <span class="operator__version-badge">
+                                    "v"{VERSION}
+                                    {if BUILD_CHANNEL != "release" { format!(" ({})", BUILD_CHANNEL) } else { String::new() }}
+                                </span>
+                            </div>
                             <nav class="operator__view-nav">
                                 <button
                                     type="button"
                                     data-role="view-toggle"
                                     data-view="worship"
-                                    data-active="true"
+                                    data-active={if initial_view == "worship" { "true" } else { "false" }}
                                 >"Worship"</button>
-                                <button type="button" data-role="view-toggle" data-view="bible">"Bible"</button>
-                                <button type="button" data-role="view-toggle" data-view="timers">"Timers"</button>
-                                <button
-                                    type="button"
-                                    data-role="view-toggle"
-                                    data-view="settings"
-                                >"Settings"</button>
+                                <button type="button" data-role="view-toggle" data-view="bible" data-active={if initial_view == "bible" { "true" } else { "false" }}>"Bible"</button>
+                                <button type="button" data-role="view-toggle" data-view="timers" data-active={if initial_view == "timers" { "true" } else { "false" }}>"Timers"</button>
+                                <button type="button" data-role="view-toggle" data-view="settings" data-active={if initial_view == "settings" { "true" } else { "false" }}>"Settings"</button>
                             </nav>
+                            <div class="operator__header-row1-right">
+                                <div class="operator__mode-toggle">
+                                    <button
+                                        type="button"
+                                        data-role="mode-toggle"
+                                        data-mode="live"
+                                        data-active="true"
+                                    >"Live"</button>
+                                    <button type="button" data-role="mode-toggle" data-mode="edit">"Edit"</button>
+                                </div>
+                                <button type="button" class="operator__hamburger" data-role="mobile-menu-toggle" aria-label="Menu">"☰"</button>
+                            </div>
                         </div>
-                        <div class="operator__header-center">
+                        <div class="operator__header-row2">
                             <form class="operator__search" data-role="global-search-form" role="search" autocomplete="off">
                                 <span class="operator__search-icon" aria-hidden="true"></span>
                                 <input
@@ -104,15 +119,12 @@ pub fn OperatorDocument(
                                     type="button"
                                     data-role="global-search-clear"
                                     aria-label="Clear search"
-                                ><span aria-hidden="true">{ "×" }</span><span class="sr-only">Clear search</span></button>
+                                ><span aria-hidden="true">{ "×" }</span><span class="sr-only">"Clear search"</span></button>
                             </form>
-                            <div class="operator__search-results" data-role="global-search-results"></div>
                             <div class="operator__stage-layout" aria-label="Stage display mode">
                                 <label class="operator__stage-layout-label" for="stage-layout-select">"Stage Output"</label>
                                 <select id="stage-layout-select" data-role="stage-layout-select"></select>
                             </div>
-                        </div>
-                        <div class="operator__header-right">
                             <div class="operator__stage-preview" data-role="stage-status" data-active="false">
                                 <div class="operator__stage-preview-stack">
                                     <div class="operator__stage-preview-panel operator__stage-preview-panel--next" data-role="stage-next">"—"</div>
@@ -153,17 +165,9 @@ pub fn OperatorDocument(
                                     aria-label="Clear live outputs"
                                 >"🧹"</button>
                             </div>
-                            <div class="operator__mode-toggle">
-                                <button
-                                    type="button"
-                                    data-role="mode-toggle"
-                                    data-mode="live"
-                                    data-active="true"
-                                >"Live"</button>
-                                <button type="button" data-role="mode-toggle" data-mode="edit">"Edit"</button>
-                            </div>
                         </div>
                     </header>
+                    <div class="operator__search-results" data-role="global-search-results"></div>
                     <main class="operator__main">
                         <section class="operator__worship" data-view-panel="worship">
                             <section class="operator__catalog" data-role="catalog">
@@ -514,7 +518,10 @@ pub fn OperatorDocument(
         }
 }
 
-pub async fn render_operator_ui(state: &AppState) -> anyhow::Result<Html<String>> {
+pub async fn render_operator_ui(
+    state: &AppState,
+    initial_view: &str,
+) -> anyhow::Result<Html<String>> {
     let library_summaries = state.library_summaries(None).await?;
     let favorite_ids: HashSet<_> = state
         .library_favorites()
@@ -610,6 +617,7 @@ pub async fn render_operator_ui(state: &AppState) -> anyhow::Result<Html<String>
                 playlists_json=playlists_json.clone()
                 stage_layouts_json=stage_layouts_json.clone()
                 stage_layout_code=stage_layout_code.clone()
+                initial_view=initial_view.to_string()
             />
         }
         .into_view()
