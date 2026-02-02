@@ -79,6 +79,17 @@ If any branches exist, delete them first: `git push origin --delete <branch>`
 - The **only** valid PRs are `dev → main` for releases
 - If any unexpected PRs exist (Dependabot, stale branches, etc.), close them immediately
 
+**NEVER create a PR until ALL CI workflows are green.** This is non-negotiable:
+
+1. Push to dev
+2. Wait for **every** CI workflow to complete with `conclusion: success`
+3. Verify with: `gh run list --limit 10 --json name,status,conclusion`
+4. Only when **all** are green, then create the PR with `gh pr create`
+5. After PR creation, wait for **all PR-triggered checks** to go green too
+6. Verify PR is mergeable: `gh pr view <number> --json mergeable,mergeStateStatus`
+
+**A PR that is not green and mergeable is unacceptable. NEVER leave a PR in a failing state.**
+
 **Dependabot is DISABLED.** Dependencies are managed manually via the dev branch. The `.github/dependabot.yml` file has been removed. Do not re-enable it.
 
 **Check before any PR work:**
