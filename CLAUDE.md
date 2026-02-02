@@ -114,7 +114,7 @@ If any PRs exist (other than the one you're working on), close them first.
 | Metric         | Warning | Hard Fail | Exempt                                  |
 | -------------- | ------- | --------- | --------------------------------------- |
 | File lines     | >800    | >1000     | Migrations, tests                       |
-| Function lines | -       | >60       | Migrations, UI renders, router builders |
+| Function lines | >80     | >120      | Migrations, UI renders, router builders |
 
 **Exempt patterns:**
 

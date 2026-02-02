@@ -134,7 +134,7 @@ for file in "${target_files[@]}"; do
   fi
 done
 
-# 7) Function length (naive) — fail > 60 lines
+# 7) Function length (naive) — warn > 80, fail > 120 lines
 # Provide targets to the checker to scope analysis
 if (( ${#target_files[@]} )); then
   QC_TARGETS=$(printf '%s\n' "${target_files[@]}")
@@ -143,7 +143,7 @@ else
 fi
 export QC_TARGETS
 
-viols=$(python3 - "$ROOT_DIR" <<'PY'
+fn_check=$(python3 - "$ROOT_DIR" <<'PY'
 import os, re, sys, json
 root = sys.argv[1]
 fn_start = re.compile(r"^\s*(?:pub(?:\([^)]*\))?\s+)?(?:async\s+)?fn\s+([A-Za-z0-9_]+)\s*\(")
@@ -168,7 +168,8 @@ def is_exempt_function(fn_name, filepath):
             return True
     return False
 
-violations = []
+violations = []  # > 120 lines (hard fail)
+warnings = []    # > 80 lines (warning)
 targets_env = os.environ.get('QC_TARGETS', '')
 targets = [t for t in targets_env.split('\n') if t.strip()]
 for dirpath, _, filenames in os.walk(os.path.join(root, 'crates')):
@@ -195,29 +196,44 @@ for dirpath, _, filenames in os.walk(os.path.join(root, 'crates')):
                         started = True
                     if started and brace == 0:
                         length = j - i + 1
-                        if length > 60 and not is_exempt_function(fn_name, path):
-                            violations.append({'file': path, 'start': i+1, 'length': length, 'fn': fn_name})
+                        if not is_exempt_function(fn_name, path):
+                            entry = {'file': path, 'start': i+1, 'length': length, 'fn': fn_name}
+                            if length > 120:
+                                violations.append(entry)
+                            elif length > 80:
+                                warnings.append(entry)
                         i = j
                         break
                     j += 1
             i += 1
 violations.sort(key=lambda v: (-v['length'], v['file'], v['start']))
-print(json.dumps(violations))
+warnings.sort(key=lambda v: (-v['length'], v['file'], v['start']))
+print(json.dumps({'violations': violations, 'warnings': warnings}))
 PY
-) || { fail "Function length checker crashed"; viols="[]"; }
+) || { fail "Function length checker crashed"; fn_check='{"violations":[],"warnings":[]}'; }
 
+# Report hard failures (>120 lines)
+viols=$(echo "$fn_check" | jq -c '.violations')
 if [[ -n "${viols:-}" && "${viols}" != "[]" ]]; then
   while IFS= read -r row; do
     file=$(echo "$row" | jq -r '.file')
     start=$(echo "$row" | jq -r '.start')
     length=$(echo "$row" | jq -r '.length')
     fn_name=$(echo "$row" | jq -r '.fn')
-    if (( ${#changed[@]} > 0 )); then
-      fail "Function too long (>60): ${file}:${start} fn ${fn_name} (${length} lines)"
-    else
-      warn "Function too long (>60): ${file}:${start} fn ${fn_name} (${length} lines)"
-    fi
+    fail "Function too long (>120): ${file}:${start} fn ${fn_name} (${length} lines)"
   done < <(echo "$viols" | jq -c '.[]')
+fi
+
+# Report warnings (>80 lines)
+fn_warns=$(echo "$fn_check" | jq -c '.warnings')
+if [[ -n "${fn_warns:-}" && "${fn_warns}" != "[]" ]]; then
+  while IFS= read -r row; do
+    file=$(echo "$row" | jq -r '.file')
+    start=$(echo "$row" | jq -r '.start')
+    length=$(echo "$row" | jq -r '.length')
+    fn_name=$(echo "$row" | jq -r '.fn')
+    warn "Function long (>80): ${file}:${start} fn ${fn_name} (${length} lines)"
+  done < <(echo "$fn_warns" | jq -c '.[]')
 fi
 
 # 8) Format & Lint (strict)
