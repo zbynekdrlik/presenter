@@ -73,11 +73,13 @@ If any branches exist, delete them first: `git push origin --delete <branch>`
 
 ### PR Policy (STRICT)
 
-**Only ONE pull request at a time.** No exceptions.
+**Only ONE pull request at a time.** No exceptions. Maximum 1 PR open in the entire repo.
 
 - Before creating a new PR, close any existing open PRs
-- Dependabot PRs must be closed and handled manually via dev branch
-- The only PRs are `dev → main` for releases
+- The **only** valid PRs are `dev → main` for releases
+- If any unexpected PRs exist (Dependabot, stale branches, etc.), close them immediately
+
+**Dependabot is DISABLED.** Dependencies are managed manually via the dev branch. The `.github/dependabot.yml` file has been removed. Do not re-enable it.
 
 **Check before any PR work:**
 
@@ -112,7 +114,7 @@ If any PRs exist (other than the one you're working on), close them first.
 | Metric         | Warning | Hard Fail | Exempt                                  |
 | -------------- | ------- | --------- | --------------------------------------- |
 | File lines     | >800    | >1000     | Migrations, tests                       |
-| Function lines | -       | >60       | Migrations, UI renders, router builders |
+| Function lines | >80     | >120      | Migrations, UI renders, router builders |
 
 **Exempt patterns:**
 

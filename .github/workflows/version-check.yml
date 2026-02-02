@@ -36,7 +36,15 @@ jobs:
           VERSION="${{ steps.version.outputs.version }}"
 
           # Get latest release version (if any)
-          LATEST=$(gh release list --limit 1 --json tagName --jq '.[0].tagName // empty' 2>/dev/null || echo "")
+          if ! command -v gh >/dev/null 2>&1; then
+            echo "::warning::gh CLI not available — skipping release comparison"
+            exit 0
+          fi
+          if ! RELEASE_OUTPUT=$(gh release list --limit 1 --json tagName --jq '.[0].tagName // empty' 2>&1); then
+            echo "::error::Failed to query GitHub releases API: $RELEASE_OUTPUT"
+            exit 1
+          fi
+          LATEST="$RELEASE_OUTPUT"
 
           if [ -z "$LATEST" ]; then
             echo "No previous releases found - version $VERSION is valid"
