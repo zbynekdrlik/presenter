@@ -102,8 +102,40 @@
     },
   };
 
+  const SESSION_STATE_KEY = "presenter.operatorState";
   const STAGE_MONITOR_BASELINE_KEY = "presenter.stageMonitorBaseline";
   const STAGE_MONITOR_REFRESH_MS = 60_000;
+
+  function saveSessionState() {
+    try {
+      if (!window.sessionStorage) return;
+      window.sessionStorage.setItem(
+        SESSION_STATE_KEY,
+        JSON.stringify({
+          view: state.view,
+          mode: state.mode,
+          activeLibraryId: state.activeLibraryId,
+          activePlaylistId: state.activePlaylistId,
+          currentPresentationId: state.currentPresentationId,
+          focusedSlideId: state.focusedSlideId,
+        }),
+      );
+    } catch (_) {
+      /* sessionStorage full or blocked — degrade silently */
+    }
+  }
+
+  function loadSessionState() {
+    try {
+      if (!window.sessionStorage) return null;
+      var raw = window.sessionStorage.getItem(SESSION_STATE_KEY);
+      if (!raw) return null;
+      var parsed = JSON.parse(raw);
+      return typeof parsed === "object" && parsed !== null ? parsed : null;
+    } catch (_) {
+      return null;
+    }
+  }
 
   const els = {
     libraryList: document.querySelector('[data-role="library-list"]'),
@@ -753,6 +785,7 @@
       updateActiveSlideIndicators();
     }
 
+    saveSessionState();
     hideSearchResults();
   }
 
@@ -1334,6 +1367,7 @@
       var url = view === "worship" ? "/ui/operator" : "/ui/operator/" + view;
       history.pushState({ view: view }, "", url);
     }
+    saveSessionState();
   }
 
   function setMode(mode) {
@@ -1349,6 +1383,7 @@
     if (state.currentPresentationId) {
       renderSlides(state.currentPresentationId);
     }
+    saveSessionState();
   }
 
   function updateAddSlideAvailability() {
@@ -1450,6 +1485,7 @@
     renderLibraries();
     renderPlaylists();
     renderPresentationList();
+    saveSessionState();
   }
 
   function openLibraryModal() {
@@ -2102,6 +2138,7 @@
     renderPlaylists();
     renderPresentationList();
     closePlaylistModal();
+    saveSessionState();
   }
 
   function renderPlaylistRow(playlist, { forModal = false } = {}) {
@@ -3841,6 +3878,7 @@
       }
       updateActiveSlideIndicators();
     }
+    saveSessionState();
   }
 
   function connectLiveSocket() {
@@ -4028,6 +4066,7 @@
         '<p class="empty">Select a presentation to load slides.</p>';
       els.slides.removeAttribute("data-slides-placeholder");
     }
+    saveSessionState();
   }
 
   function handleLibraryModalClick(event) {
@@ -4486,6 +4525,7 @@
     state.focusedSlideId = null;
     renderPresentationList();
     loadPresentation(presentationId);
+    saveSessionState();
   }
 
   function handlePresentationDragStart(event) {
@@ -4708,6 +4748,7 @@
     } else {
       updateActiveSlideIndicators();
     }
+    saveSessionState();
   }
 
   function handleSlidesPointerDown(event) {
@@ -5912,37 +5953,158 @@
 
   function initialise() {
     bindEvents();
+
+    var saved = loadSessionState();
+    var urlView = state.view;
+
+    if (saved) {
+      if (saved.mode === "live" || saved.mode === "edit") {
+        state.mode = saved.mode;
+      }
+      if (urlView !== "worship") {
+        state.view = urlView;
+      } else if (
+        saved.view &&
+        ["worship", "bible", "timers", "settings"].indexOf(saved.view) >= 0
+      ) {
+        state.view = saved.view;
+      }
+      if (saved.activeLibraryId) {
+        state.activeLibraryId = saved.activeLibraryId;
+      }
+      if (saved.activePlaylistId) {
+        state.activePlaylistId = saved.activePlaylistId;
+      }
+      if (saved.currentPresentationId) {
+        state.currentPresentationId = saved.currentPresentationId;
+      }
+      if (saved.focusedSlideId) {
+        state.focusedSlideId = saved.focusedSlideId;
+      }
+    }
+
     history.replaceState({ view: state.view }, "");
     updateSearchClearVisibility();
     updateAddSlideAvailability();
     updateClearSlideAvailability();
-    if (state.libraries.length > 0) {
-      state.activeLibraryId = state.libraries[0].id;
-      updateContextTitleFromLibrary(state.activeLibraryId);
-    } else if (state.playlists.length > 0) {
-      state.activePlaylistId = state.playlists[0].id;
-      updateContextTitleFromPlaylist(state.activePlaylistId);
+
+    var restoredFromSession = false;
+
+    if (state.activeLibraryId) {
+      var library = state.libraries.find(
+        (entry) => entry.id === state.activeLibraryId,
+      );
+      if (library) {
+        restoredFromSession = true;
+        updateContextTitleFromLibrary(state.activeLibraryId);
+      } else {
+        state.activeLibraryId = null;
+        state.currentPresentationId = null;
+        state.focusedSlideId = null;
+      }
     }
+
+    if (!restoredFromSession && state.activePlaylistId) {
+      var playlist = state.playlists.find(
+        (entry) => entry.id === state.activePlaylistId,
+      );
+      if (playlist) {
+        restoredFromSession = true;
+        state.activeLibraryId = null;
+        updateContextTitleFromPlaylist(state.activePlaylistId);
+      } else {
+        state.activePlaylistId = null;
+        state.currentPresentationId = null;
+        state.focusedSlideId = null;
+      }
+    }
+
+    if (!restoredFromSession) {
+      if (state.libraries.length > 0) {
+        state.activeLibraryId = state.libraries[0].id;
+        updateContextTitleFromLibrary(state.activeLibraryId);
+      } else if (state.playlists.length > 0) {
+        state.activePlaylistId = state.playlists[0].id;
+        updateContextTitleFromPlaylist(state.activePlaylistId);
+      }
+    }
+
     renderLibraries();
     renderPlaylists();
     applyCatalogHeight();
     applySlideSize();
 
     if (state.activeLibraryId) {
-      const library = state.libraries.find(
+      var lib = state.libraries.find(
         (entry) => entry.id === state.activeLibraryId,
       );
-      if (library && library.presentations.length > 0) {
-        state.currentPresentationId = library.presentations[0].id;
-        renderPresentationList();
-        loadPresentation(state.currentPresentationId).catch((error) => {
-          console.error("Failed to auto-load presentation", error);
-        });
+      if (lib) {
+        if (
+          state.currentPresentationId &&
+          lib.presentations.some((p) => p.id === state.currentPresentationId)
+        ) {
+          renderPresentationList();
+          loadPresentation(state.currentPresentationId)
+            .then(() => {
+              if (state.focusedSlideId) {
+                var slides = getSlidesForPresentation(
+                  state.currentPresentationId,
+                );
+                var slideExists = slides.some(
+                  (s) => s.id === state.focusedSlideId,
+                );
+                if (!slideExists) {
+                  state.focusedSlideId = null;
+                }
+                updateActiveSlideIndicators();
+                if (state.focusedSlideId) {
+                  scrollSlideIntoView(state.focusedSlideId);
+                }
+              }
+            })
+            .catch((error) => {
+              console.error("Failed to auto-load presentation", error);
+            });
+        } else if (lib.presentations.length > 0) {
+          state.currentPresentationId = lib.presentations[0].id;
+          state.focusedSlideId = null;
+          renderPresentationList();
+          loadPresentation(state.currentPresentationId).catch((error) => {
+            console.error("Failed to auto-load presentation", error);
+          });
+        } else {
+          state.currentPresentationId = null;
+          state.focusedSlideId = null;
+          renderPresentationList();
+        }
       } else {
         renderPresentationList();
       }
     } else if (state.activePlaylistId) {
       renderPresentationList();
+      if (state.currentPresentationId) {
+        loadPresentation(state.currentPresentationId)
+          .then(() => {
+            if (state.focusedSlideId) {
+              var slides = getSlidesForPresentation(
+                state.currentPresentationId,
+              );
+              var slideExists = slides.some(
+                (s) => s.id === state.focusedSlideId,
+              );
+              if (!slideExists) {
+                state.focusedSlideId = null;
+              }
+              updateActiveSlideIndicators();
+              if (state.focusedSlideId) {
+                scrollSlideIntoView(state.focusedSlideId);
+              }
+            }
+          })
+          .catch((error) => {
+            console.error("Failed to auto-load presentation", error);
+          });
+      }
     } else {
       renderPresentationList();
     }
@@ -5955,6 +6117,7 @@
     renderAbleSetPanel();
     refreshAbleSetStatus(false);
     connectLiveSocket();
+    saveSessionState();
   }
 
   window.addEventListener("beforeunload", () => {
