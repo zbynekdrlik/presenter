@@ -84,6 +84,7 @@ pub fn build_router(state: AppState) -> Router {
             put(playlists::replace_playlist_entries),
         )
         .route("/ui/operator", get(ui_routes::operator_ui))
+        .route("/ui/operator/{view}", get(ui_routes::operator_ui_with_view))
         .route("/ui/tablet", get(ui_routes::tablet_ui))
         .route("/ui/bible", get(bible::bible_ui))
         .route("/ui/settings", get(ui_routes::settings_ui))
