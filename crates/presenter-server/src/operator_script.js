@@ -143,6 +143,7 @@
     playlistList: document.querySelector('[data-role="playlist-list"]'),
     playlistCreate: document.querySelector('[data-role="playlist-create"]'),
     catalog: document.querySelector('[data-role="catalog"]'),
+    catalogBottom: document.querySelector('[data-role="catalog-bottom"]'),
     catalogResizer: document.querySelector('[data-role="catalog-resizer"]'),
     contextTitle: document.querySelector('[data-role="context-title"]'),
     presentationDropzone: document.querySelector(
@@ -768,13 +769,11 @@
       if (slideExists) {
         state.focusedSlideId = slideId;
         updateActiveSlideIndicators();
-        const card = els.slides
-          ? els.slides.querySelector(`[data-slide-id="${slideId}"]`)
-          : null;
-        if (card && typeof card.scrollIntoView === "function") {
-          card.scrollIntoView({ block: "center", behavior: "smooth" });
-        }
+        scrollSlideIntoView(slideId);
         if (state.mode === "edit") {
+          const card = els.slides
+            ? els.slides.querySelector(`[data-slide-id="${slideId}"]`)
+            : null;
           const textarea = card?.querySelector('[data-field="main"]');
           if (textarea && typeof textarea.focus === "function") {
             textarea.focus({ preventScroll: true });
@@ -2407,9 +2406,18 @@
     const target = els.presentationList.querySelector(
       `[data-role="presentation-item"][data-presentation-id="${presentationId}"]`,
     );
-    if (target && typeof target.scrollIntoView === "function") {
-      target.scrollIntoView({ block: "center", behavior: "smooth" });
-    }
+    if (!target) return;
+    const container = els.catalogBottom || els.presentationList.parentElement;
+    if (!container) return;
+    const containerRect = container.getBoundingClientRect();
+    const targetRect = target.getBoundingClientRect();
+    const offsetTop = targetRect.top - containerRect.top + container.scrollTop;
+    const centerOffset =
+      offsetTop - containerRect.height / 2 + targetRect.height / 2;
+    container.scrollTo({
+      top: Math.max(0, centerOffset),
+      behavior: "smooth",
+    });
   }
 
   function scrollSlideIntoView(slideId) {
@@ -2417,9 +2425,16 @@
       return;
     }
     const card = els.slides.querySelector(`[data-slide-id="${slideId}"]`);
-    if (card && typeof card.scrollIntoView === "function") {
-      card.scrollIntoView({ block: "center", behavior: "smooth" });
-    }
+    if (!card) return;
+    const containerRect = els.slides.getBoundingClientRect();
+    const cardRect = card.getBoundingClientRect();
+    const offsetTop = cardRect.top - containerRect.top + els.slides.scrollTop;
+    const centerOffset =
+      offsetTop - containerRect.height / 2 + cardRect.height / 2;
+    els.slides.scrollTo({
+      top: Math.max(0, centerOffset),
+      behavior: "smooth",
+    });
   }
 
   function updateActivePresentationIndicators() {
