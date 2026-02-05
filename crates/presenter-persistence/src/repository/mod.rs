@@ -183,6 +183,18 @@ impl Repository {
     }
 
     #[instrument(skip_all)]
+    pub async fn delete_presentation(&self, presentation_id: PresentationId) -> anyhow::Result<()> {
+        let id = presentation_id.to_string();
+        let result = presentation_entity::Entity::delete_by_id(id)
+            .exec(&self.db)
+            .await?;
+        if result.rows_affected == 0 {
+            return Err(anyhow!("presentation not found"));
+        }
+        Ok(())
+    }
+
+    #[instrument(skip_all)]
     pub async fn purge_presentation_content(&self) -> anyhow::Result<()> {
         let txn = self.db.begin().await?;
 

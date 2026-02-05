@@ -145,7 +145,9 @@ pub fn build_router(state: AppState) -> Router {
         )
         .route(
             "/presentations/{id}",
-            get(presentations::get_presentation_detail).patch(presentations::update_presentation),
+            get(presentations::get_presentation_detail)
+                .patch(presentations::update_presentation)
+                .delete(presentations::delete_presentation),
         )
         .route(
             "/presentations/{presentation_id}/slides",

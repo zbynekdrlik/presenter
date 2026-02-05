@@ -265,6 +265,9 @@
     presentationEditSave: document.querySelector(
       '[data-role="presentation-edit-save"]',
     ),
+    presentationEditDelete: document.querySelector(
+      '[data-role="presentation-edit-delete"]',
+    ),
     presentationEditTitle: document.querySelector(
       '[data-role="presentation-edit-title"]',
     ),
@@ -1628,10 +1631,13 @@
       els.presentationEditModal.dataset.open = "true";
     }
     state.presentationEditModalOpen = true;
+    state.pendingFocus = null;
+    state.focusedSlideId = null;
     configurePresentationEditModal({
       title: "Rename Presentation",
       label: "Presentation name",
       name: currentName || "",
+      showDelete: true,
     });
     document.body.dataset.modalOpen = "presentation-edit";
     window.setTimeout(() => {
@@ -1666,10 +1672,13 @@
       els.presentationEditModal.dataset.open = "true";
     }
     state.presentationEditModalOpen = true;
+    state.pendingFocus = null;
+    state.focusedSlideId = null;
     configurePresentationEditModal({
       title: "Rename Separator",
       label: "Separator name",
       name: entry.name || "Separator",
+      showDelete: false,
     });
     document.body.dataset.modalOpen = "presentation-edit";
     window.setTimeout(() => {
@@ -1711,6 +1720,8 @@
     state.libraryBeingEditedId = libraryId;
     state.libraryEditModalOpen = true;
     state.libraryEditSubmitting = false;
+    state.pendingFocus = null;
+    state.focusedSlideId = null;
     configureLibraryEditModal({
       mode: "edit",
       name: library.name,
@@ -1737,6 +1748,8 @@
     state.libraryBeingEditedId = null;
     state.libraryEditModalOpen = true;
     state.libraryEditSubmitting = false;
+    state.pendingFocus = null;
+    state.focusedSlideId = null;
     configureLibraryEditModal({
       mode: "create",
       name: "",
@@ -1849,7 +1862,7 @@
     }
   }
 
-  function configurePresentationEditModal({ title, label, name }) {
+  function configurePresentationEditModal({ title, label, name, showDelete }) {
     if (els.presentationEditTitle) {
       els.presentationEditTitle.textContent = title || "Rename";
     }
@@ -1862,6 +1875,9 @@
     }
     if (els.presentationEditSave) {
       els.presentationEditSave.disabled = false;
+    }
+    if (els.presentationEditDelete) {
+      els.presentationEditDelete.style.display = showDelete ? "" : "none";
     }
     setPresentationEditSubmitting(false);
   }
@@ -1889,6 +1905,8 @@
       els.playlistEditModal.dataset.open = "true";
     }
     state.playlistEditModalOpen = true;
+    state.pendingFocus = null;
+    state.focusedSlideId = null;
     document.body.dataset.modalOpen = "playlist-edit";
     window.setTimeout(() => {
       if (els.playlistEditName) {
@@ -1916,6 +1934,8 @@
       els.playlistEditModal.dataset.open = "true";
     }
     state.playlistEditModalOpen = true;
+    state.pendingFocus = null;
+    state.focusedSlideId = null;
     document.body.dataset.modalOpen = "playlist-edit";
     window.setTimeout(() => {
       if (els.playlistEditName) {
@@ -2603,6 +2623,9 @@
   function restorePendingFocus() {
     if (!state.pendingFocus || state.mode !== "edit") {
       state.pendingFocus = null;
+      return;
+    }
+    if (document.body.dataset.modalOpen) {
       return;
     }
     const target = state.pendingFocus;
@@ -4394,6 +4417,103 @@
     }
   }
 
+  async function handlePresentationEditDelete(event) {
+    event.preventDefault();
+    if (state.presentationEditSubmitting) return;
+    const target = state.presentationEditTarget;
+    if (!target || target.type !== "presentation") {
+      closePresentationEdit();
+      return;
+    }
+    const presentationId = target.presentationId;
+    if (!presentationId) {
+      closePresentationEdit();
+      return;
+    }
+    let library = null;
+    if (target.libraryId) {
+      library = state.libraries.find((item) => item.id === target.libraryId);
+    }
+    if (!library) {
+      library = state.libraries.find((item) =>
+        (item.presentations || []).some((p) => p.id === presentationId),
+      );
+    }
+    const presentation = library
+      ? (library.presentations || []).find((item) => item.id === presentationId)
+      : null;
+    const name = presentation ? presentation.name : "this presentation";
+    const confirmed = window.confirm(
+      `Delete presentation "${name}"? This will remove all its slides.`,
+    );
+    if (!confirmed) return;
+
+    setPresentationEditSubmitting(true);
+    try {
+      await apiFetch(`/presentations/${presentationId}`, {
+        method: "DELETE",
+      });
+
+      if (library) {
+        library.presentations = (library.presentations || []).filter(
+          (item) => item.id !== presentationId,
+        );
+      }
+
+      presentationIndex.delete(presentationId);
+      state.presentationMeta.delete(presentationId);
+      state.slidesCache.delete(presentationId);
+
+      state.playlists = state.playlists.map((playlist) => {
+        const filtered = playlist.entries.filter(
+          (entry) =>
+            !entry.presentationId || entry.presentationId !== presentationId,
+        );
+        const updated = Object.assign({}, playlist, {
+          entries: filtered,
+        });
+        state.playlistLookup.set(updated.id, updated);
+        return updated;
+      });
+
+      if (state.currentPresentationId === presentationId) {
+        state.currentPresentationId = null;
+      }
+      if (state.stagePresentationId === presentationId) {
+        state.stagePresentationId = null;
+        state.stageSlideId = null;
+        state.stageSnapshot = null;
+        renderAbleSetPanel();
+      }
+
+      rebuildPresentationIndex();
+      renderLibraries();
+      renderPlaylists();
+      renderPresentationList();
+
+      if (state.activeLibraryId) {
+        updateContextTitleFromLibrary(state.activeLibraryId);
+      } else if (state.activePlaylistId) {
+        updateContextTitleFromPlaylist(state.activePlaylistId);
+      }
+
+      if (!state.currentPresentationId && els.slides) {
+        els.slides.innerHTML =
+          '<p class="empty">Select a presentation to load slides.</p>';
+        els.slides.removeAttribute("data-slides-placeholder");
+      }
+
+      renderStageStatus();
+      closePresentationEdit();
+      showToast("Presentation deleted", "success");
+    } catch (error) {
+      console.error("Failed to delete presentation", error);
+      showToast("Failed to delete presentation", "error");
+    } finally {
+      setPresentationEditSubmitting(false);
+    }
+  }
+
   function handleGlobalKeydown(event) {
     const target = event.target;
     const tag = target && target.tagName ? target.tagName.toLowerCase() : "";
@@ -5005,6 +5125,17 @@
         ).forEach((node) => {
           node.removeAttribute("data-drop-position");
         });
+        const firstItem = els.presentationList.querySelector(
+          '[data-role="presentation-item"]',
+        );
+        if (firstItem) {
+          const firstRect = firstItem.getBoundingClientRect();
+          if (event.clientY < firstRect.top + firstRect.height / 2) {
+            setPresentationDropzoneState(null);
+            firstItem.dataset.dropPosition = "before";
+            return;
+          }
+        }
       }
       setPresentationDropzoneState("append");
       return;
@@ -5092,6 +5223,16 @@
           const rect = target.getBoundingClientRect();
           const isBefore = event.clientY < rect.top + rect.height / 2;
           insertIndex = isBefore ? baseIndex : baseIndex + 1;
+        }
+      } else if (els.presentationList) {
+        const firstItem = els.presentationList.querySelector(
+          '[data-role="presentation-item"]',
+        );
+        if (firstItem) {
+          const firstRect = firstItem.getBoundingClientRect();
+          if (event.clientY < firstRect.top + firstRect.height / 2) {
+            insertIndex = 0;
+          }
         }
       }
       const fromSearch =
@@ -5687,6 +5828,12 @@
           closePresentationEdit();
         }
       });
+    }
+    if (els.presentationEditDelete) {
+      els.presentationEditDelete.addEventListener(
+        "click",
+        handlePresentationEditDelete,
+      );
     }
     if (els.presentationEditModal) {
       els.presentationEditModal.addEventListener("click", (event) => {

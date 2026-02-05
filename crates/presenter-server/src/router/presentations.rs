@@ -84,6 +84,18 @@ pub(super) async fn update_presentation(
 }
 
 #[instrument(skip_all)]
+pub(super) async fn delete_presentation(
+    State(state): State<AppState>,
+    Path(id): Path<String>,
+) -> Result<StatusCode, AppError> {
+    let presentation_uuid = super::parse_uuid("presentationId", &id)?;
+    state
+        .delete_presentation(PresentationId::from_uuid(presentation_uuid))
+        .await?;
+    Ok(StatusCode::NO_CONTENT)
+}
+
+#[instrument(skip_all)]
 pub(super) async fn insert_slide(
     State(state): State<AppState>,
     Path(presentation_id): Path<String>,
