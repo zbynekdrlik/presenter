@@ -351,6 +351,36 @@ scripts/dev/show-playwright-report.sh
 - Prefer retry-with-assert poll helpers over arbitrary sleeps
 - **E2E timeout = build failure** - Optimize build caching, not extend timeouts
 
+### E2E Coverage Mandate (NO EXCEPTIONS)
+
+**Every change MUST include comprehensive E2E tests.** This is non-negotiable:
+
+1. **All new features** must have E2E tests covering the full user workflow
+2. **All bug fixes** must have E2E tests that reproduce the bug and verify the fix
+3. **All UI changes** must have E2E tests verifying the visual/interactive behavior
+4. **Do NOT skip E2E paths** to save effort — cover ALL user-facing paths affected by the change
+5. **A PR without E2E tests for changed functionality is UNACCEPTABLE and must not be submitted**
+
+**Before submitting any PR**, verify:
+
+- Every changed/added feature has at least one E2E test exercising it
+- Edge cases are covered (empty states, error states, boundary conditions)
+- Tests verify the actual user-visible behavior, not implementation details
+
+### Critical Self-Review of Test Quality
+
+**Be ruthlessly critical of your own test implementation.** Before marking tests as done:
+
+1. **Challenge coverage completeness**: Ask "what user paths did I NOT test?" and add them
+2. **Challenge test robustness**: Ask "could this test pass even if the feature is broken?" — if yes, strengthen assertions
+3. **Challenge test isolation**: Verify tests don't depend on execution order or shared state
+4. **Challenge assertion quality**: Prefer specific assertions (`toHaveText("exact value")`) over weak ones (`toBeVisible()`)
+5. **Challenge edge cases**: Test with empty data, maximum data, special characters, rapid interactions
+6. **Never take shortcuts**: Do not reduce test scope to make implementation easier or faster
+7. **Tests must fail when the feature breaks**: If you can imagine a regression that wouldn't be caught, add a test for it
+
+**The goal is tests that a human reviewer would trust as proof the feature works correctly.**
+
 ---
 
 ## Architecture
@@ -427,8 +457,8 @@ chore(deps): update tokio to 1.40
 ### Format & Lint (CI enforces)
 
 ```bash
-cargo fmt --check              # Must pass
-cargo clippy -- -D warnings    # Must pass
+cargo fmt --check                                              # Must pass
+cargo clippy --workspace --all-targets -- -D warnings -W clippy::all  # Must pass (zero warnings allowed)
 ```
 
 ### Naming Conventions

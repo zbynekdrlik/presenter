@@ -12,6 +12,7 @@ pub struct ServerConfig {
     pub companion: CompanionConfig,
     pub osc: OscConfig,
     pub stage: StageConfig,
+    #[allow(dead_code)]
     pub android: AndroidConfig,
 }
 
@@ -34,7 +35,9 @@ pub struct CompanionConfig {
 
 #[derive(Debug, Clone, Default)]
 pub struct OscConfig {
+    #[allow(dead_code)]
     pub listen_port_override: Option<u16>,
+    #[allow(dead_code)]
     pub listen_port_invalid: Option<String>,
     pub host_port: Option<u16>,
 }
@@ -46,6 +49,7 @@ pub struct StageConfig {
 
 #[derive(Debug, Clone, Default)]
 pub struct AndroidConfig {
+    #[allow(dead_code)]
     pub adb_path: Option<OsString>,
 }
 

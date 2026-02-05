@@ -32,10 +32,12 @@ mod stage;
 mod tests;
 mod timers;
 
+#[cfg(test)]
+use crate::config::OscConfig;
 use crate::{
     ableset::AbleSetBridge,
     android_stage::AndroidStageRegistry,
-    config::{OscConfig, ServerConfig},
+    config::ServerConfig,
     live::{LiveEvent, LiveHub},
     osc::{OscBridge, OscStatusSnapshot},
     resolume::ResolumeRegistry,
@@ -101,6 +103,7 @@ pub struct FeatureFlags {
 }
 
 impl AppState {
+    #[allow(dead_code)]
     pub fn new(
         repository: Repository,
         companion_token: Option<String>,
@@ -211,85 +214,6 @@ impl AppState {
                 }
             }
         });
-    }
-
-    #[instrument(skip_all)]
-    pub async fn from_env() -> anyhow::Result<Self> {
-        let db_url = env::var("PRESENTER_DB_URL")
-            .unwrap_or_else(|_| "sqlite://presenter_dev.db".to_string());
-        let repo = Repository::connect(&DatabaseSettings::new(&db_url)).await?;
-        let companion_token = env::var("PRESENTER_COMPANION_TOKEN").ok();
-
-        let stored_companion = repo
-            .get_app_setting(COMPANION_FEATURE_KEY)
-            .await?
-            .and_then(|value| parse_bool_flag(&value))
-            .unwrap_or(false);
-
-        let env_override = env::var("PRESENTER_COMPANION_ENABLED")
-            .ok()
-            .and_then(|value| parse_bool_flag(&value));
-
-        let companion_enabled = env_override.unwrap_or(stored_companion);
-
-        if let Some(value) = env_override {
-            repo.set_app_setting(COMPANION_FEATURE_KEY, if value { "1" } else { "0" })
-                .await?;
-        }
-
-        let raw_port = repo.get_app_setting(COMPANION_PORT_KEY).await?;
-        let mut persist_port = false;
-        let stored_port = raw_port
-            .as_deref()
-            .and_then(|value| value.parse::<u16>().ok())
-            .filter(|port| *port >= 1);
-        let mut companion_port = stored_port.unwrap_or(DEFAULT_COMPANION_PORT);
-        if stored_port.is_none() {
-            persist_port = true;
-        }
-
-        let env_port_override = env::var("PRESENTER_COMPANION_PORT")
-            .ok()
-            .and_then(|value| value.parse::<u16>().ok())
-            .filter(|port| *port >= 1);
-
-        if let Some(port_override) = env_port_override {
-            companion_port = port_override;
-            persist_port = true;
-        }
-
-        if persist_port {
-            repo.set_app_setting(COMPANION_PORT_KEY, &companion_port.to_string())
-                .await?;
-        }
-
-        let registry = ResolumeRegistry::new()?;
-        let android_stage_registry = AndroidStageRegistry::new();
-        let osc_bridge = OscBridge::new(&OscConfig::default());
-        let ableset_bridge = AbleSetBridge::new();
-        let state = Self::new(
-            repo,
-            companion_token,
-            companion_enabled,
-            companion_port,
-            registry,
-            android_stage_registry,
-            osc_bridge.clone(),
-            ableset_bridge.clone(),
-        );
-        state.ensure_seed_library().await?;
-        state.ensure_demo_playlist().await?;
-        state.sync_resolume_hosts().await?;
-        state.sync_android_stage_displays().await?;
-
-        Self::apply_osc_settings(&state, &osc_bridge).await?;
-        Self::apply_ableset_settings(&state, &ableset_bridge).await?;
-
-        state
-            .configure_companion_service(companion_enabled, companion_port)
-            .await?;
-        state.spawn_background_tasks();
-        Ok(state)
     }
 
     #[instrument(skip_all)]

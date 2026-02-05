@@ -24,8 +24,10 @@ pub struct OscBridge {
     inner: Arc<OscBridgeInner>,
 }
 
+#[allow(dead_code)]
 type OscFuture<'a, T> = Pin<Box<dyn Future<Output = T> + Send + 'a>>;
 
+#[allow(dead_code)]
 pub trait OscClient: Send + Sync {
     fn apply_settings(
         &self,
@@ -35,6 +37,7 @@ pub trait OscClient: Send + Sync {
     fn status(&self) -> OscFuture<'_, OscStatusSnapshot>;
 }
 
+#[allow(dead_code)]
 pub type DynOscClient = Arc<dyn OscClient>;
 
 struct OscBridgeInner {
