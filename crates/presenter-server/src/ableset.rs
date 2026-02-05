@@ -19,8 +19,10 @@ pub struct AbleSetBridge {
     inner: Arc<AbleSetInner>,
 }
 
+#[allow(dead_code)]
 type AbleSetFuture<'a, T> = Pin<Box<dyn Future<Output = T> + Send + 'a>>;
 
+#[allow(dead_code)]
 pub trait AbleSetClient: Send + Sync {
     fn apply_settings(&self, settings: AbleSetSettings) -> AbleSetFuture<'_, anyhow::Result<()>>;
     fn status_snapshot(&self) -> AbleSetFuture<'_, AbleSetStatusSnapshot>;
@@ -28,6 +30,7 @@ pub trait AbleSetClient: Send + Sync {
     fn song_snapshot(&self) -> AbleSetFuture<'_, Option<AbleSetSongSnapshot>>;
 }
 
+#[allow(dead_code)]
 pub type DynAbleSetClient = Arc<dyn AbleSetClient>;
 
 struct AbleSetInner {
@@ -302,6 +305,7 @@ struct MockAbleSetState {
 }
 
 #[cfg(test)]
+#[allow(dead_code)]
 fn mock_status_from_state(state: &MockAbleSetState) -> AbleSetStatusSnapshot {
     if let Some(settings) = &state.settings {
         AbleSetStatusSnapshot {

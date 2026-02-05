@@ -70,7 +70,7 @@ jobs:
           fi
 
       - name: Run Clippy
-        run: cargo clippy --workspace --all-targets -- -W clippy::all
+        run: cargo clippy --workspace --all-targets -- -D warnings -W clippy::all
 
   # ============================================
   # Build and Test Matrix

@@ -1254,6 +1254,10 @@ body.operator[data-mode="live"] .operator__slide-controls {
   display: none;
 }
 
+body.operator[data-mode="live"] .operator__slide-handle {
+  display: none;
+}
+
 body.operator[data-mode="edit"] .operator__slide-group {
   display: none;
 }

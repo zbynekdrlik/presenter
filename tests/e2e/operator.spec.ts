@@ -1170,4 +1170,156 @@ test.describe("Operator control surface", () => {
       await expect(playlistRow).toHaveCount(0);
     });
   });
+
+  test("search result click does not break operator layout", async ({
+    page,
+    context,
+  }) => {
+    await expect(async () => {
+      const response = await page.request.get(
+        new URL("/healthz", baseURL).toString(),
+        { timeout: 120_000 },
+      );
+      expect(response.ok()).toBeTruthy();
+    }).toPass({ timeout: 180_000 });
+
+    await page.goto(new URL("/ui/operator", baseURL).toString());
+    await page.waitForLoadState("networkidle");
+    await expect(async () => {
+      const connected = await page.evaluate(
+        () => (window as any).__presenterLiveConnected === true,
+      );
+      expect(connected).toBeTruthy();
+    }).toPass({ timeout: 60_000, intervals: [500] });
+
+    // Capture layout dimensions before search
+    const beforeLayout = await page.evaluate(() => {
+      const body = document.querySelector("body.operator") as HTMLElement;
+      const main = document.querySelector(".operator__main") as HTMLElement;
+      const catalogBottom = document.querySelector(
+        '[data-role="catalog-bottom"]',
+      ) as HTMLElement;
+      return {
+        bodyScrollTop: body?.scrollTop ?? -1,
+        bodyHeight: body?.offsetHeight ?? -1,
+        mainHeight: main?.offsetHeight ?? -1,
+        catalogBottomHeight: catalogBottom?.offsetHeight ?? -1,
+      };
+    });
+    expect(beforeLayout.bodyHeight).toBeGreaterThan(0);
+    expect(beforeLayout.mainHeight).toBeGreaterThan(0);
+    expect(beforeLayout.bodyScrollTop).toBe(0);
+
+    // Pick a presentation via the API to get a search term
+    const selection = await pickSlideWithContent(page.request, baseURL);
+
+    // Search for the presentation
+    const searchInput = page.locator('[data-role="global-search-query"]');
+    const searchResults = page.locator('[data-role="global-search-results"]');
+
+    const searchTerm = selection.presentationName
+      .split(/\s+/)
+      .filter(Boolean)[0];
+    await searchInput.fill(searchTerm);
+    await searchInput.press("Enter");
+
+    await expect(async () => {
+      const visible = await searchResults.getAttribute("data-visible");
+      expect(visible).toBe("true");
+    }).toPass({ timeout: 10_000, intervals: [200] });
+
+    // Find a clickable presentation result
+    const resultButton = searchResults
+      .locator('[data-role="search-result"][data-kind="presentation"]')
+      .first();
+    await expect(resultButton).toBeVisible({ timeout: 10_000 });
+
+    // Click the search result (this triggers activateSearchResult + scroll)
+    await resultButton.click();
+
+    // Wait for search to close and presentation to load
+    await expect(searchResults).toHaveAttribute("data-visible", "false", {
+      timeout: 10_000,
+    });
+
+    // Verify the layout is NOT broken — body and main must not have scrolled
+    const afterLayout = await page.evaluate(() => {
+      const body = document.querySelector("body.operator") as HTMLElement;
+      const main = document.querySelector(".operator__main") as HTMLElement;
+      const catalogBottom = document.querySelector(
+        '[data-role="catalog-bottom"]',
+      ) as HTMLElement;
+      const slides = document.querySelector(
+        '[data-role="slides"]',
+      ) as HTMLElement;
+      return {
+        bodyScrollTop: body?.scrollTop ?? -1,
+        mainScrollTop: main?.scrollTop ?? -1,
+        bodyHeight: body?.offsetHeight ?? -1,
+        mainHeight: main?.offsetHeight ?? -1,
+        catalogBottomHeight: catalogBottom?.offsetHeight ?? -1,
+        catalogBottomVisible: catalogBottom
+          ? catalogBottom.getBoundingClientRect().height > 0
+          : false,
+        slidesVisible: slides
+          ? slides.getBoundingClientRect().height > 0
+          : false,
+      };
+    });
+
+    // Critical: body and main must NOT have scrolled (the bug was scrollIntoView
+    // propagating scroll to overflow:hidden parents, pushing content off-screen)
+    expect(afterLayout.bodyScrollTop).toBe(0);
+    expect(afterLayout.mainScrollTop).toBe(0);
+
+    // Layout dimensions must be preserved (not "shrunk to top half")
+    expect(afterLayout.bodyHeight).toBe(beforeLayout.bodyHeight);
+    expect(afterLayout.mainHeight).toBe(beforeLayout.mainHeight);
+
+    // Key containers must remain visible with positive height
+    expect(afterLayout.catalogBottomVisible).toBe(true);
+    expect(afterLayout.slidesVisible).toBe(true);
+
+    // Verify the presentation actually loaded (slides container has content)
+    await expect(async () => {
+      const slideCount = await page
+        .locator('[data-role="slides"] [data-slide-id]')
+        .count();
+      expect(slideCount).toBeGreaterThan(0);
+    }).toPass({ timeout: 10_000, intervals: [200] });
+
+    // Search and click AGAIN to verify repeated clicks don't degrade layout
+    await searchInput.fill(searchTerm);
+    await searchInput.press("Enter");
+    await expect(async () => {
+      const visible = await searchResults.getAttribute("data-visible");
+      expect(visible).toBe("true");
+    }).toPass({ timeout: 10_000, intervals: [200] });
+
+    const secondResult = searchResults
+      .locator('[data-role="search-result"][data-kind="presentation"]')
+      .first();
+    await expect(secondResult).toBeVisible({ timeout: 10_000 });
+    await secondResult.click();
+
+    await expect(searchResults).toHaveAttribute("data-visible", "false", {
+      timeout: 10_000,
+    });
+
+    // Verify layout is still intact after second click
+    const finalLayout = await page.evaluate(() => {
+      const body = document.querySelector("body.operator") as HTMLElement;
+      const main = document.querySelector(".operator__main") as HTMLElement;
+      return {
+        bodyScrollTop: body?.scrollTop ?? -1,
+        mainScrollTop: main?.scrollTop ?? -1,
+        bodyHeight: body?.offsetHeight ?? -1,
+        mainHeight: main?.offsetHeight ?? -1,
+      };
+    });
+    expect(finalLayout.bodyScrollTop).toBe(0);
+    expect(finalLayout.mainScrollTop).toBe(0);
+    expect(finalLayout.bodyHeight).toBe(beforeLayout.bodyHeight);
+    expect(finalLayout.mainHeight).toBe(beforeLayout.mainHeight);
+  });
 });
