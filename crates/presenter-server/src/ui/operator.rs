@@ -496,6 +496,11 @@ pub fn OperatorDocument(
                                     </label>
                                 </div>
                                 <footer class="operator__library-edit-footer">
+                                    <button
+                                        type="button"
+                                        class="operator__library-edit-delete"
+                                        data-role="presentation-edit-delete"
+                                    >"Delete presentation"</button>
                                     <div class="operator__library-edit-actions">
                                         <button type="button" data-role="presentation-edit-cancel">"Cancel"</button>
                                         <button type="submit" data-role="presentation-edit-save">"Save changes"</button>

@@ -72,6 +72,15 @@ impl AppState {
         Ok(())
     }
 
+    pub async fn delete_presentation(&self, presentation_id: PresentationId) -> anyhow::Result<()> {
+        self.repository.delete_presentation(presentation_id).await?;
+        {
+            let mut guard = self.presentation_cache.write().await;
+            guard.remove(&presentation_id);
+        }
+        Ok(())
+    }
+
     pub async fn library_summaries(
         &self,
         query: Option<&str>,
