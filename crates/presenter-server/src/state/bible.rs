@@ -184,7 +184,7 @@ impl AppState {
         };
         let (_lib_id, _lib_name, presentation) = self
             .repository
-            .create_presentation(library.id, name)
+            .create_presentation(library.id, name, None)
             .await?;
         Ok(presentation)
     }

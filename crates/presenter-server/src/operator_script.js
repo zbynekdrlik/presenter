@@ -68,6 +68,7 @@
     presentationEditModalOpen: false,
     presentationEditTarget: null,
     presentationEditSubmitting: false,
+    presentationCreateModalOpen: false,
     lineLimit: resolvedLineLimit,
     pendingFocus: null,
     searchQuery: "",
@@ -273,6 +274,51 @@
     ),
     presentationEditLabel: document.querySelector(
       '[data-role="presentation-edit-label"]',
+    ),
+    presentationCreateModal: document.querySelector(
+      '[data-role="presentation-create-modal"]',
+    ),
+    presentationCreateName: document.querySelector(
+      '[data-role="presentation-create-name"]',
+    ),
+    presentationCreateOptions: document.querySelector(
+      '[data-role="presentation-create-options"]',
+    ),
+    presentationCreateBlank: document.querySelector(
+      '[data-role="presentation-create-blank"]',
+    ),
+    presentationCreatePaste: document.querySelector(
+      '[data-role="presentation-create-paste"]',
+    ),
+    presentationCreateImport: document.querySelector(
+      '[data-role="presentation-create-import"]',
+    ),
+    presentationCreatePasteArea: document.querySelector(
+      '[data-role="presentation-create-paste-area"]',
+    ),
+    presentationCreatePasteText: document.querySelector(
+      '[data-role="presentation-create-paste-text"]',
+    ),
+    presentationCreatePasteBack: document.querySelector(
+      '[data-role="presentation-create-paste-back"]',
+    ),
+    presentationCreatePasteConfirm: document.querySelector(
+      '[data-role="presentation-create-paste-confirm"]',
+    ),
+    presentationCreateImportArea: document.querySelector(
+      '[data-role="presentation-create-import-area"]',
+    ),
+    presentationCreateImportFile: document.querySelector(
+      '[data-role="presentation-create-import-file"]',
+    ),
+    presentationCreateImportBack: document.querySelector(
+      '[data-role="presentation-create-import-back"]',
+    ),
+    presentationCreateImportConfirm: document.querySelector(
+      '[data-role="presentation-create-import-confirm"]',
+    ),
+    presentationCreateCancel: document.querySelector(
+      '[data-role="presentation-create-cancel"]',
     ),
     searchForm: document.querySelector('[data-role="global-search-form"]'),
     searchInput: document.querySelector('[data-role="global-search-query"]'),
@@ -1637,7 +1683,7 @@
       title: "Rename Presentation",
       label: "Presentation name",
       name: currentName || "",
-      showDelete: true,
+      showDelete: Boolean(state.activeLibraryId),
     });
     document.body.dataset.modalOpen = "presentation-edit";
     window.setTimeout(() => {
@@ -2325,15 +2371,17 @@
                 : "";
             const meta = presentationIndex.get(presentation.id);
             const libraryName = meta ? meta.libraryName : library.name;
-            const renameAction = `
-                <button type="button" class="operator__presentation-action" data-action="presentation-rename" data-presentation-id="${presentation.id}" data-library-id="${library.id}" title="Rename presentation">
+            const renameAction = isEditMode
+              ? `<button type="button" class="operator__presentation-action" data-action="presentation-rename" data-presentation-id="${presentation.id}" data-library-id="${library.id}" title="Rename presentation">
                   <span aria-hidden="true">✎</span>
                   <span class="sr-only">Rename presentation</span>
-                </button>`;
-            const actions = `
-                <div class="operator__presentation-actions">
+                </button>`
+              : "";
+            const actions = isEditMode
+              ? `<div class="operator__presentation-actions">
                   ${renameAction}
-                </div>`;
+                </div>`
+              : "";
             return `
               <li class="operator__presentation-item${active}" data-role="presentation-item" data-type="presentation" data-presentation-id="${presentation.id}" draggable="true">
                 <span>${escapeHtml(presentation.name)}</span>
@@ -2382,20 +2430,18 @@
               presentationId && state.currentPresentationId === presentationId
                 ? " is-active"
                 : "";
-            const renameAction = presentationId
-              ? `<button type="button" class="operator__presentation-action" data-action="presentation-rename" data-presentation-id="${presentationId || ""}" data-library-id="${meta ? meta.libraryId || "" : ""}" title="Rename presentation">
+            const renameAction =
+              isEditMode && presentationId
+                ? `<button type="button" class="operator__presentation-action" data-action="presentation-rename" data-presentation-id="${presentationId || ""}" data-library-id="${meta ? meta.libraryId || "" : ""}" title="Rename presentation">
                     <span aria-hidden="true">✎</span>
                     <span class="sr-only">Rename presentation</span>
                   </button>`
-              : "";
+                : "";
             const removeAction = `<button type="button" data-action="playlist-remove" title="Remove from playlist">×</button>`;
-            const hasActions = Boolean(renameAction || removeAction);
-            const actions = hasActions
-              ? `<div class="operator__presentation-actions">
+            const actions = `<div class="operator__presentation-actions">
                   ${renameAction}
                   ${removeAction}
-                </div>`
-              : "";
+                </div>`;
             return `
               <li class="operator__presentation-item${active}" data-role="presentation-item" data-type="presentation" data-entry-id="${entry.entryId}" data-presentation-id="${presentationId || ""}" data-entry-index="${index}" draggable="true">
                 <span>${escapeHtml(entry.name)}</span>
@@ -3390,66 +3436,243 @@
     }
   }
 
-  async function handleCreatePresentation() {
+  function createPresentationAndLoad(response) {
+    if (!response || !response.presentation) {
+      throw new Error("Unexpected response creating presentation");
+    }
+    const libraryId = response.libraryId || state.activeLibraryId;
+    if (response.librarySummary) {
+      state.libraries = state.libraries
+        .filter((library) => library.id !== response.librarySummary.id)
+        .concat(response.librarySummary)
+        .sort((a, b) =>
+          a.name.localeCompare(b.name, undefined, { sensitivity: "base" }),
+        );
+    }
+    const presentation = response.presentation;
+    presentationIndex.set(presentation.id, {
+      id: presentation.id,
+      name: presentation.name,
+      libraryId,
+      libraryName:
+        response.librarySummary?.name ||
+        presentation.libraryName ||
+        presentation.library_name ||
+        "",
+    });
+    state.slidesCache.set(
+      presentation.id,
+      normaliseSlides(presentation.slides || []),
+    );
+    rebuildPresentationIndex();
+    renderLibraries();
+    state.activeLibraryId = libraryId;
+    state.currentPresentationId = presentation.id;
+    state.focusedSlideId = null;
+    renderPresentationList();
+    loadPresentation(presentation.id);
+    showToast("Presentation created", "success");
+  }
+
+  function openPresentationCreate() {
     if (!state.activeLibraryId) {
       showToast("Select a library first", "warning");
       return;
+    }
+    state.presentationCreateModalOpen = true;
+    if (els.presentationCreateModal) {
+      els.presentationCreateModal.dataset.open = "true";
+    }
+    if (els.presentationCreateOptions) {
+      els.presentationCreateOptions.style.display = "";
+    }
+    if (els.presentationCreatePasteArea) {
+      els.presentationCreatePasteArea.style.display = "none";
+    }
+    if (els.presentationCreateImportArea) {
+      els.presentationCreateImportArea.style.display = "none";
+    }
+    if (els.presentationCreatePasteText) {
+      els.presentationCreatePasteText.value = "";
+    }
+    if (els.presentationCreateImportFile) {
+      els.presentationCreateImportFile.value = "";
     }
     const defaultName = `New Presentation ${new Date().toLocaleTimeString([], {
       hour: "2-digit",
       minute: "2-digit",
     })}`;
-    const nameInput = window.prompt("Presentation name", defaultName);
-    if (nameInput === null) {
-      return;
+    if (els.presentationCreateName) {
+      els.presentationCreateName.value = defaultName;
     }
-    const trimmed = nameInput.trim() || defaultName;
+    document.body.dataset.modalOpen = "presentation-create";
+    window.setTimeout(() => {
+      if (els.presentationCreateName) {
+        els.presentationCreateName.focus();
+        els.presentationCreateName.select();
+      }
+    }, 10);
+  }
+
+  function closePresentationCreate() {
+    state.presentationCreateModalOpen = false;
+    if (els.presentationCreateModal) {
+      delete els.presentationCreateModal.dataset.open;
+    }
+    delete document.body.dataset.modalOpen;
+  }
+
+  function parseSongText(text) {
+    const lines = text.split(/\r?\n/);
+    let title = "";
+    const slides = [];
+    let currentGroup = null;
+    let currentLines = [];
+    const groupPattern =
+      /^(Verse|Chorus|Pre[- ]?Chorus|Bridge|Intro|Outro|Solo|Misc)(?:\s+(\d+))?$/i;
+
+    for (const line of lines) {
+      const trimmed = line.trim();
+      if (!title && trimmed.toLowerCase().startsWith("title:")) {
+        title = trimmed.slice(6).trim();
+        continue;
+      }
+      const match = trimmed.match(groupPattern);
+      if (match) {
+        if (currentLines.length > 0 && currentGroup) {
+          const groupLower = currentGroup.toLowerCase();
+          if (!groupLower.startsWith("misc")) {
+            slides.push({
+              main: currentLines.join("\n"),
+              group: currentGroup,
+            });
+          }
+        }
+        currentLines = [];
+        const label =
+          match[1].charAt(0).toUpperCase() + match[1].slice(1).toLowerCase();
+        currentGroup = match[2] ? `${label} ${match[2]}` : label;
+        continue;
+      }
+      if (trimmed === "" && currentLines.length > 0) {
+        if (currentGroup) {
+          const groupLower = currentGroup.toLowerCase();
+          if (!groupLower.startsWith("misc")) {
+            slides.push({
+              main: currentLines.join("\n"),
+              group: currentGroup,
+            });
+          }
+        } else if (currentLines.join("\n").trim()) {
+          slides.push({ main: currentLines.join("\n"), group: null });
+        }
+        currentLines = [];
+        continue;
+      }
+      if (trimmed) {
+        currentLines.push(trimmed);
+      }
+    }
+    if (currentLines.length > 0) {
+      if (currentGroup) {
+        const groupLower = currentGroup.toLowerCase();
+        if (!groupLower.startsWith("misc")) {
+          slides.push({
+            main: currentLines.join("\n"),
+            group: currentGroup,
+          });
+        }
+      } else if (currentLines.join("\n").trim()) {
+        slides.push({ main: currentLines.join("\n"), group: null });
+      }
+    }
+    return { title, slides };
+  }
+
+  async function handleCreateBlank() {
+    const name =
+      (els.presentationCreateName
+        ? els.presentationCreateName.value.trim()
+        : "") ||
+      `New Presentation ${new Date().toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}`;
+    closePresentationCreate();
     try {
       const response = await apiFetch(
         `/libraries/${state.activeLibraryId}/presentations`,
         {
           method: "POST",
-          body: JSON.stringify({ name: trimmed }),
+          body: JSON.stringify({ name, slides: [] }),
         },
       );
-      if (!response || !response.presentation) {
-        throw new Error("Unexpected response creating presentation");
-      }
-      const libraryId = response.libraryId || state.activeLibraryId;
-      if (response.librarySummary) {
-        state.libraries = state.libraries
-          .filter((library) => library.id !== response.librarySummary.id)
-          .concat(response.librarySummary)
-          .sort((a, b) =>
-            a.name.localeCompare(b.name, undefined, { sensitivity: "base" }),
-          );
-      }
-      const presentation = response.presentation;
-      presentationIndex.set(presentation.id, {
-        id: presentation.id,
-        name: presentation.name,
-        libraryId,
-        libraryName:
-          response.librarySummary?.name ||
-          presentation.libraryName ||
-          presentation.library_name ||
-          "",
-      });
-      state.slidesCache.set(
-        presentation.id,
-        normaliseSlides(presentation.slides || []),
-      );
-      rebuildPresentationIndex();
-      renderLibraries();
-      state.activeLibraryId = libraryId;
-      state.currentPresentationId = presentation.id;
-      state.focusedSlideId = null;
-      renderPresentationList();
-      loadPresentation(presentation.id);
-      showToast("Presentation created", "success");
+      createPresentationAndLoad(response);
     } catch (error) {
       console.error("Failed to create presentation", error);
       showToast("Failed to create presentation", "error");
+    }
+  }
+
+  async function handleCreateFromPaste() {
+    const rawText = els.presentationCreatePasteText
+      ? els.presentationCreatePasteText.value
+      : "";
+    if (!rawText.trim()) {
+      showToast("Paste some text first", "warning");
+      return;
+    }
+    const parsed = parseSongText(rawText);
+    const name =
+      (els.presentationCreateName
+        ? els.presentationCreateName.value.trim()
+        : "") ||
+      parsed.title ||
+      `New Presentation ${new Date().toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}`;
+    if (
+      parsed.title &&
+      els.presentationCreateName &&
+      !els.presentationCreateName.value.trim()
+    ) {
+      // title was extracted from text
+    }
+    closePresentationCreate();
+    try {
+      const response = await apiFetch(
+        `/libraries/${state.activeLibraryId}/presentations`,
+        {
+          method: "POST",
+          body: JSON.stringify({ name, slides: parsed.slides }),
+        },
+      );
+      createPresentationAndLoad(response);
+    } catch (error) {
+      console.error("Failed to create presentation from paste", error);
+      showToast("Failed to create presentation", "error");
+    }
+  }
+
+  async function handleCreateFromImport() {
+    const fileInput = els.presentationCreateImportFile;
+    if (!fileInput || !fileInput.files || !fileInput.files[0]) {
+      showToast("Select a .pro file first", "warning");
+      return;
+    }
+    const file = fileInput.files[0];
+    closePresentationCreate();
+    try {
+      const formData = new FormData();
+      formData.append("file", file);
+      const response = await fetch(
+        `/libraries/${state.activeLibraryId}/presentations/import`,
+        { method: "POST", body: formData },
+      );
+      if (!response.ok) {
+        const errorText = await response.text();
+        throw new Error(errorText || response.statusText);
+      }
+      const data = await response.json();
+      createPresentationAndLoad(data);
+    } catch (error) {
+      console.error("Failed to import presentation", error);
+      showToast("Failed to import presentation", "error");
     }
   }
 
@@ -4530,7 +4753,8 @@
       state.libraryEditModalOpen ||
       state.playlistModalOpen ||
       state.playlistEditModalOpen ||
-      state.presentationEditModalOpen;
+      state.presentationEditModalOpen ||
+      state.presentationCreateModalOpen;
 
     if (!isEditable && !modalOpen) {
       if (
@@ -4562,6 +4786,11 @@
     if (event.key === "Escape") {
       if (state.searchOpen) {
         hideSearchResults();
+        return;
+      }
+      if (state.presentationCreateModalOpen) {
+        event.preventDefault();
+        closePresentationCreate();
         return;
       }
       if (state.presentationEditModalOpen) {
@@ -5943,11 +6172,74 @@
         if (state.activePlaylistId) {
           handleAddSeparator();
         } else if (state.activeLibraryId) {
-          handleCreatePresentation();
+          openPresentationCreate();
         } else {
           showToast("Select a library or playlist first", "warning");
         }
       });
+    }
+    if (els.presentationCreateBlank) {
+      els.presentationCreateBlank.addEventListener("click", () =>
+        handleCreateBlank(),
+      );
+    }
+    if (els.presentationCreatePaste) {
+      els.presentationCreatePaste.addEventListener("click", () => {
+        if (els.presentationCreateOptions) {
+          els.presentationCreateOptions.style.display = "none";
+        }
+        if (els.presentationCreatePasteArea) {
+          els.presentationCreatePasteArea.style.display = "";
+        }
+        if (els.presentationCreatePasteText) {
+          els.presentationCreatePasteText.focus();
+        }
+      });
+    }
+    if (els.presentationCreateImport) {
+      els.presentationCreateImport.addEventListener("click", () => {
+        if (els.presentationCreateOptions) {
+          els.presentationCreateOptions.style.display = "none";
+        }
+        if (els.presentationCreateImportArea) {
+          els.presentationCreateImportArea.style.display = "";
+        }
+      });
+    }
+    if (els.presentationCreatePasteBack) {
+      els.presentationCreatePasteBack.addEventListener("click", () => {
+        if (els.presentationCreatePasteArea) {
+          els.presentationCreatePasteArea.style.display = "none";
+        }
+        if (els.presentationCreateOptions) {
+          els.presentationCreateOptions.style.display = "";
+        }
+      });
+    }
+    if (els.presentationCreatePasteConfirm) {
+      els.presentationCreatePasteConfirm.addEventListener("click", () =>
+        handleCreateFromPaste(),
+      );
+    }
+    if (els.presentationCreateImportBack) {
+      els.presentationCreateImportBack.addEventListener("click", () => {
+        if (els.presentationCreateImportArea) {
+          els.presentationCreateImportArea.style.display = "none";
+        }
+        if (els.presentationCreateOptions) {
+          els.presentationCreateOptions.style.display = "";
+        }
+      });
+    }
+    if (els.presentationCreateImportConfirm) {
+      els.presentationCreateImportConfirm.addEventListener("click", () =>
+        handleCreateFromImport(),
+      );
+    }
+    if (els.presentationCreateCancel) {
+      els.presentationCreateCancel.addEventListener("click", () =>
+        closePresentationCreate(),
+      );
     }
     if (els.playlistModalList) {
       els.playlistModalList.addEventListener("click", handlePlaylistModalClick);
@@ -6340,6 +6632,7 @@
       clearSearchResults();
       updateSearchClearVisibility();
     },
+    parseSongText: (text) => parseSongText(text),
   };
   initialise();
 })();

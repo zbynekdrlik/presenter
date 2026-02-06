@@ -481,7 +481,7 @@ async fn update_presentation_endpoint_renames_presentation() {
     let state = AppState::in_memory().await.unwrap();
     let library = state.create_library("Rename Library").await.unwrap();
     let (_, _, presentation, _) = state
-        .create_presentation(library.id, "Original Name")
+        .create_presentation(library.id, "Original Name", None)
         .await
         .unwrap();
     let app = build_router(state);
@@ -548,7 +548,7 @@ async fn search_endpoint_returns_results() {
     let state = AppState::in_memory().await.unwrap();
     let library = state.create_library("Search Library").await.unwrap();
     let (_, _, presentation, _) = state
-        .create_presentation(library.id, "Search Anthem")
+        .create_presentation(library.id, "Search Anthem", None)
         .await
         .unwrap();
     let slide_id = presentation.slides.first().unwrap().id;

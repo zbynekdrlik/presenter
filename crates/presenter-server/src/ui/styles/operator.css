@@ -1662,6 +1662,85 @@ body.operator[data-view="settings"] [data-view-panel="settings"] {
   opacity: 0.6;
 }
 
+.operator__presentation-create-options {
+  display: flex;
+  gap: 0.75rem;
+  margin-top: 0.5rem;
+}
+
+.operator__create-option {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 0.25rem;
+  padding: 0.75rem 0.5rem;
+  background: var(--operator-bg);
+  border: 1px solid var(--operator-border);
+  border-radius: var(--operator-radius);
+  cursor: pointer;
+  color: var(--operator-fg);
+  transition:
+    border-color 0.15s,
+    background 0.15s;
+}
+
+.operator__create-option:hover {
+  border-color: var(--operator-accent);
+  background: var(--operator-panel);
+}
+
+.operator__create-option-icon {
+  font-size: 1.75rem;
+  line-height: 1;
+}
+
+.operator__create-option-label {
+  font-weight: 600;
+  font-size: 0.85rem;
+}
+
+.operator__create-option-desc {
+  font-size: 0.75rem;
+  color: var(--operator-muted);
+}
+
+.operator__presentation-create-paste-area textarea {
+  width: 100%;
+  min-height: 180px;
+  font-family: monospace;
+  font-size: 0.85rem;
+  padding: 0.5rem;
+  background: var(--operator-bg);
+  color: var(--operator-fg);
+  border: 1px solid var(--operator-border);
+  border-radius: var(--operator-radius);
+  resize: vertical;
+}
+
+.operator__presentation-create-sub-actions {
+  display: flex;
+  gap: 0.5rem;
+  margin-top: 0.5rem;
+  justify-content: flex-end;
+}
+
+.operator__presentation-create-sub-actions button {
+  padding: 0.35rem 0.75rem;
+  border: 1px solid var(--operator-border);
+  border-radius: var(--operator-radius);
+  background: var(--operator-panel);
+  color: var(--operator-fg);
+  cursor: pointer;
+  font-size: 0.85rem;
+}
+
+.operator__presentation-create-import-area input[type="file"] {
+  width: 100%;
+  font-size: 0.85rem;
+  color: var(--operator-fg);
+}
+
 .operator__presentation-list .empty,
 .operator__slides .empty {
   color: var(--operator-muted);

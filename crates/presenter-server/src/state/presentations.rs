@@ -4,7 +4,7 @@ use super::AppState;
 use presenter_core::playlist::PlaylistEntryKind;
 use presenter_core::{
     Library, LibraryId, LibrarySummary, Playlist, PlaylistEntry, PlaylistEntryId, PlaylistId,
-    Presentation, PresentationId, SearchResult,
+    Presentation, PresentationId, SearchResult, Slide,
 };
 
 impl AppState {
@@ -43,10 +43,11 @@ impl AppState {
         &self,
         library_id: LibraryId,
         name: &str,
+        slides: Option<&[Slide]>,
     ) -> anyhow::Result<(LibraryId, String, Presentation, Option<LibrarySummary>)> {
         let (id, lib_name, presentation) = self
             .repository
-            .create_presentation(library_id, name)
+            .create_presentation(library_id, name, slides)
             .await?;
         self.cache_presentation_ref(&presentation).await;
         let summaries = self.repository.list_library_summaries(None).await?;

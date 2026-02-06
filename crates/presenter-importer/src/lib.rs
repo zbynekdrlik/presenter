@@ -185,8 +185,14 @@ impl<'a> ProPresenterImporter<'a> {
 #[instrument(fields(file = %path.display()))]
 pub fn load_presentation_from_path(path: &Path) -> Result<Presentation> {
     let bytes = fs::read(path).with_context(|| format!("failed to read {}", path.display()))?;
-    let raw = proto::Presentation::decode(bytes.as_slice())
-        .with_context(|| format!("failed to decode ProPresenter data in {}", path.display()))?;
+    load_presentation_from_bytes(&bytes)
+        .with_context(|| format!("failed to load presentation from {}", path.display()))
+}
+
+/// Parses a ProPresenter `.pro` file from raw bytes into the domain model.
+pub fn load_presentation_from_bytes(bytes: &[u8]) -> Result<Presentation> {
+    let raw = proto::Presentation::decode(bytes)
+        .context("failed to decode ProPresenter protobuf data")?;
     presentation_from_proto(&raw)
         .with_context(|| format!("failed to convert presentation {}", raw.name.trim()))
 }
