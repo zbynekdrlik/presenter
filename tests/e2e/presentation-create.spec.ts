@@ -315,6 +315,34 @@ test("parseSongText handles Title extraction and Misc skipping", async ({
   expect(result.slides[1].main).toBe("Chorus lyrics here");
 });
 
+test("parseSongText chunks long groups into 2-line slides", async ({
+  page,
+}) => {
+  await waitForOperatorReady(page);
+
+  const result = await page.evaluate(() => {
+    const helpers = (window as any).__presenterOperatorTestHelpers;
+    return helpers.parseSongText(
+      [
+        "Verse 1",
+        "Line one",
+        "Line two",
+        "Line three",
+        "Line four",
+        "Line five",
+      ].join("\n"),
+    );
+  });
+
+  expect(result.slides.length).toBe(3);
+  expect(result.slides[0].group).toBe("Verse 1");
+  expect(result.slides[0].main).toBe("Line one\nLine two");
+  expect(result.slides[1].group).toBe("Verse 1");
+  expect(result.slides[1].main).toBe("Line three\nLine four");
+  expect(result.slides[2].group).toBe("Verse 1");
+  expect(result.slides[2].main).toBe("Line five");
+});
+
 test("import .pro file via create modal", async ({ page }) => {
   await waitForOperatorReady(page);
 

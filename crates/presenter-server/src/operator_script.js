@@ -3523,6 +3523,7 @@
   }
 
   function parseSongText(text) {
+    const LINES_PER_SLIDE = 2;
     const lines = text.split(/\r?\n/);
     let title = "";
     const slides = [];
@@ -3530,6 +3531,22 @@
     let currentLines = [];
     const groupPattern =
       /^(Verse|Chorus|Pre[- ]?Chorus|Bridge|Intro|Outro|Solo|Misc)(?:\s+(\d+))?$/i;
+
+    function flushLines(group) {
+      if (currentLines.length === 0) return;
+      if (group) {
+        const groupLower = group.toLowerCase();
+        if (groupLower.startsWith("misc")) {
+          currentLines = [];
+          return;
+        }
+      }
+      for (let i = 0; i < currentLines.length; i += LINES_PER_SLIDE) {
+        const chunk = currentLines.slice(i, i + LINES_PER_SLIDE);
+        slides.push({ main: chunk.join("\n"), group: group });
+      }
+      currentLines = [];
+    }
 
     for (const line of lines) {
       const trimmed = line.trim();
@@ -3539,53 +3556,21 @@
       }
       const match = trimmed.match(groupPattern);
       if (match) {
-        if (currentLines.length > 0 && currentGroup) {
-          const groupLower = currentGroup.toLowerCase();
-          if (!groupLower.startsWith("misc")) {
-            slides.push({
-              main: currentLines.join("\n"),
-              group: currentGroup,
-            });
-          }
-        }
-        currentLines = [];
+        flushLines(currentGroup);
         const label =
           match[1].charAt(0).toUpperCase() + match[1].slice(1).toLowerCase();
         currentGroup = match[2] ? `${label} ${match[2]}` : label;
         continue;
       }
       if (trimmed === "" && currentLines.length > 0) {
-        if (currentGroup) {
-          const groupLower = currentGroup.toLowerCase();
-          if (!groupLower.startsWith("misc")) {
-            slides.push({
-              main: currentLines.join("\n"),
-              group: currentGroup,
-            });
-          }
-        } else if (currentLines.join("\n").trim()) {
-          slides.push({ main: currentLines.join("\n"), group: null });
-        }
-        currentLines = [];
+        flushLines(currentGroup);
         continue;
       }
       if (trimmed) {
         currentLines.push(trimmed);
       }
     }
-    if (currentLines.length > 0) {
-      if (currentGroup) {
-        const groupLower = currentGroup.toLowerCase();
-        if (!groupLower.startsWith("misc")) {
-          slides.push({
-            main: currentLines.join("\n"),
-            group: currentGroup,
-          });
-        }
-      } else if (currentLines.join("\n").trim()) {
-        slides.push({ main: currentLines.join("\n"), group: null });
-      }
-    }
+    flushLines(currentGroup);
     return { title, slides };
   }
 
