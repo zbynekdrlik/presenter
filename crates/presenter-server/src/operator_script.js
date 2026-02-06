@@ -4478,6 +4478,8 @@
 
       if (state.currentPresentationId === presentationId) {
         state.currentPresentationId = null;
+        state.focusedSlideId = null;
+        state.pendingFocus = null;
       }
       if (state.stagePresentationId === presentationId) {
         state.stagePresentationId = null;
