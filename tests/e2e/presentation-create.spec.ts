@@ -203,9 +203,8 @@ test("create presentation from pasted song text", async ({ page }) => {
   const createModal = page.locator('[data-role="presentation-create-modal"]');
   await expect(createModal).toHaveAttribute("data-open", "true");
 
-  // Set name
-  const songName = `E2E Pasted Song ${Date.now()}`;
-  await page.locator('[data-role="presentation-create-name"]').fill(songName);
+  // Leave name input empty — Title line from pasted text should be used
+  const expectedName = `E2E Title Song ${Date.now()}`;
 
   // Click Paste option
   await page.locator('[data-role="presentation-create-paste"]').click();
@@ -218,8 +217,9 @@ test("create presentation from pasted song text", async ({ page }) => {
     page.locator('[data-role="presentation-create-paste-area"]'),
   ).toBeVisible();
 
-  // Paste song text with groups
+  // Paste song text with Title line and groups
   const songText = [
+    `Title: ${expectedName}`,
     "Verse 1",
     "Amazing grace how sweet the sound",
     "That saved a wretch like me",
@@ -245,7 +245,7 @@ test("create presentation from pasted song text", async ({ page }) => {
     timeout: 10_000,
   });
 
-  // Verify presentation via API
+  // Verify presentation was created with the title from pasted text
   const libs: Array<{
     id: string;
     presentations: Array<{ id: string; name: string }>;
@@ -254,7 +254,9 @@ test("create presentation from pasted song text", async ({ page }) => {
   ).json();
   const updatedLib = libs.find((l) => l.id === libraryId);
   expect(updatedLib).toBeTruthy();
-  const created = updatedLib!.presentations.find((p) => p.name === songName);
+  const created = updatedLib!.presentations.find(
+    (p) => p.name === expectedName,
+  );
   expect(created).toBeTruthy();
 
   // Check slides have correct groups

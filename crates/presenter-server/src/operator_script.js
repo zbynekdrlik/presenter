@@ -3524,10 +3524,7 @@
 
   function parseSongText(text) {
     const LINES_PER_SLIDE = 2;
-    text = text.replace(
-      /[\u200B-\u200F\u2028-\u202F\u2060\uFEFF\u0000-\u0009\u000B\u000C\u000E-\u001F]/g,
-      "",
-    );
+    text = text.replace(/[^\P{C}\n\r]/gu, "");
     const lines = text.split(/\r?\n/);
     let title = "";
     const slides = [];
@@ -3610,18 +3607,11 @@
     }
     const parsed = parseSongText(rawText);
     const name =
+      parsed.title ||
       (els.presentationCreateName
         ? els.presentationCreateName.value.trim()
         : "") ||
-      parsed.title ||
       `New Presentation ${new Date().toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}`;
-    if (
-      parsed.title &&
-      els.presentationCreateName &&
-      !els.presentationCreateName.value.trim()
-    ) {
-      // title was extracted from text
-    }
     closePresentationCreate();
     try {
       const response = await apiFetch(
