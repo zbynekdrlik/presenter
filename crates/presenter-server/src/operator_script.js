@@ -3524,6 +3524,10 @@
 
   function parseSongText(text) {
     const LINES_PER_SLIDE = 2;
+    text = text.replace(
+      /[\u200B-\u200F\u2028-\u202F\u2060\uFEFF\u0000-\u0009\u000B\u000C\u000E-\u001F]/g,
+      "",
+    );
     const lines = text.split(/\r?\n/);
     let title = "";
     const slides = [];
