@@ -364,12 +364,18 @@ fn StageDisplayDocument(
       return;
     }}
     let html = '';
+    let presNum = 0;
     for (let i = 0; i < entries.length; i++) {{
       const entry = entries[i];
       const active = entry.isActive ? 'true' : 'false';
       const entryType = entry.entryType || 'presentation';
       const name = (entry.name || '').replace(/&/g, '&amp;').replace(/[<]/g, '&lt;').replace(/[>]/g, '&gt;');
-      html += '<li class=stage__worship-pp-playlist-entry data-active=' + active + ' data-type=' + entryType + '>' + name + '</li>';
+      if (entryType === 'presentation') {{
+        presNum++;
+        html += '<li class=stage__worship-pp-playlist-entry data-active=' + active + ' data-type=' + entryType + '>' + presNum + '. ' + name + '</li>';
+      }} else {{
+        html += '<li class=stage__worship-pp-playlist-entry data-active=' + active + ' data-type=' + entryType + '>' + name + '</li>';
+      }}
     }}
     listEl.innerHTML = html;
     const activeEl = listEl.querySelector('[data-active=true]');
@@ -774,6 +780,7 @@ fn render_worship_pp(snapshot: &StageDisplaySnapshot) -> AnyView {
 }
 
 fn render_playlist_entries(entries: &[StagePlaylistEntry]) -> String {
+    let mut pres_num = 0u32;
     entries
         .iter()
         .enumerate()
@@ -781,11 +788,17 @@ fn render_playlist_entries(entries: &[StagePlaylistEntry]) -> String {
             let active = if entry.is_active { "true" } else { "false" };
             let entry_type = &entry.entry_type;
             let name = html_escape(&entry.name);
+            let label = if entry_type == "presentation" {
+                pres_num += 1;
+                format!("{pres_num}. {name}")
+            } else {
+                name
+            };
             format!(
                 "<li class=\"stage__worship-pp-playlist-entry\" \
                  id=\"playlist-entry-{index}\" \
                  data-active=\"{active}\" \
-                 data-type=\"{entry_type}\">{name}</li>"
+                 data-type=\"{entry_type}\">{label}</li>"
             )
         })
         .collect::<Vec<_>>()
