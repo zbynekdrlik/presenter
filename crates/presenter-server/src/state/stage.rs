@@ -1,7 +1,8 @@
 use chrono::{DateTime, Utc};
 use presenter_core::{
-    Presentation, PresentationId, Slide, SlideContent, SlideId, SlideText, StageDisplayLayout,
-    StageDisplaySlide, StageDisplaySnapshot, TimersOverview,
+    playlist::PlaylistEntryKind, Playlist, PlaylistId, Presentation, PresentationId, Slide,
+    SlideContent, SlideId, SlideText, StageDisplayLayout, StageDisplaySlide, StageDisplaySnapshot,
+    StagePlaylistEntry, TimersOverview,
 };
 use serde::{Deserialize, Serialize};
 
@@ -27,6 +28,12 @@ pub(crate) struct StageResolution {
     pub(crate) current_index: Option<u32>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub(crate) total_slides: Option<u32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(crate) playlist_id: Option<PlaylistId>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(crate) playlist_name: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(crate) playlist_entries: Option<Vec<StagePlaylistEntry>>,
 }
 
 impl StageResolution {
@@ -41,6 +48,9 @@ impl StageResolution {
             next: None,
             current_index: None,
             total_slides: None,
+            playlist_id: None,
+            playlist_name: None,
+            playlist_entries: None,
         }
     }
 }
@@ -86,6 +96,9 @@ pub(crate) fn stage_resolution_from_presentation(
             next: None,
             current_index: None,
             total_slides: Some(total_slides),
+            playlist_id: None,
+            playlist_name: None,
+            playlist_entries: None,
         };
     }
 
@@ -117,6 +130,9 @@ pub(crate) fn stage_resolution_from_presentation(
         next: next_slide,
         current_index: current_index_value,
         total_slides: Some(total_slides),
+        playlist_id: None,
+        playlist_name: None,
+        playlist_entries: None,
     }
 }
 
@@ -207,6 +223,9 @@ pub(crate) fn build_stage_snapshot(
         context.latency_ms,
         context.resolution.current_index,
         context.resolution.total_slides,
+        context.resolution.playlist_id,
+        context.resolution.playlist_name.clone(),
+        context.resolution.playlist_entries.clone(),
     )
 }
 
@@ -239,6 +258,40 @@ pub(crate) fn blank_slide_content() -> SlideContent {
         SlideText::new("").unwrap_or_else(|_| unreachable!("empty string should always be valid"))
     });
     SlideContent::new(main, translation, stage, None)
+}
+
+pub(crate) fn build_stage_playlist_entries(
+    playlist: &Playlist,
+    active_presentation_id: Option<PresentationId>,
+    name_lookup: &std::collections::HashMap<PresentationId, String>,
+) -> Vec<StagePlaylistEntry> {
+    playlist
+        .entries
+        .iter()
+        .map(|entry| match &entry.kind {
+            PlaylistEntryKind::Presentation {
+                presentation_id, ..
+            } => {
+                let is_active = active_presentation_id == Some(*presentation_id);
+                let raw_name = name_lookup
+                    .get(presentation_id)
+                    .cloned()
+                    .unwrap_or_default();
+                StagePlaylistEntry {
+                    name: sanitize_song_title(&raw_name),
+                    presentation_id: Some(*presentation_id),
+                    is_active,
+                    entry_type: "presentation".to_string(),
+                }
+            }
+            PlaylistEntryKind::Separator { name } => StagePlaylistEntry {
+                name: name.clone(),
+                presentation_id: None,
+                is_active: false,
+                entry_type: "separator".to_string(),
+            },
+        })
+        .collect()
 }
 
 pub(crate) fn format_countdown_text(seconds_remaining: i64) -> String {

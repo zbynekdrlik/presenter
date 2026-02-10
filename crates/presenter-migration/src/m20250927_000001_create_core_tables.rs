@@ -639,6 +639,7 @@ impl MigrationTrait for Migration {
                             .string_len(36)
                             .null(),
                     )
+                    .col(ColumnDef::new(StageState::PlaylistId).string_len(36).null())
                     .col(
                         ColumnDef::new(StageState::UpdatedAt)
                             .timestamp_with_time_zone()
@@ -1039,6 +1040,7 @@ enum StageState {
     PresentationId,
     CurrentSlideId,
     NextSlideId,
+    PlaylistId,
     UpdatedAt,
 }
 #[derive(DeriveIden)]

@@ -9,7 +9,9 @@ use tracing::instrument;
 use super::{parse_uuid, AppError};
 use crate::{stage_ui, state::AppState};
 use axum::http::StatusCode;
-use presenter_core::{PresentationId, SlideId, StageDisplayLayout, StageDisplaySnapshot};
+use presenter_core::{
+    PlaylistId, PresentationId, SlideId, StageDisplayLayout, StageDisplaySnapshot,
+};
 
 #[instrument(skip_all)]
 pub(super) async fn stage_display_selected_html(
@@ -89,6 +91,8 @@ pub(super) struct StageStateRequest {
     pub(super) current_slide_id: String,
     #[serde(default)]
     pub(super) next_slide_id: Option<String>,
+    #[serde(default)]
+    pub(super) playlist_id: Option<String>,
 }
 
 #[instrument(skip_all)]
@@ -104,8 +108,17 @@ pub(super) async fn update_stage_state(
         Some(value) => Some(SlideId::from_uuid(parse_uuid("nextSlideId", &value)?)),
         None => None,
     };
+    let playlist_id = match payload.playlist_id {
+        Some(value) => Some(PlaylistId::from_uuid(parse_uuid("playlistId", &value)?)),
+        None => None,
+    };
     state
-        .update_stage_state(presentation_id, current_slide_id, next_slide_id)
+        .update_stage_state(
+            presentation_id,
+            current_slide_id,
+            next_slide_id,
+            playlist_id,
+        )
         .await
         .map_err(AppError::bad_request)?;
     Ok(StatusCode::NO_CONTENT)

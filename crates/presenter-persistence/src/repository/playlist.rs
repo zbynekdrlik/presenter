@@ -1,12 +1,14 @@
-use crate::entities::{playlist, playlist_entry, playlist_favorite};
+use crate::entities::{
+    playlist, playlist_entry, playlist_favorite, presentation as presentation_entity,
+};
 use anyhow::anyhow;
 use chrono::Utc;
-use presenter_core::{playlist::PlaylistEntryKind, Playlist, PlaylistId};
+use presenter_core::{playlist::PlaylistEntryKind, Playlist, PlaylistId, PresentationId};
 use sea_orm::{
     sea_query::Expr, sea_query::OnConflict, ColumnTrait, EntityTrait, PaginatorTrait, QueryFilter,
     QueryOrder, Set, TransactionTrait,
 };
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use tracing::instrument;
 use uuid::Uuid;
 
@@ -184,5 +186,61 @@ impl Repository {
 
         txn.commit().await?;
         Ok(())
+    }
+
+    #[instrument(skip_all)]
+    pub async fn fetch_playlist_by_id(
+        &self,
+        playlist_id: PlaylistId,
+    ) -> anyhow::Result<Option<Playlist>> {
+        let model = playlist::Entity::find_by_id(playlist_id.to_string())
+            .one(&self.db)
+            .await?;
+        let Some(model) = model else {
+            return Ok(None);
+        };
+        let favorites = playlist_favorite::Entity::find().all(&self.db).await?;
+        let favorite_ids: HashSet<_> = favorites.into_iter().map(|fav| fav.playlist_id).collect();
+        let entries_models = playlist_entry::Entity::find()
+            .filter(playlist_entry::Column::PlaylistId.eq(model.id.clone()))
+            .order_by_asc(playlist_entry::Column::Position)
+            .all(&self.db)
+            .await?;
+        let entries = entries_models
+            .into_iter()
+            .map(to_domain_playlist_entry)
+            .collect::<Result<Vec<_>, RepositoryError>>()?;
+        let playlist = to_domain_playlist(&favorite_ids, model, entries)?;
+        Ok(Some(playlist))
+    }
+
+    #[instrument(skip_all)]
+    pub async fn fetch_presentation_names_for_playlist(
+        &self,
+        playlist: &Playlist,
+    ) -> anyhow::Result<HashMap<PresentationId, String>> {
+        let ids: Vec<String> = playlist
+            .entries
+            .iter()
+            .filter_map(|entry| match &entry.kind {
+                PlaylistEntryKind::Presentation {
+                    presentation_id, ..
+                } => Some(presentation_id.to_string()),
+                _ => None,
+            })
+            .collect();
+        if ids.is_empty() {
+            return Ok(HashMap::new());
+        }
+        let models = presentation_entity::Entity::find()
+            .filter(presentation_entity::Column::Id.is_in(ids))
+            .all(&self.db)
+            .await?;
+        let mut map = HashMap::with_capacity(models.len());
+        for model in models {
+            let id = PresentationId::from_uuid(parse_uuid(&model.id)?);
+            map.insert(id, model.name);
+        }
+        Ok(map)
     }
 }

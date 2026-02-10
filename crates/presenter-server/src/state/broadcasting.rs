@@ -137,12 +137,27 @@ impl AppState {
         let Some((_, library_name, presentation)) = detail else {
             return Ok(None);
         };
-        let resolution = stage_resolution_from_presentation(
+        let mut resolution = stage_resolution_from_presentation(
             &presentation,
             Some(library_name),
             stage_state.current_slide_id,
             stage_state.next_slide_id,
         );
+        if let Some(playlist_id) = stage_state.playlist_id {
+            if let Some(playlist) = self.repository.fetch_playlist_by_id(playlist_id).await? {
+                let name_lookup = self
+                    .repository
+                    .fetch_presentation_names_for_playlist(&playlist)
+                    .await?;
+                resolution.playlist_id = Some(playlist_id);
+                resolution.playlist_name = Some(playlist.name.clone());
+                resolution.playlist_entries = Some(super::stage::build_stage_playlist_entries(
+                    &playlist,
+                    resolution.presentation_id,
+                    &name_lookup,
+                ));
+            }
+        }
         Ok(Some(resolution))
     }
 
