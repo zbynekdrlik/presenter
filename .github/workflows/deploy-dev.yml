@@ -44,7 +44,7 @@ jobs:
       - name: Setup SSH for deployment
         run: |
           mkdir -p ~/.ssh
-          echo "${{ secrets.DEPLOY_SSH_KEY }}" > ~/.ssh/id_deploy
+          echo "${{ secrets.DEPLOY_SSH_KEY_DEV }}" > ~/.ssh/id_deploy
           chmod 600 ~/.ssh/id_deploy
           ssh-keyscan ${{ env.DEPLOY_HOST }} >> ~/.ssh/known_hosts 2>/dev/null
           if [ ! -s ~/.ssh/known_hosts ]; then
