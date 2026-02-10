@@ -309,11 +309,16 @@ test.describe("Operator control surface", () => {
       '[data-role="presentation-create"]',
     );
     await expect(presentationCreateButton).toBeEnabled();
-    page.once("dialog", async (dialog) => {
-      expect(dialog.type()).toBe("prompt");
-      await dialog.accept("Quick Presentation");
-    });
     await presentationCreateButton.click();
+    const createModal = page.locator('[data-role="presentation-create-modal"]');
+    await expect(createModal).toHaveAttribute("data-open", "true");
+    await page
+      .locator('[data-role="presentation-create-name"]')
+      .fill("Quick Presentation");
+    await page.locator('[data-role="presentation-create-blank"]').click();
+    await expect(createModal).not.toHaveAttribute("data-open", "true", {
+      timeout: 10_000,
+    });
     await expect(page.locator('[data-role="presentation-list"]')).toContainText(
       "Quick Presentation",
     );
@@ -712,6 +717,10 @@ test.describe("Operator control surface", () => {
     const firstLiveLabel = (
       await firstLiveItem.locator("span").first().innerText()
     ).trim();
+
+    // Switch to edit mode — rename buttons are only visible in edit mode
+    await page.locator('[data-role="mode-toggle"][data-mode="edit"]').click();
+
     const liveRenameButton = firstLiveItem.locator(
       '[data-action="presentation-rename"]',
     );
@@ -751,6 +760,9 @@ test.describe("Operator control surface", () => {
         ).trim(),
       )
       .toBe(firstLiveLabel);
+
+    // Switch back to live mode so duplicate buttons are hidden
+    await page.locator('[data-role="mode-toggle"][data-mode="live"]').click();
 
     await selectLibraryById(page, selection.libraryId);
 
