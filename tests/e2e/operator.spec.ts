@@ -784,10 +784,12 @@ test.describe("Operator control surface", () => {
     await expect(lineLimitControl).toBeVisible();
 
     await addSlideButton.click();
-    const newSlideCard = slideContainer.locator("[data-slide-id]").last();
+    let newSlideCard = slideContainer.locator("[data-slide-id]").last();
     await newSlideCard.waitFor({ state: "visible" });
     const newSlideId = await newSlideCard.getAttribute("data-slide-id");
     expect(newSlideId).toBeTruthy();
+    // Pin to specific slide ID so async re-renders don't shift the target
+    newSlideCard = slideContainer.locator(`[data-slide-id="${newSlideId}"]`);
 
     const lineLimitInput = page.locator('[data-role="line-limit"]');
     await expect(lineLimitInput).toHaveValue("32");
