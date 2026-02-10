@@ -640,6 +640,9 @@ test.describe("Operator control surface", () => {
       expect(current).toBeGreaterThanOrEqual(afterAppendCount);
     }).toPass({ timeout: 5_000, intervals: [200] });
 
+    // Ensure search input is focused and cleared before searching again
+    await searchInput.click();
+    await expect.poll(async () => searchInput.inputValue()).toBe("");
     await searchInput.fill(searchTerm);
     await searchInput.press("Enter");
     await expect(async () => {
