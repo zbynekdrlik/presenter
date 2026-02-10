@@ -294,6 +294,9 @@ test("delete presentation via edit modal with confirmation", async ({
     await libraryButton.click();
   }
 
+  // Switch to edit mode so rename buttons are visible
+  await page.locator('[data-role="mode-toggle"][data-mode="edit"]').click();
+
   // Find the presentation item and click the rename (pen) icon
   const presentationItem = page.locator(
     `[data-role="presentation-item"][data-presentation-id="${presentationId}"]`,
@@ -378,6 +381,9 @@ test("delete presentation dismiss confirmation keeps presentation", async ({
   } else {
     await libraryButton.click();
   }
+
+  // Switch to edit mode so rename buttons are visible
+  await page.locator('[data-role="mode-toggle"][data-mode="edit"]').click();
 
   const presentationItem = page.locator(
     `[data-role="presentation-item"][data-presentation-id="${presentationId}"]`,

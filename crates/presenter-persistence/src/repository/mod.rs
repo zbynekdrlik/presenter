@@ -115,6 +115,7 @@ impl Repository {
         &self,
         library_id: LibraryId,
         name: &str,
+        slides: Option<&[Slide]>,
     ) -> anyhow::Result<(LibraryId, String, Presentation)> {
         let presentation_uuid = Uuid::new_v4();
         let library_uuid = library_id.to_string();
@@ -130,22 +131,44 @@ impl Repository {
         .exec(&txn)
         .await?;
 
-        slide_entity::Entity::insert(slide_entity::ActiveModel {
-            id: Set(Uuid::new_v4().to_string()),
-            presentation_id: Set(presentation_uuid.to_string()),
-            position: Set(0),
-            main_text: Set(String::new()),
-            main_text_search: Set(String::new()),
-            translation_text: Set(String::new()),
-            translation_text_search: Set(String::new()),
-            stage_text: Set(String::new()),
-            stage_text_search: Set(String::new()),
-            group_name: Set(None),
-            created_at: Set(Utc::now().into()),
-            metadata_json: Set(None),
-        })
-        .exec(&txn)
-        .await?;
+        let slide_list: Vec<Slide> = match slides {
+            Some(s) if !s.is_empty() => s.to_vec(),
+            _ => vec![Slide::new(
+                0,
+                SlideContent::new(
+                    presenter_core::SlideText::new("")?,
+                    presenter_core::SlideText::new("")?,
+                    presenter_core::SlideText::new("")?,
+                    None,
+                ),
+            )],
+        };
+
+        for (index, slide) in slide_list.iter().enumerate() {
+            slide_entity::Entity::insert(slide_entity::ActiveModel {
+                id: Set(slide.id.to_string()),
+                presentation_id: Set(presentation_uuid.to_string()),
+                position: Set(index as i32),
+                main_text: Set(slide.content.main.value().to_owned()),
+                main_text_search: Set(fold_query(slide.content.main.value())),
+                translation_text: Set(slide.content.translation.value().to_owned()),
+                translation_text_search: Set(fold_query(slide.content.translation.value())),
+                stage_text: Set(slide.content.stage.value().to_owned()),
+                stage_text_search: Set(fold_query(slide.content.stage.value())),
+                group_name: Set(slide
+                    .content
+                    .group
+                    .as_ref()
+                    .map(|group| group.name().to_owned())),
+                created_at: Set(Utc::now().into()),
+                metadata_json: Set(slide
+                    .metadata
+                    .as_ref()
+                    .and_then(|m| serde_json::to_string(m).ok())),
+            })
+            .exec(&txn)
+            .await?;
+        }
 
         txn.commit().await?;
 

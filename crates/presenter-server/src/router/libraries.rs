@@ -1,7 +1,7 @@
 use super::AppError;
 use crate::state::AppState;
 use axum::{
-    extract::{Path, Query, State},
+    extract::{Multipart, Path, Query, State},
     http::StatusCode,
     Json,
 };
@@ -88,9 +88,23 @@ pub(super) async fn delete_library(
 
 #[derive(Debug, serde::Deserialize)]
 #[serde(rename_all = "camelCase")]
+pub(super) struct CreateSlideInput {
+    pub(super) main: String,
+    #[serde(default)]
+    pub(super) translation: Option<String>,
+    #[serde(default)]
+    pub(super) stage: Option<String>,
+    #[serde(default)]
+    pub(super) group: Option<String>,
+}
+
+#[derive(Debug, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub(super) struct CreateLibraryPresentationRequest {
     #[serde(default)]
     pub(super) name: Option<String>,
+    #[serde(default)]
+    pub(super) slides: Option<Vec<CreateSlideInput>>,
 }
 
 #[derive(Debug, serde::Serialize, serde::Deserialize)]
@@ -113,13 +127,88 @@ pub(super) async fn create_library_presentation(
         return Err(AppError::bad_request_message("name cannot be empty"));
     }
     let library_id = LibraryId::from_uuid(id);
-    let (created_library_id, _library_name, presentation, summary) =
-        state.create_presentation(library_id, &name).await?;
+
+    let slides = match payload.slides {
+        Some(ref inputs) if !inputs.is_empty() => {
+            let mut built = Vec::with_capacity(inputs.len());
+            for (i, input) in inputs.iter().enumerate() {
+                let content = presenter_core::SlideContent::new(
+                    presenter_core::SlideText::new(&input.main)
+                        .map_err(|e| AppError::bad_request(e))?,
+                    presenter_core::SlideText::new(input.translation.as_deref().unwrap_or(""))
+                        .map_err(|e| AppError::bad_request(e))?,
+                    presenter_core::SlideText::new(input.stage.as_deref().unwrap_or(""))
+                        .map_err(|e| AppError::bad_request(e))?,
+                    input
+                        .group
+                        .as_deref()
+                        .filter(|g| !g.is_empty())
+                        .map(presenter_core::SlideGroup::new),
+                );
+                built.push(presenter_core::Slide::new(i as u32, content));
+            }
+            Some(built)
+        }
+        _ => None,
+    };
+
+    let (created_library_id, _library_name, presentation, summary) = state
+        .create_presentation(library_id, &name, slides.as_deref())
+        .await?;
     if created_library_id != library_id {
         return Err(AppError::bad_request_message(
             "created presentation belongs to a different library",
         ));
     }
+    Ok(Json(CreateLibraryPresentationResponse {
+        library_id: created_library_id.into_uuid(),
+        presentation,
+        library_summary: summary,
+    }))
+}
+
+#[instrument(skip_all)]
+pub(super) async fn import_presentation(
+    State(state): State<AppState>,
+    Path(id): Path<Uuid>,
+    mut multipart: Multipart,
+) -> Result<Json<CreateLibraryPresentationResponse>, AppError> {
+    let library_id = LibraryId::from_uuid(id);
+    let mut file_bytes: Option<Vec<u8>> = None;
+
+    while let Some(field) = multipart
+        .next_field()
+        .await
+        .map_err(|e| AppError::bad_request(e))?
+    {
+        if field.name() == Some("file") {
+            file_bytes = Some(
+                field
+                    .bytes()
+                    .await
+                    .map_err(|e| AppError::bad_request(e))?
+                    .to_vec(),
+            );
+            break;
+        }
+    }
+
+    let bytes = file_bytes.ok_or_else(|| AppError::bad_request_message("missing file field"))?;
+    let imported = presenter_importer::load_presentation_from_bytes(&bytes)
+        .map_err(|e| AppError::bad_request(e))?;
+
+    let slides: Vec<presenter_core::Slide> = imported.slides;
+    let name = imported.name;
+    if name.trim().is_empty() {
+        return Err(AppError::bad_request_message(
+            "imported presentation has no name",
+        ));
+    }
+
+    let (created_library_id, _library_name, presentation, summary) = state
+        .create_presentation(library_id, name.trim(), Some(&slides))
+        .await?;
+
     Ok(Json(CreateLibraryPresentationResponse {
         library_id: created_library_id.into_uuid(),
         presentation,
