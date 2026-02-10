@@ -3618,7 +3618,14 @@
         `/libraries/${state.activeLibraryId}/presentations`,
         {
           method: "POST",
-          body: JSON.stringify({ name, slides: parsed.slides }),
+          body: JSON.stringify({
+            name,
+            slides: [
+              { main: "", group: null },
+              ...parsed.slides,
+              { main: "", group: null },
+            ],
+          }),
         },
       );
       createPresentationAndLoad(response);
