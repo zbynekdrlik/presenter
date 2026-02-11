@@ -292,10 +292,15 @@ pub(super) fn stage_state_model_to_state(
         Some(value) => Some(SlideId::from_uuid(parse_uuid(&value)?)),
         None => None,
     };
+    let playlist_id = match model.playlist_id {
+        Some(value) => Some(PlaylistId::from_uuid(parse_uuid(&value)?)),
+        None => None,
+    };
     Ok(StageState::new(
         presentation_id,
         current_slide_id,
         next_slide_id,
+        playlist_id,
     ))
 }
 

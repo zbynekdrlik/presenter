@@ -45,8 +45,8 @@ use crate::{
 };
 use chrono::Utc;
 use presenter_core::{
-    BibleBroadcast, OscSettings, OscSettingsDraft, Presentation, PresentationId, Slide, SlideId,
-    StageDisplayLayout, StageDisplaySnapshot, StageState, TimersOverview,
+    BibleBroadcast, OscSettings, OscSettingsDraft, PlaylistId, Presentation, PresentationId, Slide,
+    SlideId, StageDisplayLayout, StageDisplaySnapshot, StageState, TimersOverview,
     DEFAULT_STAGE_LAYOUT_CODE,
 };
 use presenter_persistence::{DatabaseSettings, Repository};
@@ -71,7 +71,10 @@ use companion::{
 use seed::sample_library;
 #[cfg(test)]
 pub use seed::TestBibleIngestion;
-use stage::{build_stage_snapshot, stage_resolution_from_presentation, StageResolution};
+use stage::{
+    build_stage_playlist_entries, build_stage_snapshot, stage_resolution_from_presentation,
+    StageResolution,
+};
 
 #[derive(Clone)]
 pub struct AppState {
@@ -609,6 +612,7 @@ impl AppState {
         presentation_id: PresentationId,
         current_slide_id: SlideId,
         next_slide_id: Option<SlideId>,
+        playlist_id: Option<PlaylistId>,
     ) -> anyhow::Result<()> {
         let Some((_, library_name, presentation)) =
             self.presentation_detail(presentation_id).await?
@@ -638,14 +642,30 @@ impl AppState {
             Some(presentation_id),
             Some(current_slide_id),
             next_slide_id,
+            playlist_id,
         );
         self.repository.upsert_stage_state(&stage_state).await?;
-        let resolution = stage_resolution_from_presentation(
+        let mut resolution = stage_resolution_from_presentation(
             &presentation,
             Some(library_name),
             Some(current_slide_id),
             next_slide_id,
         );
+        if let Some(pid) = playlist_id {
+            if let Some(playlist) = self.repository.fetch_playlist_by_id(pid).await? {
+                let name_lookup = self
+                    .repository
+                    .fetch_presentation_names_for_playlist(&playlist)
+                    .await?;
+                resolution.playlist_id = Some(pid);
+                resolution.playlist_name = Some(playlist.name.clone());
+                resolution.playlist_entries = Some(build_stage_playlist_entries(
+                    &playlist,
+                    resolution.presentation_id,
+                    &name_lookup,
+                ));
+            }
+        }
         self.broadcast_stage_resolution(resolution).await?;
         Ok(())
     }

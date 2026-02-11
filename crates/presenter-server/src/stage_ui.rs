@@ -4,7 +4,8 @@ use axum::response::Html;
 use leptos::prelude::*;
 use leptos::prelude::{AnyView, IntoAny};
 use presenter_core::{
-    StageDisplaySlide, StageDisplaySnapshot, TimerState, DEFAULT_STAGE_LAYOUT_CODE,
+    StageDisplaySlide, StageDisplaySnapshot, StagePlaylistEntry, TimerState,
+    DEFAULT_STAGE_LAYOUT_CODE,
 };
 use reactive_graph::owner::Owner;
 
@@ -345,6 +346,44 @@ fn StageDisplayDocument(
     }}
   }};
 
+  const renderPlaylistSidebar = (entries, playlistName) => {{
+    const sidebar = document.getElementById('playlist-sidebar');
+    const nameEl = document.getElementById('playlist-name');
+    const listEl = document.getElementById('playlist-list');
+    if (!sidebar) return;
+    const section = sidebar.closest('.stage__worship-pp');
+    if (section) {{
+      section.dataset.hasPlaylist = (entries && entries.length > 0) ? 'true' : 'false';
+    }}
+    if (nameEl) {{
+      nameEl.textContent = playlistName || '';
+    }}
+    if (!listEl) return;
+    if (!entries || entries.length === 0) {{
+      listEl.innerHTML = '';
+      return;
+    }}
+    let html = '';
+    let presNum = 0;
+    for (let i = 0; i < entries.length; i++) {{
+      const entry = entries[i];
+      const active = entry.isActive ? 'true' : 'false';
+      const entryType = entry.entryType || 'presentation';
+      const name = (entry.name || '').replace(/&/g, '&amp;').replace(/[<]/g, '&lt;').replace(/[>]/g, '&gt;');
+      if (entryType === 'presentation') {{
+        presNum++;
+        html += '<li class=stage__worship-pp-playlist-entry data-active=' + active + ' data-type=' + entryType + '>' + presNum + '. ' + name + '</li>';
+      }} else {{
+        html += '<li class=stage__worship-pp-playlist-entry data-active=' + active + ' data-type=' + entryType + '>' + name + '</li>';
+      }}
+    }}
+    listEl.innerHTML = html;
+    const activeEl = listEl.querySelector('[data-active=true]');
+    if (activeEl) {{
+      activeEl.scrollIntoView({{ block: 'nearest', behavior: 'smooth' }});
+    }}
+  }};
+
   const formatSeconds = (rawSeconds) => {{
     const total = Math.max(0, Math.floor(rawSeconds || 0));
     const hours = Math.floor(total / 3600);
@@ -399,14 +438,12 @@ fn StageDisplayDocument(
       setText('current-group', currentGroup || '');
       setHidden('current-group', !currentGroup);
 
-      const stage = preferredStage(current);
-      setText('current-stage', stage || '');
-      setHidden('current-stage', !stage);
-
       setText('next-main', next ? next.main : '');
       const nextGroup = next && next.group ? next.group : '';
       setText('next-group', nextGroup || '');
       setHidden('next-group', !nextGroup);
+
+      renderPlaylistSidebar(snapshot.playlistEntries, snapshot.playlistName);
     }}
     fitLyrics(layout);
   }};
@@ -689,13 +726,6 @@ fn render_worship_pp(snapshot: &StageDisplaySnapshot) -> AnyView {
         .as_ref()
         .and_then(|slide| slide.group.clone())
         .unwrap_or_default();
-    let current_stage = snapshot
-        .current
-        .as_ref()
-        .map(stage_text)
-        .unwrap_or_default();
-    let current_stage_hidden = (current_stage.is_empty()).to_string();
-    let current_stage_text = current_stage.clone();
     let next_main = snapshot
         .next
         .as_ref()
@@ -706,45 +736,81 @@ fn render_worship_pp(snapshot: &StageDisplaySnapshot) -> AnyView {
         .as_ref()
         .and_then(|slide| slide.group.clone())
         .unwrap_or_default();
+    let playlist_name = snapshot.playlist_name.clone().unwrap_or_default();
+    let entries = snapshot.playlist_entries.clone().unwrap_or_default();
+    let has_playlist = !entries.is_empty();
 
     view! {
-        <section class="stage__split">
-            <div class="stage__split-main">
-                <h2>"Current"</h2>
-                <div class="stage__group-slot">
-                    <span
-                        id="current-group"
-                        class="stage__group"
-                        data-hidden={(current_group.is_empty()).to_string()}
-                    >
-                        {current_group.clone()}
-                    </span>
+        <section class="stage__worship-pp" data-has-playlist={has_playlist.to_string()}>
+            <div class="stage__worship-pp-slides">
+                <div class="stage__worship-pp-current">
+                    <div class="stage__group-slot">
+                        <span
+                            id="current-group"
+                            class="stage__group"
+                            data-hidden={(current_group.is_empty()).to_string()}
+                        >
+                            {current_group.clone()}
+                        </span>
+                    </div>
+                    <p id="current-main">{current_main}</p>
                 </div>
-                <p id="current-main">{current_main}</p>
-                <small
-                    id="current-stage"
-                    class="stage__meta"
-                    data-hidden={current_stage_hidden}
-                >
-                    {current_stage_text}
-                </small>
+                <div class="stage__worship-pp-next">
+                    <div class="stage__group-slot stage__group-slot--next">
+                        <span
+                            id="next-group"
+                            class="stage__group stage__group--next"
+                            data-hidden={(next_group.is_empty()).to_string()}
+                        >
+                            {next_group.clone()}
+                        </span>
+                    </div>
+                    <p id="next-main">{next_main}</p>
+                </div>
             </div>
-            <aside class="stage__split-sidebar">
-                <h3>"Next"</h3>
-                <div class="stage__group-slot stage__group-slot--next">
-                    <span
-                        id="next-group"
-                        class="stage__group stage__group--next"
-                        data-hidden={(next_group.is_empty()).to_string()}
-                    >
-                        {next_group.clone()}
-                    </span>
-                </div>
-                <p id="next-main">{next_main}</p>
+            <aside class="stage__worship-pp-playlist" id="playlist-sidebar">
+                <h3 id="playlist-name">{playlist_name}</h3>
+                <ul class="stage__worship-pp-playlist-list" id="playlist-list">
+                    {render_playlist_entries(&entries)}
+                </ul>
             </aside>
         </section>
     }
     .into_any()
+}
+
+fn render_playlist_entries(entries: &[StagePlaylistEntry]) -> String {
+    let mut pres_num = 0u32;
+    entries
+        .iter()
+        .enumerate()
+        .map(|(index, entry)| {
+            let active = if entry.is_active { "true" } else { "false" };
+            let entry_type = &entry.entry_type;
+            let name = html_escape(&entry.name);
+            let label = if entry_type == "presentation" {
+                pres_num += 1;
+                format!("{pres_num}. {name}")
+            } else {
+                name
+            };
+            format!(
+                "<li class=\"stage__worship-pp-playlist-entry\" \
+                 id=\"playlist-entry-{index}\" \
+                 data-active=\"{active}\" \
+                 data-type=\"{entry_type}\">{label}</li>"
+            )
+        })
+        .collect::<Vec<_>>()
+        .join("")
+}
+
+fn html_escape(input: &str) -> String {
+    input
+        .replace('&', "&amp;")
+        .replace('<', "&lt;")
+        .replace('>', "&gt;")
+        .replace('"', "&quot;")
 }
 
 fn render_timer(snapshot: &StageDisplaySnapshot) -> AnyView {
@@ -787,16 +853,6 @@ fn primary_text(slide: &StageDisplaySlide) -> String {
     }
 }
 
-fn stage_text(slide: &StageDisplaySlide) -> String {
-    if !slide.stage.trim().is_empty() {
-        slide.stage.clone()
-    } else if !slide.translation.trim().is_empty() {
-        slide.translation.clone()
-    } else {
-        slide.main.clone()
-    }
-}
-
 fn format_hms(seconds: i64) -> String {
     let total = seconds.max(0);
     let hours = total / 3600;
@@ -817,8 +873,8 @@ body.stage[data-output-stale="true"] .stage__status { box-shadow: 0 12px 32px -1
 body.stage[data-output-stale="true"] .stage__lyrics-current,
 body.stage[data-output-stale="true"] .stage__lyrics-next,
 body.stage[data-output-stale="true"] .stage__timer,
-body.stage[data-output-stale="true"] .stage__split-main,
-body.stage[data-output-stale="true"] .stage__split-sidebar { opacity: 0.65; transition: opacity 0.25s ease; }
+body.stage[data-output-stale="true"] .stage__worship-pp-current,
+body.stage[data-output-stale="true"] .stage__worship-pp-next { opacity: 0.65; transition: opacity 0.25s ease; }
 body.stage[data-live-state="reconnecting"] .stage__status-connection { color: #fbbf24; }
 body.stage[data-live-state="disconnected"] .stage__status-connection,
 body.stage[data-live-state="error"] .stage__status-connection { color: #f87171; }
@@ -830,16 +886,20 @@ body.stage[data-live-state="error"] .stage__status-connection { color: #f87171; 
 .stage__lyrics-next p { margin: 0; white-space: pre-wrap; text-transform: none; line-height: 1.1; max-width: 100%; }
 .stage__group-slot { min-height: 3.8rem; display: flex; align-items: center; justify-content: center; }
 .stage__group-slot--next { justify-content: center; }
-.stage__split { display: grid; gap: 2rem; grid-template-columns: minmax(0, 2fr) minmax(0, 1fr); width: 100%; }
-.stage__split-main { background: rgba(15, 23, 42, 0.75); padding: 2rem; border-radius: 1rem; box-shadow: 0 20px 40px -30px rgba(15, 23, 42, 0.9); display: flex; flex-direction: column; gap: 1.25rem; }
-.stage__split-main h2 { margin-top: 0; font-size: 1.5rem; letter-spacing: 0.1em; color: #38bdf8; }
-.stage__split-main p { font-size: 3rem; margin: 0; white-space: pre-wrap; }
-.stage__split-main small { color: #cbd5f5; }
-.stage__split-sidebar { background: rgba(15, 23, 42, 0.55); padding: 1.5rem; border-radius: 1rem; display: flex; flex-direction: column; gap: 1rem; }
-.stage__split-sidebar h3 { margin: 0; letter-spacing: 0.1em; color: #38bdf8; }
-.stage__split-sidebar p { margin: 0; white-space: pre-wrap; }
-.stage__split-main .stage__group-slot,
-.stage__split-sidebar .stage__group-slot { justify-content: flex-start; }
+.stage__worship-pp { display: grid; grid-template-columns: minmax(0, 1fr); gap: 1.5rem; width: 100%; height: 100%; }
+.stage__worship-pp[data-has-playlist="true"] { grid-template-columns: minmax(0, 7fr) minmax(0, 3fr); }
+.stage__worship-pp-slides { display: flex; flex-direction: column; justify-content: space-between; gap: 1.5rem; min-height: 0; }
+.stage__worship-pp-current { flex: 1; font-size: 5.4rem; font-weight: 700; display: flex; flex-direction: column; align-items: center; justify-content: center; text-align: center; min-height: 0; }
+.stage__worship-pp-current p { margin: 0; line-height: 1.08; white-space: pre-wrap; max-width: 100%; }
+.stage__worship-pp-next { font-size: 3.2rem; color: #cbd5f5; display: flex; flex-direction: column; align-items: center; justify-content: center; text-align: center; padding-bottom: 2vh; }
+.stage__worship-pp-next p { margin: 0; white-space: pre-wrap; line-height: 1.1; max-width: 100%; }
+.stage__worship-pp-playlist { background: rgba(15, 23, 42, 0.55); border-radius: 1rem; padding: 1.5rem; overflow-y: auto; display: flex; flex-direction: column; }
+.stage__worship-pp[data-has-playlist="false"] .stage__worship-pp-playlist { display: none; }
+.stage__worship-pp-playlist h3 { font-size: 1.2rem; color: #38bdf8; letter-spacing: 0.1em; text-transform: uppercase; margin: 0 0 1rem 0; }
+.stage__worship-pp-playlist-list { list-style: none; padding: 0; margin: 0; }
+.stage__worship-pp-playlist-entry { padding: 0.6rem 1rem; border-radius: 0.5rem; font-size: 1.4rem; color: #94a3b8; transition: background 0.2s; }
+.stage__worship-pp-playlist-entry[data-active="true"] { background: rgba(56, 189, 248, 0.2); color: #38bdf8; font-weight: 600; }
+.stage__worship-pp-playlist-entry[data-type="separator"] { font-size: 1rem; color: #475569; text-transform: uppercase; letter-spacing: 0.15em; padding: 0.8rem 1rem 0.3rem; }
 .stage__timer { text-align: center; width: 100%; }
 .stage__timer-value { font-size: 8rem; font-weight: 700; letter-spacing: 0.1em; }
 .stage__timer-label { font-size: 1.5rem; color: #94a3b8; letter-spacing: 0.3em; text-transform: uppercase; }
@@ -892,6 +952,9 @@ mod tests {
             None,
             None,
             None,
+            None,
+            None,
+            None,
         );
 
         let html = render_stage_display(snapshot, StageHeartbeatConfig::default_values()).0;
@@ -924,6 +987,9 @@ mod tests {
             None,
             None,
             None,
+            None,
+            None,
+            None,
         );
 
         let html = render_stage_display(snapshot, StageHeartbeatConfig::default_values()).0;
@@ -946,6 +1012,9 @@ mod tests {
             None,
             None,
             presenter_core::timer::TimersOverview::demo(now),
+            None,
+            None,
+            None,
             None,
             None,
             None,

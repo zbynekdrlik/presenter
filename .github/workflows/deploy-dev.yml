@@ -13,7 +13,7 @@ env:
   CARGO_TERM_COLOR: always
   DEPLOY_DIR: /opt/presenter-dev
   SERVICE_NAME: presenter-dev
-  DEPLOY_HOST: 10.77.9.191
+  DEPLOY_HOST: 10.77.8.134
   DEPLOY_USER: newlevel
   PRESENTER_LIBRARY_ROOT: /home/newlevel/devel/presenter/presenter-libraries
 
@@ -44,7 +44,7 @@ jobs:
       - name: Setup SSH for deployment
         run: |
           mkdir -p ~/.ssh
-          echo "${{ secrets.DEPLOY_SSH_KEY }}" > ~/.ssh/id_deploy
+          echo "${{ secrets.DEPLOY_SSH_KEY_DEV }}" > ~/.ssh/id_deploy
           chmod 600 ~/.ssh/id_deploy
           ssh-keyscan ${{ env.DEPLOY_HOST }} >> ~/.ssh/known_hosts 2>/dev/null
           if [ ! -s ~/.ssh/known_hosts ]; then
@@ -120,5 +120,5 @@ jobs:
           echo "=== Dev Deployment Complete ==="
           echo "Version: $(grep -m1 '^version' Cargo.toml | cut -d'"' -f2)"
           echo "Service: ${{ env.SERVICE_NAME }}"
-          echo "URL: http://10.77.9.191:8080"
+          echo "URL: http://10.77.8.134:8080"
           ssh deploy-target "systemctl status ${{ env.SERVICE_NAME }} --no-pager" || true

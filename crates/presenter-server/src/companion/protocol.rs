@@ -345,7 +345,7 @@ pub(super) async fn handle_command(
             current_slide_id,
             next_slide_id,
         } => match state
-            .update_stage_state(presentation_id, current_slide_id, next_slide_id)
+            .update_stage_state(presentation_id, current_slide_id, next_slide_id, None)
             .await
         {
             Ok(()) => {

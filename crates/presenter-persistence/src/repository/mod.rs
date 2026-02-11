@@ -706,6 +706,7 @@ impl Repository {
             presentation_id: Set(state.presentation_id.map(|id| id.into_uuid().to_string())),
             current_slide_id: Set(state.current_slide_id.map(|id| id.into_uuid().to_string())),
             next_slide_id: Set(state.next_slide_id.map(|id| id.into_uuid().to_string())),
+            playlist_id: Set(state.playlist_id.map(|id| id.into_uuid().to_string())),
             updated_at: Set(now.into()),
         };
 
@@ -716,6 +717,7 @@ impl Repository {
                         stage_state::Column::PresentationId,
                         stage_state::Column::CurrentSlideId,
                         stage_state::Column::NextSlideId,
+                        stage_state::Column::PlaylistId,
                         stage_state::Column::UpdatedAt,
                     ])
                     .to_owned(),

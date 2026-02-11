@@ -458,6 +458,7 @@ pub mod stage_state {
         pub presentation_id: Option<String>,
         pub current_slide_id: Option<String>,
         pub next_slide_id: Option<String>,
+        pub playlist_id: Option<String>,
         pub updated_at: DateTimeWithTimeZone,
     }
 

@@ -1,6 +1,6 @@
 use crate::{
     slide::{ResolvedSlide, Slide as DomainSlide},
-    PresentationId, SlideId,
+    PlaylistId, PresentationId, SlideId,
 };
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
@@ -55,6 +55,16 @@ impl StageDisplayLayout {
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
+pub struct StagePlaylistEntry {
+    pub name: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub presentation_id: Option<PresentationId>,
+    pub is_active: bool,
+    pub entry_type: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct StageDisplaySlide {
     pub main: String,
     pub translation: String,
@@ -88,6 +98,12 @@ pub struct StageDisplaySnapshot {
     pub current_position: Option<u32>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub total_slides: Option<u32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub playlist_id: Option<PlaylistId>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub playlist_name: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub playlist_entries: Option<Vec<StagePlaylistEntry>>,
 }
 
 impl From<&DomainSlide> for StageDisplaySlide {
@@ -122,6 +138,8 @@ pub struct StageState {
     pub presentation_id: Option<PresentationId>,
     pub current_slide_id: Option<SlideId>,
     pub next_slide_id: Option<SlideId>,
+    #[serde(default)]
+    pub playlist_id: Option<PlaylistId>,
 }
 
 impl StageState {
@@ -129,16 +147,18 @@ impl StageState {
         presentation_id: Option<PresentationId>,
         current_slide_id: Option<SlideId>,
         next_slide_id: Option<SlideId>,
+        playlist_id: Option<PlaylistId>,
     ) -> Self {
         Self {
             presentation_id,
             current_slide_id,
             next_slide_id,
+            playlist_id,
         }
     }
 
     pub fn cleared() -> Self {
-        Self::new(None, None, None)
+        Self::new(None, None, None, None)
     }
 }
 
@@ -159,6 +179,9 @@ impl StageDisplaySnapshot {
         latency_ms: Option<f64>,
         current_position: Option<u32>,
         total_slides: Option<u32>,
+        playlist_id: Option<PlaylistId>,
+        playlist_name: Option<String>,
+        playlist_entries: Option<Vec<StagePlaylistEntry>>,
     ) -> Self {
         Self {
             layout,
@@ -175,6 +198,9 @@ impl StageDisplaySnapshot {
             latency_ms,
             current_position,
             total_slides,
+            playlist_id,
+            playlist_name,
+            playlist_entries,
         }
     }
 }

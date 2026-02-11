@@ -3104,6 +3104,7 @@
           presentationId,
           currentSlideId: slideId,
           nextSlideId,
+          playlistId: state.activePlaylistId || undefined,
         }),
       });
       state.stagePresentationId = presentationId;

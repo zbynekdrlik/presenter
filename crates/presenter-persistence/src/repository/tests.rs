@@ -114,7 +114,7 @@ async fn purge_presentation_content_clears_tables() {
 
     let presentation = &library.presentations[0];
     let current = presentation.slides[0].id;
-    let state = StageState::new(Some(presentation.id), Some(current), None);
+    let state = StageState::new(Some(presentation.id), Some(current), None, None);
     repo.upsert_stage_state(&state).await.unwrap();
 
     repo.purge_presentation_content().await.unwrap();
@@ -503,7 +503,7 @@ async fn stage_state_round_trip() {
 
     let current = presentation.slides[0].id;
     let next = presentation.slides.get(1).map(|slide| slide.id);
-    let state = StageState::new(Some(presentation.id), Some(current), next);
+    let state = StageState::new(Some(presentation.id), Some(current), next, None);
 
     repo.upsert_stage_state(&state).await.unwrap();
 

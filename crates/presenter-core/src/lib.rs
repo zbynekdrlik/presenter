@@ -41,7 +41,7 @@ pub use resolume::{ResolumeHost, ResolumeHostDraft, ResolumeHostValidationError}
 pub use search::{SearchMatchField, SearchResult, SearchResultKind};
 pub use slide::{ResolvedSlide, Slide, SlideContent, SlideGroup, SlideText};
 pub use stage_display::{
-    StageDisplayLayout, StageDisplaySlide, StageDisplaySnapshot, StageState,
+    StageDisplayLayout, StageDisplaySlide, StageDisplaySnapshot, StagePlaylistEntry, StageState,
     DEFAULT_STAGE_LAYOUT_CODE,
 };
 pub use timer::{
