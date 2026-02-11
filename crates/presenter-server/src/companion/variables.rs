@@ -26,6 +26,7 @@ impl CompanionVariableState {
             crate::live::LiveEvent::Bible { broadcast } => self.apply_bible(broadcast),
             crate::live::LiveEvent::BibleCleared => self.clear_bible(),
             crate::live::LiveEvent::StageLayout { code } => self.set_stage_layout_code(&code),
+            crate::live::LiveEvent::StageAppearance { .. } => false,
         }
     }
 

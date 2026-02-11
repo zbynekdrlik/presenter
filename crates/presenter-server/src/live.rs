@@ -1,3 +1,4 @@
+use crate::router::stage::StageAppearance;
 use crate::stage_connections::{StageClientSnapshot, StageConnections};
 use axum::extract::ws::{Message, WebSocket};
 use chrono::{DateTime, Utc};
@@ -57,13 +58,30 @@ enum InboundMessage {
 #[serde(tag = "type", rename_all = "snake_case")]
 #[allow(clippy::large_enum_variant)]
 pub enum LiveEvent {
-    Timers { overview: TimersOverview },
-    Stage { snapshot: StageDisplaySnapshot },
-    Heartbeat { id: Uuid, timestamp: DateTime<Utc> },
-    StageConnection { snapshot: StageClientSnapshot },
-    Bible { broadcast: BibleBroadcast },
+    Timers {
+        overview: TimersOverview,
+    },
+    Stage {
+        snapshot: StageDisplaySnapshot,
+    },
+    Heartbeat {
+        id: Uuid,
+        timestamp: DateTime<Utc>,
+    },
+    StageConnection {
+        snapshot: StageClientSnapshot,
+    },
+    Bible {
+        broadcast: BibleBroadcast,
+    },
     BibleCleared,
-    StageLayout { code: String },
+    StageLayout {
+        code: String,
+    },
+    StageAppearance {
+        layout: String,
+        appearance: StageAppearance,
+    },
 }
 
 pub async fn serve_websocket(hub: LiveHub, connections: StageConnections, socket: WebSocket) {

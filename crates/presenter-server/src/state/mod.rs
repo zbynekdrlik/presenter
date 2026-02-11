@@ -678,6 +678,33 @@ impl AppState {
         Ok(())
     }
 
+    // Stage appearance settings
+    pub async fn get_stage_appearance(
+        &self,
+        layout: &str,
+    ) -> anyhow::Result<crate::router::stage::StageAppearance> {
+        let key = format!("stage-appearance:{layout}");
+        match self.repository.get_app_setting(&key).await? {
+            Some(json) => Ok(serde_json::from_str(&json)?),
+            None => Ok(crate::router::stage::StageAppearance::default_for(layout)),
+        }
+    }
+
+    pub async fn set_stage_appearance(
+        &self,
+        layout: &str,
+        appearance: crate::router::stage::StageAppearance,
+    ) -> anyhow::Result<()> {
+        let key = format!("stage-appearance:{layout}");
+        let json = serde_json::to_string(&appearance)?;
+        self.repository.set_app_setting(&key, &json).await?;
+        self.live_hub.publish(LiveEvent::StageAppearance {
+            layout: layout.to_string(),
+            appearance,
+        });
+        Ok(())
+    }
+
     // Slide editing methods are in slides.rs
     // Timer methods are in timers.rs
     // Broadcasting methods are in broadcasting.rs
