@@ -64,10 +64,8 @@ test("operator manages Bible workflow end-to-end", async ({
     );
   }).toPass();
 
-  const translationButtons = page.locator(
-    '[data-role="translation-list"] button',
-  );
-  await expect(translationButtons.first()).toBeVisible({ timeout: 30_000 });
+  const mainTranslation = page.locator('[data-role="main-translation"]');
+  await expect(mainTranslation).toBeVisible({ timeout: 30_000 });
 
   await page.locator('[data-role="char-limit"]').fill("80");
   await page.locator('[data-role="book-filter"]').fill("John");
@@ -598,18 +596,8 @@ test("main translation dropdown selects translation and loads books", async ({
     expect(prefs.mainTranslation).toBe("slk-seb");
   }).toPass({ timeout: 15_000 });
 
-  // Verify sidebar highlights the selected translation
-  await expect(async () => {
-    const activeButton = await page.evaluate(() => {
-      const buttons = document.querySelectorAll(
-        '[data-role="translation-list"] button[data-active="true"]',
-      );
-      return buttons.length > 0
-        ? buttons[0].getAttribute("data-translation-code")
-        : null;
-    });
-    expect(activeButton).toBe("slk-seb");
-  }).toPass();
+  // Verify dropdown reflects the selected translation
+  await expect(mainDropdown).toHaveValue("slk-seb");
 
   // Verify books loaded for the new translation
   await expect(async () => {

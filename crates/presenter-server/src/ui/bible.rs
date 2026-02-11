@@ -21,7 +21,6 @@ fn BibleDocument(
         .replace("__ACTIVE__", &active_json_safe);
     let combined_styles = format!("{}{}", styles::OPERATOR, styles::BIBLE);
     let translations_for_view = translations.clone();
-    let translation_count = translations_for_view.len();
     let broadcast_for_view = active.clone();
 
     view! {
@@ -106,67 +105,6 @@ fn BibleDocument(
                 <main class="operator__main">
                     <aside class="operator__catalog operator__catalog--bible" data-role="catalog">
                         <div class="operator__catalog-top">
-                            <section class="operator__group operator__group--translations">
-                                <header class="operator__group-header">
-                                    <h2>"Bibles"</h2>
-                                    <div class="operator__group-controls">
-                                        <button
-                                            type="button"
-                                            class="operator__group-count"
-                                            data-role="bible-dashboard"
-                                            aria-label={format!("Show all Bibles ({translation_count} available)")}
-                                            data-empty={if translation_count == 0 { "true" } else { "false" }}
-                                        >
-                                            {format!("({translation_count})")}
-                                        </button>
-                                        <button
-                                            type="button"
-                                            data-role="bible-import"
-                                            aria-label="Import Bible translation"
-                                            title="Import Bible translation"
-                                        >
-                                            "+"
-                                        </button>
-                                    </div>
-                                </header>
-                                <ul class="operator__list operator__list--tight" data-role="translation-list">
-                                    {translations_for_view.iter().enumerate().map(|(i, translation)| {
-                                        let label = if translation.language.is_empty() {
-                                            translation.name.clone()
-                                        } else {
-                                            format!("{} ({})", translation.name, translation.language)
-                                        };
-                                        let edit_label = label.clone();
-                                        view! {
-                                            <li
-                                                class="operator__list-item"
-                                                data-role="translation-item"
-                                                data-translation-code={translation.code.clone()}
-                                                data-index={i.to_string()}
-                                            >
-                                                <button
-                                                    type="button"
-                                                    class="operator__list-button"
-                                                    data-translation-code={translation.code.clone()}
-                                                >
-                                                    <span class="operator__list-label">{label}</span>
-                                                </button>
-                                                <div class="operator__list-actions">
-                                                    <button
-                                                        type="button"
-                                                        class="operator__list-action operator__list-action--icon operator__list-action--menu"
-                                                        data-action="bible-edit"
-                                                        data-translation-code={translation.code.clone()}
-                                                        aria-label={format!("Edit {edit_label}")}
-                                                    >
-                                                        "⋮"
-                                                    </button>
-                                                </div>
-                                            </li>
-                                        }
-                                    }).collect::<Vec<_>>() }
-                                </ul>
-                            </section>
                             <section class="operator__group operator__group--reference" data-role="reference-panel">
                                 <div class="operator__form-group">
                                     <label class="operator__field">
