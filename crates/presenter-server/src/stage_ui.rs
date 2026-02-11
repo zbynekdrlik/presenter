@@ -232,7 +232,7 @@ fn StageDisplayDocument(
     return measuredCharWidthPer100px;
   }};
 
-  const smartScaleElement = (element, containerWidth, ratio) => {{
+  const smartScaleElement = (element, containerWidth, ratio, maxPx) => {{
     if (!element) return;
     const text = (element.textContent || '').trim();
     if (!text.length) return;
@@ -246,19 +246,16 @@ fn StageDisplayDocument(
     const baseFontPx = containerWidth / (25 * charW);
     let fontPx = longestLen <= 25 ? baseFontPx : baseFontPx * (25 / longestLen);
     fontPx *= ratio;
+    if (maxPx && fontPx > maxPx) fontPx = maxPx;
     fontPx = Math.max(12, fontPx);
     element.style.fontSize = fontPx + 'px';
   }};
 
-  const smartScaleGroup = (element, containerWidth, ratio) => {{
+  const smartScaleGroup = (element, containerWidth) => {{
     if (!element) return;
     const text = (element.textContent || '').trim();
     if (!text.length) return;
-    const charW = measureCharWidth();
-    const baseFontPx = containerWidth / (25 * charW);
-    let fontPx = baseFontPx * ratio;
-    fontPx = Math.max(12, fontPx);
-    element.style.fontSize = fontPx + 'px';
+    element.style.fontSize = '1.6rem';
     element.style.maxWidth = Math.floor(containerWidth * 0.5) + 'px';
   }};
 
@@ -268,18 +265,18 @@ fn StageDisplayDocument(
         const container = document.querySelector('.stage__lyrics');
         if (!container) return;
         const w = container.clientWidth;
-        smartScaleElement(document.getElementById('current-text'), w, 1.0);
-        smartScaleElement(document.getElementById('next-text'), w, 0.8);
-        smartScaleGroup(document.getElementById('current-group'), w, 0.6);
-        smartScaleGroup(document.getElementById('next-group'), w, 0.6);
+        smartScaleElement(document.getElementById('current-text'), w, 1.0, 120);
+        smartScaleElement(document.getElementById('next-text'), w, 0.8, 80);
+        smartScaleGroup(document.getElementById('current-group'), w);
+        smartScaleGroup(document.getElementById('next-group'), w);
       }} else if (snapshotLayout === 'worship-pp') {{
         const container = document.querySelector('.stage__worship-pp-slides');
         if (!container) return;
         const w = container.clientWidth;
-        smartScaleElement(document.getElementById('current-main'), w, 1.0);
-        smartScaleElement(document.getElementById('next-main'), w, 0.8);
-        smartScaleGroup(document.getElementById('current-group'), w, 0.6);
-        smartScaleGroup(document.getElementById('next-group'), w, 0.6);
+        smartScaleElement(document.getElementById('current-main'), w, 1.0, 100);
+        smartScaleElement(document.getElementById('next-main'), w, 0.8, 64);
+        smartScaleGroup(document.getElementById('current-group'), w);
+        smartScaleGroup(document.getElementById('next-group'), w);
       }}
     }});
   }};
@@ -849,7 +846,7 @@ body.stage[data-live-state="error"] .stage__status-connection { color: #f87171; 
 .stage__lyrics { display: flex; flex-direction: column; justify-content: space-between; gap: 0.5rem; text-align: center; width: 100%; height: 100%; padding: 0; box-sizing: border-box; }
 .stage__lyrics-current { font-size: 6.5rem; font-weight: 700; display: flex; flex-direction: column; gap: 0.3rem; align-items: center; justify-content: flex-start; letter-spacing: 0.04em; min-height: 0; }
 .stage__lyrics-current p { margin: 0; line-height: 1.06; white-space: pre-wrap; text-transform: none; max-width: 100%; }
-.stage__lyrics-next { font-size: 5.2rem; color: #cbd5f5; letter-spacing: 0.06em; display: flex; flex-direction: column; gap: 0.3rem; align-items: center; justify-content: center; padding-bottom: 0; }
+.stage__lyrics-next { font-size: 5.2rem; color: #cbd5f5; letter-spacing: 0.06em; display: flex; flex-direction: column; gap: 0.3rem; align-items: center; justify-content: center; padding-bottom: 2vh; }
 .stage__lyrics-next p { margin: 0; white-space: pre-wrap; text-transform: none; line-height: 1.1; max-width: 100%; }
 .stage__group-slot { min-height: 0; display: flex; align-items: center; justify-content: center; }
 .stage__group-slot:has([data-hidden="true"]) { display: none; }
@@ -857,23 +854,23 @@ body.stage[data-live-state="error"] .stage__status-connection { color: #f87171; 
 .stage__worship-pp { display: grid; grid-template-columns: minmax(0, 1fr); gap: 0.5rem; width: 100%; height: 100%; }
 .stage__worship-pp[data-has-playlist="true"] { grid-template-columns: minmax(0, 7fr) minmax(0, 3fr); }
 .stage__worship-pp-slides { display: flex; flex-direction: column; justify-content: space-between; gap: 0.5rem; min-height: 0; }
-.stage__worship-pp-current { flex: 1; font-size: 5.4rem; font-weight: 700; display: flex; flex-direction: column; align-items: center; justify-content: center; text-align: center; min-height: 0; }
+.stage__worship-pp-current { flex: 1; font-size: 5.4rem; font-weight: 700; display: flex; flex-direction: column; align-items: center; justify-content: flex-start; text-align: center; min-height: 0; }
 .stage__worship-pp-current p { margin: 0; line-height: 1.08; white-space: pre-wrap; max-width: 100%; }
-.stage__worship-pp-next { font-size: 3.2rem; color: #cbd5f5; display: flex; flex-direction: column; align-items: center; justify-content: center; text-align: center; padding-bottom: 0; }
+.stage__worship-pp-next { font-size: 3.2rem; color: #cbd5f5; display: flex; flex-direction: column; align-items: center; justify-content: center; text-align: center; padding-bottom: 2vh; }
 .stage__worship-pp-next p { margin: 0; white-space: pre-wrap; line-height: 1.1; max-width: 100%; }
-.stage__worship-pp-playlist { background: rgba(15, 23, 42, 0.55); border-radius: 0.6rem; padding: 0.5rem; overflow-y: auto; display: flex; flex-direction: column; }
+.stage__worship-pp-playlist { background: rgba(15, 23, 42, 0.55); border-radius: 0.8rem; padding: 1rem; overflow-y: auto; display: flex; flex-direction: column; }
 .stage__worship-pp[data-has-playlist="false"] .stage__worship-pp-playlist { display: none; }
-.stage__worship-pp-playlist h3 { font-size: 0.9rem; color: #38bdf8; letter-spacing: 0.1em; text-transform: uppercase; margin: 0 0 0.4rem 0; }
+.stage__worship-pp-playlist h3 { font-size: 1.1rem; color: #38bdf8; letter-spacing: 0.1em; text-transform: uppercase; margin: 0 0 0.6rem 0; }
 .stage__worship-pp-playlist-list { list-style: none; padding: 0; margin: 0; }
-.stage__worship-pp-playlist-entry { padding: 0.25rem 0.5rem; border-radius: 0.35rem; font-size: 1.1rem; color: #94a3b8; transition: background 0.2s; }
+.stage__worship-pp-playlist-entry { padding: 0.45rem 0.8rem; border-radius: 0.4rem; font-size: 1.3rem; color: #94a3b8; transition: background 0.2s; }
 .stage__worship-pp-playlist-entry[data-active="true"] { background: rgba(56, 189, 248, 0.2); color: #38bdf8; font-weight: 600; }
-.stage__worship-pp-playlist-entry[data-type="separator"] { font-size: 0.8rem; color: #475569; text-transform: uppercase; letter-spacing: 0.15em; padding: 0.4rem 0.5rem 0.15rem; }
+.stage__worship-pp-playlist-entry[data-type="separator"] { font-size: 0.9rem; color: #475569; text-transform: uppercase; letter-spacing: 0.15em; padding: 0.6rem 0.8rem 0.2rem; }
 .stage__timer { text-align: center; width: 100%; }
 .stage__timer-value { font-size: 8rem; font-weight: 700; letter-spacing: 0.1em; }
 .stage__timer-label { font-size: 1.5rem; color: #94a3b8; letter-spacing: 0.3em; text-transform: uppercase; }
 .stage__timer--preach .stage__timer-value { color: #34d399; }
 .stage__timer--countdown .stage__timer-value { color: #38bdf8; }
-.stage__group { display: inline-flex; align-items: center; justify-content: center; padding: 0.3rem 1.2rem; background: rgba(56, 189, 248, 0.35); color: #38bdf8; border-radius: 999px; font-size: 2.4rem; letter-spacing: 0.18em; text-transform: uppercase; font-weight: 700; }
+.stage__group { display: inline-flex; align-items: center; justify-content: center; padding: 0.25rem 1rem; background: rgba(56, 189, 248, 0.35); color: #38bdf8; border-radius: 999px; font-size: 1.6rem; letter-spacing: 0.18em; text-transform: uppercase; font-weight: 700; }
 .stage__group[data-hidden="true"] { display: none; }
 .stage__group--next { background: rgba(250, 204, 21, 0.3); color: #facc15; }
 .stage__meta { color: #cbd5f5; display: block; margin-top: 0.5rem; }
