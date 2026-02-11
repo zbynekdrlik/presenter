@@ -28,7 +28,10 @@ pub use android_stage_display::{
     AndroidStageDisplay, AndroidStageDisplayDraft, AndroidStageDisplayValidationError,
     DEFAULT_ADB_PORT, DEFAULT_LAUNCH_COMPONENT,
 };
-pub use bible::{BibleBroadcast, BiblePassage, BibleReference, BibleTranslation};
+pub use bible::{
+    BibleBroadcast, BiblePassage, BiblePreferences, BiblePreferencesDraft, BibleReference,
+    BibleTranslation,
+};
 pub use id::{
     AndroidStageDisplayId, LibraryId, PlaylistEntryId, PlaylistId, PresentationId, ResolumeHostId,
     SlideId,

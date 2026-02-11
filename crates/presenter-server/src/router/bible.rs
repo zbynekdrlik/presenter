@@ -8,7 +8,9 @@ use axum::{
     Json,
 };
 use presenter_core::slide::SlideMetadata;
-use presenter_core::{BiblePassage, BibleReference, BibleTranslation, Slide};
+use presenter_core::{
+    BiblePassage, BiblePreferences, BiblePreferencesDraft, BibleReference, BibleTranslation, Slide,
+};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use tracing::instrument;
@@ -257,6 +259,25 @@ pub(super) async fn clear_bible_broadcast(
     State(state): State<AppState>,
 ) -> Result<StatusCode, AppError> {
     state.clear_bible_broadcast().await;
+    Ok(StatusCode::NO_CONTENT)
+}
+
+#[instrument(skip_all)]
+pub(super) async fn get_bible_preferences(
+    State(state): State<AppState>,
+) -> Result<Json<BiblePreferences>, AppError> {
+    let prefs = state.get_bible_preferences().await?;
+    Ok(Json(prefs))
+}
+
+#[instrument(skip_all)]
+pub(super) async fn update_bible_preferences(
+    State(state): State<AppState>,
+    Json(draft): Json<BiblePreferencesDraft>,
+) -> Result<StatusCode, AppError> {
+    let current = state.get_bible_preferences().await?;
+    let updated = draft.apply(current);
+    state.set_bible_preferences(updated).await?;
     Ok(StatusCode::NO_CONTENT)
 }
 
