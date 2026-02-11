@@ -103,6 +103,7 @@
 
   const els = {
     translationList: document.querySelector('[data-role="translation-list"]'),
+    mainTranslation: document.querySelector('[data-role="main-translation"]'),
     secondaryTranslation: document.querySelector(
       '[data-role="secondary-translation"]',
     ),
@@ -218,9 +219,12 @@
     });
   }
 
-  function renderTranslationSelect(selectEl, selectedCode) {
+  function renderTranslationSelect(selectEl, selectedCode, includeNone) {
     if (!selectEl) return;
-    const html = state.translations
+    let html = includeNone
+      ? `<option value=""${!selectedCode ? " selected" : ""}>None</option>`
+      : "";
+    html += state.translations
       .map((translation) => {
         const selected = translation.code === selectedCode ? " selected" : "";
         const label = translation.language
@@ -631,8 +635,13 @@
       );
       renderTranslationList();
       renderTranslationSelect(
+        els.mainTranslation,
+        state.preferences.mainTranslation,
+      );
+      renderTranslationSelect(
         els.secondaryTranslation,
         state.preferences.secondaryTranslation,
+        true,
       );
       showToast("Bible updated", "success");
       closeBibleEdit();
@@ -682,8 +691,13 @@
       alignMainTranslation(state.preferences.mainTranslation);
       renderTranslationList();
       renderTranslationSelect(
+        els.mainTranslation,
+        state.preferences.mainTranslation,
+      );
+      renderTranslationSelect(
         els.secondaryTranslation,
         state.preferences.secondaryTranslation,
+        true,
       );
       closeBibleEdit();
       showToast("Bible deleted", "success");
@@ -739,8 +753,13 @@
       alignMainTranslation(state.preferences.mainTranslation);
       renderTranslationList();
       renderTranslationSelect(
+        els.mainTranslation,
+        state.preferences.mainTranslation,
+      );
+      renderTranslationSelect(
         els.secondaryTranslation,
         state.preferences.secondaryTranslation,
+        true,
       );
       await loadBooks();
     } catch (error) {
@@ -804,8 +823,13 @@
   function renderPreferences() {
     renderTranslationList();
     renderTranslationSelect(
+      els.mainTranslation,
+      state.preferences.mainTranslation,
+    );
+    renderTranslationSelect(
       els.secondaryTranslation,
       state.preferences.secondaryTranslation,
+      true,
     );
     if (els.charLimit) {
       els.charLimit.value = state.preferences.characterLimit;
@@ -1389,8 +1413,13 @@
     state.preferences.secondaryTranslation =
       entry.secondaryTranslationCode || "";
     renderTranslationSelect(
+      els.mainTranslation,
+      state.preferences.mainTranslation,
+    );
+    renderTranslationSelect(
       els.secondaryTranslation,
       state.preferences.secondaryTranslation,
+      true,
     );
     if (typeof entry.characterLimit === "number" && entry.characterLimit > 0) {
       state.preferences.characterLimit = entry.characterLimit;
@@ -2019,6 +2048,21 @@
         }
       }
     });
+    if (els.mainTranslation) {
+      els.mainTranslation.addEventListener("change", async (event) => {
+        const code = event.target.value;
+        if (code && code !== state.preferences.mainTranslation) {
+          alignMainTranslation(code);
+          renderTranslationList();
+          try {
+            await savePreferences();
+          } catch (error) {
+            console.warn("Failed to persist Bible preferences", error);
+          }
+          await loadBooks();
+        }
+      });
+    }
     if (els.secondaryTranslation) {
       els.secondaryTranslation.addEventListener("change", (event) => {
         state.preferences.secondaryTranslation = event.target.value;

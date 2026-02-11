@@ -348,10 +348,12 @@ test("operator manages Bible workflow end-to-end", async ({
   const renamedDetail = await renamedDetailResponse.json();
   expect(renamedDetail.name).toBe(renamedPresentation);
 
-  const slovakTranslationButton = page
-    .locator('[data-role="translation-list"] button')
-    .filter({ hasText: /Slovenský ekumenický preklad/ });
-  await slovakTranslationButton.click();
+  // Switch translation via the main translation dropdown
+  const mainTranslationDropdown = page.locator(
+    '[data-role="main-translation"]',
+  );
+  await expect(mainTranslationDropdown).toBeVisible({ timeout: 10_000 });
+  await mainTranslationDropdown.selectOption("slk-seb");
   await expect(async () => {
     const preferences = await page.evaluate(
       () => window.__presenterBibleState.preferences,
@@ -541,4 +543,91 @@ test("bible preferences persist across page reloads", async ({
     expect(prefs.secondaryTranslation).toBe("slk-seb");
     expect(prefs.characterLimit).toBe(250);
   }).toPass({ timeout: 15_000 });
+});
+
+test("main translation dropdown selects translation and loads books", async ({
+  page,
+  request,
+}) => {
+  await expect(async () => {
+    const response = await request.get(
+      new URL("/healthz", baseURL).toString(),
+      { timeout: 120_000 },
+    );
+    expect(response.ok()).toBeTruthy();
+  }).toPass({ timeout: 180_000 });
+
+  await page.goto(new URL("/ui/bible", baseURL).toString());
+
+  await page.waitForFunction(
+    () => {
+      const state = (window as any).__presenterBibleState;
+      return !!state && Array.isArray(state.books) && state.books.length > 0;
+    },
+    { timeout: 120_000 },
+  );
+
+  // Main translation dropdown should be visible
+  const mainDropdown = page.locator('[data-role="main-translation"]');
+  await expect(mainDropdown).toBeVisible({ timeout: 10_000 });
+
+  // Secondary translation dropdown should be visible with None option
+  const secondaryDropdown = page.locator('[data-role="secondary-translation"]');
+  await expect(secondaryDropdown).toBeVisible();
+
+  // Verify "Reference" heading is removed
+  const referencePanel = page.locator(
+    '[data-role="reference-panel"] .operator__group-header h2',
+  );
+  await expect(referencePanel).toHaveCount(0);
+
+  // Verify "Loaded verses" heading exists but without description paragraph
+  const loadedHeader = page.locator(
+    ".operator__group--passages .operator__group-header",
+  );
+  await expect(loadedHeader.locator("h2")).toHaveText("Loaded verses");
+  await expect(loadedHeader.locator("p")).toHaveCount(0);
+
+  // Select a different translation via the main dropdown
+  await mainDropdown.selectOption("slk-seb");
+
+  await expect(async () => {
+    const prefs = await page.evaluate(
+      () => window.__presenterBibleState.preferences,
+    );
+    expect(prefs.mainTranslation).toBe("slk-seb");
+  }).toPass({ timeout: 15_000 });
+
+  // Verify sidebar highlights the selected translation
+  await expect(async () => {
+    const activeButton = await page.evaluate(() => {
+      const buttons = document.querySelectorAll(
+        '[data-role="translation-list"] button[data-active="true"]',
+      );
+      return buttons.length > 0
+        ? buttons[0].getAttribute("data-translation-code")
+        : null;
+    });
+    expect(activeButton).toBe("slk-seb");
+  }).toPass();
+
+  // Verify books loaded for the new translation
+  await expect(async () => {
+    const bookCount = await page.evaluate(
+      () => window.__presenterBibleState.books.length,
+    );
+    expect(bookCount).toBeGreaterThan(0);
+  }).toPass({ timeout: 15_000 });
+
+  // Switch back to English via dropdown
+  await mainDropdown.selectOption("eng-kjv");
+  await expect(async () => {
+    const prefs = await page.evaluate(
+      () => window.__presenterBibleState.preferences,
+    );
+    expect(prefs.mainTranslation).toBe("eng-kjv");
+  }).toPass({ timeout: 15_000 });
+
+  // Verify the dropdown reflects the selection
+  await expect(mainDropdown).toHaveValue("eng-kjv");
 });

@@ -168,13 +168,20 @@ fn BibleDocument(
                                 </ul>
                             </section>
                             <section class="operator__group operator__group--reference" data-role="reference-panel">
-                                <header class="operator__group-header">
-                                    <div>
-                                        <h2>"Reference"</h2>
-                                        <p>"Select the passage to load."</p>
-                                    </div>
-                                </header>
                                 <div class="operator__form-group">
+                                    <label class="operator__field">
+                                        <span>"Main translation"</span>
+                                        <select data-role="main-translation">
+                                            {translations_for_view.iter().map(|translation| {
+                                                let label = if translation.language.is_empty() {
+                                                    translation.name.clone()
+                                                } else {
+                                                    format!("{} ({})", translation.name, translation.language)
+                                                };
+                                                view! { <option value={translation.code.clone()}>{label}</option> }
+                                            }).collect::<Vec<_>>() }
+                                        </select>
+                                    </label>
                                     <label class="operator__field">
                                         <span>"Secondary translation"</span>
                                         <select data-role="secondary-translation">
@@ -223,7 +230,6 @@ fn BibleDocument(
                                 <header class="operator__group-header">
                                     <div>
                                         <h2>"Loaded verses"</h2>
-                                        <p>"Quickly reapply recent selections."</p>
                                     </div>
                                 </header>
                                 <ul class="operator__list operator__list--compact" data-role="loaded-passages">
