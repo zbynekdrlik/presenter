@@ -6,13 +6,7 @@ body.in-iframe .operator__main {
   margin-top: 0;
 }
 
-/* Bible catalog: flush to top, single section fills sidebar */
-.operator--bible .operator__catalog {
-  border-radius: 0;
-  border-top: none;
-  padding-top: 0.75rem;
-}
-
+/* Bible catalog: single section fills sidebar (no catalog-bottom) */
 .operator--bible .operator__catalog-top {
   flex: 1;
 }
