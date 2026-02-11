@@ -116,11 +116,6 @@ test("operator manages Bible workflow end-to-end", async ({
     expect(historyCount).toBeGreaterThan(0);
   }).toPass();
 
-  const loadedPassageItems = page.locator(
-    '[data-role="loaded-passages"] .operator__list-item',
-  );
-  await expect(loadedPassageItems.first()).toBeVisible();
-
   const storedPassage = await page.evaluate(
     () => window.__presenterBibleState.loadedPassages[0],
   );
@@ -579,12 +574,8 @@ test("main translation dropdown selects translation and loads books", async ({
   );
   await expect(referencePanel).toHaveCount(0);
 
-  // Verify "Loaded verses" heading exists but without description paragraph
-  const loadedHeader = page.locator(
-    ".operator__group--passages .operator__group-header",
-  );
-  await expect(loadedHeader.locator("h2")).toHaveText("Loaded verses");
-  await expect(loadedHeader.locator("p")).toHaveCount(0);
+  // Verify "Loaded verses" section is removed
+  await expect(page.locator(".operator__group--passages")).toHaveCount(0);
 
   // Select a different translation via the main dropdown
   await mainDropdown.selectOption("slk-seb");

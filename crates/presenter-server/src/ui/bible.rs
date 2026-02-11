@@ -163,18 +163,6 @@ fn BibleDocument(
                                 <button type="button" class="operator__list-action operator__list-action--primary" data-role="load-button">"Load passage"</button>
                             </section>
                         </div>
-                        <div class="operator__catalog-bottom">
-                            <section class="operator__group operator__group--passages">
-                                <header class="operator__group-header">
-                                    <div>
-                                        <h2>"Loaded verses"</h2>
-                                    </div>
-                                </header>
-                                <ul class="operator__list operator__list--compact" data-role="loaded-passages">
-                                    <li class="operator__list-item operator__list-item--empty">"Load a passage to populate this list."</li>
-                                </ul>
-                            </section>
-                        </div>
                     </aside>
                     <section class="operator__slides-column" data-role="slides-column">
                         <header class="operator__slides-heading">
