@@ -5,7 +5,7 @@ mod libraries;
 mod playlists;
 mod presentations;
 mod search;
-mod stage;
+pub(crate) mod stage;
 mod timers;
 mod ui_routes;
 use crate::state::AppState;
@@ -92,6 +92,7 @@ pub fn build_router(state: AppState) -> Router {
         .route("/ui/tablet", get(ui_routes::tablet_ui))
         .route("/ui/bible", get(bible::bible_ui))
         .route("/ui/settings", get(ui_routes::settings_ui))
+        .route("/ui/stage-settings", get(ui_routes::stage_settings_ui))
         .route("/overlays/timer", get(ui_routes::timer_overlay))
         .route("/stage-displays", get(stage::list_stage_displays))
         .route(
@@ -106,6 +107,10 @@ pub fn build_router(state: AppState) -> Router {
         )
         .route("/stage/state", post(stage::update_stage_state))
         .route("/stage/clear", post(stage::clear_stage_state))
+        .route(
+            "/stage/appearance/{layout}",
+            get(stage::get_stage_appearance).put(stage::update_stage_appearance),
+        )
         .route(
             "/integrations/resolume/hosts",
             get(integrations::resolume::list_resolume_hosts)

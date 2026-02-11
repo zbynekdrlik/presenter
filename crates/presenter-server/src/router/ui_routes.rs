@@ -49,6 +49,14 @@ pub(super) async fn settings_ui(
     Ok(html)
 }
 
+#[instrument(skip_all)]
+pub(super) async fn stage_settings_ui(
+    State(state): State<AppState>,
+) -> Result<axum::response::Html<String>, AppError> {
+    let html = ui::render_stage_settings_ui(&state).await?;
+    Ok(html)
+}
+
 pub(super) async fn tablet_ui(
     State(state): State<AppState>,
 ) -> Result<axum::response::Html<String>, AppError> {
