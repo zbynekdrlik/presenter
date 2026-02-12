@@ -42,7 +42,18 @@ test("operator bible surface drives live passage broadcast", async ({
   await page.goto(`${baseURL}/ui/bible`);
   await expect(page).toHaveURL(/\/ui\/bible(\?.*)?$/);
 
-  // Wait for the main translation dropdown (replaces old translation-list)
+  // Sub-tab nav should be visible with LIVE tab active by default
+  const liveTab = page.locator('[data-role="bible-tab"][data-tab="live"]');
+  await expect(liveTab).toBeVisible({ timeout: 30_000 });
+  await expect(liveTab).toHaveAttribute("data-active", "true");
+
+  // Settings tab contains translation dropdowns — switch there to verify
+  const settingsTab = page.locator(
+    '[data-role="bible-tab"][data-tab="settings"]',
+  );
+  await settingsTab.click();
+  await expect(settingsTab).toHaveAttribute("data-active", "true");
+
   const mainTranslationDropdown = page.locator(
     '[data-role="main-translation"]',
   );
@@ -93,10 +104,6 @@ test("operator bible surface drives live passage broadcast", async ({
   expect(secondaryOptions.length).toBe(translations.length + 1);
   expect(secondaryOptions[0]).toBe("None");
 
-  // Bible modal still accessible via All Bibles modal elements
-  const bibleModal = page.locator('[data-role="bible-modal"]');
-  const bibleEditModal = page.locator('[data-role="bible-edit-modal"]');
-
   // Switch main translation via dropdown
   const stateSnapshot = await page.evaluate(
     () => (window as any).__presenterBibleState,
@@ -115,7 +122,6 @@ test("operator bible surface drives live passage broadcast", async ({
       );
       expect(mainTranslation).toBe(targetTranslation.code);
     }).toPass({ timeout: 10_000 });
-    // Verify dropdown value persisted
     await expect(mainTranslationDropdown).toHaveValue(targetTranslation.code);
   }
 
@@ -132,6 +138,10 @@ test("operator bible surface drives live passage broadcast", async ({
     }).toPass({ timeout: 10_000 });
     await expect(mainTranslationDropdown).toHaveValue("slk-seb");
   }
+
+  // Switch back to LIVE tab for passage loading
+  await liveTab.click();
+  await expect(liveTab).toHaveAttribute("data-active", "true");
 
   // Search for a book and select it
   await page.locator('[data-role="book-filter"]').fill("Jan");
@@ -172,25 +182,12 @@ test("operator bible surface drives live passage broadcast", async ({
   });
   expect(firstSlideId).toBeTruthy();
 
-  // Select and trigger the first slide
-  await slideCards
-    .first()
-    .locator('[data-role="slide-select"]')
-    .check({ force: true });
+  // Click the select zone on first slide → toggles selection (blue outline)
+  await slideCards.first().locator('[data-role="slide-select-zone"]').click();
+  await expect(slideCards.first()).toHaveClass(/is-selected/);
 
-  await page.evaluate(() => {
-    const slides = (window as any).__presenterBibleState?.slides ?? [];
-    const first = slides[0];
-    if (!first) {
-      throw new Error("No Bible slide available to trigger");
-    }
-    const card = document.querySelector(`[data-slide-id="${first.id}"]`);
-    const trigger = card?.querySelector('[data-role="slide-trigger"]');
-    if (!(trigger instanceof HTMLButtonElement)) {
-      throw new Error("Bible slide trigger button missing");
-    }
-    trigger.click();
-  });
+  // Click the trigger zone on first slide → broadcasts the slide
+  await slideCards.first().locator('[data-role="slide-trigger"]').click();
 
   await waitForToastVisible();
   const toastText = await page.locator('[data-role="toast"]').innerText();
@@ -222,4 +219,12 @@ test("operator bible surface drives live passage broadcast", async ({
     activeJson?.passage?.reference?.verse_start ??
       activeJson?.passage?.reference?.verseStart,
   ).toBe(16);
+
+  // Verify PREPARED tab: switch to it and verify presentations list
+  const preparedTab = page.locator(
+    '[data-role="bible-tab"][data-tab="prepared"]',
+  );
+  await preparedTab.click();
+  await expect(preparedTab).toHaveAttribute("data-active", "true");
+  await expect(page.locator('[data-role="presentations-list"]')).toBeVisible();
 });
