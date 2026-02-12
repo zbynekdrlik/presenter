@@ -163,37 +163,6 @@ body.in-iframe .operator__main {
   outline-offset: -2px;
 }
 
-/* ---------- Slides mode toggle (LIVE / EDIT) ---------- */
-.bible__mode-toggle {
-  display: flex;
-  gap: 0.15rem;
-  padding: 0.15rem;
-  background: rgba(0, 0, 0, 0.04);
-  border-radius: 6px;
-}
-
-.bible__mode-toggle button {
-  border: none;
-  background: transparent;
-  color: #64748b;
-  padding: 0.3rem 0.65rem;
-  border-radius: 5px;
-  font-size: 0.7rem;
-  font-weight: 600;
-  text-transform: uppercase;
-  letter-spacing: 0.06em;
-  cursor: pointer;
-  transition:
-    background 0.15s ease,
-    color 0.15s ease;
-}
-
-.bible__mode-toggle button[data-active="true"] {
-  background: #ffffff;
-  color: #1e293b;
-  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.08);
-}
-
 /* Full-width trigger zone for prepared-tab slides */
 .operator__slide-trigger-zone--full {
   border-radius: 8px;

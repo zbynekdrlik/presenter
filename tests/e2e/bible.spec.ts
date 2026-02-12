@@ -144,7 +144,7 @@ test("operator manages Bible workflow end-to-end", async ({
   expect(slideCount).toBeGreaterThan(0);
 
   // Switch to Edit mode via segmented toggle
-  const modeToggle = page.locator('[data-role="slides-mode-toggle"]');
+  const modeToggle = page.locator(".operator__mode-toggle");
   const editModeBtn = modeToggle.locator('[data-mode="edit"]');
   const liveModeBtn = modeToggle.locator('[data-mode="live"]');
   await editModeBtn.click();

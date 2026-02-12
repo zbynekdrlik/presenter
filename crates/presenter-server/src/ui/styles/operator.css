@@ -1246,13 +1246,22 @@ body.operator[data-mode="live"] .operator__line-limit {
 
 .operator__slide-editor textarea {
   line-height: var(--operator-line-line-height, 1.35);
+  min-height: calc(var(--operator-line-line-height, 1.35) * 2em + 0.6rem);
+  max-height: calc(var(--operator-line-line-height, 1.35) * 2em + 0.6rem);
+  height: calc(var(--operator-line-line-height, 1.35) * 2em + 0.6rem);
+  overflow-y: auto;
+  resize: none;
+}
+
+/* Bible-specific: taller textareas based on character limit */
+.operator--bible .operator__slide-editor textarea {
   min-height: calc(
     var(--operator-line-line-height, 1.35) * var(--bible-textarea-lines, 4) *
       1em + 0.6rem
   );
+  max-height: none;
   height: auto;
   overflow-y: visible;
-  resize: none;
 }
 
 body.operator[data-mode="edit"] .operator__slide-editor textarea,

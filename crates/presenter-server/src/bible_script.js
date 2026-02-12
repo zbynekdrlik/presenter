@@ -120,7 +120,7 @@
     loadButton: document.querySelector('[data-role="load-button"]'),
     loadedPassages: document.querySelector('[data-role="loaded-passages"]'),
     slidesContainer: document.querySelector('[data-role="slides"]'),
-    modeToggle: document.querySelector('[data-role="slides-mode-toggle"]'),
+    modeToggleContainer: document.querySelector(".operator__mode-toggle"),
     selectionCount: document.querySelector('[data-role="selection-count"]'),
     presentationSelect: document.querySelector(
       '[data-role="presentation-select"]',
@@ -1571,8 +1571,8 @@
     if (typeof document !== "undefined" && document.body) {
       document.body.dataset.mode = state.editMode ? "edit" : "live";
     }
-    if (els.modeToggle) {
-      els.modeToggle.querySelectorAll("[data-mode]").forEach((btn) => {
+    if (els.modeToggleContainer) {
+      els.modeToggleContainer.querySelectorAll("[data-mode]").forEach((btn) => {
         btn.dataset.active =
           btn.dataset.mode === (state.editMode ? "edit" : "live")
             ? "true"
@@ -2409,8 +2409,8 @@
     if (els.loadButton) {
       els.loadButton.addEventListener("click", loadSlides);
     }
-    if (els.modeToggle) {
-      els.modeToggle.addEventListener("click", (event) => {
+    if (els.modeToggleContainer) {
+      els.modeToggleContainer.addEventListener("click", (event) => {
         const btn = event.target.closest("[data-mode]");
         if (!btn) return;
         const newMode = btn.dataset.mode;
