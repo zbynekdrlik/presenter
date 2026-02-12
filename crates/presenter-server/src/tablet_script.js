@@ -160,6 +160,9 @@
     if (!state.activeBibleBroadcast || !slide.metadata || !slide.metadata.bible)
       return false;
     var broadcast = state.activeBibleBroadcast;
+    var ref = broadcast.passage && broadcast.passage.reference;
+    var trans = broadcast.passage && broadcast.passage.translation;
+    if (!ref || !trans) return false;
     var meta = slide.metadata.bible;
     var translationCode = meta.translationCode || meta.translation_code;
     var chapter = meta.chapter;
@@ -167,11 +170,15 @@
     if (!verses.length) return false;
     var verseStart = verses[0].start;
     var verseEnd = verses[verses.length - 1].end;
+    var broadcastChapter = ref.chapter;
+    var broadcastVerseStart = ref.verseStart || ref.verse_start;
+    var broadcastVerseEnd = ref.verseEnd || ref.verse_end;
+    var broadcastTranslation = trans.code;
     return (
-      broadcast.translation === translationCode &&
-      broadcast.chapter === chapter &&
-      broadcast.verseStart === verseStart &&
-      broadcast.verseEnd === verseEnd
+      broadcastTranslation === translationCode &&
+      broadcastChapter === chapter &&
+      broadcastVerseStart === verseStart &&
+      broadcastVerseEnd === verseEnd
     );
   }
 
