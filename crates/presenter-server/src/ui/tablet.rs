@@ -23,6 +23,12 @@ fn TabletDocument(presentations_json: String) -> impl IntoView {
             <body class="tablet">
                 <header class="tablet-header">
                     <h1>"Bible Tablet"</h1>
+                    <div class="tablet-scale">
+                        <label for="scale-slider">"Text size"</label>
+                        <input type="range" id="scale-slider" data-role="scale-slider"
+                            min="50" max="200" value="100" step="10" />
+                        <span data-role="scale-value">"100%"</span>
+                    </div>
                 </header>
                 <main class="tablet-layout">
                     <aside class="tablet-sidebar">

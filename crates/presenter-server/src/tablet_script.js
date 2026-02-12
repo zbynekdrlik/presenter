@@ -18,6 +18,8 @@
     slides: document.querySelector('[data-role="slides"]'),
     contextTitle: document.querySelector('[data-role="context-title"]'),
     toast: document.querySelector('[data-role="toast"]'),
+    scaleSlider: document.querySelector('[data-role="scale-slider"]'),
+    scaleValue: document.querySelector('[data-role="scale-value"]'),
   };
 
   function escapeHtml(value) {
@@ -398,12 +400,49 @@
     }
   }
 
+  function applyScale(percent) {
+    var scale = percent / 100;
+    document.body.style.setProperty("--tablet-scale", scale);
+    if (els.scaleValue) {
+      els.scaleValue.textContent = percent + "%";
+    }
+    if (els.scaleSlider) {
+      els.scaleSlider.value = percent;
+    }
+    try {
+      localStorage.setItem("tablet-scale", String(percent));
+    } catch (e) {
+      // localStorage unavailable
+    }
+  }
+
+  function loadSavedScale() {
+    var saved = 100;
+    try {
+      var raw = localStorage.getItem("tablet-scale");
+      if (raw) {
+        var parsed = parseInt(raw, 10);
+        if (parsed >= 50 && parsed <= 200) {
+          saved = parsed;
+        }
+      }
+    } catch (e) {
+      // localStorage unavailable
+    }
+    applyScale(saved);
+  }
+
   function bindEvents() {
     if (els.presentationList) {
       els.presentationList.addEventListener("click", handlePresentationClick);
     }
     if (els.slides) {
       els.slides.addEventListener("click", handleSlideTap);
+    }
+    if (els.scaleSlider) {
+      els.scaleSlider.addEventListener("input", function () {
+        applyScale(parseInt(els.scaleSlider.value, 10));
+      });
     }
     document.addEventListener("visibilitychange", function () {
       if (!document.hidden) {
@@ -413,6 +452,7 @@
   }
 
   async function initialise() {
+    loadSavedScale();
     bindEvents();
     renderPresentations();
 

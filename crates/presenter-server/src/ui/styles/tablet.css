@@ -1,4 +1,5 @@
 body.tablet {
+  --tablet-scale: 1;
   margin: 0;
   min-height: 100vh;
   display: flex;
@@ -20,6 +21,31 @@ body.tablet {
 .tablet-header h1 {
   margin: 0;
   font-size: 1.35rem;
+}
+
+.tablet-scale {
+  display: flex;
+  align-items: center;
+  gap: 0.6rem;
+  color: #94a3b8;
+  font-size: 0.85rem;
+}
+
+.tablet-scale label {
+  white-space: nowrap;
+}
+
+.tablet-scale input[type="range"] {
+  width: 120px;
+  accent-color: #38bdf8;
+  cursor: pointer;
+}
+
+.tablet-scale span {
+  min-width: 3.2em;
+  text-align: center;
+  color: #cbd5f5;
+  font-variant-numeric: tabular-nums;
 }
 
 .tablet-layout {
@@ -168,7 +194,7 @@ body.tablet {
   justify-content: space-between;
   align-items: center;
   color: #cbd5f5;
-  font-size: 0.85rem;
+  font-size: calc(0.95rem * var(--tablet-scale));
 }
 
 .tablet-slide__group {
@@ -190,20 +216,20 @@ body.tablet {
 }
 
 .tablet-slide__main {
-  font-size: 1.1rem;
+  font-size: calc(1.35rem * var(--tablet-scale));
 }
 
 .tablet-slide__translation {
   color: #93c5fd;
   font-style: italic;
-  font-size: 1rem;
+  font-size: calc(1.2rem * var(--tablet-scale));
   margin-top: 0.4rem;
   padding-top: 0.4rem;
   border-top: 1px solid rgba(147, 197, 253, 0.15);
 }
 
 .tablet-slide__ref {
-  font-size: 0.8rem;
+  font-size: calc(1.1rem * var(--tablet-scale));
   color: #94a3b8;
   font-style: italic;
   margin-top: 0.25rem;
