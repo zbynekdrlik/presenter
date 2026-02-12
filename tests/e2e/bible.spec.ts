@@ -302,7 +302,7 @@ test("operator manages Bible workflow end-to-end", async ({
 
   // Click on the presentation card → loads its slides in main area
   const presentationCard = page.locator(
-    `[data-presentation-id="${createdSummary.id}"]`,
+    `article[data-presentation-id="${createdSummary.id}"]`,
   );
   await presentationCard.click();
   await expect(async () => {
