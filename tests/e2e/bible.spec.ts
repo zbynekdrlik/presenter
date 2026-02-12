@@ -242,14 +242,16 @@ test("operator manages Bible workflow end-to-end", async ({
   // Deselect first slide then select all
   await slides.first().locator('[data-role="slide-select-zone"]').click();
   await page.locator('[data-role="select-all-slides"]').click();
-  // Selection count is now in the PREPARED tab sidebar
+  // Selection count is now in the LIVE tab sidebar (moved from PREPARED)
+  await expect(page.locator('[data-role="selection-count"]')).toHaveText(
+    `${slideCount} selected`,
+  );
+
+  // Switch to PREPARED tab for presentation management
   const preparedTab = page.locator(
     '[data-role="bible-tab"][data-tab="prepared"]',
   );
   await preparedTab.click();
-  await expect(page.locator('[data-role="selection-count"]')).toHaveText(
-    `${slideCount} selected`,
-  );
 
   // Create a new presentation via the "+" button
   const presentationName = `Automation Slides ${Date.now()}`;
@@ -270,7 +272,18 @@ test("operator manages Bible workflow end-to-end", async ({
     expect(listText).toContain(presentationName);
   }).toPass({ timeout: 10_000 });
 
-  // Select the new presentation in dropdown and add slides
+  // Verify slide count displays correctly (uses slideCount from API)
+  // New presentations start with 1 default placeholder slide
+  await expect(async () => {
+    const cardText = await page
+      .locator('[data-role="presentations-list"]')
+      .innerText();
+    expect(cardText).toMatch(/\d+ slides?/);
+  }).toPass({ timeout: 5_000 });
+
+  // Switch back to LIVE tab to add slides via presentation dropdown
+  await liveTab.click();
+
   const presentationsResponse = await request.get(
     new URL("/bible/presentations", baseURL).toString(),
   );
@@ -300,7 +313,8 @@ test("operator manages Bible workflow end-to-end", async ({
     detail.slides[0].main_reference ?? detail.slides[0].mainReference;
   expect(detailMainReference).toBe(customReference);
 
-  // Click on the presentation card → loads its slides in main area
+  // Switch to PREPARED tab and click on the presentation card
+  await preparedTab.click();
   const presentationCard = page.locator(
     `article[data-presentation-id="${createdSummary.id}"]`,
   );
@@ -313,25 +327,48 @@ test("operator manages Bible workflow end-to-end", async ({
   }).toPass({ timeout: 10_000 });
   await expect(presentationCard).toHaveClass(/is-active/);
 
-  // Verify presentation slides are shown in main area
+  // Verify presentation slides are shown as triggerOnly cards (no select zone)
   const presentationSlides = page.locator(".operator__slide-card");
   await expect(presentationSlides.first()).toBeVisible({ timeout: 10_000 });
   const presentationSlideCount = await presentationSlides.count();
   expect(presentationSlideCount).toBe(slideCount);
+  // TriggerOnly slides have full trigger zone, no select zone
+  await expect(
+    presentationSlides.first().locator(".operator__slide-trigger-zone--full"),
+  ).toBeVisible();
+  await expect(
+    presentationSlides.first().locator('[data-role="slide-select-zone"]'),
+  ).toHaveCount(0);
 
-  // Rename the presentation
+  // Verify slide count shows correct number after slides were added
+  await expect(async () => {
+    const cardText = await page
+      .locator(`article[data-presentation-id="${createdSummary.id}"]`)
+      .innerText();
+    expect(cardText).toMatch(/\d+ slides?/);
+    expect(cardText).not.toContain("0 slide");
+  }).toPass({ timeout: 10_000 });
+
+  // Rename the presentation via edit modal (pen icon)
   const renamedPresentation = `${presentationName} Renamed`;
-  const renameButton = page.locator(
-    `[data-role="presentation-rename"][data-presentation-id="${createdSummary.id}"]`,
+  const editButton = page.locator(
+    `[data-role="presentation-edit"][data-presentation-id="${createdSummary.id}"]`,
   );
-  await renameButton.waitFor({ state: "attached" });
-  page.once("dialog", async (dialog) => {
-    expect(dialog.type()).toBe("prompt");
-    await dialog.accept(renamedPresentation);
-  });
-  await renameButton.evaluate((node) => {
-    (node as HTMLElement).click();
-  });
+  await editButton.waitFor({ state: "attached" });
+  await editButton.click();
+
+  // Verify edit modal is open
+  const editModal = page.locator('[data-role="bible-presentation-edit-modal"]');
+  await expect(editModal).toHaveAttribute("data-open", "true");
+
+  // Fill new name and save
+  const nameInput = page.locator('[data-role="bible-presentation-edit-name"]');
+  await nameInput.fill(renamedPresentation);
+  await page.locator('[data-role="bible-presentation-edit-save"]').click();
+
+  await expect(toast).toContainText("Presentation renamed");
+  await expect(editModal).toHaveAttribute("data-open", "false");
+
   await expect(async () => {
     const listText = await page
       .locator('[data-role="presentations-list"]')
@@ -353,6 +390,36 @@ test("operator manages Bible workflow end-to-end", async ({
   expect(renamedDetailResponse.ok()).toBeTruthy();
   const renamedDetail = await renamedDetailResponse.json();
   expect(renamedDetail.name).toBe(renamedPresentation);
+
+  // Delete the presentation via edit modal
+  const deleteEditButton = page.locator(
+    `[data-role="presentation-edit"][data-presentation-id="${createdSummary.id}"]`,
+  );
+  await deleteEditButton.click();
+  await expect(editModal).toHaveAttribute("data-open", "true");
+
+  page.once("dialog", async (dialog) => {
+    expect(dialog.type()).toBe("confirm");
+    await dialog.accept();
+  });
+  await page.locator('[data-role="bible-presentation-edit-delete"]').click();
+
+  await expect(toast).toContainText("Presentation deleted");
+  await expect(editModal).toHaveAttribute("data-open", "false");
+
+  // Verify presentation is gone from list
+  await expect(async () => {
+    const listText = await page
+      .locator('[data-role="presentations-list"]')
+      .innerText();
+    expect(listText).not.toContain(renamedPresentation);
+  }).toPass({ timeout: 10_000 });
+
+  // Verify via API
+  const deletedResponse = await request.get(
+    new URL(`/bible/presentations/${createdSummary.id}`, baseURL).toString(),
+  );
+  expect(deletedResponse.status()).toBe(404);
 
   // Switch to SETTINGS tab and change translation via dropdown
   await settingsTab.click();

@@ -569,6 +569,17 @@ pub(super) async fn rename_bible_presentation_handler(
 }
 
 #[instrument(skip_all)]
+pub(super) async fn delete_bible_presentation_handler(
+    State(state): State<AppState>,
+    axum::extract::Path(id): axum::extract::Path<uuid::Uuid>,
+) -> Result<axum::http::StatusCode, AppError> {
+    state
+        .delete_presentation(presenter_core::PresentationId::from_uuid(id))
+        .await?;
+    Ok(axum::http::StatusCode::NO_CONTENT)
+}
+
+#[instrument(skip_all)]
 pub(super) async fn append_bible_presentation_handler(
     State(state): State<AppState>,
     axum::extract::Path(id): axum::extract::Path<uuid::Uuid>,
