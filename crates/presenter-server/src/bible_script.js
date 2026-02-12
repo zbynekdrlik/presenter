@@ -79,7 +79,9 @@
     editMode: false,
     selectedSlides: new Set(),
     presentations: [],
+    bibleTab: "live",
     activePresentationId: "",
+    activePresentationSlides: [],
     activeBroadcast: initialBroadcast,
     loadedPassages: [],
     liveSocket: null,
@@ -131,9 +133,16 @@
     presentationsList: document.querySelector(
       '[data-role="presentations-list"]',
     ),
+    presentationCreate: document.querySelector(
+      '[data-role="presentation-create"]',
+    ),
     clearButton: document.querySelector('[data-role="clear-button"]'),
-    activeContainer: document.querySelector('[data-role="active-passage"]'),
     toast: document.querySelector('[data-role="toast"]'),
+    bibleTabNav: document.querySelector('[data-role="bible-tab-nav"]'),
+    bibleTabButtons: document.querySelectorAll('[data-role="bible-tab"]'),
+    livePanelEl: document.querySelector('[data-bible-panel="live"]'),
+    preparedPanelEl: document.querySelector('[data-bible-panel="prepared"]'),
+    settingsPanelEl: document.querySelector('[data-bible-panel="settings"]'),
     bibleCount: document.querySelector('[data-role="bible-dashboard"]'),
     bibleImport: document.querySelector('[data-role="bible-import"]'),
     bibleModal: document.querySelector('[data-role="bible-modal"]'),
@@ -179,6 +188,30 @@
     state.toastTimer = setTimeout(() => {
       els.toast.dataset.visible = "false";
     }, 2500);
+  }
+
+  function setBibleTab(tab) {
+    state.bibleTab = tab;
+    els.bibleTabButtons.forEach((btn) => {
+      btn.dataset.active = btn.dataset.tab === tab ? "true" : "false";
+    });
+    [els.livePanelEl, els.preparedPanelEl, els.settingsPanelEl].forEach(
+      (panel) => {
+        if (panel) panel.dataset.visible = "false";
+      },
+    );
+    const activePanel = {
+      live: els.livePanelEl,
+      prepared: els.preparedPanelEl,
+      settings: els.settingsPanelEl,
+    }[tab];
+    if (activePanel) activePanel.dataset.visible = "true";
+
+    if (tab === "live") {
+      renderSlides();
+    } else if (tab === "prepared") {
+      renderPresentationSlides();
+    }
   }
 
   function apiFetch(path, options) {
@@ -1196,24 +1229,25 @@
   }
 
   function renderSlideCard(slide, index) {
-    const checked = state.selectedSlides.has(slide.id) ? " checked" : "";
-    const header = `
-      <header class='operator__slide-header'>
-        <div class='operator__slide-header-left'>
-          <label class='operator__slide-index operator__slide-index--select'>
-            <input type='checkbox' data-role='slide-select'${checked} />
-            <span>${index + 1}</span>
-          </label>
-        </div>
-        <div class='operator__slide-controls operator__slide-controls--compact'>
-          <button type='button' class='operator__list-action operator__list-action--primary' data-role='slide-trigger'>Trigger</button>
-        </div>
-      </header>
-    `;
+    const selected = state.selectedSlides.has(slide.id) ? " is-selected" : "";
     if (state.editMode) {
+      const checked = state.selectedSlides.has(slide.id) ? " checked" : "";
+      const editHeader = `
+        <header class='operator__slide-header'>
+          <div class='operator__slide-header-left'>
+            <label class='operator__slide-index operator__slide-index--select'>
+              <input type='checkbox' data-role='slide-select'${checked} />
+              <span>${index + 1}</span>
+            </label>
+          </div>
+          <div class='operator__slide-controls operator__slide-controls--compact'>
+            <button type='button' class='operator__list-action operator__list-action--primary' data-role='slide-trigger'>Trigger</button>
+          </div>
+        </header>
+      `;
       return `
         <article class='operator__slide-card operator__slide-card--bible operator__slide-card--edit' data-slide-id='${slide.id}' data-index='${index}'>
-          ${header}
+          ${editHeader}
           <section class='operator__slide-editor operator__slide-editor--bible'>
             <label>
               <span>Main</span>
@@ -1243,13 +1277,18 @@
         : "";
     const references = buildReferenceHtml(slide);
     return `
-      <article class='operator__slide-card operator__slide-card--bible' data-slide-id='${slide.id}' data-index='${index}'>
-        ${header}
-        <section class='operator__slide-bodies operator__slide-bodies--bible'>
-          <div class='operator__slide-text operator__slide-text--main'>${lineBreakHtml(slide.main)}</div>
-          ${translationMarkup}
-          ${references}
-        </section>
+      <article class='operator__slide-card operator__slide-card--bible${selected}' data-slide-id='${slide.id}' data-index='${index}'>
+        <div class='operator__slide-trigger-zone' data-role='slide-trigger'>
+          <span class='operator__slide-trigger-icon'>\u25B6</span>
+          <span class='operator__slide-index'>${index + 1}</span>
+        </div>
+        <div class='operator__slide-select-zone' data-role='slide-select-zone'>
+          <section class='operator__slide-bodies operator__slide-bodies--bible'>
+            <div class='operator__slide-text operator__slide-text--main'>${lineBreakHtml(slide.main)}</div>
+            ${translationMarkup}
+            ${references}
+          </section>
+        </div>
       </article>
     `;
   }
@@ -1528,46 +1567,25 @@
       showToast("Select at least one slide", "warning");
       return;
     }
-    let targetPresentationId =
+    const targetPresentationId =
       els.presentationSelect && els.presentationSelect.value;
-    const newName = els.presentationName
-      ? els.presentationName.value.trim()
-      : "";
+    if (!targetPresentationId) {
+      showToast("Select a presentation first", "warning");
+      return;
+    }
     try {
-      let presentationDetail = null;
-      if (newName) {
-        presentationDetail = await apiFetch("/bible/presentations", {
-          method: "POST",
-          body: JSON.stringify({ name: newName }),
-        });
-        await loadPresentations();
-        targetPresentationId = presentationDetail.id;
-        if (els.presentationName) {
-          els.presentationName.value = "";
-        }
-      }
-      if (!targetPresentationId) {
-        showToast("Select or create a presentation", "warning");
-        return;
-      }
       const slides = state.slides
         .filter((slide) => state.selectedSlides.has(slide.id))
         .map(slideToPayload);
-      const detail = await apiFetch(
-        `/bible/presentations/${targetPresentationId}/append`,
-        {
-          method: "POST",
-          body: JSON.stringify({ slides }),
-        },
-      );
+      await apiFetch(`/bible/presentations/${targetPresentationId}/append`, {
+        method: "POST",
+        body: JSON.stringify({ slides }),
+      });
       showToast(
         `Added ${slides.length} slide${slides.length === 1 ? "" : "s"}`,
         "success",
       );
-      if (presentationDetail === null) {
-        // fetch detail to keep UI fresh
-        await loadPresentations();
-      }
+      await loadPresentations();
       state.selectedSlides.clear();
       renderSlides();
       updateSelectionLabel();
@@ -1652,7 +1670,7 @@
           `<option value="${presentation.id}">${escapeHtml(presentation.name)}</option>`,
       )
       .join("");
-    els.presentationSelect.innerHTML = `<option value="">Select existing…</option>${options}`;
+    els.presentationSelect.innerHTML = `<option value="">Add to…</option>${options}`;
   }
 
   function renderPresentations() {
@@ -1665,8 +1683,10 @@
     const html = state.presentations
       .map((presentation) => {
         const escapedName = escapeHtml(presentation.name);
+        const activeClass =
+          presentation.id === state.activePresentationId ? " is-active" : "";
         return `
-          <article class='operator__presentation-card' data-presentation-id='${presentation.id}'>
+          <article class='operator__presentation-card${activeClass}' data-presentation-id='${presentation.id}'>
             <header>
               <strong>${escapedName}</strong>
               <button type='button' class='operator__list-action operator__list-action--secondary' data-role='presentation-rename' data-presentation-id='${presentation.id}' data-presentation-name='${escapedName}'>Rename</button>
@@ -1679,42 +1699,55 @@
     els.presentationsList.innerHTML = html;
   }
 
-  function renderActive() {
-    if (!els.activeContainer) return;
-    if (!state.activeBroadcast) {
-      els.activeContainer.innerHTML = `
-        <article class='operator__active-card operator__active-card--empty'>
-          <header>
-            <strong>No active passage</strong>
-            <span></span>
-          </header>
-          <p>Trigger a slide to broadcast scripture.</p>
-        </article>
-      `;
+  async function loadPresentationSlides(id) {
+    try {
+      const detail = await apiFetch(`/bible/presentations/${id}`);
+      state.activePresentationSlides = Array.isArray(detail.slides)
+        ? detail.slides.map((slide) => {
+            const metadata = slide.metadata || null;
+            const mainReference =
+              slide.main_reference ||
+              slide.mainReference ||
+              deriveReferenceFromMetadata(metadata);
+            const translationReference =
+              slide.translation_reference ||
+              slide.translationReference ||
+              deriveReferenceFromMetadata(metadata);
+            return {
+              id: slide.id,
+              order: slide.order,
+              main: slide.main,
+              translation: slide.translation,
+              stage: slide.stage,
+              group: slide.group || null,
+              metadata,
+              mainReference,
+              translationReference,
+            };
+          })
+        : [];
+      renderPresentationSlides();
+    } catch (error) {
+      console.error("Failed to load presentation slides", error);
+      showToast("Failed to load presentation", "error");
+    }
+  }
+
+  function renderPresentationSlides() {
+    if (!els.slidesContainer) return;
+    if (!state.activePresentationSlides.length) {
+      els.slidesContainer.innerHTML =
+        "<p class='operator__slides-empty'>No slides in this presentation.</p>";
       return;
     }
-    const broadcast = state.activeBroadcast.passage;
-    const verses = broadcast.reference;
-    const verseStart = verses.verse_start ?? verses.verseStart;
-    const verseEnd = verses.verse_end ?? verses.verseEnd ?? verseStart;
-    const reference = formatReference(
-      verses.book,
-      verses.chapter,
-      verseStart,
-      verseEnd,
-    );
-    const translationLabel = broadcast.translation
-      ? broadcast.translation.name
-      : "";
-    els.activeContainer.innerHTML = `
-      <article class='operator__active-card'>
-        <header>
-          <strong>${escapeHtml(reference)}</strong>
-          <span>${escapeHtml(translationLabel)}</span>
-        </header>
-        <p>${escapeHtml(broadcast.text || "")}</p>
-      </article>
-    `;
+    const html = state.activePresentationSlides
+      .map((slide, index) => renderSlideCard(slide, index))
+      .join("");
+    els.slidesContainer.innerHTML = html;
+  }
+
+  function renderActive() {
+    // Active passage card removed — stage preview in header is sufficient
   }
 
   function connectLiveSocket() {
@@ -1867,17 +1900,40 @@
     if (!card) return;
     const slideId = card.getAttribute("data-slide-id");
     if (!slideId) return;
-    if (event.target.matches('[data-role="slide-select"]')) {
-      if (event.target.checked) {
-        state.selectedSlides.add(slideId);
-      } else {
-        state.selectedSlides.delete(slideId);
+
+    // Edit mode: keep old checkbox + trigger button behavior
+    if (state.editMode) {
+      if (event.target.matches('[data-role="slide-select"]')) {
+        if (event.target.checked) {
+          state.selectedSlides.add(slideId);
+        } else {
+          state.selectedSlides.delete(slideId);
+        }
+        updateSelectionLabel();
+        return;
       }
-      updateSelectionLabel();
+      if (event.target.matches('[data-role="slide-trigger"]')) {
+        triggerSlideById(slideId);
+      }
       return;
     }
-    if (event.target.matches('[data-role="slide-trigger"]')) {
+
+    // Trigger zone click → fire the slide
+    if (event.target.closest('[data-role="slide-trigger"]')) {
       triggerSlideById(slideId);
+      return;
+    }
+
+    // Select zone click → toggle selection
+    if (event.target.closest('[data-role="slide-select-zone"]')) {
+      if (state.selectedSlides.has(slideId)) {
+        state.selectedSlides.delete(slideId);
+      } else {
+        state.selectedSlides.add(slideId);
+      }
+      card.classList.toggle("is-selected", state.selectedSlides.has(slideId));
+      updateSelectionLabel();
+      return;
     }
   }
 
@@ -2210,19 +2266,52 @@
         appendSlidesToPresentation,
       );
     }
-    if (els.refreshPresentations) {
-      els.refreshPresentations.addEventListener("click", loadPresentations);
-    }
     if (els.presentationsList) {
-      els.presentationsList.addEventListener("click", (event) => {
-        const button = event.target.closest(
+      els.presentationsList.addEventListener("click", async (event) => {
+        const renameBtn = event.target.closest(
           '[data-role="presentation-rename"]',
         );
+        if (renameBtn) {
+          const presentationId = renameBtn.getAttribute("data-presentation-id");
+          if (!presentationId) return;
+          const currentName =
+            renameBtn.getAttribute("data-presentation-name") || "";
+          renamePresentation(presentationId, currentName);
+          return;
+        }
+        const card = event.target.closest("[data-presentation-id]");
+        if (!card) return;
+        const id = card.getAttribute("data-presentation-id");
+        if (!id) return;
+        state.activePresentationId = id;
+        await loadPresentationSlides(id);
+        renderPresentations();
+      });
+    }
+    if (els.presentationCreate) {
+      els.presentationCreate.addEventListener("click", async () => {
+        const name = window.prompt("New presentation name");
+        if (!name || !name.trim()) return;
+        try {
+          await apiFetch("/bible/presentations", {
+            method: "POST",
+            body: JSON.stringify({ name: name.trim() }),
+          });
+          showToast("Presentation created", "success");
+          await loadPresentations();
+        } catch (error) {
+          showToast(error.message || "Failed to create presentation", "error");
+        }
+      });
+    }
+    if (els.bibleTabNav) {
+      els.bibleTabNav.addEventListener("click", (event) => {
+        const button = event.target.closest('[data-role="bible-tab"]');
         if (!button) return;
-        const presentationId = button.getAttribute("data-presentation-id");
-        if (!presentationId) return;
-        const currentName = button.getAttribute("data-presentation-name") || "";
-        renamePresentation(presentationId, currentName);
+        const tab = button.dataset.tab;
+        if (tab && tab !== state.bibleTab) {
+          setBibleTab(tab);
+        }
       });
     }
     if (els.clearButton) {
@@ -2232,7 +2321,6 @@
 
   async function initialise() {
     renderPreferences();
-    renderActive();
     renderLoadedPassages();
     initialiseEvents();
     await fetchPreferences();

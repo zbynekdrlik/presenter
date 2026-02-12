@@ -64,10 +64,25 @@ test("operator manages Bible workflow end-to-end", async ({
     );
   }).toPass();
 
+  // LIVE tab is active by default — verify
+  const liveTab = page.locator('[data-role="bible-tab"][data-tab="live"]');
+  await expect(liveTab).toHaveAttribute("data-active", "true");
+
+  // Settings tab: go there to set char limit
+  const settingsTab = page.locator(
+    '[data-role="bible-tab"][data-tab="settings"]',
+  );
+  await settingsTab.click();
+  await expect(settingsTab).toHaveAttribute("data-active", "true");
+
   const mainTranslation = page.locator('[data-role="main-translation"]');
   await expect(mainTranslation).toBeVisible({ timeout: 30_000 });
 
   await page.locator('[data-role="char-limit"]').fill("80");
+
+  // Back to LIVE tab for book selection and passage loading
+  await liveTab.click();
+
   await page.locator('[data-role="book-filter"]').fill("John");
   const johnButton = page
     .locator('[data-role="book-list"] button[data-book="John"]')
@@ -154,7 +169,9 @@ test("operator manages Bible workflow end-to-end", async ({
   await toggleMode.click();
   await expect(toggleMode).toHaveText("Switch to Edit Mode");
 
-  await page.locator('[data-role="slide-select"]').first().check();
+  // Select first slide via select-zone click (new UI)
+  await slides.first().locator('[data-role="slide-select-zone"]').click();
+  await expect(slides.first()).toHaveClass(/is-selected/);
 
   const broadcast = await page.evaluate(() => {
     const slide = window.__presenterBibleState.slides[0];
@@ -198,18 +215,7 @@ test("operator manages Bible workflow end-to-end", async ({
   );
   expect(triggerResponse.ok()).toBeTruthy();
 
-  const referenceLabel =
-    broadcast.start === broadcast.end
-      ? `${broadcast.book} ${broadcast.chapter}:${broadcast.start}`
-      : `${broadcast.book} ${broadcast.chapter}:${broadcast.start}-${broadcast.end}`;
-
-  await expect(page.locator(".operator__active-card strong")).toHaveText(
-    referenceLabel,
-    {
-      timeout: 15_000,
-    },
-  );
-
+  // Verify via API (active passage card removed from UI, rely on state + API)
   const activeResponse = await request.get(
     new URL("/bible/active", baseURL).toString(),
   );
@@ -226,29 +232,36 @@ test("operator manages Bible workflow end-to-end", async ({
   expect(activeVerseEnd).toBe(broadcast.end);
 
   await page.locator('[data-role="clear-button"]').click();
-  await expect(page.locator(".operator__active-card strong")).toHaveText(
-    "No active passage",
-    {
-      timeout: 10_000,
-    },
+  const clearResponse = await request.get(
+    new URL("/bible/active", baseURL).toString(),
   );
+  expect(clearResponse.ok()).toBeTruthy();
+  const clearedActive = await clearResponse.json();
+  expect(clearedActive).toBeNull();
 
-  await page
-    .locator('[data-role="slide-select"]')
-    .first()
-    .uncheck({ force: true });
+  // Deselect first slide then select all
+  await slides.first().locator('[data-role="slide-select-zone"]').click();
   await page.locator('[data-role="select-all-slides"]').click();
+  // Selection count is now in the PREPARED tab sidebar
+  const preparedTab = page.locator(
+    '[data-role="bible-tab"][data-tab="prepared"]',
+  );
+  await preparedTab.click();
   await expect(page.locator('[data-role="selection-count"]')).toHaveText(
     `${slideCount} selected`,
   );
 
+  // Create a new presentation via the "+" button
   const presentationName = `Automation Slides ${Date.now()}`;
-  await page.locator('[data-role="presentation-name"]').fill(presentationName);
-  await page.locator('[data-role="presentation-add"]').click();
+  page.once("dialog", async (dialog) => {
+    expect(dialog.type()).toBe("prompt");
+    await dialog.accept(presentationName);
+  });
+  await page.locator('[data-role="presentation-create"]').click();
 
   const toast = page.locator('[data-role="toast"]');
   await expect(toast).toHaveAttribute("data-visible", "true");
-  await expect(toast).toContainText("Added");
+  await expect(toast).toContainText("Presentation created");
 
   await expect(async () => {
     const listText = await page
@@ -257,6 +270,7 @@ test("operator manages Bible workflow end-to-end", async ({
     expect(listText).toContain(presentationName);
   }).toPass({ timeout: 10_000 });
 
+  // Select the new presentation in dropdown and add slides
   const presentationsResponse = await request.get(
     new URL("/bible/presentations", baseURL).toString(),
   );
@@ -266,6 +280,14 @@ test("operator manages Bible workflow end-to-end", async ({
     (entry: any) => entry.name === presentationName,
   );
   expect(createdSummary).toBeTruthy();
+
+  await page.selectOption(
+    '[data-role="presentation-select"]',
+    createdSummary.id,
+  );
+  await page.locator('[data-role="presentation-add"]').click();
+  await expect(toast).toHaveAttribute("data-visible", "true");
+  await expect(toast).toContainText("Added");
 
   const detailResponse = await request.get(
     new URL(`/bible/presentations/${createdSummary.id}`, baseURL).toString(),
@@ -278,35 +300,26 @@ test("operator manages Bible workflow end-to-end", async ({
     detail.slides[0].main_reference ?? detail.slides[0].mainReference;
   expect(detailMainReference).toBe(customReference);
 
-  await page
-    .locator('[data-role="slide-select"]')
-    .first()
-    .uncheck({ force: true });
-  const checkboxCount = await page
-    .locator('[data-role="slide-select"]')
-    .count();
-  const targetCheckbox =
-    checkboxCount > 1
-      ? page.locator('[data-role="slide-select"]').nth(1)
-      : page.locator('[data-role="slide-select"]').first();
-  await targetCheckbox.check({ force: true });
-  await page.selectOption(
-    '[data-role="presentation-select"]',
-    createdSummary.id,
+  // Click on the presentation card → loads its slides in main area
+  const presentationCard = page.locator(
+    `article[data-presentation-id="${createdSummary.id}"]`,
   );
-  await page.locator('[data-role="presentation-add"]').click();
-  await expect(page.locator('[data-role="toast"]')).toHaveAttribute(
-    "data-visible",
-    "true",
-  );
+  await presentationCard.click();
+  await expect(async () => {
+    const activeId = await page.evaluate(
+      () => window.__presenterBibleState.activePresentationId,
+    );
+    expect(activeId).toBe(createdSummary.id);
+  }).toPass({ timeout: 10_000 });
+  await expect(presentationCard).toHaveClass(/is-active/);
 
-  const appendedDetailResponse = await request.get(
-    new URL(`/bible/presentations/${createdSummary.id}`, baseURL).toString(),
-  );
-  expect(appendedDetailResponse.ok()).toBeTruthy();
-  const appendedDetail = await appendedDetailResponse.json();
-  expect(appendedDetail.slides.length).toBeGreaterThan(slideCount);
+  // Verify presentation slides are shown in main area
+  const presentationSlides = page.locator(".operator__slide-card");
+  await expect(presentationSlides.first()).toBeVisible({ timeout: 10_000 });
+  const presentationSlideCount = await presentationSlides.count();
+  expect(presentationSlideCount).toBe(slideCount);
 
+  // Rename the presentation
   const renamedPresentation = `${presentationName} Renamed`;
   const renameButton = page.locator(
     `[data-role="presentation-rename"][data-presentation-id="${createdSummary.id}"]`,
@@ -341,7 +354,8 @@ test("operator manages Bible workflow end-to-end", async ({
   const renamedDetail = await renamedDetailResponse.json();
   expect(renamedDetail.name).toBe(renamedPresentation);
 
-  // Switch translation via the main translation dropdown
+  // Switch to SETTINGS tab and change translation via dropdown
+  await settingsTab.click();
   const mainTranslationDropdown = page.locator(
     '[data-role="main-translation"]',
   );
@@ -354,6 +368,8 @@ test("operator manages Bible workflow end-to-end", async ({
     expect(preferences.mainTranslation).toBe("slk-seb");
   }).toPass();
 
+  // Switch back to LIVE tab and load Slovak passage
+  await liveTab.click();
   await page.locator('[data-role="book-filter"]').fill("Ján");
   const janButton = page
     .locator('[data-role="book-list"] button[data-book="Ján"]')
@@ -513,7 +529,11 @@ test("bible preferences persist across page reloads", async ({
     expect(prefs.characterLimit).toBe(250);
   }).toPass({ timeout: 15_000 });
 
-  // Verify the character limit input reflects the saved value
+  // Switch to SETTINGS tab to verify the character limit input
+  const settingsTab = page.locator(
+    '[data-role="bible-tab"][data-tab="settings"]',
+  );
+  await settingsTab.click();
   await expect(page.locator('[data-role="char-limit"]')).toHaveValue("250");
 
   // Reload the page
@@ -560,6 +580,12 @@ test("main translation dropdown selects translation and loads books", async ({
     { timeout: 120_000 },
   );
 
+  // Switch to SETTINGS tab where translation dropdowns live
+  const settingsTab = page.locator(
+    '[data-role="bible-tab"][data-tab="settings"]',
+  );
+  await settingsTab.click();
+
   // Main translation dropdown should be visible
   const mainDropdown = page.locator('[data-role="main-translation"]');
   await expect(mainDropdown).toBeVisible({ timeout: 10_000 });
@@ -567,12 +593,6 @@ test("main translation dropdown selects translation and loads books", async ({
   // Secondary translation dropdown should be visible with None option
   const secondaryDropdown = page.locator('[data-role="secondary-translation"]');
   await expect(secondaryDropdown).toBeVisible();
-
-  // Verify "Reference" heading is removed
-  const referencePanel = page.locator(
-    '[data-role="reference-panel"] .operator__group-header h2',
-  );
-  await expect(referencePanel).toHaveCount(0);
 
   // Verify "Loaded verses" section is removed
   await expect(page.locator(".operator__group--passages")).toHaveCount(0);

@@ -6,9 +6,17 @@ body.in-iframe .operator__main {
   margin-top: 0;
 }
 
-/* Bible catalog: single section fills sidebar (no catalog-bottom) */
+/* Bible catalog: flush top edge to header, keep bottom corners rounded */
+.operator--bible .operator__catalog {
+  border-top: none;
+  border-top-left-radius: 0;
+  border-top-right-radius: 0;
+}
+
 .operator--bible .operator__catalog-top {
   flex: 1;
+  display: flex;
+  flex-direction: column;
 }
 
 .operator.operator--bible {
@@ -20,10 +28,139 @@ body.in-iframe .operator__main {
   font-family: "Inter", "Segoe UI", system-ui, sans-serif;
 }
 
+/* Two-column layout: sidebar + slides (no right panel) */
 .operator.operator--bible .operator__main {
   flex: 1;
   overflow-y: auto;
   background: #f8fafc;
+  display: grid;
+  grid-template-columns: 320px 1fr;
+  gap: 0;
+}
+
+/* ---------- Sub-tab navigation ---------- */
+.bible__tab-nav {
+  display: flex;
+  gap: 0.25rem;
+  padding: 0.25rem;
+  background: rgba(0, 0, 0, 0.04);
+  border-radius: 8px;
+  margin-bottom: 0.75rem;
+  flex-shrink: 0;
+}
+
+.bible__tab-nav button {
+  flex: 1;
+  border: none;
+  background: transparent;
+  color: #64748b;
+  padding: 0.5rem 0.5rem;
+  border-radius: 6px;
+  font-size: 0.75rem;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  cursor: pointer;
+  transition:
+    background 0.15s ease,
+    color 0.15s ease;
+}
+
+.bible__tab-nav button[data-active="true"] {
+  background: #ffffff;
+  color: #1e293b;
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.1);
+}
+
+/* ---------- Tab panel visibility ---------- */
+.bible__tab-panel {
+  display: none;
+}
+.bible__tab-panel[data-visible="true"] {
+  display: flex;
+  flex-direction: column;
+  gap: 0.75rem;
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+}
+
+/* ---------- PREPARED panel ---------- */
+.bible__prepared-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+}
+.bible__prepared-header h3 {
+  font-size: 0.9rem;
+  font-weight: 600;
+  margin: 0;
+}
+.bible__prepared-list {
+  flex: 1;
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+  min-height: 0;
+}
+.bible__prepared-actions {
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+  border-top: 1px solid #e2e8f0;
+  padding-top: 0.75rem;
+  flex-shrink: 0;
+}
+
+/* Presentation card in prepared list */
+.operator__presentation-card[data-presentation-id] {
+  border: 1px solid #e2e8f0;
+  border-radius: 8px;
+  padding: 0.6rem 0.75rem;
+  cursor: pointer;
+  transition:
+    border-color 0.15s ease,
+    background 0.15s ease;
+}
+.operator__presentation-card[data-presentation-id]:hover {
+  border-color: #94a3b8;
+  background: rgba(0, 0, 0, 0.02);
+}
+.operator__presentation-card.is-active {
+  border-color: #4f46e5;
+  background: rgba(79, 70, 229, 0.04);
+}
+
+/* ---------- Slide card trigger/select zones ---------- */
+.operator__slide-card--bible .operator__slide-trigger-zone {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  padding: 0.3rem 0.75rem;
+  background: rgba(79, 70, 229, 0.06);
+  border-bottom: 1px solid rgba(79, 70, 229, 0.1);
+  cursor: pointer;
+  transition: background 0.15s ease;
+  border-radius: 8px 8px 0 0;
+}
+.operator__slide-card--bible .operator__slide-trigger-zone:hover {
+  background: rgba(79, 70, 229, 0.14);
+}
+.operator__slide-trigger-icon {
+  font-size: 0.7rem;
+  color: #4f46e5;
+}
+.operator__slide-select-zone {
+  cursor: pointer;
+  padding: 0.5rem 0.75rem;
+}
+.operator__slide-select-zone:hover {
+  background: rgba(56, 189, 248, 0.06);
+}
+.operator__slide-card--bible.is-selected {
+  outline: 2px solid #38bdf8;
+  outline-offset: -2px;
 }
 
 .bible__content {
@@ -231,6 +368,9 @@ body.in-iframe .operator__main {
 
 @media (max-width: 720px) {
   .bible__search {
+    grid-template-columns: 1fr;
+  }
+  .operator.operator--bible .operator__main {
     grid-template-columns: 1fr;
   }
 }
