@@ -143,9 +143,13 @@ test("operator manages Bible workflow end-to-end", async ({
   const slideCount = await slides.count();
   expect(slideCount).toBeGreaterThan(0);
 
-  const toggleMode = page.locator('[data-role="toggle-mode"]');
-  await toggleMode.click();
-  await expect(toggleMode).toHaveText("Switch to Live Mode");
+  // Switch to Edit mode via segmented toggle
+  const modeToggle = page.locator('[data-role="mode-toggle"]');
+  const editModeBtn = modeToggle.locator('[data-mode="edit"]');
+  const liveModeBtn = modeToggle.locator('[data-mode="live"]');
+  await editModeBtn.click();
+  await expect(editModeBtn).toHaveAttribute("data-active", "true");
+  await expect(liveModeBtn).toHaveAttribute("data-active", "false");
 
   const customTranslation = "Custom translation for testing";
   const customReference = "John 3:16 custom";
@@ -166,8 +170,10 @@ test("operator manages Bible workflow end-to-end", async ({
     expect(slide.mainReference).toBe(customReference);
   }).toPass();
 
-  await toggleMode.click();
-  await expect(toggleMode).toHaveText("Switch to Edit Mode");
+  // Switch back to Live mode via segmented toggle
+  await liveModeBtn.click();
+  await expect(liveModeBtn).toHaveAttribute("data-active", "true");
+  await expect(editModeBtn).toHaveAttribute("data-active", "false");
 
   // Select first slide via select-zone click (new UI)
   await slides.first().locator('[data-role="slide-select-zone"]').click();
@@ -239,10 +245,12 @@ test("operator manages Bible workflow end-to-end", async ({
   const clearedActive = await clearResponse.json();
   expect(clearedActive).toBeNull();
 
-  // Deselect first slide then select all
+  // Deselect first slide then select all manually via select-zone clicks
   await slides.first().locator('[data-role="slide-select-zone"]').click();
-  await page.locator('[data-role="select-all-slides"]').click();
-  // Selection count is now in the LIVE tab sidebar (moved from PREPARED)
+  for (let i = 0; i < slideCount; i++) {
+    await slides.nth(i).locator('[data-role="slide-select-zone"]').click();
+  }
+  // Selection count is now in the LIVE tab sidebar
   await expect(page.locator('[data-role="selection-count"]')).toHaveText(
     `${slideCount} selected`,
   );
@@ -696,4 +704,185 @@ test("main translation dropdown selects translation and loads books", async ({
 
   // Verify the dropdown reflects the selection
   await expect(mainDropdown).toHaveValue("eng-kjv");
+});
+
+test("create-new presentation from LIVE tab dropdown", async ({
+  page,
+  request,
+}) => {
+  await expect(async () => {
+    const response = await request.get(
+      new URL("/healthz", baseURL).toString(),
+      { timeout: 120_000 },
+    );
+    expect(response.ok()).toBeTruthy();
+  }).toPass({ timeout: 180_000 });
+
+  await page.goto(new URL("/ui/bible", baseURL).toString());
+
+  await page.waitForFunction(
+    () => {
+      const state = (window as any).__presenterBibleState;
+      return !!state && Array.isArray(state.books) && state.books.length > 0;
+    },
+    { timeout: 120_000 },
+  );
+
+  // Load a passage first so we have slides to add
+  await page.locator('[data-role="book-filter"]').fill("John");
+  const johnButton = page
+    .locator('[data-role="book-list"] button[data-book="John"]')
+    .first();
+  await expect(johnButton).toBeVisible({ timeout: 10_000 });
+  await johnButton.click();
+  await page.locator('[data-role="chapter-input"]').fill("1");
+  await page.locator('[data-role="verse-start"]').fill("1");
+  await page.locator('[data-role="verse-end"]').fill("3");
+  await page.locator('[data-role="load-button"]').click();
+
+  const slides = page.locator(".operator__slide-card");
+  await slides.first().waitFor({ state: "visible" });
+  const slideCount = await slides.count();
+  expect(slideCount).toBeGreaterThan(0);
+
+  // Select all slides via select-zone clicks
+  for (let i = 0; i < slideCount; i++) {
+    await slides.nth(i).locator('[data-role="slide-select-zone"]').click();
+  }
+
+  // Verify the dropdown has "+ New presentation" option
+  const presentationSelect = page.locator('[data-role="presentation-select"]');
+  await expect(
+    presentationSelect.locator('option[value="__new__"]'),
+  ).toHaveCount(1);
+
+  // Select the __new__ option — dialog will prompt for name
+  const newPresentationName = `Inline Created ${Date.now()}`;
+  page.once("dialog", async (dialog) => {
+    expect(dialog.type()).toBe("prompt");
+    await dialog.accept(newPresentationName);
+  });
+  await presentationSelect.selectOption("__new__");
+  await page.locator('[data-role="presentation-add"]').click();
+
+  const toast = page.locator('[data-role="toast"]');
+  await expect(toast).toHaveAttribute("data-visible", "true");
+  await expect(toast).toContainText("Added");
+
+  // Verify presentation was created via API
+  await expect(async () => {
+    const response = await request.get(
+      new URL("/bible/presentations", baseURL).toString(),
+    );
+    expect(response.ok()).toBeTruthy();
+    const presentations = await response.json();
+    const found = presentations.find(
+      (entry: any) => entry.name === newPresentationName,
+    );
+    expect(found).toBeTruthy();
+    expect(found.slideCount).toBe(slideCount);
+  }).toPass({ timeout: 10_000 });
+
+  // Cleanup: delete the created presentation
+  const listResponse = await request.get(
+    new URL("/bible/presentations", baseURL).toString(),
+  );
+  const allPresentations = await listResponse.json();
+  const created = allPresentations.find(
+    (entry: any) => entry.name === newPresentationName,
+  );
+  if (created) {
+    await request.delete(
+      new URL(`/bible/presentations/${created.id}`, baseURL).toString(),
+    );
+  }
+});
+
+test("translation text hidden when no secondary bible selected", async ({
+  page,
+  request,
+}) => {
+  await expect(async () => {
+    const response = await request.get(
+      new URL("/healthz", baseURL).toString(),
+      { timeout: 120_000 },
+    );
+    expect(response.ok()).toBeTruthy();
+  }).toPass({ timeout: 180_000 });
+
+  // Set preferences with a secondary translation
+  await request.put(new URL("/bible/preferences", baseURL).toString(), {
+    data: {
+      mainTranslation: "eng-kjv",
+      secondaryTranslation: "slk-seb",
+      characterLimit: 320,
+    },
+  });
+
+  await page.goto(new URL("/ui/bible", baseURL).toString());
+
+  await page.waitForFunction(
+    () => {
+      const state = (window as any).__presenterBibleState;
+      return !!state && Array.isArray(state.books) && state.books.length > 0;
+    },
+    { timeout: 120_000 },
+  );
+
+  // Load a passage
+  await page.locator('[data-role="book-filter"]').fill("John");
+  const johnButton = page
+    .locator('[data-role="book-list"] button[data-book="John"]')
+    .first();
+  await expect(johnButton).toBeVisible({ timeout: 10_000 });
+  await johnButton.click();
+  await page.locator('[data-role="chapter-input"]').fill("3");
+  await page.locator('[data-role="verse-start"]').fill("16");
+  await page.locator('[data-role="verse-end"]').fill("16");
+  await page.locator('[data-role="load-button"]').click();
+
+  const slides = page.locator(".operator__slide-card");
+  await slides.first().waitFor({ state: "visible" });
+
+  // With secondary translation set, translation text should be visible
+  await expect(async () => {
+    const hasTranslation = await page.evaluate(() => {
+      const state = window.__presenterBibleState;
+      return (
+        state.slides.length > 0 &&
+        !!state.slides[0].translation &&
+        state.slides[0].translation.trim().length > 0
+      );
+    });
+    expect(hasTranslation).toBeTruthy();
+  }).toPass({ timeout: 15_000 });
+
+  await expect(
+    slides.first().locator(".operator__slide-text--translation"),
+  ).toBeVisible();
+
+  // Now remove the secondary translation via SETTINGS tab
+  const settingsTab = page.locator(
+    '[data-role="bible-tab"][data-tab="settings"]',
+  );
+  await settingsTab.click();
+  await page.locator('[data-role="secondary-translation"]').selectOption("");
+  await page.locator('[data-role="save-preferences"]').click();
+
+  // Switch back to LIVE tab and reload passage
+  const liveTab = page.locator('[data-role="bible-tab"][data-tab="live"]');
+  await liveTab.click();
+
+  await page.locator('[data-role="load-button"]').click();
+  await slides.first().waitFor({ state: "visible" });
+
+  // Translation text should now be hidden
+  await expect(
+    slides.first().locator(".operator__slide-text--translation"),
+  ).toHaveCount(0);
+
+  // Translation reference should also be hidden
+  await expect(
+    slides.first().locator(".operator__slide-reference--secondary"),
+  ).toHaveCount(0);
 });

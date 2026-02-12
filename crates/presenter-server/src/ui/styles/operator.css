@@ -1146,6 +1146,27 @@ body.operator[data-mode="live"] .operator__line-limit {
 .operator__slide-text--translation {
   color: #1d4ed8;
   font-style: italic;
+  margin-top: 0.25rem;
+  padding-top: 0.25rem;
+  border-top: 1px solid rgba(29, 78, 216, 0.12);
+}
+
+/* Bible slide reference footer */
+.operator__slide-footer {
+  display: flex;
+  flex-direction: column;
+  gap: 0.15rem;
+  margin-top: 0.25rem;
+}
+
+.operator__slide-reference {
+  font-size: 0.7rem;
+  color: #64748b;
+  font-style: italic;
+}
+
+.operator__slide-reference--secondary {
+  color: #1d4ed8;
 }
 
 .operator__slide-text--stage {
@@ -1225,10 +1246,12 @@ body.operator[data-mode="live"] .operator__line-limit {
 
 .operator__slide-editor textarea {
   line-height: var(--operator-line-line-height, 1.35);
-  min-height: calc(var(--operator-line-line-height, 1.35) * 2em + 0.6rem);
-  max-height: calc(var(--operator-line-line-height, 1.35) * 2em + 0.6rem);
-  height: calc(var(--operator-line-line-height, 1.35) * 2em + 0.6rem);
-  overflow-y: auto;
+  min-height: calc(
+    var(--operator-line-line-height, 1.35) * var(--bible-textarea-lines, 4) *
+      1em + 0.6rem
+  );
+  height: auto;
+  overflow-y: visible;
   resize: none;
 }
 
