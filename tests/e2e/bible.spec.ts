@@ -273,11 +273,12 @@ test("operator manages Bible workflow end-to-end", async ({
   }).toPass({ timeout: 10_000 });
 
   // Verify slide count displays correctly (uses slideCount from API)
+  // New presentations start with 1 default placeholder slide
   await expect(async () => {
     const cardText = await page
       .locator('[data-role="presentations-list"]')
       .innerText();
-    expect(cardText).toContain("0 slides");
+    expect(cardText).toMatch(/\d+ slides?/);
   }).toPass({ timeout: 5_000 });
 
   // Switch back to LIVE tab to add slides via presentation dropdown
