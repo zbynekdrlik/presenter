@@ -334,6 +334,63 @@
     }
   }
 
+  async function refreshPresentations() {
+    try {
+      var fresh = await apiFetch("/bible/presentations", { method: "GET" });
+      if (!Array.isArray(fresh)) return;
+      // Detect changes: new presentations or slide count updates
+      var changed = fresh.length !== state.presentations.length;
+      if (!changed) {
+        for (var i = 0; i < fresh.length; i++) {
+          var oldP = state.presentations.find(function (p) {
+            return p.id === fresh[i].id;
+          });
+          if (!oldP || oldP.slideCount !== fresh[i].slideCount) {
+            changed = true;
+            break;
+          }
+        }
+      }
+      if (!changed) return;
+      // Invalidate slides cache for presentations whose counts changed
+      fresh.forEach(function (p) {
+        var oldP = state.presentations.find(function (o) {
+          return o.id === p.id;
+        });
+        if (!oldP || oldP.slideCount !== p.slideCount) {
+          state.slidesCache.delete(p.id);
+        }
+      });
+      state.presentations = fresh;
+      renderPresentations();
+      // If current presentation was removed, clear selection
+      if (
+        state.currentPresentationId &&
+        !fresh.find(function (p) {
+          return p.id === state.currentPresentationId;
+        })
+      ) {
+        state.currentPresentationId = null;
+        if (els.contextTitle) {
+          els.contextTitle.textContent = "Select a presentation";
+        }
+        if (els.slides) {
+          els.slides.innerHTML =
+            '<p class="tablet-slides__empty">Select a presentation to view slides.</p>';
+        }
+      }
+      // If current presentation slides were invalidated, reload them
+      if (
+        state.currentPresentationId &&
+        !state.slidesCache.has(state.currentPresentationId)
+      ) {
+        loadPresentation(state.currentPresentationId);
+      }
+    } catch (error) {
+      console.warn("Failed to refresh presentations", error);
+    }
+  }
+
   function bindEvents() {
     if (els.presentationList) {
       els.presentationList.addEventListener("click", handlePresentationClick);
@@ -341,6 +398,11 @@
     if (els.slides) {
       els.slides.addEventListener("click", handleSlideTap);
     }
+    document.addEventListener("visibilitychange", function () {
+      if (!document.hidden) {
+        refreshPresentations();
+      }
+    });
   }
 
   async function initialise() {
@@ -359,6 +421,7 @@
     }
 
     connectLiveSocket();
+    setInterval(refreshPresentations, 10000);
   }
 
   initialise();
