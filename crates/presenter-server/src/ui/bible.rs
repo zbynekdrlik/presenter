@@ -95,8 +95,8 @@ fn BibleDocument(
                             </button>
                         </div>
                         <div class="operator__mode-toggle">
-                            <button type="button" data-role="mode-toggle" data-mode="live" data-active="true" disabled>"Live"</button>
-                            <button type="button" data-role="mode-toggle" data-mode="edit" disabled>"Edit"</button>
+                            <button type="button" data-role="mode-toggle" data-mode="live" data-active="true">"Live"</button>
+                            <button type="button" data-role="mode-toggle" data-mode="edit">"Edit"</button>
                         </div>
                     </div>
                 </header>
@@ -189,10 +189,6 @@ fn BibleDocument(
                         <header class="operator__slides-heading">
                             <div>
                                 <h2>"Slides"</h2>
-                            </div>
-                            <div class="operator__slides-actions">
-                                <button type="button" class="operator__list-action" data-role="select-all-slides">"Select all"</button>
-                                <button type="button" class="operator__list-action operator__list-action--secondary" data-role="toggle-mode">"Switch to Edit Mode"</button>
                             </div>
                         </header>
                         <div class="operator__slides" data-role="slides">

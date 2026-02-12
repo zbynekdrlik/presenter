@@ -120,8 +120,7 @@
     loadButton: document.querySelector('[data-role="load-button"]'),
     loadedPassages: document.querySelector('[data-role="loaded-passages"]'),
     slidesContainer: document.querySelector('[data-role="slides"]'),
-    selectAllSlides: document.querySelector('[data-role="select-all-slides"]'),
-    toggleMode: document.querySelector('[data-role="toggle-mode"]'),
+    modeToggleContainer: document.querySelector(".operator__mode-toggle"),
     selectionCount: document.querySelector('[data-role="selection-count"]'),
     presentationSelect: document.querySelector(
       '[data-role="presentation-select"]',
@@ -226,6 +225,8 @@
     if (tab === "live") {
       renderSlides();
     } else if (tab === "prepared") {
+      state.editMode = false;
+      updateMode();
       renderPresentationSlides();
     }
   }
@@ -867,6 +868,7 @@
     }
     alignMainTranslation(state.preferences.mainTranslation);
     renderPreferences();
+    updateTextareaLines();
   }
 
   function renderPreferences() {
@@ -897,6 +899,7 @@
         method: "PUT",
         body: JSON.stringify(payload),
       });
+      updateTextareaLines();
       showToast("Preferences saved", "success");
     } catch (error) {
       console.error("Failed to save preferences", error);
@@ -1249,7 +1252,9 @@
     const selected = state.selectedSlides.has(slide.id) ? " is-selected" : "";
     if (triggerOnly) {
       const translationMarkup =
-        slide.translation && slide.translation.trim().length
+        slide.translation &&
+        slide.translation.trim().length &&
+        state.preferences.secondaryTranslation
           ? `<div class='operator__slide-text operator__slide-text--translation operator__slide-text--secondary'>${lineBreakHtml(slide.translation)}</div>`
           : "";
       const references = buildReferenceHtml(slide);
@@ -1346,7 +1351,7 @@
         );
       }
     }
-    if (slide.translationReference) {
+    if (slide.translationReference && state.preferences.secondaryTranslation) {
       pieces.push(
         `<span class='operator__slide-reference operator__slide-reference--secondary'>${escapeHtml(slide.translationReference)}</span>`,
       );
@@ -1549,6 +1554,13 @@
     await loadSlides();
   }
 
+  function updateTextareaLines() {
+    const charLimit = state.preferences.characterLimit || 320;
+    const lineChars = 32;
+    const lines = Math.max(3, Math.ceil(charLimit / lineChars));
+    document.body.style.setProperty("--bible-textarea-lines", lines);
+  }
+
   function updateSelectionLabel() {
     if (!els.selectionCount) return;
     const count = state.selectedSlides.size;
@@ -1559,17 +1571,14 @@
     if (typeof document !== "undefined" && document.body) {
       document.body.dataset.mode = state.editMode ? "edit" : "live";
     }
-    if (els.toggleMode) {
-      els.toggleMode.textContent = state.editMode
-        ? "Switch to Live Mode"
-        : "Switch to Edit Mode";
+    if (els.modeToggleContainer) {
+      els.modeToggleContainer.querySelectorAll("[data-mode]").forEach((btn) => {
+        btn.dataset.active =
+          btn.dataset.mode === (state.editMode ? "edit" : "live")
+            ? "true"
+            : "false";
+      });
     }
-  }
-
-  function toggleMode() {
-    state.editMode = !state.editMode;
-    updateMode();
-    renderSlides();
   }
 
   function ensureBibleMetadata(slide) {
@@ -1604,11 +1613,29 @@
       showToast("Select at least one slide", "warning");
       return;
     }
-    const targetPresentationId =
+    let targetPresentationId =
       els.presentationSelect && els.presentationSelect.value;
     if (!targetPresentationId) {
       showToast("Select a presentation first", "warning");
       return;
+    }
+    if (targetPresentationId === "__new__") {
+      const name = window.prompt("New presentation name");
+      if (!name || !name.trim()) return;
+      try {
+        const created = await apiFetch("/bible/presentations", {
+          method: "POST",
+          body: JSON.stringify({ name: name.trim() }),
+        });
+        await loadPresentations();
+        targetPresentationId = created.id;
+        if (els.presentationSelect) {
+          els.presentationSelect.value = targetPresentationId;
+        }
+      } catch (error) {
+        showToast(error.message || "Failed to create presentation", "error");
+        return;
+      }
     }
     try {
       const slides = state.slides
@@ -1801,7 +1828,7 @@
           `<option value="${presentation.id}">${escapeHtml(presentation.name)}</option>`,
       )
       .join("");
-    els.presentationSelect.innerHTML = `<option value="">Add to…</option>${options}`;
+    els.presentationSelect.innerHTML = `<option value="">Add to…</option><option value="__new__">+ New presentation</option>${options}`;
   }
 
   function renderPresentations() {
@@ -2100,18 +2127,6 @@
     }
   }
 
-  function selectAllSlides() {
-    if (!state.slides.length) return;
-    const allSelected = state.selectedSlides.size === state.slides.length;
-    if (allSelected) {
-      state.selectedSlides.clear();
-    } else {
-      state.slides.forEach((slide) => state.selectedSlides.add(slide.id));
-    }
-    renderSlides();
-    updateSelectionLabel();
-  }
-
   function initialiseEvents() {
     document.querySelectorAll('[data-role="view-toggle"]').forEach((button) => {
       const href = button.getAttribute("data-href");
@@ -2394,11 +2409,15 @@
     if (els.loadButton) {
       els.loadButton.addEventListener("click", loadSlides);
     }
-    if (els.toggleMode) {
-      els.toggleMode.addEventListener("click", toggleMode);
-    }
-    if (els.selectAllSlides) {
-      els.selectAllSlides.addEventListener("click", selectAllSlides);
+    if (els.modeToggleContainer) {
+      els.modeToggleContainer.addEventListener("click", (event) => {
+        const btn = event.target.closest("[data-mode]");
+        if (!btn) return;
+        const newMode = btn.dataset.mode;
+        state.editMode = newMode === "edit";
+        updateMode();
+        renderSlides();
+      });
     }
     if (els.slidesContainer) {
       els.slidesContainer.addEventListener("click", onSlidesContainerClick);
@@ -2495,6 +2514,7 @@
     await loadBooks();
     updateReferenceInputs();
     updateMode();
+    updateTextareaLines();
     await loadPresentations();
     connectLiveSocket();
     ensureActivePoller();
