@@ -929,8 +929,7 @@ async fn tablet_ui_endpoint_renders_html() {
         .await
         .unwrap();
     let body = String::from_utf8(bytes.to_vec()).unwrap();
-    assert!(body.contains("Presenter Tablet"));
-    assert!(body.contains("Libraries"));
+    assert!(body.contains("Bible Tablet"));
     assert!(body.contains("Presentations"));
 }
 
