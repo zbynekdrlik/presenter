@@ -22,3 +22,6 @@ ops/companion/generated/
 
 test
 test2
+
+.playwright-mcp/
+bible-ui-*.png

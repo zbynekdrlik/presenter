@@ -76,6 +76,10 @@ pub fn build_router(state: AppState) -> Router {
         .route("/bible/trigger", post(bible::trigger_bible_broadcast))
         .route("/bible/clear", post(bible::clear_bible_broadcast))
         .route(
+            "/bible/preferences",
+            get(bible::get_bible_preferences).put(bible::update_bible_preferences),
+        )
+        .route(
             "/playlists",
             get(playlists::list_playlists).post(playlists::create_playlist),
         )

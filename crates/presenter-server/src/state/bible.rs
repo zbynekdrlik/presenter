@@ -6,7 +6,8 @@ use crate::resolume::BibleUpdate;
 use chrono::Utc;
 use presenter_bible::BibleImportSummary;
 use presenter_core::{
-    BibleBroadcast, BibleReference, BibleTranslation, Presentation, PresentationId, Slide,
+    BibleBroadcast, BiblePreferences, BibleReference, BibleTranslation, Presentation,
+    PresentationId, Slide,
 };
 use presenter_importer::bible::BibleIngestionService;
 use std::collections::HashMap;
@@ -223,6 +224,22 @@ impl AppState {
             .replace_presentation_slides(id, &presentation.slides)
             .await?;
         Ok(presentation)
+    }
+
+    // Bible preferences (persisted via app_settings)
+    pub async fn get_bible_preferences(&self) -> anyhow::Result<BiblePreferences> {
+        let key = "bible-preferences";
+        match self.repository.get_app_setting(key).await? {
+            Some(json) => Ok(serde_json::from_str(&json)?),
+            None => Ok(BiblePreferences::default()),
+        }
+    }
+
+    pub async fn set_bible_preferences(&self, prefs: BiblePreferences) -> anyhow::Result<()> {
+        let key = "bible-preferences";
+        let json = serde_json::to_string(&prefs)?;
+        self.repository.set_app_setting(key, &json).await?;
+        Ok(())
     }
 
     // Bible broadcast methods
