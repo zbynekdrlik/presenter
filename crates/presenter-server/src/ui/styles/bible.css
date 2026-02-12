@@ -163,6 +163,38 @@ body.in-iframe .operator__main {
   outline-offset: -2px;
 }
 
+/* Full-width trigger zone for prepared-tab slides */
+.operator__slide-trigger-zone--full {
+  border-radius: 8px;
+  border-bottom: none;
+  padding: 0.5rem 0.75rem;
+}
+
+/* Pen icon on presentation cards */
+.operator__presentation-action {
+  border: none;
+  background: transparent;
+  cursor: pointer;
+  padding: 0.2rem 0.4rem;
+  font-size: 0.95rem;
+  color: #64748b;
+  border-radius: 4px;
+  transition:
+    color 0.15s ease,
+    background 0.15s ease;
+}
+.operator__presentation-action:hover {
+  color: #1e293b;
+  background: rgba(0, 0, 0, 0.06);
+}
+
+/* Smaller slide count in presentation cards */
+.operator__presentation-card p {
+  margin: 0;
+  font-size: 0.7rem;
+  color: #94a3b8;
+}
+
 .bible__content {
   width: min(1080px, 100%);
   margin: 0 auto;

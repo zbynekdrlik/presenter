@@ -129,6 +129,14 @@ fn BibleDocument(
                                     </label>
                                 </div>
                                 <button type="button" class="operator__list-action operator__list-action--primary" data-role="load-button">"Load passage"</button>
+                                <hr class="operator__divider" />
+                                <span data-role="selection-count" class="operator__slides-count">"0 selected"</span>
+                                <label class="operator__field">
+                                    <select data-role="presentation-select">
+                                        <option value="">"Add to…"</option>
+                                    </select>
+                                </label>
+                                <button type="button" class="operator__list-action operator__list-action--primary" data-role="presentation-add">"Add selected"</button>
                             </div>
                             <div class="bible__tab-panel" data-bible-panel="prepared">
                                 <div class="bible__prepared-header">
@@ -137,15 +145,6 @@ fn BibleDocument(
                                 </div>
                                 <div class="bible__prepared-list" data-role="presentations-list">
                                     <p class="operator__slides-empty">"No Bible presentations yet."</p>
-                                </div>
-                                <div class="bible__prepared-actions">
-                                    <span data-role="selection-count" class="operator__slides-count">"0 selected"</span>
-                                    <label class="operator__field">
-                                        <select data-role="presentation-select">
-                                            <option value="">"Add to…"</option>
-                                        </select>
-                                    </label>
-                                    <button type="button" class="operator__list-action operator__list-action--primary" data-role="presentation-add">"Add selected"</button>
                                 </div>
                             </div>
                             <div class="bible__tab-panel" data-bible-panel="settings">
@@ -263,6 +262,41 @@ fn BibleDocument(
                                 <div class="operator__library-edit-actions">
                                     <button type="button" data-role="bible-edit-cancel">"Cancel"</button>
                                     <button type="submit" data-role="bible-edit-save">"Save changes"</button>
+                                </div>
+                            </footer>
+                        </form>
+                    </div>
+                </div>
+                <div class="operator__library-edit operator__library-edit--bible-presentation" data-role="bible-presentation-edit-modal">
+                    <div class="operator__library-edit-panel">
+                        <form class="operator__library-edit-form" data-role="bible-presentation-edit-form">
+                            <header class="operator__library-edit-header">
+                                <h3>"Edit Presentation"</h3>
+                            </header>
+                            <div class="operator__library-edit-body">
+                                <label>
+                                    <span>"Presentation name"</span>
+                                    <input
+                                        type="text"
+                                        data-role="bible-presentation-edit-name"
+                                        autocomplete="off"
+                                        required
+                                        minlength="1"
+                                        maxlength="160"
+                                    />
+                                </label>
+                            </div>
+                            <footer class="operator__library-edit-footer">
+                                <button
+                                    type="button"
+                                    class="operator__library-edit-delete"
+                                    data-role="bible-presentation-edit-delete"
+                                >
+                                    "Delete presentation"
+                                </button>
+                                <div class="operator__library-edit-actions">
+                                    <button type="button" data-role="bible-presentation-edit-cancel">"Cancel"</button>
+                                    <button type="submit" data-role="bible-presentation-edit-save">"Save changes"</button>
                                 </div>
                             </footer>
                         </form>

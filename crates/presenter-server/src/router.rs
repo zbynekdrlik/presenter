@@ -66,7 +66,9 @@ pub fn build_router(state: AppState) -> Router {
         )
         .route(
             "/bible/presentations/{id}",
-            get(bible::get_bible_presentation).patch(bible::rename_bible_presentation_handler),
+            get(bible::get_bible_presentation)
+                .patch(bible::rename_bible_presentation_handler)
+                .delete(bible::delete_bible_presentation_handler),
         )
         .route(
             "/bible/presentations/{id}/append",
