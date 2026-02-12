@@ -120,7 +120,7 @@
     loadButton: document.querySelector('[data-role="load-button"]'),
     loadedPassages: document.querySelector('[data-role="loaded-passages"]'),
     slidesContainer: document.querySelector('[data-role="slides"]'),
-    modeToggle: document.querySelector('[data-role="mode-toggle"]'),
+    modeToggle: document.querySelector('[data-role="slides-mode-toggle"]'),
     selectionCount: document.querySelector('[data-role="selection-count"]'),
     presentationSelect: document.querySelector(
       '[data-role="presentation-select"]',

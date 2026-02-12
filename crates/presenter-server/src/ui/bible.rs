@@ -191,7 +191,7 @@ fn BibleDocument(
                                 <h2>"Slides"</h2>
                             </div>
                             <div class="operator__slides-actions">
-                                <nav class="bible__mode-toggle" data-role="mode-toggle">
+                                <nav class="bible__mode-toggle" data-role="slides-mode-toggle">
                                     <button type="button" data-mode="live" data-active="true">"Live"</button>
                                     <button type="button" data-mode="edit">"Edit"</button>
                                 </nav>
