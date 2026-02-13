@@ -240,19 +240,38 @@ test("operator header shows Bible preview when bible view is active", async ({
     expect(response.ok()).toBeTruthy();
   }).toPass({ timeout: 90_000 });
 
-  // Use API to trigger a Bible broadcast (test 1 already set up the translation)
-  const triggerResponse = await request.post(`${baseURL}/bible/trigger`, {
-    data: {
-      translation: "slk-seb",
-      book: "Ján",
-      book_code: "JHN",
-      book_number: 43,
-      chapter: 3,
-      verse_start: 16,
-      verse_end: 16,
-    },
-  });
-  expect(triggerResponse.ok()).toBeTruthy();
+  // Test 1 already triggered a broadcast via the UI. Verify it's still active,
+  // or re-trigger using the same translation that test 1 set up.
+  const activeCheck = await request.get(`${baseURL}/bible/active`);
+  let hasActiveBroadcast =
+    activeCheck.ok() && (await activeCheck.json())?.passage;
+
+  if (!hasActiveBroadcast) {
+    // Get the book name from the books API for the correct translation
+    const booksResponse = await request.get(
+      `${baseURL}/bible/books?translation=slk-seb`,
+    );
+    if (booksResponse.ok()) {
+      const books = await booksResponse.json();
+      const johnBook = books.find(
+        (b: any) => b.code === "JHN" || b.book_code === "JHN",
+      );
+      const bookName = johnBook?.name || johnBook?.book_name || "John";
+
+      const triggerResponse = await request.post(`${baseURL}/bible/trigger`, {
+        data: {
+          translation: "slk-seb",
+          book: bookName,
+          book_code: "JHN",
+          book_number: 43,
+          chapter: 3,
+          verse_start: 16,
+          verse_end: 16,
+        },
+      });
+      expect(triggerResponse.ok()).toBeTruthy();
+    }
+  }
 
   // Verify broadcast is active via API
   await expect(async () => {
@@ -407,9 +426,9 @@ test("bible tab edit mode works in live and prepared tabs", async ({
   const slideCards = page.locator(".operator__slide-card");
   await expect(slideCards.first()).toBeVisible({ timeout: 60_000 });
 
-  // Edit mode toggle in live tab
-  const editBtn = page.locator('[data-mode="edit"]');
-  const liveBtn = page.locator('[data-mode="live"]');
+  // Edit mode toggle in live tab (use button selector to avoid matching modal div)
+  const editBtn = page.locator('button[data-mode="edit"]');
+  const liveBtn = page.locator('button[data-mode="live"]');
   await editBtn.click();
 
   // Verify textareas appear (edit mode renders textarea elements)
