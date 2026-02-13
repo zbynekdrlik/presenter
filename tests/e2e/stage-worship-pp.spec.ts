@@ -321,3 +321,81 @@ test("worship-pp stage hides playlist sidebar when no playlist context", async (
 
   await stagePage.close();
 });
+
+test("worship-pp stage prefers stage text over main text", async ({
+  page,
+  context,
+}) => {
+  await waitForOperatorReady(page);
+
+  // Find a library with presentations via API
+  const librariesResponse = await page.request.get(
+    new URL("/libraries", baseURL).toString(),
+    { timeout: 60_000 },
+  );
+  const libraries: Array<{
+    id: string;
+    name: string;
+    presentations: Array<{ id: string; name: string }>;
+  }> = await librariesResponse.json();
+  const sourceLibrary = libraries.find(
+    (lib) => Array.isArray(lib.presentations) && lib.presentations.length > 0,
+  );
+  if (!sourceLibrary) {
+    throw new Error("Expected at least one library with presentations");
+  }
+
+  // Get first presentation's slides
+  const presId = sourceLibrary.presentations[0].id;
+  const presResponse = await page.request.get(
+    new URL(`/presentations/${presId}`, baseURL).toString(),
+  );
+  const presDetail: {
+    presentation: {
+      slides: Array<{
+        id: string;
+        content: { main: { value: string }; stage: { value: string } };
+      }>;
+    };
+  } = await presResponse.json();
+  expect(presDetail.presentation.slides.length).toBeGreaterThan(0);
+  const targetSlide = presDetail.presentation.slides[0];
+  const slideId = targetSlide.id;
+
+  // Update the slide to have distinct stage text
+  const stageText = `Stage Priority ${Date.now()}`;
+  const updateResponse = await page.request.patch(
+    new URL(`/presentations/${presId}/slides/${slideId}`, baseURL).toString(),
+    {
+      data: {
+        stage: stageText,
+      },
+    },
+  );
+  expect(updateResponse.ok()).toBeTruthy();
+
+  // Open the stage display with worship-pp layout
+  const stagePage = await openStage(context);
+
+  // Trigger the slide via API
+  const triggerResponse = await page.request.post(
+    new URL("/stage/state", baseURL).toString(),
+    {
+      data: {
+        presentationId: presId,
+        currentSlideId: slideId,
+      },
+    },
+  );
+  expect(triggerResponse.ok()).toBeTruthy();
+
+  // Verify the stage shows the stage text (not main text)
+  const currentMain = stagePage.locator("#current-main");
+  await expect(currentMain).toHaveText(stageText, { timeout: 15_000 });
+
+  // Verify operator preview also shows the stage text
+  const operatorCurrent = page.locator('[data-role="stage-current"]');
+  await expect(operatorCurrent).toHaveText(stageText, { timeout: 15_000 });
+
+  await stagePage.close();
+});

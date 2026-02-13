@@ -567,3 +567,132 @@ test("bible tab edit mode works in live and prepared tabs", async ({
     expect(firstSlideMain).toBe(editedValue);
   }).toPass({ timeout: 10_000 });
 });
+
+test("bible tab select all button selects and deselects all slides", async ({
+  page,
+  request,
+}) => {
+  await expect(async () => {
+    const response = await request.get(`${baseURL}/healthz`, {
+      timeout: 60_000,
+    });
+    expect(response.ok()).toBeTruthy();
+  }).toPass({ timeout: 90_000 });
+
+  await page.goto(`${baseURL}/ui/bible`);
+  const liveTab = page.locator('[data-role="bible-tab"][data-tab="live"]');
+  await expect(liveTab).toBeVisible({ timeout: 30_000 });
+
+  const waitForToastVisible = async () => {
+    await page.waitForFunction(
+      () => {
+        const toast = document.querySelector('[data-role="toast"]');
+        return toast && toast.getAttribute("data-visible") === "true";
+      },
+      { timeout: 60_000 },
+    );
+  };
+  const waitForToastHidden = async () => {
+    await page.waitForFunction(
+      () => {
+        const toast = document.querySelector('[data-role="toast"]');
+        return !toast || toast.getAttribute("data-visible") !== "true";
+      },
+      { timeout: 60_000 },
+    );
+  };
+
+  // Ensure translation is set
+  const settingsTab = page.locator(
+    '[data-role="bible-tab"][data-tab="settings"]',
+  );
+  await settingsTab.click();
+  const mainDropdown = page.locator('[data-role="main-translation"]');
+  await expect(mainDropdown).toBeVisible({ timeout: 30_000 });
+
+  const translations: Array<{ code: string }> = await (
+    await request.get(`${baseURL}/bible/translations`)
+  ).json();
+  const hasSlovak = translations.some((t) => t.code === "slk-seb");
+  if (hasSlovak) {
+    await mainDropdown.selectOption("slk-seb");
+    await expect(async () => {
+      const mainTranslation = await page.evaluate(
+        () =>
+          (window as any).__presenterBibleState?.preferences?.mainTranslation,
+      );
+      expect(mainTranslation).toBe("slk-seb");
+    }).toPass({ timeout: 10_000 });
+  }
+
+  // Switch to live tab and load a passage
+  await liveTab.click();
+  await expect(liveTab).toHaveAttribute("data-active", "true");
+
+  await expect(
+    page.locator('[data-role="book-list"] button').first(),
+  ).toBeVisible({ timeout: 60_000 });
+
+  await page.locator('[data-role="book-filter"]').fill("Jan");
+  const johnButton = page
+    .locator('[data-role="book-list"] button[data-book-code="JHN"]')
+    .first();
+  await expect(johnButton).toBeVisible({ timeout: 30_000 });
+  await johnButton.click();
+
+  await page.locator('[data-role="chapter-input"]').fill("1");
+  await page.locator('[data-role="verse-start"]').fill("1");
+  await page.locator('[data-role="verse-end"]').fill("5");
+  await page.locator('[data-role="load-button"]').click();
+  await waitForToastVisible();
+  await waitForToastHidden();
+
+  const slideCards = page.locator(".operator__slide-card");
+  await expect(slideCards.first()).toBeVisible({ timeout: 60_000 });
+  const slideCount = await slideCards.count();
+  expect(slideCount).toBeGreaterThan(0);
+
+  // Verify "Select all" button is visible
+  const selectAllBtn = page.locator('[data-role="select-all-slides"]');
+  await expect(selectAllBtn).toBeVisible();
+
+  // Click "Select all" — all slides should get is-selected class
+  await selectAllBtn.click();
+
+  await expect(async () => {
+    const selectedCount = await page.evaluate(
+      () => (window as any).__presenterBibleState?.selectedSlides?.size ?? 0,
+    );
+    const totalSlides = await page.evaluate(
+      () => (window as any).__presenterBibleState?.slides?.length ?? 0,
+    );
+    expect(selectedCount).toBe(totalSlides);
+    expect(selectedCount).toBeGreaterThan(0);
+  }).toPass({ timeout: 5_000 });
+
+  // All slide cards should have is-selected class
+  for (let i = 0; i < slideCount; i++) {
+    await expect(slideCards.nth(i)).toHaveClass(/is-selected/);
+  }
+
+  // Selection count label should show correct number
+  const selectionLabel = page.locator('[data-role="selection-count"]');
+  await expect(selectionLabel).toContainText(`${slideCount} selected`);
+
+  // Click "Select all" again — should deselect all
+  await selectAllBtn.click();
+
+  await expect(async () => {
+    const selectedCount = await page.evaluate(
+      () => (window as any).__presenterBibleState?.selectedSlides?.size ?? 0,
+    );
+    expect(selectedCount).toBe(0);
+  }).toPass({ timeout: 5_000 });
+
+  // No slide cards should have is-selected class
+  for (let i = 0; i < slideCount; i++) {
+    await expect(slideCards.nth(i)).not.toHaveClass(/is-selected/);
+  }
+
+  await expect(selectionLabel).toContainText("0 selected");
+});

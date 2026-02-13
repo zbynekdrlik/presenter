@@ -1166,7 +1166,8 @@
   }
 
   function stagePrimaryText(slide) {
-    return extractField(slide, "main").trim();
+    var stage = extractField(slide, "stage").trim();
+    return stage.length ? stage : extractField(slide, "main").trim();
   }
 
   function renderStageStatus() {

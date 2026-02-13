@@ -122,6 +122,7 @@
     slidesContainer: document.querySelector('[data-role="slides"]'),
     modeToggleContainer: document.querySelector(".operator__mode-toggle"),
     selectionCount: document.querySelector('[data-role="selection-count"]'),
+    selectAllButton: document.querySelector('[data-role="select-all-slides"]'),
     presentationSelect: document.querySelector(
       '[data-role="presentation-select"]',
     ),
@@ -223,6 +224,7 @@
     if (activePanel) activePanel.dataset.visible = "true";
 
     if (tab === "live") {
+      updateMode();
       renderSlides();
     } else if (tab === "prepared") {
       updateMode();
@@ -1241,7 +1243,9 @@
       return;
     }
     const html = state.slides
-      .map((slide, index) => renderSlideCard(slide, index))
+      .map((slide, index) =>
+        renderSlideCard(slide, index, state.editMode ? {} : {}),
+      )
       .join("");
     els.slidesContainer.innerHTML = html;
   }
@@ -1564,6 +1568,21 @@
     if (!els.selectionCount) return;
     const count = state.selectedSlides.size;
     els.selectionCount.textContent = `${count} selected`;
+  }
+
+  function toggleSelectAllSlides() {
+    if (
+      state.selectedSlides.size === state.slides.length &&
+      state.slides.length > 0
+    ) {
+      state.selectedSlides.clear();
+    } else {
+      state.slides.forEach(function (slide) {
+        state.selectedSlides.add(slide.id);
+      });
+    }
+    renderSlides();
+    updateSelectionLabel();
   }
 
   function updateMode() {
@@ -2468,6 +2487,9 @@
     if (els.slidesContainer) {
       els.slidesContainer.addEventListener("click", onSlidesContainerClick);
       els.slidesContainer.addEventListener("input", onSlidesContainerInput);
+    }
+    if (els.selectAllButton) {
+      els.selectAllButton.addEventListener("click", toggleSelectAllSlides);
     }
     if (els.addToPresentation) {
       els.addToPresentation.addEventListener(
