@@ -231,7 +231,6 @@ test("operator bible surface drives live passage broadcast", async ({
 
 test("operator header shows Bible preview when bible view is active", async ({
   page,
-  browser,
   request,
 }) => {
   await expect(async () => {
@@ -241,54 +240,27 @@ test("operator header shows Bible preview when bible view is active", async ({
     expect(response.ok()).toBeTruthy();
   }).toPass({ timeout: 90_000 });
 
-  // Load and trigger a Bible passage in the Bible UI
-  const biblePage = await browser.newPage();
-  await biblePage.goto(`${baseURL}/ui/bible`);
-  const liveTab = biblePage.locator('[data-role="bible-tab"][data-tab="live"]');
-  await expect(liveTab).toBeVisible({ timeout: 30_000 });
-
-  // Wait for books to load before filtering
-  await expect(
-    biblePage.locator('[data-role="book-list"] button').first(),
-  ).toBeVisible({ timeout: 60_000 });
-
-  await biblePage.locator('[data-role="book-filter"]').fill("Jan");
-  const johnButton = biblePage
-    .locator('[data-role="book-list"] button[data-book-code="JHN"]')
-    .first();
-  await expect(johnButton).toBeVisible({ timeout: 30_000 });
-  await johnButton.click();
-
-  await biblePage.locator('[data-role="chapter-input"]').fill("3");
-  await biblePage.locator('[data-role="verse-start"]').fill("16");
-  await biblePage.locator('[data-role="verse-end"]').fill("16");
-  await biblePage.locator('[data-role="load-button"]').click();
-  await biblePage.waitForFunction(
-    () => {
-      const toast = document.querySelector('[data-role="toast"]');
-      return toast && toast.getAttribute("data-visible") === "true";
+  // Use API to trigger a Bible broadcast (test 1 already set up the translation)
+  const triggerResponse = await request.post(`${baseURL}/bible/trigger`, {
+    data: {
+      translation: "slk-seb",
+      book: "Ján",
+      book_code: "JHN",
+      book_number: 43,
+      chapter: 3,
+      verse_start: 16,
+      verse_end: 16,
     },
-    { timeout: 60_000 },
-  );
-  await biblePage.waitForFunction(
-    () => {
-      const toast = document.querySelector('[data-role="toast"]');
-      return !toast || toast.getAttribute("data-visible") !== "true";
-    },
-    { timeout: 60_000 },
-  );
+  });
+  expect(triggerResponse.ok()).toBeTruthy();
 
-  // Trigger first slide
-  const slideCards = biblePage.locator(".operator__slide-card");
-  await expect(slideCards.first()).toBeVisible({ timeout: 60_000 });
-  await slideCards.first().locator('[data-role="slide-trigger"]').click();
-  await biblePage.waitForFunction(
-    () => {
-      const toast = document.querySelector('[data-role="toast"]');
-      return toast && toast.getAttribute("data-visible") === "true";
-    },
-    { timeout: 60_000 },
-  );
+  // Verify broadcast is active via API
+  await expect(async () => {
+    const activeResponse = await request.get(`${baseURL}/bible/active`);
+    expect(activeResponse.ok()).toBeTruthy();
+    const activeJson = await activeResponse.json();
+    expect(activeJson?.passage).toBeTruthy();
+  }).toPass({ timeout: 10_000 });
 
   // Navigate to operator in Bible view
   await page.goto(`${baseURL}/ui/operator/bible`);
@@ -347,8 +319,6 @@ test("operator header shows Bible preview when bible view is active", async ({
     );
     expect(bibleDisplay).toBe("none");
   }).toPass({ timeout: 5_000 });
-
-  await biblePage.close();
 });
 
 test("bible tab edit mode works in live and prepared tabs", async ({
@@ -385,7 +355,36 @@ test("bible tab edit mode works in live and prepared tabs", async ({
     );
   };
 
-  // Wait for books to load before filtering
+  // Go to settings tab first to ensure translation is set and books load
+  const settingsTab = page.locator(
+    '[data-role="bible-tab"][data-tab="settings"]',
+  );
+  await settingsTab.click();
+  await expect(settingsTab).toHaveAttribute("data-active", "true");
+  const mainDropdown = page.locator('[data-role="main-translation"]');
+  await expect(mainDropdown).toBeVisible({ timeout: 30_000 });
+
+  // Select the Slovak translation to ensure books load
+  const translations: Array<{ code: string }> = await (
+    await request.get(`${baseURL}/bible/translations`)
+  ).json();
+  const hasSlovak = translations.some((t) => t.code === "slk-seb");
+  if (hasSlovak) {
+    await mainDropdown.selectOption("slk-seb");
+    await expect(async () => {
+      const mainTranslation = await page.evaluate(
+        () =>
+          (window as any).__presenterBibleState?.preferences?.mainTranslation,
+      );
+      expect(mainTranslation).toBe("slk-seb");
+    }).toPass({ timeout: 10_000 });
+  }
+
+  // Switch back to live tab for passage loading
+  await liveTab.click();
+  await expect(liveTab).toHaveAttribute("data-active", "true");
+
+  // Wait for books to load
   await expect(
     page.locator('[data-role="book-list"] button').first(),
   ).toBeVisible({ timeout: 60_000 });
