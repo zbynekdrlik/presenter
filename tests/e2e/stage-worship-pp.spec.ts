@@ -361,8 +361,8 @@ test("worship-pp stage prefers stage text over main text", async ({
   expect(presDetail.presentation.slides.length).toBeGreaterThan(0);
   const targetSlide = presDetail.presentation.slides[0];
   const slideId = targetSlide.id;
-  const currentMain = targetSlide.content.main.value;
-  const currentTranslation = targetSlide.content?.translation?.value ?? "";
+  const existingMain = targetSlide.content.main.value;
+  const existingTranslation = targetSlide.content?.translation?.value ?? "";
 
   // Update the slide to have distinct stage text (all fields required)
   const stageText = `Stage Priority ${Date.now()}`;
@@ -370,8 +370,8 @@ test("worship-pp stage prefers stage text over main text", async ({
     new URL(`/presentations/${presId}/slides/${slideId}`, baseURL).toString(),
     {
       data: {
-        main: currentMain,
-        translation: currentTranslation,
+        main: existingMain,
+        translation: existingTranslation,
         stage: stageText,
       },
     },
