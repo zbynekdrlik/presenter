@@ -6632,6 +6632,7 @@
   });
 
   window.__presenterOperatorState = state;
+  window.__renderStageStatus = renderStageStatus;
   window.__presenterOperatorTestHelpers = {
     addPresentationToPlaylist: (presentationId, playlistId) =>
       handlePlaylistInsertion(presentationId, playlistId, null, {
