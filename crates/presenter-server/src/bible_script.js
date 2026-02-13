@@ -225,7 +225,6 @@
     if (tab === "live") {
       renderSlides();
     } else if (tab === "prepared") {
-      state.editMode = false;
       updateMode();
       renderPresentationSlides();
     }
@@ -1902,7 +1901,11 @@
     }
     const html = state.activePresentationSlides
       .map((slide, index) =>
-        renderSlideCard(slide, index, { triggerOnly: true }),
+        renderSlideCard(
+          slide,
+          index,
+          state.editMode ? {} : { triggerOnly: true },
+        ),
       )
       .join("");
     els.slidesContainer.innerHTML = html;
@@ -2101,11 +2104,47 @@
     }
   }
 
+  var _slideAutoSaveTimers = new Map();
+  function debounceSaveSlide(presentationId, slide) {
+    var key = slide.id;
+    if (_slideAutoSaveTimers.has(key))
+      clearTimeout(_slideAutoSaveTimers.get(key));
+    _slideAutoSaveTimers.set(
+      key,
+      setTimeout(function () {
+        _slideAutoSaveTimers.delete(key);
+        apiFetch("/presentations/" + presentationId + "/slides/" + slide.id, {
+          method: "PATCH",
+          body: JSON.stringify({
+            main: slide.main || "",
+            translation: slide.translation || "",
+            stage: slide.stage || "",
+            group: slide.group || null,
+          }),
+        })
+          .then(function () {
+            showToast("Slide saved", "success");
+          })
+          .catch(function (err) {
+            console.error("Failed to save slide", err);
+            showToast("Failed to save slide", "error");
+          });
+      }, 800),
+    );
+  }
+
   function onSlidesContainerInput(event) {
     const wrapper = event.target.closest("[data-slide-id]");
     if (!wrapper) return;
     const slideId = wrapper.getAttribute("data-slide-id");
-    const slide = state.slides.find((entry) => entry.id === slideId);
+    var slide = state.slides.find((entry) => entry.id === slideId);
+    var isPrepared = false;
+    if (!slide) {
+      slide = state.activePresentationSlides.find(
+        (entry) => entry.id === slideId,
+      );
+      isPrepared = true;
+    }
     if (!slide) return;
     if (event.target.matches('[data-role="slide-main"]')) {
       slide.main = event.target.value;
@@ -2124,6 +2163,9 @@
       bibleMeta.translationReferenceLabel = value || null;
       bibleMeta.translation_reference_label =
         bibleMeta.translationReferenceLabel;
+    }
+    if (isPrepared && state.activePresentationId) {
+      debounceSaveSlide(state.activePresentationId, slide);
     }
   }
 
@@ -2416,7 +2458,11 @@
         const newMode = btn.dataset.mode;
         state.editMode = newMode === "edit";
         updateMode();
-        renderSlides();
+        if (state.bibleTab === "prepared") {
+          renderPresentationSlides();
+        } else {
+          renderSlides();
+        }
       });
     }
     if (els.slidesContainer) {

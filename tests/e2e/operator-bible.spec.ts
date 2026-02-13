@@ -228,3 +228,307 @@ test("operator bible surface drives live passage broadcast", async ({
   await expect(preparedTab).toHaveAttribute("data-active", "true");
   await expect(page.locator('[data-role="presentations-list"]')).toBeVisible();
 });
+
+test("operator header shows Bible preview when bible view is active", async ({
+  page,
+  browser,
+  request,
+}) => {
+  await expect(async () => {
+    const response = await request.get(`${baseURL}/healthz`, {
+      timeout: 60_000,
+    });
+    expect(response.ok()).toBeTruthy();
+  }).toPass({ timeout: 90_000 });
+
+  // Load and trigger a Bible passage in the Bible UI
+  const biblePage = await browser.newPage();
+  await biblePage.goto(`${baseURL}/ui/bible`);
+  const liveTab = biblePage.locator('[data-role="bible-tab"][data-tab="live"]');
+  await expect(liveTab).toBeVisible({ timeout: 30_000 });
+
+  await biblePage.locator('[data-role="book-filter"]').fill("Jan");
+  const johnButton = biblePage
+    .locator('[data-role="book-list"] button[data-book-code="JHN"]')
+    .first();
+  await expect(johnButton).toBeVisible({ timeout: 30_000 });
+  await johnButton.click();
+
+  await biblePage.locator('[data-role="chapter-input"]').fill("3");
+  await biblePage.locator('[data-role="verse-start"]').fill("16");
+  await biblePage.locator('[data-role="verse-end"]').fill("16");
+  await biblePage.locator('[data-role="load-button"]').click();
+  await biblePage.waitForFunction(
+    () => {
+      const toast = document.querySelector('[data-role="toast"]');
+      return toast && toast.getAttribute("data-visible") === "true";
+    },
+    { timeout: 60_000 },
+  );
+  await biblePage.waitForFunction(
+    () => {
+      const toast = document.querySelector('[data-role="toast"]');
+      return !toast || toast.getAttribute("data-visible") !== "true";
+    },
+    { timeout: 60_000 },
+  );
+
+  // Trigger first slide
+  const slideCards = biblePage.locator(".operator__slide-card");
+  await expect(slideCards.first()).toBeVisible({ timeout: 60_000 });
+  await slideCards.first().locator('[data-role="slide-trigger"]').click();
+  await biblePage.waitForFunction(
+    () => {
+      const toast = document.querySelector('[data-role="toast"]');
+      return toast && toast.getAttribute("data-visible") === "true";
+    },
+    { timeout: 60_000 },
+  );
+
+  // Navigate to operator in Bible view
+  await page.goto(`${baseURL}/ui/operator/bible`);
+  await expect(page).toHaveURL(/\/ui\/operator\/bible/);
+
+  // Wait for the WebSocket to deliver the Bible broadcast
+  await page.waitForFunction(
+    () => (window as any).__presenterLiveConnected === true,
+    { timeout: 30_000 },
+  );
+
+  // The Bible preview panel should be visible
+  const biblePreview = page.locator('[data-role="bible-preview"]');
+  await expect(async () => {
+    const display = await biblePreview.evaluate(
+      (el) => window.getComputedStyle(el).display,
+    );
+    expect(display).not.toBe("none");
+  }).toPass({ timeout: 15_000 });
+
+  // Worship preview should be hidden
+  const worshipPreview = page.locator('[data-role="worship-preview"]');
+  await expect(async () => {
+    const display = await worshipPreview.evaluate(
+      (el) => window.getComputedStyle(el).display,
+    );
+    expect(display).toBe("none");
+  }).toPass({ timeout: 5_000 });
+
+  // The bible preview should contain verse text (not "No active passage")
+  await expect(async () => {
+    const text = await biblePreview.innerText();
+    expect(text).not.toContain("No active passage");
+    expect(text.length).toBeGreaterThan(5);
+  }).toPass({ timeout: 15_000 });
+
+  // Verify the reference info is present in the preview
+  const refEl = biblePreview.locator(".operator__bible-preview-ref");
+  await expect(refEl).toBeVisible();
+
+  // Stage status container should indicate active state
+  const stageStatus = page.locator('[data-role="stage-status"]');
+  await expect(stageStatus).toHaveAttribute("data-active", "true");
+
+  // Switch to worship view — worship preview should appear, bible preview should hide
+  await page.locator('[data-role="view-toggle"][data-view="worship"]').click();
+  await expect(async () => {
+    const worshipDisplay = await worshipPreview.evaluate(
+      (el) => window.getComputedStyle(el).display,
+    );
+    expect(worshipDisplay).not.toBe("none");
+  }).toPass({ timeout: 5_000 });
+  await expect(async () => {
+    const bibleDisplay = await biblePreview.evaluate(
+      (el) => window.getComputedStyle(el).display,
+    );
+    expect(bibleDisplay).toBe("none");
+  }).toPass({ timeout: 5_000 });
+
+  await biblePage.close();
+});
+
+test("bible tab edit mode works in live and prepared tabs", async ({
+  page,
+  request,
+}) => {
+  await expect(async () => {
+    const response = await request.get(`${baseURL}/healthz`, {
+      timeout: 60_000,
+    });
+    expect(response.ok()).toBeTruthy();
+  }).toPass({ timeout: 90_000 });
+
+  await page.goto(`${baseURL}/ui/bible`);
+  const liveTab = page.locator('[data-role="bible-tab"][data-tab="live"]');
+  await expect(liveTab).toBeVisible({ timeout: 30_000 });
+
+  const waitForToastVisible = async () => {
+    await page.waitForFunction(
+      () => {
+        const toast = document.querySelector('[data-role="toast"]');
+        return toast && toast.getAttribute("data-visible") === "true";
+      },
+      { timeout: 60_000 },
+    );
+  };
+  const waitForToastHidden = async () => {
+    await page.waitForFunction(
+      () => {
+        const toast = document.querySelector('[data-role="toast"]');
+        return !toast || toast.getAttribute("data-visible") !== "true";
+      },
+      { timeout: 60_000 },
+    );
+  };
+
+  // Load a passage
+  await page.locator('[data-role="book-filter"]').fill("Jan");
+  const johnButton = page
+    .locator('[data-role="book-list"] button[data-book-code="JHN"]')
+    .first();
+  await expect(johnButton).toBeVisible({ timeout: 30_000 });
+  await johnButton.click();
+
+  await page.locator('[data-role="chapter-input"]').fill("1");
+  await page.locator('[data-role="verse-start"]').fill("1");
+  await page.locator('[data-role="verse-end"]').fill("3");
+  await page.locator('[data-role="load-button"]').click();
+  await waitForToastVisible();
+  await waitForToastHidden();
+
+  const slideCards = page.locator(".operator__slide-card");
+  await expect(slideCards.first()).toBeVisible({ timeout: 60_000 });
+
+  // Edit mode toggle in live tab
+  const editBtn = page.locator('[data-mode="edit"]');
+  const liveBtn = page.locator('[data-mode="live"]');
+  await editBtn.click();
+
+  // Verify textareas appear (edit mode renders textarea elements)
+  await expect(page.locator('[data-role="slide-main"]').first()).toBeVisible({
+    timeout: 10_000,
+  });
+
+  // Edit the main text inline
+  const mainTextarea = page.locator('[data-role="slide-main"]').first();
+  const originalText = await mainTextarea.inputValue();
+  await mainTextarea.fill("Edited text in live tab");
+
+  // Verify the in-memory slide was updated
+  await expect(async () => {
+    const firstMain = await page.evaluate(
+      () => (window as any).__presenterBibleState?.slides?.[0]?.main,
+    );
+    expect(firstMain).toBe("Edited text in live tab");
+  }).toPass({ timeout: 5_000 });
+
+  // Switch back to live mode — textareas should disappear
+  await liveBtn.click();
+  await expect(page.locator('[data-role="slide-main"]')).toHaveCount(0, {
+    timeout: 10_000,
+  });
+
+  // Now test prepared tab edit mode
+  // First, select some slides and create a presentation
+  await editBtn.click();
+  // Restore original text so slide has valid content
+  await page.locator('[data-role="slide-main"]').first().fill(originalText);
+  await liveBtn.click();
+
+  // Select all slides
+  const selectZones = page.locator('[data-role="slide-select-zone"]');
+  const selectCount = await selectZones.count();
+  for (let i = 0; i < selectCount; i++) {
+    await selectZones.nth(i).click();
+  }
+
+  // Switch to prepared tab and create a presentation
+  const preparedTab = page.locator(
+    '[data-role="bible-tab"][data-tab="prepared"]',
+  );
+  await preparedTab.click();
+  await expect(preparedTab).toHaveAttribute("data-active", "true");
+
+  const presentationName = `Edit Test ${Date.now()}`;
+  page.once("dialog", async (dialog) => {
+    await dialog.accept(presentationName);
+  });
+  await page.locator('[data-role="presentation-create"]').click();
+  await waitForToastVisible();
+  await waitForToastHidden();
+
+  // Switch back to live and add slides to the presentation
+  await liveTab.click();
+  await expect(async () => {
+    const listText = await page
+      .locator('[data-role="presentations-list"]')
+      .innerText();
+    expect(listText).toContain(presentationName);
+  }).toPass({ timeout: 10_000 });
+
+  // Get the created presentation id
+  const presentationsResponse = await request.get(
+    `${baseURL}/bible/presentations`,
+  );
+  const presentations = await presentationsResponse.json();
+  const created = presentations.find(
+    (entry: any) => entry.name === presentationName,
+  );
+  expect(created).toBeTruthy();
+
+  // Select the presentation in dropdown and add slides
+  await page.selectOption('[data-role="presentation-select"]', created.id);
+  await page.locator('[data-role="presentation-add"]').click();
+  await waitForToastVisible();
+  await waitForToastHidden();
+
+  // Switch to prepared tab and click on the presentation
+  await preparedTab.click();
+  const presentationCard = page.locator(
+    `article[data-presentation-id="${created.id}"]`,
+  );
+  await presentationCard.click();
+  await expect(async () => {
+    const activeId = await page.evaluate(
+      () => (window as any).__presenterBibleState?.activePresentationId,
+    );
+    expect(activeId).toBe(created.id);
+  }).toPass({ timeout: 10_000 });
+
+  // Verify slides loaded in prepared tab (triggerOnly by default)
+  const prepSlides = page.locator(".operator__slide-card");
+  await expect(prepSlides.first()).toBeVisible({ timeout: 10_000 });
+
+  // In live mode, slides should be triggerOnly (no textarea)
+  await expect(page.locator('[data-role="slide-main"]')).toHaveCount(0, {
+    timeout: 5_000,
+  });
+
+  // Switch to edit mode — textareas should appear in prepared tab too
+  await editBtn.click();
+  await expect(page.locator('[data-role="slide-main"]').first()).toBeVisible({
+    timeout: 10_000,
+  });
+
+  // Edit a slide's main text to test auto-save
+  const prepMainTextarea = page.locator('[data-role="slide-main"]').first();
+  const editedValue = `Edited prepared ${Date.now()}`;
+  await prepMainTextarea.fill(editedValue);
+
+  // Wait for debounced save (toast "Slide saved")
+  await expect(async () => {
+    const toastText = await page.locator('[data-role="toast"]').innerText();
+    expect(toastText).toContain("Slide saved");
+  }).toPass({ timeout: 10_000 });
+
+  // Verify the edit persisted by reloading the presentation detail via API
+  await expect(async () => {
+    const detailResponse = await request.get(
+      `${baseURL}/bible/presentations/${created.id}`,
+    );
+    expect(detailResponse.ok()).toBeTruthy();
+    const detail = await detailResponse.json();
+    const firstSlideMain =
+      detail.slides?.[0]?.main ?? detail.slides?.[0]?.main_text ?? "";
+    expect(firstSlideMain).toBe(editedValue);
+  }).toPass({ timeout: 10_000 });
+});

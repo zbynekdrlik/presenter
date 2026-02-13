@@ -112,25 +112,30 @@ pub fn OperatorDocument(
                                 <select id="stage-layout-select" data-role="stage-layout-select"></select>
                             </div>
                             <div class="operator__stage-preview" data-role="stage-status" data-active="false">
-                                <div class="operator__stage-preview-stack">
-                                    <div class="operator__stage-preview-panel operator__stage-preview-panel--next" data-role="stage-next">"—"</div>
-                                    <div class="operator__stage-preview-song" data-role="stage-song-line">"—"</div>
-                                    <div class="operator__stage-preview-actions">
-                                        <button
-                                            type="button"
-                                            class="operator__stage-toggle"
-                                            data-role="ableset-enable"
-                                            data-state={if ableset_enabled { "on" } else { "off" }}
-                                        >{ableset_enable_label}</button>
-                                        <button
-                                            type="button"
-                                            class="operator__stage-toggle"
-                                            data-role="ableset-follow"
-                                            data-state={if ableset_follow_enabled { "on" } else { "off" }}
-                                        >{ableset_follow_label}</button>
+                                <div data-role="worship-preview" class="operator__worship-preview-wrap">
+                                    <div class="operator__stage-preview-stack">
+                                        <div class="operator__stage-preview-panel operator__stage-preview-panel--next" data-role="stage-next">"—"</div>
+                                        <div class="operator__stage-preview-song" data-role="stage-song-line">"—"</div>
+                                        <div class="operator__stage-preview-actions">
+                                            <button
+                                                type="button"
+                                                class="operator__stage-toggle"
+                                                data-role="ableset-enable"
+                                                data-state={if ableset_enabled { "on" } else { "off" }}
+                                            >{ableset_enable_label}</button>
+                                            <button
+                                                type="button"
+                                                class="operator__stage-toggle"
+                                                data-role="ableset-follow"
+                                                data-state={if ableset_follow_enabled { "on" } else { "off" }}
+                                            >{ableset_follow_label}</button>
+                                        </div>
                                     </div>
+                                    <div class="operator__stage-preview-panel operator__stage-preview-panel--current" data-role="stage-current">"—"</div>
                                 </div>
-                                <div class="operator__stage-preview-panel operator__stage-preview-panel--current" data-role="stage-current">"—"</div>
+                                <div class="operator__bible-preview" data-role="bible-preview" style="display:none">
+                                    <span class="operator__bible-preview-empty">"No active passage"</span>
+                                </div>
                                 <button
                                     type="button"
                                     class="operator__stage-monitor"
