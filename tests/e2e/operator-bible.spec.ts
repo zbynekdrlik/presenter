@@ -696,3 +696,128 @@ test("bible tab select all button selects and deselects all slides", async ({
 
   await expect(selectionLabel).toContainText("0 selected");
 });
+
+test("operator edit/live mode toggle propagates to bible iframe", async ({
+  page,
+  request,
+}) => {
+  await expect(async () => {
+    const response = await request.get(`${baseURL}/healthz`, {
+      timeout: 60_000,
+    });
+    expect(response.ok()).toBeTruthy();
+  }).toPass({ timeout: 90_000 });
+
+  // Navigate to operator page in Bible view
+  await page.goto(`${baseURL}/ui/operator/bible`);
+  await expect(page).toHaveURL(/\/ui\/operator\/bible/);
+
+  // Wait for the Bible iframe to load
+  const bibleIframe = page.locator('[data-view-panel="bible"] iframe');
+  await expect(bibleIframe).toBeVisible({ timeout: 30_000 });
+  const bibleFrame = page.frameLocator('[data-view-panel="bible"] iframe');
+
+  // Wait for Bible script to initialise inside the iframe
+  await expect(async () => {
+    const ready = await bibleFrame
+      .locator("body")
+      .evaluate(() => !!(window as any).__presenterBibleState);
+    expect(ready).toBeTruthy();
+  }).toPass({ timeout: 30_000 });
+
+  // Set translation inside the iframe
+  const settingsTab = bibleFrame.locator(
+    '[data-role="bible-tab"][data-tab="settings"]',
+  );
+  await settingsTab.click();
+  const mainDropdown = bibleFrame.locator('[data-role="main-translation"]');
+  await expect(mainDropdown).toBeVisible({ timeout: 30_000 });
+
+  const translations: Array<{ code: string }> = await (
+    await request.get(`${baseURL}/bible/translations`)
+  ).json();
+  const hasSlovak = translations.some((t) => t.code === "slk-seb");
+  if (hasSlovak) {
+    await mainDropdown.selectOption("slk-seb");
+    await expect(async () => {
+      const mainTranslation = await bibleFrame
+        .locator("body")
+        .evaluate(
+          () =>
+            (window as any).__presenterBibleState?.preferences?.mainTranslation,
+        );
+      expect(mainTranslation).toBe("slk-seb");
+    }).toPass({ timeout: 10_000 });
+  }
+
+  // Switch to live tab inside the iframe and load a passage
+  const liveTab = bibleFrame.locator(
+    '[data-role="bible-tab"][data-tab="live"]',
+  );
+  await liveTab.click();
+  await expect(liveTab).toHaveAttribute("data-active", "true");
+
+  // Wait for books to load
+  await expect(
+    bibleFrame.locator('[data-role="book-list"] button').first(),
+  ).toBeVisible({ timeout: 60_000 });
+
+  await bibleFrame.locator('[data-role="book-filter"]').fill("Jan");
+  const johnButton = bibleFrame
+    .locator('[data-role="book-list"] button[data-book-code="JHN"]')
+    .first();
+  await expect(johnButton).toBeVisible({ timeout: 30_000 });
+  await johnButton.click();
+
+  await bibleFrame.locator('[data-role="chapter-input"]').fill("3");
+  await bibleFrame.locator('[data-role="verse-start"]').fill("16");
+  await bibleFrame.locator('[data-role="verse-end"]').fill("17");
+  await bibleFrame.locator('[data-role="load-button"]').click();
+
+  // Wait for slides to appear
+  const slideCards = bibleFrame.locator(".operator__slide-card");
+  await expect(slideCards.first()).toBeVisible({ timeout: 60_000 });
+
+  // Verify we start in live mode — no textareas in the iframe
+  await expect(bibleFrame.locator('[data-role="slide-main"]')).toHaveCount(0, {
+    timeout: 5_000,
+  });
+
+  // Click the PARENT page's Edit button
+  const parentEditBtn = page.locator(
+    'button[data-role="mode-toggle"][data-mode="edit"]',
+  );
+  await parentEditBtn.click();
+
+  // Verify textareas APPEAR inside the Bible iframe (edit mode propagated)
+  await expect(
+    bibleFrame.locator('[data-role="slide-main"]').first(),
+  ).toBeVisible({ timeout: 10_000 });
+
+  // Verify the iframe state was updated
+  await expect(async () => {
+    const editMode = await bibleFrame
+      .locator("body")
+      .evaluate(() => (window as any).__presenterBibleState?.editMode);
+    expect(editMode).toBe(true);
+  }).toPass({ timeout: 5_000 });
+
+  // Click the PARENT page's Live button
+  const parentLiveBtn = page.locator(
+    'button[data-role="mode-toggle"][data-mode="live"]',
+  );
+  await parentLiveBtn.click();
+
+  // Verify textareas DISAPPEAR inside the Bible iframe (live mode propagated)
+  await expect(bibleFrame.locator('[data-role="slide-main"]')).toHaveCount(0, {
+    timeout: 10_000,
+  });
+
+  // Verify the iframe state was updated back to live
+  await expect(async () => {
+    const editMode = await bibleFrame
+      .locator("body")
+      .evaluate(() => (window as any).__presenterBibleState?.editMode);
+    expect(editMode).toBe(false);
+  }).toPass({ timeout: 5_000 });
+});

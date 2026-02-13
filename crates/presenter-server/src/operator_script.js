@@ -1487,6 +1487,19 @@
       renderSlides(state.currentPresentationId);
     }
     saveSessionState();
+
+    // Propagate mode change to Bible iframe when Bible view is active
+    if (state.view === "bible") {
+      var bibleIframe = document.querySelector(
+        '[data-view-panel="bible"] iframe',
+      );
+      if (bibleIframe && bibleIframe.contentWindow) {
+        bibleIframe.contentWindow.postMessage(
+          { type: "presenter-mode-change", mode: mode },
+          window.location.origin,
+        );
+      }
+    }
   }
 
   function updateAddSlideAvailability() {

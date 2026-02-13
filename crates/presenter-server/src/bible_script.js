@@ -2588,6 +2588,20 @@
     ensureActivePoller();
   }
 
+  // Listen for mode changes from parent operator page (when embedded as iframe)
+  window.addEventListener("message", function (event) {
+    if (event.origin !== window.location.origin) return;
+    if (!event.data || event.data.type !== "presenter-mode-change") return;
+    var newMode = event.data.mode;
+    state.editMode = newMode === "edit";
+    updateMode();
+    if (state.bibleTab === "prepared") {
+      renderPresentationSlides();
+    } else {
+      renderSlides();
+    }
+  });
+
   window.__presenterBibleState = state;
   initialise();
 })();
