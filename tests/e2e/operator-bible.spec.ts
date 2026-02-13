@@ -247,6 +247,11 @@ test("operator header shows Bible preview when bible view is active", async ({
   const liveTab = biblePage.locator('[data-role="bible-tab"][data-tab="live"]');
   await expect(liveTab).toBeVisible({ timeout: 30_000 });
 
+  // Wait for books to load before filtering
+  await expect(
+    biblePage.locator('[data-role="book-list"] button').first(),
+  ).toBeVisible({ timeout: 60_000 });
+
   await biblePage.locator('[data-role="book-filter"]').fill("Jan");
   const johnButton = biblePage
     .locator('[data-role="book-list"] button[data-book-code="JHN"]')
@@ -379,6 +384,11 @@ test("bible tab edit mode works in live and prepared tabs", async ({
       { timeout: 60_000 },
     );
   };
+
+  // Wait for books to load before filtering
+  await expect(
+    page.locator('[data-role="book-list"] button').first(),
+  ).toBeVisible({ timeout: 60_000 });
 
   // Load a passage
   await page.locator('[data-role="book-filter"]').fill("Jan");
