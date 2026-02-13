@@ -1,11 +1,11 @@
-import { test, expect, APIRequestContext } from '@playwright/test';
+import { test, expect } from "@playwright/test";
 import {
   deriveTestConfig,
   refreshDevData,
   startTestServer,
   stopServer,
   type ServerHandle,
-} from './support';
+} from "./support";
 
 test.describe.configure({ timeout: 300_000 });
 
@@ -15,7 +15,11 @@ test.beforeAll(async ({}, testInfo) => {
   const config = deriveTestConfig(testInfo);
   baseURL = config.baseURL;
   await refreshDevData(config.dbUrl);
-  serverHandle = await startTestServer(config.port, config.dbUrl, config.oscPort);
+  serverHandle = await startTestServer(
+    config.port,
+    config.dbUrl,
+    config.oscPort,
+  );
 });
 
 test.afterAll(async () => {
@@ -23,298 +27,195 @@ test.afterAll(async () => {
   serverHandle = undefined;
 });
 
-type SlideSelection = {
-  libraryId: string;
-  libraryName: string;
-  presentationName: string;
-  presentationId: string;
-  slideId: string;
-  main: string;
-  translation: string;
-  stage: string;
-};
-
-async function pickSlideWithContent(request: APIRequestContext, base: string): Promise<SlideSelection> {
-  const librariesResp = await request.get(new URL('/libraries', base).toString(), {
-    timeout: 120_000,
-  });
-  expect(librariesResp.ok()).toBeTruthy();
-  const libraries: Array<{ id: string; name: string; presentations: Array<{ id: string; name: string }> }> =
-    await librariesResp.json();
-
-  for (const library of libraries) {
-    for (const presentation of library.presentations) {
-      const detailResp = await request.get(
-        new URL(`/presentations/${presentation.id}`, base).toString(),
-        { timeout: 120_000 }
-      );
-      expect(detailResp.ok()).toBeTruthy();
-      const detail: {
-        presentation: {
-          id: string;
-          slides: Array<{
-            id: string;
-            content: {
-              main: { value: string };
-              translation: { value: string };
-              stage: { value: string };
-            };
-          }>;
-        };
-      } = await detailResp.json();
-
-      for (const slide of detail.presentation.slides) {
-        const main = slide.content.main.value.trim();
-        const translation = slide.content.translation.value.trim();
-        const stage = slide.content.stage.value.trim();
-        if (main || translation || stage) {
-          return {
-            libraryId: library.id,
-            libraryName: library.name || 'Library',
-            presentationName: presentation.name,
-            presentationId: detail.presentation.id,
-            slideId: slide.id,
-            main,
-            translation,
-            stage,
-          };
-        }
-      }
-    }
-  }
-
-  throw new Error('No slide with visible content found');
-}
-
-test('tablet operator can trigger and edit slide content', async ({ page, context }) => {
+test("tablet shows Bible presentations, renders slides, and triggers passages", async ({
+  page,
+  request,
+}) => {
+  // Wait for server readiness
   await expect(async () => {
-    const response = await page.request.get(new URL('/healthz', baseURL).toString(), {
-      timeout: 120_000,
-    });
+    const response = await request.get(
+      new URL("/healthz", baseURL).toString(),
+      {
+        timeout: 120_000,
+      },
+    );
     expect(response.ok()).toBeTruthy();
   }).toPass({ timeout: 180_000 });
 
-  const selection = await pickSlideWithContent(page.request, baseURL);
+  // --- Setup: create a Bible presentation with slides via API ---
+  const presentationName = `Tablet E2E ${Date.now()}`;
+  const createResponse = await request.post(
+    new URL("/bible/presentations", baseURL).toString(),
+    {
+      data: { name: presentationName },
+      headers: { "Content-Type": "application/json" },
+      timeout: 60_000,
+    },
+  );
+  expect(createResponse.ok()).toBeTruthy();
+  const created = await createResponse.json();
+  const presentationId: string = created.id;
 
-  const librariesDataResponse = await page.request.get(new URL('/libraries', baseURL).toString(), {
-    timeout: 120_000,
-  });
-  expect(librariesDataResponse.ok()).toBeTruthy();
-  const librariesData: Array<{
-    id: string;
-    name: string;
-    presentations: Array<{ id: string; name: string }>;
-  }> = await librariesDataResponse.json();
-
-  let additional = {
-    libraryId: selection.libraryId,
-    libraryName: selection.libraryName,
-    presentationId: selection.presentationId,
-    presentationName: selection.presentationName,
-  };
-
-  const matchingLibrary = librariesData.find((lib) => lib.id === selection.libraryId);
-  let alternative = matchingLibrary?.presentations.find((presentation) => presentation.id !== selection.presentationId);
-  if (!alternative) {
-    for (const lib of librariesData) {
-      alternative = lib.presentations.find((presentation) => presentation.id !== selection.presentationId);
-      if (alternative) {
-        additional = {
-          libraryId: lib.id,
-          libraryName: lib.name,
-          presentationId: alternative.id,
-          presentationName: alternative.name,
-        };
-        break;
-      }
-    }
-  } else if (matchingLibrary) {
-    additional = {
-      libraryId: matchingLibrary.id,
-      libraryName: matchingLibrary.name,
-      presentationId: alternative.id,
-      presentationName: alternative.name,
-    };
-  }
-
-  const playlistName = `Tablet Autotest ${Date.now()}`;
-  const playlistResponse = await page.request.post(new URL('/playlists', baseURL).toString(), {
-    data: { name: playlistName },
-    headers: { 'Content-Type': 'application/json' },
-    timeout: 60_000,
-  });
-  expect(playlistResponse.ok()).toBeTruthy();
-  const playlist = await playlistResponse.json();
-
-  const playlistEntriesResponse = await page.request.put(
-    new URL(`/playlists/${playlist.id}/entries`, baseURL).toString(),
+  // Resolve Bible slides for John 3:16-18 to get slide data with metadata
+  const resolveResponse = await request.post(
+    new URL("/bible/resolve", baseURL).toString(),
     {
       data: {
-        entries: [
-          { type: 'presentation', presentationId: selection.presentationId },
-        ],
+        mainTranslation: "eng-kjv",
+        book: "John",
+        bookCode: "JHN",
+        chapter: 3,
+        verseStart: 16,
+        verseEnd: 18,
       },
-      headers: { 'Content-Type': 'application/json' },
+      headers: { "Content-Type": "application/json" },
       timeout: 60_000,
-    }
+    },
   );
-  if (!playlistEntriesResponse.ok()) {
-    console.error('failed to seed playlist entries', playlistEntriesResponse.status(), await playlistEntriesResponse.text());
-  }
-  expect(playlistEntriesResponse.ok()).toBeTruthy();
+  expect(resolveResponse.ok()).toBeTruthy();
+  const resolved = await resolveResponse.json();
+  const resolvedSlides: Array<{
+    main: string;
+    translation: string;
+    stage: string;
+    group?: string;
+    metadata?: any;
+    mainReference?: string;
+    translationReference?: string;
+  }> = resolved.slides;
+  expect(resolvedSlides.length).toBeGreaterThan(0);
 
-  await page.goto(new URL('/ui/tablet', baseURL).toString());
-  await page.waitForLoadState('networkidle');
-  await page.waitForFunction(() => window.__presenterTabletReady === true, {
-    timeout: 20_000,
-  });
-
-  const editToggle = page.locator('[data-role="mode-toggle"][data-mode="edit"]');
-  const liveToggle = page.locator('[data-role="mode-toggle"][data-mode="live"]');
-
-  const playlistButton = page.locator(
-    `[data-role="playlist-button"][data-playlist-id="${playlist.id}"]`
+  // Append resolved slides to the presentation
+  const appendResponse = await request.post(
+    new URL(
+      `/bible/presentations/${presentationId}/append`,
+      baseURL,
+    ).toString(),
+    {
+      data: {
+        slides: resolvedSlides.map((slide) => ({
+          main: slide.main,
+          translation: slide.translation,
+          stage: slide.stage,
+          group: slide.group || null,
+          metadata: slide.metadata || null,
+        })),
+      },
+      headers: { "Content-Type": "application/json" },
+      timeout: 60_000,
+    },
   );
-  await playlistButton.waitFor({ state: 'visible' });
-  await expect(playlistButton.locator('[data-role="playlist-count"]')).toHaveText('1');
-  await playlistButton.click();
-  await expect(page.locator('[data-role="context-title"]')).toHaveText(`Playlist: ${playlistName}`);
+  expect(appendResponse.ok()).toBeTruthy();
 
-  const libraryButton = page.locator(
-    `[data-role="library-button"][data-library-id="${selection.libraryId}"]`
-  );
-  await libraryButton.waitFor({ state: 'visible' });
-
-  await editToggle.click();
-  await expect(page.locator('body')).toHaveAttribute('data-mode', 'edit');
-
-  const additionalLibraryButton = page.locator(
-    `[data-role="library-button"][data-library-id="${additional.libraryId}"]`
-  );
-  await additionalLibraryButton.waitFor({ state: 'visible' });
-  await additionalLibraryButton.click();
-
-  const addButton = page.locator(
-    `[data-role="library-entry"][data-presentation-id="${additional.presentationId}"] [data-action="playlist-add"]`
-  );
-  await addButton.waitFor({ state: 'visible' });
-  await addButton.click();
-  await expect(playlistButton.locator('[data-role="playlist-count"]')).toHaveText('2');
-
-  await playlistButton.click();
-  await expect(page.locator('[data-role="context-title"]')).toHaveText(`Playlist: ${playlistName}`);
-  const playlistEntries = page.locator('[data-role="playlist-entry"]');
-  await expect(playlistEntries).toHaveCount(2);
-
-  await page
-    .locator(
-      `[data-role="playlist-entry"][data-presentation-id="${additional.presentationId}"] [data-action="playlist-up"]`
-    )
-    .click();
-  await expect(
-    page.locator('[data-role="playlist-entry"]').first().locator('.tablet-button__label')
-  ).toContainText(additional.presentationName);
-
-  await page
-    .locator(
-      `[data-role="playlist-entry"][data-presentation-id="${selection.presentationId}"] [data-action="playlist-remove"]`
-    )
-    .click();
-  await expect(playlistButton.locator('[data-role="playlist-count"]')).toHaveText('1');
-
-  await liveToggle.click();
-  await expect(page.locator('body')).toHaveAttribute('data-mode', 'live');
-
-  await libraryButton.click();
-  await expect(page.locator('[data-role="context-title"]')).toHaveText(
-    `Library: ${selection.libraryName}`
-  );
-
-  const presentationButton = page.locator(
-    `[data-role="presentation-button"][data-presentation-id="${selection.presentationId}"]`
-  );
-  await presentationButton.waitFor({ state: 'visible' });
-  await presentationButton.click();
-
-  const slideButton = page.locator(
-    `[data-role="tablet-slide"][data-slide-id="${selection.slideId}"]`
-  );
-  await slideButton.waitFor({ state: 'visible' });
-
-  await page.request.post(new URL('/stage/layout', baseURL).toString(), {
-    data: { code: 'worship-snv' },
-  });
-
-  const stagePage = await context.newPage();
-  await stagePage.goto(new URL('/stage', baseURL).toString());
-  await stagePage.waitForSelector('#current-text', { state: 'attached' });
-
-  await slideButton.click();
-  await page.waitForTimeout(500);
-  await expect(async () => {
-    const snapshotResponse = await page.request.get(new URL('/stage/snapshot', baseURL).toString(), {
-      timeout: 15_000,
-    });
-    if (!snapshotResponse.ok()) {
-      throw new Error('snapshot not ready');
-    }
-    const snapshot = await snapshotResponse.json();
-    if (snapshot.presentationId !== selection.presentationId || snapshot.currentSlideId !== selection.slideId) {
-      throw new Error(`stage current=${snapshot.currentSlideId}`);
-    }
-  }).toPass({ timeout: 15_000, intervals: [300] });
-  if (selection.main) {
-    await expect(stagePage.locator('#current-text')).toContainText(selection.main, {
-      timeout: 10_000,
-    });
-  }
-
-  await editToggle.click();
-  await expect(page.locator('body')).toHaveAttribute('data-mode', 'edit');
-
-  await slideButton.click();
-  const editor = page.locator('[data-role="editor"]');
-  await expect(editor).toHaveAttribute('data-open', 'true');
-
-  const newMain = selection.main ? `${selection.main} (tablet edit)` : 'Tablet main demo';
-  const newTranslation = selection.translation
-    ? `${selection.translation} (tablet edit)`
-    : 'Tablet translation demo';
-  const newStage = selection.stage ? `${selection.stage} (tablet edit)` : 'Tablet stage demo';
-  const newGroup = 'Tablet Group';
-
-  await page.fill('[data-role="editor-main"]', newMain);
-  await page.fill('[data-role="editor-translation"]', newTranslation);
-  await page.fill('[data-role="editor-stage"]', newStage);
-  await page.fill('[data-role="editor-group"]', newGroup);
-  const saveButton = page.locator('[data-role="editor-save"]');
-  await saveButton.evaluate((button) => (button as HTMLButtonElement).click());
-
-  await expect(editor).toHaveAttribute('data-open', 'false');
-  const toast = page.locator('[data-role="toast"]');
-  await expect(toast).toHaveAttribute('data-visible', 'true', { timeout: 10_000 });
-
-  await expect(async () => {
-    const text = await stagePage.locator('#current-text').textContent();
-    if (!text || !text.includes(newStage)) {
-      throw new Error('stage text not yet updated');
-    }
-  }).toPass({ timeout: 15_000, intervals: [300] });
-
-  const detailResponse = await page.request.get(
-    new URL(`/presentations/${selection.presentationId}`, baseURL).toString(),
-    { timeout: 60_000 }
+  // Fetch final presentation to get slide IDs
+  const detailResponse = await request.get(
+    new URL(`/bible/presentations/${presentationId}`, baseURL).toString(),
+    { timeout: 60_000 },
   );
   expect(detailResponse.ok()).toBeTruthy();
   const detail = await detailResponse.json();
-  const updatedSlide = detail.presentation.slides.find(
-    (slide: { id: string }) => slide.id === selection.slideId
-  );
-  expect(updatedSlide).toBeTruthy();
-  expect(updatedSlide.content.main.value).toBe(newMain);
-  expect(updatedSlide.content.translation.value).toBe(newTranslation);
-  expect(updatedSlide.content.stage.value).toBe(newStage);
-  expect(updatedSlide.content.group.name).toBe(newGroup);
+  const slideCount: number = detail.slides.length;
+  expect(slideCount).toBeGreaterThan(0);
+  const firstSlide = detail.slides[0];
 
-  await stagePage.close();
+  // --- Navigate to tablet UI ---
+  await page.goto(new URL("/ui/tablet", baseURL).toString());
+  await page.waitForLoadState("networkidle");
+  await page.waitForFunction(
+    () => (window as any).__presenterTabletReady === true,
+    {
+      timeout: 20_000,
+    },
+  );
+
+  // --- Verify presentation appears in sidebar ---
+  const presentationButton = page.locator(
+    `[data-role="presentation-button"][data-presentation-id="${presentationId}"]`,
+  );
+  await presentationButton.waitFor({ state: "visible", timeout: 10_000 });
+  await expect(
+    presentationButton.locator(".tablet-button__label"),
+  ).toContainText(presentationName);
+  await expect(presentationButton.locator(".tablet-button__meta")).toHaveText(
+    String(slideCount),
+  );
+
+  // --- Click presentation to load slides ---
+  await presentationButton.click();
+
+  // Verify context title updates
+  await expect(page.locator('[data-role="context-title"]')).toHaveText(
+    presentationName,
+  );
+
+  // Verify slides render in main area
+  const slideCards = page.locator('[data-role="tablet-slide"]');
+  await expect(slideCards).toHaveCount(slideCount, { timeout: 10_000 });
+
+  // Verify first slide content
+  const firstCard = slideCards.first();
+  if (firstSlide.main) {
+    await expect(firstCard.locator(".tablet-slide__main")).toContainText(
+      firstSlide.main.substring(0, 20),
+    );
+  }
+  if (firstSlide.mainReference) {
+    await expect(firstCard.locator(".tablet-slide__ref")).toContainText(
+      firstSlide.mainReference,
+    );
+  }
+
+  // --- Click a slide to trigger Bible passage ---
+  await firstCard.click();
+
+  // Verify toast shows success
+  const toast = page.locator('[data-role="toast"]');
+  await expect(toast).toHaveAttribute("data-visible", "true", {
+    timeout: 10_000,
+  });
+  await expect(toast).toContainText("Slide triggered");
+
+  // Verify Bible active endpoint has the triggered passage
+  await expect(async () => {
+    const activeResponse = await request.get(
+      new URL("/bible/active", baseURL).toString(),
+      { timeout: 15_000 },
+    );
+    expect(activeResponse.ok()).toBeTruthy();
+    const active = await activeResponse.json();
+    expect(active).not.toBeNull();
+    expect(active.passage.reference.book).toBe("John");
+    expect(active.passage.reference.chapter).toBe(3);
+  }).toPass({ timeout: 15_000, intervals: [300] });
+
+  // Verify the clicked slide gets is-active class
+  await expect(async () => {
+    const hasActive = await firstCard.evaluate((el) =>
+      el.classList.contains("is-active"),
+    );
+    expect(hasActive).toBe(true);
+  }).toPass({ timeout: 10_000, intervals: [300] });
+
+  // --- Verify no song/library/playlist content is visible ---
+  await expect(page.locator('[data-role="library-list"]')).toHaveCount(0);
+  await expect(page.locator('[data-role="playlist-list"]')).toHaveCount(0);
+  await expect(page.locator('[data-role="mode-toggle"]')).toHaveCount(0);
+  await expect(page.locator('[data-role="editor"]')).toHaveCount(0);
+
+  // --- Click a different slide (if multiple) to verify switching ---
+  if (slideCount > 1) {
+    const secondCard = slideCards.nth(1);
+    await secondCard.click();
+    await expect(toast).toHaveAttribute("data-visible", "true", {
+      timeout: 10_000,
+    });
+
+    // Verify second slide becomes active
+    await expect(async () => {
+      const secondActive = await secondCard.evaluate((el) =>
+        el.classList.contains("is-active"),
+      );
+      expect(secondActive).toBe(true);
+    }).toPass({ timeout: 10_000, intervals: [300] });
+  }
 });
