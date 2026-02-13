@@ -26,6 +26,7 @@ use presenter_core::{
     SlideContent, SlideId, StageState, TimersState,
 };
 use presenter_migration::{Migrator, MigratorTrait};
+use sea_orm::Statement;
 use sea_orm::{
     sea_query::{Expr, OnConflict},
     ActiveModelTrait, ColumnTrait, ConnectionTrait, Database, DatabaseConnection, EntityTrait,
@@ -61,6 +62,7 @@ impl Repository {
         let db = Database::connect(settings.url.as_str())
             .await
             .with_context(|| format!("failed to connect to database at {}", settings.url))?;
+        Self::apply_sqlite_pragmas(&db).await?;
         Self::migrate(&db).await?;
         Ok(Self { db })
     }
@@ -76,6 +78,33 @@ impl Repository {
 
     async fn migrate(db: &DatabaseConnection) -> anyhow::Result<()> {
         Migrator::up(db, None).await?;
+        Ok(())
+    }
+
+    async fn apply_sqlite_pragmas(db: &DatabaseConnection) -> anyhow::Result<()> {
+        let backend = db.get_database_backend();
+        for pragma in [
+            "PRAGMA journal_mode = WAL",
+            "PRAGMA wal_autocheckpoint = 1000",
+            "PRAGMA busy_timeout = 5000",
+        ] {
+            db.execute(Statement::from_string(backend, pragma.to_string()))
+                .await
+                .with_context(|| format!("failed to execute {pragma}"))?;
+        }
+        Ok(())
+    }
+
+    /// Run a WAL checkpoint to keep the WAL file from growing unbounded.
+    pub async fn wal_checkpoint(&self) -> anyhow::Result<()> {
+        let backend = self.db.get_database_backend();
+        self.db
+            .execute(Statement::from_string(
+                backend,
+                "PRAGMA wal_checkpoint(TRUNCATE)".to_string(),
+            ))
+            .await
+            .context("WAL checkpoint failed")?;
         Ok(())
     }
 
