@@ -101,6 +101,7 @@
       enableLoading: false,
       followLoading: false,
     },
+    activeBibleBroadcast: null,
   };
 
   const SESSION_STATE_KEY = "presenter.operatorState";
@@ -1165,12 +1166,29 @@
   }
 
   function stagePrimaryText(slide) {
-    return extractField(slide, "main").trim();
+    var stage = extractField(slide, "stage").trim();
+    return stage.length ? stage : extractField(slide, "main").trim();
   }
 
   function renderStageStatus() {
     const container = qs('[data-role="stage-status"]');
     if (!container) return;
+
+    var biblePreviewEl = qs('[data-role="bible-preview"]', container);
+    var worshipPreviewEl = qs('[data-role="worship-preview"]', container);
+
+    if (state.view === "bible") {
+      if (worshipPreviewEl) worshipPreviewEl.style.display = "none";
+      if (biblePreviewEl) {
+        biblePreviewEl.style.display = "";
+        renderBiblePreview(biblePreviewEl);
+      }
+      container.dataset.active = state.activeBibleBroadcast ? "true" : "false";
+      return;
+    }
+
+    if (biblePreviewEl) biblePreviewEl.style.display = "none";
+    if (worshipPreviewEl) worshipPreviewEl.style.display = "";
 
     const currentEl = qs('[data-role="stage-current"]', container);
     const nextEl = qs('[data-role="stage-next"]', container);
@@ -1211,6 +1229,42 @@
     if (els.stageSongLine) {
       els.stageSongLine.textContent = resolveSongLine(snapshot);
     }
+  }
+
+  function renderBiblePreview(el) {
+    var broadcast = state.activeBibleBroadcast;
+    if (!broadcast || !broadcast.passage) {
+      el.innerHTML =
+        '<span class="operator__bible-preview-empty">No active passage</span>';
+      return;
+    }
+    var ref = broadcast.passage.reference;
+    var trans = broadcast.passage.translation;
+    var text = broadcast.passage.text || "";
+    var verseLabel =
+      (ref.book || ref.book_name || "") +
+      " " +
+      ref.chapter +
+      ":" +
+      (ref.verse_start || ref.verseStart) +
+      ((ref.verse_end || ref.verseEnd) &&
+      (ref.verse_end || ref.verseEnd) !== (ref.verse_start || ref.verseStart)
+        ? "-" + (ref.verse_end || ref.verseEnd)
+        : "");
+    var translationLabel = trans.name || trans.code || "";
+
+    el.innerHTML =
+      '<div class="operator__bible-preview-text">' +
+      escapeHtml(text) +
+      "</div>" +
+      '<div class="operator__bible-preview-ref">' +
+      "<span>" +
+      escapeHtml(verseLabel) +
+      "</span>" +
+      "<span>" +
+      escapeHtml(translationLabel) +
+      "</span>" +
+      "</div>";
   }
 
   function parseStageConnectionSnapshot(raw) {
@@ -1415,6 +1469,7 @@
       var url = view === "worship" ? "/ui/operator" : "/ui/operator/" + view;
       history.pushState({ view: view }, "", url);
     }
+    renderStageStatus();
     saveSessionState();
   }
 
@@ -1432,6 +1487,19 @@
       renderSlides(state.currentPresentationId);
     }
     saveSessionState();
+
+    // Propagate mode change to Bible iframe when Bible view is active
+    if (state.view === "bible") {
+      var bibleIframe = document.querySelector(
+        '[data-view-panel="bible"] iframe',
+      );
+      if (bibleIframe && bibleIframe.contentWindow) {
+        bibleIframe.contentWindow.postMessage(
+          { type: "presenter-mode-change", mode: mode },
+          window.location.origin,
+        );
+      }
+    }
   }
 
   function updateAddSlideAvailability() {
@@ -4214,7 +4282,14 @@
         ) {
           handleStageConnectionSnapshot(payload.snapshot || payload);
         } else if (payload.type === "bible" || payload.type === "Bible") {
-          // no-op for operator for now
+          state.activeBibleBroadcast = payload.broadcast || null;
+          renderStageStatus();
+        } else if (
+          payload.type === "bible_cleared" ||
+          payload.type === "BibleCleared"
+        ) {
+          state.activeBibleBroadcast = null;
+          renderStageStatus();
         }
       } catch (error) {
         console.error("Failed to parse live payload", error);
@@ -6571,6 +6646,7 @@
   });
 
   window.__presenterOperatorState = state;
+  window.__renderStageStatus = renderStageStatus;
   window.__presenterOperatorTestHelpers = {
     addPresentationToPlaylist: (presentationId, playlistId) =>
       handlePlaylistInsertion(presentationId, playlistId, null, {

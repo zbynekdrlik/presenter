@@ -131,6 +131,7 @@ fn BibleDocument(
                                 <button type="button" class="operator__list-action operator__list-action--primary" data-role="load-button">"Load passage"</button>
                                 <hr class="operator__divider" />
                                 <span data-role="selection-count" class="operator__slides-count">"0 selected"</span>
+                                <button type="button" class="operator__list-action" data-role="select-all-slides">"Select all"</button>
                                 <label class="operator__field">
                                     <select data-role="presentation-select">
                                         <option value="">"Add to…"</option>

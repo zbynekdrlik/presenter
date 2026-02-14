@@ -122,6 +122,7 @@
     slidesContainer: document.querySelector('[data-role="slides"]'),
     modeToggleContainer: document.querySelector(".operator__mode-toggle"),
     selectionCount: document.querySelector('[data-role="selection-count"]'),
+    selectAllButton: document.querySelector('[data-role="select-all-slides"]'),
     presentationSelect: document.querySelector(
       '[data-role="presentation-select"]',
     ),
@@ -223,9 +224,9 @@
     if (activePanel) activePanel.dataset.visible = "true";
 
     if (tab === "live") {
+      updateMode();
       renderSlides();
     } else if (tab === "prepared") {
-      state.editMode = false;
       updateMode();
       renderPresentationSlides();
     }
@@ -1242,7 +1243,9 @@
       return;
     }
     const html = state.slides
-      .map((slide, index) => renderSlideCard(slide, index))
+      .map((slide, index) =>
+        renderSlideCard(slide, index, state.editMode ? {} : {}),
+      )
       .join("");
     els.slidesContainer.innerHTML = html;
   }
@@ -1565,6 +1568,21 @@
     if (!els.selectionCount) return;
     const count = state.selectedSlides.size;
     els.selectionCount.textContent = `${count} selected`;
+  }
+
+  function toggleSelectAllSlides() {
+    if (
+      state.selectedSlides.size === state.slides.length &&
+      state.slides.length > 0
+    ) {
+      state.selectedSlides.clear();
+    } else {
+      state.slides.forEach(function (slide) {
+        state.selectedSlides.add(slide.id);
+      });
+    }
+    renderSlides();
+    updateSelectionLabel();
   }
 
   function updateMode() {
@@ -1902,7 +1920,11 @@
     }
     const html = state.activePresentationSlides
       .map((slide, index) =>
-        renderSlideCard(slide, index, { triggerOnly: true }),
+        renderSlideCard(
+          slide,
+          index,
+          state.editMode ? {} : { triggerOnly: true },
+        ),
       )
       .join("");
     els.slidesContainer.innerHTML = html;
@@ -2101,11 +2123,47 @@
     }
   }
 
+  var _slideAutoSaveTimers = new Map();
+  function debounceSaveSlide(presentationId, slide) {
+    var key = slide.id;
+    if (_slideAutoSaveTimers.has(key))
+      clearTimeout(_slideAutoSaveTimers.get(key));
+    _slideAutoSaveTimers.set(
+      key,
+      setTimeout(function () {
+        _slideAutoSaveTimers.delete(key);
+        apiFetch("/presentations/" + presentationId + "/slides/" + slide.id, {
+          method: "PATCH",
+          body: JSON.stringify({
+            main: slide.main || "",
+            translation: slide.translation || "",
+            stage: slide.stage || "",
+            group: slide.group || null,
+          }),
+        })
+          .then(function () {
+            showToast("Slide saved", "success");
+          })
+          .catch(function (err) {
+            console.error("Failed to save slide", err);
+            showToast("Failed to save slide", "error");
+          });
+      }, 800),
+    );
+  }
+
   function onSlidesContainerInput(event) {
     const wrapper = event.target.closest("[data-slide-id]");
     if (!wrapper) return;
     const slideId = wrapper.getAttribute("data-slide-id");
-    const slide = state.slides.find((entry) => entry.id === slideId);
+    var slide = state.slides.find((entry) => entry.id === slideId);
+    var isPrepared = false;
+    if (!slide) {
+      slide = state.activePresentationSlides.find(
+        (entry) => entry.id === slideId,
+      );
+      isPrepared = true;
+    }
     if (!slide) return;
     if (event.target.matches('[data-role="slide-main"]')) {
       slide.main = event.target.value;
@@ -2124,6 +2182,9 @@
       bibleMeta.translationReferenceLabel = value || null;
       bibleMeta.translation_reference_label =
         bibleMeta.translationReferenceLabel;
+    }
+    if (isPrepared && state.activePresentationId) {
+      debounceSaveSlide(state.activePresentationId, slide);
     }
   }
 
@@ -2416,12 +2477,19 @@
         const newMode = btn.dataset.mode;
         state.editMode = newMode === "edit";
         updateMode();
-        renderSlides();
+        if (state.bibleTab === "prepared") {
+          renderPresentationSlides();
+        } else {
+          renderSlides();
+        }
       });
     }
     if (els.slidesContainer) {
       els.slidesContainer.addEventListener("click", onSlidesContainerClick);
       els.slidesContainer.addEventListener("input", onSlidesContainerInput);
+    }
+    if (els.selectAllButton) {
+      els.selectAllButton.addEventListener("click", toggleSelectAllSlides);
     }
     if (els.addToPresentation) {
       els.addToPresentation.addEventListener(
@@ -2519,6 +2587,20 @@
     connectLiveSocket();
     ensureActivePoller();
   }
+
+  // Listen for mode changes from parent operator page (when embedded as iframe)
+  window.addEventListener("message", function (event) {
+    if (event.origin !== window.location.origin) return;
+    if (!event.data || event.data.type !== "presenter-mode-change") return;
+    var newMode = event.data.mode;
+    state.editMode = newMode === "edit";
+    updateMode();
+    if (state.bibleTab === "prepared") {
+      renderPresentationSlides();
+    } else {
+      renderSlides();
+    }
+  });
 
   window.__presenterBibleState = state;
   initialise();

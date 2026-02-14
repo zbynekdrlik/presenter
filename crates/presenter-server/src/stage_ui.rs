@@ -442,12 +442,12 @@ fn StageDisplayDocument(
     }} else if (layout === 'worship-pp') {{
       const current = snapshot.current;
       const next = snapshot.next;
-      setText('current-main', current ? current.main : '');
+      setText('current-main', selectPrimary(current));
       const currentGroup = current && current.group ? current.group : '';
       setText('current-group', currentGroup || '');
       setHidden('current-group', !currentGroup);
 
-      setText('next-main', next ? next.main : '');
+      setText('next-main', selectPrimary(next));
       const nextGroup = next && next.group ? next.group : '';
       setText('next-group', nextGroup || '');
       setHidden('next-group', !nextGroup);
@@ -734,18 +734,14 @@ fn render_worship_pp(snapshot: &StageDisplaySnapshot) -> AnyView {
     let current_main = snapshot
         .current
         .as_ref()
-        .map(|slide| slide.main.clone())
+        .map(primary_text)
         .unwrap_or_default();
     let current_group = snapshot
         .current
         .as_ref()
         .and_then(|slide| slide.group.clone())
         .unwrap_or_default();
-    let next_main = snapshot
-        .next
-        .as_ref()
-        .map(|slide| slide.main.clone())
-        .unwrap_or_default();
+    let next_main = snapshot.next.as_ref().map(primary_text).unwrap_or_default();
     let next_group = snapshot
         .next
         .as_ref()

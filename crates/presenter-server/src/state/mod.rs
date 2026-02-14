@@ -217,6 +217,18 @@ impl AppState {
                 }
             }
         });
+
+        let wal_state = self.clone();
+        tokio::spawn(async move {
+            let mut ticker = interval(TokioDuration::from_secs(300));
+            ticker.set_missed_tick_behavior(MissedTickBehavior::Delay);
+            loop {
+                ticker.tick().await;
+                if let Err(err) = wal_state.repository.wal_checkpoint().await {
+                    warn!(?err, "periodic WAL checkpoint failed");
+                }
+            }
+        });
     }
 
     #[instrument(skip_all)]
