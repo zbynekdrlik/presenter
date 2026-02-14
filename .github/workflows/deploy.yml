@@ -13,9 +13,9 @@ env:
   CARGO_TERM_COLOR: always
   DEPLOY_DIR: /opt/presenter
   SERVICE_NAME: presenter
-  DEPLOY_HOST: 10.77.9.191
+  DEPLOY_HOST: 10.77.9.205
   DEPLOY_USER: newlevel
-  PRESENTER_LIBRARY_ROOT: /home/newlevel/devel/presenter/presenter-libraries
+  PRESENTER_LIBRARY_ROOT: /opt/presenter/libraries
 
 jobs:
   deploy:
@@ -85,7 +85,7 @@ jobs:
 
           echo "Importing ProPresenter libraries..."
           PRESENTER_DB_URL=sqlite:///opt/presenter/presenter.db \
-            /opt/presenter/import_propresenter --root "/home/newlevel/devel/presenter/presenter-libraries"
+            /opt/presenter/import_propresenter --root "/opt/presenter/libraries"
 
           echo "Importing Bible translations..."
           PRESENTER_DB_URL=sqlite:///opt/presenter/presenter.db \
