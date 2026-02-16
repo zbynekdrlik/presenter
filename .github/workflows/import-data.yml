@@ -1,0 +1,134 @@
+name: Import Data
+
+on:
+  workflow_dispatch:
+    inputs:
+      environment:
+        description: "Target environment"
+        required: true
+        type: choice
+        options:
+          - dev
+          - production
+      import_type:
+        description: "What to import"
+        required: true
+        type: choice
+        options:
+          - all
+          - propresenter
+          - bibles
+      purge:
+        description: "Purge existing data before import (WARNING: destroys playlists)"
+        required: false
+        type: boolean
+        default: false
+
+concurrency:
+  group: import-${{ inputs.environment }}
+  cancel-in-progress: false
+
+jobs:
+  import:
+    name: Import Data (${{ inputs.environment }})
+    runs-on: self-hosted
+    steps:
+      - name: Set environment variables
+        id: env
+        run: |
+          if [ "${{ inputs.environment }}" = "production" ]; then
+            echo "deploy_dir=/opt/presenter" >> "$GITHUB_OUTPUT"
+            echo "deploy_host=10.77.9.205" >> "$GITHUB_OUTPUT"
+            echo "service_name=presenter" >> "$GITHUB_OUTPUT"
+            echo "library_root=/opt/presenter/libraries" >> "$GITHUB_OUTPUT"
+            echo "ssh_key_secret=DEPLOY_SSH_KEY" >> "$GITHUB_OUTPUT"
+            echo "health_port=80" >> "$GITHUB_OUTPUT"
+          else
+            echo "deploy_dir=/opt/presenter-dev" >> "$GITHUB_OUTPUT"
+            echo "deploy_host=10.77.8.134" >> "$GITHUB_OUTPUT"
+            echo "service_name=presenter-dev" >> "$GITHUB_OUTPUT"
+            echo "library_root=/home/newlevel/devel/presenter/presenter-libraries" >> "$GITHUB_OUTPUT"
+            echo "ssh_key_secret=DEPLOY_SSH_KEY_DEV" >> "$GITHUB_OUTPUT"
+            echo "health_port=8080" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Setup SSH
+        run: |
+          mkdir -p ~/.ssh
+          if [ "${{ inputs.environment }}" = "production" ]; then
+            echo "${{ secrets.DEPLOY_SSH_KEY }}" > ~/.ssh/id_deploy
+          else
+            echo "${{ secrets.DEPLOY_SSH_KEY_DEV }}" > ~/.ssh/id_deploy
+          fi
+          chmod 600 ~/.ssh/id_deploy
+          ssh-keyscan ${{ steps.env.outputs.deploy_host }} >> ~/.ssh/known_hosts 2>/dev/null
+          cat > ~/.ssh/config <<EOF
+          Host deploy-target
+              HostName ${{ steps.env.outputs.deploy_host }}
+              User newlevel
+              IdentityFile ~/.ssh/id_deploy
+          EOF
+
+      - name: Backup database
+        run: |
+          ssh deploy-target << 'REMOTE_SCRIPT'
+          set -e
+          DB_PATH="${{ steps.env.outputs.deploy_dir }}/presenter.db"
+          BACKUP_DIR="${{ steps.env.outputs.deploy_dir }}/backups"
+          mkdir -p "$BACKUP_DIR"
+          if [ -f "$DB_PATH" ] && [ -s "$DB_PATH" ]; then
+            TIMESTAMP=$(date +%Y%m%d-%H%M%S)
+            cp "$DB_PATH" "${BACKUP_DIR}/presenter-${TIMESTAMP}.db"
+            echo "Database backed up to ${BACKUP_DIR}/presenter-${TIMESTAMP}.db"
+          else
+            echo "No existing database to back up"
+          fi
+          REMOTE_SCRIPT
+
+      - name: Stop service
+        run: |
+          ssh deploy-target "if systemctl is-active --quiet ${{ steps.env.outputs.service_name }}; then sudo systemctl stop ${{ steps.env.outputs.service_name }}; echo 'Service stopped'; else echo 'Service not running'; fi"
+
+      - name: Import ProPresenter libraries
+        if: inputs.import_type == 'all' || inputs.import_type == 'propresenter'
+        run: |
+          KEEP_FLAG=""
+          if [ "${{ inputs.purge }}" != "true" ]; then
+            KEEP_FLAG="--keep"
+          fi
+          ssh deploy-target << REMOTE_SCRIPT
+          set -e
+          echo "Importing ProPresenter libraries (purge=${{ inputs.purge }})..."
+          PRESENTER_DB_URL=sqlite://${{ steps.env.outputs.deploy_dir }}/presenter.db \
+            ${{ steps.env.outputs.deploy_dir }}/import_propresenter \
+            --root "${{ steps.env.outputs.library_root }}" ${KEEP_FLAG}
+          REMOTE_SCRIPT
+
+      - name: Import Bible translations
+        if: inputs.import_type == 'all' || inputs.import_type == 'bibles'
+        run: |
+          ssh deploy-target << 'REMOTE_SCRIPT'
+          set -e
+          echo "Importing Bible translations..."
+          PRESENTER_DB_URL=sqlite://${{ steps.env.outputs.deploy_dir }}/presenter.db \
+            ${{ steps.env.outputs.deploy_dir }}/ingest_bibles
+          REMOTE_SCRIPT
+
+      - name: Start service
+        run: |
+          ssh deploy-target "sudo systemctl start ${{ steps.env.outputs.service_name }}"
+
+      - name: Verify health
+        run: |
+          sleep 5
+          ssh deploy-target << 'REMOTE_SCRIPT'
+          set -e
+          if systemctl is-active --quiet ${{ steps.env.outputs.service_name }}; then
+            echo "Service is running"
+            curl -sf http://localhost:${{ steps.env.outputs.health_port }}/healthz || echo "Warning: healthz check failed"
+          else
+            echo "Service failed to start"
+            sudo journalctl -u ${{ steps.env.outputs.service_name }} -n 50 --no-pager
+            exit 1
+          fi
+          REMOTE_SCRIPT
