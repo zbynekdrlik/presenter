@@ -14,7 +14,7 @@ RestartSec=5
 # Environment
 Environment=PRESENTER_PORT=80
 Environment=PRESENTER_DB_URL=sqlite:///opt/presenter/presenter.db
-Environment=PRESENTER_LIBRARY_ROOT=/home/newlevel/devel/presenter/presenter-libraries
+Environment=PRESENTER_LIBRARY_ROOT=/opt/presenter/libraries
 Environment=RUST_LOG=info,tower_http=debug
 
 # Security hardening - allow binding to port 80

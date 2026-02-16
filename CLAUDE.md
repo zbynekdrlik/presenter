@@ -50,7 +50,7 @@ When a task is complete, **always** provide these links:
 
 - **Dev environment:** http://10.77.8.134:8080/ui/operator (verify healthy)
 - **PR to main:** GitHub PR URL (must be green and mergeable)
-- **Production environment:** http://10.77.9.191/ui/operator (verify healthy)
+- **Production environment:** http://10.77.9.205/ui/operator (verify healthy)
 
 ---
 
@@ -179,7 +179,7 @@ All workflows run on the Docker runners, providing:
 - 3 parallel runners for concurrent workflow execution
 - Reproducible environment (Docker image with Rust, Node.js, Playwright, Docker CLI)
 
-**Deploy workflows** use SSH to deploy binaries from runners to the application hosts (`10.77.9.191` for production, `10.77.8.134` for dev).
+**Deploy workflows** use SSH to deploy binaries from runners to the application hosts (`10.77.9.205` for production, `10.77.8.134` for dev).
 
 #### Runner Management
 
@@ -265,7 +265,7 @@ Two instances run on separate hosts:
 
 | Instance   | URL                     | Host        | Port | Service                 | Deploy Dir           | Branch |
 | ---------- | ----------------------- | ----------- | ---- | ----------------------- | -------------------- | ------ |
-| Production | http://10.77.9.191      | 10.77.9.191 | 80   | `presenter.service`     | `/opt/presenter`     | `main` |
+| Production | http://10.77.9.205      | 10.77.9.205 | 80   | `presenter.service`     | `/opt/presenter`     | `main` |
 | Dev        | http://10.77.8.134:8080 | 10.77.8.134 | 8080 | `presenter-dev.service` | `/opt/presenter-dev` | `dev`  |
 
 ```bash
@@ -511,14 +511,14 @@ cargo clippy --workspace --all-targets -- -D warnings -W clippy::all  # Must pas
 
 The user accesses the server from another machine on the same network. **Always provide LAN IP URLs, never localhost.**
 
-**Production LAN IP:** `10.77.9.191`
+**Production LAN IP:** `10.77.9.205`
 **Dev LAN IP:** `10.77.8.134`
 
 When providing URLs, use:
 
-- http://10.77.9.191/ui/operator (Production)
+- http://10.77.9.205/ui/operator (Production)
 - http://10.77.8.134:8080/ui/operator (Dev)
-- http://10.77.9.191/stage (Production stage)
+- http://10.77.9.205/stage (Production stage)
 - http://10.77.8.134:8080/stage (Dev stage)
 
 **Never use localhost** — always use the LAN IP.
