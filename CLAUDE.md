@@ -205,15 +205,16 @@ docker compose down --timeout 5 && docker compose up -d
 
 ### Workflows
 
-| Workflow            | Trigger                   | Purpose                                         |
-| ------------------- | ------------------------- | ----------------------------------------------- |
-| `ci.yml`            | Push to `dev`/`main`, PRs | Format, lint, test, quality                     |
-| `e2e.yml`           | Push to `dev`/`main`, PRs | Playwright E2E tests                            |
-| `version-check.yml` | Push to `dev`/`main`, PRs | Validate version format                         |
-| `security.yml`      | Weekly + manual           | Vulnerability scanning                          |
-| `deploy-dev.yml`    | Push to `dev`             | Deploy dev binary via SSH to /opt/presenter-dev |
-| `deploy.yml`        | Push to `main`            | Deploy prod binary via SSH to /opt/presenter    |
-| `release.yml`       | GitHub Release published  | Build and upload release artifacts              |
+| Workflow            | Trigger                    | Purpose                                         |
+| ------------------- | -------------------------- | ----------------------------------------------- |
+| `ci.yml`            | Push to `dev`/`main`, PRs  | Format, lint, test, quality                     |
+| `e2e.yml`           | Push to `dev`/`main`, PRs  | Playwright E2E tests                            |
+| `version-check.yml` | Push to `dev`/`main`, PRs  | Validate version format                         |
+| `security.yml`      | Weekly + manual            | Vulnerability scanning                          |
+| `deploy-dev.yml`    | Push to `dev`              | Deploy dev binary via SSH to /opt/presenter-dev |
+| `deploy.yml`        | Push to `main`             | Deploy prod binary via SSH to /opt/presenter    |
+| `import-data.yml`   | Manual (workflow_dispatch) | Re-import ProPresenter/Bible data               |
+| `release.yml`       | GitHub Release published   | Build and upload release artifacts              |
 
 ### Monitoring CI
 
@@ -423,13 +424,31 @@ crates/
 
 ---
 
-## Database Policy (Pre-release)
+## Database Policy
+
+### Schema Changes (Pre-release)
 
 Schema is mutable during pre-release:
 
 1. **Never add incremental migrations** - Edit initial migration directly
-2. Rebuild SQLite from scratch after schema changes
-3. Keep `scripts/dev/refresh-dev-data.sh` up to date
+2. The server auto-migrates on startup via `Repository::connect()`
+3. For destructive schema changes, manually trigger the Import Data workflow after deploy
+
+### Deploy Safety
+
+- Deploys NEVER delete the database — only binaries and service files are updated
+- Database is backed up automatically before each deploy (5 retained in `backups/`)
+- First-time deploys auto-import; subsequent deploys preserve all user data
+- Data import is a separate, explicit "Import Data" workflow in GitHub Actions
+
+### Manual Import
+
+To re-import source data (ProPresenter libraries, Bibles):
+
+1. Go to Actions > "Import Data" > Run workflow
+2. Select environment (dev/production) and import type
+3. Default mode (`--keep`) preserves existing data
+4. `--purge` mode replaces all libraries (WARNING: destroys playlists via FK cascade)
 
 ---
 
