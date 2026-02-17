@@ -58,6 +58,8 @@ pub struct StageUpdate {
 #[derive(Debug, Clone)]
 pub struct BibleUpdate {
     pub passage: Option<BibleBroadcast>,
+    pub secondary_text: Option<String>,
+    pub secondary_translation_code: Option<String>,
 }
 
 #[derive(Debug, Clone)]

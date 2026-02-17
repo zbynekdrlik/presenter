@@ -278,11 +278,48 @@ impl AppState {
                 if !combined_text.is_empty() {
                     combined_text.push_str("\n\n");
                 }
+                let label = format!("{}. ", entry.reference.verse_start);
+                combined_text.push_str(&label);
                 combined_text.push_str(entry.text.as_str());
             }
             let translation = range[0].translation.clone();
             // Use the original reference directly - it already has the correct range
             presenter_core::BiblePassage::new(reference.clone(), translation, combined_text)
+        };
+
+        // Fetch secondary translation text if configured
+        let (secondary_text, secondary_translation_code) = {
+            let prefs = self.get_bible_preferences().await?;
+            if let Some(ref sec_code) = prefs.secondary_translation {
+                let sec_range = self
+                    .repository
+                    .bible_passage_range(
+                        sec_code,
+                        reference.book.as_str(),
+                        reference.book_code.as_deref(),
+                        reference.chapter,
+                        reference.verse_start,
+                        reference.verse_end,
+                    )
+                    .await
+                    .unwrap_or_default();
+                if sec_range.is_empty() {
+                    (None, None)
+                } else {
+                    let mut sec_text = String::new();
+                    for entry in &sec_range {
+                        if !sec_text.is_empty() {
+                            sec_text.push_str("\n\n");
+                        }
+                        let label = format!("{}. ", entry.reference.verse_start);
+                        sec_text.push_str(&label);
+                        sec_text.push_str(entry.text.as_str());
+                    }
+                    (Some(sec_text), Some(sec_code.clone()))
+                }
+            } else {
+                (None, None)
+            }
         };
 
         let broadcast = BibleBroadcast::new(passage, Utc::now());
@@ -296,6 +333,8 @@ impl AppState {
         self.resolume_registry
             .bible_update(BibleUpdate {
                 passage: Some(broadcast.clone()),
+                secondary_text,
+                secondary_translation_code,
             })
             .await;
         Ok(broadcast)
@@ -308,7 +347,11 @@ impl AppState {
         }
         self.live_hub.publish(LiveEvent::BibleCleared);
         self.resolume_registry
-            .bible_update(BibleUpdate { passage: None })
+            .bible_update(BibleUpdate {
+                passage: None,
+                secondary_text: None,
+                secondary_translation_code: None,
+            })
             .await;
     }
 

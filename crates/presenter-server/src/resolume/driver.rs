@@ -23,6 +23,10 @@ use tokio::{
 };
 use tracing::{debug, error, warn};
 
+fn translation_short_code(code: &str) -> String {
+    code.rsplit('-').next().unwrap_or(code).to_uppercase()
+}
+
 #[cfg(not(test))]
 const TRIGGER_DELAY: Duration = Duration::from_millis(35);
 #[cfg(test)]
@@ -276,35 +280,76 @@ impl HostDriver {
             let (bible_lane_filled, bible_translation_lane_filled) = match update.passage {
                 Some(ref passage) => {
                     let verse_text = passage.passage.text.clone();
-                    let translation = passage.passage.translation.name.clone();
+                    let translation_code = passage.passage.translation.code.clone();
                     let reference = passage.passage.reference.to_human_readable();
-                    let combined = format!("{}\n{}", reference, verse_text);
+                    let short_code = translation_short_code(&translation_code);
+                    let reference_with_code = format!("{reference} ({short_code})");
+
+                    // Send verse text to #bible-a/b
                     let bible_targets = self
                         .update_lane_text(
                             bible_lane,
                             &mapping.bible_a,
                             &mapping.bible_b,
-                            Some(&combined),
+                            Some(&verse_text),
                             status,
                         )
                         .await?;
                     let bible_lane_filled = !bible_targets.is_empty();
                     if bible_lane_filled {
-                        to_trigger.extend(bible_targets.into_iter());
+                        to_trigger.extend(bible_targets);
                     }
+
+                    // Send reference to #bible-reference-a/b (same lane as bible)
+                    let bible_ref_targets = self
+                        .update_lane_text(
+                            bible_lane,
+                            &mapping.bible_reference_a,
+                            &mapping.bible_reference_b,
+                            Some(&reference_with_code),
+                            status,
+                        )
+                        .await?;
+                    if !bible_ref_targets.is_empty() {
+                        to_trigger.extend(bible_ref_targets);
+                    }
+
+                    // Send secondary translation text to #bible-translate-a/b
+                    let sec_text = update.secondary_text.as_deref().unwrap_or("").to_string();
                     let bible_translation_targets = self
                         .update_lane_text(
                             bible_translation_lane,
                             &mapping.bible_translation_a,
                             &mapping.bible_translation_b,
-                            Some(&translation),
+                            Some(&sec_text),
                             status,
                         )
                         .await?;
                     let bible_translation_lane_filled = !bible_translation_targets.is_empty();
                     if bible_translation_lane_filled {
-                        to_trigger.extend(bible_translation_targets.into_iter());
+                        to_trigger.extend(bible_translation_targets);
                     }
+
+                    // Send secondary translation reference to #bible-translate-reference-a/b
+                    let sec_ref = if let Some(ref sec_code) = update.secondary_translation_code {
+                        let sec_short = translation_short_code(sec_code);
+                        format!("{reference} ({sec_short})")
+                    } else {
+                        String::new()
+                    };
+                    let sec_ref_targets = self
+                        .update_lane_text(
+                            bible_translation_lane,
+                            &mapping.bible_translate_reference_a,
+                            &mapping.bible_translate_reference_b,
+                            Some(&sec_ref),
+                            status,
+                        )
+                        .await?;
+                    if !sec_ref_targets.is_empty() {
+                        to_trigger.extend(sec_ref_targets);
+                    }
+
                     (bible_lane_filled, bible_translation_lane_filled)
                 }
                 None => {
@@ -320,8 +365,23 @@ impl HostDriver {
                         .await?;
                     let bible_lane_filled = !bible_targets.is_empty();
                     if bible_lane_filled {
-                        to_trigger.extend(bible_targets.into_iter());
+                        to_trigger.extend(bible_targets);
                     }
+
+                    // Clear bible reference clips
+                    let bible_ref_targets = self
+                        .update_lane_text(
+                            bible_lane,
+                            &mapping.bible_reference_a,
+                            &mapping.bible_reference_b,
+                            Some(&blank),
+                            status,
+                        )
+                        .await?;
+                    if !bible_ref_targets.is_empty() {
+                        to_trigger.extend(bible_ref_targets);
+                    }
+
                     let bible_translation_targets = self
                         .update_lane_text(
                             bible_translation_lane,
@@ -333,8 +393,23 @@ impl HostDriver {
                         .await?;
                     let bible_translation_lane_filled = !bible_translation_targets.is_empty();
                     if bible_translation_lane_filled {
-                        to_trigger.extend(bible_translation_targets.into_iter());
+                        to_trigger.extend(bible_translation_targets);
                     }
+
+                    // Clear secondary translation reference clips
+                    let sec_ref_targets = self
+                        .update_lane_text(
+                            bible_translation_lane,
+                            &mapping.bible_translate_reference_a,
+                            &mapping.bible_translate_reference_b,
+                            Some(&blank),
+                            status,
+                        )
+                        .await?;
+                    if !sec_ref_targets.is_empty() {
+                        to_trigger.extend(sec_ref_targets);
+                    }
+
                     to_trigger.extend(mapping.bible_clear.iter().cloned());
                     (bible_lane_filled, bible_translation_lane_filled)
                 }

@@ -1,9 +1,11 @@
 # ADR 0004: Resolume Settings Surface and Clip Integration
 
 ## Status
+
 Proposed – 30 September 2025
 
 ## Context
+
 Issue #7 introduces the first control-surface integration with Resolume Arena. We must let operators
 configure one or more Resolume controllers (DNS hostnames like `resolume.lan` on port 8090) from a
 central Settings page, persist those endpoints, and drive Presenter outputs via Resolume's Web
@@ -23,6 +25,7 @@ Operators require:
 ## Decision
 
 ### Settings Architecture
+
 - Introduce a dedicated settings route (`GET /ui/settings`) rendered via a new Leptos component in
   `ui/settings.rs`. The Operator header gains a "Settings" entry that opens this document in a
   separate tab to avoid disrupting live control.
@@ -35,6 +38,7 @@ Operators require:
   introduced yet.
 
 ### Persistence Model
+
 - Extend the base migration with a `resolume_hosts` table containing:
   - `id` `TEXT` PK (UUID v4 string).
   - `label` operator-friendly name (unique per install).
@@ -48,12 +52,13 @@ Operators require:
   after the change.
 
 ### Runtime Integration
+
 - Introduce a `ResolumeRegistry` inside `AppState` that tracks active host connections. Each entry owns:
   - An async worker that fetches `/api/v1/composition` on start and at fixed intervals (10 s) or upon
     pipeline commands to refresh clip metadata.
   - A bounded channel (capacity 16) receiving Presenter text intents; the worker serializes payloads to
     Resolume REST endpoints (`PUT /api/v1/parameter/by-id/{id}` for text and `POST
-    /api/v1/composition/clips/by-id/{clipId}/connect` to trigger the clip).
+/api/v1/composition/clips/by-id/{clipId}/connect` to trigger the clip).
   - Composition metadata is refreshed proactively whenever cached mappings are older than one
     second or a command fails, so deck changes in Resolume remap the clip targets before the next
     slide fires.
@@ -67,11 +72,15 @@ Operators require:
   connection health.
 
 ### Clip Discovery & Mapping
+
 - When a connection starts the worker fetches the active composition, indexes clips by `name`, and
   buckets them into token groups. Tokens follow `#token[-lane]` conventions (e.g., `#main-a`). Matching
   is case-insensitive, ignores surrounding text, and supports alias tokens (`main-a`, `Main A`).
-- Maintain two clip references per output channel (Main, Translation, Bible, Bible Translation),
-  alternating between A/B lanes. `#bible-clear` remains a dedicated clip.
+- Maintain two clip references per output channel (Main, Translation, Bible, Bible Reference,
+  Bible Translation, Bible Translate Reference), alternating between A/B lanes.
+  `#bible-reference-a/b` carries the scripture reference with translation short code (e.g.
+  "1 Samuel 1:4-5 (ROH)"). `#bible-translate-reference-a/b` does the same for the secondary
+  translation. `#bible-clear` remains a dedicated clip.
 - Single-slot metadata clips – `#song-name` and `#band-name` – display the active song title and
   library/band name respectively. Presenter updates both alongside slide advances so overlays can show
   contextual text without lane juggling.
@@ -84,6 +93,7 @@ Operators require:
   correct naming before service.
 
 ### Latency Safeguards
+
 - All outbound updates use a pre-allocated JSON buffer and reuse the `reqwest` client with HTTP/1.1
   keep-alive to minimize connection setup costs.
 - The worker tracks round-trip times; if latency exceeds 80 ms for two consecutive commands we mark the
@@ -93,6 +103,7 @@ Operators require:
 - Add integration tests with a mocked Resolume server to assert the 100 ms SLA using Tokio time control.
 
 ## Consequences
+
 - New settings UI and API endpoints expand the server surface; Playwright tests must cover CRUD and status
   rendering to avoid regressions.
 - Application bootstrap now requires loading Resolume hosts and spawning registry tasks; we will ensure
@@ -103,6 +114,7 @@ Operators require:
   future modules (e.g., Network Bridges) to communicate structure without functionality.
 
 ## Alternatives Considered
+
 - Embedding settings in the Operator UI drawer – rejected to keep live controls uncluttered and reduce the
   risk of accidental edits mid-service.
 - Storing hosts in a JSON blob – rejected in favor of normalized tables so future features (per-host
@@ -111,6 +123,7 @@ Operators require:
   latency and network overhead.
 
 ## Follow-up
+
 1. Expose a `/integrations/resolume/hosts/{id}/status` streaming endpoint once we surface in-UI toast
    updates.
 2. Extend `ResolumeRegistry` to translate Presenter stage/bible events once the text pipeline is ready.

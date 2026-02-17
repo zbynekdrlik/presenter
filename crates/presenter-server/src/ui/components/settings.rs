@@ -238,11 +238,19 @@ pub fn ResolumeConnectionsCard(
                     </div>
                     <div>
                         <dt>"#bible-a / #bible-b"</dt>
-                        <dd>"Bible verse text for scripture cues."</dd>
+                        <dd>"Bible verse text with verse numbers (e.g. \"4. A bývalo...\")."</dd>
+                    </div>
+                    <div>
+                        <dt>"#bible-reference-a / #bible-reference-b"</dt>
+                        <dd>"Bible reference with translation code (e.g. \"1 Samuel 1:4-5 (ROH)\")."</dd>
                     </div>
                     <div>
                         <dt>"#bible-translate-a / #bible-translate-b"</dt>
-                        <dd>"Bible translation label accompanying the verse."</dd>
+                        <dd>"Secondary translation verse text with verse numbers, or empty if no secondary translation is configured."</dd>
+                    </div>
+                    <div>
+                        <dt>"#bible-translate-reference-a / #bible-translate-reference-b"</dt>
+                        <dd>"Secondary translation reference with its translation code."</dd>
                     </div>
                     <div>
                         <dt>"#bible-clear"</dt>
