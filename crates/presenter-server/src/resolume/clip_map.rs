@@ -10,6 +10,8 @@ pub struct ClipMapping {
     pub translation_b: Vec<ClipTarget>,
     pub bible_a: Vec<ClipTarget>,
     pub bible_b: Vec<ClipTarget>,
+    pub bible_reference_a: Vec<ClipTarget>,
+    pub bible_reference_b: Vec<ClipTarget>,
     pub bible_translation_a: Vec<ClipTarget>,
     pub bible_translation_b: Vec<ClipTarget>,
     pub bible_clear: Vec<ClipTarget>,
@@ -80,6 +82,10 @@ fn ingest_clip(mapping: &mut ClipMapping, clip: &Value) {
                         LaneTarget::A => mapping.bible_a.push(target),
                         LaneTarget::B => mapping.bible_b.push(target),
                     },
+                    ClipDestination::BibleReference(lane, target) => match lane {
+                        LaneTarget::A => mapping.bible_reference_a.push(target),
+                        LaneTarget::B => mapping.bible_reference_b.push(target),
+                    },
                     ClipDestination::BibleTranslation(lane, target) => match lane {
                         LaneTarget::A => mapping.bible_translation_a.push(target),
                         LaneTarget::B => mapping.bible_translation_b.push(target),
@@ -98,6 +104,7 @@ enum ClipDestination {
     Main(LaneTarget, ClipTarget),
     Translation(LaneTarget, ClipTarget),
     Bible(LaneTarget, ClipTarget),
+    BibleReference(LaneTarget, ClipTarget),
     BibleTranslation(LaneTarget, ClipTarget),
     BibleClear(ClipTarget),
     Timer(ClipTarget),
@@ -110,6 +117,7 @@ enum ClipKind {
     Main,
     Translation,
     Bible,
+    BibleReference,
     BibleTranslation,
     BibleClear,
     Timer,
@@ -144,6 +152,9 @@ fn parse_clip_destinations(
             if tokens.get(index) == Some(&"translate") {
                 index += 1;
                 ClipKind::BibleTranslation
+            } else if tokens.get(index) == Some(&"reference") {
+                index += 1;
+                ClipKind::BibleReference
             } else if tokens.get(index) == Some(&"clear") {
                 index += 1;
                 ClipKind::BibleClear
@@ -219,6 +230,16 @@ fn parse_clip_destinations(
         }
         (ClipKind::Bible, Some(lane)) => {
             result.push(ClipDestination::Bible(
+                lane,
+                ClipTarget {
+                    clip_id,
+                    text_param_id,
+                    transforms,
+                },
+            ));
+        }
+        (ClipKind::BibleReference, Some(lane)) => {
+            result.push(ClipDestination::BibleReference(
                 lane,
                 ClipTarget {
                     clip_id,
@@ -310,6 +331,12 @@ fn compute_missing_tokens(mapping: &ClipMapping) -> Vec<&'static str> {
     }
     if mapping.bible_b.is_empty() {
         missing.push("#bible-b");
+    }
+    if mapping.bible_reference_a.is_empty() {
+        missing.push("#bible-reference-a");
+    }
+    if mapping.bible_reference_b.is_empty() {
+        missing.push("#bible-reference-b");
     }
     if mapping.bible_translation_a.is_empty() {
         missing.push("#bible-translate-a");
