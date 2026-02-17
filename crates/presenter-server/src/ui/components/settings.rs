@@ -264,6 +264,10 @@ pub fn ResolumeConnectionsCard(
                         <dt>"#band-name"</dt>
                         <dd>"Displays the library/band the current song belongs to."</dd>
                     </div>
+                    <div>
+                        <dt>"Suffixes: -u / -re"</dt>
+                        <dd>"Append -u to force uppercase and -re to collapse multi-line text into a single space-delimited line."</dd>
+                    </div>
                 </dl>
             </section>
         </section>
