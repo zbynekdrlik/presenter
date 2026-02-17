@@ -61,6 +61,7 @@ fn clip_mapping_parses_tags_inside_names() {
                     clip(400, "#song-name-u", Some(4)),
                     clip(500, "#band-name", Some(5)),
                     clip(600, "#bible-reference-a", Some(6)),
+                    clip(700, "#bible-translate-reference-a", Some(7)),
                 ],
             }
         ]
@@ -84,6 +85,7 @@ fn clip_mapping_parses_tags_inside_names() {
         vec![TextTransform::Uppercase]
     );
     assert_eq!(mapping.bible_reference_a.len(), 1);
+    assert_eq!(mapping.bible_translate_reference_a.len(), 1);
 }
 
 #[tokio::test]
@@ -124,6 +126,8 @@ async fn stage_updates_alternate_main_and_translation_lanes() {
                     clip(351, "#bible-reference-b", Some(36)),
                     clip(400, "#bible-translate-a", Some(40)),
                     clip(401, "#bible-translate-b", Some(41)),
+                    clip(450, "#bible-translate-reference-a", Some(45)),
+                    clip(451, "#bible-translate-reference-b", Some(46)),
                     clip(500, "#bible-clear", None),
                     clip(600, "#song-name", Some(60)),
                     clip(601, "#band-name", Some(61)),
@@ -139,7 +143,7 @@ async fn stage_updates_alternate_main_and_translation_lanes() {
         .mount(&server)
         .await;
 
-    for endpoint in &[1, 2, 10, 20, 30, 31, 35, 36, 40, 41, 90] {
+    for endpoint in &[1, 2, 10, 20, 30, 31, 35, 36, 40, 41, 45, 46, 90] {
         let route = format!("/api/v1/parameter/by-id/{endpoint}");
         Mock::given(method("PUT"))
             .and(path(route.as_str()))
@@ -156,7 +160,9 @@ async fn stage_updates_alternate_main_and_translation_lanes() {
             .await;
     }
 
-    for clip_id in &[100, 101, 200, 201, 300, 301, 350, 351, 400, 401, 500, 900] {
+    for clip_id in &[
+        100, 101, 200, 201, 300, 301, 350, 351, 400, 401, 450, 451, 500, 900,
+    ] {
         let route = format!("/api/v1/composition/clips/by-id/{clip_id}/connect");
         Mock::given(method("POST"))
             .and(path(route.as_str()))
@@ -286,6 +292,8 @@ async fn clip_name_transforms_apply_to_payload() {
                     clip(351, "#bible-reference-b", Some(36)),
                     clip(400, "#bible-translate-a", Some(40)),
                     clip(401, "#bible-translate-b", Some(41)),
+                    clip(450, "#bible-translate-reference-a", Some(45)),
+                    clip(451, "#bible-translate-reference-b", Some(46)),
                     clip(500, "#bible-clear", None),
                     clip(910, "#song-name", Some(95)),
                     clip(911, "#band-name", Some(96)),
@@ -396,6 +404,8 @@ async fn timer_updates_send_text_without_trigger() {
                     clip(351, "#bible-reference-b", Some(36)),
                     clip(400, "#bible-translate-a", Some(40)),
                     clip(401, "#bible-translate-b", Some(41)),
+                    clip(450, "#bible-translate-reference-a", Some(45)),
+                    clip(451, "#bible-translate-reference-b", Some(46)),
                     clip(500, "#bible-clear", None),
                     clip(900, "#timer", Some(90)),
                 ],
@@ -497,6 +507,8 @@ async fn refreshes_mapping_after_cache_ttl_for_new_deck() {
                     clip(351, "#bible-reference-b", Some(36)),
                     clip(400, "#bible-translate-a", Some(40)),
                     clip(401, "#bible-translate-b", Some(41)),
+                    clip(450, "#bible-translate-reference-a", Some(45)),
+                    clip(451, "#bible-translate-reference-b", Some(46)),
                     clip(500, "#bible-clear", None),
                     clip(900, "#timer", Some(90)),
                 ],
@@ -518,6 +530,8 @@ async fn refreshes_mapping_after_cache_ttl_for_new_deck() {
                     clip(551, "#bible-reference-b", Some(136)),
                     clip(600, "#bible-translate-a", Some(140)),
                     clip(601, "#bible-translate-b", Some(141)),
+                    clip(650, "#bible-translate-reference-a", Some(145)),
+                    clip(651, "#bible-translate-reference-b", Some(146)),
                     clip(700, "#bible-clear", None),
                     clip(960, "#song-name", Some(195)),
                     clip(961, "#band-name", Some(196)),
@@ -533,7 +547,7 @@ async fn refreshes_mapping_after_cache_ttl_for_new_deck() {
         .mount(&server)
         .await;
 
-    for endpoint in [1, 2, 10, 20, 30, 31, 35, 36, 40, 41, 90, 95, 96] {
+    for endpoint in [1, 2, 10, 20, 30, 31, 35, 36, 40, 41, 45, 46, 90, 95, 96] {
         let route = format!("/api/v1/parameter/by-id/{endpoint}");
         Mock::given(method("PUT"))
             .and(path(route.as_str()))
@@ -543,7 +557,7 @@ async fn refreshes_mapping_after_cache_ttl_for_new_deck() {
     }
 
     for clip_id in [
-        100, 101, 200, 201, 300, 301, 350, 351, 400, 401, 500, 900, 910, 911,
+        100, 101, 200, 201, 300, 301, 350, 351, 400, 401, 450, 451, 500, 900, 910, 911,
     ] {
         let route = format!("/api/v1/composition/clips/by-id/{clip_id}/connect");
         Mock::given(method("POST"))
@@ -595,7 +609,7 @@ async fn refreshes_mapping_after_cache_ttl_for_new_deck() {
         .await;
 
     for endpoint in [
-        101, 102, 110, 120, 130, 131, 135, 136, 140, 141, 190, 195, 196,
+        101, 102, 110, 120, 130, 131, 135, 136, 140, 141, 145, 146, 190, 195, 196,
     ] {
         let route = format!("/api/v1/parameter/by-id/{endpoint}");
         Mock::given(method("PUT"))
@@ -606,7 +620,7 @@ async fn refreshes_mapping_after_cache_ttl_for_new_deck() {
     }
 
     for clip_id in [
-        300, 301, 400, 401, 500, 550, 551, 600, 601, 700, 950, 960, 961,
+        300, 301, 400, 401, 500, 550, 551, 600, 601, 650, 651, 700, 950, 960, 961,
     ] {
         let route = format!("/api/v1/composition/clips/by-id/{clip_id}/connect");
         Mock::given(method("POST"))

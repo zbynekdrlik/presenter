@@ -288,7 +288,7 @@ impl AppState {
         };
 
         // Fetch secondary translation text if configured
-        let secondary_text = {
+        let (secondary_text, secondary_translation_code) = {
             let prefs = self.get_bible_preferences().await?;
             if let Some(ref sec_code) = prefs.secondary_translation {
                 let sec_range = self
@@ -304,7 +304,7 @@ impl AppState {
                     .await
                     .unwrap_or_default();
                 if sec_range.is_empty() {
-                    None
+                    (None, None)
                 } else {
                     let mut sec_text = String::new();
                     for entry in &sec_range {
@@ -315,10 +315,10 @@ impl AppState {
                         sec_text.push_str(&label);
                         sec_text.push_str(entry.text.as_str());
                     }
-                    Some(sec_text)
+                    (Some(sec_text), Some(sec_code.clone()))
                 }
             } else {
-                None
+                (None, None)
             }
         };
 
@@ -334,6 +334,7 @@ impl AppState {
             .bible_update(BibleUpdate {
                 passage: Some(broadcast.clone()),
                 secondary_text,
+                secondary_translation_code,
             })
             .await;
         Ok(broadcast)
@@ -349,6 +350,7 @@ impl AppState {
             .bible_update(BibleUpdate {
                 passage: None,
                 secondary_text: None,
+                secondary_translation_code: None,
             })
             .await;
     }

@@ -14,6 +14,8 @@ pub struct ClipMapping {
     pub bible_reference_b: Vec<ClipTarget>,
     pub bible_translation_a: Vec<ClipTarget>,
     pub bible_translation_b: Vec<ClipTarget>,
+    pub bible_translate_reference_a: Vec<ClipTarget>,
+    pub bible_translate_reference_b: Vec<ClipTarget>,
     pub bible_clear: Vec<ClipTarget>,
     pub timer: Vec<ClipTarget>,
     pub song_name: Vec<ClipTarget>,
@@ -90,6 +92,10 @@ fn ingest_clip(mapping: &mut ClipMapping, clip: &Value) {
                         LaneTarget::A => mapping.bible_translation_a.push(target),
                         LaneTarget::B => mapping.bible_translation_b.push(target),
                     },
+                    ClipDestination::BibleTranslateReference(lane, target) => match lane {
+                        LaneTarget::A => mapping.bible_translate_reference_a.push(target),
+                        LaneTarget::B => mapping.bible_translate_reference_b.push(target),
+                    },
                     ClipDestination::BibleClear(target) => mapping.bible_clear.push(target),
                     ClipDestination::Timer(target) => mapping.timer.push(target),
                     ClipDestination::SongName(target) => mapping.song_name.push(target),
@@ -106,6 +112,7 @@ enum ClipDestination {
     Bible(LaneTarget, ClipTarget),
     BibleReference(LaneTarget, ClipTarget),
     BibleTranslation(LaneTarget, ClipTarget),
+    BibleTranslateReference(LaneTarget, ClipTarget),
     BibleClear(ClipTarget),
     Timer(ClipTarget),
     SongName(ClipTarget),
@@ -119,6 +126,7 @@ enum ClipKind {
     Bible,
     BibleReference,
     BibleTranslation,
+    BibleTranslateReference,
     BibleClear,
     Timer,
     SongName,
@@ -151,7 +159,12 @@ fn parse_clip_destinations(
         "#bible" => {
             if tokens.get(index) == Some(&"translate") {
                 index += 1;
-                ClipKind::BibleTranslation
+                if tokens.get(index) == Some(&"reference") {
+                    index += 1;
+                    ClipKind::BibleTranslateReference
+                } else {
+                    ClipKind::BibleTranslation
+                }
             } else if tokens.get(index) == Some(&"reference") {
                 index += 1;
                 ClipKind::BibleReference
@@ -254,6 +267,16 @@ fn parse_clip_destinations(
                 ClipTarget {
                     clip_id,
                     text_param_id,
+                    transforms: transforms.clone(),
+                },
+            ));
+        }
+        (ClipKind::BibleTranslateReference, Some(lane)) => {
+            result.push(ClipDestination::BibleTranslateReference(
+                lane,
+                ClipTarget {
+                    clip_id,
+                    text_param_id,
                     transforms,
                 },
             ));
@@ -343,6 +366,12 @@ fn compute_missing_tokens(mapping: &ClipMapping) -> Vec<&'static str> {
     }
     if mapping.bible_translation_b.is_empty() {
         missing.push("#bible-translate-b");
+    }
+    if mapping.bible_translate_reference_a.is_empty() {
+        missing.push("#bible-translate-reference-a");
+    }
+    if mapping.bible_translate_reference_b.is_empty() {
+        missing.push("#bible-translate-reference-b");
     }
     if mapping.bible_clear.is_empty() {
         missing.push("#bible-clear");
