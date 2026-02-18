@@ -3256,6 +3256,24 @@
     }
   }
 
+  async function clearActiveBible() {
+    if (state.clearingSlide) return;
+    state.clearingSlide = true;
+    updateClearSlideAvailability();
+    try {
+      await apiFetch("/bible/clear", { method: "POST" });
+      state.activeBibleBroadcast = null;
+      renderStageStatus();
+      showToast("Bible broadcast cleared", "success");
+    } catch (error) {
+      console.error("Failed to clear bible broadcast", error);
+      showToast("Failed to clear bible broadcast", "error");
+    } finally {
+      state.clearingSlide = false;
+      updateClearSlideAvailability();
+    }
+  }
+
   function saveSlide(presentationId, slideId, card) {
     if (!presentationId || !slideId || !card) return;
     const mainInput = card.querySelector('[data-field="main"]');
@@ -5112,7 +5130,11 @@
       event.preventDefault();
       event.stopPropagation();
     }
-    clearActiveSlide();
+    if (state.view === "bible") {
+      clearActiveBible();
+    } else {
+      clearActiveSlide();
+    }
   }
 
   function handleSlidesClick(event) {

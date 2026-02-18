@@ -463,6 +463,10 @@ body.in-iframe.settings .settings__card {
   grid-template-columns: minmax(160px, auto) 1fr;
 }
 
+.settings__legend dl > div {
+  display: contents;
+}
+
 .settings__legend dt {
   font-weight: 600;
   color: #cbd5f5;
