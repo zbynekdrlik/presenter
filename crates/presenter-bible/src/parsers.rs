@@ -408,20 +408,39 @@ fn sanitize_text(input: &str) -> String {
     let mut chars = input.chars().peekable();
     while let Some(ch) = chars.next() {
         if ch == '\\' {
-            // consume marker name
+            // consume marker name (letters, digits, +, and closing *)
+            let mut is_closing = false;
             while let Some(&next) = chars.peek() {
-                if next.is_whitespace() {
-                    break;
-                }
-                chars.next();
-            }
-            // consume trailing whitespace between marker and content
-            while let Some(&next) = chars.peek() {
-                if next.is_whitespace() {
+                if next.is_ascii_alphanumeric() || next == '+' {
+                    chars.next();
+                } else if next == '*' {
+                    is_closing = true;
                     chars.next();
                 } else {
                     break;
                 }
+            }
+            // consume trailing whitespace only for opening markers, not
+            // closing markers like \w* where the space is content spacing
+            if !is_closing {
+                while let Some(&next) = chars.peek() {
+                    if next.is_whitespace() {
+                        chars.next();
+                    } else {
+                        break;
+                    }
+                }
+            }
+            continue;
+        }
+        // Strip USFM word-level attributes: |strong="G1234" etc.
+        // These appear between the word text and the closing \w* marker.
+        if ch == '|' {
+            while let Some(&next) = chars.peek() {
+                if next == '\\' {
+                    break;
+                }
+                chars.next();
             }
             continue;
         }
