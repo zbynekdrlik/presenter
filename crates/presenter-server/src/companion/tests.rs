@@ -306,3 +306,47 @@ async fn bible_trigger_and_clear_flow_updates_variables() {
     }
     assert!(saw_clear, "expected bible cleared event");
 }
+
+#[test]
+fn parse_command_accepts_all_documented_commands() {
+    let target = (Utc::now() + chrono::Duration::minutes(10)).to_rfc3339();
+    let cases: Vec<(&str, Value)> = vec![
+        ("timer.start_countdown", json!({})),
+        ("timer.pause_countdown", json!({})),
+        ("timer.reset_countdown", json!({})),
+        ("timer.set_countdown_target", json!({ "target": target })),
+        ("timer.start_preach", json!({})),
+        ("timer.pause_preach", json!({})),
+        ("timer.reset_preach", json!({})),
+        ("stage.layout", json!({ "code": "timer" })),
+        (
+            "stage.set",
+            json!({
+                "presentationId": "00000000-0000-0000-0000-000000000001",
+                "currentSlideId": "00000000-0000-0000-0000-000000000002",
+            }),
+        ),
+        (
+            "bible.trigger",
+            json!({
+                "translation": "KJV",
+                "book": "John",
+                "chapter": 3,
+                "verseStart": 16,
+            }),
+        ),
+        ("bible.clear", json!({})),
+    ];
+
+    for (command, payload) in &cases {
+        let result = parse_command(command, payload.clone());
+        assert!(
+            result.is_ok(),
+            "parse_command({command}) should succeed but got: {:?}",
+            result.err()
+        );
+    }
+
+    let unknown = parse_command("nonexistent.command", json!({}));
+    assert!(unknown.is_err(), "unknown command should return error");
+}
