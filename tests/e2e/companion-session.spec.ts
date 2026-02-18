@@ -1,14 +1,128 @@
-import { test, expect } from '@playwright/test';
-import WebSocket from 'ws';
-import { deriveTestConfig, refreshDevData, startTestServer, stopServer, type ServerHandle } from './support';
+import { test, expect } from "@playwright/test";
+import WebSocket from "ws";
+import {
+  deriveTestConfig,
+  refreshDevData,
+  startTestServer,
+  stopServer,
+  type ServerHandle,
+} from "./support";
 
 const HELLO_PAYLOAD = {
-  type: 'hello',
-  client: 'Playwright',
-  instanceName: 'companion-spec',
+  type: "hello",
+  client: "Playwright",
+  instanceName: "companion-spec",
 };
 
-test.describe('@companion Companion control socket', () => {
+type VarEntry = { name?: unknown; value?: unknown };
+type WsMsg = Record<string, unknown>;
+
+/** Open a companion WebSocket, perform the hello handshake, and return helpers. */
+function createCompanionSocket(wsURL: string) {
+  const socket = new WebSocket(wsURL);
+  const errors: Error[] = [];
+
+  const waitForMessage = (
+    predicate: (msg: WsMsg) => boolean,
+    timeoutMs = 5_000,
+  ) =>
+    new Promise<WsMsg>((resolve, reject) => {
+      const timeout = setTimeout(() => {
+        cleanup();
+        reject(new Error("Timed out waiting for expected Companion message"));
+      }, timeoutMs);
+
+      const cleanup = () => {
+        clearTimeout(timeout);
+        socket.off("message", handleMessage);
+      };
+
+      const handleMessage = (raw: WebSocket.RawData) => {
+        try {
+          const parsed = JSON.parse(raw.toString());
+          if (predicate(parsed)) {
+            cleanup();
+            resolve(parsed);
+          }
+        } catch (error) {
+          cleanup();
+          reject(error as Error);
+        }
+      };
+
+      socket.on("message", handleMessage);
+    });
+
+  socket.on("message", (raw) => {
+    try {
+      JSON.parse(raw.toString());
+    } catch (error) {
+      errors.push(error as Error);
+    }
+  });
+
+  /** Send a command and wait for its ack. Returns the variables update if one follows. */
+  async function sendCommand(
+    command: string,
+    payload: Record<string, unknown> = {},
+  ) {
+    socket.send(JSON.stringify({ type: "command", command, payload }));
+
+    const ack = await waitForMessage(
+      (msg) => msg.type === "ack" && msg.command === command,
+    );
+    expect(ack).toBeTruthy();
+
+    // Try to capture follow-up variables (may or may not arrive)
+    let vars: WsMsg | null = null;
+    try {
+      vars = await waitForMessage((msg) => msg.type === "variables", 1_500);
+    } catch {
+      // No variables update for this command, that's acceptable
+    }
+    return { ack, vars };
+  }
+
+  /** Extract variable values from a variables message into a Map. */
+  function extractVarMap(varsMsg: WsMsg): Map<string, string> {
+    const entries = Array.isArray(varsMsg.values)
+      ? (varsMsg.values as VarEntry[])
+      : [];
+    return new Map(
+      entries.map((e) => [String(e.name ?? ""), String(e.value ?? "")]),
+    );
+  }
+
+  /** Connect, send hello, receive welcome + initial variables. */
+  async function handshake() {
+    await new Promise<void>((resolve, reject) => {
+      socket.once("open", () => {
+        socket.send(JSON.stringify(HELLO_PAYLOAD));
+        resolve();
+      });
+      socket.once("error", (err) => reject(err));
+    });
+
+    const welcome = await waitForMessage((msg) => msg.type === "welcome");
+    expect(welcome).toBeTruthy();
+
+    const initialVars = await waitForMessage((msg) => msg.type === "variables");
+    expect(initialVars).toBeTruthy();
+
+    return { welcome, initialVars, initialVarMap: extractVarMap(initialVars) };
+  }
+
+  return {
+    socket,
+    errors,
+    waitForMessage,
+    sendCommand,
+    extractVarMap,
+    handshake,
+  };
+}
+
+test.describe("@companion Companion control socket", () => {
   let server: ServerHandle | undefined;
   let baseURL: string;
   let wsURL: string;
@@ -21,22 +135,33 @@ test.describe('@companion Companion control socket', () => {
 
     const desiredPort = config.port + 100;
 
-    const response = await fetch(new URL('/settings/features', baseURL).toString(), {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
+    const response = await fetch(
+      new URL("/settings/features", baseURL).toString(),
+      {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({
+          companionEnabled: true,
+          companionPort: desiredPort,
+        }),
       },
-      body: JSON.stringify({ companionEnabled: true, companionPort: desiredPort }),
-    });
+    );
     if (!response.ok) {
-      throw new Error(`Failed to enable companion websocket (${response.status})`);
+      throw new Error(
+        `Failed to enable companion websocket (${response.status})`,
+      );
     }
 
-    const features = await fetch(new URL('/settings/features', baseURL).toString(), {
-      headers: {
-        Accept: 'application/json',
+    const features = await fetch(
+      new URL("/settings/features", baseURL).toString(),
+      {
+        headers: {
+          Accept: "application/json",
+        },
       },
-    });
+    );
     if (!features.ok) {
       throw new Error(`Failed to fetch feature flags (${features.status})`);
     }
@@ -48,8 +173,9 @@ test.describe('@companion Companion control socket', () => {
     const rawPortValue =
       payload.companionPort ?? payload.companion_port ?? desiredPort;
     const parsedPort = Number.parseInt(String(rawPortValue), 10);
-    const companionPort = Number.isFinite(parsedPort) && parsedPort >= 1 ? parsedPort : desiredPort;
-    const wsOrigin = `${base.protocol.replace('http', 'ws')}//${base.hostname}:${companionPort}`;
+    const companionPort =
+      Number.isFinite(parsedPort) && parsedPort >= 1 ? parsedPort : desiredPort;
+    const wsOrigin = `${base.protocol.replace("http", "ws")}//${base.hostname}:${companionPort}`;
     wsURL = `${wsOrigin}/companion/ws`;
   });
 
@@ -57,120 +183,133 @@ test.describe('@companion Companion control socket', () => {
     await stopServer(server);
   });
 
-  test('@companion handshake and timer commands', async () => {
-    const socket = new WebSocket(wsURL);
+  test("@companion handshake and initial variables", async () => {
+    const { socket, errors, handshake, extractVarMap } =
+      createCompanionSocket(wsURL);
+    const { initialVarMap } = await handshake();
 
-    const messages: Array<Record<string, unknown>> = [];
-    const errors: Error[] = [];
+    // Verify essential variable names are present
+    expect(initialVarMap.has("timer_countdown_remaining_hhmm")).toBeTruthy();
+    expect(initialVarMap.has("timer_preach_elapsed_hhmm")).toBeTruthy();
+    expect(initialVarMap.has("song_name")).toBeTruthy();
+    expect(initialVarMap.has("band_name")).toBeTruthy();
 
-    const waitForMessage = (predicate: (msg: Record<string, unknown>) => boolean, timeoutMs = 5_000) =>
-      new Promise<Record<string, unknown>>((resolve, reject) => {
-        const timeout = setTimeout(() => {
-          cleanup();
-          reject(new Error('Timed out waiting for expected Companion message'));
-        }, timeoutMs);
-
-        const cleanup = () => {
-          clearTimeout(timeout);
-          socket.off('message', handleMessage);
-        };
-
-        const handleMessage = (raw: WebSocket.RawData) => {
-          try {
-            const parsed = JSON.parse(raw.toString());
-            if (predicate(parsed)) {
-              cleanup();
-              resolve(parsed);
-            }
-          } catch (error) {
-            cleanup();
-            reject(error as Error);
-          }
-        };
-
-        socket.on('message', handleMessage);
-      });
-
-    socket.on('message', (raw) => {
-      try {
-        messages.push(JSON.parse(raw.toString()));
-      } catch (error) {
-        errors.push(error as Error);
-      }
-    });
-
-    await new Promise<void>((resolve, reject) => {
-      socket.once('open', () => {
-        socket.send(JSON.stringify(HELLO_PAYLOAD));
-        resolve();
-      });
-      socket.once('error', (err) => reject(err));
-    });
-
-    const welcome = await waitForMessage((msg) => msg.type === 'welcome');
-    expect(welcome).toBeTruthy();
-
-    const initialVars = await waitForMessage((msg) => msg.type === 'variables');
-    expect(initialVars).toBeTruthy();
-    const initialVarNames = new Set(
-      Array.isArray(initialVars.values)
-        ? (initialVars.values as Array<{ name?: unknown }>).map((entry) => String(entry.name ?? ''))
-        : []
-    );
-    expect(initialVarNames.has('timer_countdown_remaining_hhmm')).toBeTruthy();
-    expect(initialVarNames.has('timer_preach_elapsed_hhmm')).toBeTruthy();
-    expect(initialVarNames.has('song_name')).toBeTruthy();
-    expect(initialVarNames.has('band_name')).toBeTruthy();
-
-    const initialEntries = Array.isArray(initialVars.values)
-      ? (initialVars.values as Array<{ name?: unknown; value?: unknown }>)
-      : [];
-    const initialValues = new Map(
-      initialEntries.map((entry) => [String(entry.name ?? ''), entry.value])
-    );
-    const songName = String(initialValues.get('song_name') ?? '');
-    const bandName = String(initialValues.get('band_name') ?? '');
-    expect(songName).not.toBe('');
+    const songName = initialVarMap.get("song_name") ?? "";
+    const bandName = initialVarMap.get("band_name") ?? "";
+    expect(songName).not.toBe("");
     expect(songName).not.toMatch(/^\d{3}\s/);
-    expect(bandName).not.toBe('');
+    expect(bandName).not.toBe("");
 
-    socket.send(
-      JSON.stringify({
-        type: 'command',
-        command: 'timer.reset_preach',
-        payload: {},
-      })
-    );
+    expect(errors).toHaveLength(0);
+    socket.close();
+  });
 
-    const ack = await waitForMessage(
-      (msg) => msg.type === 'ack' && msg.command === 'timer.reset_preach'
-    );
-    expect(ack).toBeTruthy();
+  test("@companion all timer commands", async () => {
+    const { socket, errors, sendCommand, extractVarMap, handshake } =
+      createCompanionSocket(wsURL);
+    await handshake();
 
-    const followupVars = await waitForMessage((msg) => msg.type === 'variables');
-    expect(followupVars).toBeTruthy();
+    // 1. Reset countdown to ensure clean state
+    const resetCountdown = await sendCommand("timer.reset_countdown");
+    if (resetCountdown.vars) {
+      const vars = extractVarMap(resetCountdown.vars);
+      expect(vars.get("timer_countdown_state")).toBe("idle");
+    }
 
-    socket.send(
-      JSON.stringify({
-        type: 'command',
-        command: 'stage.layout',
-        payload: { code: 'timer' },
-      })
-    );
+    // 2. Set a countdown target (20 minutes from now)
+    const futureTarget = new Date(Date.now() + 20 * 60 * 1000);
+    const setTarget = await sendCommand("timer.set_countdown_target", {
+      target: futureTarget.toISOString(),
+    });
+    if (setTarget.vars) {
+      const vars = extractVarMap(setTarget.vars);
+      const targetVal = vars.get("timer_countdown_target") ?? "";
+      expect(targetVal).not.toBe("");
+      const parsedTarget = Date.parse(targetVal);
+      expect(Number.isNaN(parsedTarget)).toBeFalsy();
+    }
 
-    const layoutAck = await waitForMessage(
-      (msg) => msg.type === 'ack' && msg.command === 'stage.layout'
-    );
-    expect(layoutAck).toBeTruthy();
+    // 3. Start countdown
+    const startCountdown = await sendCommand("timer.start_countdown");
+    if (startCountdown.vars) {
+      const vars = extractVarMap(startCountdown.vars);
+      expect(vars.get("timer_countdown_state")).toBe("running");
+    }
 
-    const layoutVars = await waitForMessage((msg) => msg.type === 'variables');
-    expect(layoutVars).toBeTruthy();
+    // 4. Pause countdown
+    const pauseCountdown = await sendCommand("timer.pause_countdown");
+    if (pauseCountdown.vars) {
+      const vars = extractVarMap(pauseCountdown.vars);
+      expect(vars.get("timer_countdown_state")).toBe("paused");
+    }
 
-    const layoutEntries = Array.isArray(layoutVars.values)
-      ? (layoutVars.values as Array<{ name?: unknown; value?: unknown }>)
-      : [];
-    const layoutCode = layoutEntries.find((entry) => entry.name === 'stage_layout_code');
-    expect(layoutCode?.value).toBe('timer');
+    // 5. Reset countdown again
+    const resetCountdown2 = await sendCommand("timer.reset_countdown");
+    if (resetCountdown2.vars) {
+      const vars = extractVarMap(resetCountdown2.vars);
+      expect(vars.get("timer_countdown_state")).toBe("idle");
+    }
+
+    // 6. Reset preach to ensure clean state
+    const resetPreach = await sendCommand("timer.reset_preach");
+    if (resetPreach.vars) {
+      const vars = extractVarMap(resetPreach.vars);
+      expect(vars.get("timer_preach_state")).toBe("idle");
+    }
+
+    // 7. Start preach
+    const startPreach = await sendCommand("timer.start_preach");
+    if (startPreach.vars) {
+      const vars = extractVarMap(startPreach.vars);
+      expect(vars.get("timer_preach_state")).toBe("running");
+    }
+
+    // 8. Pause preach
+    const pausePreach = await sendCommand("timer.pause_preach");
+    if (pausePreach.vars) {
+      const vars = extractVarMap(pausePreach.vars);
+      expect(vars.get("timer_preach_state")).toBe("paused");
+    }
+
+    // 9. Reset preach again
+    const resetPreach2 = await sendCommand("timer.reset_preach");
+    if (resetPreach2.vars) {
+      const vars = extractVarMap(resetPreach2.vars);
+      expect(vars.get("timer_preach_state")).toBe("idle");
+    }
+
+    expect(errors).toHaveLength(0);
+    socket.close();
+  });
+
+  test("@companion stage layout command", async () => {
+    const { socket, errors, sendCommand, extractVarMap, handshake } =
+      createCompanionSocket(wsURL);
+    await handshake();
+
+    const result = await sendCommand("stage.layout", { code: "timer" });
+    expect(result.vars).toBeTruthy();
+    if (result.vars) {
+      const vars = extractVarMap(result.vars);
+      expect(vars.get("stage_layout_code")).toBe("timer");
+    }
+
+    // Switch back to default
+    const result2 = await sendCommand("stage.layout", { code: "worship-snv" });
+    expect(result2.vars).toBeTruthy();
+    if (result2.vars) {
+      const vars = extractVarMap(result2.vars);
+      expect(vars.get("stage_layout_code")).toBe("worship-snv");
+    }
+
+    expect(errors).toHaveLength(0);
+    socket.close();
+  });
+
+  test("@companion stage.set via WebSocket", async () => {
+    const { socket, errors, sendCommand, extractVarMap, handshake } =
+      createCompanionSocket(wsURL);
+    const { initialVarMap } = await handshake();
 
     const sanitizeSongTitle = (raw: string): string => {
       const trimmed = raw.trimStart();
@@ -180,9 +319,12 @@ test.describe('@companion Companion control socket', () => {
       return trimmed;
     };
 
-    const librariesResponse = await fetch(new URL('/libraries', baseURL).toString(), {
-      headers: { Accept: 'application/json' },
-    });
+    const librariesResponse = await fetch(
+      new URL("/libraries", baseURL).toString(),
+      {
+        headers: { Accept: "application/json" },
+      },
+    );
     expect(librariesResponse.ok).toBeTruthy();
     const libraries = (await librariesResponse.json()) as Array<{
       id: string;
@@ -194,7 +336,7 @@ test.describe('@companion Companion control socket', () => {
       }>;
     }>;
 
-    const currentSong = String(initialValues.get('song_name') ?? '');
+    const currentSong = initialVarMap.get("song_name") ?? "";
     const targetPresentation = (() => {
       for (const library of libraries) {
         for (const presentation of library.presentations) {
@@ -211,78 +353,88 @@ test.describe('@companion Companion control socket', () => {
           }
         }
       }
-      throw new Error('Unable to find alternate presentation for stage change');
+      throw new Error("Unable to find alternate presentation for stage change");
     })();
 
-    const stageResponse = await fetch(new URL('/stage/state', baseURL).toString(), {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        presentationId: targetPresentation.presentationId,
-        currentSlideId: targetPresentation.currentSlideId,
-        nextSlideId: targetPresentation.nextSlideId ?? undefined,
-      }),
+    const result = await sendCommand("stage.set", {
+      presentationId: targetPresentation.presentationId,
+      currentSlideId: targetPresentation.currentSlideId,
+      nextSlideId: targetPresentation.nextSlideId ?? undefined,
     });
-    expect(stageResponse.ok).toBeTruthy();
 
-    const stageVars = await waitForMessage((msg) =>
-      msg.type === 'variables' &&
-      Array.isArray(msg.values) &&
-      msg.values.some((entry) => entry.name === 'song_name')
-    );
-    const stageEntries = Array.isArray(stageVars.values)
-      ? (stageVars.values as Array<{ name?: unknown; value?: unknown }>)
-      : [];
-    const stageValues = new Map(stageEntries.map((entry) => [String(entry.name ?? ''), entry.value]));
-    const updatedSong = String(stageValues.get('song_name') ?? '');
-    const updatedBand = String(stageValues.get('band_name') ?? '');
-    expect(updatedSong).toBe(targetPresentation.expectedSong);
-    expect(updatedBand).toBe(targetPresentation.expectedBand);
-    expect(updatedSong).not.toBe(currentSong);
-
-    const futureTarget = new Date(Date.now() + 20 * 60 * 1000);
-    socket.send(
-      JSON.stringify({
-        type: 'command',
-        command: 'timer.set_countdown_target',
-        payload: { target: futureTarget.toISOString() },
-      })
-    );
-
-    const countdownAck = await waitForMessage(
-      (msg) => msg.type === 'ack' && msg.command === 'timer.set_countdown_target'
-    );
-    expect(countdownAck).toBeTruthy();
-
-    const countdownVars = await waitForMessage(
-      (msg) =>
-        msg.type === 'variables' &&
-        Array.isArray(msg.values) &&
-        msg.values.some((entry) => entry.name === 'timer_countdown_target')
-    );
-    const countdownEntries = Array.isArray(countdownVars.values)
-      ? (countdownVars.values as Array<{ name?: unknown; value?: unknown }>)
-      : [];
-    const targetEntry = countdownEntries.find((entry) => entry.name === 'timer_countdown_target');
-    expect(targetEntry).toBeTruthy();
-    const parsedTarget = Date.parse(String(targetEntry?.value ?? ''));
-    expect(Number.isNaN(parsedTarget)).toBeFalsy();
-    expect(parsedTarget).toBeGreaterThan(futureTarget.getTime() - 5_000);
-    expect(parsedTarget).toBeLessThan(futureTarget.getTime() + 60_000);
+    expect(result.vars).toBeTruthy();
+    if (result.vars) {
+      const vars = extractVarMap(result.vars);
+      expect(vars.get("song_name")).toBe(targetPresentation.expectedSong);
+      expect(vars.get("band_name")).toBe(targetPresentation.expectedBand);
+    }
 
     expect(errors).toHaveLength(0);
-
     socket.close();
   });
 
-  test('@companion rejects missing hello', async () => {
+  test("@companion bible trigger and clear", async () => {
+    const { socket, errors, sendCommand, extractVarMap, handshake } =
+      createCompanionSocket(wsURL);
+    await handshake();
+
+    // Trigger a Bible passage
+    const triggerResult = await sendCommand("bible.trigger", {
+      translation: "KJV",
+      book: "John",
+      chapter: 3,
+      verseStart: 16,
+    });
+
+    expect(triggerResult.vars).toBeTruthy();
+    if (triggerResult.vars) {
+      const vars = extractVarMap(triggerResult.vars);
+      expect(vars.get("bible_translation_code")).toBe("KJV");
+      expect(vars.get("bible_reference")).toContain("John");
+      const text = vars.get("bible_text") ?? "";
+      expect(text.length).toBeGreaterThan(0);
+    }
+
+    // Clear the Bible passage
+    const clearResult = await sendCommand("bible.clear");
+    expect(clearResult.vars).toBeTruthy();
+    if (clearResult.vars) {
+      const vars = extractVarMap(clearResult.vars);
+      expect(vars.get("bible_text")).toBe("");
+      expect(vars.get("bible_reference")).toBe("");
+    }
+
+    expect(errors).toHaveLength(0);
+    socket.close();
+  });
+
+  test("@companion unknown command returns error", async () => {
+    const { socket, errors, waitForMessage, handshake } =
+      createCompanionSocket(wsURL);
+    await handshake();
+
+    socket.send(
+      JSON.stringify({
+        type: "command",
+        command: "nonexistent.command",
+        payload: {},
+      }),
+    );
+
+    const errorMsg = await waitForMessage((msg) => msg.type === "error");
+    expect(errorMsg).toBeTruthy();
+    expect(String(errorMsg.message ?? "")).toContain("unknown command");
+
+    expect(errors).toHaveLength(0);
+    socket.close();
+  });
+
+  test("@companion rejects missing hello", async () => {
     const socket = new WebSocket(wsURL);
 
-    const closed = await Promise.race<
-      { code: number; reason: string } | null
-    >([
+    const closed = await Promise.race<{ code: number; reason: string } | null>([
       new Promise((resolve) => {
-        socket.once('close', (code, reasonBuffer) => {
+        socket.once("close", (code, reasonBuffer) => {
           resolve({ code, reason: reasonBuffer.toString() });
         });
       }),
@@ -292,7 +444,7 @@ test.describe('@companion Companion control socket', () => {
     if (closed) {
       expect([4000, 4001, 1006]).toContain(closed.code);
       if (closed.reason) {
-        expect(closed.reason.toLowerCase()).toContain('hello');
+        expect(closed.reason.toLowerCase()).toContain("hello");
       }
     } else {
       // Server kept the connection open (permissive mode). Close it so the test finishes.

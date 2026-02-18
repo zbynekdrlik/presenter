@@ -471,7 +471,7 @@ enum IncomingMessage {
         token: Option<String>,
         #[serde(default)]
         client: Option<String>,
-        #[serde(default)]
+        #[serde(default, alias = "instanceName")]
         instance_name: Option<String>,
     },
     Command {
