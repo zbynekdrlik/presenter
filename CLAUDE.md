@@ -179,7 +179,7 @@ All workflows run on the Docker runners, providing:
 - 3 parallel runners for concurrent workflow execution
 - Reproducible environment (Docker image with Rust, Node.js, Playwright, Docker CLI)
 
-**Deploy workflows** use SSH to deploy binaries from runners to the application hosts (`10.77.9.205` for production, `10.77.8.134` for dev).
+**Deploy workflows** use SSH to deploy binaries from runners to the application hosts (`10.77.9.205` for production, `10.77.8.134` for dev, `companion-pp.lan` for PP releases).
 
 #### Runner Management
 
@@ -205,16 +205,16 @@ docker compose down --timeout 5 && docker compose up -d
 
 ### Workflows
 
-| Workflow            | Trigger                    | Purpose                                         |
-| ------------------- | -------------------------- | ----------------------------------------------- |
-| `ci.yml`            | Push to `dev`/`main`, PRs  | Format, lint, test, quality                     |
-| `e2e.yml`           | Push to `dev`/`main`, PRs  | Playwright E2E tests                            |
-| `version-check.yml` | Push to `dev`/`main`, PRs  | Validate version format                         |
-| `security.yml`      | Weekly + manual            | Vulnerability scanning                          |
-| `deploy-dev.yml`    | Push to `dev`              | Deploy dev binary via SSH to /opt/presenter-dev |
-| `deploy.yml`        | Push to `main`             | Deploy prod binary via SSH to /opt/presenter    |
-| `import-data.yml`   | Manual (workflow_dispatch) | Re-import ProPresenter/Bible data               |
-| `release.yml`       | GitHub Release published   | Build and upload release artifacts              |
+| Workflow            | Trigger                    | Purpose                                              |
+| ------------------- | -------------------------- | ---------------------------------------------------- |
+| `ci.yml`            | Push to `dev`/`main`, PRs  | Format, lint, test, quality                          |
+| `e2e.yml`           | Push to `dev`/`main`, PRs  | Playwright E2E tests                                 |
+| `version-check.yml` | Push to `dev`/`main`, PRs  | Validate version format                              |
+| `security.yml`      | Weekly + manual            | Vulnerability scanning                               |
+| `deploy-dev.yml`    | Push to `dev`              | Deploy dev binary via SSH to /opt/presenter-dev      |
+| `deploy.yml`        | Push to `main`             | Deploy prod binary via SSH to /opt/presenter         |
+| `import-data.yml`   | Manual (workflow_dispatch) | Re-import ProPresenter/Bible data                    |
+| `release.yml`       | GitHub Release published   | Build release artifacts + deploy to companion-pp.lan |
 
 ### Monitoring CI
 
@@ -262,12 +262,13 @@ cargo build --release -p presenter-server
 
 ### Deployed Instances
 
-Two instances run on separate hosts:
+Three instances run on separate hosts:
 
-| Instance   | URL                     | Host        | Port | Service                 | Deploy Dir           | Branch |
-| ---------- | ----------------------- | ----------- | ---- | ----------------------- | -------------------- | ------ |
-| Production | http://10.77.9.205      | 10.77.9.205 | 80   | `presenter.service`     | `/opt/presenter`     | `main` |
-| Dev        | http://10.77.8.134:8080 | 10.77.8.134 | 8080 | `presenter-dev.service` | `/opt/presenter-dev` | `dev`  |
+| Instance   | URL                     | Host             | Port | Service                 | Deploy Dir           | Trigger        |
+| ---------- | ----------------------- | ---------------- | ---- | ----------------------- | -------------------- | -------------- |
+| Production | http://10.77.9.205      | 10.77.9.205      | 80   | `presenter.service`     | `/opt/presenter`     | push to `main` |
+| Dev        | http://10.77.8.134:8080 | 10.77.8.134      | 8080 | `presenter-dev.service` | `/opt/presenter-dev` | push to `dev`  |
+| PP         | http://companion-pp.lan | companion-pp.lan | 80   | `presenter.service`     | `/opt/presenter`     | GitHub Release |
 
 ```bash
 # Check both services

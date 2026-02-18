@@ -10,6 +10,7 @@ on:
         options:
           - dev
           - production
+          - pp
       import_type:
         description: "What to import"
         required: true
@@ -43,6 +44,13 @@ jobs:
             echo "library_root=/opt/presenter/libraries" >> "$GITHUB_OUTPUT"
             echo "ssh_key_secret=DEPLOY_SSH_KEY" >> "$GITHUB_OUTPUT"
             echo "health_port=80" >> "$GITHUB_OUTPUT"
+          elif [ "${{ inputs.environment }}" = "pp" ]; then
+            echo "deploy_dir=/opt/presenter" >> "$GITHUB_OUTPUT"
+            echo "deploy_host=companion-pp.lan" >> "$GITHUB_OUTPUT"
+            echo "service_name=presenter" >> "$GITHUB_OUTPUT"
+            echo "library_root=/opt/presenter/libraries" >> "$GITHUB_OUTPUT"
+            echo "ssh_key_secret=DEPLOY_SSH_KEY_PP" >> "$GITHUB_OUTPUT"
+            echo "health_port=80" >> "$GITHUB_OUTPUT"
           else
             echo "deploy_dir=/opt/presenter-dev" >> "$GITHUB_OUTPUT"
             echo "deploy_host=10.77.8.134" >> "$GITHUB_OUTPUT"
@@ -57,6 +65,8 @@ jobs:
           mkdir -p ~/.ssh
           if [ "${{ inputs.environment }}" = "production" ]; then
             echo "${{ secrets.DEPLOY_SSH_KEY }}" > ~/.ssh/id_deploy
+          elif [ "${{ inputs.environment }}" = "pp" ]; then
+            echo "${{ secrets.DEPLOY_SSH_KEY_PP }}" > ~/.ssh/id_deploy
           else
             echo "${{ secrets.DEPLOY_SSH_KEY_DEV }}" > ~/.ssh/id_deploy
           fi
