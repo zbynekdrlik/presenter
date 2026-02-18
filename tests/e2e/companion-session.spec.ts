@@ -61,17 +61,26 @@ function createCompanionSocket(wsURL: string) {
     }
   });
 
-  /** Send a command and wait for its ack. Returns the variables update if one follows. */
+  /** Send a command and wait for its ack or error response. Returns variables if they follow. */
   async function sendCommand(
     command: string,
     payload: Record<string, unknown> = {},
   ) {
     socket.send(JSON.stringify({ type: "command", command, payload }));
 
-    const ack = await waitForMessage(
-      (msg) => msg.type === "ack" && msg.command === command,
+    const response = await waitForMessage(
+      (msg) =>
+        (msg.type === "ack" && msg.command === command) || msg.type === "error",
     );
-    expect(ack).toBeTruthy();
+    expect(response).toBeTruthy();
+
+    if (response.type === "error") {
+      return {
+        ack: response,
+        vars: null,
+        error: String(response.message ?? ""),
+      };
+    }
 
     // Try to capture follow-up variables (may or may not arrive)
     let vars: WsMsg | null = null;
@@ -80,7 +89,7 @@ function createCompanionSocket(wsURL: string) {
     } catch {
       // No variables update for this command, that's acceptable
     }
-    return { ack, vars };
+    return { ack: response, vars, error: null };
   }
 
   /** Extract variable values from a variables message into a Map. */
@@ -378,18 +387,19 @@ test.describe("@companion Companion control socket", () => {
       createCompanionSocket(wsURL);
     await handshake();
 
-    // Trigger a Bible passage
+    // Trigger a Bible passage (eng-kjv is the translation code used by the ingestion pipeline)
     const triggerResult = await sendCommand("bible.trigger", {
-      translation: "KJV",
+      translation: "eng-kjv",
       book: "John",
       chapter: 3,
       verseStart: 16,
     });
 
+    expect(triggerResult.error).toBeNull();
     expect(triggerResult.vars).toBeTruthy();
     if (triggerResult.vars) {
       const vars = extractVarMap(triggerResult.vars);
-      expect(vars.get("bible_translation_code")).toBe("KJV");
+      expect(vars.get("bible_translation_code")).toBe("eng-kjv");
       expect(vars.get("bible_reference")).toContain("John");
       const text = vars.get("bible_text") ?? "";
       expect(text.length).toBeGreaterThan(0);
@@ -397,6 +407,7 @@ test.describe("@companion Companion control socket", () => {
 
     // Clear the Bible passage
     const clearResult = await sendCommand("bible.clear");
+    expect(clearResult.error).toBeNull();
     expect(clearResult.vars).toBeTruthy();
     if (clearResult.vars) {
       const vars = extractVarMap(clearResult.vars);
