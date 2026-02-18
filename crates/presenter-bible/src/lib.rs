@@ -510,6 +510,38 @@ mod tests {
         assert_eq!(passages[1].text, "that He gave");
     }
 
+    #[tokio::test]
+    async fn strips_strongs_concordance_markup_from_usfm() {
+        let mut archive = Vec::new();
+        {
+            let cursor = Cursor::new(&mut archive);
+            let mut writer = zip::ZipWriter::new(cursor);
+            let options = FileOptions::default();
+            let content = "\\id 1PE 1 Peter\n\\c 1\n\\v 1 \\w Peter|strong=\"G4074\"\\w*, an \\w apostle|strong=\"G0652\"\\w* of \\w Jesus|strong=\"G2424\"\\w* \\w Christ|strong=\"G5547\"\\w*\n";
+            writer.start_file("1PE.usfm", options).unwrap();
+            writer.write_all(content.as_bytes()).unwrap();
+            writer.finish().unwrap();
+        }
+
+        let provider = StubProvider { payload: archive };
+        let scraper = BibleScraper::new(provider);
+        let translation = sample_translation();
+        let spec = BibleTranslationSpec {
+            translation: translation.clone(),
+            source: BibleSource::Url {
+                url: "memory".to_string(),
+            },
+            format: BibleSourceFormat::UsfmZip {
+                book_name_overrides: HashMap::new(),
+            },
+        };
+
+        let (batch, _) = scraper.scrape(&spec).await.unwrap();
+        let passages = batch.passages();
+        assert_eq!(passages.len(), 1);
+        assert_eq!(passages[0].text, "Peter, an apostle of Jesus Christ");
+    }
+
     #[test]
     fn default_specs_include_expected_translations() {
         let codes: HashSet<_> = default_translation_specs()
