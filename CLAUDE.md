@@ -1,6 +1,6 @@
 # CLAUDE.md
 
-> **Version:** 2025.4 | **Last Updated:** 2025-12-31
+> **Version:** 2025.5 | **Last Updated:** 2026-02-19
 
 This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
 
@@ -11,7 +11,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 **Agents work autonomously. Do not ask for confirmation. Execute the full cycle:**
 
 ```
-Code → Commit → Push to dev → Monitor CI → Fix failures → Repeat until green → Local test
+Code → Commit → Push to dev → Monitor CI → Fix failures → Repeat until green → STOP (user verifies on dev)
 ```
 
 ### The Loop (execute without asking)
@@ -36,21 +36,31 @@ Code → Commit → Push to dev → Monitor CI → Fix failures → Repeat until
    # Commit and push again
    ```
 
-4. **When CI is green: test locally**
-   ```bash
-   cargo run -p presenter-server
-   # Verify at http://localhost:80
-   ```
+4. **When CI is green: STOP and report to user**
+   - Provide the dev environment URL for the user to verify the feature manually
+   - **Do NOT create a PR** — wait for the user to confirm the feature works on dev
+   - **Do NOT test locally** unless the user asks
 
 **Never ask "should I commit?" or "should I push?" - just do it.**
 
+### PR Creation (NEVER automatic)
+
+**NEVER create a pull request unless the user explicitly asks for it.** This is non-negotiable:
+
+- After CI is green, report the dev URL and wait for user verification
+- The user will test the feature on the dev environment themselves
+- Only when the user says "create a PR" or equivalent, then create one
+- Creating a PR without user approval is a violation of this policy
+
 ### Deliverables (ALWAYS provide at end of task)
 
-When a task is complete, **always** provide these links:
+When a task is complete (CI green), **always** provide:
 
-- **Dev environment:** http://10.77.8.134:8080/ui/operator (verify healthy)
-- **PR to main:** GitHub PR URL (must be green and mergeable)
-- **Production environment:** http://10.77.9.205/ui/operator (verify healthy)
+- **Dev environment:** http://10.77.8.134:8080/ui/operator (for user to verify)
+- **CI status:** Confirm all workflows are green
+- **What to test:** Brief list of what the user should verify on dev
+
+**Do NOT provide a PR link** — wait for user to request PR creation after they verify on dev.
 
 ---
 
