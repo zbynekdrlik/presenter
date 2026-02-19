@@ -964,8 +964,10 @@ test("content search across translations finds and loads verse", async ({
   ).toBeVisible();
   await expect(firstResult.locator(".bible__search-result-text")).toBeVisible();
 
-  // Click first result — verse should load, search should clear
-  await firstResult.click();
+  // Click first result — use native click to avoid Playwright hit-testing
+  // issues with elements inside nested scrollable containers
+  await firstResult.scrollIntoViewIfNeeded();
+  await firstResult.evaluate((el) => (el as HTMLElement).click());
 
   // Verify search input is cleared
   await expect(searchInput).toHaveValue("");

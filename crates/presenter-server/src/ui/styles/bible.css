@@ -418,6 +418,7 @@ body.in-iframe .operator__main {
   text-align: center;
 }
 .bible__search-result-item {
+  position: relative;
   display: flex;
   flex-direction: column;
   gap: 0.15rem;
