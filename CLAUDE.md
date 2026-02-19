@@ -207,10 +207,10 @@ docker compose down --timeout 5 && docker compose up -d
 
 | Workflow            | Trigger                    | Purpose                                              |
 | ------------------- | -------------------------- | ---------------------------------------------------- |
-| `ci.yml`            | Push to `dev`/`main`, PRs  | Format, lint, test, quality                          |
-| `e2e.yml`           | Push to `dev`/`main`, PRs  | Playwright E2E tests                                 |
-| `version-check.yml` | Push to `dev`/`main`, PRs  | Validate version format                              |
-| `security.yml`      | Weekly + manual            | Vulnerability scanning                               |
+| `ci.yml`            | Push to `dev`              | Format, lint, test, quality, coverage                |
+| `e2e.yml`           | Push to `dev`              | Playwright E2E tests                                 |
+| `version-check.yml` | Push to `dev`              | Validate version format                              |
+| `security.yml`      | Push to `dev` + weekly     | Vulnerability scanning                               |
 | `deploy-dev.yml`    | Push to `dev`              | Deploy dev binary via SSH to /opt/presenter-dev      |
 | `deploy.yml`        | Push to `main`             | Deploy prod binary via SSH to /opt/presenter         |
 | `import-data.yml`   | Manual (workflow_dispatch) | Re-import ProPresenter/Bible data                    |
