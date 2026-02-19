@@ -136,6 +136,54 @@ impl Repository {
     }
 
     #[instrument(skip_all)]
+    pub async fn search_bible_passages_cross(
+        &self,
+        translation_code: Option<&str>,
+        query: &str,
+        limit: u32,
+    ) -> anyhow::Result<Vec<BiblePassage>> {
+        if let Some(code) = translation_code {
+            return self.search_bible_passages(code, query, limit).await;
+        }
+
+        if query.trim().is_empty() {
+            return Ok(Vec::new());
+        }
+
+        let all_translations: std::collections::HashMap<String, bible_translation::Model> =
+            bible_translation::Entity::find()
+                .all(&self.db)
+                .await?
+                .into_iter()
+                .map(|m| (m.code.clone(), m))
+                .collect();
+
+        if all_translations.is_empty() {
+            return Ok(Vec::new());
+        }
+
+        let pattern = format!("%{}%", query);
+        let rows = bible_passage::Entity::find()
+            .filter(bible_passage::Column::Content.like(pattern))
+            .order_by_asc(bible_passage::Column::BookNumber)
+            .order_by_asc(bible_passage::Column::Chapter)
+            .order_by_asc(bible_passage::Column::VerseStart)
+            .order_by_asc(bible_passage::Column::TranslationCode)
+            .limit(limit as u64)
+            .all(&self.db)
+            .await?;
+
+        let mut results = Vec::with_capacity(rows.len());
+        for row in rows {
+            let translation_code = row.translation_code.clone();
+            if let Some(translation) = all_translations.get(&translation_code) {
+                results.push(to_domain_passage(row, translation.clone())?);
+            }
+        }
+        Ok(results)
+    }
+
+    #[instrument(skip_all)]
     pub async fn find_bible_passage(
         &self,
         translation_code: &str,

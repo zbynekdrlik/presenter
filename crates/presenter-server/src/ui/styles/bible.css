@@ -398,6 +398,83 @@ body.in-iframe .operator__main {
   box-sizing: border-box;
 }
 
+/* ---------- Content search results ---------- */
+.bible__search-results {
+  max-height: 280px;
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 0.25rem;
+}
+.bible__search-results:empty {
+  display: none;
+}
+.bible__search-results[data-loading="true"]::before {
+  content: "Searching…";
+  display: block;
+  padding: 0.5rem 0;
+  color: #94a3b8;
+  font-size: 0.8rem;
+  text-align: center;
+}
+.bible__search-result-item {
+  display: flex;
+  flex-direction: column;
+  gap: 0.15rem;
+  width: 100%;
+  border: 1px solid #e2e8f0;
+  border-radius: 6px;
+  padding: 0.45rem 0.6rem;
+  background: #fff;
+  cursor: pointer;
+  text-align: left;
+  font-family: inherit;
+  font-size: 0.8rem;
+  color: #1e293b;
+  transition:
+    border-color 0.15s ease,
+    background 0.15s ease;
+}
+.bible__search-result-item:hover {
+  border-color: #4f46e5;
+  background: rgba(79, 70, 229, 0.04);
+}
+.bible__search-result-header {
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+}
+.bible__search-result-ref {
+  font-weight: 600;
+  font-size: 0.8rem;
+  color: #1e293b;
+}
+.bible__search-result-badge {
+  font-size: 0.65rem;
+  font-weight: 500;
+  color: #6366f1;
+  background: rgba(99, 102, 241, 0.1);
+  padding: 0.1rem 0.35rem;
+  border-radius: 4px;
+  white-space: nowrap;
+}
+.bible__search-result-text {
+  font-size: 0.75rem;
+  color: #64748b;
+  line-height: 1.35;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+}
+.bible__search-empty {
+  padding: 0.5rem 0;
+  color: #94a3b8;
+  font-size: 0.8rem;
+  text-align: center;
+}
+
 @media (max-width: 720px) {
   .bible__search {
     grid-template-columns: 1fr;

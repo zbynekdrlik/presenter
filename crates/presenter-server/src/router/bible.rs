@@ -132,7 +132,8 @@ pub(super) async fn list_bible_books(
 
 #[derive(Debug, serde::Deserialize)]
 pub(super) struct BibleSearchQuery {
-    pub(super) translation: String,
+    #[serde(default)]
+    pub(super) translation: Option<String>,
     pub(super) query: String,
     #[serde(default)]
     pub(super) limit: Option<u32>,
@@ -150,8 +151,13 @@ pub(super) async fn search_bible_passages(
         ));
     }
     let limit = params.limit.unwrap_or(25).min(100);
+    let translation_code = params
+        .translation
+        .as_deref()
+        .map(|s| s.trim())
+        .filter(|s| !s.is_empty());
     let passages = state
-        .search_bible_passages(&params.translation, trimmed, limit)
+        .search_bible_passages_cross(translation_code, trimmed, limit)
         .await?;
     Ok(Json(passages))
 }

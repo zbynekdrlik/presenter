@@ -90,6 +90,10 @@
     toastTimer: null,
     loadingSlides: false,
     savingPreferences: false,
+    contentSearchQuery: "",
+    contentSearchResults: [],
+    contentSearchLoading: false,
+    contentSearchDebounce: null,
     presentationEditTarget: null,
     bibleEdit: {
       open: false,
@@ -112,6 +116,12 @@
     ),
     charLimit: document.querySelector('[data-role="char-limit"]'),
     savePreferences: document.querySelector('[data-role="save-preferences"]'),
+    contentSearchInput: document.querySelector(
+      '[data-role="content-search-input"]',
+    ),
+    contentSearchResults: document.querySelector(
+      '[data-role="content-search-results"]',
+    ),
     bookFilter: document.querySelector('[data-role="book-filter"]'),
     bookList: document.querySelector('[data-role="book-list"]'),
     chapterInput: document.querySelector('[data-role="chapter-input"]'),
@@ -2188,6 +2198,187 @@
     }
   }
 
+  async function performContentSearch(query) {
+    if (!query || query.length < 3) {
+      state.contentSearchResults = [];
+      state.contentSearchLoading = false;
+      renderContentSearchResults();
+      return;
+    }
+    state.contentSearchLoading = true;
+    renderContentSearchResults();
+    try {
+      const encoded = encodeURIComponent(query);
+      const results = await apiFetch(`/bible/search?query=${encoded}&limit=30`);
+      state.contentSearchResults = Array.isArray(results) ? results : [];
+    } catch (error) {
+      console.error("Content search failed", error);
+      state.contentSearchResults = [];
+    } finally {
+      state.contentSearchLoading = false;
+      renderContentSearchResults();
+    }
+  }
+
+  function renderContentSearchResults() {
+    if (!els.contentSearchResults) return;
+    if (state.contentSearchLoading) {
+      els.contentSearchResults.dataset.loading = "true";
+      els.contentSearchResults.innerHTML = "";
+      return;
+    }
+    delete els.contentSearchResults.dataset.loading;
+    if (!state.contentSearchResults.length) {
+      if (state.contentSearchQuery && state.contentSearchQuery.length >= 3) {
+        els.contentSearchResults.innerHTML =
+          "<div class='bible__search-empty'>No results found.</div>";
+      } else {
+        els.contentSearchResults.innerHTML = "";
+      }
+      return;
+    }
+    var html = state.contentSearchResults
+      .map(function (passage, idx) {
+        var ref = passage.reference || {};
+        var book = ref.book || ref.book_name || "";
+        var bookCode = ref.book_code || ref.bookCode || "";
+        var bookNumber =
+          ref.book_number != null
+            ? ref.book_number
+            : ref.bookNumber != null
+              ? ref.bookNumber
+              : 0;
+        var chapter = ref.chapter || 0;
+        var verseStart =
+          ref.verse_start != null ? ref.verse_start : ref.verseStart || 0;
+        var verseEnd =
+          ref.verse_end != null ? ref.verse_end : ref.verseEnd || verseStart;
+        var refLabel = formatReference(book, chapter, verseStart, verseEnd);
+        var translation = passage.translation || {};
+        var translationCode = translation.code || "";
+        var translationName = translation.name || translationCode;
+        var text = passage.text || "";
+        var snippet =
+          text.length > 120 ? text.substring(0, 120) + "\u2026" : text;
+        return (
+          "<button type='button' class='bible__search-result-item'" +
+          " data-idx='" +
+          idx +
+          "'" +
+          " data-book='" +
+          escapeHtml(book) +
+          "'" +
+          " data-book-code='" +
+          escapeHtml(bookCode) +
+          "'" +
+          " data-book-number='" +
+          bookNumber +
+          "'" +
+          " data-chapter='" +
+          chapter +
+          "'" +
+          " data-verse-start='" +
+          verseStart +
+          "'" +
+          " data-verse-end='" +
+          verseEnd +
+          "'" +
+          " data-translation-code='" +
+          escapeHtml(translationCode) +
+          "'" +
+          ">" +
+          "<div class='bible__search-result-header'>" +
+          "<span class='bible__search-result-ref'>" +
+          escapeHtml(refLabel) +
+          "</span>" +
+          "<span class='bible__search-result-badge'>" +
+          escapeHtml(translationName) +
+          "</span>" +
+          "</div>" +
+          "<div class='bible__search-result-text'>" +
+          escapeHtml(snippet) +
+          "</div>" +
+          "</button>"
+        );
+      })
+      .join("");
+    els.contentSearchResults.innerHTML = html;
+  }
+
+  async function handleContentSearchResultClick(event) {
+    var item = event.target.closest(".bible__search-result-item");
+    if (!item) return;
+    var translationCode = item.getAttribute("data-translation-code") || "";
+    var book = item.getAttribute("data-book") || "";
+    var bookCode = item.getAttribute("data-book-code") || "";
+    var bookNumber = Number(item.getAttribute("data-book-number") || "0") || 0;
+    var chapter = Number(item.getAttribute("data-chapter") || "1") || 1;
+    var verseStart = Number(item.getAttribute("data-verse-start") || "1") || 1;
+    var verseEnd = Number(item.getAttribute("data-verse-end") || "1") || 1;
+
+    // Switch main translation if needed
+    if (
+      translationCode &&
+      translationCode !== state.preferences.mainTranslation
+    ) {
+      alignMainTranslation(translationCode);
+      renderTranslationSelect(
+        els.mainTranslation,
+        state.preferences.mainTranslation,
+      );
+      renderTranslationSelect(
+        els.secondaryTranslation,
+        state.preferences.secondaryTranslation,
+        true,
+      );
+      await loadBooks(false);
+    }
+
+    // Match book by code
+    var bookEntry = state.books.find(function (bk) {
+      if (bookCode && bk.code) {
+        return bk.code.toLowerCase() === bookCode.toLowerCase();
+      }
+      if (bookNumber && bk.number) {
+        return bk.number === bookNumber;
+      }
+      return bk.name === book;
+    });
+    if (bookEntry) {
+      state.selectedBook = bookEntry.name;
+      state.selectedBookCode = bookEntry.code || "";
+      state.selectedBookNumber = bookEntry.number || 0;
+      state.chapters = bookEntry.chapters || [];
+    }
+    state.selectedChapter = chapter;
+    state.verseStart = verseStart;
+    state.verseEnd = verseEnd;
+    state.verseEndCustom = true;
+    state.bookSelectionLocked = true;
+    state.filteredBooks = state.books.filter(function (bk) {
+      if (state.selectedBookCode && bk.code) {
+        return bk.code === state.selectedBookCode;
+      }
+      if (state.selectedBookNumber && bk.number) {
+        return bk.number === state.selectedBookNumber;
+      }
+      return bk.name === state.selectedBook;
+    });
+
+    // Clear search
+    state.contentSearchQuery = "";
+    state.contentSearchResults = [];
+    if (els.contentSearchInput) {
+      els.contentSearchInput.value = "";
+    }
+    renderContentSearchResults();
+
+    // Update UI and load slides
+    updateReferenceInputs();
+    renderBookList();
+    await loadSlides();
+  }
+
   function initialiseEvents() {
     document.querySelectorAll('[data-role="view-toggle"]').forEach((button) => {
       const href = button.getAttribute("data-href");
@@ -2352,6 +2543,44 @@
     }
     if (els.savePreferences) {
       els.savePreferences.addEventListener("click", savePreferences);
+    }
+    if (els.contentSearchInput) {
+      els.contentSearchInput.addEventListener("input", function () {
+        var query = els.contentSearchInput.value.trim();
+        state.contentSearchQuery = query;
+        if (state.contentSearchDebounce) {
+          clearTimeout(state.contentSearchDebounce);
+        }
+        if (query.length < 3) {
+          state.contentSearchResults = [];
+          state.contentSearchLoading = false;
+          renderContentSearchResults();
+          return;
+        }
+        state.contentSearchDebounce = setTimeout(function () {
+          performContentSearch(query);
+        }, 300);
+      });
+      els.contentSearchInput.addEventListener("keydown", function (event) {
+        if (event.key === "Enter") {
+          event.preventDefault();
+          var query = els.contentSearchInput.value.trim();
+          state.contentSearchQuery = query;
+          if (state.contentSearchDebounce) {
+            clearTimeout(state.contentSearchDebounce);
+            state.contentSearchDebounce = null;
+          }
+          if (query.length >= 3) {
+            performContentSearch(query);
+          }
+        }
+      });
+    }
+    if (els.contentSearchResults) {
+      els.contentSearchResults.addEventListener(
+        "click",
+        handleContentSearchResultClick,
+      );
     }
     if (els.bookFilter) {
       els.bookFilter.addEventListener("input", (event) => {

@@ -110,6 +110,17 @@ fn BibleDocument(
                             </nav>
                             <div class="bible__tab-panel" data-bible-panel="live" data-visible="true">
                                 <label class="operator__field">
+                                    <span>"Search verse content"</span>
+                                    <input
+                                        type="search"
+                                        data-role="content-search-input"
+                                        placeholder="Type a phrase to find across all translations…"
+                                        autocomplete="off"
+                                    />
+                                </label>
+                                <div class="bible__search-results" data-role="content-search-results"></div>
+                                <hr class="operator__divider" />
+                                <label class="operator__field">
                                     <span>"Find book"</span>
                                     <input type="search" data-role="book-filter" placeholder="Start typing…" />
                                 </label>
