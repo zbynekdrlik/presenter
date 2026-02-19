@@ -92,9 +92,9 @@ jobs:
       - name: Deploy binaries
         run: |
           scp -i ~/.ssh/id_deploy \
-            binaries/target/release/presenter-server \
-            binaries/target/release/import_propresenter \
-            binaries/target/release/ingest_bibles \
+            binaries/presenter-server \
+            binaries/import_propresenter \
+            binaries/ingest_bibles \
             deploy-target:${{ env.DEPLOY_DIR }}/
           ssh deploy-target "chmod +x ${{ env.DEPLOY_DIR }}/presenter-server ${{ env.DEPLOY_DIR }}/import_propresenter ${{ env.DEPLOY_DIR }}/ingest_bibles"
 

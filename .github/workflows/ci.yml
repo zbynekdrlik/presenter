@@ -2,9 +2,7 @@ name: CI
 
 on:
   push:
-    branches: [main, dev]
-  pull_request:
-    branches: [main, dev]
+    branches: [dev]
   workflow_dispatch:
 
 concurrency:
@@ -190,7 +188,7 @@ jobs:
     name: Code Coverage
     runs-on: self-hosted
     needs: test
-    if: github.event_name == 'pull_request'
+    if: always() && needs.test.result == 'success'
     steps:
       - uses: actions/checkout@v4
 
