@@ -943,34 +943,41 @@ test("content search across translations finds and loads verse", async ({
     { timeout: 120_000 },
   );
 
-  // Verify search input is visible on Live tab
-  const searchInput = page.locator('[data-role="content-search-input"]');
+  // Verify header search input is visible
+  const searchInput = page.locator('[data-role="global-search-query"]');
   await expect(searchInput).toBeVisible({ timeout: 10_000 });
 
-  // Type a phrase and wait for results
+  // Type a phrase and wait for dropdown results
   await searchInput.fill("God so loved");
   await expect(async () => {
     const resultCount = await page
-      .locator(".bible__search-result-item")
+      .locator(".operator__search-result button")
       .count();
     expect(resultCount).toBeGreaterThan(0);
   }).toPass({ timeout: 15_000 });
 
-  // Verify result items show reference, translation badge, and content
-  const firstResult = page.locator(".bible__search-result-item").first();
-  await expect(firstResult.locator(".bible__search-result-ref")).toBeVisible();
+  // Verify dropdown is visible
+  const dropdown = page.locator('[data-role="global-search-results"]');
+  await expect(dropdown).toHaveAttribute("data-visible", "true");
+
+  // Verify result items show reference, translation, and snippet
+  const firstResult = page.locator(".operator__search-result button").first();
   await expect(
-    firstResult.locator(".bible__search-result-badge"),
+    firstResult.locator(".operator__search-result-title"),
   ).toBeVisible();
-  await expect(firstResult.locator(".bible__search-result-text")).toBeVisible();
+  await expect(
+    firstResult.locator(".operator__search-result-meta"),
+  ).toBeVisible();
+  await expect(
+    firstResult.locator(".operator__search-result-snippet"),
+  ).toBeVisible();
 
-  // Click first result — use native click to avoid Playwright hit-testing
-  // issues with elements inside nested scrollable containers
-  await firstResult.scrollIntoViewIfNeeded();
-  await firstResult.evaluate((el) => (el as HTMLElement).click());
+  // Click first result
+  await firstResult.click();
 
-  // Verify search input is cleared
+  // Verify search input is cleared and dropdown is closed
   await expect(searchInput).toHaveValue("");
+  await expect(dropdown).toHaveAttribute("data-visible", "false");
 
   // Verify slides were loaded
   await expect(async () => {
@@ -1022,4 +1029,99 @@ test("content search minimum character validation", async ({ request }) => {
     new URL("/bible/search?query=of", baseURL).toString(),
   );
   expect(twoCharResponse.ok()).toBeTruthy();
+});
+
+test("header search dropdown closes on Escape and click-outside", async ({
+  page,
+  request,
+}) => {
+  await expect(async () => {
+    const response = await request.get(
+      new URL("/healthz", baseURL).toString(),
+      { timeout: 120_000 },
+    );
+    expect(response.ok()).toBeTruthy();
+  }).toPass({ timeout: 180_000 });
+
+  await page.goto(new URL("/ui/bible", baseURL).toString());
+
+  await page.waitForFunction(
+    () => {
+      const state = (window as any).__presenterBibleState;
+      return !!state && Array.isArray(state.books) && state.books.length > 0;
+    },
+    { timeout: 120_000 },
+  );
+
+  const searchInput = page.locator('[data-role="global-search-query"]');
+  const dropdown = page.locator('[data-role="global-search-results"]');
+
+  // Type a query and wait for results
+  await searchInput.fill("God so loved");
+  await expect(async () => {
+    const count = await page.locator(".operator__search-result button").count();
+    expect(count).toBeGreaterThan(0);
+  }).toPass({ timeout: 15_000 });
+  await expect(dropdown).toHaveAttribute("data-visible", "true");
+
+  // Press Escape — dropdown should close and input should be cleared
+  await searchInput.press("Escape");
+  await expect(dropdown).toHaveAttribute("data-visible", "false");
+  await expect(searchInput).toHaveValue("");
+
+  // Type again and wait for results
+  await searchInput.fill("God so loved");
+  await expect(async () => {
+    const count = await page.locator(".operator__search-result button").count();
+    expect(count).toBeGreaterThan(0);
+  }).toPass({ timeout: 15_000 });
+  await expect(dropdown).toHaveAttribute("data-visible", "true");
+
+  // Click outside — dropdown should close, input cleared
+  await page.locator("h1").click();
+  await expect(dropdown).toHaveAttribute("data-visible", "false");
+  await expect(searchInput).toHaveValue("");
+});
+
+test("header search clear button", async ({ page, request }) => {
+  await expect(async () => {
+    const response = await request.get(
+      new URL("/healthz", baseURL).toString(),
+      { timeout: 120_000 },
+    );
+    expect(response.ok()).toBeTruthy();
+  }).toPass({ timeout: 180_000 });
+
+  await page.goto(new URL("/ui/bible", baseURL).toString());
+
+  await page.waitForFunction(
+    () => {
+      const state = (window as any).__presenterBibleState;
+      return !!state && Array.isArray(state.books) && state.books.length > 0;
+    },
+    { timeout: 120_000 },
+  );
+
+  const searchInput = page.locator('[data-role="global-search-query"]');
+  const clearButton = page.locator('[data-role="global-search-clear"]');
+  const dropdown = page.locator('[data-role="global-search-results"]');
+
+  // Clear button is hidden initially
+  await expect(clearButton).toBeHidden();
+
+  // Type query — clear button becomes visible
+  await searchInput.fill("God so loved");
+  await expect(clearButton).toBeVisible();
+
+  // Wait for results
+  await expect(async () => {
+    const count = await page.locator(".operator__search-result button").count();
+    expect(count).toBeGreaterThan(0);
+  }).toPass({ timeout: 15_000 });
+
+  // Click clear — input empty, dropdown hidden, clear button hidden
+  await clearButton.click();
+  await expect(searchInput).toHaveValue("");
+  await expect(dropdown).toHaveAttribute("data-visible", "false");
+  await expect(clearButton).toBeHidden();
 });

@@ -45,13 +45,12 @@ fn BibleDocument(
                             <span class="operator__search-icon" aria-hidden="true"></span>
                             <input
                                 type="search"
-                                placeholder="Search presenter content"
+                                placeholder="Search Bible verses\u{2026}"
                                 data-role="global-search-query"
-                                aria-label="Search presenter content"
+                                aria-label="Search Bible verses"
                                 autocomplete="off"
-                                disabled
                             />
-                            <button type="button" data-role="global-search-clear" aria-label="Clear search" disabled>
+                            <button type="button" data-role="global-search-clear" aria-label="Clear search" hidden>
                                 <span aria-hidden="true">"×"</span>
                                 <span class="sr-only">"Clear search"</span>
                             </button>
@@ -109,17 +108,6 @@ fn BibleDocument(
                                 <button type="button" data-role="bible-tab" data-tab="settings">"Settings"</button>
                             </nav>
                             <div class="bible__tab-panel" data-bible-panel="live" data-visible="true">
-                                <label class="operator__field">
-                                    <span>"Search verse content"</span>
-                                    <input
-                                        type="search"
-                                        data-role="content-search-input"
-                                        placeholder="Type a phrase to find across all translations…"
-                                        autocomplete="off"
-                                    />
-                                </label>
-                                <div class="bible__search-results" data-role="content-search-results"></div>
-                                <hr class="operator__divider" />
                                 <label class="operator__field">
                                     <span>"Find book"</span>
                                     <input type="search" data-role="book-filter" placeholder="Start typing…" />

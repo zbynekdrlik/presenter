@@ -116,11 +116,17 @@
     ),
     charLimit: document.querySelector('[data-role="char-limit"]'),
     savePreferences: document.querySelector('[data-role="save-preferences"]'),
-    contentSearchInput: document.querySelector(
-      '[data-role="content-search-input"]',
+    globalSearchForm: document.querySelector(
+      '[data-role="global-search-form"]',
     ),
-    contentSearchResults: document.querySelector(
-      '[data-role="content-search-results"]',
+    globalSearchInput: document.querySelector(
+      '[data-role="global-search-query"]',
+    ),
+    globalSearchClear: document.querySelector(
+      '[data-role="global-search-clear"]',
+    ),
+    globalSearchResults: document.querySelector(
+      '[data-role="global-search-results"]',
     ),
     bookFilter: document.querySelector('[data-role="book-filter"]'),
     bookList: document.querySelector('[data-role="book-list"]'),
@@ -2221,23 +2227,25 @@
   }
 
   function renderContentSearchResults() {
-    if (!els.contentSearchResults) return;
+    if (!els.globalSearchResults) return;
     if (state.contentSearchLoading) {
-      els.contentSearchResults.dataset.loading = "true";
-      els.contentSearchResults.innerHTML = "";
+      els.globalSearchResults.dataset.visible = "true";
+      els.globalSearchResults.innerHTML =
+        "<div class='operator__search-group'><p class='operator__search-empty'>Searching\u2026</p></div>";
       return;
     }
-    delete els.contentSearchResults.dataset.loading;
     if (!state.contentSearchResults.length) {
       if (state.contentSearchQuery && state.contentSearchQuery.length >= 3) {
-        els.contentSearchResults.innerHTML =
-          "<div class='bible__search-empty'>No results found.</div>";
+        els.globalSearchResults.dataset.visible = "true";
+        els.globalSearchResults.innerHTML =
+          "<div class='operator__search-group'><p class='operator__search-empty'>No results found.</p></div>";
       } else {
-        els.contentSearchResults.innerHTML = "";
+        els.globalSearchResults.dataset.visible = "false";
+        els.globalSearchResults.innerHTML = "";
       }
       return;
     }
-    var html = state.contentSearchResults
+    var items = state.contentSearchResults
       .map(function (passage, idx) {
         var ref = passage.reference || {};
         var book = ref.book || ref.book_name || "";
@@ -2261,7 +2269,8 @@
         var snippet =
           text.length > 120 ? text.substring(0, 120) + "\u2026" : text;
         return (
-          "<button type='button' class='bible__search-result-item'" +
+          "<div class='operator__search-result'>" +
+          "<button type='button'" +
           " data-idx='" +
           idx +
           "'" +
@@ -2287,26 +2296,29 @@
           escapeHtml(translationCode) +
           "'" +
           ">" +
-          "<div class='bible__search-result-header'>" +
-          "<span class='bible__search-result-ref'>" +
+          "<span class='operator__search-result-title'>" +
           escapeHtml(refLabel) +
           "</span>" +
-          "<span class='bible__search-result-badge'>" +
+          "<span class='operator__search-result-meta'>" +
           escapeHtml(translationName) +
           "</span>" +
-          "</div>" +
-          "<div class='bible__search-result-text'>" +
+          "<span class='operator__search-result-snippet'>" +
           escapeHtml(snippet) +
-          "</div>" +
-          "</button>"
+          "</span>" +
+          "</button>" +
+          "</div>"
         );
       })
       .join("");
-    els.contentSearchResults.innerHTML = html;
+    els.globalSearchResults.innerHTML =
+      "<div class='operator__search-group'><h3>Bible Verses</h3>" +
+      items +
+      "</div>";
+    els.globalSearchResults.dataset.visible = "true";
   }
 
   async function handleContentSearchResultClick(event) {
-    var item = event.target.closest(".bible__search-result-item");
+    var item = event.target.closest(".operator__search-result button");
     if (!item) return;
     var translationCode = item.getAttribute("data-translation-code") || "";
     var book = item.getAttribute("data-book") || "";
@@ -2368,8 +2380,11 @@
     // Clear search
     state.contentSearchQuery = "";
     state.contentSearchResults = [];
-    if (els.contentSearchInput) {
-      els.contentSearchInput.value = "";
+    if (els.globalSearchInput) {
+      els.globalSearchInput.value = "";
+    }
+    if (els.globalSearchClear) {
+      els.globalSearchClear.hidden = true;
     }
     renderContentSearchResults();
 
@@ -2544,10 +2559,18 @@
     if (els.savePreferences) {
       els.savePreferences.addEventListener("click", savePreferences);
     }
-    if (els.contentSearchInput) {
-      els.contentSearchInput.addEventListener("input", function () {
-        var query = els.contentSearchInput.value.trim();
+    if (els.globalSearchForm) {
+      els.globalSearchForm.addEventListener("submit", function (e) {
+        e.preventDefault();
+      });
+    }
+    if (els.globalSearchInput) {
+      els.globalSearchInput.addEventListener("input", function () {
+        var query = els.globalSearchInput.value.trim();
         state.contentSearchQuery = query;
+        if (els.globalSearchClear) {
+          els.globalSearchClear.hidden = !query;
+        }
         if (state.contentSearchDebounce) {
           clearTimeout(state.contentSearchDebounce);
         }
@@ -2561,10 +2584,10 @@
           performContentSearch(query);
         }, 300);
       });
-      els.contentSearchInput.addEventListener("keydown", function (event) {
+      els.globalSearchInput.addEventListener("keydown", function (event) {
         if (event.key === "Enter") {
           event.preventDefault();
-          var query = els.contentSearchInput.value.trim();
+          var query = els.globalSearchInput.value.trim();
           state.contentSearchQuery = query;
           if (state.contentSearchDebounce) {
             clearTimeout(state.contentSearchDebounce);
@@ -2574,14 +2597,68 @@
             performContentSearch(query);
           }
         }
+        if (event.key === "Escape") {
+          event.preventDefault();
+          els.globalSearchInput.value = "";
+          state.contentSearchQuery = "";
+          state.contentSearchResults = [];
+          if (state.contentSearchDebounce) {
+            clearTimeout(state.contentSearchDebounce);
+            state.contentSearchDebounce = null;
+          }
+          if (els.globalSearchClear) {
+            els.globalSearchClear.hidden = true;
+          }
+          renderContentSearchResults();
+        }
       });
     }
-    if (els.contentSearchResults) {
-      els.contentSearchResults.addEventListener(
+    if (els.globalSearchClear) {
+      els.globalSearchClear.addEventListener("click", function () {
+        if (els.globalSearchInput) {
+          els.globalSearchInput.value = "";
+          els.globalSearchInput.focus();
+        }
+        state.contentSearchQuery = "";
+        state.contentSearchResults = [];
+        if (state.contentSearchDebounce) {
+          clearTimeout(state.contentSearchDebounce);
+          state.contentSearchDebounce = null;
+        }
+        els.globalSearchClear.hidden = true;
+        renderContentSearchResults();
+      });
+    }
+    if (els.globalSearchResults) {
+      els.globalSearchResults.addEventListener(
         "click",
         handleContentSearchResultClick,
       );
     }
+    document.addEventListener("click", function (event) {
+      if (
+        els.globalSearchResults &&
+        els.globalSearchResults.dataset.visible === "true" &&
+        els.globalSearchForm &&
+        !els.globalSearchForm.contains(event.target) &&
+        !els.globalSearchResults.contains(event.target)
+      ) {
+        if (state.contentSearchDebounce) {
+          clearTimeout(state.contentSearchDebounce);
+          state.contentSearchDebounce = null;
+        }
+        els.globalSearchResults.dataset.visible = "false";
+        els.globalSearchResults.innerHTML = "";
+        state.contentSearchResults = [];
+        state.contentSearchQuery = "";
+        if (els.globalSearchInput) {
+          els.globalSearchInput.value = "";
+        }
+        if (els.globalSearchClear) {
+          els.globalSearchClear.hidden = true;
+        }
+      }
+    });
     if (els.bookFilter) {
       els.bookFilter.addEventListener("input", (event) => {
         filterBooks(event.target.value);
