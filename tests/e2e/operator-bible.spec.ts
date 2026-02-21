@@ -821,3 +821,279 @@ test("operator edit/live mode toggle propagates to bible iframe", async ({
     expect(editMode).toBe(false);
   }).toPass({ timeout: 5_000 });
 });
+
+test("operator header search switches to Bible in Bible view", async ({
+  page,
+  request,
+}) => {
+  await expect(async () => {
+    const response = await request.get(`${baseURL}/healthz`, {
+      timeout: 60_000,
+    });
+    expect(response.ok()).toBeTruthy();
+  }).toPass({ timeout: 90_000 });
+
+  // Navigate to operator in Bible view
+  await page.goto(`${baseURL}/ui/operator/bible`);
+  await expect(page).toHaveURL(/\/ui\/operator\/bible/);
+
+  // Wait for operator script to initialise
+  await page.waitForFunction(() => !!(window as any).__presenterOperatorState, {
+    timeout: 30_000,
+  });
+
+  // Verify placeholder says "Bible"
+  const searchInput = page.locator(
+    '.operator__header [data-role="global-search-query"]',
+  );
+  await expect(searchInput).toBeVisible({ timeout: 10_000 });
+  await expect(searchInput).toHaveAttribute("placeholder", /Bible/);
+
+  // Wait for the Bible iframe to be ready with books loaded
+  const bibleFrame = page.frameLocator('[data-view-panel="bible"] iframe');
+  await expect(async () => {
+    const ready = await bibleFrame.locator("body").evaluate(() => {
+      const s = (window as any).__presenterBibleState;
+      return s && Array.isArray(s.books) && s.books.length > 0;
+    });
+    expect(ready).toBeTruthy();
+  }).toPass({ timeout: 60_000 });
+
+  // Type a Bible search query (min 3 chars)
+  await searchInput.fill("God so loved");
+  // Wait for search results to appear
+  const searchResults = page.locator('[data-role="global-search-results"]');
+  await expect(async () => {
+    const visible = await searchResults.getAttribute("data-visible");
+    expect(visible).toBe("true");
+  }).toPass({ timeout: 15_000 });
+
+  // Verify results contain Bible-specific content
+  await expect(searchResults.locator("h3")).toHaveText("Bible Verses");
+  const resultButtons = searchResults.locator(
+    '[data-role="search-result"][data-kind="bible"]',
+  );
+  await expect(resultButtons.first()).toBeVisible({ timeout: 10_000 });
+  const resultCount = await resultButtons.count();
+  expect(resultCount).toBeGreaterThan(0);
+
+  // Verify result has reference, translation, and snippet
+  const firstResult = resultButtons.first();
+  await expect(
+    firstResult.locator(".operator__search-result-title"),
+  ).toBeVisible();
+  await expect(
+    firstResult.locator(".operator__search-result-meta"),
+  ).toBeVisible();
+  await expect(
+    firstResult.locator(".operator__search-result-snippet"),
+  ).toBeVisible();
+
+  // Get the data attributes from the first result for verification after click
+  const bookCode = await firstResult.getAttribute("data-book-code");
+  const chapter = await firstResult.getAttribute("data-chapter");
+  const verseStart = await firstResult.getAttribute("data-verse-start");
+
+  // Click the first result
+  await firstResult.click();
+
+  // Search should be cleared
+  await expect(searchInput).toHaveValue("");
+  await expect(async () => {
+    const visible = await searchResults.getAttribute("data-visible");
+    expect(visible).toBe("false");
+  }).toPass({ timeout: 5_000 });
+
+  // Verify the Bible iframe received the passage and loaded slides
+  await expect(async () => {
+    const bibleState = await bibleFrame.locator("body").evaluate(() => {
+      const s = (window as any).__presenterBibleState;
+      return {
+        bookCode: s?.selectedBookCode,
+        chapter: s?.selectedChapter,
+        verseStart: s?.verseStart,
+      };
+    });
+    expect(bibleState.bookCode).toBe(bookCode);
+    expect(String(bibleState.chapter)).toBe(chapter);
+    expect(String(bibleState.verseStart)).toBe(verseStart);
+  }).toPass({ timeout: 30_000 });
+
+  // Verify slides were generated in the iframe
+  await expect(bibleFrame.locator(".operator__slide-card").first()).toBeVisible(
+    {
+      timeout: 30_000,
+    },
+  );
+});
+
+test("search placeholder changes between views", async ({ page, request }) => {
+  await expect(async () => {
+    const response = await request.get(`${baseURL}/healthz`, {
+      timeout: 60_000,
+    });
+    expect(response.ok()).toBeTruthy();
+  }).toPass({ timeout: 90_000 });
+
+  // Start at worship view
+  await page.goto(`${baseURL}/ui/operator`);
+  await page.waitForFunction(() => !!(window as any).__presenterOperatorState, {
+    timeout: 30_000,
+  });
+
+  const searchInput = page.locator(
+    '.operator__header [data-role="global-search-query"]',
+  );
+  await expect(searchInput).toBeVisible({ timeout: 10_000 });
+
+  // Worship placeholder
+  await expect(searchInput).toHaveAttribute(
+    "placeholder",
+    /libraries, songs, slides/,
+  );
+
+  // Switch to Bible view
+  await page.locator('[data-role="view-toggle"][data-view="bible"]').click();
+  await expect(searchInput).toHaveAttribute("placeholder", /Bible/);
+
+  // Switch back to worship
+  await page.locator('[data-role="view-toggle"][data-view="worship"]').click();
+  await expect(searchInput).toHaveAttribute(
+    "placeholder",
+    /libraries, songs, slides/,
+  );
+});
+
+test("switching views clears active search", async ({ page, request }) => {
+  await expect(async () => {
+    const response = await request.get(`${baseURL}/healthz`, {
+      timeout: 60_000,
+    });
+    expect(response.ok()).toBeTruthy();
+  }).toPass({ timeout: 90_000 });
+
+  await page.goto(`${baseURL}/ui/operator`);
+  await page.waitForFunction(() => !!(window as any).__presenterOperatorState, {
+    timeout: 30_000,
+  });
+
+  const searchInput = page.locator(
+    '.operator__header [data-role="global-search-query"]',
+  );
+  await expect(searchInput).toBeVisible({ timeout: 10_000 });
+
+  // Type a search query in worship view
+  await searchInput.fill("test search");
+
+  // Wait for search results dropdown to appear
+  const searchResults = page.locator('[data-role="global-search-results"]');
+  await expect(async () => {
+    const visible = await searchResults.getAttribute("data-visible");
+    expect(visible).toBe("true");
+  }).toPass({ timeout: 15_000 });
+
+  // Switch to Bible view
+  await page.locator('[data-role="view-toggle"][data-view="bible"]').click();
+
+  // Input should be cleared and dropdown hidden
+  await expect(searchInput).toHaveValue("");
+  await expect(async () => {
+    const visible = await searchResults.getAttribute("data-visible");
+    expect(visible).toBe("false");
+  }).toPass({ timeout: 5_000 });
+});
+
+test("Bible search requires minimum 3 characters", async ({
+  page,
+  request,
+}) => {
+  await expect(async () => {
+    const response = await request.get(`${baseURL}/healthz`, {
+      timeout: 60_000,
+    });
+    expect(response.ok()).toBeTruthy();
+  }).toPass({ timeout: 90_000 });
+
+  await page.goto(`${baseURL}/ui/operator/bible`);
+  await page.waitForFunction(() => !!(window as any).__presenterOperatorState, {
+    timeout: 30_000,
+  });
+
+  const searchInput = page.locator(
+    '.operator__header [data-role="global-search-query"]',
+  );
+  await expect(searchInput).toBeVisible({ timeout: 10_000 });
+
+  const searchResults = page.locator('[data-role="global-search-results"]');
+
+  // Type 2 chars — should NOT trigger search dropdown
+  await searchInput.fill("ab");
+  // Wait a bit to ensure no results appear
+  await page.waitForTimeout(500);
+  const visibleAfter2 = await searchResults.getAttribute("data-visible");
+  expect(visibleAfter2).not.toBe("true");
+
+  // Type 3 chars — should trigger search
+  await searchInput.fill("abc");
+  await expect(async () => {
+    const visible = await searchResults.getAttribute("data-visible");
+    expect(visible).toBe("true");
+  }).toPass({ timeout: 15_000 });
+});
+
+test("worship search still works after visiting Bible view", async ({
+  page,
+  request,
+}) => {
+  await expect(async () => {
+    const response = await request.get(`${baseURL}/healthz`, {
+      timeout: 60_000,
+    });
+    expect(response.ok()).toBeTruthy();
+  }).toPass({ timeout: 90_000 });
+
+  // Start on Bible view and do a search
+  await page.goto(`${baseURL}/ui/operator/bible`);
+  await page.waitForFunction(() => !!(window as any).__presenterOperatorState, {
+    timeout: 30_000,
+  });
+
+  const searchInput = page.locator(
+    '.operator__header [data-role="global-search-query"]',
+  );
+  await expect(searchInput).toBeVisible({ timeout: 10_000 });
+  await searchInput.fill("God");
+  const searchResults = page.locator('[data-role="global-search-results"]');
+  await expect(async () => {
+    const visible = await searchResults.getAttribute("data-visible");
+    expect(visible).toBe("true");
+  }).toPass({ timeout: 15_000 });
+
+  // Verify Bible results
+  await expect(
+    searchResults
+      .locator('[data-role="search-result"][data-kind="bible"]')
+      .first(),
+  ).toBeVisible({ timeout: 10_000 });
+
+  // Switch to worship view
+  await page.locator('[data-role="view-toggle"][data-view="worship"]').click();
+
+  // Search should be cleared
+  await expect(searchInput).toHaveValue("");
+
+  // Do a worship search
+  await searchInput.fill("test");
+  await expect(async () => {
+    const visible = await searchResults.getAttribute("data-visible");
+    expect(visible).toBe("true");
+  }).toPass({ timeout: 15_000 });
+
+  // Worship results should NOT contain Bible kind
+  await expect(async () => {
+    const bibleResults = await searchResults
+      .locator('[data-role="search-result"][data-kind="bible"]')
+      .count();
+    expect(bibleResults).toBe(0);
+  }).toPass({ timeout: 5_000 });
+});

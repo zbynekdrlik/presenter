@@ -2897,14 +2897,83 @@
   // Listen for mode changes from parent operator page (when embedded as iframe)
   window.addEventListener("message", function (event) {
     if (event.origin !== window.location.origin) return;
-    if (!event.data || event.data.type !== "presenter-mode-change") return;
-    var newMode = event.data.mode;
-    state.editMode = newMode === "edit";
-    updateMode();
-    if (state.bibleTab === "prepared") {
-      renderPresentationSlides();
-    } else {
-      renderSlides();
+    if (!event.data) return;
+
+    if (event.data.type === "presenter-mode-change") {
+      var newMode = event.data.mode;
+      state.editMode = newMode === "edit";
+      updateMode();
+      if (state.bibleTab === "prepared") {
+        renderPresentationSlides();
+      } else {
+        renderSlides();
+      }
+      return;
+    }
+
+    if (event.data.type === "presenter-bible-load-passage") {
+      var passage = event.data.passage;
+      if (!passage) return;
+
+      (async function () {
+        // Switch translation if needed
+        if (
+          passage.translationCode &&
+          passage.translationCode !== state.preferences.mainTranslation
+        ) {
+          alignMainTranslation(passage.translationCode);
+          renderTranslationSelect(
+            els.mainTranslation,
+            state.preferences.mainTranslation,
+          );
+          renderTranslationSelect(
+            els.secondaryTranslation,
+            state.preferences.secondaryTranslation,
+            true,
+          );
+          await loadBooks(false);
+        }
+
+        // Match book by code/number/name
+        var bookEntry = state.books.find(function (bk) {
+          if (passage.bookCode && bk.code) {
+            return bk.code.toLowerCase() === passage.bookCode.toLowerCase();
+          }
+          if (passage.bookNumber && bk.number) {
+            return bk.number === passage.bookNumber;
+          }
+          return bk.name === passage.book;
+        });
+        if (bookEntry) {
+          state.selectedBook = bookEntry.name;
+          state.selectedBookCode = bookEntry.code || "";
+          state.selectedBookNumber = bookEntry.number || 0;
+          state.chapters = bookEntry.chapters || [];
+        }
+        state.selectedChapter = passage.chapter;
+        state.verseStart = passage.verseStart;
+        state.verseEnd = passage.verseEnd;
+        state.verseEndCustom = true;
+        state.bookSelectionLocked = true;
+        state.filteredBooks = state.books.filter(function (bk) {
+          if (state.selectedBookCode && bk.code) {
+            return bk.code === state.selectedBookCode;
+          }
+          if (state.selectedBookNumber && bk.number) {
+            return bk.number === state.selectedBookNumber;
+          }
+          return bk.name === state.selectedBook;
+        });
+
+        // Ensure live tab is active
+        if (state.bibleTab !== "live") {
+          setBibleTab("live");
+        }
+
+        updateReferenceInputs();
+        renderBookList();
+        await loadSlides();
+      })();
     }
   });
 
