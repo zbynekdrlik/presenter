@@ -45,13 +45,12 @@ fn BibleDocument(
                             <span class="operator__search-icon" aria-hidden="true"></span>
                             <input
                                 type="search"
-                                placeholder="Search presenter content"
+                                placeholder="Search Bible verses\u{2026}"
                                 data-role="global-search-query"
-                                aria-label="Search presenter content"
+                                aria-label="Search Bible verses"
                                 autocomplete="off"
-                                disabled
                             />
-                            <button type="button" data-role="global-search-clear" aria-label="Clear search" disabled>
+                            <button type="button" data-role="global-search-clear" aria-label="Clear search" hidden>
                                 <span aria-hidden="true">"×"</span>
                                 <span class="sr-only">"Clear search"</span>
                             </button>

@@ -31,14 +31,14 @@ impl AppState {
     }
 
     // Bible passage search methods
-    pub async fn search_bible_passages(
+    pub async fn search_bible_passages_cross(
         &self,
-        translation_code: &str,
+        translation_code: Option<&str>,
         query: &str,
         limit: u32,
     ) -> anyhow::Result<Vec<presenter_core::BiblePassage>> {
         self.repository
-            .search_bible_passages(translation_code, query, limit)
+            .search_bible_passages_cross(translation_code, query, limit)
             .await
     }
 

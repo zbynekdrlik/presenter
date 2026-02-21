@@ -398,6 +398,19 @@ body.in-iframe .operator__main {
   box-sizing: border-box;
 }
 
+/* Position the header search dropdown below the sticky header
+   Header height ≈ padding (0.65rem × 2) + content (~1.6rem) = ~2.9rem */
+.operator--bible .operator__search-results {
+  top: 3.2rem;
+}
+
+/* Ensure header search form sits above the dropdown so the clear button
+   is not obscured by the fixed-position results panel */
+.operator--bible .operator__search {
+  position: relative;
+  z-index: 21;
+}
+
 @media (max-width: 720px) {
   .bible__search {
     grid-template-columns: 1fr;
