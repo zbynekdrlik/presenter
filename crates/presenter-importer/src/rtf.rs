@@ -2,19 +2,10 @@
 
 use anyhow::Result;
 use encoding_rs::{Encoding, WINDOWS_1250, WINDOWS_1251, WINDOWS_1252, WINDOWS_1254};
-use rtf_parser::RtfDocument;
 
 pub fn decode_rtf(bytes: &[u8]) -> Result<String> {
     let raw = String::from_utf8_lossy(bytes).to_string();
     let encoding = detect_rtf_encoding(&raw);
-
-    if let Ok(doc) = RtfDocument::try_from(raw.clone()) {
-        let text = doc.get_text();
-        if !contains_control_range(&text) {
-            return Ok(clean_text(text));
-        }
-    }
-
     Ok(clean_text(fallback_rtf_to_text(&raw, encoding)))
 }
 
@@ -215,10 +206,6 @@ where
     word
 }
 
-fn contains_control_range(text: &str) -> bool {
-    text.chars().any(|ch| matches!(ch as u32, 0x80..=0x9F))
-}
-
 fn clean_text(text: String) -> String {
     let mut cleaned = String::with_capacity(text.len());
     let mut prev_alpha = false;
@@ -370,6 +357,44 @@ mod tests {
         assert_eq!(
             cleaned, "A kto to zmeniť chce musí sa znova narodiť",
             "cleaned={cleaned}"
+        );
+    }
+
+    #[test]
+    fn decode_rtf_consecutive_hex_escapes_preserve_both_chars() {
+        // \'cd = Í (0xCD in cp1252), \'8e = Ž (0x8E in cp1252)
+        let raw = br"{\rtf1\ansi\ansicpg1252 PRIBL\'cd\'8eIM SA K TEBE VIAC}";
+        let text = decode_rtf(raw).expect("rtf to decode");
+        assert!(
+            text.contains("PRIBLÍŽIM"),
+            "expected PRIBLÍŽIM but got: {text}"
+        );
+    }
+
+    #[test]
+    fn decode_rtf_cp1252_uppercase_and_lowercase_caron_z() {
+        // \'8e = Ž, \'9e = ž in Windows-1252
+        let upper = br"{\rtf1\ansi\ansicpg1252 \'8eIVOT}";
+        let lower = br"{\rtf1\ansi\ansicpg1252 t\'fa\'9ebu}";
+        let text_upper = decode_rtf(upper).expect("rtf to decode");
+        let text_lower = decode_rtf(lower).expect("rtf to decode");
+        assert!(text_upper.contains('Ž'), "expected Ž but got: {text_upper}");
+        assert!(text_lower.contains('ž'), "expected ž but got: {text_lower}");
+    }
+
+    #[test]
+    fn decode_rtf_full_rtf_header_with_consecutive_hex() {
+        let raw = br"{\rtf1\ansi\ansicpg1252\cocoartf2639
+\cocoatextscaling0\cocoaplatform0{\fonttbl\f0\fnil\fcharset0 HelveticaNeue;}
+{\colortbl;\red255\green255\blue255;}
+{\*\expandedcolortbl;;}
+\pard\tx560\tx1120\pardirnatural\qc\partightenfactor0
+
+\f0\fs120 \cf1 PRIBL\'cd\'8eIM SA K TEBE VIAC}";
+        let text = decode_rtf(raw).expect("rtf to decode");
+        assert!(
+            text.contains("PRIBLÍŽIM"),
+            "expected PRIBLÍŽIM in full RTF but got: {text}"
         );
     }
 }

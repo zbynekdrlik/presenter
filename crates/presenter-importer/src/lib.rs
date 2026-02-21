@@ -665,6 +665,24 @@ mod tests {
         );
     }
 
+    #[test]
+    fn presence_song_preserves_diacritics() {
+        let Some(path) = library_path("NEW LEVEL/006 Presence.pro") else {
+            return;
+        };
+        let presentation = load_presentation_from_path(&path).expect("presentation to parse");
+        let all_text: String = presentation
+            .slides
+            .iter()
+            .map(|s| s.content.main.value().to_string())
+            .collect::<Vec<_>>()
+            .join("\n");
+        assert!(
+            all_text.contains('Ž') || all_text.contains('ž'),
+            "expected ž/Ž diacritics in 006 Presence but none found in decoded text"
+        );
+    }
+
     #[tokio::test]
     async fn imports_library_into_repository() {
         let repo = Repository::connect_in_memory().await.unwrap();
