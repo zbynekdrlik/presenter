@@ -2197,8 +2197,9 @@ body.operator[data-view="settings"] [data-view-panel="settings"] {
   }
 }
 
-/* ── Bible LIVE mode: hide add slide button ── */
-body.operator.operator--bible[data-mode="live"] .operator__slides-add {
+/* ── Bible LIVE mode preview tab: hide add slide button (only on preview, not prepared) ── */
+body.operator.operator--bible[data-mode="live"][data-bible-tab="preview"]
+  .operator__slides-add {
   display: none;
 }
 
