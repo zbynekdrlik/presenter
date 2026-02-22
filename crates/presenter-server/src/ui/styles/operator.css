@@ -1126,6 +1126,11 @@ body.operator[data-mode="live"] .operator__line-limit {
   font-weight: 500;
 }
 
+/* Hide slide numbers in Bible view */
+.operator--bible .operator__slide-index {
+  display: none;
+}
+
 .operator__slide-warning-dot {
   display: inline-flex;
   align-items: center;
