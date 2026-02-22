@@ -150,6 +150,7 @@
     presentationsList: document.querySelector(
       '[data-role="presentations-list"]',
     ),
+    addEmptySlide: document.querySelector('[data-role="add-empty-slide"]'),
     presentationCreate: document.querySelector(
       '[data-role="presentation-create"]',
     ),
@@ -1277,8 +1278,13 @@
           ? `<div class='operator__slide-text operator__slide-text--translation operator__slide-text--secondary'>${lineBreakHtml(slide.translation)}</div>`
           : "";
       const references = buildReferenceHtml(slide);
+      const liveDragHandle =
+        state.bibleTab === "prepared"
+          ? `<button type='button' class='operator__slide-handle' data-role='slide-drag-handle' draggable='true' tabindex='-1' aria-label='Reorder slide'>\u2195</button>`
+          : "";
       return `
         <article class='operator__slide-card operator__slide-card--bible' data-slide-id='${slide.id}' data-index='${index}'>
+          ${liveDragHandle}
           <div class='operator__slide-trigger-zone operator__slide-trigger-zone--full' data-role='slide-trigger'>
             <span class='operator__slide-trigger-icon'>\u25B6</span>
             <span class='operator__slide-index'>${index + 1}</span>
@@ -1293,15 +1299,24 @@
     }
     if (state.editMode) {
       const checked = state.selectedSlides.has(slide.id) ? " checked" : "";
+      const isPreparedEdit = state.bibleTab === "prepared";
+      const deleteBtn = isPreparedEdit
+        ? `<button type='button' class='operator__list-action operator__list-action--danger' data-role='delete-slide' data-slide-id='${slide.id}' title='Delete slide'>\u00D7</button>`
+        : "";
+      const dragHandle = isPreparedEdit
+        ? `<button type='button' class='operator__slide-handle' data-role='slide-drag-handle' draggable='true' tabindex='-1' aria-label='Reorder slide'>\u2195</button>`
+        : "";
       const editHeader = `
         <header class='operator__slide-header'>
           <div class='operator__slide-header-left'>
+            ${dragHandle}
             <label class='operator__slide-index operator__slide-index--select'>
               <input type='checkbox' data-role='slide-select'${checked} />
               <span>${index + 1}</span>
             </label>
           </div>
           <div class='operator__slide-controls operator__slide-controls--compact'>
+            ${deleteBtn}
             <button type='button' class='operator__list-action operator__list-action--primary' data-role='slide-trigger'>Trigger</button>
           </div>
         </header>
@@ -1379,6 +1394,60 @@
       return "";
     }
     return `<footer class='operator__slide-footer'>${pieces.join("")}</footer>`;
+  }
+
+  function mapCoreSlidesToState(slides) {
+    if (!Array.isArray(slides)) return [];
+    return slides.map(function (slide) {
+      // Handle both core Slide format ({content: {main: {value}}}) and DTO format ({main: "..."})
+      var mainVal = "";
+      var translationVal = "";
+      var stageVal = "";
+      var groupVal = null;
+      if (slide.content && typeof slide.content === "object") {
+        mainVal =
+          typeof slide.content.main === "object" && slide.content.main
+            ? slide.content.main.value || ""
+            : slide.content.main || "";
+        translationVal =
+          typeof slide.content.translation === "object" &&
+          slide.content.translation
+            ? slide.content.translation.value || ""
+            : slide.content.translation || "";
+        stageVal =
+          typeof slide.content.stage === "object" && slide.content.stage
+            ? slide.content.stage.value || ""
+            : slide.content.stage || "";
+        groupVal = slide.content.group
+          ? slide.content.group.name || slide.content.group || null
+          : null;
+      } else {
+        mainVal = slide.main || "";
+        translationVal = slide.translation || "";
+        stageVal = slide.stage || "";
+        groupVal = slide.group || null;
+      }
+      var meta = slide.metadata || null;
+      var mainRef =
+        slide.main_reference ||
+        slide.mainReference ||
+        deriveReferenceFromMetadata(meta);
+      var translationRef =
+        slide.translation_reference ||
+        slide.translationReference ||
+        deriveReferenceFromMetadata(meta);
+      return {
+        id: slide.id,
+        order: slide.order,
+        main: mainVal,
+        translation: translationVal,
+        stage: stageVal,
+        group: typeof groupVal === "object" ? null : groupVal,
+        metadata: meta,
+        mainReference: mainRef,
+        translationReference: translationRef,
+      };
+    });
   }
 
   function lineBreakHtml(value) {
@@ -1975,6 +2044,17 @@
         ) {
           state.activeBroadcast = null;
           renderActive();
+        } else if (
+          payload.type === "bible_preferences_changed" ||
+          payload.type === "BiblePreferencesChanged"
+        ) {
+          if (payload.character_limit != null) {
+            state.preferences.characterLimit = payload.character_limit;
+            if (els.charLimit) {
+              els.charLimit.value = payload.character_limit;
+            }
+            updateTextareaLines();
+          }
         }
       } catch (error) {
         console.warn("Failed to parse bible payload", error);
@@ -2025,7 +2105,16 @@
     const slide =
       state.slides.find((entry) => entry.id === slideId) ||
       state.activePresentationSlides.find((entry) => entry.id === slideId);
-    if (!slide || !slide.metadata || !slide.metadata.bible) {
+    if (!slide) {
+      showToast("Slide not found", "error");
+      return;
+    }
+    // Empty slide (no text and no bible metadata) = clear broadcast
+    if (!slide.main && (!slide.metadata || !slide.metadata.bible)) {
+      clearBroadcast();
+      return;
+    }
+    if (!slide.metadata || !slide.metadata.bible) {
       showToast("Slide metadata missing", "error");
       return;
     }
@@ -2072,6 +2161,11 @@
       if (bookNumber) {
         payload.bookNumber = bookNumber;
       }
+      // Always send the current slide text (supports user edits)
+      payload.mainText = slide.main || null;
+      payload.translationText = slide.translation || null;
+      payload.mainReferenceLabel = slide.mainReference || null;
+      payload.translationReferenceLabel = slide.translationReference || null;
       const response = await apiFetch("/bible/trigger", {
         method: "POST",
         body: JSON.stringify(payload),
@@ -2097,11 +2191,164 @@
     }
   }
 
+  async function handleDeleteSlide(slideId) {
+    if (!state.activePresentationId) return;
+    try {
+      var response = await apiFetch(
+        "/presentations/" + state.activePresentationId + "/slides/" + slideId,
+        { method: "DELETE" },
+      );
+      state.activePresentationSlides = mapCoreSlidesToState(response);
+      renderPresentationSlides();
+      showToast("Slide deleted", "success");
+    } catch (error) {
+      console.error("Failed to delete slide", error);
+      showToast("Failed to delete slide", "error");
+    }
+  }
+
+  var dragState = { slideId: null };
+
+  function onPreparedDragStart(event) {
+    var handle = event.target.closest('[data-role="slide-drag-handle"]');
+    if (!handle) {
+      event.preventDefault();
+      return;
+    }
+    var card = handle.closest("[data-slide-id]");
+    if (!card || state.bibleTab !== "prepared") {
+      event.preventDefault();
+      return;
+    }
+    dragState.slideId = card.getAttribute("data-slide-id");
+    event.dataTransfer.effectAllowed = "move";
+    event.dataTransfer.setData("text/plain", dragState.slideId);
+    card.classList.add("is-dragging");
+  }
+
+  function onPreparedDragOver(event) {
+    if (!dragState.slideId || state.bibleTab !== "prepared") return;
+    event.preventDefault();
+    event.dataTransfer.dropEffect = "move";
+    var target = event.target.closest("[data-slide-id]");
+    if (!target || target.getAttribute("data-slide-id") === dragState.slideId) {
+      return;
+    }
+    // Show drop indicator
+    els.slidesContainer
+      .querySelectorAll("[data-slide-id]")
+      .forEach(function (c) {
+        c.classList.remove("drag-over-above", "drag-over-below");
+      });
+    var rect = target.getBoundingClientRect();
+    var midY = rect.top + rect.height / 2;
+    if (event.clientY < midY) {
+      target.classList.add("drag-over-above");
+    } else {
+      target.classList.add("drag-over-below");
+    }
+  }
+
+  function onPreparedDragEnd(event) {
+    dragState.slideId = null;
+    if (els.slidesContainer) {
+      els.slidesContainer
+        .querySelectorAll("[data-slide-id]")
+        .forEach(function (c) {
+          c.classList.remove(
+            "is-dragging",
+            "drag-over-above",
+            "drag-over-below",
+          );
+        });
+    }
+  }
+
+  function onPreparedDrop(event) {
+    event.preventDefault();
+    if (!dragState.slideId || state.bibleTab !== "prepared") return;
+    var target = event.target.closest("[data-slide-id]");
+    if (!target) return;
+    var targetId = target.getAttribute("data-slide-id");
+    if (targetId === dragState.slideId) return;
+
+    // Determine insert position
+    var rect = target.getBoundingClientRect();
+    var midY = rect.top + rect.height / 2;
+    var insertBefore = event.clientY < midY;
+
+    // Compute new order
+    var orderedIds = state.activePresentationSlides.map(function (s) {
+      return s.id;
+    });
+    // Remove dragged item
+    var fromIndex = orderedIds.indexOf(dragState.slideId);
+    if (fromIndex < 0) return;
+    orderedIds.splice(fromIndex, 1);
+    // Find target index
+    var toIndex = orderedIds.indexOf(targetId);
+    if (toIndex < 0) return;
+    if (!insertBefore) {
+      toIndex += 1;
+    }
+    orderedIds.splice(toIndex, 0, dragState.slideId);
+
+    reorderPreparedSlides(orderedIds);
+    onPreparedDragEnd(event);
+  }
+
+  async function reorderPreparedSlides(orderedIds) {
+    if (!state.activePresentationId) return;
+    try {
+      var response = await apiFetch(
+        "/presentations/" + state.activePresentationId + "/slides/reorder",
+        {
+          method: "POST",
+          body: JSON.stringify({ slideIds: orderedIds }),
+        },
+      );
+      state.activePresentationSlides = mapCoreSlidesToState(response);
+      renderPresentationSlides();
+    } catch (error) {
+      console.error("Failed to reorder slides", error);
+      showToast("Failed to reorder slides", "error");
+    }
+  }
+
+  async function addEmptySlide() {
+    if (!state.activePresentationId) {
+      showToast("Select a presentation first", "warning");
+      return;
+    }
+    try {
+      const response = await apiFetch(
+        `/presentations/${state.activePresentationId}/slides`,
+        { method: "POST", body: JSON.stringify({}) },
+      );
+      // response is the updated slides array (core Slide format)
+      state.activePresentationSlides = mapCoreSlidesToState(response);
+      renderPresentationSlides();
+      showToast("Empty slide added", "success");
+    } catch (error) {
+      console.error("Failed to add empty slide", error);
+      showToast("Failed to add slide", "error");
+    }
+  }
+
   function onSlidesContainerClick(event) {
     const card = event.target.closest("[data-slide-id]");
     if (!card) return;
     const slideId = card.getAttribute("data-slide-id");
     if (!slideId) return;
+
+    // Delete slide button (prepared tab, edit mode)
+    if (event.target.closest('[data-role="delete-slide"]')) {
+      var deleteSlideId =
+        event.target.closest('[data-role="delete-slide"]').dataset.slideId ||
+        slideId;
+      handleDeleteSlide(deleteSlideId);
+      return;
+    }
 
     // Edit mode: keep old checkbox + trigger button behavior
     if (state.editMode) {
@@ -2550,10 +2797,16 @@
         state.preferences.secondaryTranslation = event.target.value;
       });
     }
+    var charLimitSaveTimer = null;
     if (els.charLimit) {
       els.charLimit.addEventListener("input", (event) => {
         const value = Number(event.target.value) || 0;
         state.preferences.characterLimit = Math.min(Math.max(value, 1), 4000);
+        if (charLimitSaveTimer) clearTimeout(charLimitSaveTimer);
+        charLimitSaveTimer = setTimeout(function () {
+          charLimitSaveTimer = null;
+          savePreferences();
+        }, 500);
       });
     }
     if (els.savePreferences) {
@@ -2793,6 +3046,10 @@
     if (els.slidesContainer) {
       els.slidesContainer.addEventListener("click", onSlidesContainerClick);
       els.slidesContainer.addEventListener("input", onSlidesContainerInput);
+      els.slidesContainer.addEventListener("dragstart", onPreparedDragStart);
+      els.slidesContainer.addEventListener("dragover", onPreparedDragOver);
+      els.slidesContainer.addEventListener("drop", onPreparedDrop);
+      els.slidesContainer.addEventListener("dragend", onPreparedDragEnd);
     }
     if (els.selectAllButton) {
       els.selectAllButton.addEventListener("click", toggleSelectAllSlides);
@@ -2822,6 +3079,9 @@
         await loadPresentationSlides(id);
         renderPresentations();
       });
+    }
+    if (els.addEmptySlide) {
+      els.addEmptySlide.addEventListener("click", addEmptySlide);
     }
     if (els.presentationCreate) {
       els.presentationCreate.addEventListener("click", async () => {
@@ -2897,14 +3157,83 @@
   // Listen for mode changes from parent operator page (when embedded as iframe)
   window.addEventListener("message", function (event) {
     if (event.origin !== window.location.origin) return;
-    if (!event.data || event.data.type !== "presenter-mode-change") return;
-    var newMode = event.data.mode;
-    state.editMode = newMode === "edit";
-    updateMode();
-    if (state.bibleTab === "prepared") {
-      renderPresentationSlides();
-    } else {
-      renderSlides();
+    if (!event.data) return;
+
+    if (event.data.type === "presenter-mode-change") {
+      var newMode = event.data.mode;
+      state.editMode = newMode === "edit";
+      updateMode();
+      if (state.bibleTab === "prepared") {
+        renderPresentationSlides();
+      } else {
+        renderSlides();
+      }
+      return;
+    }
+
+    if (event.data.type === "presenter-bible-load-passage") {
+      var passage = event.data.passage;
+      if (!passage) return;
+
+      (async function () {
+        // Switch translation if needed
+        if (
+          passage.translationCode &&
+          passage.translationCode !== state.preferences.mainTranslation
+        ) {
+          alignMainTranslation(passage.translationCode);
+          renderTranslationSelect(
+            els.mainTranslation,
+            state.preferences.mainTranslation,
+          );
+          renderTranslationSelect(
+            els.secondaryTranslation,
+            state.preferences.secondaryTranslation,
+            true,
+          );
+          await loadBooks(false);
+        }
+
+        // Match book by code/number/name
+        var bookEntry = state.books.find(function (bk) {
+          if (passage.bookCode && bk.code) {
+            return bk.code.toLowerCase() === passage.bookCode.toLowerCase();
+          }
+          if (passage.bookNumber && bk.number) {
+            return bk.number === passage.bookNumber;
+          }
+          return bk.name === passage.book;
+        });
+        if (bookEntry) {
+          state.selectedBook = bookEntry.name;
+          state.selectedBookCode = bookEntry.code || "";
+          state.selectedBookNumber = bookEntry.number || 0;
+          state.chapters = bookEntry.chapters || [];
+        }
+        state.selectedChapter = passage.chapter;
+        state.verseStart = passage.verseStart;
+        state.verseEnd = passage.verseEnd;
+        state.verseEndCustom = true;
+        state.bookSelectionLocked = true;
+        state.filteredBooks = state.books.filter(function (bk) {
+          if (state.selectedBookCode && bk.code) {
+            return bk.code === state.selectedBookCode;
+          }
+          if (state.selectedBookNumber && bk.number) {
+            return bk.number === state.selectedBookNumber;
+          }
+          return bk.name === state.selectedBook;
+        });
+
+        // Ensure live tab is active
+        if (state.bibleTab !== "live") {
+          setBibleTab("live");
+        }
+
+        updateReferenceInputs();
+        renderBookList();
+        await loadSlides();
+      })();
     }
   });
 

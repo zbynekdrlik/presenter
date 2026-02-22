@@ -547,6 +547,17 @@
     els.searchClear.hidden = !hasQuery;
   }
 
+  function updateSearchPlaceholder() {
+    if (!els.searchInput) return;
+    if (state.view === "bible") {
+      els.searchInput.placeholder = "Search Bible verses\u2026";
+      els.searchInput.setAttribute("aria-label", "Search Bible verses");
+    } else {
+      els.searchInput.placeholder = "Search libraries, songs, slides";
+      els.searchInput.setAttribute("aria-label", "Search presenter content");
+    }
+  }
+
   function formatMatchField(field) {
     const value = String(field || "").toLowerCase();
     switch (value) {
@@ -568,6 +579,49 @@
       default:
         return value ? value.charAt(0).toUpperCase() + value.slice(1) : "";
     }
+  }
+
+  function formatBibleReference(book, chapter, start, end) {
+    if (start === end) return book + " " + chapter + ":" + start;
+    return book + " " + chapter + ":" + start + "-" + end;
+  }
+
+  function renderBibleSearchResultRow(result) {
+    const ref = result.reference || {};
+    const book = ref.book || ref.book_name || "";
+    const bookCode = ref.book_code || ref.bookCode || "";
+    const bookNumber =
+      ref.book_number != null
+        ? ref.book_number
+        : ref.bookNumber != null
+          ? ref.bookNumber
+          : 0;
+    const chapter = ref.chapter || 0;
+    const verseStart =
+      ref.verse_start != null ? ref.verse_start : ref.verseStart || 0;
+    const verseEnd =
+      ref.verse_end != null ? ref.verse_end : ref.verseEnd || verseStart;
+    const refLabel = formatBibleReference(book, chapter, verseStart, verseEnd);
+    const translation = result.translation || {};
+    const translationCode = translation.code || "";
+    const translationName = translation.name || translationCode;
+    const text = result.text || "";
+    const snippet =
+      text.length > 120 ? text.substring(0, 120) + "\u2026" : text;
+    return `<li class="operator__search-result-item" data-role="search-result-item" data-kind="bible">
+        <button type="button" data-role="search-result" data-kind="bible"
+          data-book="${escapeHtml(book)}"
+          data-book-code="${escapeHtml(bookCode)}"
+          data-book-number="${bookNumber}"
+          data-chapter="${chapter}"
+          data-verse-start="${verseStart}"
+          data-verse-end="${verseEnd}"
+          data-translation-code="${escapeHtml(translationCode)}">
+          <span class="operator__search-result-title">${escapeHtml(refLabel)}</span>
+          <span class="operator__search-result-meta">${escapeHtml(translationName)}</span>
+          <span class="operator__search-result-snippet">${escapeHtml(snippet)}</span>
+        </button>
+      </li>`;
   }
 
   function renderSearchResultRow(result) {
@@ -666,6 +720,20 @@
       return;
     }
 
+    if (state.view === "bible") {
+      const items = results
+        .map((item) => renderBibleSearchResultRow(item))
+        .join("");
+      els.searchResults.innerHTML =
+        '<section class="operator__search-group"><h3>Bible Verses</h3>' +
+        '<ul class="operator__search-result">' +
+        items +
+        "</ul></section>";
+      els.searchResults.dataset.visible = "true";
+      state.searchOpen = true;
+      return;
+    }
+
     const grouped = {
       library: [],
       presentation: [],
@@ -715,9 +783,16 @@
       renderSearchResults();
       return;
     }
+    if (state.view === "bible" && trimmed.length < 3) {
+      state.searchResults = [];
+      state.searchLoading = false;
+      hideSearchResults();
+      return;
+    }
+    const delay = state.view === "bible" ? 300 : 200;
     state.searchTimer = setTimeout(() => {
       executeSearch(trimmed);
-    }, 200);
+    }, delay);
   }
 
   async function executeSearch(query) {
@@ -731,7 +806,10 @@
     state.searchLoading = true;
     renderSearchResults();
     try {
-      const url = `/search?query=${encodeURIComponent(query)}&limit=30`;
+      const url =
+        state.view === "bible"
+          ? `/bible/search?query=${encodeURIComponent(query)}&limit=30`
+          : `/search?query=${encodeURIComponent(query)}&limit=30`;
       const request = apiFetch(url, { method: "GET" });
       state.searchAbort = request;
       const response = await request;
@@ -765,6 +843,7 @@
       clearSearchResults();
       return;
     }
+    if (state.view === "bible" && trimmed.length < 3) return;
     state.searchQuery = trimmed;
     state.searchOpen = true;
     if (state.searchTimer) {
@@ -843,6 +922,10 @@
     if (!button) return;
     event.preventDefault();
     const kind = button.dataset.kind || "";
+    if (kind === "bible") {
+      handleBibleSearchResultClick(button);
+      return;
+    }
     const libraryId = button.dataset.libraryId || "";
     const presentationId = button.dataset.presentationId || "";
     const slideId = button.dataset.slideId || "";
@@ -860,6 +943,35 @@
       presentationId || null,
       slideId || null,
     );
+  }
+
+  function handleBibleSearchResultClick(button) {
+    const passageData = {
+      book: button.getAttribute("data-book") || "",
+      bookCode: button.getAttribute("data-book-code") || "",
+      bookNumber: Number(button.getAttribute("data-book-number") || "0") || 0,
+      chapter: Number(button.getAttribute("data-chapter") || "1") || 1,
+      verseStart: Number(button.getAttribute("data-verse-start") || "1") || 1,
+      verseEnd: Number(button.getAttribute("data-verse-end") || "1") || 1,
+      translationCode: button.getAttribute("data-translation-code") || "",
+    };
+    els.searchResults.dataset.visible = "false";
+    state.searchOpen = false;
+    state.searchResults = [];
+    state.searchQuery = "";
+    if (els.searchInput) {
+      els.searchInput.value = "";
+    }
+    updateSearchClearVisibility();
+    const bibleIframe = document.querySelector(
+      '[data-view-panel="bible"] iframe',
+    );
+    if (bibleIframe && bibleIframe.contentWindow) {
+      bibleIframe.contentWindow.postMessage(
+        { type: "presenter-bible-load-passage", passage: passageData },
+        window.location.origin,
+      );
+    }
   }
 
   function handleSearchResultDragStart(event) {
@@ -1462,6 +1574,8 @@
   function setView(view, pushState) {
     state.view = view;
     document.body.dataset.view = view;
+    clearSearchResults();
+    updateSearchPlaceholder();
     els.viewButtons.forEach((button) => {
       button.dataset.active = button.dataset.view === view ? "true" : "false";
     });

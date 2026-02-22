@@ -82,6 +82,9 @@ pub enum LiveEvent {
         layout: String,
         appearance: StageAppearance,
     },
+    BiblePreferencesChanged {
+        character_limit: u32,
+    },
 }
 
 pub async fn serve_websocket(hub: LiveHub, connections: StageConnections, socket: WebSocket) {

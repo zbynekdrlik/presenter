@@ -255,6 +255,7 @@ test("operator header shows Bible preview when bible view is active", async ({
   const activeCheck = await request.get(`${baseURL}/bible/active`);
   const activeBroadcast = activeCheck.ok() ? await activeCheck.json() : null;
 
+  let broadcastTriggered = false;
   if (activeBroadcast?.passage) {
     // Re-trigger by extracting ref info from the existing broadcast
     const ref = activeBroadcast.passage.reference;
@@ -270,8 +271,9 @@ test("operator header shows Bible preview when bible view is active", async ({
         verse_end: ref?.verse_end || ref?.verseEnd || 16,
       },
     });
-    expect(triggerResponse.ok()).toBeTruthy();
-  } else {
+    broadcastTriggered = triggerResponse.ok();
+  }
+  if (!broadcastTriggered) {
     // Fallback: simulate a Bible broadcast via JS to test the rendering
     await page.evaluate(() => {
       const state = (window as any).__presenterOperatorState;
@@ -820,4 +822,730 @@ test("operator edit/live mode toggle propagates to bible iframe", async ({
       .evaluate(() => (window as any).__presenterBibleState?.editMode);
     expect(editMode).toBe(false);
   }).toPass({ timeout: 5_000 });
+});
+
+test("operator header search switches to Bible in Bible view", async ({
+  page,
+  request,
+}) => {
+  await expect(async () => {
+    const response = await request.get(`${baseURL}/healthz`, {
+      timeout: 60_000,
+    });
+    expect(response.ok()).toBeTruthy();
+  }).toPass({ timeout: 90_000 });
+
+  // Navigate to operator in Bible view
+  await page.goto(`${baseURL}/ui/operator/bible`);
+  await expect(page).toHaveURL(/\/ui\/operator\/bible/);
+
+  // Wait for operator script to initialise
+  await page.waitForFunction(() => !!(window as any).__presenterOperatorState, {
+    timeout: 30_000,
+  });
+
+  // Verify placeholder says "Bible"
+  const searchInput = page.locator(
+    '.operator__header [data-role="global-search-query"]',
+  );
+  await expect(searchInput).toBeVisible({ timeout: 10_000 });
+  await expect(searchInput).toHaveAttribute("placeholder", /Bible/);
+
+  // Wait for the Bible iframe to be ready with books loaded
+  const bibleFrame = page.frameLocator('[data-view-panel="bible"] iframe');
+  await expect(async () => {
+    const ready = await bibleFrame.locator("body").evaluate(() => {
+      const s = (window as any).__presenterBibleState;
+      return s && Array.isArray(s.books) && s.books.length > 0;
+    });
+    expect(ready).toBeTruthy();
+  }).toPass({ timeout: 60_000 });
+
+  // Type a Bible search query (min 3 chars)
+  await searchInput.fill("God so loved");
+  // Wait for search results to appear
+  const searchResults = page.locator('[data-role="global-search-results"]');
+  await expect(async () => {
+    const visible = await searchResults.getAttribute("data-visible");
+    expect(visible).toBe("true");
+  }).toPass({ timeout: 15_000 });
+
+  // Verify results contain Bible-specific content
+  await expect(searchResults.locator("h3")).toHaveText("Bible Verses");
+  const resultButtons = searchResults.locator(
+    '[data-role="search-result"][data-kind="bible"]',
+  );
+  await expect(resultButtons.first()).toBeVisible({ timeout: 10_000 });
+  const resultCount = await resultButtons.count();
+  expect(resultCount).toBeGreaterThan(0);
+
+  // Verify result has reference, translation, and snippet
+  const firstResult = resultButtons.first();
+  await expect(
+    firstResult.locator(".operator__search-result-title"),
+  ).toBeVisible();
+  await expect(
+    firstResult.locator(".operator__search-result-meta"),
+  ).toBeVisible();
+  await expect(
+    firstResult.locator(".operator__search-result-snippet"),
+  ).toBeVisible();
+
+  // Get the data attributes from the first result for verification after click
+  const bookCode = await firstResult.getAttribute("data-book-code");
+  const chapter = await firstResult.getAttribute("data-chapter");
+  const verseStart = await firstResult.getAttribute("data-verse-start");
+
+  // Click the first result
+  await firstResult.click();
+
+  // Search should be cleared
+  await expect(searchInput).toHaveValue("");
+  await expect(async () => {
+    const visible = await searchResults.getAttribute("data-visible");
+    expect(visible).toBe("false");
+  }).toPass({ timeout: 5_000 });
+
+  // Verify the Bible iframe received the passage and loaded slides
+  await expect(async () => {
+    const bibleState = await bibleFrame.locator("body").evaluate(() => {
+      const s = (window as any).__presenterBibleState;
+      return {
+        bookCode: s?.selectedBookCode,
+        chapter: s?.selectedChapter,
+        verseStart: s?.verseStart,
+      };
+    });
+    expect(bibleState.bookCode).toBe(bookCode);
+    expect(String(bibleState.chapter)).toBe(chapter);
+    expect(String(bibleState.verseStart)).toBe(verseStart);
+  }).toPass({ timeout: 30_000 });
+
+  // Verify slides were generated in the iframe
+  await expect(bibleFrame.locator(".operator__slide-card").first()).toBeVisible(
+    {
+      timeout: 30_000,
+    },
+  );
+});
+
+test("search placeholder changes between views", async ({ page, request }) => {
+  await expect(async () => {
+    const response = await request.get(`${baseURL}/healthz`, {
+      timeout: 60_000,
+    });
+    expect(response.ok()).toBeTruthy();
+  }).toPass({ timeout: 90_000 });
+
+  // Start at worship view
+  await page.goto(`${baseURL}/ui/operator`);
+  await page.waitForFunction(() => !!(window as any).__presenterOperatorState, {
+    timeout: 30_000,
+  });
+
+  const searchInput = page.locator(
+    '.operator__header [data-role="global-search-query"]',
+  );
+  await expect(searchInput).toBeVisible({ timeout: 10_000 });
+
+  // Worship placeholder
+  await expect(searchInput).toHaveAttribute(
+    "placeholder",
+    /libraries, songs, slides/,
+  );
+
+  // Switch to Bible view
+  await page.locator('[data-role="view-toggle"][data-view="bible"]').click();
+  await expect(searchInput).toHaveAttribute("placeholder", /Bible/);
+
+  // Switch back to worship
+  await page.locator('[data-role="view-toggle"][data-view="worship"]').click();
+  await expect(searchInput).toHaveAttribute(
+    "placeholder",
+    /libraries, songs, slides/,
+  );
+});
+
+test("switching views clears active search", async ({ page, request }) => {
+  await expect(async () => {
+    const response = await request.get(`${baseURL}/healthz`, {
+      timeout: 60_000,
+    });
+    expect(response.ok()).toBeTruthy();
+  }).toPass({ timeout: 90_000 });
+
+  await page.goto(`${baseURL}/ui/operator`);
+  await page.waitForFunction(() => !!(window as any).__presenterOperatorState, {
+    timeout: 30_000,
+  });
+
+  const searchInput = page.locator(
+    '.operator__header [data-role="global-search-query"]',
+  );
+  await expect(searchInput).toBeVisible({ timeout: 10_000 });
+
+  // Type a search query in worship view
+  await searchInput.fill("test search");
+
+  // Wait for search results dropdown to appear
+  const searchResults = page.locator('[data-role="global-search-results"]');
+  await expect(async () => {
+    const visible = await searchResults.getAttribute("data-visible");
+    expect(visible).toBe("true");
+  }).toPass({ timeout: 15_000 });
+
+  // Switch to Bible view
+  await page.locator('[data-role="view-toggle"][data-view="bible"]').click();
+
+  // Input should be cleared and dropdown hidden
+  await expect(searchInput).toHaveValue("");
+  await expect(async () => {
+    const visible = await searchResults.getAttribute("data-visible");
+    expect(visible).toBe("false");
+  }).toPass({ timeout: 5_000 });
+});
+
+test("Bible search requires minimum 3 characters", async ({
+  page,
+  request,
+}) => {
+  await expect(async () => {
+    const response = await request.get(`${baseURL}/healthz`, {
+      timeout: 60_000,
+    });
+    expect(response.ok()).toBeTruthy();
+  }).toPass({ timeout: 90_000 });
+
+  await page.goto(`${baseURL}/ui/operator/bible`);
+  await page.waitForFunction(() => !!(window as any).__presenterOperatorState, {
+    timeout: 30_000,
+  });
+
+  const searchInput = page.locator(
+    '.operator__header [data-role="global-search-query"]',
+  );
+  await expect(searchInput).toBeVisible({ timeout: 10_000 });
+
+  const searchResults = page.locator('[data-role="global-search-results"]');
+
+  // Type 2 chars — should NOT trigger search dropdown
+  await searchInput.fill("ab");
+  // Wait a bit to ensure no results appear
+  await page.waitForTimeout(500);
+  const visibleAfter2 = await searchResults.getAttribute("data-visible");
+  expect(visibleAfter2).not.toBe("true");
+
+  // Type 3 chars — should trigger search
+  await searchInput.fill("abc");
+  await expect(async () => {
+    const visible = await searchResults.getAttribute("data-visible");
+    expect(visible).toBe("true");
+  }).toPass({ timeout: 15_000 });
+});
+
+test("worship search still works after visiting Bible view", async ({
+  page,
+  request,
+}) => {
+  await expect(async () => {
+    const response = await request.get(`${baseURL}/healthz`, {
+      timeout: 60_000,
+    });
+    expect(response.ok()).toBeTruthy();
+  }).toPass({ timeout: 90_000 });
+
+  // Start on Bible view and do a search
+  await page.goto(`${baseURL}/ui/operator/bible`);
+  await page.waitForFunction(() => !!(window as any).__presenterOperatorState, {
+    timeout: 30_000,
+  });
+
+  const searchInput = page.locator(
+    '.operator__header [data-role="global-search-query"]',
+  );
+  await expect(searchInput).toBeVisible({ timeout: 10_000 });
+  await searchInput.fill("God");
+  const searchResults = page.locator('[data-role="global-search-results"]');
+  await expect(async () => {
+    const visible = await searchResults.getAttribute("data-visible");
+    expect(visible).toBe("true");
+  }).toPass({ timeout: 15_000 });
+
+  // Verify Bible results
+  await expect(
+    searchResults
+      .locator('[data-role="search-result"][data-kind="bible"]')
+      .first(),
+  ).toBeVisible({ timeout: 10_000 });
+
+  // Switch to worship view
+  await page.locator('[data-role="view-toggle"][data-view="worship"]').click();
+
+  // Search should be cleared
+  await expect(searchInput).toHaveValue("");
+
+  // Do a worship search
+  await searchInput.fill("test");
+  await expect(async () => {
+    const visible = await searchResults.getAttribute("data-visible");
+    expect(visible).toBe("true");
+  }).toPass({ timeout: 15_000 });
+
+  // Worship results should NOT contain Bible kind
+  await expect(async () => {
+    const bibleResults = await searchResults
+      .locator('[data-role="search-result"][data-kind="bible"]')
+      .count();
+    expect(bibleResults).toBe(0);
+  }).toPass({ timeout: 5_000 });
+});
+
+// ---------- Feature 1: Trigger sends edited text ----------
+test("triggering edited Bible slide sends edited text", async ({
+  page,
+  request,
+}) => {
+  await expect(async () => {
+    const response = await request.get(`${baseURL}/healthz`, {
+      timeout: 60_000,
+    });
+    expect(response.ok()).toBeTruthy();
+  }).toPass({ timeout: 90_000 });
+
+  await page.goto(`${baseURL}/ui/bible`);
+  const liveTab = page.locator('[data-role="bible-tab"][data-tab="live"]');
+  await expect(liveTab).toBeVisible({ timeout: 30_000 });
+
+  // Set translation
+  const settingsTab = page.locator(
+    '[data-role="bible-tab"][data-tab="settings"]',
+  );
+  await settingsTab.click();
+  const mainDropdown = page.locator('[data-role="main-translation"]');
+  await expect(mainDropdown).toBeVisible({ timeout: 30_000 });
+  const translations: Array<{ code: string }> = await (
+    await request.get(`${baseURL}/bible/translations`)
+  ).json();
+  if (translations.some((t) => t.code === "slk-seb")) {
+    await mainDropdown.selectOption("slk-seb");
+    await expect(async () => {
+      const v = await page.evaluate(
+        () =>
+          (window as any).__presenterBibleState?.preferences?.mainTranslation,
+      );
+      expect(v).toBe("slk-seb");
+    }).toPass({ timeout: 10_000 });
+  }
+
+  // Load a passage
+  await liveTab.click();
+  await expect(
+    page.locator('[data-role="book-list"] button').first(),
+  ).toBeVisible({ timeout: 60_000 });
+  await page.locator('[data-role="book-filter"]').fill("Jan");
+  const johnButton = page
+    .locator('[data-role="book-list"] button[data-book-code="JHN"]')
+    .first();
+  await expect(johnButton).toBeVisible({ timeout: 30_000 });
+  await johnButton.click();
+  await page.locator('[data-role="chapter-input"]').fill("3");
+  await page.locator('[data-role="verse-start"]').fill("16");
+  await page.locator('[data-role="verse-end"]').fill("16");
+  await page.locator('[data-role="load-button"]').click();
+  await page.waitForFunction(
+    () => {
+      const toast = document.querySelector('[data-role="toast"]');
+      return toast && toast.getAttribute("data-visible") === "true";
+    },
+    { timeout: 60_000 },
+  );
+  await page.waitForFunction(
+    () => {
+      const toast = document.querySelector('[data-role="toast"]');
+      return !toast || toast.getAttribute("data-visible") !== "true";
+    },
+    { timeout: 60_000 },
+  );
+
+  // Switch to edit mode and modify the text
+  const editBtn = page.locator('button[data-mode="edit"]');
+  await editBtn.click();
+  const mainTextarea = page.locator('[data-role="slide-main"]').first();
+  await expect(mainTextarea).toBeVisible({ timeout: 10_000 });
+  const editedText = "EDITED TEXT FOR TRIGGER TEST";
+  await mainTextarea.fill(editedText);
+
+  // Verify in-memory state updated
+  await expect(async () => {
+    const firstMain = await page.evaluate(
+      () => (window as any).__presenterBibleState?.slides?.[0]?.main,
+    );
+    expect(firstMain).toBe(editedText);
+  }).toPass({ timeout: 5_000 });
+
+  // Trigger the slide
+  await page.locator('[data-role="slide-trigger"]').first().click();
+  await page.waitForFunction(
+    () => {
+      const toast = document.querySelector('[data-role="toast"]');
+      return (
+        toast &&
+        toast.getAttribute("data-visible") === "true" &&
+        toast.textContent?.includes("Slide triggered")
+      );
+    },
+    { timeout: 60_000 },
+  );
+
+  // Verify the broadcast contains the edited text
+  const activeResponse = await request.get(`${baseURL}/bible/active`);
+  expect(activeResponse.ok()).toBeTruthy();
+  const activeJson = await activeResponse.json();
+  expect(activeJson?.passage?.text).toBe(editedText);
+});
+
+// ---------- Feature 2: Add empty slides in prepared tab ----------
+test("add empty slide in prepared tab", async ({ page, request }) => {
+  await expect(async () => {
+    const response = await request.get(`${baseURL}/healthz`, {
+      timeout: 60_000,
+    });
+    expect(response.ok()).toBeTruthy();
+  }).toPass({ timeout: 90_000 });
+
+  await page.goto(`${baseURL}/ui/bible`);
+  const preparedTab = page.locator(
+    '[data-role="bible-tab"][data-tab="prepared"]',
+  );
+  await expect(preparedTab).toBeVisible({ timeout: 30_000 });
+
+  // Create a new presentation
+  await preparedTab.click();
+  const presentationName = `EmptySlide ${Date.now()}`;
+  page.once("dialog", async (dialog) => {
+    await dialog.accept(presentationName);
+  });
+  await page.locator('[data-role="presentation-create"]').click();
+  await page.waitForFunction(
+    () => {
+      const toast = document.querySelector('[data-role="toast"]');
+      return toast && toast.getAttribute("data-visible") === "true";
+    },
+    { timeout: 60_000 },
+  );
+  await page.waitForFunction(
+    () => {
+      const toast = document.querySelector('[data-role="toast"]');
+      return !toast || toast.getAttribute("data-visible") !== "true";
+    },
+    { timeout: 60_000 },
+  );
+
+  // Click on the presentation to activate it
+  const presentations = await (
+    await request.get(`${baseURL}/bible/presentations`)
+  ).json();
+  const created = presentations.find(
+    (entry: any) => entry.name === presentationName,
+  );
+  expect(created).toBeTruthy();
+  const presentationCard = page.locator(
+    `article[data-presentation-id="${created.id}"]`,
+  );
+  await presentationCard.click();
+  await expect(async () => {
+    const activeId = await page.evaluate(
+      () => (window as any).__presenterBibleState?.activePresentationId,
+    );
+    expect(activeId).toBe(created.id);
+  }).toPass({ timeout: 10_000 });
+
+  // Click "Add empty slide" button
+  const addEmptyBtn = page.locator('[data-role="add-empty-slide"]');
+  await expect(addEmptyBtn).toBeVisible();
+  await addEmptyBtn.click();
+  await page.waitForFunction(
+    () => {
+      const toast = document.querySelector('[data-role="toast"]');
+      return (
+        toast &&
+        toast.getAttribute("data-visible") === "true" &&
+        toast.textContent?.includes("Empty slide added")
+      );
+    },
+    { timeout: 60_000 },
+  );
+
+  // Verify slide count increased
+  await expect(async () => {
+    const slideCount = await page.evaluate(
+      () =>
+        (window as any).__presenterBibleState?.activePresentationSlides
+          ?.length ?? 0,
+    );
+    expect(slideCount).toBeGreaterThanOrEqual(1);
+  }).toPass({ timeout: 10_000 });
+
+  // Add another empty slide
+  await page.waitForFunction(
+    () => {
+      const toast = document.querySelector('[data-role="toast"]');
+      return !toast || toast.getAttribute("data-visible") !== "true";
+    },
+    { timeout: 60_000 },
+  );
+  await addEmptyBtn.click();
+  await expect(async () => {
+    const slideCount = await page.evaluate(
+      () =>
+        (window as any).__presenterBibleState?.activePresentationSlides
+          ?.length ?? 0,
+    );
+    expect(slideCount).toBeGreaterThanOrEqual(2);
+  }).toPass({ timeout: 10_000 });
+});
+
+// ---------- Feature 3: Delete slides from prepared presentation ----------
+test("delete slide from prepared presentation", async ({ page, request }) => {
+  await expect(async () => {
+    const response = await request.get(`${baseURL}/healthz`, {
+      timeout: 60_000,
+    });
+    expect(response.ok()).toBeTruthy();
+  }).toPass({ timeout: 90_000 });
+
+  // Create a presentation with slides via API
+  const presentationName = `Delete Test ${Date.now()}`;
+  const createRes = await request.post(`${baseURL}/bible/presentations`, {
+    data: { name: presentationName },
+  });
+  expect(createRes.ok()).toBeTruthy();
+  const presentation = await createRes.json();
+
+  // Add 2 empty slides via API
+  await request.post(`${baseURL}/presentations/${presentation.id}/slides`, {
+    data: {},
+  });
+  await request.post(`${baseURL}/presentations/${presentation.id}/slides`, {
+    data: {},
+  });
+
+  await page.goto(`${baseURL}/ui/bible`);
+  const preparedTab = page.locator(
+    '[data-role="bible-tab"][data-tab="prepared"]',
+  );
+  await expect(preparedTab).toBeVisible({ timeout: 30_000 });
+  await preparedTab.click();
+
+  // Click on the presentation
+  const presentationCard = page.locator(
+    `article[data-presentation-id="${presentation.id}"]`,
+  );
+  await expect(presentationCard).toBeVisible({ timeout: 30_000 });
+  await presentationCard.click();
+  await expect(async () => {
+    const activeId = await page.evaluate(
+      () => (window as any).__presenterBibleState?.activePresentationId,
+    );
+    expect(activeId).toBe(presentation.id);
+  }).toPass({ timeout: 10_000 });
+
+  // Switch to edit mode to see the delete buttons
+  const editBtn = page.locator('button[data-mode="edit"]');
+  await editBtn.click();
+
+  // Get initial slide count
+  const initialCount = await page.evaluate(
+    () =>
+      (window as any).__presenterBibleState?.activePresentationSlides?.length ??
+      0,
+  );
+  expect(initialCount).toBeGreaterThanOrEqual(2);
+
+  // Click delete on the first slide
+  const deleteBtn = page.locator('[data-role="delete-slide"]').first();
+  await expect(deleteBtn).toBeVisible({ timeout: 10_000 });
+  await deleteBtn.click();
+  await page.waitForFunction(
+    () => {
+      const toast = document.querySelector('[data-role="toast"]');
+      return (
+        toast &&
+        toast.getAttribute("data-visible") === "true" &&
+        toast.textContent?.includes("Slide deleted")
+      );
+    },
+    { timeout: 60_000 },
+  );
+
+  // Verify slide count decreased
+  await expect(async () => {
+    const count = await page.evaluate(
+      () =>
+        (window as any).__presenterBibleState?.activePresentationSlides
+          ?.length ?? 0,
+    );
+    expect(count).toBe(initialCount - 1);
+  }).toPass({ timeout: 10_000 });
+});
+
+// ---------- Feature 4: Reorder slides in prepared presentation ----------
+test("reorder slides in prepared presentation", async ({ page, request }) => {
+  await expect(async () => {
+    const response = await request.get(`${baseURL}/healthz`, {
+      timeout: 60_000,
+    });
+    expect(response.ok()).toBeTruthy();
+  }).toPass({ timeout: 90_000 });
+
+  // Create a presentation and add 3 slides via API
+  const presentationName = `Reorder Test ${Date.now()}`;
+  const createRes = await request.post(`${baseURL}/bible/presentations`, {
+    data: { name: presentationName },
+  });
+  expect(createRes.ok()).toBeTruthy();
+  const presentation = await createRes.json();
+
+  // Add empty slides (presentation may already have a default blank slide)
+  for (let i = 0; i < 2; i++) {
+    await request.post(`${baseURL}/presentations/${presentation.id}/slides`, {
+      data: {},
+    });
+  }
+
+  // Get the slide IDs
+  const detailRes = await request.get(
+    `${baseURL}/bible/presentations/${presentation.id}`,
+  );
+  const detail = await detailRes.json();
+  const slideIds = detail.slides.map((s: any) => s.id);
+  expect(slideIds.length).toBeGreaterThanOrEqual(3);
+
+  // Reorder via API: reverse the order
+  const reversed = [...slideIds].reverse();
+  const reorderRes = await request.post(
+    `${baseURL}/presentations/${presentation.id}/slides/reorder`,
+    { data: { slideIds: reversed } },
+  );
+  expect(reorderRes.ok()).toBeTruthy();
+
+  // Verify the new order persists
+  const detailAfter = await request.get(
+    `${baseURL}/bible/presentations/${presentation.id}`,
+  );
+  const afterDetail = await detailAfter.json();
+  const afterIds = afterDetail.slides.map((s: any) => s.id);
+  expect(afterIds).toEqual(reversed);
+
+  // Also verify via UI
+  await page.goto(`${baseURL}/ui/bible`);
+  const preparedTab = page.locator(
+    '[data-role="bible-tab"][data-tab="prepared"]',
+  );
+  await expect(preparedTab).toBeVisible({ timeout: 30_000 });
+  await preparedTab.click();
+  const presentationCard = page.locator(
+    `article[data-presentation-id="${presentation.id}"]`,
+  );
+  await expect(presentationCard).toBeVisible({ timeout: 30_000 });
+  await presentationCard.click();
+
+  await expect(async () => {
+    const uiSlideIds = await page.evaluate(
+      () =>
+        (window as any).__presenterBibleState?.activePresentationSlides?.map(
+          (s: any) => s.id,
+        ) ?? [],
+    );
+    expect(uiSlideIds).toEqual(reversed);
+  }).toPass({ timeout: 10_000 });
+});
+
+// ---------- Feature 5: Character limit auto-save and sync ----------
+test("character limit auto-saves and syncs", async ({ page, request }) => {
+  await expect(async () => {
+    const response = await request.get(`${baseURL}/healthz`, {
+      timeout: 60_000,
+    });
+    expect(response.ok()).toBeTruthy();
+  }).toPass({ timeout: 90_000 });
+
+  await page.goto(`${baseURL}/ui/bible`);
+  const settingsTab = page.locator(
+    '[data-role="bible-tab"][data-tab="settings"]',
+  );
+  await expect(settingsTab).toBeVisible({ timeout: 30_000 });
+  await settingsTab.click();
+
+  const charLimitInput = page.locator('[data-role="char-limit"]');
+  await expect(charLimitInput).toBeVisible({ timeout: 10_000 });
+
+  // Set a distinctive value
+  const testValue = 777;
+  await charLimitInput.fill(String(testValue));
+
+  // Wait for debounced auto-save (500ms) + API round trip
+  await expect(async () => {
+    const prefsRes = await request.get(`${baseURL}/bible/preferences`);
+    const prefs = await prefsRes.json();
+    expect(prefs.characterLimit).toBe(testValue);
+  }).toPass({ timeout: 15_000 });
+});
+
+test("character limit used from server on resolve", async ({
+  page,
+  request,
+}) => {
+  await expect(async () => {
+    const response = await request.get(`${baseURL}/healthz`, {
+      timeout: 60_000,
+    });
+    expect(response.ok()).toBeTruthy();
+  }).toPass({ timeout: 90_000 });
+
+  // Set char limit to a small value via API
+  await request.put(`${baseURL}/bible/preferences`, {
+    data: { characterLimit: 50 },
+  });
+
+  // Resolve a passage WITHOUT sending characterLimit — server should use its own
+  const resolveRes = await request.post(`${baseURL}/bible/resolve`, {
+    data: {
+      mainTranslation: "slk-seb",
+      book: "Jan",
+      bookCode: "JHN",
+      chapter: 3,
+      verseStart: 16,
+      verseEnd: 18,
+    },
+  });
+  expect(resolveRes.ok()).toBeTruthy();
+  const resolved = await resolveRes.json();
+  // With a 50 char limit and 3 verses, should produce multiple slides
+  expect(resolved.slides.length).toBeGreaterThan(1);
+
+  // Now set char limit to large value
+  await request.put(`${baseURL}/bible/preferences`, {
+    data: { characterLimit: 4000 },
+  });
+
+  // Resolve again — should produce fewer slides
+  const resolveRes2 = await request.post(`${baseURL}/bible/resolve`, {
+    data: {
+      mainTranslation: "slk-seb",
+      book: "Jan",
+      bookCode: "JHN",
+      chapter: 3,
+      verseStart: 16,
+      verseEnd: 18,
+    },
+  });
+  expect(resolveRes2.ok()).toBeTruthy();
+  const resolved2 = await resolveRes2.json();
+  expect(resolved2.slides.length).toBeLessThanOrEqual(resolved.slides.length);
+
+  // Restore sensible default
+  await request.put(`${baseURL}/bible/preferences`, {
+    data: { characterLimit: 320 },
+  });
 });

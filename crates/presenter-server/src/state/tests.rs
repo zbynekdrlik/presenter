@@ -295,7 +295,7 @@ async fn trigger_bible_passage_publishes_event_and_state() {
 
     let mut rx = state.live_hub().subscribe();
     let broadcast = state
-        .trigger_bible_passage("test", &reference)
+        .trigger_bible_passage("test", &reference, Default::default())
         .await
         .unwrap();
     assert_eq!(broadcast.passage.reference, reference);

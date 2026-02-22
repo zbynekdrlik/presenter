@@ -220,6 +220,14 @@ pub(super) struct BibleTriggerRequest {
     pub(super) verse_start: u16,
     #[serde(default)]
     pub(super) verse_end: Option<u16>,
+    #[serde(default)]
+    pub(super) main_text: Option<String>,
+    #[serde(default)]
+    pub(super) translation_text: Option<String>,
+    #[serde(default)]
+    pub(super) main_reference_label: Option<String>,
+    #[serde(default)]
+    pub(super) translation_reference_label: Option<String>,
 }
 
 #[instrument(skip_all)]
@@ -246,8 +254,14 @@ pub(super) async fn trigger_bible_broadcast(
         )
         .map_err(AnyhowError::new)?,
     };
+    let text_overrides = crate::state::bible::BibleTriggerOverrides {
+        main_text: payload.main_text,
+        translation_text: payload.translation_text,
+        main_reference_label: payload.main_reference_label,
+        translation_reference_label: payload.translation_reference_label,
+    };
     match state
-        .trigger_bible_passage(&payload.translation, &reference)
+        .trigger_bible_passage(&payload.translation, &reference, text_overrides)
         .await
     {
         Ok(broadcast) => Ok(Json(broadcast)),
@@ -408,7 +422,12 @@ pub(super) async fn resolve_bible_slides(
             .unwrap_or(payload.verse_start)
     }
     .max(payload.verse_start);
-    let character_limit = payload.character_limit.unwrap_or(320);
+    let character_limit = if let Some(limit) = payload.character_limit {
+        limit
+    } else {
+        let prefs = state.get_bible_preferences().await?;
+        prefs.character_limit
+    };
     let (main_translation, secondary_translation, slides) = state
         .generate_bible_slides(
             main_translation_code,
