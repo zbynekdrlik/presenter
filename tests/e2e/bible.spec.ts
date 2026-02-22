@@ -336,18 +336,22 @@ test("operator manages Bible workflow end-to-end", async ({
   }).toPass({ timeout: 10_000 });
   await expect(presentationCard).toHaveClass(/is-active/);
 
-  // Verify presentation slides are shown as triggerOnly cards (no select zone)
+  // Verify presentation slides are shown as simple cards (no trigger zone UI, no select zone)
   const presentationSlides = page.locator(".operator__slide-card");
   await expect(presentationSlides.first()).toBeVisible({ timeout: 10_000 });
   const presentationSlideCount = await presentationSlides.count();
   expect(presentationSlideCount).toBe(slideCount);
-  // TriggerOnly slides have full trigger zone, no select zone
+  // Prepared tab slides are clean cards (whole card clickable, no trigger zone or select zone)
   await expect(
     presentationSlides.first().locator(".operator__slide-trigger-zone--full"),
-  ).toBeVisible();
+  ).toHaveCount(0);
   await expect(
     presentationSlides.first().locator('[data-role="slide-select-zone"]'),
   ).toHaveCount(0);
+  // The card body is directly visible
+  await expect(
+    presentationSlides.first().locator(".operator__slide-bodies"),
+  ).toBeVisible();
 
   // Verify slide count shows correct number after slides were added
   await expect(async () => {
