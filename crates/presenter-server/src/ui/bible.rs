@@ -141,7 +141,6 @@ fn BibleDocument(
                             <div class="bible__tab-panel" data-bible-panel="prepared">
                                 <div class="bible__prepared-header">
                                     <h3>"Presentations"</h3>
-                                    <button type="button" class="operator__list-action" data-role="add-empty-slide" aria-label="Add empty slide" title="Add empty slide to active presentation">"\u{2795}"</button>
                                     <button type="button" class="operator__list-action" data-role="presentation-create" aria-label="Create presentation">"+"</button>
                                 </div>
                                 <div class="bible__prepared-list" data-role="presentations-list">
@@ -192,6 +191,9 @@ fn BibleDocument(
                                 <h2>"Slides"</h2>
                             </div>
                         </header>
+                        <div class="operator__slides-toolbar">
+                            <button type="button" class="operator__slides-add" data-role="add-empty-slide" title="Add empty slide to active presentation">"+"</button>
+                        </div>
                         <div class="operator__slides" data-role="slides">
                             <p class="operator__slides-empty">"Load a passage to populate slides."</p>
                         </div>

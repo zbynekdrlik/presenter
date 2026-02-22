@@ -1278,8 +1278,13 @@
           ? `<div class='operator__slide-text operator__slide-text--translation operator__slide-text--secondary'>${lineBreakHtml(slide.translation)}</div>`
           : "";
       const references = buildReferenceHtml(slide);
+      const liveDragHandle =
+        state.bibleTab === "prepared"
+          ? `<button type='button' class='operator__slide-handle' data-role='slide-drag-handle' draggable='true' tabindex='-1' aria-label='Reorder slide'>\u2195</button>`
+          : "";
       return `
         <article class='operator__slide-card operator__slide-card--bible' data-slide-id='${slide.id}' data-index='${index}'>
+          ${liveDragHandle}
           <div class='operator__slide-trigger-zone operator__slide-trigger-zone--full' data-role='slide-trigger'>
             <span class='operator__slide-trigger-icon'>\u25B6</span>
             <span class='operator__slide-index'>${index + 1}</span>
@@ -1298,9 +1303,13 @@
       const deleteBtn = isPreparedEdit
         ? `<button type='button' class='operator__list-action operator__list-action--danger' data-role='delete-slide' data-slide-id='${slide.id}' title='Delete slide'>\u00D7</button>`
         : "";
+      const dragHandle = isPreparedEdit
+        ? `<button type='button' class='operator__slide-handle' data-role='slide-drag-handle' draggable='true' tabindex='-1' aria-label='Reorder slide'>\u2195</button>`
+        : "";
       const editHeader = `
         <header class='operator__slide-header'>
           <div class='operator__slide-header-left'>
+            ${dragHandle}
             <label class='operator__slide-index operator__slide-index--select'>
               <input type='checkbox' data-role='slide-select'${checked} />
               <span>${index + 1}</span>
@@ -1418,6 +1427,15 @@
         stageVal = slide.stage || "";
         groupVal = slide.group || null;
       }
+      var meta = slide.metadata || null;
+      var mainRef =
+        slide.main_reference ||
+        slide.mainReference ||
+        deriveReferenceFromMetadata(meta);
+      var translationRef =
+        slide.translation_reference ||
+        slide.translationReference ||
+        deriveReferenceFromMetadata(meta);
       return {
         id: slide.id,
         order: slide.order,
@@ -1425,9 +1443,9 @@
         translation: translationVal,
         stage: stageVal,
         group: typeof groupVal === "object" ? null : groupVal,
-        metadata: slide.metadata || null,
-        mainReference: null,
-        translationReference: null,
+        metadata: meta,
+        mainReference: mainRef,
+        translationReference: translationRef,
       };
     });
   }
@@ -1995,12 +2013,6 @@
       )
       .join("");
     els.slidesContainer.innerHTML = html;
-    // Make prepared slides draggable for reordering
-    els.slidesContainer
-      .querySelectorAll("[data-slide-id]")
-      .forEach(function (card) {
-        card.setAttribute("draggable", "true");
-      });
   }
 
   function renderActive() {
@@ -2093,7 +2105,16 @@
     const slide =
       state.slides.find((entry) => entry.id === slideId) ||
       state.activePresentationSlides.find((entry) => entry.id === slideId);
-    if (!slide || !slide.metadata || !slide.metadata.bible) {
+    if (!slide) {
+      showToast("Slide not found", "error");
+      return;
+    }
+    // Empty slide (no text and no bible metadata) = clear broadcast
+    if (!slide.main && (!slide.metadata || !slide.metadata.bible)) {
+      clearBroadcast();
+      return;
+    }
+    if (!slide.metadata || !slide.metadata.bible) {
       showToast("Slide metadata missing", "error");
       return;
     }
@@ -2189,7 +2210,12 @@
   var dragState = { slideId: null };
 
   function onPreparedDragStart(event) {
-    var card = event.target.closest("[data-slide-id]");
+    var handle = event.target.closest('[data-role="slide-drag-handle"]');
+    if (!handle) {
+      event.preventDefault();
+      return;
+    }
+    var card = handle.closest("[data-slide-id]");
     if (!card || state.bibleTab !== "prepared") {
       event.preventDefault();
       return;
