@@ -41,6 +41,9 @@ fn TabletDocument(presentations_json: String) -> impl IntoView {
                     </aside>
                     <section class="tablet-main">
                         <header class="tablet-main__header">
+                            <button type="button" class="tablet-back-button" data-role="sidebar-toggle">
+                                "← Presentations"
+                            </button>
                             <h2 data-role="context-title">"Select a presentation"</h2>
                         </header>
                         <div class="tablet-slides" data-role="slides">

@@ -11,6 +11,7 @@
     liveSocket: null,
     liveReconnectTimer: null,
     activeBibleBroadcast: null,
+    sidebarOpen: true,
   };
 
   const els = {
@@ -20,6 +21,8 @@
     toast: document.querySelector('[data-role="toast"]'),
     scaleSlider: document.querySelector('[data-role="scale-slider"]'),
     scaleValue: document.querySelector('[data-role="scale-value"]'),
+    sidebar: document.querySelector(".tablet-sidebar"),
+    sidebarToggle: document.querySelector('[data-role="sidebar-toggle"]'),
   };
 
   function escapeHtml(value) {
@@ -45,6 +48,13 @@
     state.toastTimer = setTimeout(() => {
       els.toast.dataset.visible = "false";
     }, 2500);
+  }
+
+  function toggleSidebar(open) {
+    state.sidebarOpen = open;
+    if (els.sidebar) {
+      els.sidebar.classList.toggle("is-collapsed", !open);
+    }
   }
 
   function apiFetch(path, options) {
@@ -272,6 +282,7 @@
     }
     renderPresentations();
     loadPresentation(id);
+    toggleSidebar(false);
   }
 
   function handleSlideTap(event) {
@@ -442,6 +453,11 @@
     if (els.scaleSlider) {
       els.scaleSlider.addEventListener("input", function () {
         applyScale(parseInt(els.scaleSlider.value, 10));
+      });
+    }
+    if (els.sidebarToggle) {
+      els.sidebarToggle.addEventListener("click", function () {
+        toggleSidebar(true);
       });
     }
     document.addEventListener("visibilitychange", function () {

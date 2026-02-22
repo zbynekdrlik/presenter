@@ -63,6 +63,19 @@ body.tablet {
   flex-direction: column;
   gap: 1.1rem;
   overflow-y: auto;
+  flex-shrink: 0;
+  transition:
+    width 0.3s ease,
+    padding 0.3s ease,
+    opacity 0.3s ease;
+}
+
+.tablet-sidebar.is-collapsed {
+  width: 0;
+  padding: 0;
+  overflow: hidden;
+  opacity: 0;
+  border-right: none;
 }
 
 .tablet-main {
@@ -85,6 +98,33 @@ body.tablet {
   letter-spacing: 0.05em;
   text-transform: uppercase;
   color: #a5b4fc;
+}
+
+/* Back button to reopen sidebar */
+.tablet-back-button {
+  display: none;
+  align-items: center;
+  gap: 0.35rem;
+  padding: 0.5rem 1rem;
+  background: rgba(56, 189, 248, 0.2);
+  border: 1px solid rgba(56, 189, 248, 0.4);
+  border-radius: 10px;
+  color: #38bdf8;
+  font-size: 0.9rem;
+  font-weight: 500;
+  cursor: pointer;
+  transition:
+    background 0.2s ease,
+    transform 0.2s ease;
+}
+
+.tablet-back-button:hover {
+  background: rgba(56, 189, 248, 0.35);
+  transform: translateX(-2px);
+}
+
+.tablet-sidebar.is-collapsed ~ .tablet-main .tablet-back-button {
+  display: inline-flex;
 }
 
 .tablet-panel h2 {
