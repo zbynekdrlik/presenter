@@ -20,7 +20,7 @@
 //! acquisition order (e.g., alphabetical by field name) to prevent deadlocks.
 
 mod ableset;
-mod bible;
+pub(crate) mod bible;
 mod broadcasting;
 mod companion;
 mod integrations;

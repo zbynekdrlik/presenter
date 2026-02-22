@@ -410,7 +410,10 @@ pub(super) async fn handle_command(
         CompanionCommand::BibleTrigger {
             translation,
             reference,
-        } => match state.trigger_bible_passage(&translation, &reference).await {
+        } => match state
+            .trigger_bible_passage(&translation, &reference, Default::default())
+            .await
+        {
             Ok(broadcast) => {
                 let refresh = variables.apply_bible(broadcast);
                 Ok(CommandResponse::ack(command).with_refresh(refresh))

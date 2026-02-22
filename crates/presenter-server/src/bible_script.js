@@ -150,6 +150,7 @@
     presentationsList: document.querySelector(
       '[data-role="presentations-list"]',
     ),
+    addEmptySlide: document.querySelector('[data-role="add-empty-slide"]'),
     presentationCreate: document.querySelector(
       '[data-role="presentation-create"]',
     ),
@@ -1293,6 +1294,10 @@
     }
     if (state.editMode) {
       const checked = state.selectedSlides.has(slide.id) ? " checked" : "";
+      const isPreparedEdit = state.bibleTab === "prepared";
+      const deleteBtn = isPreparedEdit
+        ? `<button type='button' class='operator__list-action operator__list-action--danger' data-role='delete-slide' data-slide-id='${slide.id}' title='Delete slide'>\u00D7</button>`
+        : "";
       const editHeader = `
         <header class='operator__slide-header'>
           <div class='operator__slide-header-left'>
@@ -1302,6 +1307,7 @@
             </label>
           </div>
           <div class='operator__slide-controls operator__slide-controls--compact'>
+            ${deleteBtn}
             <button type='button' class='operator__list-action operator__list-action--primary' data-role='slide-trigger'>Trigger</button>
           </div>
         </header>
@@ -1379,6 +1385,51 @@
       return "";
     }
     return `<footer class='operator__slide-footer'>${pieces.join("")}</footer>`;
+  }
+
+  function mapCoreSlidesToState(slides) {
+    if (!Array.isArray(slides)) return [];
+    return slides.map(function (slide) {
+      // Handle both core Slide format ({content: {main: {value}}}) and DTO format ({main: "..."})
+      var mainVal = "";
+      var translationVal = "";
+      var stageVal = "";
+      var groupVal = null;
+      if (slide.content && typeof slide.content === "object") {
+        mainVal =
+          typeof slide.content.main === "object" && slide.content.main
+            ? slide.content.main.value || ""
+            : slide.content.main || "";
+        translationVal =
+          typeof slide.content.translation === "object" &&
+          slide.content.translation
+            ? slide.content.translation.value || ""
+            : slide.content.translation || "";
+        stageVal =
+          typeof slide.content.stage === "object" && slide.content.stage
+            ? slide.content.stage.value || ""
+            : slide.content.stage || "";
+        groupVal = slide.content.group
+          ? slide.content.group.name || slide.content.group || null
+          : null;
+      } else {
+        mainVal = slide.main || "";
+        translationVal = slide.translation || "";
+        stageVal = slide.stage || "";
+        groupVal = slide.group || null;
+      }
+      return {
+        id: slide.id,
+        order: slide.order,
+        main: mainVal,
+        translation: translationVal,
+        stage: stageVal,
+        group: typeof groupVal === "object" ? null : groupVal,
+        metadata: slide.metadata || null,
+        mainReference: null,
+        translationReference: null,
+      };
+    });
   }
 
   function lineBreakHtml(value) {
@@ -1944,6 +1995,12 @@
       )
       .join("");
     els.slidesContainer.innerHTML = html;
+    // Make prepared slides draggable for reordering
+    els.slidesContainer
+      .querySelectorAll("[data-slide-id]")
+      .forEach(function (card) {
+        card.setAttribute("draggable", "true");
+      });
   }
 
   function renderActive() {
@@ -1975,6 +2032,17 @@
         ) {
           state.activeBroadcast = null;
           renderActive();
+        } else if (
+          payload.type === "bible_preferences_changed" ||
+          payload.type === "BiblePreferencesChanged"
+        ) {
+          if (payload.character_limit != null) {
+            state.preferences.characterLimit = payload.character_limit;
+            if (els.charLimit) {
+              els.charLimit.value = payload.character_limit;
+            }
+            updateTextareaLines();
+          }
         }
       } catch (error) {
         console.warn("Failed to parse bible payload", error);
@@ -2072,6 +2140,11 @@
       if (bookNumber) {
         payload.bookNumber = bookNumber;
       }
+      // Always send the current slide text (supports user edits)
+      payload.mainText = slide.main || null;
+      payload.translationText = slide.translation || null;
+      payload.mainReferenceLabel = slide.mainReference || null;
+      payload.translationReferenceLabel = slide.translationReference || null;
       const response = await apiFetch("/bible/trigger", {
         method: "POST",
         body: JSON.stringify(payload),
@@ -2097,11 +2170,159 @@
     }
   }
 
+  async function handleDeleteSlide(slideId) {
+    if (!state.activePresentationId) return;
+    try {
+      var response = await apiFetch(
+        "/presentations/" + state.activePresentationId + "/slides/" + slideId,
+        { method: "DELETE" },
+      );
+      state.activePresentationSlides = mapCoreSlidesToState(response);
+      renderPresentationSlides();
+      showToast("Slide deleted", "success");
+    } catch (error) {
+      console.error("Failed to delete slide", error);
+      showToast("Failed to delete slide", "error");
+    }
+  }
+
+  var dragState = { slideId: null };
+
+  function onPreparedDragStart(event) {
+    var card = event.target.closest("[data-slide-id]");
+    if (!card || state.bibleTab !== "prepared") {
+      event.preventDefault();
+      return;
+    }
+    dragState.slideId = card.getAttribute("data-slide-id");
+    event.dataTransfer.effectAllowed = "move";
+    event.dataTransfer.setData("text/plain", dragState.slideId);
+    card.classList.add("is-dragging");
+  }
+
+  function onPreparedDragOver(event) {
+    if (!dragState.slideId || state.bibleTab !== "prepared") return;
+    event.preventDefault();
+    event.dataTransfer.dropEffect = "move";
+    var target = event.target.closest("[data-slide-id]");
+    if (!target || target.getAttribute("data-slide-id") === dragState.slideId) {
+      return;
+    }
+    // Show drop indicator
+    els.slidesContainer
+      .querySelectorAll("[data-slide-id]")
+      .forEach(function (c) {
+        c.classList.remove("drag-over-above", "drag-over-below");
+      });
+    var rect = target.getBoundingClientRect();
+    var midY = rect.top + rect.height / 2;
+    if (event.clientY < midY) {
+      target.classList.add("drag-over-above");
+    } else {
+      target.classList.add("drag-over-below");
+    }
+  }
+
+  function onPreparedDragEnd(event) {
+    dragState.slideId = null;
+    if (els.slidesContainer) {
+      els.slidesContainer
+        .querySelectorAll("[data-slide-id]")
+        .forEach(function (c) {
+          c.classList.remove(
+            "is-dragging",
+            "drag-over-above",
+            "drag-over-below",
+          );
+        });
+    }
+  }
+
+  function onPreparedDrop(event) {
+    event.preventDefault();
+    if (!dragState.slideId || state.bibleTab !== "prepared") return;
+    var target = event.target.closest("[data-slide-id]");
+    if (!target) return;
+    var targetId = target.getAttribute("data-slide-id");
+    if (targetId === dragState.slideId) return;
+
+    // Determine insert position
+    var rect = target.getBoundingClientRect();
+    var midY = rect.top + rect.height / 2;
+    var insertBefore = event.clientY < midY;
+
+    // Compute new order
+    var orderedIds = state.activePresentationSlides.map(function (s) {
+      return s.id;
+    });
+    // Remove dragged item
+    var fromIndex = orderedIds.indexOf(dragState.slideId);
+    if (fromIndex < 0) return;
+    orderedIds.splice(fromIndex, 1);
+    // Find target index
+    var toIndex = orderedIds.indexOf(targetId);
+    if (toIndex < 0) return;
+    if (!insertBefore) {
+      toIndex += 1;
+    }
+    orderedIds.splice(toIndex, 0, dragState.slideId);
+
+    reorderPreparedSlides(orderedIds);
+    onPreparedDragEnd(event);
+  }
+
+  async function reorderPreparedSlides(orderedIds) {
+    if (!state.activePresentationId) return;
+    try {
+      var response = await apiFetch(
+        "/presentations/" + state.activePresentationId + "/slides/reorder",
+        {
+          method: "POST",
+          body: JSON.stringify({ slideIds: orderedIds }),
+        },
+      );
+      state.activePresentationSlides = mapCoreSlidesToState(response);
+      renderPresentationSlides();
+    } catch (error) {
+      console.error("Failed to reorder slides", error);
+      showToast("Failed to reorder slides", "error");
+    }
+  }
+
+  async function addEmptySlide() {
+    if (!state.activePresentationId) {
+      showToast("Select a presentation first", "warning");
+      return;
+    }
+    try {
+      const response = await apiFetch(
+        `/presentations/${state.activePresentationId}/slides`,
+        { method: "POST", body: JSON.stringify({}) },
+      );
+      // response is the updated slides array (core Slide format)
+      state.activePresentationSlides = mapCoreSlidesToState(response);
+      renderPresentationSlides();
+      showToast("Empty slide added", "success");
+    } catch (error) {
+      console.error("Failed to add empty slide", error);
+      showToast("Failed to add slide", "error");
+    }
+  }
+
   function onSlidesContainerClick(event) {
     const card = event.target.closest("[data-slide-id]");
     if (!card) return;
     const slideId = card.getAttribute("data-slide-id");
     if (!slideId) return;
+
+    // Delete slide button (prepared tab, edit mode)
+    if (event.target.closest('[data-role="delete-slide"]')) {
+      var deleteSlideId =
+        event.target.closest('[data-role="delete-slide"]').dataset.slideId ||
+        slideId;
+      handleDeleteSlide(deleteSlideId);
+      return;
+    }
 
     // Edit mode: keep old checkbox + trigger button behavior
     if (state.editMode) {
@@ -2550,10 +2771,16 @@
         state.preferences.secondaryTranslation = event.target.value;
       });
     }
+    var charLimitSaveTimer = null;
     if (els.charLimit) {
       els.charLimit.addEventListener("input", (event) => {
         const value = Number(event.target.value) || 0;
         state.preferences.characterLimit = Math.min(Math.max(value, 1), 4000);
+        if (charLimitSaveTimer) clearTimeout(charLimitSaveTimer);
+        charLimitSaveTimer = setTimeout(function () {
+          charLimitSaveTimer = null;
+          savePreferences();
+        }, 500);
       });
     }
     if (els.savePreferences) {
@@ -2793,6 +3020,10 @@
     if (els.slidesContainer) {
       els.slidesContainer.addEventListener("click", onSlidesContainerClick);
       els.slidesContainer.addEventListener("input", onSlidesContainerInput);
+      els.slidesContainer.addEventListener("dragstart", onPreparedDragStart);
+      els.slidesContainer.addEventListener("dragover", onPreparedDragOver);
+      els.slidesContainer.addEventListener("drop", onPreparedDrop);
+      els.slidesContainer.addEventListener("dragend", onPreparedDragEnd);
     }
     if (els.selectAllButton) {
       els.selectAllButton.addEventListener("click", toggleSelectAllSlides);
@@ -2822,6 +3053,9 @@
         await loadPresentationSlides(id);
         renderPresentations();
       });
+    }
+    if (els.addEmptySlide) {
+      els.addEmptySlide.addEventListener("click", addEmptySlide);
     }
     if (els.presentationCreate) {
       els.presentationCreate.addEventListener("click", async () => {

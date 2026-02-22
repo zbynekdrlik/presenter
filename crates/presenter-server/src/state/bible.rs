@@ -12,6 +12,17 @@ use presenter_core::{
 use presenter_importer::bible::BibleIngestionService;
 use std::collections::HashMap;
 
+/// Optional text overrides for triggered Bible slides (when the user edits text in the UI).
+#[derive(Debug, Default)]
+pub struct BibleTriggerOverrides {
+    pub main_text: Option<String>,
+    pub translation_text: Option<String>,
+    #[allow(dead_code)]
+    pub main_reference_label: Option<String>,
+    #[allow(dead_code)]
+    pub translation_reference_label: Option<String>,
+}
+
 impl AppState {
     // Bible translation methods
     pub async fn list_bible_translations(&self) -> anyhow::Result<Vec<BibleTranslation>> {
@@ -239,6 +250,9 @@ impl AppState {
         let key = "bible-preferences";
         let json = serde_json::to_string(&prefs)?;
         self.repository.set_app_setting(key, &json).await?;
+        self.live_hub.publish(LiveEvent::BiblePreferencesChanged {
+            character_limit: prefs.character_limit,
+        });
         Ok(())
     }
 
@@ -251,6 +265,7 @@ impl AppState {
         &self,
         translation_code: &str,
         reference: &BibleReference,
+        overrides: BibleTriggerOverrides,
     ) -> anyhow::Result<BibleBroadcast> {
         // Try to find a range of verses first (for multi-verse slides)
         let range = self
@@ -265,7 +280,19 @@ impl AppState {
             )
             .await?;
 
-        let passage = if range.is_empty() {
+        let passage = if let Some(main_text) = overrides.main_text {
+            // Use the text override from the client (edited slide)
+            let translation = if range.is_empty() {
+                self.repository
+                    .find_bible_passage(translation_code, reference)
+                    .await?
+                    .map(|p| p.translation)
+                    .ok_or_else(|| anyhow::anyhow!("passage not found"))?
+            } else {
+                range[0].translation.clone()
+            };
+            presenter_core::BiblePassage::new(reference.clone(), translation, main_text)
+        } else if range.is_empty() {
             // Fall back to exact match for single-verse passages
             self.repository
                 .find_bible_passage(translation_code, reference)
@@ -288,39 +315,49 @@ impl AppState {
         };
 
         // Fetch secondary translation text if configured
-        let (secondary_text, secondary_translation_code) = {
-            let prefs = self.get_bible_preferences().await?;
-            if let Some(ref sec_code) = prefs.secondary_translation {
-                let sec_range = self
-                    .repository
-                    .bible_passage_range(
-                        sec_code,
-                        reference.book.as_str(),
-                        reference.book_code.as_deref(),
-                        reference.chapter,
-                        reference.verse_start,
-                        reference.verse_end,
-                    )
-                    .await
-                    .unwrap_or_default();
-                if sec_range.is_empty() {
-                    (None, None)
+        let (secondary_text, secondary_translation_code) =
+            if let Some(translation_text) = overrides.translation_text {
+                // Use the translation text override from the client
+                let prefs = self.get_bible_preferences().await?;
+                let sec_code = prefs.secondary_translation.clone();
+                if translation_text.is_empty() {
+                    (None, sec_code)
                 } else {
-                    let mut sec_text = String::new();
-                    for entry in &sec_range {
-                        if !sec_text.is_empty() {
-                            sec_text.push_str("\n\n");
-                        }
-                        let label = format!("{}. ", entry.reference.verse_start);
-                        sec_text.push_str(&label);
-                        sec_text.push_str(entry.text.as_str());
-                    }
-                    (Some(sec_text), Some(sec_code.clone()))
+                    (Some(translation_text), sec_code)
                 }
             } else {
-                (None, None)
-            }
-        };
+                let prefs = self.get_bible_preferences().await?;
+                if let Some(ref sec_code) = prefs.secondary_translation {
+                    let sec_range = self
+                        .repository
+                        .bible_passage_range(
+                            sec_code,
+                            reference.book.as_str(),
+                            reference.book_code.as_deref(),
+                            reference.chapter,
+                            reference.verse_start,
+                            reference.verse_end,
+                        )
+                        .await
+                        .unwrap_or_default();
+                    if sec_range.is_empty() {
+                        (None, None)
+                    } else {
+                        let mut sec_text = String::new();
+                        for entry in &sec_range {
+                            if !sec_text.is_empty() {
+                                sec_text.push_str("\n\n");
+                            }
+                            let label = format!("{}. ", entry.reference.verse_start);
+                            sec_text.push_str(&label);
+                            sec_text.push_str(entry.text.as_str());
+                        }
+                        (Some(sec_text), Some(sec_code.clone()))
+                    }
+                } else {
+                    (None, None)
+                }
+            };
 
         let broadcast = BibleBroadcast::new(passage, Utc::now());
         {
