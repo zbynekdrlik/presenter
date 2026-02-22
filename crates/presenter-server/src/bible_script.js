@@ -1285,6 +1285,20 @@
         ? `<button type='button' class='operator__slide-handle' data-role='slide-drag-handle' tabindex='-1' aria-label='Reorder slide'>\u2195</button>`
         : "";
       const draggableAttr = isPreparedTab ? " draggable='true'" : "";
+      // Prepared tab: clean card without trigger zone UI (whole slide clickable)
+      if (isPreparedTab) {
+        return `
+          <article class='operator__slide-card operator__slide-card--bible'${draggableAttr} data-slide-id='${slide.id}' data-index='${index}'>
+            ${liveDragHandle}
+            <section class='operator__slide-bodies operator__slide-bodies--bible'>
+              <div class='operator__slide-text operator__slide-text--main'>${lineBreakHtml(slide.main)}</div>
+              ${translationMarkup}
+              ${references}
+            </section>
+          </article>
+        `;
+      }
+      // Live/Preview tab: show trigger zone with play icon
       return `
         <article class='operator__slide-card operator__slide-card--bible'${draggableAttr} data-slide-id='${slide.id}' data-index='${index}'>
           ${liveDragHandle}
@@ -2226,7 +2240,7 @@
     }
   }
 
-  var dragState = { slideId: null };
+  var dragState = { slideId: null, initialOrder: [] };
 
   function onPreparedDragStart(event) {
     // With draggable on the card, event.target is the card.
@@ -2244,6 +2258,12 @@
       return;
     }
     dragState.slideId = card.getAttribute("data-slide-id");
+    // Capture initial order for potential rollback
+    dragState.initialOrder = Array.from(
+      els.slidesContainer.querySelectorAll("[data-slide-id]"),
+    ).map(function (n) {
+      return n.dataset.slideId;
+    });
     event.dataTransfer.effectAllowed = "move";
     event.dataTransfer.setData("text/plain", dragState.slideId);
     card.classList.add("is-dragging");
@@ -2271,32 +2291,45 @@
     if (!target || target.getAttribute("data-slide-id") === dragState.slideId) {
       return;
     }
-    // Clear all indicators first, then show on target only
+
+    // Clear all drop position indicators
     els.slidesContainer
       .querySelectorAll("[data-slide-id]")
       .forEach(function (c) {
-        c.classList.remove("drag-over-above", "drag-over-below");
+        delete c.dataset.dropPosition;
       });
+
+    // Use X-axis for grid layout (left/right insertion)
     var rect = target.getBoundingClientRect();
-    var midY = rect.top + rect.height / 2;
-    if (event.clientY < midY) {
-      target.classList.add("drag-over-above");
+    var midX = rect.left + rect.width / 2;
+    if (event.clientX < midX) {
+      target.dataset.dropPosition = "before";
     } else {
-      target.classList.add("drag-over-below");
+      target.dataset.dropPosition = "after";
+    }
+
+    // Live DOM manipulation: move the dragging card in real-time
+    var dragging = els.slidesContainer.querySelector(
+      '[data-slide-id="' + dragState.slideId + '"]',
+    );
+    if (dragging && dragging !== target) {
+      if (event.clientX < midX) {
+        els.slidesContainer.insertBefore(dragging, target);
+      } else {
+        els.slidesContainer.insertBefore(dragging, target.nextSibling);
+      }
     }
   }
 
   function onPreparedDragEnd(event) {
     dragState.slideId = null;
+    dragState.initialOrder = [];
     if (els.slidesContainer) {
       els.slidesContainer
         .querySelectorAll("[data-slide-id]")
         .forEach(function (c) {
-          c.classList.remove(
-            "is-dragging",
-            "drag-over-above",
-            "drag-over-below",
-          );
+          c.classList.remove("is-dragging");
+          delete c.dataset.dropPosition;
         });
     }
   }
@@ -2304,31 +2337,22 @@
   function onPreparedDrop(event) {
     event.preventDefault();
     if (!dragState.slideId || state.bibleTab !== "prepared") return;
-    var target = event.target.closest("[data-slide-id]");
-    if (!target) return;
-    var targetId = target.getAttribute("data-slide-id");
-    if (targetId === dragState.slideId) return;
 
-    // Determine insert position
-    var rect = target.getBoundingClientRect();
-    var midY = rect.top + rect.height / 2;
-    var insertBefore = event.clientY < midY;
-
-    // Compute new order
-    var orderedIds = state.activePresentationSlides.map(function (s) {
-      return s.id;
+    // DOM already reflects the new order from live manipulation in dragOver
+    // Extract the new order from current DOM state
+    var orderedIds = Array.from(
+      els.slidesContainer.querySelectorAll("[data-slide-id]"),
+    ).map(function (n) {
+      return n.dataset.slideId;
     });
-    // Remove dragged item
-    var fromIndex = orderedIds.indexOf(dragState.slideId);
-    if (fromIndex < 0) return;
-    orderedIds.splice(fromIndex, 1);
-    // Find target index
-    var toIndex = orderedIds.indexOf(targetId);
-    if (toIndex < 0) return;
-    if (!insertBefore) {
-      toIndex += 1;
+
+    // Check if order actually changed
+    var initialStr = dragState.initialOrder.join(",");
+    var newStr = orderedIds.join(",");
+    if (initialStr === newStr) {
+      onPreparedDragEnd(event);
+      return;
     }
-    orderedIds.splice(toIndex, 0, dragState.slideId);
 
     reorderPreparedSlides(orderedIds);
     onPreparedDragEnd(event);
@@ -2344,11 +2368,13 @@
           body: JSON.stringify({ slideIds: orderedIds }),
         },
       );
+      // Update state but do NOT re-render - DOM already reflects correct order
       state.activePresentationSlides = mapCoreSlidesToState(response);
-      renderPresentationSlides();
     } catch (error) {
       console.error("Failed to reorder slides", error);
       showToast("Failed to reorder slides", "error");
+      // Rollback: re-render to restore original server state
+      renderPresentationSlides();
     }
   }
 
