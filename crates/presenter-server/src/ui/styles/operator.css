@@ -2198,7 +2198,7 @@ body.operator[data-view="settings"] [data-view-panel="settings"] {
 }
 
 /* ── Bible LIVE mode: hide add slide button ── */
-body.operator[data-mode="live"] .operator--bible .operator__slides-add {
+body.operator.operator--bible[data-mode="live"] .operator__slides-add {
   display: none;
 }
 
@@ -2219,4 +2219,23 @@ body.operator[data-mode="live"][data-bible-tab="prepared"]
 
 .operator__slide-card.is-dragging {
   opacity: 0.5;
+}
+
+/* ── Prepared tab in LIVE mode: full slide is clickable ── */
+body.operator[data-mode="live"][data-bible-tab="prepared"]
+  .operator__slide-card {
+  cursor: pointer;
+}
+
+/* ── Draggable card styling ── */
+.operator__slide-card[draggable="true"] {
+  user-select: none;
+}
+
+.operator__slide-card[draggable="true"] .operator__slide-handle {
+  cursor: grab;
+}
+
+.operator__slide-card[draggable="true"] .operator__slide-handle:active {
+  cursor: grabbing;
 }

@@ -1280,12 +1280,13 @@
           ? `<div class='operator__slide-text operator__slide-text--translation operator__slide-text--secondary'>${lineBreakHtml(slide.translation)}</div>`
           : "";
       const references = buildReferenceHtml(slide);
-      const liveDragHandle =
-        state.bibleTab === "prepared"
-          ? `<button type='button' class='operator__slide-handle' data-role='slide-drag-handle' draggable='true' tabindex='-1' aria-label='Reorder slide'>\u2195</button>`
-          : "";
+      const isPreparedTab = state.bibleTab === "prepared";
+      const liveDragHandle = isPreparedTab
+        ? `<button type='button' class='operator__slide-handle' data-role='slide-drag-handle' tabindex='-1' aria-label='Reorder slide'>\u2195</button>`
+        : "";
+      const draggableAttr = isPreparedTab ? " draggable='true'" : "";
       return `
-        <article class='operator__slide-card operator__slide-card--bible' data-slide-id='${slide.id}' data-index='${index}'>
+        <article class='operator__slide-card operator__slide-card--bible'${draggableAttr} data-slide-id='${slide.id}' data-index='${index}'>
           ${liveDragHandle}
           <div class='operator__slide-trigger-zone operator__slide-trigger-zone--full' data-role='slide-trigger'>
             <span class='operator__slide-trigger-icon'>\u25B6</span>
@@ -1306,8 +1307,9 @@
         ? `<button type='button' class='operator__list-action operator__list-action--danger' data-role='delete-slide' data-slide-id='${slide.id}' title='Delete slide'>\u00D7</button>`
         : "";
       const dragHandle = isPreparedEdit
-        ? `<button type='button' class='operator__slide-handle' data-role='slide-drag-handle' draggable='true' tabindex='-1' aria-label='Reorder slide'>\u2195</button>`
+        ? `<button type='button' class='operator__slide-handle' data-role='slide-drag-handle' tabindex='-1' aria-label='Reorder slide'>\u2195</button>`
         : "";
+      const draggableAttr = isPreparedEdit ? " draggable='true'" : "";
       const editHeader = `
         <header class='operator__slide-header'>
           <div class='operator__slide-header-left'>
@@ -1324,7 +1326,7 @@
         </header>
       `;
       return `
-        <article class='operator__slide-card operator__slide-card--bible operator__slide-card--edit' data-slide-id='${slide.id}' data-index='${index}'>
+        <article class='operator__slide-card operator__slide-card--bible operator__slide-card--edit'${draggableAttr} data-slide-id='${slide.id}' data-index='${index}'>
           ${editHeader}
           <section class='operator__slide-editor operator__slide-editor--bible'>
             <label>
@@ -1378,13 +1380,23 @@
         `<span class='operator__slide-reference'>${escapeHtml(slide.mainReference)}</span>`,
       );
     } else if (slide.metadata && slide.metadata.bible) {
-      const verses = slide.metadata.bible.verses || [];
-      if (verses.length) {
-        const start = verses[0].start;
-        const end = verses[verses.length - 1].end;
+      const bible = slide.metadata.bible;
+      // Prioritize explicit main_reference_label if set
+      const explicitLabel =
+        bible.main_reference_label || bible.mainReferenceLabel;
+      if (explicitLabel) {
         pieces.push(
-          `<span class='operator__slide-reference'>${escapeHtml(formatReference(slide.metadata.bible.book, slide.metadata.bible.chapter, start, end))}</span>`,
+          `<span class='operator__slide-reference'>${escapeHtml(explicitLabel)}</span>`,
         );
+      } else {
+        const verses = bible.verses || [];
+        if (verses.length) {
+          const start = verses[0].start;
+          const end = verses[verses.length - 1].end;
+          pieces.push(
+            `<span class='operator__slide-reference'>${escapeHtml(formatReference(bible.book, bible.chapter, start, end))}</span>`,
+          );
+        }
       }
     }
     if (slide.translationReference && state.preferences.secondaryTranslation) {
@@ -1704,6 +1716,11 @@
       return null;
     }
     const bible = metadata.bible;
+    // Prioritize explicit main_reference_label if set
+    if (bible.main_reference_label || bible.mainReferenceLabel) {
+      return bible.main_reference_label || bible.mainReferenceLabel;
+    }
+    // Fallback to computing from verses
     const verses = Array.isArray(bible.verses) ? bible.verses : [];
     if (!verses.length) {
       return null;
@@ -2212,12 +2229,16 @@
   var dragState = { slideId: null };
 
   function onPreparedDragStart(event) {
-    var handle = event.target.closest('[data-role="slide-drag-handle"]');
+    // With draggable on the card, event.target is the card.
+    // Use elementFromPoint to check if drag started on the handle.
+    var clickedEl = document.elementFromPoint(event.clientX, event.clientY);
+    var handle =
+      clickedEl && clickedEl.closest('[data-role="slide-drag-handle"]');
     if (!handle) {
       event.preventDefault();
       return;
     }
-    var card = handle.closest("[data-slide-id]");
+    var card = event.target.closest("[data-slide-id]");
     if (!card || state.bibleTab !== "prepared") {
       event.preventDefault();
       return;
