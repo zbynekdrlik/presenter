@@ -150,6 +150,8 @@ impl AppState {
             &main_passages,
             &secondary_lookup,
             character_limit,
+            verse_start,
+            verse_end,
         )?;
 
         Ok((main_translation, secondary_translation, slides))

@@ -326,7 +326,8 @@ test("operator manages Bible workflow end-to-end", async ({
   const presentationCard = page.locator(
     `article[data-presentation-id="${createdSummary.id}"]`,
   );
-  await presentationCard.click();
+  // Click on the presentation name (strong element) to avoid hitting the edit button
+  await presentationCard.locator("strong").click();
   await expect(async () => {
     const activeId = await page.evaluate(
       () => window.__presenterBibleState.activePresentationId,

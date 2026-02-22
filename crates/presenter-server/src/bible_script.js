@@ -225,6 +225,8 @@
 
   function setBibleTab(tab) {
     state.bibleTab = tab;
+    // Set data-bible-tab on body for CSS targeting (e.g., showing drag handles in prepared tab)
+    document.body.dataset.bibleTab = tab;
     els.bibleTabButtons.forEach((btn) => {
       btn.dataset.active = btn.dataset.tab === tab ? "true" : "false";
     });
@@ -2230,11 +2232,25 @@
     if (!dragState.slideId || state.bibleTab !== "prepared") return;
     event.preventDefault();
     event.dataTransfer.dropEffect = "move";
+
+    // Auto-scroll when dragging near container edges
+    var container = els.slidesContainer;
+    if (container) {
+      var containerRect = container.getBoundingClientRect();
+      var scrollThreshold = 60; // pixels from edge
+      var scrollSpeed = 8;
+      if (event.clientY < containerRect.top + scrollThreshold) {
+        container.scrollTop -= scrollSpeed;
+      } else if (event.clientY > containerRect.bottom - scrollThreshold) {
+        container.scrollTop += scrollSpeed;
+      }
+    }
+
     var target = event.target.closest("[data-slide-id]");
     if (!target || target.getAttribute("data-slide-id") === dragState.slideId) {
       return;
     }
-    // Show drop indicator
+    // Clear all indicators first, then show on target only
     els.slidesContainer
       .querySelectorAll("[data-slide-id]")
       .forEach(function (c) {
@@ -2350,6 +2366,11 @@
       return;
     }
 
+    // Drag handle clicks should not trigger anything
+    if (event.target.closest('[data-role="slide-drag-handle"]')) {
+      return;
+    }
+
     // Edit mode: keep old checkbox + trigger button behavior
     if (state.editMode) {
       if (event.target.matches('[data-role="slide-select"]')) {
@@ -2364,6 +2385,12 @@
       if (event.target.matches('[data-role="slide-trigger"]')) {
         triggerSlideById(slideId);
       }
+      return;
+    }
+
+    // Prepared tab LIVE mode: clicking anywhere on the card triggers the slide
+    if (state.bibleTab === "prepared") {
+      triggerSlideById(slideId);
       return;
     }
 

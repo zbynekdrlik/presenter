@@ -2196,3 +2196,27 @@ body.operator[data-view="settings"] [data-view-panel="settings"] {
     grid-template-columns: repeat(2, minmax(0, 1fr));
   }
 }
+
+/* ── Bible LIVE mode: hide add slide button ── */
+body.operator[data-mode="live"] .operator--bible .operator__slides-add {
+  display: none;
+}
+
+/* ── Bible prepared tab: show drag handles in LIVE mode ── */
+body.operator[data-mode="live"][data-bible-tab="prepared"]
+  .operator__slide-handle {
+  display: inline-flex;
+}
+
+/* ── Drag-and-drop visual feedback ── */
+.operator__slide-card.drag-over-above {
+  box-shadow: 0 -3px 0 0 var(--operator-accent);
+}
+
+.operator__slide-card.drag-over-below {
+  box-shadow: 0 3px 0 0 var(--operator-accent);
+}
+
+.operator__slide-card.is-dragging {
+  opacity: 0.5;
+}
