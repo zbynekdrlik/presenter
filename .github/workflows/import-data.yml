@@ -120,9 +120,25 @@ jobs:
           ssh deploy-target << 'REMOTE_SCRIPT'
           set -e
           echo "Importing Bible translations..."
-          # Set paths for local MySword Bible files if they exist
-          ROHACEK_PATH="${{ steps.env.outputs.deploy_dir }}/bibles/rohacek.bbl.mybible.zip"
-          MILOST_PATH="${{ steps.env.outputs.deploy_dir }}/bibles/milost.bbl.mybible.zip"
+
+          BIBLES_DIR="${{ steps.env.outputs.deploy_dir }}/bibles"
+          ROHACEK_PATH="$BIBLES_DIR/rohacek.bbl.mybible.zip"
+          MILOST_PATH="$BIBLES_DIR/milost.bbl.mybible.zip"
+
+          # Move files from /tmp if they exist there
+          if [ -f /tmp/rohacek.bbl.mybible.zip ] && [ ! -f "$ROHACEK_PATH" ]; then
+            sudo mkdir -p "$BIBLES_DIR"
+            sudo mv /tmp/rohacek.bbl.mybible.zip "$ROHACEK_PATH"
+            sudo chmod 644 "$ROHACEK_PATH"
+            echo "Moved Roháček from /tmp to $ROHACEK_PATH"
+          fi
+
+          if [ -f /tmp/milost.bbl.mybible.zip ] && [ ! -f "$MILOST_PATH" ]; then
+            sudo mkdir -p "$BIBLES_DIR"
+            sudo mv /tmp/milost.bbl.mybible.zip "$MILOST_PATH"
+            sudo chmod 644 "$MILOST_PATH"
+            echo "Moved Milosť from /tmp to $MILOST_PATH"
+          fi
 
           export PRESENTER_DB_URL=sqlite://${{ steps.env.outputs.deploy_dir }}/presenter.db
 
