@@ -141,11 +141,15 @@ jobs:
           for f in /tmp/roh.bbl.mybible /tmp/*[Rr]ohac*.mybible /tmp/*[Rr]ohac*.bbl.mybible; do
             if [ -f "$f" ] && [ ! -f "$ROHACEK_PATH" ]; then
               echo "Found Roháček at $f - creating zip archive..."
-              cd /tmp
               BASENAME=$(basename "$f")
-              zip -j "$ROHACEK_PATH" "$f"
+              python3 -c "
+import zipfile
+import sys
+with zipfile.ZipFile('$ROHACEK_PATH', 'w', zipfile.ZIP_DEFLATED) as zf:
+    zf.write('$f', '$BASENAME')
+print('Created $ROHACEK_PATH')
+"
               sudo chmod 644 "$ROHACEK_PATH"
-              echo "Created $ROHACEK_PATH"
               break
             fi
           done
@@ -154,11 +158,15 @@ jobs:
           for f in /tmp/milost.bbl.mybible /tmp/*[Mm]ilos*.mybible /tmp/*[Mm]ilos*.bbl.mybible; do
             if [ -f "$f" ] && [ ! -f "$MILOST_PATH" ]; then
               echo "Found Milosť at $f - creating zip archive..."
-              cd /tmp
               BASENAME=$(basename "$f")
-              zip -j "$MILOST_PATH" "$f"
+              python3 -c "
+import zipfile
+import sys
+with zipfile.ZipFile('$MILOST_PATH', 'w', zipfile.ZIP_DEFLATED) as zf:
+    zf.write('$f', '$BASENAME')
+print('Created $MILOST_PATH')
+"
               sudo chmod 644 "$MILOST_PATH"
-              echo "Created $MILOST_PATH"
               break
             fi
           done
