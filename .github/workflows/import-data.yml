@@ -127,6 +127,16 @@ jobs:
 
           sudo mkdir -p "$BIBLES_DIR"
 
+          # Clean up any invalid zip files from previous failed attempts
+          for f in "$ROHACEK_PATH" "$MILOST_PATH"; do
+            if [ -f "$f" ]; then
+              if ! unzip -t "$f" >/dev/null 2>&1; then
+                echo "Removing invalid zip file: $f"
+                sudo rm -f "$f"
+              fi
+            fi
+          done
+
           # Look for Roháček MySword file in /tmp (might be .mybible or roh.bbl.mybible)
           for f in /tmp/roh.bbl.mybible /tmp/*[Rr]ohac*.mybible /tmp/*[Rr]ohac*.bbl.mybible; do
             if [ -f "$f" ] && [ ! -f "$ROHACEK_PATH" ]; then
