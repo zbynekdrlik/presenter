@@ -125,20 +125,32 @@ jobs:
           ROHACEK_PATH="$BIBLES_DIR/rohacek.bbl.mybible.zip"
           MILOST_PATH="$BIBLES_DIR/milost.bbl.mybible.zip"
 
-          # Move files from /tmp if they exist there
-          if [ -f /tmp/rohacek.bbl.mybible.zip ] && [ ! -f "$ROHACEK_PATH" ]; then
-            sudo mkdir -p "$BIBLES_DIR"
-            sudo mv /tmp/rohacek.bbl.mybible.zip "$ROHACEK_PATH"
-            sudo chmod 644 "$ROHACEK_PATH"
-            echo "Moved Roháček from /tmp to $ROHACEK_PATH"
-          fi
+          # Debug: show what's in /tmp and bibles dir
+          echo "=== Files in /tmp matching *mybible* or *bible*: ==="
+          ls -la /tmp/*mybible* /tmp/*bible* /tmp/*Rohacek* /tmp/*Milost* 2>/dev/null || echo "No matching files in /tmp"
+          echo "=== Files in $BIBLES_DIR: ==="
+          ls -la "$BIBLES_DIR" 2>/dev/null || echo "Bibles dir does not exist"
 
-          if [ -f /tmp/milost.bbl.mybible.zip ] && [ ! -f "$MILOST_PATH" ]; then
-            sudo mkdir -p "$BIBLES_DIR"
-            sudo mv /tmp/milost.bbl.mybible.zip "$MILOST_PATH"
-            sudo chmod 644 "$MILOST_PATH"
-            echo "Moved Milosť from /tmp to $MILOST_PATH"
-          fi
+          # Move files from /tmp if they exist there (try various name patterns)
+          for f in /tmp/*[Rr]ohac*.mybible* /tmp/*[Rr]ohac*.zip; do
+            if [ -f "$f" ] && [ ! -f "$ROHACEK_PATH" ]; then
+              sudo mkdir -p "$BIBLES_DIR"
+              sudo mv "$f" "$ROHACEK_PATH"
+              sudo chmod 644 "$ROHACEK_PATH"
+              echo "Moved Roháček from $f to $ROHACEK_PATH"
+              break
+            fi
+          done
+
+          for f in /tmp/*[Mm]ilos*.mybible* /tmp/*[Mm]ilos*.zip; do
+            if [ -f "$f" ] && [ ! -f "$MILOST_PATH" ]; then
+              sudo mkdir -p "$BIBLES_DIR"
+              sudo mv "$f" "$MILOST_PATH"
+              sudo chmod 644 "$MILOST_PATH"
+              echo "Moved Milosť from $f to $MILOST_PATH"
+              break
+            fi
+          done
 
           export PRESENTER_DB_URL=sqlite://${{ steps.env.outputs.deploy_dir }}/presenter.db
 
