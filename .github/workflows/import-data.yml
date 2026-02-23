@@ -120,8 +120,23 @@ jobs:
           ssh deploy-target << 'REMOTE_SCRIPT'
           set -e
           echo "Importing Bible translations..."
-          PRESENTER_DB_URL=sqlite://${{ steps.env.outputs.deploy_dir }}/presenter.db \
-            ${{ steps.env.outputs.deploy_dir }}/ingest_bibles
+          # Set paths for local MySword Bible files if they exist
+          ROHACEK_PATH="${{ steps.env.outputs.deploy_dir }}/bibles/rohacek.bbl.mybible.zip"
+          MILOST_PATH="${{ steps.env.outputs.deploy_dir }}/bibles/milost.bbl.mybible.zip"
+
+          export PRESENTER_DB_URL=sqlite://${{ steps.env.outputs.deploy_dir }}/presenter.db
+
+          if [ -f "$ROHACEK_PATH" ]; then
+            export PRESENTER_BIBLE_ROHACEK="$ROHACEK_PATH"
+            echo "Found Roháček MySword file at $ROHACEK_PATH"
+          fi
+
+          if [ -f "$MILOST_PATH" ]; then
+            export PRESENTER_BIBLE_MILOST="$MILOST_PATH"
+            echo "Found Milosť MySword file at $MILOST_PATH"
+          fi
+
+          ${{ steps.env.outputs.deploy_dir }}/ingest_bibles
           REMOTE_SCRIPT
 
       - name: Start service
