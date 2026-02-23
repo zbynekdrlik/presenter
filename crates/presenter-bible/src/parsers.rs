@@ -15,9 +15,9 @@ use zip::read::ZipArchive;
 
 use crate::{BibleImportSummary, BibleSourceFormat, BibleTranslationSpec};
 
-/// Regex to strip variant markers like `[ Var.: + vám.]` or `[ Var.: vaša.]`
-static VARIANT_MARKER_RE: LazyLock<Regex> =
-    LazyLock::new(|| Regex::new(r"\[\s*Var\.:[^\]]*\]").expect("invalid variant marker regex"));
+/// Regex to strip bracketed comments like `[ Var.: + vám.]` or `[ Adresa v Efeze chýba v najstarších rkp.]`
+static BRACKETED_COMMENT_RE: LazyLock<Regex> =
+    LazyLock::new(|| Regex::new(r"\[[^\]]*\]").expect("invalid bracketed comment regex"));
 
 pub(crate) fn build_ingestion_batch(
     bytes: &[u8],
@@ -465,8 +465,8 @@ fn sanitize_text(input: &str) -> String {
 }
 
 fn sanitize_mysword_text(input: &str) -> String {
-    // First strip variant markers like [ Var.: + vám.] or [ Var.: vaša.]
-    let without_variants = VARIANT_MARKER_RE.replace_all(input, "");
+    // First strip all bracketed comments like [ Var.: + vám.] or [ Adresa v Efeze chýba...]
+    let without_variants = BRACKETED_COMMENT_RE.replace_all(input, "");
 
     let mut output = String::with_capacity(without_variants.len());
     let mut i = 0;
