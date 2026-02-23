@@ -13,6 +13,8 @@ pub(crate) fn compose_bible_slides(
     main_passages: &[BiblePassage],
     secondary_lookup: &HashMap<u16, BiblePassage>,
     character_limit: u32,
+    full_verse_start: u16,
+    full_verse_end: u16,
 ) -> anyhow::Result<Vec<Slide>> {
     let mut slides: Vec<Slide> = Vec::new();
     if main_passages.is_empty() {
@@ -23,6 +25,16 @@ pub(crate) fn compose_bible_slides(
     let book_code = main_passages[0].reference.book_code.clone();
     let book_number = main_passages[0].reference.book_number;
     let chapter = main_passages[0].reference.chapter;
+
+    // Build the full reference label that will appear on all slides
+    let full_reference_label = if full_verse_start == full_verse_end {
+        format!("{} {}:{}", book, chapter, full_verse_start)
+    } else {
+        format!(
+            "{} {}:{}-{}",
+            book, chapter, full_verse_start, full_verse_end
+        )
+    };
 
     let mut current_main = String::new();
     let mut current_tr = String::new();
@@ -53,7 +65,7 @@ pub(crate) fn compose_bible_slides(
                 .iter()
                 .map(|(s, e)| BibleSlideVerseRef::new(*s, *e))
                 .collect(),
-            main_reference_label: None,
+            main_reference_label: Some(full_reference_label.clone()),
             translation_reference_label: None,
         });
         slides.push(Slide::new(slides.len() as u32, content).with_metadata(Some(metadata)));

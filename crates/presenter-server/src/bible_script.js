@@ -225,6 +225,8 @@
 
   function setBibleTab(tab) {
     state.bibleTab = tab;
+    // Set data-bible-tab on body for CSS targeting (e.g., showing drag handles in prepared tab)
+    document.body.dataset.bibleTab = tab;
     els.bibleTabButtons.forEach((btn) => {
       btn.dataset.active = btn.dataset.tab === tab ? "true" : "false";
     });
@@ -1278,12 +1280,27 @@
           ? `<div class='operator__slide-text operator__slide-text--translation operator__slide-text--secondary'>${lineBreakHtml(slide.translation)}</div>`
           : "";
       const references = buildReferenceHtml(slide);
-      const liveDragHandle =
-        state.bibleTab === "prepared"
-          ? `<button type='button' class='operator__slide-handle' data-role='slide-drag-handle' draggable='true' tabindex='-1' aria-label='Reorder slide'>\u2195</button>`
-          : "";
+      const isPreparedTab = state.bibleTab === "prepared";
+      const liveDragHandle = isPreparedTab
+        ? `<button type='button' class='operator__slide-handle' data-role='slide-drag-handle' tabindex='-1' aria-label='Reorder slide'>\u2195</button>`
+        : "";
+      const draggableAttr = isPreparedTab ? " draggable='true'" : "";
+      // Prepared tab: clean card without trigger zone UI (whole slide clickable)
+      if (isPreparedTab) {
+        return `
+          <article class='operator__slide-card operator__slide-card--bible'${draggableAttr} data-slide-id='${slide.id}' data-index='${index}'>
+            ${liveDragHandle}
+            <section class='operator__slide-bodies operator__slide-bodies--bible'>
+              <div class='operator__slide-text operator__slide-text--main'>${lineBreakHtml(slide.main)}</div>
+              ${translationMarkup}
+              ${references}
+            </section>
+          </article>
+        `;
+      }
+      // Live/Preview tab: show trigger zone with play icon
       return `
-        <article class='operator__slide-card operator__slide-card--bible' data-slide-id='${slide.id}' data-index='${index}'>
+        <article class='operator__slide-card operator__slide-card--bible'${draggableAttr} data-slide-id='${slide.id}' data-index='${index}'>
           ${liveDragHandle}
           <div class='operator__slide-trigger-zone operator__slide-trigger-zone--full' data-role='slide-trigger'>
             <span class='operator__slide-trigger-icon'>\u25B6</span>
@@ -1304,8 +1321,9 @@
         ? `<button type='button' class='operator__list-action operator__list-action--danger' data-role='delete-slide' data-slide-id='${slide.id}' title='Delete slide'>\u00D7</button>`
         : "";
       const dragHandle = isPreparedEdit
-        ? `<button type='button' class='operator__slide-handle' data-role='slide-drag-handle' draggable='true' tabindex='-1' aria-label='Reorder slide'>\u2195</button>`
+        ? `<button type='button' class='operator__slide-handle' data-role='slide-drag-handle' tabindex='-1' aria-label='Reorder slide'>\u2195</button>`
         : "";
+      const draggableAttr = isPreparedEdit ? " draggable='true'" : "";
       const editHeader = `
         <header class='operator__slide-header'>
           <div class='operator__slide-header-left'>
@@ -1322,7 +1340,7 @@
         </header>
       `;
       return `
-        <article class='operator__slide-card operator__slide-card--bible operator__slide-card--edit' data-slide-id='${slide.id}' data-index='${index}'>
+        <article class='operator__slide-card operator__slide-card--bible operator__slide-card--edit'${draggableAttr} data-slide-id='${slide.id}' data-index='${index}'>
           ${editHeader}
           <section class='operator__slide-editor operator__slide-editor--bible'>
             <label>
@@ -1376,13 +1394,23 @@
         `<span class='operator__slide-reference'>${escapeHtml(slide.mainReference)}</span>`,
       );
     } else if (slide.metadata && slide.metadata.bible) {
-      const verses = slide.metadata.bible.verses || [];
-      if (verses.length) {
-        const start = verses[0].start;
-        const end = verses[verses.length - 1].end;
+      const bible = slide.metadata.bible;
+      // Prioritize explicit main_reference_label if set
+      const explicitLabel =
+        bible.main_reference_label || bible.mainReferenceLabel;
+      if (explicitLabel) {
         pieces.push(
-          `<span class='operator__slide-reference'>${escapeHtml(formatReference(slide.metadata.bible.book, slide.metadata.bible.chapter, start, end))}</span>`,
+          `<span class='operator__slide-reference'>${escapeHtml(explicitLabel)}</span>`,
         );
+      } else {
+        const verses = bible.verses || [];
+        if (verses.length) {
+          const start = verses[0].start;
+          const end = verses[verses.length - 1].end;
+          pieces.push(
+            `<span class='operator__slide-reference'>${escapeHtml(formatReference(bible.book, bible.chapter, start, end))}</span>`,
+          );
+        }
       }
     }
     if (slide.translationReference && state.preferences.secondaryTranslation) {
@@ -1702,6 +1730,11 @@
       return null;
     }
     const bible = metadata.bible;
+    // Prioritize explicit main_reference_label if set
+    if (bible.main_reference_label || bible.mainReferenceLabel) {
+      return bible.main_reference_label || bible.mainReferenceLabel;
+    }
+    // Fallback to computing from verses
     const verses = Array.isArray(bible.verses) ? bible.verses : [];
     if (!verses.length) {
       return null;
@@ -2207,20 +2240,30 @@
     }
   }
 
-  var dragState = { slideId: null };
+  var dragState = { slideId: null, initialOrder: [] };
 
   function onPreparedDragStart(event) {
-    var handle = event.target.closest('[data-role="slide-drag-handle"]');
+    // With draggable on the card, event.target is the card.
+    // Use elementFromPoint to check if drag started on the handle.
+    var clickedEl = document.elementFromPoint(event.clientX, event.clientY);
+    var handle =
+      clickedEl && clickedEl.closest('[data-role="slide-drag-handle"]');
     if (!handle) {
       event.preventDefault();
       return;
     }
-    var card = handle.closest("[data-slide-id]");
+    var card = event.target.closest("[data-slide-id]");
     if (!card || state.bibleTab !== "prepared") {
       event.preventDefault();
       return;
     }
     dragState.slideId = card.getAttribute("data-slide-id");
+    // Capture initial order for potential rollback
+    dragState.initialOrder = Array.from(
+      els.slidesContainer.querySelectorAll("[data-slide-id]"),
+    ).map(function (n) {
+      return n.dataset.slideId;
+    });
     event.dataTransfer.effectAllowed = "move";
     event.dataTransfer.setData("text/plain", dragState.slideId);
     card.classList.add("is-dragging");
@@ -2230,36 +2273,63 @@
     if (!dragState.slideId || state.bibleTab !== "prepared") return;
     event.preventDefault();
     event.dataTransfer.dropEffect = "move";
+
+    // Auto-scroll when dragging near container edges
+    var container = els.slidesContainer;
+    if (container) {
+      var containerRect = container.getBoundingClientRect();
+      var scrollThreshold = 60; // pixels from edge
+      var scrollSpeed = 8;
+      if (event.clientY < containerRect.top + scrollThreshold) {
+        container.scrollTop -= scrollSpeed;
+      } else if (event.clientY > containerRect.bottom - scrollThreshold) {
+        container.scrollTop += scrollSpeed;
+      }
+    }
+
     var target = event.target.closest("[data-slide-id]");
     if (!target || target.getAttribute("data-slide-id") === dragState.slideId) {
       return;
     }
-    // Show drop indicator
+
+    // Clear all drop position indicators
     els.slidesContainer
       .querySelectorAll("[data-slide-id]")
       .forEach(function (c) {
-        c.classList.remove("drag-over-above", "drag-over-below");
+        delete c.dataset.dropPosition;
       });
+
+    // Use X-axis for grid layout (left/right insertion)
     var rect = target.getBoundingClientRect();
-    var midY = rect.top + rect.height / 2;
-    if (event.clientY < midY) {
-      target.classList.add("drag-over-above");
+    var midX = rect.left + rect.width / 2;
+    if (event.clientX < midX) {
+      target.dataset.dropPosition = "before";
     } else {
-      target.classList.add("drag-over-below");
+      target.dataset.dropPosition = "after";
+    }
+
+    // Live DOM manipulation: move the dragging card in real-time
+    var dragging = els.slidesContainer.querySelector(
+      '[data-slide-id="' + dragState.slideId + '"]',
+    );
+    if (dragging && dragging !== target) {
+      if (event.clientX < midX) {
+        els.slidesContainer.insertBefore(dragging, target);
+      } else {
+        els.slidesContainer.insertBefore(dragging, target.nextSibling);
+      }
     }
   }
 
   function onPreparedDragEnd(event) {
     dragState.slideId = null;
+    dragState.initialOrder = [];
     if (els.slidesContainer) {
       els.slidesContainer
         .querySelectorAll("[data-slide-id]")
         .forEach(function (c) {
-          c.classList.remove(
-            "is-dragging",
-            "drag-over-above",
-            "drag-over-below",
-          );
+          c.classList.remove("is-dragging");
+          delete c.dataset.dropPosition;
         });
     }
   }
@@ -2267,31 +2337,22 @@
   function onPreparedDrop(event) {
     event.preventDefault();
     if (!dragState.slideId || state.bibleTab !== "prepared") return;
-    var target = event.target.closest("[data-slide-id]");
-    if (!target) return;
-    var targetId = target.getAttribute("data-slide-id");
-    if (targetId === dragState.slideId) return;
 
-    // Determine insert position
-    var rect = target.getBoundingClientRect();
-    var midY = rect.top + rect.height / 2;
-    var insertBefore = event.clientY < midY;
-
-    // Compute new order
-    var orderedIds = state.activePresentationSlides.map(function (s) {
-      return s.id;
+    // DOM already reflects the new order from live manipulation in dragOver
+    // Extract the new order from current DOM state
+    var orderedIds = Array.from(
+      els.slidesContainer.querySelectorAll("[data-slide-id]"),
+    ).map(function (n) {
+      return n.dataset.slideId;
     });
-    // Remove dragged item
-    var fromIndex = orderedIds.indexOf(dragState.slideId);
-    if (fromIndex < 0) return;
-    orderedIds.splice(fromIndex, 1);
-    // Find target index
-    var toIndex = orderedIds.indexOf(targetId);
-    if (toIndex < 0) return;
-    if (!insertBefore) {
-      toIndex += 1;
+
+    // Check if order actually changed
+    var initialStr = dragState.initialOrder.join(",");
+    var newStr = orderedIds.join(",");
+    if (initialStr === newStr) {
+      onPreparedDragEnd(event);
+      return;
     }
-    orderedIds.splice(toIndex, 0, dragState.slideId);
 
     reorderPreparedSlides(orderedIds);
     onPreparedDragEnd(event);
@@ -2307,11 +2368,13 @@
           body: JSON.stringify({ slideIds: orderedIds }),
         },
       );
+      // Update state but do NOT re-render - DOM already reflects correct order
       state.activePresentationSlides = mapCoreSlidesToState(response);
-      renderPresentationSlides();
     } catch (error) {
       console.error("Failed to reorder slides", error);
       showToast("Failed to reorder slides", "error");
+      // Rollback: re-render to restore original server state
+      renderPresentationSlides();
     }
   }
 
@@ -2350,6 +2413,11 @@
       return;
     }
 
+    // Drag handle clicks should not trigger anything
+    if (event.target.closest('[data-role="slide-drag-handle"]')) {
+      return;
+    }
+
     // Edit mode: keep old checkbox + trigger button behavior
     if (state.editMode) {
       if (event.target.matches('[data-role="slide-select"]')) {
@@ -2364,6 +2432,12 @@
       if (event.target.matches('[data-role="slide-trigger"]')) {
         triggerSlideById(slideId);
       }
+      return;
+    }
+
+    // Prepared tab LIVE mode: clicking anywhere on the card triggers the slide
+    if (state.bibleTab === "prepared") {
+      triggerSlideById(slideId);
       return;
     }
 
