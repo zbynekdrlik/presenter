@@ -302,6 +302,25 @@ sudo systemctl restart presenter-dev
 3. **NEVER skip tests** - No `.skip()`, `.only()`, `#[ignore]`, `testIgnore`, or any mechanism
 4. **Fix failures IMMEDIATELY** - CI failures block everything until resolved
 5. **E2E tests are PRIMARY** - They are the acceptance gate, not optional
+6. **VERIFY changes work BEFORE claiming completion** - See below
+
+### Verify Before Claiming Complete (CRITICAL)
+
+**NEVER claim a feature works without verifying it actually works.** This is non-negotiable:
+
+1. **Edit the correct files** - Before editing, verify which files are actually used by checking imports (`mod` declarations in Rust, `import` statements in TypeScript). Do not edit orphaned/unused files.
+2. **Run targeted tests** - After making changes, run tests that specifically exercise the changed code path.
+3. **Verify the behavior** - For user-facing changes, manually verify on dev environment or write a test that proves the behavior.
+4. **Check existing tests still pass** - Run the full test suite (`cargo test --workspace`) before pushing.
+
+**Common mistakes to avoid:**
+
+- Editing files that aren't included in the module tree (e.g., `parse.rs` when `mod parsers;` imports `parsers.rs`)
+- Claiming code changes fix an issue without running tests that exercise the fix
+- Pushing changes without verifying CI will pass
+- Assuming database changes take effect without re-importing data
+
+**The test must fail before your fix, and pass after.** If you cannot demonstrate this, you have not verified the fix.
 
 ### CI Failures = STOP EVERYTHING
 

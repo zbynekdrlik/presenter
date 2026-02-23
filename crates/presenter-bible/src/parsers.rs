@@ -2,16 +2,22 @@
 
 use anyhow::{anyhow, Context, Result};
 use presenter_core::{bible::BibleIngestionBatch, BiblePassage, BibleReference, BibleTranslation};
+use regex::Regex;
 use rusqlite::{types::ValueRef, Connection};
 use std::collections::HashMap;
 use std::convert::TryFrom;
 use std::io::{Cursor, Read, Write};
 use std::str;
+use std::sync::LazyLock;
 use tempfile::NamedTempFile;
 use tracing::warn;
 use zip::read::ZipArchive;
 
 use crate::{BibleImportSummary, BibleSourceFormat, BibleTranslationSpec};
+
+/// Regex to strip bracketed comments like `[ Var.: + vám.]` or `[ Adresa v Efeze chýba v najstarších rkp.]`
+static BRACKETED_COMMENT_RE: LazyLock<Regex> =
+    LazyLock::new(|| Regex::new(r"\[[^\]]*\]").expect("invalid bracketed comment regex"));
 
 pub(crate) fn build_ingestion_batch(
     bytes: &[u8],
@@ -152,7 +158,12 @@ fn parse_mysword_sqlite_zip(
             continue;
         }
 
-        let reference = BibleReference::new(book, chapter, verse, verse)?;
+        // MySword book numbers 1-66 map directly to standard book numbering
+        let book_number =
+            u16::try_from(book_index).context("MySword book index does not fit into u16")?;
+        let book_code = mysword_book_code(book_number);
+        let reference =
+            BibleReference::new_with_code(&book, book_code, book_number, chapter, verse, verse)?;
         let passage = BiblePassage::new(reference, translation.clone(), text);
         passages.push(passage);
     }
@@ -454,10 +465,13 @@ fn sanitize_text(input: &str) -> String {
 }
 
 fn sanitize_mysword_text(input: &str) -> String {
-    let mut output = String::with_capacity(input.len());
+    // First strip all bracketed comments like [ Var.: + vám.] or [ Adresa v Efeze chýba...]
+    let without_variants = BRACKETED_COMMENT_RE.replace_all(input, "");
+
+    let mut output = String::with_capacity(without_variants.len());
     let mut i = 0;
-    while i < input.len() {
-        let rest = &input[i..];
+    while i < without_variants.len() {
+        let rest = &without_variants[i..];
         if starts_with_ci(rest, "<f") {
             if let Some(end) = rest.find("</f>") {
                 i += end + 4;
@@ -472,7 +486,7 @@ fn sanitize_mysword_text(input: &str) -> String {
                 break;
             }
         }
-        // Safety: rest is non-empty since i < input.len() and we slice at valid UTF-8 boundaries
+        // Safety: rest is non-empty since i < without_variants.len() and we slice at valid UTF-8 boundaries
         if let Some(ch) = rest.chars().next() {
             output.push(ch);
             i += ch.len_utf8();
@@ -537,6 +551,79 @@ impl PassageBuilder {
             self.text.push(' ');
         }
         self.text.push_str(text);
+    }
+}
+
+/// Convert MySword book number (1-66) to standard 3-letter book code
+fn mysword_book_code(book_number: u16) -> &'static str {
+    match book_number {
+        1 => "GEN",
+        2 => "EXO",
+        3 => "LEV",
+        4 => "NUM",
+        5 => "DEU",
+        6 => "JOS",
+        7 => "JDG",
+        8 => "RUT",
+        9 => "1SA",
+        10 => "2SA",
+        11 => "1KI",
+        12 => "2KI",
+        13 => "1CH",
+        14 => "2CH",
+        15 => "EZR",
+        16 => "NEH",
+        17 => "EST",
+        18 => "JOB",
+        19 => "PSA",
+        20 => "PRO",
+        21 => "ECC",
+        22 => "SNG",
+        23 => "ISA",
+        24 => "JER",
+        25 => "LAM",
+        26 => "EZK",
+        27 => "DAN",
+        28 => "HOS",
+        29 => "JOL",
+        30 => "AMO",
+        31 => "OBA",
+        32 => "JON",
+        33 => "MIC",
+        34 => "NAM",
+        35 => "HAB",
+        36 => "ZEP",
+        37 => "HAG",
+        38 => "ZEC",
+        39 => "MAL",
+        40 => "MAT",
+        41 => "MRK",
+        42 => "LUK",
+        43 => "JHN",
+        44 => "ACT",
+        45 => "ROM",
+        46 => "1CO",
+        47 => "2CO",
+        48 => "GAL",
+        49 => "EPH",
+        50 => "PHP",
+        51 => "COL",
+        52 => "1TH",
+        53 => "2TH",
+        54 => "1TI",
+        55 => "2TI",
+        56 => "TIT",
+        57 => "PHM",
+        58 => "HEB",
+        59 => "JAS",
+        60 => "1PE",
+        61 => "2PE",
+        62 => "1JN",
+        63 => "2JN",
+        64 => "3JN",
+        65 => "JUD",
+        66 => "REV",
+        _ => "UNK",
     }
 }
 
