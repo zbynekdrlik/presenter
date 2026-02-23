@@ -165,6 +165,17 @@ pub enum BibleSource {
     LocalFile { env_var: String, hint: String },
 }
 
+impl BibleSource {
+    /// Returns true if this source can be fetched (URL sources always available,
+    /// LocalFile sources only available if the env var is set).
+    pub fn is_available(&self) -> bool {
+        match self {
+            BibleSource::Url { .. } => true,
+            BibleSource::LocalFile { env_var, .. } => std::env::var(env_var).is_ok(),
+        }
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct BibleImportSummary {
     pub translation_code: String,
@@ -225,6 +236,7 @@ pub fn default_translation_specs() -> Vec<BibleTranslationSpec> {
         slovak_ekumenicky_spec(),
         slovak_rohacek_spec(),
         slovak_evangelicky_spec(),
+        slovak_milost_spec(),
     ]
 }
 
@@ -261,11 +273,14 @@ fn slovak_ekumenicky_spec() -> BibleTranslationSpec {
 fn slovak_rohacek_spec() -> BibleTranslationSpec {
     BibleTranslationSpec {
         translation: BibleTranslation::new("slk-roh", "Roháčkov preklad", "sk")
-            .with_source(SLOVAK_ROHACEK_SOURCE),
-        source: BibleSource::Url {
-            url: SLOVAK_ROHACEK_SOURCE.to_string(),
+            .with_source("local MySword file"),
+        source: BibleSource::LocalFile {
+            env_var: "PRESENTER_BIBLE_ROHACEK".to_string(),
+            hint: "/opt/presenter/bibles/rohacek.bbl.mybible.zip".to_string(),
         },
-        format: BibleSourceFormat::ObohuSqlite,
+        format: BibleSourceFormat::MySwordSqlite {
+            book_names: slovak_rohacek_book_names(),
+        },
     }
 }
 
@@ -277,6 +292,20 @@ fn slovak_evangelicky_spec() -> BibleTranslationSpec {
             url: SLOVAK_EVANGELICKY_SOURCE.to_string(),
         },
         format: BibleSourceFormat::ObohuSqlite,
+    }
+}
+
+fn slovak_milost_spec() -> BibleTranslationSpec {
+    BibleTranslationSpec {
+        translation: BibleTranslation::new("slk-mil", "Preklad Milosť", "sk")
+            .with_source("local MySword file"),
+        source: BibleSource::LocalFile {
+            env_var: "PRESENTER_BIBLE_MILOST".to_string(),
+            hint: "/opt/presenter/bibles/milost.bbl.mybible.zip".to_string(),
+        },
+        format: BibleSourceFormat::MySwordSqlite {
+            book_names: slovak_milost_book_names(),
+        },
     }
 }
 
@@ -376,6 +405,162 @@ fn slovak_ekumenicky_book_names() -> Vec<String> {
         .collect()
 }
 
+/// Book names for Roháček MySword translation
+fn slovak_rohacek_book_names() -> Vec<String> {
+    SLOVAK_ROHACEK_BOOKS
+        .iter()
+        .map(|name| (*name).to_string())
+        .collect()
+}
+
+/// Book names for Milosť MySword translation
+fn slovak_milost_book_names() -> Vec<String> {
+    SLOVAK_MILOST_BOOKS
+        .iter()
+        .map(|name| (*name).to_string())
+        .collect()
+}
+
+/// Slovak book names for Roháček translation (MySword format)
+const SLOVAK_ROHACEK_BOOKS: [&str; 66] = [
+    "1. Mojžišova",
+    "2. Mojžišova",
+    "3. Mojžišova",
+    "4. Mojžišova",
+    "5. Mojžišova",
+    "Jozua",
+    "Sudcovia",
+    "Rút",
+    "1. Samuelova",
+    "2. Samuelova",
+    "1. Kráľov",
+    "2. Kráľov",
+    "1. Kronická",
+    "2. Kronická",
+    "Ezdráš",
+    "Nehemiáš",
+    "Ester",
+    "Jób",
+    "Žalmy",
+    "Príslovia",
+    "Kazateľ",
+    "Pieseň",
+    "Izaiáš",
+    "Jeremiáš",
+    "Plač",
+    "Ezechiel",
+    "Daniel",
+    "Hozeáš",
+    "Joel",
+    "Ámos",
+    "Abdiáš",
+    "Jonáš",
+    "Micheáš",
+    "Náhum",
+    "Abakuk",
+    "Sofoniáš",
+    "Haggeus",
+    "Zachariáš",
+    "Malachiáš",
+    "Matúš",
+    "Marek",
+    "Lukáš",
+    "Ján",
+    "Skutky",
+    "Rimanom",
+    "1. Korinťanom",
+    "2. Korinťanom",
+    "Galaťanom",
+    "Efezanom",
+    "Filipanom",
+    "Kolosenským",
+    "1. Tesaloničanom",
+    "2. Tesaloničanom",
+    "1. Timoteovi",
+    "2. Timoteovi",
+    "Títovi",
+    "Filemonovi",
+    "Židom",
+    "Jakobov",
+    "1. Petrov",
+    "2. Petrov",
+    "1. Jánov",
+    "2. Jánov",
+    "3. Jánov",
+    "Júdov",
+    "Zjavenie",
+];
+
+/// Slovak book names for Milosť translation (MySword format)
+const SLOVAK_MILOST_BOOKS: [&str; 66] = [
+    "Genezis",
+    "Exodus",
+    "Levitikus",
+    "Numeri",
+    "Deuteronómium",
+    "Józua",
+    "Sudcovia",
+    "Rút",
+    "1. Samuelova",
+    "2. Samuelova",
+    "1. Kráľov",
+    "2. Kráľov",
+    "1. Kroník",
+    "2. Kroník",
+    "Ezdráš",
+    "Nehemiáš",
+    "Ester",
+    "Jób",
+    "Žalmy",
+    "Príslovia",
+    "Kazateľ",
+    "Pieseň piesní",
+    "Izaiáš",
+    "Jeremiáš",
+    "Náreky",
+    "Ezechiel",
+    "Daniel",
+    "Hozeáš",
+    "Joel",
+    "Ámos",
+    "Abdiáš",
+    "Jonáš",
+    "Micheáš",
+    "Nahum",
+    "Habakuk",
+    "Sofoniáš",
+    "Aggeus",
+    "Zachariáš",
+    "Malachiáš",
+    "Matúš",
+    "Marek",
+    "Lukáš",
+    "Ján",
+    "Skutky",
+    "Rimanom",
+    "1. Korintským",
+    "2. Korintským",
+    "Galatským",
+    "Efezským",
+    "Filipským",
+    "Kolosenským",
+    "1. Tesalonickým",
+    "2. Tesalonickým",
+    "1. Timotejovi",
+    "2. Timotejovi",
+    "Títovi",
+    "Filemonovi",
+    "Židom",
+    "Jakub",
+    "1. Petra",
+    "2. Petra",
+    "1. Jána",
+    "2. Jána",
+    "3. Jána",
+    "Júda",
+    "Zjavenie",
+];
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -425,9 +610,15 @@ mod tests {
             [],
         )
         .unwrap();
+        // Include variant marker to test stripping
         conn.execute(
             "INSERT INTO Bible (Book, Chapter, Verse, Scripture) VALUES (?1, ?2, ?3, ?4)",
-            (1, 1, 1, "Na počiatku stvoril Boh nebo a zem. <f>[++]</f>"),
+            (
+                1,
+                1,
+                1,
+                "Na počiatku stvoril Boh nebo a zem. <f>[++]</f> [ Var.: + vám.]",
+            ),
         )
         .unwrap();
         let bytes = std::fs::read(temp.path()).unwrap();
@@ -552,6 +743,7 @@ mod tests {
         assert!(codes.contains("slk-seb"));
         assert!(codes.contains("slk-roh"));
         assert!(codes.contains("slk-sevp"));
+        assert!(codes.contains("slk-mil"));
     }
 
     #[tokio::test]
@@ -608,16 +800,16 @@ mod tests {
 
     #[tokio::test]
     async fn parses_obohu_archive_into_passages() {
-        let archive = make_obohu_archive("ROH-AV.SQLite3");
+        let archive = make_obohu_archive("SEVP.SQLite3");
         let provider = StubProvider { payload: archive };
         let scraper = BibleScraper::new(provider);
-        let mut spec = slovak_rohacek_spec();
+        let mut spec = slovak_evangelicky_spec();
         spec.source = BibleSource::Url {
             url: "memory".to_string(),
         };
 
         let (batch, summary) = scraper.scrape(&spec).await.unwrap();
-        assert_eq!(summary.translation_code, "slk-roh");
+        assert_eq!(summary.translation_code, "slk-sevp");
         let passages = batch.passages();
         assert_eq!(passages.len(), 1);
         assert_eq!(passages[0].reference.book, "Genezis");

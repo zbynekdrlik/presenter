@@ -59,7 +59,6 @@ mod tests {
     use async_trait::async_trait;
     use presenter_bible::{
         BibleSource, BibleSourceFormat, SLOVAK_ECUMENICKY_SOURCE, SLOVAK_EVANGELICKY_SOURCE,
-        SLOVAK_ROHACEK_SOURCE,
     };
     use presenter_core::{BibleReference, BibleTranslation};
     use presenter_persistence::Repository;
@@ -227,25 +226,26 @@ mod tests {
         );
         payloads.insert(SLOVAK_ECUMENICKY_SOURCE.to_string(), make_mysword_archive());
         payloads.insert(
-            SLOVAK_ROHACEK_SOURCE.to_string(),
-            make_obohu_archive("ROH-AV.SQLite3"),
-        );
-        payloads.insert(
             SLOVAK_EVANGELICKY_SOURCE.to_string(),
             make_obohu_archive("SEVP.SQLite3"),
         );
 
         let provider = MapProvider { payloads };
         let service = BibleIngestionService::new(&repo, provider);
-        let summaries = service.ingest_default_translations().await.unwrap();
+
+        // Only ingest URL-based specs (LocalFile specs require env vars)
+        let url_specs: Vec<_> = default_translation_specs()
+            .into_iter()
+            .filter(|spec| spec.source.is_available())
+            .collect();
+        let summaries = service.ingest_specs(url_specs).await.unwrap();
         let codes: HashSet<_> = summaries
             .into_iter()
             .map(|summary| summary.translation_code)
             .collect();
         assert!(codes.contains("eng-kjv"));
         assert!(codes.contains("slk-seb"));
-        assert!(codes.contains("slk-roh"));
         assert!(codes.contains("slk-sevp"));
-        // Not asserting ROH/SEVP here; defaults may be limited in CI.
+        // LocalFile specs (slk-roh, slk-mil) are skipped when env vars not set
     }
 }
