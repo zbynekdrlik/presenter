@@ -125,29 +125,30 @@ jobs:
           ROHACEK_PATH="$BIBLES_DIR/rohacek.bbl.mybible.zip"
           MILOST_PATH="$BIBLES_DIR/milost.bbl.mybible.zip"
 
-          # Debug: show what's in /tmp and bibles dir
-          echo "=== Files in /tmp matching *mybible* or *bible*: ==="
-          ls -la /tmp/*mybible* /tmp/*bible* /tmp/*Rohacek* /tmp/*Milost* 2>/dev/null || echo "No matching files in /tmp"
-          echo "=== Files in $BIBLES_DIR: ==="
-          ls -la "$BIBLES_DIR" 2>/dev/null || echo "Bibles dir does not exist"
+          sudo mkdir -p "$BIBLES_DIR"
 
-          # Move files from /tmp if they exist there (try various name patterns)
-          for f in /tmp/*[Rr]ohac*.mybible* /tmp/*[Rr]ohac*.zip; do
+          # Look for Roháček MySword file in /tmp (might be .mybible or roh.bbl.mybible)
+          for f in /tmp/roh.bbl.mybible /tmp/*[Rr]ohac*.mybible /tmp/*[Rr]ohac*.bbl.mybible; do
             if [ -f "$f" ] && [ ! -f "$ROHACEK_PATH" ]; then
-              sudo mkdir -p "$BIBLES_DIR"
-              sudo mv "$f" "$ROHACEK_PATH"
+              echo "Found Roháček at $f - creating zip archive..."
+              cd /tmp
+              BASENAME=$(basename "$f")
+              zip -j "$ROHACEK_PATH" "$f"
               sudo chmod 644 "$ROHACEK_PATH"
-              echo "Moved Roháček from $f to $ROHACEK_PATH"
+              echo "Created $ROHACEK_PATH"
               break
             fi
           done
 
-          for f in /tmp/*[Mm]ilos*.mybible* /tmp/*[Mm]ilos*.zip; do
+          # Look for Milosť MySword file in /tmp
+          for f in /tmp/milost.bbl.mybible /tmp/*[Mm]ilos*.mybible /tmp/*[Mm]ilos*.bbl.mybible; do
             if [ -f "$f" ] && [ ! -f "$MILOST_PATH" ]; then
-              sudo mkdir -p "$BIBLES_DIR"
-              sudo mv "$f" "$MILOST_PATH"
+              echo "Found Milosť at $f - creating zip archive..."
+              cd /tmp
+              BASENAME=$(basename "$f")
+              zip -j "$MILOST_PATH" "$f"
               sudo chmod 644 "$MILOST_PATH"
-              echo "Moved Milosť from $f to $MILOST_PATH"
+              echo "Created $MILOST_PATH"
               break
             fi
           done
@@ -156,12 +157,12 @@ jobs:
 
           if [ -f "$ROHACEK_PATH" ]; then
             export PRESENTER_BIBLE_ROHACEK="$ROHACEK_PATH"
-            echo "Found Roháček MySword file at $ROHACEK_PATH"
+            echo "Using Roháček MySword file at $ROHACEK_PATH"
           fi
 
           if [ -f "$MILOST_PATH" ]; then
             export PRESENTER_BIBLE_MILOST="$MILOST_PATH"
-            echo "Found Milosť MySword file at $MILOST_PATH"
+            echo "Using Milosť MySword file at $MILOST_PATH"
           fi
 
           ${{ steps.env.outputs.deploy_dir }}/ingest_bibles
