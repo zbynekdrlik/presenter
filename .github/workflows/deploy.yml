@@ -92,20 +92,37 @@ jobs:
           fi
           REMOTE_SCRIPT
 
-      - name: Import data (first deploy only)
+      - name: Deploy Bible files
+        run: |
+          ssh deploy-target "mkdir -p ${{ env.DEPLOY_DIR }}/bibles"
+          scp -i ~/.ssh/id_deploy \
+            data/bibles/rohacek.bbl.mybible.zip \
+            data/bibles/milost.bbl.mybible.zip \
+            deploy-target:${{ env.DEPLOY_DIR }}/bibles/
+
+      - name: Import ProPresenter (first deploy only)
         run: |
           ssh deploy-target << 'REMOTE_SCRIPT'
           set -e
           DB_PATH="/opt/presenter/presenter.db"
           if [ ! -f "$DB_PATH" ] || [ ! -s "$DB_PATH" ]; then
-            echo "First deploy detected - running initial import"
+            echo "First deploy detected - running ProPresenter import"
             PRESENTER_DB_URL=sqlite:///opt/presenter/presenter.db \
               /opt/presenter/import_propresenter --root "/opt/presenter/libraries"
-            PRESENTER_DB_URL=sqlite:///opt/presenter/presenter.db \
-              /opt/presenter/ingest_bibles
           else
-            echo "Existing database found - preserving user data"
+            echo "Existing database found - preserving presentations"
           fi
+          REMOTE_SCRIPT
+
+      - name: Import Bible translations
+        run: |
+          ssh deploy-target << 'REMOTE_SCRIPT'
+          set -e
+          echo "Importing Bible translations..."
+          export PRESENTER_DB_URL=sqlite:///opt/presenter/presenter.db
+          export PRESENTER_BIBLE_ROHACEK=/opt/presenter/bibles/rohacek.bbl.mybible.zip
+          export PRESENTER_BIBLE_MILOST=/opt/presenter/bibles/milost.bbl.mybible.zip
+          /opt/presenter/ingest_bibles
           REMOTE_SCRIPT
 
       - name: Deploy systemd service
