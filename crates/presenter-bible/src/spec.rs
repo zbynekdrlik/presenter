@@ -49,21 +49,18 @@ pub struct BibleImportSummary {
 }
 
 pub fn default_translation_specs() -> Vec<BibleTranslationSpec> {
-    // Temporary: limit defaults to sources verified working in CI as of 2025-10-12.
-    // Follow-up: re-add Roháček and Evanjelický once reliable mirrors are confirmed.
     vec![
         king_james_spec(),
         slovak_ekumenicky_spec(),
         slovak_rohacek_spec(),
         slovak_evangelicky_spec(),
+        slovak_milost_spec(),
     ]
 }
 
 pub const KING_JAMES_SOURCE: &str = "https://ebible.org/Scriptures/eng-kjv_usfm.zip";
 pub const SLOVAK_ECUMENICKY_SOURCE: &str =
     "https://mysword-bible.info/download/getfile.php?file=SlovakEcumenicalTranslation.bbl.mybible.zip";
-pub const SLOVAK_ROHACEK_SOURCE: &str =
-    "https://github.com/otvorenie/obohu-sqlite/releases/download/2023-08-17/ROH-AV.SQLite3.zip";
 pub const SLOVAK_EVANGELICKY_SOURCE: &str =
     "https://github.com/otvorenie/obohu-sqlite/releases/download/2023-08-17/SEVP-NT.SQLite3.zip";
 
@@ -100,11 +97,14 @@ pub(crate) fn slovak_ekumenicky_spec() -> BibleTranslationSpec {
 pub(crate) fn slovak_rohacek_spec() -> BibleTranslationSpec {
     BibleTranslationSpec {
         translation: BibleTranslation::new("slk-roh", "Roháčkov preklad", "sk")
-            .with_source(SLOVAK_ROHACEK_SOURCE),
-        source: BibleSource::Url {
-            url: SLOVAK_ROHACEK_SOURCE.to_string(),
+            .with_source("local MySword file"),
+        source: BibleSource::LocalFile {
+            env_var: "PRESENTER_BIBLE_ROHACEK".to_string(),
+            hint: "/opt/presenter/bibles/rohacek.bbl.mybible.zip".to_string(),
         },
-        format: BibleSourceFormat::ObohuSqlite,
+        format: BibleSourceFormat::MySwordSqlite {
+            book_names: slovak_rohacek_book_names(),
+        },
     }
 }
 
@@ -116,6 +116,20 @@ pub(crate) fn slovak_evangelicky_spec() -> BibleTranslationSpec {
             url: SLOVAK_EVANGELICKY_SOURCE.to_string(),
         },
         format: BibleSourceFormat::ObohuSqlite,
+    }
+}
+
+pub(crate) fn slovak_milost_spec() -> BibleTranslationSpec {
+    BibleTranslationSpec {
+        translation: BibleTranslation::new("slk-mil", "Preklad Milosť", "sk")
+            .with_source("local MySword file"),
+        source: BibleSource::LocalFile {
+            env_var: "PRESENTER_BIBLE_MILOST".to_string(),
+            hint: "/opt/presenter/bibles/milost.bbl.mybible.zip".to_string(),
+        },
+        format: BibleSourceFormat::MySwordSqlite {
+            book_names: slovak_milost_book_names(),
+        },
     }
 }
 
@@ -209,6 +223,164 @@ fn slovak_ekumenicky_book_names() -> Vec<String> {
         .collect()
 }
 
+/// Book names for Roháček MySword translation (uses same Slovak names)
+fn slovak_rohacek_book_names() -> Vec<String> {
+    // Roháček MySword uses standard book numbers 1-66 with Slovak names
+    SLOVAK_ROHACEK_BOOKS
+        .iter()
+        .map(|name| (*name).to_string())
+        .collect()
+}
+
+/// Book names for Milosť MySword translation
+fn slovak_milost_book_names() -> Vec<String> {
+    // Milosť MySword uses standard book numbers 1-66 with Slovak names
+    SLOVAK_MILOST_BOOKS
+        .iter()
+        .map(|name| (*name).to_string())
+        .collect()
+}
+
 fn default_book_name(code: &str) -> Option<&'static str> {
     canonical_book_by_code(code).map(|meta| meta.english_name)
 }
+
+/// Slovak book names for Roháček translation
+const SLOVAK_ROHACEK_BOOKS: &[&str] = &[
+    "1. Mojžišova",
+    "2. Mojžišova",
+    "3. Mojžišova",
+    "4. Mojžišova",
+    "5. Mojžišova",
+    "Jozua",
+    "Sudcovia",
+    "Rút",
+    "1. Samuelova",
+    "2. Samuelova",
+    "1. Kráľov",
+    "2. Kráľov",
+    "1. Kronická",
+    "2. Kronická",
+    "Ezdráš",
+    "Nehemiáš",
+    "Ester",
+    "Jób",
+    "Žalmy",
+    "Príslovia",
+    "Kazateľ",
+    "Pieseň",
+    "Izaiáš",
+    "Jeremiáš",
+    "Plač",
+    "Ezechiel",
+    "Daniel",
+    "Hozeáš",
+    "Joel",
+    "Ámos",
+    "Abdiáš",
+    "Jonáš",
+    "Micheáš",
+    "Náhum",
+    "Abakuk",
+    "Sofoniáš",
+    "Haggeus",
+    "Zachariáš",
+    "Malachiáš",
+    "Matúš",
+    "Marek",
+    "Lukáš",
+    "Ján",
+    "Skutky",
+    "Rimanom",
+    "1. Korinťanom",
+    "2. Korinťanom",
+    "Galaťanom",
+    "Efezanom",
+    "Filipanom",
+    "Kolosenským",
+    "1. Tesaloničanom",
+    "2. Tesaloničanom",
+    "1. Timoteovi",
+    "2. Timoteovi",
+    "Títovi",
+    "Filemonovi",
+    "Židom",
+    "Jakobov",
+    "1. Petrov",
+    "2. Petrov",
+    "1. Jánov",
+    "2. Jánov",
+    "3. Jánov",
+    "Júdov",
+    "Zjavenie",
+];
+
+/// Slovak book names for Milosť translation
+const SLOVAK_MILOST_BOOKS: &[&str] = &[
+    "Genezis",
+    "Exodus",
+    "Levitikus",
+    "Numeri",
+    "Deuteronómium",
+    "Józua",
+    "Sudcovia",
+    "Rút",
+    "1. Samuelova",
+    "2. Samuelova",
+    "1. Kráľov",
+    "2. Kráľov",
+    "1. Kroník",
+    "2. Kroník",
+    "Ezdráš",
+    "Nehemiáš",
+    "Ester",
+    "Jób",
+    "Žalmy",
+    "Príslovia",
+    "Kazateľ",
+    "Pieseň piesní",
+    "Izaiáš",
+    "Jeremiáš",
+    "Náreky",
+    "Ezechiel",
+    "Daniel",
+    "Hozeáš",
+    "Joel",
+    "Ámos",
+    "Abdiáš",
+    "Jonáš",
+    "Micheáš",
+    "Nahum",
+    "Habakuk",
+    "Sofoniáš",
+    "Aggeus",
+    "Zachariáš",
+    "Malachiáš",
+    "Matúš",
+    "Marek",
+    "Lukáš",
+    "Ján",
+    "Skutky",
+    "Rimanom",
+    "1. Korintským",
+    "2. Korintským",
+    "Galatským",
+    "Efezským",
+    "Filipským",
+    "Kolosenským",
+    "1. Tesalonickým",
+    "2. Tesalonickým",
+    "1. Timotejovi",
+    "2. Timotejovi",
+    "Títovi",
+    "Filemonovi",
+    "Židom",
+    "Jakub",
+    "1. Petra",
+    "2. Petra",
+    "1. Jána",
+    "2. Jána",
+    "3. Jána",
+    "Júda",
+    "Zjavenie",
+];

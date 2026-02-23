@@ -14,13 +14,19 @@ use presenter_core::bible::{
     BibleIngestionBatch,
 };
 use presenter_core::{BiblePassage, BibleReference, BibleTranslation};
+use regex::Regex;
 use rusqlite::{types::ValueRef, Connection};
 use std::convert::TryFrom;
 use std::io::{Cursor, Read, Write};
 use std::str;
+use std::sync::LazyLock;
 use tempfile::NamedTempFile;
 use tracing::warn;
 use zip::read::ZipArchive;
+
+/// Regex to strip variant markers like `[ Var.: + vám.]` or `[ Var.: vaša.]`
+static VARIANT_MARKER_RE: LazyLock<Regex> =
+    LazyLock::new(|| Regex::new(r"\[\s*Var\.:[^\]]*\]").expect("invalid variant marker regex"));
 
 pub fn build_ingestion_batch(
     bytes: &[u8],
@@ -539,10 +545,13 @@ fn sanitize_text(input: &str) -> String {
 }
 
 fn sanitize_mysword_text(input: &str) -> String {
-    let mut output = String::with_capacity(input.len());
+    // First strip variant markers like [ Var.: + vám.] or [ Var.: vaša.]
+    let without_variants = VARIANT_MARKER_RE.replace_all(input, "");
+
+    let mut output = String::with_capacity(without_variants.len());
     let mut i = 0;
-    while i < input.len() {
-        let rest = &input[i..];
+    while i < without_variants.len() {
+        let rest = &without_variants[i..];
         if starts_with_ci(rest, "<f") {
             if let Some(end) = rest.find("</f>") {
                 i += end + 4;
