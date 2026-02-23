@@ -1,4 +1,5 @@
 use anyhow::Context;
+use presenter_bible::default_translation_specs;
 use presenter_importer::bible::BibleIngestionService;
 use presenter_persistence::{DatabaseSettings, Repository};
 use std::env;
@@ -12,8 +13,27 @@ async fn main() -> anyhow::Result<()> {
         .await
         .with_context(|| format!("failed to connect to database at {db_url}"))?;
     let ingestion = BibleIngestionService::with_http(&repository)?;
+
+    // Filter to only available specs (URL sources always available,
+    // LocalFile sources only when env var is set)
+    let all_specs = default_translation_specs();
+    let available_specs: Vec<_> = all_specs
+        .into_iter()
+        .filter(|spec| {
+            if spec.source.is_available() {
+                true
+            } else {
+                println!(
+                    "Skipping {} (local file not configured)",
+                    spec.translation.code
+                );
+                false
+            }
+        })
+        .collect();
+
     let summaries = ingestion
-        .ingest_default_translations()
+        .ingest_specs(available_specs)
         .await
         .context("bible ingestion failed")?;
 
