@@ -444,7 +444,8 @@ impl AppState {
         let legacy_broadcast = BibleBroadcast::new(
             presenter_core::BiblePassage::new(reference, translation, output.main_text.clone()),
             output.triggered_at,
-        );
+        )
+        .with_reference_label(output.main_reference.clone());
         {
             let mut guard = self.bible_broadcast.write().await;
             *guard = Some(legacy_broadcast.clone());

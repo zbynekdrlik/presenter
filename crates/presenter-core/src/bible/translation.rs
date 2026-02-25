@@ -143,6 +143,9 @@ pub struct BibleBookChapterSummary {
 pub struct BibleBroadcast {
     pub passage: BiblePassage,
     pub triggered_at: DateTime<Utc>,
+    /// Optional reference label from slide (overrides passage.reference.to_human_readable())
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub reference_label: Option<String>,
 }
 
 impl BibleBroadcast {
@@ -150,7 +153,13 @@ impl BibleBroadcast {
         Self {
             passage,
             triggered_at,
+            reference_label: None,
         }
+    }
+
+    pub fn with_reference_label(mut self, label: String) -> Self {
+        self.reference_label = Some(label);
+        self
     }
 }
 
