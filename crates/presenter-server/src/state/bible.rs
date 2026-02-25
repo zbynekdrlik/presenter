@@ -6,8 +6,8 @@ use crate::resolume::BibleUpdate;
 use chrono::Utc;
 use presenter_bible::BibleImportSummary;
 use presenter_core::{
-    BibleBroadcast, BiblePreferences, BibleReference, BibleTranslation, Presentation,
-    PresentationId, Slide,
+    BibleBroadcast, BiblePreferences, BibleReference, BibleSlideOutput, BibleTranslation,
+    Presentation, PresentationId, Slide,
 };
 use presenter_importer::bible::BibleIngestionService;
 use std::collections::HashMap;
@@ -374,9 +374,34 @@ impl AppState {
                 passage: Some(broadcast.clone()),
                 secondary_text,
                 secondary_translation_code,
+                slide_output: None, // Legacy path - no slide output
             })
             .await;
         Ok(broadcast)
+    }
+
+    /// Trigger a Bible slide using the single-source-of-truth output.
+    /// This method does NOT fetch from the database - it uses the provided content directly.
+    pub async fn trigger_bible_slide_output(&self, output: BibleSlideOutput) {
+        // Store as the new active output
+        {
+            let mut guard = self.bible_slide_output.write().await;
+            *guard = Some(output.clone());
+        }
+        // Publish to WebSocket subscribers
+        self.live_hub.publish(LiveEvent::BibleSlide {
+            output: output.clone(),
+        });
+        // Send to Resolume
+        self.resolume_registry
+            .bible_update(BibleUpdate::from_slide_output(Some(output)))
+            .await;
+    }
+
+    /// Get the current active Bible slide output
+    #[allow(dead_code)] // Intended for future /bible/active-slide endpoint
+    pub async fn active_bible_slide_output(&self) -> Option<BibleSlideOutput> {
+        self.bible_slide_output.read().await.clone()
     }
 
     pub async fn clear_bible_broadcast(&self) {
@@ -384,13 +409,13 @@ impl AppState {
             let mut guard = self.bible_broadcast.write().await;
             *guard = None;
         }
+        {
+            let mut guard = self.bible_slide_output.write().await;
+            *guard = None;
+        }
         self.live_hub.publish(LiveEvent::BibleCleared);
         self.resolume_registry
-            .bible_update(BibleUpdate {
-                passage: None,
-                secondary_text: None,
-                secondary_translation_code: None,
-            })
+            .bible_update(BibleUpdate::from_slide_output(None))
             .await;
     }
 

@@ -9,7 +9,7 @@ pub use canonical::{
 pub use reference::{BibleReference, BibleReferenceError};
 pub use translation::{
     BibleBookChapterSummary, BibleBroadcast, BibleIngestionBatch, BibleIngestionError,
-    BiblePassage, BiblePreferences, BiblePreferencesDraft, BibleTranslation,
+    BiblePassage, BiblePreferences, BiblePreferencesDraft, BibleSlideOutput, BibleTranslation,
 };
 
 #[cfg(test)]

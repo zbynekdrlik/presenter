@@ -154,6 +154,50 @@ impl BibleBroadcast {
     }
 }
 
+/// Single source of truth for all Bible slide outputs.
+/// What you see in the slide IS what goes to all outputs.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct BibleSlideOutput {
+    /// Main verse text (displayed on main output)
+    pub main_text: String,
+
+    /// Main reference label (e.g., "John 3:16 (NIV)")
+    pub main_reference: String,
+
+    /// Secondary verse text (may be empty)
+    pub secondary_text: String,
+
+    /// Secondary reference label (e.g., "John 3:16 (ESV)")
+    pub secondary_reference: String,
+
+    /// Timestamp when triggered
+    pub triggered_at: DateTime<Utc>,
+}
+
+impl BibleSlideOutput {
+    pub fn new(
+        main_text: impl Into<String>,
+        main_reference: impl Into<String>,
+        secondary_text: impl Into<String>,
+        secondary_reference: impl Into<String>,
+        triggered_at: DateTime<Utc>,
+    ) -> Self {
+        Self {
+            main_text: main_text.into(),
+            main_reference: main_reference.into(),
+            secondary_text: secondary_text.into(),
+            secondary_reference: secondary_reference.into(),
+            triggered_at,
+        }
+    }
+
+    /// Returns true if there's any content to display
+    pub fn has_content(&self) -> bool {
+        !self.main_text.is_empty() || !self.secondary_text.is_empty()
+    }
+}
+
 #[derive(Debug, Error, PartialEq, Eq)]
 pub enum BibleIngestionError {
     #[error("passage translation '{found}' does not match batch translation '{expected}'")]

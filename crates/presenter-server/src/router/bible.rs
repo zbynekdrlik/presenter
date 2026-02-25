@@ -7,9 +7,11 @@ use axum::{
     response::Html,
     Json,
 };
+use chrono::Utc;
 use presenter_core::slide::SlideMetadata;
 use presenter_core::{
-    BiblePassage, BiblePreferences, BiblePreferencesDraft, BibleReference, BibleTranslation, Slide,
+    BiblePassage, BiblePreferences, BiblePreferencesDraft, BibleReference, BibleSlideOutput,
+    BibleTranslation, Slide,
 };
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
@@ -272,6 +274,51 @@ pub(super) async fn trigger_bible_broadcast(
             Err(err.into())
         }
     }
+}
+
+/// Request body for the new single-source-of-truth trigger endpoint.
+/// What you send is EXACTLY what goes to all outputs.
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub(super) struct BibleTriggerSlideRequest {
+    /// Main verse text (displayed on main output)
+    pub main_text: String,
+    /// Main reference label (e.g., "John 3:16 (NIV)")
+    pub main_reference: String,
+    /// Secondary verse text (may be empty)
+    #[serde(default)]
+    pub secondary_text: String,
+    /// Secondary reference label (e.g., "John 3:16 (ESV)")
+    #[serde(default)]
+    pub secondary_reference: String,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub(super) struct BibleTriggerSlideResponse {
+    success: bool,
+    output: BibleSlideOutput,
+}
+
+/// Trigger a Bible slide using the single-source-of-truth approach.
+/// What you send is EXACTLY what goes to all outputs - no database lookup.
+#[instrument(skip_all)]
+pub(super) async fn trigger_bible_slide(
+    State(state): State<AppState>,
+    Json(payload): Json<BibleTriggerSlideRequest>,
+) -> Result<Json<BibleTriggerSlideResponse>, AppError> {
+    let output = BibleSlideOutput::new(
+        payload.main_text,
+        payload.main_reference,
+        payload.secondary_text,
+        payload.secondary_reference,
+        Utc::now(),
+    );
+    state.trigger_bible_slide_output(output.clone()).await;
+    Ok(Json(BibleTriggerSlideResponse {
+        success: true,
+        output,
+    }))
 }
 
 #[instrument(skip_all)]

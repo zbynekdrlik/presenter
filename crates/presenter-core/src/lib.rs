@@ -30,7 +30,7 @@ pub use android_stage_display::{
 };
 pub use bible::{
     BibleBroadcast, BiblePassage, BiblePreferences, BiblePreferencesDraft, BibleReference,
-    BibleTranslation,
+    BibleSlideOutput, BibleTranslation,
 };
 pub use id::{
     AndroidStageDisplayId, LibraryId, PlaylistEntryId, PlaylistId, PresentationId, ResolumeHostId,
