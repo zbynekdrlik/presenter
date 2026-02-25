@@ -7,6 +7,12 @@ use std::collections::HashMap;
 use super::stage::blank_slide_content;
 use super::AppState;
 
+/// Extracts the short translation code from a full translation code.
+/// E.g., "eng-kjv" → "KJV", "sk-roh" → "ROH"
+fn translation_short_code(code: &str) -> String {
+    code.rsplit('-').next().unwrap_or(code).to_uppercase()
+}
+
 pub(crate) fn compose_bible_slides(
     main_translation: &BibleTranslation,
     secondary_translation: Option<&BibleTranslation>,
@@ -26,15 +32,35 @@ pub(crate) fn compose_bible_slides(
     let book_number = main_passages[0].reference.book_number;
     let chapter = main_passages[0].reference.chapter;
 
-    // Build the full reference label that will appear on all slides
+    // Build the full reference label that will appear on all slides (includes translation code)
+    let main_short_code = translation_short_code(&main_translation.code);
     let full_reference_label = if full_verse_start == full_verse_end {
-        format!("{} {}:{}", book, chapter, full_verse_start)
+        format!(
+            "{} {}:{} ({})",
+            book, chapter, full_verse_start, main_short_code
+        )
     } else {
         format!(
-            "{} {}:{}-{}",
-            book, chapter, full_verse_start, full_verse_end
+            "{} {}:{}-{} ({})",
+            book, chapter, full_verse_start, full_verse_end, main_short_code
         )
     };
+
+    // Build translation reference label if secondary translation is present
+    let translation_reference_label = secondary_translation.map(|t| {
+        let secondary_short_code = translation_short_code(&t.code);
+        if full_verse_start == full_verse_end {
+            format!(
+                "{} {}:{} ({})",
+                book, chapter, full_verse_start, secondary_short_code
+            )
+        } else {
+            format!(
+                "{} {}:{}-{} ({})",
+                book, chapter, full_verse_start, full_verse_end, secondary_short_code
+            )
+        }
+    });
 
     let mut current_main = String::new();
     let mut current_tr = String::new();
@@ -66,7 +92,7 @@ pub(crate) fn compose_bible_slides(
                 .map(|(s, e)| BibleSlideVerseRef::new(*s, *e))
                 .collect(),
             main_reference_label: Some(full_reference_label.clone()),
-            translation_reference_label: None,
+            translation_reference_label: translation_reference_label.clone(),
         });
         slides.push(Slide::new(slides.len() as u32, content).with_metadata(Some(metadata)));
         Ok(())
