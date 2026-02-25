@@ -388,7 +388,28 @@ impl AppState {
             let mut guard = self.bible_slide_output.write().await;
             *guard = Some(output.clone());
         }
-        // Publish to WebSocket subscribers
+        // Also update legacy bible_broadcast for backwards compatibility with /bible/active endpoint
+        // Use a placeholder reference since the slide output doesn't track reference metadata
+        let placeholder_ref = BibleReference::new("", 1, 1, 1).unwrap_or_else(|_| {
+            // This should never fail with empty book name and valid verse numbers
+            unreachable!("placeholder reference creation should not fail")
+        });
+        let legacy_broadcast = BibleBroadcast::new(
+            presenter_core::BiblePassage::new(
+                placeholder_ref,
+                presenter_core::BibleTranslation::new("", "", ""),
+                output.main_text.clone(),
+            ),
+            output.triggered_at,
+        );
+        {
+            let mut guard = self.bible_broadcast.write().await;
+            *guard = Some(legacy_broadcast.clone());
+        }
+        // Publish to WebSocket subscribers (both old and new formats)
+        self.live_hub.publish(LiveEvent::Bible {
+            broadcast: legacy_broadcast,
+        });
         self.live_hub.publish(LiveEvent::BibleSlide {
             output: output.clone(),
         });
