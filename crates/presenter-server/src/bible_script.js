@@ -2152,11 +2152,6 @@
     // Send exactly what's in the slide - no database lookup, no transformation.
     // What you see in the slide IS what goes to all outputs.
     try {
-      // Debug: log the slide object to verify what we're sending
-      console.log(
-        "[trigger-slide] Slide object:",
-        JSON.stringify(slide, null, 2),
-      );
       const bibleMeta = slide.metadata?.bible || {};
       const payload = {
         // Main content (what appears on main output)
@@ -2179,8 +2174,6 @@
         payload.verseStart = verses[0].start;
         payload.verseEnd = verses[verses.length - 1].end;
       }
-      // Debug: log the payload being sent
-      console.log("[trigger-slide] Payload:", JSON.stringify(payload, null, 2));
       const response = await apiFetch("/bible/trigger-slide", {
         method: "POST",
         body: JSON.stringify(payload),
