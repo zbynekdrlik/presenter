@@ -4,7 +4,7 @@ mod types;
 
 use anyhow::anyhow;
 use chrono::{DateTime, Utc};
-use presenter_core::{BibleBroadcast, ResolumeHost, ResolumeHostId};
+use presenter_core::{BibleBroadcast, BibleSlideOutput, ResolumeHost, ResolumeHostId};
 use reqwest::Client;
 use serde::Serialize;
 use std::{collections::HashMap, sync::Arc, time::Duration};
@@ -57,9 +57,25 @@ pub struct StageUpdate {
 
 #[derive(Debug, Clone)]
 pub struct BibleUpdate {
+    /// Legacy: passage from database lookup (deprecated)
     pub passage: Option<BibleBroadcast>,
     pub secondary_text: Option<String>,
     pub secondary_translation_code: Option<String>,
+    /// New: single source of truth slide output (preferred)
+    pub slide_output: Option<BibleSlideOutput>,
+}
+
+impl BibleUpdate {
+    /// Create a Bible update from the new single-source-of-truth slide output.
+    /// This is the preferred way to create a BibleUpdate.
+    pub fn from_slide_output(output: Option<BibleSlideOutput>) -> Self {
+        Self {
+            passage: None,
+            secondary_text: None,
+            secondary_translation_code: None,
+            slide_output: output,
+        }
+    }
 }
 
 #[derive(Debug, Clone)]

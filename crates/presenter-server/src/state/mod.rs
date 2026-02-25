@@ -45,9 +45,9 @@ use crate::{
 };
 use chrono::Utc;
 use presenter_core::{
-    BibleBroadcast, OscSettings, OscSettingsDraft, PlaylistId, Presentation, PresentationId, Slide,
-    SlideId, StageDisplayLayout, StageDisplaySnapshot, StageState, TimersOverview,
-    DEFAULT_STAGE_LAYOUT_CODE,
+    BibleBroadcast, BibleSlideOutput, OscSettings, OscSettingsDraft, PlaylistId, Presentation,
+    PresentationId, Slide, SlideId, StageDisplayLayout, StageDisplaySnapshot, StageState,
+    TimersOverview, DEFAULT_STAGE_LAYOUT_CODE,
 };
 use presenter_persistence::{DatabaseSettings, Repository};
 use serde::Serialize;
@@ -81,6 +81,8 @@ pub struct AppState {
     repository: Repository,
     live_hub: LiveHub,
     bible_broadcast: Arc<RwLock<Option<BibleBroadcast>>>,
+    /// New single-source-of-truth Bible slide output
+    bible_slide_output: Arc<RwLock<Option<BibleSlideOutput>>>,
     companion_token: Option<String>,
     companion_enabled: Arc<AtomicBool>,
     companion_port: Arc<AtomicU16>,
@@ -153,6 +155,7 @@ impl AppState {
             repository,
             live_hub: LiveHub::new(),
             bible_broadcast: Arc::new(RwLock::new(None)),
+            bible_slide_output: Arc::new(RwLock::new(None)),
             companion_token,
             companion_enabled: Arc::new(AtomicBool::new(companion_enabled)),
             companion_port: Arc::new(AtomicU16::new(companion_port)),

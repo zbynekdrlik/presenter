@@ -6,8 +6,8 @@ use crate::resolume::BibleUpdate;
 use chrono::Utc;
 use presenter_bible::BibleImportSummary;
 use presenter_core::{
-    BibleBroadcast, BiblePreferences, BibleReference, BibleTranslation, Presentation,
-    PresentationId, Slide,
+    BibleBroadcast, BiblePreferences, BibleReference, BibleSlideOutput, BibleTranslation,
+    Presentation, PresentationId, Slide,
 };
 use presenter_importer::bible::BibleIngestionService;
 use std::collections::HashMap;
@@ -21,6 +21,18 @@ pub struct BibleTriggerOverrides {
     pub main_reference_label: Option<String>,
     #[allow(dead_code)]
     pub translation_reference_label: Option<String>,
+}
+
+/// Optional reference metadata for the legacy broadcast (backwards compatibility)
+#[derive(Debug, Default)]
+pub struct BibleSlideReferenceMetadata {
+    pub translation_code: Option<String>,
+    pub book: Option<String>,
+    pub book_code: Option<String>,
+    pub book_number: Option<u16>,
+    pub chapter: Option<u16>,
+    pub verse_start: Option<u16>,
+    pub verse_end: Option<u16>,
 }
 
 impl AppState {
@@ -374,9 +386,87 @@ impl AppState {
                 passage: Some(broadcast.clone()),
                 secondary_text,
                 secondary_translation_code,
+                slide_output: None, // Legacy path - no slide output
             })
             .await;
         Ok(broadcast)
+    }
+
+    /// Trigger a Bible slide using the single-source-of-truth output.
+    /// This method does NOT fetch from the database - it uses the provided content directly.
+    pub async fn trigger_bible_slide_output(
+        &self,
+        output: BibleSlideOutput,
+        reference_metadata: BibleSlideReferenceMetadata,
+    ) {
+        // Store as the new active output
+        {
+            let mut guard = self.bible_slide_output.write().await;
+            *guard = Some(output.clone());
+        }
+        // Also update legacy bible_broadcast for backwards compatibility with /bible/active endpoint
+        // Use reference metadata if available, otherwise use placeholder
+        let reference = if let (Some(book), Some(chapter), Some(verse_start)) = (
+            reference_metadata.book.as_deref(),
+            reference_metadata.chapter,
+            reference_metadata.verse_start,
+        ) {
+            let verse_end = reference_metadata.verse_end.unwrap_or(verse_start);
+            if let (Some(book_code), Some(book_number)) = (
+                reference_metadata.book_code.as_deref(),
+                reference_metadata.book_number,
+            ) {
+                BibleReference::new_with_code(
+                    book,
+                    book_code,
+                    book_number,
+                    chapter,
+                    verse_start,
+                    verse_end,
+                )
+                .unwrap_or_else(|_| {
+                    BibleReference::new(book, chapter, verse_start, verse_end).unwrap()
+                })
+            } else {
+                BibleReference::new(book, chapter, verse_start, verse_end)
+                    .unwrap_or_else(|_| BibleReference::new("", 1, 1, 1).unwrap())
+            }
+        } else {
+            BibleReference::new("", 1, 1, 1).unwrap()
+        };
+
+        let translation = if let Some(code) = reference_metadata.translation_code {
+            presenter_core::BibleTranslation::new(code, "", "")
+        } else {
+            presenter_core::BibleTranslation::new("", "", "")
+        };
+
+        let legacy_broadcast = BibleBroadcast::new(
+            presenter_core::BiblePassage::new(reference, translation, output.main_text.clone()),
+            output.triggered_at,
+        )
+        .with_reference_label(output.main_reference.clone());
+        {
+            let mut guard = self.bible_broadcast.write().await;
+            *guard = Some(legacy_broadcast.clone());
+        }
+        // Publish to WebSocket subscribers (both old and new formats)
+        self.live_hub.publish(LiveEvent::Bible {
+            broadcast: legacy_broadcast,
+        });
+        self.live_hub.publish(LiveEvent::BibleSlide {
+            output: output.clone(),
+        });
+        // Send to Resolume
+        self.resolume_registry
+            .bible_update(BibleUpdate::from_slide_output(Some(output)))
+            .await;
+    }
+
+    /// Get the current active Bible slide output
+    #[allow(dead_code)] // Intended for future /bible/active-slide endpoint
+    pub async fn active_bible_slide_output(&self) -> Option<BibleSlideOutput> {
+        self.bible_slide_output.read().await.clone()
     }
 
     pub async fn clear_bible_broadcast(&self) {
@@ -384,13 +474,13 @@ impl AppState {
             let mut guard = self.bible_broadcast.write().await;
             *guard = None;
         }
+        {
+            let mut guard = self.bible_slide_output.write().await;
+            *guard = None;
+        }
         self.live_hub.publish(LiveEvent::BibleCleared);
         self.resolume_registry
-            .bible_update(BibleUpdate {
-                passage: None,
-                secondary_text: None,
-                secondary_translation_code: None,
-            })
+            .bible_update(BibleUpdate::from_slide_output(None))
             .await;
     }
 

@@ -1353,16 +1353,19 @@
     var ref = broadcast.passage.reference;
     var trans = broadcast.passage.translation;
     var text = broadcast.passage.text || "";
+    // Use referenceLabel from slide if available (single source of truth)
     var verseLabel =
+      broadcast.referenceLabel ||
+      broadcast.reference_label ||
       (ref.book || ref.book_name || "") +
-      " " +
-      ref.chapter +
-      ":" +
-      (ref.verse_start || ref.verseStart) +
-      ((ref.verse_end || ref.verseEnd) &&
-      (ref.verse_end || ref.verseEnd) !== (ref.verse_start || ref.verseStart)
-        ? "-" + (ref.verse_end || ref.verseEnd)
-        : "");
+        " " +
+        ref.chapter +
+        ":" +
+        (ref.verse_start || ref.verseStart) +
+        ((ref.verse_end || ref.verseEnd) &&
+        (ref.verse_end || ref.verseEnd) !== (ref.verse_start || ref.verseStart)
+          ? "-" + (ref.verse_end || ref.verseEnd)
+          : "");
     var translationLabel = trans.name || trans.code || "";
 
     el.innerHTML =

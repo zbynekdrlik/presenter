@@ -76,6 +76,7 @@ pub fn build_router(state: AppState) -> Router {
         )
         .route("/bible/active", get(bible::get_active_bible_broadcast))
         .route("/bible/trigger", post(bible::trigger_bible_broadcast))
+        .route("/bible/trigger-slide", post(bible::trigger_bible_slide))
         .route("/bible/clear", post(bible::clear_bible_broadcast))
         .route(
             "/bible/preferences",

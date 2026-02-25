@@ -3,7 +3,7 @@ use crate::stage_connections::{StageClientSnapshot, StageConnections};
 use axum::extract::ws::{Message, WebSocket};
 use chrono::{DateTime, Utc};
 use futures_util::{SinkExt, StreamExt};
-use presenter_core::{BibleBroadcast, StageDisplaySnapshot, TimersOverview};
+use presenter_core::{BibleBroadcast, BibleSlideOutput, StageDisplaySnapshot, TimersOverview};
 use serde::{Deserialize, Serialize};
 use tokio::{sync::broadcast, task::JoinHandle};
 use tokio_stream::wrappers::BroadcastStream;
@@ -73,6 +73,10 @@ pub enum LiveEvent {
     },
     Bible {
         broadcast: BibleBroadcast,
+    },
+    /// New single-source-of-truth Bible slide event
+    BibleSlide {
+        output: BibleSlideOutput,
     },
     BibleCleared,
     StageLayout {

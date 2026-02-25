@@ -2147,63 +2147,48 @@
       clearBroadcast();
       return;
     }
-    if (!slide.metadata || !slide.metadata.bible) {
-      showToast("Slide metadata missing", "error");
-      return;
-    }
-    const bibleMeta = ensureBibleMetadata(slide);
-    const verses = Array.isArray(bibleMeta.verses) ? bibleMeta.verses : [];
-    if (!verses.length) {
-      showToast("Verse metadata missing", "error");
-      return;
-    }
-    const translationCode =
-      bibleMeta.translation_code || bibleMeta.translationCode;
-    if (!translationCode) {
-      showToast("Translation metadata missing", "error");
-      return;
-    }
-    const verseStart = verses[0].start;
-    const verseEnd = verses[verses.length - 1].end;
-    const book = bibleMeta.book || state.selectedBook;
-    const bookCode =
-      bibleMeta.book_code ||
-      bibleMeta.bookCode ||
-      state.selectedBookCode ||
-      null;
-    const bookNumber =
-      bibleMeta.book_number ||
-      bibleMeta.bookNumber ||
-      state.selectedBookNumber ||
-      null;
-    const chapter =
-      typeof bibleMeta.chapter === "number"
-        ? bibleMeta.chapter
-        : state.selectedChapter;
+
+    // NEW: Single source of truth approach.
+    // Send exactly what's in the slide - no database lookup, no transformation.
+    // What you see in the slide IS what goes to all outputs.
     try {
+      const bibleMeta = slide.metadata?.bible || {};
       const payload = {
-        translation: translationCode,
-        book,
-        chapter,
-        verseStart,
-        verseEnd,
+        // Main content (what appears on main output)
+        mainText: slide.main || "",
+        mainReference: slide.mainReference || "",
+        // Secondary/translation content (what appears on secondary output)
+        secondaryText: slide.translation || "",
+        secondaryReference: slide.translationReference || "",
+        // Include reference metadata for backwards compatibility with /bible/active
+        translationCode:
+          bibleMeta.translation_code || bibleMeta.translationCode || null,
+        book: bibleMeta.book || null,
+        bookCode: bibleMeta.book_code || bibleMeta.bookCode || null,
+        bookNumber: bibleMeta.book_number || bibleMeta.bookNumber || null,
+        chapter: bibleMeta.chapter || null,
       };
-      if (bookCode) {
-        payload.bookCode = bookCode;
+      // Extract verse range from metadata
+      const verses = Array.isArray(bibleMeta.verses) ? bibleMeta.verses : [];
+      if (verses.length > 0) {
+        payload.verseStart = verses[0].start;
+        payload.verseEnd = verses[verses.length - 1].end;
       }
-      if (bookNumber) {
-        payload.bookNumber = bookNumber;
-      }
-      // Always send the current slide text (supports user edits)
-      payload.mainText = slide.main || null;
-      payload.translationText = slide.translation || null;
-      payload.mainReferenceLabel = slide.mainReference || null;
-      payload.translationReferenceLabel = slide.translationReference || null;
-      const response = await apiFetch("/bible/trigger", {
+      const response = await apiFetch("/bible/trigger-slide", {
         method: "POST",
         body: JSON.stringify(payload),
       });
-      state.activeBroadcast = response;
+      // Store the output for UI state (convert from new format)
+      state.activeBroadcast = response.output
+        ? {
+            passage: {
+              text: response.output.mainText,
+              reference: { formatted: response.output.mainReference },
+              translation: {},
+            },
+            triggered_at: response.output.triggeredAt,
+          }
+        : null;
       renderActive();
       showToast("Slide triggered", "success");
     } catch (error) {

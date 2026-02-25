@@ -7,9 +7,11 @@ use axum::{
     response::Html,
     Json,
 };
+use chrono::Utc;
 use presenter_core::slide::SlideMetadata;
 use presenter_core::{
-    BiblePassage, BiblePreferences, BiblePreferencesDraft, BibleReference, BibleTranslation, Slide,
+    BiblePassage, BiblePreferences, BiblePreferencesDraft, BibleReference, BibleSlideOutput,
+    BibleTranslation, Slide,
 };
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
@@ -272,6 +274,79 @@ pub(super) async fn trigger_bible_broadcast(
             Err(err.into())
         }
     }
+}
+
+/// Request body for the new single-source-of-truth trigger endpoint.
+/// What you send is EXACTLY what goes to all outputs.
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub(super) struct BibleTriggerSlideRequest {
+    /// Main verse text (displayed on main output)
+    pub main_text: String,
+    /// Main reference label (e.g., "John 3:16 (NIV)")
+    pub main_reference: String,
+    /// Secondary verse text (may be empty)
+    #[serde(default)]
+    pub secondary_text: String,
+    /// Secondary reference label (e.g., "John 3:16 (ESV)")
+    #[serde(default)]
+    pub secondary_reference: String,
+    // Optional structured reference data for backwards compatibility with /bible/active
+    #[serde(default)]
+    pub translation_code: Option<String>,
+    #[serde(default)]
+    pub book: Option<String>,
+    #[serde(default)]
+    pub book_code: Option<String>,
+    #[serde(default)]
+    pub book_number: Option<u16>,
+    #[serde(default)]
+    pub chapter: Option<u16>,
+    #[serde(default)]
+    pub verse_start: Option<u16>,
+    #[serde(default)]
+    pub verse_end: Option<u16>,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub(super) struct BibleTriggerSlideResponse {
+    success: bool,
+    output: BibleSlideOutput,
+}
+
+/// Trigger a Bible slide using the single-source-of-truth approach.
+/// What you send is EXACTLY what goes to all outputs - no database lookup.
+#[instrument(skip_all)]
+pub(super) async fn trigger_bible_slide(
+    State(state): State<AppState>,
+    Json(payload): Json<BibleTriggerSlideRequest>,
+) -> Result<Json<BibleTriggerSlideResponse>, AppError> {
+    use crate::state::bible::BibleSlideReferenceMetadata;
+
+    let output = BibleSlideOutput::new(
+        payload.main_text,
+        payload.main_reference,
+        payload.secondary_text,
+        payload.secondary_reference,
+        Utc::now(),
+    );
+    let reference_metadata = BibleSlideReferenceMetadata {
+        translation_code: payload.translation_code,
+        book: payload.book,
+        book_code: payload.book_code,
+        book_number: payload.book_number,
+        chapter: payload.chapter,
+        verse_start: payload.verse_start,
+        verse_end: payload.verse_end,
+    };
+    state
+        .trigger_bible_slide_output(output.clone(), reference_metadata)
+        .await;
+    Ok(Json(BibleTriggerSlideResponse {
+        success: true,
+        output,
+    }))
 }
 
 #[instrument(skip_all)]
