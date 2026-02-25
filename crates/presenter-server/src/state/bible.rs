@@ -23,6 +23,18 @@ pub struct BibleTriggerOverrides {
     pub translation_reference_label: Option<String>,
 }
 
+/// Optional reference metadata for the legacy broadcast (backwards compatibility)
+#[derive(Debug, Default)]
+pub struct BibleSlideReferenceMetadata {
+    pub translation_code: Option<String>,
+    pub book: Option<String>,
+    pub book_code: Option<String>,
+    pub book_number: Option<u16>,
+    pub chapter: Option<u16>,
+    pub verse_start: Option<u16>,
+    pub verse_end: Option<u16>,
+}
+
 impl AppState {
     // Bible translation methods
     pub async fn list_bible_translations(&self) -> anyhow::Result<Vec<BibleTranslation>> {
@@ -382,24 +394,55 @@ impl AppState {
 
     /// Trigger a Bible slide using the single-source-of-truth output.
     /// This method does NOT fetch from the database - it uses the provided content directly.
-    pub async fn trigger_bible_slide_output(&self, output: BibleSlideOutput) {
+    pub async fn trigger_bible_slide_output(
+        &self,
+        output: BibleSlideOutput,
+        reference_metadata: BibleSlideReferenceMetadata,
+    ) {
         // Store as the new active output
         {
             let mut guard = self.bible_slide_output.write().await;
             *guard = Some(output.clone());
         }
         // Also update legacy bible_broadcast for backwards compatibility with /bible/active endpoint
-        // Use a placeholder reference since the slide output doesn't track reference metadata
-        let placeholder_ref = BibleReference::new("", 1, 1, 1).unwrap_or_else(|_| {
-            // This should never fail with empty book name and valid verse numbers
-            unreachable!("placeholder reference creation should not fail")
-        });
+        // Use reference metadata if available, otherwise use placeholder
+        let reference = if let (Some(book), Some(chapter), Some(verse_start)) = (
+            reference_metadata.book.as_deref(),
+            reference_metadata.chapter,
+            reference_metadata.verse_start,
+        ) {
+            let verse_end = reference_metadata.verse_end.unwrap_or(verse_start);
+            if let (Some(book_code), Some(book_number)) = (
+                reference_metadata.book_code.as_deref(),
+                reference_metadata.book_number,
+            ) {
+                BibleReference::new_with_code(
+                    book,
+                    book_code,
+                    book_number,
+                    chapter,
+                    verse_start,
+                    verse_end,
+                )
+                .unwrap_or_else(|_| {
+                    BibleReference::new(book, chapter, verse_start, verse_end).unwrap()
+                })
+            } else {
+                BibleReference::new(book, chapter, verse_start, verse_end)
+                    .unwrap_or_else(|_| BibleReference::new("", 1, 1, 1).unwrap())
+            }
+        } else {
+            BibleReference::new("", 1, 1, 1).unwrap()
+        };
+
+        let translation = if let Some(code) = reference_metadata.translation_code {
+            presenter_core::BibleTranslation::new(code, "", "")
+        } else {
+            presenter_core::BibleTranslation::new("", "", "")
+        };
+
         let legacy_broadcast = BibleBroadcast::new(
-            presenter_core::BiblePassage::new(
-                placeholder_ref,
-                presenter_core::BibleTranslation::new("", "", ""),
-                output.main_text.clone(),
-            ),
+            presenter_core::BiblePassage::new(reference, translation, output.main_text.clone()),
             output.triggered_at,
         );
         {

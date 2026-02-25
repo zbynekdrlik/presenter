@@ -291,6 +291,21 @@ pub(super) struct BibleTriggerSlideRequest {
     /// Secondary reference label (e.g., "John 3:16 (ESV)")
     #[serde(default)]
     pub secondary_reference: String,
+    // Optional structured reference data for backwards compatibility with /bible/active
+    #[serde(default)]
+    pub translation_code: Option<String>,
+    #[serde(default)]
+    pub book: Option<String>,
+    #[serde(default)]
+    pub book_code: Option<String>,
+    #[serde(default)]
+    pub book_number: Option<u16>,
+    #[serde(default)]
+    pub chapter: Option<u16>,
+    #[serde(default)]
+    pub verse_start: Option<u16>,
+    #[serde(default)]
+    pub verse_end: Option<u16>,
 }
 
 #[derive(Debug, Serialize)]
@@ -307,6 +322,8 @@ pub(super) async fn trigger_bible_slide(
     State(state): State<AppState>,
     Json(payload): Json<BibleTriggerSlideRequest>,
 ) -> Result<Json<BibleTriggerSlideResponse>, AppError> {
+    use crate::state::bible::BibleSlideReferenceMetadata;
+
     let output = BibleSlideOutput::new(
         payload.main_text,
         payload.main_reference,
@@ -314,7 +331,18 @@ pub(super) async fn trigger_bible_slide(
         payload.secondary_reference,
         Utc::now(),
     );
-    state.trigger_bible_slide_output(output.clone()).await;
+    let reference_metadata = BibleSlideReferenceMetadata {
+        translation_code: payload.translation_code,
+        book: payload.book,
+        book_code: payload.book_code,
+        book_number: payload.book_number,
+        chapter: payload.chapter,
+        verse_start: payload.verse_start,
+        verse_end: payload.verse_end,
+    };
+    state
+        .trigger_bible_slide_output(output.clone(), reference_metadata)
+        .await;
     Ok(Json(BibleTriggerSlideResponse {
         success: true,
         output,

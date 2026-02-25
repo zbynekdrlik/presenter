@@ -2152,6 +2152,7 @@
     // Send exactly what's in the slide - no database lookup, no transformation.
     // What you see in the slide IS what goes to all outputs.
     try {
+      const bibleMeta = slide.metadata?.bible || {};
       const payload = {
         // Main content (what appears on main output)
         mainText: slide.main || "",
@@ -2159,7 +2160,20 @@
         // Secondary/translation content (what appears on secondary output)
         secondaryText: slide.translation || "",
         secondaryReference: slide.translationReference || "",
+        // Include reference metadata for backwards compatibility with /bible/active
+        translationCode:
+          bibleMeta.translation_code || bibleMeta.translationCode || null,
+        book: bibleMeta.book || null,
+        bookCode: bibleMeta.book_code || bibleMeta.bookCode || null,
+        bookNumber: bibleMeta.book_number || bibleMeta.bookNumber || null,
+        chapter: bibleMeta.chapter || null,
       };
+      // Extract verse range from metadata
+      const verses = Array.isArray(bibleMeta.verses) ? bibleMeta.verses : [];
+      if (verses.length > 0) {
+        payload.verseStart = verses[0].start;
+        payload.verseEnd = verses[verses.length - 1].end;
+      }
       const response = await apiFetch("/bible/trigger-slide", {
         method: "POST",
         body: JSON.stringify(payload),
