@@ -363,19 +363,35 @@ fn StageDisplayDocument(
     if (!element) return;
     const text = (element.textContent || '').trim();
     if (!text.length) return;
-    const lines = text.split('\n');
-    let longestLen = 0;
-    for (const line of lines) {{
-      if (line.length > longestLen) longestLen = line.length;
+
+    // Get actual container (parent box) for height constraint
+    const container = element.closest('.stage__box');
+    const containerHeight = container ? container.clientHeight : window.innerHeight * 0.4;
+
+    // Binary search for largest font that fits
+    const minFont = scalingConfig.minFont;
+    const targetMax = (maxPx || 120) * ratio;
+    let low = minFont;
+    let high = targetMax;
+
+    // Quick check: if max font fits, use it
+    element.style.fontSize = high + 'px';
+    if (element.scrollWidth <= containerWidth && element.scrollHeight <= containerHeight) {{
+      return; // Max font fits, we're done
     }}
-    if (longestLen === 0) longestLen = 1;
-    const charW = measureCharWidth();
-    const baseFontPx = containerWidth / (scalingConfig.baseChars * charW);
-    let fontPx = longestLen <= scalingConfig.baseChars ? baseFontPx : baseFontPx * (scalingConfig.baseChars / longestLen);
-    fontPx *= ratio;
-    if (maxPx && fontPx > maxPx) fontPx = maxPx;
-    fontPx = Math.max(scalingConfig.minFont, fontPx);
-    element.style.fontSize = fontPx + 'px';
+
+    // Binary search for optimal size
+    while (high - low > 1) {{
+      const mid = Math.floor((low + high) / 2);
+      element.style.fontSize = mid + 'px';
+      if (element.scrollWidth <= containerWidth && element.scrollHeight <= containerHeight) {{
+        low = mid;
+      }} else {{
+        high = mid;
+      }}
+    }}
+
+    element.style.fontSize = low + 'px';
   }};
 
   const smartScaleGroup = (element, containerWidth) => {{
@@ -395,15 +411,22 @@ fn StageDisplayDocument(
   const smartScaleLyrics = (snapshotLayout) => {{
     window.requestAnimationFrame(() => {{
       if (snapshotLayout === 'worship-snv') {{
-        const container = document.querySelector('.stage__lyrics');
-        if (!container) return;
-        const w = container.clientWidth;
+        // Use individual box containers for absolute positioning layout
+        const currentBox = document.querySelector('.stage__box--current-slide');
+        const nextBox = document.querySelector('.stage__box--next-slide');
         const currentMax = getDesignMaxFont('current_slide', scalingConfig.currentMaxFont);
         const nextMax = getDesignMaxFont('next_slide', scalingConfig.nextMaxFont);
-        smartScaleElement(document.getElementById('current-text'), w, 1.0, currentMax);
-        smartScaleElement(document.getElementById('next-text'), w, scalingConfig.nextRatio, nextMax);
-        smartScaleGroup(document.getElementById('current-group'), w);
-        smartScaleGroup(document.getElementById('next-group'), w);
+        if (currentBox) {{
+          smartScaleElement(document.getElementById('current-text'), currentBox.clientWidth, 1.0, currentMax);
+        }}
+        if (nextBox) {{
+          smartScaleElement(document.getElementById('next-text'), nextBox.clientWidth, scalingConfig.nextRatio, nextMax);
+        }}
+        const groupBox = document.querySelector('.stage__box--current-group');
+        if (groupBox) {{
+          smartScaleGroup(document.getElementById('current-group'), groupBox.clientWidth);
+          smartScaleGroup(document.getElementById('next-group'), groupBox.clientWidth);
+        }}
       }} else if (snapshotLayout === 'worship-pp') {{
         const container = document.querySelector('.stage__worship-pp-slides');
         if (!container) return;
