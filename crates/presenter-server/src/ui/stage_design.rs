@@ -63,8 +63,8 @@ fn StageDesignDocument(designs_json: String) -> impl IntoView {
     connection_status: 'Connection'
   }};
 
-  const sampleContent = {{
-    current_slide: 'Hosana, hosana\\nHostana v najvyssich',
+  const defaultSampleContent = {{
+    current_slide: 'Hosana, hosana\\nHosana v najvyssich',
     next_slide: 'Hosana, hosana\\nHosana v najvyssich',
     current_group: 'Verse 1',
     next_group: 'Chorus',
@@ -75,6 +75,17 @@ fn StageDesignDocument(designs_json: String) -> impl IntoView {
     live_indicator: 'LIVE',
     connection_status: 'Connected'
   }};
+  const customSampleContent = {{}};
+
+  const getSampleContent = (boxType) => {{
+    return customSampleContent[boxType] ?? defaultSampleContent[boxType] ?? boxTypeLabels[boxType] ?? '';
+  }};
+
+  const setSampleContent = (boxType, text) => {{
+    customSampleContent[boxType] = text;
+    renderCanvas();
+    updateLivePreview();
+  }};
 
   const showTab = (code) => {{
     activeLayout = code;
@@ -84,6 +95,7 @@ fn StageDesignDocument(designs_json: String) -> impl IntoView {
     }});
     renderCanvas();
     updatePropertiesPanel();
+    refreshLivePreview();
   }};
 
   const getDesign = () => designMap[activeLayout];
@@ -118,7 +130,7 @@ fn StageDesignDocument(designs_json: String) -> impl IntoView {
 
       const content = document.createElement('div');
       content.className = 'sd__box-content';
-      content.textContent = sampleContent[box.boxType] || boxTypeLabels[box.boxType] || box.id;
+      content.textContent = getSampleContent(box.boxType);
       el.appendChild(content);
 
       const label = document.createElement('div');
@@ -220,6 +232,9 @@ fn StageDesignDocument(designs_json: String) -> impl IntoView {
   }};
 
   const onPointerUp = () => {{
+    if (isDragging || isResizing) {{
+      updateLivePreview();
+    }}
     isDragging = false;
     isResizing = false;
     resizeHandle = null;
@@ -242,8 +257,13 @@ fn StageDesignDocument(designs_json: String) -> impl IntoView {
       return;
     }}
 
+    const currentSampleText = getSampleContent(box.boxType).replace(/\\n/g, '\\n');
     panel.innerHTML = `
       <div class="sd__prop-header">${{boxTypeLabels[box.boxType] || box.id}}</div>
+      <div class="sd__prop-group">
+        <label class="sd__prop-group-label">Sample Text</label>
+        <textarea data-sample-text="${{box.boxType}}" class="sd__sample-text" rows="3">${{currentSampleText}}</textarea>
+      </div>
       <div class="sd__prop-row">
         <label>X</label>
         <input type="number" data-prop="x" value="${{box.x.toFixed(1)}}" step="0.5" min="0" max="100" />
@@ -291,6 +311,14 @@ fn StageDesignDocument(designs_json: String) -> impl IntoView {
       input.addEventListener('change', onPropertyChange);
       input.addEventListener('input', onPropertyChange);
     }});
+
+    const sampleTextarea = panel.querySelector('[data-sample-text]');
+    if (sampleTextarea) {{
+      sampleTextarea.addEventListener('input', (e) => {{
+        const boxType = e.target.dataset.sampleText;
+        setSampleContent(boxType, e.target.value);
+      }});
+    }}
   }};
 
   const onPropertyChange = (e) => {{
@@ -309,6 +337,7 @@ fn StageDesignDocument(designs_json: String) -> impl IntoView {
 
     box[prop] = value;
     renderCanvas();
+    updateLivePreview();
   }};
 
   const showToast = (message, isError) => {{
@@ -357,6 +386,28 @@ fn StageDesignDocument(designs_json: String) -> impl IntoView {
   const openPreview = () => {{
     window.open('/stage', '_blank');
   }};
+
+  const updateLivePreview = () => {{
+    const iframe = document.getElementById('live-preview');
+    if (!iframe?.contentWindow) return;
+    const design = getDesign();
+    if (!design) return;
+    // Send design update to iframe
+    iframe.contentWindow.postMessage({{ type: 'presenter:design-update', design }}, '*');
+  }};
+
+  const refreshLivePreview = () => {{
+    const iframe = document.getElementById('live-preview');
+    if (!iframe) return;
+    iframe.src = '/stage?layout=' + activeLayout + '&t=' + Date.now();
+  }};
+
+  // Listen for iframe ready
+  window.addEventListener('message', (e) => {{
+    if (e.data?.type === 'presenter:stage-ready') {{
+      setTimeout(() => updateLivePreview(), 100);
+    }}
+  }});
 
   // Wire up tabs
   document.querySelectorAll('[data-role="layout-tab"]').forEach(btn => {{
@@ -424,6 +475,12 @@ fn StageDesignDocument(designs_json: String) -> impl IntoView {
                             <p class="sd__hint">"Select a box to edit its properties"</p>
                         </aside>
                     </div>
+                    <div class="sd__live-preview-section">
+                        <h3 class="sd__section-title">"Live Preview"</h3>
+                        <div class="sd__live-preview-wrapper">
+                            <iframe id="live-preview" class="sd__live-preview" src="/stage?layout=worship-snv"></iframe>
+                        </div>
+                    </div>
                 </main>
                 <div class="settings__toast" data-role="toast" data-visible="false"></div>
                 <script>{script}</script>
@@ -469,4 +526,11 @@ const STAGE_DESIGN_STYLES: &str = r#"
 .sd__prop-row select { flex: 1; padding: 0.4rem 0.6rem; background: #0f172a; border: 1px solid #334155; border-radius: 0.3rem; color: #e2e8f0; font-size: 0.85rem; }
 .sd__prop-row input[type="checkbox"] { width: 18px; height: 18px; accent-color: #3b82f6; }
 .sd__prop-row span { font-size: 0.8rem; color: #64748b; min-width: 20px; }
+.sd__prop-group { margin-bottom: 1rem; }
+.sd__prop-group-label { display: block; font-size: 0.8rem; color: #94a3b8; margin-bottom: 0.4rem; }
+.sd__sample-text { width: 100%; padding: 0.5rem; background: #0f172a; border: 1px solid #334155; border-radius: 0.3rem; color: #e2e8f0; font-size: 0.85rem; resize: vertical; font-family: inherit; }
+.sd__live-preview-section { margin-top: 1.5rem; }
+.sd__section-title { font-size: 1rem; font-weight: 600; color: #e2e8f0; margin-bottom: 0.75rem; }
+.sd__live-preview-wrapper { background: #0f172a; border-radius: 0.75rem; padding: 1rem; }
+.sd__live-preview { width: 100%; aspect-ratio: 16 / 9; border: none; border-radius: 0.5rem; background: #000; }
 "#;

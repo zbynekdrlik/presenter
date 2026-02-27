@@ -386,22 +386,32 @@ fn StageDisplayDocument(
     element.style.maxWidth = Math.floor(containerWidth * 0.5) + 'px';
   }};
 
+  const getDesignMaxFont = (boxType, fallback) => {{
+    if (!currentDesign?.boxes) return fallback;
+    const box = currentDesign.boxes.find(b => b.boxType === boxType);
+    return box?.maxFontPx ?? fallback;
+  }};
+
   const smartScaleLyrics = (snapshotLayout) => {{
     window.requestAnimationFrame(() => {{
       if (snapshotLayout === 'worship-snv') {{
         const container = document.querySelector('.stage__lyrics');
         if (!container) return;
         const w = container.clientWidth;
-        smartScaleElement(document.getElementById('current-text'), w, 1.0, scalingConfig.currentMaxFont);
-        smartScaleElement(document.getElementById('next-text'), w, scalingConfig.nextRatio, scalingConfig.nextMaxFont);
+        const currentMax = getDesignMaxFont('current_slide', scalingConfig.currentMaxFont);
+        const nextMax = getDesignMaxFont('next_slide', scalingConfig.nextMaxFont);
+        smartScaleElement(document.getElementById('current-text'), w, 1.0, currentMax);
+        smartScaleElement(document.getElementById('next-text'), w, scalingConfig.nextRatio, nextMax);
         smartScaleGroup(document.getElementById('current-group'), w);
         smartScaleGroup(document.getElementById('next-group'), w);
       }} else if (snapshotLayout === 'worship-pp') {{
         const container = document.querySelector('.stage__worship-pp-slides');
         if (!container) return;
         const w = container.clientWidth;
-        smartScaleElement(document.getElementById('current-main'), w, 1.0, scalingConfig.currentMaxFont);
-        smartScaleElement(document.getElementById('next-main'), w, scalingConfig.nextRatio, scalingConfig.nextMaxFont);
+        const currentMax = getDesignMaxFont('current_slide', scalingConfig.currentMaxFont);
+        const nextMax = getDesignMaxFont('next_slide', scalingConfig.nextMaxFont);
+        smartScaleElement(document.getElementById('current-main'), w, 1.0, currentMax);
+        smartScaleElement(document.getElementById('next-main'), w, scalingConfig.nextRatio, nextMax);
         smartScaleGroup(document.getElementById('current-group'), w);
         smartScaleGroup(document.getElementById('next-group'), w);
       }}
@@ -746,6 +756,18 @@ fn StageDisplayDocument(
   }};
   debugHelpers.getBroadcastLive = () => broadcastLiveState;
   window.__presenterStageDebug = debugHelpers;
+
+  // Listen for design updates from parent window (design editor iframe)
+  window.addEventListener('message', (e) => {{
+    if (e.data?.type === 'presenter:design-update' && e.data.design) {{
+      applyDesign(e.data.design);
+    }}
+  }});
+
+  // Notify parent window that stage is ready
+  if (window.parent !== window) {{
+    window.parent.postMessage({{ type: 'presenter:stage-ready', layout }}, '*');
+  }}
 }})();
 ",
         snapshot_json = snapshot_json,
