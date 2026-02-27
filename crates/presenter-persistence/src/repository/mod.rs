@@ -140,6 +140,14 @@ impl Repository {
     }
 
     #[instrument(skip_all)]
+    pub async fn delete_app_setting(&self, key: &str) -> anyhow::Result<()> {
+        app_settings::Entity::delete_by_id(key.to_string())
+            .exec(&self.db)
+            .await?;
+        Ok(())
+    }
+
+    #[instrument(skip_all)]
     pub async fn create_presentation(
         &self,
         library_id: LibraryId,

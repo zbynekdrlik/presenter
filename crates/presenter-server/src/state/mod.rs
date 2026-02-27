@@ -734,6 +734,47 @@ impl AppState {
         Ok(())
     }
 
+    // Stage design methods (visual box-based layout)
+    pub async fn get_stage_design(
+        &self,
+        layout: &str,
+    ) -> anyhow::Result<presenter_core::StageDesign> {
+        let key = format!("stage-design:{layout}");
+        match self.repository.get_app_setting(&key).await? {
+            Some(json) => Ok(serde_json::from_str(&json)?),
+            None => Ok(presenter_core::StageDesign::default_for(layout)),
+        }
+    }
+
+    pub async fn set_stage_design(
+        &self,
+        layout: &str,
+        design: presenter_core::StageDesign,
+    ) -> anyhow::Result<()> {
+        let key = format!("stage-design:{layout}");
+        let json = serde_json::to_string(&design)?;
+        self.repository.set_app_setting(&key, &json).await?;
+        self.live_hub.publish(LiveEvent::StageDesign {
+            layout: layout.to_string(),
+            design,
+        });
+        Ok(())
+    }
+
+    pub async fn reset_stage_design(
+        &self,
+        layout: &str,
+    ) -> anyhow::Result<presenter_core::StageDesign> {
+        let key = format!("stage-design:{layout}");
+        self.repository.delete_app_setting(&key).await?;
+        let design = presenter_core::StageDesign::default_for(layout);
+        self.live_hub.publish(LiveEvent::StageDesign {
+            layout: layout.to_string(),
+            design: design.clone(),
+        });
+        Ok(design)
+    }
+
     // Slide editing methods are in slides.rs
     // Timer methods are in timers.rs
     // Broadcasting methods are in broadcasting.rs

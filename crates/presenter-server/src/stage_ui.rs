@@ -305,6 +305,47 @@ fn StageDisplayDocument(
     }}
   }};
 
+  let currentDesign = null;
+
+  const fetchDesign = async () => {{
+    try {{
+      const resp = await fetch('/stage/design/' + encodeURIComponent(layout), {{ cache: 'no-store' }});
+      if (resp.ok) {{
+        const design = await resp.json();
+        applyDesign(design);
+      }}
+    }} catch (err) {{
+      console.warn('Presenter design fetch failed', err);
+    }}
+  }};
+
+  const applyDesign = (design) => {{
+    if (!design || !design.boxes) return;
+    currentDesign = design;
+    window.__presenterStageDesign = design;
+
+    // Apply background color
+    if (design.backgroundColor) {{
+      document.body.style.backgroundColor = design.backgroundColor;
+    }}
+
+    // Apply box positions via CSS custom properties
+    for (const box of design.boxes) {{
+      if (!box.visible) continue;
+      document.body.style.setProperty('--box-' + box.id + '-x', box.x + '%');
+      document.body.style.setProperty('--box-' + box.id + '-y', box.y + '%');
+      document.body.style.setProperty('--box-' + box.id + '-w', box.width + '%');
+      document.body.style.setProperty('--box-' + box.id + '-h', box.height + '%');
+      document.body.style.setProperty('--box-' + box.id + '-color', box.textColor || '#f8fafc');
+      document.body.style.setProperty('--box-' + box.id + '-align', box.textAlign || 'center');
+      document.body.style.setProperty('--box-' + box.id + '-weight', box.fontWeight || 700);
+      document.body.style.setProperty('--box-' + box.id + '-max-font', (box.maxFontPx || 120) + 'px');
+    }}
+
+    // Trigger re-layout
+    smartScaleLyrics(layout);
+  }};
+
   const measureCharWidth = () => {{
     if (measuredCharWidthPer100px !== null) return measuredCharWidthPer100px;
     const span = document.createElement('span');
@@ -548,6 +589,7 @@ fn StageDisplayDocument(
       sendStagePresence();
       refreshFromServer();
       fetchAppearance();
+      fetchDesign();
       fetchBroadcastLive();
     }});
 
@@ -563,6 +605,10 @@ fn StageDisplayDocument(
         }} else if (data.type === 'stage_appearance') {{
           if (data.layout === layout && data.appearance) {{
             applyAppearance(data.appearance);
+          }}
+        }} else if (data.type === 'stage_design') {{
+          if (data.layout === layout && data.design) {{
+            applyDesign(data.design);
           }}
         }} else if (data.type === 'stage_layout' || data.type === 'StageLayout') {{
           const next =
@@ -652,6 +698,7 @@ fn StageDisplayDocument(
 
   applyStage(currentSnapshot);
   fetchAppearance();
+  fetchDesign();
   connectLive();
 
   // Start clock updates
