@@ -118,6 +118,7 @@ pub fn build_router(state: AppState) -> Router {
             "/stage/appearance/{layout}",
             get(stage::get_stage_appearance).put(stage::update_stage_appearance),
         )
+        .route("/stage/broadcast-live", get(stage::get_broadcast_live))
         .route(
             "/integrations/resolume/hosts",
             get(integrations::resolume::list_resolume_hosts)

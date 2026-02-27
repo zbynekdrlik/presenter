@@ -225,3 +225,18 @@ pub(super) async fn update_stage_appearance(
     state.set_stage_appearance(&layout, appearance).await?;
     Ok(StatusCode::NO_CONTENT)
 }
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub(super) struct BroadcastLiveResponse {
+    pub(super) enabled: bool,
+}
+
+#[instrument(skip_all)]
+pub(super) async fn get_broadcast_live(
+    State(state): State<AppState>,
+) -> Json<BroadcastLiveResponse> {
+    Json(BroadcastLiveResponse {
+        enabled: state.broadcast_live(),
+    })
+}

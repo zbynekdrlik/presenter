@@ -96,6 +96,7 @@ pub struct AppState {
     osc_bridge: OscBridge,
     ableset_bridge: AbleSetBridge,
     ableset_cache: Arc<RwLock<AbleSetLibraryCache>>,
+    broadcast_live: Arc<AtomicBool>,
     #[cfg(test)]
     bible_ingestion_override: Option<std::sync::Arc<dyn TestBibleIngestion + Send + Sync>>,
 }
@@ -169,6 +170,7 @@ impl AppState {
             osc_bridge,
             ableset_bridge,
             ableset_cache,
+            broadcast_live: Arc::new(AtomicBool::new(false)),
             #[cfg(test)]
             bible_ingestion_override: None,
         };
@@ -448,6 +450,18 @@ impl AppState {
         FeatureFlags {
             companion_enabled: self.companion_enabled(),
             companion_port: self.companion_port(),
+        }
+    }
+
+    // Broadcast live state
+    pub fn broadcast_live(&self) -> bool {
+        self.broadcast_live.load(Ordering::SeqCst)
+    }
+
+    pub fn set_broadcast_live(&self, enabled: bool) {
+        let previous = self.broadcast_live.swap(enabled, Ordering::SeqCst);
+        if previous != enabled {
+            self.live_hub.publish(LiveEvent::BroadcastLive { enabled });
         }
     }
 
