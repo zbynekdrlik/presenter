@@ -118,17 +118,21 @@ test.describe("Stage Design Editor", () => {
     const box = canvas.locator('.sd__box[data-box-type="current_slide"]');
     await box.click();
 
-    // Get initial position
-    const initialStyle = await box.getAttribute("style");
+    // Get initial X position from properties panel
+    const xInput = page.locator('[data-prop="x"]');
+    await expect(xInput).toBeVisible();
 
     // Change X position via properties panel
-    const xInput = page.locator('[data-prop="x"]');
     await xInput.fill("10");
     await xInput.blur();
     await page.waitForTimeout(200);
 
-    // Verify box position changed
-    await expect(box).toHaveCSS("left", /10%/);
+    // Verify the input value was updated
+    await expect(xInput).toHaveValue("10");
+
+    // Verify box style attribute contains 10%
+    const style = await box.getAttribute("style");
+    expect(style).toContain("left: 10%");
   });
 });
 
