@@ -97,10 +97,12 @@ fn stage_status_overlay_is_rendered() {
     );
 
     let html = render_stage_display(snapshot, StageHeartbeatConfig::default_values()).0;
-    assert!(html.contains("id=\"stage-status-bar\""));
+    // Status elements are now in design-driven boxes
+    assert!(html.contains("stage__box--clock"));
     assert!(html.contains("id=\"stage-clock\""));
+    assert!(html.contains("stage__box--live-indicator"));
     assert!(html.contains("id=\"stage-live\""));
-    assert!(html.contains("id=\"stage-status\""));
+    assert!(html.contains("stage__box--connection-status"));
     assert!(html.contains("id=\"stage-status-connection\""));
     assert!(html.contains("id=\"stage-status-latency\""));
     assert!(html.contains("Connecting"));

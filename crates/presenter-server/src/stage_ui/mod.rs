@@ -1,5 +1,4 @@
 mod styles;
-
 use crate::stage_connections::StageHeartbeatConfig;
 use crate::ui::utils::json_safe;
 use axum::response::Html;
@@ -46,7 +45,6 @@ fn StageDisplayDocument(
   let currentSnapshot = initial;
   let layout = initial.layout.code;
   const statusEls = {{
-    container: document.getElementById('stage-status'),
     connection: document.getElementById('stage-status-connection'),
     latency: document.getElementById('stage-status-latency'),
     clock: document.getElementById('stage-clock'),
@@ -763,14 +761,6 @@ fn StageDisplayDocument(
             </head>
             <body class="stage" data-layout-code={layout_code} data-output-stale="false" data-broadcast-live="false">
                 <main class="stage__body">{layout_view}</main>
-                <div class="stage__status-bar" id="stage-status-bar">
-                    <div class="stage__clock" id="stage-clock">"00:00:00"</div>
-                    <div class="stage__live" id="stage-live" data-active="false">"VYSIELANIE JE VYPNUTE"</div>
-                    <div class="stage__status" id="stage-status">
-                        <span class="stage__status-connection" id="stage-status-connection">"Connecting..."</span>
-                        <span class="stage__status-latency" id="stage-status-latency" data-visible="false"></span>
-                    </div>
-                </div>
                 <script>{script}</script>
             </body>
         </html>
@@ -806,32 +796,30 @@ fn render_worship_snv(snapshot: &StageDisplaySnapshot) -> AnyView {
         .unwrap_or_default();
 
     view! {
-        <section class="stage__lyrics">
-            <div class="stage__lyrics-current">
-                <div class="stage__group-slot">
-                    <span
-                        id="current-group"
-                        class="stage__group"
-                        data-hidden={(current_group.is_empty()).to_string()}
-                    >
-                        {current_group.clone()}
-                    </span>
-                </div>
+        <>
+            <div class="stage__box stage__box--current-group" data-hidden={(current_group.is_empty()).to_string()}>
+                <span id="current-group" class="stage__group">{current_group.clone()}</span>
+            </div>
+            <div class="stage__box stage__box--current-slide">
                 <p id="current-text">{current_text}</p>
             </div>
-            <div class="stage__lyrics-next">
-                <div class="stage__group-slot stage__group-slot--next">
-                    <span
-                        id="next-group"
-                        class="stage__group stage__group--next"
-                        data-hidden={(next_group.is_empty()).to_string()}
-                    >
-                        {next_group.clone()}
-                    </span>
-                </div>
+            <div class="stage__box stage__box--next-group" data-hidden={(next_group.is_empty()).to_string()}>
+                <span id="next-group" class="stage__group">{next_group.clone()}</span>
+            </div>
+            <div class="stage__box stage__box--next-slide">
                 <p id="next-text">{next_text}</p>
             </div>
-        </section>
+            <div class="stage__box stage__box--clock">
+                <span id="stage-clock">"00:00:00"</span>
+            </div>
+            <div class="stage__box stage__box--live-indicator">
+                <span id="stage-live" class="stage__live" data-active="false">"VYSIELANIE JE VYPNUTE"</span>
+            </div>
+            <div class="stage__box stage__box--connection-status">
+                <span id="stage-status-connection">"Connecting..."</span>
+                <span id="stage-status-latency" class="stage__status-latency" data-visible="false"></span>
+            </div>
+        </>
     }
     .into_any()
 }
@@ -935,10 +923,24 @@ fn render_timer(snapshot: &StageDisplaySnapshot) -> AnyView {
     let formatted = format_hms(countdown);
 
     view! {
-        <section class="stage__timer stage__timer--countdown">
-            <div class="stage__timer-value" id="countdown-value">{formatted}</div>
-            <p class="stage__timer-label">"Service Countdown"</p>
-        </section>
+        <>
+            <div class="stage__box stage__box--countdown-timer">
+                <div>
+                    <span id="countdown-value">{formatted}</span>
+                    <p class="stage__timer-label">"Service Countdown"</p>
+                </div>
+            </div>
+            <div class="stage__box stage__box--clock">
+                <span id="stage-clock">"00:00:00"</span>
+            </div>
+            <div class="stage__box stage__box--live-indicator">
+                <span id="stage-live" class="stage__live" data-active="false">"VYSIELANIE JE VYPNUTE"</span>
+            </div>
+            <div class="stage__box stage__box--connection-status">
+                <span id="stage-status-connection">"Connecting..."</span>
+                <span id="stage-status-latency" class="stage__status-latency" data-visible="false"></span>
+            </div>
+        </>
     }
     .into_any()
 }
@@ -954,31 +956,43 @@ fn render_preach(snapshot: &StageDisplaySnapshot) -> AnyView {
     };
 
     view! {
-        <section class="stage__timer stage__timer--preach">
-            <div class="stage__timer-value" id="preach-value">{formatted}</div>
-            <p class="stage__timer-label">"Preach Timer ("<span id="preach-status">{status}</span>")"</p>
-        </section>
+        <>
+            <div class="stage__box stage__box--preach-timer">
+                <div>
+                    <span id="preach-value">{formatted}</span>
+                    <p class="stage__timer-label">"Preach Timer ("<span id="preach-status">{status}</span>")"</p>
+                </div>
+            </div>
+            <div class="stage__box stage__box--clock">
+                <span id="stage-clock">"00:00:00"</span>
+            </div>
+            <div class="stage__box stage__box--live-indicator">
+                <span id="stage-live" class="stage__live" data-active="false">"VYSIELANIE JE VYPNUTE"</span>
+            </div>
+            <div class="stage__box stage__box--connection-status">
+                <span id="stage-status-connection">"Connecting..."</span>
+                <span id="stage-status-latency" class="stage__status-latency" data-visible="false"></span>
+            </div>
+        </>
     }
     .into_any()
 }
 
 fn primary_text(slide: &StageDisplaySlide) -> String {
-    if !slide.stage.trim().is_empty() {
-        slide.stage.clone()
-    } else {
+    if slide.stage.trim().is_empty() {
         slide.main.clone()
+    } else {
+        slide.stage.clone()
     }
 }
 
 fn format_hms(seconds: i64) -> String {
-    let total = seconds.max(0);
-    let hours = total / 3600;
-    let minutes = (total % 3600) / 60;
-    let secs = total % 60;
-    if hours > 0 {
-        format!("{:02}:{:02}:{:02}", hours, minutes, secs)
+    let t = seconds.max(0);
+    let (h, m, s) = (t / 3600, (t % 3600) / 60, t % 60);
+    if h > 0 {
+        format!("{h:02}:{m:02}:{s:02}")
     } else {
-        format!("{:02}:{:02}", minutes, secs)
+        format!("{m:02}:{s:02}")
     }
 }
 
