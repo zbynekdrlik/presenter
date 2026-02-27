@@ -272,9 +272,14 @@ test("status bar contains clock, LIVE, and connection status", async ({
 }) => {
   const stagePage = await openStageDisplay(context);
 
-  // Check all three elements exist in the status bar
-  const statusBar = stagePage.locator("#stage-status-bar");
-  await expect(statusBar).toBeVisible();
+  // Check all three design-driven boxes exist
+  const clockBox = stagePage.locator(".stage__box--clock");
+  const liveBox = stagePage.locator(".stage__box--live-indicator");
+  const connectionBox = stagePage.locator(".stage__box--connection-status");
+
+  await expect(clockBox).toBeVisible();
+  await expect(liveBox).toBeVisible();
+  await expect(connectionBox).toBeVisible();
 
   const clockEl = stagePage.locator("#stage-clock");
   const liveEl = stagePage.locator("#stage-live");
@@ -298,18 +303,20 @@ test("status bar elements are positioned left to right: clock, LIVE, connection"
   // Get bounding boxes of all three elements
   const clockBox = await stagePage.locator("#stage-clock").boundingBox();
   const liveBox = await stagePage.locator("#stage-live").boundingBox();
-  const statusBox = await stagePage.locator("#stage-status").boundingBox();
+  const connectionBox = await stagePage
+    .locator(".stage__box--connection-status")
+    .boundingBox();
 
   expect(clockBox).toBeTruthy();
   expect(liveBox).toBeTruthy();
-  expect(statusBox).toBeTruthy();
+  expect(connectionBox).toBeTruthy();
 
-  if (clockBox && liveBox && statusBox) {
+  if (clockBox && liveBox && connectionBox) {
     // Clock should be left of LIVE
     expect(clockBox.x + clockBox.width).toBeLessThan(liveBox.x);
 
     // LIVE should be left of connection status
-    expect(liveBox.x + liveBox.width).toBeLessThan(statusBox.x);
+    expect(liveBox.x + liveBox.width).toBeLessThan(connectionBox.x);
   }
 
   await stagePage.close();
