@@ -172,13 +172,15 @@ test("stage clock updates every second", async ({ context }) => {
   await stagePage.close();
 });
 
-test("LIVE indicator is initially inactive", async ({ context }) => {
+test("LIVE indicator is initially inactive with Slovak text", async ({
+  context,
+}) => {
   const stagePage = await openStageDisplay(context);
 
   const liveEl = stagePage.locator("#stage-live");
   await expect(liveEl).toBeVisible();
   await expect(liveEl).toHaveAttribute("data-active", "false");
-  await expect(liveEl).toHaveText("LIVE");
+  await expect(liveEl).toHaveText("VYSIELANIE JE VYPNUTE");
 
   await stagePage.close();
 });
@@ -190,6 +192,7 @@ test("LIVE indicator responds to Companion broadcast.set_live command", async ({
 
   const liveEl = stagePage.locator("#stage-live");
   await expect(liveEl).toHaveAttribute("data-active", "false");
+  await expect(liveEl).toHaveText("VYSIELANIE JE VYPNUTE");
 
   // Connect to Companion and send broadcast.set_live command
   const { socket, handshake, sendCommand } = createCompanionSocket(wsURL);
@@ -210,6 +213,7 @@ test("LIVE indicator responds to Companion broadcast.set_live command", async ({
   );
 
   await expect(liveEl).toHaveAttribute("data-active", "true");
+  await expect(liveEl).toHaveText("LIVE");
 
   // Disable broadcast live
   const disableResult = await sendCommand("broadcast.set_live", {
@@ -226,6 +230,7 @@ test("LIVE indicator responds to Companion broadcast.set_live command", async ({
   );
 
   await expect(liveEl).toHaveAttribute("data-active", "false");
+  await expect(liveEl).toHaveText("VYSIELANIE JE VYPNUTE");
 
   socket.close();
   await stagePage.close();

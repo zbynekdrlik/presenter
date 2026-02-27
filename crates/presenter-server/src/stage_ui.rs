@@ -191,6 +191,7 @@ fn StageDisplayDocument(
     document.body.dataset.broadcastLive = broadcastLiveState ? 'true' : 'false';
     if (statusEls.live) {{
       statusEls.live.dataset.active = broadcastLiveState ? 'true' : 'false';
+      statusEls.live.textContent = broadcastLiveState ? 'LIVE' : 'VYSIELANIE JE VYPNUTE';
     }}
     window.__presenterStageBroadcastLive = broadcastLiveState;
   }};
@@ -714,7 +715,7 @@ fn StageDisplayDocument(
                 <main class="stage__body">{layout_view}</main>
                 <div class="stage__status-bar" id="stage-status-bar">
                     <div class="stage__clock" id="stage-clock">"00:00:00"</div>
-                    <div class="stage__live" id="stage-live" data-active="false">"LIVE"</div>
+                    <div class="stage__live" id="stage-live" data-active="false">"VYSIELANIE JE VYPNUTE"</div>
                     <div class="stage__status" id="stage-status">
                         <span class="stage__status-connection" id="stage-status-connection">"Connecting..."</span>
                         <span class="stage__status-latency" id="stage-status-latency" data-visible="false"></span>
@@ -978,12 +979,12 @@ body.stage[data-live-state="error"] .stage__status-connection { color: #f87171; 
 .stage__meta { color: #cbd5f5; display: block; margin-top: 0.5rem; }
 .stage__meta[data-hidden="true"] { display: none; }
 .stage__empty { color: #94a3b8; font-size: 2rem; }
-.stage__status-bar { position: fixed; bottom: 0; left: 0; right: 0; display: flex; align-items: center; justify-content: space-between; padding: 1rem 2.5rem; background: linear-gradient(to top, rgba(0, 0, 0, 0.7) 0%, transparent 100%); }
-.stage__clock { font-size: 2.55rem; font-weight: 700; font-variant-numeric: tabular-nums; color: #38bdf8; padding: 0.4rem 1rem; background: rgba(15, 23, 42, 0.7); border-radius: 999px; letter-spacing: 0.05em; }
-.stage__live { font-size: 1.5rem; font-weight: 700; padding: 0.5rem 1.5rem; border-radius: 999px; letter-spacing: 0.15em; text-transform: uppercase; transition: all 0.3s ease; background: rgba(15, 23, 42, 0.7); color: #475569; opacity: 0.5; }
-.stage__live[data-active="true"] { background: rgba(239, 68, 68, 0.9); color: #fff; opacity: 1; box-shadow: 0 0 20px rgba(239, 68, 68, 0.6), 0 0 40px rgba(239, 68, 68, 0.3); animation: live-pulse 2s ease-in-out infinite; }
-@keyframes live-pulse { 0%, 100% { box-shadow: 0 0 20px rgba(239, 68, 68, 0.6), 0 0 40px rgba(239, 68, 68, 0.3); } 50% { box-shadow: 0 0 30px rgba(239, 68, 68, 0.8), 0 0 60px rgba(239, 68, 68, 0.5); } }
-.stage__status { display: inline-flex; align-items: center; gap: 0.75rem; padding: 0.6rem 1.2rem; font-size: 0.85rem; letter-spacing: 0.12em; text-transform: uppercase; background: rgba(15, 23, 42, 0.7); border-radius: 999px; box-shadow: 0 12px 32px -24px rgba(15, 23, 42, 0.95); }
+.stage__status-bar { position: fixed; bottom: 0; left: 0; right: 0; display: flex; align-items: center; justify-content: space-between; padding: 1.5rem 2.5rem; background: linear-gradient(to top, rgba(0, 0, 0, 0.85) 0%, transparent 100%); }
+.stage__clock { font-size: 4rem; font-weight: 700; font-variant-numeric: tabular-nums; color: #38bdf8; padding: 0.5rem 1.5rem; background: rgba(15, 23, 42, 0.8); border-radius: 999px; letter-spacing: 0.05em; }
+.stage__live { font-size: 2.2rem; font-weight: 700; padding: 0.6rem 2rem; border-radius: 999px; letter-spacing: 0.12em; text-transform: uppercase; transition: all 0.3s ease; background: rgba(34, 197, 94, 0.9); color: #fff; box-shadow: 0 0 20px rgba(34, 197, 94, 0.5), 0 0 40px rgba(34, 197, 94, 0.25); }
+.stage__live[data-active="true"] { background: rgba(239, 68, 68, 0.95); color: #fff; box-shadow: 0 0 30px rgba(239, 68, 68, 0.7), 0 0 60px rgba(239, 68, 68, 0.4); animation: live-pulse 1.5s ease-in-out infinite; }
+@keyframes live-pulse { 0%, 100% { box-shadow: 0 0 30px rgba(239, 68, 68, 0.7), 0 0 60px rgba(239, 68, 68, 0.4); } 50% { box-shadow: 0 0 50px rgba(239, 68, 68, 0.9), 0 0 80px rgba(239, 68, 68, 0.6); } }
+.stage__status { display: inline-flex; align-items: center; gap: 0.75rem; padding: 0.8rem 1.5rem; font-size: 1.3rem; letter-spacing: 0.12em; text-transform: uppercase; background: rgba(15, 23, 42, 0.8); border-radius: 999px; box-shadow: 0 12px 32px -24px rgba(15, 23, 42, 0.95); }
 .stage__status span { display: inline-flex; align-items: center; }
 .stage__status-connection { color: #38bdf8; font-weight: 600; }
 .stage__status-latency { font-variant-numeric: tabular-nums; color: #e2e8f0; min-width: 7ch; white-space: pre; text-align: right; display: inline-flex; justify-content: flex-end; text-transform: none; letter-spacing: normal; }
