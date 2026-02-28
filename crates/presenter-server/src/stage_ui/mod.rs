@@ -394,49 +394,49 @@ fn StageDisplayDocument(
     element.style.fontSize = low + 'px';
   }};
 
-  const smartScaleGroup = (element, containerWidth) => {{
-    if (!element) return;
-    const text = (element.textContent || '').trim();
-    if (!text.length) return;
-    element.style.fontSize = scalingConfig.groupFontSize + 'rem';
-    element.style.maxWidth = Math.floor(containerWidth * 0.5) + 'px';
-  }};
-
   const getDesignMaxFont = (boxType, fallback) => {{
     if (!currentDesign?.boxes) return fallback;
     const box = currentDesign.boxes.find(b => b.boxType === boxType);
     return box?.maxFontPx ?? fallback;
   }};
 
+  const scaleBoxElement = (boxSelector, elementId, boxType, defaultMax) => {{
+    const box = document.querySelector(boxSelector);
+    const element = document.getElementById(elementId);
+    if (!box || !element) return;
+    const maxFont = getDesignMaxFont(boxType, defaultMax);
+    smartScaleElement(element, box.clientWidth, 1.0, maxFont);
+  }};
+
   const smartScaleLyrics = (snapshotLayout) => {{
     window.requestAnimationFrame(() => {{
       if (snapshotLayout === 'worship-snv') {{
-        // Use individual box containers for absolute positioning layout
-        const currentBox = document.querySelector('.stage__box--current-slide');
-        const nextBox = document.querySelector('.stage__box--next-slide');
+        // Scale slide text
+        scaleBoxElement('.stage__box--current-slide', 'current-text', 'current_slide', scalingConfig.currentMaxFont);
+        scaleBoxElement('.stage__box--next-slide', 'next-text', 'next_slide', scalingConfig.nextMaxFont);
+        // Scale groups
+        scaleBoxElement('.stage__box--current-group', 'current-group', 'current_group', 48);
+        scaleBoxElement('.stage__box--next-group', 'next-group', 'next_group', 36);
+        // Scale status elements
+        scaleBoxElement('.stage__box--clock', 'stage-clock', 'clock', 72);
+        scaleBoxElement('.stage__box--live-indicator', 'stage-live', 'live_indicator', 48);
+        scaleBoxElement('.stage__box--connection-status', 'stage-status-connection', 'connection_status', 32);
+      }} else if (snapshotLayout === 'worship-pp') {{
+        // worship-pp uses container-based layout
+        const currentBox = document.querySelector('.stage__worship-pp-current');
+        const nextBox = document.querySelector('.stage__worship-pp-next');
         const currentMax = getDesignMaxFont('current_slide', scalingConfig.currentMaxFont);
         const nextMax = getDesignMaxFont('next_slide', scalingConfig.nextMaxFont);
         if (currentBox) {{
-          smartScaleElement(document.getElementById('current-text'), currentBox.clientWidth, 1.0, currentMax);
+          smartScaleElement(document.getElementById('current-main'), currentBox.clientWidth, 1.0, currentMax);
+          const groupEl = document.getElementById('current-group');
+          if (groupEl) smartScaleElement(groupEl, currentBox.clientWidth, 1.0, getDesignMaxFont('current_group', 48));
         }}
         if (nextBox) {{
-          smartScaleElement(document.getElementById('next-text'), nextBox.clientWidth, scalingConfig.nextRatio, nextMax);
+          smartScaleElement(document.getElementById('next-main'), nextBox.clientWidth, 1.0, nextMax);
+          const groupEl = document.getElementById('next-group');
+          if (groupEl) smartScaleElement(groupEl, nextBox.clientWidth, 1.0, getDesignMaxFont('next_group', 36));
         }}
-        const groupBox = document.querySelector('.stage__box--current-group');
-        if (groupBox) {{
-          smartScaleGroup(document.getElementById('current-group'), groupBox.clientWidth);
-          smartScaleGroup(document.getElementById('next-group'), groupBox.clientWidth);
-        }}
-      }} else if (snapshotLayout === 'worship-pp') {{
-        const container = document.querySelector('.stage__worship-pp-slides');
-        if (!container) return;
-        const w = container.clientWidth;
-        const currentMax = getDesignMaxFont('current_slide', scalingConfig.currentMaxFont);
-        const nextMax = getDesignMaxFont('next_slide', scalingConfig.nextMaxFont);
-        smartScaleElement(document.getElementById('current-main'), w, 1.0, currentMax);
-        smartScaleElement(document.getElementById('next-main'), w, scalingConfig.nextRatio, nextMax);
-        smartScaleGroup(document.getElementById('current-group'), w);
-        smartScaleGroup(document.getElementById('next-group'), w);
       }}
     }});
   }};
