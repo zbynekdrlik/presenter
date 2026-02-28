@@ -775,6 +775,39 @@ impl AppState {
         Ok(design)
     }
 
+    /// Get stage design with shared status bar settings from worship-snv.
+    /// Status bar elements (clock, live indicator, connection status) are
+    /// managed in worship-snv and automatically synced to other layouts.
+    pub async fn get_stage_design_with_shared_status(
+        &self,
+        layout: &str,
+    ) -> anyhow::Result<presenter_core::StageDesign> {
+        use presenter_core::DEFAULT_STAGE_LAYOUT_CODE;
+
+        let mut design = self.get_stage_design(layout).await?;
+
+        // If this is already worship-snv, return as-is
+        if layout == DEFAULT_STAGE_LAYOUT_CODE {
+            return Ok(design);
+        }
+
+        // Get master design to extract status bar settings
+        let master = self.get_stage_design(DEFAULT_STAGE_LAYOUT_CODE).await?;
+
+        // Remove status bar boxes from current design
+        design.boxes.retain(|b| !b.box_type.is_status_bar());
+
+        // Add status bar boxes from master
+        design.boxes.extend(
+            master
+                .boxes
+                .into_iter()
+                .filter(|b| b.box_type.is_status_bar()),
+        );
+
+        Ok(design)
+    }
+
     // Slide editing methods are in slides.rs
     // Timer methods are in timers.rs
     // Broadcasting methods are in broadcasting.rs

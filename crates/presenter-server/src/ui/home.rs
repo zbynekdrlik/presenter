@@ -34,7 +34,7 @@ fn HomeDocument() -> impl IntoView {
                             <li><a href="/ui/tablet">"Tablet UI"</a></li>
                             <li><a href="/ui/bible">"Bible Control"</a></li>
                             <li><a href="/ui/settings" target="_blank" rel="noopener">"Settings"</a></li>
-                            <li><a href="/ui/stage-settings" target="_blank" rel="noopener">"Stage Appearance"</a></li>
+                            <li><a href="/ui/stage-design" target="_blank" rel="noopener">"Stage Design"</a></li>
                         </ul>
                     </section>
                     <section class="home__section">

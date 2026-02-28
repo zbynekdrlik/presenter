@@ -191,6 +191,16 @@ impl StageBoxType {
             Self::ConnectionStatus => "Connection Status",
         }
     }
+
+    /// Check if this box type is part of the shared status bar.
+    /// Status bar boxes (Clock, LiveIndicator, ConnectionStatus) are synced
+    /// from worship-snv to other layouts.
+    pub fn is_status_bar(&self) -> bool {
+        matches!(
+            self,
+            Self::Clock | Self::LiveIndicator | Self::ConnectionStatus
+        )
+    }
 }
 
 /// Text alignment within a stage box.
@@ -573,5 +583,17 @@ mod tests {
         assert_eq!(TextAlign::Left.as_css(), "left");
         assert_eq!(TextAlign::Center.as_css(), "center");
         assert_eq!(TextAlign::Right.as_css(), "right");
+    }
+
+    #[test]
+    fn is_status_bar_identifies_correct_types() {
+        assert!(StageBoxType::Clock.is_status_bar());
+        assert!(StageBoxType::LiveIndicator.is_status_bar());
+        assert!(StageBoxType::ConnectionStatus.is_status_bar());
+        assert!(!StageBoxType::CurrentSlide.is_status_bar());
+        assert!(!StageBoxType::NextSlide.is_status_bar());
+        assert!(!StageBoxType::CountdownTimer.is_status_bar());
+        assert!(!StageBoxType::PreachTimer.is_status_bar());
+        assert!(!StageBoxType::Playlist.is_status_bar());
     }
 }

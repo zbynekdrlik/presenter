@@ -248,7 +248,8 @@ pub(super) async fn get_stage_design(
     State(state): State<AppState>,
     Path(layout): Path<String>,
 ) -> Result<Json<StageDesign>, AppError> {
-    let design = state.get_stage_design(&layout).await?;
+    // Use shared status bar settings from worship-snv for all layouts
+    let design = state.get_stage_design_with_shared_status(&layout).await?;
     Ok(Json(design))
 }
 

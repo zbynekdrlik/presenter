@@ -114,11 +114,13 @@ fn StageDesignDocument(designs_json: String) -> impl IntoView {
     c.innerHTML = '';
     for (const box of design.boxes) {{
       if (!box.visible) continue;
+      const isLocked = isStatusBarBox(box.boxType) && activeLayout !== 'worship-snv';
       const el = document.createElement('div');
       el.className = 'sd__box';
       el.dataset.boxId = box.id;
       el.dataset.boxType = box.boxType;
       el.dataset.selected = box.id === selectedBoxId ? 'true' : 'false';
+      el.dataset.locked = isLocked ? 'true' : 'false';
       el.style.left = box.x + '%';
       el.style.top = box.y + '%';
       el.style.width = box.width + '%';
@@ -135,16 +137,18 @@ fn StageDesignDocument(designs_json: String) -> impl IntoView {
 
       const label = document.createElement('div');
       label.className = 'sd__box-label';
-      label.textContent = boxTypeLabels[box.boxType] || box.id;
+      label.textContent = (isLocked ? '🔗 ' : '') + (boxTypeLabels[box.boxType] || box.id);
       el.appendChild(label);
 
-      // Resize handles
-      const handles = ['nw', 'n', 'ne', 'e', 'se', 's', 'sw', 'w'];
-      for (const h of handles) {{
-        const handle = document.createElement('div');
-        handle.className = 'sd__resize-handle sd__resize-handle--' + h;
-        handle.dataset.handle = h;
-        el.appendChild(handle);
+      // Resize handles (not shown for locked boxes)
+      if (!isLocked) {{
+        const handles = ['nw', 'n', 'ne', 'e', 'se', 's', 'sw', 'w'];
+        for (const h of handles) {{
+          const handle = document.createElement('div');
+          handle.className = 'sd__resize-handle sd__resize-handle--' + h;
+          handle.dataset.handle = h;
+          el.appendChild(handle);
+        }}
       }}
 
       el.addEventListener('pointerdown', onBoxPointerDown);
@@ -164,6 +168,10 @@ fn StageDesignDocument(designs_json: String) -> impl IntoView {
     selectedBoxId = boxId;
     renderCanvas();
     updatePropertiesPanel();
+
+    // Don't allow dragging/resizing locked status bar boxes
+    const isLockedStatusBar = isStatusBarBox(box.boxType) && activeLayout !== 'worship-snv';
+    if (isLockedStatusBar) return;
 
     if (handle) {{
       isResizing = true;
@@ -242,6 +250,9 @@ fn StageDesignDocument(designs_json: String) -> impl IntoView {
     document.removeEventListener('pointerup', onPointerUp);
   }};
 
+  const STATUS_BAR_TYPES = ['clock', 'live_indicator', 'connection_status'];
+  const isStatusBarBox = (boxType) => STATUS_BAR_TYPES.includes(boxType);
+
   const updatePropertiesPanel = () => {{
     const panel = document.getElementById('properties-panel');
     if (!panel) return;
@@ -257,40 +268,52 @@ fn StageDesignDocument(designs_json: String) -> impl IntoView {
       return;
     }}
 
+    const isStatusBar = isStatusBarBox(box.boxType);
+    const isLockedStatusBar = isStatusBar && activeLayout !== 'worship-snv';
+    const disabledAttr = isLockedStatusBar ? 'disabled' : '';
+
     const currentSampleText = getSampleContent(box.boxType).replace(/\\n/g, '\\n');
+    const statusBarNote = isLockedStatusBar ? `
+      <div class="sd__status-bar-note">
+        <span class="sd__note-icon">&#x1F517;</span>
+        <span>Synced from worship-snv. Edit there to change.</span>
+      </div>
+    ` : '';
+
     panel.innerHTML = `
       <div class="sd__prop-header">${{boxTypeLabels[box.boxType] || box.id}}</div>
+      ${{statusBarNote}}
       <div class="sd__prop-group">
         <label class="sd__prop-group-label">Sample Text</label>
         <textarea data-sample-text="${{box.boxType}}" class="sd__sample-text" rows="3">${{currentSampleText}}</textarea>
       </div>
       <div class="sd__prop-row">
         <label>X</label>
-        <input type="number" data-prop="x" value="${{box.x.toFixed(1)}}" step="0.5" min="0" max="100" />
+        <input type="number" data-prop="x" value="${{box.x.toFixed(1)}}" step="0.5" min="0" max="100" ${{disabledAttr}} />
         <span>%</span>
       </div>
       <div class="sd__prop-row">
         <label>Y</label>
-        <input type="number" data-prop="y" value="${{box.y.toFixed(1)}}" step="0.5" min="0" max="100" />
+        <input type="number" data-prop="y" value="${{box.y.toFixed(1)}}" step="0.5" min="0" max="100" ${{disabledAttr}} />
         <span>%</span>
       </div>
       <div class="sd__prop-row">
         <label>Width</label>
-        <input type="number" data-prop="width" value="${{box.width.toFixed(1)}}" step="0.5" min="1" max="100" />
+        <input type="number" data-prop="width" value="${{box.width.toFixed(1)}}" step="0.5" min="1" max="100" ${{disabledAttr}} />
         <span>%</span>
       </div>
       <div class="sd__prop-row">
         <label>Height</label>
-        <input type="number" data-prop="height" value="${{box.height.toFixed(1)}}" step="0.5" min="1" max="100" />
+        <input type="number" data-prop="height" value="${{box.height.toFixed(1)}}" step="0.5" min="1" max="100" ${{disabledAttr}} />
         <span>%</span>
       </div>
       <div class="sd__prop-row">
         <label>Text Color</label>
-        <input type="color" data-prop="textColor" value="${{box.textColor}}" />
+        <input type="color" data-prop="textColor" value="${{box.textColor}}" ${{disabledAttr}} />
       </div>
       <div class="sd__prop-row">
         <label>Align</label>
-        <select data-prop="textAlign">
+        <select data-prop="textAlign" ${{disabledAttr}}>
           <option value="left" ${{box.textAlign === 'left' ? 'selected' : ''}}>Left</option>
           <option value="center" ${{box.textAlign === 'center' ? 'selected' : ''}}>Center</option>
           <option value="right" ${{box.textAlign === 'right' ? 'selected' : ''}}>Right</option>
@@ -298,12 +321,12 @@ fn StageDesignDocument(designs_json: String) -> impl IntoView {
       </div>
       <div class="sd__prop-row">
         <label>Max Font</label>
-        <input type="number" data-prop="maxFontPx" value="${{box.maxFontPx}}" step="1" min="8" max="300" />
+        <input type="number" data-prop="maxFontPx" value="${{box.maxFontPx}}" step="1" min="8" max="300" ${{disabledAttr}} />
         <span>px</span>
       </div>
       <div class="sd__prop-row">
         <label>Visible</label>
-        <input type="checkbox" data-prop="visible" ${{box.visible ? 'checked' : ''}} />
+        <input type="checkbox" data-prop="visible" ${{box.visible ? 'checked' : ''}} ${{disabledAttr}} />
       </div>
     `;
 
@@ -504,6 +527,8 @@ const STAGE_DESIGN_STYLES: &str = r#"
 .sd__box { position: absolute; border: 2px solid rgba(255, 255, 255, 0.3); border-radius: 0.25rem; cursor: move; transition: border-color 0.15s; display: flex; flex-direction: column; overflow: hidden; }
 .sd__box[data-selected="true"] { border-color: #3b82f6; box-shadow: 0 0 0 2px rgba(59, 130, 246, 0.3); }
 .sd__box:hover { border-color: rgba(255, 255, 255, 0.6); }
+.sd__box[data-locked="true"] { border-style: dashed; cursor: default; opacity: 0.8; }
+.sd__box[data-locked="true"]:hover { border-color: rgba(255, 255, 255, 0.4); }
 .sd__box-content { flex: 1; display: flex; align-items: center; justify-content: center; padding: 4px; font-size: 14px; white-space: pre-wrap; text-align: inherit; overflow: hidden; }
 .sd__box-label { position: absolute; top: 2px; left: 4px; font-size: 9px; color: rgba(255, 255, 255, 0.5); text-transform: uppercase; letter-spacing: 0.05em; pointer-events: none; }
 .sd__resize-handle { position: absolute; width: 10px; height: 10px; background: #3b82f6; border-radius: 2px; opacity: 0; transition: opacity 0.15s; }
@@ -533,4 +558,7 @@ const STAGE_DESIGN_STYLES: &str = r#"
 .sd__section-title { font-size: 1rem; font-weight: 600; color: #e2e8f0; margin-bottom: 0.75rem; }
 .sd__live-preview-wrapper { background: #0f172a; border-radius: 0.75rem; padding: 1rem; }
 .sd__live-preview { width: 100%; aspect-ratio: 16 / 9; border: none; border-radius: 0.5rem; background: #000; }
+.sd__status-bar-note { display: flex; align-items: center; gap: 0.5rem; padding: 0.6rem 0.8rem; margin-bottom: 1rem; background: #1e3a5f; border-radius: 0.4rem; font-size: 0.8rem; color: #93c5fd; border: 1px solid #3b82f6; }
+.sd__note-icon { font-size: 1rem; }
+.sd__properties input:disabled, .sd__properties select:disabled { opacity: 0.5; cursor: not-allowed; }
 "#;

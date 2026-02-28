@@ -437,6 +437,16 @@ fn StageDisplayDocument(
           const groupEl = document.getElementById('next-group');
           if (groupEl) smartScaleElement(groupEl, nextBox.clientWidth, 1.0, getDesignMaxFont('next_group', 36));
         }}
+      }} else if (snapshotLayout === 'timer') {{
+        scaleBoxElement('.stage__box--countdown-timer', 'countdown-value', 'countdown_timer', 200);
+        scaleBoxElement('.stage__box--clock', 'stage-clock', 'clock', 72);
+        scaleBoxElement('.stage__box--live-indicator', 'stage-live', 'live_indicator', 48);
+        scaleBoxElement('.stage__box--connection-status', 'stage-status-connection', 'connection_status', 32);
+      }} else if (snapshotLayout === 'preach') {{
+        scaleBoxElement('.stage__box--preach-timer', 'preach-value', 'preach_timer', 200);
+        scaleBoxElement('.stage__box--clock', 'stage-clock', 'clock', 72);
+        scaleBoxElement('.stage__box--live-indicator', 'stage-live', 'live_indicator', 48);
+        scaleBoxElement('.stage__box--connection-status', 'stage-status-connection', 'connection_status', 32);
       }}
     }});
   }};
