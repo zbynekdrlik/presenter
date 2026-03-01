@@ -102,6 +102,7 @@ async fn update_slide_content_updates_repository() {
             "Tablet translation".to_string(),
             "Tablet stage".to_string(),
             Some("Tablet Group".to_string()),
+            None, // metadata
         )
         .await
         .unwrap();

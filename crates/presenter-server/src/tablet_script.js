@@ -267,12 +267,23 @@
     if (card) card.classList.add("is-loading");
 
     try {
+      // Send slide content as single source of truth
+      var mainRefLabel =
+        bibleMeta.mainReferenceLabel || bibleMeta.main_reference_label || null;
+      var transRefLabel =
+        bibleMeta.translationReferenceLabel ||
+        bibleMeta.translation_reference_label ||
+        null;
       var payload = {
         translation: translationCode,
         book: book,
         chapter: chapter,
         verseStart: verseStart,
         verseEnd: verseEnd,
+        mainText: slide.main || "",
+        translationText: slide.translation || "",
+        mainReferenceLabel: mainRefLabel,
+        translationReferenceLabel: transRefLabel,
       };
       if (bookCode) payload.bookCode = bookCode;
       if (bookNumber) payload.bookNumber = bookNumber;

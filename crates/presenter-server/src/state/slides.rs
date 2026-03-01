@@ -149,6 +149,7 @@ impl AppState {
         translation: String,
         stage: String,
         group: Option<String>,
+        metadata_override: Option<SlideMetadata>,
     ) -> anyhow::Result<Slide> {
         let presentation_arc = self.presentation_from_cache(presentation_id).await?;
         let presentation = presentation_arc.as_ref();
@@ -178,10 +179,19 @@ impl AppState {
             stage_text.clone(),
             group.clone(),
         );
-        let updated_slide = Slide::new(existing_slide.order, content.clone()).with_id(slide_id);
+        // Use provided metadata or preserve existing
+        let final_metadata = metadata_override.or(existing_slide.metadata.clone());
+        let updated_slide = Slide::new(existing_slide.order, content.clone())
+            .with_id(slide_id)
+            .with_metadata(final_metadata.clone());
 
         self.repository
-            .update_slide_content(presentation_id, slide_id, &content)
+            .update_slide_content_with_metadata(
+                presentation_id,
+                slide_id,
+                &content,
+                final_metadata.as_ref(),
+            )
             .await?;
 
         let mut updated_presentation = presentation.clone();

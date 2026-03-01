@@ -43,6 +43,8 @@ pub(super) struct SlideContentUpdateRequest {
     pub(super) stage: String,
     #[serde(default)]
     pub(super) group: Option<String>,
+    #[serde(default)]
+    pub(super) metadata: Option<presenter_core::slide::SlideMetadata>,
 }
 
 #[instrument(skip_all)]
@@ -177,6 +179,7 @@ pub(super) async fn update_slide_content(
             payload.translation,
             payload.stage,
             payload.group,
+            payload.metadata,
         )
         .await?;
     Ok(Json(updated))

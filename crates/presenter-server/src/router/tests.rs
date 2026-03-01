@@ -560,6 +560,7 @@ async fn search_endpoint_returns_results() {
             "Search translation".to_string(),
             "Stage".to_string(),
             None,
+            None, // metadata
         )
         .await
         .unwrap();
