@@ -55,6 +55,7 @@ body.tablet {
 }
 
 .tablet-sidebar {
+  position: relative;
   width: 260px;
   padding: 1.25rem;
   background: rgba(15, 23, 42, 0.72);
@@ -68,6 +69,29 @@ body.tablet {
     width 0.3s ease,
     padding 0.3s ease,
     opacity 0.3s ease;
+}
+
+.tablet-sidebar__close {
+  position: absolute;
+  top: 0.75rem;
+  right: 0.75rem;
+  width: 2.5rem;
+  height: 2.5rem;
+  border: none;
+  background: rgba(148, 163, 184, 0.25);
+  color: #94a3b8;
+  font-size: 1.5rem;
+  line-height: 1;
+  border-radius: 8px;
+  cursor: pointer;
+  transition:
+    background 0.2s ease,
+    color 0.2s ease;
+}
+
+.tablet-sidebar__close:hover {
+  background: rgba(239, 68, 68, 0.3);
+  color: #fca5a5;
 }
 
 .tablet-sidebar.is-collapsed {

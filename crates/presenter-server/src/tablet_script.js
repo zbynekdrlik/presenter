@@ -27,6 +27,7 @@
     scaleValue: document.querySelector('[data-role="scale-value"]'),
     sidebar: document.querySelector(".tablet-sidebar"),
     sidebarToggle: document.querySelector('[data-role="sidebar-toggle"]'),
+    sidebarClose: document.querySelector('[data-role="sidebar-close"]'),
   };
 
   function escapeHtml(value) {
@@ -295,7 +296,12 @@
     var button = event.target.closest('[data-role="presentation-button"]');
     if (!button) return;
     var id = button.dataset.presentationId;
-    if (!id || id === state.currentPresentationId) return;
+    if (!id) return;
+    // Clicking the same presentation closes the sidebar
+    if (id === state.currentPresentationId) {
+      toggleSidebar(false);
+      return;
+    }
     state.currentPresentationId = id;
     var presentation = state.presentations.find(function (p) {
       return p.id === id;
@@ -538,6 +544,11 @@
     if (els.sidebarToggle) {
       els.sidebarToggle.addEventListener("click", function () {
         toggleSidebar(true);
+      });
+    }
+    if (els.sidebarClose) {
+      els.sidebarClose.addEventListener("click", function () {
+        toggleSidebar(false);
       });
     }
     document.addEventListener("visibilitychange", function () {
