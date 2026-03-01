@@ -213,11 +213,10 @@ body.tablet {
 .tablet-slides {
   flex: 1;
   padding: 1.5rem;
-  display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(340px, 1fr));
+  display: flex;
+  flex-direction: column;
   gap: 1.5rem;
   overflow-y: auto;
-  align-content: start;
   -webkit-overflow-scrolling: touch; /* Smooth scrolling + better touch handling on iOS */
 }
 
