@@ -277,13 +277,30 @@ body.tablet {
   padding-top: 0.5rem;
 }
 
-/* Alternating shades for reference groups */
+/* Alternating shades for reference groups - high contrast */
 .tablet-slide--light {
-  background: rgba(30, 41, 59, 0.8);
+  background: rgba(51, 65, 85, 0.9);
 }
 
 .tablet-slide--dark {
-  background: rgba(15, 23, 42, 0.8);
+  background: rgba(15, 23, 42, 0.9);
+}
+
+/* Big separator line between reference groups */
+.tablet-slide--group-start {
+  margin-top: 2.5rem;
+  position: relative;
+}
+
+.tablet-slide--group-start::before {
+  content: "";
+  position: absolute;
+  top: -1.25rem;
+  left: 0;
+  right: 0;
+  height: 4px;
+  background: #475569;
+  border-radius: 2px;
 }
 
 .tablet-toast {

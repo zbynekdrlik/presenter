@@ -129,8 +129,9 @@
       .map(function (slide) {
         var isActive = isSlideActive(slide) ? " is-active" : "";
 
-        // Track reference groups for alternating shades
-        if (slide.mainReference !== lastReference) {
+        // Track reference groups for alternating shades and separators
+        var isNewGroup = slide.mainReference !== lastReference;
+        if (isNewGroup) {
           if (lastReference !== null) {
             groupIndex++;
           }
@@ -138,6 +139,8 @@
         }
         var shadeClass =
           groupIndex % 2 === 0 ? " tablet-slide--light" : " tablet-slide--dark";
+        var separatorClass =
+          isNewGroup && groupIndex > 0 ? " tablet-slide--group-start" : "";
 
         // Build reference header (top, prominent)
         var refHeader = slide.mainReference
@@ -168,6 +171,7 @@
           '<article class="tablet-slide' +
           isActive +
           shadeClass +
+          separatorClass +
           '" data-role="tablet-slide" data-slide-id="' +
           slide.id +
           '">' +
