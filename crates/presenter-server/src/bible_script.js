@@ -2461,6 +2461,7 @@
             translation: slide.translation || "",
             stage: slide.stage || "",
             group: slide.group || null,
+            metadata: slide.metadata || null,
           }),
         })
           .then(function () {

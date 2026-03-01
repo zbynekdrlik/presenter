@@ -191,6 +191,65 @@ impl Repository {
     }
 
     #[instrument(skip_all)]
+    pub async fn update_slide_content_with_metadata(
+        &self,
+        presentation_id: PresentationId,
+        slide_id: SlideId,
+        content: &SlideContent,
+        metadata: Option<&presenter_core::slide::SlideMetadata>,
+    ) -> anyhow::Result<()> {
+        let main_text = content.main.value().to_owned();
+        let translation_text = content.translation.value().to_owned();
+        let stage_text = content.stage.value().to_owned();
+        let main_search = fold_query(content.main.value());
+        let translation_search = fold_query(content.translation.value());
+        let stage_search = fold_query(content.stage.value());
+        let metadata_json = metadata.map(|m| serde_json::to_string(m)).transpose()?;
+
+        let result = slide_entity::Entity::update_many()
+            .col_expr(slide_entity::Column::MainText, Expr::value(main_text))
+            .col_expr(
+                slide_entity::Column::MainTextSearch,
+                Expr::value(main_search),
+            )
+            .col_expr(
+                slide_entity::Column::TranslationText,
+                Expr::value(translation_text),
+            )
+            .col_expr(
+                slide_entity::Column::TranslationTextSearch,
+                Expr::value(translation_search),
+            )
+            .col_expr(slide_entity::Column::StageText, Expr::value(stage_text))
+            .col_expr(
+                slide_entity::Column::StageTextSearch,
+                Expr::value(stage_search),
+            )
+            .col_expr(
+                slide_entity::Column::GroupName,
+                Expr::value(content.group.as_ref().map(|group| group.name().to_owned())),
+            )
+            .col_expr(
+                slide_entity::Column::MetadataJson,
+                Expr::value(metadata_json),
+            )
+            .filter(slide_entity::Column::Id.eq(slide_id.to_string()))
+            .filter(slide_entity::Column::PresentationId.eq(presentation_id.to_string()))
+            .exec(&self.db)
+            .await?;
+
+        if result.rows_affected == 0 {
+            return Err(anyhow!(
+                "slide {} not found in presentation {}",
+                slide_id,
+                presentation_id
+            ));
+        }
+
+        Ok(())
+    }
+
+    #[instrument(skip_all)]
     pub async fn replace_presentation_slides(
         &self,
         presentation_id: PresentationId,
