@@ -358,6 +358,14 @@
           if (state.currentPresentationId) {
             renderSlides(state.currentPresentationId);
           }
+        } else if (payload.type === "bible_slides_changed") {
+          var presentationId = payload.presentation_id;
+          if (presentationId) {
+            state.slidesCache.delete(presentationId);
+            if (state.currentPresentationId === presentationId) {
+              loadPresentation(presentationId);
+            }
+          }
         }
       } catch (error) {
         console.error("tablet live payload parsing failed", error);

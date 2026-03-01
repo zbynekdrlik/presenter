@@ -98,6 +98,10 @@ pub enum LiveEvent {
     BroadcastLive {
         enabled: bool,
     },
+    /// Bible presentation slides changed (content edit, add, delete, reorder)
+    BibleSlidesChanged {
+        presentation_id: String,
+    },
 }
 
 pub async fn serve_websocket(hub: LiveHub, connections: StageConnections, socket: WebSocket) {
