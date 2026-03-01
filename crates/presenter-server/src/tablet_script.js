@@ -294,20 +294,9 @@
     toggleSidebar(false);
   }
 
-  var lastTapTime = 0;
-
   function handleSlideTap(event) {
-    // Debounce rapid taps
-    var now = Date.now();
-    if (now - lastTapTime < 300) return;
-    lastTapTime = now;
-
     var card = event.target.closest("[data-slide-id]");
     if (!card || !state.currentPresentationId) return;
-
-    // Prevent default to avoid any touch delay
-    event.preventDefault();
-
     var slideId = card.dataset.slideId;
     var slides = state.slidesCache.get(state.currentPresentationId) || [];
     var slide = slides.find(function (entry) {
@@ -469,9 +458,6 @@
     }
     if (els.slides) {
       els.slides.addEventListener("click", handleSlideTap);
-      els.slides.addEventListener("touchend", handleSlideTap, {
-        passive: false,
-      });
     }
     if (els.scaleSlider) {
       els.scaleSlider.addEventListener("input", function () {
