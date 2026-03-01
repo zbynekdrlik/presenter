@@ -37,6 +37,10 @@ impl CompanionVariableState {
             crate::live::LiveEvent::StageDesign { .. } => false,
             crate::live::LiveEvent::BiblePreferencesChanged { .. } => false,
             crate::live::LiveEvent::BroadcastLive { enabled } => self.apply_broadcast_live(enabled),
+            crate::live::LiveEvent::BibleSlidesChanged { .. } => {
+                // Bible slide changes are for tablet sync, not Companion variables.
+                false
+            }
         }
     }
 

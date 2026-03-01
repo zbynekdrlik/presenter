@@ -6,6 +6,7 @@ use std::collections::HashMap;
 
 use super::stage::blank_slide_content;
 use super::AppState;
+use crate::live::LiveEvent;
 
 /// Extracts the short translation code from a full translation code.
 /// E.g., "eng-kjv" → "KJV", "sk-roh" → "ROH"
@@ -194,6 +195,9 @@ impl AppState {
         self.cache_presentation_value(updated_presentation).await;
 
         self.broadcast_stage_snapshots().await?;
+        self.live_hub.publish(LiveEvent::BibleSlidesChanged {
+            presentation_id: presentation_id.to_string(),
+        });
 
         Ok(updated_slide)
     }
@@ -221,6 +225,9 @@ impl AppState {
         updated_presentation.slides = slides.clone();
         self.cache_presentation_value(updated_presentation).await;
         self.broadcast_stage_snapshots().await?;
+        self.live_hub.publish(LiveEvent::BibleSlidesChanged {
+            presentation_id: presentation_id.to_string(),
+        });
         Ok(slides)
     }
 
@@ -248,6 +255,9 @@ impl AppState {
         updated_presentation.slides = slides.clone();
         self.cache_presentation_value(updated_presentation).await;
         self.broadcast_stage_snapshots().await?;
+        self.live_hub.publish(LiveEvent::BibleSlidesChanged {
+            presentation_id: presentation_id.to_string(),
+        });
         Ok(slides)
     }
 
@@ -277,6 +287,9 @@ impl AppState {
         updated_presentation.slides = slides.clone();
         self.cache_presentation_value(updated_presentation).await;
         self.broadcast_stage_snapshots().await?;
+        self.live_hub.publish(LiveEvent::BibleSlidesChanged {
+            presentation_id: presentation_id.to_string(),
+        });
         Ok(slides)
     }
 
@@ -311,6 +324,9 @@ impl AppState {
         updated_presentation.slides = slides.clone();
         self.cache_presentation_value(updated_presentation).await;
         self.broadcast_stage_snapshots().await?;
+        self.live_hub.publish(LiveEvent::BibleSlidesChanged {
+            presentation_id: presentation_id.to_string(),
+        });
         Ok(slides)
     }
 }
