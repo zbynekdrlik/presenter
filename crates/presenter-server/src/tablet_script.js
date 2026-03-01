@@ -123,14 +123,23 @@
         '<p class="tablet-slides__empty">No slides in this presentation.</p>';
       return;
     }
+    var lastReference = null;
     els.slides.innerHTML = slides
-      .map(function (slide, index) {
+      .map(function (slide) {
         var isActive = isSlideActive(slide) ? " is-active" : "";
-        var groupHtml = slide.group
-          ? '<span class="tablet-slide__group">' +
-            escapeHtml(slide.group) +
-            "</span>"
+
+        // Check if this is the first slide of a new reference group
+        var isNewGroup = slide.mainReference !== lastReference;
+        var groupStartClass = isNewGroup ? " tablet-slide--group-start" : "";
+        lastReference = slide.mainReference;
+
+        // Build reference header (top, prominent)
+        var refHeader = slide.mainReference
+          ? '<header class="tablet-slide__ref">' +
+            escapeHtml(slide.mainReference) +
+            "</header>"
           : "";
+
         var mainHtml = slide.main
           ? '<p class="tablet-slide__main">' +
             formatMultiline(slide.main) +
@@ -141,27 +150,27 @@
             formatMultiline(slide.translation) +
             "</p>"
           : "";
-        var refHtml = slide.mainReference
-          ? '<footer class="tablet-slide__ref">' +
-            escapeHtml(slide.mainReference) +
-            "</footer>"
+
+        // Build footer with group badge only
+        var footerHtml = slide.group
+          ? '<footer class="tablet-slide__footer"><span class="tablet-slide__group">' +
+            escapeHtml(slide.group) +
+            "</span></footer>"
           : "";
+
         return (
           '<article class="tablet-slide' +
           isActive +
+          groupStartClass +
           '" data-role="tablet-slide" data-slide-id="' +
           slide.id +
           '">' +
-          "<header><strong>" +
-          (index + 1) +
-          "</strong>" +
-          groupHtml +
-          "</header>" +
+          refHeader +
           '<section class="tablet-slide__body">' +
           mainHtml +
           translationHtml +
           "</section>" +
-          refHtml +
+          footerHtml +
           "</article>"
         );
       })
@@ -285,9 +294,20 @@
     toggleSidebar(false);
   }
 
+  var lastTapTime = 0;
+
   function handleSlideTap(event) {
+    // Debounce rapid taps
+    var now = Date.now();
+    if (now - lastTapTime < 300) return;
+    lastTapTime = now;
+
     var card = event.target.closest("[data-slide-id]");
     if (!card || !state.currentPresentationId) return;
+
+    // Prevent default to avoid any touch delay
+    event.preventDefault();
+
     var slideId = card.dataset.slideId;
     var slides = state.slidesCache.get(state.currentPresentationId) || [];
     var slide = slides.find(function (entry) {
@@ -449,6 +469,9 @@
     }
     if (els.slides) {
       els.slides.addEventListener("click", handleSlideTap);
+      els.slides.addEventListener("touchend", handleSlideTap, {
+        passive: false,
+      });
     }
     if (els.scaleSlider) {
       els.scaleSlider.addEventListener("input", function () {
