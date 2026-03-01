@@ -12,6 +12,10 @@
     liveReconnectTimer: null,
     activeBibleBroadcast: null,
     sidebarOpen: true,
+    // Touch tracking for tap vs scroll detection
+    touchStartX: 0,
+    touchStartY: 0,
+    touchMoved: false,
   };
 
   const els = {
@@ -23,6 +27,7 @@
     scaleValue: document.querySelector('[data-role="scale-value"]'),
     sidebar: document.querySelector(".tablet-sidebar"),
     sidebarToggle: document.querySelector('[data-role="sidebar-toggle"]'),
+    sidebarClose: document.querySelector('[data-role="sidebar-close"]'),
   };
 
   function escapeHtml(value) {
@@ -123,14 +128,32 @@
         '<p class="tablet-slides__empty">No slides in this presentation.</p>';
       return;
     }
+    var lastReference = null;
+    var groupIndex = 0;
     els.slides.innerHTML = slides
-      .map(function (slide, index) {
+      .map(function (slide) {
         var isActive = isSlideActive(slide) ? " is-active" : "";
-        var groupHtml = slide.group
-          ? '<span class="tablet-slide__group">' +
-            escapeHtml(slide.group) +
-            "</span>"
+
+        // Track reference groups for alternating shades and separators
+        var isNewGroup = slide.mainReference !== lastReference;
+        if (isNewGroup) {
+          if (lastReference !== null) {
+            groupIndex++;
+          }
+          lastReference = slide.mainReference;
+        }
+        var shadeClass =
+          groupIndex % 2 === 0 ? " tablet-slide--light" : " tablet-slide--dark";
+        var separatorClass =
+          isNewGroup && groupIndex > 0 ? " tablet-slide--group-start" : "";
+
+        // Build reference header (top, prominent)
+        var refHeader = slide.mainReference
+          ? '<header class="tablet-slide__ref">' +
+            escapeHtml(slide.mainReference) +
+            "</header>"
           : "";
+
         var mainHtml = slide.main
           ? '<p class="tablet-slide__main">' +
             formatMultiline(slide.main) +
@@ -141,27 +164,28 @@
             formatMultiline(slide.translation) +
             "</p>"
           : "";
-        var refHtml = slide.mainReference
-          ? '<footer class="tablet-slide__ref">' +
-            escapeHtml(slide.mainReference) +
-            "</footer>"
+
+        // Build footer with group badge only
+        var footerHtml = slide.group
+          ? '<footer class="tablet-slide__footer"><span class="tablet-slide__group">' +
+            escapeHtml(slide.group) +
+            "</span></footer>"
           : "";
+
         return (
           '<article class="tablet-slide' +
           isActive +
+          shadeClass +
+          separatorClass +
           '" data-role="tablet-slide" data-slide-id="' +
           slide.id +
           '">' +
-          "<header><strong>" +
-          (index + 1) +
-          "</strong>" +
-          groupHtml +
-          "</header>" +
+          refHeader +
           '<section class="tablet-slide__body">' +
           mainHtml +
           translationHtml +
           "</section>" +
-          refHtml +
+          footerHtml +
           "</article>"
         );
       })
@@ -272,7 +296,12 @@
     var button = event.target.closest('[data-role="presentation-button"]');
     if (!button) return;
     var id = button.dataset.presentationId;
-    if (!id || id === state.currentPresentationId) return;
+    if (!id) return;
+    // Clicking the same presentation closes the sidebar
+    if (id === state.currentPresentationId) {
+      toggleSidebar(false);
+      return;
+    }
     state.currentPresentationId = id;
     var presentation = state.presentations.find(function (p) {
       return p.id === id;
@@ -286,6 +315,10 @@
   }
 
   function handleSlideTap(event) {
+    // Skip if this click was synthesized from a touch event (already handled)
+    if (event.sourceCapabilities && event.sourceCapabilities.firesTouchEvents) {
+      return;
+    }
     var card = event.target.closest("[data-slide-id]");
     if (!card || !state.currentPresentationId) return;
     var slideId = card.dataset.slideId;
@@ -443,11 +476,64 @@
     applyScale(saved);
   }
 
+  // Threshold in pixels - if touch moves more than this, it's a scroll not a tap
+  var TAP_THRESHOLD = 10;
+
+  function handleSlideTouchStart(event) {
+    if (event.touches.length !== 1) return;
+    var touch = event.touches[0];
+    state.touchStartX = touch.clientX;
+    state.touchStartY = touch.clientY;
+    state.touchMoved = false;
+  }
+
+  function handleSlideTouchMove(event) {
+    if (state.touchMoved) return;
+    if (event.touches.length !== 1) {
+      state.touchMoved = true;
+      return;
+    }
+    var touch = event.touches[0];
+    var deltaX = Math.abs(touch.clientX - state.touchStartX);
+    var deltaY = Math.abs(touch.clientY - state.touchStartY);
+    if (deltaX > TAP_THRESHOLD || deltaY > TAP_THRESHOLD) {
+      state.touchMoved = true;
+    }
+  }
+
+  function handleSlideTouchEnd(event) {
+    if (state.touchMoved) return;
+    // Find the element at touch end position
+    var touch = event.changedTouches[0];
+    var target = document.elementFromPoint(touch.clientX, touch.clientY);
+    if (!target) return;
+    var card = target.closest("[data-slide-id]");
+    if (!card || !state.currentPresentationId) return;
+    // Prevent ghost click
+    event.preventDefault();
+    var slideId = card.dataset.slideId;
+    var slides = state.slidesCache.get(state.currentPresentationId) || [];
+    var slide = slides.find(function (entry) {
+      return entry.id === slideId;
+    });
+    if (!slide) return;
+    triggerSlide(slide);
+  }
+
   function bindEvents() {
     if (els.presentationList) {
       els.presentationList.addEventListener("click", handlePresentationClick);
     }
     if (els.slides) {
+      // Touch events for tap detection (mobile)
+      els.slides.addEventListener("touchstart", handleSlideTouchStart, {
+        passive: true,
+      });
+      els.slides.addEventListener("touchmove", handleSlideTouchMove, {
+        passive: true,
+      });
+      els.slides.addEventListener("touchend", handleSlideTouchEnd);
+      // Click event fallback for non-touch devices (mouse)
       els.slides.addEventListener("click", handleSlideTap);
     }
     if (els.scaleSlider) {
@@ -458,6 +544,11 @@
     if (els.sidebarToggle) {
       els.sidebarToggle.addEventListener("click", function () {
         toggleSidebar(true);
+      });
+    }
+    if (els.sidebarClose) {
+      els.sidebarClose.addEventListener("click", function () {
+        toggleSidebar(false);
       });
     }
     document.addEventListener("visibilitychange", function () {

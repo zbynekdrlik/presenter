@@ -55,6 +55,7 @@ body.tablet {
 }
 
 .tablet-sidebar {
+  position: relative;
   width: 260px;
   padding: 1.25rem;
   background: rgba(15, 23, 42, 0.72);
@@ -68,6 +69,29 @@ body.tablet {
     width 0.3s ease,
     padding 0.3s ease,
     opacity 0.3s ease;
+}
+
+.tablet-sidebar__close {
+  position: absolute;
+  top: 0.75rem;
+  right: 0.75rem;
+  width: 2.5rem;
+  height: 2.5rem;
+  border: none;
+  background: rgba(148, 163, 184, 0.25);
+  color: #94a3b8;
+  font-size: 1.5rem;
+  line-height: 1;
+  border-radius: 8px;
+  cursor: pointer;
+  transition:
+    background 0.2s ease,
+    color 0.2s ease;
+}
+
+.tablet-sidebar__close:hover {
+  background: rgba(239, 68, 68, 0.3);
+  color: #fca5a5;
 }
 
 .tablet-sidebar.is-collapsed {
@@ -189,11 +213,11 @@ body.tablet {
 .tablet-slides {
   flex: 1;
   padding: 1.5rem;
-  display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(340px, 1fr));
+  display: flex;
+  flex-direction: column;
   gap: 1.5rem;
   overflow-y: auto;
-  align-content: start;
+  -webkit-overflow-scrolling: touch; /* Smooth scrolling + better touch handling on iOS */
 }
 
 .tablet-slides__empty {
@@ -210,6 +234,10 @@ body.tablet {
   gap: 0.75rem;
   border: 1px solid transparent;
   cursor: pointer;
+  user-select: none;
+  -webkit-tap-highlight-color: transparent;
+  touch-action: manipulation; /* Removes 300ms touch delay */
+  position: relative; /* Proper z-stacking in scroll container */
   transition:
     border-color 0.2s ease,
     box-shadow 0.2s ease,
@@ -229,12 +257,13 @@ body.tablet {
   opacity: 0.6;
 }
 
-.tablet-slide header {
-  display: flex;
-  justify-content: space-between;
-  align-items: center;
-  color: #cbd5f5;
-  font-size: calc(0.95rem * var(--tablet-scale));
+/* Reference header - now at top, bigger and prominent */
+.tablet-slide__ref {
+  font-size: calc(1.4rem * var(--tablet-scale));
+  color: #38bdf8;
+  font-weight: 600;
+  margin-bottom: 0.5rem;
+  text-align: center;
 }
 
 .tablet-slide__group {
@@ -268,11 +297,36 @@ body.tablet {
   border-top: 1px solid rgba(147, 197, 253, 0.15);
 }
 
-.tablet-slide__ref {
-  font-size: calc(1.1rem * var(--tablet-scale));
-  color: #94a3b8;
-  font-style: italic;
-  margin-top: 0.25rem;
+/* Footer for group badge */
+.tablet-slide__footer {
+  margin-top: auto;
+  padding-top: 0.5rem;
+}
+
+/* Alternating shades for reference groups - high contrast */
+.tablet-slide--light {
+  background: rgba(51, 65, 85, 0.9);
+}
+
+.tablet-slide--dark {
+  background: rgba(15, 23, 42, 0.9);
+}
+
+/* Big separator line between reference groups */
+.tablet-slide--group-start {
+  margin-top: 2.5rem;
+  position: relative;
+}
+
+.tablet-slide--group-start::before {
+  content: "";
+  position: absolute;
+  top: -1.25rem;
+  left: 0;
+  right: 0;
+  height: 4px;
+  background: #475569;
+  border-radius: 2px;
 }
 
 .tablet-toast {

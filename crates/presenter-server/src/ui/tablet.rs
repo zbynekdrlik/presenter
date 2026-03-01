@@ -32,6 +32,9 @@ fn TabletDocument(presentations_json: String) -> impl IntoView {
                 </header>
                 <main class="tablet-layout">
                     <aside class="tablet-sidebar">
+                        <button type="button" class="tablet-sidebar__close" data-role="sidebar-close">
+                            "×"
+                        </button>
                         <section class="tablet-panel">
                             <h2>"Presentations"</h2>
                             <div class="tablet-list" data-role="presentation-list">
