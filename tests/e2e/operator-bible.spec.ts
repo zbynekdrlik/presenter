@@ -10,7 +10,7 @@ import {
 let serverHandle: ServerHandle | undefined;
 let baseURL = "";
 
-test.describe.configure({ timeout: 300_000 });
+test.describe.configure({ timeout: 180_000 });
 
 test.beforeAll(async ({}, testInfo) => {
   const config = deriveTestConfig(testInfo);

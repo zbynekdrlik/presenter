@@ -3,7 +3,9 @@ use crate::stage_connections::{StageClientSnapshot, StageConnections};
 use axum::extract::ws::{Message, WebSocket};
 use chrono::{DateTime, Utc};
 use futures_util::{SinkExt, StreamExt};
-use presenter_core::{BibleBroadcast, BibleSlideOutput, StageDisplaySnapshot, TimersOverview};
+use presenter_core::{
+    BibleBroadcast, BibleSlideOutput, StageDesign, StageDisplaySnapshot, TimersOverview,
+};
 use serde::{Deserialize, Serialize};
 use tokio::{sync::broadcast, task::JoinHandle};
 use tokio_stream::wrappers::BroadcastStream;
@@ -86,8 +88,15 @@ pub enum LiveEvent {
         layout: String,
         appearance: StageAppearance,
     },
+    StageDesign {
+        layout: String,
+        design: StageDesign,
+    },
     BiblePreferencesChanged {
         character_limit: u32,
+    },
+    BroadcastLive {
+        enabled: bool,
     },
 }
 

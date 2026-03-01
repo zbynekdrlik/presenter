@@ -100,6 +100,7 @@ pub fn build_router(state: AppState) -> Router {
         .route("/ui/bible", get(bible::bible_ui))
         .route("/ui/settings", get(ui_routes::settings_ui))
         .route("/ui/stage-settings", get(ui_routes::stage_settings_ui))
+        .route("/ui/stage-design", get(ui_routes::stage_design_ui))
         .route("/overlays/timer", get(ui_routes::timer_overlay))
         .route("/stage-displays", get(stage::list_stage_displays))
         .route(
@@ -118,6 +119,15 @@ pub fn build_router(state: AppState) -> Router {
             "/stage/appearance/{layout}",
             get(stage::get_stage_appearance).put(stage::update_stage_appearance),
         )
+        .route(
+            "/stage/design/{layout}",
+            get(stage::get_stage_design).put(stage::update_stage_design),
+        )
+        .route(
+            "/stage/design/{layout}/reset",
+            post(stage::reset_stage_design),
+        )
+        .route("/stage/broadcast-live", get(stage::get_broadcast_live))
         .route(
             "/integrations/resolume/hosts",
             get(integrations::resolume::list_resolume_hosts)

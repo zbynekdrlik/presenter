@@ -12,7 +12,7 @@ let baseURL: string;
 let dbUrl: string;
 let port: number;
 
-test.describe.configure({ timeout: 420_000 });
+test.describe.configure({ timeout: 180_000 });
 
 async function waitForOperatorReady(page: Page) {
   await page.goto(new URL('/ui/operator', baseURL).toString(), {

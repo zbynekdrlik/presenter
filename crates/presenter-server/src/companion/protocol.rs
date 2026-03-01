@@ -148,6 +148,13 @@ pub(super) fn parse_command(command: &str, payload: Value) -> Result<CompanionCo
             })
         }
         "bible.clear" => Ok(CompanionCommand::BibleClear),
+        "broadcast.set_live" => {
+            let data: BroadcastSetLivePayload = serde_json::from_value(payload)
+                .map_err(|err| format!("invalid broadcast.set_live payload: {err}"))?;
+            Ok(CompanionCommand::BroadcastSetLive {
+                enabled: data.enabled,
+            })
+        }
         other => Err(format!("unknown command: {other}")),
     }
 }
@@ -192,6 +199,8 @@ pub(super) async fn initialise_variable_state(state: &AppState) -> CompanionVari
     if let Some(broadcast) = state.active_bible_broadcast().await {
         variables.apply_bible(broadcast);
     }
+
+    variables.apply_broadcast_live(state.broadcast_live());
 
     variables
 }
@@ -294,6 +303,9 @@ pub(super) enum CompanionCommand {
         reference: BibleReference,
     },
     BibleClear,
+    BroadcastSetLive {
+        enabled: bool,
+    },
 }
 
 #[derive(Debug, Deserialize)]
@@ -326,6 +338,12 @@ struct BibleTriggerPayload {
     verse_start: u16,
     #[serde(default)]
     verse_end: Option<u16>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct BroadcastSetLivePayload {
+    enabled: bool,
 }
 
 pub(super) async fn handle_command(
@@ -426,6 +444,11 @@ pub(super) async fn handle_command(
         CompanionCommand::BibleClear => {
             state.clear_bible_broadcast().await;
             let refresh = variables.clear_bible();
+            Ok(CommandResponse::ack(command).with_refresh(refresh))
+        }
+        CompanionCommand::BroadcastSetLive { enabled } => {
+            state.set_broadcast_live(enabled);
+            let refresh = variables.apply_broadcast_live(enabled);
             Ok(CommandResponse::ack(command).with_refresh(refresh))
         }
     }

@@ -7,7 +7,7 @@ import {
   type ServerHandle,
 } from "./support";
 
-test.describe.configure({ timeout: 420_000 });
+test.describe.configure({ timeout: 180_000 });
 
 let server: ServerHandle | undefined;
 let baseURL = "";

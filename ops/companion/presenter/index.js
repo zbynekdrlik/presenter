@@ -43,6 +43,7 @@ const VARIABLE_DEFINITIONS = [
   "bible_reference",
   "bible_text",
   "bible_triggered_at",
+  "broadcast_live",
   "live_ws_connected",
 ];
 
@@ -60,6 +61,7 @@ const COMMANDS = [
   { id: "stage.layout", label: "Stage: set layout" },
   { id: "bible.trigger", label: "Bible: trigger passage" },
   { id: "bible.clear", label: "Bible: clear passage" },
+  { id: "broadcast.set_live", label: "Broadcast: set live state" },
 ];
 
 const STAGE_LAYOUT_CHOICES = [
@@ -350,6 +352,15 @@ class PresenterInstance extends InstanceBase {
             min: 0,
           },
         ];
+      case "broadcast.set_live":
+        return [
+          {
+            type: "checkbox",
+            id: "enabled",
+            label: "Live",
+            default: false,
+          },
+        ];
       default:
         return [];
     }
@@ -391,6 +402,17 @@ class PresenterInstance extends InstanceBase {
         bgcolor: 0x00ff00,
       },
       callback: () => this.variables.get("timer_countdown_state") === "running",
+    };
+
+    feedbacks["broadcast_live"] = {
+      type: "boolean",
+      name: "Broadcast is live",
+      options: [],
+      defaultStyle: {
+        color: 0xffffff,
+        bgcolor: 0xff0000,
+      },
+      callback: () => this.variables.get("broadcast_live") === "true",
     };
 
     this.setFeedbackDefinitions(feedbacks);
@@ -436,6 +458,12 @@ class PresenterInstance extends InstanceBase {
         if (Number(options.verseEnd) > 0) {
           payload.verseEnd = Number(options.verseEnd);
         }
+        break;
+      }
+      case "broadcast.set_live": {
+        payload = {
+          enabled: Boolean(options.enabled),
+        };
         break;
       }
       default:

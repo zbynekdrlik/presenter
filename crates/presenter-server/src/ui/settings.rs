@@ -160,7 +160,7 @@ fn SettingsDocument(
                     </div>
                     <nav class="settings__header-nav">
                         <a href="/" class="settings__link">"← Back to hub"</a>
-                        <a href="/ui/stage-settings" class="settings__link">"Stage Appearance →"</a>
+                        <a href="/ui/stage-design" class="settings__link">"Stage Design →"</a>
                     </nav>
                 </header>
                 <main class="settings__main">

@@ -30,6 +30,7 @@ describe("Companion COMMANDS parity", () => {
     "stage.layout",
     "bible.trigger",
     "bible.clear",
+    "broadcast.set_live",
   ];
 
   test("COMMANDS array contains all expected command IDs", () => {

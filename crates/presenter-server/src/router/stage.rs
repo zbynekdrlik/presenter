@@ -10,7 +10,7 @@ use super::{parse_uuid, AppError};
 use crate::{stage_ui, state::AppState};
 use axum::http::StatusCode;
 use presenter_core::{
-    PlaylistId, PresentationId, SlideId, StageDisplayLayout, StageDisplaySnapshot,
+    PlaylistId, PresentationId, SlideId, StageDesign, StageDisplayLayout, StageDisplaySnapshot,
 };
 
 /// Visual appearance settings for a stage display layout.
@@ -224,4 +224,55 @@ pub(super) async fn update_stage_appearance(
 ) -> Result<StatusCode, AppError> {
     state.set_stage_appearance(&layout, appearance).await?;
     Ok(StatusCode::NO_CONTENT)
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub(super) struct BroadcastLiveResponse {
+    pub(super) enabled: bool,
+}
+
+#[instrument(skip_all)]
+pub(super) async fn get_broadcast_live(
+    State(state): State<AppState>,
+) -> Json<BroadcastLiveResponse> {
+    Json(BroadcastLiveResponse {
+        enabled: state.broadcast_live(),
+    })
+}
+
+// Stage Design endpoints
+
+#[instrument(skip_all)]
+pub(super) async fn get_stage_design(
+    State(state): State<AppState>,
+    Path(layout): Path<String>,
+) -> Result<Json<StageDesign>, AppError> {
+    // Use shared status bar settings from worship-snv for all layouts
+    let design = state.get_stage_design_with_shared_status(&layout).await?;
+    Ok(Json(design))
+}
+
+#[instrument(skip_all)]
+pub(super) async fn update_stage_design(
+    State(state): State<AppState>,
+    Path(layout): Path<String>,
+    Json(design): Json<StageDesign>,
+) -> Result<StatusCode, AppError> {
+    if design.layout_code != layout {
+        return Err(AppError::bad_request_message(
+            "layout_code in body must match URL parameter",
+        ));
+    }
+    state.set_stage_design(&layout, design).await?;
+    Ok(StatusCode::NO_CONTENT)
+}
+
+#[instrument(skip_all)]
+pub(super) async fn reset_stage_design(
+    State(state): State<AppState>,
+    Path(layout): Path<String>,
+) -> Result<Json<StageDesign>, AppError> {
+    let design = state.reset_stage_design(&layout).await?;
+    Ok(Json(design))
 }

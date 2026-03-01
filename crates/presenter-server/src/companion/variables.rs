@@ -14,6 +14,7 @@ pub(super) struct CompanionVariableState {
     pub(super) bible: Option<BibleBroadcast>,
     pub(super) stage_layout: Option<StageLayoutVariables>,
     stage_layouts: HashMap<String, StageDisplayLayout>,
+    pub(super) broadcast_live: bool,
 }
 
 impl CompanionVariableState {
@@ -33,7 +34,18 @@ impl CompanionVariableState {
             crate::live::LiveEvent::BibleCleared => self.clear_bible(),
             crate::live::LiveEvent::StageLayout { code } => self.set_stage_layout_code(&code),
             crate::live::LiveEvent::StageAppearance { .. } => false,
+            crate::live::LiveEvent::StageDesign { .. } => false,
             crate::live::LiveEvent::BiblePreferencesChanged { .. } => false,
+            crate::live::LiveEvent::BroadcastLive { enabled } => self.apply_broadcast_live(enabled),
+        }
+    }
+
+    pub(super) fn apply_broadcast_live(&mut self, enabled: bool) -> bool {
+        if self.broadcast_live == enabled {
+            false
+        } else {
+            self.broadcast_live = enabled;
+            true
         }
     }
 
@@ -122,6 +134,10 @@ impl CompanionVariableState {
         write_stage_variables(&mut builder, self.stage.as_ref());
         write_timer_variables(&mut builder, self.timers.as_ref());
         write_bible_variables(&mut builder, self.bible.as_ref());
+        builder.set(
+            "broadcast_live",
+            if self.broadcast_live { "true" } else { "false" }.to_string(),
+        );
         builder.finish()
     }
 }
