@@ -16,7 +16,7 @@ import {
 let serverHandle: ServerHandle | undefined;
 let baseURL: string;
 
-test.describe.configure({ timeout: 600_000 });
+test.describe.configure({ timeout: 180_000 });
 
 async function setCountdownInput(
   page: Page,

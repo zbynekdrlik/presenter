@@ -38,7 +38,7 @@ const selectors = {
   androidList: '[data-role="android-display-list"]',
 };
 
-test.describe.configure({ timeout: 600_000 });
+test.describe.configure({ timeout: 180_000 });
 
 test.beforeAll(async ({}, testInfo) => {
   const config = deriveTestConfig(testInfo);

@@ -14,7 +14,7 @@ let dbUrl: string;
 let port: number;
 let wsURL: string;
 
-test.describe.configure({ timeout: 420_000 });
+test.describe.configure({ timeout: 180_000 });
 
 async function openStageDisplay(context: BrowserContext) {
   await context.request.post(new URL("/stage/layout", baseURL).toString(), {
