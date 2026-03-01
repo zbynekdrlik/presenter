@@ -12,6 +12,10 @@
     liveReconnectTimer: null,
     activeBibleBroadcast: null,
     sidebarOpen: true,
+    // Touch tracking for tap vs scroll detection
+    touchStartX: 0,
+    touchStartY: 0,
+    touchMoved: false,
   };
 
   const els = {
@@ -305,6 +309,10 @@
   }
 
   function handleSlideTap(event) {
+    // Skip if this click was synthesized from a touch event (already handled)
+    if (event.sourceCapabilities && event.sourceCapabilities.firesTouchEvents) {
+      return;
+    }
     var card = event.target.closest("[data-slide-id]");
     if (!card || !state.currentPresentationId) return;
     var slideId = card.dataset.slideId;
@@ -462,11 +470,64 @@
     applyScale(saved);
   }
 
+  // Threshold in pixels - if touch moves more than this, it's a scroll not a tap
+  var TAP_THRESHOLD = 10;
+
+  function handleSlideTouchStart(event) {
+    if (event.touches.length !== 1) return;
+    var touch = event.touches[0];
+    state.touchStartX = touch.clientX;
+    state.touchStartY = touch.clientY;
+    state.touchMoved = false;
+  }
+
+  function handleSlideTouchMove(event) {
+    if (state.touchMoved) return;
+    if (event.touches.length !== 1) {
+      state.touchMoved = true;
+      return;
+    }
+    var touch = event.touches[0];
+    var deltaX = Math.abs(touch.clientX - state.touchStartX);
+    var deltaY = Math.abs(touch.clientY - state.touchStartY);
+    if (deltaX > TAP_THRESHOLD || deltaY > TAP_THRESHOLD) {
+      state.touchMoved = true;
+    }
+  }
+
+  function handleSlideTouchEnd(event) {
+    if (state.touchMoved) return;
+    // Find the element at touch end position
+    var touch = event.changedTouches[0];
+    var target = document.elementFromPoint(touch.clientX, touch.clientY);
+    if (!target) return;
+    var card = target.closest("[data-slide-id]");
+    if (!card || !state.currentPresentationId) return;
+    // Prevent ghost click
+    event.preventDefault();
+    var slideId = card.dataset.slideId;
+    var slides = state.slidesCache.get(state.currentPresentationId) || [];
+    var slide = slides.find(function (entry) {
+      return entry.id === slideId;
+    });
+    if (!slide) return;
+    triggerSlide(slide);
+  }
+
   function bindEvents() {
     if (els.presentationList) {
       els.presentationList.addEventListener("click", handlePresentationClick);
     }
     if (els.slides) {
+      // Touch events for tap detection (mobile)
+      els.slides.addEventListener("touchstart", handleSlideTouchStart, {
+        passive: true,
+      });
+      els.slides.addEventListener("touchmove", handleSlideTouchMove, {
+        passive: true,
+      });
+      els.slides.addEventListener("touchend", handleSlideTouchEnd);
+      // Click event fallback for non-touch devices (mouse)
       els.slides.addEventListener("click", handleSlideTap);
     }
     if (els.scaleSlider) {
