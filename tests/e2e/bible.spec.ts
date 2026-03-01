@@ -68,16 +68,16 @@ test("operator manages Bible workflow end-to-end", async ({
   const liveTab = page.locator('[data-role="bible-tab"][data-tab="live"]');
   await expect(liveTab).toHaveAttribute("data-active", "true");
 
+  // Translation dropdowns are now in the Live tab
+  const mainTranslation = page.locator('[data-role="main-translation"]');
+  await expect(mainTranslation).toBeVisible({ timeout: 30_000 });
+
   // Settings tab: go there to set char limit
   const settingsTab = page.locator(
     '[data-role="bible-tab"][data-tab="settings"]',
   );
   await settingsTab.click();
   await expect(settingsTab).toHaveAttribute("data-active", "true");
-
-  const mainTranslation = page.locator('[data-role="main-translation"]');
-  await expect(mainTranslation).toBeVisible({ timeout: 30_000 });
-
   await page.locator('[data-role="char-limit"]').fill("80");
 
   // Back to LIVE tab for book selection and passage loading
@@ -434,8 +434,8 @@ test("operator manages Bible workflow end-to-end", async ({
   );
   expect(deletedResponse.status()).toBe(404);
 
-  // Switch to SETTINGS tab and change translation via dropdown
-  await settingsTab.click();
+  // Change translation via dropdown (now in Live tab)
+  await liveTab.click();
   const mainTranslationDropdown = page.locator(
     '[data-role="main-translation"]',
   );
@@ -447,9 +447,6 @@ test("operator manages Bible workflow end-to-end", async ({
     );
     expect(preferences.mainTranslation).toBe("slk-seb");
   }).toPass();
-
-  // Switch back to LIVE tab and load Slovak passage
-  await liveTab.click();
   await page.locator('[data-role="book-filter"]').fill("Ján");
   const janButton = page
     .locator('[data-role="book-list"] button[data-book="Ján"]')
@@ -660,12 +657,7 @@ test("main translation dropdown selects translation and loads books", async ({
     { timeout: 120_000 },
   );
 
-  // Switch to SETTINGS tab where translation dropdowns live
-  const settingsTab = page.locator(
-    '[data-role="bible-tab"][data-tab="settings"]',
-  );
-  await settingsTab.click();
-
+  // Translation dropdowns are now in the Live tab (the default)
   // Main translation dropdown should be visible
   const mainDropdown = page.locator('[data-role="main-translation"]');
   await expect(mainDropdown).toBeVisible({ timeout: 10_000 });
@@ -866,17 +858,16 @@ test("translation text hidden when no secondary bible selected", async ({
     slides.first().locator(".operator__slide-text--translation"),
   ).toBeVisible();
 
-  // Now remove the secondary translation via SETTINGS tab
-  const settingsTab = page.locator(
-    '[data-role="bible-tab"][data-tab="settings"]',
-  );
-  await settingsTab.click();
+  // Now remove the secondary translation (dropdowns are in Live tab)
   await page.locator('[data-role="secondary-translation"]').selectOption("");
-  await page.locator('[data-role="save-preferences"]').click();
 
-  // Switch back to LIVE tab and reload passage
-  const liveTab = page.locator('[data-role="bible-tab"][data-tab="live"]');
-  await liveTab.click();
+  // Wait for auto-save to persist the preference
+  await expect(async () => {
+    const prefs = await page.evaluate(
+      () => window.__presenterBibleState.preferences,
+    );
+    expect(prefs.secondaryTranslation).toBe("");
+  }).toPass({ timeout: 5_000 });
 
   await page.locator('[data-role="load-button"]').click();
   await slides.first().waitFor({ state: "visible" });

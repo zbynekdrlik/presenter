@@ -47,13 +47,7 @@ test("operator bible surface drives live passage broadcast", async ({
   await expect(liveTab).toBeVisible({ timeout: 30_000 });
   await expect(liveTab).toHaveAttribute("data-active", "true");
 
-  // Settings tab contains translation dropdowns — switch there to verify
-  const settingsTab = page.locator(
-    '[data-role="bible-tab"][data-tab="settings"]',
-  );
-  await settingsTab.click();
-  await expect(settingsTab).toHaveAttribute("data-active", "true");
-
+  // Translation dropdowns are now in the Live tab — verify they're visible
   const mainTranslationDropdown = page.locator(
     '[data-role="main-translation"]',
   );
@@ -383,12 +377,7 @@ test("bible tab edit mode works in live and prepared tabs", async ({
     );
   };
 
-  // Go to settings tab first to ensure translation is set and books load
-  const settingsTab = page.locator(
-    '[data-role="bible-tab"][data-tab="settings"]',
-  );
-  await settingsTab.click();
-  await expect(settingsTab).toHaveAttribute("data-active", "true");
+  // Translation dropdowns are in the Live tab — access them directly
   const mainDropdown = page.locator('[data-role="main-translation"]');
   await expect(mainDropdown).toBeVisible({ timeout: 30_000 });
 
@@ -407,10 +396,6 @@ test("bible tab edit mode works in live and prepared tabs", async ({
       expect(mainTranslation).toBe("slk-seb");
     }).toPass({ timeout: 10_000 });
   }
-
-  // Switch back to live tab for passage loading
-  await liveTab.click();
-  await expect(liveTab).toHaveAttribute("data-active", "true");
 
   // Wait for books to load
   await expect(
@@ -604,11 +589,7 @@ test("bible tab select all button selects and deselects all slides", async ({
     );
   };
 
-  // Ensure translation is set
-  const settingsTab = page.locator(
-    '[data-role="bible-tab"][data-tab="settings"]',
-  );
-  await settingsTab.click();
+  // Translation dropdowns are in the Live tab — access them directly
   const mainDropdown = page.locator('[data-role="main-translation"]');
   await expect(mainDropdown).toBeVisible({ timeout: 30_000 });
 
@@ -626,10 +607,6 @@ test("bible tab select all button selects and deselects all slides", async ({
       expect(mainTranslation).toBe("slk-seb");
     }).toPass({ timeout: 10_000 });
   }
-
-  // Switch to live tab and load a passage
-  await liveTab.click();
-  await expect(liveTab).toHaveAttribute("data-active", "true");
 
   await expect(
     page.locator('[data-role="book-list"] button').first(),
@@ -727,11 +704,7 @@ test("operator edit/live mode toggle propagates to bible iframe", async ({
     expect(ready).toBeTruthy();
   }).toPass({ timeout: 30_000 });
 
-  // Set translation inside the iframe
-  const settingsTab = bibleFrame.locator(
-    '[data-role="bible-tab"][data-tab="settings"]',
-  );
-  await settingsTab.click();
+  // Translation dropdowns are in the Live tab — access them directly
   const mainDropdown = bibleFrame.locator('[data-role="main-translation"]');
   await expect(mainDropdown).toBeVisible({ timeout: 30_000 });
 
@@ -752,11 +725,10 @@ test("operator edit/live mode toggle propagates to bible iframe", async ({
     }).toPass({ timeout: 10_000 });
   }
 
-  // Switch to live tab inside the iframe and load a passage
+  // Live tab should be active by default
   const liveTab = bibleFrame.locator(
     '[data-role="bible-tab"][data-tab="live"]',
   );
-  await liveTab.click();
   await expect(liveTab).toHaveAttribute("data-active", "true");
 
   // Wait for books to load
@@ -1116,11 +1088,7 @@ test("triggering edited Bible slide sends edited text", async ({
   const liveTab = page.locator('[data-role="bible-tab"][data-tab="live"]');
   await expect(liveTab).toBeVisible({ timeout: 30_000 });
 
-  // Set translation
-  const settingsTab = page.locator(
-    '[data-role="bible-tab"][data-tab="settings"]',
-  );
-  await settingsTab.click();
+  // Translation dropdowns are in the Live tab — access them directly
   const mainDropdown = page.locator('[data-role="main-translation"]');
   await expect(mainDropdown).toBeVisible({ timeout: 30_000 });
   const translations: Array<{ code: string }> = await (
@@ -1138,7 +1106,6 @@ test("triggering edited Bible slide sends edited text", async ({
   }
 
   // Load a passage
-  await liveTab.click();
   await expect(
     page.locator('[data-role="book-list"] button').first(),
   ).toBeVisible({ timeout: 60_000 });
