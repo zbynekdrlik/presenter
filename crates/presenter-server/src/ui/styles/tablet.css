@@ -194,6 +194,7 @@ body.tablet {
   gap: 1.5rem;
   overflow-y: auto;
   align-content: start;
+  -webkit-overflow-scrolling: touch; /* Smooth scrolling + better touch handling on iOS */
 }
 
 .tablet-slides__empty {
@@ -212,6 +213,8 @@ body.tablet {
   cursor: pointer;
   user-select: none;
   -webkit-tap-highlight-color: transparent;
+  touch-action: manipulation; /* Removes 300ms touch delay */
+  position: relative; /* Proper z-stacking in scroll container */
   transition:
     border-color 0.2s ease,
     box-shadow 0.2s ease,
