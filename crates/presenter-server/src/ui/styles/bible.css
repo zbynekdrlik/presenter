@@ -85,6 +85,28 @@ body.in-iframe .operator__main {
   overflow-y: auto;
 }
 
+/* ---------- Translation row in Live tab ---------- */
+.bible__translation-row {
+  display: flex;
+  gap: 0.5rem;
+}
+
+.bible__translation-row .operator__field--compact {
+  flex: 1;
+  min-width: 0;
+}
+
+.bible__translation-row .operator__field--compact span {
+  font-size: 0.7rem;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+
+.bible__translation-row select {
+  width: 100%;
+  text-overflow: ellipsis;
+}
+
 /* ---------- PREPARED panel ---------- */
 .bible__prepared-header {
   display: flex;
@@ -414,6 +436,18 @@ body.in-iframe .operator__main {
 .operator--bible .operator__search {
   position: relative;
   z-index: 21;
+}
+
+/* ---------- Minimal slides column for Bible UI ---------- */
+.operator__slides-column--minimal {
+  padding: 0.5rem 1rem 1rem;
+  gap: 0.5rem;
+}
+
+.operator__slides-toolbar--minimal {
+  padding: 0.25rem 0.5rem;
+  border-bottom: none;
+  justify-content: flex-end;
 }
 
 @media (max-width: 720px) {

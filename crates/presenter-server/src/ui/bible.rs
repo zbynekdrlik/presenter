@@ -108,6 +108,35 @@ fn BibleDocument(
                                 <button type="button" data-role="bible-tab" data-tab="settings">"Settings"</button>
                             </nav>
                             <div class="bible__tab-panel" data-bible-panel="live" data-visible="true">
+                                <div class="bible__translation-row">
+                                    <label class="operator__field operator__field--compact">
+                                        <span>"Main"</span>
+                                        <select data-role="main-translation">
+                                            {translations_for_view.iter().map(|translation| {
+                                                let label = if translation.language.is_empty() {
+                                                    translation.name.clone()
+                                                } else {
+                                                    format!("{} ({})", translation.name, translation.language)
+                                                };
+                                                view! { <option value={translation.code.clone()}>{label}</option> }
+                                            }).collect::<Vec<_>>() }
+                                        </select>
+                                    </label>
+                                    <label class="operator__field operator__field--compact">
+                                        <span>"Secondary"</span>
+                                        <select data-role="secondary-translation">
+                                            <option value="">"None"</option>
+                                            {translations_for_view.iter().map(|translation| {
+                                                let label = if translation.language.is_empty() {
+                                                    translation.name.clone()
+                                                } else {
+                                                    format!("{} ({})", translation.name, translation.language)
+                                                };
+                                                view! { <option value={translation.code.clone()}>{label}</option> }
+                                            }).collect::<Vec<_>>() }
+                                        </select>
+                                    </label>
+                                </div>
                                 <label class="operator__field">
                                     <span>"Find book"</span>
                                     <input type="search" data-role="book-filter" placeholder="Start typing…" />
@@ -150,33 +179,6 @@ fn BibleDocument(
                             <div class="bible__tab-panel" data-bible-panel="settings">
                                 <div class="operator__form-group">
                                     <label class="operator__field">
-                                        <span>"Main translation"</span>
-                                        <select data-role="main-translation">
-                                            {translations_for_view.iter().map(|translation| {
-                                                let label = if translation.language.is_empty() {
-                                                    translation.name.clone()
-                                                } else {
-                                                    format!("{} ({})", translation.name, translation.language)
-                                                };
-                                                view! { <option value={translation.code.clone()}>{label}</option> }
-                                            }).collect::<Vec<_>>() }
-                                        </select>
-                                    </label>
-                                    <label class="operator__field">
-                                        <span>"Secondary translation"</span>
-                                        <select data-role="secondary-translation">
-                                            <option value="">"None"</option>
-                                            {translations_for_view.iter().map(|translation| {
-                                                let label = if translation.language.is_empty() {
-                                                    translation.name.clone()
-                                                } else {
-                                                    format!("{} ({})", translation.name, translation.language)
-                                                };
-                                                view! { <option value={translation.code.clone()}>{label}</option> }
-                                            }).collect::<Vec<_>>() }
-                                        </select>
-                                    </label>
-                                    <label class="operator__field">
                                         <span>"Character limit"</span>
                                         <input type="number" data-role="char-limit" value="320" min="1" max="4000" />
                                     </label>
@@ -185,13 +187,8 @@ fn BibleDocument(
                             </div>
                         </div>
                     </aside>
-                    <section class="operator__slides-column" data-role="slides-column">
-                        <header class="operator__slides-heading">
-                            <div>
-                                <h2>"Slides"</h2>
-                            </div>
-                        </header>
-                        <div class="operator__slides-toolbar">
+                    <section class="operator__slides-column operator__slides-column--minimal" data-role="slides-column">
+                        <div class="operator__slides-toolbar operator__slides-toolbar--minimal">
                             <button type="button" class="operator__slides-add" data-role="add-empty-slide" title="Add empty slide to active presentation">"+"</button>
                         </div>
                         <div class="operator__slides" data-role="slides">
