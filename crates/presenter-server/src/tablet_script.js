@@ -124,14 +124,20 @@
       return;
     }
     var lastReference = null;
+    var groupIndex = 0;
     els.slides.innerHTML = slides
       .map(function (slide) {
         var isActive = isSlideActive(slide) ? " is-active" : "";
 
-        // Check if this is the first slide of a new reference group
-        var isNewGroup = slide.mainReference !== lastReference;
-        var groupStartClass = isNewGroup ? " tablet-slide--group-start" : "";
-        lastReference = slide.mainReference;
+        // Track reference groups for alternating shades
+        if (slide.mainReference !== lastReference) {
+          if (lastReference !== null) {
+            groupIndex++;
+          }
+          lastReference = slide.mainReference;
+        }
+        var shadeClass =
+          groupIndex % 2 === 0 ? " tablet-slide--light" : " tablet-slide--dark";
 
         // Build reference header (top, prominent)
         var refHeader = slide.mainReference
@@ -161,7 +167,7 @@
         return (
           '<article class="tablet-slide' +
           isActive +
-          groupStartClass +
+          shadeClass +
           '" data-role="tablet-slide" data-slide-id="' +
           slide.id +
           '">' +

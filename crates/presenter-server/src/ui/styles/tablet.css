@@ -277,29 +277,13 @@ body.tablet {
   padding-top: 0.5rem;
 }
 
-/* Visual separation for new reference groups */
-.tablet-slide--group-start {
-  margin-top: 2rem;
-  position: relative;
+/* Alternating shades for reference groups */
+.tablet-slide--light {
+  background: rgba(30, 41, 59, 0.8);
 }
 
-.tablet-slide--group-start::before {
-  content: "";
-  position: absolute;
-  top: -1rem;
-  left: 0;
-  right: 0;
-  height: 2px;
-  background: linear-gradient(90deg, transparent, #475569, transparent);
-}
-
-/* First slide in container shouldn't have extra margin */
-.tablet-slides .tablet-slide--group-start:first-child {
-  margin-top: 0;
-}
-
-.tablet-slides .tablet-slide--group-start:first-child::before {
-  display: none;
+.tablet-slide--dark {
+  background: rgba(15, 23, 42, 0.8);
 }
 
 .tablet-toast {
