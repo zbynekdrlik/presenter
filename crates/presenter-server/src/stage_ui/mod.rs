@@ -527,6 +527,46 @@ fn StageDisplayDocument(
     return `${{String(minutes).padStart(2, '0')}}:${{String(seconds).padStart(2, '0')}}`;
   }};
 
+  // Curated color palette for group identification
+  const GROUP_COLORS = [
+    '#fb7185', // rose
+    '#fb923c', // orange
+    '#fbbf24', // amber
+    '#34d399', // emerald
+    '#22d3ee', // cyan
+    '#60a5fa', // blue
+    '#a78bfa', // violet
+    '#f472b6', // pink
+  ];
+
+  const getGroupColor = (groupName) => {{
+    if (!groupName) return null;
+    // Simple hash: sum of char codes with bit mixing
+    let hash = 0;
+    for (let i = 0; i < groupName.length; i++) {{
+      hash = ((hash << 5) - hash) + groupName.charCodeAt(i);
+      hash = hash & hash; // Convert to 32-bit integer
+    }}
+    const index = Math.abs(hash) % GROUP_COLORS.length;
+    return GROUP_COLORS[index];
+  }};
+
+  const applyGroupColor = (elementId, groupName) => {{
+    const el = document.getElementById(elementId);
+    if (!el) return;
+    if (!groupName) {{
+      el.style.backgroundColor = '';
+      el.style.color = '';
+      return;
+    }}
+    const color = getGroupColor(groupName);
+    if (color) {{
+      // Apply color with 25% opacity background
+      el.style.backgroundColor = color + '40';
+      el.style.color = color;
+    }}
+  }};
+
   const applyTimers = (timers) => {{
     if (!timers) return;
     const countdown = timers.countdownToStart || timers.countdown_to_start || {{}};
@@ -558,10 +598,12 @@ fn StageDisplayDocument(
       const currentGroup = current && current.group ? current.group : '';
       setText('current-group', currentGroup || '');
       setHidden('current-group', !currentGroup);
+      applyGroupColor('current-group', currentGroup);
 
       const nextGroup = next && next.group ? next.group : '';
       setText('next-group', nextGroup || '');
       setHidden('next-group', !nextGroup);
+      applyGroupColor('next-group', nextGroup);
     }} else if (layout === 'worship-pp') {{
       const current = snapshot.current;
       const next = snapshot.next;
@@ -569,11 +611,13 @@ fn StageDisplayDocument(
       const currentGroup = current && current.group ? current.group : '';
       setText('current-group', currentGroup || '');
       setHidden('current-group', !currentGroup);
+      applyGroupColor('current-group', currentGroup);
 
       setText('next-main', selectPrimary(next));
       const nextGroup = next && next.group ? next.group : '';
       setText('next-group', nextGroup || '');
       setHidden('next-group', !nextGroup);
+      applyGroupColor('next-group', nextGroup);
 
       renderPlaylistSidebar(snapshot.playlistEntries, snapshot.playlistName);
     }}
