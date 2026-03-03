@@ -541,13 +541,14 @@ fn StageDisplayDocument(
 
   const getGroupColor = (groupName) => {{
     if (!groupName) return null;
-    // Simple hash: sum of char codes with bit mixing
-    let hash = 0;
+    // FNV-1a hash for better distribution across short strings
+    let hash = 2166136261; // FNV offset basis
     for (let i = 0; i < groupName.length; i++) {{
-      hash = ((hash << 5) - hash) + groupName.charCodeAt(i);
-      hash = hash & hash; // Convert to 32-bit integer
+      hash ^= groupName.charCodeAt(i);
+      // FNV prime multiplication with unsigned conversion
+      hash = Math.imul(hash, 16777619) >>> 0;
     }}
-    const index = Math.abs(hash) % GROUP_COLORS.length;
+    const index = hash % GROUP_COLORS.length;
     return GROUP_COLORS[index];
   }};
 
