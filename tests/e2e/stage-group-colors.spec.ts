@@ -341,8 +341,8 @@ test("worship-pp stage applies consistent colors to group badges", async ({
   } = await updatedPresResponse.json();
   const slides = updatedPresDetail.presentation.slides;
 
-  // Update slides with groups
-  const groups = ["Leader", "Choir"];
+  // Update slides with groups (use "Men" and "Women" which are known to have different colors)
+  const groups = ["Men", "Women"];
   for (let i = 0; i < 2; i++) {
     const updateResponse = await page.request.patch(
       new URL(
@@ -385,16 +385,16 @@ test("worship-pp stage applies consistent colors to group badges", async ({
     { timeout: 15_000 },
   );
 
-  // Capture Leader color as current
-  const leaderColorAsCurrent = await getGroupColor(stagePage, "current-group");
-  expect(leaderColorAsCurrent).toBeTruthy();
+  // Capture Men color as current
+  const menColorAsCurrent = await getGroupColor(stagePage, "current-group");
+  expect(menColorAsCurrent).toBeTruthy();
 
-  // Capture Choir color as next
-  const choirColorAsNext = await getGroupColor(stagePage, "next-group");
-  expect(choirColorAsNext).toBeTruthy();
+  // Capture Women color as next
+  const womenColorAsNext = await getGroupColor(stagePage, "next-group");
+  expect(womenColorAsNext).toBeTruthy();
 
   // Should be different
-  expect(leaderColorAsCurrent).not.toBe(choirColorAsNext);
+  expect(menColorAsCurrent).not.toBe(womenColorAsNext);
 
   // Trigger second slide
   const trigger2 = await page.request.post(
@@ -417,9 +417,9 @@ test("worship-pp stage applies consistent colors to group badges", async ({
     { timeout: 15_000 },
   );
 
-  // Choir is now current - should have same color as when it was next
-  const choirColorAsCurrent = await getGroupColor(stagePage, "current-group");
-  expect(choirColorAsCurrent).toBe(choirColorAsNext);
+  // Women is now current - should have same color as when it was next
+  const womenColorAsCurrent = await getGroupColor(stagePage, "current-group");
+  expect(womenColorAsCurrent).toBe(womenColorAsNext);
 
   await stagePage.close();
 });
