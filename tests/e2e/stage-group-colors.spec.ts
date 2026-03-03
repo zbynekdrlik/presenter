@@ -99,7 +99,7 @@ test("worship-snv stage applies consistent colors to group badges", async ({
 
   const presName = `Group Colors E2E ${Date.now()}`;
   await page.locator('[data-role="presentation-create-name"]').fill(presName);
-  await page.locator('[data-role="presentation-create-submit"]').click();
+  await page.locator('[data-role="presentation-create-blank"]').click();
   await expect(modal).toHaveAttribute("data-open", "false");
 
   // Find the created presentation and get its ID
@@ -287,7 +287,7 @@ test("worship-pp stage applies consistent colors to group badges", async ({
 
   const presName = `Group Colors PP ${Date.now()}`;
   await page.locator('[data-role="presentation-create-name"]').fill(presName);
-  await page.locator('[data-role="presentation-create-submit"]').click();
+  await page.locator('[data-role="presentation-create-blank"]').click();
   await expect(modal).toHaveAttribute("data-open", "false");
 
   // Find the created presentation
@@ -433,7 +433,7 @@ test("group color is cleared when group is empty", async ({
 
   const presName = `No Group E2E ${Date.now()}`;
   await page.locator('[data-role="presentation-create-name"]').fill(presName);
-  await page.locator('[data-role="presentation-create-submit"]').click();
+  await page.locator('[data-role="presentation-create-blank"]').click();
   await expect(modal).toHaveAttribute("data-open", "false");
 
   // Find presentation
