@@ -112,6 +112,7 @@ body.tablet {
   display: flex;
   flex-direction: column;
   min-width: 0;
+  overflow-y: auto; /* Make this the scroll container for sticky header */
 }
 
 .tablet-main__header {
@@ -226,8 +227,7 @@ body.tablet {
   display: flex;
   flex-direction: column;
   gap: 1.5rem;
-  overflow-y: auto;
-  -webkit-overflow-scrolling: touch; /* Smooth scrolling + better touch handling on iOS */
+  /* overflow moved to .tablet-main for sticky header to work */
 }
 
 .tablet-slides__empty {
@@ -239,7 +239,6 @@ body.tablet {
   background: rgba(15, 23, 42, 0.8);
   border-radius: 16px;
   padding: 1.25rem;
-  margin-bottom: 1rem; /* Explicit gap between slides */
   display: flex;
   flex-direction: column;
   gap: 0.75rem;
@@ -253,10 +252,6 @@ body.tablet {
     border-color 0.2s ease,
     box-shadow 0.2s ease,
     transform 0.2s ease;
-}
-
-.tablet-slide:last-child {
-  margin-bottom: 0;
 }
 
 .tablet-slide:hover {

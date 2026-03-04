@@ -203,17 +203,20 @@
     if (!ref || !trans) return false;
     var meta = slide.metadata.bible;
     var translationCode = meta.translationCode || meta.translation_code;
+    var book = meta.book;
     var chapter = meta.chapter;
     var verses = Array.isArray(meta.verses) ? meta.verses : [];
     if (!verses.length) return false;
     var verseStart = verses[0].start;
     var verseEnd = verses[verses.length - 1].end;
+    var broadcastBook = ref.book;
     var broadcastChapter = ref.chapter;
     var broadcastVerseStart = ref.verseStart || ref.verse_start;
     var broadcastVerseEnd = ref.verseEnd || ref.verse_end;
     var broadcastTranslation = trans.code;
     return (
       broadcastTranslation === translationCode &&
+      broadcastBook === book &&
       broadcastChapter === chapter &&
       broadcastVerseStart === verseStart &&
       broadcastVerseEnd === verseEnd
