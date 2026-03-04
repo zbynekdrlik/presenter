@@ -25,6 +25,7 @@ Environment=PRESENTER_OSC_LISTEN_PORT=49051
 ProtectSystem=strict
 ProtectHome=read-only
 ReadWritePaths=/opt/presenter-dev
+PrivateTmp=true
 
 # Resource limits
 LimitNOFILE=65536
