@@ -243,12 +243,10 @@ body.tablet {
 }
 
 .tablet-slides {
-  flex: 1;
+  flex: 1 1 auto;
   padding: 1.5rem;
-  display: flex;
-  flex-direction: column;
-  gap: 1.5rem;
-  /* overflow moved to .tablet-main for sticky header to work */
+  /* Use block layout instead of flex for older Safari compatibility */
+  display: block;
 }
 
 .tablet-slides__empty {
@@ -260,24 +258,25 @@ body.tablet {
   background: rgba(15, 23, 42, 0.8);
   border-radius: 16px;
   padding: 1.25rem;
-  display: flex;
-  flex-direction: column;
-  gap: 0.75rem;
+  /* Use block layout for older Safari compatibility */
+  display: block;
   border: 1px solid transparent;
   cursor: pointer;
   user-select: none;
   -webkit-tap-highlight-color: transparent;
   touch-action: manipulation; /* Removes 300ms touch delay */
-  position: relative; /* Proper z-stacking in scroll container */
+  /* Use margin for spacing instead of flex gap */
+  margin-bottom: 1.5rem;
   transition:
     border-color 0.2s ease,
-    box-shadow 0.2s ease,
-    transform 0.2s ease;
+    box-shadow 0.2s ease;
 }
 
-.tablet-slide:hover {
-  transform: translateY(-2px);
+.tablet-slide:last-child {
+  margin-bottom: 0;
 }
+
+/* Removed transform on hover - causes issues on older Safari */
 
 .tablet-slide.is-active {
   border-color: rgba(56, 189, 248, 0.8);
@@ -293,7 +292,7 @@ body.tablet {
   font-size: calc(1.4rem * var(--tablet-scale));
   color: #38bdf8;
   font-weight: 600;
-  margin-bottom: 0.5rem;
+  margin: 0 0 0.75rem 0;
   text-align: center;
 }
 
@@ -304,9 +303,7 @@ body.tablet {
 }
 
 .tablet-slide__body {
-  display: flex;
-  flex-direction: column;
-  gap: 0.25rem;
+  display: block;
 }
 
 .tablet-slide__body p {
