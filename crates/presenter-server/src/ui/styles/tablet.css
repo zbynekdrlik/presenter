@@ -1,19 +1,36 @@
+html {
+  /* Prevent iOS bounce scroll on entire page */
+  height: 100%;
+  overflow: hidden;
+}
+
+/* Universal box-sizing for tablet UI */
+body.tablet *,
+body.tablet *::before,
+body.tablet *::after {
+  box-sizing: border-box;
+}
+
 body.tablet {
   --tablet-scale: 1;
   margin: 0;
-  height: 100vh;
-  max-height: 100vh;
+  /* Use dvh for PWA standalone mode, fallback to vh */
+  height: 100dvh;
+  height: 100vh; /* Fallback for older browsers */
+  max-height: -webkit-fill-available; /* iOS Safari PWA fix */
   display: flex;
   flex-direction: column;
   overflow: hidden;
   font-family: "Inter", "Segoe UI", system-ui, sans-serif;
   background: linear-gradient(180deg, #0f172a 0%, #1e293b 100%);
   color: #f8fafc;
-  /* Safe area insets for notched devices */
+  /* Safe area insets for notched devices - use margin instead of padding */
   padding-top: env(safe-area-inset-top);
   padding-left: env(safe-area-inset-left);
   padding-right: env(safe-area-inset-right);
   padding-bottom: env(safe-area-inset-bottom);
+  /* Ensure box-sizing includes padding in height calculation */
+  box-sizing: border-box;
 }
 
 .tablet-header {
