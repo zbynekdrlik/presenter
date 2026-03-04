@@ -192,4 +192,105 @@ test.describe("Tablet PWA Configuration", () => {
     expect(viewportContent).toContain("viewport-fit=cover");
     expect(viewportContent).toContain("user-scalable=no");
   });
+
+  test("slides have proper spacing (no overlap)", async ({ page, request }) => {
+    // Wait for server readiness
+    await expect(async () => {
+      const response = await request.get(
+        new URL("/healthz", baseURL).toString(),
+        { timeout: 120_000 },
+      );
+      expect(response.ok()).toBeTruthy();
+    }).toPass({ timeout: 180_000 });
+
+    await page.goto(new URL("/ui/tablet", baseURL).toString());
+    await page.waitForLoadState("domcontentloaded");
+
+    // Click first presentation to load slides
+    const firstPresentation = page
+      .locator('[data-role="presentation-list"] button')
+      .first();
+    await expect(firstPresentation).toBeVisible({ timeout: 10_000 });
+    await firstPresentation.click();
+
+    // Wait for slides to load
+    const slides = page.locator(".tablet-slide");
+    await expect(slides.first()).toBeVisible({ timeout: 10_000 });
+
+    // Verify slides have gaps between them (margin-bottom creates spacing)
+    const slideCount = await slides.count();
+    if (slideCount >= 2) {
+      const gaps = await page.evaluate(() => {
+        const slideElements = document.querySelectorAll(".tablet-slide");
+        const gaps: number[] = [];
+        for (let i = 0; i < slideElements.length - 1; i++) {
+          const rect1 = slideElements[i].getBoundingClientRect();
+          const rect2 = slideElements[i + 1].getBoundingClientRect();
+          gaps.push(rect2.top - rect1.bottom);
+        }
+        return gaps;
+      });
+
+      // All gaps should be at least 20px (we use 1.5rem = 24px)
+      for (const gap of gaps) {
+        expect(gap).toBeGreaterThanOrEqual(20);
+      }
+    }
+  });
+
+  test("header stays visible when scrolling (sticky)", async ({
+    page,
+    request,
+  }) => {
+    // Wait for server readiness
+    await expect(async () => {
+      const response = await request.get(
+        new URL("/healthz", baseURL).toString(),
+        { timeout: 120_000 },
+      );
+      expect(response.ok()).toBeTruthy();
+    }).toPass({ timeout: 180_000 });
+
+    await page.goto(new URL("/ui/tablet", baseURL).toString());
+    await page.waitForLoadState("domcontentloaded");
+
+    // Click first presentation to load slides
+    const firstPresentation = page
+      .locator('[data-role="presentation-list"] button')
+      .first();
+    await expect(firstPresentation).toBeVisible({ timeout: 10_000 });
+    await firstPresentation.click();
+
+    // Wait for slides to load
+    const slides = page.locator(".tablet-slide");
+    await expect(slides.first()).toBeVisible({ timeout: 10_000 });
+
+    // Verify header has sticky positioning
+    const header = page.locator(".tablet-main__header");
+    const position = await header.evaluate((el) => {
+      const style = window.getComputedStyle(el);
+      return style.position;
+    });
+    expect(position).toBe("sticky");
+
+    // Scroll down and verify header is still visible
+    const scrollContainer = page.locator(".tablet-main");
+    await scrollContainer.evaluate((el) => {
+      el.scrollTop = el.scrollHeight;
+    });
+
+    // Header should still be visible after scrolling
+    await expect(header).toBeVisible();
+
+    // Header should be at or near top of its container
+    const headerRect = await header.evaluate((el) => {
+      const rect = el.getBoundingClientRect();
+      const parent = el.closest(".tablet-main");
+      const parentRect = parent?.getBoundingClientRect() || { top: 0 };
+      return { top: rect.top, parentTop: parentRect.top };
+    });
+
+    // Header top should be close to parent top (sticky at top)
+    expect(headerRect.top - headerRect.parentTop).toBeLessThan(10);
+  });
 });
