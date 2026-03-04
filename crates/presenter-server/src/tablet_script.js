@@ -16,6 +16,8 @@
     touchStartX: 0,
     touchStartY: 0,
     touchMoved: false,
+    // Last touch timestamp to prevent duplicate triggers from synthetic clicks
+    lastTouchTime: 0,
   };
 
   const els = {
@@ -201,17 +203,20 @@
     if (!ref || !trans) return false;
     var meta = slide.metadata.bible;
     var translationCode = meta.translationCode || meta.translation_code;
+    var book = meta.book;
     var chapter = meta.chapter;
     var verses = Array.isArray(meta.verses) ? meta.verses : [];
     if (!verses.length) return false;
     var verseStart = verses[0].start;
     var verseEnd = verses[verses.length - 1].end;
+    var broadcastBook = ref.book;
     var broadcastChapter = ref.chapter;
     var broadcastVerseStart = ref.verseStart || ref.verse_start;
     var broadcastVerseEnd = ref.verseEnd || ref.verse_end;
     var broadcastTranslation = trans.code;
     return (
       broadcastTranslation === translationCode &&
+      broadcastBook === book &&
       broadcastChapter === chapter &&
       broadcastVerseStart === verseStart &&
       broadcastVerseEnd === verseEnd
@@ -326,8 +331,8 @@
   }
 
   function handleSlideTap(event) {
-    // Skip if this click was synthesized from a touch event (already handled)
-    if (event.sourceCapabilities && event.sourceCapabilities.firesTouchEvents) {
+    // Skip if a touch event happened recently (within 300ms) to prevent duplicate triggers
+    if (Date.now() - state.lastTouchTime < 300) {
       return;
     }
     var card = event.target.closest("[data-slide-id]");
@@ -530,6 +535,8 @@
     if (!card || !state.currentPresentationId) return;
     // Prevent ghost click
     event.preventDefault();
+    // Record touch time to prevent duplicate triggers from synthetic clicks
+    state.lastTouchTime = Date.now();
     var slideId = card.dataset.slideId;
     var slides = state.slidesCache.get(state.currentPresentationId) || [];
     var slide = slides.find(function (entry) {

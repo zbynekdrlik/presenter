@@ -6,6 +6,7 @@ mod playlists;
 mod presentations;
 mod search;
 pub(crate) mod stage;
+mod tablet_pwa;
 mod timers;
 mod ui_routes;
 use crate::state::AppState;
@@ -97,6 +98,14 @@ pub fn build_router(state: AppState) -> Router {
         .route("/ui/operator", get(ui_routes::operator_ui))
         .route("/ui/operator/{view}", get(ui_routes::operator_ui_with_view))
         .route("/ui/tablet", get(ui_routes::tablet_ui))
+        .route("/ui/tablet/manifest.json", get(tablet_pwa::tablet_manifest))
+        .route("/ui/tablet/icon-192.png", get(tablet_pwa::icon_192))
+        .route("/ui/tablet/icon-512.png", get(tablet_pwa::icon_512))
+        .route(
+            "/ui/tablet/apple-touch-icon.png",
+            get(tablet_pwa::apple_touch_icon),
+        )
+        .route("/ui/tablet/sw.js", get(tablet_pwa::service_worker))
         .route("/ui/bible", get(bible::bible_ui))
         .route("/ui/settings", get(ui_routes::settings_ui))
         .route("/ui/stage-settings", get(ui_routes::stage_settings_ui))

@@ -1,12 +1,36 @@
+html {
+  /* Prevent iOS bounce scroll on entire page */
+  height: 100%;
+  overflow: hidden;
+}
+
+/* Universal box-sizing for tablet UI */
+body.tablet *,
+body.tablet *::before,
+body.tablet *::after {
+  box-sizing: border-box;
+}
+
 body.tablet {
   --tablet-scale: 1;
   margin: 0;
-  min-height: 100vh;
+  /* Use dvh for PWA standalone mode, fallback to vh */
+  height: 100dvh;
+  height: 100vh; /* Fallback for older browsers */
+  max-height: -webkit-fill-available; /* iOS Safari PWA fix */
   display: flex;
   flex-direction: column;
+  overflow: hidden;
   font-family: "Inter", "Segoe UI", system-ui, sans-serif;
   background: linear-gradient(180deg, #0f172a 0%, #1e293b 100%);
   color: #f8fafc;
+  /* Safe area insets for notched devices - use margin instead of padding */
+  padding-top: env(safe-area-inset-top);
+  padding-left: env(safe-area-inset-left);
+  padding-right: env(safe-area-inset-right);
+  padding-bottom: env(safe-area-inset-bottom);
+  /* Ensure box-sizing includes padding in height calculation */
+  box-sizing: border-box;
 }
 
 .tablet-header {
@@ -104,12 +128,24 @@ body.tablet {
 
 .tablet-main {
   flex: 1;
-  display: flex;
-  flex-direction: column;
+  /* Use block layout for older Safari sticky compatibility */
+  display: block;
   min-width: 0;
+  overflow-y: auto; /* Scroll container */
+  overflow-x: hidden;
+  -webkit-overflow-scrolling: touch; /* Smooth scrolling on iOS */
 }
 
 .tablet-main__header {
+  /* Webkit prefix for older Safari */
+  position: -webkit-sticky;
+  position: sticky;
+  top: 0;
+  z-index: 10;
+  background: rgba(12, 20, 35, 0.98);
+  /* Fallback for older Safari without backdrop-filter */
+  -webkit-backdrop-filter: blur(8px);
+  backdrop-filter: blur(8px);
   padding: 1.2rem 1.6rem 0.75rem;
   display: flex;
   align-items: center;
@@ -211,13 +247,10 @@ body.tablet {
 }
 
 .tablet-slides {
-  flex: 1;
+  flex: 1 1 auto;
   padding: 1.5rem;
-  display: flex;
-  flex-direction: column;
-  gap: 1.5rem;
-  overflow-y: auto;
-  -webkit-overflow-scrolling: touch; /* Smooth scrolling + better touch handling on iOS */
+  /* Use block layout instead of flex for older Safari compatibility */
+  display: block;
 }
 
 .tablet-slides__empty {
@@ -229,24 +262,25 @@ body.tablet {
   background: rgba(15, 23, 42, 0.8);
   border-radius: 16px;
   padding: 1.25rem;
-  display: flex;
-  flex-direction: column;
-  gap: 0.75rem;
+  /* Use block layout for older Safari compatibility */
+  display: block;
   border: 1px solid transparent;
   cursor: pointer;
   user-select: none;
   -webkit-tap-highlight-color: transparent;
   touch-action: manipulation; /* Removes 300ms touch delay */
-  position: relative; /* Proper z-stacking in scroll container */
+  /* Use margin for spacing instead of flex gap */
+  margin-bottom: 1.5rem;
   transition:
     border-color 0.2s ease,
-    box-shadow 0.2s ease,
-    transform 0.2s ease;
+    box-shadow 0.2s ease;
 }
 
-.tablet-slide:hover {
-  transform: translateY(-2px);
+.tablet-slide:last-child {
+  margin-bottom: 0;
 }
+
+/* Removed transform on hover - causes issues on older Safari */
 
 .tablet-slide.is-active {
   border-color: rgba(56, 189, 248, 0.8);
@@ -262,7 +296,7 @@ body.tablet {
   font-size: calc(1.4rem * var(--tablet-scale));
   color: #38bdf8;
   font-weight: 600;
-  margin-bottom: 0.5rem;
+  margin: 0 0 0.75rem 0;
   text-align: center;
 }
 
@@ -273,9 +307,7 @@ body.tablet {
 }
 
 .tablet-slide__body {
-  display: flex;
-  flex-direction: column;
-  gap: 0.25rem;
+  display: block;
 }
 
 .tablet-slide__body p {
