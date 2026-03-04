@@ -1,4 +1,4 @@
-use anyhow::{anyhow, Context};
+use anyhow::anyhow;
 use chrono::{DateTime, Utc};
 use presenter_core::{AndroidStageDisplay, AndroidStageDisplayId};
 use serde::Serialize;
@@ -237,13 +237,28 @@ async fn connect_and_launch(
     }
 
     let adb_bin = adb_path.as_os_str();
-    let connect_output = timeout(
+
+    // Run adb connect
+    let connect_result = timeout(
         ADB_COMMAND_TIMEOUT,
         Command::new(adb_bin).arg("connect").arg(&serial).output(),
     )
-    .await
-    .with_context(|| format!("adb connect timed out for {}", serial))?
-    .with_context(|| format!("failed to execute adb connect for {}", serial))?;
+    .await;
+
+    let connect_output = match connect_result {
+        Ok(Ok(output)) => output,
+        Ok(Err(io_err)) => {
+            let err = anyhow!("failed to execute adb for {}: {}", serial, io_err);
+            record_error(status, err.to_string()).await;
+            return Err(err);
+        }
+        Err(_elapsed) => {
+            let err = anyhow!("adb connect timed out for {}", serial);
+            record_error(status, err.to_string()).await;
+            return Err(err);
+        }
+    };
+
     if let Err(msg) = ensure_success(&connect_output) {
         let err = anyhow!("adb connect error for {}: {}", serial, msg);
         record_error(status, err.to_string()).await;
@@ -255,7 +270,8 @@ async fn connect_and_launch(
         guard.state = AndroidStageDisplayState::Launching;
     }
 
-    let launch_output = timeout(
+    // Run adb shell am start
+    let launch_result = timeout(
         ADB_COMMAND_TIMEOUT,
         Command::new(adb_bin)
             .arg("-s")
@@ -267,9 +283,22 @@ async fn connect_and_launch(
             .arg(&config.launch_component)
             .output(),
     )
-    .await
-    .with_context(|| format!("adb shell am start timed out for {}", serial))?
-    .with_context(|| format!("failed to execute adb shell am start for {}", serial))?;
+    .await;
+
+    let launch_output = match launch_result {
+        Ok(Ok(output)) => output,
+        Ok(Err(io_err)) => {
+            let err = anyhow!("failed to execute adb shell for {}: {}", serial, io_err);
+            record_error(status, err.to_string()).await;
+            return Err(err);
+        }
+        Err(_elapsed) => {
+            let err = anyhow!("adb shell am start timed out for {}", serial);
+            record_error(status, err.to_string()).await;
+            return Err(err);
+        }
+    };
+
     if let Err(msg) = ensure_success(&launch_output) {
         let err = anyhow!("adb shell error for {}: {}", serial, msg);
         record_error(status, err.to_string()).await;
