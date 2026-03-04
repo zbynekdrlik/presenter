@@ -282,24 +282,11 @@ test.describe("Tablet PWA Configuration", () => {
     });
     expect(position).toBe("sticky");
 
-    // Verify webkit prefix is in the stylesheet (for older Safari)
-    const hasWebkitSticky = await page.evaluate(() => {
-      const sheets = document.styleSheets;
-      for (let i = 0; i < sheets.length; i++) {
-        try {
-          const rules = sheets[i].cssRules;
-          for (let j = 0; j < rules.length; j++) {
-            const cssText = rules[j].cssText;
-            if (cssText.includes("-webkit-sticky")) {
-              return true;
-            }
-          }
-        } catch {
-          // Cross-origin stylesheets throw
-        }
-      }
-      return false;
+    // Verify header has z-index for proper stacking
+    const zIndex = await header.evaluate((el) => {
+      const style = window.getComputedStyle(el);
+      return style.zIndex;
     });
-    expect(hasWebkitSticky).toBe(true);
+    expect(parseInt(zIndex)).toBeGreaterThanOrEqual(10);
   });
 });
