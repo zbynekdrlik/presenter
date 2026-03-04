@@ -120,6 +120,20 @@ test.describe("Tablet PWA Configuration", () => {
     expect(body[3]).toBe(0x47);
   });
 
+  test("service worker returns valid JavaScript", async ({ request }) => {
+    const response = await request.get(
+      new URL("/ui/tablet/sw.js", baseURL).toString(),
+      { timeout: 30_000 },
+    );
+    expect(response.ok()).toBeTruthy();
+    expect(response.headers()["content-type"]).toContain("javascript");
+
+    const body = await response.text();
+    expect(body).toContain("Service Worker");
+    expect(body).toContain("addEventListener");
+    expect(body).toContain("skipWaiting");
+  });
+
   test("tablet page has PWA meta tags", async ({ page, request }) => {
     // Wait for server readiness
     await expect(async () => {

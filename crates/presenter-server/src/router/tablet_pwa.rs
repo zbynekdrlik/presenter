@@ -3,6 +3,7 @@ use axum::{http::header, response::IntoResponse, Json};
 const ICON_192: &[u8] = include_bytes!("../ui/tablet_icons/icon-192.png");
 const ICON_512: &[u8] = include_bytes!("../ui/tablet_icons/icon-512.png");
 const APPLE_TOUCH_ICON: &[u8] = include_bytes!("../ui/tablet_icons/apple-touch-icon.png");
+const SERVICE_WORKER: &str = include_str!("../ui/tablet_sw.js");
 
 pub async fn tablet_manifest() -> impl IntoResponse {
     let manifest = serde_json::json!({
@@ -35,4 +36,11 @@ pub async fn icon_512() -> impl IntoResponse {
 
 pub async fn apple_touch_icon() -> impl IntoResponse {
     ([(header::CONTENT_TYPE, "image/png")], APPLE_TOUCH_ICON)
+}
+
+pub async fn service_worker() -> impl IntoResponse {
+    (
+        [(header::CONTENT_TYPE, "application/javascript")],
+        SERVICE_WORKER,
+    )
 }

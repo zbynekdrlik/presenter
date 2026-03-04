@@ -66,6 +66,21 @@ fn TabletDocument(presentations_json: String) -> impl IntoView {
                 </main>
                 <div class="tablet-toast" data-role="toast" data-visible="false"></div>
                 <script>{script}</script>
+                <script>
+                    // Register service worker for PWA auto-updates
+                    "if ('serviceWorker' in navigator) {"
+                        "navigator.serviceWorker.register('/ui/tablet/sw.js').then(function(reg) {"
+                            "reg.addEventListener('updatefound', function() {"
+                                "var newWorker = reg.installing;"
+                                "newWorker.addEventListener('statechange', function() {"
+                                    "if (newWorker.state === 'installed' && navigator.serviceWorker.controller) {"
+                                        "window.location.reload();"
+                                    "}"
+                                "});"
+                            "});"
+                        "});"
+                    "}"
+                </script>
             </body>
         </html>
     }
