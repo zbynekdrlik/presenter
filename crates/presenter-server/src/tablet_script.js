@@ -16,6 +16,8 @@
     touchStartX: 0,
     touchStartY: 0,
     touchMoved: false,
+    // Last touch timestamp to prevent duplicate triggers from synthetic clicks
+    lastTouchTime: 0,
   };
 
   const els = {
@@ -326,8 +328,8 @@
   }
 
   function handleSlideTap(event) {
-    // Skip if this click was synthesized from a touch event (already handled)
-    if (event.sourceCapabilities && event.sourceCapabilities.firesTouchEvents) {
+    // Skip if a touch event happened recently (within 300ms) to prevent duplicate triggers
+    if (Date.now() - state.lastTouchTime < 300) {
       return;
     }
     var card = event.target.closest("[data-slide-id]");
@@ -530,6 +532,8 @@
     if (!card || !state.currentPresentationId) return;
     // Prevent ghost click
     event.preventDefault();
+    // Record touch time to prevent duplicate triggers from synthetic clicks
+    state.lastTouchTime = Date.now();
     var slideId = card.dataset.slideId;
     var slides = state.slidesCache.get(state.currentPresentationId) || [];
     var slide = slides.find(function (entry) {
