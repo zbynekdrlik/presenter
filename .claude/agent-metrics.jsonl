@@ -1,2 +1,4 @@
 {"timestamp": "2026-03-04T18:04:10.450764+00:00", "files_changed": 1, "commit": "3ebce3b fix(android-stage): properly report errors when ADB fails to execute", "duration_hint": "completed"}
 {"timestamp": "2026-03-04T18:31:50.816276+00:00", "files_changed": 1, "commit": "1c9bd11 fix(deploy): add PrivateTmp for ADB access in systemd service", "duration_hint": "completed"}
+{"timestamp": "2026-03-05T09:37:07.528555+00:00", "files_changed": 0, "commit": "401e439 fix(pwa): add scope/id for Android installability, fix iOS safe area", "duration_hint": "completed"}
+{"timestamp": "2026-03-05T10:12:12.445975+00:00", "files_changed": 1, "commit": "401e439 fix(pwa): add scope/id for Android installability, fix iOS safe area", "duration_hint": "completed"}

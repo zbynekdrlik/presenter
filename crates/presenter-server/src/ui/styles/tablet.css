@@ -2,8 +2,9 @@ html {
   /* Prevent iOS bounce scroll on entire page */
   height: 100%;
   overflow: hidden;
-  /* Extend background to cover entire screen including iOS safe areas */
-  background: #0f172a;
+  /* Extend background to cover entire screen including iOS safe areas.
+     Use gradient end color (#1e293b) to blend seamlessly with body gradient. */
+  background: #1e293b;
 }
 
 /* Universal box-sizing for tablet UI */
