@@ -58,6 +58,10 @@ test.describe("Tablet PWA Configuration", () => {
     expect(manifest.background_color).toBe("#0f172a");
     expect(manifest.theme_color).toBe("#0f172a");
 
+    // Verify Android PWA installability fields
+    expect(manifest.id).toBe("/ui/tablet");
+    expect(manifest.scope).toBe("/ui/tablet");
+
     // Verify icons array
     expect(manifest.icons).toHaveLength(2);
     expect(manifest.icons[0]).toMatchObject({

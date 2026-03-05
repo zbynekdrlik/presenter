@@ -2,6 +2,8 @@ html {
   /* Prevent iOS bounce scroll on entire page */
   height: 100%;
   overflow: hidden;
+  /* Extend background to cover entire screen including iOS safe areas */
+  background: #0f172a;
 }
 
 /* Universal box-sizing for tablet UI */
