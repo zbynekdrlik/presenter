@@ -7,10 +7,12 @@ const SERVICE_WORKER: &str = include_str!("../ui/tablet_sw.js");
 
 pub async fn tablet_manifest() -> impl IntoResponse {
     let manifest = serde_json::json!({
+        "id": "/ui/tablet",
         "name": "Bible Tablet",
         "short_name": "Bible",
         "description": "Touch-optimized Bible controller",
         "start_url": "/ui/tablet",
+        "scope": "/ui/tablet",
         "display": "standalone",
         "orientation": "any",
         "background_color": "#0f172a",
