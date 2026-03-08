@@ -23,6 +23,24 @@ pub struct BibleTriggerOverrides {
     pub translation_reference_label: Option<String>,
 }
 
+/// Returns a safe placeholder BibleReference for legacy broadcast fallback.
+/// The hardcoded values (empty book, chapter=1, verses 1-1) are guaranteed valid.
+fn placeholder_bible_reference() -> BibleReference {
+    // These values always satisfy validation: chapter > 0, verse_start <= verse_end
+    BibleReference::new("", 1, 1, 1).unwrap_or_else(|e| {
+        // This branch should never execute with valid hardcoded values,
+        // but we log and create a minimal reference just in case.
+        tracing::error!(
+            ?e,
+            "placeholder_bible_reference: unexpected validation failure"
+        );
+        // Last resort: create reference with same values - if this fails too,
+        // something is fundamentally broken in the validation logic
+        BibleReference::new("Genesis", 1, 1, 1)
+            .expect("fallback Genesis 1:1 reference must always be valid")
+    })
+}
+
 /// Optional reference metadata for the legacy broadcast (backwards compatibility)
 #[derive(Debug, Default)]
 pub struct BibleSlideReferenceMetadata {
@@ -416,6 +434,7 @@ impl AppState {
                 reference_metadata.book_code.as_deref(),
                 reference_metadata.book_number,
             ) {
+                // Try with book code first, fall back to without, then to placeholder
                 BibleReference::new_with_code(
                     book,
                     book_code,
@@ -424,15 +443,14 @@ impl AppState {
                     verse_start,
                     verse_end,
                 )
-                .unwrap_or_else(|_| {
-                    BibleReference::new(book, chapter, verse_start, verse_end).unwrap()
-                })
+                .or_else(|_| BibleReference::new(book, chapter, verse_start, verse_end))
+                .unwrap_or_else(|_| placeholder_bible_reference())
             } else {
                 BibleReference::new(book, chapter, verse_start, verse_end)
-                    .unwrap_or_else(|_| BibleReference::new("", 1, 1, 1).unwrap())
+                    .unwrap_or_else(|_| placeholder_bible_reference())
             }
         } else {
-            BibleReference::new("", 1, 1, 1).unwrap()
+            placeholder_bible_reference()
         };
 
         let translation = if let Some(code) = reference_metadata.translation_code {
