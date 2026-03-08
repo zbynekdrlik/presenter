@@ -24,14 +24,10 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - name: Install Rust toolchain (with retry)
-        run: |
-          for attempt in 1 2 3; do
-            rustup toolchain install stable --component rustfmt --profile minimal && break
-            echo "::warning::Toolchain install attempt $attempt failed, retrying in 5s..."
-            sleep 5
-          done
-          rustup default stable
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt
 
       - name: Check formatting
         run: cargo fmt --all -- --check
@@ -46,14 +42,10 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - name: Install Rust toolchain (with retry)
-        run: |
-          for attempt in 1 2 3; do
-            rustup toolchain install stable --component clippy --profile minimal && break
-            echo "::warning::Toolchain install attempt $attempt failed, retrying in 5s..."
-            sleep 5
-          done
-          rustup default stable
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy
 
       - name: Clean stale build artifacts
         run: rm -rf target
@@ -88,14 +80,8 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - name: Install Rust toolchain (with retry)
-        run: |
-          for attempt in 1 2 3; do
-            rustup toolchain install stable --profile minimal && break
-            echo "::warning::Toolchain install attempt $attempt failed, retrying in 5s..."
-            sleep 5
-          done
-          rustup default stable
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
 
       - name: Clean stale build artifacts
         run: rm -rf target
@@ -140,14 +126,8 @@ jobs:
         with:
           fetch-depth: 0
 
-      - name: Install Rust toolchain (with retry)
-        run: |
-          for attempt in 1 2 3; do
-            rustup toolchain install stable --profile minimal && break
-            echo "::warning::Toolchain install attempt $attempt failed, retrying in 5s..."
-            sleep 5
-          done
-          rustup default stable
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
 
       - name: Clean stale build artifacts
         run: rm -rf target
@@ -197,14 +177,10 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - name: Install Rust toolchain (with retry)
-        run: |
-          for attempt in 1 2 3; do
-            rustup toolchain install stable --component llvm-tools-preview --profile minimal && break
-            echo "::warning::Toolchain install attempt $attempt failed, retrying in 5s..."
-            sleep 5
-          done
-          rustup default stable
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          components: llvm-tools-preview
 
       - name: Clean stale build artifacts
         run: rm -rf target
