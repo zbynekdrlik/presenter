@@ -79,27 +79,3 @@ jobs:
 
       - name: Run npm audit
         run: npm audit --audit-level=moderate
-
-  # ============================================
-  # CodeQL Analysis
-  # ============================================
-  # NOTE: CodeQL requires "Code scanning" to be enabled in repository settings.
-  # To enable: Settings > Security > Code security and analysis > Code scanning > Set up
-  # Once enabled, uncomment this job.
-  # codeql:
-  #   name: CodeQL
-  #   runs-on: self-hosted
-  #   permissions:
-  #     security-events: write
-  #     actions: read
-  #     contents: read
-  #   steps:
-  #     - uses: actions/checkout@v4
-  #
-  #     - name: Initialize CodeQL
-  #       uses: github/codeql-action/init@v3
-  #       with:
-  #         languages: javascript
-  #
-  #     - name: Perform CodeQL Analysis
-  #       uses: github/codeql-action/analyze@v3

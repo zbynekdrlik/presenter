@@ -71,31 +71,17 @@ jobs:
         run: cargo clippy --workspace --all-targets -- -D warnings -W clippy::all
 
   # ============================================
-  # Build and Test Matrix
+  # Build and Test (Single Toolchain)
   # ============================================
   test:
-    name: Test (${{ matrix.toolchain }})
+    name: Test
     needs: [fmt, clippy]
-    strategy:
-      fail-fast: false
-      matrix:
-        toolchain: [stable, beta]
-        include:
-          # MSRV check (1.85+ required for edition 2024 crates)
-          - toolchain: "1.85"
-            msrv: true
-          # Nightly for feature testing (allowed to fail)
-          - toolchain: nightly
-            experimental: true
     runs-on: self-hosted
-    continue-on-error: ${{ matrix.experimental || false }}
     steps:
       - uses: actions/checkout@v4
 
       - name: Install Rust toolchain
-        uses: dtolnay/rust-toolchain@master
-        with:
-          toolchain: ${{ matrix.toolchain }}
+        uses: dtolnay/rust-toolchain@stable
 
       - name: Clean stale build artifacts
         run: rm -rf target
@@ -103,7 +89,7 @@ jobs:
       - name: Setup Rust cache
         uses: Swatinem/rust-cache@v2
         with:
-          shared-key: test-${{ matrix.toolchain }}
+          shared-key: test
           cache-on-failure: false
 
       - name: Validate restored cache
@@ -121,7 +107,7 @@ jobs:
         run: cargo build --workspace --all-features
 
       - name: Run tests
-        run: cargo test --workspace --all-features --no-fail-fast
+        run: cargo test --workspace --all-features
         env:
           RUST_LOG: debug
 
@@ -188,7 +174,6 @@ jobs:
     name: Code Coverage
     runs-on: self-hosted
     needs: test
-    if: always() && needs.test.result == 'success'
     steps:
       - uses: actions/checkout@v4
 
@@ -221,7 +206,7 @@ jobs:
         uses: codecov/codecov-action@v4
         with:
           files: codecov.json
-          fail_ci_if_error: false
+          fail_ci_if_error: true
           verbose: true
         env:
           CODECOV_TOKEN: ${{ secrets.CODECOV_TOKEN }}
