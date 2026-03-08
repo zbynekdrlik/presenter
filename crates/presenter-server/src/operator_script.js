@@ -6499,12 +6499,6 @@
       els.playlistList.addEventListener("dragover", handlePlaylistDragOver);
       els.playlistList.addEventListener("drop", handlePlaylistDrop);
     }
-    if (els.playlistCount) {
-      els.playlistCount.addEventListener("click", (event) => {
-        event.preventDefault();
-        openPlaylistModal();
-      });
-    }
     if (els.presentationList) {
       els.presentationList.addEventListener("click", handlePresentationClick);
       els.presentationList.addEventListener(

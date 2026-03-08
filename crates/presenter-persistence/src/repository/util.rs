@@ -50,6 +50,16 @@ pub(super) fn parse_uuid(id: &str) -> Result<Uuid, RepositoryError> {
     Uuid::parse_str(id).map_err(|_| RepositoryError::InvalidUuid(id.to_string()))
 }
 
+/// Sanitizes user input for LIKE patterns by removing SQLite LIKE metacharacters
+/// (`%` and `_`). This prevents query amplification attacks where malicious
+/// patterns like `%%%%` cause expensive full-table scans.
+///
+/// For text search in presentations and Bible passages, users don't need to
+/// search for these metacharacters, so removing them has no practical impact.
+pub(super) fn sanitize_like_input(input: &str) -> String {
+    input.chars().filter(|c| *c != '%' && *c != '_').collect()
+}
+
 pub(super) fn to_domain_slide(model: slide_entity::Model) -> Result<Slide, RepositoryError> {
     let content = SlideContent::new(
         SlideText::new(model.main_text)?,

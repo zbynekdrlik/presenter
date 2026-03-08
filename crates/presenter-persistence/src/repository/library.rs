@@ -14,7 +14,7 @@ use sea_orm::{
 use std::collections::HashMap;
 use tracing::instrument;
 
-use super::util::{parse_uuid, to_domain_slide, RepositoryError};
+use super::util::{parse_uuid, sanitize_like_input, to_domain_slide, RepositoryError};
 use super::Repository;
 
 impl Repository {
@@ -253,7 +253,7 @@ impl Repository {
         // Query 1: Fetch libraries (with optional filter)
         let mut query = library::Entity::find();
         if let Some(filter) = filter {
-            let pattern = format!("%{}%", filter);
+            let pattern = format!("%{}%", sanitize_like_input(filter));
             query = query.filter(library::Column::Name.like(pattern));
         }
 
