@@ -6,11 +6,11 @@ All environment variables and feature flags for Presenter.
 
 ### Server
 
-| Variable           | Default                 | Description              |
-| ------------------ | ----------------------- | ------------------------ |
-| `PRESENTER_PORT`   | `80`                    | HTTP server port         |
-| `PRESENTER_DB_URL` | `sqlite://presenter.db` | SQLite connection string |
-| `RUST_LOG`         | `info,tower_http=debug` | Tracing filter           |
+| Variable           | Default                     | Description              |
+| ------------------ | --------------------------- | ------------------------ |
+| `PRESENTER_PORT`   | `80`                        | HTTP server port         |
+| `PRESENTER_DB_URL` | `sqlite://presenter_dev.db` | SQLite connection string |
+| `RUST_LOG`         | `info,tower_http=debug`     | Tracing filter           |
 
 ### Companion Integration
 

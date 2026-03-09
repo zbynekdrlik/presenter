@@ -1,6 +1,6 @@
 # CLAUDE.md
 
-> **Version:** 2025.5 | **Last Updated:** 2026-02-19
+> **Version:** 2025.6 | **Last Updated:** 2026-03-09
 
 This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
 
@@ -240,6 +240,7 @@ docker compose down --timeout 5 && docker compose up -d
 | `deploy.yml`        | Push to `main`             | Deploy prod binary via SSH to /opt/presenter         |
 | `import-data.yml`   | Manual (workflow_dispatch) | Re-import ProPresenter/Bible data                    |
 | `release.yml`       | GitHub Release published   | Build release artifacts + deploy to companion-pp.lan |
+| `pr-labeler.yml`    | PR opened/edited           | Auto-label PRs by changed paths                      |
 
 ### Monitoring CI
 
@@ -337,42 +338,19 @@ sudo systemctl restart presenter-dev
 
 **The test must fail before your fix, and pass after.** If you cannot demonstrate this, you have not verified the fix.
 
-### CI Failures = STOP EVERYTHING
+### CI Failure Policy (ABSOLUTE)
 
-When ANY CI workflow or check fails:
+**ALL CI must be green. Zero exceptions. Zero excuses.**
 
-1. **Stop all other work immediately**
-2. **Diagnose the failure** - `gh run view --log-failed`
-3. **Fix the root cause** - Not workarounds, not skips
-4. **Push and verify green** - Only then continue other work
+- Every CI failure is YOUR responsibility, regardless of when introduced
+- Stop all other work immediately when ANY workflow fails
+- Fix the root cause - no workarounds, no skips, no "pre-existing issue" excuses
+- If a workflow cannot pass, FIX IT or REMOVE IT
+- NEVER classify failures as "non-blocking" or "acceptable"
+- When uncertain, ask the user - never assume
+- `gh run list` must show ALL workflows as `success` before claiming "CI is green"
 
-**There is NO "fix later" or "known issue" or "flaky test" or "pre-existing issue" excuse. Fix it NOW.**
-
-### No "Non-Blocking" Failures
-
-**NEVER classify any CI failure as "non-blocking" or "acceptable":**
-
-- No "pre-existing infrastructure issues" excuse
-- No "this workflow was already broken" excuse
-- No "nightly Rust is flaky" excuse
-- No "security scans are optional" excuse
-
-**If a workflow cannot pass, either FIX IT or REMOVE IT. Do not leave broken workflows in the repository.**
-
-**When uncertain whether something should block merge, ALWAYS ask the user. Never assume.**
-
-### Zero Excuses Policy (ABSOLUTE)
-
-**You are FULLY responsible for ALL CI being green. There is NO such thing as a "pre-existing issue":**
-
-- Every CI failure is YOUR responsibility to fix, regardless of when it was introduced
-- NEVER use phrases like "pre-existing", "already broken", "not related to my changes", or "infrastructure issue"
-- If a workflow fails, YOU caused it to fail by not fixing it before pushing
-- Do NOT report success until EVERY workflow shows `conclusion: success`
-- Do NOT make excuses — make fixes
-- If you cannot fix something, EXPLICITLY ask the user for help instead of dismissing it
-
-**The standard: When you say "CI is green", running `gh run list` must show ALL workflows as `success`. Zero exceptions.**
+**Diagnosis:** `gh run view --log-failed`
 
 ### Banned Test Patterns
 
@@ -444,9 +422,12 @@ scripts/dev/show-playwright-report.sh
 
 ## Architecture
 
-### Workspace Crates
+### Project Structure
 
 ```
+data/
+├── libraries/             # ProPresenter libraries (single source of truth)
+└── bibles/                # Bible translation files
 crates/
 ├── presenter-core/        # Domain logic (no server deps)
 ├── presenter-server/      # Axum HTTP/WS + Leptos SSR
@@ -507,6 +488,20 @@ To re-import source data (ProPresenter libraries, Bibles):
 2. Select environment (dev/production) and import type
 3. Default mode (`--keep`) preserves existing data
 4. `--purge` mode replaces all libraries (WARNING: destroys playlists via FK cascade)
+
+### Library Management
+
+ProPresenter libraries are stored in `data/libraries/` as the single source of truth.
+
+**To update songs:**
+
+1. Export from ProPresenter on Mac
+2. Copy `.pro` files to `data/libraries/<LIBRARY_NAME>/`
+3. Commit and push to dev
+4. Deploy syncs libraries to servers via `rsync`
+5. Run Import Data workflow if needed
+
+Deploy workflows automatically sync `data/libraries/` to `/opt/presenter*/libraries/` on target servers.
 
 ---
 

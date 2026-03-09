@@ -116,13 +116,8 @@ jobs:
           if [ "${{ inputs.purge }}" != "true" ]; then
             KEEP_FLAG="--keep"
           fi
-          ssh deploy-target << REMOTE_SCRIPT
-          set -e
-          echo "Importing ProPresenter libraries (purge=${{ inputs.purge }})..."
-          PRESENTER_DB_URL=sqlite://${{ steps.env.outputs.deploy_dir }}/presenter.db \
-            ${{ steps.env.outputs.deploy_dir }}/import_propresenter \
-            --root "${{ steps.env.outputs.deploy_dir }}/libraries" ${KEEP_FLAG}
-          REMOTE_SCRIPT
+          DEPLOY_DIR="${{ steps.env.outputs.deploy_dir }}"
+          ssh deploy-target "set -e; echo 'Importing ProPresenter libraries (purge=${{ inputs.purge }})...'; PRESENTER_DB_URL=sqlite://${DEPLOY_DIR}/presenter.db ${DEPLOY_DIR}/import_propresenter --root '${DEPLOY_DIR}/libraries' ${KEEP_FLAG}"
 
       - name: Import Bible translations
         if: inputs.import_type == 'all' || inputs.import_type == 'bibles'

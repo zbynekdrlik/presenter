@@ -106,6 +106,12 @@ impl OscConfig {
     fn load() -> Self {
         let (listen_port_override, listen_port_invalid) =
             parse_listen_port_override(env::var("PRESENTER_OSC_LISTEN_PORT").ok());
+        if let Some(ref invalid) = listen_port_invalid {
+            tracing::warn!(
+                value = %invalid,
+                "ignoring invalid PRESENTER_OSC_LISTEN_PORT value; expected a positive u16"
+            );
+        }
         let host_port = env::var("PRESENTER_OSC_HOST_PORT")
             .ok()
             .and_then(|value| value.parse::<u16>().ok());
