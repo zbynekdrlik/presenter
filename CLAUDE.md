@@ -43,24 +43,26 @@ Code → Commit → Push to dev → Monitor CI → Fix failures → Repeat until
 
 **Never ask "should I commit?" or "should I push?" - just do it.**
 
-### PR Creation (NEVER automatic)
+### PR Creation (ALWAYS automatic)
 
-**NEVER create a pull request unless the user explicitly asks for it.** This is non-negotiable:
+**ALWAYS create a pull request when CI is green.** This is non-negotiable:
 
-- After CI is green, report the dev URL and wait for user verification
-- The user will test the feature on the dev environment themselves
-- Only when the user says "create a PR" or equivalent, then create one
-- Creating a PR without user approval is a violation of this policy
+1. Push to dev and wait for ALL CI workflows to be green
+2. Create PR from dev → main immediately
+3. Wait for PR checks to pass
+4. Provide PR URL that is green and mergeable
+5. Do NOT stop until PR is ready for merge
 
 ### Deliverables (ALWAYS provide at end of task)
 
-When a task is complete (CI green), **always** provide:
+When a task is complete, **always** provide:
 
+- **PR URL:** Green and mergeable (user merges manually)
 - **Dev environment:** http://10.77.8.134:8080/ui/operator (for user to verify)
 - **CI status:** Confirm all workflows are green
-- **What to test:** Brief list of what the user should verify on dev
+- **What to test:** Brief list of what the user should verify
 
-**Do NOT provide a PR link** — wait for user to request PR creation after they verify on dev.
+**A task is NOT complete until the PR is green and mergeable.**
 
 ---
 
