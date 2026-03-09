@@ -1,3 +1,26 @@
+// Clippy lint suppressions for presenter-server.
+//
+// Pedantic lints: these are stylistic preferences that don't indicate bugs.
+// We suppress them crate-wide to reduce noise while keeping default+correctness lints active.
+//
+// - Documentation lints (missing_errors_doc, missing_panics_doc, doc_markdown, must_use_candidate):
+//   not worth enforcing on internal server code without a public API.
+// - Style preferences (uninlined_format_args, manual_let_else, if_not_else, question_mark,
+//   single_match_else, semicolon_if_nothing_returned, manual_string_new, unnecessary_semicolon,
+//   items_after_statements, field_reassign_with_default, derivable_impls, unwrap_or_default,
+//   unnecessary_map_or): idiomatic but subjective; enforcing them would churn existing code.
+// - Cloning/borrowing (assigning_clones, option_as_ref_cloned, borrow_deref_ref, needless_borrow,
+//   explicit_auto_deref, option_as_ref_deref, trivially_copy_pass_by_ref, ptr_arg): the compiler
+//   optimises these away; suppressing avoids noisy diffs.
+// - Closures (unnecessary_lazy_evaluations, redundant_closure_for_method_calls, redundant_closure):
+//   explicit closures often read more clearly than point-free style.
+// - Casts (cast_possible_truncation, cast_sign_loss, cast_lossless): reviewed case-by-case in PRs;
+//   crate-wide allow avoids false positives on intentional casts.
+// - Complexity (too_many_lines, too_many_arguments, significant_drop_tightening, large_enum_variant):
+//   some handlers and route builders legitimately need many args/lines.
+// - Misc (map_unwrap_or, needless_pass_by_value, wildcard_imports, struct_field_names,
+//   unreadable_literal, ignored_unit_patterns, absurd_extreme_comparisons, extend_with_drain,
+//   bool_to_int_with_if): low-value pedantic lints suppressed for readability.
 #![allow(
     clippy::missing_errors_doc,
     clippy::missing_panics_doc,
