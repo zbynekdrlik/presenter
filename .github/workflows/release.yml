@@ -127,10 +127,8 @@ jobs:
 
       - name: Sync ProPresenter libraries from git
         run: |
-          ssh deploy-target "mkdir -p ${{ env.DEPLOY_DIR }}/libraries"
-          rsync -avz --delete -e "ssh -i ~/.ssh/id_deploy" \
-            data/libraries/ \
-            deploy-target:${{ env.DEPLOY_DIR }}/libraries/
+          ssh deploy-target "rm -rf ${{ env.DEPLOY_DIR }}/libraries && mkdir -p ${{ env.DEPLOY_DIR }}/libraries"
+          scp -i ~/.ssh/id_deploy -r data/libraries/* deploy-target:${{ env.DEPLOY_DIR }}/libraries/
 
       - name: Import ProPresenter (first deploy only)
         run: |
