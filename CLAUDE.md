@@ -16,11 +16,13 @@ Code → Commit → Push to dev → Monitor CI → Fix failures → Repeat until
 
 ### The Loop (execute without asking)
 
-1. **Commit and push immediately** - No confirmation needed
+1. **Sync with main, then commit and push** - No confirmation needed
 
    ```bash
-   git add -A && git commit -m "..." && git push origin dev
+   git fetch origin && git merge origin/main --no-edit && git add -A && git commit -m "..." && git push origin dev
    ```
+
+   **CRITICAL: Always sync dev with main BEFORE pushing.** CI will fail fast if branch is behind main.
 
 2. **Monitor CI until completion**
 

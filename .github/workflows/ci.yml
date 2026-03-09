@@ -16,11 +16,34 @@ env:
 
 jobs:
   # ============================================
+  # Branch Sync Check (fails fast if dev is behind main)
+  # ============================================
+  branch-sync:
+    name: Branch Sync Check
+    runs-on: self-hosted
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Check if dev is behind main
+        run: |
+          git fetch origin main
+          BEHIND=$(git rev-list --count HEAD..origin/main)
+          if [ "$BEHIND" -gt 0 ]; then
+            echo "::error::Branch is $BEHIND commits behind main. Sync with main before pushing:"
+            echo "::error::  git fetch origin && git merge origin/main && git push origin dev"
+            exit 1
+          fi
+          echo "Branch is up to date with main"
+
+  # ============================================
   # Format Check (fast, runs first)
   # ============================================
   fmt:
     name: Format
     runs-on: self-hosted
+    needs: branch-sync
     steps:
       - uses: actions/checkout@v4
 
