@@ -15,7 +15,6 @@ env:
   SERVICE_NAME: presenter-dev
   DEPLOY_HOST: 10.77.8.134
   DEPLOY_USER: newlevel
-  PRESENTER_LIBRARY_ROOT: /home/newlevel/devel/presenter/presenter-libraries
 
 jobs:
   deploy:
@@ -111,6 +110,14 @@ jobs:
             data/bibles/milost.bbl.mybible.zip \
             deploy-target:${{ env.DEPLOY_DIR }}/bibles/
 
+      - name: Sync ProPresenter libraries from git
+        run: |
+          command -v rsync >/dev/null || sudo apt-get update -qq && sudo apt-get install -y -qq rsync
+          ssh deploy-target "mkdir -p ${{ env.DEPLOY_DIR }}/libraries"
+          rsync -avz --delete -e "ssh -i ~/.ssh/id_deploy" \
+            data/libraries/ \
+            deploy-target:${{ env.DEPLOY_DIR }}/libraries/
+
       - name: Import ProPresenter (first deploy only)
         run: |
           ssh deploy-target << 'REMOTE_SCRIPT'
@@ -119,7 +126,7 @@ jobs:
           if [ ! -f "$DB_PATH" ] || [ ! -s "$DB_PATH" ]; then
             echo "First deploy detected - running ProPresenter import"
             PRESENTER_DB_URL=sqlite:///opt/presenter-dev/presenter.db \
-              /opt/presenter-dev/import_propresenter --root "/home/newlevel/devel/presenter/presenter-libraries"
+              /opt/presenter-dev/import_propresenter --root "/opt/presenter-dev/libraries"
           else
             echo "Existing database found - preserving presentations"
           fi
@@ -156,6 +163,17 @@ jobs:
             echo "Service failed to start"
             sudo journalctl -u presenter-dev -n 50 --no-pager
             exit 1
+          fi
+          REMOTE_SCRIPT
+
+      - name: Cleanup old library paths
+        run: |
+          ssh deploy-target << 'REMOTE_SCRIPT'
+          # Remove old library path that was previously used (libraries now live in $DEPLOY_DIR/libraries)
+          OLD_LIB_PATH="/home/newlevel/devel/presenter/presenter-libraries"
+          if [ -d "$OLD_LIB_PATH" ]; then
+            echo "Removing old library path: $OLD_LIB_PATH"
+            rm -rf "$OLD_LIB_PATH"
           fi
           REMOTE_SCRIPT
 

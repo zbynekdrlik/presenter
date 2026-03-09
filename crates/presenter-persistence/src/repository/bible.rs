@@ -12,7 +12,9 @@ use presenter_core::{
 };
 use sea_orm::Set;
 
-use super::util::{to_domain_passage, to_domain_translation, BIBLE_INSERT_CHUNK};
+use super::util::{
+    sanitize_like_input, to_domain_passage, to_domain_translation, BIBLE_INSERT_CHUNK,
+};
 use super::Repository;
 
 impl Repository {
@@ -117,7 +119,7 @@ impl Repository {
             return Ok(Vec::new());
         };
 
-        let pattern = format!("%{}%", query);
+        let pattern = format!("%{}%", sanitize_like_input(query));
         let rows = bible_passage::Entity::find()
             .filter(bible_passage::Column::TranslationCode.eq(translation_code.to_string()))
             .filter(bible_passage::Column::Content.like(pattern))
@@ -162,7 +164,7 @@ impl Repository {
             return Ok(Vec::new());
         }
 
-        let pattern = format!("%{}%", query);
+        let pattern = format!("%{}%", sanitize_like_input(query));
         let rows = bible_passage::Entity::find()
             .filter(bible_passage::Column::Content.like(pattern))
             .order_by_asc(bible_passage::Column::BookNumber)

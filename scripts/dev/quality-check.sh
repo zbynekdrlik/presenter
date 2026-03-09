@@ -72,6 +72,11 @@ if command -v rg >/dev/null 2>&1 && rg -n "\\.(only|skip)\\(" tests/e2e >/dev/nu
   fail "Found focused/skipped E2E tests ('.only' or '.skip')."
 fi
 
+# 6) No continue-on-error in CI workflows (strict mode)
+if command -v rg >/dev/null 2>&1 && rg -n "continue-on-error" .github/workflows/*.yml >/dev/null 2>&1; then
+  fail "Found continue-on-error in workflows - remove for strict CI"
+fi
+
 # Determine changed files vs base
 git fetch -q origin || true
 if command -v rg >/dev/null 2>&1; then

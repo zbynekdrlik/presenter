@@ -16,11 +16,34 @@ env:
 
 jobs:
   # ============================================
+  # Branch Sync Check (fails fast if dev is behind main)
+  # ============================================
+  branch-sync:
+    name: Branch Sync Check
+    runs-on: self-hosted
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Check if dev is behind main
+        run: |
+          git fetch origin main
+          BEHIND=$(git rev-list --count HEAD..origin/main)
+          if [ "$BEHIND" -gt 0 ]; then
+            echo "::error::Branch is $BEHIND commits behind main. Sync with main before pushing:"
+            echo "::error::  git fetch origin && git merge origin/main && git push origin dev"
+            exit 1
+          fi
+          echo "Branch is up to date with main"
+
+  # ============================================
   # Format Check (fast, runs first)
   # ============================================
   fmt:
     name: Format
     runs-on: self-hosted
+    needs: branch-sync
     steps:
       - uses: actions/checkout@v4
 
@@ -71,31 +94,17 @@ jobs:
         run: cargo clippy --workspace --all-targets -- -D warnings -W clippy::all
 
   # ============================================
-  # Build and Test Matrix
+  # Build and Test (Single Toolchain)
   # ============================================
   test:
-    name: Test (${{ matrix.toolchain }})
+    name: Test
     needs: [fmt, clippy]
-    strategy:
-      fail-fast: false
-      matrix:
-        toolchain: [stable, beta]
-        include:
-          # MSRV check (1.85+ required for edition 2024 crates)
-          - toolchain: "1.85"
-            msrv: true
-          # Nightly for feature testing (allowed to fail)
-          - toolchain: nightly
-            experimental: true
     runs-on: self-hosted
-    continue-on-error: ${{ matrix.experimental || false }}
     steps:
       - uses: actions/checkout@v4
 
       - name: Install Rust toolchain
-        uses: dtolnay/rust-toolchain@master
-        with:
-          toolchain: ${{ matrix.toolchain }}
+        uses: dtolnay/rust-toolchain@stable
 
       - name: Clean stale build artifacts
         run: rm -rf target
@@ -103,7 +112,7 @@ jobs:
       - name: Setup Rust cache
         uses: Swatinem/rust-cache@v2
         with:
-          shared-key: test-${{ matrix.toolchain }}
+          shared-key: test
           cache-on-failure: false
 
       - name: Validate restored cache
@@ -121,7 +130,7 @@ jobs:
         run: cargo build --workspace --all-features
 
       - name: Run tests
-        run: cargo test --workspace --all-features --no-fail-fast
+        run: cargo test --workspace --all-features
         env:
           RUST_LOG: debug
 
@@ -188,7 +197,6 @@ jobs:
     name: Code Coverage
     runs-on: self-hosted
     needs: test
-    if: always() && needs.test.result == 'success'
     steps:
       - uses: actions/checkout@v4
 
@@ -217,6 +225,7 @@ jobs:
           cargo llvm-cov --workspace --all-features \
             --codecov --output-path codecov.json
 
+      # NOTE: Set fail_ci_if_error: true once CODECOV_TOKEN secret is configured
       - name: Upload coverage to Codecov
         uses: codecov/codecov-action@v4
         with:

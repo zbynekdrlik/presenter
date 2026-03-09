@@ -34,9 +34,16 @@ All environment variables and feature flags for Presenter.
 
 ### Data & Backup
 
-| Variable                 | Default                  | Description                |
-| ------------------------ | ------------------------ | -------------------------- |
-| `PRESENTER_LIBRARY_ROOT` | `../presenter-libraries` | ProPresenter import source |
+ProPresenter libraries are stored in git at `data/libraries/` and synced to deployment servers during deploy. No runtime configuration is needed - libraries are imported from `$DEPLOY_DIR/libraries` on each target.
+
+| Location     | Path                           |
+| ------------ | ------------------------------ |
+| Git repo     | `data/libraries/`              |
+| Production   | `/opt/presenter/libraries`     |
+| Dev          | `/opt/presenter-dev/libraries` |
+| PP (release) | `/opt/presenter/libraries`     |
+
+Bible files are similarly stored in `data/bibles/` and synced during deploy.
 
 ## Feature Flags
 

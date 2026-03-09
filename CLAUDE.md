@@ -16,11 +16,13 @@ Code → Commit → Push to dev → Monitor CI → Fix failures → Repeat until
 
 ### The Loop (execute without asking)
 
-1. **Commit and push immediately** - No confirmation needed
+1. **Sync with main, then commit and push** - No confirmation needed
 
    ```bash
-   git add -A && git commit -m "..." && git push origin dev
+   git fetch origin && git merge origin/main --no-edit && git add -A && git commit -m "..." && git push origin dev
    ```
+
+   **CRITICAL: Always sync dev with main BEFORE pushing.** CI will fail fast if branch is behind main.
 
 2. **Monitor CI until completion**
 
@@ -43,24 +45,26 @@ Code → Commit → Push to dev → Monitor CI → Fix failures → Repeat until
 
 **Never ask "should I commit?" or "should I push?" - just do it.**
 
-### PR Creation (NEVER automatic)
+### PR Creation (ALWAYS automatic)
 
-**NEVER create a pull request unless the user explicitly asks for it.** This is non-negotiable:
+**ALWAYS create a pull request when CI is green.** This is non-negotiable:
 
-- After CI is green, report the dev URL and wait for user verification
-- The user will test the feature on the dev environment themselves
-- Only when the user says "create a PR" or equivalent, then create one
-- Creating a PR without user approval is a violation of this policy
+1. Push to dev and wait for ALL CI workflows to be green
+2. Create PR from dev → main immediately
+3. Wait for PR checks to pass
+4. Provide PR URL that is green and mergeable
+5. Do NOT stop until PR is ready for merge
 
 ### Deliverables (ALWAYS provide at end of task)
 
-When a task is complete (CI green), **always** provide:
+When a task is complete, **always** provide:
 
+- **PR URL:** Green and mergeable (user merges manually)
 - **Dev environment:** http://10.77.8.134:8080/ui/operator (for user to verify)
 - **CI status:** Confirm all workflows are green
-- **What to test:** Brief list of what the user should verify on dev
+- **What to test:** Brief list of what the user should verify
 
-**Do NOT provide a PR link** — wait for user to request PR creation after they verify on dev.
+**A task is NOT complete until the PR is green and mergeable.**
 
 ---
 
@@ -190,6 +194,17 @@ All workflows run on the Docker runners, providing:
 - Reproducible environment (Docker image with Rust, Node.js, Playwright, Docker CLI)
 
 **Deploy workflows** use SSH to deploy binaries from runners to the application hosts (`10.77.9.205` for production, `10.77.8.134` for dev, `companion-pp.lan` for PP releases).
+
+**Missing tools:** If a workflow step requires a tool that's not installed on the runner (e.g., `rsync`), install it at runtime:
+
+```yaml
+- name: Sync files
+  run: |
+    command -v rsync >/dev/null || sudo apt-get update -qq && sudo apt-get install -y -qq rsync
+    rsync -avz ...
+```
+
+**Never work around missing tools with inferior alternatives. Install the tool.**
 
 #### Runner Management
 
@@ -345,6 +360,19 @@ When ANY CI workflow or check fails:
 **If a workflow cannot pass, either FIX IT or REMOVE IT. Do not leave broken workflows in the repository.**
 
 **When uncertain whether something should block merge, ALWAYS ask the user. Never assume.**
+
+### Zero Excuses Policy (ABSOLUTE)
+
+**You are FULLY responsible for ALL CI being green. There is NO such thing as a "pre-existing issue":**
+
+- Every CI failure is YOUR responsibility to fix, regardless of when it was introduced
+- NEVER use phrases like "pre-existing", "already broken", "not related to my changes", or "infrastructure issue"
+- If a workflow fails, YOU caused it to fail by not fixing it before pushing
+- Do NOT report success until EVERY workflow shows `conclusion: success`
+- Do NOT make excuses — make fixes
+- If you cannot fix something, EXPLICITLY ask the user for help instead of dismissing it
+
+**The standard: When you say "CI is green", running `gh run list` must show ALL workflows as `success`. Zero exceptions.**
 
 ### Banned Test Patterns
 

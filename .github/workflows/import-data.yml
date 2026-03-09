@@ -33,7 +33,11 @@ jobs:
   import:
     name: Import Data (${{ inputs.environment }})
     runs-on: self-hosted
+    # Only run when manually triggered - guard against accidental triggers
+    if: github.event_name == 'workflow_dispatch'
     steps:
+      - uses: actions/checkout@v4
+
       - name: Set environment variables
         id: env
         run: |
@@ -41,21 +45,18 @@ jobs:
             echo "deploy_dir=/opt/presenter" >> "$GITHUB_OUTPUT"
             echo "deploy_host=10.77.9.205" >> "$GITHUB_OUTPUT"
             echo "service_name=presenter" >> "$GITHUB_OUTPUT"
-            echo "library_root=/opt/presenter/libraries" >> "$GITHUB_OUTPUT"
             echo "ssh_key_secret=DEPLOY_SSH_KEY" >> "$GITHUB_OUTPUT"
             echo "health_port=80" >> "$GITHUB_OUTPUT"
           elif [ "${{ inputs.environment }}" = "pp" ]; then
             echo "deploy_dir=/opt/presenter" >> "$GITHUB_OUTPUT"
             echo "deploy_host=companion-pp.lan" >> "$GITHUB_OUTPUT"
             echo "service_name=presenter" >> "$GITHUB_OUTPUT"
-            echo "library_root=/opt/presenter/libraries" >> "$GITHUB_OUTPUT"
             echo "ssh_key_secret=DEPLOY_SSH_KEY_PP" >> "$GITHUB_OUTPUT"
             echo "health_port=80" >> "$GITHUB_OUTPUT"
           else
             echo "deploy_dir=/opt/presenter-dev" >> "$GITHUB_OUTPUT"
             echo "deploy_host=10.77.8.134" >> "$GITHUB_OUTPUT"
             echo "service_name=presenter-dev" >> "$GITHUB_OUTPUT"
-            echo "library_root=/home/newlevel/devel/presenter/presenter-libraries" >> "$GITHUB_OUTPUT"
             echo "ssh_key_secret=DEPLOY_SSH_KEY_DEV" >> "$GITHUB_OUTPUT"
             echo "health_port=8080" >> "$GITHUB_OUTPUT"
           fi
@@ -99,6 +100,15 @@ jobs:
         run: |
           ssh deploy-target "if systemctl is-active --quiet ${{ steps.env.outputs.service_name }}; then sudo systemctl stop ${{ steps.env.outputs.service_name }}; echo 'Service stopped'; else echo 'Service not running'; fi"
 
+      - name: Sync ProPresenter libraries from git
+        if: inputs.import_type == 'all' || inputs.import_type == 'propresenter'
+        run: |
+          command -v rsync >/dev/null || sudo apt-get update -qq && sudo apt-get install -y -qq rsync
+          ssh deploy-target "mkdir -p ${{ steps.env.outputs.deploy_dir }}/libraries"
+          rsync -avz --delete -e "ssh -i ~/.ssh/id_deploy" \
+            data/libraries/ \
+            deploy-target:${{ steps.env.outputs.deploy_dir }}/libraries/
+
       - name: Import ProPresenter libraries
         if: inputs.import_type == 'all' || inputs.import_type == 'propresenter'
         run: |
@@ -111,7 +121,7 @@ jobs:
           echo "Importing ProPresenter libraries (purge=${{ inputs.purge }})..."
           PRESENTER_DB_URL=sqlite://${{ steps.env.outputs.deploy_dir }}/presenter.db \
             ${{ steps.env.outputs.deploy_dir }}/import_propresenter \
-            --root "${{ steps.env.outputs.library_root }}" ${KEEP_FLAG}
+            --root "${{ steps.env.outputs.deploy_dir }}/libraries" ${KEEP_FLAG}
           REMOTE_SCRIPT
 
       - name: Import Bible translations

@@ -15,7 +15,6 @@ env:
   SERVICE_NAME: presenter
   DEPLOY_HOST: 10.77.9.205
   DEPLOY_USER: newlevel
-  PRESENTER_LIBRARY_ROOT: /opt/presenter/libraries
 
 jobs:
   deploy:
@@ -110,6 +109,14 @@ jobs:
             data/bibles/rohacek.bbl.mybible.zip \
             data/bibles/milost.bbl.mybible.zip \
             deploy-target:${{ env.DEPLOY_DIR }}/bibles/
+
+      - name: Sync ProPresenter libraries from git
+        run: |
+          command -v rsync >/dev/null || sudo apt-get update -qq && sudo apt-get install -y -qq rsync
+          ssh deploy-target "mkdir -p ${{ env.DEPLOY_DIR }}/libraries"
+          rsync -avz --delete -e "ssh -i ~/.ssh/id_deploy" \
+            data/libraries/ \
+            deploy-target:${{ env.DEPLOY_DIR }}/libraries/
 
       - name: Import ProPresenter (first deploy only)
         run: |

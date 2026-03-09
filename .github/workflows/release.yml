@@ -24,11 +24,12 @@ jobs:
 
       - name: Create release archive
         run: |
-          mkdir -p release/bibles
+          mkdir -p release/bibles release/libraries
           cp target/release/presenter-server release/
           cp target/release/import_propresenter release/
           cp target/release/ingest_bibles release/
           cp data/bibles/*.zip release/bibles/
+          cp -r data/libraries/* release/libraries/
           tar -czvf presenter-${{ github.event.release.tag_name }}-linux-x64.tar.gz -C release .
 
       - name: Upload release artifact to GitHub Release
@@ -123,6 +124,14 @@ jobs:
             data/bibles/rohacek.bbl.mybible.zip \
             data/bibles/milost.bbl.mybible.zip \
             deploy-target:${{ env.DEPLOY_DIR }}/bibles/
+
+      - name: Sync ProPresenter libraries from git
+        run: |
+          command -v rsync >/dev/null || sudo apt-get update -qq && sudo apt-get install -y -qq rsync
+          ssh deploy-target "mkdir -p ${{ env.DEPLOY_DIR }}/libraries"
+          rsync -avz --delete -e "ssh -i ~/.ssh/id_deploy" \
+            data/libraries/ \
+            deploy-target:${{ env.DEPLOY_DIR }}/libraries/
 
       - name: Import ProPresenter (first deploy only)
         run: |
