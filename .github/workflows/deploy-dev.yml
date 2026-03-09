@@ -166,6 +166,17 @@ jobs:
           fi
           REMOTE_SCRIPT
 
+      - name: Cleanup old library paths
+        run: |
+          ssh deploy-target << 'REMOTE_SCRIPT'
+          # Remove old library path that was previously used (libraries now live in $DEPLOY_DIR/libraries)
+          OLD_LIB_PATH="/home/newlevel/devel/presenter/presenter-libraries"
+          if [ -d "$OLD_LIB_PATH" ]; then
+            echo "Removing old library path: $OLD_LIB_PATH"
+            rm -rf "$OLD_LIB_PATH"
+          fi
+          REMOTE_SCRIPT
+
       - name: Show deployment info
         run: |
           echo "=== Dev Deployment Complete ==="
