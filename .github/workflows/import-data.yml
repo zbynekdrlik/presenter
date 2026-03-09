@@ -36,6 +36,8 @@ jobs:
     # Only run when manually triggered - guard against accidental triggers
     if: github.event_name == 'workflow_dispatch'
     steps:
+      - uses: actions/checkout@v4
+
       - name: Set environment variables
         id: env
         run: |
@@ -43,21 +45,18 @@ jobs:
             echo "deploy_dir=/opt/presenter" >> "$GITHUB_OUTPUT"
             echo "deploy_host=10.77.9.205" >> "$GITHUB_OUTPUT"
             echo "service_name=presenter" >> "$GITHUB_OUTPUT"
-            echo "library_root=/opt/presenter/libraries" >> "$GITHUB_OUTPUT"
             echo "ssh_key_secret=DEPLOY_SSH_KEY" >> "$GITHUB_OUTPUT"
             echo "health_port=80" >> "$GITHUB_OUTPUT"
           elif [ "${{ inputs.environment }}" = "pp" ]; then
             echo "deploy_dir=/opt/presenter" >> "$GITHUB_OUTPUT"
             echo "deploy_host=companion-pp.lan" >> "$GITHUB_OUTPUT"
             echo "service_name=presenter" >> "$GITHUB_OUTPUT"
-            echo "library_root=/opt/presenter/libraries" >> "$GITHUB_OUTPUT"
             echo "ssh_key_secret=DEPLOY_SSH_KEY_PP" >> "$GITHUB_OUTPUT"
             echo "health_port=80" >> "$GITHUB_OUTPUT"
           else
             echo "deploy_dir=/opt/presenter-dev" >> "$GITHUB_OUTPUT"
             echo "deploy_host=10.77.8.134" >> "$GITHUB_OUTPUT"
             echo "service_name=presenter-dev" >> "$GITHUB_OUTPUT"
-            echo "library_root=/home/newlevel/devel/presenter/presenter-libraries" >> "$GITHUB_OUTPUT"
             echo "ssh_key_secret=DEPLOY_SSH_KEY_DEV" >> "$GITHUB_OUTPUT"
             echo "health_port=8080" >> "$GITHUB_OUTPUT"
           fi
@@ -101,6 +100,14 @@ jobs:
         run: |
           ssh deploy-target "if systemctl is-active --quiet ${{ steps.env.outputs.service_name }}; then sudo systemctl stop ${{ steps.env.outputs.service_name }}; echo 'Service stopped'; else echo 'Service not running'; fi"
 
+      - name: Sync ProPresenter libraries from git
+        if: inputs.import_type == 'all' || inputs.import_type == 'propresenter'
+        run: |
+          ssh deploy-target "mkdir -p ${{ steps.env.outputs.deploy_dir }}/libraries"
+          rsync -avz --delete -e "ssh -i ~/.ssh/id_deploy" \
+            data/libraries/ \
+            deploy-target:${{ steps.env.outputs.deploy_dir }}/libraries/
+
       - name: Import ProPresenter libraries
         if: inputs.import_type == 'all' || inputs.import_type == 'propresenter'
         run: |
@@ -113,8 +120,17 @@ jobs:
           echo "Importing ProPresenter libraries (purge=${{ inputs.purge }})..."
           PRESENTER_DB_URL=sqlite://${{ steps.env.outputs.deploy_dir }}/presenter.db \
             ${{ steps.env.outputs.deploy_dir }}/import_propresenter \
-            --root "${{ steps.env.outputs.library_root }}" ${KEEP_FLAG}
+            --root "${{ steps.env.outputs.deploy_dir }}/libraries" ${KEEP_FLAG}
           REMOTE_SCRIPT
+
+      - name: Sync Bible files from git
+        if: inputs.import_type == 'all' || inputs.import_type == 'bibles'
+        run: |
+          ssh deploy-target "mkdir -p ${{ steps.env.outputs.deploy_dir }}/bibles"
+          scp -i ~/.ssh/id_deploy \
+            data/bibles/rohacek.bbl.mybible.zip \
+            data/bibles/milost.bbl.mybible.zip \
+            deploy-target:${{ steps.env.outputs.deploy_dir }}/bibles/
 
       - name: Import Bible translations
         if: inputs.import_type == 'all' || inputs.import_type == 'bibles'
@@ -122,69 +138,9 @@ jobs:
           ssh deploy-target << 'REMOTE_SCRIPT'
           set -e
           echo "Importing Bible translations..."
-
-          BIBLES_DIR="${{ steps.env.outputs.deploy_dir }}/bibles"
-          ROHACEK_PATH="$BIBLES_DIR/rohacek.bbl.mybible.zip"
-          MILOST_PATH="$BIBLES_DIR/milost.bbl.mybible.zip"
-
-          sudo mkdir -p "$BIBLES_DIR"
-
-          # Clean up any invalid zip files from previous failed attempts
-          for f in "$ROHACEK_PATH" "$MILOST_PATH"; do
-            if [ -f "$f" ]; then
-              if ! unzip -t "$f" >/dev/null 2>&1; then
-                echo "Removing invalid zip file: $f"
-                sudo rm -f "$f"
-              fi
-            fi
-          done
-
-          # Look for Roháček MySword file in /tmp (might be .mybible or roh.bbl.mybible)
-          for f in /tmp/roh.bbl.mybible /tmp/*[Rr]ohac*.mybible /tmp/*[Rr]ohac*.bbl.mybible; do
-            if [ -f "$f" ] && [ ! -f "$ROHACEK_PATH" ]; then
-              echo "Found Roháček at $f - creating zip archive..."
-              BASENAME=$(basename "$f")
-              python3 -c "
-import zipfile
-import sys
-with zipfile.ZipFile('$ROHACEK_PATH', 'w', zipfile.ZIP_DEFLATED) as zf:
-    zf.write('$f', '$BASENAME')
-print('Created $ROHACEK_PATH')
-"
-              sudo chmod 644 "$ROHACEK_PATH"
-              break
-            fi
-          done
-
-          # Look for Milosť MySword file in /tmp
-          for f in /tmp/milost.bbl.mybible /tmp/*[Mm]ilos*.mybible /tmp/*[Mm]ilos*.bbl.mybible; do
-            if [ -f "$f" ] && [ ! -f "$MILOST_PATH" ]; then
-              echo "Found Milosť at $f - creating zip archive..."
-              BASENAME=$(basename "$f")
-              python3 -c "
-import zipfile
-import sys
-with zipfile.ZipFile('$MILOST_PATH', 'w', zipfile.ZIP_DEFLATED) as zf:
-    zf.write('$f', '$BASENAME')
-print('Created $MILOST_PATH')
-"
-              sudo chmod 644 "$MILOST_PATH"
-              break
-            fi
-          done
-
           export PRESENTER_DB_URL=sqlite://${{ steps.env.outputs.deploy_dir }}/presenter.db
-
-          if [ -f "$ROHACEK_PATH" ]; then
-            export PRESENTER_BIBLE_ROHACEK="$ROHACEK_PATH"
-            echo "Using Roháček MySword file at $ROHACEK_PATH"
-          fi
-
-          if [ -f "$MILOST_PATH" ]; then
-            export PRESENTER_BIBLE_MILOST="$MILOST_PATH"
-            echo "Using Milosť MySword file at $MILOST_PATH"
-          fi
-
+          export PRESENTER_BIBLE_ROHACEK=${{ steps.env.outputs.deploy_dir }}/bibles/rohacek.bbl.mybible.zip
+          export PRESENTER_BIBLE_MILOST=${{ steps.env.outputs.deploy_dir }}/bibles/milost.bbl.mybible.zip
           ${{ steps.env.outputs.deploy_dir }}/ingest_bibles
           REMOTE_SCRIPT
 
