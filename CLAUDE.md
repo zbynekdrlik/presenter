@@ -346,6 +346,19 @@ When ANY CI workflow or check fails:
 
 **When uncertain whether something should block merge, ALWAYS ask the user. Never assume.**
 
+### Zero Excuses Policy (ABSOLUTE)
+
+**You are FULLY responsible for ALL CI being green. There is NO such thing as a "pre-existing issue":**
+
+- Every CI failure is YOUR responsibility to fix, regardless of when it was introduced
+- NEVER use phrases like "pre-existing", "already broken", "not related to my changes", or "infrastructure issue"
+- If a workflow fails, YOU caused it to fail by not fixing it before pushing
+- Do NOT report success until EVERY workflow shows `conclusion: success`
+- Do NOT make excuses — make fixes
+- If you cannot fix something, EXPLICITLY ask the user for help instead of dismissing it
+
+**The standard: When you say "CI is green", running `gh run list` must show ALL workflows as `success`. Zero exceptions.**
+
 ### Banned Test Patterns
 
 | Pattern                       | Why Banned         | What To Do Instead       |

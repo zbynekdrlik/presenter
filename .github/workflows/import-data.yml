@@ -33,6 +33,8 @@ jobs:
   import:
     name: Import Data (${{ inputs.environment }})
     runs-on: self-hosted
+    # Only run when manually triggered - guard against accidental triggers
+    if: github.event_name == 'workflow_dispatch'
     steps:
       - name: Set environment variables
         id: env
