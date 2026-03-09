@@ -127,8 +127,11 @@ jobs:
 
       - name: Sync ProPresenter libraries from git
         run: |
-          ssh deploy-target "rm -rf ${{ env.DEPLOY_DIR }}/libraries && mkdir -p ${{ env.DEPLOY_DIR }}/libraries"
-          scp -i ~/.ssh/id_deploy -r data/libraries/* deploy-target:${{ env.DEPLOY_DIR }}/libraries/
+          command -v rsync >/dev/null || sudo apt-get update -qq && sudo apt-get install -y -qq rsync
+          ssh deploy-target "mkdir -p ${{ env.DEPLOY_DIR }}/libraries"
+          rsync -avz --delete -e "ssh -i ~/.ssh/id_deploy" \
+            data/libraries/ \
+            deploy-target:${{ env.DEPLOY_DIR }}/libraries/
 
       - name: Import ProPresenter (first deploy only)
         run: |

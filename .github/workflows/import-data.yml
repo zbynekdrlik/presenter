@@ -103,8 +103,11 @@ jobs:
       - name: Sync ProPresenter libraries from git
         if: inputs.import_type == 'all' || inputs.import_type == 'propresenter'
         run: |
-          ssh deploy-target "rm -rf ${{ steps.env.outputs.deploy_dir }}/libraries && mkdir -p ${{ steps.env.outputs.deploy_dir }}/libraries"
-          scp -i ~/.ssh/id_deploy -r data/libraries/* deploy-target:${{ steps.env.outputs.deploy_dir }}/libraries/
+          command -v rsync >/dev/null || sudo apt-get update -qq && sudo apt-get install -y -qq rsync
+          ssh deploy-target "mkdir -p ${{ steps.env.outputs.deploy_dir }}/libraries"
+          rsync -avz --delete -e "ssh -i ~/.ssh/id_deploy" \
+            data/libraries/ \
+            deploy-target:${{ steps.env.outputs.deploy_dir }}/libraries/
 
       - name: Import ProPresenter libraries
         if: inputs.import_type == 'all' || inputs.import_type == 'propresenter'

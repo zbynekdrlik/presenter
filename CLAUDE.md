@@ -191,6 +191,17 @@ All workflows run on the Docker runners, providing:
 
 **Deploy workflows** use SSH to deploy binaries from runners to the application hosts (`10.77.9.205` for production, `10.77.8.134` for dev, `companion-pp.lan` for PP releases).
 
+**Missing tools:** If a workflow step requires a tool that's not installed on the runner (e.g., `rsync`), install it at runtime:
+
+```yaml
+- name: Sync files
+  run: |
+    command -v rsync >/dev/null || sudo apt-get update -qq && sudo apt-get install -y -qq rsync
+    rsync -avz ...
+```
+
+**Never work around missing tools with inferior alternatives. Install the tool.**
+
 #### Runner Management
 
 ```bash
