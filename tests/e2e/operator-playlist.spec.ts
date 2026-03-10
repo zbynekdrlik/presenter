@@ -233,11 +233,11 @@ test("playlist separator entries can be added and persisted via API", async ({
       data: {
         entries: [
           {
-            type: "Presentation",
+            type: "presentation",
             presentationId: presPayload.presentation.id,
           },
           {
-            type: "Separator",
+            type: "separator",
             name: "-- Worship Set --",
           },
         ],

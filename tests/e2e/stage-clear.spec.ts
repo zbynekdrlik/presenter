@@ -129,7 +129,7 @@ test("stage clear broadcasts to WebSocket clients", async ({
   });
 
   // Wait for stage to show content
-  await expect(page.locator(".stage__current")).toContainText("Visible Text", {
+  await expect(page.locator("#current-text")).toContainText("Visible Text", {
     timeout: 10_000,
   });
 
@@ -137,7 +137,7 @@ test("stage clear broadcasts to WebSocket clients", async ({
   await request.post(new URL("/stage/clear", baseURL).toString());
 
   // Stage should update via WebSocket — current text should be empty
-  await expect(page.locator(".stage__current")).toHaveText("", {
+  await expect(page.locator("#current-text")).toHaveText("", {
     timeout: 10_000,
   });
 });

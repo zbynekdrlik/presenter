@@ -36,9 +36,8 @@ test("append slides to Bible presentation increases slide count", async ({
   const created: { id: string; slides: Array<{ id: string }> } =
     await createResp.json();
   const presId = created.id;
-  const initialCount = created.slides.length;
 
-  // Append slides
+  // Append slides (note: append filters out empty placeholder slides from creation)
   const appendResp = await request.post(
     new URL(`/bible/presentations/${presId}/append`, baseURL).toString(),
     {
@@ -63,7 +62,8 @@ test("append slides to Bible presentation increases slide count", async ({
   expect(appendResp.ok()).toBeTruthy();
   const appended: { id: string; slides: Array<{ id: string }> } =
     await appendResp.json();
-  expect(appended.slides.length).toBe(initialCount + 2);
+  // Empty placeholder slide is removed, so we get exactly 2 appended slides
+  expect(appended.slides.length).toBe(2);
 
   // Verify the presentation detail reflects the appended slides
   const detailResp = await request.get(
@@ -71,7 +71,7 @@ test("append slides to Bible presentation increases slide count", async ({
   );
   expect(detailResp.ok()).toBeTruthy();
   const detail: { slides: Array<{ id: string }> } = await detailResp.json();
-  expect(detail.slides.length).toBe(initialCount + 2);
+  expect(detail.slides.length).toBe(2);
 });
 
 test("append empty slides array returns error", async ({ request }) => {
