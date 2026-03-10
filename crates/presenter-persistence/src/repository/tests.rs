@@ -1,11 +1,14 @@
 use super::Repository;
 use chrono::{Duration, Utc};
 use presenter_core::{
-    bible::BibleIngestionBatch, playlist::PlaylistEntryKind, AndroidStageDisplayDraft,
-    BiblePassage, BibleReference, BibleTranslation, CountdownTimer, Library, LibraryId,
-    OscSettingsDraft, PlaylistEntry, PlaylistEntryId, PreachTimer, Presentation, PresentationId,
-    ResolumeHostDraft, SearchResultKind, Slide, SlideContent, SlideGroup, SlideId, SlideText,
-    StageState, TimerState, TimersState, VelocityMode, DEFAULT_ADB_PORT, DEFAULT_LAUNCH_COMPONENT,
+    bible::BibleIngestionBatch,
+    playlist::PlaylistEntryKind,
+    slide::{BibleSlideMetadata, SlideMetadata},
+    AndroidStageDisplayDraft, BiblePassage, BibleReference, BibleTranslation, CountdownTimer,
+    Library, LibraryId, OscSettingsDraft, PlaylistEntry, PlaylistEntryId, PreachTimer,
+    Presentation, PresentationId, ResolumeHostDraft, SearchResultKind, Slide, SlideContent,
+    SlideGroup, SlideId, SlideText, StageState, TimerState, TimersState, VelocityMode,
+    DEFAULT_ADB_PORT, DEFAULT_LAUNCH_COMPONENT,
 };
 
 fn sample_library() -> Library {
@@ -511,4 +514,222 @@ async fn stage_state_round_trip() {
     assert_eq!(stored.presentation_id, Some(presentation.id));
     assert_eq!(stored.current_slide_id, Some(current));
     assert_eq!(stored.next_slide_id, next);
+}
+
+// ── create_presentation tests ───────────────────────────────────────
+
+#[tokio::test]
+async fn create_presentation_persists_with_correct_fields() {
+    let repo = Repository::connect_in_memory().await.unwrap();
+    let library = sample_library();
+    repo.upsert_library(&library).await.unwrap();
+
+    let (lib_id, lib_name, presentation) = repo
+        .create_presentation(library.id, "New Song", None)
+        .await
+        .unwrap();
+
+    assert_eq!(lib_id, library.id);
+    assert_eq!(lib_name, "Default");
+    assert_eq!(presentation.name, "New Song");
+    // Default slide should be created when no slides provided
+    assert_eq!(presentation.slides.len(), 1);
+    assert_eq!(presentation.slides[0].content.main.value(), "");
+}
+
+#[tokio::test]
+async fn create_presentation_with_slides() {
+    let repo = Repository::connect_in_memory().await.unwrap();
+    let library = sample_library();
+    repo.upsert_library(&library).await.unwrap();
+
+    let slides = vec![
+        Slide::new(
+            0,
+            SlideContent::new(
+                SlideText::new("Verse 1").unwrap(),
+                SlideText::new("Trans 1").unwrap(),
+                SlideText::new("Stage 1").unwrap(),
+                Some(SlideGroup::new("Verse")),
+            ),
+        ),
+        Slide::new(
+            1,
+            SlideContent::new(
+                SlideText::new("Chorus").unwrap(),
+                SlideText::new("Refrén").unwrap(),
+                SlideText::new("Stage C").unwrap(),
+                Some(SlideGroup::new("Chorus")),
+            ),
+        ),
+    ];
+
+    let (_, _, presentation) = repo
+        .create_presentation(library.id, "Multi Slide", Some(&slides))
+        .await
+        .unwrap();
+
+    assert_eq!(presentation.name, "Multi Slide");
+    assert_eq!(presentation.slides.len(), 2);
+    assert_eq!(presentation.slides[0].content.main.value(), "Verse 1");
+    assert_eq!(presentation.slides[1].content.main.value(), "Chorus");
+}
+
+// ── rename_presentation tests ───────────────────────────────────────
+
+#[tokio::test]
+async fn rename_presentation_updates_name() {
+    let repo = Repository::connect_in_memory().await.unwrap();
+    let library = sample_library();
+    repo.upsert_library(&library).await.unwrap();
+
+    let (_, _, created) = repo
+        .create_presentation(library.id, "Original Name", None)
+        .await
+        .unwrap();
+
+    repo.rename_presentation(created.id, "Updated Name")
+        .await
+        .unwrap();
+
+    let detail = repo
+        .fetch_presentation_detail(created.id)
+        .await
+        .unwrap()
+        .expect("detail");
+    assert_eq!(detail.2.name, "Updated Name");
+}
+
+#[tokio::test]
+async fn rename_presentation_rejects_empty_name() {
+    let repo = Repository::connect_in_memory().await.unwrap();
+    let library = sample_library();
+    repo.upsert_library(&library).await.unwrap();
+
+    let (_, _, created) = repo
+        .create_presentation(library.id, "Song", None)
+        .await
+        .unwrap();
+
+    let result = repo.rename_presentation(created.id, "   ").await;
+    assert!(result.is_err());
+}
+
+// ── delete_presentation tests ───────────────────────────────────────
+
+#[tokio::test]
+async fn delete_presentation_cascades_to_slides() {
+    let repo = Repository::connect_in_memory().await.unwrap();
+    let library = sample_library();
+    let presentation_id = library.presentations[0].id;
+    repo.upsert_library(&library).await.unwrap();
+
+    // Verify it exists first
+    let before = repo
+        .fetch_presentation_detail(presentation_id)
+        .await
+        .unwrap();
+    assert!(before.is_some());
+
+    repo.delete_presentation(presentation_id).await.unwrap();
+
+    let after = repo
+        .fetch_presentation_detail(presentation_id)
+        .await
+        .unwrap();
+    assert!(after.is_none());
+}
+
+#[tokio::test]
+async fn delete_presentation_not_found_returns_error() {
+    let repo = Repository::connect_in_memory().await.unwrap();
+    let result = repo.delete_presentation(PresentationId::new()).await;
+    assert!(result.is_err());
+}
+
+// ── app_setting tests ───────────────────────────────────────────────
+
+#[tokio::test]
+async fn app_setting_round_trip_set_get_delete() {
+    let repo = Repository::connect_in_memory().await.unwrap();
+
+    // Initially absent
+    let val = repo.get_app_setting("theme").await.unwrap();
+    assert!(val.is_none());
+
+    // Set
+    repo.set_app_setting("theme", "dark").await.unwrap();
+    let val = repo.get_app_setting("theme").await.unwrap();
+    assert_eq!(val.as_deref(), Some("dark"));
+
+    // Overwrite
+    repo.set_app_setting("theme", "light").await.unwrap();
+    let val = repo.get_app_setting("theme").await.unwrap();
+    assert_eq!(val.as_deref(), Some("light"));
+
+    // Delete
+    repo.delete_app_setting("theme").await.unwrap();
+    let val = repo.get_app_setting("theme").await.unwrap();
+    assert!(val.is_none());
+}
+
+// ── update_slide_content_with_metadata tests ────────────────────────
+
+#[tokio::test]
+async fn update_slide_content_with_metadata_persists_all_fields() {
+    let repo = Repository::connect_in_memory().await.unwrap();
+    let library = sample_library();
+    let presentation = library.presentations[0].clone();
+    let slide = presentation.slides[0].clone();
+    repo.upsert_library(&library).await.unwrap();
+
+    let new_content = SlideContent::new(
+        SlideText::new("John 3:16 text").unwrap(),
+        SlideText::new("Jan 3:16 text").unwrap(),
+        SlideText::new("Stage bible").unwrap(),
+        None,
+    );
+
+    let metadata = SlideMetadata::new().with_bible(BibleSlideMetadata {
+        translation_code: "en-kjv".to_string(),
+        secondary_translation_code: Some("cs-cep".to_string()),
+        book: "John".to_string(),
+        book_code: Some("JHN".to_string()),
+        book_number: Some(43),
+        chapter: 3,
+        verses: vec![presenter_core::slide::BibleSlideVerseRef::new(16, 16)],
+        main_reference_label: Some("John 3:16 (KJV)".to_string()),
+        translation_reference_label: Some("Jan 3:16 (CEP)".to_string()),
+    });
+
+    repo.update_slide_content_with_metadata(
+        presentation.id,
+        slide.id,
+        &new_content,
+        Some(&metadata),
+    )
+    .await
+    .unwrap();
+
+    let detail = repo
+        .fetch_presentation_detail(presentation.id)
+        .await
+        .unwrap()
+        .expect("detail");
+    let updated = detail
+        .2
+        .slides
+        .iter()
+        .find(|s| s.id == slide.id)
+        .expect("slide");
+
+    assert_eq!(updated.content.main.value(), "John 3:16 text");
+    assert_eq!(updated.content.translation.value(), "Jan 3:16 text");
+    // Verify metadata was persisted and loaded back
+    assert!(updated.metadata.is_some());
+    let meta = updated.metadata.as_ref().unwrap();
+    let bible = meta.bible.as_ref().expect("bible metadata");
+    assert_eq!(bible.translation_code, "en-kjv");
+    assert_eq!(bible.book, "John");
+    assert_eq!(bible.chapter, 3);
 }

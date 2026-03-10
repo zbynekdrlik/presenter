@@ -1,5 +1,6 @@
 mod clip_map;
 mod driver;
+mod handlers;
 mod types;
 
 use anyhow::anyhow;
