@@ -3,6 +3,8 @@ target = "index.html"
 dist = "dist"
 # Serve assets from /ui-next-pkg/ to match the server route
 public_url = "/ui-next-pkg/"
+# Disable wasm-opt (handled by Trunk but can fail on some runners)
+no_minification = true
 
 [watch]
 watch = ["src", "index.html", "styles"]

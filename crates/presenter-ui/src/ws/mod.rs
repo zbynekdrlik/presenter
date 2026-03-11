@@ -2,9 +2,6 @@ use gloo_net::websocket::{futures::WebSocket, Message};
 use gloo_timers::callback::Timeout;
 use leptos::prelude::*;
 use presenter_core::LiveEvent;
-use wasm_bindgen::closure::Closure;
-use wasm_bindgen::JsCast;
-use web_sys::Window;
 
 /// Reconnection delay in milliseconds.
 const RECONNECT_DELAY_MS: u32 = 2_000;
@@ -20,7 +17,7 @@ pub enum WsState {
 
 /// Build the WebSocket URL from the current page location.
 fn ws_url() -> String {
-    let window: Window = web_sys::window().expect("no global window");
+    let window = web_sys::window().expect("no global window");
     let location = window.location();
     let protocol = location.protocol().unwrap_or_else(|_| "http:".to_string());
     let host = location.host().unwrap_or_else(|_| "localhost".to_string());
