@@ -200,6 +200,68 @@ test("allows managing playlist entries while in live mode", async ({
   await expect(playlistCountBadge).toHaveText(/\b1\b/, { timeout: 10_000 });
 });
 
+test("playlist separator entries can be added and persisted via API", async ({
+  request,
+}) => {
+  // Create a playlist
+  const playlistResp = await request.post(
+    new URL("/playlists", baseURL).toString(),
+    { data: { name: `Sep Test ${Date.now()}` } },
+  );
+  expect(playlistResp.ok()).toBeTruthy();
+  const playlist: { id: string; name: string } = await playlistResp.json();
+
+  // Create a library and presentation to use as a playlist entry
+  const libResp = await request.post(
+    new URL("/libraries", baseURL).toString(),
+    { data: { name: `Sep Lib ${Date.now()}` } },
+  );
+  expect(libResp.ok()).toBeTruthy();
+  const library: { id: string } = await libResp.json();
+
+  const presResp = await request.post(
+    new URL(`/libraries/${library.id}/presentations`, baseURL).toString(),
+    { data: { name: "Sep Song" } },
+  );
+  expect(presResp.ok()).toBeTruthy();
+  const presPayload: { presentation: { id: string } } = await presResp.json();
+
+  // Add entries including a separator
+  const entriesResp = await request.put(
+    new URL(`/playlists/${playlist.id}/entries`, baseURL).toString(),
+    {
+      data: {
+        entries: [
+          {
+            type: "presentation",
+            presentationId: presPayload.presentation.id,
+          },
+          {
+            type: "separator",
+            name: "-- Worship Set --",
+          },
+        ],
+      },
+    },
+  );
+  expect(entriesResp.ok()).toBeTruthy();
+  const updated: { entries: Array<{ kind: any }> } = await entriesResp.json();
+  expect(updated.entries.length).toBe(2);
+
+  // Verify the separator entry persists on re-fetch
+  const playlistsResp = await request.get(
+    new URL("/playlists", baseURL).toString(),
+  );
+  expect(playlistsResp.ok()).toBeTruthy();
+  const playlists: Array<{
+    id: string;
+    entries: Array<{ kind: any }>;
+  }> = await playlistsResp.json();
+  const found = playlists.find((p) => p.id === playlist.id);
+  expect(found).toBeTruthy();
+  expect(found!.entries.length).toBe(2);
+});
+
 test("stage display status shows connection and latency", async ({ page }) => {
   await page.request.post(new URL("/stage/layout", baseURL).toString(), {
     data: { code: "worship-snv" },
