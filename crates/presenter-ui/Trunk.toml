@@ -1,12 +1,8 @@
 [build]
 target = "index.html"
 dist = "dist"
-release = true
+# Serve assets from /ui-next-pkg/ to match the server route
+public_url = "/ui-next-pkg/"
 
 [watch]
 watch = ["src", "index.html", "styles"]
-
-[[hooks]]
-stage = "build"
-command = "echo"
-command_arguments = ["WASM build complete"]

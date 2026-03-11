@@ -35,6 +35,19 @@ jobs:
           shared-key: release-dev
           cache-on-failure: false
 
+      - name: Install WASM toolchain and Trunk
+        run: |
+          rustup target add wasm32-unknown-unknown
+          if ! command -v trunk &>/dev/null; then
+            cargo install trunk --locked
+          fi
+
+      - name: Build WASM UI
+        run: |
+          cd crates/presenter-ui
+          trunk build --release
+          echo "WASM UI built: $(ls -la dist/)"
+
       - name: Build release binaries
         run: cargo build --release -p presenter-server -p presenter-importer
         env:
