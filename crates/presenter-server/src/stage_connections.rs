@@ -1,28 +1,8 @@
 use chrono::{DateTime, Duration, Utc};
-use serde::Serialize;
+use presenter_core::{StageClientSnapshot, StageClientStatus};
 use std::{collections::HashMap, sync::Arc};
 use tokio::sync::RwLock;
 use uuid::Uuid;
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
-#[serde(rename_all = "snake_case")]
-pub enum StageClientStatus {
-    Connecting,
-    Connected,
-    Reconnecting,
-    Disconnected,
-}
-
-#[derive(Debug, Clone, Serialize)]
-#[serde(rename_all = "camelCase")]
-pub struct StageClientSnapshot {
-    pub id: Uuid,
-    pub layout_code: String,
-    pub last_heartbeat: DateTime<Utc>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub latency_ms: Option<u32>,
-    pub status: StageClientStatus,
-}
 
 #[derive(Debug)]
 struct StageConnection {

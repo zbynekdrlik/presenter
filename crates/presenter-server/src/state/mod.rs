@@ -42,13 +42,13 @@ use crate::{
     live::{LiveEvent, LiveHub},
     osc::{OscBridge, OscStatusSnapshot},
     resolume::ResolumeRegistry,
-    stage_connections::{StageClientSnapshot, StageConnections, StageHeartbeatConfig},
+    stage_connections::{StageConnections, StageHeartbeatConfig},
 };
 use chrono::Utc;
 use presenter_core::{
     BibleBroadcast, BibleSlideOutput, OscSettings, OscSettingsDraft, PlaylistId, Presentation,
-    PresentationId, Slide, SlideId, StageDisplayLayout, StageState, TimersOverview,
-    DEFAULT_STAGE_LAYOUT_CODE,
+    PresentationId, Slide, SlideId, StageClientSnapshot, StageDisplayLayout, StageState,
+    TimersOverview, DEFAULT_STAGE_LAYOUT_CODE,
 };
 use presenter_persistence::{DatabaseSettings, Repository};
 use serde::Serialize;

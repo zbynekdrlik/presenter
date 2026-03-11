@@ -66,18 +66,18 @@ impl AppState {
     pub async fn get_stage_appearance(
         &self,
         layout: &str,
-    ) -> anyhow::Result<crate::router::stage::StageAppearance> {
+    ) -> anyhow::Result<presenter_core::StageAppearance> {
         let key = format!("stage-appearance:{layout}");
         match self.repository.get_app_setting(&key).await? {
             Some(json) => Ok(serde_json::from_str(&json)?),
-            None => Ok(crate::router::stage::StageAppearance::default_for(layout)),
+            None => Ok(presenter_core::StageAppearance::default_for(layout)),
         }
     }
 
     pub async fn set_stage_appearance(
         &self,
         layout: &str,
-        appearance: crate::router::stage::StageAppearance,
+        appearance: presenter_core::StageAppearance,
     ) -> anyhow::Result<()> {
         let key = format!("stage-appearance:{layout}");
         let json = serde_json::to_string(&appearance)?;

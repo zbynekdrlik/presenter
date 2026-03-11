@@ -1,0 +1,12 @@
+[build]
+target = "index.html"
+dist = "dist"
+release = true
+
+[watch]
+watch = ["src", "index.html", "styles"]
+
+[[hooks]]
+stage = "build"
+command = "echo"
+command_arguments = ["WASM build complete"]
