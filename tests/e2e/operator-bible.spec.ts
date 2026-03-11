@@ -1002,10 +1002,11 @@ test("Bible search requires minimum 3 characters", async ({
 
   // Type 2 chars — should NOT trigger search dropdown
   await searchInput.fill("ab");
-  // Wait a bit to ensure no results appear
-  await page.waitForTimeout(500);
-  const visibleAfter2 = await searchResults.getAttribute("data-visible");
-  expect(visibleAfter2).not.toBe("true");
+  // Verify search results do not appear (negation assertion with retry)
+  await expect(async () => {
+    const visible = await searchResults.getAttribute("data-visible");
+    expect(visible).not.toBe("true");
+  }).toPass({ timeout: 2_000 });
 
   // Type 3 chars — should trigger search
   await searchInput.fill("abc");

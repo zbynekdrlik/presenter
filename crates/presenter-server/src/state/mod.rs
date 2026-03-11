@@ -28,6 +28,7 @@ mod presentations;
 mod seed;
 mod slides;
 mod stage;
+mod stage_display;
 #[cfg(test)]
 mod tests;
 mod timers;
@@ -46,8 +47,8 @@ use crate::{
 use chrono::Utc;
 use presenter_core::{
     BibleBroadcast, BibleSlideOutput, OscSettings, OscSettingsDraft, PlaylistId, Presentation,
-    PresentationId, Slide, SlideId, StageDisplayLayout, StageDisplaySnapshot, StageState,
-    TimersOverview, DEFAULT_STAGE_LAYOUT_CODE,
+    PresentationId, Slide, SlideId, StageDisplayLayout, StageState, TimersOverview,
+    DEFAULT_STAGE_LAYOUT_CODE,
 };
 use presenter_persistence::{DatabaseSettings, Repository};
 use serde::Serialize;
@@ -71,10 +72,7 @@ use companion::{
 use seed::sample_library;
 #[cfg(test)]
 pub use seed::TestBibleIngestion;
-use stage::{
-    build_stage_playlist_entries, build_stage_snapshot, stage_resolution_from_presentation,
-    StageResolution,
-};
+use stage::{build_stage_playlist_entries, stage_resolution_from_presentation, StageResolution};
 
 #[derive(Clone)]
 pub struct AppState {
@@ -109,7 +107,7 @@ pub struct FeatureFlags {
 }
 
 impl AppState {
-    #[allow(dead_code)]
+    #[cfg_attr(not(test), allow(dead_code))]
     pub fn new(
         repository: Repository,
         companion_token: Option<String>,
@@ -576,60 +574,6 @@ impl AppState {
         guard.insert(presentation.id, Arc::new(presentation));
     }
 
-    // Stage display methods
-    pub async fn stage_display_snapshot(
-        &self,
-        layout_code: &str,
-    ) -> anyhow::Result<Option<StageDisplaySnapshot>> {
-        let layout = StageDisplayLayout::built_in()
-            .into_iter()
-            .find(|layout| layout.code == layout_code);
-        let Some(layout) = layout else {
-            return Ok(None);
-        };
-        let Some(context) = self.build_stage_context().await? else {
-            return Ok(None);
-        };
-        Ok(Some(build_stage_snapshot(layout, &context)))
-    }
-
-    pub async fn selected_stage_display_snapshot(
-        &self,
-    ) -> anyhow::Result<Option<StageDisplaySnapshot>> {
-        let code = {
-            let guard = self.stage_layout.read().await;
-            guard.clone()
-        };
-        self.stage_display_snapshot(&code).await
-    }
-
-    pub async fn stage_layout_code(&self) -> String {
-        self.stage_layout.read().await.clone()
-    }
-
-    pub async fn set_stage_layout_code(&self, code: &str) -> anyhow::Result<StageDisplayLayout> {
-        let layout = StageDisplayLayout::built_in()
-            .into_iter()
-            .find(|layout| layout.code == code)
-            .ok_or_else(|| anyhow::anyhow!("unknown stage layout: {code}"))?;
-        {
-            let mut guard = self.stage_layout.write().await;
-            if *guard == layout.code {
-                return Ok(layout);
-            }
-            *guard = layout.code.clone();
-        }
-        self.live_hub.publish(LiveEvent::StageLayout {
-            code: layout.code.clone(),
-        });
-        self.broadcast_stage_snapshots().await?;
-        Ok(layout)
-    }
-
-    pub async fn stage_displays(&self) -> anyhow::Result<Vec<StageDisplayLayout>> {
-        Ok(StageDisplayLayout::built_in())
-    }
-
     pub async fn timers_overview(&self) -> anyhow::Result<TimersOverview> {
         let now = Utc::now();
         let state = self.load_or_init_timers(now).await?;
@@ -707,107 +651,7 @@ impl AppState {
         Ok(())
     }
 
-    // Stage appearance settings
-    pub async fn get_stage_appearance(
-        &self,
-        layout: &str,
-    ) -> anyhow::Result<crate::router::stage::StageAppearance> {
-        let key = format!("stage-appearance:{layout}");
-        match self.repository.get_app_setting(&key).await? {
-            Some(json) => Ok(serde_json::from_str(&json)?),
-            None => Ok(crate::router::stage::StageAppearance::default_for(layout)),
-        }
-    }
-
-    pub async fn set_stage_appearance(
-        &self,
-        layout: &str,
-        appearance: crate::router::stage::StageAppearance,
-    ) -> anyhow::Result<()> {
-        let key = format!("stage-appearance:{layout}");
-        let json = serde_json::to_string(&appearance)?;
-        self.repository.set_app_setting(&key, &json).await?;
-        self.live_hub.publish(LiveEvent::StageAppearance {
-            layout: layout.to_string(),
-            appearance,
-        });
-        Ok(())
-    }
-
-    // Stage design methods (visual box-based layout)
-    pub async fn get_stage_design(
-        &self,
-        layout: &str,
-    ) -> anyhow::Result<presenter_core::StageDesign> {
-        let key = format!("stage-design:{layout}");
-        match self.repository.get_app_setting(&key).await? {
-            Some(json) => Ok(serde_json::from_str(&json)?),
-            None => Ok(presenter_core::StageDesign::default_for(layout)),
-        }
-    }
-
-    pub async fn set_stage_design(
-        &self,
-        layout: &str,
-        design: presenter_core::StageDesign,
-    ) -> anyhow::Result<()> {
-        let key = format!("stage-design:{layout}");
-        let json = serde_json::to_string(&design)?;
-        self.repository.set_app_setting(&key, &json).await?;
-        self.live_hub.publish(LiveEvent::StageDesign {
-            layout: layout.to_string(),
-            design,
-        });
-        Ok(())
-    }
-
-    pub async fn reset_stage_design(
-        &self,
-        layout: &str,
-    ) -> anyhow::Result<presenter_core::StageDesign> {
-        let key = format!("stage-design:{layout}");
-        self.repository.delete_app_setting(&key).await?;
-        let design = presenter_core::StageDesign::default_for(layout);
-        self.live_hub.publish(LiveEvent::StageDesign {
-            layout: layout.to_string(),
-            design: design.clone(),
-        });
-        Ok(design)
-    }
-
-    /// Get stage design with shared status bar settings from worship-snv.
-    /// Status bar elements (clock, live indicator, connection status) are
-    /// managed in worship-snv and automatically synced to other layouts.
-    pub async fn get_stage_design_with_shared_status(
-        &self,
-        layout: &str,
-    ) -> anyhow::Result<presenter_core::StageDesign> {
-        use presenter_core::DEFAULT_STAGE_LAYOUT_CODE;
-
-        let mut design = self.get_stage_design(layout).await?;
-
-        // If this is already worship-snv, return as-is
-        if layout == DEFAULT_STAGE_LAYOUT_CODE {
-            return Ok(design);
-        }
-
-        // Get master design to extract status bar settings
-        let master = self.get_stage_design(DEFAULT_STAGE_LAYOUT_CODE).await?;
-
-        // Remove status bar boxes from current design
-        design.boxes.retain(|b| !b.box_type.is_status_bar());
-
-        // Add status bar boxes from master
-        design.boxes.extend(
-            master
-                .boxes
-                .into_iter()
-                .filter(|b| b.box_type.is_status_bar()),
-        );
-
-        Ok(design)
-    }
-
+    // Stage display, appearance, and design methods are in stage_display.rs
     // Slide editing methods are in slides.rs
     // Timer methods are in timers.rs
     // Broadcasting methods are in broadcasting.rs

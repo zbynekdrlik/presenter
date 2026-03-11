@@ -2,7 +2,7 @@
 
 ## Status
 
-Proposed – 30 September 2025
+Accepted – 30 September 2025 (implemented)
 
 ## Context
 

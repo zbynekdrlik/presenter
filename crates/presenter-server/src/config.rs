@@ -12,7 +12,7 @@ pub struct ServerConfig {
     pub companion: CompanionConfig,
     pub osc: OscConfig,
     pub stage: StageConfig,
-    #[allow(dead_code)]
+    #[allow(dead_code)] // Android stage feature in development
     pub android: AndroidConfig,
 }
 
@@ -35,9 +35,9 @@ pub struct CompanionConfig {
 
 #[derive(Debug, Clone, Default)]
 pub struct OscConfig {
-    #[allow(dead_code)]
+    #[allow(dead_code)] // Parsed for validation; override applied in state/mod.rs via env var
     pub listen_port_override: Option<u16>,
-    #[allow(dead_code)]
+    #[allow(dead_code)] // Retained for test assertions on invalid port parsing
     pub listen_port_invalid: Option<String>,
     pub host_port: Option<u16>,
 }
@@ -49,7 +49,7 @@ pub struct StageConfig {
 
 #[derive(Debug, Clone, Default)]
 pub struct AndroidConfig {
-    #[allow(dead_code)]
+    #[allow(dead_code)] // Android stage feature in development
     pub adb_path: Option<OsString>,
 }
 

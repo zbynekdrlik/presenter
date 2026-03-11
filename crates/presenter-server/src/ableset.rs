@@ -19,10 +19,10 @@ pub struct AbleSetBridge {
     inner: Arc<AbleSetInner>,
 }
 
-#[allow(dead_code)]
+#[allow(dead_code)] // Trait abstraction for test mocking
 type AbleSetFuture<'a, T> = Pin<Box<dyn Future<Output = T> + Send + 'a>>;
 
-#[allow(dead_code)]
+#[allow(dead_code)] // Trait abstraction for test mocking
 pub trait AbleSetClient: Send + Sync {
     fn apply_settings(&self, settings: AbleSetSettings) -> AbleSetFuture<'_, anyhow::Result<()>>;
     fn status_snapshot(&self) -> AbleSetFuture<'_, AbleSetStatusSnapshot>;
@@ -30,7 +30,7 @@ pub trait AbleSetClient: Send + Sync {
     fn song_snapshot(&self) -> AbleSetFuture<'_, Option<AbleSetSongSnapshot>>;
 }
 
-#[allow(dead_code)]
+#[allow(dead_code)] // Trait abstraction for test mocking
 pub type DynAbleSetClient = Arc<dyn AbleSetClient>;
 
 struct AbleSetInner {
