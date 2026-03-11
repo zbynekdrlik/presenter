@@ -1,20 +1,13 @@
-use super::{get_json, post_no_content, ApiError};
-use presenter_core::{StageAppearance, StageClientSnapshot, StageDisplaySnapshot};
-use serde::Serialize;
+use super::{get_json, post_json, post_no_content, ApiError};
+use presenter_core::{StageClientSnapshot, StageDisplayLayout, StageDisplaySnapshot};
+use serde::{Deserialize, Serialize};
 
-/// Fetch the current stage display snapshot.
 pub async fn get_snapshot() -> Result<StageDisplaySnapshot, ApiError> {
     get_json("/stage/snapshot").await
 }
 
-/// Fetch stage connections.
 pub async fn get_connections() -> Result<Vec<StageClientSnapshot>, ApiError> {
     get_json("/stage/connections").await
-}
-
-/// Get stage appearance for a layout.
-pub async fn get_appearance(layout: &str) -> Result<StageAppearance, ApiError> {
-    get_json(&format!("/stage/appearance/{layout}")).await
 }
 
 #[derive(Serialize)]
@@ -28,17 +21,14 @@ pub struct StageStateRequest {
     pub playlist_id: Option<String>,
 }
 
-/// Update stage state (trigger a slide).
 pub async fn update_state(request: &StageStateRequest) -> Result<(), ApiError> {
     post_no_content("/stage/state", request).await
 }
 
-/// Clear stage state.
 pub async fn clear() -> Result<(), ApiError> {
-    super::post_no_content("/stage/clear", &serde_json::json!({})).await
+    post_no_content("/stage/clear", &serde_json::json!({})).await
 }
 
-/// Get broadcast live status.
 pub async fn get_broadcast_live() -> Result<BroadcastLiveResponse, ApiError> {
     get_json("/stage/broadcast-live").await
 }
@@ -46,4 +36,34 @@ pub async fn get_broadcast_live() -> Result<BroadcastLiveResponse, ApiError> {
 #[derive(serde::Deserialize)]
 pub struct BroadcastLiveResponse {
     pub enabled: bool,
+}
+
+pub async fn get_layouts() -> Result<Vec<StageDisplayLayout>, ApiError> {
+    get_json("/stage-displays").await
+}
+
+#[derive(Serialize)]
+struct StageLayoutUpdateRequest {
+    code: String,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct StageLayoutResponse {
+    pub code: String,
+    pub layout: StageDisplayLayout,
+}
+
+pub async fn set_layout(code: &str) -> Result<StageLayoutResponse, ApiError> {
+    post_json(
+        "/stage/layout",
+        &StageLayoutUpdateRequest {
+            code: code.to_string(),
+        },
+    )
+    .await
+}
+
+pub async fn get_layout() -> Result<StageLayoutResponse, ApiError> {
+    get_json("/stage/layout").await
 }

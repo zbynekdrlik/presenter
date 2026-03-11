@@ -6,8 +6,23 @@ use axum::{
     Json,
 };
 use presenter_core::{Library, LibraryId, LibrarySummary};
+use serde::Serialize;
 use tracing::instrument;
 use uuid::Uuid;
+
+#[derive(Debug, Serialize)]
+pub(super) struct FavoriteLibraryIdsResponse {
+    pub(super) ids: Vec<String>,
+}
+
+#[instrument(skip_all)]
+pub(super) async fn list_library_favorites(
+    State(state): State<AppState>,
+) -> Result<Json<FavoriteLibraryIdsResponse>, AppError> {
+    let favorites = state.library_favorites().await?;
+    let ids = favorites.into_iter().map(|id| id.to_string()).collect();
+    Ok(Json(FavoriteLibraryIdsResponse { ids }))
+}
 
 #[derive(Debug, serde::Deserialize)]
 #[serde(rename_all = "camelCase")]

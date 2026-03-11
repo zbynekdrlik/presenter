@@ -9,26 +9,21 @@ pub mod timers;
 use gloo_net::http::Request;
 use serde::de::DeserializeOwned;
 
-/// Base URL for API requests (same origin).
 fn api_url(path: &str) -> String {
     path.to_string()
 }
 
-/// Perform a GET request and deserialize the JSON response.
 pub async fn get_json<T: DeserializeOwned>(path: &str) -> Result<T, ApiError> {
     let response = Request::get(&api_url(path))
         .send()
         .await
         .map_err(ApiError::Network)?;
-
     if !response.ok() {
         return Err(ApiError::Status(response.status(), response.status_text()));
     }
-
     response.json().await.map_err(ApiError::Deserialize)
 }
 
-/// Perform a POST request with a JSON body and deserialize the response.
 pub async fn post_json<B: serde::Serialize, T: DeserializeOwned>(
     path: &str,
     body: &B,
@@ -39,15 +34,12 @@ pub async fn post_json<B: serde::Serialize, T: DeserializeOwned>(
         .send()
         .await
         .map_err(ApiError::Network)?;
-
     if !response.ok() {
         return Err(ApiError::Status(response.status(), response.status_text()));
     }
-
     response.json().await.map_err(ApiError::Deserialize)
 }
 
-/// Perform a PUT request with a JSON body and deserialize the response.
 pub async fn put_json<B: serde::Serialize, T: DeserializeOwned>(
     path: &str,
     body: &B,
@@ -58,29 +50,63 @@ pub async fn put_json<B: serde::Serialize, T: DeserializeOwned>(
         .send()
         .await
         .map_err(ApiError::Network)?;
-
     if !response.ok() {
         return Err(ApiError::Status(response.status(), response.status_text()));
     }
-
     response.json().await.map_err(ApiError::Deserialize)
 }
 
-/// Perform a DELETE request.
+pub async fn patch_json<B: serde::Serialize, T: DeserializeOwned>(
+    path: &str,
+    body: &B,
+) -> Result<T, ApiError> {
+    let response = Request::patch(&api_url(path))
+        .json(body)
+        .map_err(ApiError::Serialize)?
+        .send()
+        .await
+        .map_err(ApiError::Network)?;
+    if !response.ok() {
+        return Err(ApiError::Status(response.status(), response.status_text()));
+    }
+    response.json().await.map_err(ApiError::Deserialize)
+}
+
+pub async fn patch_no_content<B: serde::Serialize>(path: &str, body: &B) -> Result<(), ApiError> {
+    let response = Request::patch(&api_url(path))
+        .json(body)
+        .map_err(ApiError::Serialize)?
+        .send()
+        .await
+        .map_err(ApiError::Network)?;
+    if !response.ok() {
+        return Err(ApiError::Status(response.status(), response.status_text()));
+    }
+    Ok(())
+}
+
 pub async fn delete(path: &str) -> Result<(), ApiError> {
     let response = Request::delete(&api_url(path))
         .send()
         .await
         .map_err(ApiError::Network)?;
-
     if !response.ok() {
         return Err(ApiError::Status(response.status(), response.status_text()));
     }
-
     Ok(())
 }
 
-/// Perform a POST request with a JSON body, expecting no response body (204).
+pub async fn delete_json<T: DeserializeOwned>(path: &str) -> Result<T, ApiError> {
+    let response = Request::delete(&api_url(path))
+        .send()
+        .await
+        .map_err(ApiError::Network)?;
+    if !response.ok() {
+        return Err(ApiError::Status(response.status(), response.status_text()));
+    }
+    response.json().await.map_err(ApiError::Deserialize)
+}
+
 pub async fn post_no_content<B: serde::Serialize>(path: &str, body: &B) -> Result<(), ApiError> {
     let response = Request::post(&api_url(path))
         .json(body)
@@ -88,15 +114,28 @@ pub async fn post_no_content<B: serde::Serialize>(path: &str, body: &B) -> Resul
         .send()
         .await
         .map_err(ApiError::Network)?;
-
     if !response.ok() {
         return Err(ApiError::Status(response.status(), response.status_text()));
     }
-
     Ok(())
 }
 
-/// API error types.
+pub async fn post_form_data<T: DeserializeOwned>(
+    path: &str,
+    form_data: &web_sys::FormData,
+) -> Result<T, ApiError> {
+    let response = Request::post(&api_url(path))
+        .body(form_data.clone())
+        .map_err(ApiError::Serialize)?
+        .send()
+        .await
+        .map_err(ApiError::Network)?;
+    if !response.ok() {
+        return Err(ApiError::Status(response.status(), response.status_text()));
+    }
+    response.json().await.map_err(ApiError::Deserialize)
+}
+
 #[derive(Debug)]
 pub enum ApiError {
     Network(gloo_net::Error),

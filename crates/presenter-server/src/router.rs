@@ -38,6 +38,10 @@ pub fn build_router(state: AppState) -> Router {
             patch(libraries::rename_library).delete(libraries::delete_library),
         )
         .route(
+            "/libraries/favorites",
+            get(libraries::list_library_favorites),
+        )
+        .route(
             "/libraries/{id}/favorite",
             post(libraries::set_library_favorite),
         )

@@ -3,126 +3,151 @@ use leptos::prelude::*;
 use crate::state::operator::OperatorState;
 use crate::state::AppContext;
 
-/// Operator header component.
 #[component]
-pub fn Header(ctx: AppContext, op: OperatorState) -> impl IntoView {
-    let view_sig = ctx.view;
-    let mode_sig = ctx.mode;
+pub fn Header() -> impl IntoView {
+    let ctx = use_context::<AppContext>().expect("AppContext");
+    let op = use_context::<OperatorState>().expect("OperatorState");
 
-    let set_view = move |v: &str| {
-        let v = v.to_string();
-        view_sig.set(v.clone());
+    // Search form handlers
+    let on_search_submit = move |ev: leptos::ev::SubmitEvent| {
+        ev.prevent_default();
+    };
+
+    let on_search_input = move |ev| {
+        let val: String = event_target_value(&ev);
+        op.search_query.set(val.clone());
+        op.search_open.set(!val.is_empty());
+    };
+
+    let on_search_clear = move |_| {
+        op.search_query.set(String::new());
+        op.search_open.set(false);
+        ctx.search_results.set(Vec::new());
+    };
+
+    // View toggle
+    let set_view = move |view: &str| {
+        let v = view.to_string();
+        ctx.view.set(v.clone());
         crate::state::session::set("view", &v);
-        if let Some(body) = crate::utils::window::document_body() {
-            let _ = body.set_attribute("data-view", &v);
-        }
     };
 
-    let set_mode = move |m: &str| {
-        let m = m.to_string();
-        mode_sig.set(m.clone());
+    // Mode toggle
+    let set_mode = move |mode: &str| {
+        let m = mode.to_string();
+        ctx.mode.set(m.clone());
         crate::state::session::set("mode", &m);
-        if let Some(body) = crate::utils::window::document_body() {
-            let _ = body.set_attribute("data-mode", &m);
-        }
     };
 
-    let search_query = op.search_query;
-    let mobile_nav = op.mobile_nav_open;
+    // Stage layout change
+    let on_layout_change = move |ev| {
+        let code: String = event_target_value(&ev);
+        let code_clone = code.clone();
+        ctx.stage_layout_code.set(code.clone());
+        leptos::task::spawn_local(async move {
+            let _ = crate::api::stage::set_layout(&code_clone).await;
+        });
+    };
+
+    // Mobile menu toggle
+    let on_mobile_toggle = move |_| {
+        op.mobile_nav_open.update(|v| *v = !*v);
+    };
 
     view! {
         <header class="operator__header">
             <div class="operator__header-left">
-                <h1>"Presenter"</h1>
-                <span class="operator__version-badge"></span>
-                <form class="operator__search" data-role="global-search-form" role="search" autocomplete="off"
-                    on:submit=move |ev| { ev.prevent_default(); }
-                >
-                    <span class="operator__search-icon" aria-hidden="true"></span>
+                <form data-role="global-search-form" on:submit=on_search_submit class="operator__search-form">
                     <input
-                        type="search"
-                        placeholder="Search libraries, songs, slides"
+                        type="text"
                         data-role="global-search-query"
-                        aria-label="Search presenter content"
-                        autocomplete="off"
-                        prop:value=move || search_query.get()
-                        on:input=move |ev| {
-                            let val = event_target_value(&ev);
-                            search_query.set(val);
-                        }
+                        class="operator__search-input"
+                        placeholder="Search..."
+                        prop:value=move || op.search_query.get()
+                        on:input=on_search_input
                     />
                     <button
                         type="button"
                         data-role="global-search-clear"
-                        aria-label="Clear search"
-                        on:click=move |_| { search_query.set(String::new()); }
+                        class="operator__search-clear"
+                        on:click=on_search_clear
                     >
-                        <span aria-hidden="true">{"\u{00D7}"}</span>
-                        <span class="sr-only">"Clear search"</span>
+                        "\u{00d7}"
                     </button>
                 </form>
             </div>
-            <nav class="operator__view-nav">
-                {["worship", "bible", "timers", "settings"].into_iter().map(|v| {
-                    let v_str = v.to_string();
-                    let v_clone = v_str.clone();
-                    let label = match v {
-                        "worship" => "Worship",
-                        "bible" => "Bible",
-                        "timers" => "Timers",
-                        "settings" => "Settings",
-                        _ => v,
-                    };
-                    view! {
-                        <button
-                            type="button"
-                            data-role="view-toggle"
-                            data-view={v_str.clone()}
-                            data-active=move || if view_sig.get() == v_clone { "true" } else { "false" }
-                            on:click={
-                                let v = v_str.clone();
-                                move |_| set_view(&v)
-                            }
-                        >{label}</button>
-                    }
-                }).collect::<Vec<_>>()}
-            </nav>
-            <div class="operator__header-right">
-                <div class="operator__stage-layout" aria-label="Stage display mode">
-                    <label class="operator__stage-layout-label" for="stage-layout-select">"Stage Output"</label>
-                    <select id="stage-layout-select" data-role="stage-layout-select"></select>
-                </div>
-                <crate::components::stage_preview::StagePreview ctx=ctx.clone() />
-                <div class="operator__mode-toggle">
-                    {["live", "edit"].into_iter().map(|m| {
-                        let m_str = m.to_string();
-                        let m_clone = m_str.clone();
-                        let label = match m {
-                            "live" => "Live",
-                            "edit" => "Edit",
-                            _ => m,
+            <nav class="operator__header-center">
+                <div class="operator__view-toggles">
+                    {["worship", "bible", "timers", "settings"].into_iter().map(|v| {
+                        let view_name = v.to_string();
+                        let label = match v {
+                            "worship" => "Worship",
+                            "bible" => "Bible",
+                            "timers" => "Timers",
+                            "settings" => "Settings",
+                            _ => v,
                         };
+                        let vn = view_name.clone();
                         view! {
                             <button
-                                type="button"
-                                data-role="mode-toggle"
-                                data-mode={m_str.clone()}
-                                data-active=move || if mode_sig.get() == m_clone { "true" } else { "false" }
+                                data-role="view-toggle"
+                                data-view=view_name.clone()
+                                attr:data-active=move || if ctx.view.get() == vn { "true" } else { "false" }
+                                class="operator__view-btn"
                                 on:click={
-                                    let m = m_str.clone();
-                                    move |_| set_mode(&m)
+                                    let vn2 = view_name.clone();
+                                    move |_| set_view(&vn2)
                                 }
-                            >{label}</button>
+                            >
+                                {label}
+                            </button>
                         }
-                    }).collect::<Vec<_>>()}
+                    }).collect_view()}
+                </div>
+            </nav>
+            <div class="operator__header-right">
+                <select
+                    data-role="stage-layout-select"
+                    class="operator__layout-select"
+                    on:change=on_layout_change
+                >
+                    {move || ctx.stage_layouts.get().into_iter().map(|layout| {
+                        let code = layout.code.clone();
+                        let name = layout.name.clone();
+                        let selected = ctx.stage_layout_code.get() == code;
+                        view! {
+                            <option value=code prop:selected=selected>{name}</option>
+                        }
+                    }).collect_view()}
+                </select>
+                <div class="operator__mode-toggles">
+                    {["live", "edit"].into_iter().map(|m| {
+                        let mode_name = m.to_string();
+                        let label = match m { "live" => "Live", "edit" => "Edit", _ => m };
+                        let mn = mode_name.clone();
+                        view! {
+                            <button
+                                data-role="mode-toggle"
+                                data-mode=mode_name.clone()
+                                attr:data-active=move || if ctx.mode.get() == mn { "true" } else { "false" }
+                                class="operator__mode-btn"
+                                on:click={
+                                    let mn2 = mode_name.clone();
+                                    move |_| set_mode(&mn2)
+                                }
+                            >
+                                {label}
+                            </button>
+                        }
+                    }).collect_view()}
                 </div>
                 <button
-                    type="button"
-                    class="operator__hamburger"
                     data-role="mobile-menu-toggle"
-                    aria-label="Menu"
-                    on:click=move |_| mobile_nav.update(|v| *v = !*v)
-                >{"\u{2630}"}</button>
+                    class="operator__mobile-menu-btn"
+                    on:click=on_mobile_toggle
+                >
+                    "\u{2630}"
+                </button>
             </div>
         </header>
     }

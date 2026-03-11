@@ -1,18 +1,20 @@
-use leptos::prelude::*;
-
 use crate::state::AppContext;
+use leptos::prelude::*;
 
 /// Toast notification component.
 #[component]
-pub fn Toast(ctx: AppContext) -> impl IntoView {
-    let msg = ctx.toast_message;
+pub fn Toast() -> impl IntoView {
+    let ctx = use_context::<AppContext>().expect("AppContext");
+
     view! {
         <div
-            class="operator__toast"
             data-role="toast"
-            class:operator__toast--visible=move || msg.get().is_some()
+            attr:data-visible=move || if ctx.toast_message.get().is_some() { "true" } else { "false" }
+            attr:data-variant=move || ctx.toast_variant.get()
+            class="operator__toast"
+            class:operator__toast--visible=move || ctx.toast_message.get().is_some()
         >
-            {move || msg.get().unwrap_or_default()}
+            {move || ctx.toast_message.get().unwrap_or_default()}
         </div>
     }
 }

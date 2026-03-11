@@ -1,68 +1,156 @@
-use leptos::prelude::*;
-
 use crate::state::operator::OperatorState;
 use crate::state::AppContext;
+use leptos::prelude::*;
+use presenter_core::SearchResult;
+use std::cell::RefCell;
+use std::rc::Rc;
 
-/// Search results dropdown.
+/// Search results dropdown with debounced API queries.
 #[component]
-pub fn SearchResults(ctx: AppContext, op: OperatorState) -> impl IntoView {
-    let results = ctx.search_results;
-    let query = op.search_query;
-    let search_open = op.search_open;
+pub fn SearchResults() -> impl IntoView {
+    let ctx = use_context::<AppContext>().expect("AppContext");
+    let op = use_context::<OperatorState>().expect("OperatorState");
 
     // Debounced search effect
-    let ctx_clone = ctx.clone();
-    Effect::new(move || {
-        let q = query.get();
-        let trimmed = q.trim().to_string();
-        if trimmed.is_empty() {
-            ctx_clone.search_results.set(Vec::new());
-            search_open.set(false);
-            return;
-        }
-        search_open.set(true);
-        ctx_clone.search_loading.set(true);
-        let search_results = ctx_clone.search_results;
-        let loading = ctx_clone.search_loading;
-        // Simple debounce via timeout
-        let handle = gloo_timers::callback::Timeout::new(200, move || {
-            leptos::task::spawn_local(async move {
-                let url = format!(
-                    "/search?query={}&limit=30",
-                    js_sys::encode_uri_component(&trimmed)
-                );
-                match crate::api::get_json::<Vec<presenter_core::SearchResult>>(&url).await {
-                    Ok(r) => search_results.set(r),
-                    Err(_) => search_results.set(Vec::new()),
-                }
-                loading.set(false);
+    let timeout_handle: Rc<RefCell<Option<gloo_timers::callback::Timeout>>> =
+        Rc::new(RefCell::new(None));
+
+    Effect::new({
+        let timeout_handle = Rc::clone(&timeout_handle);
+        move || {
+            let query = op.search_query.get();
+            let trimmed = query.trim().to_string();
+
+            // Cancel existing timer
+            timeout_handle.borrow_mut().take();
+
+            if trimmed.is_empty() {
+                ctx.search_results.set(Vec::new());
+                ctx.search_loading.set(false);
+                return;
+            }
+
+            ctx.search_loading.set(true);
+
+            let search_results = ctx.search_results;
+            let search_loading = ctx.search_loading;
+
+            let timer = gloo_timers::callback::Timeout::new(200, move || {
+                leptos::task::spawn_local(async move {
+                    let url = format!("/search?query={}&limit=30", urlencoding(&trimmed));
+                    match crate::api::get_json::<Vec<SearchResult>>(&url).await {
+                        Ok(results) => {
+                            search_results.set(results);
+                        }
+                        Err(_) => {
+                            search_results.set(Vec::new());
+                        }
+                    }
+                    search_loading.set(false);
+                });
             });
-        });
-        handle.forget();
+            *timeout_handle.borrow_mut() = Some(timer);
+        }
     });
+
+    let on_result_click = move |lib_id: String, pres_id: Option<String>| {
+        // Navigate to library and select presentation
+        ctx.selected_library_id.set(Some(lib_id.clone()));
+        ctx.selected_playlist_id.set(None);
+        crate::state::session::set("activeLibraryId", &lib_id);
+        crate::state::session::remove("activePlaylistId");
+
+        op.search_open.set(false);
+        op.search_query.set(String::new());
+        ctx.search_results.set(Vec::new());
+
+        if let Some(pid) = pres_id.clone() {
+            ctx.selected_presentation_id.set(Some(pid.clone()));
+            crate::state::session::set("currentPresentationId", &pid);
+        }
+
+        let presentations = ctx.presentations;
+        let context_title = ctx.context_title;
+        let libraries = ctx.libraries;
+        let selected_pres = ctx.selected_presentation;
+        let pres_id_clone = pres_id;
+
+        leptos::task::spawn_local(async move {
+            if let Ok(libs) = crate::api::libraries::list_libraries().await {
+                if let Some(lib) = libs.iter().find(|l| l.id.to_string() == lib_id) {
+                    context_title.set(lib.name.clone());
+                    presentations.set(lib.presentations.clone());
+                }
+                libraries.set(libs);
+            }
+            if let Some(pid) = pres_id_clone {
+                if let Ok(detail) = crate::api::presentations::get_presentation(&pid).await {
+                    selected_pres.set(Some(detail.presentation));
+                }
+            }
+        });
+    };
 
     view! {
         <div
-            class="operator__search-results"
             data-role="global-search-results"
-            style:display=move || if search_open.get() && !results.get().is_empty() { "block" } else { "none" }
+            attr:data-visible=move || {
+                let open = op.search_open.get();
+                let has_query = !op.search_query.get().is_empty();
+                if open && has_query { "true" } else { "false" }
+            }
+            class="operator__search-results"
         >
-            <ul>
-                {move || {
-                    results.get().into_iter().map(|result| {
-                        let label = result.presentation_name.clone().or(Some(result.library_name.clone())).unwrap_or_default();
-                        let snippet = result.snippet.clone().unwrap_or_default();
-                        view! {
-                            <li data-role="search-result">
-                                <button type="button" class="operator__search-result-button">
-                                    <span class="operator__search-result-label">{label}</span>
-                                    <span class="operator__search-result-snippet">{snippet}</span>
-                                </button>
-                            </li>
-                        }
-                    }).collect::<Vec<_>>()
-                }}
-            </ul>
+            {move || {
+                let results = ctx.search_results.get();
+                if results.is_empty() && ctx.search_loading.get() {
+                    return view! { <div class="operator__search-loading">"Searching..."</div> }.into_any();
+                }
+                if results.is_empty() {
+                    return view! { <div class="operator__search-empty">"No results"</div> }.into_any();
+                }
+
+                results.into_iter().map(|result| {
+                    let kind = format!("{:?}", result.kind).to_lowercase();
+                    let lib_id = result.library_id.to_string();
+                    let pres_id = result.presentation_id.map(|id| id.to_string());
+                    let pres_name = result.presentation_name.clone().unwrap_or_default();
+                    let lib_name = result.library_name.clone();
+                    let snippet = result.snippet.clone().unwrap_or_default();
+                    let pres_id_attr = pres_id.clone().unwrap_or_default();
+                    let lib_click = lib_id.clone();
+                    let pres_click = pres_id.clone();
+                    let pres_id_drag = pres_id.clone().unwrap_or_default();
+
+                    view! {
+                        <div
+                            data-role="search-result-item"
+                            data-kind=kind
+                            data-presentation-id=pres_id_attr
+                            class="operator__search-result"
+                            draggable="true"
+                            on:click=move |_| {
+                                on_result_click(lib_click.clone(), pres_click.clone());
+                            }
+                            on:dragstart=move |ev: web_sys::DragEvent| {
+                                if let Some(dt) = ev.data_transfer() {
+                                    let _ = dt.set_data("application/x-presentation-id", &pres_id_drag);
+                                }
+                            }
+                        >
+                            <span class="operator__search-result-title">{pres_name}</span>
+                            <span class="operator__search-result-meta">{lib_name}</span>
+                            <span class="operator__search-result-snippet">{snippet}</span>
+                        </div>
+                    }
+                }).collect_view().into_any()
+            }}
         </div>
     }
+}
+
+fn urlencoding(s: &str) -> String {
+    js_sys::encode_uri_component(s)
+        .as_string()
+        .unwrap_or_default()
 }

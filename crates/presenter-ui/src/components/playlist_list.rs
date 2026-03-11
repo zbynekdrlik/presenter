@@ -1,128 +1,122 @@
 use leptos::prelude::*;
-use presenter_core::playlist::PlaylistEntryKind;
 
+use crate::components::modal;
 use crate::state::operator::OperatorState;
 use crate::state::AppContext;
 
-/// Playlist sidebar list component.
 #[component]
-pub fn PlaylistList(ctx: AppContext, op: OperatorState) -> impl IntoView {
-    let playlists = ctx.playlists;
-    let selected_pl = ctx.selected_playlist_id;
-    let selected_lib = ctx.selected_library_id;
-    let presentations = ctx.presentations;
-    let context_title = ctx.context_title;
-    let selected_pres_id = ctx.selected_presentation_id;
-    let selected_pres = ctx.selected_presentation;
+pub fn PlaylistList() -> impl IntoView {
+    let ctx = use_context::<AppContext>().expect("AppContext");
+    let _op = use_context::<OperatorState>().expect("OperatorState");
 
-    let on_select = move |id: String, name: String, entries: Vec<presenter_core::PlaylistEntry>| {
-        // Selecting a playlist clears library selection
-        selected_lib.set(None);
-        crate::state::session::remove("activeLibraryId");
-        selected_pl.set(Some(id.clone()));
+    let select_playlist = move |id: String, name: String| {
+        ctx.selected_playlist_id.set(Some(id.clone()));
+        ctx.selected_library_id.set(None);
+        ctx.context_title.set(name);
         crate::state::session::set("activePlaylistId", &id);
-        context_title.set(name);
-        // Clear presentation selection
-        selected_pres_id.set(None);
-        selected_pres.set(None);
-        // Convert playlist entries to presentation summaries
-        let pres: Vec<presenter_core::PresentationSummary> = entries
-            .into_iter()
-            .filter_map(|entry| match entry.kind {
-                PlaylistEntryKind::Presentation {
-                    presentation_id, ..
-                } => {
-                    Some(presenter_core::PresentationSummary::new(
-                        presentation_id,
-                        String::new(), // Name will be resolved client-side
-                    ))
-                }
-                PlaylistEntryKind::Separator { .. } => None,
-            })
-            .collect();
-        presentations.set(pres);
+        crate::state::session::remove("activeLibraryId");
+
+        let id_clone = id.clone();
+        leptos::task::spawn_local(async move {
+            if let Ok(playlist) = crate::api::playlists::get_playlist(&id_clone).await {
+                let ctx = use_context::<AppContext>().expect("AppContext");
+                let summaries: Vec<presenter_core::PresentationSummary> = playlist
+                    .entries
+                    .iter()
+                    .filter_map(|e| match &e.kind {
+                        presenter_core::playlist::PlaylistEntryKind::Presentation {
+                            presentation_id,
+                            ..
+                        } => Some(presenter_core::PresentationSummary::new(
+                            *presentation_id,
+                            String::new(),
+                        )),
+                        _ => None,
+                    })
+                    .collect();
+                ctx.presentations.set(summaries);
+            }
+        });
     };
 
-    let pl_count = move || playlists.get().len();
-    let op_clone = op.clone();
+    let on_create = move |_| {
+        let op = use_context::<OperatorState>().expect("OperatorState");
+        op.modal_mode.set("create".to_string());
+        op.modal_target_id.set(None);
+        modal::open_modal(&op, "playlist-edit");
+    };
+
+    let on_more = move |_| {
+        let op = use_context::<OperatorState>().expect("OperatorState");
+        modal::open_modal(&op, "playlist");
+    };
+
+    let visible_count: usize = 5;
 
     view! {
-        <section class="operator__group operator__group--playlists">
-            <header class="operator__group-header">
-                <h2>"Playlists"</h2>
-                <div class="operator__group-controls">
-                    <button
-                        type="button"
-                        class="operator__group-count"
-                        data-role="playlist-more"
-                        aria-label="Show all playlists"
-                        on:click={
-                            let op = op_clone.clone();
-                            move |_| crate::components::modal::open_modal(&op, "playlist-list")
-                        }
-                    >{move || pl_count().to_string()}</button>
-                    <button
-                        type="button"
-                        data-role="playlist-create"
-                        aria-label="Create playlist"
-                        title="Create playlist"
-                        on:click={
-                            let op = op_clone.clone();
-                            move |_| crate::components::modal::open_modal(&op, "playlist-create")
-                        }
-                    >"+"</button>
-                </div>
-            </header>
-            <ul class="operator__list" data-role="playlist-list">
+        <div class="operator__list-section">
+            <div class="operator__list-header">
+                <h3 class="operator__list-title">"Playlists"</h3>
+                <button data-role="playlist-more" class="operator__list-more" on:click=on_more>
+                    {move || {
+                        let total = ctx.playlists.get().len();
+                        if total > visible_count { format!("{total}") } else { String::new() }
+                    }}
+                </button>
+                <button data-role="playlist-create" class="operator__list-create" on:click=on_create>"+"</button>
+            </div>
+            <ul data-role="playlist-list" class="operator__list">
                 {move || {
-                    playlists.get().into_iter().map(|pl| {
+                    let playlists = ctx.playlists.get();
+                    let active_id = ctx.selected_playlist_id.get();
+
+                    let visible: Vec<_> = playlists.into_iter().take(visible_count).collect();
+
+                    visible.into_iter().map(|pl| {
                         let id = pl.id.to_string();
                         let name = pl.name.clone();
-                        let entry_count = pl.entries.len();
-                        let entries = pl.entries.clone();
-                        let id_click = id.clone();
-                        let name_click = name.clone();
-                        let id_cmp = id.clone();
+                        let count = pl.entries.len();
+                        let is_active = active_id.as_deref() == Some(&id);
+                        let id_for_click = id.clone();
+                        let name_for_click = name.clone();
+                        let id_for_edit = id.clone();
+                        let id_for_row = id.clone();
+                        let id_for_btn = id.clone();
+                        let id_for_modal = id.clone();
+
                         view! {
-                            <li class="operator__list-item">
+                            <li data-role="playlist-row" data-playlist-id=id_for_row class="operator__list-item">
                                 <button
-                                    type="button"
-                                    class="operator__list-button"
                                     data-role="playlist-item"
-                                    data-playlist-id={id.clone()}
-                                    data-active=move || if selected_pl.get().as_deref() == Some(&id_cmp) { "true" } else { "false" }
-                                    on:click={
-                                        let id = id_click.clone();
-                                        let name = name_click.clone();
-                                        let entries = entries.clone();
-                                        move |_| on_select(id.clone(), name.clone(), entries.clone())
+                                    data-playlist-id=id_for_btn
+                                    attr:data-active=move || if is_active { "true" } else { "false" }
+                                    class="operator__list-btn"
+                                    on:click=move |_| {
+                                        select_playlist(id_for_click.clone(), name_for_click.clone());
                                     }
                                 >
                                     <span class="operator__list-label">{name}</span>
-                                    <span class="operator__list-meta" data-role="playlist-count">{entry_count}</span>
+                                    <span class="operator__list-meta" data-role="playlist-count">{count}</span>
                                 </button>
-                                <div class="operator__list-actions">
-                                    <button
-                                        type="button"
-                                        class="operator__list-action operator__list-action--icon operator__list-action--menu"
-                                        data-action="playlist-edit"
-                                        data-playlist-id={id.clone()}
-                                        aria-label="Edit playlist"
-                                        on:click={
-                                            let op = op_clone.clone();
-                                            let id = id.clone();
-                                            move |_| {
-                                                op.modal_target_id.set(Some(id.clone()));
-                                                crate::components::modal::open_modal(&op, "playlist-edit");
-                                            }
-                                        }
-                                    >{"\u{22EE}"}</button>
-                                </div>
+                                <button
+                                    data-action="playlist-edit"
+                                    data-playlist-id=id_for_edit
+                                    class="operator__list-edit"
+                                    on:click=move |ev: leptos::ev::MouseEvent| {
+                                        ev.stop_propagation();
+                                        let op = use_context::<OperatorState>().expect("OperatorState");
+                                        op.modal_mode.set("edit".to_string());
+                                        op.modal_target_id.set(Some(id_for_modal.clone()));
+                                        modal::open_modal(&op, "playlist-edit");
+                                    }
+                                >
+                                    "\u{270e}"
+                                </button>
                             </li>
                         }
-                    }).collect::<Vec<_>>()
+                    }).collect_view()
                 }}
             </ul>
-        </section>
+        </div>
     }
 }

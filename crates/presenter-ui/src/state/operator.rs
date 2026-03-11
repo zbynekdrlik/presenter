@@ -1,26 +1,23 @@
 use leptos::prelude::*;
 
-/// Operator-specific UI state.
 #[derive(Clone)]
 pub struct OperatorState {
-    /// Currently focused slide ID in the editor.
     pub focused_slide_id: RwSignal<Option<String>>,
-    /// Current search query text.
+    pub focused_field: RwSignal<Option<String>>,
+    pub pending_focus: RwSignal<Option<(String, String, usize)>>,
     pub search_query: RwSignal<String>,
-    /// Whether search results are visible.
     pub search_open: RwSignal<bool>,
-    /// Which modal is currently open (None = no modal).
     pub open_modal: RwSignal<Option<String>>,
-    /// Modal edit target ID (library/playlist/presentation being edited).
     pub modal_target_id: RwSignal<Option<String>>,
-    /// Line limit for slide display.
+    pub modal_mode: RwSignal<String>,
     pub line_limit: RwSignal<u32>,
-    /// Catalog top panel height in pixels.
-    pub catalog_top_height: RwSignal<Option<f64>>,
-    /// Whether mobile nav is open.
+    pub catalog_top_height: RwSignal<f64>,
     pub mobile_nav_open: RwSignal<bool>,
-    /// Whether a submitting operation is in progress.
     pub submitting: RwSignal<bool>,
+    pub paste_text: RwSignal<String>,
+    pub import_mode: RwSignal<String>,
+    pub dragging_presentation_id: RwSignal<Option<String>>,
+    pub dragging_slide_id: RwSignal<Option<String>>,
 }
 
 impl OperatorState {
@@ -29,18 +26,27 @@ impl OperatorState {
             .and_then(|v| v.parse::<u32>().ok())
             .unwrap_or(32);
 
+        let catalog_top_height = crate::state::session::get("catalogTopHeight")
+            .and_then(|v| v.parse::<f64>().ok())
+            .unwrap_or(320.0);
+
         Self {
             focused_slide_id: RwSignal::new(crate::state::session::get("focusedSlideId")),
+            focused_field: RwSignal::new(crate::state::session::get("focusedField")),
+            pending_focus: RwSignal::new(None),
             search_query: RwSignal::new(String::new()),
             search_open: RwSignal::new(false),
             open_modal: RwSignal::new(None),
             modal_target_id: RwSignal::new(None),
+            modal_mode: RwSignal::new("create".to_string()),
             line_limit: RwSignal::new(line_limit),
-            catalog_top_height: RwSignal::new(
-                crate::state::session::get("catalogTopHeight").and_then(|v| v.parse::<f64>().ok()),
-            ),
+            catalog_top_height: RwSignal::new(catalog_top_height),
             mobile_nav_open: RwSignal::new(false),
             submitting: RwSignal::new(false),
+            paste_text: RwSignal::new(String::new()),
+            import_mode: RwSignal::new(String::new()),
+            dragging_presentation_id: RwSignal::new(None),
+            dragging_slide_id: RwSignal::new(None),
         }
     }
 }

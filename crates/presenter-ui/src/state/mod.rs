@@ -5,46 +5,38 @@ pub mod session;
 use leptos::prelude::*;
 use presenter_core::{
     LibrarySummary, Playlist, Presentation, PresentationSummary, SearchResult, StageClientSnapshot,
-    StageDisplaySnapshot, TimersOverview,
+    StageDisplayLayout, StageDisplaySnapshot, TimersOverview,
 };
+use std::collections::HashSet;
 
-/// Global application context shared across all components.
+use crate::api::settings::AbleSetStatusSnapshot;
+
 #[derive(Clone)]
 pub struct AppContext {
-    /// Current view: worship, bible, timers, settings
     pub view: RwSignal<String>,
-    /// Current mode: live, edit
     pub mode: RwSignal<String>,
-    /// All library summaries.
     pub libraries: RwSignal<Vec<LibrarySummary>>,
-    /// Currently selected library ID.
     pub selected_library_id: RwSignal<Option<String>>,
-    /// Presentations in the selected library/playlist.
+    pub favorite_library_ids: RwSignal<HashSet<String>>,
     pub presentations: RwSignal<Vec<PresentationSummary>>,
-    /// Currently selected presentation (full data with slides).
     pub selected_presentation: RwSignal<Option<Presentation>>,
-    /// Currently selected presentation ID (for highlighting).
     pub selected_presentation_id: RwSignal<Option<String>>,
-    /// All playlists.
     pub playlists: RwSignal<Vec<Playlist>>,
-    /// Currently selected playlist ID.
     pub selected_playlist_id: RwSignal<Option<String>>,
-    /// Current stage display snapshot.
     pub stage_snapshot: RwSignal<Option<StageDisplaySnapshot>>,
-    /// Current timers overview.
+    pub stage_layout_code: RwSignal<String>,
+    pub stage_layouts: RwSignal<Vec<StageDisplayLayout>>,
     pub timers: RwSignal<Option<TimersOverview>>,
-    /// Whether broadcast live mode is enabled.
     pub broadcast_live: RwSignal<bool>,
-    /// Context title (library name or playlist name).
     pub context_title: RwSignal<String>,
-    /// Stage connections.
     pub stage_connections: RwSignal<Vec<StageClientSnapshot>>,
-    /// Toast message.
+    pub stage_monitor_baseline: RwSignal<Option<(usize, usize)>>,
     pub toast_message: RwSignal<Option<String>>,
-    /// Search results.
+    pub toast_variant: RwSignal<String>,
     pub search_results: RwSignal<Vec<SearchResult>>,
-    /// Whether search is loading.
     pub search_loading: RwSignal<bool>,
+    pub ws_connected: RwSignal<bool>,
+    pub ableset_status: RwSignal<Option<AbleSetStatusSnapshot>>,
 }
 
 impl AppContext {
@@ -57,27 +49,35 @@ impl AppContext {
             mode: RwSignal::new(mode),
             libraries: RwSignal::new(Vec::new()),
             selected_library_id: RwSignal::new(session::get("activeLibraryId")),
+            favorite_library_ids: RwSignal::new(HashSet::new()),
             presentations: RwSignal::new(Vec::new()),
             selected_presentation: RwSignal::new(None),
             selected_presentation_id: RwSignal::new(session::get("currentPresentationId")),
             playlists: RwSignal::new(Vec::new()),
             selected_playlist_id: RwSignal::new(session::get("activePlaylistId")),
             stage_snapshot: RwSignal::new(None),
+            stage_layout_code: RwSignal::new(String::new()),
+            stage_layouts: RwSignal::new(Vec::new()),
             timers: RwSignal::new(None),
             broadcast_live: RwSignal::new(false),
             context_title: RwSignal::new("Presentations".to_string()),
             stage_connections: RwSignal::new(Vec::new()),
+            stage_monitor_baseline: RwSignal::new(None),
             toast_message: RwSignal::new(None),
+            toast_variant: RwSignal::new("info".to_string()),
             search_results: RwSignal::new(Vec::new()),
             search_loading: RwSignal::new(false),
+            ws_connected: RwSignal::new(false),
+            ableset_status: RwSignal::new(None),
         }
     }
 
-    /// Show a toast notification that auto-hides.
-    pub fn show_toast(&self, msg: &str) {
+    pub fn show_toast(&self, msg: &str, variant: &str) {
         let toast = self.toast_message;
+        let toast_variant = self.toast_variant;
+        toast_variant.set(variant.to_string());
         toast.set(Some(msg.to_string()));
-        gloo_timers::callback::Timeout::new(3_000, move || {
+        gloo_timers::callback::Timeout::new(3_500, move || {
             toast.set(None);
         })
         .forget();

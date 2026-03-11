@@ -1,25 +1,10 @@
-use super::{get_json, post_no_content, ApiError};
-use presenter_core::TimersOverview;
-use serde::Serialize;
+use super::{get_json, post_json, ApiError};
+use presenter_core::{TimerCommand, TimersOverview};
 
-/// Fetch timers overview.
 pub async fn get_timers() -> Result<TimersOverview, ApiError> {
-    get_json("/timers").await
+    get_json("/timers/overview").await
 }
 
-#[derive(Serialize)]
-#[serde(rename_all = "camelCase")]
-pub struct TimerCommandRequest {
-    pub command: String,
-}
-
-/// Send a timer command (start, stop, reset, etc.).
-pub async fn send_command(timer_type: &str, command: &str) -> Result<(), ApiError> {
-    post_no_content(
-        &format!("/timers/{timer_type}"),
-        &TimerCommandRequest {
-            command: command.to_string(),
-        },
-    )
-    .await
+pub async fn send_command(command: &TimerCommand) -> Result<TimersOverview, ApiError> {
+    post_json("/timers/command", command).await
 }
