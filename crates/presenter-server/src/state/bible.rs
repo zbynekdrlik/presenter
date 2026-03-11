@@ -17,9 +17,9 @@ use std::collections::HashMap;
 pub struct BibleTriggerOverrides {
     pub main_text: Option<String>,
     pub translation_text: Option<String>,
-    #[allow(dead_code)]
+    #[allow(dead_code)] // Prepared for reference label editing in Bible trigger UI
     pub main_reference_label: Option<String>,
-    #[allow(dead_code)]
+    #[allow(dead_code)] // Prepared for reference label editing in Bible trigger UI
     pub translation_reference_label: Option<String>,
 }
 

@@ -856,7 +856,7 @@ test("translation text hidden when no secondary bible selected", async ({
 
   await expect(
     slides.first().locator(".operator__slide-text--translation"),
-  ).toBeVisible();
+  ).not.toBeEmpty();
 
   // Now remove the secondary translation (dropdowns are in Live tab)
   await page.locator('[data-role="secondary-translation"]').selectOption("");
@@ -956,17 +956,17 @@ test("content search across translations finds and loads verse", async ({
   const dropdown = page.locator('[data-role="global-search-results"]');
   await expect(dropdown).toHaveAttribute("data-visible", "true");
 
-  // Verify result items show reference, translation, and snippet
+  // Verify result items show reference, translation, and snippet with content
   const firstResult = page.locator(".operator__search-result button").first();
   await expect(
     firstResult.locator(".operator__search-result-title"),
-  ).toBeVisible();
+  ).not.toBeEmpty();
   await expect(
     firstResult.locator(".operator__search-result-meta"),
-  ).toBeVisible();
+  ).not.toBeEmpty();
   await expect(
     firstResult.locator(".operator__search-result-snippet"),
-  ).toBeVisible();
+  ).not.toBeEmpty();
 
   // Click first result
   await firstResult.click();
