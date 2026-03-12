@@ -4,6 +4,7 @@ use leptos::prelude::*;
 use presenter_core::SearchResult;
 use std::cell::RefCell;
 use std::rc::Rc;
+use wasm_bindgen::JsCast;
 
 /// Search results dropdown with debounced API queries.
 #[component]
@@ -52,6 +53,47 @@ pub fn SearchResults() -> impl IntoView {
             *timeout_handle.borrow_mut() = Some(timer);
         }
     });
+
+    // Outside-click handler to close search results
+    {
+        let op_close = op.clone();
+        let search_results_close = ctx.search_results;
+        let handler = wasm_bindgen::closure::Closure::<dyn Fn(web_sys::MouseEvent)>::new(
+            move |ev: web_sys::MouseEvent| {
+                if !op_close.search_open.get_untracked() {
+                    return;
+                }
+                let target = ev
+                    .target()
+                    .and_then(|t| t.dyn_into::<web_sys::Element>().ok());
+                if let Some(el) = target {
+                    let doc = crate::utils::window::document();
+                    // Check if click is inside the search form or results
+                    let in_search = doc
+                        .query_selector("[data-role='global-search-form']")
+                        .ok()
+                        .flatten()
+                        .map(|form| form.contains(Some(&el)))
+                        .unwrap_or(false);
+                    let in_results = doc
+                        .query_selector("[data-role='global-search-results']")
+                        .ok()
+                        .flatten()
+                        .map(|res| res.contains(Some(&el)))
+                        .unwrap_or(false);
+                    if !in_search && !in_results {
+                        op_close.search_open.set(false);
+                        op_close.search_query.set(String::new());
+                        search_results_close.set(Vec::new());
+                    }
+                }
+            },
+        );
+        let window = crate::utils::window::window();
+        let _ =
+            window.add_event_listener_with_callback("mousedown", handler.as_ref().unchecked_ref());
+        handler.forget();
+    }
 
     let on_result_click = move |lib_id: String, pres_id: Option<String>| {
         // Navigate to library and select presentation

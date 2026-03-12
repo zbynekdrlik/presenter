@@ -4,6 +4,38 @@ use crate::api;
 use crate::state::operator::OperatorState;
 use crate::state::AppContext;
 
+/// Format text with `<br>` for line breaks and highlight lines exceeding limit.
+fn format_multiline(text: &str, limit: u32) -> String {
+    text.lines()
+        .map(|line| {
+            let escaped = html_escape(line);
+            if limit > 0 && line.len() as u32 > limit {
+                format!("<span class=\"operator__slide-line-over\">{escaped}</span>")
+            } else {
+                escaped
+            }
+        })
+        .collect::<Vec<_>>()
+        .join("<br>")
+}
+
+fn html_escape(s: &str) -> String {
+    s.replace('&', "&amp;")
+        .replace('<', "&lt;")
+        .replace('>', "&gt;")
+        .replace('"', "&quot;")
+}
+
+fn field_has_warning(text: &str, limit: u32) -> bool {
+    limit > 0 && text.lines().any(|line| line.len() as u32 > limit)
+}
+
+fn slide_has_any_warning(main: &str, translation: &str, stage: &str, limit: u32) -> bool {
+    field_has_warning(main, limit)
+        || field_has_warning(translation, limit)
+        || field_has_warning(stage, limit)
+}
+
 #[component]
 pub fn SlideList() -> impl IntoView {
     let ctx = use_context::<AppContext>().expect("AppContext");
@@ -59,7 +91,7 @@ pub fn SlideList() -> impl IntoView {
                         step="1"
                         data-role="line-limit"
                         prop:value=move || op.line_limit.get().to_string()
-                        on:change=on_line_limit_change
+                        on:input=on_line_limit_change
                     />
                 </label>
                 <button
@@ -98,16 +130,29 @@ pub fn SlideList() -> impl IntoView {
                         let stage_text = slide.content.stage.value().to_string();
                         let group_name = slide.content.group.as_ref().map(|g| g.name().to_string());
 
-                        let show_group = if group_name != current_group {
+                        let group_inherited = if group_name != current_group {
                             current_group.clone_from(&group_name);
-                            group_name
+                            false
+                        } else {
+                            group_name.is_some()
+                        };
+
+                        let show_group = if !group_inherited {
+                            group_name.clone()
                         } else {
                             None
                         };
 
                         let is_active = current_slide_id.as_deref() == Some(&slide_id);
-                        let main_max_line_len = main_text.lines().map(|l| l.len() as u32).max().unwrap_or(0);
-                        let main_warning = main_max_line_len > line_limit;
+                        let main_warning = field_has_warning(&main_text, line_limit);
+                        let translation_warning = field_has_warning(&translation_text, line_limit);
+                        let stage_warning = field_has_warning(&stage_text, line_limit);
+                        let any_warning = slide_has_any_warning(&main_text, &translation_text, &stage_text, line_limit);
+
+                        // Format text with HTML for live mode display
+                        let main_html = format_multiline(&main_text, line_limit);
+                        let translation_html = format_multiline(&translation_text, line_limit);
+                        let stage_html = format_multiline(&stage_text, line_limit);
 
                         let pres_id_click = pres_id.clone();
                         let slide_id_click = slide_id.clone();
@@ -122,6 +167,8 @@ pub fn SlideList() -> impl IntoView {
                         let slide_id_for_article = slide_id.clone();
                         let slide_index = i;
 
+                        let group_display = group_name.clone().unwrap_or_default();
+
                         view! {
                             {show_group.map(|g| view! {
                                 <div class="operator__slide-group" data-role="slide-group">{g}</div>
@@ -134,10 +181,16 @@ pub fn SlideList() -> impl IntoView {
                                 }
                                 data-slide-id=slide_id_for_article
                                 data-slide-index=slide_index
+                                attr:data-group-inherited=if group_inherited { "true" } else { "false" }
                             >
                                 <header class="operator__slide-header">
                                     <div class="operator__slide-header-left">
-                                        <span class="operator__slide-index">{i + 1}</span>
+                                        <span class="operator__slide-index">
+                                            {i + 1}
+                                            {any_warning.then(|| view! {
+                                                <sup>"!"</sup>
+                                            })}
+                                        </span>
                                     </div>
                                     {is_edit.then(|| {
                                         let pres_id_save = pres_id_edit.clone();
@@ -203,45 +256,66 @@ pub fn SlideList() -> impl IntoView {
                                             <div
                                                 class="operator__slide-text operator__slide-text--main"
                                                 data-field-display="main"
+                                                attr:data-warning=if main_warning { "true" } else { "false" }
+                                                inner_html=main_html
                                                 on:click=move |_| {
                                                     trigger(pres_id_click.clone(), slide_id_click.clone(), next_slide_id.clone());
                                                 }
                                             >
-                                                {main_text.clone()}
                                             </div>
                                             {(!translation_text.is_empty()).then(|| view! {
-                                                <div class="operator__slide-text operator__slide-text--translation" data-field-display="translation">
-                                                    {translation_text.clone()}
+                                                <div
+                                                    class="operator__slide-text operator__slide-text--translation"
+                                                    data-field-display="translation"
+                                                    attr:data-warning=if translation_warning { "true" } else { "false" }
+                                                    inner_html=translation_html
+                                                >
                                                 </div>
                                             })}
                                             {(!stage_text.is_empty()).then(|| view! {
-                                                <div class="operator__slide-text operator__slide-text--stage" data-field-display="stage">
-                                                    {stage_text.clone()}
+                                                <div
+                                                    class="operator__slide-text operator__slide-text--stage"
+                                                    data-field-display="stage"
+                                                    attr:data-warning=if stage_warning { "true" } else { "false" }
+                                                    inner_html=stage_html
+                                                >
                                                 </div>
                                             })}
                                             <div class="operator__slide-warning" data-role="slide-warning"
-                                                attr:data-visible=move || if main_warning { "true" } else { "false" }
+                                                attr:data-visible=move || if any_warning { "true" } else { "false" }
                                             >
                                                 {format!("Line exceeds {line_limit} characters")}
                                             </div>
                                         }.into_any()
                                     } else {
                                         view! {
-                                            <div class="operator__slide-text operator__slide-text--main" data-field-display="main">
-                                                {main_text.clone()}
+                                            <div
+                                                class="operator__slide-text operator__slide-text--main"
+                                                data-field-display="main"
+                                                attr:data-warning=if main_warning { "true" } else { "false" }
+                                                inner_html=main_html.clone()
+                                            >
                                             </div>
                                             {(!translation_text.is_empty()).then(|| view! {
-                                                <div class="operator__slide-text operator__slide-text--translation" data-field-display="translation">
-                                                    {translation_text.clone()}
+                                                <div
+                                                    class="operator__slide-text operator__slide-text--translation"
+                                                    data-field-display="translation"
+                                                    attr:data-warning=if translation_warning { "true" } else { "false" }
+                                                    inner_html=translation_html.clone()
+                                                >
                                                 </div>
                                             })}
                                             {(!stage_text.is_empty()).then(|| view! {
-                                                <div class="operator__slide-text operator__slide-text--stage" data-field-display="stage">
-                                                    {stage_text.clone()}
+                                                <div
+                                                    class="operator__slide-text operator__slide-text--stage"
+                                                    data-field-display="stage"
+                                                    attr:data-warning=if stage_warning { "true" } else { "false" }
+                                                    inner_html=stage_html.clone()
+                                                >
                                                 </div>
                                             })}
                                             <div class="operator__slide-warning" data-role="slide-warning"
-                                                attr:data-visible=move || if main_warning { "true" } else { "false" }
+                                                attr:data-visible=move || if any_warning { "true" } else { "false" }
                                             >
                                                 {format!("Line exceeds {line_limit} characters")}
                                             </div>
@@ -353,7 +427,7 @@ pub fn SlideList() -> impl IntoView {
                                                     <input
                                                         type="text"
                                                         data-field="group"
-                                                        prop:value=slide.content.group.as_ref().map(|g| g.name().to_string()).unwrap_or_default()
+                                                        prop:value=group_display
                                                     />
                                                 </label>
                                             </div>

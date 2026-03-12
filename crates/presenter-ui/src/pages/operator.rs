@@ -83,6 +83,25 @@ pub fn OperatorPage() -> impl IntoView {
     // Keyboard shortcuts
     setup_keyboard_shortcuts(ctx.clone(), op.clone());
 
+    // Popstate listener for browser back/forward (GAP 7)
+    setup_popstate_listener(ctx.clone());
+
+    // Build presentation index when libraries load (GAP 5)
+    {
+        let libraries = ctx.libraries;
+        let pres_index = ctx.presentation_index;
+        Effect::new(move || {
+            let libs = libraries.get();
+            let mut index = std::collections::HashMap::new();
+            for lib in &libs {
+                for pres in &lib.presentations {
+                    index.insert(pres.id.to_string(), lib.name.clone());
+                }
+            }
+            pres_index.set(index);
+        });
+    }
+
     // Expose test helpers
     crate::utils::test_helpers::expose_globals(&ctx, &op);
 
@@ -122,7 +141,9 @@ pub fn OperatorPage() -> impl IntoView {
         <LibraryModals />
         <PlaylistModals />
         <PresentationModals />
-        <footer class="operator__version"></footer>
+        <footer class="operator__version">
+            <VersionFooter />
+        </footer>
     }
 }
 
@@ -189,11 +210,37 @@ fn setup_ws_dispatch(last_event: ReadSignal<Option<LiveEvent>>, ctx: &AppContext
     let stage_connections = ctx.stage_connections;
     let broadcast_live = ctx.broadcast_live;
     let stage_layout_code = ctx.stage_layout_code;
+    let selected_presentation_id = ctx.selected_presentation_id;
+    let selected_presentation = ctx.selected_presentation;
+    let slides_cache = ctx.slides_cache;
 
     Effect::new(move || {
         if let Some(event) = last_event.get() {
             match event {
                 LiveEvent::Stage { snapshot } => {
+                    // Auto-sync operator selection from stage (GAP 6)
+                    let new_pres_id = snapshot.presentation_id.map(|id| id.to_string());
+                    let current_pres_id = selected_presentation_id.get_untracked();
+                    if new_pres_id.is_some() && new_pres_id != current_pres_id {
+                        if let Some(ref pres_id) = new_pres_id {
+                            selected_presentation_id.set(Some(pres_id.clone()));
+                            crate::state::session::set("currentPresentationId", pres_id);
+                            let pid = pres_id.clone();
+                            leptos::task::spawn_local(async move {
+                                if let Ok(detail) =
+                                    crate::api::presentations::get_presentation(&pid).await
+                                {
+                                    slides_cache.update(|cache| {
+                                        cache.insert(
+                                            pid.clone(),
+                                            detail.presentation.slides.clone(),
+                                        );
+                                    });
+                                    selected_presentation.set(Some(detail.presentation));
+                                }
+                            });
+                        }
+                    }
                     stage_snapshot.set(Some(snapshot));
                 }
                 LiveEvent::Timers { overview } => {
@@ -319,26 +366,29 @@ fn load_session_presentation(ctx: &AppContext) {
         let playlists = ctx.playlists;
         let context_title = ctx.context_title;
         let presentations = ctx.presentations;
+        let selected_playlist = ctx.selected_playlist;
         leptos::task::spawn_local(async move {
+            // Fetch full playlist for entry rendering
+            if let Ok(pl) = crate::api::playlists::get_playlist(&pl_id).await {
+                context_title.set(pl.name.clone());
+                let summaries: Vec<presenter_core::PresentationSummary> = pl
+                    .entries
+                    .iter()
+                    .filter_map(|e| match &e.kind {
+                        presenter_core::playlist::PlaylistEntryKind::Presentation {
+                            presentation_id,
+                            ..
+                        } => Some(presenter_core::PresentationSummary::new(
+                            *presentation_id,
+                            String::new(),
+                        )),
+                        _ => None,
+                    })
+                    .collect();
+                presentations.set(summaries);
+                selected_playlist.set(Some(pl));
+            }
             if let Ok(pls) = crate::api::playlists::list_playlists().await {
-                if let Some(pl) = pls.iter().find(|p| p.id.to_string() == pl_id) {
-                    context_title.set(pl.name.clone());
-                    let summaries: Vec<presenter_core::PresentationSummary> = pl
-                        .entries
-                        .iter()
-                        .filter_map(|e| match &e.kind {
-                            presenter_core::playlist::PlaylistEntryKind::Presentation {
-                                presentation_id,
-                                ..
-                            } => Some(presenter_core::PresentationSummary::new(
-                                *presentation_id,
-                                String::new(),
-                            )),
-                            _ => None,
-                        })
-                        .collect();
-                    presentations.set(summaries);
-                }
                 playlists.set(pls);
             }
         });
@@ -430,6 +480,51 @@ fn setup_keyboard_shortcuts(ctx: AppContext, op: OperatorState) {
 
     let window = crate::utils::window::window();
     let _ = window.add_event_listener_with_callback("keydown", handler.as_ref().unchecked_ref());
+    handler.forget();
+}
+
+#[derive(serde::Deserialize)]
+struct HealthzResponse {
+    #[serde(default)]
+    version: String,
+    #[serde(default)]
+    channel: String,
+}
+
+#[component]
+fn VersionFooter() -> impl IntoView {
+    let version_text = RwSignal::new(String::new());
+    leptos::task::spawn_local(async move {
+        if let Ok(health) = crate::api::get_json::<HealthzResponse>("/healthz").await {
+            let text = if health.channel.is_empty() || health.channel == "release" {
+                format!("v{}", health.version)
+            } else {
+                format!("v{} ({})", health.version, health.channel)
+            };
+            version_text.set(text);
+        }
+    });
+    view! {
+        <span>{move || version_text.get()}</span>
+    }
+}
+
+fn setup_popstate_listener(ctx: AppContext) {
+    let view = ctx.view;
+    let handler =
+        Closure::<dyn Fn(web_sys::PopStateEvent)>::new(move |ev: web_sys::PopStateEvent| {
+            let state = ev.state();
+            if let Ok(obj) = state.dyn_into::<js_sys::Object>() {
+                if let Ok(view_val) = js_sys::Reflect::get(&obj, &"view".into()) {
+                    if let Some(v) = view_val.as_string() {
+                        view.set(v.clone());
+                        crate::state::session::set("view", &v);
+                    }
+                }
+            }
+        });
+    let window = crate::utils::window::window();
+    let _ = window.add_event_listener_with_callback("popstate", handler.as_ref().unchecked_ref());
     handler.forget();
 }
 

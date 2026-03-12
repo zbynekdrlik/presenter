@@ -34,10 +34,8 @@ pub fn LibraryList() -> impl IntoView {
 
     let on_more = move |_| {
         let op = use_context::<OperatorState>().expect("OperatorState");
-        modal::open_modal(&op, "library");
+        modal::open_modal(&op, "library-list");
     };
-
-    let visible_count: usize = 5;
 
     view! {
         <section class="operator__group operator__group--libraries">
@@ -53,7 +51,7 @@ pub fn LibraryList() -> impl IntoView {
                     >
                         {move || {
                             let total = ctx.libraries.get().len();
-                            if total > visible_count { format!("{total}") } else { String::new() }
+                            total.to_string()
                         }}
                     </button>
                     <button
@@ -71,63 +69,72 @@ pub fn LibraryList() -> impl IntoView {
                     let favs = ctx.favorite_library_ids.get();
                     let active_id = ctx.selected_library_id.get();
 
-                    let mut sorted: Vec<_> = libs.into_iter().collect();
-                    sorted.sort_by(|a, b| {
-                        let a_fav = favs.contains(&a.id.to_string());
-                        let b_fav = favs.contains(&b.id.to_string());
-                        b_fav.cmp(&a_fav).then_with(|| a.name.to_lowercase().cmp(&b.name.to_lowercase()))
-                    });
-
-                    let visible: Vec<_> = sorted.into_iter().take(visible_count).collect();
-
-                    visible.into_iter().map(|lib| {
+                    // Filter to favorites + active library only (matching JS renderLibraries)
+                    let visible: Vec<_> = libs.into_iter().filter(|lib| {
                         let id = lib.id.to_string();
-                        let name = lib.name.clone();
-                        let count = lib.presentation_count;
-                        let is_active = active_id.as_deref() == Some(&id);
-                        let id_for_click = id.clone();
-                        let name_for_click = name.clone();
-                        let id_for_edit = id.clone();
-                        let id_for_row = id.clone();
-                        let id_for_btn = id.clone();
-                        let id_for_modal = id.clone();
+                        favs.contains(&id) || active_id.as_deref() == Some(&id)
+                    }).collect();
 
-                        view! {
-                            <li class="operator__list-item" data-library-id=id_for_row>
-                                <button
-                                    type="button"
-                                    class="operator__list-button"
-                                    data-role="library-item"
-                                    data-library-id=id_for_btn
-                                    attr:data-active=move || if is_active { "true" } else { "false" }
-                                    on:click=move |_| {
-                                        select_library(id_for_click.clone(), name_for_click.clone());
-                                    }
-                                >
-                                    <span class="operator__list-label">{name}</span>
-                                    <span class="operator__list-meta" data-role="library-count">{count}</span>
-                                </button>
-                                <div class="operator__list-actions">
-                                    <button
-                                        type="button"
-                                        class="operator__list-action operator__list-action--icon operator__list-action--menu"
-                                        data-action="library-edit"
-                                        data-library-id=id_for_edit
-                                        aria-label="Edit library"
-                                        on:click=move |ev: leptos::ev::MouseEvent| {
-                                            ev.stop_propagation();
-                                            let op = use_context::<OperatorState>().expect("OperatorState");
-                                            op.modal_mode.set("edit".to_string());
-                                            op.modal_target_id.set(Some(id_for_modal.clone()));
-                                            modal::open_modal(&op, "library-edit");
-                                        }
-                                    >
-                                        "\u{22ee}"
-                                    </button>
-                                </div>
+                    if visible.is_empty() {
+                        return view! {
+                            <li class="operator__favorites-empty">
+                                "Star libraries in settings to keep them handy."
                             </li>
-                        }
-                    }).collect_view()
+                        }.into_any();
+                    }
+
+                    view! {
+                        <div class="operator__favorites">
+                            {visible.into_iter().map(|lib| {
+                                let id = lib.id.to_string();
+                                let name = lib.name.clone();
+                                let count = lib.presentation_count;
+                                let is_active = active_id.as_deref() == Some(&id);
+                                let id_for_click = id.clone();
+                                let name_for_click = name.clone();
+                                let id_for_edit = id.clone();
+                                let id_for_row = id.clone();
+                                let id_for_btn = id.clone();
+                                let id_for_modal = id.clone();
+
+                                view! {
+                                    <li class="operator__list-item operator__list-row" data-library-id=id_for_row>
+                                        <button
+                                            type="button"
+                                            class="operator__list-button"
+                                            data-role="library-item"
+                                            data-library-id=id_for_btn
+                                            attr:data-active=move || if is_active { "true" } else { "false" }
+                                            on:click=move |_| {
+                                                select_library(id_for_click.clone(), name_for_click.clone());
+                                            }
+                                        >
+                                            <span class="operator__list-label">{name}</span>
+                                            <span class="operator__list-meta" data-role="library-count">{count}</span>
+                                        </button>
+                                        <div class="operator__list-actions">
+                                            <button
+                                                type="button"
+                                                class="operator__list-action operator__list-action--icon operator__list-action--menu"
+                                                data-action="library-edit"
+                                                data-library-id=id_for_edit
+                                                aria-label="Edit library"
+                                                on:click=move |ev: leptos::ev::MouseEvent| {
+                                                    ev.stop_propagation();
+                                                    let op = use_context::<OperatorState>().expect("OperatorState");
+                                                    op.modal_mode.set("edit".to_string());
+                                                    op.modal_target_id.set(Some(id_for_modal.clone()));
+                                                    modal::open_modal(&op, "library-edit");
+                                                }
+                                            >
+                                                "\u{22ee}"
+                                            </button>
+                                        </div>
+                                    </li>
+                                }
+                            }).collect_view()}
+                        </div>
+                    }.into_any()
                 }}
             </ul>
         </section>

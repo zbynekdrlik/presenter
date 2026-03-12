@@ -4,10 +4,10 @@ pub mod session;
 
 use leptos::prelude::*;
 use presenter_core::{
-    LibrarySummary, Playlist, Presentation, PresentationSummary, SearchResult, StageClientSnapshot,
-    StageDisplayLayout, StageDisplaySnapshot, TimersOverview,
+    LibrarySummary, Playlist, Presentation, PresentationSummary, SearchResult, Slide,
+    StageClientSnapshot, StageDisplayLayout, StageDisplaySnapshot, TimersOverview,
 };
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 
 use crate::api::settings::AbleSetStatusSnapshot;
 
@@ -23,6 +23,7 @@ pub struct AppContext {
     pub selected_presentation_id: RwSignal<Option<String>>,
     pub playlists: RwSignal<Vec<Playlist>>,
     pub selected_playlist_id: RwSignal<Option<String>>,
+    pub selected_playlist: RwSignal<Option<Playlist>>,
     pub stage_snapshot: RwSignal<Option<StageDisplaySnapshot>>,
     pub stage_layout_code: RwSignal<String>,
     pub stage_layouts: RwSignal<Vec<StageDisplayLayout>>,
@@ -37,6 +38,8 @@ pub struct AppContext {
     pub search_loading: RwSignal<bool>,
     pub ws_connected: RwSignal<bool>,
     pub ableset_status: RwSignal<Option<AbleSetStatusSnapshot>>,
+    pub slides_cache: RwSignal<HashMap<String, Vec<Slide>>>,
+    pub presentation_index: RwSignal<HashMap<String, String>>,
 }
 
 impl AppContext {
@@ -55,6 +58,7 @@ impl AppContext {
             selected_presentation_id: RwSignal::new(session::get("currentPresentationId")),
             playlists: RwSignal::new(Vec::new()),
             selected_playlist_id: RwSignal::new(session::get("activePlaylistId")),
+            selected_playlist: RwSignal::new(None),
             stage_snapshot: RwSignal::new(None),
             stage_layout_code: RwSignal::new(String::new()),
             stage_layouts: RwSignal::new(Vec::new()),
@@ -69,6 +73,8 @@ impl AppContext {
             search_loading: RwSignal::new(false),
             ws_connected: RwSignal::new(false),
             ableset_status: RwSignal::new(None),
+            slides_cache: RwSignal::new(HashMap::new()),
+            presentation_index: RwSignal::new(HashMap::new()),
         }
     }
 

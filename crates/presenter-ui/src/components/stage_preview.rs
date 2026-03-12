@@ -6,10 +6,18 @@ use leptos::prelude::*;
 pub fn StagePreview() -> impl IntoView {
     let ctx = use_context::<AppContext>().expect("AppContext");
 
-    let on_clear = move |_| {
-        leptos::task::spawn_local(async move {
-            let _ = crate::api::stage::clear().await;
-        });
+    let on_clear = {
+        let stage_snapshot = ctx.stage_snapshot;
+        let toast_message = ctx.toast_message;
+        let toast_variant = ctx.toast_variant;
+        move |_| {
+            leptos::task::spawn_local(async move {
+                let _ = crate::api::stage::clear().await;
+                stage_snapshot.set(None);
+                toast_variant.set("info".to_string());
+                toast_message.set(Some("Slide outputs cleared".to_string()));
+            });
+        }
     };
 
     let on_ableset_enable = move |_| {

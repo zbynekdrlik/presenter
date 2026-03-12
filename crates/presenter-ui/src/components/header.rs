@@ -4,6 +4,14 @@ use crate::components::stage_preview::StagePreview;
 use crate::state::operator::OperatorState;
 use crate::state::AppContext;
 
+#[derive(serde::Deserialize)]
+struct HealthzResponse {
+    #[serde(default)]
+    version: String,
+    #[serde(default)]
+    channel: String,
+}
+
 #[component]
 pub fn Header() -> impl IntoView {
     let ctx = use_context::<AppContext>().expect("AppContext");
@@ -31,6 +39,13 @@ pub fn Header() -> impl IntoView {
         let v = view.to_string();
         ctx.view.set(v.clone());
         crate::state::session::set("view", &v);
+        // Push browser history state for back/forward navigation
+        let window = crate::utils::window::window();
+        let state = js_sys::Object::new();
+        let _ = js_sys::Reflect::set(&state, &"view".into(), &v.clone().into());
+        let _ = window
+            .history()
+            .and_then(|h| h.push_state_with_url(&state, "", None));
     };
 
     // Mode toggle
@@ -55,11 +70,26 @@ pub fn Header() -> impl IntoView {
         op.mobile_nav_open.update(|v| *v = !*v);
     };
 
+    // Fetch version from /healthz
+    let version_text = RwSignal::new(String::new());
+    {
+        leptos::task::spawn_local(async move {
+            if let Ok(health) = crate::api::get_json::<HealthzResponse>("/healthz").await {
+                let text = if health.channel.is_empty() || health.channel == "release" {
+                    format!("v{}", health.version)
+                } else {
+                    format!("v{} ({})", health.version, health.channel)
+                };
+                version_text.set(text);
+            }
+        });
+    }
+
     view! {
         <header class="operator__header">
             <div class="operator__header-left">
                 <h1>"Presenter"</h1>
-                <span class="operator__version-badge"></span>
+                <span class="operator__version-badge">{move || version_text.get()}</span>
                 <form class="operator__search" data-role="global-search-form" role="search" autocomplete="off"
                     on:submit=on_search_submit
                 >

@@ -238,21 +238,50 @@ pub fn LibraryModals() -> impl IntoView {
                 </header>
                 <div class="operator__library-modal-body" data-role="library-modal-list">
                     {move || {
+                        let favs = favorite_ids.get();
                         libraries.get().into_iter().map(|lib| {
                             let id = lib.id.to_string();
                             let name = lib.name.clone();
+                            let count = lib.presentation_count;
+                            let is_fav = favs.contains(&id);
                             let id_click = id.clone();
                             let name_click = name.clone();
+                            let id_fav = id.clone();
                             let on_select = on_list_select.clone();
                             view! {
-                                <div class="operator__library-modal-item"
+                                <div class="operator__library-modal-item operator__list-row"
                                     data-role="library-row"
                                     data-library-id=id
                                 >
-                                    <button type="button" on:click=move |_| {
+                                    <button
+                                        type="button"
+                                        class="operator__list-action operator__list-action--icon operator__list-action--star"
+                                        data-action="library-toggle-favorite"
+                                        attr:aria-pressed=if is_fav { "true" } else { "false" }
+                                        on:click=move |ev: leptos::ev::MouseEvent| {
+                                            ev.stop_propagation();
+                                            let id = id_fav.clone();
+                                            let new_fav = !is_fav;
+                                            let fav_ids = favorite_ids;
+                                            let libs = libraries;
+                                            leptos::task::spawn_local(async move {
+                                                let _ = crate::api::libraries::set_favorite(&id, new_fav).await;
+                                                if let Ok(favs) = crate::api::libraries::get_favorites().await {
+                                                    fav_ids.set(favs.into_iter().collect());
+                                                }
+                                                if let Ok(ls) = crate::api::libraries::list_libraries().await {
+                                                    libs.set(ls);
+                                                }
+                                            });
+                                        }
+                                    >
+                                        {if is_fav { "\u{2605}" } else { "\u{2606}" }}
+                                    </button>
+                                    <button type="button" class="operator__list-button" on:click=move |_| {
                                         on_select(id_click.clone(), name_click.clone());
                                     }>
-                                        {name}
+                                        <span class="operator__list-label">{name}</span>
+                                        <span class="operator__list-meta">{count}</span>
                                     </button>
                                 </div>
                             }

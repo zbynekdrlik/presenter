@@ -216,18 +216,44 @@ pub fn PlaylistModals() -> impl IntoView {
                         playlists.get().into_iter().map(|pl| {
                             let id = pl.id.to_string();
                             let name = pl.name.clone();
+                            let count = pl.entries.len();
+                            let is_dashboard = pl.show_in_dashboard;
                             let id_click = id.clone();
                             let name_click = name.clone();
+                            let id_toggle = id.clone();
                             let on_select = on_list_select.clone();
                             view! {
-                                <div class="operator__playlist-modal-item"
+                                <div class="operator__playlist-modal-item operator__list-row"
                                     data-role="playlist-row"
                                     data-playlist-id=id
                                 >
-                                    <button type="button" on:click=move |_| {
+                                    <button
+                                        type="button"
+                                        class="operator__list-action operator__list-action--icon operator__list-action--star"
+                                        data-action="playlist-toggle-dashboard"
+                                        attr:aria-pressed=if is_dashboard { "true" } else { "false" }
+                                        on:click=move |ev: leptos::ev::MouseEvent| {
+                                            ev.stop_propagation();
+                                            let id = id_toggle.clone();
+                                            let new_dashboard = !is_dashboard;
+                                            let pls = playlists;
+                                            leptos::task::spawn_local(async move {
+                                                let _ = crate::api::playlists::update_playlist(
+                                                    &id, None, Some(new_dashboard)
+                                                ).await;
+                                                if let Ok(updated_pls) = crate::api::playlists::list_playlists().await {
+                                                    pls.set(updated_pls);
+                                                }
+                                            });
+                                        }
+                                    >
+                                        {if is_dashboard { "\u{2605}" } else { "\u{2606}" }}
+                                    </button>
+                                    <button type="button" class="operator__list-button" on:click=move |_| {
                                         on_select(id_click.clone(), name_click.clone());
                                     }>
-                                        {name}
+                                        <span class="operator__list-label">{name}</span>
+                                        <span class="operator__list-meta">{count}</span>
                                     </button>
                                 </div>
                             }
