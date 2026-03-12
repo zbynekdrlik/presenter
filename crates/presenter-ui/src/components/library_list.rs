@@ -40,18 +40,32 @@ pub fn LibraryList() -> impl IntoView {
     let visible_count: usize = 5;
 
     view! {
-        <div class="operator__list-section">
-            <div class="operator__list-header">
-                <h3 class="operator__list-title">"Libraries"</h3>
-                <button data-role="library-more" class="operator__list-more" on:click=on_more>
-                    {move || {
-                        let total = ctx.libraries.get().len();
-                        if total > visible_count { format!("{total}") } else { String::new() }
-                    }}
-                </button>
-                <button data-role="library-create" class="operator__list-create" on:click=on_create>"+"</button>
-            </div>
-            <ul data-role="library-list" class="operator__list">
+        <section class="operator__group operator__group--libraries">
+            <header class="operator__group-header">
+                <h2>"Libraries"</h2>
+                <div class="operator__group-controls">
+                    <button
+                        type="button"
+                        class="operator__group-count"
+                        data-role="library-more"
+                        aria-label="Show all libraries"
+                        on:click=on_more
+                    >
+                        {move || {
+                            let total = ctx.libraries.get().len();
+                            if total > visible_count { format!("{total}") } else { String::new() }
+                        }}
+                    </button>
+                    <button
+                        type="button"
+                        data-role="library-create"
+                        aria-label="Create library"
+                        title="Create library"
+                        on:click=on_create
+                    >"+"</button>
+                </div>
+            </header>
+            <ul class="operator__list" data-role="library-list">
                 {move || {
                     let libs = ctx.libraries.get();
                     let favs = ctx.favorite_library_ids.get();
@@ -64,7 +78,6 @@ pub fn LibraryList() -> impl IntoView {
                         b_fav.cmp(&a_fav).then_with(|| a.name.to_lowercase().cmp(&b.name.to_lowercase()))
                     });
 
-                    // Show favorites + active + up to visible_count
                     let visible: Vec<_> = sorted.into_iter().take(visible_count).collect();
 
                     visible.into_iter().map(|lib| {
@@ -80,12 +93,13 @@ pub fn LibraryList() -> impl IntoView {
                         let id_for_modal = id.clone();
 
                         view! {
-                            <li data-role="library-row" data-library-id=id_for_row class="operator__list-item">
+                            <li class="operator__list-item" data-library-id=id_for_row>
                                 <button
+                                    type="button"
+                                    class="operator__list-button"
                                     data-role="library-item"
                                     data-library-id=id_for_btn
                                     attr:data-active=move || if is_active { "true" } else { "false" }
-                                    class="operator__list-btn"
                                     on:click=move |_| {
                                         select_library(id_for_click.clone(), name_for_click.clone());
                                     }
@@ -93,25 +107,29 @@ pub fn LibraryList() -> impl IntoView {
                                     <span class="operator__list-label">{name}</span>
                                     <span class="operator__list-meta" data-role="library-count">{count}</span>
                                 </button>
-                                <button
-                                    data-action="library-edit"
-                                    data-library-id=id_for_edit
-                                    class="operator__list-edit"
-                                    on:click=move |ev: leptos::ev::MouseEvent| {
-                                        ev.stop_propagation();
-                                        let op = use_context::<OperatorState>().expect("OperatorState");
-                                        op.modal_mode.set("edit".to_string());
-                                        op.modal_target_id.set(Some(id_for_modal.clone()));
-                                        modal::open_modal(&op, "library-edit");
-                                    }
-                                >
-                                    "\u{270e}"
-                                </button>
+                                <div class="operator__list-actions">
+                                    <button
+                                        type="button"
+                                        class="operator__list-action operator__list-action--icon operator__list-action--menu"
+                                        data-action="library-edit"
+                                        data-library-id=id_for_edit
+                                        aria-label="Edit library"
+                                        on:click=move |ev: leptos::ev::MouseEvent| {
+                                            ev.stop_propagation();
+                                            let op = use_context::<OperatorState>().expect("OperatorState");
+                                            op.modal_mode.set("edit".to_string());
+                                            op.modal_target_id.set(Some(id_for_modal.clone()));
+                                            modal::open_modal(&op, "library-edit");
+                                        }
+                                    >
+                                        "\u{22ee}"
+                                    </button>
+                                </div>
                             </li>
                         }
                     }).collect_view()
                 }}
             </ul>
-        </div>
+        </section>
     }
 }

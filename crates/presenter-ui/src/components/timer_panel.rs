@@ -95,88 +95,87 @@ pub fn TimerPanel() -> impl IntoView {
     };
 
     view! {
-        <div class="operator__timers" data-view-panel="timers">
-            // Countdown timer
-            <div data-role="timer-countdown" class="operator__timer-card">
-                <h3 class="operator__timer-title">"Countdown"</h3>
-                <div class="operator__timer-value">
+        <div class="operator__timers" data-role="timer-cards">
+            <article class="operator__timer-card" data-role="timer-countdown">
+                <header>
+                    <strong>"Countdown"</strong>
+                </header>
+                <p class="operator__timer-primary" id="countdown-value">
                     {move || {
                         ctx.timers.get()
                             .map(|t| format_seconds(t.countdown_to_start.seconds_remaining))
                             .unwrap_or_else(|| "0:00".to_string())
                     }}
-                </div>
-                <div class="operator__timer-state">
+                </p>
+                <small id="countdown-target">
                     {move || {
                         ctx.timers.get()
-                            .map(|t| format!("{:?}", t.countdown_to_start.state))
-                            .unwrap_or_else(|| "Idle".to_string())
-                    }}
-                </div>
-                <div class="operator__timer-target">
-                    {move || {
-                        ctx.timers.get()
-                            .map(|t| format!("Target: {}", t.countdown_to_start.target.format("%H:%M:%S")))
+                            .map(|t| format!("Target {}", t.countdown_to_start.target.format("%H:%M:%S")))
                             .unwrap_or_default()
                     }}
-                </div>
-                <div class="operator__timer-controls">
-                    <input
-                        type="text"
-                        data-role="countdown-target-input"
-                        class="operator__timer-input"
-                        inputmode="numeric"
-                        placeholder="HH:MM"
-                        aria-label="Countdown target time (HH:MM)"
-                        on:keydown=on_countdown_target
-                    />
-                    <button data-role="countdown-start" class="operator__timer-btn" on:click=on_countdown_start>
-                        "Start"
-                    </button>
-                    <button data-role="countdown-offset-minus" class="operator__timer-btn" on:click=on_offset_minus>
-                        "-5 min"
-                    </button>
-                    <button data-role="countdown-offset-plus" class="operator__timer-btn" on:click=on_offset_plus>
-                        "+5 min"
-                    </button>
-                </div>
-            </div>
+                </small>
+            </article>
 
-            // Preach timer
-            <div data-role="timer-preach" class="operator__timer-card">
-                <h3 class="operator__timer-title">"Preach"</h3>
-                <div class="operator__timer-value">
+            <article class="operator__timer-card" data-role="timer-preach">
+                <header>
+                    <strong>"Preach"</strong>
+                    <span class="operator__timer-state" id="preach-state">
+                        {move || {
+                            ctx.timers.get()
+                                .map(|t| format!("{:?}", t.preach_timer.state))
+                                .unwrap_or_else(|| "Idle".to_string())
+                        }}
+                    </span>
+                </header>
+                <p class="operator__timer-primary" id="preach-value">
                     {move || {
                         ctx.timers.get()
                             .map(|t| format_seconds(t.preach_timer.seconds_elapsed))
                             .unwrap_or_else(|| "0:00".to_string())
                     }}
-                </div>
-                <div class="operator__timer-state">
+                </p>
+                <small id="preach-elapsed">
                     {move || {
                         ctx.timers.get()
-                            .map(|t| format!("{:?}", t.preach_timer.state))
-                            .unwrap_or_else(|| "Idle".to_string())
+                            .map(|t| format!("Elapsed {}", format_seconds(t.preach_timer.seconds_elapsed)))
+                            .unwrap_or_default()
                     }}
+                </small>
+            </article>
+        </div>
+        <div class="operator__timer-actions" data-role="timer-actions">
+            <div class="operator__timer-group">
+                <h3>"Countdown"</h3>
+                <label class="operator__timer-field">
+                    <span>"Service start"</span>
+                    <input
+                        type="text"
+                        inputmode="numeric"
+                        placeholder="18:00"
+                        data-role="countdown-target-input"
+                        aria-label="Countdown target time (HH:MM)"
+                        on:keydown=on_countdown_target
+                    />
+                </label>
+                <p class="operator__timer-help">
+                    "Type HH:MM (or minutes only) and press Enter or Set to update while the timer runs."
+                </p>
+                <div class="operator__timer-buttons">
+                    <button type="button" data-role="countdown-start" on:click=on_countdown_start>"Start"</button>
+                    <button type="button" data-role="countdown-offset-minus" on:click=on_offset_minus>"-5 min"</button>
+                    <button type="button" data-role="countdown-offset-plus" on:click=on_offset_plus>"+5 min"</button>
                 </div>
-                <div class="operator__timer-controls">
-                    <button data-command="start_preach" class="operator__timer-btn" on:click=on_preach_start>
-                        "Start"
-                    </button>
-                    <button data-command="reset_preach" class="operator__timer-btn" on:click=on_preach_reset>
-                        "Reset"
-                    </button>
+                <div class="operator__timer-links">
+                    <button type="button" data-role="timer-overlay-open" on:click=on_overlay_open>"Open Countdown Overlay"</button>
+                    <button type="button" data-role="timer-overlay-copy" on:click=on_overlay_copy>"Copy Overlay URL"</button>
                 </div>
             </div>
-
-            // Overlay controls
-            <div class="operator__timer-overlay-controls">
-                <button data-role="timer-overlay-open" class="operator__timer-btn" on:click=on_overlay_open>
-                    "Open Countdown Overlay"
-                </button>
-                <button data-role="timer-overlay-copy" class="operator__timer-btn" on:click=on_overlay_copy>
-                    "Copy Overlay URL"
-                </button>
+            <div class="operator__timer-group">
+                <h3>"Preach"</h3>
+                <div class="operator__timer-buttons">
+                    <button type="button" data-command="start_preach" on:click=on_preach_start>"Start"</button>
+                    <button type="button" data-command="reset_preach" on:click=on_preach_reset>"Reset"</button>
+                </div>
             </div>
         </div>
     }

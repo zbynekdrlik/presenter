@@ -1,5 +1,6 @@
 use leptos::prelude::*;
 
+use crate::components::stage_preview::StagePreview;
 use crate::state::operator::OperatorState;
 use crate::state::AppContext;
 
@@ -57,80 +58,89 @@ pub fn Header() -> impl IntoView {
     view! {
         <header class="operator__header">
             <div class="operator__header-left">
-                <form data-role="global-search-form" on:submit=on_search_submit class="operator__search-form">
+                <h1>"Presenter"</h1>
+                <span class="operator__version-badge"></span>
+                <form class="operator__search" data-role="global-search-form" role="search" autocomplete="off"
+                    on:submit=on_search_submit
+                >
+                    <span class="operator__search-icon" aria-hidden="true"></span>
                     <input
-                        type="text"
+                        type="search"
+                        placeholder="Search libraries, songs, slides"
                         data-role="global-search-query"
-                        class="operator__search-input"
-                        placeholder="Search..."
+                        aria-label="Search presenter content"
+                        autocomplete="off"
                         prop:value=move || op.search_query.get()
                         on:input=on_search_input
                     />
                     <button
                         type="button"
                         data-role="global-search-clear"
-                        class="operator__search-clear"
+                        aria-label="Clear search"
                         on:click=on_search_clear
                     >
-                        "\u{00d7}"
+                        <span aria-hidden="true">{"\u{00d7}"}</span>
+                        <span class="sr-only">"Clear search"</span>
                     </button>
                 </form>
             </div>
-            <nav class="operator__header-center">
-                <div class="operator__view-toggles">
-                    {["worship", "bible", "timers", "settings"].into_iter().map(|v| {
-                        let view_name = v.to_string();
-                        let label = match v {
-                            "worship" => "Worship",
-                            "bible" => "Bible",
-                            "timers" => "Timers",
-                            "settings" => "Settings",
-                            _ => v,
-                        };
-                        let vn = view_name.clone();
-                        view! {
-                            <button
-                                data-role="view-toggle"
-                                data-view=view_name.clone()
-                                attr:data-active=move || if ctx.view.get() == vn { "true" } else { "false" }
-                                class="operator__view-btn"
-                                on:click={
-                                    let vn2 = view_name.clone();
-                                    move |_| set_view(&vn2)
-                                }
-                            >
-                                {label}
-                            </button>
-                        }
-                    }).collect_view()}
-                </div>
+            <nav class="operator__view-nav">
+                {["worship", "bible", "timers", "settings"].into_iter().map(|v| {
+                    let view_name = v.to_string();
+                    let label = match v {
+                        "worship" => "Worship",
+                        "bible" => "Bible",
+                        "timers" => "Timers",
+                        "settings" => "Settings",
+                        _ => v,
+                    };
+                    let vn = view_name.clone();
+                    view! {
+                        <button
+                            type="button"
+                            data-role="view-toggle"
+                            data-view=view_name.clone()
+                            attr:data-active=move || if ctx.view.get() == vn { "true" } else { "false" }
+                            on:click={
+                                let vn2 = view_name.clone();
+                                move |_| set_view(&vn2)
+                            }
+                        >
+                            {label}
+                        </button>
+                    }
+                }).collect_view()}
             </nav>
             <div class="operator__header-right">
-                <select
-                    data-role="stage-layout-select"
-                    class="operator__layout-select"
-                    on:change=on_layout_change
-                >
-                    {move || ctx.stage_layouts.get().into_iter().map(|layout| {
-                        let code = layout.code.clone();
-                        let name = layout.name.clone();
-                        let selected = ctx.stage_layout_code.get() == code;
-                        view! {
-                            <option value=code prop:selected=selected>{name}</option>
-                        }
-                    }).collect_view()}
-                </select>
-                <div class="operator__mode-toggles">
+                <div class="operator__stage-layout" aria-label="Stage display mode">
+                    <label class="operator__stage-layout-label" for="stage-layout-select">"Stage Output"</label>
+                    <select
+                        id="stage-layout-select"
+                        data-role="stage-layout-select"
+                        on:change=on_layout_change
+                    >
+                        {move || ctx.stage_layouts.get().into_iter().map(|layout| {
+                            let code = layout.code.clone();
+                            let name = layout.name.clone();
+                            let selected = ctx.stage_layout_code.get() == code;
+                            view! {
+                                <option value=code prop:selected=selected>{name}</option>
+                            }
+                        }).collect_view()}
+                    </select>
+                </div>
+                <StagePreview />
+                <div class="operator__mode-toggle">
                     {["live", "edit"].into_iter().map(|m| {
                         let mode_name = m.to_string();
                         let label = match m { "live" => "Live", "edit" => "Edit", _ => m };
                         let mn = mode_name.clone();
                         view! {
                             <button
+                                type="button"
                                 data-role="mode-toggle"
                                 data-mode=mode_name.clone()
                                 attr:data-active=move || if ctx.mode.get() == mn { "true" } else { "false" }
-                                class="operator__mode-btn"
                                 on:click={
                                     let mn2 = mode_name.clone();
                                     move |_| set_mode(&mn2)
@@ -142,8 +152,10 @@ pub fn Header() -> impl IntoView {
                     }).collect_view()}
                 </div>
                 <button
+                    type="button"
+                    class="operator__hamburger"
                     data-role="mobile-menu-toggle"
-                    class="operator__mobile-menu-btn"
+                    aria-label="Menu"
                     on:click=on_mobile_toggle
                 >
                     "\u{2630}"

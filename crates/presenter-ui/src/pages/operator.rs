@@ -12,7 +12,6 @@ use crate::components::presentation_list::PresentationList;
 use crate::components::presentation_modal::PresentationModals;
 use crate::components::search::SearchResults;
 use crate::components::slide_list::SlideList;
-use crate::components::stage_preview::StagePreview;
 use crate::components::timer_panel::TimerPanel;
 use crate::components::toast::Toast;
 use crate::state::operator::OperatorState;
@@ -35,10 +34,25 @@ pub fn OperatorPage() -> impl IntoView {
     {
         let view = ctx.view;
         let mode = ctx.mode;
+        let mobile_nav_open = op.mobile_nav_open;
+        let line_limit = op.line_limit;
         Effect::new(move || {
             if let Some(body) = crate::utils::window::document_body() {
                 let _ = body.set_attribute("data-view", &view.get());
                 let _ = body.set_attribute("data-mode", &mode.get());
+
+                // Sync mobile nav class
+                if mobile_nav_open.get() {
+                    let _ = body.class_list().add_1("operator--mobile-nav-open");
+                } else {
+                    let _ = body.class_list().remove_1("operator--mobile-nav-open");
+                }
+
+                // Sync line-limit CSS custom property
+                let ll = line_limit.get();
+                let _ = body
+                    .style()
+                    .set_property("--operator-line-limit-ch", &format!("{ll}ch"));
             }
         });
     }
@@ -78,9 +92,8 @@ pub fn OperatorPage() -> impl IntoView {
     view! {
         <Header />
         <SearchResults />
-        <StagePreview />
         <main class="operator__main">
-            <section class="operator__worship" attr:data-view-panel="worship">
+            <section class="operator__worship" data-view-panel="worship">
                 <section class="operator__catalog" data-role="catalog">
                     <div
                         class="operator__catalog-top"

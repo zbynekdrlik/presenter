@@ -196,6 +196,7 @@ pub fn PlaylistModals() -> impl IntoView {
     view! {
         // Playlist list modal
         <div class="operator__playlist-modal" data-role="playlist-modal"
+            attr:data-open=move || if is_pl_list_open() { "true" } else { "false" }
             style:display=move || if is_pl_list_open() { "flex" } else { "none" }
             on:click=close_list
         >

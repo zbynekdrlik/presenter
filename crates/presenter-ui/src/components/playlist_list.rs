@@ -54,18 +54,32 @@ pub fn PlaylistList() -> impl IntoView {
     let visible_count: usize = 5;
 
     view! {
-        <div class="operator__list-section">
-            <div class="operator__list-header">
-                <h3 class="operator__list-title">"Playlists"</h3>
-                <button data-role="playlist-more" class="operator__list-more" on:click=on_more>
-                    {move || {
-                        let total = ctx.playlists.get().len();
-                        if total > visible_count { format!("{total}") } else { String::new() }
-                    }}
-                </button>
-                <button data-role="playlist-create" class="operator__list-create" on:click=on_create>"+"</button>
-            </div>
-            <ul data-role="playlist-list" class="operator__list">
+        <section class="operator__group operator__group--playlists">
+            <header class="operator__group-header">
+                <h2>"Playlists"</h2>
+                <div class="operator__group-controls">
+                    <button
+                        type="button"
+                        class="operator__group-count"
+                        data-role="playlist-more"
+                        aria-label="Show all playlists"
+                        on:click=on_more
+                    >
+                        {move || {
+                            let total = ctx.playlists.get().len();
+                            if total > visible_count { format!("{total}") } else { String::new() }
+                        }}
+                    </button>
+                    <button
+                        type="button"
+                        data-role="playlist-create"
+                        aria-label="Create playlist"
+                        title="Create playlist"
+                        on:click=on_create
+                    >"+"</button>
+                </div>
+            </header>
+            <ul class="operator__list" data-role="playlist-list">
                 {move || {
                     let playlists = ctx.playlists.get();
                     let active_id = ctx.selected_playlist_id.get();
@@ -85,12 +99,13 @@ pub fn PlaylistList() -> impl IntoView {
                         let id_for_modal = id.clone();
 
                         view! {
-                            <li data-role="playlist-row" data-playlist-id=id_for_row class="operator__list-item">
+                            <li class="operator__list-item" data-playlist-id=id_for_row>
                                 <button
+                                    type="button"
+                                    class="operator__list-button"
                                     data-role="playlist-item"
                                     data-playlist-id=id_for_btn
                                     attr:data-active=move || if is_active { "true" } else { "false" }
-                                    class="operator__list-btn"
                                     on:click=move |_| {
                                         select_playlist(id_for_click.clone(), name_for_click.clone());
                                     }
@@ -98,25 +113,29 @@ pub fn PlaylistList() -> impl IntoView {
                                     <span class="operator__list-label">{name}</span>
                                     <span class="operator__list-meta" data-role="playlist-count">{count}</span>
                                 </button>
-                                <button
-                                    data-action="playlist-edit"
-                                    data-playlist-id=id_for_edit
-                                    class="operator__list-edit"
-                                    on:click=move |ev: leptos::ev::MouseEvent| {
-                                        ev.stop_propagation();
-                                        let op = use_context::<OperatorState>().expect("OperatorState");
-                                        op.modal_mode.set("edit".to_string());
-                                        op.modal_target_id.set(Some(id_for_modal.clone()));
-                                        modal::open_modal(&op, "playlist-edit");
-                                    }
-                                >
-                                    "\u{270e}"
-                                </button>
+                                <div class="operator__list-actions">
+                                    <button
+                                        type="button"
+                                        class="operator__list-action operator__list-action--icon operator__list-action--menu"
+                                        data-action="playlist-edit"
+                                        data-playlist-id=id_for_edit
+                                        aria-label="Edit playlist"
+                                        on:click=move |ev: leptos::ev::MouseEvent| {
+                                            ev.stop_propagation();
+                                            let op = use_context::<OperatorState>().expect("OperatorState");
+                                            op.modal_mode.set("edit".to_string());
+                                            op.modal_target_id.set(Some(id_for_modal.clone()));
+                                            modal::open_modal(&op, "playlist-edit");
+                                        }
+                                    >
+                                        "\u{22ee}"
+                                    </button>
+                                </div>
                             </li>
                         }
                     }).collect_view()
                 }}
             </ul>
-        </div>
+        </section>
     }
 }

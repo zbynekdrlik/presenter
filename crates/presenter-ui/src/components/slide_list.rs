@@ -48,29 +48,31 @@ pub fn SlideList() -> impl IntoView {
     };
 
     view! {
-        <div class="operator__slides">
+        <section class="operator__slides-column">
             <div class="operator__slides-toolbar">
-                <label class="operator__line-limit-label">
-                    "Line limit: "
+                <label class="operator__line-limit" title="Maximum characters per line">
+                    <span>"Line limit"</span>
                     <input
                         type="number"
+                        min="10"
+                        max="120"
+                        step="1"
                         data-role="line-limit"
-                        class="operator__line-limit-input"
                         prop:value=move || op.line_limit.get().to_string()
                         on:change=on_line_limit_change
-                        min="1"
-                        max="100"
                     />
                 </label>
                 <button
+                    type="button"
+                    class="operator__slides-add"
                     data-role="add-slide"
-                    class="operator__add-slide"
+                    title="Add slide"
                     on:click=add_slide
                 >
-                    "+ Add Slide"
+                    "+"
                 </button>
             </div>
-            <div class="operator__slide-list" data-role="slide-list">
+            <div class="operator__slides" data-role="slides">
                 {move || {
                     let mode = ctx.mode.get();
                     let pres = ctx.selected_presentation.get();
@@ -78,13 +80,14 @@ pub fn SlideList() -> impl IntoView {
                     let line_limit = op.line_limit.get();
 
                     let Some(presentation) = pres else {
-                        return view! { <div class="operator__no-slides">"Select a presentation to view slides"</div> }.into_any();
+                        return view! { <p class="empty">"Select a presentation to load slides."</p> }.into_any();
                     };
 
                     let pres_id = presentation.id.to_string();
                     let slides = presentation.slides.clone();
                     let current_slide_id = snapshot.as_ref().and_then(|s| s.current_slide_id.map(|id| id.to_string()));
                     let is_live = mode == "live";
+                    let is_edit = !is_live;
 
                     let mut current_group: Option<String> = None;
 
@@ -103,81 +106,56 @@ pub fn SlideList() -> impl IntoView {
                         };
 
                         let is_active = current_slide_id.as_deref() == Some(&slide_id);
-                        let main_lines = main_text.lines().count() as u32;
-                        let main_warning = main_lines > line_limit;
+                        let main_max_line_len = main_text.lines().map(|l| l.len() as u32).max().unwrap_or(0);
+                        let main_warning = main_max_line_len > line_limit;
 
                         let pres_id_click = pres_id.clone();
                         let slide_id_click = slide_id.clone();
                         let next_slide_id = presentation.slides.get(i + 1).map(|s| s.id.to_string());
 
-                        // For edit mode blur handlers
                         let pres_id_edit = pres_id.clone();
                         let slide_id_edit = slide_id.clone();
                         let pres_id_dup = pres_id.clone();
                         let slide_id_dup = slide_id.clone();
                         let pres_id_del = pres_id.clone();
                         let slide_id_del = slide_id.clone();
+                        let slide_id_for_article = slide_id.clone();
+                        let slide_index = i;
 
                         view! {
                             {show_group.map(|g| view! {
-                                <div data-role="slide-group" class="operator__slide-group">{g}</div>
+                                <div class="operator__slide-group" data-role="slide-group">{g}</div>
                             })}
-                            <div
+                            <article
                                 class=move || {
-                                    let mut c = "stage-control__slide".to_string();
+                                    let mut c = "operator__slide-card stage-control__slide".to_string();
                                     if is_active { c.push_str(" is-active"); }
                                     c
                                 }
-                                data-slide-id=slide_id.clone()
+                                data-slide-id=slide_id_for_article
+                                data-slide-index=slide_index
                             >
-                                {if is_live {
-                                    // Live mode: clickable slides
-                                    let trigger = trigger_slide;
-                                    view! {
-                                        <div
-                                            class="operator__slide-card operator__slide-card--live"
-                                            on:click=move |_| {
-                                                trigger(pres_id_click.clone(), slide_id_click.clone(), next_slide_id.clone());
-                                            }
-                                        >
-                                            <div class="operator__slide-text--main" attr:data-warning=move || if main_warning { "true" } else { "false" }>
-                                                {main_text.clone()}
-                                            </div>
-                                            {(!translation_text.is_empty()).then(|| view! {
-                                                <div class="operator__slide-text--translation">{translation_text.clone()}</div>
-                                            })}
-                                            {(!stage_text.is_empty()).then(|| view! {
-                                                <div class="operator__slide-text--stage">{stage_text.clone()}</div>
-                                            })}
-                                        </div>
-                                    }.into_any()
-                                } else {
-                                    // Edit mode: textareas
-                                    view! {
-                                        <div class="operator__slide-card operator__slide-card--edit">
-                                            <div data-role="slide-warning" attr:data-visible=move || if main_warning { "true" } else { "false" } class="operator__slide-warning">
-                                                {format!("Warning: {main_lines} lines exceeds limit of {line_limit}")}
-                                            </div>
-                                            <textarea
-                                                data-field="main"
-                                                class="operator__slide-textarea operator__slide-textarea--main"
-                                                prop:value=main_text.clone()
-                                                on:blur={
-                                                    let pres_id = pres_id_edit.clone();
-                                                    let sid = slide_id_edit.clone();
-                                                    move |ev| {
-                                                        let val = event_target_value(&ev);
-                                                        let pres_id = pres_id.clone();
-                                                        let sid = sid.clone();
+                                <header class="operator__slide-header">
+                                    <div class="operator__slide-header-left">
+                                        <span class="operator__slide-index">{i + 1}</span>
+                                    </div>
+                                    {is_edit.then(|| {
+                                        let pres_id_save = pres_id_edit.clone();
+                                        let slide_id_save = slide_id_edit.clone();
+                                        view! {
+                                            <div class="operator__slide-controls">
+                                                <button type="button" data-action="save"
+                                                    on:click=move |_| {
+                                                        let pres_id = pres_id_save.clone();
+                                                        let sid = slide_id_save.clone();
                                                         leptos::task::spawn_local(async move {
                                                             let ctx = use_context::<AppContext>().expect("AppContext");
-                                                            let pres = ctx.selected_presentation.get_untracked();
-                                                            if let Some(p) = &pres {
-                                                                let slide = p.slides.iter().find(|s| s.id.to_string() == sid);
-                                                                if let Some(s) = slide {
+                                                            let p = ctx.selected_presentation.get_untracked();
+                                                            if let Some(p) = &p {
+                                                                if let Some(s) = p.slides.iter().find(|s| s.id.to_string() == sid) {
                                                                     let _ = api::presentations::update_slide(
                                                                         &pres_id, &sid,
-                                                                        &val,
+                                                                        s.content.main.value(),
                                                                         s.content.translation.value(),
                                                                         s.content.stage.value(),
                                                                     ).await;
@@ -185,79 +163,8 @@ pub fn SlideList() -> impl IntoView {
                                                             }
                                                         });
                                                     }
-                                                }
-                                                on:focus={
-                                                    let sid = slide_id.clone();
-                                                    move |_| {
-                                                        let op = use_context::<OperatorState>().expect("OperatorState");
-                                                        op.focused_slide_id.set(Some(sid.clone()));
-                                                        op.focused_field.set(Some("main".to_string()));
-                                                        crate::state::session::set("focusedSlideId", &sid);
-                                                    }
-                                                }
-                                            />
-                                            <textarea
-                                                data-field="translation"
-                                                class="operator__slide-textarea operator__slide-textarea--translation"
-                                                prop:value=translation_text.clone()
-                                                on:blur={
-                                                    let pres_id = pres_id_edit.clone();
-                                                    let sid = slide_id_edit.clone();
-                                                    move |ev| {
-                                                        let val = event_target_value(&ev);
-                                                        let pres_id = pres_id.clone();
-                                                        let sid = sid.clone();
-                                                        leptos::task::spawn_local(async move {
-                                                            let ctx = use_context::<AppContext>().expect("AppContext");
-                                                            let pres = ctx.selected_presentation.get_untracked();
-                                                            if let Some(p) = &pres {
-                                                                let slide = p.slides.iter().find(|s| s.id.to_string() == sid);
-                                                                if let Some(s) = slide {
-                                                                    let _ = api::presentations::update_slide(
-                                                                        &pres_id, &sid,
-                                                                        s.content.main.value(),
-                                                                        &val,
-                                                                        s.content.stage.value(),
-                                                                    ).await;
-                                                                }
-                                                            }
-                                                        });
-                                                    }
-                                                }
-                                            />
-                                            <textarea
-                                                data-field="stage"
-                                                class="operator__slide-textarea operator__slide-textarea--stage"
-                                                prop:value=stage_text.clone()
-                                                on:blur={
-                                                    let pres_id = pres_id_edit.clone();
-                                                    let sid = slide_id_edit.clone();
-                                                    move |ev| {
-                                                        let val = event_target_value(&ev);
-                                                        let pres_id = pres_id.clone();
-                                                        let sid = sid.clone();
-                                                        leptos::task::spawn_local(async move {
-                                                            let ctx = use_context::<AppContext>().expect("AppContext");
-                                                            let pres = ctx.selected_presentation.get_untracked();
-                                                            if let Some(p) = &pres {
-                                                                let slide = p.slides.iter().find(|s| s.id.to_string() == sid);
-                                                                if let Some(s) = slide {
-                                                                    let _ = api::presentations::update_slide(
-                                                                        &pres_id, &sid,
-                                                                        s.content.main.value(),
-                                                                        s.content.translation.value(),
-                                                                        &val,
-                                                                    ).await;
-                                                                }
-                                                            }
-                                                        });
-                                                    }
-                                                }
-                                            />
-                                            <div class="operator__slide-actions">
-                                                <button
-                                                    data-action="duplicate"
-                                                    class="operator__slide-action-btn"
+                                                >"Save"</button>
+                                                <button type="button" data-action="duplicate"
                                                     on:click=move |_| {
                                                         let pres_id = pres_id_dup.clone();
                                                         let sid = slide_id_dup.clone();
@@ -270,12 +177,8 @@ pub fn SlideList() -> impl IntoView {
                                                             }
                                                         });
                                                     }
-                                                >
-                                                    "Duplicate"
-                                                </button>
-                                                <button
-                                                    data-action="delete-slide"
-                                                    class="operator__slide-action-btn operator__slide-action-btn--danger"
+                                                >"Duplicate"</button>
+                                                <button type="button" data-action="delete"
                                                     on:click=move |_| {
                                                         let pres_id = pres_id_del.clone();
                                                         let sid = slide_id_del.clone();
@@ -288,18 +191,180 @@ pub fn SlideList() -> impl IntoView {
                                                             }
                                                         });
                                                     }
-                                                >
-                                                    "Delete"
-                                                </button>
+                                                >"Delete"</button>
                                             </div>
-                                        </div>
-                                    }.into_any()
-                                }}
-                            </div>
+                                        }
+                                    })}
+                                </header>
+                                <section class="operator__slide-bodies">
+                                    {if is_live {
+                                        let trigger = trigger_slide;
+                                        view! {
+                                            <div
+                                                class="operator__slide-text operator__slide-text--main"
+                                                data-field-display="main"
+                                                on:click=move |_| {
+                                                    trigger(pres_id_click.clone(), slide_id_click.clone(), next_slide_id.clone());
+                                                }
+                                            >
+                                                {main_text.clone()}
+                                            </div>
+                                            {(!translation_text.is_empty()).then(|| view! {
+                                                <div class="operator__slide-text operator__slide-text--translation" data-field-display="translation">
+                                                    {translation_text.clone()}
+                                                </div>
+                                            })}
+                                            {(!stage_text.is_empty()).then(|| view! {
+                                                <div class="operator__slide-text operator__slide-text--stage" data-field-display="stage">
+                                                    {stage_text.clone()}
+                                                </div>
+                                            })}
+                                            <div class="operator__slide-warning" data-role="slide-warning"
+                                                attr:data-visible=move || if main_warning { "true" } else { "false" }
+                                            >
+                                                {format!("Line exceeds {line_limit} characters")}
+                                            </div>
+                                        }.into_any()
+                                    } else {
+                                        view! {
+                                            <div class="operator__slide-text operator__slide-text--main" data-field-display="main">
+                                                {main_text.clone()}
+                                            </div>
+                                            {(!translation_text.is_empty()).then(|| view! {
+                                                <div class="operator__slide-text operator__slide-text--translation" data-field-display="translation">
+                                                    {translation_text.clone()}
+                                                </div>
+                                            })}
+                                            {(!stage_text.is_empty()).then(|| view! {
+                                                <div class="operator__slide-text operator__slide-text--stage" data-field-display="stage">
+                                                    {stage_text.clone()}
+                                                </div>
+                                            })}
+                                            <div class="operator__slide-warning" data-role="slide-warning"
+                                                attr:data-visible=move || if main_warning { "true" } else { "false" }
+                                            >
+                                                {format!("Line exceeds {line_limit} characters")}
+                                            </div>
+                                            <div class="operator__slide-editor">
+                                                <label>
+                                                    <span>"Main"</span>
+                                                    <textarea
+                                                        data-field="main"
+                                                        prop:value=main_text.clone()
+                                                        on:blur={
+                                                            let pres_id = pres_id_edit.clone();
+                                                            let sid = slide_id_edit.clone();
+                                                            move |ev| {
+                                                                let val = event_target_value(&ev);
+                                                                let pres_id = pres_id.clone();
+                                                                let sid = sid.clone();
+                                                                leptos::task::spawn_local(async move {
+                                                                    let ctx = use_context::<AppContext>().expect("AppContext");
+                                                                    let pres = ctx.selected_presentation.get_untracked();
+                                                                    if let Some(p) = &pres {
+                                                                        let slide = p.slides.iter().find(|s| s.id.to_string() == sid);
+                                                                        if let Some(s) = slide {
+                                                                            let _ = api::presentations::update_slide(
+                                                                                &pres_id, &sid,
+                                                                                &val,
+                                                                                s.content.translation.value(),
+                                                                                s.content.stage.value(),
+                                                                            ).await;
+                                                                        }
+                                                                    }
+                                                                });
+                                                            }
+                                                        }
+                                                        on:focus={
+                                                            let sid = slide_id.clone();
+                                                            move |_| {
+                                                                let op = use_context::<OperatorState>().expect("OperatorState");
+                                                                op.focused_slide_id.set(Some(sid.clone()));
+                                                                op.focused_field.set(Some("main".to_string()));
+                                                                crate::state::session::set("focusedSlideId", &sid);
+                                                            }
+                                                        }
+                                                    />
+                                                </label>
+                                                <label>
+                                                    <span>"Translation"</span>
+                                                    <textarea
+                                                        data-field="translation"
+                                                        prop:value=translation_text.clone()
+                                                        on:blur={
+                                                            let pres_id = pres_id_edit.clone();
+                                                            let sid = slide_id_edit.clone();
+                                                            move |ev| {
+                                                                let val = event_target_value(&ev);
+                                                                let pres_id = pres_id.clone();
+                                                                let sid = sid.clone();
+                                                                leptos::task::spawn_local(async move {
+                                                                    let ctx = use_context::<AppContext>().expect("AppContext");
+                                                                    let pres = ctx.selected_presentation.get_untracked();
+                                                                    if let Some(p) = &pres {
+                                                                        let slide = p.slides.iter().find(|s| s.id.to_string() == sid);
+                                                                        if let Some(s) = slide {
+                                                                            let _ = api::presentations::update_slide(
+                                                                                &pres_id, &sid,
+                                                                                s.content.main.value(),
+                                                                                &val,
+                                                                                s.content.stage.value(),
+                                                                            ).await;
+                                                                        }
+                                                                    }
+                                                                });
+                                                            }
+                                                        }
+                                                    />
+                                                </label>
+                                                <label>
+                                                    <span>"Stage"</span>
+                                                    <textarea
+                                                        data-field="stage"
+                                                        prop:value=stage_text.clone()
+                                                        on:blur={
+                                                            let pres_id = pres_id_edit.clone();
+                                                            let sid = slide_id_edit.clone();
+                                                            move |ev| {
+                                                                let val = event_target_value(&ev);
+                                                                let pres_id = pres_id.clone();
+                                                                let sid = sid.clone();
+                                                                leptos::task::spawn_local(async move {
+                                                                    let ctx = use_context::<AppContext>().expect("AppContext");
+                                                                    let pres = ctx.selected_presentation.get_untracked();
+                                                                    if let Some(p) = &pres {
+                                                                        let slide = p.slides.iter().find(|s| s.id.to_string() == sid);
+                                                                        if let Some(s) = slide {
+                                                                            let _ = api::presentations::update_slide(
+                                                                                &pres_id, &sid,
+                                                                                s.content.main.value(),
+                                                                                s.content.translation.value(),
+                                                                                &val,
+                                                                            ).await;
+                                                                        }
+                                                                    }
+                                                                });
+                                                            }
+                                                        }
+                                                    />
+                                                </label>
+                                                <label>
+                                                    <span>"Group"</span>
+                                                    <input
+                                                        type="text"
+                                                        data-field="group"
+                                                        prop:value=slide.content.group.as_ref().map(|g| g.name().to_string()).unwrap_or_default()
+                                                    />
+                                                </label>
+                                            </div>
+                                        }.into_any()
+                                    }}
+                                </section>
+                            </article>
                         }
                     }).collect_view().into_any()
                 }}
             </div>
-        </div>
+        </section>
     }
 }

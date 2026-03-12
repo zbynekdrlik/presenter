@@ -221,6 +221,7 @@ pub fn LibraryModals() -> impl IntoView {
     view! {
         // Library list modal
         <div class="operator__library-modal" data-role="library-modal"
+            attr:data-open=move || if is_lib_list_open() { "true" } else { "false" }
             style:display=move || if is_lib_list_open() { "flex" } else { "none" }
             on:click=close_list
         >
