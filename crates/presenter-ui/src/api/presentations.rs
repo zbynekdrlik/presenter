@@ -156,6 +156,26 @@ pub async fn update_slide(
     .await
 }
 
+pub async fn update_slide_with_group(
+    pres_id: &str,
+    slide_id: &str,
+    main: &str,
+    translation: &str,
+    stage: &str,
+    group: Option<String>,
+) -> Result<Slide, ApiError> {
+    super::patch_json(
+        &format!("/presentations/{pres_id}/slides/{slide_id}"),
+        &UpdateSlideRequest {
+            main: main.to_string(),
+            translation: translation.to_string(),
+            stage: stage.to_string(),
+            group,
+        },
+    )
+    .await
+}
+
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
 struct ReorderSlidesRequest {

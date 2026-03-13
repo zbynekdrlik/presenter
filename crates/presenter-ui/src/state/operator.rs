@@ -1,10 +1,14 @@
 use leptos::prelude::*;
 
+/// Focus restoration data: (slide_id, field_name, selection_start, selection_end)
+pub type PendingFocus = (String, String, u32, u32);
+
 #[derive(Clone)]
 pub struct OperatorState {
     pub focused_slide_id: RwSignal<Option<String>>,
     pub focused_field: RwSignal<Option<String>>,
-    pub pending_focus: RwSignal<Option<(String, String, usize)>>,
+    /// Pending focus restoration after saves: (slide_id, field, sel_start, sel_end)
+    pub pending_focus: RwSignal<Option<PendingFocus>>,
     pub search_query: RwSignal<String>,
     pub search_open: RwSignal<bool>,
     pub open_modal: RwSignal<Option<String>>,
@@ -18,6 +22,8 @@ pub struct OperatorState {
     pub import_mode: RwSignal<String>,
     pub dragging_presentation_id: RwSignal<Option<String>>,
     pub dragging_slide_id: RwSignal<Option<String>>,
+    /// Skip click trigger to prevent double-fire: (slide_id, expires_at_ms)
+    pub skip_click_trigger: RwSignal<Option<(String, f64)>>,
 }
 
 impl OperatorState {
@@ -48,6 +54,7 @@ impl OperatorState {
             import_mode: RwSignal::new(String::new()),
             dragging_presentation_id: RwSignal::new(None),
             dragging_slide_id: RwSignal::new(None),
+            skip_click_trigger: RwSignal::new(None),
         }
     }
 }
