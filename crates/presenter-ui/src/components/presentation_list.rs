@@ -4,6 +4,19 @@ use crate::components::modal;
 use crate::state::operator::OperatorState;
 use crate::state::AppContext;
 
+// Signal for tracking dragged entry ID during playlist reordering
+thread_local! {
+    static DRAGGING_ENTRY_ID: std::cell::RefCell<Option<String>> = std::cell::RefCell::new(None);
+}
+
+fn set_dragging_entry(id: Option<String>) {
+    DRAGGING_ENTRY_ID.with(|cell| *cell.borrow_mut() = id);
+}
+
+fn get_dragging_entry() -> Option<String> {
+    DRAGGING_ENTRY_ID.with(|cell| cell.borrow().clone())
+}
+
 #[component]
 pub fn PresentationList() -> impl IntoView {
     let ctx = use_context::<AppContext>().expect("AppContext");
@@ -165,6 +178,9 @@ pub fn PresentationList() -> impl IntoView {
                                         let entry_id_rename = entry_id.clone();
                                         let entry_id_remove = entry_id.clone();
                                         let entry_id_li = entry_id.clone();
+                                        let entry_id_drag = entry_id.clone();
+                                        let entry_id_drop = entry_id.clone();
+                                        let playlist_id_reorder = ctx.selected_playlist_id.get_untracked().unwrap_or_default();
                                         view! {
                                             <li
                                                 class="operator__presentation-item operator__presentation-item--separator"
@@ -172,6 +188,59 @@ pub fn PresentationList() -> impl IntoView {
                                                 data-type="separator"
                                                 data-entry-id=entry_id_li
                                                 data-entry-index=idx
+                                                draggable=is_edit.to_string()
+                                                on:dragstart=move |ev: web_sys::DragEvent| {
+                                                    if !is_edit { return; }
+                                                    if let Some(dt) = ev.data_transfer() {
+                                                        let _ = dt.set_data("application/x-entry-id", &entry_id_drag);
+                                                        dt.set_effect_allowed("move");
+                                                    }
+                                                    set_dragging_entry(Some(entry_id_drag.clone()));
+                                                }
+                                                on:dragend=move |_| {
+                                                    set_dragging_entry(None);
+                                                }
+                                                on:dragover=move |ev: web_sys::DragEvent| {
+                                                    if get_dragging_entry().is_some() {
+                                                        ev.prevent_default();
+                                                    }
+                                                }
+                                                on:drop={
+                                                    let target_entry_id = entry_id_drop.clone();
+                                                    let playlist_id = playlist_id_reorder.clone();
+                                                    let selected_playlist = ctx.selected_playlist;
+                                                    let playlists = ctx.playlists;
+                                                    let presentations = ctx.presentations;
+                                                    move |ev: web_sys::DragEvent| {
+                                                        ev.prevent_default();
+                                                        if let Some(dragged_id) = get_dragging_entry() {
+                                                            if dragged_id == target_entry_id { return; }
+                                                            let playlist_id = playlist_id.clone();
+                                                            let target_entry_id = target_entry_id.clone();
+                                                            leptos::task::spawn_local(async move {
+                                                                let current = selected_playlist.get_untracked();
+                                                                if let Some(pl) = current {
+                                                                    let mut entries: Vec<_> = pl.entries.iter().map(entry_to_payload).collect();
+                                                                    // Find positions
+                                                                    let drag_pos = entries.iter().position(|e| get_entry_id(e) == Some(&dragged_id));
+                                                                    let target_pos = entries.iter().position(|e| get_entry_id(e) == Some(&target_entry_id));
+                                                                    if let (Some(from), Some(to)) = (drag_pos, target_pos) {
+                                                                        let item = entries.remove(from);
+                                                                        entries.insert(to, item);
+                                                                        if let Ok(updated) = crate::api::playlists::replace_entries(&playlist_id, entries).await {
+                                                                            selected_playlist.set(Some(updated.clone()));
+                                                                            rebuild_playlist_presentations_with_signal(presentations, &updated);
+                                                                        }
+                                                                        if let Ok(pls) = crate::api::playlists::list_playlists().await {
+                                                                            playlists.set(pls);
+                                                                        }
+                                                                    }
+                                                                }
+                                                            });
+                                                        }
+                                                        set_dragging_entry(None);
+                                                    }
+                                                }
                                             >
                                                 <span>{sep_name}</span>
                                                 <span class="operator__presentation-meta">"Separator"</span>
@@ -272,6 +341,9 @@ pub fn PresentationList() -> impl IntoView {
                                         let entry_id_li = entry_id.clone();
                                         let entry_id_remove = entry_id.clone();
                                         let id_for_drag = id.clone();
+                                        let entry_id_drag = entry_id.clone();
+                                        let entry_id_drop = entry_id.clone();
+                                        let playlist_id_reorder = ctx.selected_playlist_id.get_untracked().unwrap_or_default();
 
                                         // Look up presentation name from presentations list or index
                                         let presentations = ctx.presentations.get();
@@ -306,6 +378,52 @@ pub fn PresentationList() -> impl IntoView {
                                                     if let Some(dt) = ev.data_transfer() {
                                                         let _ = dt.set_data("text/plain", &id_for_drag);
                                                         let _ = dt.set_data("application/x-presentation-id", &id_for_drag);
+                                                        let _ = dt.set_data("application/x-entry-id", &entry_id_drag);
+                                                        dt.set_effect_allowed("move");
+                                                    }
+                                                    set_dragging_entry(Some(entry_id_drag.clone()));
+                                                }
+                                                on:dragend=move |_| {
+                                                    set_dragging_entry(None);
+                                                }
+                                                on:dragover=move |ev: web_sys::DragEvent| {
+                                                    if get_dragging_entry().is_some() {
+                                                        ev.prevent_default();
+                                                    }
+                                                }
+                                                on:drop={
+                                                    let target_entry_id = entry_id_drop.clone();
+                                                    let playlist_id = playlist_id_reorder.clone();
+                                                    let selected_playlist = ctx.selected_playlist;
+                                                    let playlists = ctx.playlists;
+                                                    let presentations = ctx.presentations;
+                                                    move |ev: web_sys::DragEvent| {
+                                                        ev.prevent_default();
+                                                        if let Some(dragged_id) = get_dragging_entry() {
+                                                            if dragged_id == target_entry_id { return; }
+                                                            let playlist_id = playlist_id.clone();
+                                                            let target_entry_id = target_entry_id.clone();
+                                                            leptos::task::spawn_local(async move {
+                                                                let current = selected_playlist.get_untracked();
+                                                                if let Some(pl) = current {
+                                                                    let mut entries: Vec<_> = pl.entries.iter().map(entry_to_payload).collect();
+                                                                    let drag_pos = entries.iter().position(|e| get_entry_id(e) == Some(&dragged_id));
+                                                                    let target_pos = entries.iter().position(|e| get_entry_id(e) == Some(&target_entry_id));
+                                                                    if let (Some(from), Some(to)) = (drag_pos, target_pos) {
+                                                                        let item = entries.remove(from);
+                                                                        entries.insert(to, item);
+                                                                        if let Ok(updated) = crate::api::playlists::replace_entries(&playlist_id, entries).await {
+                                                                            selected_playlist.set(Some(updated.clone()));
+                                                                            rebuild_playlist_presentations_with_signal(presentations, &updated);
+                                                                        }
+                                                                        if let Ok(pls) = crate::api::playlists::list_playlists().await {
+                                                                            playlists.set(pls);
+                                                                        }
+                                                                    }
+                                                                }
+                                                            });
+                                                        }
+                                                        set_dragging_entry(None);
                                                     }
                                                 }
                                             >
@@ -495,4 +613,16 @@ fn rebuild_playlist_presentations_with_signal(
         })
         .collect();
     presentations.set(summaries);
+}
+
+/// Get entry_id from a PlaylistEntryPayload
+fn get_entry_id(payload: &crate::api::playlists::PlaylistEntryPayload) -> Option<&String> {
+    match payload {
+        crate::api::playlists::PlaylistEntryPayload::Presentation { entry_id, .. } => {
+            entry_id.as_ref()
+        }
+        crate::api::playlists::PlaylistEntryPayload::Separator { entry_id, .. } => {
+            entry_id.as_ref()
+        }
+    }
 }

@@ -340,6 +340,41 @@ fn create_test_helpers(ctx: &AppContext, op: &OperatorState) {
     );
 }
 
+/// Regex-like pattern matching for group names (Verse, Chorus, etc.)
+fn is_group_line(line: &str) -> bool {
+    let line_lower = line.trim().to_lowercase();
+    let patterns = [
+        "verse",
+        "chorus",
+        "bridge",
+        "intro",
+        "outro",
+        "pre-chorus",
+        "prechorus",
+        "tag",
+        "interlude",
+        "refrain",
+        "hook",
+        "coda",
+        "ending",
+        "instrumental",
+    ];
+    for pattern in patterns {
+        if line_lower.starts_with(pattern) {
+            // Check if rest is empty or just a number/whitespace
+            let rest = line_lower[pattern.len()..].trim();
+            if rest.is_empty()
+                || rest
+                    .chars()
+                    .all(|c| c.is_ascii_digit() || c.is_whitespace())
+            {
+                return true;
+            }
+        }
+    }
+    false
+}
+
 pub fn parse_song_text(text: &str) -> Vec<SlideInput> {
     let trimmed = text.trim();
     if trimmed.is_empty() {
@@ -348,11 +383,30 @@ pub fn parse_song_text(text: &str) -> Vec<SlideInput> {
     trimmed
         .split("\n\n")
         .filter(|section| !section.trim().is_empty())
-        .map(|section| SlideInput {
-            main: section.trim().to_string(),
-            translation: None,
-            stage: None,
-            group: None,
+        .map(|section| {
+            let section = section.trim();
+            let lines: Vec<&str> = section.lines().collect();
+
+            // Check if first line is a group name
+            if let Some(first_line) = lines.first() {
+                if is_group_line(first_line) {
+                    let group_name = first_line.trim().to_string();
+                    let main_content = lines[1..].join("\n");
+                    return SlideInput {
+                        main: main_content,
+                        translation: None,
+                        stage: None,
+                        group: Some(group_name),
+                    };
+                }
+            }
+
+            SlideInput {
+                main: section.to_string(),
+                translation: None,
+                stage: None,
+                group: None,
+            }
         })
         .collect()
 }

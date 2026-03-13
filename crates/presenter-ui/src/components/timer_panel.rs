@@ -32,6 +32,14 @@ pub fn TimerPanel() -> impl IntoView {
         send_timer_cmd(TimerCommand::StartCountdown);
     };
 
+    let on_countdown_pause = move |_| {
+        send_timer_cmd(TimerCommand::PauseCountdown);
+    };
+
+    let on_countdown_reset = move |_| {
+        send_timer_cmd(TimerCommand::ResetCountdown);
+    };
+
     let on_countdown_target = move |ev: web_sys::KeyboardEvent| {
         if ev.key() != "Enter" {
             return;
@@ -68,6 +76,10 @@ pub fn TimerPanel() -> impl IntoView {
 
     let on_preach_start = move |_| {
         send_timer_cmd(TimerCommand::StartPreach);
+    };
+
+    let on_preach_pause = move |_| {
+        send_timer_cmd(TimerCommand::PausePreach);
     };
 
     let on_preach_reset = move |_| {
@@ -162,6 +174,8 @@ pub fn TimerPanel() -> impl IntoView {
                 </p>
                 <div class="operator__timer-buttons">
                     <button type="button" data-role="countdown-start" on:click=on_countdown_start>"Start"</button>
+                    <button type="button" data-role="countdown-pause" on:click=on_countdown_pause>"Pause"</button>
+                    <button type="button" data-role="countdown-reset" on:click=on_countdown_reset>"Reset"</button>
                     <button type="button" data-role="countdown-offset-minus" on:click=on_offset_minus>"-5 min"</button>
                     <button type="button" data-role="countdown-offset-plus" on:click=on_offset_plus>"+5 min"</button>
                 </div>
@@ -174,6 +188,7 @@ pub fn TimerPanel() -> impl IntoView {
                 <h3>"Preach"</h3>
                 <div class="operator__timer-buttons">
                     <button type="button" data-command="start_preach" on:click=on_preach_start>"Start"</button>
+                    <button type="button" data-command="pause_preach" on:click=on_preach_pause>"Pause"</button>
                     <button type="button" data-command="reset_preach" on:click=on_preach_reset>"Reset"</button>
                 </div>
             </div>

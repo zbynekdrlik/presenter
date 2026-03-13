@@ -1,4 +1,5 @@
 use leptos::prelude::*;
+use wasm_bindgen::JsCast;
 
 use crate::components::modal;
 use crate::state::operator::OperatorState;
@@ -122,8 +123,110 @@ pub fn PlaylistList() -> impl IntoView {
                                 let id_for_btn = id.clone();
                                 let id_for_modal = id.clone();
 
+                                let id_for_drop = id.clone();
                                 view! {
-                                    <li class="operator__list-item operator__list-row" data-playlist-id=id_for_row>
+                                    <li
+                                        class="operator__list-item operator__list-row"
+                                        data-playlist-id=id_for_row
+                                        on:dragover=move |ev: web_sys::DragEvent| {
+                                            // Accept presentation drops
+                                            if let Some(dt) = ev.data_transfer() {
+                                                let types = dt.types();
+                                                let accepts = (0..types.length())
+                                                    .any(|i| {
+                                                        let t = types.get(i).as_string().unwrap_or_default();
+                                                        t == "application/x-presentation-id" || t == "application/x-presenter-search"
+                                                    });
+                                                if accepts {
+                                                    ev.prevent_default();
+                                                    if let Some(target) = ev.target() {
+                                                        if let Ok(el) = target.dyn_into::<web_sys::Element>() {
+                                                            let _ = el.closest(".operator__list-item")
+                                                                .ok()
+                                                                .flatten()
+                                                                .map(|li| li.class_list().add_1("drag-over"));
+                                                        }
+                                                    }
+                                                }
+                                            }
+                                        }
+                                        on:dragleave=move |ev: web_sys::DragEvent| {
+                                            if let Some(target) = ev.target() {
+                                                if let Ok(el) = target.dyn_into::<web_sys::Element>() {
+                                                    let _ = el.closest(".operator__list-item")
+                                                        .ok()
+                                                        .flatten()
+                                                        .map(|li| li.class_list().remove_1("drag-over"));
+                                                }
+                                            }
+                                        }
+                                        on:drop={
+                                            let playlist_id = id_for_drop.clone();
+                                            let playlists = ctx.playlists;
+                                            let selected_playlist = ctx.selected_playlist;
+                                            move |ev: web_sys::DragEvent| {
+                                                ev.prevent_default();
+                                                // Remove drag-over class
+                                                if let Some(target) = ev.target() {
+                                                    if let Ok(el) = target.dyn_into::<web_sys::Element>() {
+                                                        let _ = el.closest(".operator__list-item")
+                                                            .ok()
+                                                            .flatten()
+                                                            .map(|li| li.class_list().remove_1("drag-over"));
+                                                    }
+                                                }
+                                                // Get presentation ID from drag data
+                                                if let Some(dt) = ev.data_transfer() {
+                                                    let pres_id = dt.get_data("application/x-presentation-id")
+                                                        .ok()
+                                                        .filter(|s| !s.is_empty())
+                                                        .or_else(|| dt.get_data("application/x-presenter-search").ok().filter(|s| !s.is_empty()));
+
+                                                    if let Some(pres_id) = pres_id {
+                                                        let playlist_id = playlist_id.clone();
+                                                        leptos::task::spawn_local(async move {
+                                                            // Get current playlist entries
+                                                            if let Ok(pl) = crate::api::playlists::get_playlist(&playlist_id).await {
+                                                                let mut entries: Vec<crate::api::playlists::PlaylistEntryPayload> = pl.entries.iter().map(|e| {
+                                                                    match &e.kind {
+                                                                        presenter_core::playlist::PlaylistEntryKind::Presentation { presentation_id, .. } => {
+                                                                            crate::api::playlists::PlaylistEntryPayload::Presentation {
+                                                                                entry_id: Some(e.id.to_string()),
+                                                                                presentation_id: presentation_id.to_string(),
+                                                                            }
+                                                                        }
+                                                                        presenter_core::playlist::PlaylistEntryKind::Separator { name } => {
+                                                                            crate::api::playlists::PlaylistEntryPayload::Separator {
+                                                                                entry_id: Some(e.id.to_string()),
+                                                                                name: name.clone(),
+                                                                            }
+                                                                        }
+                                                                    }
+                                                                }).collect();
+                                                                // Add new presentation
+                                                                entries.push(crate::api::playlists::PlaylistEntryPayload::Presentation {
+                                                                    entry_id: None,
+                                                                    presentation_id: pres_id,
+                                                                });
+                                                                if let Ok(updated) = crate::api::playlists::replace_entries(&playlist_id, entries).await {
+                                                                    // Update selected playlist if it's the one we modified
+                                                                    selected_playlist.update(|sel| {
+                                                                        if sel.as_ref().map(|s| s.id.to_string()) == Some(playlist_id.clone()) {
+                                                                            *sel = Some(updated.clone());
+                                                                        }
+                                                                    });
+                                                                }
+                                                                // Refresh playlists list
+                                                                if let Ok(pls) = crate::api::playlists::list_playlists().await {
+                                                                    playlists.set(pls);
+                                                                }
+                                                            }
+                                                        });
+                                                    }
+                                                }
+                                            }
+                                        }
+                                    >
                                         <button
                                             type="button"
                                             class="operator__list-button"
