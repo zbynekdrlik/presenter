@@ -163,28 +163,48 @@ fn CatalogResizer() -> impl IntoView {
             let _ = el.set_pointer_capture(pointer_id);
         }
 
+        // Create move handler and convert to JS value (ownership transferred to JS GC)
         let on_move: Closure<dyn Fn(web_sys::PointerEvent)> =
             Closure::new(move |ev: web_sys::PointerEvent| {
                 let dy = ev.client_y() as f64 - start_y;
                 let new_height = (start_height + dy).clamp(200.0, 520.0);
                 op.catalog_top_height.set(new_height);
             });
+        let on_move_fn = on_move.into_js_value();
 
-        let on_up: Closure<dyn Fn(web_sys::PointerEvent)> =
-            Closure::new(move |_ev: web_sys::PointerEvent| {
-                let height = op.catalog_top_height.get_untracked();
-                // Use persistent storage so setting survives tab close
-                crate::state::session::set_persistent("catalogTopHeight", &height.to_string());
-            });
+        // Clone for cleanup in pointerup handler
+        let on_move_fn_for_cleanup = on_move_fn.clone();
+        let target_for_cleanup = target.clone();
+
+        // Create one-shot pointerup handler that cleans up the pointermove listener
+        // Closure::once_into_js auto-cleans after being called once
+        let on_up = Closure::once_into_js(move |_ev: web_sys::PointerEvent| {
+            let height = op.catalog_top_height.get_untracked();
+            // Use persistent storage so setting survives tab close
+            crate::state::session::set_persistent("catalogTopHeight", &height.to_string());
+
+            // Remove the pointermove listener to allow GC of that closure
+            if let Some(el) = target_for_cleanup {
+                let _ = el.remove_event_listener_with_callback(
+                    "pointermove",
+                    on_move_fn_for_cleanup.unchecked_ref(),
+                );
+            }
+            // on_move_fn_for_cleanup dropped here, allowing GC
+        });
 
         if let Some(el) = &target {
-            let _ = el
-                .add_event_listener_with_callback("pointermove", on_move.as_ref().unchecked_ref());
-            let _ =
-                el.add_event_listener_with_callback("pointerup", on_up.as_ref().unchecked_ref());
+            let _ = el.add_event_listener_with_callback("pointermove", on_move_fn.unchecked_ref());
+            // Use once:true option so the pointerup listener is auto-removed after firing
+            let opts = web_sys::AddEventListenerOptions::new();
+            opts.set_once(true);
+            let _ = el.add_event_listener_with_callback_and_add_event_listener_options(
+                "pointerup",
+                on_up.unchecked_ref(),
+                &opts,
+            );
         }
-        on_move.forget();
-        on_up.forget();
+        // No forget() needed - closures are converted to JS values and managed by GC
     };
 
     view! {

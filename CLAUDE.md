@@ -132,7 +132,7 @@ If any PRs exist (other than the one you're working on), close them first.
 | `std::thread::sleep` | Blocks async runtime            | Use `tokio::time::sleep`                      |
 | `.only` / `.skip`    | Leaves incomplete test coverage | Remove before commit                          |
 
-**Note:** Test code (`#[cfg(test)]` modules) is exempt from panic rules.
+**Note:** Test code (`#[cfg(test)]` modules) and WASM code (`presenter-ui` crate) are exempt from panic rules. WASM panics become browser-side JavaScript errors rather than server crashes.
 
 ### File/Function Limits (Enforced by CI)
 

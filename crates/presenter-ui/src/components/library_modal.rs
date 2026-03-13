@@ -93,9 +93,13 @@ pub fn LibraryModals() -> impl IntoView {
                         Err(e) => Err(e),
                     }
                 } else {
-                    let _ = crate::api::libraries::rename_library(&target_id, &name).await;
-                    let _ = crate::api::libraries::set_favorite(&target_id, fav).await;
-                    Ok(())
+                    // Handle rename and favorite errors instead of silently discarding
+                    match crate::api::libraries::rename_library(&target_id, &name).await {
+                        Ok(()) => crate::api::libraries::set_favorite(&target_id, fav)
+                            .await
+                            .map(|_| ()),
+                        Err(e) => Err(e),
+                    }
                 };
 
                 // Reload
