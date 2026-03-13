@@ -1,9 +1,9 @@
-import { spawn, type ChildProcessWithoutNullStreams } from 'child_process';
-import { once } from 'events';
-import http from 'http';
-import path from 'path';
-import type { AddressInfo } from 'net';
-import type { TestInfo } from '@playwright/test';
+import { spawn, type ChildProcessWithoutNullStreams } from "child_process";
+import { once } from "events";
+import http from "http";
+import path from "path";
+import type { AddressInfo } from "net";
+import type { TestInfo } from "@playwright/test";
 
 export const REPO_ROOT = process.cwd();
 
@@ -27,7 +27,6 @@ export type MockResolumeHandle = {
   close: () => Promise<void>;
 };
 
-
 export type MockAbleSetHandle = {
   port: number;
   /** update the active song name returned by the mock */
@@ -45,35 +44,46 @@ export type TestConfig = {
 
 export function deriveTestConfig(testInfo: TestInfo): TestConfig {
   const workerIndex = testInfo.workerIndex ?? 0;
-  const basePort = Number.parseInt(process.env.PRESENTER_PORT_BASE ?? '18999', 10);
+  const basePort = Number.parseInt(
+    process.env.PRESENTER_PORT_BASE ?? "18999",
+    10,
+  );
   const scopeKey = testInfo.file ?? testInfo.title ?? `worker-${workerIndex}`;
   const fileOffset = stableHash(scopeKey) % 50;
   const port = basePort + workerIndex * 100 + fileOffset;
   const explicitDbUrl = process.env.PRESENTER_DB_URL;
-  const defaultDbPath = path.join(REPO_ROOT, 'var', 'tmp', `presenter_e2e_${workerIndex}.db`);
+  const defaultDbPath = path.join(
+    REPO_ROOT,
+    "var",
+    "tmp",
+    `presenter_e2e_${workerIndex}.db`,
+  );
   const dbUrl = explicitDbUrl ?? `sqlite://${defaultDbPath}`;
   const baseURL = `http://127.0.0.1:${port}`;
   const oscPort = port + 1;
   return { workerIndex, port, dbUrl, baseURL, oscPort };
 }
 
-export function runShell(command: string, extraEnv: NodeJS.ProcessEnv = {}): Promise<void> {
+export function runShell(
+  command: string,
+  extraEnv: NodeJS.ProcessEnv = {},
+): Promise<void> {
   return new Promise((resolve, reject) => {
-    const child = spawn('bash', ['-lc', command], {
+    const child = spawn("bash", ["-lc", command], {
       cwd: REPO_ROOT,
       env: {
         ...process.env,
         ...extraEnv,
       },
-      stdio: 'inherit',
+      stdio: "inherit",
     });
 
-    child.on('error', reject);
-    child.on('exit', (code) => {
+    child.on("error", reject);
+    child.on("exit", (code) => {
       if (code === 0) {
         resolve();
       } else {
-        reject(new Error(`Command failed (${code ?? 'unknown'}): ${command}`));
+        reject(new Error(`Command failed (${code ?? "unknown"}): ${command}`));
       }
     });
   });
@@ -81,21 +91,29 @@ export function runShell(command: string, extraEnv: NodeJS.ProcessEnv = {}): Pro
 
 const DEFAULT_LIBRARY_ROOT =
   process.env.PRESENTER_LIBRARY_ROOT ??
-  path.resolve(REPO_ROOT, '..', 'presenter-libraries');
+  path.join(REPO_ROOT, "data", "libraries");
 
-export async function refreshDevData(dbUrl: string, root = DEFAULT_LIBRARY_ROOT) {
-  await runShell(`PRESENTER_DB_URL=${dbUrl} ./scripts/dev/refresh-dev-data.sh "${root}"`, {
-    PRESENTER_DB_URL: dbUrl,
-  });
+export async function refreshDevData(
+  dbUrl: string,
+  root = DEFAULT_LIBRARY_ROOT,
+) {
+  await runShell(
+    `PRESENTER_DB_URL=${dbUrl} ./scripts/dev/refresh-dev-data.sh "${root}"`,
+    {
+      PRESENTER_DB_URL: dbUrl,
+    },
+  );
 }
 
 async function waitForServerReady(baseURL: string, timeoutMs = 240_000) {
   const startedAt = Date.now();
-  const healthUrl = new URL('/healthz', baseURL).toString();
+  const healthUrl = new URL("/healthz", baseURL).toString();
 
   while (Date.now() - startedAt < timeoutMs) {
     try {
-      const response = await fetch(healthUrl, { signal: AbortSignal.timeout(5_000) });
+      const response = await fetch(healthUrl, {
+        signal: AbortSignal.timeout(5_000),
+      });
       if (response.ok) {
         return;
       }
@@ -105,30 +123,37 @@ async function waitForServerReady(baseURL: string, timeoutMs = 240_000) {
     await new Promise((resolve) => setTimeout(resolve, 1_000));
   }
 
-  throw new Error(`Presenter server did not become ready within ${timeoutMs}ms`);
+  throw new Error(
+    `Presenter server did not become ready within ${timeoutMs}ms`,
+  );
 }
 
-export async function startTestServer(port: number, dbUrl: string, oscPort?: number): Promise<ServerHandle> {
+export async function startTestServer(
+  port: number,
+  dbUrl: string,
+  oscPort?: number,
+): Promise<ServerHandle> {
   const env = {
     ...process.env,
     PRESENTER_DB_URL: dbUrl,
     PRESENTER_PORT: String(port),
     ...(oscPort ? { PRESENTER_OSC_LISTEN_PORT: String(oscPort) } : {}),
-    PRESENTER_ANDROID_ADB_BIN: process.env.PRESENTER_ANDROID_ADB_BIN ?? 'true',
-    RUST_LOG: process.env.RUST_LOG ?? 'presenter_server=info,tower_http=warn,sqlx=warn',
+    PRESENTER_ANDROID_ADB_BIN: process.env.PRESENTER_ANDROID_ADB_BIN ?? "true",
+    RUST_LOG:
+      process.env.RUST_LOG ?? "presenter_server=info,tower_http=warn,sqlx=warn",
   };
 
   const processHandle = spawn(
-    'bash',
+    "bash",
     [
-      '-lc',
-      `PRESENTER_DB_URL=${dbUrl} PRESENTER_PORT=${port} ${oscPort ? `PRESENTER_OSC_LISTEN_PORT=${oscPort} ` : ''}cargo run -p presenter-server`,
+      "-lc",
+      `PRESENTER_DB_URL=${dbUrl} PRESENTER_PORT=${port} ${oscPort ? `PRESENTER_OSC_LISTEN_PORT=${oscPort} ` : ""}cargo run -p presenter-server`,
     ],
     {
       cwd: REPO_ROOT,
       env,
-      stdio: 'inherit',
-    }
+      stdio: "inherit",
+    },
   );
 
   await waitForServerReady(`http://127.0.0.1:${port}`);
@@ -137,16 +162,16 @@ export async function startTestServer(port: number, dbUrl: string, oscPort?: num
     process: processHandle,
     port,
     stop: async () => {
-      processHandle.kill('SIGTERM');
-      await once(processHandle, 'exit');
+      processHandle.kill("SIGTERM");
+      await once(processHandle, "exit");
     },
   };
 }
 
 export async function stopServer(handle?: ServerHandle) {
   if (!handle) return;
-  handle.process.kill('SIGTERM');
-  await once(handle.process, 'exit');
+  handle.process.kill("SIGTERM");
+  await once(handle.process, "exit");
 }
 
 export async function startMockResolume(): Promise<MockResolumeHandle> {
@@ -156,32 +181,32 @@ export async function startMockResolume(): Promise<MockResolumeHandle> {
     const { method, url } = req;
     if (!url) {
       res.statusCode = 400;
-      return res.end('bad request');
+      return res.end("bad request");
     }
 
     if (!online) {
       res.statusCode = 503;
-      return res.end('resolume offline');
+      return res.end("resolume offline");
     }
 
-    if (method === 'GET' && url.startsWith('/api/v1/composition')) {
-      res.writeHead(200, { 'content-type': 'application/json' });
+    if (method === "GET" && url.startsWith("/api/v1/composition")) {
+      res.writeHead(200, { "content-type": "application/json" });
       const body = {
         layers: [
           {
             clips: [
-              clip(100, '#main-a', 1),
-              clip(101, '#main-b', 2),
-              clip(200, '#translate-a', 10),
-              clip(201, '#translate-b', 20),
-              clip(300, '#bible-a', 30),
-              clip(301, '#bible-b', 31),
-              clip(400, '#bible-translate-a', 40),
-              clip(401, '#bible-translate-b', 41),
-              clip(500, '#bible-clear', undefined),
-              clip(600, '#timer', 60),
-              clip(700, '#song-name', undefined),
-              clip(701, '#band-name', undefined),
+              clip(100, "#main-a", 1),
+              clip(101, "#main-b", 2),
+              clip(200, "#translate-a", 10),
+              clip(201, "#translate-b", 20),
+              clip(300, "#bible-a", 30),
+              clip(301, "#bible-b", 31),
+              clip(400, "#bible-translate-a", 40),
+              clip(401, "#bible-translate-b", 41),
+              clip(500, "#bible-clear", undefined),
+              clip(600, "#timer", 60),
+              clip(700, "#song-name", undefined),
+              clip(701, "#band-name", undefined),
             ],
           },
         ],
@@ -191,27 +216,30 @@ export async function startMockResolume(): Promise<MockResolumeHandle> {
       return;
     }
 
-    if (method === 'PUT' && url.startsWith('/api/v1/parameter/by-id/')) {
+    if (method === "PUT" && url.startsWith("/api/v1/parameter/by-id/")) {
       res.statusCode = 200;
       res.end();
       return;
     }
 
-    if (method === 'POST' && url.startsWith('/api/v1/composition/clips/by-id/')) {
+    if (
+      method === "POST" &&
+      url.startsWith("/api/v1/composition/clips/by-id/")
+    ) {
       res.statusCode = 200;
       res.end();
       return;
     }
 
     res.statusCode = 404;
-    res.end('not found');
+    res.end("not found");
   });
 
   function clip(id: number, name: string, param?: number) {
     const sourceparams = param
       ? {
           text: {
-            valuetype: 'ParamText',
+            valuetype: "ParamText",
             id: param,
           },
         }
@@ -225,7 +253,7 @@ export async function startMockResolume(): Promise<MockResolumeHandle> {
   }
 
   await new Promise<void>((resolve, reject) => {
-    server.listen(0, '127.0.0.1', (err?: Error) => {
+    server.listen(0, "127.0.0.1", (err?: Error) => {
       if (err) reject(err);
       else resolve();
     });
@@ -249,25 +277,26 @@ export async function startMockResolume(): Promise<MockResolumeHandle> {
 }
 
 export async function startMockAbleSet(): Promise<MockAbleSetHandle> {
-  let activeId = 'song-1';
-  let activeName = '148 Vrat ma spat';
+  let activeId = "song-1";
+  let activeName = "148 Vrat ma spat";
   let activeOrder: number | undefined = 5;
 
   const server = http.createServer((req, res) => {
     const { method, url } = req;
     if (!url) {
       res.statusCode = 400;
-      return res.end('bad request');
+      return res.end("bad request");
     }
-    if (method === 'GET' && url.startsWith('/api/setlist')) {
-      res.writeHead(200, { 'content-type': 'application/json' });
+    if (method === "GET" && url.startsWith("/api/setlist")) {
+      res.writeHead(200, { "content-type": "application/json" });
       const payload = {
         activeSongId: activeId,
         songs: [
           {
             id: activeId,
             meta: { name: activeName, raw: activeName },
-            internalMeta: activeOrder != null ? { order: activeOrder } : undefined,
+            internalMeta:
+              activeOrder != null ? { order: activeOrder } : undefined,
           },
         ],
       };
@@ -275,16 +304,18 @@ export async function startMockAbleSet(): Promise<MockAbleSetHandle> {
       return;
     }
     res.statusCode = 404;
-    res.end('not found');
+    res.end("not found");
   });
 
   await new Promise<void>((resolve, reject) => {
-    server.listen(0, '127.0.0.1', (err?: Error) => (err ? reject(err) : resolve()));
+    server.listen(0, "127.0.0.1", (err?: Error) =>
+      err ? reject(err) : resolve(),
+    );
   });
   const address = server.address() as AddressInfo;
   return {
     port: address.port,
-    setActiveSong: (name: string, id = 'song-1', order = 0) => {
+    setActiveSong: (name: string, id = "song-1", order = 0) => {
       activeName = name;
       activeId = id;
       activeOrder = order;
