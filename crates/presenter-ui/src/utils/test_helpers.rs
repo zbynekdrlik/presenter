@@ -360,9 +360,9 @@ fn is_group_line(line: &str) -> bool {
         "instrumental",
     ];
     for pattern in patterns {
-        if line_lower.starts_with(pattern) {
+        if let Some(rest) = line_lower.strip_prefix(pattern) {
             // Check if rest is empty or just a number/whitespace
-            let rest = line_lower[pattern.len()..].trim();
+            let rest = rest.trim();
             if rest.is_empty()
                 || rest
                     .chars()

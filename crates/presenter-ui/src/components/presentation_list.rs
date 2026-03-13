@@ -6,7 +6,7 @@ use crate::state::AppContext;
 
 // Signal for tracking dragged entry ID during playlist reordering
 thread_local! {
-    static DRAGGING_ENTRY_ID: std::cell::RefCell<Option<String>> = std::cell::RefCell::new(None);
+    static DRAGGING_ENTRY_ID: std::cell::RefCell<Option<String>> = const { std::cell::RefCell::new(None) };
 }
 
 fn set_dragging_entry(id: Option<String>) {
