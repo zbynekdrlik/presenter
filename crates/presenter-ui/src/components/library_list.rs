@@ -9,6 +9,9 @@ pub fn LibraryList() -> impl IntoView {
     let ctx = use_context::<AppContext>().expect("AppContext");
     let _op = use_context::<OperatorState>().expect("OperatorState");
 
+    // Track loading state for library presentations
+    let is_loading_presentations = RwSignal::new(false);
+
     let select_library = move |id: String, name: String| {
         ctx.selected_library_id.set(Some(id.clone()));
         ctx.selected_playlist_id.set(None);
@@ -18,11 +21,26 @@ pub fn LibraryList() -> impl IntoView {
 
         // Capture signals OUTSIDE async block - context may not be available inside spawn_local
         let presentations_signal = ctx.presentations;
+        let toast_message = ctx.toast_message;
+        let toast_variant = ctx.toast_variant;
         let id_clone = id.clone();
+        is_loading_presentations.set(true);
         leptos::task::spawn_local(async move {
-            if let Ok(presentations) = crate::api::libraries::list_presentations(&id_clone).await {
-                presentations_signal.set(presentations);
+            match crate::api::libraries::list_presentations(&id_clone).await {
+                Ok(presentations) => {
+                    presentations_signal.set(presentations);
+                }
+                Err(e) => {
+                    // Show error toast on API failure
+                    toast_variant.set("error".to_string());
+                    toast_message.set(Some(format!("Failed to load presentations: {e}")));
+                    gloo_timers::callback::Timeout::new(3_500, move || {
+                        toast_message.set(None);
+                    })
+                    .forget();
+                }
             }
+            is_loading_presentations.set(false);
         });
     };
 
@@ -70,11 +88,38 @@ pub fn LibraryList() -> impl IntoView {
                     let favs = ctx.favorite_library_ids.get();
                     let active_id = ctx.selected_library_id.get();
 
-                    // Filter to favorites + active library only (matching JS renderLibraries)
-                    let visible: Vec<_> = libs.into_iter().filter(|lib| {
-                        let id = lib.id.to_string();
-                        favs.contains(&id) || active_id.as_deref() == Some(&id)
-                    }).collect();
+                    // Show loading state while libraries are being fetched
+                    if libs.is_empty() && ctx.ws_connected.get() {
+                        // Libraries haven't loaded yet but WS is connected (initial load)
+                        return view! {
+                            <li class="operator__favorites-empty">
+                                "Loading libraries..."
+                            </li>
+                        }.into_any();
+                    }
+
+                    if libs.is_empty() {
+                        return view! {
+                            <li class="operator__favorites-empty">
+                                "No libraries found."
+                            </li>
+                        }.into_any();
+                    }
+
+                    // Match JS behavior: if no favorites configured, show ALL libraries sorted
+                    // Otherwise show favorites + active library
+                    let visible: Vec<_> = if favs.is_empty() {
+                        // No favorites - show all libraries sorted alphabetically
+                        let mut all = libs.clone();
+                        all.sort_by(|a, b| a.name.to_lowercase().cmp(&b.name.to_lowercase()));
+                        all
+                    } else {
+                        // Show favorites + active library (JS behavior)
+                        libs.into_iter().filter(|lib| {
+                            let id = lib.id.to_string();
+                            favs.contains(&id) || active_id.as_deref() == Some(&id)
+                        }).collect()
+                    };
 
                     if visible.is_empty() {
                         return view! {

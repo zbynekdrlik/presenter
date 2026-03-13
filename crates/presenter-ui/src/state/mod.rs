@@ -40,6 +40,17 @@ pub struct AppContext {
     pub ableset_status: RwSignal<Option<AbleSetStatusSnapshot>>,
     pub slides_cache: RwSignal<HashMap<String, Vec<Slide>>>,
     pub presentation_index: RwSignal<HashMap<String, String>>,
+    // === Additional state for JS feature parity ===
+    /// Reverse index: presentation_id -> list of playlist_ids containing it
+    pub presentation_playlist_index: RwSignal<HashMap<String, Vec<String>>>,
+    /// Quick lookup: playlist_id -> Playlist
+    pub playlist_lookup: RwSignal<HashMap<String, Playlist>>,
+    /// Active bible broadcast passage
+    pub active_bible_broadcast: RwSignal<Option<String>>,
+    /// Loading state for libraries
+    pub libraries_loading: RwSignal<bool>,
+    /// Loading state for playlists
+    pub playlists_loading: RwSignal<bool>,
 }
 
 impl AppContext {
@@ -75,6 +86,11 @@ impl AppContext {
             ableset_status: RwSignal::new(None),
             slides_cache: RwSignal::new(HashMap::new()),
             presentation_index: RwSignal::new(HashMap::new()),
+            presentation_playlist_index: RwSignal::new(HashMap::new()),
+            playlist_lookup: RwSignal::new(HashMap::new()),
+            active_bible_broadcast: RwSignal::new(None),
+            libraries_loading: RwSignal::new(false),
+            playlists_loading: RwSignal::new(false),
         }
     }
 

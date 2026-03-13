@@ -71,10 +71,11 @@ pub fn OperatorPage() -> impl IntoView {
     // Dispatch WS events
     setup_ws_dispatch(last_event, &ctx);
 
-    // Load initial data
+    // Load initial data (libraries, playlists, etc.)
     load_initial_data(&ctx);
 
-    // Load session state
+    // Load session state - runs after initial data starts loading
+    // The session restoration handles its own data fetching
     load_session_presentation(&ctx);
 
     // Stage monitor polling
@@ -99,6 +100,41 @@ pub fn OperatorPage() -> impl IntoView {
                 }
             }
             pres_index.set(index);
+        });
+    }
+
+    // Build playlist indexes when playlists load
+    {
+        let playlists = ctx.playlists;
+        let playlist_lookup = ctx.playlist_lookup;
+        let pres_playlist_index = ctx.presentation_playlist_index;
+        Effect::new(move || {
+            let pls = playlists.get();
+            let mut lookup = std::collections::HashMap::new();
+            let mut pres_index: std::collections::HashMap<String, Vec<String>> =
+                std::collections::HashMap::new();
+
+            for pl in &pls {
+                let pl_id = pl.id.to_string();
+                lookup.insert(pl_id.clone(), pl.clone());
+
+                // Build reverse index: presentation_id -> [playlist_ids]
+                for entry in &pl.entries {
+                    if let presenter_core::playlist::PlaylistEntryKind::Presentation {
+                        presentation_id,
+                        ..
+                    } = &entry.kind
+                    {
+                        pres_index
+                            .entry(presentation_id.to_string())
+                            .or_default()
+                            .push(pl_id.clone());
+                    }
+                }
+            }
+
+            playlist_lookup.set(lookup);
+            pres_playlist_index.set(pres_index);
         });
     }
 

@@ -24,6 +24,26 @@ pub struct OperatorState {
     pub dragging_slide_id: RwSignal<Option<String>>,
     /// Skip click trigger to prevent double-fire: (slide_id, expires_at_ms)
     pub skip_click_trigger: RwSignal<Option<(String, f64)>>,
+
+    // === Missing state properties for JS feature parity ===
+    /// Whether search results are being dragged
+    pub search_dragging: RwSignal<bool>,
+    /// Whether a drag originated from search results
+    pub dragging_from_search: RwSignal<bool>,
+    /// Whether catalog resize is in progress
+    pub catalog_resize_active: RwSignal<bool>,
+    /// Whether a slide clear operation is in progress (prevents double-clear)
+    pub clearing_slide: RwSignal<bool>,
+    /// Whether countdown input is focused
+    pub countdown_input_active: RwSignal<bool>,
+    /// Whether countdown input has unsaved changes
+    pub countdown_input_dirty: RwSignal<bool>,
+    /// Snapshot of reorder state before drag (for undo)
+    pub reorder_snapshot: RwSignal<Option<Vec<String>>>,
+    /// Initial playlist state when editing (for change detection)
+    pub playlist_edit_initial: RwSignal<Option<String>>,
+    /// Whether stage layout is loading
+    pub stage_layout_loading: RwSignal<bool>,
 }
 
 impl OperatorState {
@@ -55,6 +75,16 @@ impl OperatorState {
             dragging_presentation_id: RwSignal::new(None),
             dragging_slide_id: RwSignal::new(None),
             skip_click_trigger: RwSignal::new(None),
+            // New state properties for JS feature parity
+            search_dragging: RwSignal::new(false),
+            dragging_from_search: RwSignal::new(false),
+            catalog_resize_active: RwSignal::new(false),
+            clearing_slide: RwSignal::new(false),
+            countdown_input_active: RwSignal::new(false),
+            countdown_input_dirty: RwSignal::new(false),
+            reorder_snapshot: RwSignal::new(None),
+            playlist_edit_initial: RwSignal::new(None),
+            stage_layout_loading: RwSignal::new(false),
         }
     }
 }
