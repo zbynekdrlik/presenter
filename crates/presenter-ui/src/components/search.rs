@@ -133,12 +133,16 @@ pub fn SearchResults() -> impl IntoView {
         });
     };
 
+    // Clone op for multiple closures in view! macro
+    let op_visible = op.clone();
+    let op_results = op.clone();
+
     view! {
         <div
             data-role="global-search-results"
             attr:data-visible=move || {
-                let open = op.search_open.get();
-                let has_query = !op.search_query.get().is_empty();
+                let open = op_visible.search_open.get();
+                let has_query = !op_visible.search_query.get().is_empty();
                 if open && has_query { "true" } else { "false" }
             }
             class="operator__search-results"
@@ -167,6 +171,7 @@ pub fn SearchResults() -> impl IntoView {
                     (libs, pres, slds)
                 };
 
+                let op_for_render = op_results.clone();
                 let render_result = |result: SearchResult| {
                     let kind = format!("{:?}", result.kind).to_lowercase();
                     let lib_id = result.library_id.to_string();
@@ -178,6 +183,10 @@ pub fn SearchResults() -> impl IntoView {
                     let lib_click = lib_id.clone();
                     let pres_click = pres_id.clone();
                     let pres_id_drag = pres_id.clone().unwrap_or_default();
+
+                    // Clone op for drag handlers
+                    let op_drag_start = op_for_render.clone();
+                    let op_drag_end = op_for_render.clone();
 
                     view! {
                         <div
@@ -191,8 +200,18 @@ pub fn SearchResults() -> impl IntoView {
                             }
                             on:dragstart=move |ev: web_sys::DragEvent| {
                                 if let Some(dt) = ev.data_transfer() {
+                                    // Set both MIME types for compatibility
                                     let _ = dt.set_data("application/x-presentation-id", &pres_id_drag);
+                                    let _ = dt.set_data("application/x-presenter-search", &pres_id_drag);
+                                    dt.set_effect_allowed("copy");
                                 }
+                                // Track drag state for JS parity
+                                op_drag_start.search_dragging.set(true);
+                                op_drag_start.dragging_from_search.set(true);
+                            }
+                            on:dragend=move |_| {
+                                op_drag_end.search_dragging.set(false);
+                                op_drag_end.dragging_from_search.set(false);
                             }
                         >
                             <span class="operator__search-result-title">{pres_name}</span>
