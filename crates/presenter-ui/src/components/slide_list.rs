@@ -77,7 +77,8 @@ pub fn SlideList() -> impl IntoView {
         let val: String = event_target_value(&ev);
         if let Ok(n) = val.parse::<u32>() {
             op.line_limit.set(n);
-            crate::state::session::set("lineLimit", &n.to_string());
+            // Use persistent storage so setting survives tab close
+            crate::state::session::set_persistent("lineLimit", &n.to_string());
         }
     };
 

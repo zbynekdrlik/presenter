@@ -22,11 +22,12 @@ pub struct OperatorState {
 
 impl OperatorState {
     pub fn new() -> Self {
-        let line_limit = crate::state::session::get("lineLimit")
+        // Use persistent storage (localStorage) for settings that should survive tab close
+        let line_limit = crate::state::session::get_persistent("lineLimit")
             .and_then(|v| v.parse::<u32>().ok())
             .unwrap_or(32);
 
-        let catalog_top_height = crate::state::session::get("catalogTopHeight")
+        let catalog_top_height = crate::state::session::get_persistent("catalogTopHeight")
             .and_then(|v| v.parse::<f64>().ok())
             .unwrap_or(320.0);
 

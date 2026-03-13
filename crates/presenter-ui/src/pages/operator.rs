@@ -173,7 +173,8 @@ fn CatalogResizer() -> impl IntoView {
         let on_up: Closure<dyn Fn(web_sys::PointerEvent)> =
             Closure::new(move |_ev: web_sys::PointerEvent| {
                 let height = op.catalog_top_height.get_untracked();
-                crate::state::session::set("catalogTopHeight", &height.to_string());
+                // Use persistent storage so setting survives tab close
+                crate::state::session::set_persistent("catalogTopHeight", &height.to_string());
             });
 
         if let Some(el) = &target {
