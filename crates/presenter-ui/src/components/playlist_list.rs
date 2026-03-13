@@ -16,10 +16,12 @@ pub fn PlaylistList() -> impl IntoView {
         crate::state::session::set("activePlaylistId", &id);
         crate::state::session::remove("activeLibraryId");
 
+        // Capture signals OUTSIDE async block - context may not be available inside spawn_local
+        let presentations_signal = ctx.presentations;
+        let selected_playlist_signal = ctx.selected_playlist;
         let id_clone = id.clone();
         leptos::task::spawn_local(async move {
             if let Ok(playlist) = crate::api::playlists::get_playlist(&id_clone).await {
-                let ctx = use_context::<AppContext>().expect("AppContext");
                 let summaries: Vec<presenter_core::PresentationSummary> = playlist
                     .entries
                     .iter()
@@ -34,8 +36,8 @@ pub fn PlaylistList() -> impl IntoView {
                         _ => None,
                     })
                     .collect();
-                ctx.presentations.set(summaries);
-                ctx.selected_playlist.set(Some(playlist));
+                presentations_signal.set(summaries);
+                selected_playlist_signal.set(Some(playlist));
             }
         });
     };

@@ -1,4 +1,5 @@
 use leptos::prelude::*;
+use wasm_bindgen::JsCast;
 
 use crate::api;
 use crate::state::operator::OperatorState;
@@ -58,10 +59,11 @@ pub fn SlideList() -> impl IntoView {
         let pres = ctx.selected_presentation.get_untracked();
         if let Some(p) = pres {
             let pres_id = p.id.to_string();
+            // Capture signal OUTSIDE async block
+            let selected_presentation_signal = ctx.selected_presentation;
             leptos::task::spawn_local(async move {
                 if let Ok(slides) = api::presentations::insert_slide(&pres_id, None).await {
-                    let ctx = use_context::<AppContext>().expect("AppContext");
-                    ctx.selected_presentation.update(|p| {
+                    selected_presentation_signal.update(|p| {
                         if let Some(pres) = p.as_mut() {
                             pres.slides = slides;
                         }
@@ -154,8 +156,6 @@ pub fn SlideList() -> impl IntoView {
                         let translation_html = format_multiline(&translation_text, line_limit);
                         let stage_html = format_multiline(&stage_text, line_limit);
 
-                        let pres_id_click = pres_id.clone();
-                        let slide_id_click = slide_id.clone();
                         let next_slide_id = presentation.slides.get(i + 1).map(|s| s.id.to_string());
 
                         let pres_id_edit = pres_id.clone();
@@ -168,6 +168,11 @@ pub fn SlideList() -> impl IntoView {
                         let slide_index = i;
 
                         let group_display = group_name.clone().unwrap_or_default();
+
+                        let trigger = trigger_slide;
+                        let pres_id_trigger = pres_id.clone();
+                        let slide_id_trigger = slide_id.clone();
+                        let next_slide_trigger = next_slide_id.clone();
 
                         view! {
                             {show_group.map(|g| view! {
@@ -182,6 +187,24 @@ pub fn SlideList() -> impl IntoView {
                                 data-slide-id=slide_id_for_article
                                 data-slide-index=slide_index
                                 attr:data-group-inherited=if group_inherited { "true" } else { "false" }
+                                on:click=move |ev: web_sys::MouseEvent| {
+                                    // Skip if click target is an interactive element (button, textarea, input)
+                                    if let Some(target) = ev.target() {
+                                        if let Ok(el) = target.dyn_into::<web_sys::Element>() {
+                                            let tag = el.tag_name().to_lowercase();
+                                            if tag == "button" || tag == "textarea" || tag == "input" {
+                                                return;
+                                            }
+                                            // Also check for data-action attribute (action buttons)
+                                            if el.get_attribute("data-action").is_some() {
+                                                return;
+                                            }
+                                        }
+                                    }
+                                    if is_live {
+                                        trigger(pres_id_trigger.clone(), slide_id_trigger.clone(), next_slide_trigger.clone());
+                                    }
+                                }
                             >
                                 <header class="operator__slide-header">
                                     <div class="operator__slide-header-left">
@@ -195,15 +218,19 @@ pub fn SlideList() -> impl IntoView {
                                     {is_edit.then(|| {
                                         let pres_id_save = pres_id_edit.clone();
                                         let slide_id_save = slide_id_edit.clone();
+                                        // Capture signal OUTSIDE async blocks
+                                        let selected_pres_save = ctx.selected_presentation;
+                                        let selected_pres_dup = ctx.selected_presentation;
+                                        let selected_pres_del = ctx.selected_presentation;
                                         view! {
                                             <div class="operator__slide-controls">
                                                 <button type="button" data-action="save"
                                                     on:click=move |_| {
                                                         let pres_id = pres_id_save.clone();
                                                         let sid = slide_id_save.clone();
+                                                        let selected_pres = selected_pres_save;
                                                         leptos::task::spawn_local(async move {
-                                                            let ctx = use_context::<AppContext>().expect("AppContext");
-                                                            let p = ctx.selected_presentation.get_untracked();
+                                                            let p = selected_pres.get_untracked();
                                                             if let Some(p) = &p {
                                                                 if let Some(s) = p.slides.iter().find(|s| s.id.to_string() == sid) {
                                                                     let _ = api::presentations::update_slide(
@@ -221,10 +248,10 @@ pub fn SlideList() -> impl IntoView {
                                                     on:click=move |_| {
                                                         let pres_id = pres_id_dup.clone();
                                                         let sid = slide_id_dup.clone();
+                                                        let selected_pres = selected_pres_dup;
                                                         leptos::task::spawn_local(async move {
                                                             if let Ok(slides) = api::presentations::duplicate_slide(&pres_id, &sid).await {
-                                                                let ctx = use_context::<AppContext>().expect("AppContext");
-                                                                ctx.selected_presentation.update(|p| {
+                                                                selected_pres.update(|p| {
                                                                     if let Some(pres) = p.as_mut() { pres.slides = slides; }
                                                                 });
                                                             }
@@ -235,10 +262,10 @@ pub fn SlideList() -> impl IntoView {
                                                     on:click=move |_| {
                                                         let pres_id = pres_id_del.clone();
                                                         let sid = slide_id_del.clone();
+                                                        let selected_pres = selected_pres_del;
                                                         leptos::task::spawn_local(async move {
                                                             if let Ok(slides) = api::presentations::delete_slide(&pres_id, &sid).await {
-                                                                let ctx = use_context::<AppContext>().expect("AppContext");
-                                                                ctx.selected_presentation.update(|p| {
+                                                                selected_pres.update(|p| {
                                                                     if let Some(pres) = p.as_mut() { pres.slides = slides; }
                                                                 });
                                                             }
@@ -251,16 +278,12 @@ pub fn SlideList() -> impl IntoView {
                                 </header>
                                 <section class="operator__slide-bodies">
                                     {if is_live {
-                                        let trigger = trigger_slide;
                                         view! {
                                             <div
                                                 class="operator__slide-text operator__slide-text--main"
                                                 data-field-display="main"
                                                 attr:data-warning=if main_warning { "true" } else { "false" }
                                                 inner_html=main_html
-                                                on:click=move |_| {
-                                                    trigger(pres_id_click.clone(), slide_id_click.clone(), next_slide_id.clone());
-                                                }
                                             >
                                             </div>
                                             {(!translation_text.is_empty()).then(|| view! {
@@ -328,13 +351,14 @@ pub fn SlideList() -> impl IntoView {
                                                         on:blur={
                                                             let pres_id = pres_id_edit.clone();
                                                             let sid = slide_id_edit.clone();
+                                                            // Capture signal OUTSIDE async block
+                                                            let selected_pres = ctx.selected_presentation;
                                                             move |ev| {
                                                                 let val = event_target_value(&ev);
                                                                 let pres_id = pres_id.clone();
                                                                 let sid = sid.clone();
                                                                 leptos::task::spawn_local(async move {
-                                                                    let ctx = use_context::<AppContext>().expect("AppContext");
-                                                                    let pres = ctx.selected_presentation.get_untracked();
+                                                                    let pres = selected_pres.get_untracked();
                                                                     if let Some(p) = &pres {
                                                                         let slide = p.slides.iter().find(|s| s.id.to_string() == sid);
                                                                         if let Some(s) = slide {
@@ -352,7 +376,6 @@ pub fn SlideList() -> impl IntoView {
                                                         on:focus={
                                                             let sid = slide_id.clone();
                                                             move |_| {
-                                                                let op = use_context::<OperatorState>().expect("OperatorState");
                                                                 op.focused_slide_id.set(Some(sid.clone()));
                                                                 op.focused_field.set(Some("main".to_string()));
                                                                 crate::state::session::set("focusedSlideId", &sid);
@@ -368,13 +391,14 @@ pub fn SlideList() -> impl IntoView {
                                                         on:blur={
                                                             let pres_id = pres_id_edit.clone();
                                                             let sid = slide_id_edit.clone();
+                                                            // Capture signal OUTSIDE async block
+                                                            let selected_pres = ctx.selected_presentation;
                                                             move |ev| {
                                                                 let val = event_target_value(&ev);
                                                                 let pres_id = pres_id.clone();
                                                                 let sid = sid.clone();
                                                                 leptos::task::spawn_local(async move {
-                                                                    let ctx = use_context::<AppContext>().expect("AppContext");
-                                                                    let pres = ctx.selected_presentation.get_untracked();
+                                                                    let pres = selected_pres.get_untracked();
                                                                     if let Some(p) = &pres {
                                                                         let slide = p.slides.iter().find(|s| s.id.to_string() == sid);
                                                                         if let Some(s) = slide {
@@ -399,13 +423,14 @@ pub fn SlideList() -> impl IntoView {
                                                         on:blur={
                                                             let pres_id = pres_id_edit.clone();
                                                             let sid = slide_id_edit.clone();
+                                                            // Capture signal OUTSIDE async block
+                                                            let selected_pres = ctx.selected_presentation;
                                                             move |ev| {
                                                                 let val = event_target_value(&ev);
                                                                 let pres_id = pres_id.clone();
                                                                 let sid = sid.clone();
                                                                 leptos::task::spawn_local(async move {
-                                                                    let ctx = use_context::<AppContext>().expect("AppContext");
-                                                                    let pres = ctx.selected_presentation.get_untracked();
+                                                                    let pres = selected_pres.get_untracked();
                                                                     if let Some(p) = &pres {
                                                                         let slide = p.slides.iter().find(|s| s.id.to_string() == sid);
                                                                         if let Some(s) = slide {

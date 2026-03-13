@@ -16,11 +16,12 @@ pub fn LibraryList() -> impl IntoView {
         crate::state::session::set("activeLibraryId", &id);
         crate::state::session::remove("activePlaylistId");
 
+        // Capture signals OUTSIDE async block - context may not be available inside spawn_local
+        let presentations_signal = ctx.presentations;
         let id_clone = id.clone();
         leptos::task::spawn_local(async move {
             if let Ok(presentations) = crate::api::libraries::list_presentations(&id_clone).await {
-                let ctx = use_context::<AppContext>().expect("AppContext");
-                ctx.presentations.set(presentations);
+                presentations_signal.set(presentations);
             }
         });
     };
