@@ -64,7 +64,7 @@ jobs:
           key: playwright-${{ runner.os }}-${{ hashFiles('**/package-lock.json') }}
 
       - name: Install trunk
-        run: cargo install trunk --locked
+        run: command -v trunk >/dev/null 2>&1 || cargo install trunk --locked
 
       - name: Install wasm32 target
         run: rustup target add wasm32-unknown-unknown
