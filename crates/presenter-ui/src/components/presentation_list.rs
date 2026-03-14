@@ -435,6 +435,8 @@ pub fn PresentationList() -> impl IntoView {
                                                 {is_edit.then(|| {
                                                     let id_for_rename = id.clone();
                                                     let playlist_id = ctx.selected_playlist_id.get_untracked().unwrap_or_default();
+                                                    // Capture op OUTSIDE the click handler closure
+                                                    let op_for_rename = op.clone();
                                                     view! {
                                                         <div class="operator__presentation-actions">
                                                             <button
@@ -444,10 +446,9 @@ pub fn PresentationList() -> impl IntoView {
                                                                 data-presentation-id=id_for_rename.clone()
                                                                 on:click=move |ev: leptos::ev::MouseEvent| {
                                                                     ev.stop_propagation();
-                                                                    let op = use_context::<OperatorState>().expect("OperatorState");
-                                                                    op.modal_mode.set("edit".to_string());
-                                                                    op.modal_target_id.set(Some(id_for_rename.clone()));
-                                                                    modal::open_modal(&op, "presentation-edit");
+                                                                    op_for_rename.modal_mode.set("edit".to_string());
+                                                                    op_for_rename.modal_target_id.set(Some(id_for_rename.clone()));
+                                                                    modal::open_modal(&op_for_rename, "presentation-edit");
                                                                 }
                                                             >
                                                                 "\u{270e}"
@@ -548,25 +549,28 @@ pub fn PresentationList() -> impl IntoView {
                             >
                                 <span>{name}</span>
                                 <span class="operator__presentation-meta">{lib_name}</span>
-                                {is_edit.then(|| view! {
-                                    <div class="operator__presentation-actions">
-                                        <button
-                                            type="button"
-                                            class="operator__presentation-action"
-                                            data-action="presentation-rename"
-                                            data-presentation-id=id_for_rename.clone()
-                                            on:click=move |ev: leptos::ev::MouseEvent| {
-                                                ev.stop_propagation();
-                                                let op = use_context::<OperatorState>().expect("OperatorState");
-                                                op.modal_mode.set("edit".to_string());
-                                                op.modal_target_id.set(Some(id_for_rename.clone()));
-                                                modal::open_modal(&op, "presentation-edit");
-                                            }
-                                        >
-                                            "\u{270e}"
-                                        </button>
-                                    </div>
-                                })}
+                                {
+                                    // Capture op OUTSIDE the click handler closure
+                                    let op_for_rename = op.clone();
+                                    is_edit.then(|| view! {
+                                        <div class="operator__presentation-actions">
+                                            <button
+                                                type="button"
+                                                class="operator__presentation-action"
+                                                data-action="presentation-rename"
+                                                data-presentation-id=id_for_rename.clone()
+                                                on:click=move |ev: leptos::ev::MouseEvent| {
+                                                    ev.stop_propagation();
+                                                    op_for_rename.modal_mode.set("edit".to_string());
+                                                    op_for_rename.modal_target_id.set(Some(id_for_rename.clone()));
+                                                    modal::open_modal(&op_for_rename, "presentation-edit");
+                                                }
+                                            >
+                                                "\u{270e}"
+                                            </button>
+                                        </div>
+                                    })
+                                }
                             </li>
                         }
                     }).collect_view().into_any()

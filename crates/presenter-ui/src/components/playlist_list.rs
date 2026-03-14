@@ -48,7 +48,8 @@ pub fn PlaylistList() -> impl IntoView {
         move |_| {
             op.modal_mode.set("create".to_string());
             op.modal_target_id.set(None);
-            modal::open_modal(&op, "playlist-edit");
+            // Use "playlist-create" so edit_mode() returns "create" in playlist_modal.rs
+            modal::open_modal(&op, "playlist-create");
         }
     };
 
