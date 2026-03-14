@@ -302,6 +302,8 @@ fn create_test_helpers(ctx: &AppContext, op: &OperatorState) {
                 .filter(|c| c.status != presenter_core::StageClientStatus::Connected)
                 .count();
             baseline.set(Some((connected, issues)));
+            // Persist to localStorage
+            crate::state::save_baseline_to_storage(connected, issues);
             JsValue::TRUE
         }) as Box<dyn Fn() -> JsValue>);
         let _ = js_sys::Reflect::set(&helpers, &"resetStageMonitorBaseline".into(), func.as_ref());

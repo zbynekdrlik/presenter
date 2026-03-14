@@ -11,6 +11,21 @@ use std::collections::{HashMap, HashSet};
 
 use crate::api::settings::AbleSetStatusSnapshot;
 
+/// Load stage monitor baseline from persistent storage.
+fn load_baseline_from_storage() -> Option<(usize, usize)> {
+    let connected = session::get_persistent("stageMonitorBaselineConnected")
+        .and_then(|s| s.parse::<usize>().ok())?;
+    let issues = session::get_persistent("stageMonitorBaselineIssues")
+        .and_then(|s| s.parse::<usize>().ok())?;
+    Some((connected, issues))
+}
+
+/// Save stage monitor baseline to persistent storage.
+pub fn save_baseline_to_storage(connected: usize, issues: usize) {
+    session::set_persistent("stageMonitorBaselineConnected", &connected.to_string());
+    session::set_persistent("stageMonitorBaselineIssues", &issues.to_string());
+}
+
 #[derive(Clone)]
 pub struct AppContext {
     pub view: RwSignal<String>,
@@ -77,7 +92,7 @@ impl AppContext {
             broadcast_live: RwSignal::new(false),
             context_title: RwSignal::new("Presentations".to_string()),
             stage_connections: RwSignal::new(Vec::new()),
-            stage_monitor_baseline: RwSignal::new(None),
+            stage_monitor_baseline: RwSignal::new(load_baseline_from_storage()),
             toast_message: RwSignal::new(None),
             toast_variant: RwSignal::new("info".to_string()),
             search_results: RwSignal::new(Vec::new()),
