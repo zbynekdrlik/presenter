@@ -168,23 +168,26 @@ test.describe("WASM Operator Playlist Operations", () => {
 
     await page.waitForTimeout(500);
 
-    // Find the playlist edit button for the newly created playlist
+    // Open playlist modal to find the newly created playlist (not in quick list unless dashboard is checked)
+    await page.locator('[data-role="playlist-more"]').click();
+    await page.waitForFunction(
+      () =>
+        document.querySelector(
+          '[data-role="playlist-modal"][data-open="true"]',
+        ),
+      { timeout: 5_000 },
+    );
+
+    // Find playlist in modal
     const playlistRow = page
-      .locator('[data-role="playlist-item"]')
+      .locator('[data-role="playlist-modal"] [data-role="playlist-row"]')
       .filter({ hasText: "To Delete Playlist" });
     const rowCount = await playlistRow.count();
-    expect(rowCount, "Created playlist not found in list").toBeGreaterThan(0);
+    expect(rowCount, "Created playlist not found in modal").toBeGreaterThan(0);
     if (rowCount === 0) return;
 
-    // Find the edit button within or near this row - it's in the parent list-item
-    const editButton = page
-      .locator('[data-action="playlist-edit"]')
-      .filter({ hasText: "" })
-      .first();
-
-    // Actually the edit buttons are adjacent to playlist-items, let's use a more robust approach
-    // Click on all visible playlist edit buttons to find the right one by opening modal and checking name
-    await page.locator('[data-action="playlist-edit"]').first().click();
+    // Click the edit button within this row
+    await playlistRow.locator('[data-action="playlist-edit"]').click();
 
     await page.waitForFunction(
       () =>
