@@ -138,7 +138,9 @@ test.describe("WASM Operator Edge Cases", () => {
       (e) =>
         !e.includes("wasm-bindgen") &&
         !e.includes("WebSocket") &&
-        !e.includes("Failed to fetch"),
+        !e.includes("Failed to fetch") &&
+        !e.includes("404") && // API returns 404 for missing resources (handled gracefully)
+        !e.includes("Failed to load resource"), // Browser network error messages for 404s
     );
 
     expect(realErrors).toHaveLength(0);

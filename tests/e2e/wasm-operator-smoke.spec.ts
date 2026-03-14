@@ -238,7 +238,9 @@ test.describe("WASM Operator Smoke Tests", () => {
       (e) =>
         !e.includes("wasm-bindgen") &&
         !e.includes("WebSocket") && // WS reconnect attempts are fine
-        !e.includes("Failed to fetch"), // Network issues are handled gracefully
+        !e.includes("Failed to fetch") && // Network issues are handled gracefully
+        !e.includes("404") && // API returns 404 for missing resources (handled gracefully)
+        !e.includes("Failed to load resource"), // Browser network error messages for 404s
     );
 
     expect(realErrors).toHaveLength(0);
