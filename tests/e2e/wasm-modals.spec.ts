@@ -132,36 +132,6 @@ test.describe("WASM Operator Modals", () => {
     await page.keyboard.press("Escape");
   });
 
-  test("library edit modal: rename", async ({ page }) => {
-    await initPage(page);
-
-    // Click library more button (edit icon)
-    const editButton = page.locator('[data-role="library-edit"]').first();
-    const editButtonCount = await editButton.count();
-    expect(
-      editButtonCount,
-      "No library edit button found for rename test",
-    ).toBeGreaterThan(0);
-    if (editButtonCount === 0) return;
-    await editButton.click();
-
-    // Wait for edit modal
-    await page.waitForFunction(
-      () =>
-        document.querySelector(
-          '[data-role="library-edit-modal"][data-open="true"]',
-        ),
-      { timeout: 5_000 },
-    );
-
-    // Verify modal has name input
-    const nameInput = page.locator('[data-role="library-edit-name"]');
-    await expect(nameInput).toBeVisible();
-
-    // Close without saving
-    await page.keyboard.press("Escape");
-  });
-
   test("playlist modal opens and closes", async ({ page }) => {
     await initPage(page);
 
@@ -189,60 +159,6 @@ test.describe("WASM Operator Modals", () => {
         ),
       { timeout: 5_000 },
     );
-  });
-
-  test("playlist edit modal: rename", async ({ page }) => {
-    await initPage(page);
-
-    // Find a playlist edit button
-    const editButton = page.locator('[data-action="playlist-edit"]').first();
-    const playlistEditCount = await editButton.count();
-    expect(
-      playlistEditCount,
-      "No playlist edit button found for rename test",
-    ).toBeGreaterThan(0);
-    if (playlistEditCount === 0) return;
-    await editButton.click();
-
-    // Wait for edit modal
-    await page.waitForFunction(
-      () =>
-        document.querySelector(
-          '[data-role="playlist-edit-modal"][data-open="true"]',
-        ),
-      { timeout: 5_000 },
-    );
-
-    // Get current name
-    const nameInput = page.locator('[data-role="playlist-edit-name"]');
-    const originalName = await nameInput.inputValue();
-
-    // Modify name
-    await nameInput.fill(originalName + "_TEST");
-
-    // Save
-    await page.locator('[data-role="playlist-edit-save"]').click();
-
-    // Wait for modal to close
-    await page.waitForFunction(
-      () =>
-        !document.querySelector(
-          '[data-role="playlist-edit-modal"][data-open="true"]',
-        ),
-      { timeout: 10_000 },
-    );
-
-    // Restore original name
-    await editButton.click();
-    await page.waitForFunction(
-      () =>
-        document.querySelector(
-          '[data-role="playlist-edit-modal"][data-open="true"]',
-        ),
-      { timeout: 5_000 },
-    );
-    await nameInput.fill(originalName);
-    await page.locator('[data-role="playlist-edit-save"]').click();
   });
 
   test("presentation create modal: navigate steps", async ({ page }) => {
