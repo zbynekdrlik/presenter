@@ -91,10 +91,12 @@ test.describe("WASM Operator Playlist Operations", () => {
 
     // Click on a playlist
     const playlist = page.locator('[data-role="playlist-item"]').first();
-    if ((await playlist.count()) === 0) {
-      test.skip();
-      return;
-    }
+    const playlistCount = await playlist.count();
+    expect(
+      playlistCount,
+      "No playlists available for select test",
+    ).toBeGreaterThan(0);
+    if (playlistCount === 0) return;
 
     await playlist.click();
 
@@ -137,10 +139,12 @@ test.describe("WASM Operator Playlist Operations", () => {
 
     // First select a playlist
     const playlist = page.locator('[data-role="playlist-item"]').first();
-    if ((await playlist.count()) === 0) {
-      test.skip();
-      return;
-    }
+    const playlistCountForSeparator = await playlist.count();
+    expect(
+      playlistCountForSeparator,
+      "No playlists available for separator test",
+    ).toBeGreaterThan(0);
+    if (playlistCountForSeparator === 0) return;
     await playlist.click();
 
     // Wait for playlist to load
@@ -174,10 +178,12 @@ test.describe("WASM Operator Playlist Operations", () => {
 
     // Click edit on a playlist
     const editButton = page.locator('[data-action="playlist-edit"]').first();
-    if ((await editButton.count()) === 0) {
-      test.skip();
-      return;
-    }
+    const editButtonCount = await editButton.count();
+    expect(
+      editButtonCount,
+      "No playlist edit button found for dashboard toggle test",
+    ).toBeGreaterThan(0);
+    if (editButtonCount === 0) return;
     await editButton.click();
 
     // Wait for modal
@@ -193,12 +199,16 @@ test.describe("WASM Operator Playlist Operations", () => {
     const dashboardCheckbox = page.locator(
       '[data-role="playlist-edit-dashboard"]',
     );
-    if ((await dashboardCheckbox.count()) === 0) {
-      // Close modal and skip
+    const dashboardCheckboxCount = await dashboardCheckbox.count();
+    if (dashboardCheckboxCount === 0) {
+      // Close modal - this test requires the dashboard checkbox
       await page.keyboard.press("Escape");
-      test.skip();
-      return;
     }
+    expect(
+      dashboardCheckboxCount,
+      "No dashboard checkbox found in playlist edit modal",
+    ).toBeGreaterThan(0);
+    if (dashboardCheckboxCount === 0) return;
 
     // Toggle it
     const wasDashboard = await dashboardCheckbox.isChecked();

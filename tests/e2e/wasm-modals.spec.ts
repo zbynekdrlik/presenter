@@ -137,10 +137,12 @@ test.describe("WASM Operator Modals", () => {
 
     // Click library more button (edit icon)
     const editButton = page.locator('[data-role="library-edit"]').first();
-    if ((await editButton.count()) === 0) {
-      test.skip();
-      return;
-    }
+    const editButtonCount = await editButton.count();
+    expect(
+      editButtonCount,
+      "No library edit button found for rename test",
+    ).toBeGreaterThan(0);
+    if (editButtonCount === 0) return;
     await editButton.click();
 
     // Wait for edit modal
@@ -194,10 +196,12 @@ test.describe("WASM Operator Modals", () => {
 
     // Find a playlist edit button
     const editButton = page.locator('[data-action="playlist-edit"]').first();
-    if ((await editButton.count()) === 0) {
-      test.skip();
-      return;
-    }
+    const playlistEditCount = await editButton.count();
+    expect(
+      playlistEditCount,
+      "No playlist edit button found for rename test",
+    ).toBeGreaterThan(0);
+    if (playlistEditCount === 0) return;
     await editButton.click();
 
     // Wait for edit modal

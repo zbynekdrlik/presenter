@@ -193,10 +193,12 @@ test.describe("WASM Operator Keyboard Shortcuts", () => {
 
     // Trigger second slide
     const secondSlide = page.locator("[data-slide-id]").nth(1);
-    if ((await secondSlide.count()) === 0) {
-      test.skip();
-      return;
-    }
+    const secondSlideCount = await secondSlide.count();
+    expect(
+      secondSlideCount,
+      "Presentation needs at least 2 slides for ArrowLeft test",
+    ).toBeGreaterThan(0);
+    if (secondSlideCount === 0) return;
     await secondSlide.click();
     await expect(secondSlide).toHaveClass(/is-active/, { timeout: 5_000 });
 

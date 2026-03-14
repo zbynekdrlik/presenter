@@ -103,10 +103,12 @@ test.describe("WASM Operator Drag-Drop", () => {
 
     // Get a playlist
     const playlist = page.locator('[data-role="playlist-item"]').first();
-    if ((await playlist.count()) === 0) {
-      test.skip();
-      return;
-    }
+    const playlistCount = await playlist.count();
+    expect(
+      playlistCount,
+      "No playlists available for drop test",
+    ).toBeGreaterThan(0);
+    if (playlistCount === 0) return;
 
     // Get initial playlist count
     const initialCount = await page.evaluate(async () => {
@@ -167,10 +169,11 @@ test.describe("WASM Operator Drag-Drop", () => {
       .locator('[data-role="presentation-item"][data-active="true"]')
       .getAttribute("data-presentation-id");
 
-    if (!presId) {
-      test.skip();
-      return;
-    }
+    expect(
+      presId,
+      "No active presentation found for slide reorder test",
+    ).toBeTruthy();
+    if (!presId) return;
 
     const initialOrder = await page.evaluate((presId) => {
       const helpers = (window as any).__presenterOperatorTestHelpers;
@@ -180,10 +183,11 @@ test.describe("WASM Operator Drag-Drop", () => {
       return [];
     }, presId);
 
-    if (initialOrder.length < 2) {
-      test.skip();
-      return;
-    }
+    expect(
+      initialOrder.length,
+      "Presentation needs at least 2 slides for reorder test",
+    ).toBeGreaterThanOrEqual(2);
+    if (initialOrder.length < 2) return;
 
     // Reorder: swap first two slides
     const reorderedSlides = [
@@ -266,10 +270,12 @@ test.describe("WASM Operator Drag-Drop", () => {
 
     // Select a playlist
     const playlist = page.locator('[data-role="playlist-item"]').first();
-    if ((await playlist.count()) === 0) {
-      test.skip();
-      return;
-    }
+    const playlistCountForEntry = await playlist.count();
+    expect(
+      playlistCountForEntry,
+      "No playlists available for entry drag test",
+    ).toBeGreaterThan(0);
+    if (playlistCountForEntry === 0) return;
     await playlist.click();
 
     // Wait for playlist entries
@@ -279,11 +285,12 @@ test.describe("WASM Operator Drag-Drop", () => {
     const entries = page.locator(
       '[data-role="presentation-item"][data-entry-id]',
     );
-    if ((await entries.count()) === 0) {
-      // Empty playlist - skip
-      test.skip();
-      return;
-    }
+    const entriesCount = await entries.count();
+    expect(
+      entriesCount,
+      "Empty playlist - no entries available for drag test",
+    ).toBeGreaterThan(0);
+    if (entriesCount === 0) return;
 
     // Verify entry is draggable
     const firstEntry = entries.first();
