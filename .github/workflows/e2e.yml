@@ -63,6 +63,16 @@ jobs:
           path: ~/.cache/ms-playwright
           key: playwright-${{ runner.os }}-${{ hashFiles('**/package-lock.json') }}
 
+      - name: Install trunk
+        run: cargo install trunk --locked
+
+      - name: Install wasm32 target
+        run: rustup target add wasm32-unknown-unknown
+
+      - name: Build WASM UI
+        run: trunk build
+        working-directory: crates/presenter-ui
+
       - name: Build binaries
         run: |
           cargo build -p presenter-server
