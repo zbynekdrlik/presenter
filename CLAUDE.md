@@ -6,6 +6,42 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ---
 
+## Complete Implementation Policy (ABSOLUTE - NO EXCEPTIONS)
+
+**ALWAYS implement 100% of the requested feature in ONE run. No phases. No skips. No shortcuts.**
+
+### The Rule
+
+When asked to implement a feature, rewrite, or replacement:
+
+1. **Implement EVERYTHING** - Every function, every modal, every handler, every edge case
+2. **No "partial implementation"** - If the feature has 10 parts, implement all 10
+3. **No "tests for later"** - Write tests AND implementation together
+4. **No removing tests to pass CI** - If tests fail, fix the code, not delete the tests
+5. **No "phase 1, phase 2"** - Complete the entire feature in one session
+6. **No "this can be added later"** - Add it NOW
+
+### What This Means
+
+- Asked to replace JS frontend with WASM? Implement **100% feature parity** - every modal, every drag-drop, every keyboard shortcut
+- Asked to add a feature? Implement the **complete feature** with all edge cases
+- Tests failing? **Fix the implementation**, not remove the tests
+- Feature seems large? **Still do it all** - no excuses about scope
+
+### Banned Behaviors
+
+| Behavior                    | Why Banned             | Required Instead    |
+| --------------------------- | ---------------------- | ------------------- |
+| "Phase 1 complete"          | Incomplete delivery    | Complete ALL phases |
+| Removing failing tests      | Hides missing features | Fix the code        |
+| "Will add X later"          | Leaves gaps            | Add X NOW           |
+| "Basic implementation done" | Incomplete             | Full implementation |
+| Skipping edge cases         | Buggy result           | Handle ALL cases    |
+
+**If you cannot complete 100% of a feature, say so BEFORE starting - never deliver partial work.**
+
+---
+
 ## Autonomous Workflow (CRITICAL)
 
 **Agents work autonomously. Do not ask for confirmation. Execute the full cycle:**

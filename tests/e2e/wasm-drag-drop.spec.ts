@@ -121,4 +121,183 @@ test.describe("WASM Operator Drag-Drop", () => {
     const dragHandle = page.locator('[data-role="slide-drag-handle"]').first();
     await expect(dragHandle).toHaveAttribute("draggable", "true");
   });
+
+  test("playlist accepts presentation drop via test helper", async ({
+    page,
+  }) => {
+    await initPage(page);
+
+    // Select library to load presentations
+    await page.locator('[data-role="library-item"]').first().click();
+    await page.waitForSelector('[data-role="presentation-item"]', {
+      timeout: 15_000,
+    });
+
+    // Get a playlist
+    const playlist = page.locator('[data-role="playlist-item"]').first();
+    const playlistCount = await playlist.count();
+    expect(
+      playlistCount,
+      "No playlists available for drop test",
+    ).toBeGreaterThan(0);
+    if (playlistCount === 0) return;
+
+    // Get playlist ID from parent element
+    const playlistId = await page
+      .locator("[data-playlist-id]")
+      .first()
+      .getAttribute("data-playlist-id");
+
+    expect(playlistId, "No playlist ID found").toBeTruthy();
+    if (!playlistId) return;
+
+    // Get initial playlist count
+    const initialCount = await page.evaluate(async (plId) => {
+      const helpers = (window as any).__presenterOperatorTestHelpers;
+      if (helpers?.playlistPresentationCount) {
+        return helpers.playlistPresentationCount(plId) ?? 0;
+      }
+      return 0;
+    }, playlistId);
+
+    // Get a presentation ID
+    const presId = await page
+      .locator('[data-role="presentation-item"]')
+      .first()
+      .getAttribute("data-presentation-id");
+
+    expect(presId, "No presentation ID found").toBeTruthy();
+    if (!presId) return;
+
+    // Use test helper to add presentation to playlist
+    await page.evaluate(
+      async ({ presId, playlistId }) => {
+        const helpers = (window as any).__presenterOperatorTestHelpers;
+        if (helpers?.addPresentationToPlaylist) {
+          await helpers.addPresentationToPlaylist(playlistId, presId);
+        }
+      },
+      { presId, playlistId },
+    );
+
+    // Wait for update
+    await page.waitForTimeout(1000);
+
+    // Verify count increased
+    const newCount = await page.evaluate(async (plId) => {
+      const helpers = (window as any).__presenterOperatorTestHelpers;
+      if (helpers?.playlistPresentationCount) {
+        return helpers.playlistPresentationCount(plId) ?? 0;
+      }
+      return 0;
+    }, playlistId);
+
+    expect(newCount).toBeGreaterThan(initialCount);
+  });
+
+  test("slide reorder via test helper", async ({ page }) => {
+    await loadPresentation(page);
+
+    // Get presentation ID
+    const presId = await page
+      .locator('[data-role="presentation-item"][data-active="true"]')
+      .getAttribute("data-presentation-id");
+
+    expect(
+      presId,
+      "No active presentation found for slide reorder test",
+    ).toBeTruthy();
+    if (!presId) return;
+
+    const initialOrder = await page.evaluate((presId) => {
+      const helpers = (window as any).__presenterOperatorTestHelpers;
+      if (helpers?.slideOrder) {
+        return helpers.slideOrder(presId) ?? [];
+      }
+      return [];
+    }, presId);
+
+    expect(
+      initialOrder.length,
+      "Presentation needs at least 2 slides for reorder test",
+    ).toBeGreaterThanOrEqual(2);
+    if (initialOrder.length < 2) return;
+
+    // Reorder: swap first two slides
+    const reorderedSlides = [
+      initialOrder[1],
+      initialOrder[0],
+      ...initialOrder.slice(2),
+    ];
+
+    await page.evaluate(
+      async ({ presId, slideIds }) => {
+        const helpers = (window as any).__presenterOperatorTestHelpers;
+        if (helpers?.reorderSlides) {
+          await helpers.reorderSlides(presId, slideIds);
+        }
+      },
+      { presId, slideIds: reorderedSlides },
+    );
+
+    // Wait for update
+    await page.waitForTimeout(1000);
+
+    // Verify new order
+    const newOrder = await page.evaluate((presId) => {
+      const helpers = (window as any).__presenterOperatorTestHelpers;
+      if (helpers?.slideOrder) {
+        return helpers.slideOrder(presId) ?? [];
+      }
+      return [];
+    }, presId);
+
+    expect(newOrder[0]).toBe(initialOrder[1]);
+    expect(newOrder[1]).toBe(initialOrder[0]);
+
+    // Restore original order
+    await page.evaluate(
+      async ({ presId, slideIds }) => {
+        const helpers = (window as any).__presenterOperatorTestHelpers;
+        if (helpers?.reorderSlides) {
+          await helpers.reorderSlides(presId, slideIds);
+        }
+      },
+      { presId, slideIds: initialOrder },
+    );
+  });
+
+  test("playlist entry is draggable when in playlist context", async ({
+    page,
+  }) => {
+    await initPage(page);
+
+    // Select a playlist
+    const playlist = page.locator('[data-role="playlist-item"]').first();
+    const playlistCountForEntry = await playlist.count();
+    expect(
+      playlistCountForEntry,
+      "No playlists available for entry drag test",
+    ).toBeGreaterThan(0);
+    if (playlistCountForEntry === 0) return;
+    await playlist.click();
+
+    // Wait for playlist entries
+    await page.waitForTimeout(500);
+
+    // Check if there are entries
+    const entries = page.locator(
+      '[data-role="presentation-item"][data-entry-id]',
+    );
+    const entriesCount = await entries.count();
+    expect(
+      entriesCount,
+      "Empty playlist - no entries available for drag test",
+    ).toBeGreaterThan(0);
+    if (entriesCount === 0) return;
+
+    // Verify entry is draggable
+    const firstEntry = entries.first();
+    await expect(firstEntry).toHaveAttribute("draggable", "true");
+  });
 });

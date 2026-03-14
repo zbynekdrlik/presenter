@@ -74,11 +74,15 @@ test.describe("WASM Operator Modals", () => {
       { timeout: 5_000 },
     );
 
-    // Click a library in the modal
+    // Click a library in the modal (modal items are library-row)
     const modalLibrary = page
-      .locator('[data-role="library-modal"] [data-role="library-item"]')
+      .locator(
+        '[data-role="library-modal"] [data-role="library-row"] .operator__list-button',
+      )
       .first();
-    if ((await modalLibrary.count()) > 0) {
+    const libCount = await modalLibrary.count();
+    expect(libCount, "No libraries in modal").toBeGreaterThan(0);
+    if (libCount > 0) {
       await modalLibrary.click();
 
       // Modal should close and library should be selected
@@ -103,14 +107,21 @@ test.describe("WASM Operator Modals", () => {
       { timeout: 5_000 },
     );
 
-    // Find a star button
+    // Find a star button (uses data-action for toggle buttons)
     const starButton = page
-      .locator('[data-role="library-modal"] [data-role="library-star"]')
+      .locator(
+        '[data-role="library-modal"] [data-action="library-toggle-favorite"]',
+      )
       .first();
-    if ((await starButton.count()) > 0) {
-      // Get current state
+    const starCount = await starButton.count();
+    expect(
+      starCount,
+      "No library favorite toggle button found",
+    ).toBeGreaterThan(0);
+    if (starCount > 0) {
+      // Get current state via aria-pressed
       const wasFavorite =
-        (await starButton.getAttribute("data-favorited")) === "true";
+        (await starButton.getAttribute("aria-pressed")) === "true";
 
       // Click to toggle
       await starButton.click();
@@ -119,9 +130,9 @@ test.describe("WASM Operator Modals", () => {
       await page.waitForFunction(
         (wasFav) => {
           const star = document.querySelector(
-            '[data-role="library-modal"] [data-role="library-star"]',
+            '[data-role="library-modal"] [data-action="library-toggle-favorite"]',
           );
-          return star && star.getAttribute("data-favorited") !== String(wasFav);
+          return star && star.getAttribute("aria-pressed") !== String(wasFav);
         },
         wasFavorite,
         { timeout: 5_000 },
@@ -129,6 +140,36 @@ test.describe("WASM Operator Modals", () => {
     }
 
     // Close modal
+    await page.keyboard.press("Escape");
+  });
+
+  test("library edit modal: rename", async ({ page }) => {
+    await initPage(page);
+
+    // Click library edit button (uses data-action)
+    const editButton = page.locator('[data-action="library-edit"]').first();
+    const editButtonCount = await editButton.count();
+    expect(
+      editButtonCount,
+      "No library edit button found for rename test",
+    ).toBeGreaterThan(0);
+    if (editButtonCount === 0) return;
+    await editButton.click();
+
+    // Wait for edit modal
+    await page.waitForFunction(
+      () =>
+        document.querySelector(
+          '[data-role="library-edit-modal"][data-open="true"]',
+        ),
+      { timeout: 5_000 },
+    );
+
+    // Verify modal has name input
+    const nameInput = page.locator('[data-role="library-edit-name"]');
+    await expect(nameInput).toBeVisible();
+
+    // Close without saving
     await page.keyboard.press("Escape");
   });
 
@@ -159,6 +200,60 @@ test.describe("WASM Operator Modals", () => {
         ),
       { timeout: 5_000 },
     );
+  });
+
+  test("playlist edit modal: rename", async ({ page }) => {
+    await initPage(page);
+
+    // Find a playlist edit button (uses data-action)
+    const editButton = page.locator('[data-action="playlist-edit"]').first();
+    const playlistEditCount = await editButton.count();
+    expect(
+      playlistEditCount,
+      "No playlist edit button found for rename test",
+    ).toBeGreaterThan(0);
+    if (playlistEditCount === 0) return;
+    await editButton.click();
+
+    // Wait for edit modal
+    await page.waitForFunction(
+      () =>
+        document.querySelector(
+          '[data-role="playlist-edit-modal"][data-open="true"]',
+        ),
+      { timeout: 5_000 },
+    );
+
+    // Get current name
+    const nameInput = page.locator('[data-role="playlist-edit-name"]');
+    const originalName = await nameInput.inputValue();
+
+    // Modify name
+    await nameInput.fill(originalName + "_TEST");
+
+    // Save
+    await page.locator('[data-role="playlist-edit-save"]').click();
+
+    // Wait for modal to close
+    await page.waitForFunction(
+      () =>
+        !document.querySelector(
+          '[data-role="playlist-edit-modal"][data-open="true"]',
+        ),
+      { timeout: 10_000 },
+    );
+
+    // Restore original name
+    await editButton.click();
+    await page.waitForFunction(
+      () =>
+        document.querySelector(
+          '[data-role="playlist-edit-modal"][data-open="true"]',
+        ),
+      { timeout: 5_000 },
+    );
+    await nameInput.fill(originalName);
+    await page.locator('[data-role="playlist-edit-save"]').click();
   });
 
   test("presentation create modal: navigate steps", async ({ page }) => {
