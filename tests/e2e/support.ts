@@ -143,11 +143,35 @@ export async function startTestServer(
       process.env.RUST_LOG ?? "presenter_server=info,tower_http=warn,sqlx=warn",
   };
 
+  // Use pre-built binary if available (CI builds binaries first), otherwise fall back to cargo run
+  const debugBinary = path.join(
+    REPO_ROOT,
+    "target",
+    "debug",
+    "presenter-server",
+  );
+  const releaseBinary = path.join(
+    REPO_ROOT,
+    "target",
+    "release",
+    "presenter-server",
+  );
+
+  let command: string;
+  if (require("fs").existsSync(releaseBinary)) {
+    command = releaseBinary;
+  } else if (require("fs").existsSync(debugBinary)) {
+    command = debugBinary;
+  } else {
+    // Fall back to cargo run if no pre-built binary exists
+    command = `cargo run -p presenter-server`;
+  }
+
   const processHandle = spawn(
     "bash",
     [
       "-lc",
-      `PRESENTER_DB_URL=${dbUrl} PRESENTER_PORT=${port} ${oscPort ? `PRESENTER_OSC_LISTEN_PORT=${oscPort} ` : ""}cargo run -p presenter-server`,
+      `PRESENTER_DB_URL=${dbUrl} PRESENTER_PORT=${port} ${oscPort ? `PRESENTER_OSC_LISTEN_PORT=${oscPort} ` : ""}${command}`,
     ],
     {
       cwd: REPO_ROOT,
