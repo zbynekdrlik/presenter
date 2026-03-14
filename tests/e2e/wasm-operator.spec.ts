@@ -431,10 +431,10 @@ test.describe("WASM Operator - Slides", () => {
 
     const slides = page.locator("[data-slide-id]");
     const count = await slides.count();
-    if (count < 2) {
-      test.skip();
-      return;
-    }
+    expect(
+      count,
+      "Test requires at least 2 slides - ensure test data has presentations with multiple slides",
+    ).toBeGreaterThanOrEqual(2);
 
     const firstSlide = slides.nth(0);
     const secondSlide = slides.nth(1);
@@ -775,10 +775,10 @@ test.describe("WASM Operator - Keyboard Shortcuts", () => {
 
     const slides = page.locator("[data-slide-id]");
     const count = await slides.count();
-    if (count < 2) {
-      test.skip();
-      return;
-    }
+    expect(
+      count,
+      "Test requires at least 2 slides - ensure test data has presentations with multiple slides",
+    ).toBeGreaterThanOrEqual(2);
 
     // Trigger first slide
     const firstSlide = slides.first();
