@@ -102,6 +102,7 @@ fn BibleSearch(bible_state: BibleState) -> impl IntoView {
     let searching = bible_state.searching;
     let search_results = bible_state.search_results;
     let selected_translation = bible_state.selected_translation;
+    let has_searched = bible_state.has_searched;
 
     let do_search = move || {
         let query = search_query.get_untracked();
@@ -125,6 +126,7 @@ fn BibleSearch(bible_state: BibleState) -> impl IntoView {
                 }
             }
             searching.set(false);
+            has_searched.set(true);
         });
     };
 
@@ -179,6 +181,7 @@ fn BibleSearch(bible_state: BibleState) -> impl IntoView {
 fn BibleResults(bible_state: BibleState) -> impl IntoView {
     let search_results = bible_state.search_results;
     let selected_translation = bible_state.selected_translation;
+    let has_searched = bible_state.has_searched;
     let ctx = use_context::<AppContext>().expect("AppContext");
     let toast_message = ctx.toast_message;
     let toast_variant = ctx.toast_variant;
@@ -189,8 +192,13 @@ fn BibleResults(bible_state: BibleState) -> impl IntoView {
             {move || {
                 let results = search_results.get();
                 if results.is_empty() {
+                    let message = if has_searched.get() {
+                        "No results found. Try a different search query."
+                    } else {
+                        "Enter a search query to find Bible passages."
+                    };
                     view! {
-                        <p class="bible-results-empty">"Enter a search query to find Bible passages."</p>
+                        <p class="bible-results-empty">{message}</p>
                     }.into_any()
                 } else {
                     results.into_iter().map(|hit| {

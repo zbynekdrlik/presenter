@@ -14,6 +14,8 @@ pub struct BibleState {
     pub search_results: RwSignal<Vec<crate::api::bible::BibleSearchHit>>,
     /// Whether a search is in progress.
     pub searching: RwSignal<bool>,
+    /// Whether a search has been performed (to differentiate initial state from empty results).
+    pub has_searched: RwSignal<bool>,
 }
 
 impl BibleState {
@@ -24,6 +26,7 @@ impl BibleState {
             search_query: RwSignal::new(String::new()),
             search_results: RwSignal::new(Vec::new()),
             searching: RwSignal::new(false),
+            has_searched: RwSignal::new(false),
         }
     }
 }
