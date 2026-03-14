@@ -14,6 +14,7 @@ use crate::components::search::SearchResults;
 use crate::components::slide_list::SlideList;
 use crate::components::timer_panel::TimerPanel;
 use crate::components::toast::Toast;
+use crate::pages::bible::BiblePage;
 use crate::state::operator::OperatorState;
 use crate::state::AppContext;
 use crate::ws;
@@ -164,7 +165,7 @@ pub fn OperatorPage() -> impl IntoView {
                 <SlideList />
             </section>
             <section class="operator__panel operator__panel--bible" data-view-panel="bible">
-                <iframe src="/ui/bible" title="Bible Control"></iframe>
+                <BiblePage />
             </section>
             <section class="operator__panel operator__panel--timers" data-view-panel="timers">
                 <TimerPanel />
@@ -270,6 +271,7 @@ fn setup_ws_dispatch(last_event: ReadSignal<Option<LiveEvent>>, ctx: &AppContext
     let selected_presentation_id = ctx.selected_presentation_id;
     let selected_presentation = ctx.selected_presentation;
     let slides_cache = ctx.slides_cache;
+    let active_bible_broadcast = ctx.active_bible_broadcast;
 
     Effect::new(move || {
         if let Some(event) = last_event.get() {
@@ -317,6 +319,12 @@ fn setup_ws_dispatch(last_event: ReadSignal<Option<LiveEvent>>, ctx: &AppContext
                 }
                 LiveEvent::StageLayout { code } => {
                     stage_layout_code.set(code);
+                }
+                LiveEvent::Bible { broadcast } => {
+                    active_bible_broadcast.set(Some(broadcast));
+                }
+                LiveEvent::BibleCleared => {
+                    active_bible_broadcast.set(None);
                 }
                 _ => {}
             }

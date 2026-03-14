@@ -1,10 +1,43 @@
-use crate::state::AppContext;
+use crate::state::{save_baseline_to_storage, AppContext};
 use leptos::prelude::*;
 
 /// Stage preview panel rendered inside the header.
 #[component]
 pub fn StagePreview() -> impl IntoView {
     let ctx = use_context::<AppContext>().expect("AppContext");
+
+    // Compute alert state: connected < baseline connected
+    let has_alert = move || {
+        let baseline = ctx.stage_monitor_baseline.get();
+        let conns = ctx.stage_connections.get();
+        let connected = conns
+            .iter()
+            .filter(|c| c.status == presenter_core::StageClientStatus::Connected)
+            .count();
+        match baseline {
+            Some((baseline_connected, _)) => connected < baseline_connected,
+            None => false,
+        }
+    };
+
+    // Handler to reset baseline to current counts
+    let on_reset_baseline = {
+        let stage_connections = ctx.stage_connections;
+        let stage_monitor_baseline = ctx.stage_monitor_baseline;
+        move |_| {
+            let conns = stage_connections.get_untracked();
+            let connected = conns
+                .iter()
+                .filter(|c| c.status == presenter_core::StageClientStatus::Connected)
+                .count();
+            let issues = conns
+                .iter()
+                .filter(|c| c.status != presenter_core::StageClientStatus::Connected)
+                .count();
+            stage_monitor_baseline.set(Some((connected, issues)));
+            save_baseline_to_storage(connected, issues);
+        }
+    };
 
     let on_clear = {
         let stage_snapshot = ctx.stage_snapshot;
@@ -128,8 +161,16 @@ pub fn StagePreview() -> impl IntoView {
             </div>
             <button
                 type="button"
-                class="operator__stage-monitor"
+                class=move || {
+                    let base = "operator__stage-monitor";
+                    if has_alert() {
+                        format!("{} operator__stage-monitor--alert", base)
+                    } else {
+                        base.to_string()
+                    }
+                }
                 data-role="stage-monitor"
+                data-alert=move || if has_alert() { "true" } else { "false" }
                 data-connected=move || {
                     let conns = ctx.stage_connections.get();
                     let connected = conns.iter().filter(|c| c.status == presenter_core::StageClientStatus::Connected).count();
@@ -142,6 +183,7 @@ pub fn StagePreview() -> impl IntoView {
                 }
                 aria-label="Stage display health"
                 title="Stage displays"
+                on:click=on_reset_baseline
             >
                 <span data-role="stage-monitor-connected" class="operator__stage-monitor-count operator__stage-monitor-count--connected">
                     {move || {

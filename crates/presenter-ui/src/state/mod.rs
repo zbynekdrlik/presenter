@@ -4,8 +4,8 @@ pub mod session;
 
 use leptos::prelude::*;
 use presenter_core::{
-    LibrarySummary, Playlist, Presentation, PresentationSummary, SearchResult, Slide,
-    StageClientSnapshot, StageDisplayLayout, StageDisplaySnapshot, TimersOverview,
+    BibleBroadcast, LibrarySummary, Playlist, Presentation, PresentationSummary, SearchResult,
+    Slide, StageClientSnapshot, StageDisplayLayout, StageDisplaySnapshot, TimersOverview,
 };
 use std::collections::{HashMap, HashSet};
 
@@ -61,7 +61,7 @@ pub struct AppContext {
     /// Quick lookup: playlist_id -> Playlist
     pub playlist_lookup: RwSignal<HashMap<String, Playlist>>,
     /// Active bible broadcast passage
-    pub active_bible_broadcast: RwSignal<Option<String>>,
+    pub active_bible_broadcast: RwSignal<Option<BibleBroadcast>>,
     /// Loading state for libraries
     pub libraries_loading: RwSignal<bool>,
     /// Loading state for playlists

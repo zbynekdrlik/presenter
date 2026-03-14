@@ -1,3 +1,4 @@
+use crate::state::operator::OperatorState;
 use crate::state::AppContext;
 use leptos::prelude::*;
 use presenter_core::TimerCommand;
@@ -18,6 +19,7 @@ fn format_seconds(seconds: i64) -> String {
 #[component]
 pub fn TimerPanel() -> impl IntoView {
     let ctx = use_context::<AppContext>().expect("AppContext");
+    let op = use_context::<OperatorState>().expect("OperatorState");
 
     let send_timer_cmd = move |cmd: TimerCommand| {
         let timers = ctx.timers;
@@ -40,6 +42,42 @@ pub fn TimerPanel() -> impl IntoView {
         send_timer_cmd(TimerCommand::ResetCountdown);
     };
 
+    // Focus/blur tracking for countdown input
+    let on_countdown_focus = {
+        let countdown_input_active = op.countdown_input_active;
+        move |_| {
+            countdown_input_active.set(true);
+        }
+    };
+
+    let on_countdown_blur = {
+        let countdown_input_active = op.countdown_input_active;
+        let countdown_input_dirty = op.countdown_input_dirty;
+        move |ev: web_sys::FocusEvent| {
+            countdown_input_active.set(false);
+            // If dirty, save on blur
+            if countdown_input_dirty.get_untracked() {
+                if let Some(input) = ev.target().and_then(|t| {
+                    use wasm_bindgen::JsCast;
+                    t.dyn_into::<web_sys::HtmlInputElement>().ok()
+                }) {
+                    let val = input.value();
+                    if let Some(target) = parse_time_input(&val) {
+                        send_timer_cmd(TimerCommand::SetCountdownTarget { target });
+                    }
+                }
+                countdown_input_dirty.set(false);
+            }
+        }
+    };
+
+    let on_countdown_input = {
+        let countdown_input_dirty = op.countdown_input_dirty;
+        move |_| {
+            countdown_input_dirty.set(true);
+        }
+    };
+
     let on_countdown_target = move |ev: web_sys::KeyboardEvent| {
         if ev.key() != "Enter" {
             return;
@@ -52,6 +90,7 @@ pub fn TimerPanel() -> impl IntoView {
             let val = el.value();
             if let Some(target) = parse_time_input(&val) {
                 send_timer_cmd(TimerCommand::SetCountdownTarget { target });
+                op.countdown_input_dirty.set(false);
             }
         }
     };
@@ -166,6 +205,9 @@ pub fn TimerPanel() -> impl IntoView {
                         placeholder="18:00"
                         data-role="countdown-target-input"
                         aria-label="Countdown target time (HH:MM)"
+                        on:focus=on_countdown_focus
+                        on:blur=on_countdown_blur
+                        on:input=on_countdown_input
                         on:keydown=on_countdown_target
                     />
                 </label>

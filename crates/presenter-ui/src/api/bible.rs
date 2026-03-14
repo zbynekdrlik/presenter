@@ -24,7 +24,7 @@ pub struct SearchResult {
     pub results: Vec<BibleSearchHit>,
 }
 
-#[derive(Deserialize)]
+#[derive(Clone, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct BibleSearchHit {
     pub reference: String,
