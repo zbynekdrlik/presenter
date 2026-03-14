@@ -196,7 +196,7 @@ pub fn PlaylistModals() -> impl IntoView {
     view! {
         // Playlist list modal
         <div class="operator__playlist-modal" data-role="playlist-modal"
-            attr:data-open=move || if is_pl_list_open() { "true" } else { "false" }
+            data-open=move || if is_pl_list_open() { "true" } else { "false" }
             style:display=move || if is_pl_list_open() { "flex" } else { "none" }
             on:click=close_list
         >
@@ -266,7 +266,7 @@ pub fn PlaylistModals() -> impl IntoView {
         // Playlist edit/create modal
         <div class="operator__library-edit operator__playlist-edit" data-role="playlist-edit-modal"
             data-mode=edit_mode
-            attr:data-open=move || if is_pl_edit_open() { "true" } else { "false" }
+            data-open=move || if is_pl_edit_open() { "true" } else { "false" }
             style:display=move || if is_pl_edit_open() { "flex" } else { "none" }
         >
             <div class="operator__library-edit-panel">

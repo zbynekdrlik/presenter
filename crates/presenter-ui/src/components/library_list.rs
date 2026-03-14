@@ -7,7 +7,7 @@ use crate::state::AppContext;
 #[component]
 pub fn LibraryList() -> impl IntoView {
     let ctx = use_context::<AppContext>().expect("AppContext");
-    let _op = use_context::<OperatorState>().expect("OperatorState");
+    let op = use_context::<OperatorState>().expect("OperatorState");
 
     // Track loading state for library presentations
     let is_loading_presentations = RwSignal::new(false);
@@ -15,6 +15,7 @@ pub fn LibraryList() -> impl IntoView {
     let select_library = move |id: String, name: String| {
         ctx.selected_library_id.set(Some(id.clone()));
         ctx.selected_playlist_id.set(None);
+        ctx.selected_playlist.set(None);
         ctx.context_title.set(name);
         crate::state::session::set("activeLibraryId", &id);
         crate::state::session::remove("activePlaylistId");
@@ -44,16 +45,20 @@ pub fn LibraryList() -> impl IntoView {
         });
     };
 
-    let on_create = move |_| {
-        let op = use_context::<OperatorState>().expect("OperatorState");
-        op.modal_mode.set("create".to_string());
-        op.modal_target_id.set(None);
-        modal::open_modal(&op, "library-edit");
+    let on_create = {
+        let op = op.clone();
+        move |_| {
+            op.modal_mode.set("create".to_string());
+            op.modal_target_id.set(None);
+            modal::open_modal(&op, "library-edit");
+        }
     };
 
-    let on_more = move |_| {
-        let op = use_context::<OperatorState>().expect("OperatorState");
-        modal::open_modal(&op, "library-list");
+    let on_more = {
+        let op = op.clone();
+        move |_| {
+            modal::open_modal(&op, "library-list");
+        }
     };
 
     view! {
@@ -135,13 +140,19 @@ pub fn LibraryList() -> impl IntoView {
                                 let id = lib.id.to_string();
                                 let name = lib.name.clone();
                                 let count = lib.presentation_count;
-                                let is_active = active_id.as_deref() == Some(&id);
                                 let id_for_click = id.clone();
                                 let name_for_click = name.clone();
                                 let id_for_edit = id.clone();
                                 let id_for_row = id.clone();
                                 let id_for_btn = id.clone();
                                 let id_for_modal = id.clone();
+                                let id_for_active = id.clone();
+                                let selected_library_id = ctx.selected_library_id;
+                                let op_for_edit = op.clone();
+
+                                let is_active = Signal::derive(move || {
+                                    selected_library_id.get().as_deref() == Some(id_for_active.as_str())
+                                });
 
                                 view! {
                                     <li class="operator__list-item operator__list-row" data-library-id=id_for_row>
@@ -150,7 +161,7 @@ pub fn LibraryList() -> impl IntoView {
                                             class="operator__list-button"
                                             data-role="library-item"
                                             data-library-id=id_for_btn
-                                            attr:data-active=move || if is_active { "true" } else { "false" }
+                                            data-active=move || if is_active.get() { "true" } else { "false" }
                                             on:click=move |_| {
                                                 select_library(id_for_click.clone(), name_for_click.clone());
                                             }
@@ -167,10 +178,9 @@ pub fn LibraryList() -> impl IntoView {
                                                 aria-label="Edit library"
                                                 on:click=move |ev: leptos::ev::MouseEvent| {
                                                     ev.stop_propagation();
-                                                    let op = use_context::<OperatorState>().expect("OperatorState");
-                                                    op.modal_mode.set("edit".to_string());
-                                                    op.modal_target_id.set(Some(id_for_modal.clone()));
-                                                    modal::open_modal(&op, "library-edit");
+                                                    op_for_edit.modal_mode.set("edit".to_string());
+                                                    op_for_edit.modal_target_id.set(Some(id_for_modal.clone()));
+                                                    modal::open_modal(&op_for_edit, "library-edit");
                                                 }
                                             >
                                                 "\u{22ee}"

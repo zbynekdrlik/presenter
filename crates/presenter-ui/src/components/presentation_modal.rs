@@ -391,7 +391,7 @@ pub fn PresentationModals() -> impl IntoView {
         // Presentation edit (rename) modal
         <div class="operator__library-edit operator__presentation-edit" data-role="presentation-edit-modal"
             data-mode="presentation"
-            attr:data-open=move || if is_edit_open() { "true" } else { "false" }
+            data-open=move || if is_edit_open() { "true" } else { "false" }
             style:display=move || if is_edit_open() { "flex" } else { "none" }
         >
             <div class="operator__library-edit-panel">
@@ -436,7 +436,7 @@ pub fn PresentationModals() -> impl IntoView {
 
         // Presentation create modal
         <div class="operator__library-edit operator__presentation-create" data-role="presentation-create-modal"
-            attr:data-open=move || if is_create_open() { "true" } else { "false" }
+            data-open=move || if is_create_open() { "true" } else { "false" }
             style:display=move || if is_create_open() { "flex" } else { "none" }
         >
             <div class="operator__library-edit-panel">

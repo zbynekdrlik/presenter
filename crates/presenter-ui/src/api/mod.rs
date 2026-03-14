@@ -142,6 +142,7 @@ pub enum ApiError {
     Status(u16, String),
     Serialize(gloo_net::Error),
     Deserialize(gloo_net::Error),
+    NotFound(String),
 }
 
 impl std::fmt::Display for ApiError {
@@ -151,6 +152,7 @@ impl std::fmt::Display for ApiError {
             Self::Status(code, text) => write!(f, "HTTP {code}: {text}"),
             Self::Serialize(err) => write!(f, "Serialization error: {err}"),
             Self::Deserialize(err) => write!(f, "Deserialization error: {err}"),
+            Self::NotFound(msg) => write!(f, "Not found: {msg}"),
         }
     }
 }

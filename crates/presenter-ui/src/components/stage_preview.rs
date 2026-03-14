@@ -57,7 +57,7 @@ pub fn StagePreview() -> impl IntoView {
         <div
             class="operator__stage-preview"
             data-role="stage-status"
-            attr:data-active=move || {
+            data-active=move || {
                 let snap = ctx.stage_snapshot.get();
                 if snap.as_ref().and_then(|s| s.current_slide_id.as_ref()).is_some() { "true" } else { "false" }
             }
@@ -83,7 +83,7 @@ pub fn StagePreview() -> impl IntoView {
                             type="button"
                             class="operator__stage-toggle"
                             data-role="ableset-enable"
-                            attr:data-state=move || {
+                            data-state=move || {
                                 if ctx.ableset_status.get().map(|s| s.enabled).unwrap_or(false) { "on" } else { "off" }
                             }
                             on:click=on_ableset_enable
@@ -100,7 +100,7 @@ pub fn StagePreview() -> impl IntoView {
                             type="button"
                             class="operator__stage-toggle"
                             data-role="ableset-follow"
-                            attr:data-state=move || {
+                            data-state=move || {
                                 if ctx.ableset_status.get().map(|s| s.follow_enabled).unwrap_or(false) { "on" } else { "off" }
                             }
                             on:click=on_ableset_follow
@@ -130,12 +130,12 @@ pub fn StagePreview() -> impl IntoView {
                 type="button"
                 class="operator__stage-monitor"
                 data-role="stage-monitor"
-                attr:data-connected=move || {
+                data-connected=move || {
                     let conns = ctx.stage_connections.get();
                     let connected = conns.iter().filter(|c| c.status == presenter_core::StageClientStatus::Connected).count();
                     connected.to_string()
                 }
-                attr:data-issues=move || {
+                data-issues=move || {
                     let conns = ctx.stage_connections.get();
                     let issues = conns.iter().filter(|c| c.status != presenter_core::StageClientStatus::Connected).count();
                     issues.to_string()

@@ -368,7 +368,7 @@ pub fn PresentationList() -> impl IntoView {
                                                 data-presentation-id=id_for_li
                                                 data-entry-id=entry_id_li
                                                 data-entry-index=idx
-                                                attr:data-active=move || if is_active { "true" } else { "false" }
+                                                data-active=move || if is_active { "true" } else { "false" }
                                                 draggable="true"
                                                 on:click={
                                                     let id = id_for_click.clone();
@@ -530,7 +530,7 @@ pub fn PresentationList() -> impl IntoView {
                                 data-role="presentation-item"
                                 data-type="presentation"
                                 data-presentation-id=id_for_li
-                                attr:data-active=move || if is_active { "true" } else { "false" }
+                                data-active=move || if is_active { "true" } else { "false" }
                                 draggable="true"
                                 on:click={
                                     let id = id_for_click.clone();

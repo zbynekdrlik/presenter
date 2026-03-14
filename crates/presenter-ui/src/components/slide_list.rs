@@ -321,7 +321,7 @@ pub fn SlideList() -> impl IntoView {
                                 }
                                 data-slide-id=slide_id_for_article.clone()
                                 data-slide-index=slide_index
-                                attr:data-group-inherited=if group_inherited { "true" } else { "false" }
+                                data-group-inherited=if group_inherited { "true" } else { "false" }
                                 on:click={
                                     let slide_id = slide_id_click.clone();
                                     let pres_id_trigger = pres_id_click.clone();
@@ -494,7 +494,7 @@ pub fn SlideList() -> impl IntoView {
                                             <div
                                                 class="operator__slide-text operator__slide-text--main"
                                                 data-field-display="main"
-                                                attr:data-warning=if main_warning { "true" } else { "false" }
+                                                data-warning=if main_warning { "true" } else { "false" }
                                                 inner_html=main_html
                                             >
                                             </div>
@@ -502,7 +502,7 @@ pub fn SlideList() -> impl IntoView {
                                                 <div
                                                     class="operator__slide-text operator__slide-text--translation"
                                                     data-field-display="translation"
-                                                    attr:data-warning=if translation_warning { "true" } else { "false" }
+                                                    data-warning=if translation_warning { "true" } else { "false" }
                                                     inner_html=translation_html
                                                 >
                                                 </div>
@@ -511,13 +511,13 @@ pub fn SlideList() -> impl IntoView {
                                                 <div
                                                     class="operator__slide-text operator__slide-text--stage"
                                                     data-field-display="stage"
-                                                    attr:data-warning=if stage_warning { "true" } else { "false" }
+                                                    data-warning=if stage_warning { "true" } else { "false" }
                                                     inner_html=stage_html
                                                 >
                                                 </div>
                                             })}
                                             <div class="operator__slide-warning" data-role="slide-warning"
-                                                attr:data-visible=move || if any_warning { "true" } else { "false" }
+                                                data-visible=move || if any_warning { "true" } else { "false" }
                                             >
                                                 {format!("Line exceeds {line_limit} characters")}
                                             </div>
@@ -533,7 +533,7 @@ pub fn SlideList() -> impl IntoView {
                                             <div
                                                 class="operator__slide-text operator__slide-text--main"
                                                 data-field-display="main"
-                                                attr:data-warning=move || if main_warn_sig.get() { "true" } else { "false" }
+                                                data-warning=move || if main_warn_sig.get() { "true" } else { "false" }
                                                 inner_html=main_html.clone()
                                             >
                                             </div>
@@ -541,7 +541,7 @@ pub fn SlideList() -> impl IntoView {
                                                 <div
                                                     class="operator__slide-text operator__slide-text--translation"
                                                     data-field-display="translation"
-                                                    attr:data-warning=move || if trans_warn_sig.get() { "true" } else { "false" }
+                                                    data-warning=move || if trans_warn_sig.get() { "true" } else { "false" }
                                                     inner_html=translation_html.clone()
                                                 >
                                                 </div>
@@ -550,13 +550,13 @@ pub fn SlideList() -> impl IntoView {
                                                 <div
                                                     class="operator__slide-text operator__slide-text--stage"
                                                     data-field-display="stage"
-                                                    attr:data-warning=move || if stage_warn_sig.get() { "true" } else { "false" }
+                                                    data-warning=move || if stage_warn_sig.get() { "true" } else { "false" }
                                                     inner_html=stage_html.clone()
                                                 >
                                                 </div>
                                             })}
                                             <div class="operator__slide-warning" data-role="slide-warning"
-                                                attr:data-visible=move || if any_warn_sig.get() { "true" } else { "false" }
+                                                data-visible=move || if any_warn_sig.get() { "true" } else { "false" }
                                             >
                                                 {format!("Line exceeds {line_limit} characters")}
                                             </div>

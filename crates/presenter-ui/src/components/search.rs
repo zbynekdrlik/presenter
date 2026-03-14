@@ -140,7 +140,7 @@ pub fn SearchResults() -> impl IntoView {
     view! {
         <div
             data-role="global-search-results"
-            attr:data-visible=move || {
+            data-visible=move || {
                 let open = op_visible.search_open.get();
                 let has_query = !op_visible.search_query.get().is_empty();
                 if open && has_query { "true" } else { "false" }

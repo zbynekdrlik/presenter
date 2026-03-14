@@ -225,7 +225,7 @@ pub fn LibraryModals() -> impl IntoView {
     view! {
         // Library list modal
         <div class="operator__library-modal" data-role="library-modal"
-            attr:data-open=move || if is_lib_list_open() { "true" } else { "false" }
+            data-open=move || if is_lib_list_open() { "true" } else { "false" }
             style:display=move || if is_lib_list_open() { "flex" } else { "none" }
             on:click=close_list
         >
@@ -298,7 +298,7 @@ pub fn LibraryModals() -> impl IntoView {
         // Library edit/create modal
         <div class="operator__library-edit" data-role="library-edit-modal"
             data-mode=edit_mode
-            attr:data-open=move || if is_lib_edit_open() { "true" } else { "false" }
+            data-open=move || if is_lib_edit_open() { "true" } else { "false" }
             style:display=move || if is_lib_edit_open() { "flex" } else { "none" }
         >
             <div class="operator__library-edit-panel">

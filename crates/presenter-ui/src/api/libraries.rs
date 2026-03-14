@@ -6,14 +6,20 @@ pub async fn list_libraries() -> Result<Vec<LibrarySummary>, ApiError> {
     get_json("/libraries/summary").await
 }
 
-pub async fn get_library(id: &str) -> Result<Library, ApiError> {
-    get_json(&format!("/libraries/{id}")).await
+/// Get a specific library by ID from the summary endpoint.
+/// Note: There's no dedicated GET /libraries/{id} endpoint, so we fetch all and filter.
+pub async fn get_library(id: &str) -> Result<LibrarySummary, ApiError> {
+    let libraries: Vec<LibrarySummary> = get_json("/libraries/summary").await?;
+    libraries
+        .into_iter()
+        .find(|lib| lib.id.to_string() == id)
+        .ok_or_else(|| ApiError::NotFound("Library not found".to_string()))
 }
 
+/// Get presentations for a library by fetching from the summary endpoint.
 pub async fn list_presentations(library_id: &str) -> Result<Vec<PresentationSummary>, ApiError> {
-    get_json::<LibrarySummary>(&format!("/libraries/{library_id}"))
-        .await
-        .map(|lib| lib.presentations)
+    let library = get_library(library_id).await?;
+    Ok(library.presentations)
 }
 
 #[derive(Serialize)]

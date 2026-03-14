@@ -130,7 +130,7 @@ pub fn Header() -> impl IntoView {
                             type="button"
                             data-role="view-toggle"
                             data-view=view_name.clone()
-                            attr:data-active=move || if ctx.view.get() == vn { "true" } else { "false" }
+                            data-active=move || if ctx.view.get() == vn { "true" } else { "false" }
                             on:click={
                                 let vn2 = view_name.clone();
                                 move |_| set_view(&vn2)
@@ -170,7 +170,7 @@ pub fn Header() -> impl IntoView {
                                 type="button"
                                 data-role="mode-toggle"
                                 data-mode=mode_name.clone()
-                                attr:data-active=move || if ctx.mode.get() == mn { "true" } else { "false" }
+                                data-active=move || if ctx.mode.get() == mn { "true" } else { "false" }
                                 on:click={
                                     let mn2 = mode_name.clone();
                                     move |_| set_mode(&mn2)

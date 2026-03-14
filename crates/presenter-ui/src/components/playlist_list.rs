@@ -232,7 +232,7 @@ pub fn PlaylistList() -> impl IntoView {
                                             class="operator__list-button"
                                             data-role="playlist-item"
                                             data-playlist-id=id_for_btn
-                                            attr:data-active=move || if is_active { "true" } else { "false" }
+                                            data-active=move || if is_active { "true" } else { "false" }
                                             on:click=move |_| {
                                                 select_playlist(id_for_click.clone(), name_for_click.clone());
                                             }
