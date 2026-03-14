@@ -8,7 +8,7 @@ use crate::state::AppContext;
 #[component]
 pub fn PlaylistList() -> impl IntoView {
     let ctx = use_context::<AppContext>().expect("AppContext");
-    let _op = use_context::<OperatorState>().expect("OperatorState");
+    let op = use_context::<OperatorState>().expect("OperatorState");
 
     let select_playlist = move |id: String, name: String| {
         ctx.selected_playlist_id.set(Some(id.clone()));
@@ -43,16 +43,20 @@ pub fn PlaylistList() -> impl IntoView {
         });
     };
 
-    let on_create = move |_| {
-        let op = use_context::<OperatorState>().expect("OperatorState");
-        op.modal_mode.set("create".to_string());
-        op.modal_target_id.set(None);
-        modal::open_modal(&op, "playlist-edit");
+    let on_create = {
+        let op = op.clone();
+        move |_| {
+            op.modal_mode.set("create".to_string());
+            op.modal_target_id.set(None);
+            modal::open_modal(&op, "playlist-edit");
+        }
     };
 
-    let on_more = move |_| {
-        let op = use_context::<OperatorState>().expect("OperatorState");
-        modal::open_modal(&op, "playlist-list");
+    let on_more = {
+        let op = op.clone();
+        move |_| {
+            modal::open_modal(&op, "playlist-list");
+        }
     };
 
     view! {
@@ -122,6 +126,7 @@ pub fn PlaylistList() -> impl IntoView {
                                 let id_for_row = id.clone();
                                 let id_for_btn = id.clone();
                                 let id_for_modal = id.clone();
+                                let op_for_edit = op.clone();
 
                                 let id_for_drop = id.clone();
                                 view! {
@@ -249,10 +254,9 @@ pub fn PlaylistList() -> impl IntoView {
                                                 aria-label="Edit playlist"
                                                 on:click=move |ev: leptos::ev::MouseEvent| {
                                                     ev.stop_propagation();
-                                                    let op = use_context::<OperatorState>().expect("OperatorState");
-                                                    op.modal_mode.set("edit".to_string());
-                                                    op.modal_target_id.set(Some(id_for_modal.clone()));
-                                                    modal::open_modal(&op, "playlist-edit");
+                                                    op_for_edit.modal_mode.set("edit".to_string());
+                                                    op_for_edit.modal_target_id.set(Some(id_for_modal.clone()));
+                                                    modal::open_modal(&op_for_edit, "playlist-edit");
                                                 }
                                             >
                                                 "\u{22ee}"

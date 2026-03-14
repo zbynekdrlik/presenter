@@ -20,7 +20,7 @@ fn get_dragging_entry() -> Option<String> {
 #[component]
 pub fn PresentationList() -> impl IntoView {
     let ctx = use_context::<AppContext>().expect("AppContext");
-    let _op = use_context::<OperatorState>().expect("OperatorState");
+    let op = use_context::<OperatorState>().expect("OperatorState");
 
     let select_presentation = move |id: String| {
         ctx.selected_presentation_id.set(Some(id.clone()));
@@ -53,71 +53,74 @@ pub fn PresentationList() -> impl IntoView {
         });
     };
 
-    let on_create = move |_| {
-        let op = use_context::<OperatorState>().expect("OperatorState");
-        let ctx = use_context::<AppContext>().expect("AppContext");
-        let has_playlist = ctx.selected_playlist_id.get_untracked().is_some();
+    let on_create = {
+        let op = op.clone();
+        move |_| {
+            let has_playlist = ctx.selected_playlist_id.get_untracked().is_some();
 
-        if has_playlist {
-            // When playlist is active, prompt for separator name
-            let name = crate::utils::window::window()
-                .prompt_with_message("Separator name:")
-                .ok()
-                .flatten()
-                .unwrap_or_default();
-            let name = name.trim().to_string();
-            if name.is_empty() {
-                return;
-            }
-            let playlist_id = ctx.selected_playlist_id.get_untracked().unwrap_or_default();
-            let selected_playlist = ctx.selected_playlist;
-            let playlists = ctx.playlists;
-            // Capture signal OUTSIDE async block
-            let presentations_signal = ctx.presentations;
-            leptos::task::spawn_local(async move {
-                // Build current entries + new separator
-                let current = selected_playlist.get_untracked();
-                let mut entries: Vec<crate::api::playlists::PlaylistEntryPayload> = current
-                    .as_ref()
-                    .map(|pl| {
-                        pl.entries
-                            .iter()
-                            .map(|e| match &e.kind {
-                                presenter_core::playlist::PlaylistEntryKind::Presentation {
-                                    presentation_id,
-                                    ..
-                                } => crate::api::playlists::PlaylistEntryPayload::Presentation {
-                                    entry_id: Some(e.id.to_string()),
-                                    presentation_id: presentation_id.to_string(),
-                                },
-                                presenter_core::playlist::PlaylistEntryKind::Separator { name } => {
-                                    crate::api::playlists::PlaylistEntryPayload::Separator {
+            if has_playlist {
+                // When playlist is active, prompt for separator name
+                let name = crate::utils::window::window()
+                    .prompt_with_message("Separator name:")
+                    .ok()
+                    .flatten()
+                    .unwrap_or_default();
+                let name = name.trim().to_string();
+                if name.is_empty() {
+                    return;
+                }
+                let playlist_id = ctx.selected_playlist_id.get_untracked().unwrap_or_default();
+                let selected_playlist = ctx.selected_playlist;
+                let playlists = ctx.playlists;
+                // Capture signal OUTSIDE async block
+                let presentations_signal = ctx.presentations;
+                leptos::task::spawn_local(async move {
+                    // Build current entries + new separator
+                    let current = selected_playlist.get_untracked();
+                    let mut entries: Vec<crate::api::playlists::PlaylistEntryPayload> = current
+                        .as_ref()
+                        .map(|pl| {
+                            pl.entries
+                                .iter()
+                                .map(|e| match &e.kind {
+                                    presenter_core::playlist::PlaylistEntryKind::Presentation {
+                                        presentation_id,
+                                        ..
+                                    } => {
+                                        crate::api::playlists::PlaylistEntryPayload::Presentation {
+                                            entry_id: Some(e.id.to_string()),
+                                            presentation_id: presentation_id.to_string(),
+                                        }
+                                    }
+                                    presenter_core::playlist::PlaylistEntryKind::Separator {
+                                        name,
+                                    } => crate::api::playlists::PlaylistEntryPayload::Separator {
                                         entry_id: Some(e.id.to_string()),
                                         name: name.clone(),
-                                    }
-                                }
-                            })
-                            .collect()
-                    })
-                    .unwrap_or_default();
-                entries.push(crate::api::playlists::PlaylistEntryPayload::Separator {
-                    entry_id: None,
-                    name,
+                                    },
+                                })
+                                .collect()
+                        })
+                        .unwrap_or_default();
+                    entries.push(crate::api::playlists::PlaylistEntryPayload::Separator {
+                        entry_id: None,
+                        name,
+                    });
+                    if let Ok(updated) =
+                        crate::api::playlists::replace_entries(&playlist_id, entries).await
+                    {
+                        selected_playlist.set(Some(updated.clone()));
+                        // Refresh presentation list from playlist entries using captured signal
+                        rebuild_playlist_presentations_with_signal(presentations_signal, &updated);
+                    }
+                    if let Ok(pls) = crate::api::playlists::list_playlists().await {
+                        playlists.set(pls);
+                    }
                 });
-                if let Ok(updated) =
-                    crate::api::playlists::replace_entries(&playlist_id, entries).await
-                {
-                    selected_playlist.set(Some(updated.clone()));
-                    // Refresh presentation list from playlist entries using captured signal
-                    rebuild_playlist_presentations_with_signal(presentations_signal, &updated);
-                }
-                if let Ok(pls) = crate::api::playlists::list_playlists().await {
-                    playlists.set(pls);
-                }
-            });
-        } else {
-            op.modal_mode.set("create".to_string());
-            modal::open_modal(&op, "presentation-create");
+            } else {
+                op.modal_mode.set("create".to_string());
+                modal::open_modal(&op, "presentation-create");
+            }
         }
     };
 
