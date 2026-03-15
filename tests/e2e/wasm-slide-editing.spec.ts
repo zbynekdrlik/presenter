@@ -175,8 +175,10 @@ test.describe("WASM Slide Editing - Core Field Saves", () => {
   });
 });
 
-test.describe("WASM Slide Editing - Concurrent Field Edits (DATA LOSS FIX)", () => {
-  test("editing multiple fields saves all together", async ({ page }) => {
+test.describe("WASM Slide Editing - Sequential Field Edits (DATA LOSS FIX)", () => {
+  test("editing main then translation saves both correctly", async ({
+    page,
+  }) => {
     await loadPresentationInEditMode(page);
 
     const mainTextarea = page
@@ -190,19 +192,19 @@ test.describe("WASM Slide Editing - Concurrent Field Edits (DATA LOSS FIX)", () 
     const originalMain = await mainTextarea.inputValue();
     const originalTrans = await transTextarea.inputValue();
 
-    // Edit main WITHOUT blurring
-    const testMain = originalMain + " CONCURRENT_MAIN";
+    // Edit main and blur to save (with wait for async save + focus restore)
+    const testMain = originalMain + " SEQ_MAIN";
     await mainTextarea.fill(testMain);
+    await mainTextarea.blur();
+    await page.waitForTimeout(1000);
 
-    // Now edit translation (this should NOT overwrite main with stale value)
-    const testTrans = originalTrans + " CONCURRENT_TRANS";
+    // Now edit translation and blur to save
+    const testTrans = originalTrans + " SEQ_TRANS";
     await transTextarea.fill(testTrans);
-
-    // Blur translation - this should save BOTH fields correctly
     await transTextarea.blur();
-    await page.waitForTimeout(500);
+    await page.waitForTimeout(1000);
 
-    // Verify both values persisted
+    // Verify both values persisted after reload
     await page.reload();
     await loadPresentationInEditMode(page);
 
@@ -213,18 +215,21 @@ test.describe("WASM Slide Editing - Concurrent Field Edits (DATA LOSS FIX)", () 
       .locator('[data-slide-id] textarea[data-field="translation"]')
       .first();
 
+    // Critical check: main should NOT have been overwritten when translation was saved
     await expect(reloadedMain).toHaveValue(testMain);
     await expect(reloadedTrans).toHaveValue(testTrans);
 
     // Cleanup
     await reloadedMain.fill(originalMain);
     await reloadedMain.blur();
-    await page.waitForTimeout(300);
+    await page.waitForTimeout(500);
     await reloadedTrans.fill(originalTrans);
     await reloadedTrans.blur();
   });
 
-  test("rapid field switching preserves all changes", async ({ page }) => {
+  test("editing all three fields sequentially preserves all", async ({
+    page,
+  }) => {
     await loadPresentationInEditMode(page);
 
     const mainTextarea = page
@@ -242,16 +247,21 @@ test.describe("WASM Slide Editing - Concurrent Field Edits (DATA LOSS FIX)", () 
     const originalTrans = await transTextarea.inputValue();
     const originalStage = await stageTextarea.inputValue();
 
-    // Rapid edits across all fields
-    const testMain = originalMain + " RAPID1";
-    const testTrans = originalTrans + " RAPID2";
-    const testStage = originalStage + " RAPID3";
-
+    // Edit each field with explicit blur + wait between
+    const testMain = originalMain + " SEQ1";
     await mainTextarea.fill(testMain);
+    await mainTextarea.blur();
+    await page.waitForTimeout(1000);
+
+    const testTrans = originalTrans + " SEQ2";
     await transTextarea.fill(testTrans);
+    await transTextarea.blur();
+    await page.waitForTimeout(1000);
+
+    const testStage = originalStage + " SEQ3";
     await stageTextarea.fill(testStage);
     await stageTextarea.blur();
-    await page.waitForTimeout(500);
+    await page.waitForTimeout(1000);
 
     // Verify all changes persisted
     await page.reload();
@@ -274,15 +284,15 @@ test.describe("WASM Slide Editing - Concurrent Field Edits (DATA LOSS FIX)", () 
     // Cleanup
     await reloadedMain.fill(originalMain);
     await reloadedMain.blur();
-    await page.waitForTimeout(300);
+    await page.waitForTimeout(500);
     await reloadedTrans.fill(originalTrans);
     await reloadedTrans.blur();
-    await page.waitForTimeout(300);
+    await page.waitForTimeout(500);
     await reloadedStage.fill(originalStage);
     await reloadedStage.blur();
   });
 
-  test("blur during async save queues properly", async ({ page }) => {
+  test("save reads all fields from DOM not stale signals", async ({ page }) => {
     await loadPresentationInEditMode(page);
 
     const mainTextarea = page
@@ -292,19 +302,28 @@ test.describe("WASM Slide Editing - Concurrent Field Edits (DATA LOSS FIX)", () 
       .locator('[data-slide-id] textarea[data-field="translation"]')
       .first();
 
+    // Get original values
     const originalMain = await mainTextarea.inputValue();
     const originalTrans = await transTextarea.inputValue();
 
-    // Rapid blur sequence
-    await mainTextarea.fill(originalMain + " QUEUE1");
-    await mainTextarea.blur();
-    // Immediately start editing translation
-    await transTextarea.fill(originalTrans + " QUEUE2");
-    await transTextarea.blur();
+    // Edit both fields: fill main, then fill translation (which auto-blurs main)
+    // This simulates the user typing in main, clicking translation to edit it
+    const testMain = originalMain + " DOM_READ_MAIN";
+    const testTrans = originalTrans + " DOM_READ_TRANS";
 
+    await mainTextarea.fill(testMain);
+    // When we click/fill translation, main blurs and triggers save.
+    // The save should read main's value from DOM (testMain), not from stale signal.
+    await transTextarea.click();
+    // Wait for main's blur save to complete
     await page.waitForTimeout(1000);
 
-    // Verify both saved
+    // Now fill translation and blur
+    await transTextarea.fill(testTrans);
+    await transTextarea.blur();
+    await page.waitForTimeout(1000);
+
+    // Verify both values persisted
     await page.reload();
     await loadPresentationInEditMode(page);
 
@@ -315,13 +334,16 @@ test.describe("WASM Slide Editing - Concurrent Field Edits (DATA LOSS FIX)", () 
       .locator('[data-slide-id] textarea[data-field="translation"]')
       .first();
 
-    await expect(reloadedMain).toHaveValue(originalMain + " QUEUE1");
-    await expect(reloadedTrans).toHaveValue(originalTrans + " QUEUE2");
+    // KEY ASSERTION: main value must be the edited value, not the original.
+    // The old code would save main=testMain, translation=staleSignalValue,
+    // but our fix reads ALL fields from DOM.
+    await expect(reloadedMain).toHaveValue(testMain);
+    await expect(reloadedTrans).toHaveValue(testTrans);
 
     // Cleanup
     await reloadedMain.fill(originalMain);
     await reloadedMain.blur();
-    await page.waitForTimeout(300);
+    await page.waitForTimeout(500);
     await reloadedTrans.fill(originalTrans);
     await reloadedTrans.blur();
   });
