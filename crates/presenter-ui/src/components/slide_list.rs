@@ -332,13 +332,16 @@ pub fn SlideList() -> impl IntoView {
                     move || {
                     let mode = ctx.mode.get();
                     let pres = ctx.selected_presentation.get();
-                    let snapshot = ctx.stage_snapshot.get();
+                    // NOTE: stage_snapshot is NOT read here (no .get()) to prevent
+                    // slide save from triggering full re-render. Slide save calls
+                    // broadcast_stage_snapshots() on server → LiveEvent::Stage via WS
+                    // → stage_snapshot.set(). Each slide card reads stage_snapshot
+                    // reactively in its class= closure, which only updates the class
+                    // attribute without destroying textarea DOM elements.
                     let line_limit = op.line_limit.get();
                     // Use get_untracked() so focused_slide_id changes do NOT trigger
-                    // full slide list re-render. Re-renders destroy textarea DOM elements
-                    // and replace them with new ones that have prop:value from signal data,
-                    // which erases any in-progress edits. The is-focused class is applied
-                    // via DOM manipulation in on:focus/on:blur handlers instead.
+                    // full slide list re-render. The is-focused class is applied
+                    // via DOM manipulation in on:focus handlers instead.
                     let focused_slide = op.focused_slide_id.get_untracked();
 
                     let Some(presentation) = pres else {
@@ -347,7 +350,6 @@ pub fn SlideList() -> impl IntoView {
 
                     let pres_id = presentation.id.to_string();
                     let slides = presentation.slides.clone();
-                    let current_slide_id = snapshot.as_ref().and_then(|s| s.current_slide_id.map(|id| id.to_string()));
                     let is_live = mode == "live";
                     let is_edit = !is_live;
 
@@ -380,7 +382,8 @@ pub fn SlideList() -> impl IntoView {
                             None
                         };
 
-                        let is_active = current_slide_id.as_deref() == Some(&slide_id);
+                        // is_active is now computed reactively in the class= closure
+                        // using ctx.stage_snapshot.get() directly (see class closure below)
                         let is_focused = focused_slide.as_deref() == Some(&slide_id);
                         let main_warning = field_has_warning(&main_text, line_limit);
                         let translation_warning = field_has_warning(&translation_text, line_limit);
@@ -431,8 +434,14 @@ pub fn SlideList() -> impl IntoView {
                             <article
                                 class=move || {
                                     let mut c = "operator__slide-card stage-control__slide".to_string();
-                                    if is_active { c.push_str(" is-active"); }
-                                    // Add is-focused class for edit mode visibility
+                                    // Read stage_snapshot reactively HERE (in class closure)
+                                    // so it only updates this element's class, not the entire view.
+                                    let snap = ctx.stage_snapshot.get();
+                                    let active_id = snap.as_ref().and_then(|s| s.current_slide_id.map(|id| id.to_string()));
+                                    if active_id.as_deref() == Some(&slide_id_class) {
+                                        c.push_str(" is-active");
+                                    }
+                                    // is-focused is managed via DOM in apply_focused_class()
                                     if is_focused { c.push_str(" is-focused"); }
                                     // Add is-loading class during trigger operation
                                     if op.triggering_slide_id.get().as_deref() == Some(&slide_id_class) {
