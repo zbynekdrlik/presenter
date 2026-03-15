@@ -37,6 +37,27 @@ fn slide_has_any_warning(main: &str, translation: &str, stage: &str, limit: u32)
         || field_has_warning(stage, limit)
 }
 
+/// Apply is-focused class to a slide card via DOM manipulation.
+/// This avoids reactive re-renders from focused_slide_id signal changes.
+fn apply_focused_class(slide_id: &str) {
+    let doc = crate::utils::window::document();
+    // Remove is-focused from all slide cards
+    if let Ok(cards) = doc.query_selector_all(".is-focused") {
+        for i in 0..cards.length() {
+            if let Some(el) = cards.item(i) {
+                if let Ok(el) = el.dyn_into::<web_sys::Element>() {
+                    let _ = el.class_list().remove_1("is-focused");
+                }
+            }
+        }
+    }
+    // Add is-focused to the target slide card
+    let selector = format!("[data-slide-id=\"{}\"]", slide_id);
+    if let Ok(Some(el)) = doc.query_selector(&selector) {
+        let _ = el.class_list().add_1("is-focused");
+    }
+}
+
 /// Get a textarea/input value from the DOM by slide_id and field name.
 fn get_field_value(doc: &web_sys::Document, slide_id: &str, field: &str) -> String {
     let selector = format!(
@@ -313,7 +334,12 @@ pub fn SlideList() -> impl IntoView {
                     let pres = ctx.selected_presentation.get();
                     let snapshot = ctx.stage_snapshot.get();
                     let line_limit = op.line_limit.get();
-                    let focused_slide = op.focused_slide_id.get();
+                    // Use get_untracked() so focused_slide_id changes do NOT trigger
+                    // full slide list re-render. Re-renders destroy textarea DOM elements
+                    // and replace them with new ones that have prop:value from signal data,
+                    // which erases any in-progress edits. The is-focused class is applied
+                    // via DOM manipulation in on:focus/on:blur handlers instead.
+                    let focused_slide = op.focused_slide_id.get_untracked();
 
                     let Some(presentation) = pres else {
                         return view! { <p class="empty">"Select a presentation to load slides."</p> }.into_any();
@@ -687,6 +713,9 @@ pub fn SlideList() -> impl IntoView {
                                                                 op.focused_field.set(Some("main".to_string()));
                                                                 crate::state::session::set("focusedSlideId", &sid);
                                                                 crate::state::session::set("focusedField", "main");
+                                                                // Apply is-focused class via DOM since focused_slide_id
+                                                                // uses get_untracked() to avoid re-renders
+                                                                apply_focused_class(&sid);
                                                             }
                                                         }
                                                     />
@@ -721,6 +750,7 @@ pub fn SlideList() -> impl IntoView {
                                                                 op.focused_field.set(Some("translation".to_string()));
                                                                 crate::state::session::set("focusedSlideId", &sid);
                                                                 crate::state::session::set("focusedField", "translation");
+                                                                apply_focused_class(&sid);
                                                             }
                                                         }
                                                     />
@@ -755,6 +785,7 @@ pub fn SlideList() -> impl IntoView {
                                                                 op.focused_field.set(Some("stage".to_string()));
                                                                 crate::state::session::set("focusedSlideId", &sid);
                                                                 crate::state::session::set("focusedField", "stage");
+                                                                apply_focused_class(&sid);
                                                             }
                                                         }
                                                     />
@@ -808,6 +839,7 @@ pub fn SlideList() -> impl IntoView {
                                                                 op.focused_field.set(Some("group".to_string()));
                                                                 crate::state::session::set("focusedSlideId", &sid);
                                                                 crate::state::session::set("focusedField", "group");
+                                                                apply_focused_class(&sid);
                                                             }
                                                         }
                                                     />
