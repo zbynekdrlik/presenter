@@ -236,15 +236,50 @@ test.describe("WASM Slide Editing - Unified Save (DATA LOSS FIX)", () => {
   });
 
   test("main edit persists after editing second slide", async ({ page }) => {
-    await loadPresentationInEditMode(page);
+    // Load presentation and first trigger a slide in live mode to sync
+    // stage with operator. Without this, a save broadcasts stage_snapshots
+    // which may auto-sync to a different presentation from a previous test.
+    await page.goto(`${baseURL}/ui-next/operator`);
+    await page.waitForSelector('[data-role="library-list"]', {
+      timeout: 30_000,
+    });
+    await page.waitForSelector('[data-role="library-item"]', {
+      timeout: 30_000,
+    });
+    await page.locator('[data-role="library-item"]').first().click();
+    await page.waitForSelector('[data-role="presentation-item"]', {
+      timeout: 15_000,
+    });
+    await page.locator('[data-role="presentation-item"]').first().click();
+    await page.waitForFunction(
+      () => {
+        const slides = document.querySelector('[data-role="slides"]');
+        return slides && slides.querySelectorAll("[data-slide-id]").length > 0;
+      },
+      { timeout: 15_000 },
+    );
+
+    // Trigger first slide in live mode to sync stage
+    if ((await page.locator("body").getAttribute("data-mode")) !== "live") {
+      await page.locator('[data-role="mode-toggle"][data-mode="live"]').click();
+      await page.waitForFunction(
+        () => document.body.getAttribute("data-mode") === "live",
+        { timeout: 5_000 },
+      );
+    }
+    await page.locator("[data-slide-id]").first().click();
+    await page.waitForTimeout(1000);
+
+    // Switch to edit mode
+    await page.locator('[data-role="mode-toggle"][data-mode="edit"]').click();
+    await page.waitForFunction(
+      () => document.body.getAttribute("data-mode") === "edit",
+      { timeout: 5_000 },
+    );
 
     const slides = page.locator("[data-slide-id]");
     const slideCount = await slides.count();
-
-    // Need at least 2 slides for this test
-    if (slideCount < 2) {
-      return;
-    }
+    if (slideCount < 2) return;
 
     // Capture slide IDs for reliable lookup after reload
     const slideId1 = await slides.first().getAttribute("data-slide-id");
@@ -267,7 +302,7 @@ test.describe("WASM Slide Editing - Unified Save (DATA LOSS FIX)", () => {
     await secondMain.blur();
     await page.waitForTimeout(1500);
 
-    // Reload and verify both slides saved correctly (use slide IDs, not position)
+    // Reload and verify both slides saved correctly (use slide IDs)
     await page.reload();
     await loadPresentationInEditMode(page);
 
