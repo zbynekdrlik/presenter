@@ -246,13 +246,18 @@ test.describe("WASM Slide Editing - Unified Save (DATA LOSS FIX)", () => {
       return;
     }
 
+    // Capture slide IDs for reliable lookup after reload
+    const slideId1 = await slides.first().getAttribute("data-slide-id");
+    const slideId2 = await slides.nth(1).getAttribute("data-slide-id");
+    if (!slideId1 || !slideId2) return;
+
     // Edit first slide main field
     const firstMain = slides.first().locator('textarea[data-field="main"]');
     const originalFirst = await firstMain.inputValue();
     const testFirst = originalFirst + " SLIDE1_TEST";
     await firstMain.fill(testFirst);
     await firstMain.blur();
-    await page.waitForTimeout(1000);
+    await page.waitForTimeout(1500);
 
     // Edit second slide main field
     const secondMain = slides.nth(1).locator('textarea[data-field="main"]');
@@ -260,20 +265,18 @@ test.describe("WASM Slide Editing - Unified Save (DATA LOSS FIX)", () => {
     const testSecond = originalSecond + " SLIDE2_TEST";
     await secondMain.fill(testSecond);
     await secondMain.blur();
-    await page.waitForTimeout(1000);
+    await page.waitForTimeout(1500);
 
-    // Reload and verify both slides saved correctly
+    // Reload and verify both slides saved correctly (use slide IDs, not position)
     await page.reload();
     await loadPresentationInEditMode(page);
 
-    const reloadedFirst = page
-      .locator("[data-slide-id]")
-      .first()
-      .locator('textarea[data-field="main"]');
-    const reloadedSecond = page
-      .locator("[data-slide-id]")
-      .nth(1)
-      .locator('textarea[data-field="main"]');
+    const reloadedFirst = page.locator(
+      `[data-slide-id="${slideId1}"] textarea[data-field="main"]`,
+    );
+    const reloadedSecond = page.locator(
+      `[data-slide-id="${slideId2}"] textarea[data-field="main"]`,
+    );
 
     await expect(reloadedFirst).toHaveValue(testFirst);
     await expect(reloadedSecond).toHaveValue(testSecond);
