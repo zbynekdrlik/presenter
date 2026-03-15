@@ -99,13 +99,15 @@ fn restore_pending_focus(op: &OperatorState) {
 
 /// Unified save function that saves ALL fields from DOM atomically.
 /// This prevents data loss when editing multiple fields before blur.
+/// Takes `RwSignal` (which is `Copy`) instead of `&AppContext` to allow
+/// use in multiple `move` closures without moving the entire context.
 fn save_all_fields_from_dom(
     pres_id: &str,
     slide_id: &str,
     current_field: &str,
     sel_start: u32,
     sel_end: u32,
-    ctx: &AppContext,
+    selected_pres: RwSignal<Option<presenter_core::Presentation>>,
     op: &OperatorState,
 ) {
     // Set pending focus before async operation
@@ -130,7 +132,7 @@ fn save_all_fields_from_dom(
     };
 
     // Compare to original before saving - skip if no changes
-    let pres = ctx.selected_presentation.get_untracked();
+    let pres = selected_pres.get_untracked();
     if let Some(p) = &pres {
         if let Some(slide) = p.slides.iter().find(|s| s.id.to_string() == slide_id) {
             let orig = &slide.content;
@@ -149,7 +151,6 @@ fn save_all_fields_from_dom(
 
     let pres_id = pres_id.to_string();
     let sid = slide_id.to_string();
-    let selected_pres = ctx.selected_presentation;
     let op = op.clone();
 
     leptos::task::spawn_local(async move {
@@ -692,7 +693,7 @@ pub fn SlideList() -> impl IntoView {
                                                             move |ev| {
                                                                 let (sel_start, sel_end) = capture_selection(&ev);
                                                                 // Use unified save that gets ALL fields from DOM
-                                                                save_all_fields_from_dom(&pres_id, &sid, "main", sel_start, sel_end, &ctx, &op);
+                                                                save_all_fields_from_dom(&pres_id, &sid, "main", sel_start, sel_end, ctx.selected_presentation, &op);
                                                             }
                                                         }
                                                         on:focus={
@@ -726,7 +727,7 @@ pub fn SlideList() -> impl IntoView {
                                                             move |ev| {
                                                                 let (sel_start, sel_end) = capture_selection(&ev);
                                                                 // Use unified save that gets ALL fields from DOM
-                                                                save_all_fields_from_dom(&pres_id, &sid, "translation", sel_start, sel_end, &ctx, &op);
+                                                                save_all_fields_from_dom(&pres_id, &sid, "translation", sel_start, sel_end, ctx.selected_presentation, &op);
                                                             }
                                                         }
                                                         on:focus={
@@ -760,7 +761,7 @@ pub fn SlideList() -> impl IntoView {
                                                             move |ev| {
                                                                 let (sel_start, sel_end) = capture_selection(&ev);
                                                                 // Use unified save that gets ALL fields from DOM
-                                                                save_all_fields_from_dom(&pres_id, &sid, "stage", sel_start, sel_end, &ctx, &op);
+                                                                save_all_fields_from_dom(&pres_id, &sid, "stage", sel_start, sel_end, ctx.selected_presentation, &op);
                                                             }
                                                         }
                                                         on:focus={
