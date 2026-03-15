@@ -155,7 +155,7 @@ fn save_all_fields_from_dom(
 
     leptos::task::spawn_local(async move {
         // Save all fields atomically using update_slide_with_group
-        let result = api::presentations::update_slide_with_group(
+        let _ = api::presentations::update_slide_with_group(
             &pres_id,
             &sid,
             &main,
@@ -164,17 +164,13 @@ fn save_all_fields_from_dom(
             group.clone(),
         )
         .await;
-
-        if let Ok(updated_slide) = result {
-            // Update local cache without refetch - more efficient
-            selected_pres.update(|p| {
-                if let Some(pres) = p.as_mut() {
-                    if let Some(slide) = pres.slides.iter_mut().find(|s| s.id.to_string() == sid) {
-                        *slide = updated_slide;
-                    }
-                }
-            });
-        }
+        // NOTE: Do NOT update selected_pres signal here. Updating the signal
+        // triggers a Leptos re-render of the entire slide list, which creates
+        // new textarea elements and overwrites any in-progress DOM edits.
+        // The DOM is the source of truth while editing. The signal data may
+        // become stale but this only causes redundant saves, not data loss.
+        // Group blur handler uses refetch separately since it needs to update
+        // group inheritance display across all slides.
         restore_pending_focus(&op);
     });
 }

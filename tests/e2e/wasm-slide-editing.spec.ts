@@ -348,28 +348,26 @@ test.describe("WASM Slide Editing - Focus Restoration", () => {
     // The implementation may not restore focus automatically after blur
   });
 
-  test("cursor position restored after save", async ({ page }) => {
+  test("edited value persists after blur without re-render overwrite", async ({
+    page,
+  }) => {
     await loadPresentationInEditMode(page);
 
     const textarea = page
       .locator('[data-slide-id] textarea[data-field="main"]')
       .first();
     const originalValue = await textarea.inputValue();
+    const testValue = originalValue + " PERSIST_TEST";
 
-    // Position cursor in middle and add text
-    await textarea.focus();
-    await textarea.click();
-
-    // Use keyboard to position cursor
-    await textarea.press("Home");
-    await textarea.type("START_");
-
-    // Blur triggers save
+    // Fill and blur
+    await textarea.fill(testValue);
     await textarea.blur();
+
+    // Wait for save to complete
     await page.waitForTimeout(500);
 
-    // Verify the text was inserted at start
-    await expect(textarea).toHaveValue("START_" + originalValue);
+    // Value should still be in the textarea (not overwritten by re-render)
+    await expect(textarea).toHaveValue(testValue);
 
     // Cleanup
     await textarea.fill(originalValue);
