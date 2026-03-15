@@ -44,6 +44,8 @@ pub struct OperatorState {
     pub playlist_edit_initial: RwSignal<Option<String>>,
     /// Whether stage layout is loading
     pub stage_layout_loading: RwSignal<bool>,
+    /// Slide ID currently being triggered (for is-loading class)
+    pub triggering_slide_id: RwSignal<Option<String>>,
 }
 
 impl OperatorState {
@@ -85,6 +87,7 @@ impl OperatorState {
             reorder_snapshot: RwSignal::new(None),
             playlist_edit_initial: RwSignal::new(None),
             stage_layout_loading: RwSignal::new(false),
+            triggering_slide_id: RwSignal::new(None),
         }
     }
 }

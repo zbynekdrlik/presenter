@@ -57,9 +57,24 @@ fn get_field_value(doc: &web_sys::Document, slide_id: &str, field: &str) -> Stri
 /// Restore focus to a field after save/re-render.
 fn restore_pending_focus(op: &OperatorState) {
     if let Some((slide_id, field, sel_start, sel_end)) = op.pending_focus.get_untracked() {
+        // Check mode before restoring - only restore in edit mode
+        if crate::state::session::get("mode").as_deref() != Some("edit") {
+            op.pending_focus.set(None);
+            return;
+        }
+        // Check modal not open
+        let doc = crate::utils::window::document();
+        if doc
+            .body()
+            .and_then(|b| b.get_attribute("data-modal-open"))
+            .is_some()
+        {
+            return;
+        }
+
         let op = op.clone();
-        // Use a small timeout to let the DOM update
-        gloo_timers::callback::Timeout::new(0, move || {
+        // Use requestAnimationFrame for proper timing after DOM updates
+        let closure = wasm_bindgen::closure::Closure::once(Box::new(move || {
             let doc = crate::utils::window::document();
             let selector = format!(
                 "[data-slide-id=\"{}\"] [data-field=\"{}\"]",
@@ -75,9 +90,92 @@ fn restore_pending_focus(op: &OperatorState) {
                 }
             }
             op.pending_focus.set(None);
-        })
-        .forget();
+        }) as Box<dyn FnOnce()>);
+        let window = crate::utils::window::window();
+        let _ = window.request_animation_frame(closure.as_ref().unchecked_ref());
+        closure.forget();
     }
+}
+
+/// Unified save function that saves ALL fields from DOM atomically.
+/// This prevents data loss when editing multiple fields before blur.
+fn save_all_fields_from_dom(
+    pres_id: &str,
+    slide_id: &str,
+    current_field: &str,
+    sel_start: u32,
+    sel_end: u32,
+    ctx: &AppContext,
+    op: &OperatorState,
+) {
+    // Set pending focus before async operation
+    op.pending_focus.set(Some((
+        slide_id.to_string(),
+        current_field.to_string(),
+        sel_start,
+        sel_end,
+    )));
+
+    let doc = crate::utils::window::document();
+
+    // Get ALL field values from the DOM (not from signals which may be stale)
+    let main = get_field_value(&doc, slide_id, "main");
+    let translation = get_field_value(&doc, slide_id, "translation");
+    let stage = get_field_value(&doc, slide_id, "stage");
+    let group_val = get_field_value(&doc, slide_id, "group");
+    let group = if group_val.trim().is_empty() {
+        None
+    } else {
+        Some(group_val.trim().to_string())
+    };
+
+    // Compare to original before saving - skip if no changes
+    let pres = ctx.selected_presentation.get_untracked();
+    if let Some(p) = &pres {
+        if let Some(slide) = p.slides.iter().find(|s| s.id.to_string() == slide_id) {
+            let orig = &slide.content;
+            let orig_group = orig.group.as_ref().map(|g| g.name().to_string());
+            if orig.main.value() == main
+                && orig.translation.value() == translation
+                && orig.stage.value() == stage
+                && orig_group == group
+            {
+                // No changes, skip save but still restore focus
+                restore_pending_focus(op);
+                return;
+            }
+        }
+    }
+
+    let pres_id = pres_id.to_string();
+    let sid = slide_id.to_string();
+    let selected_pres = ctx.selected_presentation;
+    let op = op.clone();
+
+    leptos::task::spawn_local(async move {
+        // Save all fields atomically using update_slide_with_group
+        let result = api::presentations::update_slide_with_group(
+            &pres_id,
+            &sid,
+            &main,
+            &translation,
+            &stage,
+            group.clone(),
+        )
+        .await;
+
+        if let Ok(updated_slide) = result {
+            // Update local cache without refetch - more efficient
+            selected_pres.update(|p| {
+                if let Some(pres) = p.as_mut() {
+                    if let Some(slide) = pres.slides.iter_mut().find(|s| s.id.to_string() == sid) {
+                        *slide = updated_slide;
+                    }
+                }
+            });
+        }
+        restore_pending_focus(&op);
+    });
 }
 
 /// Capture current selection range from a textarea event.
@@ -104,6 +202,9 @@ pub fn SlideList() -> impl IntoView {
 
     let trigger_slide = move |pres_id: String, slide_id: String, next_slide_id: Option<String>| {
         let playlist_id = ctx.selected_playlist_id.get_untracked();
+        // Set loading state for visual feedback
+        op.triggering_slide_id.set(Some(slide_id.clone()));
+        let triggering_signal = op.triggering_slide_id;
         leptos::task::spawn_local(async move {
             let _ = api::stage::update_state(&api::stage::StageStateRequest {
                 presentation_id: pres_id,
@@ -112,6 +213,8 @@ pub fn SlideList() -> impl IntoView {
                 playlist_id,
             })
             .await;
+            // Clear loading state after API call completes
+            triggering_signal.set(None);
         });
     };
 
@@ -307,6 +410,9 @@ pub fn SlideList() -> impl IntoView {
                         let slide_id_pointer = slide_id.clone();
                         let next_slide_pointer = next_slide_id.clone();
 
+                        // Clone for class closure (is-loading check)
+                        let slide_id_class = slide_id.clone();
+
                         view! {
                             {show_group.map(|g| view! {
                                 <div class="operator__slide-group" data-role="slide-group">{g}</div>
@@ -315,8 +421,12 @@ pub fn SlideList() -> impl IntoView {
                                 class=move || {
                                     let mut c = "operator__slide-card stage-control__slide".to_string();
                                     if is_active { c.push_str(" is-active"); }
-                                    // BLOCKER #2 fix: Add is-focused class for edit mode visibility
+                                    // Add is-focused class for edit mode visibility
                                     if is_focused { c.push_str(" is-focused"); }
+                                    // Add is-loading class during trigger operation
+                                    if op.triggering_slide_id.get().as_deref() == Some(&slide_id_class) {
+                                        c.push_str(" is-loading");
+                                    }
                                     c
                                 }
                                 data-slide-id=slide_id_for_article.clone()
@@ -578,33 +688,11 @@ pub fn SlideList() -> impl IntoView {
                                                         on:blur={
                                                             let pres_id = pres_id_edit.clone();
                                                             let sid = slide_id_edit.clone();
-                                                            let selected_pres = ctx.selected_presentation;
                                                             let op = op.clone();
                                                             move |ev| {
                                                                 let (sel_start, sel_end) = capture_selection(&ev);
-                                                                // BLOCKER #3: Set pending focus before save
-                                                                op.pending_focus.set(Some((sid.clone(), "main".to_string(), sel_start, sel_end)));
-
-                                                                let val = event_target_value(&ev);
-                                                                let pres_id = pres_id.clone();
-                                                                let sid = sid.clone();
-                                                                let op = op.clone();
-                                                                leptos::task::spawn_local(async move {
-                                                                    let pres = selected_pres.get_untracked();
-                                                                    if let Some(p) = &pres {
-                                                                        let slide = p.slides.iter().find(|s| s.id.to_string() == sid);
-                                                                        if let Some(s) = slide {
-                                                                            let _ = api::presentations::update_slide(
-                                                                                &pres_id, &sid,
-                                                                                &val,
-                                                                                s.content.translation.value(),
-                                                                                s.content.stage.value(),
-                                                                            ).await;
-                                                                            // Restore focus after save
-                                                                            restore_pending_focus(&op);
-                                                                        }
-                                                                    }
-                                                                });
+                                                                // Use unified save that gets ALL fields from DOM
+                                                                save_all_fields_from_dom(&pres_id, &sid, "main", sel_start, sel_end, &ctx, &op);
                                                             }
                                                         }
                                                         on:focus={
@@ -634,34 +722,13 @@ pub fn SlideList() -> impl IntoView {
                                                         on:blur={
                                                             let pres_id = pres_id_edit.clone();
                                                             let sid = slide_id_edit.clone();
-                                                            let selected_pres = ctx.selected_presentation;
                                                             let op = op.clone();
                                                             move |ev| {
                                                                 let (sel_start, sel_end) = capture_selection(&ev);
-                                                                op.pending_focus.set(Some((sid.clone(), "translation".to_string(), sel_start, sel_end)));
-
-                                                                let val = event_target_value(&ev);
-                                                                let pres_id = pres_id.clone();
-                                                                let sid = sid.clone();
-                                                                let op = op.clone();
-                                                                leptos::task::spawn_local(async move {
-                                                                    let pres = selected_pres.get_untracked();
-                                                                    if let Some(p) = &pres {
-                                                                        let slide = p.slides.iter().find(|s| s.id.to_string() == sid);
-                                                                        if let Some(s) = slide {
-                                                                            let _ = api::presentations::update_slide(
-                                                                                &pres_id, &sid,
-                                                                                s.content.main.value(),
-                                                                                &val,
-                                                                                s.content.stage.value(),
-                                                                            ).await;
-                                                                            restore_pending_focus(&op);
-                                                                        }
-                                                                    }
-                                                                });
+                                                                // Use unified save that gets ALL fields from DOM
+                                                                save_all_fields_from_dom(&pres_id, &sid, "translation", sel_start, sel_end, &ctx, &op);
                                                             }
                                                         }
-                                                        // BLOCKER #4 fix: Add on:focus to track field focus
                                                         on:focus={
                                                             let sid = slide_id.clone();
                                                             move |_| {
@@ -689,34 +756,13 @@ pub fn SlideList() -> impl IntoView {
                                                         on:blur={
                                                             let pres_id = pres_id_edit.clone();
                                                             let sid = slide_id_edit.clone();
-                                                            let selected_pres = ctx.selected_presentation;
                                                             let op = op.clone();
                                                             move |ev| {
                                                                 let (sel_start, sel_end) = capture_selection(&ev);
-                                                                op.pending_focus.set(Some((sid.clone(), "stage".to_string(), sel_start, sel_end)));
-
-                                                                let val = event_target_value(&ev);
-                                                                let pres_id = pres_id.clone();
-                                                                let sid = sid.clone();
-                                                                let op = op.clone();
-                                                                leptos::task::spawn_local(async move {
-                                                                    let pres = selected_pres.get_untracked();
-                                                                    if let Some(p) = &pres {
-                                                                        let slide = p.slides.iter().find(|s| s.id.to_string() == sid);
-                                                                        if let Some(s) = slide {
-                                                                            let _ = api::presentations::update_slide(
-                                                                                &pres_id, &sid,
-                                                                                s.content.main.value(),
-                                                                                s.content.translation.value(),
-                                                                                &val,
-                                                                            ).await;
-                                                                            restore_pending_focus(&op);
-                                                                        }
-                                                                    }
-                                                                });
+                                                                // Use unified save that gets ALL fields from DOM
+                                                                save_all_fields_from_dom(&pres_id, &sid, "stage", sel_start, sel_end, &ctx, &op);
                                                             }
                                                         }
-                                                        // BLOCKER #4 fix: Add on:focus to track field focus
                                                         on:focus={
                                                             let sid = slide_id.clone();
                                                             move |_| {
@@ -736,38 +782,33 @@ pub fn SlideList() -> impl IntoView {
                                                         prop:value=group_display.clone()
                                                         // CRITICAL #8 fix: Show inherited group as placeholder
                                                         placeholder=group_placeholder
-                                                        // BLOCKER #1 fix: Add blur handler to save group changes
                                                         on:blur={
                                                             let pres_id = pres_id_edit.clone();
                                                             let sid = slide_id_edit.clone();
-                                                            let selected_pres = ctx.selected_presentation;
                                                             let op = op.clone();
+                                                            let selected_pres = ctx.selected_presentation;
                                                             move |ev| {
                                                                 let (sel_start, sel_end) = capture_selection(&ev);
+                                                                // For group changes, we need to refetch full presentation
+                                                                // to update group inheritance across all slides
                                                                 op.pending_focus.set(Some((sid.clone(), "group".to_string(), sel_start, sel_end)));
 
-                                                                let group_val = event_target_value(&ev);
-                                                                let pres_id = pres_id.clone();
-                                                                let sid = sid.clone();
-                                                                let op = op.clone();
-
-                                                                // Get all field values from DOM to ensure we save current state
                                                                 let doc = crate::utils::window::document();
                                                                 let main = get_field_value(&doc, &sid, "main");
                                                                 let translation = get_field_value(&doc, &sid, "translation");
                                                                 let stage = get_field_value(&doc, &sid, "stage");
-
+                                                                let group_val = get_field_value(&doc, &sid, "group");
                                                                 let group = if group_val.trim().is_empty() { None } else { Some(group_val.trim().to_string()) };
 
+                                                                let pres_id = pres_id.clone();
+                                                                let sid = sid.clone();
+                                                                let op = op.clone();
                                                                 leptos::task::spawn_local(async move {
                                                                     let _ = api::presentations::update_slide_with_group(
                                                                         &pres_id, &sid,
-                                                                        &main,
-                                                                        &translation,
-                                                                        &stage,
-                                                                        group,
+                                                                        &main, &translation, &stage, group,
                                                                     ).await;
-                                                                    // Refetch presentation to update group display
+                                                                    // Refetch to update group inheritance display
                                                                     if let Ok(detail) = api::presentations::get_presentation(&pres_id).await {
                                                                         selected_pres.set(Some(detail.presentation));
                                                                     }
@@ -775,7 +816,6 @@ pub fn SlideList() -> impl IntoView {
                                                                 });
                                                             }
                                                         }
-                                                        // BLOCKER #4 fix: Add on:focus to track field focus
                                                         on:focus={
                                                             let sid = slide_id.clone();
                                                             move |_| {
