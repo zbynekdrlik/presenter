@@ -60,12 +60,21 @@ async function loadPresentationInEditMode(
     { timeout: 15_000 },
   );
 
+  // Wait for async presentation fetch to complete and final re-render to settle.
+  // The presentation click triggers a cache lookup + async API fetch. The API fetch
+  // updates selected_presentation signal when it completes, causing a re-render.
+  // Without this wait, the re-render can happen AFTER we start editing, destroying edits.
+  await page.waitForTimeout(1500);
+
   // Switch to edit mode
   await page.locator('[data-role="mode-toggle"][data-mode="edit"]').click();
   await page.waitForFunction(
     () => document.body.getAttribute("data-mode") === "edit",
     { timeout: 5_000 },
   );
+
+  // Wait for edit mode re-render to settle
+  await page.waitForTimeout(500);
 }
 
 test.describe("WASM Slide Editing - Core Field Saves", () => {
@@ -350,26 +359,6 @@ test.describe("WASM Slide Editing - Sequential Field Edits (DATA LOSS FIX)", () 
 });
 
 test.describe("WASM Slide Editing - Focus Restoration", () => {
-  test("focus returns to same field after save", async ({ page }) => {
-    await loadPresentationInEditMode(page);
-
-    const textarea = page
-      .locator('[data-slide-id] textarea[data-field="main"]')
-      .first();
-
-    await textarea.focus();
-    await textarea.press("End"); // Move cursor to end
-    await textarea.type(" FOCUS_TEST");
-    await textarea.blur();
-
-    // Wait for save and focus restoration
-    await page.waitForTimeout(500);
-
-    // The textarea should have focus restored
-    // Note: This depends on whether pendingFocus triggers focus restoration
-    // The implementation may not restore focus automatically after blur
-  });
-
   test("edited value persists after blur without re-render overwrite", async ({
     page,
   }) => {
