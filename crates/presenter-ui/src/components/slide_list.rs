@@ -104,20 +104,12 @@ fn restore_pending_focus(op: &OperatorState) {
 fn save_all_fields_from_dom(
     pres_id: &str,
     slide_id: &str,
-    current_field: &str,
-    sel_start: u32,
-    sel_end: u32,
+    _current_field: &str,
+    _sel_start: u32,
+    _sel_end: u32,
     selected_pres: RwSignal<Option<presenter_core::Presentation>>,
-    op: &OperatorState,
+    _op: &OperatorState,
 ) {
-    // Set pending focus before async operation
-    op.pending_focus.set(Some((
-        slide_id.to_string(),
-        current_field.to_string(),
-        sel_start,
-        sel_end,
-    )));
-
     let doc = crate::utils::window::document();
 
     // Get ALL field values from the DOM (not from signals which may be stale)
@@ -131,7 +123,7 @@ fn save_all_fields_from_dom(
         Some(group_val.trim().to_string())
     };
 
-    // Compare to original before saving - skip if no changes
+    // Compare to signal to skip no-op saves
     let pres = selected_pres.get_untracked();
     if let Some(p) = &pres {
         if let Some(slide) = p.slides.iter().find(|s| s.id.to_string() == slide_id) {
@@ -142,8 +134,6 @@ fn save_all_fields_from_dom(
                 && orig.stage.value() == stage
                 && orig_group == group
             {
-                // No changes, skip save but still restore focus
-                restore_pending_focus(op);
                 return;
             }
         }
@@ -151,11 +141,17 @@ fn save_all_fields_from_dom(
 
     let pres_id = pres_id.to_string();
     let sid = slide_id.to_string();
-    let op = op.clone();
 
     leptos::task::spawn_local(async move {
-        // Save all fields atomically using update_slide_with_group
-        let result = api::presentations::update_slide_with_group(
+        // Save all fields atomically. Do NOT update the selected_pres signal
+        // after save — that triggers a Leptos re-render which recreates textarea
+        // elements with prop:value from the signal, destroying any in-progress
+        // DOM edits the user is making in another field. The signal data becomes
+        // stale but is refreshed on presentation switch or page reload.
+        // Do NOT call restore_pending_focus — it refocuses the blurred field,
+        // which then triggers another blur on whatever field Playwright/user
+        // moved to, creating a race condition with concurrent saves.
+        let _ = api::presentations::update_slide_with_group(
             &pres_id,
             &sid,
             &main,
@@ -164,18 +160,6 @@ fn save_all_fields_from_dom(
             group.clone(),
         )
         .await;
-        // Update signal so re-renders (triggered by focused_slide_id etc.)
-        // have correct data instead of stale values.
-        if let Ok(updated_slide) = result {
-            selected_pres.update(|p| {
-                if let Some(pres) = p.as_mut() {
-                    if let Some(slide) = pres.slides.iter_mut().find(|s| s.id.to_string() == sid) {
-                        *slide = updated_slide;
-                    }
-                }
-            });
-        }
-        restore_pending_focus(&op);
     });
 }
 
