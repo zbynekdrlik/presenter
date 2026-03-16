@@ -435,10 +435,16 @@ jobs:
         uses: actions/download-artifact@v4
         with:
           name: build-artifacts
-          path: target/release
+          path: _artifacts
 
-      - name: Verify artifacts
+      - name: Place binaries
         run: |
+          echo "=== Downloaded artifact contents ==="
+          find _artifacts -type f -ls
+          mkdir -p target/release
+          cp _artifacts/presenter-server target/release/
+          cp _artifacts/import_propresenter target/release/
+          cp _artifacts/ingest_bibles target/release/
           chmod +x target/release/presenter-server target/release/import_propresenter target/release/ingest_bibles
           ls -la target/release/presenter-server target/release/import_propresenter target/release/ingest_bibles
 
@@ -498,10 +504,14 @@ jobs:
         uses: actions/download-artifact@v4
         with:
           name: build-artifacts
-          path: target/release
+          path: _artifacts
 
-      - name: Verify artifacts
+      - name: Place binaries
         run: |
+          mkdir -p target/release
+          cp _artifacts/presenter-server target/release/
+          cp _artifacts/import_propresenter target/release/
+          cp _artifacts/ingest_bibles target/release/
           chmod +x target/release/presenter-server target/release/import_propresenter target/release/ingest_bibles
           ls -la target/release/presenter-server target/release/import_propresenter target/release/ingest_bibles
 
