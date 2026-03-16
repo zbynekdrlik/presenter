@@ -133,21 +133,21 @@ fn BibleTabNav() -> impl IntoView {
                 type="button"
                 data-role="bible-tab"
                 data-tab="live"
-                attr:data-active=move || if bible_tab.get() == "live" { "true" } else { "false" }
+                data-active=move || if bible_tab.get() == "live" { "true" } else { "false" }
                 on:click=make_tab_click("live")
             >"Live"</button>
             <button
                 type="button"
                 data-role="bible-tab"
                 data-tab="prepared"
-                attr:data-active=move || if bible_tab.get() == "prepared" { "true" } else { "false" }
+                data-active=move || if bible_tab.get() == "prepared" { "true" } else { "false" }
                 on:click=make_tab_click("prepared")
             >"Prepared"</button>
             <button
                 type="button"
                 data-role="bible-tab"
                 data-tab="settings"
-                attr:data-active=move || if bible_tab.get() == "settings" { "true" } else { "false" }
+                data-active=move || if bible_tab.get() == "settings" { "true" } else { "false" }
                 on:click=make_tab_click("settings")
             >"Settings"</button>
         </nav>
@@ -167,7 +167,7 @@ fn BibleLiveTab() -> impl IntoView {
         <div
             class="bible__tab-panel"
             data-bible-panel="live"
-            attr:data-visible=move || if bible_tab.get() == "live" { "true" } else { "false" }
+            data-visible=move || if bible_tab.get() == "live" { "true" } else { "false" }
         >
             <TranslationSelectors />
             <BookFilter />
@@ -344,7 +344,7 @@ fn BookList() -> impl IntoView {
                                 class="operator__list-item"
                                 data-role="book-item"
                                 data-book-code=code
-                                attr:data-active=move || if is_active() { "true" } else { "false" }
+                                data-active=move || if is_active() { "true" } else { "false" }
                                 on:click=on_click
                             >
                                 {display_name}
@@ -669,7 +669,7 @@ fn BiblePreparedTab() -> impl IntoView {
         <div
             class="bible__tab-panel"
             data-bible-panel="prepared"
-            attr:data-visible=move || if bible_tab.get() == "prepared" { "true" } else { "false" }
+            data-visible=move || if bible_tab.get() == "prepared" { "true" } else { "false" }
         >
             <div class="bible__prepared-header">
                 <h3>"Presentations"</h3>
@@ -899,7 +899,7 @@ fn BibleSettingsTab() -> impl IntoView {
         <div
             class="bible__tab-panel"
             data-bible-panel="settings"
-            attr:data-visible=move || if bible_tab.get() == "settings" { "true" } else { "false" }
+            data-visible=move || if bible_tab.get() == "settings" { "true" } else { "false" }
         >
             <div class="operator__form-group">
                 <label class="operator__field">
