@@ -49,6 +49,13 @@ pub fn OperatorPage() -> impl IntoView {
                     let _ = body.class_list().remove_1("operator--mobile-nav-open");
                 }
 
+                // Sync bible view class (used by bible.css for layout)
+                if view.get() == "bible" {
+                    let _ = body.class_list().add_1("operator--bible");
+                } else {
+                    let _ = body.class_list().remove_1("operator--bible");
+                }
+
                 // Sync line-limit CSS custom property
                 let ll = line_limit.get();
                 let _ = body

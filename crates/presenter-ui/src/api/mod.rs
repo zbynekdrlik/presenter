@@ -72,6 +72,19 @@ pub async fn patch_json<B: serde::Serialize, T: DeserializeOwned>(
     response.json().await.map_err(ApiError::Deserialize)
 }
 
+pub async fn put_no_content<B: serde::Serialize>(path: &str, body: &B) -> Result<(), ApiError> {
+    let response = Request::put(&api_url(path))
+        .json(body)
+        .map_err(ApiError::Serialize)?
+        .send()
+        .await
+        .map_err(ApiError::Network)?;
+    if !response.ok() {
+        return Err(ApiError::Status(response.status(), response.status_text()));
+    }
+    Ok(())
+}
+
 pub async fn patch_no_content<B: serde::Serialize>(path: &str, body: &B) -> Result<(), ApiError> {
     let response = Request::patch(&api_url(path))
         .json(body)
