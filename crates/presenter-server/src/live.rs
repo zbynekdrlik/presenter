@@ -1,12 +1,8 @@
-use crate::router::stage::StageAppearance;
-use crate::stage_connections::{StageClientSnapshot, StageConnections};
+use crate::stage_connections::StageConnections;
 use axum::extract::ws::{Message, WebSocket};
-use chrono::{DateTime, Utc};
+use chrono::Utc;
 use futures_util::{SinkExt, StreamExt};
-use presenter_core::{
-    BibleBroadcast, BibleSlideOutput, StageDesign, StageDisplaySnapshot, TimersOverview,
-};
-use serde::{Deserialize, Serialize};
+pub use presenter_core::{InboundMessage, LiveEvent};
 use tokio::{sync::broadcast, task::JoinHandle};
 use tokio_stream::wrappers::BroadcastStream;
 use tracing::{debug, warn};
@@ -35,73 +31,6 @@ impl LiveHub {
             debug!(?err, "no live subscribers to consume event");
         }
     }
-}
-
-#[derive(Debug, Deserialize)]
-#[serde(tag = "type", rename_all = "snake_case")]
-enum InboundMessage {
-    StagePresence {
-        client_id: String,
-        layout_code: String,
-    },
-    StageHeartbeatAck {
-        client_id: String,
-        #[serde(default)]
-        heartbeat_id: Option<String>,
-    },
-    StageDisconnect {
-        client_id: String,
-    },
-    #[serde(other)]
-    Unknown,
-}
-
-#[derive(Debug, Clone, Serialize)]
-#[serde(tag = "type", rename_all = "snake_case")]
-#[allow(clippy::large_enum_variant)]
-pub enum LiveEvent {
-    Timers {
-        overview: TimersOverview,
-    },
-    Stage {
-        snapshot: StageDisplaySnapshot,
-    },
-    Heartbeat {
-        id: Uuid,
-        timestamp: DateTime<Utc>,
-    },
-    StageConnection {
-        snapshot: StageClientSnapshot,
-    },
-    Bible {
-        broadcast: BibleBroadcast,
-    },
-    /// New single-source-of-truth Bible slide event
-    BibleSlide {
-        output: BibleSlideOutput,
-    },
-    BibleCleared,
-    StageLayout {
-        code: String,
-    },
-    StageAppearance {
-        layout: String,
-        appearance: StageAppearance,
-    },
-    StageDesign {
-        layout: String,
-        design: StageDesign,
-    },
-    BiblePreferencesChanged {
-        character_limit: u32,
-    },
-    BroadcastLive {
-        enabled: bool,
-    },
-    /// Bible presentation slides changed (content edit, add, delete, reorder)
-    BibleSlidesChanged {
-        presentation_id: String,
-    },
 }
 
 pub async fn serve_websocket(hub: LiveHub, connections: StageConnections, socket: WebSocket) {

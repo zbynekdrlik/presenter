@@ -2,3 +2,87 @@
 {"timestamp": "2026-03-04T18:31:50.816276+00:00", "files_changed": 1, "commit": "1c9bd11 fix(deploy): add PrivateTmp for ADB access in systemd service", "duration_hint": "completed"}
 {"timestamp": "2026-03-05T09:37:07.528555+00:00", "files_changed": 0, "commit": "401e439 fix(pwa): add scope/id for Android installability, fix iOS safe area", "duration_hint": "completed"}
 {"timestamp": "2026-03-05T10:12:12.445975+00:00", "files_changed": 1, "commit": "401e439 fix(pwa): add scope/id for Android installability, fix iOS safe area", "duration_hint": "completed"}
+{"timestamp": "2026-03-05T10:37:46.461287+00:00", "files_changed": 0, "commit": "f232786 fix(pwa): use gradient end color for iOS safe area background", "duration_hint": "completed"}
+{"timestamp": "2026-03-06T16:18:12.084864+00:00", "files_changed": 1, "commit": "f232786 fix(pwa): use gradient end color for iOS safe area background", "duration_hint": "completed"}
+{"timestamp": "2026-03-06T16:26:21.757953+00:00", "files_changed": 1, "commit": "f232786 fix(pwa): use gradient end color for iOS safe area background", "duration_hint": "completed"}
+{"timestamp": "2026-03-08T18:39:08.174697+00:00", "files_changed": 1, "commit": "f232786 fix(pwa): use gradient end color for iOS safe area background", "duration_hint": "completed"}
+{"timestamp": "2026-03-08T18:49:01.102554+00:00", "files_changed": 1, "commit": "f232786 fix(pwa): use gradient end color for iOS safe area background", "duration_hint": "completed"}
+{"timestamp": "2026-03-08T18:53:33.072510+00:00", "files_changed": 1, "commit": "f232786 fix(pwa): use gradient end color for iOS safe area background", "duration_hint": "completed"}
+{"timestamp": "2026-03-08T18:53:39.375369+00:00", "files_changed": 1, "commit": "f232786 fix(pwa): use gradient end color for iOS safe area background", "duration_hint": "completed"}
+{"timestamp": "2026-03-08T18:59:46.835296+00:00", "files_changed": 1, "commit": "f232786 fix(pwa): use gradient end color for iOS safe area background", "duration_hint": "completed"}
+{"timestamp": "2026-03-08T19:03:38.134152+00:00", "files_changed": 1, "commit": "f232786 fix(pwa): use gradient end color for iOS safe area background", "duration_hint": "completed"}
+{"timestamp": "2026-03-08T19:12:49.387201+00:00", "files_changed": 1, "commit": "f232786 fix(pwa): use gradient end color for iOS safe area background", "duration_hint": "completed"}
+{"timestamp": "2026-03-08T20:26:14.487397+00:00", "files_changed": 1, "commit": "4392ae1 fix(ci): revert to dtolnay/rust-toolchain action", "duration_hint": "completed"}
+{"timestamp": "2026-03-08T20:26:23.422393+00:00", "files_changed": 1, "commit": "4392ae1 fix(ci): revert to dtolnay/rust-toolchain action", "duration_hint": "completed"}
+{"timestamp": "2026-03-08T20:40:35.046860+00:00", "files_changed": 1, "commit": "4392ae1 fix(ci): revert to dtolnay/rust-toolchain action", "duration_hint": "completed"}
+{"timestamp": "2026-03-08T21:33:47.753531+00:00", "files_changed": 1, "commit": "3c01af5 fix(bible): remove unsafe unwrap calls in reference fallback", "duration_hint": "completed"}
+{"timestamp": "2026-03-08T21:34:05.309362+00:00", "files_changed": 1, "commit": "3c01af5 fix(bible): remove unsafe unwrap calls in reference fallback", "duration_hint": "completed"}
+{"timestamp": "2026-03-08T22:35:51.372714+00:00", "files_changed": 1, "commit": "3c01af5 fix(bible): remove unsafe unwrap calls in reference fallback", "duration_hint": "completed"}
+{"timestamp": "2026-03-09T10:03:13.191855+00:00", "files_changed": 1, "commit": "1be0069 fix(ci): prevent import-data.yml from triggering on push", "duration_hint": "completed"}
+{"timestamp": "2026-03-09T10:15:31.981957+00:00", "files_changed": 1, "commit": "1be0069 fix(ci): prevent import-data.yml from triggering on push", "duration_hint": "completed"}
+{"timestamp": "2026-03-09T10:17:29.154639+00:00", "files_changed": 1, "commit": "1be0069 fix(ci): prevent import-data.yml from triggering on push", "duration_hint": "completed"}
+{"timestamp": "2026-03-09T10:18:34.989725+00:00", "files_changed": 1, "commit": "1be0069 fix(ci): prevent import-data.yml from triggering on push", "duration_hint": "completed"}
+{"timestamp": "2026-03-09T10:22:04.374645+00:00", "files_changed": 1, "commit": "1be0069 fix(ci): prevent import-data.yml from triggering on push", "duration_hint": "completed"}
+{"timestamp": "2026-03-09T11:12:13.974090+00:00", "files_changed": 1, "commit": "1be0069 fix(ci): prevent import-data.yml from triggering on push", "duration_hint": "completed"}
+{"timestamp": "2026-03-09T11:18:59.311154+00:00", "files_changed": 1, "commit": "1be0069 fix(ci): prevent import-data.yml from triggering on push", "duration_hint": "completed"}
+{"timestamp": "2026-03-09T11:19:08.671481+00:00", "files_changed": 1, "commit": "1be0069 fix(ci): prevent import-data.yml from triggering on push", "duration_hint": "completed"}
+{"timestamp": "2026-03-09T11:23:29.538021+00:00", "files_changed": 1, "commit": "1be0069 fix(ci): prevent import-data.yml from triggering on push", "duration_hint": "completed"}
+{"timestamp": "2026-03-09T11:27:49.687913+00:00", "files_changed": 1, "commit": "1be0069 fix(ci): prevent import-data.yml from triggering on push", "duration_hint": "completed"}
+{"timestamp": "2026-03-09T12:28:47.524888+00:00", "files_changed": 1, "commit": "3045b52 fix(ci): cleanup old library path on dev server", "duration_hint": "completed"}
+{"timestamp": "2026-03-09T12:28:52.018730+00:00", "files_changed": 1, "commit": "3045b52 fix(ci): cleanup old library path on dev server", "duration_hint": "completed"}
+{"timestamp": "2026-03-09T13:17:19.937992+00:00", "files_changed": 1, "commit": "3045b52 fix(ci): cleanup old library path on dev server", "duration_hint": "completed"}
+{"timestamp": "2026-03-09T13:19:44.623715+00:00", "files_changed": 1, "commit": "316f348 docs(claude): change PR rule to ALWAYS create PR when CI green", "duration_hint": "completed"}
+{"timestamp": "2026-03-09T13:24:53.638413+00:00", "files_changed": 1, "commit": "316f348 docs(claude): change PR rule to ALWAYS create PR when CI green", "duration_hint": "completed"}
+{"timestamp": "2026-03-09T13:42:52.148388+00:00", "files_changed": 1, "commit": "316f348 docs(claude): change PR rule to ALWAYS create PR when CI green", "duration_hint": "completed"}
+{"timestamp": "2026-03-09T13:46:26.865641+00:00", "files_changed": 1, "commit": "316f348 docs(claude): change PR rule to ALWAYS create PR when CI green", "duration_hint": "completed"}
+{"timestamp": "2026-03-09T14:43:03.948785+00:00", "files_changed": 1, "commit": "316f348 docs(claude): change PR rule to ALWAYS create PR when CI green", "duration_hint": "completed"}
+{"timestamp": "2026-03-09T14:46:46.029894+00:00", "files_changed": 7, "commit": "316f348 docs(claude): change PR rule to ALWAYS create PR when CI green", "duration_hint": "completed"}
+{"timestamp": "2026-03-09T15:05:19.274743+00:00", "files_changed": 1, "commit": "3df6bae fix(data): replace stale library files with fresh Mac data", "duration_hint": "completed"}
+{"timestamp": "2026-03-09T15:49:39.009247+00:00", "files_changed": 1, "commit": "4f26cba fix(ci): add branch sync check to fail fast if behind main", "duration_hint": "completed"}
+{"timestamp": "2026-03-09T16:34:47.797876+00:00", "files_changed": 1, "commit": "4f26cba fix(ci): add branch sync check to fail fast if behind main", "duration_hint": "completed"}
+{"timestamp": "2026-03-09T16:36:01.737298+00:00", "files_changed": 1, "commit": "4dd3f09 Merge pull request #172 from zbynekdrlik/dev", "duration_hint": "completed"}
+{"timestamp": "2026-03-09T17:02:55.960912+00:00", "files_changed": 1, "commit": "4dd3f09 Merge pull request #172 from zbynekdrlik/dev", "duration_hint": "completed"}
+{"timestamp": "2026-03-09T19:50:25.770084+00:00", "files_changed": 1, "commit": "d0c7268 fix: resolve documentation inaccuracies and improve code quality", "duration_hint": "completed"}
+{"timestamp": "2026-03-09T19:50:30.175699+00:00", "files_changed": 1, "commit": "d0c7268 fix: resolve documentation inaccuracies and improve code quality", "duration_hint": "completed"}
+{"timestamp": "2026-03-09T20:29:07.169972+00:00", "files_changed": 1, "commit": "cd33199 Merge pull request #173 from zbynekdrlik/dev", "duration_hint": "completed"}
+{"timestamp": "2026-03-09T20:30:19.784819+00:00", "files_changed": 1, "commit": "cd33199 Merge pull request #173 from zbynekdrlik/dev", "duration_hint": "completed"}
+{"timestamp": "2026-03-09T21:58:06.799778+00:00", "files_changed": 1, "commit": "f591243 refactor: decompose resolume driver and repository with full test coverage", "duration_hint": "completed"}
+{"timestamp": "2026-03-09T21:58:10.609077+00:00", "files_changed": 1, "commit": "f591243 refactor: decompose resolume driver and repository with full test coverage", "duration_hint": "completed"}
+{"timestamp": "2026-03-10T21:41:50.907219+00:00", "files_changed": 1, "commit": "f591243 refactor: decompose resolume driver and repository with full test coverage", "duration_hint": "completed"}
+{"timestamp": "2026-03-10T22:42:40.982376+00:00", "files_changed": 1, "commit": "f8296e1 fix(e2e): correct test assertions and update quinn-proto for security", "duration_hint": "completed"}
+{"timestamp": "2026-03-10T22:42:46.573097+00:00", "files_changed": 1, "commit": "f8296e1 fix(e2e): correct test assertions and update quinn-proto for security", "duration_hint": "completed"}
+{"timestamp": "2026-03-11T06:28:10.636800+00:00", "files_changed": 1, "commit": "ab0c777 Merge pull request #175 from zbynekdrlik/dev", "duration_hint": "completed"}
+{"timestamp": "2026-03-11T09:06:30.218375+00:00", "files_changed": 1, "commit": "c6fda22 refactor: code review improvements - split state module, fix E2E tests, audit dead code", "duration_hint": "completed"}
+{"timestamp": "2026-03-11T09:06:33.980568+00:00", "files_changed": 1, "commit": "c6fda22 refactor: code review improvements - split state module, fix E2E tests, audit dead code", "duration_hint": "completed"}
+{"timestamp": "2026-03-11T09:17:21.555286+00:00", "files_changed": 1, "commit": "c6fda22 refactor: code review improvements - split state module, fix E2E tests, audit dead code", "duration_hint": "completed"}
+{"timestamp": "2026-03-11T09:19:19.613085+00:00", "files_changed": 1, "commit": "c6fda22 refactor: code review improvements - split state module, fix E2E tests, audit dead code", "duration_hint": "completed"}
+{"timestamp": "2026-03-11T09:22:27.254506+00:00", "files_changed": 1, "commit": "c6fda22 refactor: code review improvements - split state module, fix E2E tests, audit dead code", "duration_hint": "completed"}
+{"timestamp": "2026-03-11T10:28:37.380414+00:00", "files_changed": 1, "commit": "c6fda22 refactor: code review improvements - split state module, fix E2E tests, audit dead code", "duration_hint": "completed"}
+{"timestamp": "2026-03-11T11:54:00.119233+00:00", "files_changed": 1, "commit": "9f858bb fix(build): ensure presenter-ui/dist exists for include_dir macro", "duration_hint": "completed"}
+{"timestamp": "2026-03-11T12:41:15.828582+00:00", "files_changed": 1, "commit": "9f858bb fix(build): ensure presenter-ui/dist exists for include_dir macro", "duration_hint": "completed"}
+{"timestamp": "2026-03-11T15:04:52.877463+00:00", "files_changed": 1, "commit": "d7ee4cd fix(ui): resolve WASM build errors for presenter-ui crate", "duration_hint": "completed"}
+{"timestamp": "2026-03-11T16:44:44.763830+00:00", "files_changed": 1, "commit": "3ffb970 feat(ui): implement full operator page with all components for WASM UI", "duration_hint": "completed"}
+{"timestamp": "2026-03-11T21:26:47.959522+00:00", "files_changed": 1, "commit": "c3c8c16 feat(ui): complete WASM operator page rework with full feature parity", "duration_hint": "completed"}
+{"timestamp": "2026-03-11T21:26:53.298772+00:00", "files_changed": 1, "commit": "c3c8c16 feat(ui): complete WASM operator page rework with full feature parity", "duration_hint": "completed"}
+{"timestamp": "2026-03-12T07:21:26.452632+00:00", "files_changed": 1, "commit": "af82218 fix(ui): align WASM operator HTML structure with JS template for CSS parity", "duration_hint": "completed"}
+{"timestamp": "2026-03-12T07:21:31.144748+00:00", "files_changed": 1, "commit": "af82218 fix(ui): align WASM operator HTML structure with JS template for CSS parity", "duration_hint": "completed"}
+{"timestamp": "2026-03-12T21:51:02.923373+00:00", "files_changed": 1, "commit": "3048ea3 feat(ui): implement comprehensive WASM operator behavioral parity with JS version", "duration_hint": "completed"}
+{"timestamp": "2026-03-12T21:51:09.434227+00:00", "files_changed": 1, "commit": "3048ea3 feat(ui): implement comprehensive WASM operator behavioral parity with JS version", "duration_hint": "completed"}
+{"timestamp": "2026-03-13T05:28:17.325716+00:00", "files_changed": 1, "commit": "2f1a780 fix(ui): additional WASM operator improvements", "duration_hint": "completed"}
+{"timestamp": "2026-03-13T05:29:47.503158+00:00", "files_changed": 1, "commit": "2f1a780 fix(ui): additional WASM operator improvements", "duration_hint": "completed"}
+{"timestamp": "2026-03-13T05:44:59.457336+00:00", "files_changed": 1, "commit": "2f1a780 fix(ui): additional WASM operator improvements", "duration_hint": "completed"}
+{"timestamp": "2026-03-13T05:45:12.677663+00:00", "files_changed": 1, "commit": "2f1a780 fix(ui): additional WASM operator improvements", "duration_hint": "completed"}
+{"timestamp": "2026-03-13T06:21:51.869294+00:00", "files_changed": 1, "commit": "2f1a780 fix(ui): additional WASM operator improvements", "duration_hint": "completed"}
+{"timestamp": "2026-03-13T06:21:57.266872+00:00", "files_changed": 1, "commit": "2f1a780 fix(ui): additional WASM operator improvements", "duration_hint": "completed"}
+{"timestamp": "2026-03-13T09:17:14.764878+00:00", "files_changed": 1, "commit": "a036828 fix(ui): comprehensive WASM operator edit mode regression fixes", "duration_hint": "completed"}
+{"timestamp": "2026-03-13T09:17:29.772816+00:00", "files_changed": 1, "commit": "a036828 fix(ui): comprehensive WASM operator edit mode regression fixes", "duration_hint": "completed"}
+{"timestamp": "2026-03-13T14:50:08.674781+00:00", "files_changed": 1, "commit": "31e39b7 fix(ui): resolve WASM operator code review issues", "duration_hint": "completed"}
+{"timestamp": "2026-03-13T16:13:15.214183+00:00", "files_changed": 1, "commit": "1749bee feat(ui): implement WASM operator feature parity enhancements", "duration_hint": "completed"}
+{"timestamp": "2026-03-13T16:15:38.173080+00:00", "files_changed": 1, "commit": "1749bee feat(ui): implement WASM operator feature parity enhancements", "duration_hint": "completed"}
+{"timestamp": "2026-03-13T16:15:47.025624+00:00", "files_changed": 1, "commit": "1749bee feat(ui): implement WASM operator feature parity enhancements", "duration_hint": "completed"}
+{"timestamp": "2026-03-13T16:16:27.092322+00:00", "files_changed": 1, "commit": "1749bee feat(ui): implement WASM operator feature parity enhancements", "duration_hint": "completed"}
+{"timestamp": "2026-03-13T16:17:30.103601+00:00", "files_changed": 3, "commit": "1749bee feat(ui): implement WASM operator feature parity enhancements", "duration_hint": "completed"}
+{"timestamp": "2026-03-13T16:18:23.100312+00:00", "files_changed": 3, "commit": "1749bee feat(ui): implement WASM operator feature parity enhancements", "duration_hint": "completed"}
+{"timestamp": "2026-03-13T16:18:32.352866+00:00", "files_changed": 3, "commit": "1749bee feat(ui): implement WASM operator feature parity enhancements", "duration_hint": "completed"}
+{"timestamp": "2026-03-13T16:44:01.620330+00:00", "files_changed": 1, "commit": "1741fc8 fix(ui): resolve clippy warnings in WASM crate", "duration_hint": "completed"}
+{"timestamp": "2026-03-13T22:13:11.643300+00:00", "files_changed": 1, "commit": "245262b fix(ui): add search drag state tracking for JS feature parity", "duration_hint": "completed"}

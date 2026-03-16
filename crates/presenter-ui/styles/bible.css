@@ -1,0 +1,460 @@
+/* Hide header when embedded in operator iframe */
+body.in-iframe .operator__header {
+  display: none;
+}
+body.in-iframe .operator__main {
+  margin-top: 0;
+}
+
+/* Bible catalog: flush top edge to header, keep bottom corners rounded */
+.operator--bible .operator__catalog {
+  border-top: none;
+  border-top-left-radius: 0;
+  border-top-right-radius: 0;
+}
+
+.operator--bible .operator__catalog-top {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+}
+
+.operator.operator--bible {
+  background: #0f172a;
+  color: #f8fafc;
+  min-height: 100vh;
+  display: flex;
+  flex-direction: column;
+  font-family: "Inter", "Segoe UI", system-ui, sans-serif;
+}
+
+/* Two-column layout: sidebar + slides (no right panel) */
+.operator.operator--bible .operator__main {
+  flex: 1;
+  overflow-y: auto;
+  background: #0f172a;
+  display: grid;
+  grid-template-columns: 320px 1fr;
+  gap: 0;
+}
+
+/* ---------- Sub-tab navigation ---------- */
+.bible__tab-nav {
+  display: flex;
+  gap: 0.25rem;
+  padding: 0.25rem;
+  background: rgba(148, 163, 184, 0.1);
+  border-radius: 8px;
+  margin-bottom: 0.75rem;
+  flex-shrink: 0;
+}
+
+.bible__tab-nav button {
+  flex: 1;
+  border: none;
+  background: transparent;
+  color: #94a3b8;
+  padding: 0.5rem 0.5rem;
+  border-radius: 6px;
+  font-size: 0.75rem;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  cursor: pointer;
+  transition:
+    background 0.15s ease,
+    color 0.15s ease;
+}
+
+.bible__tab-nav button[data-active="true"] {
+  background: #334155;
+  color: #f8fafc;
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.3);
+}
+
+/* ---------- Tab panel visibility ---------- */
+.bible__tab-panel {
+  display: none;
+}
+.bible__tab-panel[data-visible="true"] {
+  display: flex;
+  flex-direction: column;
+  gap: 0.75rem;
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+}
+
+/* ---------- Translation row in Live tab ---------- */
+.bible__translation-row {
+  display: flex;
+  gap: 0.5rem;
+}
+
+.bible__translation-row .operator__field--compact {
+  flex: 1;
+  min-width: 0;
+}
+
+.bible__translation-row .operator__field--compact span {
+  font-size: 0.7rem;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+
+.bible__translation-row select {
+  width: 100%;
+  text-overflow: ellipsis;
+}
+
+/* ---------- PREPARED panel ---------- */
+.bible__prepared-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+}
+.bible__prepared-header h3 {
+  font-size: 0.9rem;
+  font-weight: 600;
+  margin: 0;
+}
+.bible__prepared-list {
+  flex: 1;
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+  min-height: 0;
+}
+.bible__prepared-actions {
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+  border-top: 1px solid rgba(148, 163, 184, 0.25);
+  padding-top: 0.75rem;
+  flex-shrink: 0;
+}
+
+/* Presentation card in prepared list */
+.operator__presentation-card[data-presentation-id] {
+  border: 1px solid rgba(148, 163, 184, 0.25);
+  border-radius: 8px;
+  padding: 0.6rem 0.75rem;
+  cursor: pointer;
+  transition:
+    border-color 0.15s ease,
+    background 0.15s ease;
+}
+.operator__presentation-card[data-presentation-id]:hover {
+  border-color: rgba(148, 163, 184, 0.45);
+  background: rgba(148, 163, 184, 0.08);
+}
+.operator__presentation-card.is-active {
+  border-color: #6366f1;
+  background: rgba(99, 102, 241, 0.15);
+}
+
+/* ---------- Slide card trigger/select zones ---------- */
+.operator__slide-card--bible .operator__slide-trigger-zone {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  padding: 0.3rem 0.75rem;
+  background: rgba(99, 102, 241, 0.15);
+  border-bottom: 1px solid rgba(99, 102, 241, 0.2);
+  cursor: pointer;
+  transition: background 0.15s ease;
+  border-radius: 8px 8px 0 0;
+}
+.operator__slide-card--bible .operator__slide-trigger-zone:hover {
+  background: rgba(99, 102, 241, 0.25);
+}
+.operator__slide-trigger-icon {
+  font-size: 0.7rem;
+  color: #a5b4fc;
+}
+.operator__slide-select-zone {
+  cursor: pointer;
+  padding: 0.5rem 0.75rem;
+}
+.operator__slide-select-zone:hover {
+  background: rgba(56, 189, 248, 0.12);
+}
+.operator__slide-card--bible.is-selected {
+  outline: 2px solid #38bdf8;
+  outline-offset: -2px;
+}
+
+/* Full-width trigger zone for prepared-tab slides */
+.operator__slide-trigger-zone--full {
+  border-radius: 8px;
+  border-bottom: none;
+  padding: 0.5rem 0.75rem;
+}
+
+/* Pen icon on presentation cards */
+.operator__presentation-action {
+  border: none;
+  background: transparent;
+  cursor: pointer;
+  padding: 0.2rem 0.4rem;
+  font-size: 0.95rem;
+  color: #94a3b8;
+  border-radius: 4px;
+  transition:
+    color 0.15s ease,
+    background 0.15s ease;
+}
+.operator__presentation-action:hover {
+  color: #f8fafc;
+  background: rgba(148, 163, 184, 0.15);
+}
+
+/* Smaller slide count in presentation cards */
+.operator__presentation-card p {
+  margin: 0;
+  font-size: 0.7rem;
+  color: #94a3b8;
+}
+
+.bible__content {
+  width: min(1080px, 100%);
+  margin: 0 auto;
+  padding: 2rem 2rem 3rem;
+  display: flex;
+  flex-direction: column;
+  gap: 1.75rem;
+}
+
+.bible__search {
+  display: grid;
+  gap: 1rem;
+  grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+  padding: 1.5rem 1.75rem;
+  background: #1e293b;
+  border-radius: 18px;
+  box-shadow: 0 14px 30px rgba(0, 0, 0, 0.35);
+  border: 1px solid rgba(148, 163, 184, 0.2);
+}
+
+.bible__search label {
+  display: flex;
+  flex-direction: column;
+  gap: 0.35rem;
+  font-size: 0.85rem;
+  color: #a5b4fc;
+}
+
+.bible__search select,
+.bible__search input {
+  border-radius: 10px;
+  border: 1px solid rgba(148, 163, 184, 0.35);
+  padding: 0.65rem 0.75rem;
+  font-size: 0.95rem;
+  font-family: inherit;
+  background: #0f172a;
+  color: #f8fafc;
+}
+
+.bible__search select:disabled,
+.bible__search input:disabled {
+  opacity: 0.7;
+}
+
+.bible__search-button {
+  align-self: end;
+  border: none;
+  border-radius: 10px;
+  background: #6366f1;
+  color: #f8fafc;
+  padding: 0.65rem 1.25rem;
+  font-size: 0.95rem;
+  cursor: pointer;
+  box-shadow: 0 12px 24px rgba(99, 102, 241, 0.35);
+}
+
+.bible__active {
+  padding: 0;
+}
+
+.bible__active-card {
+  background: #1e293b;
+  border-radius: 16px;
+  padding: 1.25rem 1.4rem;
+  box-shadow: 0 14px 30px rgba(0, 0, 0, 0.35);
+  border: 1px solid rgba(148, 163, 184, 0.2);
+}
+
+.bible__active-card--empty {
+  background: rgba(30, 41, 59, 0.6);
+  border: 1px dashed rgba(148, 163, 184, 0.35);
+  box-shadow: none;
+}
+
+.bible__active-card header {
+  display: flex;
+  justify-content: space-between;
+  align-items: baseline;
+  gap: 1rem;
+  margin-bottom: 0.8rem;
+}
+
+.bible__active-translation {
+  font-size: 0.85rem;
+  color: #6366f1;
+}
+
+.bible__active-card p {
+  margin: 0;
+  white-space: pre-wrap;
+  line-height: 1.6;
+}
+
+.bible__results {
+  padding: 0;
+  display: grid;
+  gap: 1rem;
+}
+
+.bible__result {
+  background: #1e293b;
+  border-radius: 14px;
+  padding: 1rem 1.2rem;
+  border: 1px solid rgba(148, 163, 184, 0.25);
+  box-shadow: 0 8px 20px rgba(0, 0, 0, 0.25);
+}
+
+.bible__result header {
+  display: flex;
+  justify-content: space-between;
+  align-items: baseline;
+  gap: 1rem;
+  margin-bottom: 0.6rem;
+}
+
+.bible__result-actions button {
+  border: none;
+  background: #38bdf8;
+  color: #0f172a;
+  border-radius: 8px;
+  padding: 0.45rem 0.85rem;
+  font-size: 0.85rem;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.bible__result p {
+  margin: 0;
+  white-space: pre-wrap;
+  line-height: 1.5;
+}
+
+.bible__empty {
+  color: #94a3b8;
+  font-size: 0.95rem;
+}
+
+.bible__toast {
+  position: fixed;
+  bottom: 1.5rem;
+  right: 1.5rem;
+  background: #0f172a;
+  color: #f8fafc;
+  padding: 0.7rem 1rem;
+  border-radius: 10px;
+  box-shadow: 0 12px 24px rgba(15, 23, 42, 0.28);
+  opacity: 0;
+  transform: translateY(6px);
+  transition:
+    opacity 0.2s ease,
+    transform 0.2s ease;
+  pointer-events: none;
+}
+
+.bible__toast[data-visible="true"] {
+  opacity: 1;
+  transform: translateY(0);
+}
+
+@media (max-width: 900px) {
+  .bible__content {
+    padding: 1.5rem 1.25rem 2.5rem;
+  }
+}
+
+/* Bible Reference form layout */
+.operator--bible .operator__form-group {
+  display: flex;
+  flex-direction: column;
+  gap: 0.75rem;
+}
+
+.operator--bible .operator__field {
+  display: flex;
+  flex-direction: column;
+  gap: 0.3rem;
+  font-size: 0.85rem;
+  color: #94a3b8;
+}
+
+.operator--bible .operator__field select,
+.operator--bible .operator__field input {
+  padding: 0.5rem 0.6rem;
+  border: 1px solid rgba(148, 163, 184, 0.35);
+  border-radius: 6px;
+  font-size: 0.85rem;
+  font-family: inherit;
+  background: #0f172a;
+  color: #f8fafc;
+}
+
+.operator--bible .operator__divider {
+  border: none;
+  border-top: 1px solid rgba(148, 163, 184, 0.25);
+  margin: 0.5rem 0;
+}
+
+.operator--bible .operator__reference-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr 1fr;
+  gap: 0.5rem;
+}
+
+.operator--bible .operator__reference-grid input {
+  width: 100%;
+  box-sizing: border-box;
+}
+
+/* Position the header search dropdown below the sticky header
+   Header height ≈ padding (0.65rem × 2) + content (~1.6rem) = ~2.9rem */
+.operator--bible .operator__search-results {
+  top: 3.2rem;
+}
+
+/* Ensure header search form sits above the dropdown so the clear button
+   is not obscured by the fixed-position results panel */
+.operator--bible .operator__search {
+  position: relative;
+  z-index: 21;
+}
+
+/* ---------- Minimal slides column for Bible UI ---------- */
+.operator__slides-column--minimal {
+  padding: 0.5rem 1rem 1rem;
+  gap: 0.5rem;
+}
+
+.operator__slides-toolbar--minimal {
+  padding: 0.25rem 0.5rem;
+  border-bottom: none;
+  justify-content: flex-end;
+}
+
+@media (max-width: 720px) {
+  .bible__search {
+    grid-template-columns: 1fr;
+  }
+  .operator.operator--bible .operator__main {
+    grid-template-columns: 1fr;
+  }
+}

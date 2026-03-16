@@ -8,6 +8,22 @@ DEFAULT_LIB_ROOT="${PRESENTER_LIBRARY_ROOT:-${REPO_PARENT}/presenter-libraries}"
 export PRESENTER_DB_URL="${PRESENTER_DB_URL:-sqlite://$REPO_ROOT/var/data/dev/presenter_dev.db}"
 ROOT_DIR="${1:-$DEFAULT_LIB_ROOT}"
 
+# Use pre-built binaries if available (CI builds them first), otherwise fall back to cargo run
+run_binary() {
+  local bin_name="$1"
+  shift
+  local debug_binary="${REPO_ROOT}/target/debug/${bin_name}"
+  local release_binary="${REPO_ROOT}/target/release/${bin_name}"
+
+  if [[ -x "$release_binary" ]]; then
+    "$release_binary" "$@"
+  elif [[ -x "$debug_binary" ]]; then
+    "$debug_binary" "$@"
+  else
+    cargo run -p presenter-importer --bin "$bin_name" -- "$@"
+  fi
+}
+
 if [[ "$PRESENTER_DB_URL" == sqlite://* ]]; then
   db_path="${PRESENTER_DB_URL#sqlite://}"
   echo "[refresh-dev-data] Removing existing SQLite database at $db_path"
@@ -17,7 +33,7 @@ if [[ "$PRESENTER_DB_URL" == sqlite://* ]]; then
 fi
 
 echo "[refresh-dev-data] Importing ProPresenter libraries from '$ROOT_DIR'"
-cargo run -p presenter-importer --bin import_propresenter -- "--root" "$ROOT_DIR"
+run_binary import_propresenter "--root" "$ROOT_DIR"
 
 echo "[refresh-dev-data] Importing default Bible translations"
-cargo run -p presenter-importer --bin ingest_bibles
+run_binary ingest_bibles

@@ -1,0 +1,387 @@
+html {
+  /* Prevent iOS bounce scroll on entire page */
+  height: 100%;
+  overflow: hidden;
+  /* Extend background to cover entire screen including iOS safe areas.
+     Use gradient end color (#1e293b) to blend seamlessly with body gradient. */
+  background: #1e293b;
+}
+
+/* Universal box-sizing for tablet UI */
+body.tablet *,
+body.tablet *::before,
+body.tablet *::after {
+  box-sizing: border-box;
+}
+
+body.tablet {
+  --tablet-scale: 1;
+  margin: 0;
+  /* Use dvh for PWA standalone mode, fallback to vh */
+  height: 100dvh;
+  height: 100vh; /* Fallback for older browsers */
+  max-height: -webkit-fill-available; /* iOS Safari PWA fix */
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  font-family: "Inter", "Segoe UI", system-ui, sans-serif;
+  background: linear-gradient(180deg, #0f172a 0%, #1e293b 100%);
+  color: #f8fafc;
+  /* Safe area insets for notched devices - use margin instead of padding */
+  padding-top: env(safe-area-inset-top);
+  padding-left: env(safe-area-inset-left);
+  padding-right: env(safe-area-inset-right);
+  padding-bottom: env(safe-area-inset-bottom);
+  /* Ensure box-sizing includes padding in height calculation */
+  box-sizing: border-box;
+}
+
+.tablet-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 1.25rem 1.75rem;
+  background: rgba(12, 20, 35, 0.9);
+  box-shadow: 0 14px 32px rgba(15, 23, 42, 0.55);
+}
+
+.tablet-header h1 {
+  margin: 0;
+  font-size: 1.35rem;
+}
+
+.tablet-scale {
+  display: flex;
+  align-items: center;
+  gap: 0.6rem;
+  color: #94a3b8;
+  font-size: 0.85rem;
+}
+
+.tablet-scale label {
+  white-space: nowrap;
+}
+
+.tablet-scale input[type="range"] {
+  width: 120px;
+  accent-color: #38bdf8;
+  cursor: pointer;
+}
+
+.tablet-scale span {
+  min-width: 3.2em;
+  text-align: center;
+  color: #cbd5f5;
+  font-variant-numeric: tabular-nums;
+}
+
+.tablet-layout {
+  flex: 1;
+  display: flex;
+  overflow: hidden;
+}
+
+.tablet-sidebar {
+  position: relative;
+  width: 260px;
+  padding: 1.25rem;
+  background: rgba(15, 23, 42, 0.72);
+  border-right: 1px solid rgba(148, 163, 184, 0.25);
+  display: flex;
+  flex-direction: column;
+  gap: 1.1rem;
+  overflow-y: auto;
+  flex-shrink: 0;
+  transition:
+    width 0.3s ease,
+    padding 0.3s ease,
+    opacity 0.3s ease;
+}
+
+.tablet-sidebar__close {
+  position: absolute;
+  top: 0.75rem;
+  right: 0.75rem;
+  width: 2.5rem;
+  height: 2.5rem;
+  border: none;
+  background: rgba(148, 163, 184, 0.25);
+  color: #94a3b8;
+  font-size: 1.5rem;
+  line-height: 1;
+  border-radius: 8px;
+  cursor: pointer;
+  transition:
+    background 0.2s ease,
+    color 0.2s ease;
+}
+
+.tablet-sidebar__close:hover {
+  background: rgba(239, 68, 68, 0.3);
+  color: #fca5a5;
+}
+
+.tablet-sidebar.is-collapsed {
+  width: 0;
+  padding: 0;
+  overflow: hidden;
+  opacity: 0;
+  border-right: none;
+}
+
+.tablet-main {
+  flex: 1;
+  /* Use block layout for older Safari sticky compatibility */
+  display: block;
+  min-width: 0;
+  overflow-y: auto; /* Scroll container */
+  overflow-x: hidden;
+  -webkit-overflow-scrolling: touch; /* Smooth scrolling on iOS */
+}
+
+.tablet-main__header {
+  /* Webkit prefix for older Safari */
+  position: -webkit-sticky;
+  position: sticky;
+  top: 0;
+  z-index: 10;
+  background: rgba(12, 20, 35, 0.98);
+  /* Fallback for older Safari without backdrop-filter */
+  -webkit-backdrop-filter: blur(8px);
+  backdrop-filter: blur(8px);
+  padding: 1.2rem 1.6rem 0.75rem;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+
+.tablet-main__header h2 {
+  margin: 0;
+  font-size: 1.05rem;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+  color: #a5b4fc;
+}
+
+/* Back button to reopen sidebar */
+.tablet-back-button {
+  display: none;
+  align-items: center;
+  gap: 0.35rem;
+  padding: 0.5rem 1rem;
+  background: rgba(56, 189, 248, 0.2);
+  border: 1px solid rgba(56, 189, 248, 0.4);
+  border-radius: 10px;
+  color: #38bdf8;
+  font-size: 0.9rem;
+  font-weight: 500;
+  cursor: pointer;
+  transition:
+    background 0.2s ease,
+    transform 0.2s ease;
+}
+
+.tablet-back-button:hover {
+  background: rgba(56, 189, 248, 0.35);
+  transform: translateX(-2px);
+}
+
+.tablet-sidebar.is-collapsed ~ .tablet-main .tablet-back-button {
+  display: inline-flex;
+}
+
+.tablet-panel h2 {
+  margin: 0 0 0.8rem;
+  font-size: 0.95rem;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+  color: #94a3b8;
+}
+
+.tablet-list {
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+}
+
+.tablet-list-item {
+  display: flex;
+  align-items: center;
+  gap: 0.45rem;
+}
+
+.tablet-button {
+  border: none;
+  text-align: left;
+  background: rgba(148, 163, 184, 0.18);
+  color: #f8fafc;
+  padding: 0.55rem 0.75rem;
+  border-radius: 10px;
+  font-size: 0.95rem;
+  cursor: pointer;
+  transition:
+    transform 0.2s ease,
+    background 0.2s ease;
+  display: flex;
+  align-items: center;
+  gap: 0.55rem;
+  width: 100%;
+}
+
+.tablet-button:hover {
+  transform: translateY(-1px);
+}
+
+.tablet-button[data-active="true"] {
+  background: rgba(56, 189, 248, 0.3);
+  box-shadow: 0 12px 26px rgba(56, 189, 248, 0.35);
+}
+
+.tablet-button__label {
+  flex: 1;
+}
+
+.tablet-button__meta {
+  font-size: 0.78rem;
+  color: #cbd5f5;
+  background: rgba(56, 189, 248, 0.25);
+  border-radius: 999px;
+  padding: 0.05rem 0.45rem;
+}
+
+.tablet-slides {
+  flex: 1 1 auto;
+  padding: 1.5rem;
+  /* Use block layout instead of flex for older Safari compatibility */
+  display: block;
+}
+
+.tablet-slides__empty {
+  color: #94a3b8;
+  font-size: 0.95rem;
+}
+
+.tablet-slide {
+  background: rgba(15, 23, 42, 0.8);
+  border-radius: 16px;
+  padding: 1.25rem;
+  /* Use block layout for older Safari compatibility */
+  display: block;
+  border: 1px solid transparent;
+  cursor: pointer;
+  user-select: none;
+  -webkit-tap-highlight-color: transparent;
+  touch-action: manipulation; /* Removes 300ms touch delay */
+  /* Use margin for spacing instead of flex gap */
+  margin-bottom: 1.5rem;
+  transition:
+    border-color 0.2s ease,
+    box-shadow 0.2s ease;
+}
+
+.tablet-slide:last-child {
+  margin-bottom: 0;
+}
+
+/* Removed transform on hover - causes issues on older Safari */
+
+.tablet-slide.is-active {
+  border-color: rgba(56, 189, 248, 0.8);
+  box-shadow: 0 14px 30px rgba(56, 189, 248, 0.38);
+}
+
+.tablet-slide.is-loading {
+  opacity: 0.6;
+}
+
+/* Reference header - now at top, bigger and prominent */
+.tablet-slide__ref {
+  font-size: calc(1.4rem * var(--tablet-scale));
+  color: #38bdf8;
+  font-weight: 600;
+  margin: 0 0 0.75rem 0;
+  text-align: center;
+}
+
+.tablet-slide__group {
+  background: rgba(56, 189, 248, 0.18);
+  padding: 0.1rem 0.45rem;
+  border-radius: 999px;
+}
+
+.tablet-slide__body {
+  display: block;
+}
+
+.tablet-slide__body p {
+  margin: 0;
+  white-space: pre-wrap;
+  line-height: 1.55;
+}
+
+.tablet-slide__main {
+  font-size: calc(1.35rem * var(--tablet-scale));
+}
+
+.tablet-slide__translation {
+  color: #93c5fd;
+  font-style: italic;
+  font-size: calc(1.2rem * var(--tablet-scale));
+  margin-top: 0.4rem;
+  padding-top: 0.4rem;
+  border-top: 1px solid rgba(147, 197, 253, 0.15);
+}
+
+/* Footer for group badge */
+.tablet-slide__footer {
+  margin-top: auto;
+  padding-top: 0.5rem;
+}
+
+/* Alternating shades for reference groups - high contrast */
+.tablet-slide--light {
+  background: rgba(51, 65, 85, 0.9);
+}
+
+.tablet-slide--dark {
+  background: rgba(15, 23, 42, 0.9);
+}
+
+/* Big separator line between reference groups */
+.tablet-slide--group-start {
+  margin-top: 2.5rem;
+  position: relative;
+}
+
+.tablet-slide--group-start::before {
+  content: "";
+  position: absolute;
+  top: -1.25rem;
+  left: 0;
+  right: 0;
+  height: 4px;
+  background: #475569;
+  border-radius: 2px;
+}
+
+.tablet-toast {
+  position: fixed;
+  bottom: 1.5rem;
+  right: 1.5rem;
+  background: rgba(15, 23, 42, 0.88);
+  color: #f8fafc;
+  padding: 0.7rem 1rem;
+  border-radius: 12px;
+  box-shadow: 0 12px 26px rgba(15, 23, 42, 0.55);
+  opacity: 0;
+  transform: translateY(8px);
+  transition:
+    opacity 0.2s ease,
+    transform 0.2s ease;
+  pointer-events: none;
+}
+
+.tablet-toast[data-visible="true"] {
+  opacity: 1;
+  transform: translateY(0);
+}

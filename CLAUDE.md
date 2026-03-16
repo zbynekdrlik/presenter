@@ -1,8 +1,44 @@
 # CLAUDE.md
 
-> **Version:** 2025.6 | **Last Updated:** 2026-03-09
+> **Version:** 2025.7 | **Last Updated:** 2026-03-16
 
 This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
+
+---
+
+## Complete Implementation Policy (ABSOLUTE - NO EXCEPTIONS)
+
+**ALWAYS implement 100% of the requested feature in ONE run. No phases. No skips. No shortcuts.**
+
+### The Rule
+
+When asked to implement a feature, rewrite, or replacement:
+
+1. **Implement EVERYTHING** - Every function, every modal, every handler, every edge case
+2. **No "partial implementation"** - If the feature has 10 parts, implement all 10
+3. **No "tests for later"** - Write tests AND implementation together
+4. **No removing tests to pass CI** - If tests fail, fix the code, not delete the tests
+5. **No "phase 1, phase 2"** - Complete the entire feature in one session
+6. **No "this can be added later"** - Add it NOW
+
+### What This Means
+
+- Asked to replace JS frontend with WASM? Implement **100% feature parity** - every modal, every drag-drop, every keyboard shortcut
+- Asked to add a feature? Implement the **complete feature** with all edge cases
+- Tests failing? **Fix the implementation**, not remove the tests
+- Feature seems large? **Still do it all** - no excuses about scope
+
+### Banned Behaviors
+
+| Behavior                    | Why Banned             | Required Instead    |
+| --------------------------- | ---------------------- | ------------------- |
+| "Phase 1 complete"          | Incomplete delivery    | Complete ALL phases |
+| Removing failing tests      | Hides missing features | Fix the code        |
+| "Will add X later"          | Leaves gaps            | Add X NOW           |
+| "Basic implementation done" | Incomplete             | Full implementation |
+| Skipping edge cases         | Buggy result           | Handle ALL cases    |
+
+**If you cannot complete 100% of a feature, say so BEFORE starting - never deliver partial work.**
 
 ---
 
@@ -132,7 +168,7 @@ If any PRs exist (other than the one you're working on), close them first.
 | `std::thread::sleep` | Blocks async runtime            | Use `tokio::time::sleep`                      |
 | `.only` / `.skip`    | Leaves incomplete test coverage | Remove before commit                          |
 
-**Note:** Test code (`#[cfg(test)]` modules) is exempt from panic rules.
+**Note:** Test code (`#[cfg(test)]` modules) and WASM code (`presenter-ui` crate) are exempt from panic rules. WASM panics become browser-side JavaScript errors rather than server crashes.
 
 ### File/Function Limits (Enforced by CI)
 
@@ -177,70 +213,54 @@ See `docs/architecture.md` for full versioning and release strategy.
 
 ## GitHub Actions (Primary CI/CD)
 
-### Self-Hosted Runners
+### Runner Architecture
 
-This project uses **3 Docker-based self-hosted runners** on a remote machine to save GitHub Actions costs.
+This project uses a **mixed runner strategy**:
 
-**Runner host:** `10.77.8.189`
-**Runner names:** `presenter-runner-1`, `presenter-runner-2`, `presenter-runner-3`
-**Runner label:** `self-hosted`
-**Config location:** `~/presenter-runners/` on 10.77.8.189
+- **GitHub-hosted runners** (`ubuntu-latest`): All compilation, linting, testing, and security scans. Free for public repos.
+- **One bare-metal local runner** (`self-hosted`): E2E tests (need running binary) and deployments (SSH to LAN hosts).
 
-All workflows run on the Docker runners, providing:
+**Local runner host:** `10.77.8.134` (same machine as dev server)
+**Local runner name:** `presenter-local`
+**Local runner label:** `self-hosted`
+**Config location:** `~/actions-runner/`
 
-- Faster builds (local caching, shared cargo volumes)
-- No GitHub minutes consumed
-- 3 parallel runners for concurrent workflow execution
-- Reproducible environment (Docker image with Rust, Node.js, Playwright, Docker CLI)
+The local runner does NOT compile Rust — it only runs pre-built artifacts downloaded from GitHub-hosted build jobs. It needs: Node.js 22, Playwright chromium, rsync, and SSH access to LAN deploy targets.
 
-**Deploy workflows** use SSH to deploy binaries from runners to the application hosts (`10.77.9.205` for production, `10.77.8.134` for dev, `companion-pp.lan` for PP releases).
-
-**Missing tools:** If a workflow step requires a tool that's not installed on the runner (e.g., `rsync`), install it at runtime:
-
-```yaml
-- name: Sync files
-  run: |
-    command -v rsync >/dev/null || sudo apt-get update -qq && sudo apt-get install -y -qq rsync
-    rsync -avz ...
-```
-
-**Never work around missing tools with inferior alternatives. Install the tool.**
+**Deploy workflows** use SSH from the local runner to application hosts (`10.77.9.205` for production, `10.77.8.134` for dev, `companion-pp.lan` for PP releases).
 
 #### Runner Management
 
 ```bash
-# SSH to runner host
-ssh 10.77.8.189
-
-# Check runner status
-cd ~/presenter-runners && docker compose ps
+# Check runner status (runs locally — same machine as dev)
+cd ~/actions-runner && sudo ./svc.sh status
 
 # View runner logs
-docker compose logs -f presenter-runner-1
+sudo journalctl -u actions.runner.zbynekdrlik-presenter.presenter-local -f
 
-# Restart all runners (requires fresh registration token)
+# Restart runner
+cd ~/actions-runner && sudo ./svc.sh stop && sudo ./svc.sh start
+
+# Re-register (requires fresh token)
 gh api -X POST repos/zbynekdrlik/presenter/actions/runners/registration-token --jq '.token'
-# Update .env with new RUNNER_TOKEN, then:
-docker compose down --timeout 5 && docker compose up -d
-
-# Rebuild image after Dockerfile changes
-docker build -t presenter-runner:latest .
-docker compose down --timeout 5 && docker compose up -d
+cd ~/actions-runner && ./config.sh --url https://github.com/zbynekdrlik/presenter --token "$TOKEN" --name presenter-local --labels self-hosted,local
+sudo ./svc.sh install && sudo ./svc.sh start
 ```
 
 ### Workflows
 
-| Workflow            | Trigger                    | Purpose                                              |
-| ------------------- | -------------------------- | ---------------------------------------------------- |
-| `ci.yml`            | Push to `dev`              | Format, lint, test, quality, coverage                |
-| `e2e.yml`           | Push to `dev`              | Playwright E2E tests                                 |
-| `version-check.yml` | Push to `dev`              | Validate version format                              |
-| `security.yml`      | Push to `dev` + weekly     | Vulnerability scanning                               |
-| `deploy-dev.yml`    | Push to `dev`              | Deploy dev binary via SSH to /opt/presenter-dev      |
-| `deploy.yml`        | Push to `main`             | Deploy prod binary via SSH to /opt/presenter         |
-| `import-data.yml`   | Manual (workflow_dispatch) | Re-import ProPresenter/Bible data                    |
-| `release.yml`       | GitHub Release published   | Build release artifacts + deploy to companion-pp.lan |
-| `pr-labeler.yml`    | PR opened/edited           | Auto-label PRs by changed paths                      |
+| Workflow                | Trigger                    | Purpose                                                   |
+| ----------------------- | -------------------------- | --------------------------------------------------------- |
+| `pipeline.yml`          | Push to `dev`              | Full pipeline: checks → build → E2E → deploy-dev          |
+| `deploy.yml`            | Push to `main`             | Build on GH runner, deploy to production via SSH          |
+| `release.yml`           | GitHub Release published   | Build release, upload tarball, deploy to companion-pp.lan |
+| `security-schedule.yml` | Weekly (Sunday) + manual   | Scheduled vulnerability scanning                          |
+| `import-data.yml`       | Manual (workflow_dispatch) | Re-import ProPresenter/Bible data                         |
+| `pr-labeler.yml`        | PR opened/edited           | Auto-label PRs by changed paths                           |
+
+**Pipeline dependency chain:** `branch-sync → [fmt, clippy, companion, version-check, security] → [test, quality] → coverage → build → e2e → deploy-dev`
+
+Deploy-dev **cannot run** unless every check, test, build, and E2E job succeeds.
 
 ### Monitoring CI
 

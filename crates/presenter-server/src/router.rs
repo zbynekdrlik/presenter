@@ -9,6 +9,7 @@ pub(crate) mod stage;
 mod tablet_pwa;
 mod timers;
 mod ui_routes;
+mod wasm_ui;
 use crate::state::AppState;
 use axum::{
     extract::{ws::WebSocketUpgrade, State},
@@ -35,6 +36,10 @@ pub fn build_router(state: AppState) -> Router {
         .route(
             "/libraries/{id}",
             patch(libraries::rename_library).delete(libraries::delete_library),
+        )
+        .route(
+            "/libraries/favorites",
+            get(libraries::list_library_favorites),
         )
         .route(
             "/libraries/{id}/favorite",
@@ -111,6 +116,10 @@ pub fn build_router(state: AppState) -> Router {
         .route("/ui/stage-settings", get(ui_routes::stage_settings_ui))
         .route("/ui/stage-design", get(ui_routes::stage_design_ui))
         .route("/overlays/timer", get(ui_routes::timer_overlay))
+        // WASM UI routes (migration: served alongside existing JS-based UI)
+        .route("/ui-next", get(wasm_ui::wasm_ui_shell))
+        .route("/ui-next/{*path}", get(wasm_ui::wasm_ui_shell_with_path))
+        .route("/ui-next-pkg/{*path}", get(wasm_ui::wasm_ui_asset))
         .route("/stage-displays", get(stage::list_stage_displays))
         .route(
             "/stage/layout",

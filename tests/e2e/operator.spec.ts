@@ -535,14 +535,25 @@ test.describe("Operator control surface", () => {
     const searchInput = page.locator('[data-role="global-search-query"]');
     const searchResults = page.locator('[data-role="global-search-results"]');
 
+    const sanitize = (value: string) => value.replace(/[.,;:!?]/g, "");
+    // Use presentation name for search to reliably find presentation results
+    // (slide content tokens may only match bible entries)
+    const presentationTokens = selection.presentationName
+      .split(/\s+/)
+      .map((t: string) => sanitize(t))
+      .filter((t: string) => t.length > 0);
     const mainTokens = selection.currentText.split(/\s+/).filter(Boolean);
     const libraryTokens = selection.libraryName.split(/\s+/).filter(Boolean);
-    const sanitize = (value: string) => value.replace(/[.,;:!?]/g, "");
-    const searchTermCandidates = [...mainTokens, ...libraryTokens]
-      .map((token) => sanitize(token))
-      .filter((token) => token.length > 0);
+    const searchTermCandidates = [
+      ...presentationTokens,
+      ...mainTokens,
+      ...libraryTokens,
+    ]
+      .map((token: string) => sanitize(token))
+      .filter((token: string) => token.length > 0);
     const searchTerm =
-      searchTermCandidates.find((token) => token.length >= 4) ??
+      presentationTokens.find((token: string) => token.length >= 4) ??
+      searchTermCandidates.find((token: string) => token.length >= 4) ??
       searchTermCandidates[0] ??
       "Jezis";
     if (mainTokens.length >= 1) {
