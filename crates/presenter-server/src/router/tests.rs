@@ -935,7 +935,29 @@ async fn tablet_ui_endpoint_renders_html() {
 }
 
 #[tokio::test]
-async fn operator_ui_endpoint_renders_html() {
+async fn operator_ui_endpoint_serves_wasm_shell() {
+    let state = AppState::in_memory().await.unwrap();
+    let app = build_router(state);
+    let response = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .uri("/ui/operator")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    // WASM shell returns OK if dist is built, or 503 if not — both are valid
+    let status = response.status();
+    assert!(
+        status == StatusCode::OK || status == StatusCode::SERVICE_UNAVAILABLE,
+        "unexpected status: {status}"
+    );
+}
+
+#[tokio::test]
+async fn legacy_operator_ui_endpoint_renders_html() {
     let state = AppState::in_memory().await.unwrap();
     state
         .repository()
@@ -947,7 +969,7 @@ async fn operator_ui_endpoint_renders_html() {
         .clone()
         .oneshot(
             Request::builder()
-                .uri("/ui/operator")
+                .uri("/legacy")
                 .body(Body::empty())
                 .unwrap(),
         )

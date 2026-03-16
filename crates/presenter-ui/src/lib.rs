@@ -29,10 +29,10 @@ fn App() -> impl IntoView {
 
     // Client-side routing based on pathname
     let page_view = move || match pathname.as_str() {
-        "/ui-next/operator" => view! { <pages::operator::OperatorPage /> }.into_any(),
-        "/ui-next/bible" => view! { <pages::bible::BiblePage /> }.into_any(),
-        "/ui-next/tablet" => view! { <pages::tablet::TabletPage /> }.into_any(),
-        "/ui-next/settings" => view! { <pages::settings::SettingsPage /> }.into_any(),
+        "/ui/operator" => view! { <pages::operator::OperatorPage /> }.into_any(),
+        "/ui/operator/bible" => view! { <pages::bible::BiblePage /> }.into_any(),
+        "/ui/tablet" => view! { <pages::tablet::TabletPage /> }.into_any(),
+        "/ui/operator/settings" => view! { <pages::settings::SettingsPage /> }.into_any(),
         _ => view! {
             <div data-role="not-found">
                 <h1>"Page not found"</h1>

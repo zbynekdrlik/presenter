@@ -86,3 +86,27 @@
 {"timestamp": "2026-03-13T16:18:32.352866+00:00", "files_changed": 3, "commit": "1749bee feat(ui): implement WASM operator feature parity enhancements", "duration_hint": "completed"}
 {"timestamp": "2026-03-13T16:44:01.620330+00:00", "files_changed": 1, "commit": "1741fc8 fix(ui): resolve clippy warnings in WASM crate", "duration_hint": "completed"}
 {"timestamp": "2026-03-13T22:13:11.643300+00:00", "files_changed": 1, "commit": "245262b fix(ui): add search drag state tracking for JS feature parity", "duration_hint": "completed"}
+{"timestamp": "2026-03-14T07:14:42.740412+00:00", "files_changed": 0, "commit": "5e8441e fix(ui): fix context capture in playlist/presentation list handlers", "duration_hint": "completed"}
+{"timestamp": "2026-03-14T07:14:50.888500+00:00", "files_changed": 1, "commit": "5e8441e fix(ui): fix context capture in playlist/presentation list handlers", "duration_hint": "completed"}
+{"timestamp": "2026-03-14T11:14:51.019146+00:00", "files_changed": 1, "commit": "e2647a3 fix(e2e): remove WASM tests for non-existent features", "duration_hint": "completed"}
+{"timestamp": "2026-03-14T11:14:55.883984+00:00", "files_changed": 1, "commit": "e2647a3 fix(e2e): remove WASM tests for non-existent features", "duration_hint": "completed"}
+{"timestamp": "2026-03-14T12:31:32.053313+00:00", "files_changed": 1, "commit": "e2647a3 fix(e2e): remove WASM tests for non-existent features", "duration_hint": "completed"}
+{"timestamp": "2026-03-14T15:41:24.982222+00:00", "files_changed": 1, "commit": "3c87f02 fix(e2e): replace test.skip() with expect assertions", "duration_hint": "completed"}
+{"timestamp": "2026-03-14T15:41:32.550883+00:00", "files_changed": 1, "commit": "3c87f02 fix(e2e): replace test.skip() with expect assertions", "duration_hint": "completed"}
+{"timestamp": "2026-03-14T20:30:08.578204+00:00", "files_changed": 1, "commit": "5f61351 fix(e2e): fix Bible search and keyboard tab tests", "duration_hint": "completed"}
+{"timestamp": "2026-03-14T20:30:13.586717+00:00", "files_changed": 1, "commit": "5f61351 fix(e2e): fix Bible search and keyboard tab tests", "duration_hint": "completed"}
+{"timestamp": "2026-03-15T22:53:03.354527+00:00", "files_changed": 1, "commit": "fdffc7b fix(e2e): replace multi-slide test with simple API payload verification", "duration_hint": "completed"}
+{"timestamp": "2026-03-15T22:53:08.489961+00:00", "files_changed": 1, "commit": "fdffc7b fix(e2e): replace multi-slide test with simple API payload verification", "duration_hint": "completed"}
+{"timestamp": "2026-03-15T22:58:38.457224+00:00", "files_changed": 1, "commit": "fdffc7b fix(e2e): replace multi-slide test with simple API payload verification", "duration_hint": "completed"}
+{"timestamp": "2026-03-16T10:17:07.610640+00:00", "files_changed": 1, "commit": "dd2b82c fix(ci): use explicit artifact extraction path for runner compatibility", "duration_hint": "completed"}
+{"timestamp": "2026-03-16T10:17:19.142430+00:00", "files_changed": 1, "commit": "dd2b82c fix(ci): use explicit artifact extraction path for runner compatibility", "duration_hint": "completed"}
+{"timestamp": "2026-03-16T10:45:29.788200+00:00", "files_changed": 1, "commit": "dd2b82c fix(ci): use explicit artifact extraction path for runner compatibility", "duration_hint": "completed"}
+{"timestamp": "2026-03-16T10:47:02.369246+00:00", "files_changed": 1, "commit": "dd2b82c fix(ci): use explicit artifact extraction path for runner compatibility", "duration_hint": "completed"}
+{"timestamp": "2026-03-16T12:27:45.087928+00:00", "files_changed": 1, "commit": "4d87506 docs: fix runner host IP in CLAUDE.md (10.77.8.134, not 10.77.8.189)", "duration_hint": "completed"}
+{"timestamp": "2026-03-16T12:28:03.915345+00:00", "files_changed": 1, "commit": "4d87506 docs: fix runner host IP in CLAUDE.md (10.77.8.134, not 10.77.8.189)", "duration_hint": "completed"}
+{"timestamp": "2026-03-16T13:00:18.587319+00:00", "files_changed": 1, "commit": "4d87506 docs: fix runner host IP in CLAUDE.md (10.77.8.134, not 10.77.8.189)", "duration_hint": "completed"}
+{"timestamp": "2026-03-16T13:25:17.135247+00:00", "files_changed": 1, "commit": "4d87506 docs: fix runner host IP in CLAUDE.md (10.77.8.134, not 10.77.8.189)", "duration_hint": "completed"}
+{"timestamp": "2026-03-16T13:25:21.995221+00:00", "files_changed": 1, "commit": "4d87506 docs: fix runner host IP in CLAUDE.md (10.77.8.134, not 10.77.8.189)", "duration_hint": "completed"}
+{"timestamp": "2026-03-16T13:53:24.640711+00:00", "files_changed": 1, "commit": "4d87506 docs: fix runner host IP in CLAUDE.md (10.77.8.134, not 10.77.8.189)", "duration_hint": "completed"}
+{"timestamp": "2026-03-16T13:55:13.582767+00:00", "files_changed": 1, "commit": "4d87506 docs: fix runner host IP in CLAUDE.md (10.77.8.134, not 10.77.8.189)", "duration_hint": "completed"}
+{"timestamp": "2026-03-16T14:06:22.560334+00:00", "files_changed": 1, "commit": "4d87506 docs: fix runner host IP in CLAUDE.md (10.77.8.134, not 10.77.8.189)", "duration_hint": "completed"}

@@ -31,7 +31,7 @@ test.afterAll(async () => {
 
 test.describe("WASM Operator Edge Cases", () => {
   test("empty library shows message", async ({ page }) => {
-    await page.goto(`${baseURL}/ui-next/operator`);
+    await page.goto(`${baseURL}/ui/operator`);
     await page.waitForSelector('[data-role="library-list"]', {
       timeout: 30_000,
     });
@@ -56,7 +56,7 @@ test.describe("WASM Operator Edge Cases", () => {
   });
 
   test("empty playlist shows message", async ({ page }) => {
-    await page.goto(`${baseURL}/ui-next/operator`);
+    await page.goto(`${baseURL}/ui/operator`);
     await page.waitForSelector('[data-role="playlist-list"]', {
       timeout: 30_000,
     });
@@ -70,7 +70,7 @@ test.describe("WASM Operator Edge Cases", () => {
   });
 
   test("no presentation selected shows prompt", async ({ page }) => {
-    await page.goto(`${baseURL}/ui-next/operator`);
+    await page.goto(`${baseURL}/ui/operator`);
     await page.waitForSelector('[data-role="library-list"]', {
       timeout: 30_000,
     });
@@ -84,7 +84,7 @@ test.describe("WASM Operator Edge Cases", () => {
   });
 
   test("toast appears on element", async ({ page }) => {
-    await page.goto(`${baseURL}/ui-next/operator`);
+    await page.goto(`${baseURL}/ui/operator`);
     await page.waitForSelector('[data-role="library-list"]', {
       timeout: 30_000,
     });
@@ -102,7 +102,7 @@ test.describe("WASM Operator Edge Cases", () => {
       }
     });
 
-    await page.goto(`${baseURL}/ui-next/operator`);
+    await page.goto(`${baseURL}/ui/operator`);
     await page.waitForSelector('[data-role="library-list"]', {
       timeout: 30_000,
     });
@@ -147,7 +147,7 @@ test.describe("WASM Operator Edge Cases", () => {
   });
 
   test("session state restored on refresh", async ({ page }) => {
-    await page.goto(`${baseURL}/ui-next/operator`);
+    await page.goto(`${baseURL}/ui/operator`);
     await page.waitForSelector('[data-role="library-item"]', {
       timeout: 30_000,
     });
@@ -184,7 +184,7 @@ test.describe("WASM Operator Edge Cases", () => {
   });
 
   test("long content scrolls correctly", async ({ page }) => {
-    await page.goto(`${baseURL}/ui-next/operator`);
+    await page.goto(`${baseURL}/ui/operator`);
     await page.waitForSelector('[data-role="library-item"]', {
       timeout: 30_000,
     });
@@ -218,7 +218,7 @@ test.describe("WASM Operator Edge Cases", () => {
   });
 
   test("test helpers are exposed", async ({ page }) => {
-    await page.goto(`${baseURL}/ui-next/operator`);
+    await page.goto(`${baseURL}/ui/operator`);
     await page.waitForSelector('[data-role="library-list"]', {
       timeout: 30_000,
     });
@@ -251,7 +251,7 @@ test.describe("WASM Operator Edge Cases", () => {
   });
 
   test("parseSongText handles verse markers", async ({ page }) => {
-    await page.goto(`${baseURL}/ui-next/operator`);
+    await page.goto(`${baseURL}/ui/operator`);
     await page.waitForSelector('[data-role="library-list"]', {
       timeout: 30_000,
     });
@@ -277,7 +277,7 @@ More content`);
   });
 
   test("stage monitor baseline can be reset", async ({ page }) => {
-    await page.goto(`${baseURL}/ui-next/operator`);
+    await page.goto(`${baseURL}/ui/operator`);
     await page.waitForSelector('[data-role="library-list"]', {
       timeout: 30_000,
     });

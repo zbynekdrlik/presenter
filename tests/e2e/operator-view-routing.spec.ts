@@ -25,7 +25,7 @@ test.afterAll(async () => {
 });
 
 test("operator default view loads without view parameter", async ({ page }) => {
-  const resp = await page.goto(new URL("/ui/operator", baseURL).toString(), {
+  const resp = await page.goto(new URL("/legacy", baseURL).toString(), {
     waitUntil: "domcontentloaded",
   });
   expect(resp?.ok()).toBeTruthy();
@@ -33,31 +33,31 @@ test("operator default view loads without view parameter", async ({ page }) => {
   await expect(page.locator("body")).toBeVisible();
 });
 
-test("operator /ui/operator/bible navigates to Bible tab", async ({ page }) => {
+test("operator /legacy/bible navigates to Bible tab", async ({ page }) => {
   const resp = await page.goto(
-    new URL("/ui/operator/bible", baseURL).toString(),
+    new URL("/legacy/bible", baseURL).toString(),
     { waitUntil: "domcontentloaded" },
   );
   expect(resp?.ok()).toBeTruthy();
   await expect(page.locator("body")).toBeVisible();
 });
 
-test("operator /ui/operator/timers navigates to Timers view", async ({
+test("operator /legacy/timers navigates to Timers view", async ({
   page,
 }) => {
   const resp = await page.goto(
-    new URL("/ui/operator/timers", baseURL).toString(),
+    new URL("/legacy/timers", baseURL).toString(),
     { waitUntil: "domcontentloaded" },
   );
   expect(resp?.ok()).toBeTruthy();
   await expect(page.locator("body")).toBeVisible();
 });
 
-test("operator /ui/operator/settings navigates to Settings view", async ({
+test("operator /legacy/settings navigates to Settings view", async ({
   page,
 }) => {
   const resp = await page.goto(
-    new URL("/ui/operator/settings", baseURL).toString(),
+    new URL("/legacy/settings", baseURL).toString(),
     { waitUntil: "domcontentloaded" },
   );
   expect(resp?.ok()).toBeTruthy();
@@ -66,7 +66,7 @@ test("operator /ui/operator/settings navigates to Settings view", async ({
 
 test("operator invalid view falls back gracefully", async ({ page }) => {
   const resp = await page.goto(
-    new URL("/ui/operator/nonexistent", baseURL).toString(),
+    new URL("/legacy/nonexistent", baseURL).toString(),
     { waitUntil: "domcontentloaded" },
   );
   // Should still render the operator page (defaults to worship)

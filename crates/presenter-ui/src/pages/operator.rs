@@ -53,7 +53,7 @@ pub fn OperatorPage() -> impl IntoView {
                 let ll = line_limit.get();
                 let _ = body
                     .style()
-                    .set_property("--operator-line-limit-ch", &format!("{ll}ch"));
+                    .set_property("--operator-line-limit-ch", &ll.to_string());
             }
         });
     }

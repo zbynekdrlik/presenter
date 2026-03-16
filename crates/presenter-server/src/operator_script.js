@@ -1583,7 +1583,7 @@
       button.dataset.active = button.dataset.view === view ? "true" : "false";
     });
     if (pushState !== false) {
-      var url = view === "worship" ? "/ui/operator" : "/ui/operator/" + view;
+      var url = view === "worship" ? "/legacy" : "/legacy/" + view;
       history.pushState({ view: view }, "", url);
     }
     renderStageStatus();

@@ -1,8 +1,8 @@
 /**
  * WASM Operator Smoke Tests
  *
- * These tests verify critical functionality of the WASM-based operator UI at /ui-next/operator
- * to ensure feature parity with the JavaScript operator at /ui/operator.
+ * These tests verify critical functionality of the WASM-based operator UI at /ui/operator
+ * to ensure feature parity with the JavaScript operator at /legacy.
  *
  * Critical issues being verified:
  * - Library click works and loads presentations
@@ -38,7 +38,7 @@ test.afterAll(async () => {
 
 test.describe("WASM Operator Smoke Tests", () => {
   test.beforeEach(async ({ page }) => {
-    await page.goto(`${baseURL}/ui-next/operator`);
+    await page.goto(`${baseURL}/ui/operator`);
     // Wait for initial load - libraries should appear
     await page.waitForSelector('[data-role="library-list"]', {
       timeout: 30_000,
@@ -225,7 +225,7 @@ test.describe("WASM Operator Smoke Tests", () => {
     });
 
     // Navigate fresh to catch all console output
-    await page.goto(`${baseURL}/ui-next/operator`);
+    await page.goto(`${baseURL}/ui/operator`);
     await page.waitForSelector('[data-role="library-list"]', {
       timeout: 30_000,
     });
@@ -284,7 +284,7 @@ test.describe("WASM Operator Smoke Tests", () => {
 
 test.describe("WASM Operator Content Parity", () => {
   test.beforeEach(async ({ page }) => {
-    await page.goto(`${baseURL}/ui-next/operator`);
+    await page.goto(`${baseURL}/ui/operator`);
     await page.waitForSelector('[data-role="library-list"]', {
       timeout: 30_000,
     });
@@ -305,8 +305,8 @@ test.describe("WASM Operator Content Parity", () => {
       .locator('[data-role="library-more"]')
       .textContent();
 
-    // Navigate to JS operator
-    await page.goto(`${baseURL}/ui/operator`);
+    // Navigate to JS operator (legacy)
+    await page.goto(`${baseURL}/legacy`);
     await page.waitForSelector('[data-role="library-list"]', {
       timeout: 30_000,
     });
@@ -334,8 +334,8 @@ test.describe("WASM Operator Content Parity", () => {
       .locator('[data-role="playlist-more"]')
       .textContent();
 
-    // Navigate to JS operator
-    await page.goto(`${baseURL}/ui/operator`);
+    // Navigate to JS operator (legacy)
+    await page.goto(`${baseURL}/legacy`);
     await page.waitForSelector('[data-role="playlist-list"]', {
       timeout: 30_000,
     });
