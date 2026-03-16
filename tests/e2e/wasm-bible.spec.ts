@@ -30,7 +30,7 @@ test.afterAll(async () => {
 });
 
 async function navigateToBible(page: import("@playwright/test").Page) {
-  await page.goto(`${baseURL}/ui-next/operator`);
+  await page.goto(`${baseURL}/ui/operator`);
   await page.waitForSelector('[data-role="library-list"]', { timeout: 30_000 });
 
   // Navigate to bible view
@@ -59,7 +59,7 @@ async function navigateToBible(page: import("@playwright/test").Page) {
 
 test.describe("WASM Operator Bible Tests", () => {
   test("bible tab is visible and navigable", async ({ page }) => {
-    await page.goto(`${baseURL}/ui-next/operator`);
+    await page.goto(`${baseURL}/ui/operator`);
     await page.waitForSelector('[data-role="library-list"]', {
       timeout: 30_000,
     });

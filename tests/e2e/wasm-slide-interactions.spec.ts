@@ -32,7 +32,7 @@ test.afterAll(async () => {
 async function loadPresentationWithSlides(
   page: import("@playwright/test").Page,
 ) {
-  await page.goto(`${baseURL}/ui-next/operator`);
+  await page.goto(`${baseURL}/ui/operator`);
   await page.waitForSelector('[data-role="library-list"]', { timeout: 30_000 });
 
   // Wait for libraries to load

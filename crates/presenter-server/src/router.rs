@@ -100,8 +100,16 @@ pub fn build_router(state: AppState) -> Router {
             "/playlists/{id}/entries",
             put(playlists::replace_playlist_entries),
         )
-        .route("/ui/operator", get(ui_routes::operator_ui))
-        .route("/ui/operator/{view}", get(ui_routes::operator_ui_with_view))
+        // WASM UI is the default operator interface
+        .route("/ui/operator", get(wasm_ui::wasm_ui_shell))
+        .route(
+            "/ui/operator/{*path}",
+            get(wasm_ui::wasm_ui_shell_with_path),
+        )
+        .route("/ui-pkg/{*path}", get(wasm_ui::wasm_ui_asset))
+        // Legacy JS operator UI
+        .route("/legacy", get(ui_routes::operator_ui))
+        .route("/legacy/{view}", get(ui_routes::operator_ui_with_view))
         .route("/ui/tablet", get(ui_routes::tablet_ui))
         .route("/ui/tablet/manifest.json", get(tablet_pwa::tablet_manifest))
         .route("/ui/tablet/icon-192.png", get(tablet_pwa::icon_192))
@@ -116,10 +124,6 @@ pub fn build_router(state: AppState) -> Router {
         .route("/ui/stage-settings", get(ui_routes::stage_settings_ui))
         .route("/ui/stage-design", get(ui_routes::stage_design_ui))
         .route("/overlays/timer", get(ui_routes::timer_overlay))
-        // WASM UI routes (migration: served alongside existing JS-based UI)
-        .route("/ui-next", get(wasm_ui::wasm_ui_shell))
-        .route("/ui-next/{*path}", get(wasm_ui::wasm_ui_shell_with_path))
-        .route("/ui-next-pkg/{*path}", get(wasm_ui::wasm_ui_asset))
         .route("/stage-displays", get(stage::list_stage_displays))
         .route(
             "/stage/layout",

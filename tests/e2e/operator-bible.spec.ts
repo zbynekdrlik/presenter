@@ -235,7 +235,7 @@ test("operator header shows Bible preview when bible view is active", async ({
   }).toPass({ timeout: 90_000 });
 
   // Navigate to operator in Bible view FIRST (before triggering the broadcast)
-  await page.goto(`${baseURL}/ui/operator/bible`);
+  await page.goto(`${baseURL}/legacy/bible`);
   await expect(page).toHaveURL(/\/ui\/operator\/bible/);
 
   // Wait for WebSocket connection
@@ -688,7 +688,7 @@ test("operator edit/live mode toggle propagates to bible iframe", async ({
   }).toPass({ timeout: 90_000 });
 
   // Navigate to operator page in Bible view
-  await page.goto(`${baseURL}/ui/operator/bible`);
+  await page.goto(`${baseURL}/legacy/bible`);
   await expect(page).toHaveURL(/\/ui\/operator\/bible/);
 
   // Wait for the Bible iframe to load
@@ -808,7 +808,7 @@ test("operator header search switches to Bible in Bible view", async ({
   }).toPass({ timeout: 90_000 });
 
   // Navigate to operator in Bible view
-  await page.goto(`${baseURL}/ui/operator/bible`);
+  await page.goto(`${baseURL}/legacy/bible`);
   await expect(page).toHaveURL(/\/ui\/operator\/bible/);
 
   // Wait for operator script to initialise
@@ -910,7 +910,7 @@ test("search placeholder changes between views", async ({ page, request }) => {
   }).toPass({ timeout: 90_000 });
 
   // Start at worship view
-  await page.goto(`${baseURL}/ui/operator`);
+  await page.goto(`${baseURL}/legacy`);
   await page.waitForFunction(() => !!(window as any).__presenterOperatorState, {
     timeout: 30_000,
   });
@@ -946,7 +946,7 @@ test("switching views clears active search", async ({ page, request }) => {
     expect(response.ok()).toBeTruthy();
   }).toPass({ timeout: 90_000 });
 
-  await page.goto(`${baseURL}/ui/operator`);
+  await page.goto(`${baseURL}/legacy`);
   await page.waitForFunction(() => !!(window as any).__presenterOperatorState, {
     timeout: 30_000,
   });
@@ -988,7 +988,7 @@ test("Bible search requires minimum 3 characters", async ({
     expect(response.ok()).toBeTruthy();
   }).toPass({ timeout: 90_000 });
 
-  await page.goto(`${baseURL}/ui/operator/bible`);
+  await page.goto(`${baseURL}/legacy/bible`);
   await page.waitForFunction(() => !!(window as any).__presenterOperatorState, {
     timeout: 30_000,
   });
@@ -1028,7 +1028,7 @@ test("worship search still works after visiting Bible view", async ({
   }).toPass({ timeout: 90_000 });
 
   // Start on Bible view and do a search
-  await page.goto(`${baseURL}/ui/operator/bible`);
+  await page.goto(`${baseURL}/legacy/bible`);
   await page.waitForFunction(() => !!(window as any).__presenterOperatorState, {
     timeout: 30_000,
   });

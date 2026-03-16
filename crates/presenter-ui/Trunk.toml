@@ -1,8 +1,8 @@
 [build]
 target = "index.html"
 dist = "dist"
-# Serve assets from /ui-next-pkg/ to match the server route
-public_url = "/ui-next-pkg/"
+# Serve assets from /ui-pkg/ to match the server route
+public_url = "/ui-pkg/"
 # Disable wasm-opt (handled by Trunk but can fail on some runners)
 no_minification = true
 

@@ -1,7 +1,7 @@
-//! Routes for serving the WASM-based UI at `/ui-next/*`.
+//! Routes for serving the WASM-based UI at `/ui/operator`.
 //!
-//! During migration, WASM pages are served alongside the existing JS-based pages.
-//! After cutover, these routes replace the original `/ui/*` routes.
+//! The WASM UI is the default operator interface. The legacy JS operator
+//! is available at `/legacy` for fallback.
 
 use axum::{
     extract::Path,
@@ -15,13 +15,13 @@ use include_dir::{include_dir, Dir};
 /// If the directory doesn't exist yet, the build still compiles — routes return 503.
 static WASM_UI_DIR: Dir<'_> = include_dir!("$CARGO_MANIFEST_DIR/../presenter-ui/dist");
 
-/// Serve the WASM app shell for all `/ui-next/*` routes.
+/// Serve the WASM app shell for `/ui/operator` routes.
 /// The WASM app handles client-side routing internally.
 pub(super) async fn wasm_ui_shell() -> Response {
     serve_index_html()
 }
 
-/// Serve the WASM app shell for routes with a sub-path like `/ui-next/operator`.
+/// Serve the WASM app shell for routes with a sub-path like `/ui/operator/bible`.
 pub(super) async fn wasm_ui_shell_with_path(Path(_path): Path<String>) -> Response {
     serve_index_html()
 }

@@ -16,7 +16,7 @@ let dbUrl: string;
 let port: number;
 
 async function waitForOperatorReady(page: Page) {
-  await page.goto(new URL("/ui/operator", baseURL).toString(), {
+  await page.goto(new URL("/legacy", baseURL).toString(), {
     waitUntil: "domcontentloaded",
   });
   await page.waitForLoadState("networkidle");

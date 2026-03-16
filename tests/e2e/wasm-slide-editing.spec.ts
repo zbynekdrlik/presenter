@@ -34,7 +34,7 @@ test.afterAll(async () => {
 async function loadPresentationInEditMode(
   page: import("@playwright/test").Page,
 ) {
-  await page.goto(`${baseURL}/ui-next/operator`);
+  await page.goto(`${baseURL}/ui/operator`);
   await page.waitForSelector('[data-role="library-list"]', { timeout: 30_000 });
 
   // Wait for libraries to load
@@ -336,7 +336,7 @@ test.describe("WASM Slide Editing - Persistence", () => {
 
 test.describe("WASM Slide Editing - Visual Feedback", () => {
   test("is-loading class appears during trigger", async ({ page }) => {
-    await page.goto(`${baseURL}/ui-next/operator`);
+    await page.goto(`${baseURL}/ui/operator`);
     await page.waitForSelector('[data-role="library-list"]', {
       timeout: 30_000,
     });

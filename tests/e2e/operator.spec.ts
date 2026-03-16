@@ -199,7 +199,7 @@ test.describe("Operator control surface", () => {
       expect(response.ok()).toBeTruthy();
     }).toPass({ timeout: 180_000 });
 
-    await page.goto(new URL("/ui/operator", baseURL).toString());
+    await page.goto(new URL("/legacy", baseURL).toString());
     await page.waitForLoadState("networkidle");
     await expect(async () => {
       const connected = await page.evaluate(
@@ -1211,7 +1211,7 @@ test.describe("Operator control surface", () => {
       expect(response.ok()).toBeTruthy();
     }).toPass({ timeout: 180_000 });
 
-    await page.goto(new URL("/ui/operator", baseURL).toString());
+    await page.goto(new URL("/legacy", baseURL).toString());
     await page.waitForLoadState("networkidle");
     await expect(async () => {
       const connected = await page.evaluate(
