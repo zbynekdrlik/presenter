@@ -220,10 +220,10 @@ This project uses a **mixed runner strategy**:
 - **GitHub-hosted runners** (`ubuntu-latest`): All compilation, linting, testing, and security scans. Free for public repos.
 - **One bare-metal local runner** (`self-hosted`): E2E tests (need running binary) and deployments (SSH to LAN hosts).
 
-**Local runner host:** `10.77.8.189`
+**Local runner host:** `10.77.8.134` (same machine as dev server)
 **Local runner name:** `presenter-local`
 **Local runner label:** `self-hosted`
-**Config location:** `~/actions-runner/` on 10.77.8.189
+**Config location:** `~/actions-runner/`
 
 The local runner does NOT compile Rust — it only runs pre-built artifacts downloaded from GitHub-hosted build jobs. It needs: Node.js 22, Playwright chromium, rsync, and SSH access to LAN deploy targets.
 
@@ -232,10 +232,7 @@ The local runner does NOT compile Rust — it only runs pre-built artifacts down
 #### Runner Management
 
 ```bash
-# SSH to runner host
-ssh 10.77.8.189
-
-# Check runner status
+# Check runner status (runs locally — same machine as dev)
 cd ~/actions-runner && sudo ./svc.sh status
 
 # View runner logs
