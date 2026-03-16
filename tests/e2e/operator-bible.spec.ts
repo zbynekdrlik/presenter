@@ -236,7 +236,7 @@ test("operator header shows Bible preview when bible view is active", async ({
 
   // Navigate to operator in Bible view FIRST (before triggering the broadcast)
   await page.goto(`${baseURL}/legacy/bible`);
-  await expect(page).toHaveURL(/\/ui\/operator\/bible/);
+  await expect(page).toHaveURL(/\/legacy\/bible/);
 
   // Wait for WebSocket connection
   await page.waitForFunction(
@@ -689,7 +689,7 @@ test("operator edit/live mode toggle propagates to bible iframe", async ({
 
   // Navigate to operator page in Bible view
   await page.goto(`${baseURL}/legacy/bible`);
-  await expect(page).toHaveURL(/\/ui\/operator\/bible/);
+  await expect(page).toHaveURL(/\/legacy\/bible/);
 
   // Wait for the Bible iframe to load
   const bibleIframe = page.locator('[data-view-panel="bible"] iframe');
@@ -809,7 +809,7 @@ test("operator header search switches to Bible in Bible view", async ({
 
   // Navigate to operator in Bible view
   await page.goto(`${baseURL}/legacy/bible`);
-  await expect(page).toHaveURL(/\/ui\/operator\/bible/);
+  await expect(page).toHaveURL(/\/legacy\/bible/);
 
   // Wait for operator script to initialise
   await page.waitForFunction(() => !!(window as any).__presenterOperatorState, {
