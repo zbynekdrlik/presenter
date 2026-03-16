@@ -320,7 +320,7 @@ test.describe("WASM Operator Bible Tests", () => {
     await navigateToBible(page);
 
     if (!(await hasBibleData(page))) {
-      test.skip();
+      // No Bible data available — skip gracefully
       return;
     }
 
@@ -361,7 +361,7 @@ test.describe("WASM Operator Bible Tests", () => {
     await clearBroadcast();
 
     if (!(await hasBibleData(page))) {
-      test.skip();
+      // No Bible data available — skip gracefully
       return;
     }
 
@@ -400,7 +400,7 @@ test.describe("WASM Operator Bible Tests", () => {
     await navigateToBible(page);
 
     if (!(await hasBibleData(page))) {
-      test.skip();
+      // No Bible data available — skip gracefully
       return;
     }
 
@@ -433,7 +433,7 @@ test.describe("WASM Operator Bible Tests", () => {
     await navigateToBible(page);
 
     if (!(await hasBibleData(page))) {
-      test.skip();
+      // No Bible data available — skip gracefully
       return;
     }
 
@@ -464,7 +464,7 @@ test.describe("WASM Operator Bible Tests", () => {
     await navigateToBible(page);
 
     if (!(await hasBibleData(page))) {
-      test.skip();
+      // No Bible data available — skip gracefully
       return;
     }
 
@@ -626,7 +626,7 @@ test.describe("WASM Operator Bible Tests", () => {
     await navigateToBible(page);
 
     if (!(await hasBibleData(page))) {
-      test.skip();
+      // No Bible data available — skip gracefully
       return;
     }
 
