@@ -55,6 +55,11 @@ async function navigateToBible(page: import("@playwright/test").Page) {
   );
 }
 
+/** Get the bible view panel as a scoped locator. */
+function biblePanel(page: import("@playwright/test").Page) {
+  return page.locator('[data-view-panel="bible"]');
+}
+
 /** Check if Bible data is available (translations + books loaded). */
 async function hasBibleData(
   page: import("@playwright/test").Page,
@@ -510,33 +515,35 @@ test.describe("WASM Operator Bible Tests", () => {
 
   test("prepared tab shows create button and empty state", async ({ page }) => {
     await navigateToBible(page);
+    const bp = biblePanel(page);
 
     // Switch to Prepared tab
     await page.locator('[data-role="bible-tab"][data-tab="prepared"]').click();
 
-    const createButton = page.locator('[data-role="presentation-create"]');
+    const createButton = bp.locator('[data-role="presentation-create"]');
     await expect(createButton).toBeVisible();
   });
 
   test("create presentation adds to list", async ({ page }) => {
     await navigateToBible(page);
+    const bp = biblePanel(page);
 
     // Switch to Prepared tab
     await page.locator('[data-role="bible-tab"][data-tab="prepared"]').click();
 
     // Count existing presentations
-    const initialCount = await page
+    const initialCount = await bp
       .locator('[data-role="presentation-card"]')
       .count();
 
     // Click create
-    await page.locator('[data-role="presentation-create"]').click();
+    await bp.locator('[data-role="presentation-create"]').click();
 
     // Wait for new presentation to appear
     await page.waitForFunction(
       (expected: number) => {
         const cards = document.querySelectorAll(
-          '[data-role="presentation-card"]',
+          '[data-view-panel="bible"] [data-role="presentation-card"]',
         );
         return cards.length > expected;
       },
@@ -544,7 +551,7 @@ test.describe("WASM Operator Bible Tests", () => {
       { timeout: 10_000 },
     );
 
-    const newCount = await page
+    const newCount = await bp
       .locator('[data-role="presentation-card"]')
       .count();
     expect(newCount).toBeGreaterThan(initialCount);
@@ -552,18 +559,20 @@ test.describe("WASM Operator Bible Tests", () => {
 
   test("clicking presentation loads its slides in column", async ({ page }) => {
     await navigateToBible(page);
+    const bp = biblePanel(page);
 
     // Switch to Prepared tab
     await page.locator('[data-role="bible-tab"][data-tab="prepared"]').click();
 
     // Ensure at least one presentation exists
-    const presCards = page.locator('[data-role="presentation-card"]');
+    const presCards = bp.locator('[data-role="presentation-card"]');
     if ((await presCards.count()) === 0) {
-      await page.locator('[data-role="presentation-create"]').click();
+      await bp.locator('[data-role="presentation-create"]').click();
       await page.waitForFunction(
         () =>
-          document.querySelectorAll('[data-role="presentation-card"]').length >
-          0,
+          document.querySelectorAll(
+            '[data-view-panel="bible"] [data-role="presentation-card"]',
+          ).length > 0,
         { timeout: 10_000 },
       );
     }
@@ -578,20 +587,23 @@ test.describe("WASM Operator Bible Tests", () => {
 
   test("delete presentation removes it from list", async ({ page }) => {
     await navigateToBible(page);
+    const bp = biblePanel(page);
 
     // Switch to Prepared tab
     await page.locator('[data-role="bible-tab"][data-tab="prepared"]').click();
 
     // Create a fresh presentation to delete
-    await page.locator('[data-role="presentation-create"]').click();
+    await bp.locator('[data-role="presentation-create"]').click();
     await page.waitForFunction(
       () =>
-        document.querySelectorAll('[data-role="presentation-card"]').length > 0,
+        document.querySelectorAll(
+          '[data-view-panel="bible"] [data-role="presentation-card"]',
+        ).length > 0,
       { timeout: 10_000 },
     );
 
     // Select the last created presentation
-    const presCards = page.locator('[data-role="presentation-card"]');
+    const presCards = bp.locator('[data-role="presentation-card"]');
     const countBefore = await presCards.count();
     const lastPres = presCards.last();
     await lastPres.click();
@@ -600,13 +612,13 @@ test.describe("WASM Operator Bible Tests", () => {
     page.once("dialog", (dialog) => dialog.accept());
 
     // Click delete
-    await page.locator('[data-role="presentation-delete"]').click();
+    await bp.locator('[data-role="presentation-delete"]').click();
 
     // Wait for deletion
     await page.waitForFunction(
       (expected: number) => {
         const cards = document.querySelectorAll(
-          '[data-role="presentation-card"]',
+          '[data-view-panel="bible"] [data-role="presentation-card"]',
         );
         return cards.length < expected;
       },
@@ -776,8 +788,9 @@ test.describe("WASM Operator Bible Tests", () => {
 
   test("slides column shows empty state initially", async ({ page }) => {
     await navigateToBible(page);
+    const bp = biblePanel(page);
 
-    const slidesColumn = page.locator('[data-role="slides"]');
+    const slidesColumn = bp.locator('[data-role="slides"]');
     await expect(slidesColumn).toBeVisible();
 
     const emptyState = slidesColumn.locator(".operator__slides-empty");
@@ -787,11 +800,12 @@ test.describe("WASM Operator Bible Tests", () => {
 
   test("prepared tab slides column shows empty state", async ({ page }) => {
     await navigateToBible(page);
+    const bp = biblePanel(page);
 
     // Switch to Prepared tab
     await page.locator('[data-role="bible-tab"][data-tab="prepared"]').click();
 
-    const slidesColumn = page.locator('[data-role="slides"]');
+    const slidesColumn = bp.locator('[data-role="slides"]');
     const emptyState = slidesColumn.locator(".operator__slides-empty");
     await expect(emptyState).toHaveText(
       "Select a presentation to view slides.",
@@ -806,9 +820,10 @@ test.describe("WASM Operator Bible Tests", () => {
     page,
   }) => {
     await navigateToBible(page);
+    const bp = biblePanel(page);
 
-    const catalog = page.locator('[data-role="catalog"]');
-    const slidesColumn = page.locator('[data-role="slides-column"]');
+    const catalog = bp.locator('[data-role="catalog"]');
+    const slidesColumn = bp.locator('[data-role="slides-column"]');
 
     await expect(catalog).toBeVisible();
     await expect(slidesColumn).toBeVisible();
