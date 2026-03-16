@@ -65,6 +65,9 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      - name: Install system dependencies
+        run: sudo apt-get update -qq && sudo apt-get install -y -qq protobuf-compiler
+
       - name: Install Rust toolchain
         uses: dtolnay/rust-toolchain@stable
         with:
@@ -260,6 +263,9 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      - name: Install system dependencies
+        run: sudo apt-get update -qq && sudo apt-get install -y -qq protobuf-compiler
+
       - name: Install Rust toolchain
         uses: dtolnay/rust-toolchain@stable
 
@@ -292,6 +298,9 @@ jobs:
         with:
           fetch-depth: 0
 
+      - name: Install system dependencies
+        run: sudo apt-get update -qq && sudo apt-get install -y -qq protobuf-compiler ripgrep jq python3
+
       - name: Install Rust toolchain
         uses: dtolnay/rust-toolchain@stable
 
@@ -300,9 +309,6 @@ jobs:
         with:
           shared-key: ci
           cache-on-failure: false
-
-      - name: Install required tools
-        run: sudo apt-get update -qq && sudo apt-get install -y -qq ripgrep jq python3
 
       - name: Run quality checks
         run: ./scripts/dev/quality-check.sh --strict --against origin/${{ github.base_ref || 'main' }}
@@ -316,6 +322,9 @@ jobs:
     needs: test
     steps:
       - uses: actions/checkout@v4
+
+      - name: Install system dependencies
+        run: sudo apt-get update -qq && sudo apt-get install -y -qq protobuf-compiler
 
       - name: Install Rust toolchain
         uses: dtolnay/rust-toolchain@stable
@@ -366,6 +375,9 @@ jobs:
       - npm-audit
     steps:
       - uses: actions/checkout@v4
+
+      - name: Install system dependencies
+        run: sudo apt-get update -qq && sudo apt-get install -y -qq protobuf-compiler
 
       - name: Install Rust toolchain
         uses: dtolnay/rust-toolchain@stable
