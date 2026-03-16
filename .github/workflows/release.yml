@@ -7,15 +7,24 @@ on:
 permissions:
   contents: write
 
+env:
+  CARGO_TERM_COLOR: always
+
 jobs:
   build-release:
     name: Build Release
-    runs-on: self-hosted
+    runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
 
       - name: Install Rust toolchain
         uses: dtolnay/rust-toolchain@stable
+
+      - name: Setup Rust cache
+        uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: build
+          cache-on-failure: false
 
       - name: Build release binaries
         run: cargo build --release -p presenter-server -p presenter-importer
@@ -42,11 +51,11 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: release-binaries
+          retention-days: 1
           path: |
             target/release/presenter-server
             target/release/import_propresenter
             target/release/ingest_bibles
-          retention-days: 1
 
   deploy-pp:
     name: Deploy to companion-pp.lan

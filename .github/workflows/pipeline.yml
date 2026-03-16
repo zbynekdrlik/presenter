@@ -1,0 +1,638 @@
+name: Pipeline
+
+on:
+  push:
+    branches: [dev]
+  workflow_dispatch:
+
+concurrency:
+  group: pipeline-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  CARGO_TERM_COLOR: always
+  CARGO_INCREMENTAL: 0
+  RUST_BACKTRACE: short
+
+jobs:
+  # ============================================
+  # Branch Sync Check (fails fast if dev is behind main)
+  # ============================================
+  branch-sync:
+    name: Branch Sync Check
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Check if dev is behind main
+        run: |
+          git fetch origin main
+          BEHIND=$(git rev-list --count HEAD..origin/main)
+          if [ "$BEHIND" -gt 0 ]; then
+            echo "::error::Branch is $BEHIND commits behind main. Sync with main before pushing:"
+            echo "::error::  git fetch origin && git merge origin/main && git push origin dev"
+            exit 1
+          fi
+          echo "Branch is up to date with main"
+
+  # ============================================
+  # Format Check
+  # ============================================
+  fmt:
+    name: Format
+    runs-on: ubuntu-latest
+    needs: branch-sync
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt
+
+      - name: Check formatting
+        run: cargo fmt --all -- --check
+
+  # ============================================
+  # Clippy Linting
+  # ============================================
+  clippy:
+    name: Clippy
+    runs-on: ubuntu-latest
+    needs: branch-sync
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy
+
+      - name: Setup Rust cache
+        uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: ci
+          cache-on-failure: false
+
+      - name: Run Clippy
+        run: cargo clippy --workspace --all-targets -- -D warnings -W clippy::all
+
+  # ============================================
+  # Companion (Node.js) Tests
+  # ============================================
+  companion-tests:
+    name: Companion Tests
+    runs-on: ubuntu-latest
+    needs: branch-sync
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: "npm"
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Run companion tests
+        run: npm run test:companion
+
+  # ============================================
+  # Version Check
+  # ============================================
+  version-check:
+    name: Validate Version
+    runs-on: ubuntu-latest
+    needs: branch-sync
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Extract version from Cargo.toml
+        id: version
+        run: |
+          VERSION=$(grep -m1 '^version = ' Cargo.toml | sed 's/version = "\(.*\)"/\1/')
+          echo "version=$VERSION" >> $GITHUB_OUTPUT
+          echo "Extracted version: $VERSION"
+
+      - name: Validate version format
+        run: |
+          VERSION="${{ steps.version.outputs.version }}"
+          if [[ ! "$VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+            echo "::error::Version must be clean semver X.Y.Z (got: $VERSION)"
+            exit 1
+          fi
+          echo "Version $VERSION is valid semver"
+
+      - name: Check version is increasing
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          VERSION="${{ steps.version.outputs.version }}"
+
+          if ! RELEASE_OUTPUT=$(gh release list --limit 1 --json tagName --jq '.[0].tagName // empty' 2>&1); then
+            echo "::error::Failed to query GitHub releases API: $RELEASE_OUTPUT"
+            exit 1
+          fi
+          LATEST="$RELEASE_OUTPUT"
+
+          if [ -z "$LATEST" ]; then
+            echo "No previous releases found - version $VERSION is valid"
+            exit 0
+          fi
+
+          LATEST="${LATEST#v}"
+          echo "Current version: $VERSION"
+          echo "Latest release:  $LATEST"
+
+          HIGHER=$(printf '%s\n%s' "$LATEST" "$VERSION" | sort -V | tail -n1)
+
+          if [ "$HIGHER" = "$LATEST" ]; then
+            echo "::error::Version must be greater than latest release"
+            echo "Current: $VERSION"
+            echo "Latest:  $LATEST"
+            echo "Please increment the version in Cargo.toml"
+            exit 1
+          fi
+
+          if [ "$VERSION" = "$LATEST" ]; then
+            echo "::error::Version cannot equal latest release"
+            echo "Current: $VERSION"
+            echo "Latest:  $LATEST"
+            echo "Please increment the version in Cargo.toml"
+            exit 1
+          fi
+
+          echo "Version $VERSION is greater than latest release $LATEST"
+
+  # ============================================
+  # Rust Security Audit
+  # ============================================
+  security-audit:
+    name: Cargo Audit
+    runs-on: ubuntu-latest
+    needs: branch-sync
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache cargo tools
+        uses: actions/cache@v4
+        with:
+          path: ~/.cargo/bin/cargo-audit
+          key: cargo-audit-${{ runner.os }}-${{ hashFiles('Cargo.lock') }}
+          restore-keys: cargo-audit-${{ runner.os }}-
+
+      - name: Install cargo-audit
+        run: command -v cargo-audit >/dev/null 2>&1 || cargo install cargo-audit --locked
+
+      - name: Clean stale advisory database
+        run: rm -rf ~/.cargo/advisory-db
+
+      - name: Run cargo audit
+        run: cargo audit --deny warnings
+
+  # ============================================
+  # Dependency Policy (cargo-deny)
+  # ============================================
+  security-deny:
+    name: Cargo Deny (${{ matrix.checks }})
+    runs-on: ubuntu-latest
+    needs: branch-sync
+    strategy:
+      matrix:
+        checks:
+          - advisories
+          - bans licenses sources
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache cargo tools
+        uses: actions/cache@v4
+        with:
+          path: ~/.cargo/bin/cargo-deny
+          key: cargo-deny-${{ runner.os }}-${{ hashFiles('Cargo.lock') }}
+          restore-keys: cargo-deny-${{ runner.os }}-
+
+      - name: Install cargo-deny
+        run: command -v cargo-deny >/dev/null 2>&1 || cargo install cargo-deny --locked
+
+      - name: Run cargo-deny
+        run: cargo deny --all-features check ${{ matrix.checks }}
+
+  # ============================================
+  # npm Audit
+  # ============================================
+  npm-audit:
+    name: npm Audit
+    runs-on: ubuntu-latest
+    needs: branch-sync
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: "npm"
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Run npm audit
+        run: npm audit --audit-level=moderate
+
+  # ============================================
+  # Build and Test
+  # ============================================
+  test:
+    name: Test
+    runs-on: ubuntu-latest
+    needs: [fmt, clippy]
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Setup Rust cache
+        uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: ci
+          cache-on-failure: false
+
+      - name: Build workspace
+        run: cargo build --workspace --all-features
+
+      - name: Run tests
+        run: cargo test --workspace --all-features
+        env:
+          RUST_LOG: debug
+
+      - name: Run doc tests
+        run: cargo test --doc --workspace
+
+  # ============================================
+  # Quality Checks
+  # ============================================
+  quality:
+    name: Quality Checks
+    runs-on: ubuntu-latest
+    needs: [fmt, clippy]
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Setup Rust cache
+        uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: ci
+          cache-on-failure: false
+
+      - name: Install required tools
+        run: sudo apt-get update -qq && sudo apt-get install -y -qq ripgrep jq python3
+
+      - name: Run quality checks
+        run: ./scripts/dev/quality-check.sh --strict --against origin/${{ github.base_ref || 'main' }}
+
+  # ============================================
+  # Code Coverage
+  # ============================================
+  coverage:
+    name: Code Coverage
+    runs-on: ubuntu-latest
+    needs: test
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          components: llvm-tools-preview
+
+      - name: Setup Rust cache
+        uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: coverage
+          cache-on-failure: false
+
+      - name: Install cargo-llvm-cov
+        run: |
+          if ! command -v cargo-llvm-cov &>/dev/null; then
+            cargo install cargo-llvm-cov --locked
+          fi
+
+      - name: Generate coverage report
+        run: |
+          cargo llvm-cov --workspace --all-features \
+            --codecov --output-path codecov.json
+
+      # NOTE: Set fail_ci_if_error: true once CODECOV_TOKEN secret is configured
+      - name: Upload coverage to Codecov
+        uses: codecov/codecov-action@v4
+        with:
+          files: codecov.json
+          fail_ci_if_error: false
+          verbose: true
+        env:
+          CODECOV_TOKEN: ${{ secrets.CODECOV_TOKEN }}
+
+  # ============================================
+  # Build Release Artifacts (gate: ALL checks must pass)
+  # ============================================
+  build:
+    name: Build
+    runs-on: ubuntu-latest
+    needs:
+      - test
+      - quality
+      - companion-tests
+      - coverage
+      - version-check
+      - security-audit
+      - security-deny
+      - npm-audit
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Add wasm32 target
+        run: rustup target add wasm32-unknown-unknown
+
+      - name: Setup Rust cache
+        uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: build
+          cache-on-failure: false
+
+      - name: Cache trunk binary
+        uses: actions/cache@v4
+        with:
+          path: ~/.cargo/bin/trunk
+          key: trunk-${{ runner.os }}-${{ hashFiles('Cargo.lock') }}
+          restore-keys: trunk-${{ runner.os }}-
+
+      - name: Install trunk
+        run: command -v trunk >/dev/null 2>&1 || cargo install trunk --locked
+
+      - name: Build WASM UI
+        run: trunk build --release
+        working-directory: crates/presenter-ui
+
+      - name: Build release binaries
+        run: cargo build --release -p presenter-server -p presenter-importer
+        env:
+          PRESENTER_BUILD_CHANNEL: dev
+
+      - name: Upload build artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: build-artifacts
+          retention-days: 1
+          path: |
+            target/release/presenter-server
+            target/release/import_propresenter
+            target/release/ingest_bibles
+
+  # ============================================
+  # E2E Tests (local runner — downloads pre-built artifacts)
+  # ============================================
+  e2e:
+    name: Playwright E2E
+    runs-on: self-hosted
+    needs: build
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Download build artifacts
+        uses: actions/download-artifact@v4
+        with:
+          name: build-artifacts
+          path: target/release
+
+      - name: Verify artifacts
+        run: |
+          chmod +x target/release/presenter-server target/release/import_propresenter target/release/ingest_bibles
+          ls -la target/release/presenter-server target/release/import_propresenter target/release/ingest_bibles
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: "npm"
+
+      - name: Install npm dependencies
+        run: npm ci
+
+      - name: Install Playwright browsers
+        run: npx playwright install --with-deps chromium
+
+      - name: Run Playwright tests
+        run: npm run test:playwright
+        env:
+          CI: true
+          PRESENTER_LIBRARY_ROOT: ${{ github.workspace }}/data/libraries
+
+      - name: Upload Playwright report
+        uses: actions/upload-artifact@v4
+        if: ${{ !cancelled() }}
+        with:
+          name: playwright-report-${{ github.run_id }}
+          path: playwright-report/
+          retention-days: 14
+
+      - name: Upload test traces
+        uses: actions/upload-artifact@v4
+        if: failure()
+        with:
+          name: playwright-traces-${{ github.run_id }}
+          path: test-results/
+          retention-days: 7
+
+  # ============================================
+  # Deploy to Dev (local runner — needs SSH to LAN)
+  # ============================================
+  deploy-dev:
+    name: Deploy to Dev
+    runs-on: self-hosted
+    needs: e2e
+    concurrency:
+      group: deploy-dev
+      cancel-in-progress: false
+    env:
+      DEPLOY_DIR: /opt/presenter-dev
+      SERVICE_NAME: presenter-dev
+      DEPLOY_HOST: 10.77.8.134
+      DEPLOY_USER: newlevel
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Download build artifacts
+        uses: actions/download-artifact@v4
+        with:
+          name: build-artifacts
+          path: target/release
+
+      - name: Verify artifacts
+        run: |
+          chmod +x target/release/presenter-server target/release/import_propresenter target/release/ingest_bibles
+          ls -la target/release/presenter-server target/release/import_propresenter target/release/ingest_bibles
+
+      - name: Setup SSH for deployment
+        run: |
+          mkdir -p ~/.ssh
+          echo "${{ secrets.DEPLOY_SSH_KEY_DEV }}" > ~/.ssh/id_deploy
+          chmod 600 ~/.ssh/id_deploy
+          ssh-keyscan ${{ env.DEPLOY_HOST }} >> ~/.ssh/known_hosts 2>/dev/null
+          if [ ! -s ~/.ssh/known_hosts ]; then
+            echo "::error::ssh-keyscan failed — known_hosts is empty. Cannot verify host."
+            exit 1
+          fi
+          cat > ~/.ssh/config <<EOF
+          Host deploy-target
+              HostName ${{ env.DEPLOY_HOST }}
+              User ${{ env.DEPLOY_USER }}
+              IdentityFile ~/.ssh/id_deploy
+          EOF
+
+      - name: Create deploy directory
+        run: |
+          ssh deploy-target "sudo mkdir -p ${{ env.DEPLOY_DIR }} && sudo chown -R ${{ env.DEPLOY_USER }}:${{ env.DEPLOY_USER }} ${{ env.DEPLOY_DIR }}"
+
+      - name: Ensure ADB is installed
+        run: |
+          ssh deploy-target << 'REMOTE_SCRIPT'
+          if ! command -v adb &> /dev/null; then
+            echo "Installing ADB..."
+            sudo apt-get update -qq
+            sudo apt-get install -y -qq android-tools-adb
+          fi
+          echo "ADB version: $(adb --version | head -1)"
+          REMOTE_SCRIPT
+
+      - name: Stop service (if running)
+        run: |
+          ssh deploy-target "if systemctl is-active --quiet ${{ env.SERVICE_NAME }}; then sudo systemctl stop ${{ env.SERVICE_NAME }}; echo 'Service stopped'; else echo 'Service not running'; fi"
+
+      - name: Deploy binaries
+        run: |
+          scp -i ~/.ssh/id_deploy \
+            target/release/presenter-server \
+            target/release/import_propresenter \
+            target/release/ingest_bibles \
+            deploy-target:${{ env.DEPLOY_DIR }}/
+          ssh deploy-target "chmod +x ${{ env.DEPLOY_DIR }}/presenter-server ${{ env.DEPLOY_DIR }}/import_propresenter ${{ env.DEPLOY_DIR }}/ingest_bibles"
+
+      - name: Backup database
+        run: |
+          ssh deploy-target << 'REMOTE_SCRIPT'
+          set -e
+          DB_PATH="/opt/presenter-dev/presenter.db"
+          BACKUP_DIR="/opt/presenter-dev/backups"
+          mkdir -p "$BACKUP_DIR"
+          if [ -f "$DB_PATH" ] && [ -s "$DB_PATH" ]; then
+            TIMESTAMP=$(date +%Y%m%d-%H%M%S)
+            cp "$DB_PATH" "${BACKUP_DIR}/presenter-${TIMESTAMP}.db"
+            echo "Database backed up to ${BACKUP_DIR}/presenter-${TIMESTAMP}.db"
+            ls -t "$BACKUP_DIR"/presenter-*.db 2>/dev/null | tail -n +6 | xargs -r rm --
+          else
+            echo "No existing database to back up"
+          fi
+          REMOTE_SCRIPT
+
+      - name: Deploy Bible files
+        run: |
+          ssh deploy-target "mkdir -p ${{ env.DEPLOY_DIR }}/bibles"
+          scp -i ~/.ssh/id_deploy \
+            data/bibles/rohacek.bbl.mybible.zip \
+            data/bibles/milost.bbl.mybible.zip \
+            deploy-target:${{ env.DEPLOY_DIR }}/bibles/
+
+      - name: Sync ProPresenter libraries from git
+        run: |
+          command -v rsync >/dev/null || sudo apt-get update -qq && sudo apt-get install -y -qq rsync
+          ssh deploy-target "mkdir -p ${{ env.DEPLOY_DIR }}/libraries"
+          rsync -avz --delete -e "ssh -i ~/.ssh/id_deploy" \
+            data/libraries/ \
+            deploy-target:${{ env.DEPLOY_DIR }}/libraries/
+
+      - name: Import ProPresenter (first deploy only)
+        run: |
+          ssh deploy-target << 'REMOTE_SCRIPT'
+          set -e
+          DB_PATH="/opt/presenter-dev/presenter.db"
+          if [ ! -f "$DB_PATH" ] || [ ! -s "$DB_PATH" ]; then
+            echo "First deploy detected - running ProPresenter import"
+            PRESENTER_DB_URL=sqlite:///opt/presenter-dev/presenter.db \
+              /opt/presenter-dev/import_propresenter --root "/opt/presenter-dev/libraries"
+          else
+            echo "Existing database found - preserving presentations"
+          fi
+          REMOTE_SCRIPT
+
+      - name: Import Bible translations
+        run: |
+          ssh deploy-target << 'REMOTE_SCRIPT'
+          set -e
+          echo "Importing Bible translations..."
+          export PRESENTER_DB_URL=sqlite:///opt/presenter-dev/presenter.db
+          export PRESENTER_BIBLE_ROHACEK=/opt/presenter-dev/bibles/rohacek.bbl.mybible.zip
+          export PRESENTER_BIBLE_MILOST=/opt/presenter-dev/bibles/milost.bbl.mybible.zip
+          /opt/presenter-dev/ingest_bibles
+          REMOTE_SCRIPT
+
+      - name: Deploy systemd service
+        run: |
+          scp -i ~/.ssh/id_deploy scripts/deploy/presenter-dev.service deploy-target:/tmp/presenter-dev.service
+          ssh deploy-target "sudo cp /tmp/presenter-dev.service /etc/systemd/system/ && sudo systemctl daemon-reload"
+
+      - name: Start service
+        run: |
+          ssh deploy-target "sudo systemctl enable ${{ env.SERVICE_NAME }} && sudo systemctl start ${{ env.SERVICE_NAME }}"
+
+      - name: Verify deployment
+        run: |
+          sleep 5
+          ssh deploy-target << 'REMOTE_SCRIPT'
+          if systemctl is-active --quiet presenter-dev; then
+            echo "Service is running"
+            curl -sf http://localhost:8080/healthz || echo "Warning: healthz check failed"
+          else
+            echo "Service failed to start"
+            sudo journalctl -u presenter-dev -n 50 --no-pager
+            exit 1
+          fi
+          REMOTE_SCRIPT
+
+      - name: Cleanup old library paths
+        run: |
+          ssh deploy-target << 'REMOTE_SCRIPT'
+          OLD_LIB_PATH="/home/newlevel/devel/presenter/presenter-libraries"
+          if [ -d "$OLD_LIB_PATH" ]; then
+            echo "Removing old library path: $OLD_LIB_PATH"
+            rm -rf "$OLD_LIB_PATH"
+          fi
+          REMOTE_SCRIPT
+
+      - name: Show deployment info
+        run: |
+          echo "=== Dev Deployment Complete ==="
+          echo "Version: $(grep -m1 '^version' Cargo.toml | cut -d'"' -f2)"
+          echo "Service: ${{ env.SERVICE_NAME }}"
+          echo "URL: http://10.77.8.134:8080"
+          ssh deploy-target "systemctl status ${{ env.SERVICE_NAME }} --no-pager" || true

@@ -1,6 +1,6 @@
 # CLAUDE.md
 
-> **Version:** 2025.6 | **Last Updated:** 2026-03-09
+> **Version:** 2025.7 | **Last Updated:** 2026-03-16
 
 This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
 
@@ -213,34 +213,21 @@ See `docs/architecture.md` for full versioning and release strategy.
 
 ## GitHub Actions (Primary CI/CD)
 
-### Self-Hosted Runners
+### Runner Architecture
 
-This project uses **3 Docker-based self-hosted runners** on a remote machine to save GitHub Actions costs.
+This project uses a **mixed runner strategy**:
 
-**Runner host:** `10.77.8.189`
-**Runner names:** `presenter-runner-1`, `presenter-runner-2`, `presenter-runner-3`
-**Runner label:** `self-hosted`
-**Config location:** `~/presenter-runners/` on 10.77.8.189
+- **GitHub-hosted runners** (`ubuntu-latest`): All compilation, linting, testing, and security scans. Free for public repos.
+- **One bare-metal local runner** (`self-hosted`): E2E tests (need running binary) and deployments (SSH to LAN hosts).
 
-All workflows run on the Docker runners, providing:
+**Local runner host:** `10.77.8.189`
+**Local runner name:** `presenter-local`
+**Local runner label:** `self-hosted`
+**Config location:** `~/actions-runner/` on 10.77.8.189
 
-- Faster builds (local caching, shared cargo volumes)
-- No GitHub minutes consumed
-- 3 parallel runners for concurrent workflow execution
-- Reproducible environment (Docker image with Rust, Node.js, Playwright, Docker CLI)
+The local runner does NOT compile Rust — it only runs pre-built artifacts downloaded from GitHub-hosted build jobs. It needs: Node.js 22, Playwright chromium, rsync, and SSH access to LAN deploy targets.
 
-**Deploy workflows** use SSH to deploy binaries from runners to the application hosts (`10.77.9.205` for production, `10.77.8.134` for dev, `companion-pp.lan` for PP releases).
-
-**Missing tools:** If a workflow step requires a tool that's not installed on the runner (e.g., `rsync`), install it at runtime:
-
-```yaml
-- name: Sync files
-  run: |
-    command -v rsync >/dev/null || sudo apt-get update -qq && sudo apt-get install -y -qq rsync
-    rsync -avz ...
-```
-
-**Never work around missing tools with inferior alternatives. Install the tool.**
+**Deploy workflows** use SSH from the local runner to application hosts (`10.77.9.205` for production, `10.77.8.134` for dev, `companion-pp.lan` for PP releases).
 
 #### Runner Management
 
@@ -249,34 +236,34 @@ All workflows run on the Docker runners, providing:
 ssh 10.77.8.189
 
 # Check runner status
-cd ~/presenter-runners && docker compose ps
+cd ~/actions-runner && sudo ./svc.sh status
 
 # View runner logs
-docker compose logs -f presenter-runner-1
+sudo journalctl -u actions.runner.zbynekdrlik-presenter.presenter-local -f
 
-# Restart all runners (requires fresh registration token)
+# Restart runner
+cd ~/actions-runner && sudo ./svc.sh stop && sudo ./svc.sh start
+
+# Re-register (requires fresh token)
 gh api -X POST repos/zbynekdrlik/presenter/actions/runners/registration-token --jq '.token'
-# Update .env with new RUNNER_TOKEN, then:
-docker compose down --timeout 5 && docker compose up -d
-
-# Rebuild image after Dockerfile changes
-docker build -t presenter-runner:latest .
-docker compose down --timeout 5 && docker compose up -d
+cd ~/actions-runner && ./config.sh --url https://github.com/zbynekdrlik/presenter --token "$TOKEN" --name presenter-local --labels self-hosted,local
+sudo ./svc.sh install && sudo ./svc.sh start
 ```
 
 ### Workflows
 
-| Workflow            | Trigger                    | Purpose                                              |
-| ------------------- | -------------------------- | ---------------------------------------------------- |
-| `ci.yml`            | Push to `dev`              | Format, lint, test, quality, coverage                |
-| `e2e.yml`           | Push to `dev`              | Playwright E2E tests                                 |
-| `version-check.yml` | Push to `dev`              | Validate version format                              |
-| `security.yml`      | Push to `dev` + weekly     | Vulnerability scanning                               |
-| `deploy-dev.yml`    | Push to `dev`              | Deploy dev binary via SSH to /opt/presenter-dev      |
-| `deploy.yml`        | Push to `main`             | Deploy prod binary via SSH to /opt/presenter         |
-| `import-data.yml`   | Manual (workflow_dispatch) | Re-import ProPresenter/Bible data                    |
-| `release.yml`       | GitHub Release published   | Build release artifacts + deploy to companion-pp.lan |
-| `pr-labeler.yml`    | PR opened/edited           | Auto-label PRs by changed paths                      |
+| Workflow                | Trigger                    | Purpose                                                   |
+| ----------------------- | -------------------------- | --------------------------------------------------------- |
+| `pipeline.yml`          | Push to `dev`              | Full pipeline: checks → build → E2E → deploy-dev          |
+| `deploy.yml`            | Push to `main`             | Build on GH runner, deploy to production via SSH          |
+| `release.yml`           | GitHub Release published   | Build release, upload tarball, deploy to companion-pp.lan |
+| `security-schedule.yml` | Weekly (Sunday) + manual   | Scheduled vulnerability scanning                          |
+| `import-data.yml`       | Manual (workflow_dispatch) | Re-import ProPresenter/Bible data                         |
+| `pr-labeler.yml`        | PR opened/edited           | Auto-label PRs by changed paths                           |
+
+**Pipeline dependency chain:** `branch-sync → [fmt, clippy, companion, version-check, security] → [test, quality] → coverage → build → e2e → deploy-dev`
+
+Deploy-dev **cannot run** unless every check, test, build, and E2E job succeeds.
 
 ### Monitoring CI
 
