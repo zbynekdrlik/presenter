@@ -45,7 +45,7 @@ async function loadPresentation(page: import("@playwright/test").Page) {
   await page.waitForFunction(
     () =>
       document
-        .querySelector('[data-role="slides"]')
+        .querySelector('[data-view-panel="worship"] [data-role="slides"]')
         ?.querySelectorAll("[data-slide-id]").length ?? 0 > 0,
     { timeout: 15_000 },
   );
@@ -260,7 +260,9 @@ test.describe("WASM Operator Keyboard Shortcuts", () => {
     });
 
     // Open presentation create modal
-    await page.locator('[data-role="presentation-create"]').click();
+    await page
+      .locator('[data-view-panel="worship"] [data-role="presentation-create"]')
+      .click();
     await page.waitForFunction(
       () =>
         document.querySelector(

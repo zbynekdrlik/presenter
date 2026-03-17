@@ -54,7 +54,9 @@ async function loadPresentationInEditMode(
   // Wait for slides to load
   await page.waitForFunction(
     () => {
-      const slides = document.querySelector('[data-role="slides"]');
+      const slides = document.querySelector(
+        '[data-view-panel="worship"] [data-role="slides"]',
+      );
       return slides && slides.querySelectorAll("[data-slide-id]").length > 0;
     },
     { timeout: 15_000 },
@@ -312,7 +314,9 @@ test.describe("WASM Slide Editing - Persistence", () => {
     await textarea.type(" MODAL_TEST");
 
     // Open a modal (e.g., presentation create)
-    const createButton = page.locator('[data-role="presentation-create"]');
+    const createButton = page.locator(
+      '[data-view-panel="worship"] [data-role="presentation-create"]',
+    );
     await createButton.click();
 
     // Modal should be open - focus should NOT return to textarea
@@ -350,7 +354,9 @@ test.describe("WASM Slide Editing - Visual Feedback", () => {
     await page.locator('[data-role="presentation-item"]').first().click();
     await page.waitForFunction(
       () => {
-        const slides = document.querySelector('[data-role="slides"]');
+        const slides = document.querySelector(
+          '[data-view-panel="worship"] [data-role="slides"]',
+        );
         return slides && slides.querySelectorAll("[data-slide-id]").length > 0;
       },
       { timeout: 15_000 },

@@ -76,7 +76,9 @@ test.describe("WASM Operator Edge Cases", () => {
     });
 
     // Without selecting anything, slides area should show prompt
-    const slidesArea = page.locator('[data-role="slides"]');
+    const slidesArea = page.locator(
+      '[data-view-panel="worship"] [data-role="slides"]',
+    );
     const emptyMessage = slidesArea.locator(".empty");
     if ((await emptyMessage.count()) > 0) {
       await expect(emptyMessage).toContainText(/Select/);
@@ -121,7 +123,7 @@ test.describe("WASM Operator Edge Cases", () => {
     await page.waitForFunction(
       () =>
         document
-          .querySelector('[data-role="slides"]')
+          .querySelector('[data-view-panel="worship"] [data-role="slides"]')
           ?.querySelectorAll("[data-slide-id]").length ?? 0 > 0,
       { timeout: 15_000 },
     );
@@ -200,13 +202,15 @@ test.describe("WASM Operator Edge Cases", () => {
     await page.waitForFunction(
       () =>
         document
-          .querySelector('[data-role="slides"]')
+          .querySelector('[data-view-panel="worship"] [data-role="slides"]')
           ?.querySelectorAll("[data-slide-id]").length ?? 0 > 0,
       { timeout: 15_000 },
     );
 
     // Check if slides container is scrollable
-    const slidesContainer = page.locator('[data-role="slides"]');
+    const slidesContainer = page.locator(
+      '[data-view-panel="worship"] [data-role="slides"]',
+    );
     const isScrollable = await slidesContainer.evaluate((el) => {
       return el.scrollHeight > el.clientHeight;
     });

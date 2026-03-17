@@ -225,7 +225,9 @@ test.describe("WASM Operator View Routing Tests", () => {
       );
 
       // Verify worship panel is visible
-      const catalogSection = page.locator('[data-role="catalog"]');
+      const catalogSection = page.locator(
+        '[data-view-panel="worship"] [data-role="catalog"]',
+      );
       await expect(catalogSection).toBeVisible();
     }
   });

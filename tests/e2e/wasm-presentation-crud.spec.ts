@@ -48,7 +48,9 @@ test.describe("WASM Operator Presentation CRUD", () => {
     await selectLibrary(page);
 
     // Open create modal
-    await page.locator('[data-role="presentation-create"]').click();
+    await page
+      .locator('[data-view-panel="worship"] [data-role="presentation-create"]')
+      .click();
 
     await page.waitForFunction(
       () =>
@@ -85,7 +87,9 @@ test.describe("WASM Operator Presentation CRUD", () => {
     await selectLibrary(page);
 
     // Open create modal
-    await page.locator('[data-role="presentation-create"]').click();
+    await page
+      .locator('[data-view-panel="worship"] [data-role="presentation-create"]')
+      .click();
 
     await page.waitForFunction(
       () =>
@@ -221,7 +225,9 @@ Multiple lines here`;
     await selectLibrary(page);
 
     // First create a test presentation to delete
-    await page.locator('[data-role="presentation-create"]').click();
+    await page
+      .locator('[data-view-panel="worship"] [data-role="presentation-create"]')
+      .click();
     await page.waitForFunction(
       () =>
         document.querySelector(
@@ -361,7 +367,9 @@ Multiple lines here`;
     await selectLibrary(page);
 
     // Open create modal
-    await page.locator('[data-role="presentation-create"]').click();
+    await page
+      .locator('[data-view-panel="worship"] [data-role="presentation-create"]')
+      .click();
 
     await page.waitForFunction(
       () =>
