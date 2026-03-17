@@ -823,6 +823,12 @@ test.describe("WASM Operator Bible Tests", () => {
     await navigateToBible(page);
     const bp = biblePanel(page);
 
+    // Wait for the operator--bible class on body (set reactively, may lag behind data-view)
+    await page.waitForFunction(
+      () => document.body.classList.contains("operator--bible"),
+      { timeout: 5_000 },
+    );
+
     // bp IS the .operator__panel--bible element (data-view-panel="bible")
     const catalog = bp.locator('[data-role="catalog"]');
     const slidesColumn = bp.locator('[data-role="slides-column"]');
