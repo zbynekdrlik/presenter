@@ -4,8 +4,56 @@ import http from "http";
 import path from "path";
 import type { AddressInfo } from "net";
 import type { TestInfo } from "@playwright/test";
+import { expect, type Locator } from "@playwright/test";
 
 export const REPO_ROOT = process.cwd();
+
+/**
+ * Assert that a container uses a two-column layout with left and right
+ * columns rendered side-by-side at the expected widths.
+ */
+export async function assertTwoColumnLayout(
+  container: Locator,
+  leftColumn: Locator,
+  rightColumn: Locator,
+  options: {
+    expectedLeftWidth?: number;
+    leftWidthTolerance?: number;
+    expectedDisplay?: string;
+  } = {},
+) {
+  const {
+    expectedLeftWidth = 320,
+    leftWidthTolerance = 10,
+    expectedDisplay = "grid",
+  } = options;
+
+  // Container uses expected display mode
+  const display = await container.evaluate(
+    (el) => window.getComputedStyle(el).display,
+  );
+  expect(display).toBe(expectedDisplay);
+
+  // Get bounding boxes
+  const leftBox = await leftColumn.boundingBox();
+  const rightBox = await rightColumn.boundingBox();
+  expect(leftBox).toBeTruthy();
+  expect(rightBox).toBeTruthy();
+  if (!leftBox || !rightBox) return;
+
+  // Side-by-side: same vertical position (not stacked)
+  expect(Math.abs(leftBox.y - rightBox.y)).toBeLessThan(5);
+
+  // Left column width ~expected
+  expect(leftBox.width).toBeGreaterThan(expectedLeftWidth - leftWidthTolerance);
+  expect(leftBox.width).toBeLessThan(expectedLeftWidth + leftWidthTolerance);
+
+  // No overlap
+  expect(rightBox.x).toBeGreaterThanOrEqual(leftBox.x + leftBox.width - 1);
+
+  // Right column fills remaining space
+  expect(rightBox.width).toBeGreaterThan(leftBox.width);
+}
 
 function stableHash(input: string): number {
   let hash = 0;

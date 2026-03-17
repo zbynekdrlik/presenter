@@ -7,6 +7,7 @@
 
 import { test, expect } from "@playwright/test";
 import {
+  assertTwoColumnLayout,
   deriveTestConfig,
   refreshDevData,
   startTestServer,
@@ -816,16 +817,21 @@ test.describe("WASM Operator Bible Tests", () => {
   // Two-column layout
   // -----------------------------------------------------------------------
 
-  test("two-column layout renders catalog and slides column", async ({
+  test("two-column layout renders catalog and slides side-by-side at 320px", async ({
     page,
   }) => {
     await navigateToBible(page);
     const bp = biblePanel(page);
 
+    const container = bp.locator(".operator__panel--bible");
     const catalog = bp.locator('[data-role="catalog"]');
     const slidesColumn = bp.locator('[data-role="slides-column"]');
 
     await expect(catalog).toBeVisible();
     await expect(slidesColumn).toBeVisible();
+
+    await assertTwoColumnLayout(container, catalog, slidesColumn, {
+      expectedLeftWidth: 320,
+    });
   });
 });
