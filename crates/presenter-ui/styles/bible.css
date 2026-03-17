@@ -28,14 +28,25 @@ body.in-iframe .operator__main {
   font-family: "Inter", "Segoe UI", system-ui, sans-serif;
 }
 
-/* Two-column layout: sidebar + slides (no right panel) */
-.operator.operator--bible .operator__main {
-  flex: 1;
-  overflow-y: auto;
-  background: #0f172a;
-  display: grid;
+/* Two-column layout: bible panel becomes the grid container (not __main which is shared) */
+body.operator.operator--bible .operator__panel--bible {
+  display: grid !important; /* override display: block from operator.css */
   grid-template-columns: 320px 1fr;
   gap: 0;
+  padding: 0; /* remove .operator__panel's 1.5rem padding */
+  overflow: hidden;
+}
+
+/* Catalog sidebar fills grid cell and scrolls internally */
+.operator--bible .operator__catalog--bible {
+  height: 100%;
+  overflow-y: auto;
+}
+
+/* Slides column fills grid cell */
+.operator--bible .operator__slides-column {
+  height: 100%;
+  overflow-y: auto;
 }
 
 /* ---------- Sub-tab navigation ---------- */
@@ -454,7 +465,7 @@ body.in-iframe .operator__main {
   .bible__search {
     grid-template-columns: 1fr;
   }
-  .operator.operator--bible .operator__main {
+  body.operator.operator--bible .operator__panel--bible {
     grid-template-columns: 1fr;
   }
 }
