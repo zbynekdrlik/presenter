@@ -257,6 +257,44 @@ test.describe("WASM Operator Bible Tests", () => {
     expect(count).toBeGreaterThan(0);
   });
 
+  test("book items have proper button structure and chapter count badges", async ({
+    page,
+  }) => {
+    await navigateToBible(page);
+
+    await page.waitForFunction(
+      () => document.querySelectorAll('[data-role="book-item"]').length > 0,
+      { timeout: 10_000 },
+    );
+
+    const firstBook = page.locator('[data-role="book-item"]').first();
+
+    // Book item should be a button with operator__list-button class
+    await expect(firstBook).toHaveClass(/operator__list-button/);
+
+    // Should be wrapped in a div.operator__list-item
+    const wrapper = firstBook.locator("..");
+    await expect(wrapper).toHaveClass(/operator__list-item/);
+
+    // Should contain a label span and a chapter count meta span
+    const label = firstBook.locator(".operator__list-label");
+    await expect(label).toBeVisible();
+    const labelText = await label.textContent();
+    expect(labelText?.trim().length).toBeGreaterThan(0);
+
+    const meta = firstBook.locator(".operator__list-meta");
+    await expect(meta).toBeVisible();
+    const metaText = await meta.textContent();
+    // Meta should show chapter count like "50 ch."
+    expect(metaText).toMatch(/\d+\s*ch\./);
+
+    // Button should have pointer cursor (styled as clickable)
+    const cursor = await firstBook.evaluate(
+      (el) => window.getComputedStyle(el).cursor,
+    );
+    expect(cursor).toBe("pointer");
+  });
+
   test("book filter narrows book list", async ({ page }) => {
     await navigateToBible(page);
 

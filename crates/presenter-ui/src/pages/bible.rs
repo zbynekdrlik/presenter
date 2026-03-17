@@ -339,16 +339,19 @@ fn BookList() -> impl IntoView {
                         };
 
                         view! {
-                            <button
-                                type="button"
-                                class="operator__list-item"
-                                data-role="book-item"
-                                data-book-code=code
-                                data-active=move || if is_active() { "true" } else { "false" }
-                                on:click=on_click
-                            >
-                                {display_name}
-                            </button>
+                            <div class="operator__list-item">
+                                <button
+                                    type="button"
+                                    class="operator__list-button"
+                                    data-role="book-item"
+                                    data-book-code=code
+                                    data-active=move || if is_active() { "true" } else { "false" }
+                                    on:click=on_click
+                                >
+                                    <span class="operator__list-label">{display_name}</span>
+                                    <span class="operator__list-meta">{chapter_count}" ch."</span>
+                                </button>
+                            </div>
                         }
                     }).collect_view().into_any()
                 }
