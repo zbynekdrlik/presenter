@@ -823,14 +823,14 @@ test.describe("WASM Operator Bible Tests", () => {
     await navigateToBible(page);
     const bp = biblePanel(page);
 
-    const container = bp.locator(".operator__panel--bible");
+    // bp IS the .operator__panel--bible element (data-view-panel="bible")
     const catalog = bp.locator('[data-role="catalog"]');
     const slidesColumn = bp.locator('[data-role="slides-column"]');
 
     await expect(catalog).toBeVisible();
     await expect(slidesColumn).toBeVisible();
 
-    await assertTwoColumnLayout(container, catalog, slidesColumn, {
+    await assertTwoColumnLayout(bp, catalog, slidesColumn, {
       expectedLeftWidth: 320,
     });
   });
