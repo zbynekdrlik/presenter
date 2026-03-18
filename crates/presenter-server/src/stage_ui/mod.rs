@@ -586,6 +586,62 @@ fn StageDisplayDocument(
     }}
   }};
 
+  // ---- Bible overlay rendering ----
+  let activeBibleSlide = null;
+
+  const bibleOverlay = document.getElementById('bible-overlay');
+  const bibleTextEl = document.getElementById('bible-text');
+  const bibleRefEl = document.getElementById('bible-reference');
+  const bibleSecondaryEl = document.getElementById('bible-secondary');
+  const bibleSecondaryTextEl = document.getElementById('bible-secondary-text');
+  const bibleSecondaryRefEl = document.getElementById('bible-secondary-ref');
+
+  const renderBibleOverlay = (output) => {{
+    if (!bibleOverlay) return;
+    if (!output) {{
+      bibleOverlay.dataset.visible = 'false';
+      document.body.dataset.bibleActive = 'false';
+      activeBibleSlide = null;
+      window.__presenterStageBibleSlide = null;
+      return;
+    }}
+    activeBibleSlide = output;
+    window.__presenterStageBibleSlide = output;
+
+    if (bibleTextEl) bibleTextEl.textContent = output.mainText || '';
+    if (bibleRefEl) bibleRefEl.textContent = output.mainReference || '';
+
+    const hasSecondary = Boolean(output.secondaryText);
+    if (bibleSecondaryEl) bibleSecondaryEl.dataset.visible = hasSecondary ? 'true' : 'false';
+    if (bibleSecondaryTextEl) bibleSecondaryTextEl.textContent = output.secondaryText || '';
+    if (bibleSecondaryRefEl) bibleSecondaryRefEl.textContent = output.secondaryReference || '';
+
+    bibleOverlay.dataset.visible = 'true';
+    document.body.dataset.bibleActive = 'true';
+  }};
+
+  const clearBibleOverlay = () => {{
+    renderBibleOverlay(null);
+  }};
+
+  const fetchBibleActive = async () => {{
+    try {{
+      const resp = await fetch('/bible/active-slide', {{ cache: 'no-store' }});
+      if (resp.ok) {{
+        const data = await resp.json();
+        if (data && data.mainText) {{
+          renderBibleOverlay(data);
+        }} else {{
+          clearBibleOverlay();
+        }}
+      }} else {{
+        clearBibleOverlay();
+      }}
+    }} catch (err) {{
+      console.warn('Presenter bible active fetch failed', err);
+    }}
+  }};
+
   const applyStage = (snapshot) => {{
     applyTimers(snapshot.timers);
 
@@ -678,6 +734,7 @@ fn StageDisplayDocument(
       fetchAppearance();
       fetchDesign();
       fetchBroadcastLive();
+      fetchBibleActive();
     }});
 
     ws.addEventListener('message', (event) => {{
@@ -735,6 +792,12 @@ fn StageDisplayDocument(
               }}
             }}
           }}
+        }} else if (data.type === 'bible_slide' || data.type === 'BibleSlide') {{
+          if (data.output) {{
+            renderBibleOverlay(data.output);
+          }}
+        }} else if (data.type === 'bible_cleared' || data.type === 'BibleCleared') {{
+          clearBibleOverlay();
         }} else if (data.type === 'broadcast_live' || data.type === 'BroadcastLive') {{
           const enabled = Boolean(data.enabled);
           setBroadcastLive(enabled);
@@ -786,6 +849,7 @@ fn StageDisplayDocument(
   applyStage(currentSnapshot);
   fetchAppearance();
   fetchDesign();
+  fetchBibleActive();
   connectLive();
 
   // Start clock updates
@@ -857,8 +921,18 @@ fn StageDisplayDocument(
                 <title>{layout.name.clone()}</title>
                 <style>{STAGE_STYLES}</style>
             </head>
-            <body class="stage" data-layout-code={layout_code} data-output-stale="false" data-broadcast-live="false">
+            <body class="stage" data-layout-code={layout_code} data-output-stale="false" data-broadcast-live="false" data-bible-active="false">
                 <main class="stage__body">{layout_view}</main>
+                <div id="bible-overlay" class="stage__bible-overlay" data-visible="false">
+                    <div class="stage__bible-main">
+                        <p id="bible-text" class="stage__bible-text"></p>
+                        <p id="bible-reference" class="stage__bible-reference"></p>
+                    </div>
+                    <div id="bible-secondary" class="stage__bible-secondary" data-visible="false">
+                        <p id="bible-secondary-text" class="stage__bible-secondary-text"></p>
+                        <p id="bible-secondary-ref" class="stage__bible-secondary-reference"></p>
+                    </div>
+                </div>
                 <script>{script}</script>
             </body>
         </html>

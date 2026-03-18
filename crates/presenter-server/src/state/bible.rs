@@ -481,8 +481,8 @@ impl AppState {
             .await;
     }
 
-    /// Get the current active Bible slide output
-    #[allow(dead_code)] // Intended for future /bible/active-slide endpoint
+    /// Get the current active Bible slide output.
+    /// Used by `/bible/active-slide` endpoint (stage page initial load).
     pub async fn active_bible_slide_output(&self) -> Option<BibleSlideOutput> {
         self.bible_slide_output.read().await.clone()
     }

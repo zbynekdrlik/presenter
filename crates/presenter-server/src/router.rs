@@ -81,6 +81,10 @@ pub fn build_router(state: AppState) -> Router {
             post(bible::append_bible_presentation_handler),
         )
         .route("/bible/active", get(bible::get_active_bible_broadcast))
+        .route(
+            "/bible/active-slide",
+            get(bible::get_active_bible_slide_output),
+        )
         .route("/bible/trigger", post(bible::trigger_bible_broadcast))
         .route("/bible/trigger-slide", post(bible::trigger_bible_slide))
         .route("/bible/clear", post(bible::clear_bible_broadcast))
