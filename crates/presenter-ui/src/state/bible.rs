@@ -14,6 +14,19 @@ pub struct SelectedBook {
     pub verse_counts: Vec<u16>,
 }
 
+/// A previously loaded passage for the history list.
+#[derive(Clone, Debug)]
+pub struct LoadedPassage {
+    pub book: String,
+    pub book_code: String,
+    pub book_number: u16,
+    pub chapter: u16,
+    pub verse_start: u16,
+    pub verse_end: Option<u16>,
+    pub translation_code: String,
+    pub label: String,
+}
+
 /// Bible page specific state.
 #[derive(Clone)]
 pub struct BibleState {
@@ -51,6 +64,13 @@ pub struct BibleState {
 
     // -- Preferences --
     pub character_limit: RwSignal<u32>,
+
+    // -- Loaded passages history (max 12) --
+    pub loaded_passages_history: RwSignal<Vec<LoadedPassage>>,
+
+    // -- Drag state for prepared slide reorder --
+    pub drag_source_idx: RwSignal<Option<usize>>,
+    pub drag_over_idx: RwSignal<Option<usize>>,
 }
 
 impl BibleState {
@@ -83,7 +103,21 @@ impl BibleState {
             active_presentation_slides: RwSignal::new(Vec::new()),
 
             character_limit: RwSignal::new(320),
+
+            loaded_passages_history: RwSignal::new(Vec::new()),
+            drag_source_idx: RwSignal::new(None),
+            drag_over_idx: RwSignal::new(None),
         }
+    }
+
+    /// Add a passage to the loaded history (max 12, most recent first).
+    pub fn push_history(&self, passage: LoadedPassage) {
+        self.loaded_passages_history.update(|history| {
+            // Remove duplicate if exists
+            history.retain(|p| p.label != passage.label);
+            history.insert(0, passage);
+            history.truncate(12);
+        });
     }
 
     /// Get filtered books based on the book_filter signal.

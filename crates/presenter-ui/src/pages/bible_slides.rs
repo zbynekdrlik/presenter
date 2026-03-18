@@ -98,7 +98,7 @@ fn LiveSlides() -> impl IntoView {
                 }.into_any()
             } else {
                 slide_list.into_iter().map(|slide| {
-                    view! { <BibleSlideCard slide=slide source="live" /> }
+                    view! { <BibleSlideCard slide=slide source="live" index=0 /> }
                 }).collect_view().into_any()
             }
         }}
@@ -118,16 +118,63 @@ fn PreparedSlides() -> impl IntoView {
                     <p class="operator__slides-empty">"Select a presentation to view slides."</p>
                 }.into_any()
             } else {
-                slide_list.into_iter().map(|slide| {
-                    view! { <BibleSlideCard slide=slide source="prepared" /> }
+                slide_list.into_iter().enumerate().map(|(idx, slide)| {
+                    view! { <BibleSlideCard slide=slide source="prepared" index=idx /> }
                 }).collect_view().into_any()
             }
         }}
     }
 }
 
+/// Helper to build a TriggerSlideRequest from signal values (for edit mode accuracy).
+fn build_trigger_request(
+    main_text_sig: RwSignal<String>,
+    main_ref_sig: RwSignal<String>,
+    trans_text_sig: RwSignal<String>,
+    trans_ref_sig: RwSignal<String>,
+    slide: &BibleSlideDto,
+    bs_translation: RwSignal<Option<String>>,
+) -> bible::TriggerSlideRequest {
+    let main_text = main_text_sig.get_untracked();
+    let main_ref = {
+        let r = main_ref_sig.get_untracked();
+        if r.is_empty() {
+            "Bible".to_string()
+        } else {
+            r
+        }
+    };
+    let translation_text = trans_text_sig.get_untracked();
+    let trans_ref = trans_ref_sig.get_untracked();
+
+    let meta = slide.metadata.as_ref().and_then(|m| m.bible.as_ref());
+    bible::TriggerSlideRequest {
+        main_text,
+        main_reference: main_ref,
+        secondary_text: if translation_text.is_empty() {
+            None
+        } else {
+            Some(translation_text)
+        },
+        secondary_reference: if trans_ref.is_empty() {
+            None
+        } else {
+            Some(trans_ref)
+        },
+        translation_code: meta
+            .and_then(|m| m.translation_code.clone())
+            .or_else(|| bs_translation.get_untracked()),
+        book: meta.and_then(|m| m.book.clone()),
+        book_code: meta.and_then(|m| m.book_code.clone()),
+        book_number: meta.and_then(|m| m.book_number),
+        chapter: meta.and_then(|m| m.chapter),
+        verse_start: meta.and_then(|m| m.verse_start),
+        verse_end: meta.and_then(|m| m.verse_end),
+    }
+}
+
 #[component]
-fn BibleSlideCard(slide: BibleSlideDto, source: &'static str) -> impl IntoView {
+fn BibleSlideCard(slide: BibleSlideDto, source: &'static str, index: usize) -> impl IntoView {
     let bs = use_context::<BibleState>().expect("BibleState");
     let ctx = use_context::<AppContext>().expect("AppContext");
     let mode = ctx.mode;
@@ -136,7 +183,7 @@ fn BibleSlideCard(slide: BibleSlideDto, source: &'static str) -> impl IntoView {
     let main_ref = slide.main_reference.clone().unwrap_or_default();
     let trans_ref_initial = slide.translation_reference.clone().unwrap_or_default();
 
-    // Store text in signals so closures can read them repeatedly
+    // Store text in signals so closures can read current values (important for edit mode)
     let main_text_sig = RwSignal::new(slide.main.clone());
     let trans_text_sig = RwSignal::new(slide.translation.clone());
     let group_label_sig = RwSignal::new(slide.group.clone().unwrap_or_default());
@@ -152,51 +199,35 @@ fn BibleSlideCard(slide: BibleSlideDto, source: &'static str) -> impl IntoView {
         move || bs.selected_slide_ids.get().contains(&sid)
     };
 
+    // Trigger handler reads from signal values so edit mode changes are captured
     let on_trigger = {
         let ctx = ctx.clone();
         let slide = slide.clone();
         let bs_translation = bs.selected_translation;
-        move |_| {
-            let main_text = slide.main.clone();
-            let main_ref = slide
-                .main_reference
-                .clone()
-                .unwrap_or_else(|| "Bible".to_string());
-            let translation_text = slide.translation.clone();
-            let trans_ref = slide.translation_reference.clone().unwrap_or_default();
-
-            let meta = slide.metadata.as_ref().and_then(|m| m.bible.as_ref());
-            let req = bible::TriggerSlideRequest {
-                main_text,
-                main_reference: main_ref,
-                secondary_text: if translation_text.is_empty() {
-                    None
-                } else {
-                    Some(translation_text)
-                },
-                secondary_reference: if trans_ref.is_empty() {
-                    None
-                } else {
-                    Some(trans_ref)
-                },
-                translation_code: meta
-                    .and_then(|m| m.translation_code.clone())
-                    .or_else(|| bs_translation.get_untracked()),
-                book: meta.and_then(|m| m.book.clone()),
-                book_code: meta.and_then(|m| m.book_code.clone()),
-                book_number: meta.and_then(|m| m.book_number),
-                chapter: meta.and_then(|m| m.chapter),
-                verse_start: meta.and_then(|m| m.verse_start),
-                verse_end: meta.and_then(|m| m.verse_end),
-            };
+        move |ev: web_sys::MouseEvent| {
+            // Stop propagation to prevent select zone from toggling selection
+            ev.stop_propagation();
+            let req = build_trigger_request(
+                main_text_sig,
+                main_ref_sig,
+                trans_text_sig,
+                trans_ref_sig,
+                &slide,
+                bs_translation,
+            );
 
             let toast_message = ctx.toast_message;
             let toast_variant = ctx.toast_variant;
+            let active_broadcast = ctx.active_bible_broadcast;
             leptos::task::spawn_local(async move {
                 match bible::trigger_slide(&req).await {
                     Ok(_) => {
                         toast_variant.set("success".to_string());
                         toast_message.set(Some("Triggered".to_string()));
+                        // Refresh broadcast state
+                        if let Ok(broadcast) = bible::get_broadcast().await {
+                            active_broadcast.set(broadcast);
+                        }
                     }
                     Err(e) => {
                         toast_variant.set("error".to_string());
@@ -358,15 +389,151 @@ fn BibleSlideCard(slide: BibleSlideDto, source: &'static str) -> impl IntoView {
         }
         .into_any()
     } else {
-        // Prepared slide layout
+        // Prepared slide layout — with delete button and drag-drop reorder
         let main = main_text_sig.get_untracked();
         let trans = trans_text_sig.get_untracked();
         let group = group_label_sig.get_untracked();
+
+        let slide_id_for_delete = slide_id.clone();
+
+        let on_delete = {
+            let ctx = ctx.clone();
+            let bs = bs.clone();
+            move |ev: web_sys::MouseEvent| {
+                ev.stop_propagation();
+                let pres_id = bs.active_presentation_id.get_untracked();
+                let Some(pid) = pres_id else { return };
+                let sid = slide_id_for_delete.clone();
+
+                let window = crate::utils::window::window();
+                if let Ok(confirmed) = window.confirm_with_message("Delete this slide?") {
+                    if !confirmed {
+                        return;
+                    }
+                }
+
+                let active_slides = bs.active_presentation_slides;
+                let toast_message = ctx.toast_message;
+                let toast_variant = ctx.toast_variant;
+                leptos::task::spawn_local(async move {
+                    match bible::delete_presentation_slide(&pid, &sid).await {
+                        Ok(()) => {
+                            // Refresh presentation slides
+                            if let Ok(detail) = bible::get_presentation(&pid).await {
+                                active_slides.set(detail.slides);
+                            }
+                            toast_variant.set("success".to_string());
+                            toast_message.set(Some("Slide deleted".to_string()));
+                        }
+                        Err(e) => {
+                            toast_variant.set("error".to_string());
+                            toast_message.set(Some(format!("Delete failed: {e}")));
+                        }
+                    }
+                });
+            }
+        };
+
+        // Drag-drop handlers for reorder
+        let drag_source = bs.drag_source_idx;
+        let drag_over = bs.drag_over_idx;
+
+        let on_dragstart = {
+            move |ev: web_sys::DragEvent| {
+                drag_source.set(Some(index));
+                if let Some(dt) = ev.data_transfer() {
+                    let _ = dt.set_data("text/plain", &index.to_string());
+                    dt.set_effect_allowed("move");
+                }
+            }
+        };
+
+        let on_dragover = {
+            move |ev: web_sys::DragEvent| {
+                ev.prevent_default();
+                drag_over.set(Some(index));
+                if let Some(dt) = ev.data_transfer() {
+                    dt.set_drop_effect("move");
+                }
+            }
+        };
+
+        let on_dragleave = {
+            move |_ev: web_sys::DragEvent| {
+                drag_over.update(|v| {
+                    if *v == Some(index) {
+                        *v = None;
+                    }
+                });
+            }
+        };
+
+        let on_drop = {
+            let bs = bs.clone();
+            let ctx = ctx.clone();
+            move |ev: web_sys::DragEvent| {
+                ev.prevent_default();
+                drag_over.set(None);
+                let src = drag_source.get_untracked();
+                drag_source.set(None);
+
+                let Some(from_idx) = src else { return };
+                let to_idx = index;
+                if from_idx == to_idx {
+                    return;
+                }
+
+                let pres_id = bs.active_presentation_id.get_untracked();
+                let Some(pid) = pres_id else { return };
+
+                // Reorder locally first for responsiveness
+                let mut current_slides = bs.active_presentation_slides.get_untracked();
+                if from_idx >= current_slides.len() || to_idx >= current_slides.len() {
+                    return;
+                }
+                let slide = current_slides.remove(from_idx);
+                current_slides.insert(to_idx, slide);
+
+                let slide_ids: Vec<String> = current_slides.iter().map(|s| s.id.clone()).collect();
+                bs.active_presentation_slides.set(current_slides);
+
+                let active_slides = bs.active_presentation_slides;
+                let toast_message = ctx.toast_message;
+                let toast_variant = ctx.toast_variant;
+                leptos::task::spawn_local(async move {
+                    match bible::reorder_presentation_slides(&pid, slide_ids).await {
+                        Ok(()) => {
+                            // Refresh to get server-canonical order
+                            if let Ok(detail) = bible::get_presentation(&pid).await {
+                                active_slides.set(detail.slides);
+                            }
+                        }
+                        Err(e) => {
+                            toast_variant.set("error".to_string());
+                            toast_message.set(Some(format!("Reorder failed: {e}")));
+                            // Refresh to restore server state
+                            if let Ok(detail) = bible::get_presentation(&pid).await {
+                                active_slides.set(detail.slides);
+                            }
+                        }
+                    }
+                });
+            }
+        };
+
+        let is_drag_over = move || drag_over.get() == Some(index);
+
         view! {
             <div
                 class="operator__slide-card operator__slide-card--bible"
+                class:operator__slide-card--drag-over=is_drag_over
                 data-role="slide-card"
                 data-slide-id=slide_id.clone()
+                draggable="true"
+                on:dragstart=on_dragstart
+                on:dragover=on_dragover
+                on:dragleave=on_dragleave
+                on:drop=on_drop
             >
                 <div
                     class="operator__slide-trigger-zone operator__slide-trigger-zone--full"
@@ -398,6 +565,15 @@ fn BibleSlideCard(slide: BibleSlideDto, source: &'static str) -> impl IntoView {
                         None
                     }}
                 </section>
+                <div class="operator__slide-actions">
+                    <button
+                        type="button"
+                        class="operator__slide-delete-btn"
+                        data-role="slide-delete"
+                        title="Delete slide"
+                        on:click=on_delete
+                    >"\u{2715}"</button>
+                </div>
             </div>
         }
         .into_any()

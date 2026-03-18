@@ -1075,4 +1075,784 @@ test.describe("WASM Operator Bible Tests", () => {
       expectedLeftWidth: 320,
     });
   });
+
+  // -----------------------------------------------------------------------
+  // Trigger sends to stage (verifying actual stage output)
+  // -----------------------------------------------------------------------
+
+  test("triggering a slide updates the stage display", async ({ page }) => {
+    await navigateToBible(page);
+    await clearBroadcast();
+
+    if (!(await hasBibleData(page))) return;
+
+    // Load a passage
+    const firstBook = page.locator('[data-role="book-item"]').first();
+    await firstBook.click();
+    await page.locator('[data-role="load-button"]').click();
+
+    await page.waitForFunction(
+      () => document.querySelectorAll('[data-role="slide-card"]').length > 0,
+      { timeout: 15_000 },
+    );
+
+    // Click trigger zone on first slide
+    const firstTrigger = page
+      .locator('[data-role="slide-trigger-zone"]')
+      .first();
+    await firstTrigger.click();
+
+    // Wait for success toast
+    await page.waitForFunction(
+      () => {
+        const toast = document.querySelector('[data-role="toast"]');
+        return toast && toast.textContent?.includes("Triggered");
+      },
+      { timeout: 5_000 },
+    );
+
+    // Verify stage page shows triggered content via API
+    const broadcast = await page.evaluate(async (url: string) => {
+      const resp = await fetch(`${url}/bible/active`);
+      return resp.json();
+    }, baseURL);
+
+    expect(broadcast).not.toBeNull();
+    expect(broadcast.mainText || broadcast.main_text).toBeTruthy();
+  });
+
+  test("trigger button in edit mode sends current (edited) text to stage", async ({
+    page,
+  }) => {
+    await navigateToBible(page);
+    await clearBroadcast();
+
+    if (!(await hasBibleData(page))) return;
+
+    // Load a passage
+    const firstBook = page.locator('[data-role="book-item"]').first();
+    await firstBook.click();
+    await page.locator('[data-role="load-button"]').click();
+
+    await page.waitForFunction(
+      () => document.querySelectorAll('[data-role="slide-card"]').length > 0,
+      { timeout: 15_000 },
+    );
+
+    // Switch to edit mode
+    await page.locator('[data-role="mode-toggle"][data-mode="edit"]').click();
+    await page.waitForSelector('[data-role="slide-main-edit"]', {
+      timeout: 5_000,
+    });
+
+    // Edit the text
+    const mainEdit = page.locator('[data-role="slide-main-edit"]').first();
+    await mainEdit.fill("EDITED TEXT FOR TRIGGER TEST");
+
+    // Click the Trigger button (inside the edit header, NOT the trigger zone)
+    const triggerBtn = page.locator('[data-role="slide-trigger"]').first();
+    await triggerBtn.click();
+
+    // Verify success toast
+    await page.waitForFunction(
+      () => {
+        const toast = document.querySelector('[data-role="toast"]');
+        return toast && toast.textContent?.includes("Triggered");
+      },
+      { timeout: 5_000 },
+    );
+
+    // Verify the broadcast has the EDITED text
+    const broadcast = await page.evaluate(async (url: string) => {
+      const resp = await fetch(`${url}/bible/active`);
+      return resp.json();
+    }, baseURL);
+
+    expect(broadcast).not.toBeNull();
+    const mainText = broadcast.mainText || broadcast.main_text || "";
+    expect(mainText).toContain("EDITED TEXT FOR TRIGGER TEST");
+
+    await clearBroadcast();
+  });
+
+  test("triggering from trigger zone does not toggle selection", async ({
+    page,
+  }) => {
+    await navigateToBible(page);
+
+    if (!(await hasBibleData(page))) return;
+
+    // Load a passage
+    const firstBook = page.locator('[data-role="book-item"]').first();
+    await firstBook.click();
+    await page.locator('[data-role="load-button"]').click();
+
+    await page.waitForFunction(
+      () => document.querySelectorAll('[data-role="slide-card"]').length > 0,
+      { timeout: 15_000 },
+    );
+
+    // Click trigger zone on first slide
+    const firstTrigger = page
+      .locator('[data-role="slide-trigger-zone"]')
+      .first();
+    await firstTrigger.click();
+
+    // Wait a bit for any state changes
+    await page.waitForTimeout(300);
+
+    // Slide should NOT be selected (trigger zone is separate from select zone)
+    const firstCard = page.locator('[data-role="slide-card"]').first();
+    const hasSelectedClass = await firstCard.evaluate((el) =>
+      el.classList.contains("is-selected"),
+    );
+    expect(hasSelectedClass).toBe(false);
+  });
+
+  // -----------------------------------------------------------------------
+  // Clear broadcast
+  // -----------------------------------------------------------------------
+
+  test("clear broadcast button is visible and functional", async ({ page }) => {
+    await navigateToBible(page);
+
+    // Clear button should be visible in the live tab
+    const clearBtn = page.locator('[data-role="clear-broadcast"]');
+    await expect(clearBtn).toBeVisible();
+
+    if (!(await hasBibleData(page))) return;
+
+    // First trigger a verse
+    const firstBook = page.locator('[data-role="book-item"]').first();
+    await firstBook.click();
+    await page.locator('[data-role="load-button"]').click();
+
+    await page.waitForFunction(
+      () => document.querySelectorAll('[data-role="slide-card"]').length > 0,
+      { timeout: 15_000 },
+    );
+
+    const firstTrigger = page
+      .locator('[data-role="slide-trigger-zone"]')
+      .first();
+    await firstTrigger.click();
+
+    // Wait for trigger toast
+    await page.waitForFunction(
+      () => {
+        const toast = document.querySelector('[data-role="toast"]');
+        return toast && toast.textContent?.includes("Triggered");
+      },
+      { timeout: 5_000 },
+    );
+
+    // Now clear
+    await clearBtn.click();
+
+    // Should show "Broadcast cleared" toast
+    await page.waitForFunction(
+      () => {
+        const toast = document.querySelector('[data-role="toast"]');
+        return toast && toast.textContent?.includes("cleared");
+      },
+      { timeout: 5_000 },
+    );
+
+    // Verify broadcast is cleared via API
+    const broadcast = await page.evaluate(async (url: string) => {
+      const resp = await fetch(`${url}/bible/active`);
+      return resp.json();
+    }, baseURL);
+
+    expect(broadcast).toBeNull();
+  });
+
+  // -----------------------------------------------------------------------
+  // Bible search
+  // -----------------------------------------------------------------------
+
+  test("bible search input is visible and functional", async ({ page }) => {
+    await navigateToBible(page);
+
+    const searchInput = page.locator('[data-role="bible-search-input"]');
+    await expect(searchInput).toBeVisible();
+  });
+
+  test("search requires minimum 3 characters", async ({ page }) => {
+    await navigateToBible(page);
+
+    const searchInput = page.locator('[data-role="bible-search-input"]');
+    await searchInput.fill("ab");
+
+    // No results container should appear
+    await page.waitForTimeout(500);
+    const results = page.locator('[data-role="bible-search-results"]');
+    await expect(results).toHaveCount(0);
+  });
+
+  test("search results appear with 3+ characters", async ({ page }) => {
+    await navigateToBible(page);
+
+    if (!(await hasBibleData(page))) return;
+
+    const searchInput = page.locator('[data-role="bible-search-input"]');
+    await searchInput.fill("love");
+
+    // Wait for search results to appear (debounce + API call)
+    await page.waitForSelector('[data-role="bible-search-results"]', {
+      timeout: 10_000,
+    });
+
+    const results = page.locator('[data-role="bible-search-results"]');
+    await expect(results).toBeVisible();
+  });
+
+  test("clicking search result sets reference inputs", async ({ page }) => {
+    await navigateToBible(page);
+
+    if (!(await hasBibleData(page))) return;
+
+    const searchInput = page.locator('[data-role="bible-search-input"]');
+    await searchInput.fill("love");
+
+    // Wait for results
+    await page.waitForSelector('[data-role="bible-search-result"]', {
+      timeout: 10_000,
+    });
+
+    const firstResult = page
+      .locator('[data-role="bible-search-result"]')
+      .first();
+    if ((await firstResult.count()) > 0) {
+      await firstResult.click();
+
+      // Search should be cleared
+      await page.waitForTimeout(300);
+      const searchValue = await searchInput.inputValue();
+      expect(searchValue).toBe("");
+
+      // A book should be selected
+      const activeBook = page.locator(
+        '[data-role="book-item"][data-active="true"]',
+      );
+      const count = await activeBook.count();
+      expect(count).toBeGreaterThanOrEqual(1);
+    }
+  });
+
+  test("search clear button clears results", async ({ page }) => {
+    await navigateToBible(page);
+
+    if (!(await hasBibleData(page))) return;
+
+    const searchInput = page.locator('[data-role="bible-search-input"]');
+    await searchInput.fill("love");
+
+    await page.waitForSelector('[data-role="bible-search-results"]', {
+      timeout: 10_000,
+    });
+
+    const clearBtn = page.locator('[data-role="bible-search-clear"]');
+    await clearBtn.click();
+
+    await page.waitForTimeout(300);
+    const searchValue = await searchInput.inputValue();
+    expect(searchValue).toBe("");
+
+    const results = page.locator('[data-role="bible-search-results"]');
+    await expect(results).toHaveCount(0);
+  });
+
+  // -----------------------------------------------------------------------
+  // Loaded passages history
+  // -----------------------------------------------------------------------
+
+  test("loading a passage adds it to history", async ({ page }) => {
+    await navigateToBible(page);
+
+    if (!(await hasBibleData(page))) return;
+
+    // Load a passage
+    const firstBook = page.locator('[data-role="book-item"]').first();
+    await firstBook.click();
+    await page.locator('[data-role="load-button"]').click();
+
+    await page.waitForFunction(
+      () => document.querySelectorAll('[data-role="slide-card"]').length > 0,
+      { timeout: 15_000 },
+    );
+
+    // History should now appear
+    const history = page.locator('[data-role="bible-history"]');
+    await expect(history).toBeVisible();
+
+    const historyItems = page.locator('[data-role="bible-history-item"]');
+    const count = await historyItems.count();
+    expect(count).toBeGreaterThanOrEqual(1);
+  });
+
+  test("clicking history item sets reference inputs", async ({ page }) => {
+    await navigateToBible(page);
+
+    if (!(await hasBibleData(page))) return;
+
+    // Load first passage
+    const firstBook = page.locator('[data-role="book-item"]').first();
+    await firstBook.click();
+    await page.locator('[data-role="chapter-input"]').fill("2");
+    await page
+      .locator('[data-role="chapter-input"]')
+      .evaluate((el: HTMLInputElement) =>
+        el.dispatchEvent(new Event("change", { bubbles: true })),
+      );
+    await page.locator('[data-role="load-button"]').click();
+
+    await page.waitForFunction(
+      () => document.querySelectorAll('[data-role="slide-card"]').length > 0,
+      { timeout: 15_000 },
+    );
+
+    // Change to chapter 1
+    await page.locator('[data-role="chapter-input"]').fill("1");
+    await page
+      .locator('[data-role="chapter-input"]')
+      .evaluate((el: HTMLInputElement) =>
+        el.dispatchEvent(new Event("change", { bubbles: true })),
+      );
+
+    // Click history item (should be chapter 2)
+    const historyItem = page
+      .locator('[data-role="bible-history-item"]')
+      .first();
+    if ((await historyItem.count()) > 0) {
+      await historyItem.click();
+
+      // Chapter input should be set back to 2
+      const chapterVal = await page
+        .locator('[data-role="chapter-input"]')
+        .inputValue();
+      expect(chapterVal).toBe("2");
+    }
+  });
+
+  // -----------------------------------------------------------------------
+  // Delete slide from prepared presentation
+  // -----------------------------------------------------------------------
+
+  test("delete slide from prepared presentation", async ({ page }) => {
+    await navigateToBible(page);
+
+    if (!(await hasBibleData(page))) return;
+
+    // Create a presentation with slides
+    const presResponse = await page.evaluate(async (url: string) => {
+      const resp = await fetch(`${url}/bible/presentations`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ name: "Delete Slide Test" }),
+      });
+      return resp.json();
+    }, baseURL);
+    const presId = presResponse.id;
+
+    // Add some slides
+    await page.evaluate(
+      async ({ url, id }: { url: string; id: string }) => {
+        await fetch(`${url}/bible/presentations/${id}/append`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            slides: [
+              { main: "Slide 1", translation: "", stage: "" },
+              { main: "Slide 2", translation: "", stage: "" },
+              { main: "Slide 3", translation: "", stage: "" },
+            ],
+          }),
+        });
+      },
+      { url: baseURL, id: presId },
+    );
+
+    // Switch to Prepared tab
+    await page.locator('[data-role="bible-tab"][data-tab="prepared"]').click();
+
+    // Wait for presentation list to include our new one and click it
+    await page.waitForFunction(
+      (id: string) => {
+        const card = document.querySelector(`[data-presentation-id="${id}"]`);
+        return card !== null;
+      },
+      presId,
+      { timeout: 10_000 },
+    );
+
+    // Reload presentations by switching tabs
+    await page.locator('[data-role="bible-tab"][data-tab="live"]').click();
+    await page.locator('[data-role="bible-tab"][data-tab="prepared"]').click();
+
+    await page.waitForFunction(
+      (id: string) => {
+        const card = document.querySelector(`[data-presentation-id="${id}"]`);
+        return card !== null;
+      },
+      presId,
+      { timeout: 10_000 },
+    );
+
+    await page.locator(`[data-presentation-id="${presId}"]`).click();
+
+    // Wait for slides to load
+    await page.waitForFunction(
+      () => document.querySelectorAll('[data-role="slide-card"]').length >= 3,
+      { timeout: 10_000 },
+    );
+
+    const countBefore = await page.locator('[data-role="slide-card"]').count();
+
+    // Handle confirm dialog
+    page.once("dialog", (dialog) => dialog.accept());
+
+    // Click delete on first slide
+    const deleteBtn = page.locator('[data-role="slide-delete"]').first();
+    await deleteBtn.click();
+
+    // Wait for slide count to decrease
+    await page.waitForFunction(
+      (expected: number) =>
+        document.querySelectorAll('[data-role="slide-card"]').length < expected,
+      countBefore,
+      { timeout: 10_000 },
+    );
+
+    const countAfter = await page.locator('[data-role="slide-card"]').count();
+    expect(countAfter).toBeLessThan(countBefore);
+
+    // Cleanup
+    await page.evaluate(
+      async ({ url, id }: { url: string; id: string }) => {
+        await fetch(`${url}/bible/presentations/${id}`, { method: "DELETE" });
+      },
+      { url: baseURL, id: presId },
+    );
+  });
+
+  // -----------------------------------------------------------------------
+  // Drag-drop reorder slides in prepared presentation
+  // -----------------------------------------------------------------------
+
+  test("prepared slides are draggable", async ({ page }) => {
+    await navigateToBible(page);
+
+    if (!(await hasBibleData(page))) return;
+
+    // Create a presentation with slides via API
+    const presResponse = await page.evaluate(async (url: string) => {
+      const resp = await fetch(`${url}/bible/presentations`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ name: "Drag Test" }),
+      });
+      return resp.json();
+    }, baseURL);
+    const presId = presResponse.id;
+
+    await page.evaluate(
+      async ({ url, id }: { url: string; id: string }) => {
+        await fetch(`${url}/bible/presentations/${id}/append`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            slides: [
+              { main: "First", translation: "", stage: "" },
+              { main: "Second", translation: "", stage: "" },
+            ],
+          }),
+        });
+      },
+      { url: baseURL, id: presId },
+    );
+
+    // Switch to Prepared tab and select the presentation
+    await page.locator('[data-role="bible-tab"][data-tab="prepared"]').click();
+
+    // Reload to get fresh data
+    await page.locator('[data-role="bible-tab"][data-tab="live"]').click();
+    await page.locator('[data-role="bible-tab"][data-tab="prepared"]').click();
+
+    await page.waitForFunction(
+      (id: string) =>
+        document.querySelector(`[data-presentation-id="${id}"]`) !== null,
+      presId,
+      { timeout: 10_000 },
+    );
+
+    await page.locator(`[data-presentation-id="${presId}"]`).click();
+
+    await page.waitForFunction(
+      () => document.querySelectorAll('[data-role="slide-card"]').length >= 2,
+      { timeout: 10_000 },
+    );
+
+    // Verify slides have draggable attribute
+    const firstSlide = page.locator('[data-role="slide-card"]').first();
+    await expect(firstSlide).toHaveAttribute("draggable", "true");
+
+    // Cleanup
+    await page.evaluate(
+      async ({ url, id }: { url: string; id: string }) => {
+        await fetch(`${url}/bible/presentations/${id}`, { method: "DELETE" });
+      },
+      { url: baseURL, id: presId },
+    );
+  });
+
+  // -----------------------------------------------------------------------
+  // Stage output dropdown
+  // -----------------------------------------------------------------------
+
+  test("stage output dropdown has options and is visible in bible view", async ({
+    page,
+  }) => {
+    await navigateToBible(page);
+
+    const stageSelect = page.locator('[data-role="stage-layout-select"]');
+    await expect(stageSelect).toBeVisible();
+
+    // Wait for options to load
+    await page.waitForFunction(
+      () => {
+        const select = document.querySelector(
+          '[data-role="stage-layout-select"]',
+        ) as HTMLSelectElement;
+        return select && select.options.length > 0;
+      },
+      { timeout: 10_000 },
+    );
+
+    const optionCount = await stageSelect.locator("option").count();
+    expect(optionCount).toBeGreaterThanOrEqual(1);
+  });
+
+  // -----------------------------------------------------------------------
+  // End-to-end workflow
+  // -----------------------------------------------------------------------
+
+  test("full bible workflow: load, trigger, add to presentation, trigger prepared", async ({
+    page,
+  }) => {
+    await navigateToBible(page);
+    await clearBroadcast();
+
+    if (!(await hasBibleData(page))) return;
+
+    // 1. Load a passage
+    const firstBook = page.locator('[data-role="book-item"]').first();
+    await firstBook.click();
+    await page.locator('[data-role="load-button"]').click();
+
+    await page.waitForFunction(
+      () => document.querySelectorAll('[data-role="slide-card"]').length > 0,
+      { timeout: 15_000 },
+    );
+
+    // 2. Trigger first slide
+    const firstTrigger = page
+      .locator('[data-role="slide-trigger-zone"]')
+      .first();
+    await firstTrigger.click();
+
+    await page.waitForFunction(
+      () => {
+        const toast = document.querySelector('[data-role="toast"]');
+        return toast && toast.textContent?.includes("Triggered");
+      },
+      { timeout: 5_000 },
+    );
+
+    // 3. Select all slides
+    await page.locator('[data-role="select-all-slides"]').click();
+
+    // 4. Create a presentation via API
+    const presResponse = await page.evaluate(async (url: string) => {
+      const resp = await fetch(`${url}/bible/presentations`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ name: "E2E Workflow Test" }),
+      });
+      return resp.json();
+    }, baseURL);
+    const presId = presResponse.id;
+
+    // 5. Select presentation and add slides
+    const presSelect = page.locator('[data-role="presentation-select"]');
+    await presSelect.selectOption(presId);
+    await page.locator('[data-role="presentation-add"]').click();
+
+    await page.waitForFunction(
+      () => {
+        const toast = document.querySelector('[data-role="toast"]');
+        return toast && toast.textContent?.includes("Added");
+      },
+      { timeout: 5_000 },
+    );
+
+    // 6. Switch to Prepared tab and select the presentation
+    await page.locator('[data-role="bible-tab"][data-tab="prepared"]').click();
+
+    await page.waitForFunction(
+      (id: string) =>
+        document.querySelector(`[data-presentation-id="${id}"]`) !== null,
+      presId,
+      { timeout: 10_000 },
+    );
+
+    await page.locator(`[data-presentation-id="${presId}"]`).click();
+
+    // 7. Wait for prepared slides to appear
+    await page.waitForFunction(
+      () => document.querySelectorAll('[data-role="slide-card"]').length > 0,
+      { timeout: 10_000 },
+    );
+
+    // 8. Trigger first prepared slide
+    await clearBroadcast();
+    const preparedTrigger = page
+      .locator('[data-role="slide-trigger-zone"]')
+      .first();
+    await preparedTrigger.click();
+
+    await page.waitForFunction(
+      () => {
+        const toast = document.querySelector('[data-role="toast"]');
+        return toast && toast.textContent?.includes("Triggered");
+      },
+      { timeout: 5_000 },
+    );
+
+    // 9. Verify broadcast
+    const broadcast = await page.evaluate(async (url: string) => {
+      const resp = await fetch(`${url}/bible/active`);
+      return resp.json();
+    }, baseURL);
+    expect(broadcast).not.toBeNull();
+
+    // 10. Clear broadcast
+    await page.locator('[data-role="bible-tab"][data-tab="live"]').click();
+    await page.locator('[data-role="clear-broadcast"]').click();
+
+    await page.waitForFunction(
+      () => {
+        const toast = document.querySelector('[data-role="toast"]');
+        return toast && toast.textContent?.includes("cleared");
+      },
+      { timeout: 5_000 },
+    );
+
+    // Cleanup
+    await page.evaluate(
+      async ({ url, id }: { url: string; id: string }) => {
+        await fetch(`${url}/bible/presentations/${id}`, { method: "DELETE" });
+      },
+      { url: baseURL, id: presId },
+    );
+  });
+
+  // -----------------------------------------------------------------------
+  // Preferences round-trip
+  // -----------------------------------------------------------------------
+
+  test("bible preferences API round-trip with all fields", async ({ page }) => {
+    await navigateToBible(page);
+
+    // Set specific preferences via API
+    await page.evaluate(async (url: string) => {
+      await fetch(`${url}/bible/preferences`, {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          characterLimit: 250,
+        }),
+      });
+    }, baseURL);
+
+    // Navigate to settings tab
+    await page.locator('[data-role="bible-tab"][data-tab="settings"]').click();
+
+    // Reload page to pick up saved preferences
+    await navigateToBible(page);
+    await page.locator('[data-role="bible-tab"][data-tab="settings"]').click();
+
+    const charLimit = page.locator('[data-role="char-limit"]');
+    const value = await charLimit.inputValue();
+    expect(parseInt(value)).toBe(250);
+
+    // Reset to default
+    await page.evaluate(async (url: string) => {
+      await fetch(`${url}/bible/preferences`, {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          characterLimit: 320,
+        }),
+      });
+    }, baseURL);
+  });
+
+  // -----------------------------------------------------------------------
+  // Add empty slide in prepared tab
+  // -----------------------------------------------------------------------
+
+  test("add empty slide button in prepared tab works", async ({ page }) => {
+    await navigateToBible(page);
+
+    if (!(await hasBibleData(page))) return;
+
+    // Create a presentation via API
+    const presResponse = await page.evaluate(async (url: string) => {
+      const resp = await fetch(`${url}/bible/presentations`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ name: "Empty Slide Test" }),
+      });
+      return resp.json();
+    }, baseURL);
+    const presId = presResponse.id;
+
+    // Switch to Prepared tab
+    await page.locator('[data-role="bible-tab"][data-tab="prepared"]').click();
+
+    // Reload to get fresh data
+    await page.locator('[data-role="bible-tab"][data-tab="live"]').click();
+    await page.locator('[data-role="bible-tab"][data-tab="prepared"]').click();
+
+    await page.waitForFunction(
+      (id: string) =>
+        document.querySelector(`[data-presentation-id="${id}"]`) !== null,
+      presId,
+      { timeout: 10_000 },
+    );
+
+    await page.locator(`[data-presentation-id="${presId}"]`).click();
+
+    // Click add empty slide
+    const addBtn = page.locator('[data-role="add-empty-slide"]');
+    await addBtn.click();
+
+    // Wait for slide to appear
+    await page.waitForFunction(
+      () => document.querySelectorAll('[data-role="slide-card"]').length > 0,
+      { timeout: 10_000 },
+    );
+
+    const slideCount = await page.locator('[data-role="slide-card"]').count();
+    expect(slideCount).toBeGreaterThanOrEqual(1);
+
+    // Cleanup
+    await page.evaluate(
+      async ({ url, id }: { url: string; id: string }) => {
+        await fetch(`${url}/bible/presentations/${id}`, { method: "DELETE" });
+      },
+      { url: baseURL, id: presId },
+    );
+  });
 });

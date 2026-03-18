@@ -333,6 +333,15 @@ fn setup_ws_dispatch(last_event: ReadSignal<Option<LiveEvent>>, ctx: &AppContext
                 LiveEvent::BibleCleared => {
                     active_bible_broadcast.set(None);
                 }
+                LiveEvent::BiblePreferencesChanged { character_limit } => {
+                    // Update character limit in real-time when changed by another client
+                    // BibleState context may not be available here (only exists when bible view is mounted)
+                    // Store on AppContext for any bible page to pick up
+                    if let Some(body) = crate::utils::window::document_body() {
+                        let _ = body
+                            .set_attribute("data-bible-char-limit", &character_limit.to_string());
+                    }
+                }
                 _ => {}
             }
         }
