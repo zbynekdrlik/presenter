@@ -1011,6 +1011,17 @@ test.describe("WASM Operator Bible Tests", () => {
     const secondarySelect = page.locator('[data-role="secondary-translation"]');
     await expect(secondarySelect).toBeVisible({ timeout: 10_000 });
 
+    // Wait for options to be populated (loaded asynchronously)
+    await page.waitForFunction(
+      () => {
+        const sel = document.querySelector(
+          '[data-role="secondary-translation"]',
+        );
+        return sel && sel.querySelectorAll("option").length >= 2;
+      },
+      { timeout: 10_000 },
+    );
+
     const options = secondarySelect.locator("option");
     const count = await options.count();
 
