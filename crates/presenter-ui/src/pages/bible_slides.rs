@@ -147,6 +147,10 @@ fn BibleSlideCard(slide: BibleSlideDto, source: &'static str) -> impl IntoView {
         let sid = slide_id.clone();
         move || bs.selected_slide_ids.get().contains(&sid)
     };
+    let is_selected_for_checkbox = {
+        let sid = slide_id.clone();
+        move || bs.selected_slide_ids.get().contains(&sid)
+    };
 
     let on_trigger = {
         let ctx = ctx.clone();
@@ -248,7 +252,7 @@ fn BibleSlideCard(slide: BibleSlideDto, source: &'static str) -> impl IntoView {
                             <label class="operator__slide-index operator__slide-index--select">
                                 <input type="checkbox"
                                     data-role="slide-select"
-                                    prop:checked=is_selected
+                                    prop:checked=is_selected_for_checkbox
                                     on:change=move |_| {}
                                 />
                             </label>
