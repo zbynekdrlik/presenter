@@ -363,6 +363,125 @@ test("stage layout change preserves active bible broadcast", async ({
   });
 });
 
+test("trigger from WASM operator UI shows bible on stage page", async ({
+  page,
+  request,
+  browser,
+}) => {
+  await clearBroadcast(request);
+
+  // Navigate to WASM operator and switch to Bible view
+  await page.goto(`${baseURL}/ui/operator`);
+  await page.waitForSelector('[data-role="library-list"]', { timeout: 30_000 });
+
+  const bibleButton = page.locator(
+    '[data-role="view-toggle"][data-view="bible"]',
+  );
+  if ((await bibleButton.count()) > 0) {
+    await bibleButton.click();
+  }
+  await page.waitForFunction(
+    () => document.body.getAttribute("data-view") === "bible",
+    { timeout: 5_000 },
+  );
+
+  // Check if Bible data is available
+  const bookItems = page.locator('[data-role="book-item"]');
+  const bookCount = await bookItems.count();
+  if (bookCount === 0) {
+    // No Bible data — skip
+    return;
+  }
+
+  // Load a passage
+  await bookItems.first().click();
+  await page.locator('[data-role="load-button"]').click();
+
+  await page.waitForFunction(
+    () => document.querySelectorAll('[data-role="slide-card"]').length > 0,
+    { timeout: 15_000 },
+  );
+
+  // Trigger via UI click
+  const triggerZone = page.locator('[data-role="slide-trigger-zone"]').first();
+  await triggerZone.click();
+
+  // Wait for success toast
+  await page.waitForFunction(
+    () => {
+      const toast = document.querySelector('[data-role="toast"]');
+      return toast && toast.textContent?.includes("Triggered");
+    },
+    { timeout: 5_000 },
+  );
+
+  // Open stage in a separate page and verify Bible text appears
+  const stagePage = await browser.newPage();
+  await stagePage.goto(`${baseURL}/stage`);
+  await stagePage.waitForLoadState("domcontentloaded");
+
+  const bibleOverlay = stagePage.locator("#bible-overlay");
+  await expect(bibleOverlay).toHaveAttribute("data-visible", "true", {
+    timeout: 10_000,
+  });
+
+  const bibleText = stagePage.locator("#bible-text");
+  const text = await bibleText.textContent();
+  expect(text).toBeTruthy();
+  expect(text!.length).toBeGreaterThan(0);
+
+  await stagePage.close();
+});
+
+test("clear from WASM operator UI removes text from stage page", async ({
+  page,
+  request,
+  browser,
+}) => {
+  // Trigger a slide via API first
+  await triggerSlide(request, {
+    mainText: "Test clear from operator",
+    mainReference: "Test 1:1",
+  });
+
+  // Open stage page
+  const stagePage = await browser.newPage();
+  await stagePage.goto(`${baseURL}/stage`);
+  await stagePage.waitForLoadState("domcontentloaded");
+
+  // Verify it's visible
+  const bibleOverlay = stagePage.locator("#bible-overlay");
+  await expect(bibleOverlay).toHaveAttribute("data-visible", "true", {
+    timeout: 10_000,
+  });
+
+  // Navigate to WASM operator and clear
+  await page.goto(`${baseURL}/ui/operator`);
+  await page.waitForSelector('[data-role="library-list"]', { timeout: 30_000 });
+
+  const bibleButton = page.locator(
+    '[data-role="view-toggle"][data-view="bible"]',
+  );
+  if ((await bibleButton.count()) > 0) {
+    await bibleButton.click();
+  }
+  await page.waitForFunction(
+    () => document.body.getAttribute("data-view") === "bible",
+    { timeout: 5_000 },
+  );
+
+  // Click clear broadcast
+  const clearBtn = page.locator('[data-role="clear-broadcast"]');
+  await clearBtn.click();
+
+  // Wait for overlay to disappear on stage page
+  await expect(bibleOverlay).toHaveAttribute("data-visible", "false", {
+    timeout: 10_000,
+  });
+
+  await stagePage.close();
+});
+
 test("active-slide API endpoint returns current slide output", async ({
   request,
 }) => {

@@ -1,5 +1,7 @@
 use super::{get_json, post_json, post_no_content, ApiError};
-use presenter_core::{BibleBroadcast, BiblePreferences, BiblePreferencesDraft, BibleTranslation};
+use presenter_core::{
+    BibleBroadcast, BiblePreferences, BiblePreferencesDraft, BibleSlideOutput, BibleTranslation,
+};
 use serde::{Deserialize, Serialize};
 
 // ---------------------------------------------------------------------------
@@ -187,6 +189,7 @@ pub struct TriggerSlideRequest {
 #[serde(rename_all = "camelCase")]
 pub struct TriggerSlideResponse {
     pub success: bool,
+    pub output: BibleSlideOutput,
 }
 
 /// Trigger a slide via single-source-of-truth. Server: POST /bible/trigger-slide

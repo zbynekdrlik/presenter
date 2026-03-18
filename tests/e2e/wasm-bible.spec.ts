@@ -434,6 +434,17 @@ test.describe("WASM Operator Bible Tests", () => {
       },
       { timeout: 5_000 },
     );
+
+    // Verify actual stage content via active-slide API
+    const activeSlide = await page.evaluate(async (url: string) => {
+      const resp = await fetch(`${url}/bible/active-slide`);
+      return resp.json();
+    }, baseURL);
+
+    expect(activeSlide).not.toBeNull();
+    expect(activeSlide.mainText).toBeTruthy();
+    expect(activeSlide.mainText.length).toBeGreaterThan(0);
+    expect(activeSlide.mainReference).toBeTruthy();
   });
 
   // -----------------------------------------------------------------------
@@ -1111,14 +1122,16 @@ test.describe("WASM Operator Bible Tests", () => {
       { timeout: 5_000 },
     );
 
-    // Verify stage page shows triggered content via API
-    const broadcast = await page.evaluate(async (url: string) => {
-      const resp = await fetch(`${url}/bible/active`);
+    // Verify stage content via active-slide API (single-source-of-truth format)
+    const activeSlide = await page.evaluate(async (url: string) => {
+      const resp = await fetch(`${url}/bible/active-slide`);
       return resp.json();
     }, baseURL);
 
-    expect(broadcast).not.toBeNull();
-    expect(broadcast.mainText || broadcast.main_text).toBeTruthy();
+    expect(activeSlide).not.toBeNull();
+    expect(activeSlide.mainText).toBeTruthy();
+    expect(activeSlide.mainText.length).toBeGreaterThan(0);
+    expect(activeSlide.mainReference).toBeTruthy();
   });
 
   test("trigger button in edit mode sends current (edited) text to stage", async ({
@@ -1162,15 +1175,14 @@ test.describe("WASM Operator Bible Tests", () => {
       { timeout: 5_000 },
     );
 
-    // Verify the broadcast has the EDITED text
-    const broadcast = await page.evaluate(async (url: string) => {
-      const resp = await fetch(`${url}/bible/active`);
+    // Verify the active-slide has the EDITED text (not just toast)
+    const activeSlide = await page.evaluate(async (url: string) => {
+      const resp = await fetch(`${url}/bible/active-slide`);
       return resp.json();
     }, baseURL);
 
-    expect(broadcast).not.toBeNull();
-    const mainText = broadcast.mainText || broadcast.main_text || "";
-    expect(mainText).toContain("EDITED TEXT FOR TRIGGER TEST");
+    expect(activeSlide).not.toBeNull();
+    expect(activeSlide.mainText).toBe("EDITED TEXT FOR TRIGGER TEST");
 
     await clearBroadcast();
   });
@@ -1258,13 +1270,13 @@ test.describe("WASM Operator Bible Tests", () => {
       { timeout: 5_000 },
     );
 
-    // Verify broadcast is cleared via API
-    const broadcast = await page.evaluate(async (url: string) => {
-      const resp = await fetch(`${url}/bible/active`);
+    // Verify broadcast is cleared via active-slide API
+    const activeSlide = await page.evaluate(async (url: string) => {
+      const resp = await fetch(`${url}/bible/active-slide`);
       return resp.json();
     }, baseURL);
 
-    expect(broadcast).toBeNull();
+    expect(activeSlide).toBeNull();
   });
 
   // -----------------------------------------------------------------------
@@ -1729,12 +1741,13 @@ test.describe("WASM Operator Bible Tests", () => {
       { timeout: 5_000 },
     );
 
-    // 9. Verify broadcast
-    const broadcast = await page.evaluate(async (url: string) => {
-      const resp = await fetch(`${url}/bible/active`);
+    // 9. Verify stage content via active-slide API
+    const activeSlide = await page.evaluate(async (url: string) => {
+      const resp = await fetch(`${url}/bible/active-slide`);
       return resp.json();
     }, baseURL);
-    expect(broadcast).not.toBeNull();
+    expect(activeSlide).not.toBeNull();
+    expect(activeSlide.mainText).toBeTruthy();
 
     // 10. Clear broadcast
     await page.locator('[data-role="bible-tab"][data-tab="live"]').click();
