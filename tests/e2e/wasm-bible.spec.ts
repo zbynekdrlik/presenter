@@ -543,9 +543,206 @@ test.describe("WASM Operator Bible Tests", () => {
     await liveButton.click();
 
     // Textareas should be gone, content should show
-    await page.waitForSelector(".operator__slide-content", {
+    await page.waitForSelector(".operator__slide-bodies--bible", {
       timeout: 5_000,
     });
+  });
+
+  test("slide cards use legacy content classes (operator__slide-bodies--bible)", async ({
+    page,
+  }) => {
+    await navigateToBible(page);
+
+    if (!(await hasBibleData(page))) return;
+
+    // Load a passage
+    const firstBook = page.locator('[data-role="book-item"]').first();
+    await firstBook.click();
+    await page.locator('[data-role="load-button"]').click();
+
+    await page.waitForFunction(
+      () => document.querySelectorAll('[data-role="slide-card"]').length > 0,
+      { timeout: 15_000 },
+    );
+
+    const firstCard = page.locator('[data-role="slide-card"]').first();
+
+    // Verify legacy class structure
+    const bodiesSection = firstCard.locator(
+      ".operator__slide-bodies.operator__slide-bodies--bible",
+    );
+    await expect(bodiesSection).toBeVisible();
+
+    const mainText = firstCard.locator(
+      ".operator__slide-text.operator__slide-text--main",
+    );
+    await expect(mainText).toBeVisible();
+
+    // Main text should be centered and bold
+    const textAlign = await mainText.evaluate(
+      (el) => window.getComputedStyle(el).textAlign,
+    );
+    expect(textAlign).toBe("center");
+
+    const fontWeight = await mainText.evaluate(
+      (el) => window.getComputedStyle(el).fontWeight,
+    );
+    expect(parseInt(fontWeight)).toBeGreaterThanOrEqual(600);
+  });
+
+  test("slide cards show reference footer when reference exists", async ({
+    page,
+  }) => {
+    await navigateToBible(page);
+
+    if (!(await hasBibleData(page))) return;
+
+    const firstBook = page.locator('[data-role="book-item"]').first();
+    await firstBook.click();
+    await page.locator('[data-role="chapter-input"]').fill("1");
+    await page.locator('[data-role="verse-start"]').fill("1");
+    await page.locator('[data-role="load-button"]').click();
+
+    await page.waitForFunction(
+      () => document.querySelectorAll('[data-role="slide-card"]').length > 0,
+      { timeout: 15_000 },
+    );
+
+    // Check that at least one slide has a reference footer
+    const footers = page.locator(
+      '[data-role="slide-card"] .operator__slide-footer .operator__slide-reference',
+    );
+    const footerCount = await footers.count();
+    expect(footerCount).toBeGreaterThan(0);
+
+    // Reference should have small italic styling
+    const firstFooter = footers.first();
+    const fontStyle = await firstFooter.evaluate(
+      (el) => window.getComputedStyle(el).fontStyle,
+    );
+    expect(fontStyle).toBe("italic");
+  });
+
+  test("edit mode shows labeled textareas and reference inputs", async ({
+    page,
+  }) => {
+    await navigateToBible(page);
+
+    if (!(await hasBibleData(page))) return;
+
+    const firstBook = page.locator('[data-role="book-item"]').first();
+    await firstBook.click();
+    await page.locator('[data-role="load-button"]').click();
+
+    await page.waitForFunction(
+      () => document.querySelectorAll('[data-role="slide-card"]').length > 0,
+      { timeout: 15_000 },
+    );
+
+    // Switch to edit mode
+    const editButton = page.locator(
+      '[data-role="mode-toggle"][data-mode="edit"]',
+    );
+    await editButton.click();
+
+    // Wait for editor section
+    await page.waitForSelector(".operator__slide-editor--bible", {
+      timeout: 5_000,
+    });
+
+    const firstCard = page.locator('[data-role="slide-card"]').first();
+
+    // Editor section should use legacy class
+    const editorSection = firstCard.locator(
+      ".operator__slide-editor.operator__slide-editor--bible",
+    );
+    await expect(editorSection).toBeVisible();
+
+    // Labels should be visible
+    const mainLabel = editorSection
+      .locator("label span")
+      .filter({ hasText: "Main" })
+      .first();
+    await expect(mainLabel).toBeVisible();
+
+    const transLabel = editorSection
+      .locator("label span")
+      .filter({ hasText: "Translation" })
+      .first();
+    await expect(transLabel).toBeVisible();
+
+    // Reference inputs should exist in editor grid
+    const mainRefInput = firstCard.locator('[data-role="slide-main-ref"]');
+    await expect(mainRefInput).toBeVisible();
+
+    const transRefInput = firstCard.locator(
+      '[data-role="slide-translation-ref"]',
+    );
+    await expect(transRefInput).toBeVisible();
+
+    // Editor grid should use 2-column layout
+    const editorGrid = firstCard.locator(".operator__slide-editor-grid");
+    const gridDisplay = await editorGrid.evaluate(
+      (el) => window.getComputedStyle(el).display,
+    );
+    expect(gridDisplay).toBe("grid");
+
+    // Header with trigger button should be visible
+    const triggerBtn = firstCard.locator(
+      ".operator__slide-header .operator__list-action--primary",
+    );
+    await expect(triggerBtn).toBeVisible();
+    await expect(triggerBtn).toHaveText("Trigger");
+
+    // Checkbox should be visible
+    const checkbox = firstCard.locator(
+      '.operator__slide-header input[data-role="slide-select"]',
+    );
+    await expect(checkbox).toBeVisible();
+  });
+
+  test("translation text has blue italic styling with secondary class", async ({
+    page,
+  }) => {
+    await navigateToBible(page);
+
+    if (!(await hasBibleData(page))) return;
+
+    // Select secondary translation first
+    const secondarySelect = page.locator('[data-role="secondary-translation"]');
+    await expect(secondarySelect).toBeVisible({ timeout: 10_000 });
+    const options = secondarySelect.locator("option");
+    const count = await options.count();
+    if (count < 2) return; // Need at least one real translation
+
+    const secondOption = await options.nth(1).getAttribute("value");
+    if (secondOption) {
+      await secondarySelect.selectOption(secondOption);
+    }
+
+    // Load a passage
+    const firstBook = page.locator('[data-role="book-item"]').first();
+    await firstBook.click();
+    await page.locator('[data-role="load-button"]').click();
+
+    await page.waitForFunction(
+      () => document.querySelectorAll('[data-role="slide-card"]').length > 0,
+      { timeout: 15_000 },
+    );
+
+    // Check for translation text with proper class
+    const transText = page
+      .locator(
+        ".operator__slide-text--translation.operator__slide-text--secondary",
+      )
+      .first();
+
+    if ((await transText.count()) > 0) {
+      const fontStyle = await transText.evaluate(
+        (el) => window.getComputedStyle(el).fontStyle,
+      );
+      expect(fontStyle).toBe("italic");
+    }
   });
 
   // -----------------------------------------------------------------------

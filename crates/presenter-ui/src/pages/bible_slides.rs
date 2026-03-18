@@ -134,11 +134,14 @@ fn BibleSlideCard(slide: BibleSlideDto, source: &'static str) -> impl IntoView {
 
     let slide_id = slide.id.clone();
     let main_ref = slide.main_reference.clone().unwrap_or_default();
+    let trans_ref_initial = slide.translation_reference.clone().unwrap_or_default();
 
     // Store text in signals so closures can read them repeatedly
     let main_text_sig = RwSignal::new(slide.main.clone());
     let trans_text_sig = RwSignal::new(slide.translation.clone());
     let group_label_sig = RwSignal::new(slide.group.clone().unwrap_or_default());
+    let main_ref_sig = RwSignal::new(main_ref.clone());
+    let trans_ref_sig = RwSignal::new(trans_ref_initial);
 
     let is_selected = {
         let sid = slide_id.clone();
@@ -220,6 +223,7 @@ fn BibleSlideCard(slide: BibleSlideDto, source: &'static str) -> impl IntoView {
         view! {
             <div
                 class="operator__slide-card operator__slide-card--bible"
+                class:operator__slide-card--edit=move || mode.get() == "edit"
                 class:is-selected=is_selected
                 data-role="slide-card"
                 data-slide-id=slide_id.clone()
@@ -238,50 +242,111 @@ fn BibleSlideCard(slide: BibleSlideDto, source: &'static str) -> impl IntoView {
                     data-role="slide-select-zone"
                     on:click=on_select.clone()
                 >
+                    // Edit mode: header + editor section
+                    <header class="operator__slide-header">
+                        <div class="operator__slide-header-left">
+                            <label class="operator__slide-index operator__slide-index--select">
+                                <input type="checkbox"
+                                    data-role="slide-select"
+                                    prop:checked=is_selected
+                                    on:change=move |_| {}
+                                />
+                            </label>
+                        </div>
+                        <div class="operator__slide-controls operator__slide-controls--compact">
+                            <button type="button"
+                                class="operator__list-action operator__list-action--primary"
+                                data-role="slide-trigger"
+                                on:click=on_trigger.clone()
+                            >"Trigger"</button>
+                        </div>
+                    </header>
+                    <section class="operator__slide-editor operator__slide-editor--bible">
+                        <label>
+                            <span>"Main"</span>
+                            <textarea
+                                data-role="slide-main-edit"
+                                prop:value=move || main_text_sig.get()
+                                on:input=move |ev: web_sys::Event| {
+                                    let target = ev.target().and_then(|t| t.dyn_into::<web_sys::HtmlTextAreaElement>().ok());
+                                    if let Some(ta) = target { main_text_sig.set(ta.value()); }
+                                }
+                            ></textarea>
+                        </label>
+                        <label>
+                            <span>"Translation"</span>
+                            <textarea
+                                data-role="slide-translation-edit"
+                                prop:value=move || trans_text_sig.get()
+                                on:input=move |ev: web_sys::Event| {
+                                    let target = ev.target().and_then(|t| t.dyn_into::<web_sys::HtmlTextAreaElement>().ok());
+                                    if let Some(ta) = target { trans_text_sig.set(ta.value()); }
+                                }
+                            ></textarea>
+                        </label>
+                        <div class="operator__slide-editor-grid">
+                            <label>
+                                <span>"Main Reference"</span>
+                                <input type="text"
+                                    data-role="slide-main-ref"
+                                    prop:value=move || main_ref_sig.get()
+                                    on:input=move |ev: web_sys::Event| {
+                                        let target = ev.target().and_then(|t| t.dyn_into::<web_sys::HtmlInputElement>().ok());
+                                        if let Some(el) = target { main_ref_sig.set(el.value()); }
+                                    }
+                                />
+                            </label>
+                            <label>
+                                <span>"Translation Reference"</span>
+                                <input type="text"
+                                    data-role="slide-translation-ref"
+                                    prop:value=move || trans_ref_sig.get()
+                                    on:input=move |ev: web_sys::Event| {
+                                        let target = ev.target().and_then(|t| t.dyn_into::<web_sys::HtmlInputElement>().ok());
+                                        if let Some(el) = target { trans_ref_sig.set(el.value()); }
+                                    }
+                                />
+                            </label>
+                        </div>
+                    </section>
+                    // View mode: slide bodies with proper legacy classes
                     {move || {
-                        let is_edit = mode.get() == "edit";
-                        if is_edit {
-                            view! {
-                                <div class="operator__slide-edit">
-                                    <textarea
-                                        data-role="slide-main-edit"
-                                        rows="3"
-                                        prop:value=move || main_text_sig.get()
-                                        on:input=move |ev: web_sys::Event| {
-                                            let target = ev.target().and_then(|t| t.dyn_into::<web_sys::HtmlTextAreaElement>().ok());
-                                            if let Some(ta) = target { main_text_sig.set(ta.value()); }
-                                        }
-                                    ></textarea>
-                                    <textarea
-                                        data-role="slide-translation-edit"
-                                        rows="2"
-                                        prop:value=move || trans_text_sig.get()
-                                        on:input=move |ev: web_sys::Event| {
-                                            let target = ev.target().and_then(|t| t.dyn_into::<web_sys::HtmlTextAreaElement>().ok());
-                                            if let Some(ta) = target { trans_text_sig.set(ta.value()); }
-                                        }
-                                    ></textarea>
-                                </div>
-                            }.into_any()
-                        } else {
-                            let main = main_text_sig.get();
-                            let trans = trans_text_sig.get();
-                            let group = group_label_sig.get();
-                            view! {
-                                <div class="operator__slide-content">
-                                    <p class="operator__slide-main">{main}</p>
-                                    {if !trans.is_empty() {
-                                        Some(view! { <p class="operator__slide-translation">{trans}</p> })
-                                    } else {
-                                        None
-                                    }}
-                                    {if !group.is_empty() {
-                                        Some(view! { <small class="operator__slide-group">{group}</small> })
-                                    } else {
-                                        None
-                                    }}
-                                </div>
-                            }.into_any()
+                        let main = main_text_sig.get();
+                        let trans = trans_text_sig.get();
+                        let group = group_label_sig.get();
+                        let mref = main_ref_sig.get();
+                        let tref = trans_ref_sig.get();
+                        view! {
+                            <section class="operator__slide-bodies operator__slide-bodies--bible">
+                                <div class="operator__slide-text operator__slide-text--main">{main}</div>
+                                {if !trans.is_empty() {
+                                    Some(view! {
+                                        <div class="operator__slide-text operator__slide-text--translation operator__slide-text--secondary">{trans}</div>
+                                    })
+                                } else {
+                                    None
+                                }}
+                                {if !mref.is_empty() || !tref.is_empty() || !group.is_empty() {
+                                    Some(view! {
+                                        <footer class="operator__slide-footer">
+                                            {if !mref.is_empty() {
+                                                Some(view! { <span class="operator__slide-reference">{mref}</span> })
+                                            } else if !group.is_empty() {
+                                                Some(view! { <span class="operator__slide-reference">{group}</span> })
+                                            } else {
+                                                None
+                                            }}
+                                            {if !tref.is_empty() {
+                                                Some(view! { <span class="operator__slide-reference operator__slide-reference--secondary">{tref}</span> })
+                                            } else {
+                                                None
+                                            }}
+                                        </footer>
+                                    })
+                                } else {
+                                    None
+                                }}
+                            </section>
                         }
                     }}
                 </div>
@@ -292,6 +357,7 @@ fn BibleSlideCard(slide: BibleSlideDto, source: &'static str) -> impl IntoView {
         // Prepared slide layout
         let main = main_text_sig.get_untracked();
         let trans = trans_text_sig.get_untracked();
+        let group = group_label_sig.get_untracked();
         view! {
             <div
                 class="operator__slide-card operator__slide-card--bible"
@@ -307,14 +373,27 @@ fn BibleSlideCard(slide: BibleSlideDto, source: &'static str) -> impl IntoView {
                     <span class="operator__slide-trigger-icon">"\u{25B6}"</span>
                     <span>{if !main_ref.is_empty() { main_ref.clone() } else { "Trigger".to_string() }}</span>
                 </div>
-                <div class="operator__slide-content" style="padding: 0.5rem 0.75rem;">
-                    <p class="operator__slide-main">{main}</p>
+                <section class="operator__slide-bodies operator__slide-bodies--bible">
+                    <div class="operator__slide-text operator__slide-text--main">{main}</div>
                     {if !trans.is_empty() {
-                        Some(view! { <p class="operator__slide-translation">{trans}</p> })
+                        Some(view! {
+                            <div class="operator__slide-text operator__slide-text--translation operator__slide-text--secondary">{trans}</div>
+                        })
                     } else {
                         None
                     }}
-                </div>
+                    {if !main_ref.is_empty() || !group.is_empty() {
+                        Some(view! {
+                            <footer class="operator__slide-footer">
+                                <span class="operator__slide-reference">{
+                                    if !main_ref.is_empty() { main_ref.clone() } else { group }
+                                }</span>
+                            </footer>
+                        })
+                    } else {
+                        None
+                    }}
+                </section>
             </div>
         }
         .into_any()

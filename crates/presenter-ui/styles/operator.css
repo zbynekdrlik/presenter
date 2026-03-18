@@ -1334,7 +1334,17 @@ body.operator[data-mode="edit"] .operator__slide-editor input {
   background: rgba(239, 68, 68, 0.15);
 }
 
+.operator__slide-editor-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 0.65rem;
+}
+
 body.operator[data-mode="live"] .operator__slide-editor {
+  display: none;
+}
+
+body.operator[data-mode="live"] .operator__slide-header {
   display: none;
 }
 
