@@ -1134,6 +1134,115 @@ test.describe("WASM Operator Bible Tests", () => {
     expect(activeSlide.mainReference).toBeTruthy();
   });
 
+  // -----------------------------------------------------------------------
+  // Header Bible preview
+  // -----------------------------------------------------------------------
+
+  test("header preview shows triggered Bible verse text", async ({ page }) => {
+    await navigateToBible(page);
+    await clearBroadcast();
+
+    if (!(await hasBibleData(page))) return;
+
+    // In Bible view, bible-preview should be visible (even if empty)
+    const biblePreview = page.locator('[data-role="bible-preview"]');
+    await expect(biblePreview).toBeVisible();
+    // Worship preview should be hidden
+    const worshipPreview = page.locator('[data-role="worship-preview"]');
+    await expect(worshipPreview).toBeHidden();
+
+    // Initially shows "No active passage"
+    await expect(biblePreview).toContainText("No active passage");
+
+    // Load a passage
+    const firstBook = page.locator('[data-role="book-item"]').first();
+    await firstBook.click();
+    await page.locator('[data-role="load-button"]').click();
+
+    await page.waitForFunction(
+      () => document.querySelectorAll('[data-role="slide-card"]').length > 0,
+      { timeout: 15_000 },
+    );
+
+    // Trigger first slide
+    const firstTrigger = page
+      .locator('[data-role="slide-trigger-zone"]')
+      .first();
+    await firstTrigger.click();
+
+    // Wait for success toast
+    await page.waitForFunction(
+      () => {
+        const toast = document.querySelector('[data-role="toast"]');
+        return toast && toast.textContent?.includes("Triggered");
+      },
+      { timeout: 5_000 },
+    );
+
+    // Wait for bible preview to update with verse text (via WS event)
+    await page.waitForFunction(
+      () => {
+        const preview = document.querySelector('[data-role="bible-preview"]');
+        return (
+          preview &&
+          preview.getAttribute("data-active") === "true" &&
+          !preview.textContent?.includes("No active passage")
+        );
+      },
+      { timeout: 5_000 },
+    );
+
+    // Bible preview should contain verse text and reference
+    const previewText = page.locator('[data-role="bible-preview-text"]');
+    await expect(previewText).toBeVisible();
+    const textContent = await previewText.textContent();
+    expect(textContent).toBeTruthy();
+    expect(textContent!.length).toBeGreaterThan(0);
+
+    const previewRef = page.locator('[data-role="bible-preview-ref"]');
+    await expect(previewRef).toBeVisible();
+    const refContent = await previewRef.textContent();
+    expect(refContent).toBeTruthy();
+
+    // Clear the broadcast
+    await page.evaluate(async (url: string) => {
+      await fetch(`${url}/bible/clear`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: "{}",
+      });
+    }, baseURL);
+
+    // Wait for preview to show empty state again
+    await page.waitForFunction(
+      () => {
+        const preview = document.querySelector('[data-role="bible-preview"]');
+        return (
+          preview &&
+          preview.getAttribute("data-active") === "false" &&
+          preview.textContent?.includes("No active passage")
+        );
+      },
+      { timeout: 5_000 },
+    );
+
+    await expect(biblePreview).toContainText("No active passage");
+
+    // Switch to worship view — worship preview should show, bible preview hidden
+    const worshipButton = page.locator(
+      '[data-role="view-toggle"][data-view="worship"]',
+    );
+    await worshipButton.click();
+
+    await page.waitForFunction(
+      () => document.body.getAttribute("data-view") === "worship",
+      { timeout: 5_000 },
+    );
+
+    await expect(worshipPreview).toBeVisible();
+    await expect(biblePreview).toBeHidden();
+  });
+
   test("trigger button in edit mode sends current (edited) text to stage", async ({
     page,
   }) => {

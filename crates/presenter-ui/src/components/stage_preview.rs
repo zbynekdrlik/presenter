@@ -95,7 +95,13 @@ pub fn StagePreview() -> impl IntoView {
                 if snap.as_ref().and_then(|s| s.current_slide_id.as_ref()).is_some() { "true" } else { "false" }
             }
         >
-            <div data-role="worship-preview" class="operator__worship-preview-wrap">
+            <div
+                data-role="worship-preview"
+                class="operator__worship-preview-wrap"
+                style=move || {
+                    if ctx.view.get() == "bible" { "display:none" } else { "" }
+                }
+            >
                 <div class="operator__stage-preview-stack">
                     <div class="operator__stage-preview-panel operator__stage-preview-panel--next" data-role="stage-next">
                         {move || {
@@ -156,8 +162,48 @@ pub fn StagePreview() -> impl IntoView {
                     }}
                 </div>
             </div>
-            <div class="operator__bible-preview" data-role="bible-preview" style="display:none">
-                <span class="operator__bible-preview-empty">"No active passage"</span>
+            <div
+                class="operator__bible-preview"
+                data-role="bible-preview"
+                style=move || {
+                    if ctx.view.get() == "bible" { "" } else { "display:none" }
+                }
+                data-active=move || {
+                    if ctx.active_bible_broadcast.get().is_some() { "true" } else { "false" }
+                }
+            >
+                {move || {
+                    match ctx.active_bible_broadcast.get() {
+                        Some(broadcast) => {
+                            let text = &broadcast.passage.text;
+                            let truncated = if text.chars().count() > 100 {
+                                let end: String = text.chars().take(100).collect();
+                                format!("{end}…")
+                            } else {
+                                text.clone()
+                            };
+                            let reference = broadcast
+                                .reference_label
+                                .clone()
+                                .unwrap_or_else(|| {
+                                    format!(
+                                        "{} ({})",
+                                        broadcast.passage.reference.to_human_readable(),
+                                        broadcast.passage.translation.code
+                                    )
+                                });
+                            leptos::prelude::view! {
+                                <span class="operator__bible-preview-text" data-role="bible-preview-text">{truncated}</span>
+                                <span class="operator__bible-preview-ref" data-role="bible-preview-ref">{reference}</span>
+                            }.into_any()
+                        }
+                        None => {
+                            leptos::prelude::view! {
+                                <span class="operator__bible-preview-empty">"No active passage"</span>
+                            }.into_any()
+                        }
+                    }
+                }}
             </div>
             <button
                 type="button"
