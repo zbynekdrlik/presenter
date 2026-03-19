@@ -1,0 +1,498 @@
+- generic [ref=e1]:
+  - banner [ref=e2]:
+    - generic [ref=e3]:
+      - heading "Presenter" [level=1] [ref=e4]
+      - generic [ref=e110]: v0.1.6 (dev)
+      - search [ref=e5]:
+        - searchbox "Search presenter content" [ref=e7]
+        - button "Clear search" [ref=e8] [cursor=pointer]:
+          - text: ×
+          - generic [ref=e9]: Clear search
+    - navigation [ref=e10]:
+      - button "Worship" [ref=e11] [cursor=pointer]
+      - button "Bible" [active] [ref=e12] [cursor=pointer]
+      - button "Timers" [ref=e13] [cursor=pointer]
+      - button "Settings" [ref=e14] [cursor=pointer]
+    - generic [ref=e15]:
+      - generic "Stage display mode" [ref=e16]:
+        - generic [ref=e17]: Stage Output
+        - combobox "Stage Output" [ref=e18] [cursor=pointer]:
+          - option "WORSHIP SNV"
+          - option "WORSHIP PP"
+          - option "TIMER"
+          - option "PREACH" [selected]
+      - generic [ref=e19]:
+        - generic [ref=e20]:
+          - generic [ref=e21]:
+            - generic [ref=e22]: Počatý Duchom Svätým prišiel Ježiš na zem ľudí zachrániť
+            - generic [ref=e23]: 001 Vyznanie viery
+            - generic [ref=e24]:
+              - button "Ableton OFF" [ref=e25] [cursor=pointer]
+              - button "Follow OFF" [ref=e26] [cursor=pointer]
+          - generic [ref=e27]: Náš večný Otec v nebi všetkého Stvoriteľ, Všemohúci
+        - button "Stage display health" [ref=e28] [cursor=pointer]:
+          - generic [ref=e29]: "0"
+          - generic [ref=e30]: /
+          - generic [ref=e31]: "0"
+        - button "Clear live outputs" [ref=e32] [cursor=pointer]: 🧹
+      - generic [ref=e33]:
+        - button "Live" [ref=e34] [cursor=pointer]
+        - button "Edit" [ref=e35] [cursor=pointer]
+  - main [ref=e36]:
+    - generic [ref=e37]:
+      - generic [ref=e38]:
+        - generic [ref=e39]:
+          - generic [ref=e40]:
+            - generic [ref=e41]:
+              - heading "Libraries" [level=2] [ref=e42]
+              - generic [ref=e43]:
+                - button "Show all libraries" [ref=e44] [cursor=pointer]: "22"
+                - button "Create library" [ref=e45] [cursor=pointer]: +
+            - list [ref=e46]:
+              - listitem [ref=e112]:
+                - button "NEW LEVEL 159" [ref=e113] [cursor=pointer]:
+                  - generic [ref=e114]: NEW LEVEL
+                  - generic [ref=e115]: "159"
+                - button "Edit library" [ref=e117] [cursor=pointer]: ⋮
+          - generic [ref=e48]:
+            - generic [ref=e49]:
+              - heading "Playlists" [level=2] [ref=e50]
+              - generic [ref=e51]:
+                - button "Show all playlists" [ref=e52] [cursor=pointer]: "1"
+                - button "Create playlist" [ref=e53] [cursor=pointer]: +
+            - list [ref=e54]:
+              - listitem [ref=e119]:
+                - button "Ableton Demo 0" [ref=e120] [cursor=pointer]:
+                  - generic [ref=e121]: Ableton Demo
+                  - generic [ref=e122]: "0"
+                - button "Edit playlist" [ref=e124] [cursor=pointer]: ⋮
+        - generic [ref=e57]:
+          - generic [ref=e58]:
+            - heading "Presentations" [level=2] [ref=e59]
+            - generic [ref=e60]:
+              - generic [ref=e61]: —
+              - button "Add presentation or separator" [ref=e62] [cursor=pointer]: +
+          - list [ref=e63]:
+            - listitem [ref=e64]: Select a library or playlist to view presentations.
+      - generic [ref=e67]:
+        - article [ref=e125]
+        - article [ref=e128]:
+          - generic [ref=e129]:
+            - generic [ref=e130]:
+              - text: Náš večný Otec v nebi
+              - text: všetkého Stvoriteľ, Všemohúci
+            - generic [ref=e131]: Line exceeds 32 characters
+        - article [ref=e132]:
+          - generic [ref=e133]:
+            - generic [ref=e134]:
+              - text: Počatý Duchom Svätým
+              - text: prišiel Ježiš na zem ľudí zachrániť
+            - generic [ref=e135]: Line exceeds 32 characters
+        - generic [ref=e136]: Vsetci
+        - article [ref=e137]:
+          - generic [ref=e139]:
+            - text: Ja verím v môjho Boha Otca
+            - text: verím v Syna Božieho
+        - article [ref=e140]:
+          - generic [ref=e142]:
+            - text: Verím vo Svätého Ducha
+            - text: v Boha trojjediného
+        - article [ref=e143]:
+          - generic [ref=e145]:
+            - text: Verím vo vzkriesenie z mŕtvych
+            - text: že živí vstaneme
+        - article [ref=e146]:
+          - generic [ref=e147]:
+            - generic [ref=e148]: lebo verím v to mocné meno Ježiš
+            - generic [ref=e149]: Line exceeds 32 characters
+        - article [ref=e150]
+        - generic [ref=e153]: Stevo, Tina
+        - article [ref=e154]:
+          - generic [ref=e156]:
+            - text: Náš Sudca aj Obhajca, trpel si
+            - text: na kríži, hriechy odpúšťaš
+        - generic [ref=e157]: Vsetci
+        - article [ref=e158]:
+          - generic [ref=e159]:
+            - generic [ref=e160]:
+              - text: Do pekiel si zostúpil, no slávne
+              - text: z mŕtvych vstal, večnú vládu máš
+            - generic [ref=e161]: Line exceeds 32 characters
+        - article [ref=e162]:
+          - generic [ref=e164]:
+            - text: Ja verím v môjho Boha Otca
+            - text: verím v Syna Božieho
+        - article [ref=e165]:
+          - generic [ref=e167]:
+            - text: Verím vo Svätého Ducha
+            - text: v Boha trojjediného
+        - article [ref=e168]:
+          - generic [ref=e170]:
+            - text: Verím vo vzkriesenie z mŕtvych
+            - text: že živí vstaneme
+        - article [ref=e171]:
+          - generic [ref=e172]:
+            - generic [ref=e173]: lebo verím v to mocné meno Ježiš
+            - generic [ref=e174]: Line exceeds 32 characters
+        - article [ref=e175]
+        - article [ref=e178]:
+          - generic [ref=e180]:
+            - text: Ja verím v Teba
+            - text: Ja verím z mŕtvych si vstal
+        - article [ref=e181]:
+          - generic [ref=e182]:
+            - generic [ref=e183]: Ja verím, že Ježiš, On je Pán
+            - generic [ref=e184]: Line exceeds 32 characters
+        - article [ref=e185]:
+          - generic [ref=e187]:
+            - text: Ja verím v Teba
+            - text: Ja verím z mŕtvych si vstal
+        - article [ref=e188]:
+          - generic [ref=e189]:
+            - generic [ref=e190]: Ja verím, že Ježiš, On je Pán
+            - generic [ref=e191]: Line exceeds 32 characters
+        - article [ref=e192]:
+          - generic [ref=e194]:
+            - text: Ja verím v môjho Boha Otca
+            - text: verím v Syna Božieho
+        - article [ref=e195]:
+          - generic [ref=e197]:
+            - text: Verím vo Svätého Ducha
+            - text: v Boha trojjediného
+        - article [ref=e198]:
+          - generic [ref=e200]:
+            - text: Verím vo vzkriesenie z mŕtvych
+            - text: že živí vstaneme
+        - article [ref=e201]:
+          - generic [ref=e202]:
+            - generic [ref=e203]: lebo verím v to mocné meno Ježiš
+            - generic [ref=e204]: Line exceeds 32 characters
+        - article [ref=e205]:
+          - generic [ref=e207]:
+            - text: Ja verím v môjho Boha Otca
+            - text: verím v Syna Božieho
+        - article [ref=e208]:
+          - generic [ref=e210]:
+            - text: Verím vo Svätého Ducha
+            - text: v Boha trojjediného
+        - article [ref=e211]:
+          - generic [ref=e213]:
+            - text: Verím vo vzkriesenie z mŕtvych
+            - text: že živí vstaneme
+        - article [ref=e214]:
+          - generic [ref=e215]:
+            - generic [ref=e216]: lebo verím v to mocné meno Ježiš
+            - generic [ref=e217]: Line exceeds 32 characters
+        - article [ref=e218]:
+          - generic [ref=e219]:
+            - generic [ref=e220]: Lebo verím v to mocné meno Ježiš
+            - generic [ref=e221]: Line exceeds 32 characters
+        - generic [ref=e222]: Stevo
+        - article [ref=e223]:
+          - generic [ref=e224]:
+            - generic [ref=e225]: Lebo verím v to mocné meno Ježiš
+            - generic [ref=e226]: Line exceeds 32 characters
+        - generic [ref=e227]: Vsetci
+        - article [ref=e228]
+        - article [ref=e231]:
+          - generic [ref=e233]:
+            - text: Verím v život večný v nebi
+            - text: verím v hriechov odpustenie
+        - article [ref=e234]:
+          - generic [ref=e236]:
+            - text: Verím v spoločenstvo svätých
+            - text: v naše posvätenie
+        - article [ref=e237]:
+          - generic [ref=e239]:
+            - text: Verím vo vzkriesenie z mŕtvych
+            - text: že Pán sa vráti späť
+        - article [ref=e240]:
+          - generic [ref=e241]:
+            - generic [ref=e242]: Preto verím v to mocné meno Ježiš
+            - generic [ref=e243]: Line exceeds 32 characters
+        - article [ref=e244]
+        - generic [ref=e247]: Vsetci
+        - article [ref=e248]:
+          - generic [ref=e250]:
+            - text: Ja verím v môjho Boha Otca
+            - text: verím v Syna Božieho
+        - article [ref=e251]:
+          - generic [ref=e253]:
+            - text: Verím vo Svätého Ducha
+            - text: v Boha trojjediného
+        - article [ref=e254]:
+          - generic [ref=e256]:
+            - text: Verím vo vzkriesenie z mŕtvych
+            - text: že živí vstaneme
+        - article [ref=e257]:
+          - generic [ref=e258]:
+            - generic [ref=e259]: lebo verím v to mocné meno Ježiš
+            - generic [ref=e260]: Line exceeds 32 characters
+        - article [ref=e261]:
+          - generic [ref=e263]:
+            - text: Ja verím v môjho Boha Otca
+            - text: verím v Syna Božieho
+        - article [ref=e264]:
+          - generic [ref=e266]:
+            - text: Verím vo Svätého Ducha
+            - text: v Boha trojjediného
+        - article [ref=e267]:
+          - generic [ref=e269]:
+            - text: Verím vo vzkriesenie z mŕtvych
+            - text: že živí vstaneme
+        - article [ref=e270]:
+          - generic [ref=e271]:
+            - generic [ref=e272]: lebo verím v to mocné meno Ježiš
+            - generic [ref=e273]: Line exceeds 32 characters
+        - article [ref=e274]:
+          - generic [ref=e275]:
+            - generic [ref=e276]: Lebo verím v to mocné meno Ježiš
+            - generic [ref=e277]: Line exceeds 32 characters
+        - article [ref=e278]
+    - generic [ref=e69]:
+      - complementary [ref=e70]:
+        - generic [ref=e71]:
+          - navigation [ref=e72]:
+            - button "Live" [ref=e73] [cursor=pointer]
+            - button "Prepared" [ref=e74] [cursor=pointer]
+            - button "Settings" [ref=e75] [cursor=pointer]
+          - generic [ref=e76]:
+            - generic [ref=e77]:
+              - generic [ref=e78]:
+                - generic [ref=e79]: Main
+                - combobox "Main" [ref=e80]:
+                  - option "King James Version (en)"
+                  - option "Preklad Milosť (sk)"
+                  - option "Roháčkov preklad (sk)"
+                  - option "Slovenský ekumenický preklad (sk)" [selected]
+                  - option "Slovenský evanjelický preklad (sk)"
+              - generic [ref=e81]:
+                - generic [ref=e82]: Secondary
+                - combobox "Secondary" [ref=e83]:
+                  - option "None" [selected]
+                  - option "King James Version (en)"
+                  - option "Preklad Milosť (sk)"
+                  - option "Roháčkov preklad (sk)"
+                  - option "Slovenský ekumenický preklad (sk)"
+                  - option "Slovenský evanjelický preklad (sk)"
+            - generic [ref=e84]:
+              - generic [ref=e85]: Find book
+              - searchbox "Find book" [ref=e86]
+            - generic [ref=e87]:
+              - button "1 Ján 5 ch." [ref=e282] [cursor=pointer]:
+                - generic [ref=e283]: 1 Ján
+                - generic [ref=e284]: 5 ch.
+              - button "1 Korinťanom 16 ch." [ref=e286] [cursor=pointer]:
+                - generic [ref=e287]: 1 Korinťanom
+                - generic [ref=e288]: 16 ch.
+              - button "1 Kroník 29 ch." [ref=e290] [cursor=pointer]:
+                - generic [ref=e291]: 1 Kroník
+                - generic [ref=e292]: 29 ch.
+              - button "1 Kráľov 22 ch." [ref=e294] [cursor=pointer]:
+                - generic [ref=e295]: 1 Kráľov
+                - generic [ref=e296]: 22 ch.
+              - button "1 Peter 5 ch." [ref=e298] [cursor=pointer]:
+                - generic [ref=e299]: 1 Peter
+                - generic [ref=e300]: 5 ch.
+              - button "1 Samuelova 31 ch." [ref=e302] [cursor=pointer]:
+                - generic [ref=e303]: 1 Samuelova
+                - generic [ref=e304]: 31 ch.
+              - button "1 Tesaloničanom 5 ch." [ref=e306] [cursor=pointer]:
+                - generic [ref=e307]: 1 Tesaloničanom
+                - generic [ref=e308]: 5 ch.
+              - button "1 Timotejovi 6 ch." [ref=e310] [cursor=pointer]:
+                - generic [ref=e311]: 1 Timotejovi
+                - generic [ref=e312]: 6 ch.
+              - button "2 Ján 1 ch." [ref=e314] [cursor=pointer]:
+                - generic [ref=e315]: 2 Ján
+                - generic [ref=e316]: 1 ch.
+              - button "2 Korinťanom 13 ch." [ref=e318] [cursor=pointer]:
+                - generic [ref=e319]: 2 Korinťanom
+                - generic [ref=e320]: 13 ch.
+              - button "2 Kroník 36 ch." [ref=e322] [cursor=pointer]:
+                - generic [ref=e323]: 2 Kroník
+                - generic [ref=e324]: 36 ch.
+              - button "2 Kráľov 25 ch." [ref=e326] [cursor=pointer]:
+                - generic [ref=e327]: 2 Kráľov
+                - generic [ref=e328]: 25 ch.
+              - button "2 Peter 3 ch." [ref=e330] [cursor=pointer]:
+                - generic [ref=e331]: 2 Peter
+                - generic [ref=e332]: 3 ch.
+              - button "2 Samuelova 24 ch." [ref=e334] [cursor=pointer]:
+                - generic [ref=e335]: 2 Samuelova
+                - generic [ref=e336]: 24 ch.
+              - button "2 Tesaloničanom 3 ch." [ref=e338] [cursor=pointer]:
+                - generic [ref=e339]: 2 Tesaloničanom
+                - generic [ref=e340]: 3 ch.
+              - button "2 Timotejovi 4 ch." [ref=e342] [cursor=pointer]:
+                - generic [ref=e343]: 2 Timotejovi
+                - generic [ref=e344]: 4 ch.
+              - button "3 Ján 1 ch." [ref=e346] [cursor=pointer]:
+                - generic [ref=e347]: 3 Ján
+                - generic [ref=e348]: 1 ch.
+              - button "Abdiáš 1 ch." [ref=e350] [cursor=pointer]:
+                - generic [ref=e351]: Abdiáš
+                - generic [ref=e352]: 1 ch.
+              - button "Amos 9 ch." [ref=e354] [cursor=pointer]:
+                - generic [ref=e355]: Amos
+                - generic [ref=e356]: 9 ch.
+              - button "Daniel 12 ch." [ref=e358] [cursor=pointer]:
+                - generic [ref=e359]: Daniel
+                - generic [ref=e360]: 12 ch.
+              - button "Deuteronómium 34 ch." [ref=e362] [cursor=pointer]:
+                - generic [ref=e363]: Deuteronómium
+                - generic [ref=e364]: 34 ch.
+              - button "Efezanom 6 ch." [ref=e366] [cursor=pointer]:
+                - generic [ref=e367]: Efezanom
+                - generic [ref=e368]: 6 ch.
+              - button "Ester 10 ch." [ref=e370] [cursor=pointer]:
+                - generic [ref=e371]: Ester
+                - generic [ref=e372]: 10 ch.
+              - button "Exodus 40 ch." [ref=e374] [cursor=pointer]:
+                - generic [ref=e375]: Exodus
+                - generic [ref=e376]: 40 ch.
+              - button "Ezdraš 10 ch." [ref=e378] [cursor=pointer]:
+                - generic [ref=e379]: Ezdraš
+                - generic [ref=e380]: 10 ch.
+              - button "Ezechiel 48 ch." [ref=e382] [cursor=pointer]:
+                - generic [ref=e383]: Ezechiel
+                - generic [ref=e384]: 48 ch.
+              - button "Filimonovi 1 ch." [ref=e386] [cursor=pointer]:
+                - generic [ref=e387]: Filimonovi
+                - generic [ref=e388]: 1 ch.
+              - button "Filipanom 4 ch." [ref=e390] [cursor=pointer]:
+                - generic [ref=e391]: Filipanom
+                - generic [ref=e392]: 4 ch.
+              - button "Galaťanom 6 ch." [ref=e394] [cursor=pointer]:
+                - generic [ref=e395]: Galaťanom
+                - generic [ref=e396]: 6 ch.
+              - button "Genezis 50 ch." [ref=e398] [cursor=pointer]:
+                - generic [ref=e399]: Genezis
+                - generic [ref=e400]: 50 ch.
+              - button "Habakuk 3 ch." [ref=e402] [cursor=pointer]:
+                - generic [ref=e403]: Habakuk
+                - generic [ref=e404]: 3 ch.
+              - button "Haggeus 2 ch." [ref=e406] [cursor=pointer]:
+                - generic [ref=e407]: Haggeus
+                - generic [ref=e408]: 2 ch.
+              - button "Hebrejom 13 ch." [ref=e410] [cursor=pointer]:
+                - generic [ref=e411]: Hebrejom
+                - generic [ref=e412]: 13 ch.
+              - button "Izaiáš 66 ch." [ref=e414] [cursor=pointer]:
+                - generic [ref=e415]: Izaiáš
+                - generic [ref=e416]: 66 ch.
+              - button "Jakub 5 ch." [ref=e418] [cursor=pointer]:
+                - generic [ref=e419]: Jakub
+                - generic [ref=e420]: 5 ch.
+              - button "Jeremiáš 52 ch." [ref=e422] [cursor=pointer]:
+                - generic [ref=e423]: Jeremiáš
+                - generic [ref=e424]: 52 ch.
+              - button "Joel 4 ch." [ref=e426] [cursor=pointer]:
+                - generic [ref=e427]: Joel
+                - generic [ref=e428]: 4 ch.
+              - button "Jonáš 4 ch." [ref=e430] [cursor=pointer]:
+                - generic [ref=e431]: Jonáš
+                - generic [ref=e432]: 4 ch.
+              - button "Jozue 24 ch." [ref=e434] [cursor=pointer]:
+                - generic [ref=e435]: Jozue
+                - generic [ref=e436]: 24 ch.
+              - button "Ján 21 ch." [ref=e438] [cursor=pointer]:
+                - generic [ref=e439]: Ján
+                - generic [ref=e440]: 21 ch.
+              - button "Jób 42 ch." [ref=e442] [cursor=pointer]:
+                - generic [ref=e443]: Jób
+                - generic [ref=e444]: 42 ch.
+              - button "Júda 1 ch." [ref=e446] [cursor=pointer]:
+                - generic [ref=e447]: Júda
+                - generic [ref=e448]: 1 ch.
+              - button "Kazateľ 12 ch." [ref=e450] [cursor=pointer]:
+                - generic [ref=e451]: Kazateľ
+                - generic [ref=e452]: 12 ch.
+              - button "Kolosanom 4 ch." [ref=e454] [cursor=pointer]:
+                - generic [ref=e455]: Kolosanom
+                - generic [ref=e456]: 4 ch.
+              - button "Levitikus 27 ch." [ref=e458] [cursor=pointer]:
+                - generic [ref=e459]: Levitikus
+                - generic [ref=e460]: 27 ch.
+              - button "Lukáš 24 ch." [ref=e462] [cursor=pointer]:
+                - generic [ref=e463]: Lukáš
+                - generic [ref=e464]: 24 ch.
+              - button "Malachiáš 3 ch." [ref=e466] [cursor=pointer]:
+                - generic [ref=e467]: Malachiáš
+                - generic [ref=e468]: 3 ch.
+              - button "Marek 16 ch." [ref=e470] [cursor=pointer]:
+                - generic [ref=e471]: Marek
+                - generic [ref=e472]: 16 ch.
+              - button "Matúš 28 ch." [ref=e474] [cursor=pointer]:
+                - generic [ref=e475]: Matúš
+                - generic [ref=e476]: 28 ch.
+              - button "Micheáš 7 ch." [ref=e478] [cursor=pointer]:
+                - generic [ref=e479]: Micheáš
+                - generic [ref=e480]: 7 ch.
+              - button "Nahum 3 ch." [ref=e482] [cursor=pointer]:
+                - generic [ref=e483]: Nahum
+                - generic [ref=e484]: 3 ch.
+              - button "Nehemiáš 13 ch." [ref=e486] [cursor=pointer]:
+                - generic [ref=e487]: Nehemiáš
+                - generic [ref=e488]: 13 ch.
+              - button "Numeri 36 ch." [ref=e490] [cursor=pointer]:
+                - generic [ref=e491]: Numeri
+                - generic [ref=e492]: 36 ch.
+              - button "Náreky 5 ch." [ref=e494] [cursor=pointer]:
+                - generic [ref=e495]: Náreky
+                - generic [ref=e496]: 5 ch.
+              - button "Ozeáš 14 ch." [ref=e498] [cursor=pointer]:
+                - generic [ref=e499]: Ozeáš
+                - generic [ref=e500]: 14 ch.
+              - button "Pieseň piesní 8 ch." [ref=e502] [cursor=pointer]:
+                - generic [ref=e503]: Pieseň piesní
+                - generic [ref=e504]: 8 ch.
+              - button "Príslovia 31 ch." [ref=e506] [cursor=pointer]:
+                - generic [ref=e507]: Príslovia
+                - generic [ref=e508]: 31 ch.
+              - button "Rimanom 16 ch." [ref=e510] [cursor=pointer]:
+                - generic [ref=e511]: Rimanom
+                - generic [ref=e512]: 16 ch.
+              - button "Rút 4 ch." [ref=e514] [cursor=pointer]:
+                - generic [ref=e515]: Rút
+                - generic [ref=e516]: 4 ch.
+              - button "Skutky apoštolov 28 ch." [ref=e518] [cursor=pointer]:
+                - generic [ref=e519]: Skutky apoštolov
+                - generic [ref=e520]: 28 ch.
+              - button "Sofoniáš 3 ch." [ref=e522] [cursor=pointer]:
+                - generic [ref=e523]: Sofoniáš
+                - generic [ref=e524]: 3 ch.
+              - button "Sudcov 21 ch." [ref=e526] [cursor=pointer]:
+                - generic [ref=e527]: Sudcov
+                - generic [ref=e528]: 21 ch.
+              - button "Títovi 3 ch." [ref=e530] [cursor=pointer]:
+                - generic [ref=e531]: Títovi
+                - generic [ref=e532]: 3 ch.
+              - button "Zachariáš 14 ch." [ref=e534] [cursor=pointer]:
+                - generic [ref=e535]: Zachariáš
+                - generic [ref=e536]: 14 ch.
+              - button "Zjavenie 22 ch." [ref=e538] [cursor=pointer]:
+                - generic [ref=e539]: Zjavenie
+                - generic [ref=e540]: 22 ch.
+              - button "Žalmy 150 ch." [ref=e542] [cursor=pointer]:
+                - generic [ref=e543]: Žalmy
+                - generic [ref=e544]: 150 ch.
+            - generic [ref=e89]:
+              - generic [ref=e90]:
+                - generic [ref=e91]: Chapter
+                - spinbutton "Chapter" [ref=e92]: "1"
+              - generic [ref=e93]:
+                - generic [ref=e94]: Verse start
+                - spinbutton "Verse start" [ref=e95]: "1"
+              - generic [ref=e96]:
+                - generic [ref=e97]: Verse end
+                - spinbutton "Verse end" [ref=e98]
+            - button "Load passage" [disabled] [ref=e99] [cursor=pointer]
+            - separator [ref=e100]
+            - generic [ref=e101]: 0 selected
+            - button "Select all" [ref=e102] [cursor=pointer]
+            - combobox [ref=e104]:
+              - option "Add to…" [selected]
+            - button "Add selected" [ref=e105] [cursor=pointer]
+      - paragraph [ref=e109]: Load a passage to populate slides.
+  - contentinfo: v0.1.6 (dev)
