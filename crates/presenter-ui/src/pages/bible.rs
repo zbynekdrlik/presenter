@@ -720,92 +720,99 @@ fn BiblePreparedTab() -> impl IntoView {
                         }.into_any()
                     } else {
                         pres_list.into_iter().map(|p| {
-                            let id = p.id.clone();
-                            let name = p.name.clone();
-                            let count = p.slide_count;
-                            let id_for_click = id.clone();
-                            let id_for_edit = id.clone();
-
-                            let is_active = {
-                                let id = id.clone();
-                                move || active_presentation_id.get().as_ref() == Some(&id)
-                            };
-
-                            let on_click = {
-                                move |_| {
-                                    let id = id_for_click.clone();
-                                    active_presentation_id.set(Some(id.clone()));
-                                    leptos::task::spawn_local(async move {
-                                        if let Ok(detail) = bible::get_presentation(&id).await {
-                                            active_presentation_slides.set(detail.slides);
-                                        }
-                                    });
-                                }
-                            };
-
-                            let name_for_edit = name.clone();
-                            let on_edit = {
-                                let ctx = ctx.clone();
-                                move |ev: web_sys::MouseEvent| {
-                                    ev.stop_propagation();
-                                    let id = id_for_edit.clone();
-                                    let toast_message = ctx.toast_message;
-                                    let toast_variant = ctx.toast_variant;
-
-                                    // Use JS prompt for rename (simple approach matching legacy)
-                                    let window = crate::utils::window::window();
-                                    if let Ok(Some(new_name)) = window.prompt_with_message_and_default(
-                                        "Rename presentation:",
-                                        &name_for_edit,
-                                    ) {
-                                        let new_name = new_name.trim().to_string();
-                                        if !new_name.is_empty() {
-                                            leptos::task::spawn_local(async move {
-                                                match bible::rename_presentation(&id, &new_name).await {
-                                                    Ok(()) => {
-                                                        toast_variant.set("success".to_string());
-                                                        toast_message.set(Some("Renamed".to_string()));
-                                                        if let Ok(pres) = bible::list_presentations().await {
-                                                            presentations.set(pres);
-                                                        }
-                                                    }
-                                                    Err(e) => {
-                                                        toast_variant.set("error".to_string());
-                                                        toast_message.set(Some(format!("Rename failed: {e}")));
-                                                    }
-                                                }
-                                            });
-                                        }
-                                    }
-                                }
-                            };
-
-                            view! {
-                                <div
-                                    class="operator__presentation-card"
-                                    class:is-active=is_active
-                                    data-presentation-id=id.clone()
-                                    data-role="presentation-card"
-                                    on:click=on_click
-                                >
-                                    <div style="display:flex;justify-content:space-between;align-items:center;">
-                                        <strong>{name.clone()}</strong>
-                                        <button
-                                            type="button"
-                                            class="operator__presentation-action"
-                                            data-role="presentation-edit"
-                                            on:click=on_edit
-                                            title="Edit presentation"
-                                        >"\u{270F}\u{FE0F}"</button>
-                                    </div>
-                                    <p>{format!("{} slide(s)", count)}</p>
-                                </div>
-                            }
+                            view! { <PresentationCard presentation=p /> }
                         }).collect_view().into_any()
                     }
                 }}
             </div>
             <PreparedDeleteButton />
+        </div>
+    }
+}
+
+#[component]
+fn PresentationCard(presentation: bible::BiblePresentationSummary) -> impl IntoView {
+    let bs = use_context::<BibleState>().expect("BibleState");
+    let ctx = use_context::<AppContext>().expect("AppContext");
+    let active_presentation_id = bs.active_presentation_id;
+    let active_presentation_slides = bs.active_presentation_slides;
+    let presentations = bs.presentations;
+
+    let id = presentation.id.clone();
+    let name = presentation.name.clone();
+    let count = presentation.slide_count;
+    let id_for_click = id.clone();
+    let id_for_edit = id.clone();
+
+    let is_active = {
+        let id = id.clone();
+        move || active_presentation_id.get().as_ref() == Some(&id)
+    };
+
+    let on_click = move |_| {
+        let id = id_for_click.clone();
+        active_presentation_id.set(Some(id.clone()));
+        leptos::task::spawn_local(async move {
+            if let Ok(detail) = bible::get_presentation(&id).await {
+                active_presentation_slides.set(detail.slides);
+            }
+        });
+    };
+
+    let name_for_edit = name.clone();
+    let on_edit = {
+        let ctx = ctx.clone();
+        move |ev: web_sys::MouseEvent| {
+            ev.stop_propagation();
+            let id = id_for_edit.clone();
+            let toast_message = ctx.toast_message;
+            let toast_variant = ctx.toast_variant;
+
+            let window = crate::utils::window::window();
+            if let Ok(Some(new_name)) =
+                window.prompt_with_message_and_default("Rename presentation:", &name_for_edit)
+            {
+                let new_name = new_name.trim().to_string();
+                if !new_name.is_empty() {
+                    leptos::task::spawn_local(async move {
+                        match bible::rename_presentation(&id, &new_name).await {
+                            Ok(()) => {
+                                toast_variant.set("success".to_string());
+                                toast_message.set(Some("Renamed".to_string()));
+                                if let Ok(pres) = bible::list_presentations().await {
+                                    presentations.set(pres);
+                                }
+                            }
+                            Err(e) => {
+                                toast_variant.set("error".to_string());
+                                toast_message.set(Some(format!("Rename failed: {e}")));
+                            }
+                        }
+                    });
+                }
+            }
+        }
+    };
+
+    view! {
+        <div
+            class="operator__presentation-card"
+            class:is-active=is_active
+            data-presentation-id=id.clone()
+            data-role="presentation-card"
+            on:click=on_click
+        >
+            <div style="display:flex;justify-content:space-between;align-items:center;">
+                <strong>{name.clone()}</strong>
+                <button
+                    type="button"
+                    class="operator__presentation-action"
+                    data-role="presentation-edit"
+                    on:click=on_edit
+                    title="Edit presentation"
+                >"\u{270F}\u{FE0F}"</button>
+            </div>
+            <p>{format!("{} slide(s)", count)}</p>
         </div>
     }
 }

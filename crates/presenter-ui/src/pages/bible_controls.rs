@@ -80,7 +80,7 @@ pub fn BibleSearch() -> impl IntoView {
         searching.set(true);
         let translation = bs.selected_translation.get_untracked().unwrap_or_default();
 
-        let cb = wasm_bindgen::closure::Closure::once(move || {
+        let cb = wasm_bindgen::closure::Closure::once_into_js(move || {
             leptos::task::spawn_local(async move {
                 match bible::search(&query, &translation, Some(20)).await {
                     Ok(hits) => {
@@ -97,9 +97,8 @@ pub fn BibleSearch() -> impl IntoView {
         });
 
         let handle = crate::utils::window::window()
-            .set_timeout_with_callback_and_timeout_and_arguments_0(cb.as_ref().unchecked_ref(), 300)
+            .set_timeout_with_callback_and_timeout_and_arguments_0(cb.unchecked_ref(), 300)
             .unwrap_or(0);
-        cb.forget();
         timer_handle.set(Some(handle));
     };
 

@@ -569,19 +569,11 @@ fn setup_keyboard_shortcuts(ctx: AppContext, op: OperatorState) {
     handler.forget();
 }
 
-#[derive(serde::Deserialize)]
-struct HealthzResponse {
-    #[serde(default)]
-    version: String,
-    #[serde(default)]
-    channel: String,
-}
-
 #[component]
 fn VersionFooter() -> impl IntoView {
     let version_text = RwSignal::new(String::new());
     leptos::task::spawn_local(async move {
-        if let Ok(health) = crate::api::get_json::<HealthzResponse>("/healthz").await {
+        if let Ok(health) = crate::api::get_json::<crate::api::HealthzResponse>("/healthz").await {
             let text = if health.channel.is_empty() || health.channel == "release" {
                 format!("v{}", health.version)
             } else {

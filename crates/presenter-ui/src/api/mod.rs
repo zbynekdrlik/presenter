@@ -149,6 +149,15 @@ pub async fn post_form_data<T: DeserializeOwned>(
     response.json().await.map_err(ApiError::Deserialize)
 }
 
+/// Response from the /healthz endpoint.
+#[derive(serde::Deserialize)]
+pub struct HealthzResponse {
+    #[serde(default)]
+    pub version: String,
+    #[serde(default)]
+    pub channel: String,
+}
+
 #[derive(Debug)]
 pub enum ApiError {
     Network(gloo_net::Error),

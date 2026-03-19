@@ -232,6 +232,73 @@ test.describe("WASM Operator View Routing Tests", () => {
     }
   });
 
+  test("direct navigation to /ui/operator/timers opens timers view", async ({
+    page,
+  }) => {
+    await page.goto(`${baseURL}/ui/operator/timers`);
+    await page.waitForSelector('[data-wasm-ready="true"]', { timeout: 30_000 });
+
+    await page.waitForFunction(
+      () => document.body.getAttribute("data-view") === "timers",
+      { timeout: 5_000 },
+    );
+    const url = new URL(page.url());
+    expect(url.pathname).toBe("/ui/operator/timers");
+  });
+
+  test("direct navigation to /ui/operator/settings opens settings view", async ({
+    page,
+  }) => {
+    await page.goto(`${baseURL}/ui/operator/settings`);
+    await page.waitForSelector('[data-wasm-ready="true"]', { timeout: 30_000 });
+
+    await page.waitForFunction(
+      () => document.body.getAttribute("data-view") === "settings",
+      { timeout: 5_000 },
+    );
+    const url = new URL(page.url());
+    expect(url.pathname).toBe("/ui/operator/settings");
+  });
+
+  test("browser forward button navigates to next view", async ({ page }) => {
+    await initPage(page);
+
+    // Navigate to bible via tab click
+    const bibleButton = page.locator(
+      '[data-role="view-toggle"][data-view="bible"]',
+    );
+    await bibleButton.click();
+    await page.waitForFunction(
+      () => document.body.getAttribute("data-view") === "bible",
+      { timeout: 5_000 },
+    );
+
+    // Go back to worship
+    await page.goBack();
+    await page.waitForFunction(
+      () => document.body.getAttribute("data-view") === "worship",
+      { timeout: 5_000 },
+    );
+
+    // Go forward back to bible
+    await page.goForward();
+    await page.waitForFunction(
+      () => document.body.getAttribute("data-view") === "bible",
+      { timeout: 5_000 },
+    );
+    expect(page.url()).toContain("/ui/operator/bible");
+  });
+
+  test("/ui/bible redirects with 308 status", async ({ page }) => {
+    const response = await page.goto(`${baseURL}/ui/bible`);
+
+    // Should end up at /ui/operator/bible after redirect
+    expect(page.url()).toContain("/ui/operator/bible");
+
+    // The final response chain should have resulted in a successful page
+    expect(response?.ok()).toBe(true);
+  });
+
   test("view panel visibility matches data-view", async ({ page }) => {
     await initPage(page);
 

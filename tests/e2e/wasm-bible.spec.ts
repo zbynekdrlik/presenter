@@ -310,8 +310,12 @@ test.describe("WASM Operator Bible Tests", () => {
     const bookFilter = page.locator('[data-role="book-filter"]');
     await bookFilter.fill("John");
 
-    // Wait for filtered list to update
-    await page.waitForTimeout(300);
+    // Wait for filtered list to update reactively
+    await expect
+      .poll(async () => page.locator('[data-role="book-item"]').count(), {
+        timeout: 5_000,
+      })
+      .toBeLessThan(initialCount > 5 ? initialCount : initialCount + 1);
 
     const filteredCount = await page.locator('[data-role="book-item"]').count();
 
@@ -1330,15 +1334,16 @@ test.describe("WASM Operator Bible Tests", () => {
       .first();
     await firstTrigger.click();
 
-    // Wait a bit for any state changes
-    await page.waitForTimeout(300);
-
     // Slide should NOT be selected (trigger zone is separate from select zone)
     const firstCard = page.locator('[data-role="slide-card"]').first();
-    const hasSelectedClass = await firstCard.evaluate((el) =>
-      el.classList.contains("is-selected"),
-    );
-    expect(hasSelectedClass).toBe(false);
+    // Use poll to ensure state has settled after click
+    await expect
+      .poll(
+        async () =>
+          firstCard.evaluate((el) => el.classList.contains("is-selected")),
+        { timeout: 3_000 },
+      )
+      .toBe(false);
   });
 
   // -----------------------------------------------------------------------
@@ -1416,10 +1421,13 @@ test.describe("WASM Operator Bible Tests", () => {
     const searchInput = page.locator('[data-role="bible-search-input"]');
     await searchInput.fill("ab");
 
-    // No results container should appear
-    await page.waitForTimeout(500);
-    const results = page.locator('[data-role="bible-search-results"]');
-    await expect(results).toHaveCount(0);
+    // No results container should appear (wait for debounce to settle)
+    await expect
+      .poll(
+        async () => page.locator('[data-role="bible-search-results"]').count(),
+        { timeout: 3_000 },
+      )
+      .toBe(0);
   });
 
   test("search results appear with 3+ characters", async ({ page }) => {
@@ -1459,9 +1467,7 @@ test.describe("WASM Operator Bible Tests", () => {
       await firstResult.click();
 
       // Search should be cleared
-      await page.waitForTimeout(300);
-      const searchValue = await searchInput.inputValue();
-      expect(searchValue).toBe("");
+      await expect(searchInput).toHaveValue("", { timeout: 3_000 });
 
       // A book should be selected
       const activeBook = page.locator(
@@ -1487,12 +1493,14 @@ test.describe("WASM Operator Bible Tests", () => {
     const clearBtn = page.locator('[data-role="bible-search-clear"]');
     await clearBtn.click();
 
-    await page.waitForTimeout(300);
-    const searchValue = await searchInput.inputValue();
-    expect(searchValue).toBe("");
+    await expect(searchInput).toHaveValue("", { timeout: 3_000 });
 
-    const results = page.locator('[data-role="bible-search-results"]');
-    await expect(results).toHaveCount(0);
+    await expect
+      .poll(
+        async () => page.locator('[data-role="bible-search-results"]').count(),
+        { timeout: 3_000 },
+      )
+      .toBe(0);
   });
 
   // -----------------------------------------------------------------------

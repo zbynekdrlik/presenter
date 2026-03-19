@@ -110,16 +110,6 @@ impl BibleState {
         }
     }
 
-    /// Add a passage to the loaded history (max 12, most recent first).
-    pub fn push_history(&self, passage: LoadedPassage) {
-        self.loaded_passages_history.update(|history| {
-            // Remove duplicate if exists
-            history.retain(|p| p.label != passage.label);
-            history.insert(0, passage);
-            history.truncate(12);
-        });
-    }
-
     /// Get filtered books based on the book_filter signal.
     pub fn filtered_books(&self) -> Vec<BibleBookDto> {
         let filter = self.book_filter.get().to_lowercase();
