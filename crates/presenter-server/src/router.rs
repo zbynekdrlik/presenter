@@ -123,7 +123,10 @@ pub fn build_router(state: AppState) -> Router {
             get(tablet_pwa::apple_touch_icon),
         )
         .route("/ui/tablet/sw.js", get(tablet_pwa::service_worker))
-        .route("/ui/bible", get(bible::bible_ui))
+        .route(
+            "/ui/bible",
+            get(|| async { axum::response::Redirect::permanent("/ui/operator/bible") }),
+        )
         .route("/ui/settings", get(ui_routes::settings_ui))
         .route("/ui/stage-settings", get(ui_routes::stage_settings_ui))
         .route("/ui/stage-design", get(ui_routes::stage_design_ui))

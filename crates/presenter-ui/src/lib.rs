@@ -28,18 +28,27 @@ fn App() -> impl IntoView {
     }
 
     // Client-side routing based on pathname
-    let page_view = move || match pathname.as_str() {
-        "/ui/operator" => view! { <pages::operator::OperatorPage /> }.into_any(),
-        "/ui/operator/bible" => view! { <pages::bible::BiblePage /> }.into_any(),
-        "/ui/tablet" => view! { <pages::tablet::TabletPage /> }.into_any(),
-        "/ui/operator/settings" => view! { <pages::settings::SettingsPage /> }.into_any(),
-        _ => view! {
-            <div data-role="not-found">
-                <h1>"Page not found"</h1>
-                <p>"The requested page does not exist."</p>
-            </div>
+    let page_view = move || {
+        let p = pathname.as_str();
+        if p == "/ui/operator" || p.starts_with("/ui/operator/") {
+            // Extract view from path: /ui/operator/bible → "bible"
+            let initial_view = p
+                .strip_prefix("/ui/operator/")
+                .filter(|v| !v.is_empty())
+                .unwrap_or("")
+                .to_string();
+            view! { <pages::operator::OperatorPage initial_view=initial_view /> }.into_any()
+        } else if p == "/ui/tablet" {
+            view! { <pages::tablet::TabletPage /> }.into_any()
+        } else {
+            view! {
+                <div data-role="not-found">
+                    <h1>"Page not found"</h1>
+                    <p>"The requested page does not exist."</p>
+                </div>
+            }
+            .into_any()
         }
-        .into_any(),
     };
 
     view! {

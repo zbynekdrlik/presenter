@@ -20,9 +20,14 @@ use crate::state::AppContext;
 use crate::ws;
 
 #[component]
-pub fn OperatorPage() -> impl IntoView {
+pub fn OperatorPage(#[prop(default = String::new())] initial_view: String) -> impl IntoView {
     let ctx = AppContext::new();
     let op = OperatorState::new();
+
+    // Override view from URL path if provided (e.g., /ui/operator/bible → "bible")
+    if !initial_view.is_empty() {
+        ctx.view.set(initial_view);
+    }
 
     // Provide context for all child components
     provide_context(ctx.clone());
@@ -593,16 +598,16 @@ fn VersionFooter() -> impl IntoView {
 fn setup_popstate_listener(ctx: AppContext) {
     let view = ctx.view;
     let handler =
-        Closure::<dyn Fn(web_sys::PopStateEvent)>::new(move |ev: web_sys::PopStateEvent| {
-            let state = ev.state();
-            if let Ok(obj) = state.dyn_into::<js_sys::Object>() {
-                if let Ok(view_val) = js_sys::Reflect::get(&obj, &"view".into()) {
-                    if let Some(v) = view_val.as_string() {
-                        view.set(v.clone());
-                        crate::state::session::set("view", &v);
-                    }
-                }
-            }
+        Closure::<dyn Fn(web_sys::PopStateEvent)>::new(move |_ev: web_sys::PopStateEvent| {
+            // Derive view from the current URL pathname
+            let pathname = crate::utils::window::current_pathname();
+            let v = pathname
+                .strip_prefix("/ui/operator/")
+                .filter(|s| !s.is_empty())
+                .unwrap_or("worship")
+                .to_string();
+            view.set(v.clone());
+            crate::state::session::set("view", &v);
         });
     let window = crate::utils::window::window();
     let _ = window.add_event_listener_with_callback("popstate", handler.as_ref().unchecked_ref());

@@ -1988,4 +1988,140 @@ test.describe("WASM Operator Bible Tests", () => {
       { url: baseURL, id: presId },
     );
   });
+
+  // -----------------------------------------------------------------------
+  // URL-based navigation
+  // -----------------------------------------------------------------------
+
+  test("direct navigation to /ui/operator/bible opens bible view", async ({
+    page,
+  }) => {
+    await page.goto(`${baseURL}/ui/operator/bible`);
+    await page.waitForSelector('[data-wasm-ready="true"]', { timeout: 30_000 });
+
+    // Bible view should be active
+    await page.waitForFunction(
+      () => document.body.getAttribute("data-view") === "bible",
+      { timeout: 5_000 },
+    );
+
+    // Bible tab should show as active
+    const bibleButton = page.locator(
+      '[data-role="view-toggle"][data-view="bible"]',
+    );
+    await expect(bibleButton).toHaveAttribute("data-active", "true");
+  });
+
+  test("clicking bible tab updates URL to /ui/operator/bible", async ({
+    page,
+  }) => {
+    await page.goto(`${baseURL}/ui/operator`);
+    await page.waitForSelector('[data-role="library-list"]', {
+      timeout: 30_000,
+    });
+
+    // Click Bible tab
+    const bibleButton = page.locator(
+      '[data-role="view-toggle"][data-view="bible"]',
+    );
+    await bibleButton.click();
+    await page.waitForFunction(
+      () => document.body.getAttribute("data-view") === "bible",
+      { timeout: 5_000 },
+    );
+
+    // URL should now end with /ui/operator/bible
+    expect(page.url()).toContain("/ui/operator/bible");
+  });
+
+  test("clicking worship tab updates URL to /ui/operator", async ({ page }) => {
+    // Start at bible view via URL
+    await page.goto(`${baseURL}/ui/operator/bible`);
+    await page.waitForSelector('[data-wasm-ready="true"]', { timeout: 30_000 });
+    await page.waitForFunction(
+      () => document.body.getAttribute("data-view") === "bible",
+      { timeout: 5_000 },
+    );
+
+    // Click Worship tab
+    const worshipButton = page.locator(
+      '[data-role="view-toggle"][data-view="worship"]',
+    );
+    await worshipButton.click();
+    await page.waitForFunction(
+      () => document.body.getAttribute("data-view") === "worship",
+      { timeout: 5_000 },
+    );
+
+    // URL should be /ui/operator (no subpath)
+    const url = new URL(page.url());
+    expect(url.pathname).toBe("/ui/operator");
+  });
+
+  test("browser back button returns to previous view and URL", async ({
+    page,
+  }) => {
+    await page.goto(`${baseURL}/ui/operator`);
+    await page.waitForSelector('[data-role="library-list"]', {
+      timeout: 30_000,
+    });
+
+    // Navigate to bible via tab click
+    const bibleButton = page.locator(
+      '[data-role="view-toggle"][data-view="bible"]',
+    );
+    await bibleButton.click();
+    await page.waitForFunction(
+      () => document.body.getAttribute("data-view") === "bible",
+      { timeout: 5_000 },
+    );
+    expect(page.url()).toContain("/ui/operator/bible");
+
+    // Press browser back
+    await page.goBack();
+
+    // Should return to worship view
+    await page.waitForFunction(
+      () => document.body.getAttribute("data-view") === "worship",
+      { timeout: 5_000 },
+    );
+    const url = new URL(page.url());
+    expect(url.pathname).toBe("/ui/operator");
+  });
+
+  test("/ui/bible redirects to /ui/operator/bible", async ({ page }) => {
+    // Navigate to legacy /ui/bible URL
+    const response = await page.goto(`${baseURL}/ui/bible`);
+
+    // Should end up at /ui/operator/bible after redirect
+    expect(page.url()).toContain("/ui/operator/bible");
+
+    // Bible view should be active (WASM loaded)
+    await page.waitForSelector('[data-wasm-ready="true"]', { timeout: 30_000 });
+    await page.waitForFunction(
+      () => document.body.getAttribute("data-view") === "bible",
+      { timeout: 5_000 },
+    );
+  });
+
+  test("direct navigation to /ui/operator opens default worship view", async ({
+    page,
+  }) => {
+    // Clear session storage to ensure no saved view
+    await page.goto(`${baseURL}/ui/operator`);
+    await page.waitForSelector('[data-wasm-ready="true"]', { timeout: 30_000 });
+    await page.evaluate(() => sessionStorage.clear());
+
+    // Reload to get fresh state
+    await page.goto(`${baseURL}/ui/operator`);
+    await page.waitForSelector('[data-wasm-ready="true"]', { timeout: 30_000 });
+
+    // Should default to worship view
+    await page.waitForFunction(
+      () => document.body.getAttribute("data-view") === "worship",
+      { timeout: 5_000 },
+    );
+    const url = new URL(page.url());
+    expect(url.pathname).toBe("/ui/operator");
+  });
 });
