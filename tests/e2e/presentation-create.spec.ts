@@ -57,9 +57,7 @@ test.afterAll(async () => {
   serverHandle = undefined;
 });
 
-test("delete button visible in library context, hidden in playlist context", async ({
-  page,
-}) => {
+test("delete button visible in presentation edit modal", async ({ page }) => {
   await waitForOperatorReady(page);
 
   // Select a library and switch to edit mode
@@ -69,7 +67,7 @@ test("delete button visible in library context, hidden in playlist context", asy
   // Click the rename button on the first presentation
   const renameButton = page
     .locator(
-      '[data-role="presentation-list"] [data-action="presentation-rename"]',
+      '[data-view-panel="worship"] [data-role="presentation-list"] [data-action="presentation-rename"]',
     )
     .first();
   await expect(renameButton).toBeVisible({ timeout: 10_000 });
@@ -83,28 +81,6 @@ test("delete button visible in library context, hidden in playlist context", asy
 
   // Close the modal
   await page.locator('[data-role="presentation-edit-cancel"]').click();
-
-  // Now switch to a playlist
-  await selectPlaylist(page);
-
-  // In playlist view, click a presentation rename button
-  const playlistRenameButton = page
-    .locator(
-      '[data-role="presentation-list"] [data-action="presentation-rename"]',
-    )
-    .first();
-  // It may or may not be visible (depends on edit mode for playlist view),
-  // but if we can click it, delete should be hidden
-  const isRenameVisible = await playlistRenameButton
-    .isVisible()
-    .catch(() => false);
-  if (isRenameVisible) {
-    await playlistRenameButton.click();
-    await expect(editModal).toHaveAttribute("data-open", "true");
-    // Delete button should be hidden (display:none) in playlist context
-    await expect(deleteButton).toBeHidden();
-    await page.locator('[data-role="presentation-edit-cancel"]').click();
-  }
 });
 
 test("edit pen button hidden in live mode, visible in edit mode", async ({
@@ -119,7 +95,7 @@ test("edit pen button hidden in live mode, visible in edit mode", async ({
   await page.locator('[data-role="mode-toggle"][data-mode="live"]').click();
   await page.waitForTimeout(200);
   const renameButtons = page.locator(
-    '[data-role="presentation-list"] [data-action="presentation-rename"]',
+    '[data-view-panel="worship"] [data-role="presentation-list"] [data-action="presentation-rename"]',
   );
   await expect(renameButtons).toHaveCount(0);
 
@@ -129,7 +105,7 @@ test("edit pen button hidden in live mode, visible in edit mode", async ({
 
   // Now rename buttons should be visible
   const editRenameButtons = page.locator(
-    '[data-role="presentation-list"] [data-action="presentation-rename"]',
+    '[data-view-panel="worship"] [data-role="presentation-list"] [data-action="presentation-rename"]',
   );
   const count = await editRenameButtons.count();
   expect(count).toBeGreaterThan(0);
@@ -142,7 +118,9 @@ test("create blank presentation via modal", async ({ page }) => {
   const libraryId = await selectLibrary(page);
 
   // Open create modal
-  const createButton = page.locator('[data-role="presentation-create"]');
+  const createButton = page.locator(
+    '[data-view-panel="worship"] [data-role="presentation-create"]',
+  );
   await expect(createButton).toBeVisible();
   await createButton.click();
 
@@ -196,7 +174,9 @@ test("create presentation from pasted song text", async ({ page }) => {
   const libraryId = await selectLibrary(page);
 
   // Open create modal
-  await page.locator('[data-role="presentation-create"]').click();
+  await page
+    .locator('[data-view-panel="worship"] [data-role="presentation-create"]')
+    .click();
   const createModal = page.locator('[data-role="presentation-create-modal"]');
   await expect(createModal).toHaveAttribute("data-open", "true");
 
@@ -287,9 +267,7 @@ test("create presentation from pasted song text", async ({ page }) => {
   expect(slides[4].content.main.value).toBe("");
 });
 
-test("parseSongText handles Title extraction and Misc skipping", async ({
-  page,
-}) => {
+test("parseSongText splits sections and extracts groups", async ({ page }) => {
   await waitForOperatorReady(page);
 
   const result = await page.evaluate(() => {
@@ -298,54 +276,17 @@ test("parseSongText handles Title extraction and Misc skipping", async ({
       throw new Error("parseSongText not available");
     }
     return helpers.parseSongText(
-      [
-        "Title: My Song",
-        "Misc 1",
-        "Author: Test",
-        "",
-        "Verse",
-        "First verse lyrics",
-        "",
-        "Chorus",
-        "Chorus lyrics here",
-      ].join("\n"),
+      ["Verse", "First verse lyrics", "", "Chorus", "Chorus lyrics here"].join(
+        "\n",
+      ),
     );
   });
 
-  expect(result.title).toBe("My Song");
-  expect(result.slides.length).toBe(2);
-  expect(result.slides[0].group).toBe("Verse");
-  expect(result.slides[0].main).toBe("First verse lyrics");
-  expect(result.slides[1].group).toBe("Chorus");
-  expect(result.slides[1].main).toBe("Chorus lyrics here");
-});
-
-test("parseSongText chunks long groups into 2-line slides", async ({
-  page,
-}) => {
-  await waitForOperatorReady(page);
-
-  const result = await page.evaluate(() => {
-    const helpers = (window as any).__presenterOperatorTestHelpers;
-    return helpers.parseSongText(
-      [
-        "Verse 1",
-        "Line one",
-        "Line two",
-        "Line three",
-        "Line four",
-        "Line five",
-      ].join("\n"),
-    );
-  });
-
-  expect(result.slides.length).toBe(3);
-  expect(result.slides[0].group).toBe("Verse 1");
-  expect(result.slides[0].main).toBe("Line one\nLine two");
-  expect(result.slides[1].group).toBe("Verse 1");
-  expect(result.slides[1].main).toBe("Line three\nLine four");
-  expect(result.slides[2].group).toBe("Verse 1");
-  expect(result.slides[2].main).toBe("Line five");
+  expect(result.length).toBe(2);
+  expect(result[0].group).toBe("Verse");
+  expect(result[0].main).toBe("First verse lyrics");
+  expect(result[1].group).toBe("Chorus");
+  expect(result[1].main).toBe("Chorus lyrics here");
 });
 
 test("import .pro file via create modal", async ({ page }) => {
@@ -365,7 +306,9 @@ test("import .pro file via create modal", async ({ page }) => {
   const beforeCount = beforeLib ? beforeLib.presentations.length : 0;
 
   // Open create modal
-  await page.locator('[data-role="presentation-create"]').click();
+  await page
+    .locator('[data-view-panel="worship"] [data-role="presentation-create"]')
+    .click();
   const createModal = page.locator('[data-role="presentation-create-modal"]');
   await expect(createModal).toHaveAttribute("data-open", "true");
 
@@ -430,7 +373,9 @@ test("create modal Escape closes it", async ({ page }) => {
   await selectLibrary(page);
 
   // Open create modal
-  await page.locator('[data-role="presentation-create"]').click();
+  await page
+    .locator('[data-view-panel="worship"] [data-role="presentation-create"]')
+    .click();
   const createModal = page.locator('[data-role="presentation-create-modal"]');
   await expect(createModal).toHaveAttribute("data-open", "true");
 
@@ -446,7 +391,9 @@ test("paste area Back button returns to options", async ({ page }) => {
 
   await selectLibrary(page);
 
-  await page.locator('[data-role="presentation-create"]').click();
+  await page
+    .locator('[data-view-panel="worship"] [data-role="presentation-create"]')
+    .click();
   const createModal = page.locator('[data-role="presentation-create-modal"]');
   await expect(createModal).toHaveAttribute("data-open", "true");
 

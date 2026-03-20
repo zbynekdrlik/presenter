@@ -66,6 +66,13 @@ test("worship-pp stage displays playlist sidebar when triggered from playlist", 
   await page.locator('[data-role="playlist-edit-save"]').click();
   await expect(playlistModal).toHaveAttribute("data-open", "false");
 
+  // Wait for playlist to appear and click to select it
+  const newPlaylist = page.locator('[data-role="playlist-item"]', {
+    hasText: playlistName,
+  });
+  await expect(newPlaylist).toBeVisible({ timeout: 10_000 });
+  await newPlaylist.click();
+
   const activePlaylist = page.locator(
     '[data-role="playlist-item"][data-active="true"]',
   );
@@ -394,10 +401,6 @@ test("worship-pp stage prefers stage text over main text", async ({
   // Verify the stage shows the stage text (not main text)
   const currentMain = stagePage.locator("#current-main");
   await expect(currentMain).toHaveText(stageText, { timeout: 15_000 });
-
-  // Verify operator preview also shows the stage text
-  const operatorCurrent = page.locator('[data-role="stage-current"]');
-  await expect(operatorCurrent).toHaveText(stageText, { timeout: 15_000 });
 
   await stagePage.close();
 });

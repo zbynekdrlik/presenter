@@ -91,7 +91,9 @@ test("worship-snv stage applies consistent colors to group badges", async ({
   await waitForOperatorReady(page);
 
   // Create a presentation with slides that have different groups
-  await page.locator('[data-role="presentation-create"]').click();
+  await page
+    .locator('[data-view-panel="worship"] [data-role="presentation-create"]')
+    .click();
   const modal = page.locator('[data-role="presentation-create-modal"]');
   await expect(modal).toHaveAttribute("data-open", "true");
 
@@ -281,7 +283,9 @@ test("worship-pp stage applies consistent colors to group badges", async ({
   await waitForOperatorReady(page);
 
   // Create a presentation with slides that have different groups
-  await page.locator('[data-role="presentation-create"]').click();
+  await page
+    .locator('[data-view-panel="worship"] [data-role="presentation-create"]')
+    .click();
   const modal = page.locator('[data-role="presentation-create-modal"]');
   await expect(modal).toHaveAttribute("data-open", "true");
 
@@ -429,7 +433,9 @@ test("group color is cleared when group is empty", async ({
   await waitForOperatorReady(page);
 
   // Create presentation
-  await page.locator('[data-role="presentation-create"]').click();
+  await page
+    .locator('[data-view-panel="worship"] [data-role="presentation-create"]')
+    .click();
   const modal = page.locator('[data-role="presentation-create-modal"]');
   await expect(modal).toHaveAttribute("data-open", "true");
 
