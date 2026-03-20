@@ -142,19 +142,6 @@ test("worship-pp stage displays playlist sidebar when triggered from playlist", 
     .locator('[data-role="presentation-item"]');
   await expect(playlistItems).toHaveCount(3, { timeout: 15_000 });
 
-  // Get the playlist ID from the API
-  const playlistsResponse = await page.request.get(
-    new URL("/playlists", baseURL).toString(),
-  );
-  const playlists: Array<{
-    id: string;
-    name: string;
-    entries: Array<{ kind: { Presentation?: { presentationId: string } } }>;
-  }> = await playlistsResponse.json();
-  const createdPlaylist = playlists.find((p) => p.name === playlistName);
-  expect(createdPlaylist).toBeTruthy();
-  const playlistId = createdPlaylist!.id;
-
   // Get first presentation's slide for triggering via API
   const firstPresId = sourceLibrary.presentations[0].id;
   const presResponse = await page.request.get(
