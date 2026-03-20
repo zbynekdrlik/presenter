@@ -11,13 +11,12 @@ This directory contains Architecture Decision Records (ADRs) documenting signifi
 
 ## ADR Index
 
-| Number | Title | Status | Date |
-|--------|-------|--------|------|
-| [0001](0001-architecture-stack.md) | Backend Architecture Stack | Accepted | 2025-09-27 |
-| [0002](0002-bible-sources.md) | Bible Source Pipeline | Accepted | 2025-09-27 |
-| [0003](0003-dockerized-demos.md) | Dockerized Demo Environments | Accepted | 2025-10-01 |
+| Number                                            | Title                           | Status   | Date       |
+| ------------------------------------------------- | ------------------------------- | -------- | ---------- |
+| [0001](0001-architecture-stack.md)                | Backend Architecture Stack      | Accepted | 2025-09-27 |
+| [0002](0002-bible-sources.md)                     | Bible Source Pipeline           | Accepted | 2025-09-27 |
 | [0004](0004-resolume-settings-and-integration.md) | Resolume Settings & Integration | Proposed | 2025-09-30 |
-| [0005](0005-stage-heartbeat.md) | Stage Display Heartbeat | Accepted | 2025-10-01 |
+| [0005](0005-stage-heartbeat.md)                   | Stage Display Heartbeat         | Accepted | 2025-10-01 |
 
 ## Creating New ADRs
 

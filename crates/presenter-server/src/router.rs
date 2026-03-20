@@ -111,9 +111,6 @@ pub fn build_router(state: AppState) -> Router {
             get(wasm_ui::wasm_ui_shell_with_path),
         )
         .route("/ui-pkg/{*path}", get(wasm_ui::wasm_ui_asset))
-        // Legacy JS operator UI
-        .route("/legacy", get(ui_routes::operator_ui))
-        .route("/legacy/{view}", get(ui_routes::operator_ui_with_view))
         .route("/ui/tablet", get(ui_routes::tablet_ui))
         .route("/ui/tablet/manifest.json", get(tablet_pwa::tablet_manifest))
         .route("/ui/tablet/icon-192.png", get(tablet_pwa::icon_192))

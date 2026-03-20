@@ -1,7 +1,4 @@
 //! Routes for serving the WASM-based UI at `/ui/operator`.
-//!
-//! The WASM UI is the default operator interface. The legacy JS operator
-//! is available at `/legacy` for fallback.
 
 use axum::{
     extract::Path,
