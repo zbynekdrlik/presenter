@@ -114,13 +114,13 @@ test("worship-pp stage displays playlist sidebar when triggered from playlist", 
   const playlistId = targetPlaylist!.id;
 
   const presIds = sourceLibrary.presentations.slice(0, 3).map((p) => p.id);
-  const entries = presIds.map((id) => ({
+  const playlistEntries = presIds.map((id) => ({
     type: "presentation",
     presentation_id: id,
   }));
   const replaceResp = await page.request.put(
     new URL(`/playlists/${playlistId}/entries`, baseURL).toString(),
-    { data: { entries } },
+    { data: { entries: playlistEntries } },
   );
   expect(replaceResp.ok()).toBeTruthy();
 
