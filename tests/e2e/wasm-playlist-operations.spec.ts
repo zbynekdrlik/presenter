@@ -290,7 +290,9 @@ test.describe("WASM Operator Playlist Operations", () => {
       await dialog.accept("Test Separator");
     });
 
-    const addButton = page.locator('[data-role="presentation-create"]');
+    const addButton = page.locator(
+      '[data-view-panel="worship"] [data-role="presentation-create"]',
+    );
     await addButton.click();
 
     // Wait for separator to appear

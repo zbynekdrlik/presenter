@@ -1615,13 +1615,8 @@ async fn bible_clear_endpoint_resets_state() {
 }
 
 #[tokio::test]
-async fn bible_ui_endpoint_renders_document() {
+async fn bible_ui_endpoint_redirects_to_operator_bible() {
     let state = AppState::in_memory().await.unwrap();
-    state
-        .repository()
-        .replace_bible_translation_passages(&sample_ingestion_batch())
-        .await
-        .unwrap();
     let app = build_router(state);
 
     let response = app
@@ -1633,12 +1628,13 @@ async fn bible_ui_endpoint_renders_document() {
         )
         .await
         .unwrap();
-    assert_eq!(response.status(), StatusCode::OK);
-    let bytes = axum::body::to_bytes(response.into_body(), usize::MAX)
-        .await
+    assert_eq!(response.status(), StatusCode::PERMANENT_REDIRECT);
+    let location = response
+        .headers()
+        .get("location")
+        .and_then(|v| v.to_str().ok())
         .unwrap();
-    let body = String::from_utf8(bytes.to_vec()).unwrap();
-    assert!(body.contains("Presenter Bible"));
+    assert_eq!(location, "/ui/operator/bible");
 }
 
 fn sample_ingestion_batch() -> presenter_core::bible::BibleIngestionBatch {

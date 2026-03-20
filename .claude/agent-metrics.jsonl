@@ -110,3 +110,42 @@
 {"timestamp": "2026-03-16T13:53:24.640711+00:00", "files_changed": 1, "commit": "4d87506 docs: fix runner host IP in CLAUDE.md (10.77.8.134, not 10.77.8.189)", "duration_hint": "completed"}
 {"timestamp": "2026-03-16T13:55:13.582767+00:00", "files_changed": 1, "commit": "4d87506 docs: fix runner host IP in CLAUDE.md (10.77.8.134, not 10.77.8.189)", "duration_hint": "completed"}
 {"timestamp": "2026-03-16T14:06:22.560334+00:00", "files_changed": 1, "commit": "4d87506 docs: fix runner host IP in CLAUDE.md (10.77.8.134, not 10.77.8.189)", "duration_hint": "completed"}
+{"timestamp": "2026-03-16T18:06:14.859183+00:00", "files_changed": 0, "commit": "5b4a5bb fix(e2e): update URL assertions in operator-bible tests for /legacy path", "duration_hint": "completed"}
+{"timestamp": "2026-03-16T18:06:20.947677+00:00", "files_changed": 1, "commit": "5b4a5bb fix(e2e): update URL assertions in operator-bible tests for /legacy path", "duration_hint": "completed"}
+{"timestamp": "2026-03-16T18:10:56.739259+00:00", "files_changed": 1, "commit": "5b4a5bb fix(e2e): update URL assertions in operator-bible tests for /legacy path", "duration_hint": "completed"}
+{"timestamp": "2026-03-16T22:31:44.914086+00:00", "files_changed": 1, "commit": "ee539d2 fix(e2e): scope Bible test selectors to bible panel to avoid conflicts", "duration_hint": "completed"}
+{"timestamp": "2026-03-16T22:31:53.818904+00:00", "files_changed": 1, "commit": "ee539d2 fix(e2e): scope Bible test selectors to bible panel to avoid conflicts", "duration_hint": "completed"}
+{"timestamp": "2026-03-17T08:09:55.602826+00:00", "files_changed": 1, "commit": "8f4c49f fix(e2e): scope all ambiguous selectors to worship panel", "duration_hint": "completed"}
+{"timestamp": "2026-03-17T08:29:07.698312+00:00", "files_changed": 1, "commit": "8f4c49f fix(e2e): scope all ambiguous selectors to worship panel", "duration_hint": "completed"}
+{"timestamp": "2026-03-17T08:38:21.759166+00:00", "files_changed": 1, "commit": "4eedda8 fix(bible): target panel container for 2-column grid instead of shared main", "duration_hint": "completed"}
+{"timestamp": "2026-03-17T08:39:27.723071+00:00", "files_changed": 1, "commit": "4eedda8 fix(bible): target panel container for 2-column grid instead of shared main", "duration_hint": "completed"}
+{"timestamp": "2026-03-17T08:40:06.371209+00:00", "files_changed": 1, "commit": "4eedda8 fix(bible): target panel container for 2-column grid instead of shared main", "duration_hint": "completed"}
+{"timestamp": "2026-03-17T09:40:16.305688+00:00", "files_changed": 1, "commit": "4eedda8 fix(bible): target panel container for 2-column grid instead of shared main", "duration_hint": "completed"}
+{"timestamp": "2026-03-17T09:40:20.808529+00:00", "files_changed": 1, "commit": "4eedda8 fix(bible): target panel container for 2-column grid instead of shared main", "duration_hint": "completed"}
+{"timestamp": "2026-03-17T09:57:22.315142+00:00", "files_changed": 1, "commit": "854ac8c test(e2e): add layout assertions for Bible two-column grid, strengthen CLAUDE.md testing policy", "duration_hint": "completed"}
+{"timestamp": "2026-03-17T10:43:13.287513+00:00", "files_changed": 1, "commit": "854ac8c test(e2e): add layout assertions for Bible two-column grid, strengthen CLAUDE.md testing policy", "duration_hint": "completed"}
+{"timestamp": "2026-03-17T11:09:13.461779+00:00", "files_changed": 1, "commit": "25f90cc fix(e2e): use biblePanel directly as container for layout assertion", "duration_hint": "completed"}
+{"timestamp": "2026-03-17T12:08:13.834353+00:00", "files_changed": 1, "commit": "ec5aeed fix(e2e): wait for operator--bible class before checking grid layout", "duration_hint": "completed"}
+{"timestamp": "2026-03-17T12:08:17.223015+00:00", "files_changed": 1, "commit": "ec5aeed fix(e2e): wait for operator--bible class before checking grid layout", "duration_hint": "completed"}
+{"timestamp": "2026-03-17T13:01:38.422730+00:00", "files_changed": 1, "commit": "847058d fix(bible): include bible.css in Trunk WASM build", "duration_hint": "completed"}
+{"timestamp": "2026-03-17T13:52:41.937628+00:00", "files_changed": 1, "commit": "847058d fix(bible): include bible.css in Trunk WASM build", "duration_hint": "completed"}
+{"timestamp": "2026-03-17T14:06:15.493747+00:00", "files_changed": 1, "commit": "847058d fix(bible): include bible.css in Trunk WASM build", "duration_hint": "completed"}
+{"timestamp": "2026-03-17T18:57:00.734116+00:00", "files_changed": 1, "commit": "c3d92f5 fix(bible): match book list HTML structure with legacy for proper styling", "duration_hint": "completed"}
+{"timestamp": "2026-03-17T18:57:06.057463+00:00", "files_changed": 1, "commit": "c3d92f5 fix(bible): match book list HTML structure with legacy for proper styling", "duration_hint": "completed"}
+{"timestamp": "2026-03-17T19:46:58.539927+00:00", "files_changed": 1, "commit": "c3d92f5 fix(bible): match book list HTML structure with legacy for proper styling", "duration_hint": "completed"}
+{"timestamp": "2026-03-17T20:17:35.975692+00:00", "files_changed": 1, "commit": "c3d92f5 fix(bible): match book list HTML structure with legacy for proper styling", "duration_hint": "completed"}
+{"timestamp": "2026-03-18T07:08:42.040614+00:00", "files_changed": 1, "commit": "9df4a04 fix(bible): fix closure move error for is_selected in slide card", "duration_hint": "completed"}
+{"timestamp": "2026-03-18T07:08:47.149272+00:00", "files_changed": 1, "commit": "9df4a04 fix(bible): fix closure move error for is_selected in slide card", "duration_hint": "completed"}
+{"timestamp": "2026-03-18T09:10:18.950096+00:00", "files_changed": 1, "commit": "4693a79 refactor(bible): extract search/history/clear components to bible_controls.rs", "duration_hint": "completed"}
+{"timestamp": "2026-03-18T09:10:25.224497+00:00", "files_changed": 1, "commit": "4693a79 refactor(bible): extract search/history/clear components to bible_controls.rs", "duration_hint": "completed"}
+{"timestamp": "2026-03-18T12:45:43.329147+00:00", "files_changed": 1, "commit": "4693a79 refactor(bible): extract search/history/clear components to bible_controls.rs", "duration_hint": "completed"}
+{"timestamp": "2026-03-18T15:08:35.807806+00:00", "files_changed": 1, "commit": "6a02ed8 feat(stage): add Bible overlay to stage display with WS event handlers", "duration_hint": "completed"}
+{"timestamp": "2026-03-18T15:08:41.890589+00:00", "files_changed": 1, "commit": "6a02ed8 feat(stage): add Bible overlay to stage display with WS event handlers", "duration_hint": "completed"}
+{"timestamp": "2026-03-18T16:25:06.377784+00:00", "files_changed": 1, "commit": "d7f2901 fix(bible): fix WASM trigger response and strengthen E2E test assertions", "duration_hint": "completed"}
+{"timestamp": "2026-03-18T16:25:10.679217+00:00", "files_changed": 1, "commit": "d7f2901 fix(bible): fix WASM trigger response and strengthen E2E test assertions", "duration_hint": "completed"}
+{"timestamp": "2026-03-18T22:31:16.633464+00:00", "files_changed": 1, "commit": "a021eee fix(e2e): wait for secondary translation options to populate", "duration_hint": "completed"}
+{"timestamp": "2026-03-18T22:31:22.176284+00:00", "files_changed": 1, "commit": "a021eee fix(e2e): wait for secondary translation options to populate", "duration_hint": "completed"}
+{"timestamp": "2026-03-19T07:50:24.689148+00:00", "files_changed": 1, "commit": "a021eee fix(e2e): wait for secondary translation options to populate", "duration_hint": "completed"}
+{"timestamp": "2026-03-19T07:54:11.176624+00:00", "files_changed": 1, "commit": "a021eee fix(e2e): wait for secondary translation options to populate", "duration_hint": "completed"}
+{"timestamp": "2026-03-19T12:29:34.061533+00:00", "files_changed": 1, "commit": "58af03f feat(ui): unify operator views with URL-based navigation", "duration_hint": "completed"}
+{"timestamp": "2026-03-19T16:17:44.135371+00:00", "files_changed": 1, "commit": "daef8a8 ci: trigger fresh pipeline run", "duration_hint": "completed"}

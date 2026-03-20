@@ -4,14 +4,6 @@ use crate::components::stage_preview::StagePreview;
 use crate::state::operator::OperatorState;
 use crate::state::AppContext;
 
-#[derive(serde::Deserialize)]
-struct HealthzResponse {
-    #[serde(default)]
-    version: String,
-    #[serde(default)]
-    channel: String,
-}
-
 #[component]
 pub fn Header() -> impl IntoView {
     let ctx = use_context::<AppContext>().expect("AppContext");
@@ -34,18 +26,23 @@ pub fn Header() -> impl IntoView {
         ctx.search_results.set(Vec::new());
     };
 
-    // View toggle
+    // View toggle — updates URL pathname so browser back/forward works
     let set_view = move |view: &str| {
         let v = view.to_string();
         ctx.view.set(v.clone());
         crate::state::session::set("view", &v);
-        // Push browser history state for back/forward navigation
+        // Build URL path: "worship" → /ui/operator, others → /ui/operator/{view}
+        let url = if v == "worship" {
+            "/ui/operator".to_string()
+        } else {
+            format!("/ui/operator/{v}")
+        };
         let window = crate::utils::window::window();
         let state = js_sys::Object::new();
         let _ = js_sys::Reflect::set(&state, &"view".into(), &v.clone().into());
         let _ = window
             .history()
-            .and_then(|h| h.push_state_with_url(&state, "", None));
+            .and_then(|h| h.push_state_with_url(&state, "", Some(&url)));
     };
 
     // Mode toggle
@@ -74,7 +71,9 @@ pub fn Header() -> impl IntoView {
     let version_text = RwSignal::new(String::new());
     {
         leptos::task::spawn_local(async move {
-            if let Ok(health) = crate::api::get_json::<HealthzResponse>("/healthz").await {
+            if let Ok(health) =
+                crate::api::get_json::<crate::api::HealthzResponse>("/healthz").await
+            {
                 let text = if health.channel.is_empty() || health.channel == "release" {
                     format!("v{}", health.version)
                 } else {

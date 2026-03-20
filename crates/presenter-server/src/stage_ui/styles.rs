@@ -38,4 +38,14 @@ body.stage[data-live-state="error"] .stage__box--connection-status { color: #f87
 /* Status latency */
 .stage__status-latency { font-variant-numeric: tabular-nums; opacity: 0.7; }
 .stage__status-latency[data-visible="false"] { display: none; }
+/* Bible overlay */
+.stage__bible-overlay { position: absolute; inset: 0; display: flex; flex-direction: column; align-items: center; justify-content: center; background: rgba(0,0,0,0.92); z-index: 100; padding: 4vh 4vw; gap: 2vh; transition: opacity 0.3s ease; }
+.stage__bible-overlay[data-visible="false"] { display: none; }
+.stage__bible-main { display: flex; flex-direction: column; align-items: center; gap: 1.5vh; max-width: 90%; }
+.stage__bible-text { font-size: clamp(1.5rem, 4vw, 5rem); font-weight: 700; color: #f8fafc; text-align: center; line-height: 1.3; margin: 0; white-space: pre-wrap; }
+.stage__bible-reference { font-size: clamp(1rem, 2vw, 2.5rem); font-weight: 600; color: #38bdf8; text-align: center; margin: 0; font-style: italic; }
+.stage__bible-secondary { display: flex; flex-direction: column; align-items: center; gap: 1vh; max-width: 90%; margin-top: 1vh; padding-top: 2vh; border-top: 1px solid rgba(255,255,255,0.15); }
+.stage__bible-secondary[data-visible="false"] { display: none; }
+.stage__bible-secondary-text { font-size: clamp(1.2rem, 3vw, 3.5rem); font-weight: 500; color: #cbd5e1; text-align: center; line-height: 1.3; margin: 0; white-space: pre-wrap; font-style: italic; }
+.stage__bible-secondary-reference { font-size: clamp(0.8rem, 1.5vw, 2rem); font-weight: 500; color: #60a5fa; text-align: center; margin: 0; font-style: italic; }
 "#;

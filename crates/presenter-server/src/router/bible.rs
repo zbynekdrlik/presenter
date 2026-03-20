@@ -4,7 +4,6 @@ use anyhow::Error as AnyhowError;
 use axum::{
     extract::{Query, State},
     http::StatusCode,
-    response::Html,
     Json,
 };
 use chrono::Utc;
@@ -209,6 +208,16 @@ pub(super) async fn get_active_bible_broadcast(
     Ok(Json(active))
 }
 
+/// Get the active Bible slide output (single-source-of-truth format).
+/// Used by the stage page to load the current Bible display on connect.
+#[instrument(skip_all)]
+pub(super) async fn get_active_bible_slide_output(
+    State(state): State<AppState>,
+) -> Result<Json<Option<presenter_core::BibleSlideOutput>>, AppError> {
+    let output = state.active_bible_slide_output().await;
+    Ok(Json(output))
+}
+
 #[derive(Debug, serde::Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub(super) struct BibleTriggerRequest {
@@ -376,11 +385,7 @@ pub(super) async fn update_bible_preferences(
     Ok(StatusCode::NO_CONTENT)
 }
 
-#[instrument(skip_all)]
-pub(super) async fn bible_ui(State(state): State<AppState>) -> Result<Html<String>, AppError> {
-    let html = crate::ui::render_bible_ui(&state).await?;
-    Ok(html)
-}
+// bible_ui handler removed — /ui/bible now redirects to /ui/operator/bible
 
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]

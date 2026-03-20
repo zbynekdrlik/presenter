@@ -1,312 +1,956 @@
 use leptos::prelude::*;
 use wasm_bindgen::JsCast;
 
-use crate::state::bible::BibleState;
+use crate::api::bible;
+use crate::state::bible::{BibleState, LoadedPassage, SelectedBook};
 use crate::state::AppContext;
-use crate::ws;
 
-/// Bible page - search and broadcast Bible passages.
+use super::bible_controls::{BibleSearch, ClearBroadcastButton, LoadedPassagesHistory};
+use super::bible_slides::BibleSlidesColumn;
+
+/// Bible page — 2-column layout matching the legacy Bible UI.
+/// Rendered inside the operator shell's `<section data-view-panel="bible">`.
 #[component]
 pub fn BiblePage() -> impl IntoView {
     let ctx = use_context::<AppContext>().expect("AppContext");
-    let bible_state = BibleState::new();
-    provide_context(bible_state.clone());
+    let bs = BibleState::new();
+    provide_context(bs.clone());
 
-    let (_ws_state, _last_event) = ws::use_live_websocket();
-
-    // Load translations on mount
-    let translations = bible_state.translations;
-    let selected_translation = bible_state.selected_translation;
-    leptos::task::spawn_local(async move {
-        if let Ok(trans) = crate::api::bible::list_translations().await {
-            // Set default translation if available
-            if let Some(first) = trans.first() {
-                if selected_translation.get_untracked().is_none() {
-                    selected_translation.set(Some(first.code.clone()));
+    // Load translations + preferences on mount
+    {
+        let translations = bs.translations;
+        let selected_translation = bs.selected_translation;
+        let secondary_translation = bs.secondary_translation;
+        let character_limit = bs.character_limit;
+        leptos::task::spawn_local(async move {
+            // Load preferences first to set saved translation choices
+            if let Ok(prefs) = bible::get_preferences().await {
+                if let Some(ref main) = prefs.main_translation {
+                    selected_translation.set(Some(main.clone()));
                 }
+                if let Some(ref sec) = prefs.secondary_translation {
+                    secondary_translation.set(Some(sec.clone()));
+                }
+                character_limit.set(prefs.character_limit);
             }
-            translations.set(trans);
-        }
-    });
+            if let Ok(trans) = bible::list_translations().await {
+                // Set default if preferences didn't set one
+                if selected_translation.get_untracked().is_none() {
+                    if let Some(first) = trans.first() {
+                        selected_translation.set(Some(first.code.clone()));
+                    }
+                }
+                translations.set(trans);
+            }
+        });
+    }
 
     // Load current broadcast state
-    let active_broadcast = ctx.active_bible_broadcast;
-    leptos::task::spawn_local(async move {
-        if let Ok(broadcast) = crate::api::bible::get_broadcast().await {
-            active_broadcast.set(broadcast);
-        }
-    });
+    {
+        let active_broadcast = ctx.active_bible_broadcast;
+        leptos::task::spawn_local(async move {
+            if let Ok(broadcast) = bible::get_broadcast().await {
+                active_broadcast.set(broadcast);
+            }
+        });
+    }
+
+    // Load presentations
+    {
+        let presentations = bs.presentations;
+        leptos::task::spawn_local(async move {
+            if let Ok(pres) = bible::list_presentations().await {
+                presentations.set(pres);
+            }
+        });
+    }
+
+    // Load books when translation changes
+    {
+        let selected_translation = bs.selected_translation;
+        let books = bs.books;
+        let selected_book = bs.selected_book;
+        Effect::new(move || {
+            let trans = selected_translation.get();
+            if let Some(code) = trans {
+                let books = books;
+                let selected_book = selected_book;
+                leptos::task::spawn_local(async move {
+                    if let Ok(book_list) = bible::list_books(&code).await {
+                        books.set(book_list);
+                        selected_book.set(None);
+                    }
+                });
+            }
+        });
+    }
+
+    // Sync data-bible-tab on body for CSS
+    {
+        let bible_tab = bs.bible_tab;
+        let view = ctx.view;
+        Effect::new(move || {
+            let tab = bible_tab.get();
+            let v = view.get();
+            if v == "bible" {
+                if let Some(body) = crate::utils::window::document_body() {
+                    let _ = body.set_attribute("data-bible-tab", &tab);
+                }
+            }
+        });
+    }
 
     view! {
-        <div data-role="bible-page" class="bible-layout">
-            <header data-role="bible-header" class="bible-header">
-                <h1>"Bible"</h1>
-                <TranslationSelector bible_state=bible_state.clone() />
-            </header>
-            <main data-role="bible-main" class="bible-main">
-                <BibleSearch bible_state=bible_state.clone() />
-                <BibleResults bible_state=bible_state.clone() />
-                <ActiveBroadcast />
-            </main>
+        <aside class="operator__catalog operator__catalog--bible" data-role="catalog">
+            <div class="operator__catalog-top">
+                <BibleTabNav />
+                <BibleLiveTab />
+                <BiblePreparedTab />
+                <BibleSettingsTab />
+            </div>
+        </aside>
+        <BibleSlidesColumn />
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Tab navigation
+// ---------------------------------------------------------------------------
+
+#[component]
+fn BibleTabNav() -> impl IntoView {
+    let bs = use_context::<BibleState>().expect("BibleState");
+    let bible_tab = bs.bible_tab;
+
+    let make_tab_click = move |tab: &'static str| {
+        move |_| {
+            bible_tab.set(tab.to_string());
+        }
+    };
+
+    view! {
+        <nav class="bible__tab-nav" data-role="bible-tab-nav">
+            <button
+                type="button"
+                data-role="bible-tab"
+                data-tab="live"
+                data-active=move || if bible_tab.get() == "live" { "true" } else { "false" }
+                on:click=make_tab_click("live")
+            >"Live"</button>
+            <button
+                type="button"
+                data-role="bible-tab"
+                data-tab="prepared"
+                data-active=move || if bible_tab.get() == "prepared" { "true" } else { "false" }
+                on:click=make_tab_click("prepared")
+            >"Prepared"</button>
+            <button
+                type="button"
+                data-role="bible-tab"
+                data-tab="settings"
+                data-active=move || if bible_tab.get() == "settings" { "true" } else { "false" }
+                on:click=make_tab_click("settings")
+            >"Settings"</button>
+        </nav>
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Live tab
+// ---------------------------------------------------------------------------
+
+#[component]
+fn BibleLiveTab() -> impl IntoView {
+    let bs = use_context::<BibleState>().expect("BibleState");
+    let bible_tab = bs.bible_tab;
+
+    view! {
+        <div
+            class="bible__tab-panel"
+            data-bible-panel="live"
+            data-visible=move || if bible_tab.get() == "live" { "true" } else { "false" }
+        >
+            <TranslationSelectors />
+            <BibleSearch />
+            <BookFilter />
+            <BookList />
+            <ReferenceInputs />
+            <LoadButton />
+            <ClearBroadcastButton />
+            <LoadedPassagesHistory />
+            <hr class="operator__divider" />
+            <SelectionControls />
         </div>
     }
 }
 
-/// Translation dropdown selector
 #[component]
-fn TranslationSelector(bible_state: BibleState) -> impl IntoView {
-    let translations = bible_state.translations;
-    let selected_translation = bible_state.selected_translation;
+fn TranslationSelectors() -> impl IntoView {
+    let bs = use_context::<BibleState>().expect("BibleState");
+    let translations = bs.translations;
+    let selected_translation = bs.selected_translation;
+    let secondary_translation = bs.secondary_translation;
 
-    let on_change = move |ev: web_sys::Event| {
+    let on_main_change = move |ev: web_sys::Event| {
         let target = ev
             .target()
             .and_then(|t| t.dyn_into::<web_sys::HtmlSelectElement>().ok());
         if let Some(select) = target {
-            let value = select.value();
-            if !value.is_empty() {
-                selected_translation.set(Some(value));
+            let val = select.value();
+            if !val.is_empty() {
+                selected_translation.set(Some(val));
             }
         }
     };
 
+    let on_secondary_change = move |ev: web_sys::Event| {
+        let target = ev
+            .target()
+            .and_then(|t| t.dyn_into::<web_sys::HtmlSelectElement>().ok());
+        if let Some(select) = target {
+            let val = select.value();
+            secondary_translation.set(if val.is_empty() { None } else { Some(val) });
+        }
+    };
+
     view! {
-        <div class="bible-translation-selector">
-            <label for="bible-translation">"Translation:"</label>
-            <select
-                id="bible-translation"
-                data-role="bible-translation-select"
-                on:change=on_change
-            >
-                {move || {
-                    let current = selected_translation.get();
-                    translations.get().into_iter().map(|t| {
-                        let code = t.code.clone();
-                        let is_selected = current.as_ref() == Some(&code);
-                        view! {
-                            <option value=code.clone() selected=is_selected>
-                                {format!("{} ({})", t.name, t.code)}
-                            </option>
-                        }
-                    }).collect_view()
-                }}
-            </select>
+        <div class="bible__translation-row">
+            <label class="operator__field operator__field--compact">
+                <span>"Main"</span>
+                <select data-role="main-translation" on:change=on_main_change>
+                    {move || {
+                        let current = selected_translation.get();
+                        translations.get().into_iter().map(|t| {
+                            let code = t.code.clone();
+                            let is_selected = current.as_ref() == Some(&code);
+                            let label = if t.language.is_empty() {
+                                t.name.clone()
+                            } else {
+                                format!("{} ({})", t.name, t.language)
+                            };
+                            view! {
+                                <option value=code selected=is_selected>{label}</option>
+                            }
+                        }).collect_view()
+                    }}
+                </select>
+            </label>
+            <label class="operator__field operator__field--compact">
+                <span>"Secondary"</span>
+                <select data-role="secondary-translation" on:change=on_secondary_change>
+                    <option value="">"None"</option>
+                    {move || {
+                        let current = secondary_translation.get();
+                        translations.get().into_iter().map(|t| {
+                            let code = t.code.clone();
+                            let is_selected = current.as_ref() == Some(&code);
+                            let label = if t.language.is_empty() {
+                                t.name.clone()
+                            } else {
+                                format!("{} ({})", t.name, t.language)
+                            };
+                            view! {
+                                <option value=code selected=is_selected>{label}</option>
+                            }
+                        }).collect_view()
+                    }}
+                </select>
+            </label>
         </div>
     }
 }
 
-/// Bible search input
 #[component]
-fn BibleSearch(bible_state: BibleState) -> impl IntoView {
-    let search_query = bible_state.search_query;
-    let searching = bible_state.searching;
-    let search_results = bible_state.search_results;
-    let selected_translation = bible_state.selected_translation;
-    let has_searched = bible_state.has_searched;
+fn BookFilter() -> impl IntoView {
+    let bs = use_context::<BibleState>().expect("BibleState");
+    let book_filter = bs.book_filter;
 
-    let do_search = move || {
-        let query = search_query.get_untracked();
-        let translation = selected_translation
-            .get_untracked()
-            .unwrap_or_else(|| "ESV".to_string());
-
-        if query.trim().is_empty() {
-            search_results.set(Vec::new());
-            return;
+    let on_input = move |ev: web_sys::Event| {
+        let target = ev
+            .target()
+            .and_then(|t| t.dyn_into::<web_sys::HtmlInputElement>().ok());
+        if let Some(input) = target {
+            book_filter.set(input.value());
         }
-
-        searching.set(true);
-        leptos::task::spawn_local(async move {
-            match crate::api::bible::search(&query, &translation).await {
-                Ok(result) => {
-                    search_results.set(result.results);
-                }
-                Err(_) => {
-                    search_results.set(Vec::new());
-                }
-            }
-            searching.set(false);
-            has_searched.set(true);
-        });
-    };
-
-    let on_input = {
-        move |ev: web_sys::Event| {
-            let target = ev
-                .target()
-                .and_then(|t| t.dyn_into::<web_sys::HtmlInputElement>().ok());
-            if let Some(input) = target {
-                search_query.set(input.value());
-            }
-        }
-    };
-
-    let on_keydown = move |ev: web_sys::KeyboardEvent| {
-        if ev.key() == "Enter" {
-            ev.prevent_default();
-            do_search();
-        }
-    };
-
-    let on_search_click = move |_| {
-        do_search();
     };
 
     view! {
-        <section data-role="bible-search" class="bible-search">
-            <div class="bible-search-row">
-                <input
-                    data-role="bible-search-input"
-                    type="text"
-                    placeholder="Search Bible (e.g., John 3:16, love)"
-                    prop:value=move || search_query.get()
-                    on:input=on_input
-                    on:keydown=on_keydown
-                />
-                <button
-                    type="button"
-                    data-role="bible-search-button"
-                    on:click=on_search_click
-                    disabled=move || searching.get()
-                >
-                    {move || if searching.get() { "Searching..." } else { "Search" }}
-                </button>
-            </div>
-        </section>
+        <label class="operator__field">
+            <span>"Find book"</span>
+            <input
+                type="search"
+                data-role="book-filter"
+                placeholder="Start typing\u{2026}"
+                prop:value=move || book_filter.get()
+                on:input=on_input
+            />
+        </label>
     }
 }
 
-/// Bible search results list
 #[component]
-fn BibleResults(bible_state: BibleState) -> impl IntoView {
-    let search_results = bible_state.search_results;
-    let selected_translation = bible_state.selected_translation;
-    let has_searched = bible_state.has_searched;
-    let ctx = use_context::<AppContext>().expect("AppContext");
-    let toast_message = ctx.toast_message;
-    let toast_variant = ctx.toast_variant;
-    let active_broadcast = ctx.active_bible_broadcast;
+fn BookList() -> impl IntoView {
+    let bs = use_context::<BibleState>().expect("BibleState");
 
     view! {
-        <section data-role="bible-results" class="bible-results">
+        <div class="operator__list operator__list--tight" data-role="book-list">
             {move || {
-                let results = search_results.get();
-                if results.is_empty() {
-                    let message = if has_searched.get() {
-                        "No results found. Try a different search query."
-                    } else {
-                        "Enter a search query to find Bible passages."
-                    };
+                let filtered = bs.filtered_books();
+                let selected_book = bs.selected_book;
+                let selected_chapter = bs.selected_chapter;
+                let verse_start = bs.verse_start;
+                let verse_end = bs.verse_end;
+
+                if filtered.is_empty() {
                     view! {
-                        <p class="bible-results-empty">{message}</p>
+                        <p class="operator__slides-empty">"No books found."</p>
                     }.into_any()
                 } else {
-                    results.into_iter().map(|hit| {
-                        let reference = hit.reference.clone();
-                        let text = hit.text.clone();
-                        let ref_for_attr = reference.clone();
-                        let ref_for_display = reference.clone();
-                        let ref_for_click = reference.clone();
-                        let translation = selected_translation.get_untracked().unwrap_or_else(|| "ESV".to_string());
+                    filtered.into_iter().map(|book| {
+                        let book_name = book.book.clone();
+                        let code = book.code.clone();
+                        let number = book.number;
+                        let chapter_count = book.chapters.len() as u16;
+                        let verse_counts: Vec<u16> = book.chapters.iter().map(|c| c.verse_count).collect();
+                        let display_name = book_name.clone();
+
+                        let is_active = {
+                            let code = code.clone();
+                            move || {
+                                selected_book.get()
+                                    .as_ref()
+                                    .map(|sb| sb.code == code)
+                                    .unwrap_or(false)
+                            }
+                        };
 
                         let on_click = {
-                            let reference = ref_for_click;
-                            let translation = translation.clone();
+                            let book_name = book_name.clone();
+                            let code = code.clone();
+                            let verse_counts = verse_counts.clone();
                             move |_| {
-                                let reference = reference.clone();
-                                let translation = translation.clone();
-                                leptos::task::spawn_local(async move {
-                                    match crate::api::bible::broadcast(&reference, &translation).await {
-                                        Ok(broadcast) => {
-                                            active_broadcast.set(Some(broadcast));
-                                            toast_variant.set("success".to_string());
-                                            toast_message.set(Some(format!("Broadcasting: {}", reference)));
-                                        }
-                                        Err(_) => {
-                                            toast_variant.set("error".to_string());
-                                            toast_message.set(Some("Failed to broadcast passage".to_string()));
-                                        }
-                                    }
-                                });
+                                selected_book.set(Some(SelectedBook {
+                                    book: book_name.clone(),
+                                    code: code.clone(),
+                                    number,
+                                    chapter_count,
+                                    verse_counts: verse_counts.clone(),
+                                }));
+                                selected_chapter.set(1);
+                                verse_start.set(1);
+                                verse_end.set(None);
                             }
                         };
 
                         view! {
-                            <article
-                                class="bible-result-item"
-                                data-role="bible-result"
-                                data-reference=ref_for_attr
-                                on:click=on_click
-                            >
-                                <h3 class="bible-result-reference">{ref_for_display}</h3>
-                                <p class="bible-result-text">{text}</p>
-                            </article>
+                            <div class="operator__list-item">
+                                <button
+                                    type="button"
+                                    class="operator__list-button"
+                                    data-role="book-item"
+                                    data-book-code=code
+                                    data-active=move || if is_active() { "true" } else { "false" }
+                                    on:click=on_click
+                                >
+                                    <span class="operator__list-label">{display_name}</span>
+                                    <span class="operator__list-meta">{chapter_count}" ch."</span>
+                                </button>
+                            </div>
                         }
                     }).collect_view().into_any()
                 }
             }}
-        </section>
+        </div>
     }
 }
 
-/// Active broadcast display with clear button
 #[component]
-fn ActiveBroadcast() -> impl IntoView {
-    let ctx = use_context::<AppContext>().expect("AppContext");
-    let active_broadcast = ctx.active_bible_broadcast;
-    let toast_message = ctx.toast_message;
-    let toast_variant = ctx.toast_variant;
+fn ReferenceInputs() -> impl IntoView {
+    let bs = use_context::<BibleState>().expect("BibleState");
+    let selected_chapter = bs.selected_chapter;
+    let verse_start_signal = bs.verse_start;
+    let verse_end_signal = bs.verse_end;
+    let on_chapter = move |ev: web_sys::Event| {
+        let target = ev
+            .target()
+            .and_then(|t| t.dyn_into::<web_sys::HtmlInputElement>().ok());
+        if let Some(input) = target {
+            if let Ok(val) = input.value().parse::<u16>() {
+                selected_chapter.set(val.max(1));
+                verse_start_signal.set(1);
+                verse_end_signal.set(None);
+            }
+        }
+    };
 
-    let on_clear = move |_| {
+    let on_verse_start = move |ev: web_sys::Event| {
+        let target = ev
+            .target()
+            .and_then(|t| t.dyn_into::<web_sys::HtmlInputElement>().ok());
+        if let Some(input) = target {
+            if let Ok(val) = input.value().parse::<u16>() {
+                verse_start_signal.set(val.max(1));
+            }
+        }
+    };
+
+    let on_verse_end = move |ev: web_sys::Event| {
+        let target = ev
+            .target()
+            .and_then(|t| t.dyn_into::<web_sys::HtmlInputElement>().ok());
+        if let Some(input) = target {
+            let val_str = input.value();
+            if val_str.is_empty() {
+                verse_end_signal.set(None);
+            } else if let Ok(val) = val_str.parse::<u16>() {
+                verse_end_signal.set(Some(val.max(1)));
+            }
+        }
+    };
+
+    view! {
+        <div class="operator__reference-grid">
+            <label class="operator__field">
+                <span>"Chapter"</span>
+                <input
+                    type="number"
+                    data-role="chapter-input"
+                    min="1"
+                    prop:value=move || selected_chapter.get().to_string()
+                    on:change=on_chapter
+                />
+            </label>
+            <label class="operator__field">
+                <span>"Verse start"</span>
+                <input
+                    type="number"
+                    data-role="verse-start"
+                    min="1"
+                    prop:value=move || verse_start_signal.get().to_string()
+                    on:change=on_verse_start
+                />
+            </label>
+            <label class="operator__field">
+                <span>"Verse end"</span>
+                <input
+                    type="number"
+                    data-role="verse-end"
+                    min="1"
+                    prop:value=move || verse_end_signal.get().map(|v| v.to_string()).unwrap_or_default()
+                    placeholder="All"
+                    on:change=on_verse_end
+                />
+            </label>
+        </div>
+    }
+}
+
+#[component]
+fn LoadButton() -> impl IntoView {
+    let bs = use_context::<BibleState>().expect("BibleState");
+    let ctx = use_context::<AppContext>().expect("AppContext");
+
+    let on_load = move |_| {
+        let selected_book = bs.selected_book.get_untracked();
+        let Some(book) = selected_book else {
+            ctx.show_toast("Select a book first", "error");
+            return;
+        };
+        let main_trans = bs.selected_translation.get_untracked();
+        let Some(main_code) = main_trans else {
+            ctx.show_toast("Select a translation first", "error");
+            return;
+        };
+        let secondary = bs.secondary_translation.get_untracked();
+        let chapter = bs.selected_chapter.get_untracked();
+        let v_start = bs.verse_start.get_untracked();
+        let v_end = bs.verse_end.get_untracked();
+        let char_limit = bs.character_limit.get_untracked();
+
+        let slides = bs.slides;
+        let loading = bs.loading_slides;
+        let selected_ids = bs.selected_slide_ids;
+        let toast_message = ctx.toast_message;
+        let toast_variant = ctx.toast_variant;
+
+        loading.set(true);
+        selected_ids.set(std::collections::HashSet::new());
+
+        // Build history label
+        let label = if let Some(ve) = v_end {
+            format!("{} {}:{}-{}", book.book, chapter, v_start, ve)
+        } else {
+            format!("{} {}:{}", book.book, chapter, v_start)
+        };
+        let history_entry = LoadedPassage {
+            book: book.book.clone(),
+            book_code: book.code.clone(),
+            book_number: book.number,
+            chapter,
+            verse_start: v_start,
+            verse_end: v_end,
+            translation_code: main_code.clone(),
+            label,
+        };
+
+        let req = bible::ResolveRequest {
+            main_translation: main_code,
+            secondary_translation: secondary.filter(|s| !s.is_empty()),
+            book: book.book,
+            book_code: Some(book.code),
+            chapter,
+            verse_start: v_start,
+            verse_end: v_end,
+            character_limit: Some(char_limit),
+        };
+
+        let history_signal = bs.loaded_passages_history;
         leptos::task::spawn_local(async move {
-            match crate::api::bible::clear_broadcast().await {
-                Ok(()) => {
-                    active_broadcast.set(None);
-                    toast_variant.set("info".to_string());
-                    toast_message.set(Some("Bible broadcast cleared".to_string()));
+            match bible::resolve_slides(&req).await {
+                Ok(resp) => {
+                    slides.set(resp.slides);
+                    // Push to history on successful load
+                    history_signal.update(|history| {
+                        history.retain(|p| p.label != history_entry.label);
+                        history.insert(0, history_entry);
+                        history.truncate(12);
+                    });
                 }
-                Err(_) => {
+                Err(e) => {
                     toast_variant.set("error".to_string());
-                    toast_message.set(Some("Failed to clear broadcast".to_string()));
+                    toast_message.set(Some(format!("Failed to load passage: {e}")));
                 }
+            }
+            loading.set(false);
+        });
+    };
+
+    let is_disabled = move || {
+        bs.selected_book.get().is_none()
+            || bs.selected_translation.get().is_none()
+            || bs.loading_slides.get()
+    };
+
+    view! {
+        <button
+            type="button"
+            class="operator__list-action operator__list-action--primary"
+            data-role="load-button"
+            on:click=on_load
+            disabled=is_disabled
+        >
+            {move || if bs.loading_slides.get() { "Loading\u{2026}" } else { "Load passage" }}
+        </button>
+    }
+}
+
+#[component]
+fn SelectionControls() -> impl IntoView {
+    let bs = use_context::<BibleState>().expect("BibleState");
+    let ctx = use_context::<AppContext>().expect("AppContext");
+
+    let selected_count = move || bs.selected_slide_ids.get().len();
+
+    let on_select_all = move |_| {
+        let all_ids: std::collections::HashSet<String> =
+            bs.slides.get().iter().map(|s| s.id.clone()).collect();
+        bs.selected_slide_ids.set(all_ids);
+    };
+
+    // Presentation selector for "Add to..."
+    let presentations = bs.presentations;
+
+    let on_pres_change = move |ev: web_sys::Event| {
+        let target = ev
+            .target()
+            .and_then(|t| t.dyn_into::<web_sys::HtmlSelectElement>().ok());
+        if let Some(select) = target {
+            let val = select.value();
+            bs.active_presentation_id
+                .set(if val.is_empty() { None } else { Some(val) });
+        }
+    };
+
+    let on_add_selected = {
+        let bs = bs.clone();
+        let ctx = ctx.clone();
+        move |_| {
+            let pres_id = bs.active_presentation_id.get_untracked();
+            let Some(pres_id) = pres_id else {
+                ctx.show_toast("Select a presentation first", "error");
+                return;
+            };
+            let selected_ids = bs.selected_slide_ids.get_untracked();
+            if selected_ids.is_empty() {
+                ctx.show_toast("No slides selected", "error");
+                return;
+            }
+            let slides = bs.slides.get_untracked();
+            let inputs: Vec<bible::AppendSlideInput> = slides
+                .iter()
+                .filter(|s| selected_ids.contains(&s.id))
+                .map(|s| bible::AppendSlideInput {
+                    main: s.main.clone(),
+                    translation: s.translation.clone(),
+                    stage: s.stage.clone(),
+                    group: s.group.clone(),
+                })
+                .collect();
+            if inputs.is_empty() {
+                return;
+            }
+
+            let bs_pres = bs.presentations;
+            let toast_message = ctx.toast_message;
+            let toast_variant = ctx.toast_variant;
+            leptos::task::spawn_local(async move {
+                match bible::append_presentation_slides(&pres_id, &inputs).await {
+                    Ok(_) => {
+                        toast_variant.set("success".to_string());
+                        toast_message.set(Some(format!(
+                            "Added {} slide(s) to presentation",
+                            inputs.len()
+                        )));
+                        // Refresh presentations list to update slide count
+                        if let Ok(pres) = bible::list_presentations().await {
+                            bs_pres.set(pres);
+                        }
+                    }
+                    Err(e) => {
+                        toast_variant.set("error".to_string());
+                        toast_message.set(Some(format!("Failed to add slides: {e}")));
+                    }
+                }
+            });
+        }
+    };
+
+    view! {
+        <span data-role="selection-count" class="operator__slides-count">
+            {move || format!("{} selected", selected_count())}
+        </span>
+        <button
+            type="button"
+            class="operator__list-action"
+            data-role="select-all-slides"
+            on:click=on_select_all
+        >"Select all"</button>
+        <label class="operator__field">
+            <select data-role="presentation-select" on:change=on_pres_change>
+                <option value="">"Add to\u{2026}"</option>
+                {move || {
+                    presentations.get().into_iter().map(|p| {
+                        let id = p.id.clone();
+                        let label = format!("{} ({} slides)", p.name, p.slide_count);
+                        view! {
+                            <option value=id>{label}</option>
+                        }
+                    }).collect_view()
+                }}
+            </select>
+        </label>
+        <button
+            type="button"
+            class="operator__list-action operator__list-action--primary"
+            data-role="presentation-add"
+            on:click=on_add_selected
+        >"Add selected"</button>
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Prepared tab
+// ---------------------------------------------------------------------------
+
+#[component]
+fn BiblePreparedTab() -> impl IntoView {
+    let bs = use_context::<BibleState>().expect("BibleState");
+    let ctx = use_context::<AppContext>().expect("AppContext");
+    let bible_tab = bs.bible_tab;
+    let presentations = bs.presentations;
+    let active_presentation_id = bs.active_presentation_id;
+    let active_presentation_slides = bs.active_presentation_slides;
+
+    let on_create = {
+        let ctx = ctx.clone();
+        move |_| {
+            let toast_message = ctx.toast_message;
+            let toast_variant = ctx.toast_variant;
+            let name = "New Presentation".to_string();
+            leptos::task::spawn_local(async move {
+                match bible::create_presentation(&name).await {
+                    Ok(detail) => {
+                        toast_variant.set("success".to_string());
+                        toast_message.set(Some(format!("Created \"{}\"", detail.name)));
+                        if let Ok(pres) = bible::list_presentations().await {
+                            presentations.set(pres);
+                        }
+                    }
+                    Err(e) => {
+                        toast_variant.set("error".to_string());
+                        toast_message.set(Some(format!("Failed to create: {e}")));
+                    }
+                }
+            });
+        }
+    };
+
+    view! {
+        <div
+            class="bible__tab-panel"
+            data-bible-panel="prepared"
+            data-visible=move || if bible_tab.get() == "prepared" { "true" } else { "false" }
+        >
+            <div class="bible__prepared-header">
+                <h3>"Presentations"</h3>
+                <button
+                    type="button"
+                    class="operator__list-action"
+                    data-role="presentation-create"
+                    aria-label="Create presentation"
+                    on:click=on_create
+                >"+"</button>
+            </div>
+            <div class="bible__prepared-list" data-role="presentations-list">
+                {move || {
+                    let pres_list = presentations.get();
+                    if pres_list.is_empty() {
+                        view! {
+                            <p class="operator__slides-empty">"No Bible presentations yet."</p>
+                        }.into_any()
+                    } else {
+                        pres_list.into_iter().map(|p| {
+                            view! { <PresentationCard presentation=p /> }
+                        }).collect_view().into_any()
+                    }
+                }}
+            </div>
+            <PreparedDeleteButton />
+        </div>
+    }
+}
+
+#[component]
+fn PresentationCard(presentation: bible::BiblePresentationSummary) -> impl IntoView {
+    let bs = use_context::<BibleState>().expect("BibleState");
+    let ctx = use_context::<AppContext>().expect("AppContext");
+    let active_presentation_id = bs.active_presentation_id;
+    let active_presentation_slides = bs.active_presentation_slides;
+    let presentations = bs.presentations;
+
+    let id = presentation.id.clone();
+    let name = presentation.name.clone();
+    let count = presentation.slide_count;
+    let id_for_click = id.clone();
+    let id_for_edit = id.clone();
+
+    let is_active = {
+        let id = id.clone();
+        move || active_presentation_id.get().as_ref() == Some(&id)
+    };
+
+    let on_click = move |_| {
+        let id = id_for_click.clone();
+        active_presentation_id.set(Some(id.clone()));
+        leptos::task::spawn_local(async move {
+            if let Ok(detail) = bible::get_presentation(&id).await {
+                active_presentation_slides.set(detail.slides);
             }
         });
     };
 
-    view! {
-        <section data-role="bible-broadcast" class="bible-broadcast">
-            {move || {
-                if let Some(broadcast) = active_broadcast.get() {
-                    view! {
-                        <div class="bible-broadcast-active" data-role="bible-broadcast-active">
-                            <header class="bible-broadcast-header">
-                                <h3>"Active Broadcast"</h3>
-                                <button
-                                    type="button"
-                                    class="bible-broadcast-clear"
-                                    data-role="bible-clear-broadcast"
-                                    on:click=on_clear
-                                >
-                                    "Clear"
-                                </button>
-                            </header>
-                            <div class="bible-broadcast-content">
-                                <strong class="bible-broadcast-reference">
-                                    {broadcast.reference_label.clone().unwrap_or_else(|| broadcast.passage.reference.to_human_readable())}
-                                </strong>
-                                <p class="bible-broadcast-text">{broadcast.passage.text.clone()}</p>
-                                <small class="bible-broadcast-translation">{broadcast.passage.translation.name.clone()}</small>
-                            </div>
-                        </div>
-                    }.into_any()
-                } else {
-                    view! {
-                        <div class="bible-broadcast-inactive" data-role="bible-broadcast-inactive">
-                            <p>"No active broadcast"</p>
-                        </div>
-                    }.into_any()
+    let name_for_edit = name.clone();
+    let on_edit = {
+        let ctx = ctx.clone();
+        move |ev: web_sys::MouseEvent| {
+            ev.stop_propagation();
+            let id = id_for_edit.clone();
+            let toast_message = ctx.toast_message;
+            let toast_variant = ctx.toast_variant;
+
+            let window = crate::utils::window::window();
+            if let Ok(Some(new_name)) =
+                window.prompt_with_message_and_default("Rename presentation:", &name_for_edit)
+            {
+                let new_name = new_name.trim().to_string();
+                if !new_name.is_empty() {
+                    leptos::task::spawn_local(async move {
+                        match bible::rename_presentation(&id, &new_name).await {
+                            Ok(()) => {
+                                toast_variant.set("success".to_string());
+                                toast_message.set(Some("Renamed".to_string()));
+                                if let Ok(pres) = bible::list_presentations().await {
+                                    presentations.set(pres);
+                                }
+                            }
+                            Err(e) => {
+                                toast_variant.set("error".to_string());
+                                toast_message.set(Some(format!("Rename failed: {e}")));
+                            }
+                        }
+                    });
                 }
-            }}
-        </section>
+            }
+        }
+    };
+
+    view! {
+        <div
+            class="operator__presentation-card"
+            class:is-active=is_active
+            data-presentation-id=id.clone()
+            data-role="presentation-card"
+            on:click=on_click
+        >
+            <div style="display:flex;justify-content:space-between;align-items:center;">
+                <strong>{name.clone()}</strong>
+                <button
+                    type="button"
+                    class="operator__presentation-action"
+                    data-role="presentation-edit"
+                    on:click=on_edit
+                    title="Edit presentation"
+                >"\u{270F}\u{FE0F}"</button>
+            </div>
+            <p>{format!("{} slide(s)", count)}</p>
+        </div>
+    }
+}
+
+#[component]
+fn PreparedDeleteButton() -> impl IntoView {
+    let bs = use_context::<BibleState>().expect("BibleState");
+    let ctx = use_context::<AppContext>().expect("AppContext");
+
+    let on_delete = {
+        let bs = bs.clone();
+        let ctx = ctx.clone();
+        move |_| {
+            let pres_id = bs.active_presentation_id.get_untracked();
+            let Some(id) = pres_id else { return };
+            let window = crate::utils::window::window();
+            if let Ok(confirmed) = window.confirm_with_message("Delete this presentation?") {
+                if !confirmed {
+                    return;
+                }
+            }
+            let presentations = bs.presentations;
+            let active_id = bs.active_presentation_id;
+            let active_slides = bs.active_presentation_slides;
+            let toast_message = ctx.toast_message;
+            let toast_variant = ctx.toast_variant;
+            leptos::task::spawn_local(async move {
+                match bible::delete_presentation(&id).await {
+                    Ok(()) => {
+                        active_id.set(None);
+                        active_slides.set(Vec::new());
+                        toast_variant.set("success".to_string());
+                        toast_message.set(Some("Deleted".to_string()));
+                        if let Ok(pres) = bible::list_presentations().await {
+                            presentations.set(pres);
+                        }
+                    }
+                    Err(e) => {
+                        toast_variant.set("error".to_string());
+                        toast_message.set(Some(format!("Delete failed: {e}")));
+                    }
+                }
+            });
+        }
+    };
+
+    let has_active = move || bs.active_presentation_id.get().is_some();
+
+    view! {
+        <div class="bible__prepared-actions">
+            <button
+                type="button"
+                class="operator__list-action"
+                data-role="presentation-delete"
+                disabled=move || !has_active()
+                on:click=on_delete
+                style="color: #ef4444;"
+            >"Delete presentation"</button>
+        </div>
+    }
+}
+// ---------------------------------------------------------------------------
+// Settings tab
+// ---------------------------------------------------------------------------
+
+#[component]
+fn BibleSettingsTab() -> impl IntoView {
+    let bs = use_context::<BibleState>().expect("BibleState");
+    let ctx = use_context::<AppContext>().expect("AppContext");
+    let bible_tab = bs.bible_tab;
+    let character_limit = bs.character_limit;
+
+    let on_char_limit_change = move |ev: web_sys::Event| {
+        let target = ev
+            .target()
+            .and_then(|t| t.dyn_into::<web_sys::HtmlInputElement>().ok());
+        if let Some(input) = target {
+            if let Ok(val) = input.value().parse::<u32>() {
+                character_limit.set(val.clamp(1, 4000));
+            }
+        }
+    };
+
+    let on_save = {
+        let ctx = ctx.clone();
+        move |_| {
+            let limit = character_limit.get_untracked();
+            let main = bs.selected_translation.get_untracked();
+            let sec = bs.secondary_translation.get_untracked();
+            let toast_message = ctx.toast_message;
+            let toast_variant = ctx.toast_variant;
+
+            let draft = presenter_core::BiblePreferencesDraft {
+                main_translation: main,
+                secondary_translation: sec,
+                character_limit: Some(limit),
+            };
+
+            leptos::task::spawn_local(async move {
+                match bible::update_preferences(&draft).await {
+                    Ok(()) => {
+                        toast_variant.set("success".to_string());
+                        toast_message.set(Some("Preferences saved".to_string()));
+                    }
+                    Err(e) => {
+                        toast_variant.set("error".to_string());
+                        toast_message.set(Some(format!("Save failed: {e}")));
+                    }
+                }
+            });
+        }
+    };
+
+    view! {
+        <div
+            class="bible__tab-panel"
+            data-bible-panel="settings"
+            data-visible=move || if bible_tab.get() == "settings" { "true" } else { "false" }
+        >
+            <div class="operator__form-group">
+                <label class="operator__field">
+                    <span>"Character limit"</span>
+                    <input
+                        type="number"
+                        data-role="char-limit"
+                        min="1"
+                        max="4000"
+                        prop:value=move || character_limit.get().to_string()
+                        on:change=on_char_limit_change
+                    />
+                </label>
+                <button
+                    type="button"
+                    class="operator__list-action operator__list-action--primary"
+                    data-role="save-preferences"
+                    on:click=on_save
+                >"Save preferences"</button>
+            </div>
+        </div>
     }
 }

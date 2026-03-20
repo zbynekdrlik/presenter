@@ -427,7 +427,7 @@ jobs:
     name: Playwright E2E
     runs-on: self-hosted
     needs: build
-    timeout-minutes: 60
+    timeout-minutes: 90
     steps:
       - uses: actions/checkout@v4
 

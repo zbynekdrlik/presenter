@@ -266,7 +266,9 @@ test.describe("WASM Operator Modals", () => {
     });
 
     // Open create modal
-    await page.locator('[data-role="presentation-create"]').click();
+    await page
+      .locator('[data-view-panel="worship"] [data-role="presentation-create"]')
+      .click();
     await page.waitForFunction(
       () =>
         document.querySelector(

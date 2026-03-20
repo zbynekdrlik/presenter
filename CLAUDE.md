@@ -339,6 +339,7 @@ sudo systemctl restart presenter-dev
 4. **Fix failures IMMEDIATELY** - CI failures block everything until resolved
 5. **E2E tests are PRIMARY** - They are the acceptance gate, not optional
 6. **VERIFY changes work BEFORE claiming completion** - See below
+7. **TDD is MANDATORY for bug fixes** - Write the failing test FIRST, prove it catches the bug, THEN fix the code. No exceptions.
 
 ### Verify Before Claiming Complete (CRITICAL)
 
@@ -429,7 +430,7 @@ scripts/dev/show-playwright-report.sh
 **Be ruthlessly critical of your own test implementation.** Before marking tests as done:
 
 1. **Challenge coverage completeness**: Ask "what user paths did I NOT test?" and add them
-2. **Challenge test robustness**: Ask "could this test pass even if the feature is broken?" — if yes, strengthen assertions
+2. **Challenge test robustness**: Ask "could this test pass even if the feature is VISUALLY broken?" — if yes, add layout/positional assertions. A test that passes with broken CSS is a worthless test.
 3. **Challenge test isolation**: Verify tests don't depend on execution order or shared state
 4. **Challenge assertion quality**: Prefer specific assertions (`toHaveText("exact value")`) over weak ones (`toBeVisible()`)
 5. **Challenge edge cases**: Test with empty data, maximum data, special characters, rapid interactions
@@ -437,6 +438,30 @@ scripts/dev/show-playwright-report.sh
 7. **Tests must fail when the feature breaks**: If you can imagine a regression that wouldn't be caught, add a test for it
 
 **The goal is tests that a human reviewer would trust as proof the feature works correctly.**
+
+### E2E Test Realism (ABSOLUTE — NO EXCEPTIONS)
+
+**E2E tests MUST verify outcomes the way a user would — by seeing and clicking, not by checking HTTP status codes or element existence.**
+
+1. **Test what the user SEES, not what the code DOES** — A 200 response means nothing if the page is visually broken. A visible element means nothing if it's in the wrong position. Always verify the actual visual/interactive outcome.
+2. **Layout assertions are required for UI changes** — Use `boundingBox()`, `getComputedStyle()`, and positional assertions. Never rely solely on `toBeVisible()` for layout verification. Verify elements are side-by-side, correctly sized, and not overlapping.
+3. **Treat E2E tests as perpetually weak** — After writing tests, always ask: "Could the feature be completely broken while these tests still pass?" If yes, the tests are insufficient. Strengthen them.
+4. **TDD for ALL bug fixes (NO EXCEPTIONS):**
+   - Step 1: Write a test that **reproduces the bug** (test MUST FAIL)
+   - Step 2: Verify the test fails for the right reason
+   - Step 3: Fix the code
+   - Step 4: Verify the test now passes
+   - **Never skip steps.** A fix without a previously-failing test is unverified.
+5. **Post-deploy verification is not optional** — After deploying to dev, use Playwright MCP to visually verify the deployed page matches expectations. Screenshots + DOM snapshots are evidence. "CI green" is necessary but NOT sufficient.
+
+**Banned weak assertion patterns:**
+
+| Pattern                          | Why Weak                               | Required Instead                          |
+| -------------------------------- | -------------------------------------- | ----------------------------------------- |
+| `toBeVisible()` alone for layout | Passes even if stacked vertically      | `boundingBox()` positional assertions     |
+| Checking HTTP 200                | Page could render garbage              | Assert actual page content and structure  |
+| `toHaveAttribute()` alone        | Attribute exists but CSS may not apply | Verify computed styles or visual position |
+| `toBeAttached()` for UI          | Element in DOM but invisible/misplaced | Combine with layout/visual assertions     |
 
 ---
 

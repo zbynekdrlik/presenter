@@ -20,9 +20,14 @@ use crate::state::AppContext;
 use crate::ws;
 
 #[component]
-pub fn OperatorPage() -> impl IntoView {
+pub fn OperatorPage(#[prop(default = String::new())] initial_view: String) -> impl IntoView {
     let ctx = AppContext::new();
     let op = OperatorState::new();
+
+    // Override view from URL path if provided (e.g., /ui/operator/bible → "bible")
+    if !initial_view.is_empty() {
+        ctx.view.set(initial_view);
+    }
 
     // Provide context for all child components
     provide_context(ctx.clone());
@@ -47,6 +52,13 @@ pub fn OperatorPage() -> impl IntoView {
                     let _ = body.class_list().add_1("operator--mobile-nav-open");
                 } else {
                     let _ = body.class_list().remove_1("operator--mobile-nav-open");
+                }
+
+                // Sync bible view class (used by bible.css for layout)
+                if view.get() == "bible" {
+                    let _ = body.class_list().add_1("operator--bible");
+                } else {
+                    let _ = body.class_list().remove_1("operator--bible");
                 }
 
                 // Sync line-limit CSS custom property
@@ -326,6 +338,15 @@ fn setup_ws_dispatch(last_event: ReadSignal<Option<LiveEvent>>, ctx: &AppContext
                 LiveEvent::BibleCleared => {
                     active_bible_broadcast.set(None);
                 }
+                LiveEvent::BiblePreferencesChanged { character_limit } => {
+                    // Update character limit in real-time when changed by another client
+                    // BibleState context may not be available here (only exists when bible view is mounted)
+                    // Store on AppContext for any bible page to pick up
+                    if let Some(body) = crate::utils::window::document_body() {
+                        let _ = body
+                            .set_attribute("data-bible-char-limit", &character_limit.to_string());
+                    }
+                }
                 _ => {}
             }
         }
@@ -548,19 +569,11 @@ fn setup_keyboard_shortcuts(ctx: AppContext, op: OperatorState) {
     handler.forget();
 }
 
-#[derive(serde::Deserialize)]
-struct HealthzResponse {
-    #[serde(default)]
-    version: String,
-    #[serde(default)]
-    channel: String,
-}
-
 #[component]
 fn VersionFooter() -> impl IntoView {
     let version_text = RwSignal::new(String::new());
     leptos::task::spawn_local(async move {
-        if let Ok(health) = crate::api::get_json::<HealthzResponse>("/healthz").await {
+        if let Ok(health) = crate::api::get_json::<crate::api::HealthzResponse>("/healthz").await {
             let text = if health.channel.is_empty() || health.channel == "release" {
                 format!("v{}", health.version)
             } else {
@@ -577,16 +590,16 @@ fn VersionFooter() -> impl IntoView {
 fn setup_popstate_listener(ctx: AppContext) {
     let view = ctx.view;
     let handler =
-        Closure::<dyn Fn(web_sys::PopStateEvent)>::new(move |ev: web_sys::PopStateEvent| {
-            let state = ev.state();
-            if let Ok(obj) = state.dyn_into::<js_sys::Object>() {
-                if let Ok(view_val) = js_sys::Reflect::get(&obj, &"view".into()) {
-                    if let Some(v) = view_val.as_string() {
-                        view.set(v.clone());
-                        crate::state::session::set("view", &v);
-                    }
-                }
-            }
+        Closure::<dyn Fn(web_sys::PopStateEvent)>::new(move |_ev: web_sys::PopStateEvent| {
+            // Derive view from the current URL pathname
+            let pathname = crate::utils::window::current_pathname();
+            let v = pathname
+                .strip_prefix("/ui/operator/")
+                .filter(|s| !s.is_empty())
+                .unwrap_or("worship")
+                .to_string();
+            view.set(v.clone());
+            crate::state::session::set("view", &v);
         });
     let window = crate::utils::window::window();
     let _ = window.add_event_listener_with_callback("popstate", handler.as_ref().unchecked_ref());
