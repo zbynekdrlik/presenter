@@ -103,44 +103,37 @@ test("worship-pp stage displays playlist sidebar when triggered from playlist", 
     throw new Error("Expected at least one library with 3+ presentations");
   }
 
-  // Add 3 presentations to the playlist via API (more reliable than drag)
-  const playlistsBeforeAdd = await page.request.get(
-    new URL("/playlists", baseURL).toString(),
-  );
-  const playlistsBefore: Array<{ id: string; name: string }> =
-    await playlistsBeforeAdd.json();
-  const targetPlaylist = playlistsBefore.find((p) => p.name === playlistName);
-  expect(targetPlaylist).toBeTruthy();
-  const playlistId = targetPlaylist!.id;
-
-  const presIds = sourceLibrary.presentations.slice(0, 3).map((p) => p.id);
-  const playlistEntries = presIds.map((id) => ({
-    type: "Presentation",
-    presentationId: id,
-  }));
-  const replaceResp = await page.request.put(
-    new URL(`/playlists/${playlistId}/entries`, baseURL).toString(),
-    { data: { entries: playlistEntries } },
-  );
-  expect(replaceResp.ok()).toBeTruthy();
-
-  // Reload page to see updated playlist
-  await page.reload({ waitUntil: "domcontentloaded" });
-  await page.waitForSelector('[data-wasm-ready="true"]', { timeout: 30_000 });
-  await page.waitForSelector('[data-role="library-list"]', { timeout: 30_000 });
-
-  // Re-select the playlist
-  const reloadedPlaylist = page.locator('[data-role="playlist-item"]', {
-    hasText: playlistName,
-  });
-  await expect(reloadedPlaylist).toBeVisible({ timeout: 10_000 });
-  await reloadedPlaylist.click();
+  // Add 3 presentations to the playlist via search + drag
+  for (let i = 0; i < 3; i++) {
+    const pres = sourceLibrary.presentations[i];
+    const searchInput = page.locator('[data-role="global-search-query"]');
+    await searchInput.fill(pres.name.slice(0, Math.min(12, pres.name.length)));
+    const searchResult = page
+      .locator('[data-role="search-result-item"][data-kind="presentation"]')
+      .first();
+    await expect(searchResult).toBeVisible({ timeout: 20_000 });
+    const presentationList = page.locator('[data-role="presentation-list"]');
+    await searchResult.dragTo(presentationList);
+    // Clear search manually (WASM doesn't auto-clear after drag)
+    await searchInput.fill("");
+    await page.waitForTimeout(300);
+  }
 
   // Verify 3 items in playlist
   const playlistItems = page
     .locator('[data-role="presentation-list"]')
     .locator('[data-role="presentation-item"]');
   await expect(playlistItems).toHaveCount(3, { timeout: 15_000 });
+
+  // Get the playlist ID from the API
+  const playlistsResponse = await page.request.get(
+    new URL("/playlists", baseURL).toString(),
+  );
+  const playlists: Array<{ id: string; name: string }> =
+    await playlistsResponse.json();
+  const createdPlaylist = playlists.find((p) => p.name === playlistName);
+  expect(createdPlaylist).toBeTruthy();
+  const playlistId = createdPlaylist!.id;
 
   // Get first presentation's slide for triggering via API
   const firstPresId = sourceLibrary.presentations[0].id;
