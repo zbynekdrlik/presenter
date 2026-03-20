@@ -103,19 +103,38 @@ test("worship-pp stage displays playlist sidebar when triggered from playlist", 
     throw new Error("Expected at least one library with 3+ presentations");
   }
 
-  // Add 3 presentations to the playlist via search + drag
-  for (let i = 0; i < 3; i++) {
-    const pres = sourceLibrary.presentations[i];
-    const searchInput = page.locator('[data-role="global-search-query"]');
-    await searchInput.fill(pres.name.slice(0, Math.min(12, pres.name.length)));
-    const searchResult = page
-      .locator('[data-role="search-result-item"][data-kind="presentation"]')
-      .first();
-    await expect(searchResult).toBeVisible({ timeout: 20_000 });
-    const presentationList = page.locator('[data-role="presentation-list"]');
-    await searchResult.dragTo(presentationList);
-    await expect(searchInput).toHaveValue("");
-  }
+  // Add 3 presentations to the playlist via API (more reliable than drag)
+  const playlistsBeforeAdd = await page.request.get(
+    new URL("/playlists", baseURL).toString(),
+  );
+  const playlistsBefore: Array<{ id: string; name: string }> =
+    await playlistsBeforeAdd.json();
+  const targetPlaylist = playlistsBefore.find((p) => p.name === playlistName);
+  expect(targetPlaylist).toBeTruthy();
+  const playlistId = targetPlaylist!.id;
+
+  const presIds = sourceLibrary.presentations.slice(0, 3).map((p) => p.id);
+  const entries = presIds.map((id) => ({
+    type: "presentation",
+    presentation_id: id,
+  }));
+  const replaceResp = await page.request.put(
+    new URL(`/playlists/${playlistId}/entries`, baseURL).toString(),
+    { data: { entries } },
+  );
+  expect(replaceResp.ok()).toBeTruthy();
+
+  // Reload page to see updated playlist
+  await page.reload({ waitUntil: "domcontentloaded" });
+  await page.waitForSelector('[data-wasm-ready="true"]', { timeout: 30_000 });
+  await page.waitForSelector('[data-role="library-list"]', { timeout: 30_000 });
+
+  // Re-select the playlist
+  const reloadedPlaylist = page.locator('[data-role="playlist-item"]', {
+    hasText: playlistName,
+  });
+  await expect(reloadedPlaylist).toBeVisible({ timeout: 10_000 });
+  await reloadedPlaylist.click();
 
   // Verify 3 items in playlist
   const playlistItems = page

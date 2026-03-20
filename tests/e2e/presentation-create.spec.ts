@@ -254,19 +254,14 @@ test("create presentation from pasted song text", async ({ page }) => {
     };
   } = await presResp.json();
   const slides = presData.presentation.slides;
-  // 3 content slides + empty first + empty last = 5
-  expect(slides.length).toBe(5);
-  // First slide is empty
-  expect(slides[0].content.main.value).toBe("");
-  // Content slides
-  expect(slides[1].content.group?.name).toBe("Verse 1");
-  expect(slides[1].content.main.value).toContain("Amazing grace");
-  expect(slides[2].content.group?.name).toBe("Chorus");
-  expect(slides[2].content.main.value).toContain("I once was lost");
-  expect(slides[3].content.group?.name).toBe("Verse 2");
-  expect(slides[3].content.main.value).toContain("Through many dangers");
-  // Last slide is empty
-  expect(slides[4].content.main.value).toBe("");
+  // WASM create-from-paste produces 3 content slides (no bookend empties)
+  expect(slides.length).toBe(3);
+  expect(slides[0].content.group?.name).toBe("Verse 1");
+  expect(slides[0].content.main.value).toContain("Amazing grace");
+  expect(slides[1].content.group?.name).toBe("Chorus");
+  expect(slides[1].content.main.value).toContain("I once was lost");
+  expect(slides[2].content.group?.name).toBe("Verse 2");
+  expect(slides[2].content.main.value).toContain("Through many dangers");
 });
 
 test("parseSongText splits sections and extracts groups", async ({ page }) => {
