@@ -957,37 +957,6 @@ async fn operator_ui_endpoint_serves_wasm_shell() {
 }
 
 #[tokio::test]
-async fn legacy_operator_ui_endpoint_renders_html() {
-    let state = AppState::in_memory().await.unwrap();
-    state
-        .repository()
-        .replace_bible_translation_passages(&sample_ingestion_batch())
-        .await
-        .unwrap();
-    let app = build_router(state);
-    let response = app
-        .clone()
-        .oneshot(
-            Request::builder()
-                .uri("/legacy")
-                .body(Body::empty())
-                .unwrap(),
-        )
-        .await
-        .unwrap();
-    assert_eq!(response.status(), StatusCode::OK);
-    let bytes = axum::body::to_bytes(response.into_body(), usize::MAX)
-        .await
-        .unwrap();
-    let body = String::from_utf8(bytes.to_vec()).unwrap();
-    assert!(body.contains("Presenter Operator"));
-    assert!(body.contains("Sample Library"));
-    assert!(body.contains("Slides"));
-    assert!(body.contains("Timers"));
-    assert!(body.contains("data-mode=\"live\""));
-}
-
-#[tokio::test]
 async fn timer_overlay_endpoint_renders_html() {
     let state = AppState::in_memory().await.unwrap();
     let app = build_router(state);

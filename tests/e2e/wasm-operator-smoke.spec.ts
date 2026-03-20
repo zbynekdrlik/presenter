@@ -1,8 +1,7 @@
 /**
  * WASM Operator Smoke Tests
  *
- * These tests verify critical functionality of the WASM-based operator UI at /ui/operator
- * to ensure feature parity with the JavaScript operator at /legacy.
+ * These tests verify critical functionality of the WASM-based operator UI at /ui/operator.
  *
  * Critical issues being verified:
  * - Library click works and loads presentations
@@ -279,73 +278,5 @@ test.describe("WASM Operator Smoke Tests", () => {
     // Actual toast verification depends on how errors are handled
     // The test passes if no unhandled exceptions occur
     expect(true).toBe(true);
-  });
-});
-
-test.describe("WASM Operator Content Parity", () => {
-  test.beforeEach(async ({ page }) => {
-    await page.goto(`${baseURL}/ui/operator`);
-    await page.waitForSelector('[data-role="library-list"]', {
-      timeout: 30_000,
-    });
-    // Wait for libraries to load (count > 0)
-    await page.waitForFunction(
-      () => {
-        const btn = document.querySelector('[data-role="library-more"]');
-        const count = parseInt(btn?.textContent || "0", 10);
-        return count > 0;
-      },
-      { timeout: 30_000 },
-    );
-  });
-
-  test("library count matches JS operator", async ({ page }) => {
-    // Get WASM library count
-    const wasmCount = await page
-      .locator('[data-role="library-more"]')
-      .textContent();
-
-    // Navigate to JS operator (legacy)
-    await page.goto(`${baseURL}/legacy`);
-    await page.waitForSelector('[data-role="library-list"]', {
-      timeout: 30_000,
-    });
-
-    // Get JS library count
-    const jsCount = await page
-      .locator('[data-role="library-more"]')
-      .textContent();
-
-    // They should match
-    expect(wasmCount).toBe(jsCount);
-  });
-
-  test("playlist count matches JS operator", async ({ page }) => {
-    // Get WASM playlist count - wait for it to load first
-    await page.waitForFunction(
-      () => {
-        const btn = document.querySelector('[data-role="playlist-more"]');
-        const count = parseInt(btn?.textContent || "0", 10);
-        return count > 0;
-      },
-      { timeout: 30_000 },
-    );
-    const wasmCount = await page
-      .locator('[data-role="playlist-more"]')
-      .textContent();
-
-    // Navigate to JS operator (legacy)
-    await page.goto(`${baseURL}/legacy`);
-    await page.waitForSelector('[data-role="playlist-list"]', {
-      timeout: 30_000,
-    });
-
-    // Get JS playlist count
-    const jsCount = await page
-      .locator('[data-role="playlist-more"]')
-      .textContent();
-
-    // They should match
-    expect(wasmCount).toBe(jsCount);
   });
 });

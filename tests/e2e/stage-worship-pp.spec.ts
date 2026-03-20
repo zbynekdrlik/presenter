@@ -15,13 +15,11 @@ let port: number;
 test.describe.configure({ timeout: 180_000 });
 
 async function waitForOperatorReady(page: Page) {
-  await page.goto(new URL("/legacy", baseURL).toString(), {
+  await page.goto(new URL("/ui/operator", baseURL).toString(), {
     waitUntil: "domcontentloaded",
   });
-  await page.waitForLoadState("networkidle");
-  await page.waitForFunction(() => window.__presenterLiveConnected === true, {
-    timeout: 30_000,
-  });
+  await page.waitForSelector('[data-wasm-ready="true"]', { timeout: 30_000 });
+  await page.waitForSelector('[data-role="library-list"]', { timeout: 30_000 });
 }
 
 async function openStage(context: BrowserContext) {

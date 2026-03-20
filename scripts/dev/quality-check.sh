@@ -54,7 +54,7 @@ if command -v rg >/dev/null 2>&1 && rg -n "(insert_slide_handler|duplicate_slide
 fi
 
 # 3) UI pages present
-for f in crates/presenter-server/src/ui/{operator,tablet,settings,home,timer_overlay}.rs; do
+for f in crates/presenter-server/src/ui/{tablet,settings,home,timer_overlay}.rs; do
   [[ -f "$f" ]] || fail "Missing UI page: $f"
 done
 
