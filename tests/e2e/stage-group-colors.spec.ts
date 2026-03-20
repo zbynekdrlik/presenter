@@ -20,6 +20,11 @@ async function waitForOperatorReady(page: Page) {
   });
   await page.waitForSelector('[data-wasm-ready="true"]', { timeout: 30_000 });
   await page.waitForSelector('[data-role="library-list"]', { timeout: 30_000 });
+  // Select the first library so presentation creation works
+  const libraryItem = page.locator('[data-role="library-item"]').first();
+  await expect(libraryItem).toBeVisible({ timeout: 10_000 });
+  await libraryItem.click();
+  await page.waitForTimeout(300);
 }
 
 async function openStageDisplay(

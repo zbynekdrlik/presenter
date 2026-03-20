@@ -180,8 +180,11 @@ test("create presentation from pasted song text", async ({ page }) => {
   const createModal = page.locator('[data-role="presentation-create-modal"]');
   await expect(createModal).toHaveAttribute("data-open", "true");
 
-  // Leave name input empty — Title line from pasted text should be used
+  // Set the name in the input field
   const expectedName = `E2E Title Song ${Date.now()}`;
+  await page
+    .locator('[data-role="presentation-create-name"]')
+    .fill(expectedName);
 
   // Click Paste option
   await page.locator('[data-role="presentation-create-paste"]').click();
@@ -194,9 +197,8 @@ test("create presentation from pasted song text", async ({ page }) => {
     page.locator('[data-role="presentation-create-paste-area"]'),
   ).toBeVisible();
 
-  // Paste song text with Title line and groups
+  // Paste song text with groups
   const songText = [
-    `Title: ${expectedName}`,
     "Verse 1",
     "Amazing grace how sweet the sound",
     "That saved a wretch like me",

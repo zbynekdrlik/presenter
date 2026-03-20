@@ -57,12 +57,19 @@ test("worship-pp stage displays playlist sidebar when triggered from playlist", 
 }) => {
   await waitForOperatorReady(page);
 
-  // Create a playlist
+  // Create a playlist with dashboard visibility
   await page.locator('[data-role="playlist-create"]').click();
   const playlistModal = page.locator('[data-role="playlist-edit-modal"]');
   await expect(playlistModal).toHaveAttribute("data-open", "true");
   const playlistName = `Stage E2E ${Date.now()}`;
   await page.locator('[data-role="playlist-edit-name"]').fill(playlistName);
+  // Enable "Show in dashboard" so the playlist appears in the sidebar
+  const dashboardCheckbox = page.locator(
+    '[data-role="playlist-edit-dashboard"]',
+  );
+  if (!(await dashboardCheckbox.isChecked())) {
+    await dashboardCheckbox.check();
+  }
   await page.locator('[data-role="playlist-edit-save"]').click();
   await expect(playlistModal).toHaveAttribute("data-open", "false");
 
