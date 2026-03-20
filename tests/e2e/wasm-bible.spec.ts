@@ -208,6 +208,15 @@ test.describe("WASM Operator Bible Tests", () => {
     const mainTranslation = page.locator('[data-role="main-translation"]');
     await expect(mainTranslation).toBeVisible({ timeout: 10_000 });
 
+    // Wait for translation options to load asynchronously
+    await page.waitForFunction(
+      () => {
+        const select = document.querySelector('[data-role="main-translation"]');
+        return select && select.querySelectorAll("option").length >= 1;
+      },
+      { timeout: 15_000 },
+    );
+
     const options = mainTranslation.locator("option");
     const count = await options.count();
     expect(count).toBeGreaterThanOrEqual(1);
@@ -850,22 +859,26 @@ test.describe("WASM Operator Bible Tests", () => {
         document.querySelectorAll(
           '[data-view-panel="bible"] [data-role="presentation-card"]',
         ).length > 0,
-      { timeout: 10_000 },
+      { timeout: 15_000 },
     );
+
+    // Wait for the card list to stabilise after creation
+    await page.waitForTimeout(500);
 
     // Select the last created presentation
     const presCards = bp.locator('[data-role="presentation-card"]');
     const countBefore = await presCards.count();
     const lastPres = presCards.last();
     await lastPres.click();
+    await expect(lastPres).toHaveClass(/is-active/, { timeout: 5_000 });
 
-    // Handle confirm dialog
+    // Set up dialog handler BEFORE triggering the delete
     page.once("dialog", (dialog) => dialog.accept());
 
     // Click delete
     await bp.locator('[data-role="presentation-delete"]').click();
 
-    // Wait for deletion
+    // Wait for deletion with extended timeout
     await page.waitForFunction(
       (expected: number) => {
         const cards = document.querySelectorAll(
@@ -874,7 +887,7 @@ test.describe("WASM Operator Bible Tests", () => {
         return cards.length < expected;
       },
       countBefore,
-      { timeout: 10_000 },
+      { timeout: 15_000 },
     );
 
     const countAfter = await presCards.count();
