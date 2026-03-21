@@ -352,12 +352,9 @@ test.describe("WASM Slide Editing - Persistence", () => {
     await createButton.click();
 
     // Modal should be open - focus should NOT return to textarea
-    await page
-      .waitForFunction(
-        () => document.querySelector('[data-role="modal"]') !== null,
-        { timeout: 5_000 },
-      )
-      .catch(() => {}); // Modal may not appear
+    // Use a short fixed wait — the modal opening is non-deterministic and
+    // we only need to verify focus didn't snap back to textarea.
+    await page.waitForTimeout(500);
 
     // Check if modal is visible
     const modal = page.locator('[data-role="modal"]');
@@ -371,12 +368,7 @@ test.describe("WASM Slide Editing - Persistence", () => {
 
     // Close modal by pressing Escape
     await page.keyboard.press("Escape");
-    await page
-      .waitForFunction(
-        () => !document.querySelector('[data-role="modal"][data-open="true"]'),
-        { timeout: 5_000 },
-      )
-      .catch(() => {});
+    await page.waitForTimeout(300);
   });
 });
 
