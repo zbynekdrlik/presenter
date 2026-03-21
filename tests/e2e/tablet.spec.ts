@@ -510,14 +510,17 @@ test("tablet shows empty message for presentation with no slides", async ({
     { timeout: 10_000 },
   );
 
-  // Verify empty state message (use polling to handle async slide loading)
-  await expect(async () => {
-    const emptyMsg = page.locator(".tablet-slides__empty");
-    await expect(emptyMsg).toContainText("No slides in this presentation");
-  }).toPass({ timeout: 10_000, intervals: [300] });
+  // Wait for slides to load (async fetch), then verify empty state
+  // The slide area first shows previous presentation's slides until fetch completes
+  await expect(page.locator('[data-role="tablet-slide"]')).toHaveCount(0, {
+    timeout: 15_000,
+  });
 
-  // Verify no slide cards rendered
-  await expect(page.locator('[data-role="tablet-slide"]')).toHaveCount(0);
+  // Verify empty state message
+  await expect(page.locator(".tablet-slides__empty")).toContainText(
+    "No slides in this presentation",
+    { timeout: 5_000 },
+  );
 });
 
 test("tablet switches between multiple presentations", async ({
