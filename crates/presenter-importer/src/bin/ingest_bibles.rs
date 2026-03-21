@@ -32,35 +32,21 @@ async fn main() -> anyhow::Result<()> {
         })
         .collect();
 
-    let mut success_count = 0;
-    let mut fail_count = 0;
+    let summaries = ingestion
+        .ingest_specs(available_specs)
+        .await
+        .context("bible ingestion failed")?;
 
-    for spec in available_specs {
-        let code = spec.translation.code.clone();
-        match ingestion.ingest(&spec).await {
-            Ok(summary) => {
-                println!(
-                    "Imported {count} passages for translation {code}",
-                    count = summary.passage_count,
-                    code = summary.translation_code
-                );
-                success_count += 1;
-            }
-            Err(err) => {
-                eprintln!("Warning: failed to import {code}: {err:#}");
-                fail_count += 1;
-            }
+    if summaries.is_empty() {
+        println!("No Bible translations were imported.");
+    } else {
+        for summary in summaries {
+            println!(
+                "Imported {count} passages for translation {code}",
+                count = summary.passage_count,
+                code = summary.translation_code
+            );
         }
-    }
-
-    if success_count == 0 && fail_count > 0 {
-        anyhow::bail!("all {fail_count} bible translations failed to import");
-    }
-
-    if fail_count > 0 {
-        eprintln!(
-            "Imported {success_count} translations, {fail_count} failed (see warnings above)"
-        );
     }
 
     Ok(())

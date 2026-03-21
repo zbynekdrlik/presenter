@@ -247,9 +247,10 @@ fn king_james_spec() -> BibleTranslationSpec {
 
     BibleTranslationSpec {
         translation: BibleTranslation::new("eng-kjv", "King James Version", "en")
-            .with_source(KING_JAMES_SOURCE),
-        source: BibleSource::Url {
-            url: KING_JAMES_SOURCE.to_string(),
+            .with_source("local USFM file"),
+        source: BibleSource::LocalFile {
+            env_var: "PRESENTER_BIBLE_KJV".to_string(),
+            hint: "/opt/presenter/bibles/kjv.usfm.zip".to_string(),
         },
         format: BibleSourceFormat::UsfmZip {
             book_name_overrides: overrides,
@@ -260,9 +261,10 @@ fn king_james_spec() -> BibleTranslationSpec {
 fn slovak_ekumenicky_spec() -> BibleTranslationSpec {
     BibleTranslationSpec {
         translation: BibleTranslation::new("slk-seb", "Slovenský ekumenický preklad", "sk")
-            .with_source(SLOVAK_ECUMENICKY_SOURCE),
-        source: BibleSource::Url {
-            url: SLOVAK_ECUMENICKY_SOURCE.to_string(),
+            .with_source("local MySword file"),
+        source: BibleSource::LocalFile {
+            env_var: "PRESENTER_BIBLE_SEB".to_string(),
+            hint: "/opt/presenter/bibles/seb.bbl.mybible.zip".to_string(),
         },
         format: BibleSourceFormat::MySwordSqlite {
             book_names: slovak_ekumenicky_book_names(),
@@ -287,9 +289,10 @@ fn slovak_rohacek_spec() -> BibleTranslationSpec {
 fn slovak_evangelicky_spec() -> BibleTranslationSpec {
     BibleTranslationSpec {
         translation: BibleTranslation::new("slk-sevp", "Slovenský evanjelický preklad", "sk")
-            .with_source(SLOVAK_EVANGELICKY_SOURCE),
-        source: BibleSource::Url {
-            url: SLOVAK_EVANGELICKY_SOURCE.to_string(),
+            .with_source("local Obohu file"),
+        source: BibleSource::LocalFile {
+            env_var: "PRESENTER_BIBLE_SEVP".to_string(),
+            hint: "/opt/presenter/bibles/sevp.obohu.mybible.zip".to_string(),
         },
         format: BibleSourceFormat::ObohuSqlite,
     }
