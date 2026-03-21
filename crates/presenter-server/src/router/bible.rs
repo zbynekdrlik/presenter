@@ -1,6 +1,6 @@
 use super::AppError;
 use crate::state::AppState;
-use anyhow::Error as AnyhowError;
+use anyhow::Context;
 use axum::{
     extract::{Query, State},
     http::StatusCode,
@@ -180,7 +180,7 @@ pub(super) async fn get_bible_passage(
 ) -> Result<Json<Option<BiblePassage>>, AppError> {
     let verse_end = query.verse_end.unwrap_or(query.verse_start);
     let reference = BibleReference::new(query.book, query.chapter, query.verse_start, verse_end)
-        .map_err(AnyhowError::new)?;
+        .context("failed to parse Bible reference")?;
     let passage = state
         .find_bible_passage(&query.translation, &reference)
         .await?;
@@ -256,14 +256,14 @@ pub(super) async fn trigger_bible_broadcast(
             payload.verse_start,
             verse_end,
         )
-        .map_err(AnyhowError::new)?,
+        .context("failed to parse Bible reference")?,
         _ => BibleReference::new(
             payload.book,
             payload.chapter,
             payload.verse_start,
             verse_end,
         )
-        .map_err(AnyhowError::new)?,
+        .context("failed to parse Bible reference")?,
     };
     let text_overrides = crate::state::bible::BibleTriggerOverrides {
         main_text: payload.main_text,

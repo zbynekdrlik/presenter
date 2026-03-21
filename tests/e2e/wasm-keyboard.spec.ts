@@ -140,7 +140,21 @@ test.describe("WASM Operator Keyboard Shortcuts", () => {
     await searchInput.fill("test");
 
     // Wait for results
-    await page.waitForTimeout(500);
+    await page
+      .waitForFunction(
+        () => {
+          const results = document.querySelector(
+            '[data-role="global-search-results"]',
+          );
+          return (
+            results &&
+            results.querySelectorAll('[data-role="search-result-item"]')
+              .length > 0
+          );
+        },
+        { timeout: 5_000 },
+      )
+      .catch(() => {});
 
     // Press Escape
     await page.keyboard.press("Escape");

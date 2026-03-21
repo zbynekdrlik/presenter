@@ -173,7 +173,9 @@ test.describe("WASM Operator Edge Cases", () => {
     });
 
     // Wait for data to load
-    await page.waitForTimeout(2000);
+    await page.waitForSelector('[data-role="library-list"]', {
+      timeout: 10_000,
+    });
 
     // Check if presentation is still selected (via session storage)
     // The session may or may not restore depending on implementation

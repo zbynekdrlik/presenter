@@ -96,7 +96,21 @@ test.describe("WASM Operator Search", () => {
     await searchInput.fill("test");
 
     // Wait for results to appear
-    await page.waitForTimeout(500);
+    await page
+      .waitForFunction(
+        () => {
+          const results = document.querySelector(
+            '[data-role="global-search-results"]',
+          );
+          return (
+            results &&
+            results.querySelectorAll('[data-role="search-result-item"]')
+              .length > 0
+          );
+        },
+        { timeout: 5_000 },
+      )
+      .catch(() => {});
 
     // Press escape
     await page.keyboard.press("Escape");
@@ -168,7 +182,20 @@ test.describe("WASM Operator Search", () => {
     await searchInput.fill("abc");
 
     // Wait for debounce to complete
-    await page.waitForTimeout(300);
+    await page.waitForFunction(
+      () => {
+        const results = document.querySelector(
+          '[data-role="global-search-results"]',
+        );
+        return (
+          results &&
+          (results.querySelectorAll('[data-role="search-result-item"]').length >
+            0 ||
+            results.textContent?.includes("No results"))
+        );
+      },
+      { timeout: 5_000 },
+    );
 
     // Results should eventually appear (single request)
     await page.waitForFunction(
@@ -195,7 +222,21 @@ test.describe("WASM Operator Search", () => {
     await searchInput.fill("test");
 
     // Wait for results
-    await page.waitForTimeout(500);
+    await page
+      .waitForFunction(
+        () => {
+          const results = document.querySelector(
+            '[data-role="global-search-results"]',
+          );
+          return (
+            results &&
+            results.querySelectorAll('[data-role="search-result-item"]')
+              .length > 0
+          );
+        },
+        { timeout: 5_000 },
+      )
+      .catch(() => {});
 
     // Clear by using test helper
     await page.evaluate(() => {

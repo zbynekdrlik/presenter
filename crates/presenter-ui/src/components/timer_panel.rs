@@ -18,8 +18,8 @@ fn format_seconds(seconds: i64) -> String {
 /// Timer panel for the timers view.
 #[component]
 pub fn TimerPanel() -> impl IntoView {
-    let ctx = use_context::<AppContext>().expect("AppContext");
-    let op = use_context::<OperatorState>().expect("OperatorState");
+    let ctx = use_ctx!(AppContext);
+    let op = use_ctx!(OperatorState);
 
     let send_timer_cmd = move |cmd: TimerCommand| {
         let timers = ctx.timers;

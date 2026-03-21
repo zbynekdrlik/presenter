@@ -234,8 +234,92 @@ fn default_boxes_for(layout_code: &str) -> Vec<StageBox> {
     }
 }
 
-fn worship_snv_default_boxes() -> Vec<StageBox> {
+/// Standard status bar boxes for full-width layouts.
+fn default_status_bar_boxes() -> Vec<StageBox> {
     vec![
+        StageBox::with_style(
+            "clock",
+            StageBoxType::Clock,
+            2.0,
+            92.0,
+            20.0,
+            6.0,
+            "#38bdf8",
+            TextAlign::Left,
+            700,
+            48.0,
+        ),
+        StageBox::with_style(
+            "live-indicator",
+            StageBoxType::LiveIndicator,
+            40.0,
+            92.0,
+            20.0,
+            6.0,
+            "#ef4444",
+            TextAlign::Center,
+            700,
+            32.0,
+        ),
+        StageBox::with_style(
+            "connection-status",
+            StageBoxType::ConnectionStatus,
+            75.0,
+            92.0,
+            23.0,
+            6.0,
+            "#38bdf8",
+            TextAlign::Right,
+            600,
+            20.0,
+        ),
+    ]
+}
+
+/// Compact status bar boxes for layouts with sidebars.
+fn compact_status_bar_boxes() -> Vec<StageBox> {
+    vec![
+        StageBox::with_style(
+            "clock",
+            StageBoxType::Clock,
+            2.0,
+            92.0,
+            20.0,
+            6.0,
+            "#38bdf8",
+            TextAlign::Left,
+            700,
+            48.0,
+        ),
+        StageBox::with_style(
+            "live-indicator",
+            StageBoxType::LiveIndicator,
+            28.0,
+            92.0,
+            20.0,
+            6.0,
+            "#ef4444",
+            TextAlign::Center,
+            700,
+            32.0,
+        ),
+        StageBox::with_style(
+            "connection-status",
+            StageBoxType::ConnectionStatus,
+            50.0,
+            92.0,
+            20.0,
+            6.0,
+            "#38bdf8",
+            TextAlign::Right,
+            600,
+            20.0,
+        ),
+    ]
+}
+
+fn worship_snv_default_boxes() -> Vec<StageBox> {
+    let mut boxes = vec![
         StageBox::with_style(
             "current-group",
             StageBoxType::CurrentGroup,
@@ -284,48 +368,13 @@ fn worship_snv_default_boxes() -> Vec<StageBox> {
             700,
             80.0,
         ),
-        // Status bar elements (bottom of screen)
-        StageBox::with_style(
-            "clock",
-            StageBoxType::Clock,
-            2.0,
-            92.0,
-            20.0,
-            6.0,
-            "#38bdf8",
-            TextAlign::Left,
-            700,
-            48.0,
-        ),
-        StageBox::with_style(
-            "live-indicator",
-            StageBoxType::LiveIndicator,
-            40.0,
-            92.0,
-            20.0,
-            6.0,
-            "#ef4444",
-            TextAlign::Center,
-            700,
-            32.0,
-        ),
-        StageBox::with_style(
-            "connection-status",
-            StageBoxType::ConnectionStatus,
-            75.0,
-            92.0,
-            23.0,
-            6.0,
-            "#38bdf8",
-            TextAlign::Right,
-            600,
-            20.0,
-        ),
-    ]
+    ];
+    boxes.extend(default_status_bar_boxes());
+    boxes
 }
 
 fn worship_pp_default_boxes() -> Vec<StageBox> {
-    vec![
+    let mut boxes = vec![
         StageBox::with_style(
             "current-group",
             StageBoxType::CurrentGroup,
@@ -386,152 +435,43 @@ fn worship_pp_default_boxes() -> Vec<StageBox> {
             400,
             18.0,
         ),
-        // Status bar elements
-        StageBox::with_style(
-            "clock",
-            StageBoxType::Clock,
-            2.0,
-            92.0,
-            20.0,
-            6.0,
-            "#38bdf8",
-            TextAlign::Left,
-            700,
-            48.0,
-        ),
-        StageBox::with_style(
-            "live-indicator",
-            StageBoxType::LiveIndicator,
-            28.0,
-            92.0,
-            20.0,
-            6.0,
-            "#ef4444",
-            TextAlign::Center,
-            700,
-            32.0,
-        ),
-        StageBox::with_style(
-            "connection-status",
-            StageBoxType::ConnectionStatus,
-            50.0,
-            92.0,
-            20.0,
-            6.0,
-            "#38bdf8",
-            TextAlign::Right,
-            600,
-            20.0,
-        ),
-    ]
+    ];
+    boxes.extend(compact_status_bar_boxes());
+    boxes
 }
 
 fn timer_default_boxes() -> Vec<StageBox> {
-    vec![
-        StageBox::with_style(
-            "countdown-timer",
-            StageBoxType::CountdownTimer,
-            10.0,
-            35.0,
-            80.0,
-            30.0,
-            "#38bdf8",
-            TextAlign::Center,
-            700,
-            200.0,
-        ),
-        // Status bar elements
-        StageBox::with_style(
-            "clock",
-            StageBoxType::Clock,
-            2.0,
-            92.0,
-            20.0,
-            6.0,
-            "#38bdf8",
-            TextAlign::Left,
-            700,
-            48.0,
-        ),
-        StageBox::with_style(
-            "live-indicator",
-            StageBoxType::LiveIndicator,
-            40.0,
-            92.0,
-            20.0,
-            6.0,
-            "#ef4444",
-            TextAlign::Center,
-            700,
-            32.0,
-        ),
-        StageBox::with_style(
-            "connection-status",
-            StageBoxType::ConnectionStatus,
-            75.0,
-            92.0,
-            23.0,
-            6.0,
-            "#38bdf8",
-            TextAlign::Right,
-            600,
-            20.0,
-        ),
-    ]
+    let mut boxes = vec![StageBox::with_style(
+        "countdown-timer",
+        StageBoxType::CountdownTimer,
+        10.0,
+        35.0,
+        80.0,
+        30.0,
+        "#38bdf8",
+        TextAlign::Center,
+        700,
+        200.0,
+    )];
+    boxes.extend(default_status_bar_boxes());
+    boxes
 }
 
 fn preach_default_boxes() -> Vec<StageBox> {
-    vec![
-        StageBox::with_style(
-            "preach-timer",
-            StageBoxType::PreachTimer,
-            10.0,
-            35.0,
-            80.0,
-            30.0,
-            "#34d399",
-            TextAlign::Center,
-            700,
-            200.0,
-        ),
-        // Status bar elements
-        StageBox::with_style(
-            "clock",
-            StageBoxType::Clock,
-            2.0,
-            92.0,
-            20.0,
-            6.0,
-            "#38bdf8",
-            TextAlign::Left,
-            700,
-            48.0,
-        ),
-        StageBox::with_style(
-            "live-indicator",
-            StageBoxType::LiveIndicator,
-            40.0,
-            92.0,
-            20.0,
-            6.0,
-            "#ef4444",
-            TextAlign::Center,
-            700,
-            32.0,
-        ),
-        StageBox::with_style(
-            "connection-status",
-            StageBoxType::ConnectionStatus,
-            75.0,
-            92.0,
-            23.0,
-            6.0,
-            "#38bdf8",
-            TextAlign::Right,
-            600,
-            20.0,
-        ),
-    ]
+    let mut boxes = vec![StageBox::with_style(
+        "preach-timer",
+        StageBoxType::PreachTimer,
+        10.0,
+        35.0,
+        80.0,
+        30.0,
+        "#34d399",
+        TextAlign::Center,
+        700,
+        200.0,
+    )];
+    boxes.extend(default_status_bar_boxes());
+    boxes
 }
 
 #[cfg(test)]

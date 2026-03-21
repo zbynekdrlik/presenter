@@ -11,7 +11,7 @@ use crate::state::AppContext;
 
 #[component]
 pub fn ClearBroadcastButton() -> impl IntoView {
-    let ctx = use_context::<AppContext>().expect("AppContext");
+    let ctx = use_ctx!(AppContext);
 
     let on_clear = move |_| {
         let toast_message = ctx.toast_message;
@@ -49,7 +49,7 @@ pub fn ClearBroadcastButton() -> impl IntoView {
 
 #[component]
 pub fn BibleSearch() -> impl IntoView {
-    let bs = use_context::<BibleState>().expect("BibleState");
+    let bs = use_ctx!(BibleState);
     let search_query = bs.search_query;
     let search_results = bs.search_results;
     let searching = bs.searching;
@@ -163,7 +163,7 @@ pub fn BibleSearch() -> impl IntoView {
 
 #[component]
 fn BibleSearchResults() -> impl IntoView {
-    let bs = use_context::<BibleState>().expect("BibleState");
+    let bs = use_ctx!(BibleState);
     let results = bs.search_results;
 
     view! {
@@ -231,7 +231,7 @@ fn BibleSearchResults() -> impl IntoView {
 
 #[component]
 pub fn LoadedPassagesHistory() -> impl IntoView {
-    let bs = use_context::<BibleState>().expect("BibleState");
+    let bs = use_ctx!(BibleState);
     let history = bs.loaded_passages_history;
 
     view! {

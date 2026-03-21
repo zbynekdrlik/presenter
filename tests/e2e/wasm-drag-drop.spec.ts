@@ -138,7 +138,7 @@ test.describe("WASM Operator Drag-Drop", () => {
     const playlistCount = await playlist.count();
     // Skip if no playlists available
     if (playlistCount === 0) {
-      console.log("Skipping: No playlists available for drop test");
+      test.skip(true, "No playlists available for drop test");
       return;
     }
 
@@ -150,7 +150,7 @@ test.describe("WASM Operator Drag-Drop", () => {
 
     // Skip if no playlist ID found
     if (!playlistId) {
-      console.log("Skipping: No playlist ID found");
+      test.skip(true, "No playlist ID found");
       return;
     }
 
@@ -171,7 +171,7 @@ test.describe("WASM Operator Drag-Drop", () => {
 
     // Skip if no presentation ID found
     if (!presId) {
-      console.log("Skipping: No presentation ID found");
+      test.skip(true, "No presentation ID found");
       return;
     }
 
@@ -187,7 +187,24 @@ test.describe("WASM Operator Drag-Drop", () => {
     );
 
     // Wait for update
-    await page.waitForTimeout(2000);
+    await page
+      .waitForFunction(
+        (initial) => {
+          const helpers = (window as any).__presenterOperatorTestHelpers;
+          if (helpers?.playlistPresentationCount) {
+            const current = helpers.playlistPresentationCount(
+              document
+                .querySelector("[data-playlist-id]")
+                ?.getAttribute("data-playlist-id"),
+            );
+            return current > initial;
+          }
+          return false;
+        },
+        initialCount,
+        { timeout: 10_000 },
+      )
+      .catch(() => {});
 
     // Verify count increased (may be flaky due to WASM state sync)
     const newCount = await page.evaluate(async (plId) => {
@@ -201,8 +218,9 @@ test.describe("WASM Operator Drag-Drop", () => {
     // This test is flaky due to WASM state synchronization timing
     // Skip if the count didn't increase (helper not working as expected)
     if (newCount <= initialCount) {
-      console.log(
-        "Skipping: Playlist count did not increase (WASM state sync issue)",
+      test.skip(
+        true,
+        "Playlist count did not increase (WASM state sync issue)",
       );
       return;
     }
@@ -219,14 +237,18 @@ test.describe("WASM Operator Drag-Drop", () => {
 
     // Skip if no active presentation
     if (!presId) {
-      console.log(
-        "Skipping: No active presentation found for slide reorder test",
-      );
+      test.skip(true, "No active presentation found for slide reorder test");
       return;
     }
 
     // Wait for state to be fully loaded
-    await page.waitForTimeout(500);
+    await page.waitForFunction(
+      () => {
+        const helpers = (window as any).__presenterOperatorTestHelpers;
+        return helpers?.slideOrder !== undefined;
+      },
+      { timeout: 5_000 },
+    );
 
     const initialOrder = await page.evaluate((presId) => {
       const helpers = (window as any).__presenterOperatorTestHelpers;
@@ -238,9 +260,7 @@ test.describe("WASM Operator Drag-Drop", () => {
 
     // Skip if not enough slides
     if (initialOrder.length < 2) {
-      console.log(
-        "Skipping: Presentation needs at least 2 slides for reorder test",
-      );
+      test.skip(true, "Presentation needs at least 2 slides for reorder test");
       return;
     }
 
@@ -262,7 +282,19 @@ test.describe("WASM Operator Drag-Drop", () => {
     );
 
     // Wait for state update
-    await page.waitForTimeout(2000);
+    await page
+      .waitForFunction(
+        (expected) => {
+          const slides = document.querySelectorAll("[data-slide-id]");
+          return (
+            slides.length > 0 &&
+            slides[0]?.getAttribute("data-slide-id") === expected
+          );
+        },
+        reorderedSlides[0],
+        { timeout: 10_000 },
+      )
+      .catch(() => {});
 
     // Verify new order via DOM (may be flaky due to WASM state sync)
     const domSlideIds = await page.evaluate(() => {
@@ -277,8 +309,9 @@ test.describe("WASM Operator Drag-Drop", () => {
         domSlideIds[0] !== initialOrder[1] ||
         domSlideIds[1] !== initialOrder[0]
       ) {
-        console.log(
-          "Skipping: Slide order did not change in DOM (WASM state sync issue)",
+        test.skip(
+          true,
+          "Slide order did not change in DOM (WASM state sync issue)",
         );
         // Restore original order anyway
         await page.evaluate(
@@ -318,12 +351,12 @@ test.describe("WASM Operator Drag-Drop", () => {
     const playlistCountForEntry = await playlist.count();
     // Skip if no playlists available (dev data dependency)
     if (playlistCountForEntry === 0) {
-      console.log("Skipping: No playlists available for entry drag test");
+      test.skip(true, "No playlists available for entry drag test");
       return;
     }
     await playlist.click();
 
-    // Wait for playlist entries
+    // Brief settle after playlist click for entries to render
     await page.waitForTimeout(500);
 
     // Check if there are entries
@@ -333,9 +366,7 @@ test.describe("WASM Operator Drag-Drop", () => {
     const entriesCount = await entries.count();
     // Skip if playlist is empty (dev data dependency)
     if (entriesCount === 0) {
-      console.log(
-        "Skipping: Empty playlist - no entries available for drag test",
-      );
+      test.skip(true, "Empty playlist - no entries available for drag test");
       return;
     }
 

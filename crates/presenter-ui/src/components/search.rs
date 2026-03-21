@@ -9,8 +9,8 @@ use wasm_bindgen::JsCast;
 /// Search results dropdown with debounced API queries.
 #[component]
 pub fn SearchResults() -> impl IntoView {
-    let ctx = use_context::<AppContext>().expect("AppContext");
-    let op = use_context::<OperatorState>().expect("OperatorState");
+    let ctx = use_ctx!(AppContext);
+    let op = use_ctx!(OperatorState);
 
     // Debounced search effect
     let timeout_handle: Rc<RefCell<Option<gloo_timers::callback::Timeout>>> =

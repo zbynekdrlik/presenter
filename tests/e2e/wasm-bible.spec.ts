@@ -377,7 +377,7 @@ test.describe("WASM Operator Bible Tests", () => {
     await navigateToBible(page);
 
     if (!(await hasBibleData(page))) {
-      // No Bible data available — skip gracefully
+      test.skip(true, "No Bible data available");
       return;
     }
 
@@ -418,7 +418,7 @@ test.describe("WASM Operator Bible Tests", () => {
     await clearBroadcast();
 
     if (!(await hasBibleData(page))) {
-      // No Bible data available — skip gracefully
+      test.skip(true, "No Bible data available");
       return;
     }
 
@@ -468,7 +468,7 @@ test.describe("WASM Operator Bible Tests", () => {
     await navigateToBible(page);
 
     if (!(await hasBibleData(page))) {
-      // No Bible data available — skip gracefully
+      test.skip(true, "No Bible data available");
       return;
     }
 
@@ -501,7 +501,7 @@ test.describe("WASM Operator Bible Tests", () => {
     await navigateToBible(page);
 
     if (!(await hasBibleData(page))) {
-      // No Bible data available — skip gracefully
+      test.skip(true, "No Bible data available");
       return;
     }
 
@@ -532,7 +532,7 @@ test.describe("WASM Operator Bible Tests", () => {
     await navigateToBible(page);
 
     if (!(await hasBibleData(page))) {
-      // No Bible data available — skip gracefully
+      test.skip(true, "No Bible data available");
       return;
     }
 
@@ -577,7 +577,10 @@ test.describe("WASM Operator Bible Tests", () => {
   }) => {
     await navigateToBible(page);
 
-    if (!(await hasBibleData(page))) return;
+    if (!(await hasBibleData(page))) {
+      test.skip(true, "No Bible data available");
+      return;
+    }
 
     // Load a passage
     const firstBook = page.locator('[data-role="book-item"]').first();
@@ -619,7 +622,10 @@ test.describe("WASM Operator Bible Tests", () => {
   }) => {
     await navigateToBible(page);
 
-    if (!(await hasBibleData(page))) return;
+    if (!(await hasBibleData(page))) {
+      test.skip(true, "No Bible data available");
+      return;
+    }
 
     const firstBook = page.locator('[data-role="book-item"]').first();
     await firstBook.click();
@@ -652,7 +658,10 @@ test.describe("WASM Operator Bible Tests", () => {
   }) => {
     await navigateToBible(page);
 
-    if (!(await hasBibleData(page))) return;
+    if (!(await hasBibleData(page))) {
+      test.skip(true, "No Bible data available");
+      return;
+    }
 
     const firstBook = page.locator('[data-role="book-item"]').first();
     await firstBook.click();
@@ -730,7 +739,10 @@ test.describe("WASM Operator Bible Tests", () => {
   }) => {
     await navigateToBible(page);
 
-    if (!(await hasBibleData(page))) return;
+    if (!(await hasBibleData(page))) {
+      test.skip(true, "No Bible data available");
+      return;
+    }
 
     // Select secondary translation first
     const secondarySelect = page.locator('[data-role="secondary-translation"]');
@@ -863,7 +875,15 @@ test.describe("WASM Operator Bible Tests", () => {
     );
 
     // Wait for the card list to stabilise after creation
-    await page.waitForTimeout(500);
+    await page.waitForFunction(
+      () => {
+        const cards = document.querySelectorAll(
+          '[data-view-panel="bible"] [data-role="presentation-card"]',
+        );
+        return cards.length > 0;
+      },
+      { timeout: 5_000 },
+    );
 
     // Select the last created presentation
     const presCards = bp.locator('[data-role="presentation-card"]');
@@ -902,7 +922,7 @@ test.describe("WASM Operator Bible Tests", () => {
     await navigateToBible(page);
 
     if (!(await hasBibleData(page))) {
-      // No Bible data available — skip gracefully
+      test.skip(true, "No Bible data available");
       return;
     }
 
@@ -1123,7 +1143,10 @@ test.describe("WASM Operator Bible Tests", () => {
     await navigateToBible(page);
     await clearBroadcast();
 
-    if (!(await hasBibleData(page))) return;
+    if (!(await hasBibleData(page))) {
+      test.skip(true, "No Bible data available");
+      return;
+    }
 
     // Load a passage
     const firstBook = page.locator('[data-role="book-item"]').first();
@@ -1170,7 +1193,10 @@ test.describe("WASM Operator Bible Tests", () => {
     await navigateToBible(page);
     await clearBroadcast();
 
-    if (!(await hasBibleData(page))) return;
+    if (!(await hasBibleData(page))) {
+      test.skip(true, "No Bible data available");
+      return;
+    }
 
     // In Bible view, bible-preview should be visible (even if empty)
     const biblePreview = page.locator('[data-role="bible-preview"]');
@@ -1277,7 +1303,10 @@ test.describe("WASM Operator Bible Tests", () => {
     await navigateToBible(page);
     await clearBroadcast();
 
-    if (!(await hasBibleData(page))) return;
+    if (!(await hasBibleData(page))) {
+      test.skip(true, "No Bible data available");
+      return;
+    }
 
     // Load a passage
     const firstBook = page.locator('[data-role="book-item"]').first();
@@ -1329,7 +1358,10 @@ test.describe("WASM Operator Bible Tests", () => {
   }) => {
     await navigateToBible(page);
 
-    if (!(await hasBibleData(page))) return;
+    if (!(await hasBibleData(page))) {
+      test.skip(true, "No Bible data available");
+      return;
+    }
 
     // Load a passage
     const firstBook = page.locator('[data-role="book-item"]').first();
@@ -1370,7 +1402,10 @@ test.describe("WASM Operator Bible Tests", () => {
     const clearBtn = page.locator('[data-role="clear-broadcast"]');
     await expect(clearBtn).toBeVisible();
 
-    if (!(await hasBibleData(page))) return;
+    if (!(await hasBibleData(page))) {
+      test.skip(true, "No Bible data available");
+      return;
+    }
 
     // First trigger a verse
     const firstBook = page.locator('[data-role="book-item"]').first();
@@ -1446,7 +1481,10 @@ test.describe("WASM Operator Bible Tests", () => {
   test("search results appear with 3+ characters", async ({ page }) => {
     await navigateToBible(page);
 
-    if (!(await hasBibleData(page))) return;
+    if (!(await hasBibleData(page))) {
+      test.skip(true, "No Bible data available");
+      return;
+    }
 
     const searchInput = page.locator('[data-role="bible-search-input"]');
     await searchInput.fill("love");
@@ -1463,7 +1501,10 @@ test.describe("WASM Operator Bible Tests", () => {
   test("clicking search result sets reference inputs", async ({ page }) => {
     await navigateToBible(page);
 
-    if (!(await hasBibleData(page))) return;
+    if (!(await hasBibleData(page))) {
+      test.skip(true, "No Bible data available");
+      return;
+    }
 
     const searchInput = page.locator('[data-role="bible-search-input"]');
     await searchInput.fill("love");
@@ -1494,7 +1535,10 @@ test.describe("WASM Operator Bible Tests", () => {
   test("search clear button clears results", async ({ page }) => {
     await navigateToBible(page);
 
-    if (!(await hasBibleData(page))) return;
+    if (!(await hasBibleData(page))) {
+      test.skip(true, "No Bible data available");
+      return;
+    }
 
     const searchInput = page.locator('[data-role="bible-search-input"]');
     await searchInput.fill("love");
@@ -1523,7 +1567,10 @@ test.describe("WASM Operator Bible Tests", () => {
   test("loading a passage adds it to history", async ({ page }) => {
     await navigateToBible(page);
 
-    if (!(await hasBibleData(page))) return;
+    if (!(await hasBibleData(page))) {
+      test.skip(true, "No Bible data available");
+      return;
+    }
 
     // Load a passage
     const firstBook = page.locator('[data-role="book-item"]').first();
@@ -1547,7 +1594,10 @@ test.describe("WASM Operator Bible Tests", () => {
   test("clicking history item sets reference inputs", async ({ page }) => {
     await navigateToBible(page);
 
-    if (!(await hasBibleData(page))) return;
+    if (!(await hasBibleData(page))) {
+      test.skip(true, "No Bible data available");
+      return;
+    }
 
     // Load first passage
     const firstBook = page.locator('[data-role="book-item"]').first();
@@ -1595,7 +1645,10 @@ test.describe("WASM Operator Bible Tests", () => {
   test("delete slide from prepared presentation", async ({ page }) => {
     await navigateToBible(page);
 
-    if (!(await hasBibleData(page))) return;
+    if (!(await hasBibleData(page))) {
+      test.skip(true, "No Bible data available");
+      return;
+    }
 
     // Create a presentation with slides
     const presResponse = await page.evaluate(async (url: string) => {
@@ -1696,7 +1749,10 @@ test.describe("WASM Operator Bible Tests", () => {
   test("prepared slides are draggable", async ({ page }) => {
     await navigateToBible(page);
 
-    if (!(await hasBibleData(page))) return;
+    if (!(await hasBibleData(page))) {
+      test.skip(true, "No Bible data available");
+      return;
+    }
 
     // Create a presentation with slides via API
     const presResponse = await page.evaluate(async (url: string) => {
@@ -1796,7 +1852,10 @@ test.describe("WASM Operator Bible Tests", () => {
     await navigateToBible(page);
     await clearBroadcast();
 
-    if (!(await hasBibleData(page))) return;
+    if (!(await hasBibleData(page))) {
+      test.skip(true, "No Bible data available");
+      return;
+    }
 
     // 1. Load a passage
     const firstBook = page.locator('[data-role="book-item"]').first();
@@ -1959,7 +2018,10 @@ test.describe("WASM Operator Bible Tests", () => {
   test("add empty slide button in prepared tab works", async ({ page }) => {
     await navigateToBible(page);
 
-    if (!(await hasBibleData(page))) return;
+    if (!(await hasBibleData(page))) {
+      test.skip(true, "No Bible data available");
+      return;
+    }
 
     // Create a presentation via API
     const presResponse = await page.evaluate(async (url: string) => {

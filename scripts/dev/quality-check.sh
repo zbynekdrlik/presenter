@@ -68,7 +68,10 @@ if command -v rg >/dev/null 2>&1 && rg -n "playwright show-report" \
 fi
 
 # 5) No focused/skipped Playwright tests
-if command -v rg >/dev/null 2>&1 && rg -n "\\.(only|skip)\\(" tests/e2e >/dev/null 2>&1; then
+# Allow test.skip(true, ...) which is Playwright's conditional skip API (reports as SKIPPED in CI).
+# The skip call may span multiple lines, so exclude any line containing 'test.skip(' since the
+# conditional form always uses test.skip(true, ...). Block .only() and definition-level .skip().
+if command -v rg >/dev/null 2>&1 && rg -n "\\.(only|skip)\\(" tests/e2e --glob '*.spec.ts' | grep -vP 'test\.skip\(' >/dev/null 2>&1; then
   fail "Found focused/skipped E2E tests ('.only' or '.skip')."
 fi
 

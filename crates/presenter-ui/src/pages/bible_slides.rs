@@ -11,7 +11,7 @@ use crate::state::AppContext;
 
 #[component]
 pub fn BibleSlidesColumn() -> impl IntoView {
-    let bs = use_context::<BibleState>().expect("BibleState");
+    let bs = use_ctx!(BibleState);
     let bible_tab = bs.bible_tab;
 
     view! {
@@ -38,8 +38,8 @@ pub fn BibleSlidesColumn() -> impl IntoView {
 
 #[component]
 fn AddEmptySlideButton() -> impl IntoView {
-    let bs = use_context::<BibleState>().expect("BibleState");
-    let ctx = use_context::<AppContext>().expect("AppContext");
+    let bs = use_ctx!(BibleState);
+    let ctx = use_ctx!(AppContext);
 
     let on_click = move |_| {
         let pres_id = bs.active_presentation_id.get_untracked();
@@ -86,7 +86,7 @@ fn AddEmptySlideButton() -> impl IntoView {
 
 #[component]
 fn LiveSlides() -> impl IntoView {
-    let bs = use_context::<BibleState>().expect("BibleState");
+    let bs = use_ctx!(BibleState);
     let slides = bs.slides;
 
     view! {
@@ -107,7 +107,7 @@ fn LiveSlides() -> impl IntoView {
 
 #[component]
 fn PreparedSlides() -> impl IntoView {
-    let bs = use_context::<BibleState>().expect("BibleState");
+    let bs = use_ctx!(BibleState);
     let slides = bs.active_presentation_slides;
 
     view! {
@@ -265,8 +265,8 @@ fn make_trigger_handler(
 
 #[component]
 fn LiveSlideCard(slide: BibleSlideDto) -> impl IntoView {
-    let bs = use_context::<BibleState>().expect("BibleState");
-    let ctx = use_context::<AppContext>().expect("AppContext");
+    let bs = use_ctx!(BibleState);
+    let ctx = use_ctx!(AppContext);
     let mode = ctx.mode;
 
     let slide_id = slide.id.clone();
@@ -419,8 +419,8 @@ fn LiveSlideCard(slide: BibleSlideDto) -> impl IntoView {
 
 #[component]
 fn PreparedSlideCard(slide: BibleSlideDto, index: usize) -> impl IntoView {
-    let bs = use_context::<BibleState>().expect("BibleState");
-    let ctx = use_context::<AppContext>().expect("AppContext");
+    let bs = use_ctx!(BibleState);
+    let ctx = use_ctx!(AppContext);
 
     let slide_id = slide.id.clone();
     let main_ref = slide.main_reference.clone().unwrap_or_default();

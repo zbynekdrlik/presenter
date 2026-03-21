@@ -7,8 +7,8 @@ use crate::state::AppContext;
 
 #[component]
 pub fn PlaylistList() -> impl IntoView {
-    let ctx = use_context::<AppContext>().expect("AppContext");
-    let op = use_context::<OperatorState>().expect("OperatorState");
+    let ctx = use_ctx!(AppContext);
+    let op = use_ctx!(OperatorState);
 
     let select_playlist = move |id: String, name: String| {
         ctx.selected_playlist_id.set(Some(id.clone()));

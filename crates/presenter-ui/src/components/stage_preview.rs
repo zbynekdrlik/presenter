@@ -4,7 +4,7 @@ use leptos::prelude::*;
 /// Stage preview panel rendered inside the header.
 #[component]
 pub fn StagePreview() -> impl IntoView {
-    let ctx = use_context::<AppContext>().expect("AppContext");
+    let ctx = use_ctx!(AppContext);
 
     // Compute alert state: connected < baseline connected
     let has_alert = move || {

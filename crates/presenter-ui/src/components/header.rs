@@ -6,8 +6,8 @@ use crate::state::AppContext;
 
 #[component]
 pub fn Header() -> impl IntoView {
-    let ctx = use_context::<AppContext>().expect("AppContext");
-    let op = use_context::<OperatorState>().expect("OperatorState");
+    let ctx = use_ctx!(AppContext);
+    let op = use_ctx!(OperatorState);
 
     // Search form handlers
     let on_search_submit = move |ev: leptos::ev::SubmitEvent| {
