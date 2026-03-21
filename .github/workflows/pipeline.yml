@@ -367,12 +367,6 @@ jobs:
     needs:
       - test
       - quality
-      - companion-tests
-      - coverage
-      - version-check
-      - security-audit
-      - security-deny
-      - npm-audit
     steps:
       - uses: actions/checkout@v4
 
@@ -421,13 +415,23 @@ jobs:
             target/release/ingest_bibles
 
   # ============================================
-  # E2E Tests (local runner — downloads pre-built artifacts)
+  # E2E Tests (GitHub-hosted runners, 3 parallel shards)
   # ============================================
   e2e:
-    name: Playwright E2E
-    runs-on: self-hosted
-    needs: build
-    timeout-minutes: 90
+    name: Playwright E2E (${{ matrix.shard }})
+    runs-on: ubuntu-latest
+    needs:
+      - build
+      - companion-tests
+      - version-check
+      - security-audit
+      - security-deny
+      - npm-audit
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: ["1/3", "2/3", "3/3"]
     steps:
       - uses: actions/checkout@v4
 
@@ -461,26 +465,64 @@ jobs:
         run: npx playwright install --with-deps chromium
 
       - name: Run Playwright tests
-        run: npm run test:playwright
+        run: npx playwright test --shard=${{ matrix.shard }} --reporter=blob
         env:
           CI: true
           PRESENTER_LIBRARY_ROOT: ${{ github.workspace }}/data/libraries
+          PRESENTER_BIBLE_KJV: ${{ github.workspace }}/data/bibles/kjv.usfm.zip
+          PRESENTER_BIBLE_SEB: ${{ github.workspace }}/data/bibles/seb.bbl.mybible.zip
+          PRESENTER_BIBLE_ROHACEK: ${{ github.workspace }}/data/bibles/rohacek.bbl.mybible.zip
+          PRESENTER_BIBLE_SEVP: ${{ github.workspace }}/data/bibles/sevp.obohu.mybible.zip
+          PRESENTER_BIBLE_MILOST: ${{ github.workspace }}/data/bibles/milost.bbl.mybible.zip
 
-      - name: Upload Playwright report
+      - name: Upload blob report
         uses: actions/upload-artifact@v4
         if: ${{ !cancelled() }}
         with:
-          name: playwright-report-${{ github.run_id }}
-          path: playwright-report/
-          retention-days: 14
+          name: playwright-blob-report-shard-${{ strategy.job-index }}-${{ github.run_id }}
+          path: blob-report/
+          retention-days: 1
 
       - name: Upload test traces
         uses: actions/upload-artifact@v4
         if: failure()
         with:
-          name: playwright-traces-${{ github.run_id }}
+          name: playwright-traces-shard-${{ strategy.job-index }}-${{ github.run_id }}
           path: test-results/
           retention-days: 7
+
+  # ============================================
+  # Merge E2E Reports
+  # ============================================
+  e2e-report:
+    name: Merge E2E Reports
+    runs-on: ubuntu-latest
+    needs: e2e
+    if: ${{ !cancelled() }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: "npm"
+
+      - run: npm ci
+
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: playwright-blob-report-shard-*
+          path: all-blob-reports
+          merge-multiple: true
+
+      - name: Merge reports
+        run: npx playwright merge-reports --reporter html all-blob-reports
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: playwright-report-${{ github.run_id }}
+          path: playwright-report/
+          retention-days: 14
 
   # ============================================
   # Deploy to Dev (local runner — needs SSH to LAN)
@@ -581,7 +623,10 @@ jobs:
         run: |
           ssh deploy-target "mkdir -p ${{ env.DEPLOY_DIR }}/bibles"
           scp -i ~/.ssh/id_deploy \
+            data/bibles/kjv.usfm.zip \
+            data/bibles/seb.bbl.mybible.zip \
             data/bibles/rohacek.bbl.mybible.zip \
+            data/bibles/sevp.obohu.mybible.zip \
             data/bibles/milost.bbl.mybible.zip \
             deploy-target:${{ env.DEPLOY_DIR }}/bibles/
 
@@ -613,7 +658,10 @@ jobs:
           set -e
           echo "Importing Bible translations..."
           export PRESENTER_DB_URL=sqlite:///opt/presenter-dev/presenter.db
+          export PRESENTER_BIBLE_KJV=/opt/presenter-dev/bibles/kjv.usfm.zip
+          export PRESENTER_BIBLE_SEB=/opt/presenter-dev/bibles/seb.bbl.mybible.zip
           export PRESENTER_BIBLE_ROHACEK=/opt/presenter-dev/bibles/rohacek.bbl.mybible.zip
+          export PRESENTER_BIBLE_SEVP=/opt/presenter-dev/bibles/sevp.obohu.mybible.zip
           export PRESENTER_BIBLE_MILOST=/opt/presenter-dev/bibles/milost.bbl.mybible.zip
           /opt/presenter-dev/ingest_bibles
           REMOTE_SCRIPT

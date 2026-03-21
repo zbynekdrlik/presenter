@@ -156,7 +156,10 @@ jobs:
         run: |
           ssh deploy-target "mkdir -p ${{ env.DEPLOY_DIR }}/bibles"
           scp -i ~/.ssh/id_deploy \
+            data/bibles/kjv.usfm.zip \
+            data/bibles/seb.bbl.mybible.zip \
             data/bibles/rohacek.bbl.mybible.zip \
+            data/bibles/sevp.obohu.mybible.zip \
             data/bibles/milost.bbl.mybible.zip \
             deploy-target:${{ env.DEPLOY_DIR }}/bibles/
 
@@ -188,7 +191,10 @@ jobs:
           set -e
           echo "Importing Bible translations..."
           export PRESENTER_DB_URL=sqlite:///opt/presenter/presenter.db
+          export PRESENTER_BIBLE_KJV=/opt/presenter/bibles/kjv.usfm.zip
+          export PRESENTER_BIBLE_SEB=/opt/presenter/bibles/seb.bbl.mybible.zip
           export PRESENTER_BIBLE_ROHACEK=/opt/presenter/bibles/rohacek.bbl.mybible.zip
+          export PRESENTER_BIBLE_SEVP=/opt/presenter/bibles/sevp.obohu.mybible.zip
           export PRESENTER_BIBLE_MILOST=/opt/presenter/bibles/milost.bbl.mybible.zip
           /opt/presenter/ingest_bibles
           REMOTE_SCRIPT

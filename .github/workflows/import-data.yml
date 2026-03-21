@@ -176,11 +176,27 @@ print('Created $MILOST_PATH')
             fi
           done
 
+          BIBLE_DIR="${{ steps.env.outputs.deploy_dir }}/bibles"
           export PRESENTER_DB_URL=sqlite://${{ steps.env.outputs.deploy_dir }}/presenter.db
+
+          if [ -f "$BIBLE_DIR/kjv.usfm.zip" ]; then
+            export PRESENTER_BIBLE_KJV="$BIBLE_DIR/kjv.usfm.zip"
+            echo "Using KJV USFM file"
+          fi
+
+          if [ -f "$BIBLE_DIR/seb.bbl.mybible.zip" ]; then
+            export PRESENTER_BIBLE_SEB="$BIBLE_DIR/seb.bbl.mybible.zip"
+            echo "Using SEB MySword file"
+          fi
 
           if [ -f "$ROHACEK_PATH" ]; then
             export PRESENTER_BIBLE_ROHACEK="$ROHACEK_PATH"
             echo "Using Roháček MySword file at $ROHACEK_PATH"
+          fi
+
+          if [ -f "$BIBLE_DIR/sevp.obohu.mybible.zip" ]; then
+            export PRESENTER_BIBLE_SEVP="$BIBLE_DIR/sevp.obohu.mybible.zip"
+            echo "Using SEVP Obohu file"
           fi
 
           if [ -f "$MILOST_PATH" ]; then
