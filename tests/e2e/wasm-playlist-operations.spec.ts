@@ -75,7 +75,13 @@ test.describe("WASM Operator Playlist Operations", () => {
     );
 
     // Wait for playlist list to update
-    await page.waitForTimeout(500);
+    await page.waitForFunction(
+      () => {
+        const items = document.querySelectorAll('[data-role="playlist-item"]');
+        return items.length > 0;
+      },
+      { timeout: 5_000 },
+    );
 
     // Verify playlist was created (should appear in list or modal)
     await page.locator('[data-role="playlist-more"]').click();
@@ -175,7 +181,15 @@ test.describe("WASM Operator Playlist Operations", () => {
       { timeout: 10_000 },
     );
 
-    await page.waitForTimeout(1000);
+    await page.waitForFunction(
+      () => {
+        const items = document.querySelectorAll('[data-role="playlist-item"]');
+        return Array.from(items).some((item) =>
+          item.textContent?.includes("To Delete Playlist"),
+        );
+      },
+      { timeout: 10_000 },
+    );
 
     // Find the playlist in the quick list (now visible because dashboard is enabled)
     // The edit button is only in the quick list, not in the modal
@@ -186,7 +200,7 @@ test.describe("WASM Operator Playlist Operations", () => {
 
     // If not found in quick list, skip the test (data dependency)
     if (itemCount === 0) {
-      console.log("Skipping: Created playlist not found in quick list");
+      test.skip(true, "Created playlist not found in quick list");
       return;
     }
 
@@ -283,7 +297,17 @@ test.describe("WASM Operator Playlist Operations", () => {
     await playlist.click();
 
     // Wait for playlist to load
-    await page.waitForTimeout(500);
+    await page
+      .waitForFunction(
+        () => {
+          const entries = document.querySelectorAll(
+            '[data-role="presentation-item"]',
+          );
+          return entries.length > 0;
+        },
+        { timeout: 5_000 },
+      )
+      .catch(() => {});
 
     // Click the "+" button (which adds separator when playlist is active)
     page.once("dialog", async (dialog) => {

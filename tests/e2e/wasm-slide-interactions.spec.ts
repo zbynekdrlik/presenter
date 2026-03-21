@@ -138,7 +138,12 @@ test.describe("WASM Operator Slide Interactions", () => {
 
     // Blur to trigger save
     await textarea.blur();
-    await page.waitForTimeout(500); // Wait for API call
+    await page
+      .waitForResponse(
+        (resp) => resp.url().includes("/stage/state") && resp.status() === 200,
+        { timeout: 5_000 },
+      )
+      .catch(() => {});
 
     // Verify value persists (reload page and check)
     await page.reload();
@@ -265,9 +270,14 @@ test.describe("WASM Operator Slide Interactions", () => {
     await loadPresentationWithSlides(page);
 
     // First add a slide so we have something to delete
+    const preAddCount = await page.locator("[data-slide-id]").count();
     const addButton = page.locator('[data-role="add-slide"]');
     await addButton.click();
-    await page.waitForTimeout(1000);
+    await page.waitForFunction(
+      (prev) => document.querySelectorAll("[data-slide-id]").length > prev,
+      preAddCount,
+      { timeout: 10_000 },
+    );
 
     const initialCount = await page.locator("[data-slide-id]").count();
 
@@ -326,7 +336,14 @@ test.describe("WASM Operator Slide Interactions", () => {
     await deleteButton.click();
 
     // Wait a bit and verify count unchanged
-    await page.waitForTimeout(500);
+    await page
+      .waitForFunction(
+        (expected) =>
+          document.querySelectorAll("[data-slide-id]").length === expected,
+        initialCount,
+        { timeout: 5_000 },
+      )
+      .catch(() => {});
     const newCount = await page.locator("[data-slide-id]").count();
     expect(newCount).toBe(initialCount);
   });

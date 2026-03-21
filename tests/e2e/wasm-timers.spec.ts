@@ -86,7 +86,12 @@ test.describe("WASM Operator Timer Tests", () => {
     await countdownInput.press("Enter");
 
     // Wait for update - target display should update
-    await page.waitForTimeout(500);
+    await page
+      .waitForResponse(
+        (resp) => resp.url().includes("/timers/") && resp.status() === 200,
+        { timeout: 5_000 },
+      )
+      .catch(() => {});
 
     // Verify no error toast
     const errorToast = page.locator(
@@ -104,7 +109,12 @@ test.describe("WASM Operator Timer Tests", () => {
     await startButton.click();
 
     // Wait for API response
-    await page.waitForTimeout(500);
+    await page
+      .waitForResponse(
+        (resp) => resp.url().includes("/timers/") && resp.status() === 200,
+        { timeout: 5_000 },
+      )
+      .catch(() => {});
 
     // Should not show error
     const errorToast = page.locator(
@@ -122,7 +132,12 @@ test.describe("WASM Operator Timer Tests", () => {
     await offsetMinus.click();
 
     // Wait for API response
-    await page.waitForTimeout(500);
+    await page
+      .waitForResponse(
+        (resp) => resp.url().includes("/timers/") && resp.status() === 200,
+        { timeout: 5_000 },
+      )
+      .catch(() => {});
 
     // Should not show error
     const errorToast = page.locator(
@@ -140,7 +155,12 @@ test.describe("WASM Operator Timer Tests", () => {
     await offsetPlus.click();
 
     // Wait for API response
-    await page.waitForTimeout(500);
+    await page
+      .waitForResponse(
+        (resp) => resp.url().includes("/timers/") && resp.status() === 200,
+        { timeout: 5_000 },
+      )
+      .catch(() => {});
 
     // Should not show error
     const errorToast = page.locator(
@@ -204,17 +224,32 @@ test.describe("WASM Operator Timer Tests", () => {
     const startButton = page.locator('button[data-command="start_preach"]');
     await expect(startButton).toBeVisible();
     await startButton.click();
-    await page.waitForTimeout(500);
+    await page
+      .waitForResponse(
+        (resp) => resp.url().includes("/timers/") && resp.status() === 200,
+        { timeout: 5_000 },
+      )
+      .catch(() => {});
 
     // Pause preach timer
     const pauseButton = page.locator('button[data-command="pause_preach"]');
     await pauseButton.click();
-    await page.waitForTimeout(500);
+    await page
+      .waitForResponse(
+        (resp) => resp.url().includes("/timers/") && resp.status() === 200,
+        { timeout: 5_000 },
+      )
+      .catch(() => {});
 
     // Reset preach timer
     const resetButton = page.locator('button[data-command="reset_preach"]');
     await resetButton.click();
-    await page.waitForTimeout(500);
+    await page
+      .waitForResponse(
+        (resp) => resp.url().includes("/timers/") && resp.status() === 200,
+        { timeout: 5_000 },
+      )
+      .catch(() => {});
 
     // Should not show error
     const errorToast = page.locator(

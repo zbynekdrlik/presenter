@@ -7,8 +7,8 @@ use crate::state::AppContext;
 /// Playlist list modal + playlist edit/create modal.
 #[component]
 pub fn PlaylistModals() -> impl IntoView {
-    let ctx = use_context::<AppContext>().expect("AppContext");
-    let op = use_context::<OperatorState>().expect("OperatorState");
+    let ctx = use_ctx!(AppContext);
+    let op = use_ctx!(OperatorState);
 
     let playlists = ctx.playlists;
     let open_modal_sig = op.open_modal;

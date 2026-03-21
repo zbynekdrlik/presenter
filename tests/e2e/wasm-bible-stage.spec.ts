@@ -344,7 +344,7 @@ test("stage layout change preserves active bible broadcast", async ({
   });
 
   // Wait for page to reload (layout change triggers reload)
-  await page.waitForTimeout(2000);
+  await page.waitForSelector('[data-wasm-ready="true"]', { timeout: 10_000 });
   await page.waitForLoadState("domcontentloaded");
 
   // After reload, bible overlay should still show the active verse

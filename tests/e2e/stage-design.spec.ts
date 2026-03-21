@@ -42,12 +42,20 @@ test.describe("Stage Design Editor", () => {
     await expect(
       page.locator('[data-role="layout-tab"][data-layout="preach"]'),
     ).toBeVisible();
+    // Verify tabs are horizontally arranged
+    const tabs = page.locator('[data-role="layout-tab"]');
+    const tabBoxes = await tabs.evaluateAll((els) =>
+      els.map((el) => el.getBoundingClientRect()),
+    );
+    for (let i = 1; i < tabBoxes.length; i++) {
+      expect(tabBoxes[i].left).toBeGreaterThan(tabBoxes[i - 1].left);
+    }
   });
 
   test("canvas shows boxes for worship-snv layout", async ({ page }) => {
     await page.goto(`${baseURL}/ui/stage-design`);
     // Wait for canvas to render
-    await page.waitForTimeout(500);
+    await page.waitForSelector("#design-canvas .sd__box", { timeout: 5_000 });
     const canvas = page.locator("#design-canvas");
     await expect(canvas).toBeVisible();
     // Verify boxes are rendered
@@ -60,14 +68,28 @@ test.describe("Stage Design Editor", () => {
     await expect(
       canvas.locator('.sd__box[data-box-type="clock"]'),
     ).toBeVisible();
+    // Verify boxes are contained within canvas
+    const canvasBox = await canvas.boundingBox();
+    const boxEls = canvas.locator(".sd__box");
+    const boxCount = await boxEls.count();
+    for (let i = 0; i < boxCount; i++) {
+      const bb = await boxEls.nth(i).boundingBox();
+      if (bb && canvasBox) {
+        expect(bb.x).toBeGreaterThanOrEqual(canvasBox.x);
+        expect(bb.y).toBeGreaterThanOrEqual(canvasBox.y);
+      }
+    }
   });
 
   test("switching tabs renders different boxes", async ({ page }) => {
     await page.goto(`${baseURL}/ui/stage-design`);
-    await page.waitForTimeout(500);
+    await page.waitForSelector("#design-canvas .sd__box", { timeout: 5_000 });
     // Switch to timer layout
     await page.locator('[data-role="layout-tab"][data-layout="timer"]').click();
-    await page.waitForTimeout(300);
+    await page.waitForSelector(
+      '#design-canvas .sd__box[data-box-type="countdown_timer"]',
+      { timeout: 5_000 },
+    );
     // Timer layout should have countdown_timer box
     const canvas = page.locator("#design-canvas");
     await expect(
@@ -81,11 +103,20 @@ test.describe("Stage Design Editor", () => {
 
   test("clicking box selects it", async ({ page }) => {
     await page.goto(`${baseURL}/ui/stage-design`);
-    await page.waitForTimeout(500);
+    await page.waitForSelector("#design-canvas .sd__box", { timeout: 5_000 });
     const canvas = page.locator("#design-canvas");
     const box = canvas.locator('.sd__box[data-box-type="current_slide"]');
     await box.click();
     await expect(box).toHaveAttribute("data-selected", "true");
+    // Verify selection has visual border
+    const borderStyle = await box.evaluate((el) => {
+      const style = window.getComputedStyle(el);
+      return {
+        borderWidth: style.borderWidth,
+        borderStyle: style.borderStyle,
+      };
+    });
+    expect(borderStyle.borderStyle).not.toBe("none");
     // Properties panel should show the box info
     const panel = page.locator("#properties-panel");
     await expect(panel.locator(".sd__prop-header")).toContainText(
@@ -95,7 +126,7 @@ test.describe("Stage Design Editor", () => {
 
   test("clicking canvas background deselects box", async ({ page }) => {
     await page.goto(`${baseURL}/ui/stage-design`);
-    await page.waitForTimeout(500);
+    await page.waitForSelector("#design-canvas .sd__box", { timeout: 5_000 });
     const canvas = page.locator("#design-canvas");
     const box = canvas.locator('.sd__box[data-box-type="current_slide"]');
     // Select the box
@@ -103,7 +134,10 @@ test.describe("Stage Design Editor", () => {
     await expect(box).toHaveAttribute("data-selected", "true");
     // Click on canvas background
     await canvas.click({ position: { x: 5, y: 5 } });
-    await page.waitForTimeout(200);
+    await page.waitForFunction(
+      () => !document.querySelector('.sd__box[data-selected="true"]'),
+      { timeout: 5_000 },
+    );
     // Box should be deselected
     await expect(box).toHaveAttribute("data-selected", "false");
     // Properties panel should show hint
@@ -113,7 +147,7 @@ test.describe("Stage Design Editor", () => {
 
   test("properties panel updates box position", async ({ page }) => {
     await page.goto(`${baseURL}/ui/stage-design`);
-    await page.waitForTimeout(500);
+    await page.waitForSelector("#design-canvas .sd__box", { timeout: 5_000 });
     const canvas = page.locator("#design-canvas");
     const box = canvas.locator('.sd__box[data-box-type="current_slide"]');
     await box.click();
@@ -125,7 +159,15 @@ test.describe("Stage Design Editor", () => {
     // Change X position via properties panel
     await xInput.fill("10");
     await xInput.blur();
-    await page.waitForTimeout(200);
+    await page.waitForFunction(
+      () => {
+        const box = document.querySelector(
+          '.sd__box[data-box-type="current_slide"]',
+        );
+        return box && box.getAttribute("style")?.includes("left: 10%");
+      },
+      { timeout: 5_000 },
+    );
 
     // Verify the input value was updated
     await expect(xInput).toHaveValue("10");
@@ -271,7 +313,7 @@ test.describe("Stage Design API", () => {
 test.describe("Stage Design Save/Reset via UI", () => {
   test("save button persists design", async ({ page }) => {
     await page.goto(`${baseURL}/ui/stage-design`);
-    await page.waitForTimeout(500);
+    await page.waitForSelector("#design-canvas .sd__box", { timeout: 5_000 });
 
     // Click save
     await page.locator('[data-role="save"]').click();
@@ -280,6 +322,11 @@ test.describe("Stage Design Save/Reset via UI", () => {
     const toast = page.locator('[data-role="toast"]');
     await expect(toast).toHaveAttribute("data-visible", "true");
     await expect(toast).toContainText("saved");
+    // Verify toast is visually visible
+    const toastOpacity = await toast.evaluate(
+      (el) => window.getComputedStyle(el).opacity,
+    );
+    expect(Number(toastOpacity)).toBeGreaterThan(0);
   });
 
   test("reset button restores defaults", async ({ page }) => {
@@ -313,7 +360,7 @@ test.describe("Stage Design Save/Reset via UI", () => {
     await page
       .locator('[data-role="layout-tab"][data-layout="preach"]')
       .click();
-    await page.waitForTimeout(500);
+    await page.waitForSelector("#design-canvas .sd__box", { timeout: 5_000 });
 
     // Click reset
     await page.locator('[data-role="reset"]').click();
@@ -322,6 +369,11 @@ test.describe("Stage Design Save/Reset via UI", () => {
     const toast = page.locator('[data-role="toast"]');
     await expect(toast).toHaveAttribute("data-visible", "true");
     await expect(toast).toContainText("Reset");
+    // Verify toast is visually visible
+    const toastOpacity = await toast.evaluate(
+      (el) => window.getComputedStyle(el).opacity,
+    );
+    expect(Number(toastOpacity)).toBeGreaterThan(0);
 
     // Verify defaults via API
     const getResponse = await page.request.get(
@@ -344,7 +396,14 @@ test.describe("Stage Design WebSocket Updates", () => {
 
     // Open stage display
     await page.goto(`${baseURL}/stage`);
-    await page.waitForTimeout(1500);
+    await page
+      .waitForFunction(
+        () =>
+          (window as any).__presenterStageDesign !== undefined ||
+          document.querySelector(".stage") !== null,
+        { timeout: 10_000 },
+      )
+      .catch(() => {});
 
     // Now update via API (triggers WS broadcast)
     const settingsPage = await context.newPage();
@@ -373,7 +432,12 @@ test.describe("Stage Design WebSocket Updates", () => {
     });
 
     // Wait for WebSocket to propagate
-    await page.waitForTimeout(1500);
+    await page
+      .waitForFunction(
+        () => (window as any).__presenterStageDesign !== undefined,
+        { timeout: 10_000 },
+      )
+      .catch(() => {});
 
     // Verify the design was received
     const design = await page.evaluate(

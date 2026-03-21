@@ -12,7 +12,7 @@ use super::bible_slides::BibleSlidesColumn;
 /// Rendered inside the operator shell's `<section data-view-panel="bible">`.
 #[component]
 pub fn BiblePage() -> impl IntoView {
-    let ctx = use_context::<AppContext>().expect("AppContext");
+    let ctx = use_ctx!(AppContext);
     let bs = BibleState::new();
     provide_context(bs.clone());
 
@@ -119,7 +119,7 @@ pub fn BiblePage() -> impl IntoView {
 
 #[component]
 fn BibleTabNav() -> impl IntoView {
-    let bs = use_context::<BibleState>().expect("BibleState");
+    let bs = use_ctx!(BibleState);
     let bible_tab = bs.bible_tab;
 
     let make_tab_click = move |tab: &'static str| {
@@ -161,7 +161,7 @@ fn BibleTabNav() -> impl IntoView {
 
 #[component]
 fn BibleLiveTab() -> impl IntoView {
-    let bs = use_context::<BibleState>().expect("BibleState");
+    let bs = use_ctx!(BibleState);
     let bible_tab = bs.bible_tab;
 
     view! {
@@ -186,7 +186,7 @@ fn BibleLiveTab() -> impl IntoView {
 
 #[component]
 fn TranslationSelectors() -> impl IntoView {
-    let bs = use_context::<BibleState>().expect("BibleState");
+    let bs = use_ctx!(BibleState);
     let translations = bs.translations;
     let selected_translation = bs.selected_translation;
     let secondary_translation = bs.secondary_translation;
@@ -262,7 +262,7 @@ fn TranslationSelectors() -> impl IntoView {
 
 #[component]
 fn BookFilter() -> impl IntoView {
-    let bs = use_context::<BibleState>().expect("BibleState");
+    let bs = use_ctx!(BibleState);
     let book_filter = bs.book_filter;
 
     let on_input = move |ev: web_sys::Event| {
@@ -290,7 +290,7 @@ fn BookFilter() -> impl IntoView {
 
 #[component]
 fn BookList() -> impl IntoView {
-    let bs = use_context::<BibleState>().expect("BibleState");
+    let bs = use_ctx!(BibleState);
 
     view! {
         <div class="operator__list operator__list--tight" data-role="book-list">
@@ -366,7 +366,7 @@ fn BookList() -> impl IntoView {
 
 #[component]
 fn ReferenceInputs() -> impl IntoView {
-    let bs = use_context::<BibleState>().expect("BibleState");
+    let bs = use_ctx!(BibleState);
     let selected_chapter = bs.selected_chapter;
     let verse_start_signal = bs.verse_start;
     let verse_end_signal = bs.verse_end;
@@ -447,8 +447,8 @@ fn ReferenceInputs() -> impl IntoView {
 
 #[component]
 fn LoadButton() -> impl IntoView {
-    let bs = use_context::<BibleState>().expect("BibleState");
-    let ctx = use_context::<AppContext>().expect("AppContext");
+    let bs = use_ctx!(BibleState);
+    let ctx = use_ctx!(AppContext);
 
     let on_load = move |_| {
         let selected_book = bs.selected_book.get_untracked();
@@ -546,8 +546,8 @@ fn LoadButton() -> impl IntoView {
 
 #[component]
 fn SelectionControls() -> impl IntoView {
-    let bs = use_context::<BibleState>().expect("BibleState");
-    let ctx = use_context::<AppContext>().expect("AppContext");
+    let bs = use_ctx!(BibleState);
+    let ctx = use_ctx!(AppContext);
 
     let selected_count = move || bs.selected_slide_ids.get().len();
 
@@ -664,8 +664,8 @@ fn SelectionControls() -> impl IntoView {
 
 #[component]
 fn BiblePreparedTab() -> impl IntoView {
-    let bs = use_context::<BibleState>().expect("BibleState");
-    let ctx = use_context::<AppContext>().expect("AppContext");
+    let bs = use_ctx!(BibleState);
+    let ctx = use_ctx!(AppContext);
     let bible_tab = bs.bible_tab;
     let presentations = bs.presentations;
     let active_presentation_id = bs.active_presentation_id;
@@ -732,8 +732,8 @@ fn BiblePreparedTab() -> impl IntoView {
 
 #[component]
 fn PresentationCard(presentation: bible::BiblePresentationSummary) -> impl IntoView {
-    let bs = use_context::<BibleState>().expect("BibleState");
-    let ctx = use_context::<AppContext>().expect("AppContext");
+    let bs = use_ctx!(BibleState);
+    let ctx = use_ctx!(AppContext);
     let active_presentation_id = bs.active_presentation_id;
     let active_presentation_slides = bs.active_presentation_slides;
     let presentations = bs.presentations;
@@ -819,8 +819,8 @@ fn PresentationCard(presentation: bible::BiblePresentationSummary) -> impl IntoV
 
 #[component]
 fn PreparedDeleteButton() -> impl IntoView {
-    let bs = use_context::<BibleState>().expect("BibleState");
-    let ctx = use_context::<AppContext>().expect("AppContext");
+    let bs = use_ctx!(BibleState);
+    let ctx = use_ctx!(AppContext);
 
     let on_delete = {
         let bs = bs.clone();
@@ -880,8 +880,8 @@ fn PreparedDeleteButton() -> impl IntoView {
 
 #[component]
 fn BibleSettingsTab() -> impl IntoView {
-    let bs = use_context::<BibleState>().expect("BibleState");
-    let ctx = use_context::<AppContext>().expect("AppContext");
+    let bs = use_ctx!(BibleState);
+    let ctx = use_ctx!(AppContext);
     let bible_tab = bs.bible_tab;
     let character_limit = bs.character_limit;
 

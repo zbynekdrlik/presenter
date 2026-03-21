@@ -1,3 +1,5 @@
+#[macro_use]
+mod context_macros;
 pub mod api;
 pub mod components;
 pub mod pages;

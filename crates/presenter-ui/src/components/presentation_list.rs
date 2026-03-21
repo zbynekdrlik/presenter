@@ -19,8 +19,8 @@ fn get_dragging_entry() -> Option<String> {
 
 #[component]
 pub fn PresentationList() -> impl IntoView {
-    let ctx = use_context::<AppContext>().expect("AppContext");
-    let op = use_context::<OperatorState>().expect("OperatorState");
+    let ctx = use_ctx!(AppContext);
+    let op = use_ctx!(OperatorState);
 
     let select_presentation = move |id: String| {
         ctx.selected_presentation_id.set(Some(id.clone()));

@@ -6,8 +6,8 @@ use crate::state::AppContext;
 
 #[component]
 pub fn LibraryList() -> impl IntoView {
-    let ctx = use_context::<AppContext>().expect("AppContext");
-    let op = use_context::<OperatorState>().expect("OperatorState");
+    let ctx = use_ctx!(AppContext);
+    let op = use_ctx!(OperatorState);
 
     // Track loading state for library presentations
     let is_loading_presentations = RwSignal::new(false);

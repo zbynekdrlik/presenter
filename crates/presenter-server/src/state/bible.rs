@@ -36,8 +36,15 @@ fn placeholder_bible_reference() -> BibleReference {
         );
         // Last resort: create reference with same values - if this fails too,
         // something is fundamentally broken in the validation logic
-        BibleReference::new("Genesis", 1, 1, 1)
-            .expect("fallback Genesis 1:1 reference must always be valid")
+        // Direct construction bypasses validation — safe because values are hardcoded valid.
+        BibleReference {
+            book: "Genesis".to_string(),
+            book_code: None,
+            book_number: None,
+            chapter: 1,
+            verse_start: 1,
+            verse_end: 1,
+        }
     })
 }
 

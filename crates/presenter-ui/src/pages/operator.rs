@@ -198,7 +198,7 @@ pub fn OperatorPage(#[prop(default = String::new())] initial_view: String) -> im
 
 #[component]
 fn CatalogResizer() -> impl IntoView {
-    let op = use_context::<OperatorState>().expect("OperatorState");
+    let op = use_ctx!(OperatorState);
 
     let on_pointerdown = move |ev: web_sys::PointerEvent| {
         let start_y = ev.client_y() as f64;

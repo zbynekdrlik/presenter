@@ -4,7 +4,7 @@ use leptos::prelude::*;
 /// Toast notification component.
 #[component]
 pub fn Toast() -> impl IntoView {
-    let ctx = use_context::<AppContext>().expect("AppContext");
+    let ctx = use_ctx!(AppContext);
 
     view! {
         <div

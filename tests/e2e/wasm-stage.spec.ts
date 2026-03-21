@@ -87,7 +87,15 @@ test.describe("WASM Operator Stage Monitor Tests", () => {
     await stageMonitor.click();
 
     // Wait for click to be processed
-    await page.waitForTimeout(500);
+    await page
+      .waitForFunction(
+        () => {
+          const monitor = document.querySelector('[data-role="stage-monitor"]');
+          return monitor?.getAttribute("data-connected") !== null;
+        },
+        { timeout: 5_000 },
+      )
+      .catch(() => {});
 
     // Should not show error
     const errorToast = page.locator(

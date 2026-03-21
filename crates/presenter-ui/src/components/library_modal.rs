@@ -7,8 +7,8 @@ use crate::state::AppContext;
 /// Library list modal + library edit/create modal.
 #[component]
 pub fn LibraryModals() -> impl IntoView {
-    let ctx = use_context::<AppContext>().expect("AppContext");
-    let op = use_context::<OperatorState>().expect("OperatorState");
+    let ctx = use_ctx!(AppContext);
+    let op = use_ctx!(OperatorState);
 
     let libraries = ctx.libraries;
     let open_modal_sig = op.open_modal;

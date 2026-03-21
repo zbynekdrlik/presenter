@@ -211,7 +211,17 @@ test.describe("Tablet PWA Configuration", () => {
     await page.waitForLoadState("domcontentloaded");
 
     // Wait for presentation list to load (shows "Loading..." initially)
-    await page.waitForTimeout(2000);
+    await page
+      .waitForFunction(
+        () => {
+          const list = document.querySelector(
+            '[data-role="presentation-list"]',
+          );
+          return list && !list.textContent?.includes("Loading");
+        },
+        { timeout: 10_000 },
+      )
+      .catch(() => {});
 
     // Check if any presentations exist
     const presentationCount = await page

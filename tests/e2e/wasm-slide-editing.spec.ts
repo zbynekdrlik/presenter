@@ -62,11 +62,13 @@ async function loadPresentationInEditMode(
     { timeout: 15_000 },
   );
 
-  // Wait for async presentation fetch to complete and final re-render to settle.
-  // The presentation click triggers a cache lookup + async API fetch. The API fetch
-  // updates selected_presentation signal when it completes, causing a re-render.
-  // Without this wait, the re-render can happen AFTER we start editing, destroying edits.
-  await page.waitForTimeout(1500);
+  // Wait for the async presentation detail fetch to complete
+  await page
+    .waitForResponse(
+      (resp) => resp.url().includes("/presentations/") && resp.status() === 200,
+      { timeout: 10_000 },
+    )
+    .catch(() => {}); // May have already completed
 
   // Switch to edit mode
   await page.locator('[data-role="mode-toggle"][data-mode="edit"]').click();
@@ -76,7 +78,9 @@ async function loadPresentationInEditMode(
   );
 
   // Wait for edit mode re-render to settle
-  await page.waitForTimeout(500);
+  await page.waitForSelector('[data-slide-id] textarea[data-field="main"]', {
+    timeout: 5_000,
+  });
 }
 
 test.describe("WASM Slide Editing - Core Field Saves", () => {
@@ -91,7 +95,11 @@ test.describe("WASM Slide Editing - Core Field Saves", () => {
 
     await textarea.fill(testValue);
     await textarea.blur();
-    await page.waitForTimeout(500);
+    await page.waitForResponse(
+      (resp) =>
+        resp.url().includes("/slides/") && resp.request().method() === "PATCH",
+      { timeout: 5_000 },
+    );
 
     // Reload and verify
     await page.reload();
@@ -118,7 +126,11 @@ test.describe("WASM Slide Editing - Core Field Saves", () => {
 
     await textarea.fill(testValue);
     await textarea.blur();
-    await page.waitForTimeout(500);
+    await page.waitForResponse(
+      (resp) =>
+        resp.url().includes("/slides/") && resp.request().method() === "PATCH",
+      { timeout: 5_000 },
+    );
 
     await page.reload();
     await loadPresentationInEditMode(page);
@@ -144,7 +156,11 @@ test.describe("WASM Slide Editing - Core Field Saves", () => {
 
     await textarea.fill(testValue);
     await textarea.blur();
-    await page.waitForTimeout(500);
+    await page.waitForResponse(
+      (resp) =>
+        resp.url().includes("/slides/") && resp.request().method() === "PATCH",
+      { timeout: 5_000 },
+    );
 
     await page.reload();
     await loadPresentationInEditMode(page);
@@ -170,7 +186,11 @@ test.describe("WASM Slide Editing - Core Field Saves", () => {
 
     await input.fill(testValue);
     await input.blur();
-    await page.waitForTimeout(500);
+    await page.waitForResponse(
+      (resp) =>
+        resp.url().includes("/slides/") && resp.request().method() === "PATCH",
+      { timeout: 5_000 },
+    );
 
     await page.reload();
     await loadPresentationInEditMode(page);
@@ -210,7 +230,11 @@ test.describe("WASM Slide Editing - Unified Save (DATA LOSS FIX)", () => {
     const testMain = originalMain + " ATOMIC_SAVE_TEST";
     await mainTextarea.fill(testMain);
     await mainTextarea.blur();
-    await page.waitForTimeout(1000);
+    await page.waitForResponse(
+      (resp) =>
+        resp.url().includes("/slides/") && resp.request().method() === "PATCH",
+      { timeout: 5_000 },
+    );
 
     // Verify the PATCH call was made with all fields
     expect(patchCalls.length).toBeGreaterThan(0);
@@ -263,7 +287,11 @@ test.describe("WASM Slide Editing - Unified Save (DATA LOSS FIX)", () => {
     // Edit with unique marker and blur to trigger save
     await mainTextarea.fill("MARKER_VERIFY_TEST");
     await mainTextarea.blur();
-    await page.waitForTimeout(1000);
+    await page.waitForResponse(
+      (resp) =>
+        resp.url().includes("/slides/") && resp.request().method() === "PATCH",
+      { timeout: 5_000 },
+    );
 
     // Verify the save request contained our marker text
     expect(savedMain).toContain("MARKER_VERIFY");
@@ -287,7 +315,11 @@ test.describe("WASM Slide Editing - Persistence", () => {
     // Fill and blur to save
     await textarea.fill(testValue);
     await textarea.blur();
-    await page.waitForTimeout(1000);
+    await page.waitForResponse(
+      (resp) =>
+        resp.url().includes("/slides/") && resp.request().method() === "PATCH",
+      { timeout: 5_000 },
+    );
 
     // Reload and verify value persisted
     await page.reload();
@@ -320,7 +352,12 @@ test.describe("WASM Slide Editing - Persistence", () => {
     await createButton.click();
 
     // Modal should be open - focus should NOT return to textarea
-    await page.waitForTimeout(500);
+    await page
+      .waitForFunction(
+        () => document.querySelector('[data-role="modal"]') !== null,
+        { timeout: 5_000 },
+      )
+      .catch(() => {}); // Modal may not appear
 
     // Check if modal is visible
     const modal = page.locator('[data-role="modal"]');
@@ -334,7 +371,12 @@ test.describe("WASM Slide Editing - Persistence", () => {
 
     // Close modal by pressing Escape
     await page.keyboard.press("Escape");
-    await page.waitForTimeout(300);
+    await page
+      .waitForFunction(
+        () => !document.querySelector('[data-role="modal"][data-open="true"]'),
+        { timeout: 5_000 },
+      )
+      .catch(() => {});
   });
 });
 
@@ -480,7 +522,12 @@ test.describe("WASM Slide Editing - No-Change Optimization", () => {
     // Focus and blur without changing content
     await textarea.focus();
     await textarea.blur();
-    await page.waitForTimeout(500);
+    // Give time for any save to fire (we expect none since content is unchanged)
+    await page
+      .waitForResponse((resp) => resp.url().includes("/slides/"), {
+        timeout: 1_000,
+      })
+      .catch(() => {}); // Expected to timeout - no API call should happen
 
     // Should not have made any PATCH requests since nothing changed
     const patchCalls = apiCalls.filter((url) => url.includes("/slides/"));

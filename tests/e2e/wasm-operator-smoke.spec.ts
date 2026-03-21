@@ -230,7 +230,13 @@ test.describe("WASM Operator Smoke Tests", () => {
     });
 
     // Allow some time for any async operations
-    await page.waitForTimeout(2_000);
+    await page.waitForFunction(
+      () => {
+        const list = document.querySelector('[data-role="library-list"]');
+        return list && !list.textContent?.includes("Loading");
+      },
+      { timeout: 10_000 },
+    );
 
     // Filter out expected WASM-related messages that aren't actual errors
     const realErrors = errors.filter(

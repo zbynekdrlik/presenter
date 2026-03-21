@@ -149,3 +149,19 @@
 {"timestamp": "2026-03-19T07:54:11.176624+00:00", "files_changed": 1, "commit": "a021eee fix(e2e): wait for secondary translation options to populate", "duration_hint": "completed"}
 {"timestamp": "2026-03-19T12:29:34.061533+00:00", "files_changed": 1, "commit": "58af03f feat(ui): unify operator views with URL-based navigation", "duration_hint": "completed"}
 {"timestamp": "2026-03-19T16:17:44.135371+00:00", "files_changed": 1, "commit": "daef8a8 ci: trigger fresh pipeline run", "duration_hint": "completed"}
+{"timestamp": "2026-03-19T19:18:21.517281+00:00", "files_changed": 0, "commit": "88a841e chore: remove accidentally committed screenshot files", "duration_hint": "completed"}
+{"timestamp": "2026-03-19T19:18:26.902413+00:00", "files_changed": 1, "commit": "88a841e chore: remove accidentally committed screenshot files", "duration_hint": "completed"}
+{"timestamp": "2026-03-19T19:26:18.686392+00:00", "files_changed": 1, "commit": "88a841e chore: remove accidentally committed screenshot files", "duration_hint": "completed"}
+{"timestamp": "2026-03-19T19:26:37.395707+00:00", "files_changed": 1, "commit": "88a841e chore: remove accidentally committed screenshot files", "duration_hint": "completed"}
+{"timestamp": "2026-03-19T21:00:21.138415+00:00", "files_changed": 1, "commit": "88a841e chore: remove accidentally committed screenshot files", "duration_hint": "completed"}
+{"timestamp": "2026-03-19T23:50:11.971397+00:00", "files_changed": 1, "commit": "ebed0a2 ci: remove bible.rs from quality check after standalone page removal", "duration_hint": "completed"}
+{"timestamp": "2026-03-19T23:50:16.805049+00:00", "files_changed": 1, "commit": "ebed0a2 ci: remove bible.rs from quality check after standalone page removal", "duration_hint": "completed"}
+{"timestamp": "2026-03-20T09:40:28.761894+00:00", "files_changed": 1, "commit": "ebed0a2 ci: remove bible.rs from quality check after standalone page removal", "duration_hint": "completed"}
+{"timestamp": "2026-03-20T09:44:35.715464+00:00", "files_changed": 1, "commit": "7b94251 Merge pull request #185 from zbynekdrlik/dev", "duration_hint": "completed"}
+{"timestamp": "2026-03-20T09:53:46.307324+00:00", "files_changed": 1, "commit": "7b94251 Merge pull request #185 from zbynekdrlik/dev", "duration_hint": "completed"}
+{"timestamp": "2026-03-20T10:55:55.368679+00:00", "files_changed": 1, "commit": "ce3b11f refactor: remove legacy operator and dead code after WASM migration", "duration_hint": "completed"}
+{"timestamp": "2026-03-20T10:56:15.046483+00:00", "files_changed": 1, "commit": "ce3b11f refactor: remove legacy operator and dead code after WASM migration", "duration_hint": "completed"}
+{"timestamp": "2026-03-20T12:53:49.024136+00:00", "files_changed": 1, "commit": "1cc525b fix(e2e): fix remaining WASM operator migration issues", "duration_hint": "completed"}
+{"timestamp": "2026-03-20T13:10:12.870458+00:00", "files_changed": 1, "commit": "781d0c5 fix(e2e): fix paste slide count and playlist drag assertions", "duration_hint": "completed"}
+{"timestamp": "2026-03-20T20:15:47.952900+00:00", "files_changed": 1, "commit": "01d2653 test(e2e): remove legacy-dependent tests superseded by WASM coverage", "duration_hint": "completed"}
+{"timestamp": "2026-03-20T20:55:21.641561+00:00", "files_changed": 1, "commit": "cb3006f Merge pull request #186 from zbynekdrlik/dev", "duration_hint": "completed"}

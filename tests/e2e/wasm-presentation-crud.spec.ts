@@ -249,7 +249,9 @@ Multiple lines here`;
       { timeout: 10_000 },
     );
 
-    await page.waitForTimeout(500);
+    await page
+      .waitForSelector("[data-slide-id]", { timeout: 5_000 })
+      .catch(() => {});
 
     // Switch to edit mode (rename buttons only visible in edit mode)
     await page.locator('[data-role="mode-toggle"][data-mode="edit"]').click();
@@ -350,7 +352,15 @@ Multiple lines here`;
     await page.locator('[data-role="presentation-edit-delete"]').click();
 
     // Modal should remain open (dialog was dismissed)
-    await page.waitForTimeout(500);
+    await page
+      .waitForFunction(
+        () =>
+          !!document.querySelector(
+            '[data-role="presentation-edit-modal"][data-open="true"]',
+          ),
+        { timeout: 5_000 },
+      )
+      .catch(() => {});
     const modalStillOpen = await page.evaluate(
       () =>
         !!document.querySelector(
