@@ -47,18 +47,9 @@ pub fn TabletPage() -> impl IntoView {
             match event {
                 LiveEvent::Bible { broadcast } => {
                     ctx.active_broadcast.set(Some(broadcast));
-                    // Re-render slides to update active state
-                    if ctx.current_presentation_id.get_untracked().is_some() {
-                        let slides = ctx.slides.get_untracked();
-                        ctx.slides.set(slides);
-                    }
                 }
                 LiveEvent::BibleCleared => {
                     ctx.active_broadcast.set(None);
-                    if ctx.current_presentation_id.get_untracked().is_some() {
-                        let slides = ctx.slides.get_untracked();
-                        ctx.slides.set(slides);
-                    }
                 }
                 LiveEvent::BibleSlidesChanged { presentation_id } => {
                     ctx.slides_cache.update(|cache| {
@@ -316,7 +307,6 @@ fn SlideList() -> impl IntoView {
     view! {
         {move || {
             let slide_list = ctx.slides.get();
-            let _broadcast = ctx.active_broadcast.get(); // Subscribe to broadcast changes
 
             if ctx.current_presentation_id.get().is_none() {
                 return view! {
@@ -370,7 +360,7 @@ fn TabletSlideCard(slide: BibleSlideDto, class_str: String) -> impl IntoView {
     let is_active = {
         let slide = slide.clone();
         let active_broadcast = ctx.active_broadcast;
-        move || is_slide_active(&slide, &active_broadcast.get_untracked())
+        move || is_slide_active(&slide, &active_broadcast.get())
     };
 
     let on_click = {
@@ -575,9 +565,6 @@ async fn trigger_slide(ctx: &TabletContext, slide: &BibleSlideDto) {
     match bible::trigger(&req).await {
         Ok(broadcast) => {
             ctx.active_broadcast.set(Some(broadcast));
-            // Re-render slides to update active highlight
-            let slides = ctx.slides.get_untracked();
-            ctx.slides.set(slides);
             ctx.show_toast("Slide triggered", "success");
         }
         Err(e) => {
