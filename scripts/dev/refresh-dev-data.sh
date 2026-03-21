@@ -35,9 +35,5 @@ fi
 echo "[refresh-dev-data] Importing ProPresenter libraries from '$ROOT_DIR'"
 run_binary import_propresenter "--root" "$ROOT_DIR"
 
-if [[ "${PRESENTER_SKIP_BIBLES:-0}" == "1" ]]; then
-  echo "[refresh-dev-data] Skipping Bible translations (PRESENTER_SKIP_BIBLES=1)"
-else
-  echo "[refresh-dev-data] Importing default Bible translations"
-  run_binary ingest_bibles
-fi
+echo "[refresh-dev-data] Importing default Bible translations"
+run_binary ingest_bibles
