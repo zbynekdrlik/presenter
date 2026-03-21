@@ -254,10 +254,33 @@ pub struct BibleSlideMetaBible {
     pub book_code: Option<String>,
     pub book_number: Option<u16>,
     pub chapter: Option<u16>,
+    /// Flat verse range (used by trigger-slide API responses)
     pub verse_start: Option<u16>,
     pub verse_end: Option<u16>,
+    /// Structured verse ranges (used by resolve/presentation detail responses)
+    #[serde(default)]
+    pub verses: Vec<BibleSlideVerseRefDto>,
     pub main_reference_label: Option<String>,
     pub translation_reference_label: Option<String>,
+}
+
+impl BibleSlideMetaBible {
+    /// Get the effective verse start, preferring `verses` array over flat fields.
+    pub fn effective_verse_start(&self) -> Option<u16> {
+        self.verses.first().map(|v| v.start).or(self.verse_start)
+    }
+
+    /// Get the effective verse end, preferring `verses` array over flat fields.
+    pub fn effective_verse_end(&self) -> Option<u16> {
+        self.verses.last().map(|v| v.end).or(self.verse_end)
+    }
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct BibleSlideVerseRefDto {
+    pub start: u16,
+    pub end: u16,
 }
 
 /// Generate slides from a Bible reference. Server: POST /bible/resolve

@@ -497,10 +497,13 @@ fn matches_bible_metadata(
         .map_or(false, |c| c == broadcast_translation);
     let book_match = meta.book.as_deref().map_or(false, |b| b == broadcast_book);
     let chapter_match = meta.chapter.map_or(false, |c| c == broadcast_chapter);
+    // Use effective_verse_start/end which prefers `verses` array over flat fields
     let verse_start_match = meta
-        .verse_start
+        .effective_verse_start()
         .map_or(false, |v| v == broadcast_verse_start);
-    let verse_end_match = meta.verse_end.map_or(false, |v| v == broadcast_verse_end);
+    let verse_end_match = meta
+        .effective_verse_end()
+        .map_or(false, |v| v == broadcast_verse_end);
 
     translation_match && book_match && chapter_match && verse_start_match && verse_end_match
 }
@@ -550,8 +553,8 @@ async fn trigger_slide(ctx: &TabletContext, slide: &BibleSlideDto) {
         book_code: meta.book_code.clone(),
         book_number: meta.book_number,
         chapter: meta.chapter.unwrap_or(1),
-        verse_start: meta.verse_start.unwrap_or(1),
-        verse_end: meta.verse_end,
+        verse_start: meta.effective_verse_start().unwrap_or(1),
+        verse_end: meta.effective_verse_end(),
         main_text: Some(slide.main.clone()),
         translation_text: if slide.translation.is_empty() {
             None
