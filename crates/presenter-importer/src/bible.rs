@@ -57,9 +57,7 @@ where
 mod tests {
     use super::*;
     use async_trait::async_trait;
-    use presenter_bible::{
-        BibleSource, BibleSourceFormat, SLOVAK_ECUMENICKY_SOURCE, SLOVAK_EVANGELICKY_SOURCE,
-    };
+    use presenter_bible::{BibleSource, BibleSourceFormat};
     use presenter_core::{BibleReference, BibleTranslation};
     use presenter_persistence::Repository;
     use rusqlite::Connection;
@@ -219,33 +217,61 @@ mod tests {
     #[tokio::test]
     async fn ingest_default_translations_uses_specs() {
         let repo = Repository::connect_in_memory().await.unwrap();
-        let mut payloads = HashMap::new();
-        payloads.insert(
-            "https://ebible.org/Scriptures/eng-kjv_usfm.zip".to_string(),
-            make_usfm_archive(),
-        );
-        payloads.insert(SLOVAK_ECUMENICKY_SOURCE.to_string(), make_mysword_archive());
-        payloads.insert(
-            SLOVAK_EVANGELICKY_SOURCE.to_string(),
-            make_obohu_archive("SEVP.SQLite3"),
-        );
 
-        let provider = MapProvider { payloads };
+        // Write mock bible archives to temp files and set env vars
+        let tmp = tempfile::tempdir().unwrap();
+
+        let kjv_path = tmp.path().join("kjv.usfm.zip");
+        std::fs::write(&kjv_path, make_usfm_archive()).unwrap();
+        std::env::set_var("PRESENTER_BIBLE_KJV", &kjv_path);
+
+        let seb_path = tmp.path().join("seb.bbl.mybible.zip");
+        std::fs::write(&seb_path, make_mysword_archive()).unwrap();
+        std::env::set_var("PRESENTER_BIBLE_SEB", &seb_path);
+
+        let roh_path = tmp.path().join("roh.bbl.mybible.zip");
+        std::fs::write(&roh_path, make_mysword_archive()).unwrap();
+        std::env::set_var("PRESENTER_BIBLE_ROHACEK", &roh_path);
+
+        let sevp_path = tmp.path().join("sevp.obohu.mybible.zip");
+        std::fs::write(&sevp_path, make_obohu_archive("SEVP.SQLite3")).unwrap();
+        std::env::set_var("PRESENTER_BIBLE_SEVP", &sevp_path);
+
+        let mil_path = tmp.path().join("mil.bbl.mybible.zip");
+        std::fs::write(&mil_path, make_mysword_archive()).unwrap();
+        std::env::set_var("PRESENTER_BIBLE_MILOST", &mil_path);
+
+        // Provider is unused since all specs are LocalFile, but required by type
+        let provider = MapProvider {
+            payloads: HashMap::new(),
+        };
         let service = BibleIngestionService::new(&repo, provider);
 
-        // Only ingest URL-based specs (LocalFile specs require env vars)
-        let url_specs: Vec<_> = default_translation_specs()
+        let available_specs: Vec<_> = default_translation_specs()
             .into_iter()
             .filter(|spec| spec.source.is_available())
             .collect();
-        let summaries = service.ingest_specs(url_specs).await.unwrap();
+        assert_eq!(
+            available_specs.len(),
+            5,
+            "all 5 translations should be available"
+        );
+        let summaries = service.ingest_specs(available_specs).await.unwrap();
         let codes: HashSet<_> = summaries
             .into_iter()
             .map(|summary| summary.translation_code)
             .collect();
         assert!(codes.contains("eng-kjv"));
         assert!(codes.contains("slk-seb"));
+        assert!(codes.contains("slk-roh"));
         assert!(codes.contains("slk-sevp"));
-        // LocalFile specs (slk-roh, slk-mil) are skipped when env vars not set
+        assert!(codes.contains("slk-mil"));
+
+        // Clean up env vars
+        std::env::remove_var("PRESENTER_BIBLE_KJV");
+        std::env::remove_var("PRESENTER_BIBLE_SEB");
+        std::env::remove_var("PRESENTER_BIBLE_ROHACEK");
+        std::env::remove_var("PRESENTER_BIBLE_SEVP");
+        std::env::remove_var("PRESENTER_BIBLE_MILOST");
     }
 }
