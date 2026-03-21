@@ -120,13 +120,13 @@ test("tablet shows Bible presentations, renders slides, and triggers passages", 
 
   // --- Navigate to tablet UI ---
   await page.goto(new URL("/ui/tablet", baseURL).toString());
-  await page.waitForLoadState("networkidle");
-  await page.waitForFunction(
-    () => (window as any).__presenterTabletReady === true,
-    {
-      timeout: 20_000,
-    },
-  );
+  await page.waitForSelector('body[data-wasm-ready="true"]', {
+    timeout: 30_000,
+  });
+  await page.waitForSelector('[data-role="presentation-list"]', {
+    state: "visible",
+    timeout: 20_000,
+  });
 
   // --- Verify presentation appears in sidebar ---
   const presentationButton = page.locator(

@@ -40,10 +40,3 @@ pub(super) async fn stage_design_ui(
     let html = ui::render_stage_design_ui(&state).await?;
     Ok(html)
 }
-
-pub(super) async fn tablet_ui(
-    State(state): State<AppState>,
-) -> Result<axum::response::Html<String>, AppError> {
-    let html = ui::render_tablet_ui(&state).await?;
-    Ok(html)
-}

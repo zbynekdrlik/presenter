@@ -1,6 +1,7 @@
 pub mod bible;
 pub mod operator;
 pub mod session;
+pub mod tablet;
 
 use leptos::prelude::*;
 use presenter_core::{

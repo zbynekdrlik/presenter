@@ -149,7 +149,10 @@ test.describe("Tablet PWA Configuration", () => {
     }).toPass({ timeout: 180_000 });
 
     await page.goto(new URL("/ui/tablet", baseURL).toString());
-    await page.waitForLoadState("domcontentloaded");
+    // Wait for WASM ready since PWA meta tags are injected dynamically
+    await page.waitForSelector('body[data-wasm-ready="true"]', {
+      timeout: 30_000,
+    });
 
     // Verify PWA manifest link
     const manifestLink = page.locator('link[rel="manifest"]');
@@ -208,24 +211,21 @@ test.describe("Tablet PWA Configuration", () => {
     }).toPass({ timeout: 180_000 });
 
     await page.goto(new URL("/ui/tablet", baseURL).toString());
-    await page.waitForLoadState("domcontentloaded");
+    await page.waitForSelector('body[data-wasm-ready="true"]', {
+      timeout: 30_000,
+    });
 
-    // Wait for presentation list to load (shows "Loading..." initially)
+    // Wait for presentation list to be visible
     await page
-      .waitForFunction(
-        () => {
-          const list = document.querySelector(
-            '[data-role="presentation-list"]',
-          );
-          return list && !list.textContent?.includes("Loading");
-        },
-        { timeout: 10_000 },
-      )
+      .waitForSelector('[data-role="presentation-list"]', {
+        state: "visible",
+        timeout: 10_000,
+      })
       .catch(() => {});
 
     // Check if any presentations exist
     const presentationCount = await page
-      .locator('[data-role="presentation-list"] button')
+      .locator('[data-role="presentation-button"]')
       .count();
 
     if (presentationCount === 0) {
@@ -241,7 +241,7 @@ test.describe("Tablet PWA Configuration", () => {
 
     // Click first presentation to load slides
     const firstPresentation = page
-      .locator('[data-role="presentation-list"] button')
+      .locator('[data-role="presentation-button"]')
       .first();
     await firstPresentation.click();
 
@@ -284,7 +284,9 @@ test.describe("Tablet PWA Configuration", () => {
     }).toPass({ timeout: 180_000 });
 
     await page.goto(new URL("/ui/tablet", baseURL).toString());
-    await page.waitForLoadState("domcontentloaded");
+    await page.waitForSelector('body[data-wasm-ready="true"]', {
+      timeout: 30_000,
+    });
 
     // Verify header has sticky positioning (can test without presentations)
     const header = page.locator(".tablet-main__header");
