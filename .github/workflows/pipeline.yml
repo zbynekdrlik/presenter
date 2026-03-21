@@ -465,7 +465,7 @@ jobs:
         run: npx playwright install --with-deps chromium
 
       - name: Run Playwright tests
-        run: npx playwright test --shard=${{ matrix.shard }}
+        run: npx playwright test --shard=${{ matrix.shard }} --reporter=blob
         env:
           CI: true
           PRESENTER_LIBRARY_ROOT: ${{ github.workspace }}/data/libraries
@@ -475,13 +475,13 @@ jobs:
           PRESENTER_BIBLE_SEVP: ${{ github.workspace }}/data/bibles/sevp.obohu.mybible.zip
           PRESENTER_BIBLE_MILOST: ${{ github.workspace }}/data/bibles/milost.bbl.mybible.zip
 
-      - name: Upload shard report
+      - name: Upload blob report
         uses: actions/upload-artifact@v4
         if: ${{ !cancelled() }}
         with:
-          name: playwright-report-shard-${{ strategy.job-index }}-${{ github.run_id }}
-          path: playwright-report/
-          retention-days: 14
+          name: playwright-blob-report-shard-${{ strategy.job-index }}-${{ github.run_id }}
+          path: blob-report/
+          retention-days: 1
 
       - name: Upload test traces
         uses: actions/upload-artifact@v4
@@ -511,12 +511,12 @@ jobs:
 
       - uses: actions/download-artifact@v4
         with:
-          pattern: playwright-report-shard-*
-          path: all-reports
+          pattern: playwright-blob-report-shard-*
+          path: all-blob-reports
           merge-multiple: true
 
       - name: Merge reports
-        run: npx playwright merge-reports --reporter html all-reports
+        run: npx playwright merge-reports --reporter html all-blob-reports
 
       - uses: actions/upload-artifact@v4
         with:
