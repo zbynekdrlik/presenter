@@ -296,18 +296,8 @@ test.describe("WASM Operator Playlist Operations", () => {
     if (playlistCountForSeparator === 0) return;
     await playlist.click();
 
-    // Wait for playlist to load
-    await page
-      .waitForFunction(
-        () => {
-          const entries = document.querySelectorAll(
-            '[data-role="presentation-item"]',
-          );
-          return entries.length > 0;
-        },
-        { timeout: 5_000 },
-      )
-      .catch(() => {});
+    // Brief settle after playlist selection
+    await page.waitForTimeout(500);
 
     // Click the "+" button (which adds separator when playlist is active)
     page.once("dialog", async (dialog) => {

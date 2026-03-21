@@ -356,16 +356,8 @@ test.describe("WASM Operator Drag-Drop", () => {
     }
     await playlist.click();
 
-    // Wait for playlist entries
-    await page
-      .waitForFunction(
-        () =>
-          document.querySelectorAll(
-            '[data-role="presentation-item"][data-entry-id]',
-          ).length > 0,
-        { timeout: 5_000 },
-      )
-      .catch(() => {});
+    // Brief settle after playlist click for entries to render
+    await page.waitForTimeout(500);
 
     // Check if there are entries
     const entries = page.locator(
