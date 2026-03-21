@@ -53,8 +53,8 @@ if command -v rg >/dev/null 2>&1 && rg -n "(insert_slide_handler|duplicate_slide
   fail "router.rs still contains legacy presentation handler impls; move to router/presentations.rs"
 fi
 
-# 3) UI pages present
-for f in crates/presenter-server/src/ui/{tablet,settings,home,timer_overlay}.rs; do
+# 3) UI pages present (tablet migrated to WASM in presenter-ui)
+for f in crates/presenter-server/src/ui/{settings,home,timer_overlay}.rs; do
   [[ -f "$f" ]] || fail "Missing UI page: $f"
 done
 
