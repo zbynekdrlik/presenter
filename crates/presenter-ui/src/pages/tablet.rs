@@ -534,40 +534,63 @@ async fn load_presentation_slides(ctx: &TabletContext, presentation_id: &str) {
 }
 
 async fn trigger_slide(ctx: &TabletContext, slide: &BibleSlideDto) {
-    let Some(meta) = slide.metadata.as_ref().and_then(|m| m.bible.as_ref()) else {
-        ctx.show_toast("Slide has no Bible metadata", "error");
-        return;
-    };
+    let meta = slide.metadata.as_ref().and_then(|m| m.bible.as_ref());
 
-    let translation_code = match meta.translation_code.as_ref() {
-        Some(code) => code.clone(),
-        None => {
-            ctx.show_toast("Translation metadata missing", "error");
+    // If we have full Bible metadata with translation code, use the structured trigger
+    if let Some(meta) = meta {
+        if let Some(translation_code) = meta.translation_code.as_ref() {
+            let req = bible::TriggerRequest {
+                translation: translation_code.clone(),
+                book: meta.book.clone().unwrap_or_default(),
+                book_code: meta.book_code.clone(),
+                book_number: meta.book_number,
+                chapter: meta.chapter.unwrap_or(1),
+                verse_start: meta.effective_verse_start().unwrap_or(1),
+                verse_end: meta.effective_verse_end(),
+                main_text: Some(slide.main.clone()),
+                translation_text: if slide.translation.is_empty() {
+                    None
+                } else {
+                    Some(slide.translation.clone())
+                },
+                main_reference_label: meta.main_reference_label.clone(),
+                translation_reference_label: meta.translation_reference_label.clone(),
+            };
+
+            match bible::trigger(&req).await {
+                Ok(broadcast) => {
+                    ctx.active_broadcast.set(Some(broadcast));
+                    ctx.show_toast("Slide triggered", "success");
+                }
+                Err(e) => {
+                    ctx.show_toast(&format!("Failed to trigger slide: {e}"), "error");
+                }
+            }
             return;
         }
-    };
+    }
 
-    let req = bible::TriggerRequest {
-        translation: translation_code,
-        book: meta.book.clone().unwrap_or_default(),
-        book_code: meta.book_code.clone(),
-        book_number: meta.book_number,
-        chapter: meta.chapter.unwrap_or(1),
-        verse_start: meta.effective_verse_start().unwrap_or(1),
-        verse_end: meta.effective_verse_end(),
-        main_text: Some(slide.main.clone()),
-        translation_text: if slide.translation.is_empty() {
+    // Fallback: use trigger-slide endpoint with raw text content
+    let req = bible::TriggerSlideRequest {
+        main_text: slide.main.clone(),
+        main_reference: slide.main_reference.clone().unwrap_or_default(),
+        secondary_text: if slide.translation.is_empty() {
             None
         } else {
             Some(slide.translation.clone())
         },
-        main_reference_label: meta.main_reference_label.clone(),
-        translation_reference_label: meta.translation_reference_label.clone(),
+        secondary_reference: slide.translation_reference.clone(),
+        translation_code: meta.and_then(|m| m.translation_code.clone()),
+        book: meta.and_then(|m| m.book.clone()),
+        book_code: meta.and_then(|m| m.book_code.clone()),
+        book_number: meta.and_then(|m| m.book_number),
+        chapter: meta.and_then(|m| m.chapter),
+        verse_start: meta.and_then(|m| m.effective_verse_start()),
+        verse_end: meta.and_then(|m| m.effective_verse_end()),
     };
 
-    match bible::trigger(&req).await {
-        Ok(broadcast) => {
-            ctx.active_broadcast.set(Some(broadcast));
+    match bible::trigger_slide(&req).await {
+        Ok(_resp) => {
             ctx.show_toast("Slide triggered", "success");
         }
         Err(e) => {
