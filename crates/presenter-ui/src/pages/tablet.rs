@@ -520,6 +520,9 @@ async fn load_presentation_slides(ctx: &TabletContext, presentation_id: &str) {
         return;
     }
 
+    // Clear stale slides so the UI shows the correct state while fetching
+    ctx.slides.set(Vec::new());
+
     match bible::get_presentation(presentation_id).await {
         Ok(detail) => {
             ctx.slides_cache.update(|cache| {
