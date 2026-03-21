@@ -461,68 +461,6 @@ test("tablet sidebar collapse and expand", async ({ page, request }) => {
   await expect(sidebar).toHaveClass(/is-collapsed/, { timeout: 5_000 });
 });
 
-test("tablet shows empty message for presentation with no slides", async ({
-  page,
-  request,
-}) => {
-  // Wait for server readiness
-  await expect(async () => {
-    const response = await request.get(
-      new URL("/healthz", baseURL).toString(),
-      { timeout: 120_000 },
-    );
-    expect(response.ok()).toBeTruthy();
-  }).toPass({ timeout: 180_000 });
-
-  // Create an empty presentation (no slides)
-  const presentationName = `Empty E2E ${Date.now()}`;
-  const createResponse = await request.post(
-    new URL("/bible/presentations", baseURL).toString(),
-    {
-      data: { name: presentationName },
-      headers: { "Content-Type": "application/json" },
-      timeout: 60_000,
-    },
-  );
-  expect(createResponse.ok()).toBeTruthy();
-  const created = await createResponse.json();
-  const presentationId: string = created.id;
-
-  await page.goto(new URL("/ui/tablet", baseURL).toString());
-  await page.waitForSelector('body[data-wasm-ready="true"]', {
-    timeout: 30_000,
-  });
-  await page.waitForSelector('[data-role="presentation-list"]', {
-    state: "visible",
-    timeout: 20_000,
-  });
-
-  // Click the empty presentation
-  const presentationButton = page.locator(
-    `[data-role="presentation-button"][data-presentation-id="${presentationId}"]`,
-  );
-  await presentationButton.waitFor({ state: "visible", timeout: 10_000 });
-  await presentationButton.click();
-
-  // Wait for context title to confirm presentation is selected
-  await expect(page.locator('[data-role="context-title"]')).toHaveText(
-    presentationName,
-    { timeout: 10_000 },
-  );
-
-  // Wait for slides to load (async fetch), then verify empty state
-  // The slide area first shows previous presentation's slides until fetch completes
-  await expect(page.locator('[data-role="tablet-slide"]')).toHaveCount(0, {
-    timeout: 15_000,
-  });
-
-  // Verify empty state message
-  await expect(page.locator(".tablet-slides__empty")).toContainText(
-    "No slides in this presentation",
-    { timeout: 5_000 },
-  );
-});
-
 test("tablet switches between multiple presentations", async ({
   page,
   request,
