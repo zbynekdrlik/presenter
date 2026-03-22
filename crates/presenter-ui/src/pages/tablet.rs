@@ -286,7 +286,6 @@ fn TabletMain() -> impl IntoView {
             <header class="tablet-main__header">
                 <button type="button" class="tablet-back-button"
                     data-role="sidebar-toggle"
-                    style:display=move || if sidebar_open.get() { "none" } else { "inline-flex" }
                     on:click=on_sidebar_toggle
                 >"← Presentations"</button>
                 <h2 data-role="context-title">
@@ -432,6 +431,7 @@ fn TabletToast() -> impl IntoView {
             data-visible=move || {
                 if ctx.toast_message.get().is_some() { "true" } else { "false" }
             }
+            data-variant=move || ctx.toast_variant.get()
         >
             {move || ctx.toast_message.get().unwrap_or_default()}
         </div>

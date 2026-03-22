@@ -1,6 +1,7 @@
 use leptos::prelude::*;
 use presenter_core::BibleBroadcast;
 use std::collections::HashMap;
+use wasm_bindgen::{JsCast, UnwrapThrowExt};
 
 use crate::api::bible::{BiblePresentationSummary, BibleSlideDto};
 use crate::state::session;
@@ -20,6 +21,7 @@ pub struct TabletContext {
     pub text_scale: RwSignal<u32>,
     pub toast_message: RwSignal<Option<String>>,
     pub toast_variant: RwSignal<String>,
+    pub toast_timer_handle: RwSignal<Option<i32>>,
     pub ws_connected: RwSignal<bool>,
 }
 
@@ -41,19 +43,34 @@ impl TabletContext {
             text_scale: RwSignal::new(saved_scale),
             toast_message: RwSignal::new(None),
             toast_variant: RwSignal::new("info".to_string()),
+            toast_timer_handle: RwSignal::new(None),
             ws_connected: RwSignal::new(false),
         }
     }
 
     pub fn show_toast(&self, msg: &str, variant: &str) {
+        // Cancel previous timer
+        if let Some(handle) = self.toast_timer_handle.get_untracked() {
+            let window = web_sys::window().expect_throw("no window");
+            window.clear_timeout_with_handle(handle);
+        }
+
+        self.toast_variant.set(variant.to_string());
+        self.toast_message.set(Some(msg.to_string()));
+
         let toast = self.toast_message;
-        let toast_variant = self.toast_variant;
-        toast_variant.set(variant.to_string());
-        toast.set(Some(msg.to_string()));
-        gloo_timers::callback::Timeout::new(2_500, move || {
+        let timer_handle_sig = self.toast_timer_handle;
+        let closure = wasm_bindgen::closure::Closure::once_into_js(move || {
             toast.set(None);
-        })
-        .forget();
+            timer_handle_sig.set(None);
+        });
+        let window = web_sys::window().expect_throw("no window");
+        if let Ok(handle) = window.set_timeout_with_callback_and_timeout_and_arguments_0(
+            closure.as_ref().unchecked_ref(),
+            2_500,
+        ) {
+            self.toast_timer_handle.set(Some(handle));
+        }
     }
 
     pub fn persist_scale(&self) {
