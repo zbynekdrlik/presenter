@@ -572,42 +572,69 @@ fn SelectionControls() -> impl IntoView {
         bs.selected_slide_ids.set(all_ids);
     };
 
-    let on_add_to_new = {
+    view! {
+        <span data-role="selection-count" class="operator__slides-count">
+            {move || format!("{} selected", selected_count())}
+        </span>
+        <button
+            type="button"
+            class="operator__list-action"
+            data-role="select-all-slides"
+            on:click=on_select_all
+        >"Select all"</button>
+        <AddToPresentationButtons />
+    }
+}
+
+/// Collect selected slides into AppendSlideInput vec. Returns None if no slides selected.
+fn collect_selected_inputs(bs: &BibleState) -> Option<Vec<bible::AppendSlideInput>> {
+    let selected_ids = bs.selected_slide_ids.get_untracked();
+    if selected_ids.is_empty() {
+        return None;
+    }
+    let slides = bs.slides.get_untracked();
+    let inputs: Vec<bible::AppendSlideInput> = slides
+        .iter()
+        .filter(|s| selected_ids.contains(&s.id))
+        .map(|s| bible::AppendSlideInput {
+            main: s.main.clone(),
+            translation: s.translation.clone(),
+            stage: s.stage.clone(),
+            group: s.group.clone(),
+            metadata: s.metadata.clone(),
+        })
+        .collect();
+    if inputs.is_empty() {
+        None
+    } else {
+        Some(inputs)
+    }
+}
+
+#[component]
+fn AddToPresentationButtons() -> impl IntoView {
+    let bs = use_ctx!(BibleState);
+    let ctx = use_ctx!(AppContext);
+    let presentations = bs.presentations;
+
+    let on_add_new = {
         let bs = bs.clone();
         let ctx = ctx.clone();
         move |_| {
-            let selected_ids = bs.selected_slide_ids.get_untracked();
-            if selected_ids.is_empty() {
+            let Some(inputs) = collect_selected_inputs(&bs) else {
                 ctx.show_toast("No slides selected", "error");
                 return;
-            }
-            let slides = bs.slides.get_untracked();
-            let inputs: Vec<bible::AppendSlideInput> = slides
-                .iter()
-                .filter(|s| selected_ids.contains(&s.id))
-                .map(|s| bible::AppendSlideInput {
-                    main: s.main.clone(),
-                    translation: s.translation.clone(),
-                    stage: s.stage.clone(),
-                    group: s.group.clone(),
-                    metadata: s.metadata.clone(),
-                })
-                .collect();
-            if inputs.is_empty() {
-                return;
-            }
-
+            };
             let bs_pres = bs.presentations;
             let active_pres = bs.active_presentation_id;
             let toast_message = ctx.toast_message;
             let toast_variant = ctx.toast_variant;
             leptos::task::spawn_local(async move {
-                // Create a new presentation, then append slides to it
                 let detail = match bible::create_presentation("New Presentation").await {
                     Ok(d) => d,
                     Err(e) => {
                         toast_variant.set("error".to_string());
-                        toast_message.set(Some(format!("Failed to create presentation: {e}")));
+                        toast_message.set(Some(format!("Failed to create: {e}")));
                         return;
                     }
                 };
@@ -634,21 +661,61 @@ fn SelectionControls() -> impl IntoView {
     };
 
     view! {
-        <span data-role="selection-count" class="operator__slides-count">
-            {move || format!("{} selected", selected_count())}
-        </span>
-        <button
-            type="button"
-            class="operator__list-action"
-            data-role="select-all-slides"
-            on:click=on_select_all
-        >"Select all"</button>
         <button
             type="button"
             class="operator__list-action operator__list-action--primary"
             data-role="presentation-add"
-            on:click=on_add_to_new
-        >"Add to new presentation"</button>
+            on:click=on_add_new
+        >"+ New presentation"</button>
+        {move || {
+            let pres_list = presentations.get();
+            if pres_list.is_empty() {
+                None
+            } else {
+                Some(pres_list.into_iter().map(|p| {
+                    let pres_id = p.id.clone();
+                    let label = format!("{} ({})", p.name, p.slide_count);
+                    let bs = bs.clone();
+                    let ctx = ctx.clone();
+                    let on_click = move |_| {
+                        let Some(inputs) = collect_selected_inputs(&bs) else {
+                            ctx.show_toast("No slides selected", "error");
+                            return;
+                        };
+                        let pres_id = pres_id.clone();
+                        let bs_pres = bs.presentations;
+                        let toast_message = ctx.toast_message;
+                        let toast_variant = ctx.toast_variant;
+                        leptos::task::spawn_local(async move {
+                            match bible::append_presentation_slides(&pres_id, &inputs).await {
+                                Ok(_) => {
+                                    toast_variant.set("success".to_string());
+                                    toast_message.set(Some(format!(
+                                        "Added {} slide(s)",
+                                        inputs.len()
+                                    )));
+                                    if let Ok(pres) = bible::list_presentations().await {
+                                        bs_pres.set(pres);
+                                    }
+                                }
+                                Err(e) => {
+                                    toast_variant.set("error".to_string());
+                                    toast_message.set(Some(format!("Failed: {e}")));
+                                }
+                            }
+                        });
+                    };
+                    view! {
+                        <button
+                            type="button"
+                            class="operator__list-action"
+                            data-role="presentation-add-existing"
+                            on:click=on_click
+                        >{label}</button>
+                    }
+                }).collect_view())
+            }
+        }}
     }
 }
 
