@@ -572,14 +572,18 @@ fn BiblePreparedTab() -> impl IntoView {
     let bible_tab = bs.bible_tab;
     let presentations = bs.presentations;
     let active_presentation_id = bs.active_presentation_id;
-    let active_presentation_slides = bs.active_presentation_slides;
+    let edit_mode = bs.edit_mode;
 
     let on_create = {
         let ctx = ctx.clone();
         move |_| {
+            let window = crate::utils::window::window();
+            let name = match window.prompt_with_message("Presentation name:") {
+                Ok(Some(n)) if !n.trim().is_empty() => n.trim().to_string(),
+                _ => return,
+            };
             let toast_message = ctx.toast_message;
             let toast_variant = ctx.toast_variant;
-            let name = "New Presentation".to_string();
             leptos::task::spawn_local(async move {
                 match bible::create_presentation(&name).await {
                     Ok(detail) => {
@@ -606,6 +610,20 @@ fn BiblePreparedTab() -> impl IntoView {
             data-bible-panel="prepared"
             data-visible=move || if bible_tab.get() == "prepared" { "true" } else { "false" }
         >
+            <div class="bible__mode-toggle">
+                <button
+                    type="button"
+                    data-role="bible-mode-live"
+                    data-active=move || if !edit_mode.get() { "true" } else { "false" }
+                    on:click=move |_| edit_mode.set(false)
+                >"Live"</button>
+                <button
+                    type="button"
+                    data-role="bible-mode-edit"
+                    data-active=move || if edit_mode.get() { "true" } else { "false" }
+                    on:click=move |_| edit_mode.set(true)
+                >"Edit"</button>
+            </div>
             <div class="bible__prepared-header">
                 <h3>"Presentations"</h3>
                 <button
@@ -630,7 +648,7 @@ fn BiblePreparedTab() -> impl IntoView {
                     }
                 }}
             </div>
-            <PreparedDeleteButton />
+            <BiblePresentationModal />
         </div>
     }
 }
@@ -638,16 +656,15 @@ fn BiblePreparedTab() -> impl IntoView {
 #[component]
 fn PresentationCard(presentation: bible::BiblePresentationSummary) -> impl IntoView {
     let bs = use_ctx!(BibleState);
-    let ctx = use_ctx!(AppContext);
     let active_presentation_id = bs.active_presentation_id;
     let active_presentation_slides = bs.active_presentation_slides;
-    let presentations = bs.presentations;
 
     let id = presentation.id.clone();
     let name = presentation.name.clone();
     let count = presentation.slide_count;
     let id_for_click = id.clone();
     let id_for_edit = id.clone();
+    let name_for_edit = name.clone();
 
     let is_active = {
         let id = id.clone();
@@ -664,39 +681,10 @@ fn PresentationCard(presentation: bible::BiblePresentationSummary) -> impl IntoV
         });
     };
 
-    let name_for_edit = name.clone();
-    let on_edit = {
-        let ctx = ctx.clone();
-        move |ev: web_sys::MouseEvent| {
-            ev.stop_propagation();
-            let id = id_for_edit.clone();
-            let toast_message = ctx.toast_message;
-            let toast_variant = ctx.toast_variant;
-
-            let window = crate::utils::window::window();
-            if let Ok(Some(new_name)) =
-                window.prompt_with_message_and_default("Rename presentation:", &name_for_edit)
-            {
-                let new_name = new_name.trim().to_string();
-                if !new_name.is_empty() {
-                    leptos::task::spawn_local(async move {
-                        match bible::rename_presentation(&id, &new_name).await {
-                            Ok(()) => {
-                                toast_variant.set("success".to_string());
-                                toast_message.set(Some("Renamed".to_string()));
-                                if let Ok(pres) = bible::list_presentations().await {
-                                    presentations.set(pres);
-                                }
-                            }
-                            Err(e) => {
-                                toast_variant.set("error".to_string());
-                                toast_message.set(Some(format!("Rename failed: {e}")));
-                            }
-                        }
-                    });
-                }
-            }
-        }
+    let on_edit = move |ev: web_sys::MouseEvent| {
+        ev.stop_propagation();
+        bs.modal_presentation_id.set(Some(id_for_edit.clone()));
+        bs.modal_presentation_name.set(name_for_edit.clone());
     };
 
     view! {
@@ -723,16 +711,68 @@ fn PresentationCard(presentation: bible::BiblePresentationSummary) -> impl IntoV
 }
 
 #[component]
-fn PreparedDeleteButton() -> impl IntoView {
+fn BiblePresentationModal() -> impl IntoView {
     let bs = use_ctx!(BibleState);
     let ctx = use_ctx!(AppContext);
+    let modal_id = bs.modal_presentation_id;
+    let modal_name = bs.modal_presentation_name;
+
+    let is_open = move || modal_id.get().is_some();
+
+    let on_close = move |_: web_sys::MouseEvent| {
+        modal_id.set(None);
+        modal_name.set(String::new());
+    };
+
+    let on_name_input = move |ev: web_sys::Event| {
+        let target = ev
+            .target()
+            .and_then(|t| t.dyn_into::<web_sys::HtmlInputElement>().ok());
+        if let Some(input) = target {
+            modal_name.set(input.value());
+        }
+    };
+
+    let on_save = {
+        let ctx = ctx.clone();
+        move |ev: web_sys::SubmitEvent| {
+            ev.prevent_default();
+            let Some(id) = modal_id.get_untracked() else {
+                return;
+            };
+            let new_name = modal_name.get_untracked().trim().to_string();
+            if new_name.is_empty() {
+                return;
+            }
+            let presentations = bs.presentations;
+            let toast_message = ctx.toast_message;
+            let toast_variant = ctx.toast_variant;
+            leptos::task::spawn_local(async move {
+                match bible::rename_presentation(&id, &new_name).await {
+                    Ok(()) => {
+                        toast_variant.set("success".to_string());
+                        toast_message.set(Some("Renamed".to_string()));
+                        if let Ok(pres) = bible::list_presentations().await {
+                            presentations.set(pres);
+                        }
+                        modal_id.set(None);
+                        modal_name.set(String::new());
+                    }
+                    Err(e) => {
+                        toast_variant.set("error".to_string());
+                        toast_message.set(Some(format!("Rename failed: {e}")));
+                    }
+                }
+            });
+        }
+    };
 
     let on_delete = {
-        let bs = bs.clone();
         let ctx = ctx.clone();
-        move |_| {
-            let pres_id = bs.active_presentation_id.get_untracked();
-            let Some(id) = pres_id else { return };
+        move |_: web_sys::MouseEvent| {
+            let Some(id) = modal_id.get_untracked() else {
+                return;
+            };
             let window = crate::utils::window::window();
             if let Ok(confirmed) = window.confirm_with_message("Delete this presentation?") {
                 if !confirmed {
@@ -754,6 +794,8 @@ fn PreparedDeleteButton() -> impl IntoView {
                         if let Ok(pres) = bible::list_presentations().await {
                             presentations.set(pres);
                         }
+                        modal_id.set(None);
+                        modal_name.set(String::new());
                     }
                     Err(e) => {
                         toast_variant.set("error".to_string());
@@ -764,18 +806,56 @@ fn PreparedDeleteButton() -> impl IntoView {
         }
     };
 
-    let has_active = move || bs.active_presentation_id.get().is_some();
+    let on_backdrop = move |ev: web_sys::MouseEvent| {
+        // Close only if clicking the backdrop itself
+        let target = ev.target();
+        let current = ev.current_target();
+        if target == current {
+            modal_id.set(None);
+            modal_name.set(String::new());
+        }
+    };
 
     view! {
-        <div class="bible__prepared-actions">
-            <button
-                type="button"
-                class="operator__list-action"
-                data-role="presentation-delete"
-                disabled=move || !has_active()
-                on:click=on_delete
-                style="color: #ef4444;"
-            >"Delete presentation"</button>
+        <div
+            class="bible__modal-overlay"
+            data-role="presentation-modal"
+            style:display=move || if is_open() { "flex" } else { "none" }
+            on:click=on_backdrop
+        >
+            <form class="bible__modal" on:submit=on_save>
+                <h3>"Edit presentation"</h3>
+                    <label class="operator__field">
+                        <span>"Name"</span>
+                        <input
+                            type="text"
+                            data-role="modal-presentation-name"
+                            prop:value=move || modal_name.get()
+                            on:input=on_name_input
+                        />
+                    </label>
+                    <div class="bible__modal-actions">
+                        <button
+                            type="button"
+                            class="bible__modal-btn bible__modal-btn--danger"
+                            data-role="modal-delete"
+                            on:click=on_delete
+                        >"Delete"</button>
+                        <div class="bible__modal-actions-right">
+                            <button
+                                type="button"
+                                class="bible__modal-btn"
+                                data-role="modal-cancel"
+                                on:click=on_close
+                            >"Cancel"</button>
+                            <button
+                                type="submit"
+                                class="bible__modal-btn bible__modal-btn--primary"
+                                data-role="modal-save"
+                            >"Save"</button>
+                        </div>
+                    </div>
+            </form>
         </div>
     }
 }

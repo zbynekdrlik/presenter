@@ -71,6 +71,13 @@ pub struct BibleState {
     // -- Drag state for prepared slide reorder --
     pub drag_source_idx: RwSignal<Option<usize>>,
     pub drag_over_idx: RwSignal<Option<usize>>,
+
+    // -- Edit mode (prepared tab) --
+    pub edit_mode: RwSignal<bool>,
+
+    // -- Presentation edit modal --
+    pub modal_presentation_id: RwSignal<Option<String>>,
+    pub modal_presentation_name: RwSignal<String>,
 }
 
 impl BibleState {
@@ -107,6 +114,9 @@ impl BibleState {
             loaded_passages_history: RwSignal::new(Vec::new()),
             drag_source_idx: RwSignal::new(None),
             drag_over_idx: RwSignal::new(None),
+            edit_mode: RwSignal::new(false),
+            modal_presentation_id: RwSignal::new(None),
+            modal_presentation_name: RwSignal::new(String::new()),
         }
     }
 
