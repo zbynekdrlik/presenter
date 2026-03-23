@@ -456,24 +456,8 @@ test("clear from WASM operator UI removes text from stage page", async ({
     timeout: 10_000,
   });
 
-  // Navigate to WASM operator and clear
-  await page.goto(`${baseURL}/ui/operator`);
-  await page.waitForSelector('[data-role="library-list"]', { timeout: 30_000 });
-
-  const bibleButton = page.locator(
-    '[data-role="view-toggle"][data-view="bible"]',
-  );
-  if ((await bibleButton.count()) > 0) {
-    await bibleButton.click();
-  }
-  await page.waitForFunction(
-    () => document.body.getAttribute("data-view") === "bible",
-    { timeout: 5_000 },
-  );
-
-  // Click clear broadcast
-  const clearBtn = page.locator('[data-role="clear-broadcast"]');
-  await clearBtn.click();
+  // Clear via API (clear broadcast button was removed from UI)
+  await request.post(new URL("/bible/clear", baseURL).toString());
 
   // Wait for overlay to disappear on stage page
   await expect(bibleOverlay).toHaveAttribute("data-visible", "false", {

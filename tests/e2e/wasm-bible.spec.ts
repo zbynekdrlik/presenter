@@ -939,22 +939,7 @@ test.describe("WASM Operator Bible Tests", () => {
     // Select all slides
     await page.locator('[data-role="select-all-slides"]').click();
 
-    // Create a presentation if none exist (via API for speed)
-    const presResponse = await page.evaluate(async (url: string) => {
-      const resp = await fetch(`${url}/bible/presentations`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ name: "E2E Test Pres" }),
-      });
-      return resp.json();
-    }, baseURL);
-    const presId = presResponse.id;
-
-    // Select that presentation in the dropdown
-    const presSelect = page.locator('[data-role="presentation-select"]');
-    await presSelect.selectOption(presId);
-
-    // Click "Add selected"
+    // Click "Add to new presentation" — creates a new presentation and appends slides
     await page.locator('[data-role="presentation-add"]').click();
 
     // Should show success toast
@@ -963,15 +948,7 @@ test.describe("WASM Operator Bible Tests", () => {
         const toast = document.querySelector('[data-role="toast"]');
         return toast && toast.textContent?.includes("Added");
       },
-      { timeout: 5_000 },
-    );
-
-    // Clean up: delete test presentation
-    await page.evaluate(
-      async ({ url, id }: { url: string; id: string }) => {
-        await fetch(`${url}/bible/presentations/${id}`, { method: "DELETE" });
-      },
-      { url: baseURL, id: presId },
+      { timeout: 10_000 },
     );
   });
 
@@ -1391,66 +1368,8 @@ test.describe("WASM Operator Bible Tests", () => {
       .toBe(false);
   });
 
-  // -----------------------------------------------------------------------
-  // Clear broadcast
-  // -----------------------------------------------------------------------
-
-  test("clear broadcast button is visible and functional", async ({ page }) => {
-    await navigateToBible(page);
-
-    // Clear button should be visible in the live tab
-    const clearBtn = page.locator('[data-role="clear-broadcast"]');
-    await expect(clearBtn).toBeVisible();
-
-    if (!(await hasBibleData(page))) {
-      test.skip(true, "No Bible data available");
-      return;
-    }
-
-    // First trigger a verse
-    const firstBook = page.locator('[data-role="book-item"]').first();
-    await firstBook.click();
-    await page.locator('[data-role="load-button"]').click();
-
-    await page.waitForFunction(
-      () => document.querySelectorAll('[data-role="slide-card"]').length > 0,
-      { timeout: 15_000 },
-    );
-
-    const firstTrigger = page
-      .locator('[data-role="slide-trigger-zone"]')
-      .first();
-    await firstTrigger.click();
-
-    // Wait for trigger toast
-    await page.waitForFunction(
-      () => {
-        const toast = document.querySelector('[data-role="toast"]');
-        return toast && toast.textContent?.includes("Triggered");
-      },
-      { timeout: 5_000 },
-    );
-
-    // Now clear
-    await clearBtn.click();
-
-    // Should show "Broadcast cleared" toast
-    await page.waitForFunction(
-      () => {
-        const toast = document.querySelector('[data-role="toast"]');
-        return toast && toast.textContent?.includes("cleared");
-      },
-      { timeout: 5_000 },
-    );
-
-    // Verify broadcast is cleared via active-slide API
-    const activeSlide = await page.evaluate(async (url: string) => {
-      const resp = await fetch(`${url}/bible/active-slide`);
-      return resp.json();
-    }, baseURL);
-
-    expect(activeSlide).toBeNull();
-  });
+  // Clear broadcast button was removed from Bible UI (user clears via stage preview).
+  // Clear functionality is verified via API in wasm-bible-stage.spec.ts.
 
   // -----------------------------------------------------------------------
   // Bible search
@@ -1884,20 +1803,7 @@ test.describe("WASM Operator Bible Tests", () => {
     // 3. Select all slides
     await page.locator('[data-role="select-all-slides"]').click();
 
-    // 4. Create a presentation via API
-    const presResponse = await page.evaluate(async (url: string) => {
-      const resp = await fetch(`${url}/bible/presentations`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ name: "E2E Workflow Test" }),
-      });
-      return resp.json();
-    }, baseURL);
-    const presId = presResponse.id;
-
-    // 5. Select presentation and add slides
-    const presSelect = page.locator('[data-role="presentation-select"]');
-    await presSelect.selectOption(presId);
+    // 4. Click "Add to new presentation" — creates + appends in one step
     await page.locator('[data-role="presentation-add"]').click();
 
     await page.waitForFunction(
@@ -1905,20 +1811,21 @@ test.describe("WASM Operator Bible Tests", () => {
         const toast = document.querySelector('[data-role="toast"]');
         return toast && toast.textContent?.includes("Added");
       },
-      { timeout: 5_000 },
-    );
-
-    // 6. Switch to Prepared tab and select the presentation
-    await page.locator('[data-role="bible-tab"][data-tab="prepared"]').click();
-
-    await page.waitForFunction(
-      (id: string) =>
-        document.querySelector(`[data-presentation-id="${id}"]`) !== null,
-      presId,
       { timeout: 10_000 },
     );
 
-    await page.locator(`[data-presentation-id="${presId}"]`).click();
+    // 5. Switch to Prepared tab and select the newly created presentation
+    await page.locator('[data-role="bible-tab"][data-tab="prepared"]').click();
+
+    // Wait for any presentation to appear
+    await page.waitForFunction(
+      () => document.querySelector("[data-presentation-id]") !== null,
+      { timeout: 10_000 },
+    );
+
+    // Click the last presentation (the newly created one)
+    const allPres = page.locator("[data-presentation-id]");
+    await allPres.last().click();
 
     // 7. Wait for prepared slides to appear
     await page.waitForFunction(

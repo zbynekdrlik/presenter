@@ -5,7 +5,7 @@ use crate::api::bible;
 use crate::state::bible::{BibleState, LoadedPassage, SelectedBook};
 use crate::state::AppContext;
 
-use super::bible_controls::{BibleSearch, LoadedPassagesHistory};
+use super::bible_controls::BibleSearch;
 use super::bible_slides::BibleSlidesColumn;
 
 /// Bible page — 2-column layout matching the legacy Bible UI.
@@ -177,7 +177,6 @@ fn BibleLiveTab() -> impl IntoView {
             <ReferenceInputs />
             <LoadButton />
             <SelectionControls />
-            <LoadedPassagesHistory />
         </div>
     }
 }
@@ -573,29 +572,10 @@ fn SelectionControls() -> impl IntoView {
         bs.selected_slide_ids.set(all_ids);
     };
 
-    // Presentation selector for "Add to..."
-    let presentations = bs.presentations;
-
-    let on_pres_change = move |ev: web_sys::Event| {
-        let target = ev
-            .target()
-            .and_then(|t| t.dyn_into::<web_sys::HtmlSelectElement>().ok());
-        if let Some(select) = target {
-            let val = select.value();
-            bs.active_presentation_id
-                .set(if val.is_empty() { None } else { Some(val) });
-        }
-    };
-
-    let on_add_selected = {
+    let on_add_to_new = {
         let bs = bs.clone();
         let ctx = ctx.clone();
         move |_| {
-            let pres_id = bs.active_presentation_id.get_untracked();
-            let Some(pres_id) = pres_id else {
-                ctx.show_toast("Select a presentation first", "error");
-                return;
-            };
             let selected_ids = bs.selected_slide_ids.get_untracked();
             if selected_ids.is_empty() {
                 ctx.show_toast("No slides selected", "error");
@@ -618,20 +598,31 @@ fn SelectionControls() -> impl IntoView {
             }
 
             let bs_pres = bs.presentations;
+            let active_pres = bs.active_presentation_id;
             let toast_message = ctx.toast_message;
             let toast_variant = ctx.toast_variant;
             leptos::task::spawn_local(async move {
+                // Create a new presentation, then append slides to it
+                let detail = match bible::create_presentation("New Presentation").await {
+                    Ok(d) => d,
+                    Err(e) => {
+                        toast_variant.set("error".to_string());
+                        toast_message.set(Some(format!("Failed to create presentation: {e}")));
+                        return;
+                    }
+                };
+                let pres_id = detail.id;
                 match bible::append_presentation_slides(&pres_id, &inputs).await {
                     Ok(_) => {
                         toast_variant.set("success".to_string());
                         toast_message.set(Some(format!(
-                            "Added {} slide(s) to presentation",
+                            "Added {} slide(s) to new presentation",
                             inputs.len()
                         )));
-                        // Refresh presentations list to update slide count
                         if let Ok(pres) = bible::list_presentations().await {
                             bs_pres.set(pres);
                         }
+                        active_pres.set(Some(pres_id));
                     }
                     Err(e) => {
                         toast_variant.set("error".to_string());
@@ -652,26 +643,12 @@ fn SelectionControls() -> impl IntoView {
             data-role="select-all-slides"
             on:click=on_select_all
         >"Select all"</button>
-        <label class="operator__field">
-            <select data-role="presentation-select" on:change=on_pres_change>
-                <option value="">"Add to\u{2026}"</option>
-                {move || {
-                    presentations.get().into_iter().map(|p| {
-                        let id = p.id.clone();
-                        let label = format!("{} ({} slides)", p.name, p.slide_count);
-                        view! {
-                            <option value=id>{label}</option>
-                        }
-                    }).collect_view()
-                }}
-            </select>
-        </label>
         <button
             type="button"
             class="operator__list-action operator__list-action--primary"
             data-role="presentation-add"
-            on:click=on_add_selected
-        >"Add selected"</button>
+            on:click=on_add_to_new
+        >"Add to new presentation"</button>
     }
 }
 
