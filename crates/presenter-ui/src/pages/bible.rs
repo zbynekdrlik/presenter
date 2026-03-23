@@ -5,7 +5,7 @@ use crate::api::bible;
 use crate::state::bible::{BibleState, LoadedPassage, SelectedBook};
 use crate::state::AppContext;
 
-use super::bible_controls::{BibleSearch, ClearBroadcastButton, LoadedPassagesHistory};
+use super::bible_controls::{BibleSearch, SelectionControls};
 use super::bible_slides::BibleSlidesColumn;
 
 /// Bible page — 2-column layout matching the legacy Bible UI.
@@ -176,9 +176,6 @@ fn BibleLiveTab() -> impl IntoView {
             <BookList />
             <ReferenceInputs />
             <LoadButton />
-            <ClearBroadcastButton />
-            <LoadedPassagesHistory />
-            <hr class="operator__divider" />
             <SelectionControls />
         </div>
     }
@@ -300,6 +297,24 @@ fn BookList() -> impl IntoView {
                 let selected_chapter = bs.selected_chapter;
                 let verse_start = bs.verse_start;
                 let verse_end = bs.verse_end;
+
+                // If a book is already selected, collapse the list to just that book
+                if let Some(selected) = selected_book.get() {
+                    return view! {
+                        <div class="operator__list-item">
+                            <button
+                                type="button"
+                                class="operator__list-button"
+                                data-role="book-item"
+                                data-active="true"
+                                on:click=move |_| { selected_book.set(None); }
+                            >
+                                <span class="operator__list-label">{selected.book.clone()}</span>
+                                <span class="operator__list-meta">"Change"</span>
+                            </button>
+                        </div>
+                    }.into_any();
+                }
 
                 if filtered.is_empty() {
                     view! {
@@ -544,119 +559,7 @@ fn LoadButton() -> impl IntoView {
     }
 }
 
-#[component]
-fn SelectionControls() -> impl IntoView {
-    let bs = use_ctx!(BibleState);
-    let ctx = use_ctx!(AppContext);
-
-    let selected_count = move || bs.selected_slide_ids.get().len();
-
-    let on_select_all = move |_| {
-        let all_ids: std::collections::HashSet<String> =
-            bs.slides.get().iter().map(|s| s.id.clone()).collect();
-        bs.selected_slide_ids.set(all_ids);
-    };
-
-    // Presentation selector for "Add to..."
-    let presentations = bs.presentations;
-
-    let on_pres_change = move |ev: web_sys::Event| {
-        let target = ev
-            .target()
-            .and_then(|t| t.dyn_into::<web_sys::HtmlSelectElement>().ok());
-        if let Some(select) = target {
-            let val = select.value();
-            bs.active_presentation_id
-                .set(if val.is_empty() { None } else { Some(val) });
-        }
-    };
-
-    let on_add_selected = {
-        let bs = bs.clone();
-        let ctx = ctx.clone();
-        move |_| {
-            let pres_id = bs.active_presentation_id.get_untracked();
-            let Some(pres_id) = pres_id else {
-                ctx.show_toast("Select a presentation first", "error");
-                return;
-            };
-            let selected_ids = bs.selected_slide_ids.get_untracked();
-            if selected_ids.is_empty() {
-                ctx.show_toast("No slides selected", "error");
-                return;
-            }
-            let slides = bs.slides.get_untracked();
-            let inputs: Vec<bible::AppendSlideInput> = slides
-                .iter()
-                .filter(|s| selected_ids.contains(&s.id))
-                .map(|s| bible::AppendSlideInput {
-                    main: s.main.clone(),
-                    translation: s.translation.clone(),
-                    stage: s.stage.clone(),
-                    group: s.group.clone(),
-                })
-                .collect();
-            if inputs.is_empty() {
-                return;
-            }
-
-            let bs_pres = bs.presentations;
-            let toast_message = ctx.toast_message;
-            let toast_variant = ctx.toast_variant;
-            leptos::task::spawn_local(async move {
-                match bible::append_presentation_slides(&pres_id, &inputs).await {
-                    Ok(_) => {
-                        toast_variant.set("success".to_string());
-                        toast_message.set(Some(format!(
-                            "Added {} slide(s) to presentation",
-                            inputs.len()
-                        )));
-                        // Refresh presentations list to update slide count
-                        if let Ok(pres) = bible::list_presentations().await {
-                            bs_pres.set(pres);
-                        }
-                    }
-                    Err(e) => {
-                        toast_variant.set("error".to_string());
-                        toast_message.set(Some(format!("Failed to add slides: {e}")));
-                    }
-                }
-            });
-        }
-    };
-
-    view! {
-        <span data-role="selection-count" class="operator__slides-count">
-            {move || format!("{} selected", selected_count())}
-        </span>
-        <button
-            type="button"
-            class="operator__list-action"
-            data-role="select-all-slides"
-            on:click=on_select_all
-        >"Select all"</button>
-        <label class="operator__field">
-            <select data-role="presentation-select" on:change=on_pres_change>
-                <option value="">"Add to\u{2026}"</option>
-                {move || {
-                    presentations.get().into_iter().map(|p| {
-                        let id = p.id.clone();
-                        let label = format!("{} ({} slides)", p.name, p.slide_count);
-                        view! {
-                            <option value=id>{label}</option>
-                        }
-                    }).collect_view()
-                }}
-            </select>
-        </label>
-        <button
-            type="button"
-            class="operator__list-action operator__list-action--primary"
-            data-role="presentation-add"
-            on:click=on_add_selected
-        >"Add selected"</button>
-    }
-}
+// SelectionControls and AddToPresentationButtons are in bible_controls.rs
 
 // ---------------------------------------------------------------------------
 // Prepared tab
@@ -680,11 +583,13 @@ fn BiblePreparedTab() -> impl IntoView {
             leptos::task::spawn_local(async move {
                 match bible::create_presentation(&name).await {
                     Ok(detail) => {
+                        let new_id = detail.id.clone();
                         toast_variant.set("success".to_string());
                         toast_message.set(Some(format!("Created \"{}\"", detail.name)));
                         if let Ok(pres) = bible::list_presentations().await {
                             presentations.set(pres);
                         }
+                        active_presentation_id.set(Some(new_id));
                     }
                     Err(e) => {
                         toast_variant.set("error".to_string());
