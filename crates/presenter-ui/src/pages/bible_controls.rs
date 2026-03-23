@@ -359,12 +359,18 @@ fn AddToPresentationButtons() -> impl IntoView {
                 ctx.show_toast("No slides selected", "error");
                 return;
             };
+            // Prompt user for presentation name
+            let window = crate::utils::window::window();
+            let name = match window.prompt_with_message("Presentation name:") {
+                Ok(Some(n)) if !n.trim().is_empty() => n.trim().to_string(),
+                _ => return, // User cancelled or entered empty name
+            };
             let bs_pres = bs.presentations;
             let active_pres = bs.active_presentation_id;
             let toast_message = ctx.toast_message;
             let toast_variant = ctx.toast_variant;
             leptos::task::spawn_local(async move {
-                let detail = match bible::create_presentation("New Presentation").await {
+                let detail = match bible::create_presentation(&name).await {
                     Ok(d) => d,
                     Err(e) => {
                         toast_variant.set("error".to_string());
