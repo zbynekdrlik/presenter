@@ -328,26 +328,17 @@ fn SlideList() -> impl IntoView {
                 }
                 last_reference = slide.main_reference.clone();
 
-                let shade_class = if group_index % 2 == 0 {
-                    "tablet-slide tablet-slide--light"
-                } else {
-                    "tablet-slide tablet-slide--dark"
-                };
-                let separator = is_new_group && group_index > 0;
-                let full_class = if separator {
-                    format!("{shade_class} tablet-slide--group-start")
-                } else {
-                    shade_class.to_string()
-                };
+                let is_light = group_index % 2 == 0;
+                let is_group_start = is_new_group && group_index > 0;
 
-                view! { <TabletSlideCard slide=slide class_str=full_class /> }
+                view! { <TabletSlideCard slide=slide is_light=is_light is_group_start=is_group_start /> }
             }).collect_view().into_any()
         }}
     }
 }
 
 #[component]
-fn TabletSlideCard(slide: BibleSlideDto, class_str: String) -> impl IntoView {
+fn TabletSlideCard(slide: BibleSlideDto, is_light: bool, is_group_start: bool) -> impl IntoView {
     let ctx = use_ctx!(TabletContext);
     let slide_id = slide.id.clone();
     let main_ref = slide.main_reference.clone().unwrap_or_default();
@@ -379,7 +370,10 @@ fn TabletSlideCard(slide: BibleSlideDto, class_str: String) -> impl IntoView {
 
     view! {
         <article
-            class=class_str
+            class="tablet-slide"
+            class:tablet-slide--light=is_light
+            class:tablet-slide--dark=!is_light
+            class:tablet-slide--group-start=is_group_start
             class:is-active=is_active
             class:is-loading=move || is_loading.get()
             data-role="tablet-slide"
