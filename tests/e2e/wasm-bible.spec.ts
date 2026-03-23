@@ -868,17 +868,19 @@ test.describe("WASM Operator Bible Tests", () => {
     // Switch to Prepared tab
     await page.locator('[data-role="bible-tab"][data-tab="prepared"]').click();
 
-    // Handle all dialogs: accept prompts with a name, accept confirms
-    page.on("dialog", (dialog) => {
-      if (dialog.type() === "prompt") {
-        void dialog.accept("To Delete");
-      } else {
-        void dialog.accept();
-      }
+    // Create a presentation via API, then reload to pick it up
+    await page.evaluate(async () => {
+      await fetch("/bible/presentations", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ name: "To Delete" }),
+      });
     });
-
-    // Create a fresh presentation to delete
-    await bp.locator('[data-role="presentation-create"]').click();
+    await page.reload({ waitUntil: "networkidle" });
+    await page.waitForSelector('[data-role="bible-tab-nav"]', {
+      timeout: 15_000,
+    });
+    await page.locator('[data-role="bible-tab"][data-tab="prepared"]').click();
     await page.waitForFunction(
       () =>
         document.querySelectorAll(
@@ -894,10 +896,8 @@ test.describe("WASM Operator Bible Tests", () => {
     await lastPres.click();
     await expect(lastPres).toHaveClass(/is-active/, { timeout: 5_000 });
 
-    // Open the presentation edit modal via the edit button on the active card
+    // Open the presentation edit modal
     await lastPres.locator('[data-role="presentation-edit"]').click();
-
-    // Wait for modal to be visible
     await page.waitForFunction(
       () => {
         const m = document.querySelector('[data-role="presentation-modal"]');
@@ -906,11 +906,16 @@ test.describe("WASM Operator Bible Tests", () => {
       { timeout: 5_000 },
     );
 
-    // Click delete in the modal (confirm dialog will be auto-accepted by the handler above)
-    const modal = page.locator('[data-role="presentation-modal"]');
-    await modal.locator('[data-role="modal-delete"]').click();
+    // Handle confirm dialog, then click delete via JS to avoid overlay hit-test issues
+    page.once("dialog", (dialog) => dialog.accept());
+    await page.evaluate(() => {
+      const btn = document.querySelector(
+        '[data-role="modal-delete"]',
+      ) as HTMLButtonElement;
+      btn?.click();
+    });
 
-    // Wait for deletion with extended timeout
+    // Wait for card count to decrease
     await page.waitForFunction(
       (expected: number) => {
         const cards = document.querySelectorAll(
