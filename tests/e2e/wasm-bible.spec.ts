@@ -868,8 +868,16 @@ test.describe("WASM Operator Bible Tests", () => {
     // Switch to Prepared tab
     await page.locator('[data-role="bible-tab"][data-tab="prepared"]').click();
 
+    // Handle all dialogs: accept prompts with a name, accept confirms
+    page.on("dialog", (dialog) => {
+      if (dialog.type() === "prompt") {
+        void dialog.accept("To Delete");
+      } else {
+        void dialog.accept();
+      }
+    });
+
     // Create a fresh presentation to delete
-    page.once("dialog", (dialog) => dialog.accept("To Delete"));
     await bp.locator('[data-role="presentation-create"]').click();
     await page.waitForFunction(
       () =>
@@ -877,17 +885,6 @@ test.describe("WASM Operator Bible Tests", () => {
           '[data-view-panel="bible"] [data-role="presentation-card"]',
         ).length > 0,
       { timeout: 15_000 },
-    );
-
-    // Wait for the card list to stabilise after creation
-    await page.waitForFunction(
-      () => {
-        const cards = document.querySelectorAll(
-          '[data-view-panel="bible"] [data-role="presentation-card"]',
-        );
-        return cards.length > 0;
-      },
-      { timeout: 5_000 },
     );
 
     // Select the last created presentation
@@ -900,14 +897,17 @@ test.describe("WASM Operator Bible Tests", () => {
     // Open the presentation edit modal via the edit button on the active card
     await lastPres.locator('[data-role="presentation-edit"]').click();
 
-    // Wait for modal to appear
+    // Wait for modal to be visible
+    await page.waitForFunction(
+      () => {
+        const m = document.querySelector('[data-role="presentation-modal"]');
+        return m && getComputedStyle(m).display !== "none";
+      },
+      { timeout: 5_000 },
+    );
+
+    // Click delete in the modal (confirm dialog will be auto-accepted by the handler above)
     const modal = page.locator('[data-role="presentation-modal"]');
-    await expect(modal).toBeVisible({ timeout: 5_000 });
-
-    // Set up dialog handler BEFORE triggering the delete (confirm dialog)
-    page.once("dialog", (dialog) => dialog.accept());
-
-    // Click delete in the modal
     await modal.locator('[data-role="modal-delete"]').click();
 
     // Wait for deletion with extended timeout
