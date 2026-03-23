@@ -38,8 +38,11 @@ self.addEventListener("fetch", (event) => {
     return;
   }
 
-  // Only cache tablet-related requests
-  if (!url.pathname.startsWith("/ui/tablet")) {
+  // Only cache tablet-related requests and WASM assets
+  if (
+    !url.pathname.startsWith("/ui/tablet") &&
+    !url.pathname.startsWith("/ui-pkg/")
+  ) {
     return;
   }
 

@@ -111,7 +111,7 @@ pub fn build_router(state: AppState) -> Router {
             get(wasm_ui::wasm_ui_shell_with_path),
         )
         .route("/ui-pkg/{*path}", get(wasm_ui::wasm_ui_asset))
-        .route("/ui/tablet", get(ui_routes::tablet_ui))
+        .route("/ui/tablet", get(wasm_ui::wasm_ui_shell))
         .route("/ui/tablet/manifest.json", get(tablet_pwa::tablet_manifest))
         .route("/ui/tablet/icon-192.png", get(tablet_pwa::icon_192))
         .route("/ui/tablet/icon-512.png", get(tablet_pwa::icon_512))
