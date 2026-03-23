@@ -5,7 +5,7 @@ use crate::api::bible;
 use crate::state::bible::{BibleState, LoadedPassage, SelectedBook};
 use crate::state::AppContext;
 
-use super::bible_controls::{BibleSearch, ClearBroadcastButton, LoadedPassagesHistory};
+use super::bible_controls::{BibleSearch, LoadedPassagesHistory};
 use super::bible_slides::BibleSlidesColumn;
 
 /// Bible page — 2-column layout matching the legacy Bible UI.
