@@ -176,10 +176,8 @@ fn BibleLiveTab() -> impl IntoView {
             <BookList />
             <ReferenceInputs />
             <LoadButton />
-            <ClearBroadcastButton />
-            <LoadedPassagesHistory />
-            <hr class="operator__divider" />
             <SelectionControls />
+            <LoadedPassagesHistory />
         </div>
     }
 }
@@ -300,6 +298,24 @@ fn BookList() -> impl IntoView {
                 let selected_chapter = bs.selected_chapter;
                 let verse_start = bs.verse_start;
                 let verse_end = bs.verse_end;
+
+                // If a book is already selected, collapse the list to just that book
+                if let Some(selected) = selected_book.get() {
+                    return view! {
+                        <div class="operator__list-item">
+                            <button
+                                type="button"
+                                class="operator__list-button"
+                                data-role="book-item"
+                                data-active="true"
+                                on:click=move |_| { selected_book.set(None); }
+                            >
+                                <span class="operator__list-label">{selected.book.clone()}</span>
+                                <span class="operator__list-meta">"Change"</span>
+                            </button>
+                        </div>
+                    }.into_any();
+                }
 
                 if filtered.is_empty() {
                     view! {
@@ -594,6 +610,7 @@ fn SelectionControls() -> impl IntoView {
                     translation: s.translation.clone(),
                     stage: s.stage.clone(),
                     group: s.group.clone(),
+                    metadata: s.metadata.clone(),
                 })
                 .collect();
             if inputs.is_empty() {
@@ -680,11 +697,13 @@ fn BiblePreparedTab() -> impl IntoView {
             leptos::task::spawn_local(async move {
                 match bible::create_presentation(&name).await {
                     Ok(detail) => {
+                        let new_id = detail.id.clone();
                         toast_variant.set("success".to_string());
                         toast_message.set(Some(format!("Created \"{}\"", detail.name)));
                         if let Ok(pres) = bible::list_presentations().await {
                             presentations.set(pres);
                         }
+                        active_presentation_id.set(Some(new_id));
                     }
                     Err(e) => {
                         toast_variant.set("error".to_string());

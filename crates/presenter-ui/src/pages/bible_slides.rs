@@ -56,6 +56,7 @@ fn AddEmptySlideButton() -> impl IntoView {
             translation: String::new(),
             stage: String::new(),
             group: None,
+            metadata: None,
         };
 
         leptos::task::spawn_local(async move {

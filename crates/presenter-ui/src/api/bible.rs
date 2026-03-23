@@ -351,6 +351,8 @@ pub struct AppendSlideInput {
     pub stage: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub group: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub metadata: Option<BibleSlideMetadataDto>,
 }
 
 /// Append slides to a Bible presentation. Server: POST /bible/presentations/{id}/append
