@@ -367,6 +367,7 @@ fn AddToPresentationButtons() -> impl IntoView {
             };
             let bs_pres = bs.presentations;
             let active_pres = bs.active_presentation_id;
+            let selected_ids = bs.selected_slide_ids;
             let toast_message = ctx.toast_message;
             let toast_variant = ctx.toast_variant;
             leptos::task::spawn_local(async move {
@@ -386,6 +387,7 @@ fn AddToPresentationButtons() -> impl IntoView {
                             "Added {} slide(s) to new presentation",
                             inputs.len()
                         )));
+                        selected_ids.set(std::collections::HashSet::new());
                         if let Ok(pres) = bible::list_presentations().await {
                             bs_pres.set(pres);
                         }
@@ -424,6 +426,7 @@ fn AddToPresentationButtons() -> impl IntoView {
                         };
                         let pres_id = pres_id.clone();
                         let bs_pres = bs.presentations;
+                        let selected_ids = bs.selected_slide_ids;
                         let toast_message = ctx.toast_message;
                         let toast_variant = ctx.toast_variant;
                         leptos::task::spawn_local(async move {
@@ -434,6 +437,7 @@ fn AddToPresentationButtons() -> impl IntoView {
                                         "Added {} slide(s)",
                                         inputs.len()
                                     )));
+                                    selected_ids.set(std::collections::HashSet::new());
                                     if let Ok(pres) = bible::list_presentations().await {
                                         bs_pres.set(pres);
                                     }

@@ -630,16 +630,16 @@ fn PreparedSlideCard(slide: BibleSlideDto, index: usize) -> impl IntoView {
             class:operator__slide-card--edit=move || edit_mode.get()
             data-role="slide-card"
             data-slide-id=slide_id.clone()
+            on:dragover=on_dragover
+            on:dragleave=on_dragleave
+            on:drop=on_drop
         >
-            // Drag handle — works in both modes
+            // Drag handle — initiates the drag
             <div
                 class="bible__slide-handle"
                 data-role="slide-drag-handle"
                 draggable="true"
                 on:dragstart=on_dragstart
-                on:dragover=on_dragover
-                on:dragleave=on_dragleave
-                on:drop=on_drop
                 title="Drag to reorder"
             >"\u{2630}"</div>
 
