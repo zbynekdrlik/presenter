@@ -304,17 +304,17 @@ request-retry: 2
             .arg("-config")
             .arg(self.config_path())
             .stdout(std::process::Stdio::piped())
-            .stderr(std::process::Stdio::piped())
+            .stderr(std::process::Stdio::null())
             .kill_on_drop(true)
             .spawn()?;
 
-        // Read stderr line by line to find the auth URL
-        let stderr = child
-            .stderr
+        // Read stdout line by line to find the auth URL
+        let stdout = child
+            .stdout
             .take()
-            .ok_or_else(|| anyhow::anyhow!("failed to capture stderr"))?;
+            .ok_or_else(|| anyhow::anyhow!("failed to capture stdout"))?;
 
-        let mut reader = tokio::io::BufReader::new(stderr).lines();
+        let mut reader = tokio::io::BufReader::new(stdout).lines();
         let mut auth_url = None;
 
         // Read lines with a timeout — the URL should appear quickly
@@ -366,15 +366,19 @@ request-retry: 2
         let target = format!("http://127.0.0.1:{OAUTH_CALLBACK_PORT}/callback{query}");
         info!("forwarding OAuth callback to CLIProxyAPI");
 
-        let resp = reqwest::Client::new()
+        // Don't follow redirects — CLIProxyAPI returns 302 on success
+        let resp = reqwest::Client::builder()
+            .redirect(reqwest::redirect::Policy::none())
+            .build()?
             .get(&target)
             .timeout(std::time::Duration::from_secs(10))
             .send()
             .await?;
 
-        if !resp.status().is_success() {
+        let status = resp.status().as_u16();
+        if status >= 400 {
             let body = resp.text().await.unwrap_or_default();
-            anyhow::bail!("OAuth callback failed: {body}");
+            anyhow::bail!("OAuth callback failed (HTTP {status}): {body}");
         }
 
         // Give CLIProxyAPI a moment to save tokens
