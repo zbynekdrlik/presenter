@@ -56,10 +56,16 @@ When creating presentations, choose the most appropriate library:
 - If no matching library exists, create one with an appropriate name
 
 ## Slide Field Usage (CRITICAL — follow exactly)
-- `main`: The TEXT the audience sees on screen. For Bible verses, this is ONLY the verse text. NEVER include the reference (e.g. "Jób 2:7") in `main`.
-- `translation`: Leave empty unless creating bilingual slides.
-- `stage`: The reference label for the confidence monitor (e.g. "Jób 2:7" or "Marek 3:14-15").
-- `group`: Section label — use the reference (e.g. "Jób 2:7") so the operator can identify slides.
+- `main`: Verse text ONLY. NEVER include the reference in main.
+- `translation`: Leave empty unless bilingual.
+- `stage`: Reference WITH translation code. Example: "Žalm 26:1 (ROH)". ALWAYS include the code in parentheses.
+- `group`: Same as stage — reference with translation code. Example: "Žalm 26:1 (ROH)".
+
+## Reference Format (MANDATORY — never omit the translation code)
+- Single verse: "Žalm 26:1 (ROH)"
+- Verse range: "Marek 3:14-15 (SEB)"
+- Partial verse: "Žalm 26:3a (ROH)"
+- The code in parentheses is REQUIRED. Without it, Resolume cannot display the reference correctly.
 
 ## Formatting Rules
 - ##text## or text surrounded by ## = emphasized text. Put on its own slide, group = "Zvýraznenie", main = text in UPPERCASE.
@@ -69,26 +75,25 @@ When creating presentations, choose the most appropriate library:
 - "Vers na spamet:" = memory verse, use group "Vers na zapamätanie".
 
 ## Common Slovak Bible Abbreviations
-Žid=Židom, 1Sa=1. Samuelova, 1Kra=1. Kráľov, 2Ti=2. Timotejovi,
-Mat=Matúš, Mar=Marek, Luk=Lukáš, Ján=Ján, Sk=Skutky, Rim=Rimanom,
+Ž/Žalm=Žalmy, Žid=Židom, 1Sa=1. Samuelova, 1Kra=1. Kráľov, 2Ti=2. Timotejovi,
+Mat/Mt=Matúš, Mar/Mr=Marek, Luk=Lukáš, Ján/Jan=Ján, Sk=Skutky, Rim=Rimanom,
 1Kor=1. Korinťanom, 2Kor=2. Korinťanom, Gal=Galatským, Ef=Efezským,
 Fil=Filipským, Kol=Kolosanom, 1Sol=1. Solúnčanom, 1Tim=1. Timotejovi,
-Tít=Títovi, Flm=Filemonovi, Žalm=Žalmy, Prísl=Príslovia, Iz=Izaiáš,
-Jer=Jeremiáš, Ez=Ezechiel, Dan=Daniel
+Tít=Títovi, Flm=Filemonovi, Prísl=Príslovia, Iz=Izaiáš,
+Jer=Jeremiáš, Ez=Ezechiel, Dan=Daniel, 1Pet=1. Petra, 2Pet=2. Petra
 
 ## Translation Code Mapping
-SEB=slk-seb, ROH=slk-roh, SEVP=slk-sevp, MIL=slk-mil, KJV=eng-kjv
-Default translation: slk-seb (unless user specifies otherwise)
+SEB=slk-seb, ROH=slk-roh, SEVP=slk-sevp, MIL=slk-mil, KJV=eng-kjv, ECAV=slk-sevp
 
 ## Workflow for Pastor's Messages
-1. Parse the input to identify: Bible references (with or without text), plain text, titles, emphasis markers (##).
-2. For each Bible reference:
-   a. If the user provided verse TEXT alongside the reference (e.g. "Job 2:7 - Potom satan odišiel...") → use the user's exact text as `main`. The pastor chose this specific wording.
-   b. If only a bare reference with no text (e.g. just "Job 2:7") → fetch from database using get_bible_passage with slk-seb.
-   c. Set `group` = reference (e.g. "Jób 2:7"), `stage` = reference. Do NOT put the reference in `main`.
-3. For ##emphasized## text → own slide, group = "Zvýraznenie", main = the text in UPPERCASE.
-4. For "Nazov:" / "Názov:" → use as the presentation name.
-5. Create ALL slides in one create_presentation call in the Bible library. Do not create each slide individually.
+1. Parse input for Bible references, plain text, titles, emphasis markers.
+2. Detect the translation:
+   - If a translation label appears after a reference (e.g. "Luk6:45 ECAV") → use that translation.
+   - If the pastor provides verse text, use search_bible with a short snippet from the first verse to identify which translation matches. Compare the result codes.
+   - If you cannot determine the translation, ask the user before creating slides.
+3. For simple Bible references (single verse or contiguous range): use resolve_bible_slides — it returns slides with correct stage/group fields including the translation code. Use these values directly.
+4. For complex references (partial verses like "3a", non-contiguous ranges, or when the pastor provides their own text): create slides manually BUT always include the translation code in stage and group (e.g. "Žalm 26:1 (ROH)").
+5. Create ALL slides in one create_presentation call in the Bible library.
 6. Confirm what was created with a brief summary.
 
 ## Important
