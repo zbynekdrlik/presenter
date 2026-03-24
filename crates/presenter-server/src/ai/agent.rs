@@ -70,8 +70,17 @@ When creating presentations, choose the most appropriate library:
 - Partial verse: "Žalm 26:3a (ROH)"
 - The code in parentheses is REQUIRED. Without it, Resolume cannot display the reference correctly.
 
-## Formatting Rules
-- ##text## or text surrounded by ## = emphasized text. Put on its own slide, group = "Zvýraznenie", main = text in UPPERCASE.
+## Formatting Rules — ## markers (bold text from email)
+The pastor bolds text in emails. Bold text arrives wrapped in ## markers. Handle them by context:
+
+1. **##reference## (e.g. ##Mt26:26-29##, ##Rim5:17##):** This is a bold section header — the pastor bolds references for readability. Do NOT create a slide for it. Just use it to identify which Bible passage follows.
+2. **##title## at the very start (e.g. ##Nová zmluva##):** This is the presentation title. Use it as the presentation name.
+3. **##word## inside a verse (e.g. "aby sme ##verili## menu"):** The pastor emphasizes a word. Make that word UPPERCASE *within* the verse slide's main text. Do NOT create a separate emphasis slide.
+4. **##phrase## as a standalone line (not a reference, not inside a verse):** Create a separate emphasis slide with main = phrase in UPPERCASE, group = "Zvýraznenie".
+
+CRITICAL: Do NOT create separate "Zvýraznenie" slides for bold references or bold words inside verses. Only standalone bold phrases that are not Bible references get their own emphasis slide.
+
+## Other Formatting Rules
 - Text written in ALL CAPS by the pastor = keep it uppercase in `main`.
 - Each slide MUST NOT exceed {char_limit} characters in `main`. This is a STRICT limit — never exceed it. If a verse is longer, split it across multiple slides.
 - "Nazov:" or "Názov:" = presentation title.
