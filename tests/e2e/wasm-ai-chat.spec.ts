@@ -433,3 +433,111 @@ test.describe("AI Chat Layout", () => {
     expect(alignSelf).toBe("flex-end");
   });
 });
+
+test.describe("AI Chat Paste Handler", () => {
+  test("pasting HTML with bold tags converts to ## markers", async ({
+    page,
+  }) => {
+    await navigateToAi(page);
+
+    const textarea = page.locator('[data-role="ai-input"]');
+    await textarea.focus();
+
+    // Dispatch paste event with HTML containing <b> and <strong> tags
+    await page.evaluate(() => {
+      const ta = document.querySelector(
+        '[data-role="ai-input"]',
+      ) as HTMLTextAreaElement;
+      const dt = new DataTransfer();
+      dt.setData(
+        "text/html",
+        "Normal text <b>bold text</b> and <strong>strong text</strong> end",
+      );
+      dt.setData("text/plain", "Normal text bold text and strong text end");
+      const event = new ClipboardEvent("paste", {
+        clipboardData: dt,
+        bubbles: true,
+        cancelable: true,
+      });
+      ta.dispatchEvent(event);
+    });
+
+    // Verify the textarea contains ## markers around bold text
+    const value = await textarea.inputValue();
+    expect(value).toContain("##bold text##");
+    expect(value).toContain("##strong text##");
+    expect(value).toContain("Normal text");
+    expect(value).toContain("end");
+    // Non-bold text should NOT have ## markers
+    expect(value).not.toMatch(/##Normal text##/);
+    expect(value).not.toMatch(/##end##/);
+  });
+
+  test("pasting HTML with font-weight:bold style converts to ## markers", async ({
+    page,
+  }) => {
+    await navigateToAi(page);
+
+    const textarea = page.locator('[data-role="ai-input"]');
+    await textarea.focus();
+
+    // Dispatch paste event with CSS font-weight:bold style
+    await page.evaluate(() => {
+      const ta = document.querySelector(
+        '[data-role="ai-input"]',
+      ) as HTMLTextAreaElement;
+      const dt = new DataTransfer();
+      dt.setData(
+        "text/html",
+        'Before <span style="font-weight:bold">styled bold</span> after',
+      );
+      dt.setData("text/plain", "Before styled bold after");
+      const event = new ClipboardEvent("paste", {
+        clipboardData: dt,
+        bubbles: true,
+        cancelable: true,
+      });
+      ta.dispatchEvent(event);
+    });
+
+    const value = await textarea.inputValue();
+    expect(value).toContain("##styled bold##");
+    expect(value).toContain("Before");
+    expect(value).toContain("after");
+  });
+
+  test("pasting plain text without HTML does not add markers", async ({
+    page,
+  }) => {
+    await navigateToAi(page);
+
+    const textarea = page.locator('[data-role="ai-input"]');
+    // Pre-fill to verify handler doesn't modify existing text
+    await textarea.fill("existing text");
+    await textarea.focus();
+
+    // Dispatch paste with ONLY text/plain (no text/html)
+    const wasDefaultPrevented = await page.evaluate(() => {
+      const ta = document.querySelector(
+        '[data-role="ai-input"]',
+      ) as HTMLTextAreaElement;
+      const dt = new DataTransfer();
+      dt.setData("text/plain", "just plain text");
+      // No text/html — handler should return early without preventing default
+      const event = new ClipboardEvent("paste", {
+        clipboardData: dt,
+        bubbles: true,
+        cancelable: true,
+      });
+      ta.dispatchEvent(event);
+      return event.defaultPrevented;
+    });
+
+    // Handler should NOT prevent default for plain text paste
+    expect(wasDefaultPrevented).toBe(false);
+
+    // Textarea should not contain ## markers
+    const value = await textarea.inputValue();
+    expect(value).not.toContain("##");
+  });
+});

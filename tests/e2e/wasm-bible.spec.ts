@@ -205,6 +205,11 @@ test.describe("WASM Operator Bible Tests", () => {
   test("main translation dropdown has options", async ({ page }) => {
     await navigateToBible(page);
 
+    if (!(await hasBibleData(page))) {
+      test.skip(true, "No Bible data available");
+      return;
+    }
+
     const mainTranslation = page.locator('[data-role="main-translation"]');
     await expect(mainTranslation).toBeVisible({ timeout: 10_000 });
 
@@ -248,6 +253,11 @@ test.describe("WASM Operator Bible Tests", () => {
   test("book list loads when translation is selected", async ({ page }) => {
     await navigateToBible(page);
 
+    if (!(await hasBibleData(page))) {
+      test.skip(true, "No Bible data available");
+      return;
+    }
+
     // Wait for books to load
     const bookList = page.locator('[data-role="book-list"]');
     await expect(bookList).toBeVisible({ timeout: 10_000 });
@@ -270,6 +280,11 @@ test.describe("WASM Operator Bible Tests", () => {
     page,
   }) => {
     await navigateToBible(page);
+
+    if (!(await hasBibleData(page))) {
+      test.skip(true, "No Bible data available");
+      return;
+    }
 
     await page.waitForFunction(
       () => document.querySelectorAll('[data-role="book-item"]').length > 0,
@@ -307,6 +322,11 @@ test.describe("WASM Operator Bible Tests", () => {
   test("book filter narrows book list", async ({ page }) => {
     await navigateToBible(page);
 
+    if (!(await hasBibleData(page))) {
+      test.skip(true, "No Bible data available");
+      return;
+    }
+
     // Wait for books to load
     await page.waitForFunction(
       () => document.querySelectorAll('[data-role="book-item"]').length > 0,
@@ -337,6 +357,11 @@ test.describe("WASM Operator Bible Tests", () => {
 
   test("clicking a book selects it", async ({ page }) => {
     await navigateToBible(page);
+
+    if (!(await hasBibleData(page))) {
+      test.skip(true, "No Bible data available");
+      return;
+    }
 
     await page.waitForFunction(
       () => document.querySelectorAll('[data-role="book-item"]').length > 0,
@@ -782,6 +807,329 @@ test.describe("WASM Operator Bible Tests", () => {
   });
 
   // -----------------------------------------------------------------------
+  // Unified slide editor (Prepared tab)
+  // -----------------------------------------------------------------------
+
+  test("prepared tab edit mode shows Main Reference and Translation Reference fields", async ({
+    page,
+  }) => {
+    await navigateToBible(page);
+
+    // Create a presentation with a slide via API
+    const presResponse = await page.evaluate(async (url: string) => {
+      const resp = await fetch(`${url}/bible/presentations`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ name: "Editor Fields Test" }),
+      });
+      return resp.json();
+    }, baseURL);
+    const presId = presResponse.id;
+
+    await page.evaluate(
+      async ({ url, id }: { url: string; id: string }) => {
+        await fetch(`${url}/bible/presentations/${id}/append`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            slides: [
+              {
+                main: "Test verse text",
+                translation: "Translated text",
+                stage: "Gen 1:1",
+              },
+            ],
+          }),
+        });
+      },
+      { url: baseURL, id: presId },
+    );
+
+    // Switch to Prepared tab and load presentation
+    await page.locator('[data-role="bible-tab"][data-tab="prepared"]').click();
+    await page.locator('[data-role="bible-tab"][data-tab="live"]').click();
+    await page.locator('[data-role="bible-tab"][data-tab="prepared"]').click();
+
+    await page.waitForFunction(
+      (id: string) =>
+        document.querySelector(`[data-presentation-id="${id}"]`) !== null,
+      presId,
+      { timeout: 10_000 },
+    );
+
+    await page.locator(`[data-presentation-id="${presId}"]`).click();
+
+    await page.waitForFunction(
+      () => document.querySelectorAll('[data-role="slide-card"]').length > 0,
+      { timeout: 10_000 },
+    );
+
+    // Switch to edit mode
+    await page.locator('[data-role="mode-toggle"][data-mode="edit"]').click();
+    await page.waitForSelector('[data-role="slide-main-edit"]', {
+      timeout: 5_000,
+    });
+
+    const firstCard = page.locator('[data-role="slide-card"]').first();
+
+    // Main Reference and Translation Reference inputs should be visible
+    const mainRefInput = firstCard.locator('[data-role="slide-main-ref"]');
+    await expect(mainRefInput).toBeVisible();
+    await expect(mainRefInput).toHaveAttribute("data-field", "main-ref");
+
+    const transRefInput = firstCard.locator(
+      '[data-role="slide-translation-ref"]',
+    );
+    await expect(transRefInput).toBeVisible();
+    await expect(transRefInput).toHaveAttribute(
+      "data-field",
+      "translation-ref",
+    );
+
+    // Labels should include "Main Reference" and "Translation Reference"
+    const editorSection = firstCard.locator(".operator__slide-editor--bible");
+    const mainRefLabel = editorSection
+      .locator("label span")
+      .filter({ hasText: "Main Reference" });
+    await expect(mainRefLabel).toBeVisible();
+
+    const transRefLabel = editorSection
+      .locator("label span")
+      .filter({ hasText: "Translation Reference" });
+    await expect(transRefLabel).toBeVisible();
+
+    // There should be NO "Stage" or "Group" fields
+    const stageLabel = editorSection
+      .locator("label span")
+      .filter({ hasText: /^Stage$/ });
+    expect(await stageLabel.count()).toBe(0);
+
+    const groupLabel = editorSection
+      .locator("label span")
+      .filter({ hasText: /^Group$/ });
+    expect(await groupLabel.count()).toBe(0);
+
+    // Cleanup
+    await page.evaluate(
+      async ({ url, id }: { url: string; id: string }) => {
+        await fetch(`${url}/bible/presentations/${id}`, { method: "DELETE" });
+      },
+      { url: baseURL, id: presId },
+    );
+  });
+
+  test("prepared slide editor matches live slide editor fields", async ({
+    page,
+  }) => {
+    await navigateToBible(page);
+
+    if (!(await hasBibleData(page))) {
+      test.skip(true, "No Bible data available");
+      return;
+    }
+
+    // Load a passage on Live tab
+    const firstBook = page.locator('[data-role="book-item"]').first();
+    await firstBook.click();
+    await page.locator('[data-role="load-button"]').click();
+
+    await page.waitForFunction(
+      () => document.querySelectorAll('[data-role="slide-card"]').length > 0,
+      { timeout: 15_000 },
+    );
+
+    // Switch to edit mode on Live tab and collect field labels
+    await page.locator('[data-role="mode-toggle"][data-mode="edit"]').click();
+    await page.waitForSelector('[data-role="slide-main-edit"]', {
+      timeout: 5_000,
+    });
+
+    const liveCard = page.locator('[data-role="slide-card"]').first();
+    const liveEditor = liveCard.locator(".operator__slide-editor--bible");
+    const liveLabels = await liveEditor.locator("label span").allTextContents();
+    const liveFieldSet = liveLabels.map((l) => l.trim()).sort();
+
+    // Create a presentation with slides via API
+    const presResponse = await page.evaluate(async (url: string) => {
+      const resp = await fetch(`${url}/bible/presentations`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ name: "Field Match Test" }),
+      });
+      return resp.json();
+    }, baseURL);
+    const presId = presResponse.id;
+
+    await page.evaluate(
+      async ({ url, id }: { url: string; id: string }) => {
+        await fetch(`${url}/bible/presentations/${id}/append`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            slides: [
+              { main: "Match test", translation: "Trans", stage: "Ref" },
+            ],
+          }),
+        });
+      },
+      { url: baseURL, id: presId },
+    );
+
+    // Switch to Prepared tab and select the presentation
+    await page.locator('[data-role="mode-toggle"][data-mode="live"]').click();
+    await page.locator('[data-role="bible-tab"][data-tab="prepared"]').click();
+    await page.locator('[data-role="bible-tab"][data-tab="live"]').click();
+    await page.locator('[data-role="bible-tab"][data-tab="prepared"]').click();
+
+    await page.waitForFunction(
+      (id: string) =>
+        document.querySelector(`[data-presentation-id="${id}"]`) !== null,
+      presId,
+      { timeout: 10_000 },
+    );
+
+    await page.locator(`[data-presentation-id="${presId}"]`).click();
+
+    await page.waitForFunction(
+      () => document.querySelectorAll('[data-role="slide-card"]').length > 0,
+      { timeout: 10_000 },
+    );
+
+    // Switch to edit mode on Prepared tab and collect field labels
+    await page.locator('[data-role="mode-toggle"][data-mode="edit"]').click();
+    await page.waitForSelector('[data-role="slide-main-edit"]', {
+      timeout: 5_000,
+    });
+
+    const prepCard = page.locator('[data-role="slide-card"]').first();
+    const prepEditor = prepCard.locator(".operator__slide-editor--bible");
+    const prepLabels = await prepEditor.locator("label span").allTextContents();
+    const prepFieldSet = prepLabels.map((l) => l.trim()).sort();
+
+    // Both tabs should have identical field sets
+    expect(prepFieldSet).toEqual(liveFieldSet);
+    expect(prepFieldSet).toContain("Main");
+    expect(prepFieldSet).toContain("Translation");
+    expect(prepFieldSet).toContain("Main Reference");
+    expect(prepFieldSet).toContain("Translation Reference");
+
+    // Cleanup
+    await page.evaluate(
+      async ({ url, id }: { url: string; id: string }) => {
+        await fetch(`${url}/bible/presentations/${id}`, { method: "DELETE" });
+      },
+      { url: baseURL, id: presId },
+    );
+  });
+
+  test("prepared slide saves main-ref to stage field via blur", async ({
+    page,
+  }) => {
+    await navigateToBible(page);
+
+    // Create a presentation with a slide
+    const presResponse = await page.evaluate(async (url: string) => {
+      const resp = await fetch(`${url}/bible/presentations`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ name: "Save Ref Test" }),
+      });
+      return resp.json();
+    }, baseURL);
+    const presId = presResponse.id;
+
+    await page.evaluate(
+      async ({ url, id }: { url: string; id: string }) => {
+        await fetch(`${url}/bible/presentations/${id}/append`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            slides: [
+              { main: "Test text", translation: "", stage: "Original Ref" },
+            ],
+          }),
+        });
+      },
+      { url: baseURL, id: presId },
+    );
+
+    // Switch to Prepared tab and select presentation
+    await page.locator('[data-role="bible-tab"][data-tab="prepared"]').click();
+    await page.locator('[data-role="bible-tab"][data-tab="live"]').click();
+    await page.locator('[data-role="bible-tab"][data-tab="prepared"]').click();
+
+    await page.waitForFunction(
+      (id: string) =>
+        document.querySelector(`[data-presentation-id="${id}"]`) !== null,
+      presId,
+      { timeout: 10_000 },
+    );
+
+    await page.locator(`[data-presentation-id="${presId}"]`).click();
+
+    await page.waitForFunction(
+      () => document.querySelectorAll('[data-role="slide-card"]').length > 0,
+      { timeout: 10_000 },
+    );
+
+    // Switch to edit mode
+    await page.locator('[data-role="mode-toggle"][data-mode="edit"]').click();
+    await page.waitForSelector('[data-role="slide-main-ref"]', {
+      timeout: 5_000,
+    });
+
+    // Edit the Main Reference input and blur to trigger save
+    const mainRefInput = page.locator('[data-role="slide-main-ref"]').first();
+    await mainRefInput.fill("Updated Reference 123");
+    await mainRefInput.evaluate((el: HTMLInputElement) => el.blur());
+
+    // Wait for save to complete
+    await page.waitForTimeout(1_000);
+
+    // Reload and verify persisted
+    await page.reload({ waitUntil: "networkidle" });
+    await page.waitForSelector('[data-role="bible-tab-nav"]', {
+      timeout: 15_000,
+    });
+
+    await page.locator('[data-role="bible-tab"][data-tab="prepared"]').click();
+
+    await page.waitForFunction(
+      (id: string) =>
+        document.querySelector(`[data-presentation-id="${id}"]`) !== null,
+      presId,
+      { timeout: 10_000 },
+    );
+
+    await page.locator(`[data-presentation-id="${presId}"]`).click();
+
+    await page.waitForFunction(
+      () => document.querySelectorAll('[data-role="slide-card"]').length > 0,
+      { timeout: 10_000 },
+    );
+
+    // Switch to edit mode and verify persisted value
+    await page.locator('[data-role="mode-toggle"][data-mode="edit"]').click();
+    await page.waitForSelector('[data-role="slide-main-ref"]', {
+      timeout: 5_000,
+    });
+
+    const savedValue = await page
+      .locator('[data-role="slide-main-ref"]')
+      .first()
+      .inputValue();
+    expect(savedValue).toBe("Updated Reference 123");
+
+    // Cleanup
+    await page.evaluate(
+      async ({ url, id }: { url: string; id: string }) => {
+        await fetch(`${url}/bible/presentations/${id}`, { method: "DELETE" });
+      },
+      { url: baseURL, id: presId },
+    );
+  });
+
+  // -----------------------------------------------------------------------
   // Presentations (Prepared tab)
   // -----------------------------------------------------------------------
 
@@ -830,6 +1178,62 @@ test.describe("WASM Operator Bible Tests", () => {
       .locator('[data-role="presentation-card"]')
       .count();
     expect(newCount).toBeGreaterThan(initialCount);
+  });
+
+  test("creating a presentation via API refreshes prepared tab list", async ({
+    page,
+  }) => {
+    await navigateToBible(page);
+    const bp = biblePanel(page);
+
+    // Switch to Prepared tab
+    await page.locator('[data-role="bible-tab"][data-tab="prepared"]').click();
+
+    // Count existing presentations
+    const initialCount = await bp
+      .locator('[data-role="presentation-card"]')
+      .count();
+
+    // Create a presentation via API (simulates what AI does via create_presentation())
+    const presResponse = await page.evaluate(async (url: string) => {
+      const resp = await fetch(`${url}/bible/presentations`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ name: "Auto Refresh Test" }),
+      });
+      return resp.json();
+    }, baseURL);
+    const presId = presResponse.id;
+
+    // Wait for the presentation list to update WITHOUT page reload
+    // The BibleSlidesChanged event should trigger a refresh
+    await page.waitForFunction(
+      (expected: number) => {
+        const cards = document.querySelectorAll(
+          '[data-view-panel="bible"] [data-role="presentation-card"]',
+        );
+        return cards.length > expected;
+      },
+      initialCount,
+      { timeout: 15_000 },
+    );
+
+    const newCount2 = await bp
+      .locator('[data-role="presentation-card"]')
+      .count();
+    expect(newCount2).toBeGreaterThan(initialCount);
+
+    // Verify the new presentation is visible in the list
+    const newPres = page.locator(`[data-presentation-id="${presId}"]`);
+    await expect(newPres).toBeVisible();
+
+    // Cleanup
+    await page.evaluate(
+      async ({ url, id }: { url: string; id: string }) => {
+        await fetch(`${url}/bible/presentations/${id}`, { method: "DELETE" });
+      },
+      { url: baseURL, id: presId },
+    );
   });
 
   test("clicking presentation loads its slides in column", async ({ page }) => {
@@ -1041,6 +1445,11 @@ test.describe("WASM Operator Bible Tests", () => {
 
   test("secondary translation can be set", async ({ page }) => {
     await navigateToBible(page);
+
+    if (!(await hasBibleData(page))) {
+      test.skip(true, "No Bible data available");
+      return;
+    }
 
     const secondarySelect = page.locator('[data-role="secondary-translation"]');
     await expect(secondarySelect).toBeVisible({ timeout: 10_000 });
