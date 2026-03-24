@@ -3,7 +3,7 @@ use crate::state::AppState;
 use serde_json::{json, Value};
 use tracing::{info, warn};
 
-const MAX_ITERATIONS: usize = 10;
+const MAX_ITERATIONS: usize = 100;
 
 /// Build the system prompt with dynamic content from the database.
 async fn build_system_prompt(state: &AppState, extra: Option<&str>) -> String {
