@@ -344,17 +344,17 @@ request-retry: 2
 
         info!("exchanging OAuth code for token");
 
-        let body = serde_json::json!({
-            "grant_type": "authorization_code",
-            "client_id": CLAUDE_CLIENT_ID,
-            "code": code,
-            "code_verifier": code_verifier,
-            "redirect_uri": CLAUDE_REDIRECT_URI
-        });
+        let params = [
+            ("grant_type", "authorization_code"),
+            ("client_id", CLAUDE_CLIENT_ID),
+            ("code", code),
+            ("code_verifier", code_verifier.as_str()),
+            ("redirect_uri", CLAUDE_REDIRECT_URI),
+        ];
 
         let resp = reqwest::Client::new()
             .post(CLAUDE_TOKEN_ENDPOINT)
-            .json(&body)
+            .form(&params)
             .timeout(std::time::Duration::from_secs(15))
             .send()
             .await?;
