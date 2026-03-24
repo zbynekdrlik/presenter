@@ -27,7 +27,7 @@ pub enum ProgressEvent {
 }
 
 /// Build the system prompt with dynamic content from the database.
-async fn build_system_prompt(state: &AppState, extra: Option<&str>) -> String {
+async fn build_system_prompt(state: &AppState, extra: Option<&str>) -> (String, u32) {
     let translations = state.list_bible_translations().await.unwrap_or_default();
     let translation_list: Vec<String> = translations
         .iter()
@@ -39,6 +39,9 @@ async fn build_system_prompt(state: &AppState, extra: Option<&str>) -> String {
         .iter()
         .map(|l| format!("- {} (id: {})", l.name, l.id))
         .collect();
+
+    let prefs = state.get_bible_preferences().await.unwrap_or_default();
+    let char_limit = prefs.character_limit;
 
     let mut prompt = format!(
         r#"You are an AI assistant for Presenter, a church worship presentation system for a Slovak church.
@@ -70,7 +73,7 @@ When creating presentations, choose the most appropriate library:
 ## Formatting Rules
 - ##text## or text surrounded by ## = emphasized text. Put on its own slide, group = "Zvýraznenie", main = text in UPPERCASE.
 - Text written in ALL CAPS by the pastor = keep it uppercase in `main`.
-- Each slide should have max ~320 characters in `main`.
+- Each slide MUST NOT exceed {char_limit} characters in `main`. This is a STRICT limit — never exceed it. If a verse is longer, split it across multiple slides.
 - "Nazov:" or "Názov:" = presentation title.
 - "Vers na spamet:" = memory verse, use group "Vers na zapamätanie".
 
@@ -112,7 +115,7 @@ SEB=slk-seb, ROH=slk-roh, SEVP=slk-sevp, MIL=slk-mil, KJV=eng-kjv, ECAV=slk-sevp
         }
     }
 
-    prompt
+    (prompt, char_limit)
 }
 
 /// Run the agentic loop: send to LLM, execute tools, repeat until text response.
@@ -125,7 +128,8 @@ pub async fn run_agent(
     settings: &AiSettings,
     progress_tx: Option<tokio::sync::mpsc::UnboundedSender<ProgressEvent>>,
 ) -> anyhow::Result<(String, Vec<ToolAction>)> {
-    let system_prompt = build_system_prompt(state, settings.system_prompt_extra.as_deref()).await;
+    let (system_prompt, char_limit) =
+        build_system_prompt(state, settings.system_prompt_extra.as_deref()).await;
     let tools = super::tools::tool_definitions();
     let mut actions = Vec::new();
 
@@ -213,6 +217,7 @@ pub async fn run_agent(
                         &tc.function.name,
                         &tc.function.arguments,
                         state,
+                        char_limit,
                     )
                     .await
                     {

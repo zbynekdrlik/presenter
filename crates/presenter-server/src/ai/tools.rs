@@ -276,6 +276,7 @@ pub async fn execute_tool(
     name: &str,
     args: &str,
     state: &AppState,
+    default_char_limit: u32,
 ) -> anyhow::Result<(String, String)> {
     let args: Value = serde_json::from_str(args).unwrap_or(json!({}));
 
@@ -532,7 +533,10 @@ pub async fn execute_tool(
             let chapter = args["chapter"].as_u64().unwrap_or(1) as u16;
             let verse_start = args["verse_start"].as_u64().unwrap_or(1) as u16;
             let verse_end = args["verse_end"].as_u64().unwrap_or(verse_start as u64) as u16;
-            let char_limit = args["character_limit"].as_u64().unwrap_or(320) as u32;
+            let char_limit = args["character_limit"]
+                .as_u64()
+                .map(|v| v as u32)
+                .unwrap_or(default_char_limit);
 
             let (main_trans, _, slides) = state
                 .generate_bible_slides(
