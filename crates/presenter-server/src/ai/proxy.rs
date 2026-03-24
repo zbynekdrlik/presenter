@@ -27,7 +27,7 @@ const CLAUDE_CLIENT_ID: &str = "9d1c250a-e61b-44d9-88ed-5944d1962f5e";
 const CLAUDE_REDIRECT_URI: &str = "https://platform.claude.com/oauth/code/callback";
 
 /// Claude OAuth token exchange endpoint.
-const CLAUDE_TOKEN_ENDPOINT: &str = "https://api.anthropic.com/v1/oauth/token";
+const CLAUDE_TOKEN_ENDPOINT: &str = "https://platform.claude.com/v1/oauth/token";
 
 /// State of the managed CLIProxyAPI process.
 #[derive(Debug, Clone, serde::Serialize)]
@@ -344,19 +344,17 @@ request-retry: 2
 
         info!("exchanging OAuth code for token");
 
-        let body = format!(
-            "grant_type=authorization_code\
-             &client_id={CLAUDE_CLIENT_ID}\
-             &code={code}\
-             &code_verifier={code_verifier}\
-             &redirect_uri={redirect}",
-            redirect = urlencod(CLAUDE_REDIRECT_URI),
-        );
+        let body = serde_json::json!({
+            "grant_type": "authorization_code",
+            "client_id": CLAUDE_CLIENT_ID,
+            "code": code,
+            "code_verifier": code_verifier,
+            "redirect_uri": CLAUDE_REDIRECT_URI
+        });
 
         let resp = reqwest::Client::new()
             .post(CLAUDE_TOKEN_ENDPOINT)
-            .header("Content-Type", "application/x-www-form-urlencoded")
-            .body(body)
+            .json(&body)
             .timeout(std::time::Duration::from_secs(15))
             .send()
             .await?;
