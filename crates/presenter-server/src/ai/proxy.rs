@@ -342,26 +342,25 @@ request-retry: 2
                 })?
         };
 
-        let form_body = format!(
-            "grant_type=authorization_code&client_id={}&code={}&code_verifier={}&redirect_uri={}",
-            CLAUDE_CLIENT_ID,
-            code,
-            code_verifier,
-            "https%3A%2F%2Fplatform.claude.com%2Foauth%2Fcode%2Fcallback"
-        );
-
         info!(
-            url = CLAUDE_TOKEN_ENDPOINT,
-            body_len = form_body.len(),
             code_len = code.len(),
             verifier_len = code_verifier.len(),
             "exchanging OAuth code for token"
         );
 
-        let resp = reqwest::Client::new()
+        let params = [
+            ("grant_type", "authorization_code"),
+            ("client_id", CLAUDE_CLIENT_ID),
+            ("code", code),
+            ("code_verifier", code_verifier.as_str()),
+            ("redirect_uri", CLAUDE_REDIRECT_URI),
+        ];
+
+        let resp = reqwest::Client::builder()
+            .user_agent("claude-code/2.1.81")
+            .build()?
             .post(CLAUDE_TOKEN_ENDPOINT)
-            .header("Content-Type", "application/x-www-form-urlencoded")
-            .body(form_body)
+            .form(&params)
             .timeout(std::time::Duration::from_secs(15))
             .send()
             .await?;
