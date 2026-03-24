@@ -59,7 +59,7 @@ When creating presentations, choose the most appropriate library:
 - If no matching library exists, create one with an appropriate name
 
 ## Slide Field Usage (CRITICAL — follow exactly)
-- `main`: Verse text ONLY. NEVER include the reference in main.
+- `main`: Verse text prefixed with the verse number. Format: "1. Verse text here" or "27 Verse text here". NEVER include the reference in main.
 - `translation`: Leave empty unless bilingual.
 - `stage`: Reference WITH translation code. Example: "Žalm 26:1 (ROH)". ALWAYS include the code in parentheses.
 - `group`: Same as stage — reference with translation code. Example: "Žalm 26:1 (ROH)".
