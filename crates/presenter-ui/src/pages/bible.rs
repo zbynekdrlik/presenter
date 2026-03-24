@@ -5,7 +5,7 @@ use crate::api::bible;
 use crate::state::bible::{BibleState, LoadedPassage, SelectedBook};
 use crate::state::AppContext;
 
-use super::bible_controls::{BibleSearch, SelectionControls};
+use super::bible_controls::SelectionControls;
 use super::bible_slides::BibleSlidesColumn;
 
 /// Bible page — 2-column layout matching the legacy Bible UI.
@@ -100,6 +100,21 @@ pub fn BiblePage() -> impl IntoView {
         });
     }
 
+    // Sync data-mode on body for Bible page (same as operator.rs)
+    {
+        let mode = ctx.mode;
+        let view = ctx.view;
+        Effect::new(move || {
+            let m = mode.get();
+            let v = view.get();
+            if v == "bible" {
+                if let Some(body) = crate::utils::window::document_body() {
+                    let _ = body.set_attribute("data-mode", &m);
+                }
+            }
+        });
+    }
+
     view! {
         <aside class="operator__catalog operator__catalog--bible" data-role="catalog">
             <div class="operator__catalog-top">
@@ -172,7 +187,6 @@ fn BibleLiveTab() -> impl IntoView {
             data-visible=move || if bible_tab.get() == "live" { "true" } else { "false" }
         >
             <TranslationSelectors />
-            <BibleSearch />
             <BookFilter />
             <BookList />
             <ReferenceInputs />
@@ -573,7 +587,6 @@ fn BiblePreparedTab() -> impl IntoView {
     let bible_tab = bs.bible_tab;
     let presentations = bs.presentations;
     let active_presentation_id = bs.active_presentation_id;
-    let edit_mode = bs.edit_mode;
 
     let on_create = {
         let ctx = ctx.clone();
@@ -611,20 +624,6 @@ fn BiblePreparedTab() -> impl IntoView {
             data-bible-panel="prepared"
             data-visible=move || if bible_tab.get() == "prepared" { "true" } else { "false" }
         >
-            <div class="bible__mode-toggle">
-                <button
-                    type="button"
-                    data-role="bible-mode-live"
-                    data-active=move || if !edit_mode.get() { "true" } else { "false" }
-                    on:click=move |_| edit_mode.set(false)
-                >"Live"</button>
-                <button
-                    type="button"
-                    data-role="bible-mode-edit"
-                    data-active=move || if edit_mode.get() { "true" } else { "false" }
-                    on:click=move |_| edit_mode.set(true)
-                >"Edit"</button>
-            </div>
             <div class="bible__prepared-header">
                 <h3>"Presentations"</h3>
                 <button

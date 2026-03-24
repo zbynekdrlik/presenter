@@ -470,39 +470,6 @@ body.operator.operator--bible .operator__panel--bible {
   gap: 0.25rem;
 }
 
-/* ---------- Edit mode toggle ---------- */
-.bible__mode-toggle {
-  display: flex;
-  gap: 0.25rem;
-  padding: 0.25rem;
-  background: rgba(148, 163, 184, 0.1);
-  border-radius: 8px;
-  flex-shrink: 0;
-}
-
-.bible__mode-toggle button {
-  flex: 1;
-  border: none;
-  background: transparent;
-  color: #94a3b8;
-  padding: 0.4rem 0.5rem;
-  border-radius: 6px;
-  font-size: 0.7rem;
-  font-weight: 600;
-  text-transform: uppercase;
-  letter-spacing: 0.08em;
-  cursor: pointer;
-  transition:
-    background 0.15s ease,
-    color 0.15s ease;
-}
-
-.bible__mode-toggle button[data-active="true"] {
-  background: #334155;
-  color: #f8fafc;
-  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.3);
-}
-
 /* ---------- Drag handle ---------- */
 .bible__slide-handle {
   display: flex;
@@ -577,7 +544,8 @@ body.operator.operator--bible .operator__panel--bible {
   color: #94a3b8;
 }
 
-.operator__slide-card--bible .operator__slide-editor--bible textarea {
+.operator__slide-card--bible .operator__slide-editor--bible textarea,
+.operator__slide-card--bible .operator__slide-editor--bible input[type="text"] {
   width: 100%;
   box-sizing: border-box;
   padding: 0.4rem 0.5rem;

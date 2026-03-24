@@ -465,13 +465,14 @@ fn save_bible_slide_from_dom(pres_id: &str, slide_id: &str) {
 fn PreparedSlideCard(slide: BibleSlideDto, index: usize) -> impl IntoView {
     let bs = use_ctx!(BibleState);
     let ctx = use_ctx!(AppContext);
-    let edit_mode = bs.edit_mode;
+    let mode = ctx.mode;
 
     let slide_id = slide.id.clone();
     let main_ref = slide.main_reference.clone().unwrap_or_default();
 
     let main_text_sig = RwSignal::new(slide.main.clone());
     let trans_text_sig = RwSignal::new(slide.translation.clone());
+    let stage_text_sig = RwSignal::new(slide.stage.clone());
     let group_label_sig = RwSignal::new(slide.group.clone().unwrap_or_default());
     let main_ref_sig = RwSignal::new(main_ref.clone());
     let trans_ref_sig = RwSignal::new(slide.translation_reference.clone().unwrap_or_default());
@@ -627,7 +628,7 @@ fn PreparedSlideCard(slide: BibleSlideDto, index: usize) -> impl IntoView {
         <div
             class="operator__slide-card operator__slide-card--bible"
             class:operator__slide-card--drag-over=is_drag_over
-            class:operator__slide-card--edit=move || edit_mode.get()
+            class:operator__slide-card--edit=move || mode.get() == "edit"
             data-role="slide-card"
             data-slide-id=slide_id.clone()
             on:dragover=on_dragover
@@ -648,7 +649,7 @@ fn PreparedSlideCard(slide: BibleSlideDto, index: usize) -> impl IntoView {
                 let on_trigger = on_trigger.clone();
                 let main_ref_trigger = main_ref.clone();
                 move || {
-                    if !edit_mode.get() {
+                    if mode.get() != "edit" {
                         Some(view! {
                             <div
                                 class="operator__slide-trigger-zone operator__slide-trigger-zone--full"
@@ -666,12 +667,14 @@ fn PreparedSlideCard(slide: BibleSlideDto, index: usize) -> impl IntoView {
                 }
             }
 
-            // Edit mode: textareas
+            // Edit mode: 4 editable fields (main, translation, stage, group)
             {
                 let on_blur = on_field_blur.clone();
                 let on_blur2 = on_field_blur.clone();
+                let on_blur3 = on_field_blur.clone();
+                let on_blur4 = on_field_blur.clone();
                 move || {
-                    if edit_mode.get() {
+                    if mode.get() == "edit" {
                         Some(view! {
                             <section class="operator__slide-editor operator__slide-editor--bible">
                                 <label>
@@ -706,6 +709,37 @@ fn PreparedSlideCard(slide: BibleSlideDto, index: usize) -> impl IntoView {
                                         }
                                     ></textarea>
                                 </label>
+                                <label>
+                                    <span>"Stage"</span>
+                                    <textarea
+                                        data-field="stage"
+                                        rows="2"
+                                        prop:value=move || stage_text_sig.get()
+                                        on:input=move |ev: web_sys::Event| {
+                                            let target = ev.target().and_then(|t| t.dyn_into::<web_sys::HtmlTextAreaElement>().ok());
+                                            if let Some(ta) = target { stage_text_sig.set(ta.value()); }
+                                        }
+                                        on:blur={
+                                            let on_blur = on_blur3.clone();
+                                            move |ev| on_blur(ev)
+                                        }
+                                    ></textarea>
+                                </label>
+                                <label>
+                                    <span>"Group"</span>
+                                    <input type="text"
+                                        data-field="group"
+                                        prop:value=move || group_label_sig.get()
+                                        on:input=move |ev: web_sys::Event| {
+                                            let target = ev.target().and_then(|t| t.dyn_into::<web_sys::HtmlInputElement>().ok());
+                                            if let Some(el) = target { group_label_sig.set(el.value()); }
+                                        }
+                                        on:blur={
+                                            let on_blur = on_blur4.clone();
+                                            move |ev| on_blur(ev)
+                                        }
+                                    />
+                                </label>
                             </section>
                         })
                     } else {
@@ -721,7 +755,7 @@ fn PreparedSlideCard(slide: BibleSlideDto, index: usize) -> impl IntoView {
                 let group = group_ro.clone();
                 let mref = main_ref_ro.clone();
                 move || {
-                    if !edit_mode.get() {
+                    if mode.get() != "edit" {
                         Some(slide_body_view(main.clone(), trans.clone(), mref.clone(), String::new(), group.clone()))
                     } else {
                         None
@@ -733,7 +767,7 @@ fn PreparedSlideCard(slide: BibleSlideDto, index: usize) -> impl IntoView {
             {
                 let on_delete = on_delete.clone();
                 move || {
-                    if edit_mode.get() {
+                    if mode.get() == "edit" {
                         Some(view! {
                             <div class="operator__slide-actions">
                                 <button

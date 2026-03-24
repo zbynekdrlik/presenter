@@ -8,6 +8,8 @@ use presenter_core::{
     BibleBroadcast, LibrarySummary, Playlist, Presentation, PresentationSummary, SearchResult,
     Slide, StageClientSnapshot, StageDisplayLayout, StageDisplaySnapshot, TimersOverview,
 };
+
+use crate::api::bible::BibleSearchHit;
 use std::collections::{HashMap, HashSet};
 
 use crate::api::settings::AbleSetStatusSnapshot;
@@ -67,6 +69,11 @@ pub struct AppContext {
     pub libraries_loading: RwSignal<bool>,
     /// Loading state for playlists
     pub playlists_loading: RwSignal<bool>,
+    /// Bible search signals (shared between header and bible page)
+    pub bible_search_query: RwSignal<String>,
+    pub bible_search_results: RwSignal<Vec<BibleSearchHit>>,
+    pub bible_searching: RwSignal<bool>,
+    pub bible_has_searched: RwSignal<bool>,
 }
 
 impl AppContext {
@@ -107,6 +114,10 @@ impl AppContext {
             active_bible_broadcast: RwSignal::new(None),
             libraries_loading: RwSignal::new(false),
             playlists_loading: RwSignal::new(false),
+            bible_search_query: RwSignal::new(String::new()),
+            bible_search_results: RwSignal::new(Vec::new()),
+            bible_searching: RwSignal::new(false),
+            bible_has_searched: RwSignal::new(false),
         }
     }
 
