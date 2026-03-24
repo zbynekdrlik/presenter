@@ -8,9 +8,16 @@
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use tokio::io::AsyncBufReadExt;
-use tokio::process::{Child, Command};
+use tokio::process::{Child, ChildStdout, Command};
 use tokio::sync::RwLock;
 use tracing::{info, warn};
+
+/// Holds a login child process and its stdout handle.
+/// The stdout must be kept alive to prevent SIGPIPE from killing the process.
+struct LoginProcess {
+    child: Child,
+    _stdout: ChildStdout,
+}
 
 /// Default port for the embedded CLIProxyAPI instance.
 const DEFAULT_PROXY_PORT: u16 = 18787;
@@ -59,7 +66,7 @@ impl Default for ProxyConfig {
 /// Manages the CLIProxyAPI child process and Claude OAuth.
 pub struct ProxyManager {
     child: Arc<RwLock<Option<Child>>>,
-    login_child: Arc<RwLock<Option<Child>>>,
+    login_child: Arc<RwLock<Option<LoginProcess>>>,
     config: Arc<RwLock<ProxyConfig>>,
     deploy_dir: PathBuf,
 }
@@ -271,9 +278,9 @@ request-retry: 2
         // Kill any previous login process
         {
             let mut guard = self.login_child.write().await;
-            if let Some(mut child) = guard.take() {
-                child.kill().await.ok();
-                child.wait().await.ok();
+            if let Some(mut proc) = guard.take() {
+                proc.child.kill().await.ok();
+                proc.child.wait().await.ok();
             }
         }
 
@@ -293,18 +300,21 @@ request-retry: 2
             .arg("-config")
             .arg(self.config_path())
             .stdout(std::process::Stdio::piped())
-            .stderr(std::process::Stdio::piped())
+            .stderr(std::process::Stdio::null())
             .kill_on_drop(true)
             .spawn()?;
 
-        // Read stdout lines looking for the auth URL
+        // Read stdout lines looking for the auth URL.
+        // IMPORTANT: We must keep the stdout handle alive after reading —
+        // dropping it closes the pipe which sends SIGPIPE and kills the process.
         let stdout = child
             .stdout
             .take()
             .ok_or_else(|| anyhow::anyhow!("failed to capture login process stdout"))?;
 
-        let mut reader = tokio::io::BufReader::new(stdout).lines();
+        let mut reader = tokio::io::BufReader::new(stdout);
         let mut auth_url: Option<String> = None;
+        let mut line_buf = String::new();
 
         // Give the process up to 10 seconds to print the URL
         let deadline = tokio::time::Instant::now() + tokio::time::Duration::from_secs(10);
@@ -314,10 +324,12 @@ request-retry: 2
                 break;
             }
 
-            match tokio::time::timeout(remaining, reader.next_line()).await {
-                Ok(Ok(Some(line))) => {
+            line_buf.clear();
+            match tokio::time::timeout(remaining, reader.read_line(&mut line_buf)).await {
+                Ok(Ok(0)) => break, // EOF
+                Ok(Ok(_)) => {
+                    let line = line_buf.trim_end();
                     info!(line = %line, "claude-login stdout");
-                    // Look for a line containing an https URL
                     if let Some(url_start) = line.find("https://") {
                         let url = line[url_start..].split_whitespace().next().unwrap_or("");
                         if !url.is_empty() {
@@ -326,7 +338,6 @@ request-retry: 2
                         }
                     }
                 }
-                Ok(Ok(None)) => break, // EOF
                 Ok(Err(e)) => {
                     warn!(?e, "error reading claude-login stdout");
                     break;
@@ -339,10 +350,15 @@ request-retry: 2
             anyhow::anyhow!("claude-login did not produce an auth URL within 10s")
         })?;
 
-        // Keep the login child alive — it needs to receive the OAuth callback
+        // Keep both the child AND the stdout handle alive — dropping stdout
+        // closes the pipe and kills the process via SIGPIPE.
+        let stdout_handle = reader.into_inner();
         {
             let mut guard = self.login_child.write().await;
-            *guard = Some(child);
+            *guard = Some(LoginProcess {
+                child,
+                _stdout: stdout_handle,
+            });
         }
 
         info!("claude-login URL obtained, waiting for OAuth callback via SSH tunnel");
