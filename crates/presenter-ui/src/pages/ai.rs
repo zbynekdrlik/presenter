@@ -138,6 +138,41 @@ pub fn AiPage() -> impl IntoView {
         }
     };
 
+    // Paste handler: convert <b>/<strong> from HTML clipboard to ## markers
+    let on_paste = move |ev: web_sys::Event| {
+        let Ok(clip_ev) = ev.dyn_into::<web_sys::ClipboardEvent>() else {
+            return;
+        };
+        let Some(dt) = clip_ev.clipboard_data() else {
+            return;
+        };
+        let html = dt.get_data("text/html").unwrap_or_default();
+        if html.is_empty() {
+            return; // No HTML — let default plain-text paste happen
+        }
+        clip_ev.prevent_default();
+
+        // Parse HTML: convert <b>/<strong> contents to ##...## markers
+        let converted = convert_html_bold_to_markers(&html);
+
+        // Insert at cursor position (or replace selection)
+        let target = clip_ev
+            .target()
+            .and_then(|t| t.dyn_into::<web_sys::HtmlTextAreaElement>().ok());
+        if let Some(ta) = target {
+            let start = ta.selection_start().ok().flatten().unwrap_or(0) as usize;
+            let end = ta.selection_end().ok().flatten().unwrap_or(0) as usize;
+            let current = input_text.get_untracked();
+            let mut new_val = String::with_capacity(current.len() + converted.len());
+            new_val.push_str(&current[..start.min(current.len())]);
+            new_val.push_str(&converted);
+            new_val.push_str(&current[end.min(current.len())..]);
+            input_text.set(new_val);
+        } else {
+            input_text.set(converted);
+        }
+    };
+
     let on_clear = move |_| {
         messages.set(Vec::new());
         error.set(None);
@@ -516,6 +551,7 @@ pub fn AiPage() -> impl IntoView {
                     prop:value=move || input_text.get()
                     on:input=move |ev| input_text.set(event_target_value(&ev))
                     on:keydown=on_keydown
+                    on:paste=on_paste
                     prop:disabled=move || loading.get()
                 ></textarea>
                 <button
@@ -696,4 +732,104 @@ fn scroll_chat_to_bottom() {
         }
     })
     .forget();
+}
+
+/// Convert HTML bold/strong tags to `##...##` markers, strip all other HTML,
+/// and normalise whitespace so the result reads like clean plain text.
+///
+/// Uses a temporary DOM element to parse HTML correctly (handles Gmail's
+/// nested spans, style attributes, etc.).
+fn convert_html_bold_to_markers(html: &str) -> String {
+    let doc = crate::utils::window::document();
+    let container = doc.create_element("div").expect("create_element");
+    container.set_inner_html(html);
+
+    let mut output = String::new();
+    walk_node(&container, &mut output, false);
+
+    // Collapse whitespace per line, remove excessive blank lines
+    let mut result = String::new();
+    let mut prev_blank = false;
+    for line in output.lines() {
+        let trimmed = line.split_whitespace().collect::<Vec<_>>().join(" ");
+        if trimmed.is_empty() {
+            if !prev_blank && !result.is_empty() {
+                result.push('\n');
+            }
+            prev_blank = true;
+        } else {
+            if prev_blank && !result.is_empty() {
+                result.push('\n');
+            }
+            result.push_str(&trimmed);
+            result.push('\n');
+            prev_blank = false;
+        }
+    }
+    result.trim().to_string()
+}
+
+/// Recursively walk DOM nodes, wrapping bold content in ## markers.
+fn walk_node(node: &web_sys::Node, output: &mut String, in_bold: bool) {
+    use web_sys::Node;
+    let node_type = node.node_type();
+
+    if node_type == Node::TEXT_NODE {
+        if let Some(text) = node.text_content() {
+            output.push_str(&text);
+        }
+        return;
+    }
+
+    if node_type != Node::ELEMENT_NODE {
+        return;
+    }
+
+    let el: &web_sys::Element = node.unchecked_ref();
+    let tag = el.tag_name().to_uppercase();
+
+    // Detect bold: <b>, <strong>, or font-weight bold/700+ via style
+    let is_bold_tag = tag == "B" || tag == "STRONG";
+    let is_bold_style = el
+        .get_attribute("style")
+        .map(|s| {
+            let s = s.to_lowercase();
+            s.contains("font-weight")
+                && (s.contains("bold")
+                    || s.contains("700")
+                    || s.contains("800")
+                    || s.contains("900"))
+        })
+        .unwrap_or(false);
+    let this_bold = is_bold_tag || is_bold_style;
+    let child_bold = in_bold || this_bold;
+
+    let is_block = matches!(
+        tag.as_str(),
+        "P" | "DIV" | "BR" | "LI" | "TR" | "H1" | "H2" | "H3" | "H4" | "H5" | "H6" | "BLOCKQUOTE"
+    );
+
+    if is_block && !output.is_empty() && !output.ends_with('\n') {
+        output.push('\n');
+    }
+
+    // Only emit ## at the outermost bold boundary (avoid nested ##)
+    let emit_markers = this_bold && !in_bold;
+    if emit_markers {
+        output.push_str("##");
+    }
+
+    let children = node.child_nodes();
+    for i in 0..children.length() {
+        if let Some(child) = children.item(i) {
+            walk_node(&child, output, child_bold);
+        }
+    }
+
+    if emit_markers {
+        output.push_str("##");
+    }
+    if is_block && !output.ends_with('\n') {
+        output.push('\n');
+    }
 }
