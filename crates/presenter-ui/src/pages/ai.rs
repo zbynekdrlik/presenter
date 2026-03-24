@@ -310,7 +310,8 @@ pub fn AiPage() -> impl IntoView {
                                             proxy_loading.set(true);
                                             login_url.set(None);
                                             leptos::task::spawn_local(async move {
-                                                match ai_api::proxy_login().await {
+                                                let origin = crate::utils::window::window().location().origin().unwrap_or_default();
+                                                match ai_api::proxy_login(&origin).await {
                                                     Ok(resp) => login_url.set(Some(resp.login_url)),
                                                     Err(e) => {
                                                         error.set(Some(format!("Login failed: {e}")));
@@ -324,63 +325,10 @@ pub fn AiPage() -> impl IntoView {
                                     </button>
                                 </div>
                                 {move || login_url.get().map(|url| {
-                                    let url_display = url.clone();
                                     view! {
                                         <div class="ai-chat__login-flow">
-                                            <div class="ai-chat__login-step">
-                                                <span class="ai-chat__login-step-num">"1"</span>
-                                                <p>"Open this link and authorize with Claude:"</p>
-                                            </div>
-                                            <a class="ai-chat__login-link" href=url target="_blank" rel="noopener">{url_display}</a>
-                                            <div class="ai-chat__login-step">
-                                                <span class="ai-chat__login-step-num">"2"</span>
-                                                <p>"Paste the callback URL or code you received:"</p>
-                                            </div>
-                                            <div class="ai-chat__login-paste">
-                                                <input
-                                                    type="text"
-                                                    data-role="ai-callback-input"
-                                                    placeholder="Paste the URL from your browser here..."
-                                                    prop:value=move || callback_input.get()
-                                                    on:input=move |ev| callback_input.set(event_target_value(&ev))
-                                                />
-                                                <button
-                                                    type="button"
-                                                    class="ai-chat__btn ai-chat__btn--save"
-                                                    data-role="ai-complete-login"
-                                                    prop:disabled=move || callback_input.get().trim().is_empty() || proxy_loading.get()
-                                                    on:click=move |_| {
-                                                        let cb = callback_input.get_untracked();
-                                                        if cb.trim().is_empty() { return; }
-                                                        proxy_loading.set(true);
-                                                        let toast = ctx.toast_message;
-                                                        let toast_variant = ctx.toast_variant;
-                                                        leptos::task::spawn_local(async move {
-                                                            match ai_api::proxy_complete_login(&cb).await {
-                                                                Ok(status) => {
-                                                                    proxy_running.set(status.running);
-                                                                    proxy_authenticated.set(status.claude_authenticated);
-                                                                    login_url.set(None);
-                                                                    callback_input.set(String::new());
-                                                                    toast_variant.set("success".to_string());
-                                                                    toast.set(Some("Claude authenticated successfully!".to_string()));
-                                                                    // Re-check connection
-                                                                    if let Ok(s) = ai_api::check_status().await {
-                                                                        connected.set(s.connected);
-                                                                    }
-                                                                }
-                                                                Err(e) => {
-                                                                    toast_variant.set("error".to_string());
-                                                                    toast.set(Some(format!("Authentication failed: {e}")));
-                                                                }
-                                                            }
-                                                            proxy_loading.set(false);
-                                                        });
-                                                    }
-                                                >
-                                                    "Complete Login"
-                                                </button>
-                                            </div>
+                                            <p>"Click the link below to authenticate with Claude. After authorizing, you will be redirected back here automatically."</p>
+                                            <a class="ai-chat__login-link" href=url target="_blank" rel="noopener">"Open Claude Authorization"</a>
                                         </div>
                                     }
                                 })}

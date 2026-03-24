@@ -2,7 +2,12 @@ use super::AppError;
 use crate::ai::proxy::ProxyStatus;
 use crate::ai::{AiSettings, ToolAction, AI_SETTINGS_KEY};
 use crate::state::AppState;
-use axum::{extract::State, http::StatusCode, Json};
+use axum::{
+    extract::{Query, State},
+    http::StatusCode,
+    response::{IntoResponse, Redirect},
+    Json,
+};
 use serde::{Deserialize, Serialize};
 use tracing::instrument;
 
@@ -182,13 +187,22 @@ pub(super) struct LoginResponse {
     pub login_url: String,
 }
 
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub(super) struct LoginRequest {
+    /// The origin URL of the Presenter server as seen by the user's browser,
+    /// e.g. "http://10.77.8.134:8080". Used to rewrite the OAuth redirect_uri.
+    pub origin: String,
+}
+
 #[instrument(skip_all)]
 pub(super) async fn proxy_login(
     State(state): State<AppState>,
+    Json(payload): Json<LoginRequest>,
 ) -> Result<Json<LoginResponse>, AppError> {
     let url = state
         .ai_proxy()
-        .claude_login()
+        .claude_login(&payload.origin)
         .await
         .map_err(|e| AppError::internal(format!("Login failed: {e}")))?;
     Ok(Json(LoginResponse { login_url: url }))
@@ -212,6 +226,31 @@ pub(super) async fn proxy_complete_login(
         .map_err(|e| AppError::internal(format!("Login completion failed: {e}")))?;
     let status = state.ai_proxy().status().await;
     Ok(Json(status))
+}
+
+/// OAuth callback endpoint. Claude redirects here after the user authorizes.
+/// Presenter forwards the request to CLIProxyAPI on localhost:54545.
+#[instrument(skip_all)]
+pub(super) async fn oauth_callback(
+    State(state): State<AppState>,
+    Query(params): Query<std::collections::HashMap<String, String>>,
+) -> Result<impl IntoResponse, AppError> {
+    // Build the query string to forward
+    let query: String = params
+        .iter()
+        .map(|(k, v)| format!("{k}={v}"))
+        .collect::<Vec<_>>()
+        .join("&");
+
+    let callback_url = format!("http://localhost:54545/callback?{query}");
+    state
+        .ai_proxy()
+        .complete_login(&callback_url)
+        .await
+        .map_err(|e| AppError::internal(format!("OAuth callback failed: {e}")))?;
+
+    // Redirect user to the AI tab
+    Ok(Redirect::to("/ui/operator/ai"))
 }
 
 async fn get_settings_internal(state: &AppState) -> anyhow::Result<AiSettings> {

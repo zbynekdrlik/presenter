@@ -271,16 +271,19 @@ request-retry: 2
     /// Start the Claude OAuth login flow.
     ///
     /// Spawns CLIProxyAPI with `--claude-login --no-browser`, reads the auth URL
-    /// from its output, and returns it. The login process keeps running in the
-    /// background waiting for the OAuth callback on port 54545.
+    /// from its output, and rewrites the redirect_uri to point at Presenter's
+    /// `/ai/oauth/callback` endpoint instead of `localhost:54545/callback`.
+    ///
+    /// `presenter_origin` should be the externally-reachable base URL,
+    /// e.g. `http://10.77.8.134:8080`.
     ///
     /// Flow for the user:
-    /// 1. Call this method → get the claude.ai auth URL
+    /// 1. Call this method → get the claude.ai auth URL (with Presenter as redirect)
     /// 2. Open URL in browser, authorize with Claude
-    /// 3. Browser redirects to localhost:54545/callback?code=XXX — this fails (wrong host)
-    /// 4. Copy the full redirect URL from browser address bar
-    /// 5. Call `complete_login(callback_url)` which forwards it to CLIProxyAPI
-    pub async fn claude_login(&self) -> anyhow::Result<String> {
+    /// 3. Claude redirects to Presenter's /ai/oauth/callback?code=XXX&state=YYY
+    /// 4. Presenter forwards the callback to CLIProxyAPI on localhost:54545
+    /// 5. Done — no manual copy-paste needed
+    pub async fn claude_login(&self, presenter_origin: &str) -> anyhow::Result<String> {
         // Kill any existing login process
         {
             let mut guard = self.login_child.write().await;
@@ -342,7 +345,19 @@ request-retry: 2
             *guard = Some(child);
         }
 
-        auth_url.ok_or_else(|| anyhow::anyhow!("could not find auth URL in CLIProxyAPI output"))
+        let raw_url = auth_url
+            .ok_or_else(|| anyhow::anyhow!("could not find auth URL in CLIProxyAPI output"))?;
+
+        // Rewrite redirect_uri: replace localhost:54545 with Presenter's origin
+        // so Claude redirects back to Presenter (which is reachable from the user's browser)
+        let localhost_callback =
+            format!("http%3A%2F%2Flocalhost%3A{OAUTH_CALLBACK_PORT}%2Fcallback");
+        let presenter_callback = format!("{presenter_origin}/ai/oauth/callback")
+            .replace(':', "%3A")
+            .replace('/', "%2F");
+        let rewritten = raw_url.replace(&localhost_callback, &presenter_callback);
+
+        Ok(rewritten)
     }
 
     /// Complete the OAuth login by forwarding the callback URL to CLIProxyAPI.
