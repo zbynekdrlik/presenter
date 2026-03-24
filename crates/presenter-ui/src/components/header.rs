@@ -182,12 +182,13 @@ pub fn Header() -> impl IntoView {
                 </form>
             </div>
             <nav class="operator__view-nav">
-                {["worship", "bible", "timers", "settings"].into_iter().map(|v| {
+                {["worship", "bible", "timers", "ai", "settings"].into_iter().map(|v| {
                     let view_name = v.to_string();
                     let label = match v {
                         "worship" => "Worship",
                         "bible" => "Bible",
                         "timers" => "Timers",
+                        "ai" => "AI",
                         "settings" => "Settings",
                         _ => v,
                     };

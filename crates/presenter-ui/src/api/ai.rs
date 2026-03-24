@@ -1,0 +1,78 @@
+use serde::{Deserialize, Serialize};
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ChatRequest {
+    pub message: String,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ChatResponse {
+    pub response: String,
+    pub actions: Vec<ToolAction>,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ToolAction {
+    pub tool: String,
+    pub result_preview: String,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AiSettingsResponse {
+    pub api_url: String,
+    pub api_key_set: bool,
+    pub model: String,
+    pub system_prompt_extra: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct UpdateAiSettings {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub api_url: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub api_key: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub model: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub system_prompt_extra: Option<String>,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AiStatusResponse {
+    pub connected: bool,
+    pub error: Option<String>,
+}
+
+use super::ApiError;
+
+pub async fn send_message(message: &str) -> Result<ChatResponse, ApiError> {
+    super::post_json(
+        "/ai/chat",
+        &ChatRequest {
+            message: message.to_string(),
+        },
+    )
+    .await
+}
+
+pub async fn get_settings() -> Result<AiSettingsResponse, ApiError> {
+    super::get_json("/ai/settings").await
+}
+
+pub async fn update_settings(settings: &UpdateAiSettings) -> Result<(), ApiError> {
+    super::put_no_content("/ai/settings", settings).await
+}
+
+pub async fn clear_conversation() -> Result<(), ApiError> {
+    super::post_no_content("/ai/clear", &serde_json::json!({})).await
+}
+
+pub async fn check_status() -> Result<AiStatusResponse, ApiError> {
+    super::get_json("/ai/status").await
+}

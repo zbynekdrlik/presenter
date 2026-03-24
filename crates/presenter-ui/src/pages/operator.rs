@@ -14,6 +14,7 @@ use crate::components::search::SearchResults;
 use crate::components::slide_list::SlideList;
 use crate::components::timer_panel::TimerPanel;
 use crate::components::toast::Toast;
+use crate::pages::ai::AiPage;
 use crate::pages::bible::BiblePage;
 use crate::state::operator::OperatorState;
 use crate::state::AppContext;
@@ -181,6 +182,9 @@ pub fn OperatorPage(#[prop(default = String::new())] initial_view: String) -> im
             </section>
             <section class="operator__panel operator__panel--timers" data-view-panel="timers">
                 <TimerPanel />
+            </section>
+            <section class="operator__panel operator__panel--ai" data-view-panel="ai">
+                <AiPage />
             </section>
             <section class="operator__panel operator__panel--settings" data-view-panel="settings">
                 <iframe src="/ui/settings" title="Settings" class="operator__settings-frame"></iframe>

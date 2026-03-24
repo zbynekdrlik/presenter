@@ -1,3 +1,4 @@
+mod ai;
 mod bible;
 mod features;
 mod integrations;
@@ -224,6 +225,13 @@ pub fn build_router(state: AppState) -> Router {
             "/settings/features",
             get(features::get_feature_settings).post(features::update_feature_settings),
         )
+        .route("/ai/chat", post(ai::chat))
+        .route(
+            "/ai/settings",
+            get(ai::get_settings).put(ai::update_settings),
+        )
+        .route("/ai/clear", post(ai::clear_conversation))
+        .route("/ai/status", get(ai::check_status))
         .with_state(state)
 }
 

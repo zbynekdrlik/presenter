@@ -37,6 +37,7 @@ mod timers;
 use crate::config::OscConfig;
 use crate::{
     ableset::AbleSetBridge,
+    ai::ChatMessage,
     android_stage::AndroidStageRegistry,
     config::ServerConfig,
     live::{LiveEvent, LiveHub},
@@ -95,6 +96,7 @@ pub struct AppState {
     ableset_bridge: AbleSetBridge,
     ableset_cache: Arc<RwLock<AbleSetLibraryCache>>,
     broadcast_live: Arc<AtomicBool>,
+    ai_conversation: Arc<RwLock<Vec<ChatMessage>>>,
     #[cfg(test)]
     bible_ingestion_override: Option<std::sync::Arc<dyn TestBibleIngestion + Send + Sync>>,
 }
@@ -169,6 +171,7 @@ impl AppState {
             ableset_bridge,
             ableset_cache,
             broadcast_live: Arc::new(AtomicBool::new(false)),
+            ai_conversation: Arc::new(RwLock::new(Vec::new())),
             #[cfg(test)]
             bible_ingestion_override: None,
         };
@@ -417,6 +420,10 @@ impl AppState {
 
     pub fn live_hub(&self) -> LiveHub {
         self.live_hub.clone()
+    }
+
+    pub fn ai_conversation(&self) -> &Arc<RwLock<Vec<ChatMessage>>> {
+        &self.ai_conversation
     }
 
     pub fn stage_connections_handle(&self) -> StageConnections {
