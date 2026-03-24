@@ -1398,20 +1398,23 @@ test.describe("WASM Operator Bible Tests", () => {
   test("bible search input is visible and functional", async ({ page }) => {
     await navigateToBible(page);
 
-    const searchInput = page.locator('[data-role="bible-search-input"]');
+    // Bible search uses the header global search input
+    const searchInput = page.locator('[data-role="global-search-query"]');
     await expect(searchInput).toBeVisible();
+    // Placeholder should indicate Bible search when on bible view
+    await expect(searchInput).toHaveAttribute("placeholder", /Bible/i);
   });
 
   test("search requires minimum 3 characters", async ({ page }) => {
     await navigateToBible(page);
 
-    const searchInput = page.locator('[data-role="bible-search-input"]');
+    const searchInput = page.locator('[data-role="global-search-query"]');
     await searchInput.fill("ab");
 
-    // No results container should appear (wait for debounce to settle)
+    // No bible search results should appear (wait for debounce to settle)
     await expect
       .poll(
-        async () => page.locator('[data-role="bible-search-results"]').count(),
+        async () => page.locator('[data-role="bible-search-result"]').count(),
         { timeout: 3_000 },
       )
       .toBe(0);
@@ -1425,15 +1428,15 @@ test.describe("WASM Operator Bible Tests", () => {
       return;
     }
 
-    const searchInput = page.locator('[data-role="bible-search-input"]');
+    const searchInput = page.locator('[data-role="global-search-query"]');
     await searchInput.fill("love");
 
-    // Wait for search results to appear (debounce + API call)
-    await page.waitForSelector('[data-role="bible-search-results"]', {
+    // Wait for Bible search results to appear in the header dropdown
+    await page.waitForSelector('[data-role="bible-search-result"]', {
       timeout: 10_000,
     });
 
-    const results = page.locator('[data-role="bible-search-results"]');
+    const results = page.locator('[data-role="global-search-results"]');
     await expect(results).toBeVisible();
   });
 
@@ -1445,7 +1448,7 @@ test.describe("WASM Operator Bible Tests", () => {
       return;
     }
 
-    const searchInput = page.locator('[data-role="bible-search-input"]');
+    const searchInput = page.locator('[data-role="global-search-query"]');
     await searchInput.fill("love");
 
     // Wait for results
