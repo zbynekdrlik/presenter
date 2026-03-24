@@ -83,6 +83,7 @@ CRITICAL: Do NOT create separate "Zvýraznenie" slides for bold references or bo
 ## Other Formatting Rules
 - Text written in ALL CAPS by the pastor = keep it uppercase in `main`.
 - Each slide MUST NOT exceed {char_limit} characters in `main`. This is a STRICT limit — never exceed it. If a verse is longer, split it across multiple slides.
+- MERGE short consecutive verses onto the same slide when they fit within {char_limit}. Do NOT put each verse on its own slide if they are short. Combine verses like "1. First verse text\n2. Second verse text" on one slide until adding another verse would exceed {char_limit}.
 - "Nazov:" or "Názov:" = presentation title.
 - "Vers na spamet:" = memory verse, use group "Vers na zapamätanie".
 
