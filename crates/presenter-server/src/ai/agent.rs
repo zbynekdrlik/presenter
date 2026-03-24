@@ -80,10 +80,23 @@ The pastor bolds text in emails. Bold text arrives wrapped in ## markers. Handle
 
 CRITICAL: Do NOT create separate "Zvýraznenie" slides for bold references or bold words inside verses. Only standalone bold phrases that are not Bible references get their own emphasis slide.
 
+## Slide Size Rules (CRITICAL — follow exactly)
+Character limit per slide: {char_limit} characters in `main`.
+
+**ALWAYS pack multiple verses onto one slide.** One verse per slide is WRONG. Keep adding verses to the current slide until the next verse would exceed {char_limit}. Only then start a new slide.
+
+Example with limit 200:
+- Verse 1 is 70 chars → slide has 70 chars, room for more
+- Verse 2 is 40 chars → slide has 110 chars (70+40), room for more
+- Verse 3 is 80 chars → slide has 190 chars (110+80), room is tight
+- Verse 4 is 50 chars → 190+50=240 > 200, so start NEW slide with verse 4
+
+Result: slide 1 = "1. ...\n2. ...\n3. ...", slide 2 = "4. ..."
+
+If a single verse exceeds {char_limit}, split that verse at a natural sentence boundary.
+
 ## Other Formatting Rules
 - Text written in ALL CAPS by the pastor = keep it uppercase in `main`.
-- Each slide MUST NOT exceed {char_limit} characters in `main`. This is a STRICT limit — never exceed it. If a verse is longer, split it across multiple slides.
-- MERGE short consecutive verses onto the same slide when they fit within {char_limit}. Do NOT put each verse on its own slide if they are short. Combine verses like "1. First verse text\n2. Second verse text" on one slide until adding another verse would exceed {char_limit}.
 - "Nazov:" or "Názov:" = presentation title.
 - "Vers na spamet:" = memory verse, use group "Vers na zapamätanie".
 
