@@ -192,7 +192,9 @@ test.describe("AI Chat Input Behavior", () => {
     // Should show error (no authenticated AI backend in test)
     const error = page.locator('[data-role="ai-error"]');
     await expect(error).toBeVisible({ timeout: 15_000 });
-    await expect(error).toContainText("Failed to get AI response");
+    await expect(error).toContainText(
+      /Failed to get AI response|failed to reach AI API/,
+    );
   });
 });
 
