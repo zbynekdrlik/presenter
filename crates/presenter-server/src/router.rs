@@ -232,6 +232,9 @@ pub fn build_router(state: AppState) -> Router {
         )
         .route("/ai/clear", post(ai::clear_conversation))
         .route("/ai/status", get(ai::check_status))
+        .route("/ai/proxy/start", post(ai::proxy_start))
+        .route("/ai/proxy/stop", post(ai::proxy_stop))
+        .route("/ai/proxy/login", post(ai::proxy_login))
         .with_state(state)
 }
 

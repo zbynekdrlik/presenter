@@ -135,6 +135,19 @@ jobs:
             deploy-target:${{ env.DEPLOY_DIR }}/
           ssh deploy-target "chmod +x ${{ env.DEPLOY_DIR }}/presenter-server ${{ env.DEPLOY_DIR }}/import_propresenter ${{ env.DEPLOY_DIR }}/ingest_bibles"
 
+      - name: Deploy CLIProxyAPI
+        run: |
+          CLIPROXY_VERSION="6.9.1"
+          CLIPROXY_URL="https://github.com/router-for-me/CLIProxyAPI/releases/download/v${CLIPROXY_VERSION}/CLIProxyAPI_${CLIPROXY_VERSION}_linux_amd64.tar.gz"
+          ssh deploy-target "if [ ! -f ${{ env.DEPLOY_DIR }}/cli-proxy-api ]; then
+            echo 'Downloading CLIProxyAPI v${CLIPROXY_VERSION}...'
+            curl -sL '${CLIPROXY_URL}' | tar xz -C ${{ env.DEPLOY_DIR }}/
+            chmod +x ${{ env.DEPLOY_DIR }}/cli-proxy-api
+            echo 'CLIProxyAPI deployed'
+          else
+            echo 'CLIProxyAPI already present'
+          fi"
+
       - name: Backup database
         run: |
           ssh deploy-target << 'REMOTE_SCRIPT'

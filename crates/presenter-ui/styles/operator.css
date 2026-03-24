@@ -2578,3 +2578,59 @@ body.operator[data-mode="live"][data-bible-tab="prepared"]
   opacity: 0.4;
   cursor: not-allowed;
 }
+
+/* Proxy section */
+.ai-chat__proxy-section {
+  margin-top: 0.75rem;
+  padding-top: 0.75rem;
+  border-top: 1px solid var(--operator-border);
+}
+
+.ai-chat__proxy-title {
+  margin: 0 0 0.4rem;
+  font-size: 0.8rem;
+  font-weight: 600;
+  color: var(--operator-muted);
+}
+
+.ai-chat__proxy-hint {
+  font-size: 0.75rem;
+  color: var(--operator-muted);
+  margin: 0;
+}
+
+.ai-chat__proxy-controls {
+  font-size: 0.8rem;
+}
+
+.ai-chat__proxy-status {
+  font-weight: 500;
+}
+
+.ai-chat__proxy-auth {
+  color: var(--operator-muted);
+}
+
+.ai-chat__proxy-buttons {
+  display: flex;
+  gap: 0.4rem;
+  margin-top: 0.4rem;
+}
+
+.ai-chat__login-url {
+  margin-top: 0.5rem;
+  padding: 0.5rem;
+  background: rgba(59, 130, 246, 0.1);
+  border-radius: 6px;
+  font-size: 0.75rem;
+  word-break: break-all;
+}
+
+.ai-chat__login-url p {
+  margin: 0 0 0.3rem;
+  color: var(--operator-muted);
+}
+
+.ai-chat__login-url a {
+  color: var(--operator-accent-dark);
+}

@@ -1,5 +1,6 @@
 pub(crate) mod agent;
 pub(crate) mod client;
+pub(crate) mod proxy;
 pub(crate) mod tools;
 
 use serde::{Deserialize, Serialize};

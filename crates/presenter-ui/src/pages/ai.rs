@@ -29,7 +29,14 @@ pub fn AiPage() -> impl IntoView {
     let model: RwSignal<String> = RwSignal::new(String::new());
     let api_key_set: RwSignal<bool> = RwSignal::new(false);
 
-    // Load settings on mount
+    // Proxy signals
+    let proxy_running: RwSignal<bool> = RwSignal::new(false);
+    let proxy_binary_found: RwSignal<bool> = RwSignal::new(false);
+    let proxy_authenticated: RwSignal<bool> = RwSignal::new(false);
+    let proxy_loading: RwSignal<bool> = RwSignal::new(false);
+    let login_url: RwSignal<Option<String>> = RwSignal::new(None);
+
+    // Load settings and status on mount
     {
         leptos::task::spawn_local(async move {
             if let Ok(s) = ai_api::get_settings().await {
@@ -37,14 +44,11 @@ pub fn AiPage() -> impl IntoView {
                 model.set(s.model);
                 api_key_set.set(s.api_key_set);
             }
-        });
-    }
-
-    // Check connection status on mount
-    {
-        leptos::task::spawn_local(async move {
             if let Ok(status) = ai_api::check_status().await {
                 connected.set(status.connected);
+                proxy_running.set(status.proxy.running);
+                proxy_binary_found.set(status.proxy.binary_found);
+                proxy_authenticated.set(status.proxy.claude_authenticated);
             }
         });
     }
@@ -120,7 +124,12 @@ pub fn AiPage() -> impl IntoView {
     let on_check_status = move |_| {
         leptos::task::spawn_local(async move {
             match ai_api::check_status().await {
-                Ok(status) => connected.set(status.connected),
+                Ok(status) => {
+                    connected.set(status.connected);
+                    proxy_running.set(status.proxy.running);
+                    proxy_binary_found.set(status.proxy.binary_found);
+                    proxy_authenticated.set(status.proxy.claude_authenticated);
+                }
                 Err(_) => connected.set(false),
             }
         });
@@ -239,6 +248,93 @@ pub fn AiPage() -> impl IntoView {
                 >
                     "Save Settings"
                 </button>
+
+                // Proxy controls
+                <div class="ai-chat__proxy-section">
+                    <h3 class="ai-chat__proxy-title">"Built-in Proxy (CLIProxyAPI)"</h3>
+                    {move || if !proxy_binary_found.get() {
+                        view! {
+                            <p class="ai-chat__proxy-hint">"Binary not found. Place cli-proxy-api next to presenter-server."</p>
+                        }.into_any()
+                    } else {
+                        view! {
+                            <div class="ai-chat__proxy-controls">
+                                <span class="ai-chat__proxy-status">
+                                    {move || if proxy_running.get() { "Running" } else { "Stopped" }}
+                                </span>
+                                <span class="ai-chat__proxy-auth">
+                                    {move || if proxy_authenticated.get() { " | Claude: authenticated" } else { " | Claude: not authenticated" }}
+                                </span>
+                                <div class="ai-chat__proxy-buttons">
+                                    <button
+                                        type="button"
+                                        class="ai-chat__btn"
+                                        data-role="ai-proxy-start"
+                                        prop:disabled=move || proxy_loading.get() || proxy_running.get()
+                                        on:click=move |_| {
+                                            proxy_loading.set(true);
+                                            leptos::task::spawn_local(async move {
+                                                if let Ok(status) = ai_api::proxy_start().await {
+                                                    proxy_running.set(status.running);
+                                                }
+                                                proxy_loading.set(false);
+                                            });
+                                        }
+                                    >
+                                        "Start"
+                                    </button>
+                                    <button
+                                        type="button"
+                                        class="ai-chat__btn"
+                                        data-role="ai-proxy-stop"
+                                        prop:disabled=move || proxy_loading.get() || !proxy_running.get()
+                                        on:click=move |_| {
+                                            proxy_loading.set(true);
+                                            leptos::task::spawn_local(async move {
+                                                if let Ok(status) = ai_api::proxy_stop().await {
+                                                    proxy_running.set(status.running);
+                                                }
+                                                proxy_loading.set(false);
+                                            });
+                                        }
+                                    >
+                                        "Stop"
+                                    </button>
+                                    <button
+                                        type="button"
+                                        class="ai-chat__btn"
+                                        data-role="ai-proxy-login"
+                                        prop:disabled=move || proxy_loading.get()
+                                        on:click=move |_| {
+                                            proxy_loading.set(true);
+                                            login_url.set(None);
+                                            leptos::task::spawn_local(async move {
+                                                match ai_api::proxy_login().await {
+                                                    Ok(resp) => login_url.set(Some(resp.login_url)),
+                                                    Err(e) => {
+                                                        error.set(Some(format!("Login failed: {e}")));
+                                                    }
+                                                }
+                                                proxy_loading.set(false);
+                                            });
+                                        }
+                                    >
+                                        "Claude Login"
+                                    </button>
+                                </div>
+                                {move || login_url.get().map(|url| {
+                                    let url_display = url.clone();
+                                    view! {
+                                        <div class="ai-chat__login-url">
+                                            <p>"Open this URL to authenticate:"</p>
+                                            <a href=url target="_blank" rel="noopener">{url_display}</a>
+                                        </div>
+                                    }
+                                })}
+                            </div>
+                        }.into_any()
+                    }}
+                </div>
             </div>
 
             // Chat messages area

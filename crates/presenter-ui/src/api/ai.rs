@@ -47,6 +47,23 @@ pub struct UpdateAiSettings {
 pub struct AiStatusResponse {
     pub connected: bool,
     pub error: Option<String>,
+    pub proxy: ProxyStatus,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ProxyStatus {
+    pub running: bool,
+    pub port: u16,
+    pub api_url: String,
+    pub binary_found: bool,
+    pub claude_authenticated: bool,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct LoginResponse {
+    pub login_url: String,
 }
 
 use super::ApiError;
@@ -75,4 +92,16 @@ pub async fn clear_conversation() -> Result<(), ApiError> {
 
 pub async fn check_status() -> Result<AiStatusResponse, ApiError> {
     super::get_json("/ai/status").await
+}
+
+pub async fn proxy_start() -> Result<ProxyStatus, ApiError> {
+    super::post_json("/ai/proxy/start", &serde_json::json!({})).await
+}
+
+pub async fn proxy_stop() -> Result<ProxyStatus, ApiError> {
+    super::post_json("/ai/proxy/stop", &serde_json::json!({})).await
+}
+
+pub async fn proxy_login() -> Result<LoginResponse, ApiError> {
+    super::post_json("/ai/proxy/login", &serde_json::json!({})).await
 }

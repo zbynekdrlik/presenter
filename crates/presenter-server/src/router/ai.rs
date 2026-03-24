@@ -1,4 +1,5 @@
 use super::AppError;
+use crate::ai::proxy::ProxyStatus;
 use crate::ai::{AiSettings, ToolAction, AI_SETTINGS_KEY};
 use crate::state::AppState;
 use axum::{extract::State, http::StatusCode, Json};
@@ -122,6 +123,7 @@ pub(super) async fn clear_conversation(
 pub(super) struct StatusResponse {
     pub connected: bool,
     pub error: Option<String>,
+    pub proxy: ProxyStatus,
 }
 
 #[instrument(skip_all)]
@@ -129,21 +131,82 @@ pub(super) async fn check_status(
     State(state): State<AppState>,
 ) -> Result<Json<StatusResponse>, AppError> {
     let settings = get_settings_internal(&state).await?;
-    match crate::ai::client::check_connectivity(&settings).await {
+    let proxy_status = state.ai_proxy().status().await;
+
+    let connection = crate::ai::client::check_connectivity(&settings).await;
+    match connection {
         Ok(()) => Ok(Json(StatusResponse {
             connected: true,
             error: None,
+            proxy: proxy_status,
         })),
         Err(e) => Ok(Json(StatusResponse {
             connected: false,
             error: Some(e.to_string()),
+            proxy: proxy_status,
         })),
     }
 }
 
+// ── Proxy management endpoints ──
+
+#[instrument(skip_all)]
+pub(super) async fn proxy_start(
+    State(state): State<AppState>,
+) -> Result<Json<ProxyStatus>, AppError> {
+    state
+        .ai_proxy()
+        .start()
+        .await
+        .map_err(|e| AppError::internal(format!("Failed to start proxy: {e}")))?;
+    let status = state.ai_proxy().status().await;
+    Ok(Json(status))
+}
+
+#[instrument(skip_all)]
+pub(super) async fn proxy_stop(
+    State(state): State<AppState>,
+) -> Result<Json<ProxyStatus>, AppError> {
+    state
+        .ai_proxy()
+        .stop()
+        .await
+        .map_err(|e| AppError::internal(format!("Failed to stop proxy: {e}")))?;
+    let status = state.ai_proxy().status().await;
+    Ok(Json(status))
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub(super) struct LoginResponse {
+    pub login_url: String,
+}
+
+#[instrument(skip_all)]
+pub(super) async fn proxy_login(
+    State(state): State<AppState>,
+) -> Result<Json<LoginResponse>, AppError> {
+    let url = state
+        .ai_proxy()
+        .claude_login()
+        .await
+        .map_err(|e| AppError::internal(format!("Login failed: {e}")))?;
+    Ok(Json(LoginResponse { login_url: url }))
+}
+
 async fn get_settings_internal(state: &AppState) -> anyhow::Result<AiSettings> {
-    match state.repository().get_app_setting(AI_SETTINGS_KEY).await? {
-        Some(json) => Ok(serde_json::from_str(&json)?),
-        None => Ok(AiSettings::default()),
+    let mut settings = match state.repository().get_app_setting(AI_SETTINGS_KEY).await? {
+        Some(json) => serde_json::from_str(&json)?,
+        None => AiSettings::default(),
+    };
+
+    // If no custom API URL set and proxy is running, use proxy URL
+    if settings.api_url == AiSettings::default().api_url {
+        let proxy_status = state.ai_proxy().status().await;
+        if proxy_status.running {
+            settings.api_url = proxy_status.api_url;
+        }
     }
+
+    Ok(settings)
 }

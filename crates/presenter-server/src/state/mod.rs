@@ -37,7 +37,7 @@ mod timers;
 use crate::config::OscConfig;
 use crate::{
     ableset::AbleSetBridge,
-    ai::ChatMessage,
+    ai::{proxy::ProxyManager, ChatMessage},
     android_stage::AndroidStageRegistry,
     config::ServerConfig,
     live::{LiveEvent, LiveHub},
@@ -97,6 +97,7 @@ pub struct AppState {
     ableset_cache: Arc<RwLock<AbleSetLibraryCache>>,
     broadcast_live: Arc<AtomicBool>,
     ai_conversation: Arc<RwLock<Vec<ChatMessage>>>,
+    ai_proxy: Arc<ProxyManager>,
     #[cfg(test)]
     bible_ingestion_override: Option<std::sync::Arc<dyn TestBibleIngestion + Send + Sync>>,
 }
@@ -172,6 +173,7 @@ impl AppState {
             ableset_cache,
             broadcast_live: Arc::new(AtomicBool::new(false)),
             ai_conversation: Arc::new(RwLock::new(Vec::new())),
+            ai_proxy: Arc::new(ProxyManager::new(crate::ai::proxy::detect_deploy_dir())),
             #[cfg(test)]
             bible_ingestion_override: None,
         };
@@ -308,6 +310,7 @@ impl AppState {
             .configure_companion_service(companion_enabled, companion_port)
             .await?;
         state.spawn_background_tasks();
+        state.ai_proxy.auto_start().await;
         Ok(state)
     }
 
@@ -424,6 +427,10 @@ impl AppState {
 
     pub fn ai_conversation(&self) -> &Arc<RwLock<Vec<ChatMessage>>> {
         &self.ai_conversation
+    }
+
+    pub fn ai_proxy(&self) -> &Arc<ProxyManager> {
+        &self.ai_proxy
     }
 
     pub fn stage_connections_handle(&self) -> StageConnections {
