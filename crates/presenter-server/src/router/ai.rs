@@ -194,6 +194,26 @@ pub(super) async fn proxy_login(
     Ok(Json(LoginResponse { login_url: url }))
 }
 
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub(super) struct CompleteLoginRequest {
+    pub callback_url: String,
+}
+
+#[instrument(skip_all)]
+pub(super) async fn proxy_complete_login(
+    State(state): State<AppState>,
+    Json(payload): Json<CompleteLoginRequest>,
+) -> Result<Json<ProxyStatus>, AppError> {
+    state
+        .ai_proxy()
+        .complete_login(&payload.callback_url)
+        .await
+        .map_err(|e| AppError::internal(format!("Login completion failed: {e}")))?;
+    let status = state.ai_proxy().status().await;
+    Ok(Json(status))
+}
+
 async fn get_settings_internal(state: &AppState) -> anyhow::Result<AiSettings> {
     let mut settings = match state.repository().get_app_setting(AI_SETTINGS_KEY).await? {
         Some(json) => serde_json::from_str(&json)?,

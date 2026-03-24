@@ -35,6 +35,7 @@ pub fn AiPage() -> impl IntoView {
     let proxy_authenticated: RwSignal<bool> = RwSignal::new(false);
     let proxy_loading: RwSignal<bool> = RwSignal::new(false);
     let login_url: RwSignal<Option<String>> = RwSignal::new(None);
+    let callback_input: RwSignal<String> = RwSignal::new(String::new());
 
     // Load settings and status on mount
     {
@@ -325,9 +326,61 @@ pub fn AiPage() -> impl IntoView {
                                 {move || login_url.get().map(|url| {
                                     let url_display = url.clone();
                                     view! {
-                                        <div class="ai-chat__login-url">
-                                            <p>"Open this URL to authenticate:"</p>
-                                            <a href=url target="_blank" rel="noopener">{url_display}</a>
+                                        <div class="ai-chat__login-flow">
+                                            <div class="ai-chat__login-step">
+                                                <span class="ai-chat__login-step-num">"1"</span>
+                                                <p>"Open this link and authorize with Claude:"</p>
+                                            </div>
+                                            <a class="ai-chat__login-link" href=url target="_blank" rel="noopener">{url_display}</a>
+                                            <div class="ai-chat__login-step">
+                                                <span class="ai-chat__login-step-num">"2"</span>
+                                                <p>"Paste the callback URL or code you received:"</p>
+                                            </div>
+                                            <div class="ai-chat__login-paste">
+                                                <input
+                                                    type="text"
+                                                    data-role="ai-callback-input"
+                                                    placeholder="Paste the URL from your browser here..."
+                                                    prop:value=move || callback_input.get()
+                                                    on:input=move |ev| callback_input.set(event_target_value(&ev))
+                                                />
+                                                <button
+                                                    type="button"
+                                                    class="ai-chat__btn ai-chat__btn--save"
+                                                    data-role="ai-complete-login"
+                                                    prop:disabled=move || callback_input.get().trim().is_empty() || proxy_loading.get()
+                                                    on:click=move |_| {
+                                                        let cb = callback_input.get_untracked();
+                                                        if cb.trim().is_empty() { return; }
+                                                        proxy_loading.set(true);
+                                                        let toast = ctx.toast_message;
+                                                        let toast_variant = ctx.toast_variant;
+                                                        leptos::task::spawn_local(async move {
+                                                            match ai_api::proxy_complete_login(&cb).await {
+                                                                Ok(status) => {
+                                                                    proxy_running.set(status.running);
+                                                                    proxy_authenticated.set(status.claude_authenticated);
+                                                                    login_url.set(None);
+                                                                    callback_input.set(String::new());
+                                                                    toast_variant.set("success".to_string());
+                                                                    toast.set(Some("Claude authenticated successfully!".to_string()));
+                                                                    // Re-check connection
+                                                                    if let Ok(s) = ai_api::check_status().await {
+                                                                        connected.set(s.connected);
+                                                                    }
+                                                                }
+                                                                Err(e) => {
+                                                                    toast_variant.set("error".to_string());
+                                                                    toast.set(Some(format!("Authentication failed: {e}")));
+                                                                }
+                                                            }
+                                                            proxy_loading.set(false);
+                                                        });
+                                                    }
+                                                >
+                                                    "Complete Login"
+                                                </button>
+                                            </div>
                                         </div>
                                     }
                                 })}

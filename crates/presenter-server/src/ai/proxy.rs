@@ -6,12 +6,16 @@
 
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
+use tokio::io::AsyncBufReadExt;
 use tokio::process::{Child, Command};
 use tokio::sync::RwLock;
 use tracing::{info, warn};
 
 /// Default port for the embedded CLIProxyAPI instance.
 const DEFAULT_PROXY_PORT: u16 = 18787;
+
+/// OAuth callback port used by CLIProxyAPI for Claude login.
+const OAUTH_CALLBACK_PORT: u16 = 54545;
 
 /// Name of the CLIProxyAPI binary.
 const PROXY_BINARY_NAME: &str = "cli-proxy-api";
@@ -57,6 +61,7 @@ impl Default for ProxyConfig {
 /// Manages the CLIProxyAPI child process.
 pub struct ProxyManager {
     child: Arc<RwLock<Option<Child>>>,
+    login_child: Arc<RwLock<Option<Child>>>,
     config: Arc<RwLock<ProxyConfig>>,
     deploy_dir: PathBuf,
 }
@@ -65,6 +70,7 @@ impl ProxyManager {
     pub fn new(deploy_dir: PathBuf) -> Self {
         Self {
             child: Arc::new(RwLock::new(None)),
+            login_child: Arc::new(RwLock::new(None)),
             config: Arc::new(RwLock::new(ProxyConfig::default())),
             deploy_dir,
         }
@@ -75,19 +81,16 @@ impl ProxyManager {
     /// 2. Working directory
     /// 3. PATH
     fn binary_path(&self) -> Option<PathBuf> {
-        // Check deploy directory
         let deploy_path = self.deploy_dir.join(PROXY_BINARY_NAME);
         if deploy_path.exists() {
             return Some(deploy_path);
         }
 
-        // Check working directory
         let cwd_path = PathBuf::from(PROXY_BINARY_NAME);
         if cwd_path.exists() {
             return Some(cwd_path);
         }
 
-        // Check if in PATH
         if let Ok(output) = std::process::Command::new("which")
             .arg(PROXY_BINARY_NAME)
             .output()
@@ -113,10 +116,9 @@ impl ProxyManager {
         self.deploy_dir.join("cli-proxy-api-config.yaml")
     }
 
-    /// Check if Claude OAuth tokens exist (authentication has been done).
+    /// Check if Claude OAuth tokens exist.
     pub fn is_claude_authenticated(&self) -> bool {
         let auth_dir = self.auth_dir();
-        // CLIProxyAPI stores tokens in the auth directory
         auth_dir.exists()
             && std::fs::read_dir(&auth_dir)
                 .map(|entries| {
@@ -151,7 +153,6 @@ request-retry: 2
 
     /// Start the CLIProxyAPI process.
     pub async fn start(&self) -> anyhow::Result<()> {
-        // Check if already running
         {
             let guard = self.child.read().await;
             if guard.is_some() {
@@ -188,7 +189,6 @@ request-retry: 2
         // Wait briefly for it to start
         tokio::time::sleep(tokio::time::Duration::from_secs(2)).await;
 
-        // Verify it's responding
         let port = config.port;
         drop(config);
         let url = format!("http://127.0.0.1:{port}/v1/models");
@@ -200,21 +200,15 @@ request-retry: 2
         {
             Ok(resp) if resp.status().is_success() => {
                 info!(port, "CLIProxyAPI started successfully");
-                Ok(())
             }
             Ok(resp) => {
-                warn!(
-                    port,
-                    status = %resp.status(),
-                    "CLIProxyAPI started but returned non-success"
-                );
-                Ok(()) // Still running, might just need auth
+                warn!(port, status = %resp.status(), "CLIProxyAPI started but returned non-success");
             }
             Err(e) => {
                 warn!(?e, "CLIProxyAPI may not have started correctly");
-                Ok(()) // Don't fail — it might be slow to start
             }
         }
+        Ok(())
     }
 
     /// Stop the CLIProxyAPI process.
@@ -258,11 +252,10 @@ request-retry: 2
     async fn is_running(&self) -> bool {
         let mut guard = self.child.write().await;
         if let Some(ref mut child) = *guard {
-            // try_wait returns None if still running
             match child.try_wait() {
                 Ok(None) => true,
                 Ok(Some(_)) => {
-                    *guard = None; // Process exited, clean up
+                    *guard = None;
                     false
                 }
                 Err(_) => {
@@ -275,39 +268,136 @@ request-retry: 2
         }
     }
 
-    /// Run the Claude OAuth login flow. Returns the login URL for the user.
+    /// Start the Claude OAuth login flow.
+    ///
+    /// Spawns CLIProxyAPI with `--claude-login --no-browser`, reads the auth URL
+    /// from its output, and returns it. The login process keeps running in the
+    /// background waiting for the OAuth callback on port 54545.
+    ///
+    /// Flow for the user:
+    /// 1. Call this method → get the claude.ai auth URL
+    /// 2. Open URL in browser, authorize with Claude
+    /// 3. Browser redirects to localhost:54545/callback?code=XXX — this fails (wrong host)
+    /// 4. Copy the full redirect URL from browser address bar
+    /// 5. Call `complete_login(callback_url)` which forwards it to CLIProxyAPI
     pub async fn claude_login(&self) -> anyhow::Result<String> {
+        // Kill any existing login process
+        {
+            let mut guard = self.login_child.write().await;
+            if let Some(mut child) = guard.take() {
+                child.kill().await.ok();
+                child.wait().await.ok();
+            }
+        }
+
         let binary = self
             .binary_path()
             .ok_or_else(|| anyhow::anyhow!("CLIProxyAPI binary not found"))?;
 
-        // Ensure auth dir exists
-        let auth_dir = self.auth_dir();
-        tokio::fs::create_dir_all(&auth_dir).await?;
+        self.write_config().await?;
 
-        // Run login with --no-browser to get the URL
-        let output = Command::new(&binary)
+        info!("starting Claude OAuth login flow");
+
+        let mut child = Command::new(&binary)
             .arg("-claude-login")
             .arg("-no-browser")
             .arg("-config")
             .arg(self.config_path())
-            .output()
-            .await?;
+            .stdout(std::process::Stdio::piped())
+            .stderr(std::process::Stdio::piped())
+            .kill_on_drop(true)
+            .spawn()?;
 
-        let stderr = String::from_utf8_lossy(&output.stderr);
-        let stdout = String::from_utf8_lossy(&output.stdout);
-        let combined = format!("{stdout}\n{stderr}");
+        // Read stderr line by line to find the auth URL
+        let stderr = child
+            .stderr
+            .take()
+            .ok_or_else(|| anyhow::anyhow!("failed to capture stderr"))?;
 
-        // Extract URL from output
-        for line in combined.lines() {
-            let trimmed = line.trim();
-            if trimmed.starts_with("http://") || trimmed.starts_with("https://") {
-                return Ok(trimmed.to_string());
+        let mut reader = tokio::io::BufReader::new(stderr).lines();
+        let mut auth_url = None;
+
+        // Read lines with a timeout — the URL should appear quickly
+        let deadline = tokio::time::Instant::now() + tokio::time::Duration::from_secs(10);
+        while tokio::time::Instant::now() < deadline {
+            let line =
+                tokio::time::timeout(tokio::time::Duration::from_secs(2), reader.next_line()).await;
+
+            match line {
+                Ok(Ok(Some(line))) => {
+                    if line.contains("claude.ai/oauth/authorize") {
+                        auth_url = Some(line.trim().to_string());
+                        break;
+                    }
+                }
+                Ok(Ok(None)) => break, // EOF
+                Ok(Err(_)) => break,   // Read error
+                Err(_) => continue,    // Timeout on this line, try next
             }
         }
 
-        // If no URL found, return the full output for debugging
-        anyhow::bail!("Could not extract login URL. Output: {combined}")
+        // Store the login child process — it needs to stay alive to receive the callback
+        {
+            let mut guard = self.login_child.write().await;
+            *guard = Some(child);
+        }
+
+        auth_url.ok_or_else(|| anyhow::anyhow!("could not find auth URL in CLIProxyAPI output"))
+    }
+
+    /// Complete the OAuth login by forwarding the callback URL to CLIProxyAPI.
+    ///
+    /// After the user authorizes in their browser, Claude redirects to
+    /// `http://localhost:54545/callback?code=XXX&state=YYY`. Since the server
+    /// is remote, this fails in the user's browser. The user copies the full
+    /// URL from the browser error page and pastes it here.
+    ///
+    /// Presenter extracts the query parameters and calls CLIProxyAPI's
+    /// callback endpoint on localhost.
+    pub async fn complete_login(&self, callback_url: &str) -> anyhow::Result<()> {
+        // Extract query string from the callback URL
+        let query = if let Some(pos) = callback_url.find('?') {
+            &callback_url[pos..]
+        } else {
+            anyhow::bail!("callback URL must contain query parameters (?code=...&state=...)");
+        };
+
+        // Forward to CLIProxyAPI's callback endpoint
+        let target = format!("http://127.0.0.1:{OAUTH_CALLBACK_PORT}/callback{query}");
+        info!("forwarding OAuth callback to CLIProxyAPI");
+
+        let resp = reqwest::Client::new()
+            .get(&target)
+            .timeout(std::time::Duration::from_secs(10))
+            .send()
+            .await?;
+
+        if !resp.status().is_success() {
+            let body = resp.text().await.unwrap_or_default();
+            anyhow::bail!("OAuth callback failed: {body}");
+        }
+
+        // Give CLIProxyAPI a moment to save tokens
+        tokio::time::sleep(tokio::time::Duration::from_secs(2)).await;
+
+        // Kill the login process — it's done
+        {
+            let mut guard = self.login_child.write().await;
+            if let Some(mut child) = guard.take() {
+                child.kill().await.ok();
+                child.wait().await.ok();
+            }
+        }
+
+        // Restart the main proxy to pick up the new credentials
+        if self.is_running().await {
+            info!("restarting CLIProxyAPI to use new credentials");
+            self.stop().await?;
+            self.start().await?;
+        }
+
+        info!("Claude OAuth login completed");
+        Ok(())
     }
 
     /// Update the proxy configuration.
@@ -347,7 +437,6 @@ request-retry: 2
 
 /// Determine the deploy directory (where presenter-server lives).
 pub fn detect_deploy_dir() -> PathBuf {
-    // Use the directory of the current executable
     std::env::current_exe()
         .ok()
         .and_then(|p| p.parent().map(Path::to_path_buf))
