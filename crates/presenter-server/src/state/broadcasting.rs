@@ -9,9 +9,11 @@ use super::stage::{
     build_stage_snapshot, sanitize_song_title, stage_resolution_from_presentation, StageContext,
     StageResolution,
 };
+use presenter_core::bible::BibleSlideOutput;
+
 use super::AppState;
 use crate::live::LiveEvent;
-use crate::resolume::StageUpdate;
+use crate::resolume::{BibleUpdate, StageUpdate};
 
 impl AppState {
     pub(super) fn publish_stage_update(&self, snapshot: StageDisplaySnapshot) {
@@ -74,6 +76,25 @@ impl AppState {
             band_name: Some(band_name),
         };
         self.resolume_registry.stage_update(stage_update).await;
+
+        // If the current slide has a Bible reference in the `stage` field,
+        // also emit a BibleUpdate so Resolume #bible-reference-a/b clips
+        // show the actual reference instead of the library name.
+        if let Some(ref slide) = context.resolution.current {
+            if !slide.stage.is_empty() {
+                let bible_output = BibleSlideOutput {
+                    main_text: slide.main.clone(),
+                    main_reference: slide.stage.clone(),
+                    secondary_text: slide.translation.clone(),
+                    secondary_reference: String::new(),
+                    triggered_at: now,
+                };
+                self.resolume_registry
+                    .bible_update(BibleUpdate::from_slide_output(Some(bible_output)))
+                    .await;
+            }
+        }
+
         Ok(())
     }
 
