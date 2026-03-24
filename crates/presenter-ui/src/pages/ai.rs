@@ -1,5 +1,8 @@
 use leptos::prelude::*;
+use wasm_bindgen::prelude::*;
 use wasm_bindgen::JsCast;
+use wasm_bindgen_futures::JsFuture;
+use web_sys::js_sys;
 
 use crate::api::ai as ai_api;
 use crate::state::AppContext;
@@ -12,6 +15,19 @@ struct DisplayMessage {
     actions: Vec<ai_api::ToolAction>,
 }
 
+/// A tool progress entry shown during AI processing.
+#[derive(Clone)]
+struct ToolProgress {
+    tool: String,
+    status: ToolProgressStatus,
+}
+
+#[derive(Clone)]
+enum ToolProgressStatus {
+    Running,
+    Done(String),
+}
+
 #[component]
 pub fn AiPage() -> impl IntoView {
     let ctx = use_ctx!(AppContext);
@@ -21,6 +37,7 @@ pub fn AiPage() -> impl IntoView {
     let loading: RwSignal<bool> = RwSignal::new(false);
     let error: RwSignal<Option<String>> = RwSignal::new(None);
     let connected: RwSignal<bool> = RwSignal::new(false);
+    let tool_progress: RwSignal<Vec<ToolProgress>> = RwSignal::new(Vec::new());
 
     // Settings signals
     let settings_open: RwSignal<bool> = RwSignal::new(false);
@@ -37,7 +54,7 @@ pub fn AiPage() -> impl IntoView {
     let login_url: RwSignal<Option<String>> = RwSignal::new(None);
     let ssh_command: RwSignal<Option<String>> = RwSignal::new(None);
 
-    // Load settings and status on mount
+    // Load settings, status, and conversation on mount
     {
         leptos::task::spawn_local(async move {
             if let Ok(s) = ai_api::get_settings().await {
@@ -51,10 +68,26 @@ pub fn AiPage() -> impl IntoView {
                 proxy_binary_found.set(status.proxy.binary_found);
                 proxy_authenticated.set(status.proxy.claude_authenticated);
             }
+            // Restore conversation from server
+            if let Ok(conv) = ai_api::get_conversation().await {
+                let restored: Vec<DisplayMessage> = conv
+                    .messages
+                    .into_iter()
+                    .map(|m| DisplayMessage {
+                        role: m.role,
+                        content: m.content,
+                        actions: m.actions,
+                    })
+                    .collect();
+                if !restored.is_empty() {
+                    messages.set(restored);
+                    scroll_chat_to_bottom();
+                }
+            }
         });
     }
 
-    // Send message handler
+    // Send message via SSE streaming
     let send_message = move || {
         let text = input_text.get_untracked();
         if text.trim().is_empty() || loading.get_untracked() {
@@ -64,6 +97,7 @@ pub fn AiPage() -> impl IntoView {
         input_text.set(String::new());
         error.set(None);
         loading.set(true);
+        tool_progress.set(Vec::new());
 
         // Add user message to display
         messages.update(|msgs| {
@@ -75,27 +109,17 @@ pub fn AiPage() -> impl IntoView {
         });
 
         leptos::task::spawn_local(async move {
-            match ai_api::send_message(&text).await {
-                Ok(resp) => {
-                    messages.update(|msgs| {
-                        msgs.push(DisplayMessage {
-                            role: "assistant".to_string(),
-                            content: resp.response,
-                            actions: resp.actions,
-                        });
-                    });
-                }
+            match send_message_sse(&text, messages, tool_progress, error).await {
+                Ok(()) => {}
                 Err(e) => {
                     error.set(Some(format!("Failed to get AI response: {e}")));
                 }
             }
             loading.set(false);
-
-            // Scroll to bottom
+            tool_progress.set(Vec::new());
             scroll_chat_to_bottom();
         });
 
-        // Scroll to show user message immediately
         scroll_chat_to_bottom();
     };
 
@@ -154,7 +178,6 @@ pub fn AiPage() -> impl IntoView {
                 Ok(()) => {
                     toast_variant.set("success".to_string());
                     toast.set(Some("AI settings saved".to_string()));
-                    // Re-check connection
                     if let Ok(status) = ai_api::check_status().await {
                         connected.set(status.connected);
                     }
@@ -438,12 +461,43 @@ pub fn AiPage() -> impl IntoView {
                     }
                 }}
 
-                // Loading indicator
-                {move || loading.get().then(|| view! {
-                    <div class="ai-chat__loading" data-role="ai-loading">
-                        <span class="ai-chat__loading-dots">"..."</span>
-                        " AI is thinking"
-                    </div>
+                // Loading indicator with tool progress
+                {move || loading.get().then(|| {
+                    let progress = tool_progress.get();
+                    view! {
+                        <div class="ai-chat__loading" data-role="ai-loading">
+                            <span class="ai-chat__loading-dots">"..."</span>
+                            " AI is working"
+                            {if !progress.is_empty() {
+                                view! {
+                                    <div class="ai-chat__tool-progress">
+                                        {progress.iter().map(|tp| {
+                                            let icon = match &tp.status {
+                                                ToolProgressStatus::Running => "~",
+                                                ToolProgressStatus::Done(_) => "+",
+                                            };
+                                            let detail = match &tp.status {
+                                                ToolProgressStatus::Running => "...".to_string(),
+                                                ToolProgressStatus::Done(preview) => preview.clone(),
+                                            };
+                                            let tool = tp.tool.clone();
+                                            view! {
+                                                <div class="ai-chat__tool-progress-item">
+                                                    <span class="ai-chat__tool-progress-icon">{icon}</span>
+                                                    " "
+                                                    <span class="ai-chat__tool-progress-name">{tool}</span>
+                                                    ": "
+                                                    <span class="ai-chat__tool-progress-detail">{detail}</span>
+                                                </div>
+                                            }
+                                        }).collect_view()}
+                                    </div>
+                                }.into_any()
+                            } else {
+                                view! { <span></span> }.into_any()
+                            }}
+                        </div>
+                    }
                 })}
             </div>
 
@@ -475,6 +529,159 @@ pub fn AiPage() -> impl IntoView {
                 </button>
             </div>
         </div>
+    }
+}
+
+/// Send a chat message via POST and read the SSE stream for progress events.
+async fn send_message_sse(
+    message: &str,
+    messages: RwSignal<Vec<DisplayMessage>>,
+    tool_progress: RwSignal<Vec<ToolProgress>>,
+    error: RwSignal<Option<String>>,
+) -> Result<(), String> {
+    let window = web_sys::window().ok_or("no window")?;
+
+    // Build the POST request with JSON body
+    let mut init = web_sys::RequestInit::new();
+    init.method("POST");
+    let body = serde_json::json!({"message": message}).to_string();
+    init.body(Some(&JsValue::from_str(&body)));
+
+    let headers = web_sys::Headers::new().map_err(|e| format!("{e:?}"))?;
+    headers
+        .set("Content-Type", "application/json")
+        .map_err(|e| format!("{e:?}"))?;
+    init.headers(&headers);
+
+    let request =
+        web_sys::Request::new_with_str_and_init("/ai/chat", &init).map_err(|e| format!("{e:?}"))?;
+
+    let resp_val = JsFuture::from(window.fetch_with_request(&request))
+        .await
+        .map_err(|e| format!("{e:?}"))?;
+    let resp: web_sys::Response = resp_val.dyn_into().map_err(|e| format!("{e:?}"))?;
+
+    if !resp.ok() {
+        return Err(format!("HTTP {}", resp.status()));
+    }
+
+    let body_stream = resp.body().ok_or("no response body")?;
+    let reader = body_stream
+        .get_reader()
+        .dyn_into::<web_sys::ReadableStreamDefaultReader>()
+        .map_err(|e| format!("{e:?}"))?;
+
+    let decoder = web_sys::TextDecoder::new().map_err(|e| format!("{e:?}"))?;
+    let mut buffer = String::new();
+
+    loop {
+        let chunk = JsFuture::from(reader.read())
+            .await
+            .map_err(|e| format!("{e:?}"))?;
+        let done = js_sys::Reflect::get(&chunk, &JsValue::from_str("done"))
+            .unwrap_or(JsValue::TRUE)
+            .as_bool()
+            .unwrap_or(true);
+
+        if let Ok(value) = js_sys::Reflect::get(&chunk, &JsValue::from_str("value")) {
+            if !value.is_undefined() {
+                let array: js_sys::Uint8Array = value.dyn_into().map_err(|e| format!("{e:?}"))?;
+                let text = decoder
+                    .decode_with_buffer_source(&array)
+                    .map_err(|e| format!("{e:?}"))?;
+                buffer.push_str(&text);
+
+                // Parse SSE events from the buffer
+                while let Some(event_end) = buffer.find("\n\n") {
+                    let event_text = buffer[..event_end].to_string();
+                    buffer = buffer[event_end + 2..].to_string();
+                    process_sse_event(&event_text, &messages, &tool_progress, &error);
+                }
+            }
+        }
+
+        if done {
+            // Process any remaining data in buffer
+            if !buffer.trim().is_empty() {
+                process_sse_event(&buffer, &messages, &tool_progress, &error);
+            }
+            break;
+        }
+    }
+
+    Ok(())
+}
+
+/// Parse and handle a single SSE event block.
+fn process_sse_event(
+    event_text: &str,
+    messages: &RwSignal<Vec<DisplayMessage>>,
+    tool_progress: &RwSignal<Vec<ToolProgress>>,
+    error: &RwSignal<Option<String>>,
+) {
+    let mut event_type = "";
+    let mut data = String::new();
+
+    for line in event_text.lines() {
+        if let Some(rest) = line.strip_prefix("event: ") {
+            event_type = rest.trim();
+        } else if let Some(rest) = line.strip_prefix("data: ") {
+            data.push_str(rest);
+        }
+    }
+
+    if data.is_empty() {
+        return;
+    }
+
+    match event_type {
+        "progress" => {
+            if let Ok(event) = serde_json::from_str::<ai_api::ProgressEvent>(&data) {
+                match event {
+                    ai_api::ProgressEvent::ToolStart { tool } => {
+                        tool_progress.update(|items| {
+                            items.push(ToolProgress {
+                                tool,
+                                status: ToolProgressStatus::Running,
+                            });
+                        });
+                        scroll_chat_to_bottom();
+                    }
+                    ai_api::ProgressEvent::ToolDone { tool, preview } => {
+                        tool_progress.update(|items| {
+                            if let Some(item) = items.iter_mut().rev().find(|i| i.tool == tool) {
+                                item.status = ToolProgressStatus::Done(preview);
+                            }
+                        });
+                    }
+                    _ => {}
+                }
+            }
+        }
+        "done" => {
+            if let Ok(val) = serde_json::from_str::<serde_json::Value>(&data) {
+                let response = val["response"].as_str().unwrap_or_default().to_string();
+                let actions: Vec<ai_api::ToolAction> = val
+                    .get("actions")
+                    .and_then(|a| serde_json::from_value(a.clone()).ok())
+                    .unwrap_or_default();
+                messages.update(|msgs| {
+                    msgs.push(DisplayMessage {
+                        role: "assistant".to_string(),
+                        content: response,
+                        actions,
+                    });
+                });
+                scroll_chat_to_bottom();
+            }
+        }
+        "error" => {
+            if let Ok(val) = serde_json::from_str::<serde_json::Value>(&data) {
+                let msg = val["message"].as_str().unwrap_or("Unknown error");
+                error.set(Some(format!("AI error: {msg}")));
+            }
+        }
+        _ => {}
     }
 }
 

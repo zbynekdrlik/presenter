@@ -8,13 +8,6 @@ pub struct ChatRequest {
 
 #[derive(Debug, Clone, Deserialize)]
 #[serde(rename_all = "camelCase")]
-pub struct ChatResponse {
-    pub response: String,
-    pub actions: Vec<ToolAction>,
-}
-
-#[derive(Debug, Clone, Deserialize)]
-#[serde(rename_all = "camelCase")]
 pub struct ToolAction {
     pub tool: String,
     pub result_preview: String,
@@ -67,17 +60,41 @@ pub struct LoginResponse {
     pub ssh_command: String,
 }
 
-use super::ApiError;
-
-pub async fn send_message(message: &str) -> Result<ChatResponse, ApiError> {
-    super::post_json(
-        "/ai/chat",
-        &ChatRequest {
-            message: message.to_string(),
-        },
-    )
-    .await
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ConversationMessage {
+    pub role: String,
+    pub content: String,
+    pub actions: Vec<ToolAction>,
 }
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ConversationResponse {
+    pub messages: Vec<ConversationMessage>,
+}
+
+/// SSE progress event from the streaming chat endpoint.
+#[derive(Debug, Clone, Deserialize)]
+#[serde(tag = "type", rename_all = "camelCase")]
+pub enum ProgressEvent {
+    ToolStart {
+        tool: String,
+    },
+    ToolDone {
+        tool: String,
+        preview: String,
+    },
+    Response {
+        response: String,
+        actions: Vec<ToolAction>,
+    },
+    Error {
+        message: String,
+    },
+}
+
+use super::ApiError;
 
 pub async fn get_settings() -> Result<AiSettingsResponse, ApiError> {
     super::get_json("/ai/settings").await
@@ -93,6 +110,10 @@ pub async fn clear_conversation() -> Result<(), ApiError> {
 
 pub async fn check_status() -> Result<AiStatusResponse, ApiError> {
     super::get_json("/ai/status").await
+}
+
+pub async fn get_conversation() -> Result<ConversationResponse, ApiError> {
+    super::get_json("/ai/conversation").await
 }
 
 pub async fn proxy_start() -> Result<ProxyStatus, ApiError> {

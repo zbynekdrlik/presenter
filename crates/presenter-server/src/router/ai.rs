@@ -1,9 +1,15 @@
 use super::AppError;
+use crate::ai::agent::ProgressEvent;
 use crate::ai::proxy::ProxyStatus;
 use crate::ai::{AiSettings, ToolAction, AI_SETTINGS_KEY};
 use crate::state::AppState;
-use axum::{extract::State, http::StatusCode, Json};
+use axum::extract::State;
+use axum::http::StatusCode;
+use axum::response::sse::{Event, Sse};
+use axum::response::IntoResponse;
+use axum::Json;
 use serde::{Deserialize, Serialize};
+use std::convert::Infallible;
 use tracing::instrument;
 
 #[derive(Debug, Deserialize)]
@@ -12,18 +18,13 @@ pub(super) struct ChatRequest {
     pub message: String,
 }
 
-#[derive(Debug, Serialize)]
-#[serde(rename_all = "camelCase")]
-pub(super) struct ChatResponse {
-    pub response: String,
-    pub actions: Vec<ToolAction>,
-}
-
+/// SSE streaming chat endpoint. Sends progress events as tools execute,
+/// then a final response event with the assistant's reply.
 #[instrument(skip_all)]
 pub(super) async fn chat(
     State(state): State<AppState>,
     Json(payload): Json<ChatRequest>,
-) -> Result<Json<ChatResponse>, AppError> {
+) -> Result<impl IntoResponse, AppError> {
     if payload.message.trim().is_empty() {
         return Err(AppError::bad_request_message("message cannot be empty"));
     }
@@ -35,17 +36,145 @@ pub(super) async fn chat(
         guard.clone()
     };
 
-    let (response, actions) =
-        crate::ai::agent::run_agent(&payload.message, &mut conversation, &state, &settings)
-            .await
-            .map_err(|e| AppError::internal(format!("AI error: {e}")))?;
+    let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel::<ProgressEvent>();
 
-    {
-        let mut guard = state.ai_conversation().write().await;
-        *guard = conversation;
+    // Spawn the agent loop in a background task
+    let state_clone = state.clone();
+    let message = payload.message.clone();
+    let agent_handle = tokio::spawn(async move {
+        let result = crate::ai::agent::run_agent(
+            &message,
+            &mut conversation,
+            &state_clone,
+            &settings,
+            Some(tx),
+        )
+        .await;
+
+        // Store updated conversation back
+        {
+            let mut guard = state_clone.ai_conversation().write().await;
+            *guard = conversation;
+        }
+
+        result
+    });
+
+    // Build SSE stream from the progress channel
+    let stream = async_stream::stream! {
+        // Yield progress events as they arrive
+        while let Some(event) = rx.recv().await {
+            let json = serde_json::to_string(&event).unwrap_or_default();
+            yield Ok::<_, Infallible>(Event::default().event("progress").data(json));
+        }
+
+        // Agent is done — get the final result
+        match agent_handle.await {
+            Ok(Ok((response, actions))) => {
+                let done = serde_json::json!({
+                    "type": "response",
+                    "response": response,
+                    "actions": actions,
+                });
+                yield Ok(Event::default().event("done").data(done.to_string()));
+            }
+            Ok(Err(e)) => {
+                let err = serde_json::json!({"type": "error", "message": e.to_string()});
+                yield Ok(Event::default().event("error").data(err.to_string()));
+            }
+            Err(e) => {
+                let err = serde_json::json!({"type": "error", "message": e.to_string()});
+                yield Ok(Event::default().event("error").data(err.to_string()));
+            }
+        }
+    };
+
+    Ok(Sse::new(stream))
+}
+
+// ── Conversation history ──
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub(super) struct ConversationMessage {
+    pub role: String,
+    pub content: String,
+    pub actions: Vec<ToolAction>,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub(super) struct ConversationResponse {
+    pub messages: Vec<ConversationMessage>,
+}
+
+/// Return the current conversation as display-ready messages.
+/// Filters out internal tool messages, only returns user + assistant.
+#[instrument(skip_all)]
+pub(super) async fn get_conversation(
+    State(state): State<AppState>,
+) -> Result<Json<ConversationResponse>, AppError> {
+    let guard = state.ai_conversation().read().await;
+    let mut display_messages = Vec::new();
+
+    // Walk through messages, collecting tool actions for assistant messages
+    let mut pending_actions: Vec<ToolAction> = Vec::new();
+
+    for msg in guard.iter() {
+        match msg.role.as_str() {
+            "user" => {
+                display_messages.push(ConversationMessage {
+                    role: "user".to_string(),
+                    content: msg.content.clone().unwrap_or_default(),
+                    actions: Vec::new(),
+                });
+            }
+            "assistant" => {
+                // If this assistant message has tool_calls, collect action names
+                // and wait for the next text-only assistant message
+                if msg.tool_calls.is_some() {
+                    // Tool call message — actions will be filled from subsequent tool results
+                    continue;
+                }
+                // Text response from assistant — include accumulated actions
+                display_messages.push(ConversationMessage {
+                    role: "assistant".to_string(),
+                    content: msg.content.clone().unwrap_or_default(),
+                    actions: std::mem::take(&mut pending_actions),
+                });
+            }
+            "tool" => {
+                // Accumulate tool results as actions for the next assistant text
+                if let Some(ref name) = msg.name {
+                    let preview = msg
+                        .content
+                        .as_deref()
+                        .and_then(|c| {
+                            // Try to extract a short preview from the result
+                            serde_json::from_str::<serde_json::Value>(c)
+                                .ok()
+                                .and_then(|v| {
+                                    if let Some(arr) = v.as_array() {
+                                        Some(format!("{} results", arr.len()))
+                                    } else {
+                                        v.get("error").map(|err| format!("Error: {err}"))
+                                    }
+                                })
+                        })
+                        .unwrap_or_else(|| "done".to_string());
+                    pending_actions.push(ToolAction {
+                        tool: name.clone(),
+                        result_preview: preview,
+                    });
+                }
+            }
+            _ => {}
+        }
     }
 
-    Ok(Json(ChatResponse { response, actions }))
+    Ok(Json(ConversationResponse {
+        messages: display_messages,
+    }))
 }
 
 #[derive(Debug, Serialize)]

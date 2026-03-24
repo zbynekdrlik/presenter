@@ -5,6 +5,27 @@ use tracing::{info, warn};
 
 const MAX_ITERATIONS: usize = 100;
 
+/// Progress events sent during agent execution for real-time UI updates.
+#[derive(Debug, Clone, serde::Serialize)]
+#[serde(tag = "type", rename_all = "camelCase")]
+#[allow(dead_code)] // Variants constructed via serialization patterns
+pub enum ProgressEvent {
+    ToolStart {
+        tool: String,
+    },
+    ToolDone {
+        tool: String,
+        preview: String,
+    },
+    Response {
+        response: String,
+        actions: Vec<ToolAction>,
+    },
+    Error {
+        message: String,
+    },
+}
+
 /// Build the system prompt with dynamic content from the database.
 async fn build_system_prompt(state: &AppState, extra: Option<&str>) -> String {
     let translations = state.list_bible_translations().await.unwrap_or_default();
@@ -13,12 +34,26 @@ async fn build_system_prompt(state: &AppState, extra: Option<&str>) -> String {
         .map(|t| format!("{} ({})", t.code, t.name))
         .collect();
 
+    let libraries = state.libraries().await.unwrap_or_default();
+    let library_list: Vec<String> = libraries
+        .iter()
+        .map(|l| format!("- {} (id: {})", l.name, l.id))
+        .collect();
+
     let mut prompt = format!(
         r#"You are an AI assistant for Presenter, a church worship presentation system for a Slovak church.
 You have full access to manage presentations, slides, Bible passages, and stage display.
 
 ## Available Bible Translations
 {translations}
+
+## Available Libraries
+{libraries}
+
+When creating presentations, choose the most appropriate library:
+- For Bible verse presentations, prefer a library with "Bible" or "Biblia" in its name
+- For worship songs, use the appropriate worship/song library
+- If no matching library exists, create one with an appropriate name
 
 ## Slide Rules
 - Each slide has: main text (displayed), translation text (secondary language), stage text (confidence monitor), group (section label like "Verse 1", "Chorus")
@@ -45,15 +80,15 @@ SEB=slk-seb, ROH=slk-roh, SEVP=slk-sevp, MIL=slk-mil, KJV=eng-kjv
 
 ## Workflow
 1. Parse the user's message to identify Bible references, titles, and text
-2. Look up Bible translations to verify which are available
-3. For Bible references: use get_bible_passage or resolve_bible_slides to fetch actual verse text, then create slides
-4. For plain text: create slides directly, splitting by ~320 char limit
-5. Create the presentation with all slides in order
-6. Confirm what was created
+2. For Bible references: use get_bible_passage or resolve_bible_slides to fetch actual verse text, then create slides
+3. For plain text: create slides directly, splitting by ~320 char limit
+4. Create the presentation in the appropriate library with all slides in order
+5. Confirm what was created
 
 Always use the actual Bible text from the database, never reproduce from memory.
 Respond in the same language the user writes in."#,
-        translations = translation_list.join(", ")
+        translations = translation_list.join(", "),
+        libraries = library_list.join("\n"),
     );
 
     if let Some(extra_prompt) = extra {
@@ -67,11 +102,14 @@ Respond in the same language the user writes in."#,
 }
 
 /// Run the agentic loop: send to LLM, execute tools, repeat until text response.
+///
+/// If `progress_tx` is provided, sends real-time progress events for each tool execution.
 pub async fn run_agent(
     user_message: &str,
     conversation: &mut Vec<ChatMessage>,
     state: &AppState,
     settings: &AiSettings,
+    progress_tx: Option<tokio::sync::mpsc::UnboundedSender<ProgressEvent>>,
 ) -> anyhow::Result<(String, Vec<ToolAction>)> {
     let system_prompt = build_system_prompt(state, settings.system_prompt_extra.as_deref()).await;
     let tools = super::tools::tool_definitions();
@@ -149,6 +187,14 @@ pub async fn run_agent(
                 // Execute each tool call
                 for tc in tool_calls {
                     info!(tool = %tc.function.name, "executing AI tool call");
+
+                    // Send progress: tool starting
+                    if let Some(ref tx) = progress_tx {
+                        let _ = tx.send(ProgressEvent::ToolStart {
+                            tool: tc.function.name.clone(),
+                        });
+                    }
+
                     let result = match super::tools::execute_tool(
                         &tc.function.name,
                         &tc.function.arguments,
@@ -157,6 +203,13 @@ pub async fn run_agent(
                     .await
                     {
                         Ok((result, preview)) => {
+                            // Send progress: tool done
+                            if let Some(ref tx) = progress_tx {
+                                let _ = tx.send(ProgressEvent::ToolDone {
+                                    tool: tc.function.name.clone(),
+                                    preview: preview.clone(),
+                                });
+                            }
                             actions.push(ToolAction {
                                 tool: tc.function.name.clone(),
                                 result_preview: preview,
@@ -165,9 +218,16 @@ pub async fn run_agent(
                         }
                         Err(err) => {
                             warn!(tool = %tc.function.name, ?err, "AI tool call failed");
+                            let preview = format!("Error: {err}");
+                            if let Some(ref tx) = progress_tx {
+                                let _ = tx.send(ProgressEvent::ToolDone {
+                                    tool: tc.function.name.clone(),
+                                    preview: preview.clone(),
+                                });
+                            }
                             actions.push(ToolAction {
                                 tool: tc.function.name.clone(),
-                                result_preview: format!("Error: {err}"),
+                                result_preview: preview,
                             });
                             json!({"error": err.to_string()}).to_string()
                         }

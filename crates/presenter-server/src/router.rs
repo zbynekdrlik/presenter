@@ -230,6 +230,7 @@ pub fn build_router(state: AppState) -> Router {
             "/ai/settings",
             get(ai::get_settings).put(ai::update_settings),
         )
+        .route("/ai/conversation", get(ai::get_conversation))
         .route("/ai/clear", post(ai::clear_conversation))
         .route("/ai/status", get(ai::check_status))
         .route("/ai/proxy/start", post(ai::proxy_start))
