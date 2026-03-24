@@ -173,57 +173,29 @@ pub(super) async fn proxy_stop(
     Ok(Json(state.ai_proxy().status().await))
 }
 
-// ── Claude OAuth ──
+// ── Claude Login (via CLIProxyAPI native flow + SSH tunnel) ──
 
 #[derive(Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub(super) struct LoginResponse {
     pub login_url: String,
+    pub ssh_command: String,
 }
 
-/// Generate the Claude OAuth URL. User opens it, authorizes, gets a code.
+/// Start the CLIProxyAPI login flow. Returns the auth URL and SSH tunnel command.
 #[instrument(skip_all)]
 pub(super) async fn proxy_login(
     State(state): State<AppState>,
 ) -> Result<Json<LoginResponse>, AppError> {
     let url = state
         .ai_proxy()
-        .generate_oauth_url()
+        .claude_login()
         .await
         .map_err(|e| AppError::internal(format!("Login failed: {e}")))?;
-    Ok(Json(LoginResponse { login_url: url }))
-}
-
-#[derive(Debug, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub(super) struct CompleteLoginRequest {
-    pub code: String,
-}
-
-/// Exchange the authorization code for a token and store it.
-#[instrument(skip_all)]
-pub(super) async fn proxy_complete_login(
-    State(state): State<AppState>,
-    Json(payload): Json<CompleteLoginRequest>,
-) -> Result<Json<ProxyStatus>, AppError> {
-    let code = payload.code.trim();
-    if code.is_empty() {
-        return Err(AppError::bad_request_message("code cannot be empty"));
-    }
-
-    let token = state
-        .ai_proxy()
-        .exchange_code(code)
-        .await
-        .map_err(|e| AppError::internal(format!("Token exchange failed: {e}")))?;
-
-    state
-        .ai_proxy()
-        .store_token_and_restart(&token)
-        .await
-        .map_err(|e| AppError::internal(format!("Failed to store token: {e}")))?;
-
-    Ok(Json(state.ai_proxy().status().await))
+    Ok(Json(LoginResponse {
+        login_url: url,
+        ssh_command: "ssh -L 54545:127.0.0.1:54545 newlevel@10.77.8.134".to_string(),
+    }))
 }
 
 async fn get_settings_internal(state: &AppState) -> anyhow::Result<AiSettings> {
