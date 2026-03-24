@@ -74,6 +74,8 @@ pub struct AppContext {
     pub bible_search_results: RwSignal<Vec<BibleSearchHit>>,
     pub bible_searching: RwSignal<bool>,
     pub bible_has_searched: RwSignal<bool>,
+    /// Bumped when a BibleSlidesChanged event arrives, so Bible page can re-fetch
+    pub bible_presentations_version: RwSignal<u64>,
 }
 
 impl AppContext {
@@ -118,6 +120,7 @@ impl AppContext {
             bible_search_results: RwSignal::new(Vec::new()),
             bible_searching: RwSignal::new(false),
             bible_has_searched: RwSignal::new(false),
+            bible_presentations_version: RwSignal::new(0),
         }
     }
 

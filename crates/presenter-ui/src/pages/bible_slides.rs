@@ -141,7 +141,8 @@ fn build_trigger_request(
     let main_ref = {
         let r = main_ref_sig.get_untracked();
         if r.is_empty() {
-            "Bible".to_string()
+            // Fall back to stage field (where AI puts the reference)
+            slide.stage.clone()
         } else {
             r
         }
@@ -468,7 +469,11 @@ fn PreparedSlideCard(slide: BibleSlideDto, index: usize) -> impl IntoView {
     let mode = ctx.mode;
 
     let slide_id = slide.id.clone();
-    let main_ref = slide.main_reference.clone().unwrap_or_default();
+    // Use main_reference from metadata, fall back to stage field (where AI puts the reference)
+    let main_ref = slide
+        .main_reference
+        .clone()
+        .unwrap_or_else(|| slide.stage.clone());
 
     let main_text_sig = RwSignal::new(slide.main.clone());
     let trans_text_sig = RwSignal::new(slide.translation.clone());

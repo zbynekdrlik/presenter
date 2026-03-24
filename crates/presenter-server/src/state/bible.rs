@@ -237,6 +237,9 @@ impl AppState {
             .repository
             .create_presentation(library.id, name, None)
             .await?;
+        self.live_hub.publish(LiveEvent::BibleSlidesChanged {
+            presentation_id: presentation.id.to_string(),
+        });
         Ok(presentation)
     }
 
@@ -273,6 +276,9 @@ impl AppState {
         self.repository
             .replace_presentation_slides(id, &presentation.slides)
             .await?;
+        self.live_hub.publish(LiveEvent::BibleSlidesChanged {
+            presentation_id: id.to_string(),
+        });
         Ok(presentation)
     }
 

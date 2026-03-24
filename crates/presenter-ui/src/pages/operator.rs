@@ -288,6 +288,7 @@ fn setup_ws_dispatch(last_event: ReadSignal<Option<LiveEvent>>, ctx: &AppContext
     let selected_presentation = ctx.selected_presentation;
     let slides_cache = ctx.slides_cache;
     let active_bible_broadcast = ctx.active_bible_broadcast;
+    let bible_presentations_version = ctx.bible_presentations_version;
 
     Effect::new(move || {
         if let Some(event) = last_event.get() {
@@ -341,6 +342,9 @@ fn setup_ws_dispatch(last_event: ReadSignal<Option<LiveEvent>>, ctx: &AppContext
                 }
                 LiveEvent::BibleCleared => {
                     active_bible_broadcast.set(None);
+                }
+                LiveEvent::BibleSlidesChanged { .. } => {
+                    bible_presentations_version.update(|v| *v += 1);
                 }
                 LiveEvent::BiblePreferencesChanged { character_limit } => {
                     // Update character limit in real-time when changed by another client
