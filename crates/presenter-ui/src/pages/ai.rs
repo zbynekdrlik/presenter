@@ -333,13 +333,13 @@ pub fn AiPage() -> impl IntoView {
                                             <a class="ai-chat__login-link" href=url target="_blank" rel="noopener">"Open Claude Authorization"</a>
                                             <div class="ai-chat__login-step">
                                                 <span class="ai-chat__login-step-num">"2"</span>
-                                                <p>"After authorizing, your browser will show an error page. Copy the full URL from your browser's address bar and paste it here:"</p>
+                                                <p>"After authorizing, Claude will show you a code. Copy it and paste it here:"</p>
                                             </div>
                                             <div class="ai-chat__login-paste">
                                                 <input
                                                     type="text"
                                                     data-role="ai-callback-input"
-                                                    placeholder="Paste the localhost URL here..."
+                                                    placeholder="Paste the code here..."
                                                     prop:value=move || callback_input.get()
                                                     on:input=move |ev| callback_input.set(event_target_value(&ev))
                                                 />

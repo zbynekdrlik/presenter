@@ -106,10 +106,10 @@ pub async fn proxy_login() -> Result<LoginResponse, ApiError> {
     super::post_json("/ai/proxy/login", &serde_json::json!({})).await
 }
 
-pub async fn proxy_complete_login(callback_url: &str) -> Result<ProxyStatus, ApiError> {
+pub async fn proxy_complete_login(code: &str) -> Result<ProxyStatus, ApiError> {
     super::post_json(
         "/ai/proxy/complete-login",
-        &serde_json::json!({"callbackUrl": callback_url}),
+        &serde_json::json!({"code": code}),
     )
     .await
 }

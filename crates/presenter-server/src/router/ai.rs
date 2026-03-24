@@ -2,12 +2,7 @@ use super::AppError;
 use crate::ai::proxy::ProxyStatus;
 use crate::ai::{AiSettings, ToolAction, AI_SETTINGS_KEY};
 use crate::state::AppState;
-use axum::{
-    extract::{Query, State},
-    http::StatusCode,
-    response::{IntoResponse, Redirect},
-    Json,
-};
+use axum::{extract::State, http::StatusCode, Json};
 use serde::{Deserialize, Serialize};
 use tracing::instrument;
 
@@ -45,7 +40,6 @@ pub(super) async fn chat(
             .await
             .map_err(|e| AppError::internal(format!("AI error: {e}")))?;
 
-    // Save updated conversation back
     {
         let mut guard = state.ai_conversation().write().await;
         *guard = conversation;
@@ -153,7 +147,7 @@ pub(super) async fn check_status(
     }
 }
 
-// ── Proxy management endpoints ──
+// ── Proxy management ──
 
 #[instrument(skip_all)]
 pub(super) async fn proxy_start(
@@ -164,8 +158,7 @@ pub(super) async fn proxy_start(
         .start()
         .await
         .map_err(|e| AppError::internal(format!("Failed to start proxy: {e}")))?;
-    let status = state.ai_proxy().status().await;
-    Ok(Json(status))
+    Ok(Json(state.ai_proxy().status().await))
 }
 
 #[instrument(skip_all)]
@@ -177,9 +170,10 @@ pub(super) async fn proxy_stop(
         .stop()
         .await
         .map_err(|e| AppError::internal(format!("Failed to stop proxy: {e}")))?;
-    let status = state.ai_proxy().status().await;
-    Ok(Json(status))
+    Ok(Json(state.ai_proxy().status().await))
 }
+
+// ── Claude OAuth ──
 
 #[derive(Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -187,13 +181,14 @@ pub(super) struct LoginResponse {
     pub login_url: String,
 }
 
+/// Generate the Claude OAuth URL. User opens it, authorizes, gets a code.
 #[instrument(skip_all)]
 pub(super) async fn proxy_login(
     State(state): State<AppState>,
 ) -> Result<Json<LoginResponse>, AppError> {
     let url = state
         .ai_proxy()
-        .claude_login()
+        .generate_oauth_url()
         .await
         .map_err(|e| AppError::internal(format!("Login failed: {e}")))?;
     Ok(Json(LoginResponse { login_url: url }))
@@ -202,46 +197,33 @@ pub(super) async fn proxy_login(
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub(super) struct CompleteLoginRequest {
-    pub callback_url: String,
+    pub code: String,
 }
 
+/// Exchange the authorization code for a token and store it.
 #[instrument(skip_all)]
 pub(super) async fn proxy_complete_login(
     State(state): State<AppState>,
     Json(payload): Json<CompleteLoginRequest>,
 ) -> Result<Json<ProxyStatus>, AppError> {
+    let code = payload.code.trim();
+    if code.is_empty() {
+        return Err(AppError::bad_request_message("code cannot be empty"));
+    }
+
+    let token = state
+        .ai_proxy()
+        .exchange_code(code)
+        .await
+        .map_err(|e| AppError::internal(format!("Token exchange failed: {e}")))?;
+
     state
         .ai_proxy()
-        .complete_login(&payload.callback_url)
+        .store_token_and_restart(&token)
         .await
-        .map_err(|e| AppError::internal(format!("Login completion failed: {e}")))?;
-    let status = state.ai_proxy().status().await;
-    Ok(Json(status))
-}
+        .map_err(|e| AppError::internal(format!("Failed to store token: {e}")))?;
 
-/// OAuth callback endpoint. Claude redirects here after the user authorizes.
-/// Presenter forwards the request to CLIProxyAPI on localhost:54545.
-#[instrument(skip_all)]
-pub(super) async fn oauth_callback(
-    State(state): State<AppState>,
-    Query(params): Query<std::collections::HashMap<String, String>>,
-) -> Result<impl IntoResponse, AppError> {
-    // Build the query string to forward
-    let query: String = params
-        .iter()
-        .map(|(k, v)| format!("{k}={v}"))
-        .collect::<Vec<_>>()
-        .join("&");
-
-    let callback_url = format!("http://localhost:54545/callback?{query}");
-    state
-        .ai_proxy()
-        .complete_login(&callback_url)
-        .await
-        .map_err(|e| AppError::internal(format!("OAuth callback failed: {e}")))?;
-
-    // Redirect user to the AI tab
-    Ok(Redirect::to("/ui/operator/ai"))
+    Ok(Json(state.ai_proxy().status().await))
 }
 
 async fn get_settings_internal(state: &AppState) -> anyhow::Result<AiSettings> {
