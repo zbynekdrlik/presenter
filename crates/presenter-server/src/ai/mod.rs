@@ -26,7 +26,7 @@ impl Default for AiSettings {
                 .unwrap_or_else(|_| "http://localhost:8787/v1".to_string()),
             api_key: std::env::var("PRESENTER_AI_API_KEY").ok(),
             model: std::env::var("PRESENTER_AI_MODEL")
-                .unwrap_or_else(|_| "claude-sonnet-4-20250514".to_string()),
+                .unwrap_or_else(|_| "claude-opus-4-20250514".to_string()),
             system_prompt_extra: None,
         }
     }

@@ -542,16 +542,16 @@ async fn send_message_sse(
     let window = web_sys::window().ok_or("no window")?;
 
     // Build the POST request with JSON body
-    let mut init = web_sys::RequestInit::new();
-    init.method("POST");
+    let init = web_sys::RequestInit::new();
+    init.set_method("POST");
     let body = serde_json::json!({"message": message}).to_string();
-    init.body(Some(&JsValue::from_str(&body)));
+    init.set_body(&JsValue::from_str(&body));
 
     let headers = web_sys::Headers::new().map_err(|e| format!("{e:?}"))?;
     headers
         .set("Content-Type", "application/json")
         .map_err(|e| format!("{e:?}"))?;
-    init.headers(&headers);
+    init.set_headers(&headers);
 
     let request =
         web_sys::Request::new_with_str_and_init("/ai/chat", &init).map_err(|e| format!("{e:?}"))?;
