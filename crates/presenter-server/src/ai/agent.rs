@@ -55,20 +55,21 @@ When creating presentations, choose the most appropriate library:
 - For worship songs, use the appropriate worship/song library
 - If no matching library exists, create one with an appropriate name
 
-## Slide Rules
-- Each slide has: main text (displayed), translation text (secondary language), stage text (confidence monitor), group (section label like "Verse 1", "Chorus")
-- Maximum 4000 characters per field, but aim for ~320 characters per slide for readability
-- When creating Bible presentations, use resolve_bible_slides to automatically split by character limit
-- For non-Bible text slides, split content so each slide has ~320 characters max
+## Slide Field Usage (CRITICAL — follow exactly)
+- `main`: The TEXT the audience sees on screen. For Bible verses, this is ONLY the verse text. NEVER include the reference (e.g. "Jób 2:7") in `main`.
+- `translation`: Leave empty unless creating bilingual slides.
+- `stage`: The reference label for the confidence monitor (e.g. "Jób 2:7" or "Marek 3:14-15").
+- `group`: Section label — use the reference (e.g. "Jób 2:7") so the operator can identify slides.
 
-## Pastor's Message Conventions
-- "Nazov:" or "Názov:" = presentation title
-- "Vers na spamet:" = memory verse (use group "Vers na zapamätanie")
-- ##text## = emphasized/big text (put on its own slide, mark group as "Zvýraznenie")
-- Bible references like "Žid 4:13 SEB" mean: book=Židom, chapter=4, verse=13, translation=SEB
+## Formatting Rules
+- ##text## or text surrounded by ## = emphasized text. Put on its own slide, group = "Zvýraznenie", main = text in UPPERCASE.
+- Text written in ALL CAPS by the pastor = keep it uppercase in `main`.
+- Each slide should have max ~320 characters in `main`.
+- "Nazov:" or "Názov:" = presentation title.
+- "Vers na spamet:" = memory verse, use group "Vers na zapamätanie".
 
 ## Common Slovak Bible Abbreviations
-Žid=Židom (Hebrews), 1Sa=1. Samuelova, 1Kra=1. Kráľov, 2Ti=2. Timotejovi,
+Žid=Židom, 1Sa=1. Samuelova, 1Kra=1. Kráľov, 2Ti=2. Timotejovi,
 Mat=Matúš, Mar=Marek, Luk=Lukáš, Ján=Ján, Sk=Skutky, Rim=Rimanom,
 1Kor=1. Korinťanom, 2Kor=2. Korinťanom, Gal=Galatským, Ef=Efezským,
 Fil=Filipským, Kol=Kolosanom, 1Sol=1. Solúnčanom, 1Tim=1. Timotejovi,
@@ -77,16 +78,24 @@ Jer=Jeremiáš, Ez=Ezechiel, Dan=Daniel
 
 ## Translation Code Mapping
 SEB=slk-seb, ROH=slk-roh, SEVP=slk-sevp, MIL=slk-mil, KJV=eng-kjv
+Default translation: slk-seb (unless user specifies otherwise)
 
-## Workflow
-1. Parse the user's message to identify Bible references, titles, and text
-2. For Bible references: use get_bible_passage or resolve_bible_slides to fetch actual verse text, then create slides
-3. For plain text: create slides directly, splitting by ~320 char limit
-4. Create the presentation in the appropriate library with all slides in order
-5. Confirm what was created
+## Workflow for Pastor's Messages
+1. Parse the input to identify: Bible references (with or without text), plain text, titles, emphasis markers (##).
+2. For each Bible reference:
+   a. If the user provided verse TEXT alongside the reference (e.g. "Job 2:7 - Potom satan odišiel...") → use the user's exact text as `main`. The pastor chose this specific wording.
+   b. If only a bare reference with no text (e.g. just "Job 2:7") → fetch from database using get_bible_passage with slk-seb.
+   c. Set `group` = reference (e.g. "Jób 2:7"), `stage` = reference. Do NOT put the reference in `main`.
+3. For ##emphasized## text → own slide, group = "Zvýraznenie", main = the text in UPPERCASE.
+4. For "Nazov:" / "Názov:" → use as the presentation name.
+5. Create ALL slides in one create_presentation call in the Bible library. Do not create each slide individually.
+6. Confirm what was created with a brief summary.
 
-Always use the actual Bible text from the database, never reproduce from memory.
-Respond in the same language the user writes in."#,
+## Important
+- Do NOT call list_bible_translations or list_libraries — they are listed above.
+- Use the user's provided text when available — the pastor may use a specific emphasis or paraphrase.
+- Never duplicate the reference in the main text field.
+- Respond in the same language the user writes in."#,
         translations = translation_list.join(", "),
         libraries = library_list.join("\n"),
     );
