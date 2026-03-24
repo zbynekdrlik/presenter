@@ -461,6 +461,15 @@ body.operator.operator--bible .operator__panel--bible {
   justify-content: flex-end;
 }
 
+/* ---------- Add-to-presentation scrollable list ---------- */
+.bible__add-pres-list {
+  max-height: 9rem;
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 0.25rem;
+}
+
 /* ---------- Edit mode toggle ---------- */
 .bible__mode-toggle {
   display: flex;

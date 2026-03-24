@@ -409,56 +409,58 @@ fn AddToPresentationButtons() -> impl IntoView {
             data-role="presentation-add"
             on:click=on_add_new
         >"+ New presentation"</button>
-        {move || {
-            let pres_list = presentations.get();
-            if pres_list.is_empty() {
-                None
-            } else {
-                Some(pres_list.into_iter().map(|p| {
-                    let pres_id = p.id.clone();
-                    let label = format!("{} ({})", p.name, p.slide_count);
-                    let bs = bs.clone();
-                    let ctx = ctx.clone();
-                    let on_click = move |_| {
-                        let Some(inputs) = collect_selected_inputs(&bs) else {
-                            ctx.show_toast("No slides selected", "error");
-                            return;
-                        };
-                        let pres_id = pres_id.clone();
-                        let bs_pres = bs.presentations;
-                        let selected_ids = bs.selected_slide_ids;
-                        let toast_message = ctx.toast_message;
-                        let toast_variant = ctx.toast_variant;
-                        leptos::task::spawn_local(async move {
-                            match bible::append_presentation_slides(&pres_id, &inputs).await {
-                                Ok(_) => {
-                                    toast_variant.set("success".to_string());
-                                    toast_message.set(Some(format!(
-                                        "Added {} slide(s)",
-                                        inputs.len()
-                                    )));
-                                    selected_ids.set(std::collections::HashSet::new());
-                                    if let Ok(pres) = bible::list_presentations().await {
-                                        bs_pres.set(pres);
+        <div class="bible__add-pres-list">
+            {move || {
+                let pres_list = presentations.get();
+                if pres_list.is_empty() {
+                    None
+                } else {
+                    Some(pres_list.into_iter().map(|p| {
+                        let pres_id = p.id.clone();
+                        let label = format!("{} ({})", p.name, p.slide_count);
+                        let bs = bs.clone();
+                        let ctx = ctx.clone();
+                        let on_click = move |_| {
+                            let Some(inputs) = collect_selected_inputs(&bs) else {
+                                ctx.show_toast("No slides selected", "error");
+                                return;
+                            };
+                            let pres_id = pres_id.clone();
+                            let bs_pres = bs.presentations;
+                            let selected_ids = bs.selected_slide_ids;
+                            let toast_message = ctx.toast_message;
+                            let toast_variant = ctx.toast_variant;
+                            leptos::task::spawn_local(async move {
+                                match bible::append_presentation_slides(&pres_id, &inputs).await {
+                                    Ok(_) => {
+                                        toast_variant.set("success".to_string());
+                                        toast_message.set(Some(format!(
+                                            "Added {} slide(s)",
+                                            inputs.len()
+                                        )));
+                                        selected_ids.set(std::collections::HashSet::new());
+                                        if let Ok(pres) = bible::list_presentations().await {
+                                            bs_pres.set(pres);
+                                        }
+                                    }
+                                    Err(e) => {
+                                        toast_variant.set("error".to_string());
+                                        toast_message.set(Some(format!("Failed: {e}")));
                                     }
                                 }
-                                Err(e) => {
-                                    toast_variant.set("error".to_string());
-                                    toast_message.set(Some(format!("Failed: {e}")));
-                                }
-                            }
-                        });
-                    };
-                    view! {
-                        <button
-                            type="button"
-                            class="operator__list-action"
-                            data-role="presentation-add-existing"
-                            on:click=on_click
-                        >{label}</button>
-                    }
-                }).collect_view())
-            }
-        }}
+                            });
+                        };
+                        view! {
+                            <button
+                                type="button"
+                                class="operator__list-action"
+                                data-role="presentation-add-existing"
+                                on:click=on_click
+                            >{label}</button>
+                        }
+                    }).collect_view())
+                }
+            }}
+        </div>
     }
 }

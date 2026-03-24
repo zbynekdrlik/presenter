@@ -110,6 +110,7 @@ pub fn BiblePage() -> impl IntoView {
             </div>
         </aside>
         <BibleSlidesColumn />
+        <BiblePresentationModal />
     }
 }
 
@@ -648,7 +649,6 @@ fn BiblePreparedTab() -> impl IntoView {
                     }
                 }}
             </div>
-            <BiblePresentationModal />
         </div>
     }
 }
