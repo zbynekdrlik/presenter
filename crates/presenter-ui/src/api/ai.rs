@@ -102,8 +102,8 @@ pub async fn proxy_stop() -> Result<ProxyStatus, ApiError> {
     super::post_json("/ai/proxy/stop", &serde_json::json!({})).await
 }
 
-pub async fn proxy_login(origin: &str) -> Result<LoginResponse, ApiError> {
-    super::post_json("/ai/proxy/login", &serde_json::json!({"origin": origin})).await
+pub async fn proxy_login() -> Result<LoginResponse, ApiError> {
+    super::post_json("/ai/proxy/login", &serde_json::json!({})).await
 }
 
 pub async fn proxy_complete_login(callback_url: &str) -> Result<ProxyStatus, ApiError> {

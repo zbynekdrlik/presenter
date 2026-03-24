@@ -283,7 +283,7 @@ request-retry: 2
     /// 3. Claude redirects to Presenter's /ai/oauth/callback?code=XXX&state=YYY
     /// 4. Presenter forwards the callback to CLIProxyAPI on localhost:54545
     /// 5. Done — no manual copy-paste needed
-    pub async fn claude_login(&self, presenter_origin: &str) -> anyhow::Result<String> {
+    pub async fn claude_login(&self) -> anyhow::Result<String> {
         // Kill any existing login process
         {
             let mut guard = self.login_child.write().await;
@@ -345,19 +345,7 @@ request-retry: 2
             *guard = Some(child);
         }
 
-        let raw_url = auth_url
-            .ok_or_else(|| anyhow::anyhow!("could not find auth URL in CLIProxyAPI output"))?;
-
-        // Rewrite redirect_uri: replace localhost:54545 with Presenter's origin
-        // so Claude redirects back to Presenter (which is reachable from the user's browser)
-        let localhost_callback =
-            format!("http%3A%2F%2Flocalhost%3A{OAUTH_CALLBACK_PORT}%2Fcallback");
-        let presenter_callback = format!("{presenter_origin}/ai/oauth/callback")
-            .replace(':', "%3A")
-            .replace('/', "%2F");
-        let rewritten = raw_url.replace(&localhost_callback, &presenter_callback);
-
-        Ok(rewritten)
+        auth_url.ok_or_else(|| anyhow::anyhow!("could not find auth URL in CLIProxyAPI output"))
     }
 
     /// Complete the OAuth login by forwarding the callback URL to CLIProxyAPI.

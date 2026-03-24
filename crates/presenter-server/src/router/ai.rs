@@ -187,22 +187,13 @@ pub(super) struct LoginResponse {
     pub login_url: String,
 }
 
-#[derive(Debug, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub(super) struct LoginRequest {
-    /// The origin URL of the Presenter server as seen by the user's browser,
-    /// e.g. "http://10.77.8.134:8080". Used to rewrite the OAuth redirect_uri.
-    pub origin: String,
-}
-
 #[instrument(skip_all)]
 pub(super) async fn proxy_login(
     State(state): State<AppState>,
-    Json(payload): Json<LoginRequest>,
 ) -> Result<Json<LoginResponse>, AppError> {
     let url = state
         .ai_proxy()
-        .claude_login(&payload.origin)
+        .claude_login()
         .await
         .map_err(|e| AppError::internal(format!("Login failed: {e}")))?;
     Ok(Json(LoginResponse { login_url: url }))
