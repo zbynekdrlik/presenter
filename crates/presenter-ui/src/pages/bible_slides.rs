@@ -2,6 +2,7 @@ use leptos::prelude::*;
 use wasm_bindgen::JsCast;
 
 use crate::api::bible::{self, BibleSlideDto};
+use crate::api::presentations as pres_api;
 use crate::state::bible::BibleState;
 use crate::state::AppContext;
 
@@ -415,13 +416,56 @@ fn LiveSlideCard(slide: BibleSlideDto) -> impl IntoView {
 }
 
 // ---------------------------------------------------------------------------
-// Prepared slide card — drag-drop reordering + delete
+// Helper: read a field value from the DOM by data-slide-id + data-field
+// ---------------------------------------------------------------------------
+
+fn get_bible_field_value(doc: &web_sys::Document, slide_id: &str, field: &str) -> String {
+    let selector = format!(
+        "[data-slide-id=\"{}\"] [data-field=\"{}\"]",
+        slide_id, field
+    );
+    if let Ok(Some(el)) = doc.query_selector(&selector) {
+        if let Ok(ta) = el.clone().dyn_into::<web_sys::HtmlTextAreaElement>() {
+            return ta.value();
+        }
+        if let Ok(inp) = el.dyn_into::<web_sys::HtmlInputElement>() {
+            return inp.value();
+        }
+    }
+    String::new()
+}
+
+/// Save all editable fields from DOM atomically — prevents stale signal bugs.
+fn save_bible_slide_from_dom(pres_id: &str, slide_id: &str) {
+    let doc = crate::utils::window::document();
+    let main = get_bible_field_value(&doc, slide_id, "main");
+    let translation = get_bible_field_value(&doc, slide_id, "translation");
+    let stage = get_bible_field_value(&doc, slide_id, "stage");
+    let group_val = get_bible_field_value(&doc, slide_id, "group");
+    let group = if group_val.trim().is_empty() {
+        None
+    } else {
+        Some(group_val.trim().to_string())
+    };
+
+    let pres_id = pres_id.to_string();
+    let sid = slide_id.to_string();
+    leptos::task::spawn_local(async move {
+        let _ =
+            pres_api::update_slide_with_group(&pres_id, &sid, &main, &translation, &stage, group)
+                .await;
+    });
+}
+
+// ---------------------------------------------------------------------------
+// Prepared slide card — drag-drop reordering + edit mode + delete
 // ---------------------------------------------------------------------------
 
 #[component]
 fn PreparedSlideCard(slide: BibleSlideDto, index: usize) -> impl IntoView {
     let bs = use_ctx!(BibleState);
     let ctx = use_ctx!(AppContext);
+    let edit_mode = bs.edit_mode;
 
     let slide_id = slide.id.clone();
     let main_ref = slide.main_reference.clone().unwrap_or_default();
@@ -442,10 +486,7 @@ fn PreparedSlideCard(slide: BibleSlideDto, index: usize) -> impl IntoView {
         bs.selected_translation,
     );
 
-    let main = main_text_sig.get_untracked();
-    let trans = trans_text_sig.get_untracked();
-    let group = group_label_sig.get_untracked();
-
+    // -- Delete handler --
     let slide_id_for_delete = slide_id.clone();
     let on_delete = {
         let ctx = ctx.clone();
@@ -484,7 +525,7 @@ fn PreparedSlideCard(slide: BibleSlideDto, index: usize) -> impl IntoView {
         }
     };
 
-    // Drag-drop handlers for reorder
+    // -- Drag-drop handlers for reorder --
     let drag_source = bs.drag_source_idx;
     let drag_over = bs.drag_over_idx;
 
@@ -564,37 +605,152 @@ fn PreparedSlideCard(slide: BibleSlideDto, index: usize) -> impl IntoView {
 
     let is_drag_over = move || drag_over.get() == Some(index);
 
+    // -- Blur handler for edit mode: save from DOM --
+    let slide_id_for_blur = slide_id.clone();
+    let on_field_blur = {
+        let bs = bs.clone();
+        move |_ev: web_sys::FocusEvent| {
+            let Some(pid) = bs.active_presentation_id.get_untracked() else {
+                return;
+            };
+            save_bible_slide_from_dom(&pid, &slide_id_for_blur);
+        }
+    };
+
+    // Static values for read-only body view
+    let main_ro = main_text_sig.get_untracked();
+    let trans_ro = trans_text_sig.get_untracked();
+    let group_ro = group_label_sig.get_untracked();
+    let main_ref_ro = main_ref.clone();
+
     view! {
         <div
             class="operator__slide-card operator__slide-card--bible"
             class:operator__slide-card--drag-over=is_drag_over
+            class:operator__slide-card--edit=move || edit_mode.get()
             data-role="slide-card"
             data-slide-id=slide_id.clone()
-            draggable="true"
-            on:dragstart=on_dragstart
             on:dragover=on_dragover
             on:dragleave=on_dragleave
             on:drop=on_drop
         >
+            // Drag handle — initiates the drag
             <div
-                class="operator__slide-trigger-zone operator__slide-trigger-zone--full"
-                data-role="slide-trigger-zone"
-                on:click=on_trigger.clone()
-                title="Click to trigger this slide"
-            >
-                <span class="operator__slide-trigger-icon">"\u{25B6}"</span>
-                <span>{if !main_ref.is_empty() { main_ref.clone() } else { "Trigger".to_string() }}</span>
-            </div>
-            {slide_body_view(main, trans, main_ref, String::new(), group)}
-            <div class="operator__slide-actions">
-                <button
-                    type="button"
-                    class="operator__slide-delete-btn"
-                    data-role="slide-delete"
-                    title="Delete slide"
-                    on:click=on_delete
-                >"\u{2715}"</button>
-            </div>
+                class="bible__slide-handle"
+                data-role="slide-drag-handle"
+                draggable="true"
+                on:dragstart=on_dragstart
+                title="Drag to reorder"
+            >"\u{2630}"</div>
+
+            // Trigger zone (live mode only)
+            {
+                let on_trigger = on_trigger.clone();
+                let main_ref_trigger = main_ref.clone();
+                move || {
+                    if !edit_mode.get() {
+                        Some(view! {
+                            <div
+                                class="operator__slide-trigger-zone operator__slide-trigger-zone--full"
+                                data-role="slide-trigger-zone"
+                                on:click=on_trigger.clone()
+                                title="Click to trigger this slide"
+                            >
+                                <span class="operator__slide-trigger-icon">"\u{25B6}"</span>
+                                <span>{if !main_ref_trigger.is_empty() { main_ref_trigger.clone() } else { "Trigger".to_string() }}</span>
+                            </div>
+                        })
+                    } else {
+                        None
+                    }
+                }
+            }
+
+            // Edit mode: textareas
+            {
+                let on_blur = on_field_blur.clone();
+                let on_blur2 = on_field_blur.clone();
+                move || {
+                    if edit_mode.get() {
+                        Some(view! {
+                            <section class="operator__slide-editor operator__slide-editor--bible">
+                                <label>
+                                    <span>"Main"</span>
+                                    <textarea
+                                        data-field="main"
+                                        rows="2"
+                                        prop:value=move || main_text_sig.get()
+                                        on:input=move |ev: web_sys::Event| {
+                                            let target = ev.target().and_then(|t| t.dyn_into::<web_sys::HtmlTextAreaElement>().ok());
+                                            if let Some(ta) = target { main_text_sig.set(ta.value()); }
+                                        }
+                                        on:blur={
+                                            let on_blur = on_blur.clone();
+                                            move |ev| on_blur(ev)
+                                        }
+                                    ></textarea>
+                                </label>
+                                <label>
+                                    <span>"Translation"</span>
+                                    <textarea
+                                        data-field="translation"
+                                        rows="2"
+                                        prop:value=move || trans_text_sig.get()
+                                        on:input=move |ev: web_sys::Event| {
+                                            let target = ev.target().and_then(|t| t.dyn_into::<web_sys::HtmlTextAreaElement>().ok());
+                                            if let Some(ta) = target { trans_text_sig.set(ta.value()); }
+                                        }
+                                        on:blur={
+                                            let on_blur = on_blur2.clone();
+                                            move |ev| on_blur(ev)
+                                        }
+                                    ></textarea>
+                                </label>
+                            </section>
+                        })
+                    } else {
+                        None
+                    }
+                }
+            }
+
+            // Read-only body (live mode)
+            {
+                let main = main_ro.clone();
+                let trans = trans_ro.clone();
+                let group = group_ro.clone();
+                let mref = main_ref_ro.clone();
+                move || {
+                    if !edit_mode.get() {
+                        Some(slide_body_view(main.clone(), trans.clone(), mref.clone(), String::new(), group.clone()))
+                    } else {
+                        None
+                    }
+                }
+            }
+
+            // Delete button (edit mode only)
+            {
+                let on_delete = on_delete.clone();
+                move || {
+                    if edit_mode.get() {
+                        Some(view! {
+                            <div class="operator__slide-actions">
+                                <button
+                                    type="button"
+                                    class="operator__slide-delete-btn"
+                                    data-action="delete"
+                                    data-role="slide-delete"
+                                    title="Delete slide"
+                                    on:click=on_delete.clone()
+                                >"\u{2715}"</button>
+                            </div>
+                        })
+                    } else {
+                        None
+                    }
+                }
+            }
         </div>
     }
 }

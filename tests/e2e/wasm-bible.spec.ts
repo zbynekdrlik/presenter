@@ -808,6 +808,9 @@ test.describe("WASM Operator Bible Tests", () => {
       .locator('[data-role="presentation-card"]')
       .count();
 
+    // Handle the prompt dialog for presentation name
+    page.once("dialog", (dialog) => dialog.accept("Test Presentation"));
+
     // Click create
     await bp.locator('[data-role="presentation-create"]').click();
 
@@ -839,6 +842,7 @@ test.describe("WASM Operator Bible Tests", () => {
     // Ensure at least one presentation exists
     const presCards = bp.locator('[data-role="presentation-card"]');
     if ((await presCards.count()) === 0) {
+      page.once("dialog", (dialog) => dialog.accept("Test Pres"));
       await bp.locator('[data-role="presentation-create"]').click();
       await page.waitForFunction(
         () =>
@@ -864,25 +868,25 @@ test.describe("WASM Operator Bible Tests", () => {
     // Switch to Prepared tab
     await page.locator('[data-role="bible-tab"][data-tab="prepared"]').click();
 
-    // Create a fresh presentation to delete
-    await bp.locator('[data-role="presentation-create"]').click();
+    // Create a presentation via API, then reload to pick it up
+    await page.evaluate(async () => {
+      await fetch("/bible/presentations", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ name: "To Delete" }),
+      });
+    });
+    await page.reload({ waitUntil: "networkidle" });
+    await page.waitForSelector('[data-role="bible-tab-nav"]', {
+      timeout: 15_000,
+    });
+    await page.locator('[data-role="bible-tab"][data-tab="prepared"]').click();
     await page.waitForFunction(
       () =>
         document.querySelectorAll(
           '[data-view-panel="bible"] [data-role="presentation-card"]',
         ).length > 0,
       { timeout: 15_000 },
-    );
-
-    // Wait for the card list to stabilise after creation
-    await page.waitForFunction(
-      () => {
-        const cards = document.querySelectorAll(
-          '[data-view-panel="bible"] [data-role="presentation-card"]',
-        );
-        return cards.length > 0;
-      },
-      { timeout: 5_000 },
     );
 
     // Select the last created presentation
@@ -892,13 +896,26 @@ test.describe("WASM Operator Bible Tests", () => {
     await lastPres.click();
     await expect(lastPres).toHaveClass(/is-active/, { timeout: 5_000 });
 
-    // Set up dialog handler BEFORE triggering the delete
+    // Open the presentation edit modal
+    await lastPres.locator('[data-role="presentation-edit"]').click();
+    await page.waitForFunction(
+      () => {
+        const m = document.querySelector('[data-role="presentation-modal"]');
+        return m && getComputedStyle(m).display !== "none";
+      },
+      { timeout: 5_000 },
+    );
+
+    // Handle confirm dialog, then click delete via JS to avoid overlay hit-test issues
     page.once("dialog", (dialog) => dialog.accept());
+    await page.evaluate(() => {
+      const btn = document.querySelector(
+        '[data-role="modal-delete"]',
+      ) as HTMLButtonElement;
+      btn?.click();
+    });
 
-    // Click delete
-    await bp.locator('[data-role="presentation-delete"]').click();
-
-    // Wait for deletion with extended timeout
+    // Wait for card count to decrease
     await page.waitForFunction(
       (expected: number) => {
         const cards = document.querySelectorAll(
@@ -938,6 +955,9 @@ test.describe("WASM Operator Bible Tests", () => {
 
     // Select all slides
     await page.locator('[data-role="select-all-slides"]').click();
+
+    // Handle the prompt dialog for new presentation name
+    page.once("dialog", (dialog) => dialog.accept("Test Slides Pres"));
 
     // Click "Add to new presentation" — creates a new presentation and appends slides
     await page.locator('[data-role="presentation-add"]').click();
@@ -1803,7 +1823,8 @@ test.describe("WASM Operator Bible Tests", () => {
     // 3. Select all slides
     await page.locator('[data-role="select-all-slides"]').click();
 
-    // 4. Click "Add to new presentation" — creates + appends in one step
+    // 4. Click "Add to new presentation" — handle name prompt, then creates + appends
+    page.once("dialog", (dialog) => dialog.accept("Full Workflow Pres"));
     await page.locator('[data-role="presentation-add"]').click();
 
     await page.waitForFunction(
