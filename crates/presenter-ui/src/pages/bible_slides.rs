@@ -177,12 +177,13 @@ fn build_trigger_request(
 }
 
 /// Render the slide body content (shared between live and prepared cards).
+/// Bible slides have 4 fields: Main, Translation, Main Reference, Translation Reference.
+/// Group is a worship field — not used here.
 fn slide_body_view(
     main: String,
     trans: String,
     main_ref: String,
     trans_ref: String,
-    group: String,
 ) -> impl IntoView {
     view! {
         <section class="operator__slide-bodies operator__slide-bodies--bible">
@@ -194,13 +195,11 @@ fn slide_body_view(
             } else {
                 None
             }}
-            {if !main_ref.is_empty() || !trans_ref.is_empty() || !group.is_empty() {
+            {if !main_ref.is_empty() || !trans_ref.is_empty() {
                 Some(view! {
                     <footer class="operator__slide-footer">
                         {if !main_ref.is_empty() {
                             Some(view! { <span class="operator__slide-reference">{main_ref}</span> })
-                        } else if !group.is_empty() {
-                            Some(view! { <span class="operator__slide-reference">{group}</span> })
                         } else {
                             None
                         }}
@@ -448,10 +447,9 @@ fn LiveSlideCard(slide: BibleSlideDto) -> impl IntoView {
                 {move || {
                     let main = main_text_sig.get();
                     let trans = trans_text_sig.get();
-                    let group = group_label_sig.get();
                     let mref = main_ref_sig.get();
                     let tref = trans_ref_sig.get();
-                    slide_body_view(main, trans, mref, tref, group)
+                    slide_body_view(main, trans, mref, tref)
                 }}
             </div>
         </div>
@@ -479,24 +477,18 @@ fn get_bible_field_value(doc: &web_sys::Document, slide_id: &str, field: &str) -
 }
 
 /// Save all editable fields from DOM atomically — prevents stale signal bugs.
-/// Maps: main-ref → stage (Resolume reads this), translation-ref → group.
+/// Maps: main-ref → stage (Resolume reads this). Group is a worship field — not used for Bible.
 fn save_bible_slide_from_dom(pres_id: &str, slide_id: &str) {
     let doc = crate::utils::window::document();
     let main = get_bible_field_value(&doc, slide_id, "main");
     let translation = get_bible_field_value(&doc, slide_id, "translation");
     let stage = get_bible_field_value(&doc, slide_id, "main-ref");
-    let trans_ref = get_bible_field_value(&doc, slide_id, "translation-ref");
-    let group = if trans_ref.trim().is_empty() {
-        None
-    } else {
-        Some(trans_ref.trim().to_string())
-    };
 
     let pres_id = pres_id.to_string();
     let sid = slide_id.to_string();
     leptos::task::spawn_local(async move {
         let _ =
-            pres_api::update_slide_with_group(&pres_id, &sid, &main, &translation, &stage, group)
+            pres_api::update_slide_with_group(&pres_id, &sid, &main, &translation, &stage, None)
                 .await;
     });
 }
@@ -734,12 +726,11 @@ fn PreparedSlideCard(slide: BibleSlideDto, index: usize) -> impl IntoView {
             {
                 let main = main_ro.clone();
                 let trans = trans_ro.clone();
-                let group = group_ro.clone();
                 let mref = main_ref_ro.clone();
                 let tref = trans_ref_ro.clone();
                 move || {
                     if mode.get() != "edit" {
-                        Some(slide_body_view(main.clone(), trans.clone(), mref.clone(), tref.clone(), group.clone()))
+                        Some(slide_body_view(main.clone(), trans.clone(), mref.clone(), tref.clone()))
                     } else {
                         None
                     }

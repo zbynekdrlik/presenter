@@ -352,7 +352,6 @@ fn TabletSlideCard(slide: BibleSlideDto, is_light: bool, is_group_start: bool) -
         .unwrap_or_else(|| slide.stage.clone());
     let main_text = slide.main.clone();
     let translation_text = slide.translation.clone();
-    let group = slide.group.clone();
     let is_loading = RwSignal::new(false);
 
     let is_active = {
@@ -416,15 +415,6 @@ fn TabletSlideCard(slide: BibleSlideDto, is_light: bool, is_group_start: bool) -
                     None
                 }}
             </section>
-            {if let Some(ref g) = group {
-                Some(view! {
-                    <footer class="tablet-slide__footer">
-                        <span class="tablet-slide__group">{g.clone()}</span>
-                    </footer>
-                })
-            } else {
-                None
-            }}
         </article>
     }
 }
