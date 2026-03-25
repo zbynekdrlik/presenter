@@ -22,6 +22,7 @@ pub struct TabletContext {
     pub toast_message: RwSignal<Option<String>>,
     pub toast_variant: RwSignal<String>,
     pub toast_timer_handle: RwSignal<Option<i32>>,
+    pub active_slide_id: RwSignal<Option<String>>,
     pub ws_connected: RwSignal<bool>,
 }
 
@@ -39,6 +40,7 @@ impl TabletContext {
             slides: RwSignal::new(Vec::new()),
             slides_cache: RwSignal::new(HashMap::new()),
             active_broadcast: RwSignal::new(None),
+            active_slide_id: RwSignal::new(None),
             sidebar_open: RwSignal::new(true),
             text_scale: RwSignal::new(saved_scale),
             toast_message: RwSignal::new(None),

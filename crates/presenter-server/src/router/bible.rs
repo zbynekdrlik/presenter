@@ -359,6 +359,85 @@ pub(super) async fn trigger_bible_slide(
 }
 
 #[instrument(skip_all)]
+pub(super) async fn trigger_presentation_slide(
+    State(state): State<AppState>,
+    axum::extract::Path((presentation_id, slide_id)): axum::extract::Path<(String, String)>,
+) -> Result<Json<BibleTriggerSlideResponse>, AppError> {
+    use crate::state::bible::BibleSlideReferenceMetadata;
+
+    let pres_uuid = presentation_id
+        .parse::<uuid::Uuid>()
+        .map_err(|_| AppError::bad_request_message("Invalid presentation ID"))?;
+    let presentation = state
+        .bible_presentation_detail(presenter_core::PresentationId::from_uuid(pres_uuid))
+        .await?
+        .ok_or_else(|| AppError::not_found("Presentation not found"))?;
+
+    let slide_uuid = slide_id
+        .parse::<uuid::Uuid>()
+        .map_err(|_| AppError::bad_request_message("Invalid slide ID"))?;
+    let slide = presentation
+        .slides
+        .iter()
+        .find(|s| s.id == presenter_core::SlideId::from_uuid(slide_uuid))
+        .ok_or_else(|| AppError::not_found("Slide not found in presentation"))?;
+
+    let main_reference = slide
+        .metadata
+        .as_ref()
+        .and_then(|m| m.bible.as_ref())
+        .and_then(|b| b.main_reference_label.clone())
+        .unwrap_or_else(|| slide.content.stage.value().to_string());
+
+    let secondary_reference = slide
+        .metadata
+        .as_ref()
+        .and_then(|m| m.bible.as_ref())
+        .and_then(|b| b.translation_reference_label.clone())
+        .unwrap_or_default();
+
+    let secondary_text = {
+        let t = slide.content.translation.value().to_string();
+        if t.is_empty() {
+            String::new()
+        } else {
+            t
+        }
+    };
+
+    let output = BibleSlideOutput::new(
+        slide.content.main.value().to_string(),
+        main_reference,
+        secondary_text,
+        secondary_reference,
+        Utc::now(),
+    );
+
+    let meta = slide.metadata.as_ref().and_then(|m| m.bible.as_ref());
+    let (verse_start, verse_end) = meta
+        .and_then(|m| m.verse_span())
+        .map(|(s, e)| (Some(s), Some(e)))
+        .unwrap_or((None, None));
+    let reference_metadata = BibleSlideReferenceMetadata {
+        translation_code: meta.map(|m| m.translation_code.clone()),
+        book: meta.map(|m| m.book.clone()),
+        book_code: meta.and_then(|m| m.book_code.clone()),
+        book_number: meta.and_then(|m| m.book_number),
+        chapter: meta.map(|m| m.chapter),
+        verse_start,
+        verse_end,
+    };
+
+    state
+        .trigger_bible_slide_output(output.clone(), reference_metadata)
+        .await;
+    Ok(Json(BibleTriggerSlideResponse {
+        success: true,
+        output,
+    }))
+}
+
+#[instrument(skip_all)]
 pub(super) async fn clear_bible_broadcast(
     State(state): State<AppState>,
 ) -> Result<StatusCode, AppError> {

@@ -197,6 +197,26 @@ pub async fn trigger_slide(req: &TriggerSlideRequest) -> Result<TriggerSlideResp
     post_json("/bible/trigger-slide", req).await
 }
 
+/// Trigger a specific slide from a presentation by ID.
+/// Server: POST /bible/presentations/{id}/slides/{slide_id}/trigger
+pub async fn trigger_presentation_slide(
+    presentation_id: &str,
+    slide_id: &str,
+) -> Result<(), ApiError> {
+    let url = format!(
+        "/bible/presentations/{}/slides/{}/trigger",
+        presentation_id, slide_id
+    );
+    let response = gloo_net::http::Request::post(&url)
+        .send()
+        .await
+        .map_err(ApiError::Network)?;
+    if !response.ok() {
+        return Err(ApiError::Status(response.status(), response.status_text()));
+    }
+    Ok(())
+}
+
 // ---------------------------------------------------------------------------
 // Resolve (generate slides from reference)
 // ---------------------------------------------------------------------------

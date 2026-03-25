@@ -50,6 +50,7 @@ pub fn TabletPage() -> impl IntoView {
                 }
                 LiveEvent::BibleCleared => {
                     ctx.active_broadcast.set(None);
+                    ctx.active_slide_id.set(None);
                 }
                 LiveEvent::BibleSlidesChanged { presentation_id } => {
                     ctx.slides_cache.update(|cache| {
@@ -322,11 +323,14 @@ fn SlideList() -> impl IntoView {
             let mut group_index: usize = 0;
 
             slide_list.into_iter().map(|slide| {
-                let is_new_group = slide.main_reference.as_deref() != last_reference.as_deref();
+                let effective_ref = slide.main_reference.clone()
+                    .filter(|r| !r.is_empty())
+                    .or_else(|| if slide.stage.is_empty() { None } else { Some(slide.stage.clone()) });
+                let is_new_group = effective_ref.as_deref() != last_reference.as_deref();
                 if is_new_group && last_reference.is_some() {
                     group_index += 1;
                 }
-                last_reference = slide.main_reference.clone();
+                last_reference = effective_ref;
 
                 let is_light = group_index % 2 == 0;
                 let is_group_start = is_new_group && group_index > 0;
@@ -341,16 +345,25 @@ fn SlideList() -> impl IntoView {
 fn TabletSlideCard(slide: BibleSlideDto, is_light: bool, is_group_start: bool) -> impl IntoView {
     let ctx = use_ctx!(TabletContext);
     let slide_id = slide.id.clone();
-    let main_ref = slide.main_reference.clone().unwrap_or_default();
+    let main_ref = slide
+        .main_reference
+        .clone()
+        .filter(|r| !r.is_empty())
+        .unwrap_or_else(|| slide.stage.clone());
     let main_text = slide.main.clone();
     let translation_text = slide.translation.clone();
     let group = slide.group.clone();
     let is_loading = RwSignal::new(false);
 
     let is_active = {
-        let slide = slide.clone();
+        let slide_for_active = slide.clone();
+        let slide_id_for_active = slide_id.clone();
         let active_broadcast = ctx.active_broadcast;
-        move || is_slide_active(&slide, &active_broadcast.get())
+        let active_slide_id = ctx.active_slide_id;
+        move || {
+            is_slide_active(&slide_for_active, &active_broadcast.get())
+                || active_slide_id.get().as_deref() == Some(slide_id_for_active.as_str())
+        }
     };
 
     let on_click = {
@@ -531,63 +544,13 @@ async fn load_presentation_slides(ctx: &TabletContext, presentation_id: &str) {
 }
 
 async fn trigger_slide(ctx: &TabletContext, slide: &BibleSlideDto) {
-    let meta = slide.metadata.as_ref().and_then(|m| m.bible.as_ref());
-
-    // If we have full Bible metadata with translation code, use the structured trigger
-    if let Some(meta) = meta {
-        if let Some(translation_code) = meta.translation_code.as_ref() {
-            let req = bible::TriggerRequest {
-                translation: translation_code.clone(),
-                book: meta.book.clone().unwrap_or_default(),
-                book_code: meta.book_code.clone(),
-                book_number: meta.book_number,
-                chapter: meta.chapter.unwrap_or(1),
-                verse_start: meta.effective_verse_start().unwrap_or(1),
-                verse_end: meta.effective_verse_end(),
-                main_text: Some(slide.main.clone()),
-                translation_text: if slide.translation.is_empty() {
-                    None
-                } else {
-                    Some(slide.translation.clone())
-                },
-                main_reference_label: meta.main_reference_label.clone(),
-                translation_reference_label: meta.translation_reference_label.clone(),
-            };
-
-            match bible::trigger(&req).await {
-                Ok(broadcast) => {
-                    ctx.active_broadcast.set(Some(broadcast));
-                    ctx.show_toast("Slide triggered", "success");
-                }
-                Err(e) => {
-                    ctx.show_toast(&format!("Failed to trigger slide: {e}"), "error");
-                }
-            }
-            return;
-        }
-    }
-
-    // Fallback: use trigger-slide endpoint with raw text content
-    let req = bible::TriggerSlideRequest {
-        main_text: slide.main.clone(),
-        main_reference: slide.main_reference.clone().unwrap_or_default(),
-        secondary_text: if slide.translation.is_empty() {
-            None
-        } else {
-            Some(slide.translation.clone())
-        },
-        secondary_reference: slide.translation_reference.clone(),
-        translation_code: meta.and_then(|m| m.translation_code.clone()),
-        book: meta.and_then(|m| m.book.clone()),
-        book_code: meta.and_then(|m| m.book_code.clone()),
-        book_number: meta.and_then(|m| m.book_number),
-        chapter: meta.and_then(|m| m.chapter),
-        verse_start: meta.and_then(|m| m.effective_verse_start()),
-        verse_end: meta.and_then(|m| m.effective_verse_end()),
+    let Some(pres_id) = ctx.current_presentation_id.get_untracked() else {
+        ctx.show_toast("No presentation selected", "error");
+        return;
     };
-
-    match bible::trigger_slide(&req).await {
-        Ok(_resp) => {
+    match bible::trigger_presentation_slide(&pres_id, &slide.id).await {
+        Ok(()) => {
+            ctx.active_slide_id.set(Some(slide.id.clone()));
             ctx.show_toast("Slide triggered", "success");
         }
         Err(e) => {
