@@ -52,7 +52,7 @@ pub fn AiPage() -> impl IntoView {
     let proxy_authenticated: RwSignal<bool> = RwSignal::new(false);
     let proxy_loading: RwSignal<bool> = RwSignal::new(false);
     let login_url: RwSignal<Option<String>> = RwSignal::new(None);
-    let ssh_command: RwSignal<Option<String>> = RwSignal::new(None);
+    let callback_input: RwSignal<String> = RwSignal::new(String::new());
 
     // Load settings, status, and conversation on mount
     {
@@ -367,12 +367,10 @@ pub fn AiPage() -> impl IntoView {
                                         on:click=move |_| {
                                             proxy_loading.set(true);
                                             login_url.set(None);
-                                            ssh_command.set(None);
                                             leptos::task::spawn_local(async move {
                                                 match ai_api::proxy_login().await {
                                                     Ok(resp) => {
                                                         login_url.set(Some(resp.login_url));
-                                                        ssh_command.set(Some(resp.ssh_command));
                                                     }
                                                     Err(e) => {
                                                         error.set(Some(format!("Login failed: {e}")));
@@ -386,58 +384,58 @@ pub fn AiPage() -> impl IntoView {
                                     </button>
                                 </div>
                                 {move || login_url.get().map(|url| {
-                                    let ssh_cmd = ssh_command.get().unwrap_or_default();
                                     view! {
                                         <div class="ai-chat__login-flow">
                                             <div class="ai-chat__login-step">
                                                 <span class="ai-chat__login-step-num">"1"</span>
-                                                <p>"Open a terminal and run this SSH tunnel command:"</p>
-                                            </div>
-                                            <div class="ai-chat__login-ssh-cmd">
-                                                <code>{ssh_cmd}</code>
-                                            </div>
-                                            <div class="ai-chat__login-step">
-                                                <span class="ai-chat__login-step-num">"2"</span>
-                                                <p>"Then open this link in your browser:"</p>
+                                                <p>"Open this link in your browser and authorize:"</p>
                                             </div>
                                             <a class="ai-chat__login-link" href=url target="_blank" rel="noopener">"Open Claude Authorization"</a>
                                             <div class="ai-chat__login-step">
-                                                <span class="ai-chat__login-step-num">"3"</span>
-                                                <p>"After authorizing, authentication completes automatically."</p>
+                                                <span class="ai-chat__login-step-num">"2"</span>
+                                                <p>"After authorizing, Claude will show you a code. Copy it and paste it here:"</p>
                                             </div>
-                                            <button
-                                                type="button"
-                                                class="ai-chat__btn ai-chat__btn--save"
-                                                data-role="ai-check-auth"
-                                                on:click=move |_| {
-                                                    let toast = ctx.toast_message;
-                                                    let toast_variant = ctx.toast_variant;
-                                                    leptos::task::spawn_local(async move {
-                                                        match ai_api::check_status().await {
-                                                            Ok(status) => {
-                                                                connected.set(status.connected);
-                                                                proxy_running.set(status.proxy.running);
-                                                                proxy_authenticated.set(status.proxy.claude_authenticated);
-                                                                if status.proxy.claude_authenticated {
+                                            <div class="ai-chat__login-paste">
+                                                <input
+                                                    type="text"
+                                                    data-role="ai-callback-input"
+                                                    placeholder="Paste the code here..."
+                                                    prop:value=move || callback_input.get()
+                                                    on:input=move |ev| callback_input.set(event_target_value(&ev))
+                                                />
+                                                <button
+                                                    type="button"
+                                                    class="ai-chat__btn ai-chat__btn--save"
+                                                    data-role="ai-complete-login"
+                                                    prop:disabled=move || callback_input.get().trim().is_empty() || proxy_loading.get()
+                                                    on:click=move |_| {
+                                                        let code = callback_input.get().trim().to_string();
+                                                        if code.is_empty() { return; }
+                                                        proxy_loading.set(true);
+                                                        let toast = ctx.toast_message;
+                                                        let toast_variant = ctx.toast_variant;
+                                                        leptos::task::spawn_local(async move {
+                                                            match ai_api::proxy_complete_login(&code).await {
+                                                                Ok(status) => {
+                                                                    proxy_running.set(status.running);
+                                                                    proxy_authenticated.set(status.claude_authenticated);
                                                                     login_url.set(None);
-                                                                    ssh_command.set(None);
+                                                                    callback_input.set(String::new());
                                                                     toast_variant.set("success".to_string());
                                                                     toast.set(Some("Claude authenticated!".to_string()));
-                                                                } else {
+                                                                }
+                                                                Err(e) => {
                                                                     toast_variant.set("error".to_string());
-                                                                    toast.set(Some("Not yet authenticated. Complete the authorization flow first.".to_string()));
+                                                                    toast.set(Some(format!("Login failed: {e}")));
                                                                 }
                                                             }
-                                                            Err(e) => {
-                                                                toast_variant.set("error".to_string());
-                                                                toast.set(Some(format!("Status check failed: {e}")));
-                                                            }
-                                                        }
-                                                    });
-                                                }
-                                            >
-                                                "Check Status"
-                                            </button>
+                                                            proxy_loading.set(false);
+                                                        });
+                                                    }
+                                                >
+                                                    "Complete Login"
+                                                </button>
+                                            </div>
                                         </div>
                                     }
                                 })}

@@ -32,6 +32,9 @@ reqwest.workspace = true
 rosc = "0.10"
 include_dir = "0.7"
 async-stream = "0.3"
+sha2 = "0.10"
+base64 = "0.22"
+rand = "0.9"
 
 [dev-dependencies]
 axum.workspace = true
