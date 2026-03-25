@@ -148,10 +148,10 @@ fn collect_selected_inputs(bs: &BibleState) -> Option<Vec<bible::AppendSlideInpu
         .iter()
         .filter(|s| selected_ids.contains(&s.id))
         .map(|s| bible::AppendSlideInput {
-            main: s.main.clone(),
-            translation: s.translation.clone(),
-            stage: s.stage.clone(),
-            group: s.group.clone(),
+            bible_main: s.bible_main.clone(),
+            bible_translation: s.bible_translation.clone(),
+            bible_main_reference: s.bible_main_reference.clone(),
+            bible_translation_reference: s.bible_translation_reference.clone(),
             metadata: s.metadata.clone(),
         })
         .collect();
