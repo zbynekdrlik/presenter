@@ -389,6 +389,37 @@ pub async fn append_presentation_slides(
     .await
 }
 
+/// Update a Bible slide's text and reference labels.
+/// Server: PATCH /bible/presentations/{id}/slides/{slide_id}
+pub async fn update_bible_slide(
+    presentation_id: &str,
+    slide_id: &str,
+    main: &str,
+    translation: &str,
+    main_reference: &str,
+    translation_reference: &str,
+) -> Result<BibleSlideDto, ApiError> {
+    #[derive(serde::Serialize)]
+    #[serde(rename_all = "camelCase")]
+    struct UpdateBibleSlideRequest {
+        main: String,
+        translation: String,
+        main_reference: String,
+        translation_reference: String,
+    }
+
+    super::patch_json(
+        &format!("/bible/presentations/{presentation_id}/slides/{slide_id}"),
+        &UpdateBibleSlideRequest {
+            main: main.to_string(),
+            translation: translation.to_string(),
+            main_reference: main_reference.to_string(),
+            translation_reference: translation_reference.to_string(),
+        },
+    )
+    .await
+}
+
 /// Delete a slide from a Bible presentation. Uses the generic presentations endpoint.
 /// Server: DELETE /presentations/{id}/slides/{slide_id}
 pub async fn delete_presentation_slide(

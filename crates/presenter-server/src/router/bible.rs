@@ -387,7 +387,7 @@ pub(super) async fn trigger_presentation_slide(
         .as_ref()
         .and_then(|m| m.bible.as_ref())
         .and_then(|b| b.main_reference_label.clone())
-        .unwrap_or_else(|| slide.content.stage.value().to_string());
+        .unwrap_or_default();
 
     let secondary_reference = slide
         .metadata
@@ -668,7 +668,38 @@ fn request_slide_to_domain(input: BibleSlideInput) -> Result<Slide, AppError> {
         input.group.map(presenter_core::SlideGroup::new),
     );
     let mut slide = Slide::new(0, content);
-    if let Some(meta) = input.metadata {
+    // Backward compatibility: if stage is set but metadata lacks main_reference_label,
+    // copy stage into metadata so new code always reads from metadata.
+    let metadata = match input.metadata {
+        Some(mut meta) => {
+            if !input.stage.trim().is_empty() {
+                if let Some(ref mut bible) = meta.bible {
+                    if bible.main_reference_label.is_none() {
+                        bible.main_reference_label = Some(input.stage.clone());
+                    }
+                }
+            }
+            Some(meta)
+        }
+        None if !input.stage.trim().is_empty() => {
+            // No metadata but stage has a reference — create minimal Bible metadata
+            Some(
+                SlideMetadata::new().with_bible(presenter_core::slide::BibleSlideMetadata {
+                    translation_code: String::new(),
+                    secondary_translation_code: None,
+                    book: String::new(),
+                    book_code: None,
+                    book_number: None,
+                    chapter: 0,
+                    verses: Vec::new(),
+                    main_reference_label: Some(input.stage.clone()),
+                    translation_reference_label: None,
+                }),
+            )
+        }
+        None => None,
+    };
+    if let Some(meta) = metadata {
         slide = slide.with_metadata(Some(meta));
     }
     Ok(slide)
@@ -761,6 +792,118 @@ pub(super) async fn delete_bible_presentation_handler(
         .delete_presentation(presenter_core::PresentationId::from_uuid(id))
         .await?;
     Ok(axum::http::StatusCode::NO_CONTENT)
+}
+
+/// Request body for updating a single Bible slide's text and references.
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub(super) struct UpdateBibleSlideRequest {
+    pub(super) main: String,
+    pub(super) translation: String,
+    pub(super) main_reference: String,
+    pub(super) translation_reference: String,
+}
+
+/// PATCH /bible/presentations/{id}/slides/{slide_id}
+/// Updates a Bible slide's content (main, translation) and metadata references
+/// (main_reference_label, translation_reference_label). Also writes mainReference
+/// to content.stage for Resolume compatibility (transparent to UI). Does NOT touch group.
+#[instrument(skip_all)]
+pub(super) async fn update_bible_slide(
+    State(state): State<AppState>,
+    axum::extract::Path((presentation_id, slide_id)): axum::extract::Path<(String, String)>,
+    Json(payload): Json<UpdateBibleSlideRequest>,
+) -> Result<Json<BibleSlideDto>, AppError> {
+    let pres_uuid = presentation_id
+        .parse::<uuid::Uuid>()
+        .map_err(|_| AppError::bad_request_message("Invalid presentation ID"))?;
+    let slide_uuid = slide_id
+        .parse::<uuid::Uuid>()
+        .map_err(|_| AppError::bad_request_message("Invalid slide ID"))?;
+
+    let pres_id = presenter_core::PresentationId::from_uuid(pres_uuid);
+    let s_id = presenter_core::SlideId::from_uuid(slide_uuid);
+
+    // Look up the existing slide to preserve its metadata structure and group
+    let presentation = state
+        .bible_presentation_detail(pres_id)
+        .await?
+        .ok_or_else(|| AppError::not_found("Presentation not found"))?;
+
+    let existing_slide = presentation
+        .slides
+        .iter()
+        .find(|s| s.id == s_id)
+        .ok_or_else(|| AppError::not_found("Slide not found in presentation"))?;
+
+    // Build updated metadata: preserve existing bible metadata but update reference labels
+    let updated_metadata = {
+        let mut meta = existing_slide
+            .metadata
+            .clone()
+            .unwrap_or_else(SlideMetadata::new);
+        if let Some(ref mut bible) = meta.bible {
+            bible.main_reference_label = if payload.main_reference.is_empty() {
+                None
+            } else {
+                Some(payload.main_reference.clone())
+            };
+            bible.translation_reference_label = if payload.translation_reference.is_empty() {
+                None
+            } else {
+                Some(payload.translation_reference.clone())
+            };
+        }
+        // If there's no bible metadata at all but references are provided, we still store them
+        if meta.bible.is_none()
+            && (!payload.main_reference.is_empty() || !payload.translation_reference.is_empty())
+        {
+            meta.bible = Some(presenter_core::slide::BibleSlideMetadata {
+                translation_code: String::new(),
+                secondary_translation_code: None,
+                book: String::new(),
+                book_code: None,
+                book_number: None,
+                chapter: 0,
+                verses: Vec::new(),
+                main_reference_label: if payload.main_reference.is_empty() {
+                    None
+                } else {
+                    Some(payload.main_reference.clone())
+                },
+                translation_reference_label: if payload.translation_reference.is_empty() {
+                    None
+                } else {
+                    Some(payload.translation_reference.clone())
+                },
+            });
+        }
+        Some(meta)
+    };
+
+    // Write mainReference to stage for Resolume compatibility (transparent to UI)
+    let stage_value = payload.main_reference.clone();
+
+    // Preserve existing group (do NOT touch it)
+    let existing_group = existing_slide
+        .content
+        .group
+        .as_ref()
+        .map(|g| g.name().to_string());
+
+    let updated = state
+        .update_slide_content(
+            pres_id,
+            s_id,
+            payload.main,
+            payload.translation,
+            stage_value,
+            existing_group,
+            updated_metadata,
+        )
+        .await?;
+
+    bible_slide_to_dto(&updated).map(Json)
 }
 
 #[instrument(skip_all)]

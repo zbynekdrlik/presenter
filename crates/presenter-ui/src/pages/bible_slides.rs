@@ -2,7 +2,6 @@ use leptos::prelude::*;
 use wasm_bindgen::JsCast;
 
 use crate::api::bible::{self, BibleSlideDto};
-use crate::api::presentations as pres_api;
 use crate::state::bible::BibleState;
 use crate::state::AppContext;
 
@@ -138,15 +137,7 @@ fn build_trigger_request(
     bs_translation: RwSignal<Option<String>>,
 ) -> bible::TriggerSlideRequest {
     let main_text = main_text_sig.get_untracked();
-    let main_ref = {
-        let r = main_ref_sig.get_untracked();
-        if r.is_empty() {
-            // Fall back to stage field (where AI puts the reference)
-            slide.stage.clone()
-        } else {
-            r
-        }
-    };
+    let main_ref = main_ref_sig.get_untracked();
     let translation_text = trans_text_sig.get_untracked();
     let trans_ref = trans_ref_sig.get_untracked();
 
@@ -477,18 +468,20 @@ fn get_bible_field_value(doc: &web_sys::Document, slide_id: &str, field: &str) -
 }
 
 /// Save all editable fields from DOM atomically — prevents stale signal bugs.
-/// Maps: main-ref → stage (Resolume reads this). Group is a worship field — not used for Bible.
+/// Uses the Bible-specific PATCH endpoint that updates text + metadata references.
+/// Does NOT send stage or group (server handles stage for Resolume compatibility).
 fn save_bible_slide_from_dom(pres_id: &str, slide_id: &str) {
     let doc = crate::utils::window::document();
     let main = get_bible_field_value(&doc, slide_id, "main");
     let translation = get_bible_field_value(&doc, slide_id, "translation");
-    let stage = get_bible_field_value(&doc, slide_id, "main-ref");
+    let main_ref = get_bible_field_value(&doc, slide_id, "main-ref");
+    let trans_ref = get_bible_field_value(&doc, slide_id, "translation-ref");
 
     let pres_id = pres_id.to_string();
     let sid = slide_id.to_string();
     leptos::task::spawn_local(async move {
         let _ =
-            pres_api::update_slide_with_group(&pres_id, &sid, &main, &translation, &stage, None)
+            bible::update_bible_slide(&pres_id, &sid, &main, &translation, &main_ref, &trans_ref)
                 .await;
     });
 }
@@ -504,11 +497,8 @@ fn PreparedSlideCard(slide: BibleSlideDto, index: usize) -> impl IntoView {
     let mode = ctx.mode;
 
     let slide_id = slide.id.clone();
-    // Use main_reference from metadata, fall back to stage field (where AI puts the reference)
-    let main_ref = slide
-        .main_reference
-        .clone()
-        .unwrap_or_else(|| slide.stage.clone());
+    // Use main_reference from metadata only (no stage fallback)
+    let main_ref = slide.main_reference.clone().unwrap_or_default();
 
     let main_text_sig = RwSignal::new(slide.main.clone());
     let trans_text_sig = RwSignal::new(slide.translation.clone());
