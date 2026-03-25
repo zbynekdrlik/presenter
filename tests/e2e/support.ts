@@ -145,10 +145,15 @@ export async function refreshDevData(
   dbUrl: string,
   root = DEFAULT_LIBRARY_ROOT,
 ) {
+  const bibleDir = path.join(REPO_ROOT, "data", "bibles");
   await runShell(
     `PRESENTER_DB_URL=${dbUrl} ./scripts/dev/refresh-dev-data.sh "${root}"`,
     {
       PRESENTER_DB_URL: dbUrl,
+      PRESENTER_BIBLE_KJV: path.join(bibleDir, "kjv.usfm.zip"),
+      PRESENTER_BIBLE_SEB: path.join(bibleDir, "seb.bbl.mybible.zip"),
+      PRESENTER_BIBLE_ROHACEK: path.join(bibleDir, "rohacek.bbl.mybible.zip"),
+      PRESENTER_BIBLE_SEVP: path.join(bibleDir, "sevp.obohu.mybible.zip"),
     },
   );
 }
