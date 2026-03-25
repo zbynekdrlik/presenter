@@ -11,7 +11,7 @@ exclude = ["crates/presenter-ui"]
 resolver = "2"
 
 [workspace.package]
-version = "0.1.6"
+version = "0.2.0"
 edition = "2021"
 authors = ["Presenter Team <drlik.zbynek@gmail.com>"]
 license = "MIT"
