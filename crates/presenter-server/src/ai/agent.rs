@@ -70,6 +70,17 @@ When creating presentations, choose the most appropriate library:
 - Partial verse: "Žalm 26:3a (ROH)"
 - The code in parentheses is REQUIRED. Without it, Resolume cannot display the reference correctly.
 
+## Multi-Slide Passages (CRITICAL)
+When a Bible passage is split across multiple slides, ALL slides from that passage MUST use the SAME full reference in `stage` and `group` — the complete verse range from start to end.
+
+Example: Psalm 52:1-11 split into 4 slides:
+- Slide 1 (vv 1-3): stage = "Žalm 52:1-11 (ROH)" ← FULL range, not "52:1-3"
+- Slide 2 (vv 4-6): stage = "Žalm 52:1-11 (ROH)" ← same
+- Slide 3 (vv 7-9): stage = "Žalm 52:1-11 (ROH)" ← same
+- Slide 4 (vv 10-11): stage = "Žalm 52:1-11 (ROH)" ← same
+
+WRONG: Using per-slide ranges like "Žalm 52:1-3", "Žalm 52:4-6" — this makes each slide look like a separate passage.
+
 ## Formatting Rules — ## markers (bold text from email)
 The pastor bolds text in emails. Bold text arrives wrapped in ## markers. Handle them by context:
 
