@@ -324,7 +324,10 @@ request-retry: 2
     /// The user copies the code from `platform.claude.com/oauth/code/callback`
     /// and pastes it into Presenter. This method exchanges it at Anthropic's
     /// token endpoint using the stored PKCE code_verifier.
-    pub async fn exchange_code(&self, code: &str) -> anyhow::Result<String> {
+    pub async fn exchange_code(&self, raw_code: &str) -> anyhow::Result<String> {
+        // Strip URL fragment (e.g. "CODE#fragment" → "CODE")
+        let code = raw_code.split('#').next().unwrap_or(raw_code).trim();
+
         let code_verifier = {
             let guard = self.pkce_state.read().await;
             guard
@@ -340,9 +343,10 @@ request-retry: 2
         let body = format!(
             "grant_type=authorization_code\
              &client_id={CLAUDE_CLIENT_ID}\
-             &code={code}\
+             &code={encoded_code}\
              &code_verifier={code_verifier}\
              &redirect_uri={redirect}",
+            encoded_code = urlencod(code),
             redirect = urlencod(CLAUDE_REDIRECT_URI),
         );
 
