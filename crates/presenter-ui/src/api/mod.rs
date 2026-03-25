@@ -1,3 +1,4 @@
+pub mod ai;
 pub mod bible;
 pub mod libraries;
 pub mod playlists;

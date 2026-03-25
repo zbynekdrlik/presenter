@@ -61,12 +61,27 @@ pub(super) fn sanitize_like_input(input: &str) -> String {
 }
 
 pub(super) fn to_domain_slide(model: slide_entity::Model) -> Result<Slide, RepositoryError> {
-    let content = SlideContent::new(
-        SlideText::new(model.main_text)?,
-        SlideText::new(model.translation_text)?,
-        SlideText::new(model.stage_text)?,
-        model.group_name.map(SlideGroup::new),
-    );
+    // Determine slide type: Bible slides have bible_main populated, worship slides use worship_main
+    let is_bible = !model.bible_main.is_empty();
+    let content = if is_bible {
+        SlideContent::new(
+            SlideText::new(model.bible_main)?,
+            SlideText::new(model.bible_translation)?,
+            SlideText::new(model.bible_main_reference.clone())?,
+            if model.bible_main_reference.is_empty() {
+                None
+            } else {
+                Some(SlideGroup::new(model.bible_main_reference))
+            },
+        )
+    } else {
+        SlideContent::new(
+            SlideText::new(model.worship_main)?,
+            SlideText::new(model.worship_translate)?,
+            SlideText::new(model.worship_stage)?,
+            model.worship_group.map(SlideGroup::new),
+        )
+    };
     let mut slide = Slide::new(model.position as u32, content)
         .with_id(SlideId::from_uuid(parse_uuid(&model.id)?));
     if let Some(raw) = model.metadata_json.as_deref() {
@@ -339,6 +354,85 @@ pub(super) fn parse_timer_state(value: &str) -> Result<TimerState, RepositoryErr
         "paused" => Ok(TimerState::Paused),
         "completed" => Ok(TimerState::Completed),
         other => Err(RepositoryError::UnknownTimerState(other.to_string())),
+    }
+}
+
+/// Builds a slide entity ActiveModel from a domain Slide.
+/// Determines whether to populate worship_* or bible_* columns based on metadata.
+pub(super) fn build_slide_active_model(
+    slide: &Slide,
+    presentation_id: &str,
+    position: i32,
+) -> slide_entity::ActiveModel {
+    use sea_orm::Set;
+
+    let is_bible = slide
+        .metadata
+        .as_ref()
+        .and_then(|m| m.bible.as_ref())
+        .is_some();
+    let metadata_json = slide
+        .metadata
+        .as_ref()
+        .and_then(|m| serde_json::to_string(m).ok());
+
+    if is_bible {
+        slide_entity::ActiveModel {
+            id: Set(slide.id.to_string()),
+            presentation_id: Set(presentation_id.to_string()),
+            position: Set(position),
+            worship_main: Set(String::new()),
+            worship_main_search: Set(String::new()),
+            worship_translate: Set(String::new()),
+            worship_translate_search: Set(String::new()),
+            worship_stage: Set(String::new()),
+            worship_stage_search: Set(String::new()),
+            worship_group: Set(None),
+            bible_main: Set(slide.content.main.value().to_owned()),
+            bible_main_search: Set(presenter_core::search::fold_query(
+                slide.content.main.value(),
+            )),
+            bible_translation: Set(slide.content.translation.value().to_owned()),
+            bible_translation_search: Set(presenter_core::search::fold_query(
+                slide.content.translation.value(),
+            )),
+            bible_main_reference: Set(slide.content.stage.value().to_owned()),
+            bible_translation_reference: Set(slide
+                .metadata
+                .as_ref()
+                .and_then(|m| m.bible.as_ref())
+                .and_then(|b| b.translation_reference_label.clone())
+                .unwrap_or_default()),
+            created_at: Set(chrono::Utc::now().into()),
+            metadata_json: Set(metadata_json),
+        }
+    } else {
+        slide_entity::ActiveModel {
+            id: Set(slide.id.to_string()),
+            presentation_id: Set(presentation_id.to_string()),
+            position: Set(position),
+            worship_main: Set(slide.content.main.value().to_owned()),
+            worship_main_search: Set(presenter_core::search::fold_query(
+                slide.content.main.value(),
+            )),
+            worship_translate: Set(slide.content.translation.value().to_owned()),
+            worship_translate_search: Set(presenter_core::search::fold_query(
+                slide.content.translation.value(),
+            )),
+            worship_stage: Set(slide.content.stage.value().to_owned()),
+            worship_stage_search: Set(presenter_core::search::fold_query(
+                slide.content.stage.value(),
+            )),
+            worship_group: Set(slide.content.group.as_ref().map(|g| g.name().to_owned())),
+            bible_main: Set(String::new()),
+            bible_main_search: Set(String::new()),
+            bible_translation: Set(String::new()),
+            bible_translation_search: Set(String::new()),
+            bible_main_reference: Set(String::new()),
+            bible_translation_reference: Set(String::new()),
+            created_at: Set(chrono::Utc::now().into()),
+            metadata_json: Set(metadata_json),
+        }
     }
 }
 

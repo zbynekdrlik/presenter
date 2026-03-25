@@ -1,3 +1,4 @@
+mod ai;
 mod bible;
 mod features;
 mod integrations;
@@ -79,6 +80,14 @@ pub fn build_router(state: AppState) -> Router {
         .route(
             "/bible/presentations/{id}/append",
             post(bible::append_bible_presentation_handler),
+        )
+        .route(
+            "/bible/presentations/{id}/slides/{slide_id}",
+            patch(bible::update_bible_slide),
+        )
+        .route(
+            "/bible/presentations/{id}/slides/{slide_id}/trigger",
+            post(bible::trigger_presentation_slide),
         )
         .route("/bible/active", get(bible::get_active_bible_broadcast))
         .route(
@@ -224,6 +233,17 @@ pub fn build_router(state: AppState) -> Router {
             "/settings/features",
             get(features::get_feature_settings).post(features::update_feature_settings),
         )
+        .route("/ai/chat", post(ai::chat))
+        .route(
+            "/ai/settings",
+            get(ai::get_settings).put(ai::update_settings),
+        )
+        .route("/ai/conversation", get(ai::get_conversation))
+        .route("/ai/clear", post(ai::clear_conversation))
+        .route("/ai/status", get(ai::check_status))
+        .route("/ai/proxy/start", post(ai::proxy_start))
+        .route("/ai/proxy/stop", post(ai::proxy_stop))
+        .route("/ai/proxy/login", post(ai::proxy_login))
         .with_state(state)
 }
 

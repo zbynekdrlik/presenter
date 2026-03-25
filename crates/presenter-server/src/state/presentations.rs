@@ -1,6 +1,7 @@
 //! Library, playlist, and presentation methods for [`AppState`].
 
 use super::AppState;
+use crate::live::LiveEvent;
 use presenter_core::playlist::PlaylistEntryKind;
 use presenter_core::{
     Library, LibraryId, LibrarySummary, Playlist, PlaylistEntry, PlaylistEntryId, PlaylistId,
@@ -50,6 +51,9 @@ impl AppState {
             .create_presentation(library_id, name, slides)
             .await?;
         self.cache_presentation_ref(&presentation).await;
+        self.live_hub.publish(LiveEvent::BibleSlidesChanged {
+            presentation_id: presentation.id.to_string(),
+        });
         let summaries = self.repository.list_library_summaries(None).await?;
         let summary = summaries.into_iter().find(|summary| summary.id == id);
         Ok((id, lib_name, presentation, summary))

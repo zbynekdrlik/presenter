@@ -2,7 +2,7 @@ use leptos::prelude::*;
 use presenter_core::BibleTranslation;
 use std::collections::HashSet;
 
-use crate::api::bible::{BibleBookDto, BiblePresentationSummary, BibleSearchHit, BibleSlideDto};
+use crate::api::bible::{BibleBookDto, BiblePresentationSummary, BibleSlideDto};
 
 /// Selected book in the Live tab.
 #[derive(Clone, Debug)]
@@ -35,12 +35,6 @@ pub struct BibleState {
     pub selected_translation: RwSignal<Option<String>>,
     pub secondary_translation: RwSignal<Option<String>>,
 
-    // -- Search --
-    pub search_query: RwSignal<String>,
-    pub search_results: RwSignal<Vec<BibleSearchHit>>,
-    pub searching: RwSignal<bool>,
-    pub has_searched: RwSignal<bool>,
-
     // -- Book / chapter / verse selection --
     pub books: RwSignal<Vec<BibleBookDto>>,
     pub book_filter: RwSignal<String>,
@@ -72,9 +66,6 @@ pub struct BibleState {
     pub drag_source_idx: RwSignal<Option<usize>>,
     pub drag_over_idx: RwSignal<Option<usize>>,
 
-    // -- Edit mode (prepared tab) --
-    pub edit_mode: RwSignal<bool>,
-
     // -- Presentation edit modal --
     pub modal_presentation_id: RwSignal<Option<String>>,
     pub modal_presentation_name: RwSignal<String>,
@@ -86,11 +77,6 @@ impl BibleState {
             translations: RwSignal::new(Vec::new()),
             selected_translation: RwSignal::new(None),
             secondary_translation: RwSignal::new(None),
-
-            search_query: RwSignal::new(String::new()),
-            search_results: RwSignal::new(Vec::new()),
-            searching: RwSignal::new(false),
-            has_searched: RwSignal::new(false),
 
             books: RwSignal::new(Vec::new()),
             book_filter: RwSignal::new(String::new()),
@@ -114,7 +100,6 @@ impl BibleState {
             loaded_passages_history: RwSignal::new(Vec::new()),
             drag_source_idx: RwSignal::new(None),
             drag_over_idx: RwSignal::new(None),
-            edit_mode: RwSignal::new(false),
             modal_presentation_id: RwSignal::new(None),
             modal_presentation_name: RwSignal::new(String::new()),
         }

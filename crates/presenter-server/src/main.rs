@@ -72,6 +72,7 @@
 )]
 
 mod ableset;
+mod ai;
 mod android_stage;
 mod companion;
 mod config;

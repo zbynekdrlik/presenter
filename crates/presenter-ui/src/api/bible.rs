@@ -197,6 +197,26 @@ pub async fn trigger_slide(req: &TriggerSlideRequest) -> Result<TriggerSlideResp
     post_json("/bible/trigger-slide", req).await
 }
 
+/// Trigger a specific slide from a presentation by ID.
+/// Server: POST /bible/presentations/{id}/slides/{slide_id}/trigger
+pub async fn trigger_presentation_slide(
+    presentation_id: &str,
+    slide_id: &str,
+) -> Result<(), ApiError> {
+    let url = format!(
+        "/bible/presentations/{}/slides/{}/trigger",
+        presentation_id, slide_id
+    );
+    let response = gloo_net::http::Request::post(&url)
+        .send()
+        .await
+        .map_err(ApiError::Network)?;
+    if !response.ok() {
+        return Err(ApiError::Status(response.status(), response.status_text()));
+    }
+    Ok(())
+}
+
 // ---------------------------------------------------------------------------
 // Resolve (generate slides from reference)
 // ---------------------------------------------------------------------------
@@ -231,13 +251,11 @@ pub struct ResolveResponse {
 pub struct BibleSlideDto {
     pub id: String,
     pub order: u32,
-    pub main: String,
-    pub translation: String,
-    pub stage: String,
-    pub group: Option<String>,
+    pub bible_main: String,
+    pub bible_translation: String,
     pub metadata: Option<BibleSlideMetadataDto>,
-    pub main_reference: Option<String>,
-    pub translation_reference: Option<String>,
+    pub bible_main_reference: String,
+    pub bible_translation_reference: String,
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
@@ -346,11 +364,12 @@ pub struct AppendSlidesRequest {
 #[derive(Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct AppendSlideInput {
-    pub main: String,
-    pub translation: String,
-    pub stage: String,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub group: Option<String>,
+    pub bible_main: String,
+    pub bible_translation: String,
+    #[serde(default)]
+    pub bible_main_reference: String,
+    #[serde(default)]
+    pub bible_translation_reference: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub metadata: Option<BibleSlideMetadataDto>,
 }
@@ -364,6 +383,37 @@ pub async fn append_presentation_slides(
         &format!("/bible/presentations/{id}/append"),
         &AppendSlidesRequest {
             slides: slides.to_vec(),
+        },
+    )
+    .await
+}
+
+/// Update a Bible slide's text and reference labels.
+/// Server: PATCH /bible/presentations/{id}/slides/{slide_id}
+pub async fn update_bible_slide(
+    presentation_id: &str,
+    slide_id: &str,
+    bible_main: &str,
+    bible_translation: &str,
+    bible_main_reference: &str,
+    bible_translation_reference: &str,
+) -> Result<BibleSlideDto, ApiError> {
+    #[derive(serde::Serialize)]
+    #[serde(rename_all = "camelCase")]
+    struct UpdateBibleSlideRequest {
+        bible_main: String,
+        bible_translation: String,
+        bible_main_reference: String,
+        bible_translation_reference: String,
+    }
+
+    super::patch_json(
+        &format!("/bible/presentations/{presentation_id}/slides/{slide_id}"),
+        &UpdateBibleSlideRequest {
+            bible_main: bible_main.to_string(),
+            bible_translation: bible_translation.to_string(),
+            bible_main_reference: bible_main_reference.to_string(),
+            bible_translation_reference: bible_translation_reference.to_string(),
         },
     )
     .await

@@ -2,7 +2,6 @@ use leptos::prelude::*;
 use wasm_bindgen::JsCast;
 
 use crate::api::bible::{self, BibleSlideDto};
-use crate::api::presentations as pres_api;
 use crate::state::bible::BibleState;
 use crate::state::AppContext;
 
@@ -53,10 +52,10 @@ fn AddEmptySlideButton() -> impl IntoView {
         let toast_variant = ctx.toast_variant;
 
         let input = bible::AppendSlideInput {
-            main: String::new(),
-            translation: String::new(),
-            stage: String::new(),
-            group: None,
+            bible_main: String::new(),
+            bible_translation: String::new(),
+            bible_main_reference: String::new(),
+            bible_translation_reference: String::new(),
             metadata: None,
         };
 
@@ -138,14 +137,7 @@ fn build_trigger_request(
     bs_translation: RwSignal<Option<String>>,
 ) -> bible::TriggerSlideRequest {
     let main_text = main_text_sig.get_untracked();
-    let main_ref = {
-        let r = main_ref_sig.get_untracked();
-        if r.is_empty() {
-            "Bible".to_string()
-        } else {
-            r
-        }
-    };
+    let main_ref = main_ref_sig.get_untracked();
     let translation_text = trans_text_sig.get_untracked();
     let trans_ref = trans_ref_sig.get_untracked();
 
@@ -176,12 +168,13 @@ fn build_trigger_request(
 }
 
 /// Render the slide body content (shared between live and prepared cards).
+/// Bible slides have 4 fields: Main, Translation, Main Reference, Translation Reference.
+/// Group is a worship field — not used here.
 fn slide_body_view(
     main: String,
     trans: String,
     main_ref: String,
     trans_ref: String,
-    group: String,
 ) -> impl IntoView {
     view! {
         <section class="operator__slide-bodies operator__slide-bodies--bible">
@@ -193,13 +186,11 @@ fn slide_body_view(
             } else {
                 None
             }}
-            {if !main_ref.is_empty() || !trans_ref.is_empty() || !group.is_empty() {
+            {if !main_ref.is_empty() || !trans_ref.is_empty() {
                 Some(view! {
                     <footer class="operator__slide-footer">
                         {if !main_ref.is_empty() {
                             Some(view! { <span class="operator__slide-reference">{main_ref}</span> })
-                        } else if !group.is_empty() {
-                            Some(view! { <span class="operator__slide-reference">{group}</span> })
                         } else {
                             None
                         }}
@@ -213,6 +204,92 @@ fn slide_body_view(
             } else {
                 None
             }}
+        </section>
+    }
+}
+
+/// Shared editor section for Bible slide cards (Main, Translation, Main Reference, Translation Reference).
+/// Used by both LiveSlideCard and PreparedSlideCard to ensure one consistent editor layout.
+fn bible_slide_editor_view(
+    main_text_sig: RwSignal<String>,
+    trans_text_sig: RwSignal<String>,
+    main_ref_sig: RwSignal<String>,
+    trans_ref_sig: RwSignal<String>,
+    on_blur: impl Fn(web_sys::FocusEvent) + Clone + 'static,
+) -> impl IntoView {
+    let on_blur2 = on_blur.clone();
+    let on_blur3 = on_blur.clone();
+    let on_blur4 = on_blur.clone();
+    view! {
+        <section class="operator__slide-editor operator__slide-editor--bible">
+            <label>
+                <span>"Main"</span>
+                <textarea
+                    data-field="main"
+                    data-role="slide-main-edit"
+                    rows="2"
+                    prop:value=move || main_text_sig.get()
+                    on:input=move |ev: web_sys::Event| {
+                        let target = ev.target().and_then(|t| t.dyn_into::<web_sys::HtmlTextAreaElement>().ok());
+                        if let Some(ta) = target { main_text_sig.set(ta.value()); }
+                    }
+                    on:blur={
+                        let on_blur = on_blur.clone();
+                        move |ev| on_blur(ev)
+                    }
+                ></textarea>
+            </label>
+            <label>
+                <span>"Translation"</span>
+                <textarea
+                    data-field="translation"
+                    data-role="slide-translation-edit"
+                    rows="2"
+                    prop:value=move || trans_text_sig.get()
+                    on:input=move |ev: web_sys::Event| {
+                        let target = ev.target().and_then(|t| t.dyn_into::<web_sys::HtmlTextAreaElement>().ok());
+                        if let Some(ta) = target { trans_text_sig.set(ta.value()); }
+                    }
+                    on:blur={
+                        let on_blur = on_blur2.clone();
+                        move |ev| on_blur(ev)
+                    }
+                ></textarea>
+            </label>
+            <div class="operator__slide-editor-grid">
+                <label>
+                    <span>"Main Reference"</span>
+                    <input type="text"
+                        data-field="main-ref"
+                        data-role="slide-main-ref"
+                        prop:value=move || main_ref_sig.get()
+                        on:input=move |ev: web_sys::Event| {
+                            let target = ev.target().and_then(|t| t.dyn_into::<web_sys::HtmlInputElement>().ok());
+                            if let Some(el) = target { main_ref_sig.set(el.value()); }
+                        }
+                        on:blur={
+                            let on_blur = on_blur3.clone();
+                            move |ev| on_blur(ev)
+                        }
+                    />
+                </label>
+                <label>
+                    <span>"Translation Reference"</span>
+                    <input type="text"
+                        data-field="translation-ref"
+                        data-role="slide-translation-ref"
+                        prop:value=move || trans_ref_sig.get()
+                        on:input=move |ev: web_sys::Event| {
+                            let target = ev.target().and_then(|t| t.dyn_into::<web_sys::HtmlInputElement>().ok());
+                            if let Some(el) = target { trans_ref_sig.set(el.value()); }
+                        }
+                        on:blur={
+                            let on_blur = on_blur4.clone();
+                            move |ev| on_blur(ev)
+                        }
+                    />
+                </label>
+            </div>
         </section>
     }
 }
@@ -272,12 +349,11 @@ fn LiveSlideCard(slide: BibleSlideDto) -> impl IntoView {
     let mode = ctx.mode;
 
     let slide_id = slide.id.clone();
-    let main_ref = slide.main_reference.clone().unwrap_or_default();
-    let trans_ref_initial = slide.translation_reference.clone().unwrap_or_default();
+    let main_ref = slide.bible_main_reference.clone();
+    let trans_ref_initial = slide.bible_translation_reference.clone();
 
-    let main_text_sig = RwSignal::new(slide.main.clone());
-    let trans_text_sig = RwSignal::new(slide.translation.clone());
-    let group_label_sig = RwSignal::new(slide.group.clone().unwrap_or_default());
+    let main_text_sig = RwSignal::new(slide.bible_main.clone());
+    let trans_text_sig = RwSignal::new(slide.bible_translation.clone());
     let main_ref_sig = RwSignal::new(main_ref.clone());
     let trans_ref_sig = RwSignal::new(trans_ref_initial);
 
@@ -354,61 +430,16 @@ fn LiveSlideCard(slide: BibleSlideDto) -> impl IntoView {
                         >"Trigger"</button>
                     </div>
                 </header>
-                <section class="operator__slide-editor operator__slide-editor--bible">
-                    <label>
-                        <span>"Main"</span>
-                        <textarea
-                            data-role="slide-main-edit"
-                            prop:value=move || main_text_sig.get()
-                            on:input=move |ev: web_sys::Event| {
-                                let target = ev.target().and_then(|t| t.dyn_into::<web_sys::HtmlTextAreaElement>().ok());
-                                if let Some(ta) = target { main_text_sig.set(ta.value()); }
-                            }
-                        ></textarea>
-                    </label>
-                    <label>
-                        <span>"Translation"</span>
-                        <textarea
-                            data-role="slide-translation-edit"
-                            prop:value=move || trans_text_sig.get()
-                            on:input=move |ev: web_sys::Event| {
-                                let target = ev.target().and_then(|t| t.dyn_into::<web_sys::HtmlTextAreaElement>().ok());
-                                if let Some(ta) = target { trans_text_sig.set(ta.value()); }
-                            }
-                        ></textarea>
-                    </label>
-                    <div class="operator__slide-editor-grid">
-                        <label>
-                            <span>"Main Reference"</span>
-                            <input type="text"
-                                data-role="slide-main-ref"
-                                prop:value=move || main_ref_sig.get()
-                                on:input=move |ev: web_sys::Event| {
-                                    let target = ev.target().and_then(|t| t.dyn_into::<web_sys::HtmlInputElement>().ok());
-                                    if let Some(el) = target { main_ref_sig.set(el.value()); }
-                                }
-                            />
-                        </label>
-                        <label>
-                            <span>"Translation Reference"</span>
-                            <input type="text"
-                                data-role="slide-translation-ref"
-                                prop:value=move || trans_ref_sig.get()
-                                on:input=move |ev: web_sys::Event| {
-                                    let target = ev.target().and_then(|t| t.dyn_into::<web_sys::HtmlInputElement>().ok());
-                                    if let Some(el) = target { trans_ref_sig.set(el.value()); }
-                                }
-                            />
-                        </label>
-                    </div>
-                </section>
+                {bible_slide_editor_view(
+                    main_text_sig, trans_text_sig, main_ref_sig, trans_ref_sig,
+                    |_: web_sys::FocusEvent| {},
+                )}
                 {move || {
                     let main = main_text_sig.get();
                     let trans = trans_text_sig.get();
-                    let group = group_label_sig.get();
                     let mref = main_ref_sig.get();
                     let tref = trans_ref_sig.get();
-                    slide_body_view(main, trans, mref, tref, group)
+                    slide_body_view(main, trans, mref, tref)
                 }}
             </div>
         </div>
@@ -436,23 +467,20 @@ fn get_bible_field_value(doc: &web_sys::Document, slide_id: &str, field: &str) -
 }
 
 /// Save all editable fields from DOM atomically — prevents stale signal bugs.
+/// Uses the Bible-specific PATCH endpoint that updates text + metadata references.
+/// Does NOT send stage or group (server handles stage for Resolume compatibility).
 fn save_bible_slide_from_dom(pres_id: &str, slide_id: &str) {
     let doc = crate::utils::window::document();
     let main = get_bible_field_value(&doc, slide_id, "main");
     let translation = get_bible_field_value(&doc, slide_id, "translation");
-    let stage = get_bible_field_value(&doc, slide_id, "stage");
-    let group_val = get_bible_field_value(&doc, slide_id, "group");
-    let group = if group_val.trim().is_empty() {
-        None
-    } else {
-        Some(group_val.trim().to_string())
-    };
+    let main_ref = get_bible_field_value(&doc, slide_id, "main-ref");
+    let trans_ref = get_bible_field_value(&doc, slide_id, "translation-ref");
 
     let pres_id = pres_id.to_string();
     let sid = slide_id.to_string();
     leptos::task::spawn_local(async move {
         let _ =
-            pres_api::update_slide_with_group(&pres_id, &sid, &main, &translation, &stage, group)
+            bible::update_bible_slide(&pres_id, &sid, &main, &translation, &main_ref, &trans_ref)
                 .await;
     });
 }
@@ -465,16 +493,15 @@ fn save_bible_slide_from_dom(pres_id: &str, slide_id: &str) {
 fn PreparedSlideCard(slide: BibleSlideDto, index: usize) -> impl IntoView {
     let bs = use_ctx!(BibleState);
     let ctx = use_ctx!(AppContext);
-    let edit_mode = bs.edit_mode;
+    let mode = ctx.mode;
 
     let slide_id = slide.id.clone();
-    let main_ref = slide.main_reference.clone().unwrap_or_default();
+    let main_ref = slide.bible_main_reference.clone();
 
-    let main_text_sig = RwSignal::new(slide.main.clone());
-    let trans_text_sig = RwSignal::new(slide.translation.clone());
-    let group_label_sig = RwSignal::new(slide.group.clone().unwrap_or_default());
+    let main_text_sig = RwSignal::new(slide.bible_main.clone());
+    let trans_text_sig = RwSignal::new(slide.bible_translation.clone());
     let main_ref_sig = RwSignal::new(main_ref.clone());
-    let trans_ref_sig = RwSignal::new(slide.translation_reference.clone().unwrap_or_default());
+    let trans_ref_sig = RwSignal::new(slide.bible_translation_reference.clone());
 
     let on_trigger = make_trigger_handler(
         &ctx,
@@ -620,14 +647,14 @@ fn PreparedSlideCard(slide: BibleSlideDto, index: usize) -> impl IntoView {
     // Static values for read-only body view
     let main_ro = main_text_sig.get_untracked();
     let trans_ro = trans_text_sig.get_untracked();
-    let group_ro = group_label_sig.get_untracked();
     let main_ref_ro = main_ref.clone();
+    let trans_ref_ro = trans_ref_sig.get_untracked();
 
     view! {
         <div
             class="operator__slide-card operator__slide-card--bible"
             class:operator__slide-card--drag-over=is_drag_over
-            class:operator__slide-card--edit=move || edit_mode.get()
+            class:operator__slide-card--edit=move || mode.get() == "edit"
             data-role="slide-card"
             data-slide-id=slide_id.clone()
             on:dragover=on_dragover
@@ -648,7 +675,7 @@ fn PreparedSlideCard(slide: BibleSlideDto, index: usize) -> impl IntoView {
                 let on_trigger = on_trigger.clone();
                 let main_ref_trigger = main_ref.clone();
                 move || {
-                    if !edit_mode.get() {
+                    if mode.get() != "edit" {
                         Some(view! {
                             <div
                                 class="operator__slide-trigger-zone operator__slide-trigger-zone--full"
@@ -666,48 +693,15 @@ fn PreparedSlideCard(slide: BibleSlideDto, index: usize) -> impl IntoView {
                 }
             }
 
-            // Edit mode: textareas
+            // Edit mode: shared editor (main, translation, main ref, translation ref)
             {
                 let on_blur = on_field_blur.clone();
-                let on_blur2 = on_field_blur.clone();
                 move || {
-                    if edit_mode.get() {
-                        Some(view! {
-                            <section class="operator__slide-editor operator__slide-editor--bible">
-                                <label>
-                                    <span>"Main"</span>
-                                    <textarea
-                                        data-field="main"
-                                        rows="2"
-                                        prop:value=move || main_text_sig.get()
-                                        on:input=move |ev: web_sys::Event| {
-                                            let target = ev.target().and_then(|t| t.dyn_into::<web_sys::HtmlTextAreaElement>().ok());
-                                            if let Some(ta) = target { main_text_sig.set(ta.value()); }
-                                        }
-                                        on:blur={
-                                            let on_blur = on_blur.clone();
-                                            move |ev| on_blur(ev)
-                                        }
-                                    ></textarea>
-                                </label>
-                                <label>
-                                    <span>"Translation"</span>
-                                    <textarea
-                                        data-field="translation"
-                                        rows="2"
-                                        prop:value=move || trans_text_sig.get()
-                                        on:input=move |ev: web_sys::Event| {
-                                            let target = ev.target().and_then(|t| t.dyn_into::<web_sys::HtmlTextAreaElement>().ok());
-                                            if let Some(ta) = target { trans_text_sig.set(ta.value()); }
-                                        }
-                                        on:blur={
-                                            let on_blur = on_blur2.clone();
-                                            move |ev| on_blur(ev)
-                                        }
-                                    ></textarea>
-                                </label>
-                            </section>
-                        })
+                    if mode.get() == "edit" {
+                        Some(bible_slide_editor_view(
+                            main_text_sig, trans_text_sig, main_ref_sig, trans_ref_sig,
+                            on_blur.clone(),
+                        ))
                     } else {
                         None
                     }
@@ -718,11 +712,11 @@ fn PreparedSlideCard(slide: BibleSlideDto, index: usize) -> impl IntoView {
             {
                 let main = main_ro.clone();
                 let trans = trans_ro.clone();
-                let group = group_ro.clone();
                 let mref = main_ref_ro.clone();
+                let tref = trans_ref_ro.clone();
                 move || {
-                    if !edit_mode.get() {
-                        Some(slide_body_view(main.clone(), trans.clone(), mref.clone(), String::new(), group.clone()))
+                    if mode.get() != "edit" {
+                        Some(slide_body_view(main.clone(), trans.clone(), mref.clone(), tref.clone()))
                     } else {
                         None
                     }
@@ -733,7 +727,7 @@ fn PreparedSlideCard(slide: BibleSlideDto, index: usize) -> impl IntoView {
             {
                 let on_delete = on_delete.clone();
                 move || {
-                    if edit_mode.get() {
+                    if mode.get() == "edit" {
                         Some(view! {
                             <div class="operator__slide-actions">
                                 <button

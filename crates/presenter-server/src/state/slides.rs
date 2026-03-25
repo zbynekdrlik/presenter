@@ -1,6 +1,7 @@
 use presenter_core::slide::{BibleSlideMetadata, BibleSlideVerseRef, SlideMetadata};
 use presenter_core::{
-    BiblePassage, BibleTranslation, PresentationId, Slide, SlideContent, SlideId, SlideText,
+    BiblePassage, BibleTranslation, PresentationId, Slide, SlideContent, SlideGroup, SlideId,
+    SlideText,
 };
 use std::collections::HashMap;
 
@@ -78,8 +79,8 @@ pub(crate) fn compose_bible_slides(
         let content = SlideContent::new(
             SlideText::new(&main)?,
             SlideText::new(&tr)?,
-            SlideText::new(&main)?,
-            None,
+            SlideText::new(&full_reference_label)?,
+            Some(SlideGroup::new(&full_reference_label)),
         );
         let metadata = SlideMetadata::new().with_bible(BibleSlideMetadata {
             translation_code: main_translation.code.clone(),
@@ -338,5 +339,145 @@ impl AppState {
             presentation_id: presentation_id.to_string(),
         });
         Ok(slides)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use presenter_core::BibleReference;
+    use std::collections::HashMap;
+
+    fn test_translation(code: &str) -> BibleTranslation {
+        BibleTranslation {
+            code: code.to_string(),
+            name: code.to_uppercase(),
+            language: "test".to_string(),
+            show_in_dashboard: true,
+            source: None,
+        }
+    }
+
+    fn test_passage(book: &str, chapter: u16, verse: u16, text: &str) -> BiblePassage {
+        BiblePassage::new(
+            BibleReference::new(book, chapter, verse, verse).unwrap(),
+            test_translation("slk-seb"),
+            text.to_string(),
+        )
+    }
+
+    #[test]
+    fn compose_bible_slides_sets_reference_in_stage_and_group() {
+        let translation = test_translation("slk-seb");
+        let passages = vec![test_passage(
+            "Jób",
+            2,
+            7,
+            "Potom satan odišiel spred Hospodina.",
+        )];
+
+        let slides =
+            compose_bible_slides(&translation, None, &passages, &HashMap::new(), 320, 7, 7)
+                .unwrap();
+
+        assert_eq!(slides.len(), 1);
+        let slide = &slides[0];
+
+        // main = verse text (with verse number prefix)
+        assert!(
+            slide.content.main.value().contains("Potom satan"),
+            "main should contain verse text, got: {}",
+            slide.content.main.value()
+        );
+
+        // stage = reference with translation code
+        assert_eq!(
+            slide.content.stage.value(),
+            "Jób 2:7 (SEB)",
+            "stage should be the reference label"
+        );
+
+        // group = reference with translation code
+        let group = slide.content.group.as_ref().expect("group should be set");
+        assert_eq!(
+            group.name(),
+            "Jób 2:7 (SEB)",
+            "group should be the reference label"
+        );
+
+        // main must NOT contain the reference
+        assert!(
+            !slide.content.main.value().contains("Jób 2:7"),
+            "main must not contain the reference"
+        );
+    }
+
+    #[test]
+    fn compose_bible_slides_multi_verse_range_reference() {
+        let translation = test_translation("slk-seb");
+        let passages = vec![
+            test_passage("Marek", 3, 14, "Vtedy ustanovil Dvanástich."),
+            test_passage("Marek", 3, 15, "A aby mali moc vyháňať zlých duchov."),
+        ];
+
+        let slides =
+            compose_bible_slides(&translation, None, &passages, &HashMap::new(), 320, 14, 15)
+                .unwrap();
+
+        assert!(!slides.is_empty());
+        let slide = &slides[0];
+
+        // Reference should show verse range
+        assert_eq!(
+            slide.content.stage.value(),
+            "Marek 3:14-15 (SEB)",
+            "stage should show verse range reference"
+        );
+
+        let group = slide.content.group.as_ref().expect("group should be set");
+        assert_eq!(group.name(), "Marek 3:14-15 (SEB)");
+    }
+
+    #[test]
+    fn compose_bible_slides_with_secondary_translation() {
+        let main_translation = test_translation("slk-seb");
+        let secondary_translation = test_translation("eng-kjv");
+        let passages = vec![test_passage("John", 3, 16, "Lebo Boh tak miloval svet.")];
+        let mut secondary = HashMap::new();
+        secondary.insert(
+            16,
+            BiblePassage::new(
+                BibleReference::new("John", 3, 16, 16).unwrap(),
+                secondary_translation.clone(),
+                "For God so loved the world.".to_string(),
+            ),
+        );
+
+        let slides = compose_bible_slides(
+            &main_translation,
+            Some(&secondary_translation),
+            &passages,
+            &secondary,
+            320,
+            16,
+            16,
+        )
+        .unwrap();
+
+        assert_eq!(slides.len(), 1);
+        let slide = &slides[0];
+
+        // main = verse text
+        assert!(slide.content.main.value().contains("Boh tak miloval"));
+
+        // translation = secondary verse text
+        assert!(
+            slide.content.translation.value().contains("God so loved"),
+            "translation should contain secondary text, got: {}",
+            slide.content.translation.value()
+        );
+
+        // stage = main reference (NOT secondary)
+        assert_eq!(slide.content.stage.value(), "John 3:16 (SEB)");
     }
 }

@@ -493,6 +493,59 @@ const ENGLISH_EXTRA_ALIASES: &[(&str, &str)] = &[
     ("Acts", "ACT"),
 ];
 
+/// Common Slovak abbreviations used in church bulletins and pastor's notes.
+const SLOVAK_ABBREVIATIONS: &[(&str, &str)] = &[
+    ("Sk", "ACT"),
+    ("Mar", "MRK"),
+    ("Iz", "ISA"),
+    ("Luk", "LUK"),
+    ("Mat", "MAT"),
+    ("Ján", "JHN"),
+    ("Žid", "HEB"),
+    ("Rim", "ROM"),
+    ("Gal", "GAL"),
+    ("Ef", "EPH"),
+    ("Fil", "PHP"),
+    ("Kol", "COL"),
+    ("Tít", "TIT"),
+    ("Flm", "PHM"),
+    ("Žalm", "PSA"),
+    ("Prísl", "PRO"),
+    ("Jer", "JER"),
+    ("Ez", "EZK"),
+    ("Dan", "DAN"),
+    ("1Sa", "1SA"),
+    ("2Sa", "2SA"),
+    ("1Kra", "1KI"),
+    ("2Kra", "2KI"),
+    ("1Kor", "1CO"),
+    ("2Kor", "2CO"),
+    ("1Sol", "1TH"),
+    ("2Sol", "2TH"),
+    ("1Tim", "1TI"),
+    ("2Tim", "2TI"),
+    ("1Pt", "1PE"),
+    ("2Pt", "2PE"),
+    ("1Jn", "1JN"),
+    ("2Jn", "2JN"),
+    ("3Jn", "3JN"),
+    ("Zj", "REV"),
+    ("Oz", "HOS"),
+    ("Am", "AMO"),
+    ("Ab", "OBA"),
+    ("Jon", "JON"),
+    ("Mich", "MIC"),
+    ("Nah", "NAM"),
+    ("Hab", "HAB"),
+    ("Sof", "ZEP"),
+    ("Hag", "HAG"),
+    ("Zach", "ZEC"),
+    ("Mal", "MAL"),
+    ("Jób", "JOB"),
+    ("Kaz", "ECC"),
+    ("Pies", "SNG"),
+];
+
 static BOOK_NAME_ALIASES: LazyLock<HashMap<String, BibleBookCanonical>> = LazyLock::new(|| {
     let mut map: HashMap<String, BibleBookCanonical> = HashMap::new();
 
@@ -521,6 +574,12 @@ static BOOK_NAME_ALIASES: LazyLock<HashMap<String, BibleBookCanonical>> = LazyLo
     for &(alias, code) in ENGLISH_EXTRA_ALIASES {
         if let Some(meta) = canonical_book_by_code(code) {
             register_alias_variants(&mut map, alias, meta);
+        }
+    }
+
+    for &(alias, code) in SLOVAK_ABBREVIATIONS {
+        if let Some(meta) = canonical_book_by_code(code) {
+            register_alias(&mut map, alias, meta);
         }
     }
 

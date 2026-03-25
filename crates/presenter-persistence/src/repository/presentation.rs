@@ -1,4 +1,4 @@
-use super::util::{parse_uuid, to_domain_slide, RepositoryError};
+use super::util::{build_slide_active_model, parse_uuid, to_domain_slide, RepositoryError};
 use super::Repository;
 use crate::entities::{presentation as presentation_entity, slide as slide_entity};
 use anyhow::anyhow;
@@ -47,29 +47,9 @@ impl Repository {
         };
 
         for (index, slide) in slide_list.iter().enumerate() {
-            slide_entity::Entity::insert(slide_entity::ActiveModel {
-                id: Set(slide.id.to_string()),
-                presentation_id: Set(presentation_uuid.to_string()),
-                position: Set(index as i32),
-                main_text: Set(slide.content.main.value().to_owned()),
-                main_text_search: Set(fold_query(slide.content.main.value())),
-                translation_text: Set(slide.content.translation.value().to_owned()),
-                translation_text_search: Set(fold_query(slide.content.translation.value())),
-                stage_text: Set(slide.content.stage.value().to_owned()),
-                stage_text_search: Set(fold_query(slide.content.stage.value())),
-                group_name: Set(slide
-                    .content
-                    .group
-                    .as_ref()
-                    .map(|group| group.name().to_owned())),
-                created_at: Set(Utc::now().into()),
-                metadata_json: Set(slide
-                    .metadata
-                    .as_ref()
-                    .and_then(|m| serde_json::to_string(m).ok())),
-            })
-            .exec(&txn)
-            .await?;
+            let pres_id_str = presentation_uuid.to_string();
+            let active = build_slide_active_model(slide, &pres_id_str, index as i32);
+            slide_entity::Entity::insert(active).exec(&txn).await?;
         }
 
         txn.commit().await?;
@@ -199,34 +179,34 @@ impl Repository {
         slide_id: SlideId,
         content: &SlideContent,
     ) -> anyhow::Result<()> {
-        let main_text = content.main.value().to_owned();
-        let translation_text = content.translation.value().to_owned();
-        let stage_text = content.stage.value().to_owned();
-        let main_search = fold_query(content.main.value());
-        let translation_search = fold_query(content.translation.value());
-        let stage_search = fold_query(content.stage.value());
-
+        // Worship slide update (no metadata change)
         let result = slide_entity::Entity::update_many()
-            .col_expr(slide_entity::Column::MainText, Expr::value(main_text))
             .col_expr(
-                slide_entity::Column::MainTextSearch,
-                Expr::value(main_search),
+                slide_entity::Column::WorshipMain,
+                Expr::value(content.main.value().to_owned()),
             )
             .col_expr(
-                slide_entity::Column::TranslationText,
-                Expr::value(translation_text),
+                slide_entity::Column::WorshipMainSearch,
+                Expr::value(fold_query(content.main.value())),
             )
             .col_expr(
-                slide_entity::Column::TranslationTextSearch,
-                Expr::value(translation_search),
-            )
-            .col_expr(slide_entity::Column::StageText, Expr::value(stage_text))
-            .col_expr(
-                slide_entity::Column::StageTextSearch,
-                Expr::value(stage_search),
+                slide_entity::Column::WorshipTranslate,
+                Expr::value(content.translation.value().to_owned()),
             )
             .col_expr(
-                slide_entity::Column::GroupName,
+                slide_entity::Column::WorshipTranslateSearch,
+                Expr::value(fold_query(content.translation.value())),
+            )
+            .col_expr(
+                slide_entity::Column::WorshipStage,
+                Expr::value(content.stage.value().to_owned()),
+            )
+            .col_expr(
+                slide_entity::Column::WorshipStageSearch,
+                Expr::value(fold_query(content.stage.value())),
+            )
+            .col_expr(
+                slide_entity::Column::WorshipGroup,
                 Expr::value(content.group.as_ref().map(|group| group.name().to_owned())),
             )
             .filter(slide_entity::Column::Id.eq(slide_id.to_string()))
@@ -253,45 +233,87 @@ impl Repository {
         content: &SlideContent,
         metadata: Option<&presenter_core::slide::SlideMetadata>,
     ) -> anyhow::Result<()> {
-        let main_text = content.main.value().to_owned();
-        let translation_text = content.translation.value().to_owned();
-        let stage_text = content.stage.value().to_owned();
-        let main_search = fold_query(content.main.value());
-        let translation_search = fold_query(content.translation.value());
-        let stage_search = fold_query(content.stage.value());
+        let is_bible = metadata.and_then(|m| m.bible.as_ref()).is_some();
         let metadata_json = metadata.map(|m| serde_json::to_string(m)).transpose()?;
 
-        let result = slide_entity::Entity::update_many()
-            .col_expr(slide_entity::Column::MainText, Expr::value(main_text))
-            .col_expr(
-                slide_entity::Column::MainTextSearch,
-                Expr::value(main_search),
-            )
-            .col_expr(
-                slide_entity::Column::TranslationText,
-                Expr::value(translation_text),
-            )
-            .col_expr(
-                slide_entity::Column::TranslationTextSearch,
-                Expr::value(translation_search),
-            )
-            .col_expr(slide_entity::Column::StageText, Expr::value(stage_text))
-            .col_expr(
-                slide_entity::Column::StageTextSearch,
-                Expr::value(stage_search),
-            )
-            .col_expr(
-                slide_entity::Column::GroupName,
-                Expr::value(content.group.as_ref().map(|group| group.name().to_owned())),
-            )
-            .col_expr(
-                slide_entity::Column::MetadataJson,
-                Expr::value(metadata_json),
-            )
-            .filter(slide_entity::Column::Id.eq(slide_id.to_string()))
-            .filter(slide_entity::Column::PresentationId.eq(presentation_id.to_string()))
-            .exec(&self.db)
-            .await?;
+        let result = if is_bible {
+            slide_entity::Entity::update_many()
+                .col_expr(
+                    slide_entity::Column::BibleMain,
+                    Expr::value(content.main.value().to_owned()),
+                )
+                .col_expr(
+                    slide_entity::Column::BibleMainSearch,
+                    Expr::value(fold_query(content.main.value())),
+                )
+                .col_expr(
+                    slide_entity::Column::BibleTranslation,
+                    Expr::value(content.translation.value().to_owned()),
+                )
+                .col_expr(
+                    slide_entity::Column::BibleTranslationSearch,
+                    Expr::value(fold_query(content.translation.value())),
+                )
+                .col_expr(
+                    slide_entity::Column::BibleMainReference,
+                    Expr::value(content.stage.value().to_owned()),
+                )
+                .col_expr(
+                    slide_entity::Column::BibleTranslationReference,
+                    Expr::value(
+                        metadata
+                            .and_then(|m| m.bible.as_ref())
+                            .and_then(|b| b.translation_reference_label.clone())
+                            .unwrap_or_default(),
+                    ),
+                )
+                .col_expr(
+                    slide_entity::Column::MetadataJson,
+                    Expr::value(metadata_json),
+                )
+                .filter(slide_entity::Column::Id.eq(slide_id.to_string()))
+                .filter(slide_entity::Column::PresentationId.eq(presentation_id.to_string()))
+                .exec(&self.db)
+                .await?
+        } else {
+            slide_entity::Entity::update_many()
+                .col_expr(
+                    slide_entity::Column::WorshipMain,
+                    Expr::value(content.main.value().to_owned()),
+                )
+                .col_expr(
+                    slide_entity::Column::WorshipMainSearch,
+                    Expr::value(fold_query(content.main.value())),
+                )
+                .col_expr(
+                    slide_entity::Column::WorshipTranslate,
+                    Expr::value(content.translation.value().to_owned()),
+                )
+                .col_expr(
+                    slide_entity::Column::WorshipTranslateSearch,
+                    Expr::value(fold_query(content.translation.value())),
+                )
+                .col_expr(
+                    slide_entity::Column::WorshipStage,
+                    Expr::value(content.stage.value().to_owned()),
+                )
+                .col_expr(
+                    slide_entity::Column::WorshipStageSearch,
+                    Expr::value(fold_query(content.stage.value())),
+                )
+                .col_expr(
+                    slide_entity::Column::WorshipGroup,
+                    Expr::value(content.group.as_ref().map(|group| group.name().to_owned())),
+                )
+                .col_expr(
+                    slide_entity::Column::MetadataJson,
+                    Expr::value(metadata_json),
+                )
+                .filter(slide_entity::Column::Id.eq(slide_id.to_string()))
+                .filter(slide_entity::Column::PresentationId.eq(presentation_id.to_string()))
+                .exec(&self.db)
+                .await?
+        };
 
         if result.rows_affected == 0 {
             return Err(anyhow!(
@@ -318,27 +340,8 @@ impl Repository {
             .await?;
 
         for (index, slide) in slides.iter().enumerate() {
-            let active = slide_entity::ActiveModel {
-                id: Set(slide.id.to_string()),
-                presentation_id: Set(presentation_id.to_string()),
-                position: Set(index as i32),
-                main_text: Set(slide.content.main.value().to_owned()),
-                main_text_search: Set(fold_query(slide.content.main.value())),
-                translation_text: Set(slide.content.translation.value().to_owned()),
-                translation_text_search: Set(fold_query(slide.content.translation.value())),
-                stage_text: Set(slide.content.stage.value().to_owned()),
-                stage_text_search: Set(fold_query(slide.content.stage.value())),
-                group_name: Set(slide
-                    .content
-                    .group
-                    .as_ref()
-                    .map(|group| group.name().to_owned())),
-                created_at: Set(Utc::now().into()),
-                metadata_json: Set(slide
-                    .metadata
-                    .as_ref()
-                    .and_then(|m| serde_json::to_string(m).ok())),
-            };
+            let pres_id_str = presentation_id.to_string();
+            let active = build_slide_active_model(slide, &pres_id_str, index as i32);
             slide_entity::Entity::insert(active).exec(&txn).await?;
         }
 

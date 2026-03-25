@@ -14,6 +14,7 @@ use crate::components::search::SearchResults;
 use crate::components::slide_list::SlideList;
 use crate::components::timer_panel::TimerPanel;
 use crate::components::toast::Toast;
+use crate::pages::ai::AiPage;
 use crate::pages::bible::BiblePage;
 use crate::state::operator::OperatorState;
 use crate::state::AppContext;
@@ -182,6 +183,9 @@ pub fn OperatorPage(#[prop(default = String::new())] initial_view: String) -> im
             <section class="operator__panel operator__panel--timers" data-view-panel="timers">
                 <TimerPanel />
             </section>
+            <section class="operator__panel operator__panel--ai" data-view-panel="ai">
+                <AiPage />
+            </section>
             <section class="operator__panel operator__panel--settings" data-view-panel="settings">
                 <iframe src="/ui/settings" title="Settings" class="operator__settings-frame"></iframe>
             </section>
@@ -284,6 +288,7 @@ fn setup_ws_dispatch(last_event: ReadSignal<Option<LiveEvent>>, ctx: &AppContext
     let selected_presentation = ctx.selected_presentation;
     let slides_cache = ctx.slides_cache;
     let active_bible_broadcast = ctx.active_bible_broadcast;
+    let bible_presentations_version = ctx.bible_presentations_version;
 
     Effect::new(move || {
         if let Some(event) = last_event.get() {
@@ -337,6 +342,9 @@ fn setup_ws_dispatch(last_event: ReadSignal<Option<LiveEvent>>, ctx: &AppContext
                 }
                 LiveEvent::BibleCleared => {
                     active_bible_broadcast.set(None);
+                }
+                LiveEvent::BibleSlidesChanged { .. } => {
+                    bible_presentations_version.update(|v| *v += 1);
                 }
                 LiveEvent::BiblePreferencesChanged { character_limit } => {
                     // Update character limit in real-time when changed by another client
