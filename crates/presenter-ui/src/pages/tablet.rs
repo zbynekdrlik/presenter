@@ -323,8 +323,11 @@ fn SlideList() -> impl IntoView {
             let mut group_index: usize = 0;
 
             slide_list.into_iter().map(|slide| {
-                let effective_ref = slide.main_reference.clone()
-                    .filter(|r| !r.is_empty());
+                let effective_ref = if slide.bible_main_reference.is_empty() {
+                    None
+                } else {
+                    Some(slide.bible_main_reference.clone())
+                };
                 let is_new_group = effective_ref.as_deref() != last_reference.as_deref();
                 if is_new_group && last_reference.is_some() {
                     group_index += 1;
@@ -344,13 +347,9 @@ fn SlideList() -> impl IntoView {
 fn TabletSlideCard(slide: BibleSlideDto, is_light: bool, is_group_start: bool) -> impl IntoView {
     let ctx = use_ctx!(TabletContext);
     let slide_id = slide.id.clone();
-    let main_ref = slide
-        .main_reference
-        .clone()
-        .filter(|r| !r.is_empty())
-        .unwrap_or_default();
-    let main_text = slide.main.clone();
-    let translation_text = slide.translation.clone();
+    let main_ref = slide.bible_main_reference.clone();
+    let main_text = slide.bible_main.clone();
+    let translation_text = slide.bible_translation.clone();
     let is_loading = RwSignal::new(false);
 
     let is_active = {

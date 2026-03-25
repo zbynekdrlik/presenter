@@ -14,7 +14,9 @@ use sea_orm::{
 use std::collections::HashMap;
 use tracing::instrument;
 
-use super::util::{parse_uuid, sanitize_like_input, to_domain_slide, RepositoryError};
+use super::util::{
+    build_slide_active_model, parse_uuid, sanitize_like_input, to_domain_slide, RepositoryError,
+};
 use super::Repository;
 
 impl Repository {
@@ -47,23 +49,8 @@ impl Repository {
                 .await?;
 
             for slide in &presentation.slides {
-                let slide_model = slide_entity::ActiveModel {
-                    id: Set(slide.id.to_string()),
-                    presentation_id: Set(presentation.id.to_string()),
-                    position: Set(slide.order as i32),
-                    main_text: Set(slide.content.main.value().to_owned()),
-                    main_text_search: Set(fold_query(slide.content.main.value())),
-                    translation_text: Set(slide.content.translation.value().to_owned()),
-                    translation_text_search: Set(fold_query(slide.content.translation.value())),
-                    stage_text: Set(slide.content.stage.value().to_owned()),
-                    stage_text_search: Set(fold_query(slide.content.stage.value())),
-                    group_name: Set(slide.content.group.as_ref().map(|g| g.name().to_owned())),
-                    created_at: Set(Utc::now().into()),
-                    metadata_json: Set(slide
-                        .metadata
-                        .as_ref()
-                        .and_then(|m| serde_json::to_string(m).ok())),
-                };
+                let pres_id_str = presentation.id.to_string();
+                let slide_model = build_slide_active_model(slide, &pres_id_str, slide.order as i32);
                 slide_entity::Entity::insert(slide_model).exec(&txn).await?;
             }
         }

@@ -44,16 +44,16 @@ test("append slides to Bible presentation increases slide count", async ({
       data: {
         slides: [
           {
-            main: "For God so loved the world",
-            translation: "Neboť Bůh tak miloval svět",
-            stage: "John 3:16",
-            group: "Verse 16",
+            bibleMain: "For God so loved the world",
+            bibleTranslation: "Neboť Bůh tak miloval svět",
+            bibleMainReference: "John 3:16",
+            bibleTranslationReference: "",
           },
           {
-            main: "that he gave his one and only Son",
-            translation: "že dal svého jediného Syna",
-            stage: "John 3:16b",
-            group: "Verse 16",
+            bibleMain: "that he gave his one and only Son",
+            bibleTranslation: "že dal svého jediného Syna",
+            bibleMainReference: "John 3:16b",
+            bibleTranslationReference: "",
           },
         ],
       },

@@ -145,28 +145,81 @@ impl MigrationTrait for Migration {
                             .not_null(),
                     )
                     .col(ColumnDef::new(Slides::Position).integer().not_null())
-                    .col(ColumnDef::new(Slides::MainText).text().not_null())
+                    // Worship-specific columns
                     .col(
-                        ColumnDef::new(Slides::MainTextSearch)
+                        ColumnDef::new(Slides::WorshipMain)
                             .text()
                             .not_null()
                             .default(""),
                     )
-                    .col(ColumnDef::new(Slides::TranslationText).text().not_null())
                     .col(
-                        ColumnDef::new(Slides::TranslationTextSearch)
+                        ColumnDef::new(Slides::WorshipMainSearch)
                             .text()
                             .not_null()
                             .default(""),
                     )
-                    .col(ColumnDef::new(Slides::StageText).text().not_null())
                     .col(
-                        ColumnDef::new(Slides::StageTextSearch)
+                        ColumnDef::new(Slides::WorshipTranslate)
                             .text()
                             .not_null()
                             .default(""),
                     )
-                    .col(ColumnDef::new(Slides::GroupName).string().null())
+                    .col(
+                        ColumnDef::new(Slides::WorshipTranslateSearch)
+                            .text()
+                            .not_null()
+                            .default(""),
+                    )
+                    .col(
+                        ColumnDef::new(Slides::WorshipStage)
+                            .text()
+                            .not_null()
+                            .default(""),
+                    )
+                    .col(
+                        ColumnDef::new(Slides::WorshipStageSearch)
+                            .text()
+                            .not_null()
+                            .default(""),
+                    )
+                    .col(ColumnDef::new(Slides::WorshipGroup).string().null())
+                    // Bible-specific columns
+                    .col(
+                        ColumnDef::new(Slides::BibleMain)
+                            .text()
+                            .not_null()
+                            .default(""),
+                    )
+                    .col(
+                        ColumnDef::new(Slides::BibleMainSearch)
+                            .text()
+                            .not_null()
+                            .default(""),
+                    )
+                    .col(
+                        ColumnDef::new(Slides::BibleTranslation)
+                            .text()
+                            .not_null()
+                            .default(""),
+                    )
+                    .col(
+                        ColumnDef::new(Slides::BibleTranslationSearch)
+                            .text()
+                            .not_null()
+                            .default(""),
+                    )
+                    .col(
+                        ColumnDef::new(Slides::BibleMainReference)
+                            .text()
+                            .not_null()
+                            .default(""),
+                    )
+                    .col(
+                        ColumnDef::new(Slides::BibleTranslationReference)
+                            .text()
+                            .not_null()
+                            .default(""),
+                    )
                     .col(ColumnDef::new(Slides::MetadataJson).text().null())
                     .col(
                         ColumnDef::new(Slides::CreatedAt)
@@ -933,13 +986,21 @@ enum Slides {
     Id,
     PresentationId,
     Position,
-    MainText,
-    MainTextSearch,
-    TranslationText,
-    TranslationTextSearch,
-    StageText,
-    StageTextSearch,
-    GroupName,
+    // Worship columns
+    WorshipMain,
+    WorshipMainSearch,
+    WorshipTranslate,
+    WorshipTranslateSearch,
+    WorshipStage,
+    WorshipStageSearch,
+    WorshipGroup,
+    // Bible columns
+    BibleMain,
+    BibleMainSearch,
+    BibleTranslation,
+    BibleTranslationSearch,
+    BibleMainReference,
+    BibleTranslationReference,
     MetadataJson,
     CreatedAt,
 }

@@ -247,17 +247,21 @@ impl Repository {
         let mut slide_condition = Condition::any();
         if !ctx.trimmed.is_empty() {
             slide_condition = slide_condition
-                .add(slide_entity::Column::MainText.contains(&ctx.trimmed))
-                .add(slide_entity::Column::TranslationText.contains(&ctx.trimmed))
-                .add(slide_entity::Column::StageText.contains(&ctx.trimmed));
+                .add(slide_entity::Column::WorshipMain.contains(&ctx.trimmed))
+                .add(slide_entity::Column::WorshipTranslate.contains(&ctx.trimmed))
+                .add(slide_entity::Column::WorshipStage.contains(&ctx.trimmed))
+                .add(slide_entity::Column::BibleMain.contains(&ctx.trimmed))
+                .add(slide_entity::Column::BibleTranslation.contains(&ctx.trimmed));
         }
         if ctx.has_tokens {
             let mut token_condition = Condition::all();
             for token in &ctx.tokens {
                 let per_token = Condition::any()
-                    .add(slide_entity::Column::MainTextSearch.contains(token.clone()))
-                    .add(slide_entity::Column::TranslationTextSearch.contains(token.clone()))
-                    .add(slide_entity::Column::StageTextSearch.contains(token.clone()));
+                    .add(slide_entity::Column::WorshipMainSearch.contains(token.clone()))
+                    .add(slide_entity::Column::WorshipTranslateSearch.contains(token.clone()))
+                    .add(slide_entity::Column::WorshipStageSearch.contains(token.clone()))
+                    .add(slide_entity::Column::BibleMainSearch.contains(token.clone()))
+                    .add(slide_entity::Column::BibleTranslationSearch.contains(token.clone()));
                 token_condition = token_condition.add(per_token);
             }
             slide_condition = slide_condition.add(token_condition);
@@ -320,63 +324,89 @@ impl Repository {
             let presentation_id = PresentationId::from_uuid(parse_uuid(&presentation_model.id)?);
             let slide_id = SlideId::from_uuid(parse_uuid(&slide_model.id)?);
 
+            // Determine effective text fields (worship or Bible)
+            let is_bible = !slide_model.bible_main.is_empty();
+            let (eff_main, eff_main_search) = if is_bible {
+                (
+                    slide_model.bible_main.as_str(),
+                    slide_model.bible_main_search.as_str(),
+                )
+            } else {
+                (
+                    slide_model.worship_main.as_str(),
+                    slide_model.worship_main_search.as_str(),
+                )
+            };
+            let (eff_translation, eff_translation_search) = if is_bible {
+                (
+                    slide_model.bible_translation.as_str(),
+                    slide_model.bible_translation_search.as_str(),
+                )
+            } else {
+                (
+                    slide_model.worship_translate.as_str(),
+                    slide_model.worship_translate_search.as_str(),
+                )
+            };
+            let (eff_stage, eff_stage_search) = if is_bible {
+                ("", "")
+            } else {
+                (
+                    slide_model.worship_stage.as_str(),
+                    slide_model.worship_stage_search.as_str(),
+                )
+            };
+
             if ctx.has_tokens {
                 let combined = fold_query(&format!(
                     "{} {} {} {} {}",
-                    library_name,
-                    presentation_model.name,
-                    slide_model.main_text,
-                    slide_model.translation_text,
-                    slide_model.stage_text
+                    library_name, presentation_model.name, eff_main, eff_translation, eff_stage
                 ));
                 if !ctx.tokens.iter().all(|token| combined.contains(token)) {
                     continue;
                 }
             }
 
-            let main_lower = slide_model.main_text.to_lowercase();
-            let translation_lower = slide_model.translation_text.to_lowercase();
-            let stage_lower = slide_model.stage_text.to_lowercase();
+            let main_lower = eff_main.to_lowercase();
+            let translation_lower = eff_translation.to_lowercase();
+            let stage_lower = eff_stage.to_lowercase();
 
             let folded_ref = ctx.folded.as_str();
             let main_matches = (!ctx.query_lower.is_empty()
                 && main_lower.contains(&ctx.query_lower))
-                || (ctx.has_folded && slide_model.main_text_search.contains(folded_ref))
+                || (ctx.has_folded && eff_main_search.contains(folded_ref))
                 || (ctx.has_tokens
                     && ctx
                         .tokens
                         .iter()
-                        .any(|token| slide_model.main_text_search.contains(token)));
+                        .any(|token| eff_main_search.contains(token)));
             let translation_matches = (!ctx.query_lower.is_empty()
                 && translation_lower.contains(&ctx.query_lower))
-                || (ctx.has_folded && slide_model.translation_text_search.contains(folded_ref))
+                || (ctx.has_folded && eff_translation_search.contains(folded_ref))
                 || (ctx.has_tokens
                     && ctx
                         .tokens
                         .iter()
-                        .any(|token| slide_model.translation_text_search.contains(token)));
-            let stage_matches = (!ctx.query_lower.is_empty()
-                && stage_lower.contains(&ctx.query_lower))
-                || (ctx.has_folded && slide_model.stage_text_search.contains(folded_ref))
-                || (ctx.has_tokens
-                    && ctx
-                        .tokens
-                        .iter()
-                        .any(|token| slide_model.stage_text_search.contains(token)));
+                        .any(|token| eff_translation_search.contains(token)));
+            let stage_matches = !eff_stage.is_empty()
+                && ((!ctx.query_lower.is_empty() && stage_lower.contains(&ctx.query_lower))
+                    || (ctx.has_folded && eff_stage_search.contains(folded_ref))
+                    || (ctx.has_tokens
+                        && ctx
+                            .tokens
+                            .iter()
+                            .any(|token| eff_stage_search.contains(token))));
 
             if !main_matches && !translation_matches && !stage_matches {
                 continue;
             }
 
             let (match_field, source_text) = if main_matches {
-                (SearchMatchField::MainText, slide_model.main_text.as_str())
+                (SearchMatchField::MainText, eff_main)
             } else if translation_matches {
-                (
-                    SearchMatchField::TranslationText,
-                    slide_model.translation_text.as_str(),
-                )
+                (SearchMatchField::TranslationText, eff_translation)
             } else {
-                (SearchMatchField::StageText, slide_model.stage_text.as_str())
+                (SearchMatchField::StageText, eff_stage)
             };
 
             let snippet = build_snippet(source_text, &ctx.trimmed);

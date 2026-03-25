@@ -75,13 +75,11 @@ test("tablet shows Bible presentations, renders slides, and triggers passages", 
   expect(resolveResponse.ok()).toBeTruthy();
   const resolved = await resolveResponse.json();
   const resolvedSlides: Array<{
-    main: string;
-    translation: string;
-    stage: string;
-    group?: string;
+    bibleMain: string;
+    bibleTranslation: string;
     metadata?: any;
-    mainReference?: string;
-    translationReference?: string;
+    bibleMainReference: string;
+    bibleTranslationReference: string;
   }> = resolved.slides;
   expect(resolvedSlides.length).toBeGreaterThan(0);
 
@@ -94,10 +92,10 @@ test("tablet shows Bible presentations, renders slides, and triggers passages", 
     {
       data: {
         slides: resolvedSlides.map((slide) => ({
-          main: slide.main,
-          translation: slide.translation,
-          stage: slide.stage,
-          group: slide.group || null,
+          bibleMain: slide.bibleMain,
+          bibleTranslation: slide.bibleTranslation,
+          bibleMainReference: slide.bibleMainReference,
+          bibleTranslationReference: slide.bibleTranslationReference,
           metadata: slide.metadata || null,
         })),
       },
@@ -154,14 +152,14 @@ test("tablet shows Bible presentations, renders slides, and triggers passages", 
 
   // Verify first slide content
   const firstCard = slideCards.first();
-  if (firstSlide.main) {
+  if (firstSlide.bibleMain) {
     await expect(firstCard.locator(".tablet-slide__main")).toContainText(
-      firstSlide.main.substring(0, 20),
+      firstSlide.bibleMain.substring(0, 20),
     );
   }
-  if (firstSlide.mainReference) {
+  if (firstSlide.bibleMainReference) {
     await expect(firstCard.locator(".tablet-slide__ref")).toContainText(
-      firstSlide.mainReference,
+      firstSlide.bibleMainReference,
     );
   }
 
@@ -257,16 +255,16 @@ test("tablet handles slides without Bible metadata gracefully", async ({
       data: {
         slides: [
           {
-            main: "For God so loved the world",
-            translation: "",
-            stage: "For God so loved the world",
-            group: null,
+            bibleMain: "For God so loved the world",
+            bibleTranslation: "",
+            bibleMainReference: "For God so loved the world",
+            bibleTranslationReference: "",
           },
           {
-            main: "That he gave his only begotten Son",
-            translation: "Secondary text here",
-            stage: "That he gave his only begotten Son",
-            group: null,
+            bibleMain: "That he gave his only begotten Son",
+            bibleTranslation: "Secondary text here",
+            bibleMainReference: "That he gave his only begotten Son",
+            bibleTranslationReference: "",
           },
         ],
       },
@@ -507,9 +505,10 @@ test("tablet switches between multiple presentations", async ({
       data: {
         slides: [
           {
-            main: "First presentation slide one",
-            translation: "",
-            stage: "First presentation slide one",
+            bibleMain: "First presentation slide one",
+            bibleTranslation: "",
+            bibleMainReference: "First presentation slide one",
+            bibleTranslationReference: "",
           },
         ],
       },
@@ -523,14 +522,16 @@ test("tablet switches between multiple presentations", async ({
       data: {
         slides: [
           {
-            main: "Second presentation slide one",
-            translation: "",
-            stage: "Second presentation slide one",
+            bibleMain: "Second presentation slide one",
+            bibleTranslation: "",
+            bibleMainReference: "Second presentation slide one",
+            bibleTranslationReference: "",
           },
           {
-            main: "Second presentation slide two",
-            translation: "",
-            stage: "Second presentation slide two",
+            bibleMain: "Second presentation slide two",
+            bibleTranslation: "",
+            bibleMainReference: "Second presentation slide two",
+            bibleTranslationReference: "",
           },
         ],
       },

@@ -52,10 +52,10 @@ fn AddEmptySlideButton() -> impl IntoView {
         let toast_variant = ctx.toast_variant;
 
         let input = bible::AppendSlideInput {
-            main: String::new(),
-            translation: String::new(),
-            stage: String::new(),
-            group: None,
+            bible_main: String::new(),
+            bible_translation: String::new(),
+            bible_main_reference: String::new(),
+            bible_translation_reference: String::new(),
             metadata: None,
         };
 
@@ -349,12 +349,11 @@ fn LiveSlideCard(slide: BibleSlideDto) -> impl IntoView {
     let mode = ctx.mode;
 
     let slide_id = slide.id.clone();
-    let main_ref = slide.main_reference.clone().unwrap_or_default();
-    let trans_ref_initial = slide.translation_reference.clone().unwrap_or_default();
+    let main_ref = slide.bible_main_reference.clone();
+    let trans_ref_initial = slide.bible_translation_reference.clone();
 
-    let main_text_sig = RwSignal::new(slide.main.clone());
-    let trans_text_sig = RwSignal::new(slide.translation.clone());
-    let group_label_sig = RwSignal::new(slide.group.clone().unwrap_or_default());
+    let main_text_sig = RwSignal::new(slide.bible_main.clone());
+    let trans_text_sig = RwSignal::new(slide.bible_translation.clone());
     let main_ref_sig = RwSignal::new(main_ref.clone());
     let trans_ref_sig = RwSignal::new(trans_ref_initial);
 
@@ -497,14 +496,12 @@ fn PreparedSlideCard(slide: BibleSlideDto, index: usize) -> impl IntoView {
     let mode = ctx.mode;
 
     let slide_id = slide.id.clone();
-    // Use main_reference from metadata only (no stage fallback)
-    let main_ref = slide.main_reference.clone().unwrap_or_default();
+    let main_ref = slide.bible_main_reference.clone();
 
-    let main_text_sig = RwSignal::new(slide.main.clone());
-    let trans_text_sig = RwSignal::new(slide.translation.clone());
-    let group_label_sig = RwSignal::new(slide.group.clone().unwrap_or_default());
+    let main_text_sig = RwSignal::new(slide.bible_main.clone());
+    let trans_text_sig = RwSignal::new(slide.bible_translation.clone());
     let main_ref_sig = RwSignal::new(main_ref.clone());
-    let trans_ref_sig = RwSignal::new(slide.translation_reference.clone().unwrap_or_default());
+    let trans_ref_sig = RwSignal::new(slide.bible_translation_reference.clone());
 
     let on_trigger = make_trigger_handler(
         &ctx,
@@ -650,7 +647,6 @@ fn PreparedSlideCard(slide: BibleSlideDto, index: usize) -> impl IntoView {
     // Static values for read-only body view
     let main_ro = main_text_sig.get_untracked();
     let trans_ro = trans_text_sig.get_untracked();
-    let group_ro = group_label_sig.get_untracked();
     let main_ref_ro = main_ref.clone();
     let trans_ref_ro = trans_ref_sig.get_untracked();
 

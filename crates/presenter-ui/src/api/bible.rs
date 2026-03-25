@@ -251,13 +251,11 @@ pub struct ResolveResponse {
 pub struct BibleSlideDto {
     pub id: String,
     pub order: u32,
-    pub main: String,
-    pub translation: String,
-    pub stage: String,
-    pub group: Option<String>,
+    pub bible_main: String,
+    pub bible_translation: String,
     pub metadata: Option<BibleSlideMetadataDto>,
-    pub main_reference: Option<String>,
-    pub translation_reference: Option<String>,
+    pub bible_main_reference: String,
+    pub bible_translation_reference: String,
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
@@ -366,11 +364,12 @@ pub struct AppendSlidesRequest {
 #[derive(Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct AppendSlideInput {
-    pub main: String,
-    pub translation: String,
-    pub stage: String,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub group: Option<String>,
+    pub bible_main: String,
+    pub bible_translation: String,
+    #[serde(default)]
+    pub bible_main_reference: String,
+    #[serde(default)]
+    pub bible_translation_reference: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub metadata: Option<BibleSlideMetadataDto>,
 }
@@ -394,27 +393,27 @@ pub async fn append_presentation_slides(
 pub async fn update_bible_slide(
     presentation_id: &str,
     slide_id: &str,
-    main: &str,
-    translation: &str,
-    main_reference: &str,
-    translation_reference: &str,
+    bible_main: &str,
+    bible_translation: &str,
+    bible_main_reference: &str,
+    bible_translation_reference: &str,
 ) -> Result<BibleSlideDto, ApiError> {
     #[derive(serde::Serialize)]
     #[serde(rename_all = "camelCase")]
     struct UpdateBibleSlideRequest {
-        main: String,
-        translation: String,
-        main_reference: String,
-        translation_reference: String,
+        bible_main: String,
+        bible_translation: String,
+        bible_main_reference: String,
+        bible_translation_reference: String,
     }
 
     super::patch_json(
         &format!("/bible/presentations/{presentation_id}/slides/{slide_id}"),
         &UpdateBibleSlideRequest {
-            main: main.to_string(),
-            translation: translation.to_string(),
-            main_reference: main_reference.to_string(),
-            translation_reference: translation_reference.to_string(),
+            bible_main: bible_main.to_string(),
+            bible_translation: bible_translation.to_string(),
+            bible_main_reference: bible_main_reference.to_string(),
+            bible_translation_reference: bible_translation_reference.to_string(),
         },
     )
     .await

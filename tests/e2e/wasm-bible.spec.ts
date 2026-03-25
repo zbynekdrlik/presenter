@@ -834,9 +834,10 @@ test.describe("WASM Operator Bible Tests", () => {
           body: JSON.stringify({
             slides: [
               {
-                main: "Test verse text",
-                translation: "Translated text",
-                stage: "Gen 1:1",
+                bibleMain: "Test verse text",
+                bibleTranslation: "Translated text",
+                bibleMainReference: "Gen 1:1",
+                bibleTranslationReference: "",
               },
             ],
           }),
@@ -967,7 +968,12 @@ test.describe("WASM Operator Bible Tests", () => {
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({
             slides: [
-              { main: "Match test", translation: "Trans", stage: "Ref" },
+              {
+                bibleMain: "Match test",
+                bibleTranslation: "Trans",
+                bibleMainReference: "Ref",
+                bibleTranslationReference: "",
+              },
             ],
           }),
         });
@@ -1045,7 +1051,12 @@ test.describe("WASM Operator Bible Tests", () => {
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({
             slides: [
-              { main: "Test text", translation: "", stage: "Original Ref" },
+              {
+                bibleMain: "Test text",
+                bibleTranslation: "",
+                bibleMainReference: "Original Ref",
+                bibleTranslationReference: "",
+              },
             ],
           }),
         });
@@ -2020,9 +2031,24 @@ test.describe("WASM Operator Bible Tests", () => {
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({
             slides: [
-              { main: "Slide 1", translation: "", stage: "" },
-              { main: "Slide 2", translation: "", stage: "" },
-              { main: "Slide 3", translation: "", stage: "" },
+              {
+                bibleMain: "Slide 1",
+                bibleTranslation: "",
+                bibleMainReference: "",
+                bibleTranslationReference: "",
+              },
+              {
+                bibleMain: "Slide 2",
+                bibleTranslation: "",
+                bibleMainReference: "",
+                bibleTranslationReference: "",
+              },
+              {
+                bibleMain: "Slide 3",
+                bibleTranslation: "",
+                bibleMainReference: "",
+                bibleTranslationReference: "",
+              },
             ],
           }),
         });
@@ -2123,8 +2149,18 @@ test.describe("WASM Operator Bible Tests", () => {
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({
             slides: [
-              { main: "First", translation: "", stage: "" },
-              { main: "Second", translation: "", stage: "" },
+              {
+                bibleMain: "First",
+                bibleTranslation: "",
+                bibleMainReference: "",
+                bibleTranslationReference: "",
+              },
+              {
+                bibleMain: "Second",
+                bibleTranslation: "",
+                bibleMainReference: "",
+                bibleTranslationReference: "",
+              },
             ],
           }),
         });
