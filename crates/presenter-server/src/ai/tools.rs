@@ -702,3 +702,205 @@ async fn bible_metadata_for_presentation(
         translation_reference_label: None,
     }))
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::state::AppState;
+
+    #[tokio::test]
+    async fn create_presentation_in_bible_library_attaches_metadata() {
+        let state = AppState::in_memory().await.unwrap();
+
+        // Create a "Bible" library via the tool
+        let (result, _) = execute_tool("create_library", r#"{"name":"Bible"}"#, &state, 320)
+            .await
+            .unwrap();
+        let lib: Value = serde_json::from_str(&result).unwrap();
+        let lib_id = lib["id"].as_str().unwrap();
+
+        // Create a presentation with a slide that has a stage reference
+        let args = json!({
+            "library_id": lib_id,
+            "name": "John 3:16-17",
+            "slides": [
+                {"main": "For God so loved the world", "stage": "John 3:16"},
+                {"main": "For God did not send his Son", "stage": "John 3:17"}
+            ]
+        });
+        let (result, _) = execute_tool("create_presentation", &args.to_string(), &state, 320)
+            .await
+            .unwrap();
+        let pres: Value = serde_json::from_str(&result).unwrap();
+        let pres_id_str = pres["id"].as_str().unwrap();
+
+        // Fetch the presentation and verify slides have Bible metadata
+        let pres_id = PresentationId::from_uuid(Uuid::parse_str(pres_id_str).unwrap());
+        let detail = state.presentation_detail(pres_id).await.unwrap().unwrap();
+        let (_, lib_name, presentation) = detail;
+        assert_eq!(lib_name, "Bible");
+
+        for slide in &presentation.slides {
+            let meta = slide.metadata.as_ref().expect("slide should have metadata");
+            let bible = meta
+                .bible
+                .as_ref()
+                .expect("slide should have bible metadata");
+            assert!(
+                bible.main_reference_label.is_some(),
+                "slide {} should have a main_reference_label",
+                slide.order
+            );
+        }
+        assert_eq!(
+            presentation.slides[0]
+                .metadata
+                .as_ref()
+                .unwrap()
+                .bible
+                .as_ref()
+                .unwrap()
+                .main_reference_label,
+            Some("John 3:16".to_string())
+        );
+        assert_eq!(
+            presentation.slides[1]
+                .metadata
+                .as_ref()
+                .unwrap()
+                .bible
+                .as_ref()
+                .unwrap()
+                .main_reference_label,
+            Some("John 3:17".to_string())
+        );
+    }
+
+    #[tokio::test]
+    async fn create_presentation_in_non_bible_library_has_no_metadata() {
+        let state = AppState::in_memory().await.unwrap();
+
+        let (result, _) = execute_tool("create_library", r#"{"name":"Worship"}"#, &state, 320)
+            .await
+            .unwrap();
+        let lib: Value = serde_json::from_str(&result).unwrap();
+        let lib_id = lib["id"].as_str().unwrap();
+
+        let args = json!({
+            "library_id": lib_id,
+            "name": "Amazing Grace",
+            "slides": [{"main": "Amazing grace", "stage": "Verse 1"}]
+        });
+        let (result, _) = execute_tool("create_presentation", &args.to_string(), &state, 320)
+            .await
+            .unwrap();
+        let pres: Value = serde_json::from_str(&result).unwrap();
+        let pres_id_str = pres["id"].as_str().unwrap();
+
+        let pres_id = PresentationId::from_uuid(Uuid::parse_str(pres_id_str).unwrap());
+        let detail = state.presentation_detail(pres_id).await.unwrap().unwrap();
+        let (_, _, presentation) = detail;
+
+        for slide in &presentation.slides {
+            assert!(
+                slide.metadata.is_none(),
+                "non-Bible slide should not have metadata"
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn add_slide_to_bible_presentation_attaches_metadata() {
+        let state = AppState::in_memory().await.unwrap();
+
+        let (result, _) = execute_tool("create_library", r#"{"name":"Bible"}"#, &state, 320)
+            .await
+            .unwrap();
+        let lib: Value = serde_json::from_str(&result).unwrap();
+        let lib_id = lib["id"].as_str().unwrap();
+
+        let args = json!({
+            "library_id": lib_id,
+            "name": "Romans 8",
+            "slides": [{"main": "Initial verse", "stage": "Romans 8:1"}]
+        });
+        let (result, _) = execute_tool("create_presentation", &args.to_string(), &state, 320)
+            .await
+            .unwrap();
+        let pres: Value = serde_json::from_str(&result).unwrap();
+        let pres_id = pres["id"].as_str().unwrap();
+
+        // Add a slide via the add_slide tool
+        let add_args = json!({
+            "presentation_id": pres_id,
+            "main": "There is now no condemnation",
+            "stage": "Romans 8:2"
+        });
+        execute_tool("add_slide", &add_args.to_string(), &state, 320)
+            .await
+            .unwrap();
+
+        // Verify the added slide has Bible metadata
+        let pid = PresentationId::from_uuid(Uuid::parse_str(pres_id).unwrap());
+        let detail = state.presentation_detail(pid).await.unwrap().unwrap();
+        let (_, _, presentation) = detail;
+        let last_slide = presentation.slides.last().unwrap();
+        let bible = last_slide
+            .metadata
+            .as_ref()
+            .expect("added slide should have metadata")
+            .bible
+            .as_ref()
+            .expect("added slide should have bible metadata");
+        assert_eq!(bible.main_reference_label, Some("Romans 8:2".to_string()));
+    }
+
+    #[tokio::test]
+    async fn update_slide_in_bible_presentation_attaches_metadata() {
+        let state = AppState::in_memory().await.unwrap();
+
+        let (result, _) = execute_tool("create_library", r#"{"name":"Bible"}"#, &state, 320)
+            .await
+            .unwrap();
+        let lib: Value = serde_json::from_str(&result).unwrap();
+        let lib_id = lib["id"].as_str().unwrap();
+
+        let args = json!({
+            "library_id": lib_id,
+            "name": "Psalm 23",
+            "slides": [{"main": "The Lord is my shepherd", "stage": "Psalm 23:1"}]
+        });
+        let (result, _) = execute_tool("create_presentation", &args.to_string(), &state, 320)
+            .await
+            .unwrap();
+        let pres: Value = serde_json::from_str(&result).unwrap();
+        let pres_id = pres["id"].as_str().unwrap();
+
+        // Fetch to get the slide ID
+        let pid = PresentationId::from_uuid(Uuid::parse_str(pres_id).unwrap());
+        let detail = state.presentation_detail(pid).await.unwrap().unwrap();
+        let slide_id = detail.2.slides[0].id.to_string();
+
+        // Update the slide with a new reference
+        let update_args = json!({
+            "presentation_id": pres_id,
+            "slide_id": slide_id,
+            "main": "Updated text",
+            "stage": "Psalm 23:2"
+        });
+        execute_tool("update_slide", &update_args.to_string(), &state, 320)
+            .await
+            .unwrap();
+
+        // Verify metadata was updated
+        let detail = state.presentation_detail(pid).await.unwrap().unwrap();
+        let bible = detail.2.slides[0]
+            .metadata
+            .as_ref()
+            .expect("updated slide should have metadata")
+            .bible
+            .as_ref()
+            .expect("updated slide should have bible metadata");
+        assert_eq!(bible.main_reference_label, Some("Psalm 23:2".to_string()));
+    }
+}
