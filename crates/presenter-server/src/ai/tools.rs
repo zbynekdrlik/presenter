@@ -1,6 +1,6 @@
 use crate::state::bible::BibleTriggerOverrides;
 use crate::state::AppState;
-use presenter_core::slide::{SlideContent, SlideText};
+use presenter_core::slide::{BibleSlideMetadata, SlideContent, SlideMetadata, SlideText};
 use presenter_core::{BibleReference, LibraryId, PresentationId, Slide, SlideId};
 use serde_json::{json, Value};
 use uuid::Uuid;
@@ -256,7 +256,7 @@ fn slide_to_json(s: &Slide) -> Value {
     })
 }
 
-fn make_slide(i: usize, s: &Value) -> Slide {
+fn make_slide(i: usize, s: &Value, is_bible: bool) -> Slide {
     let main_text = SlideText::new(s["main"].as_str().unwrap_or(""))
         .unwrap_or_else(|_| SlideText::new("").unwrap());
     let translation_text = SlideText::new(s["translation"].as_str().unwrap_or(""))
@@ -268,7 +268,27 @@ fn make_slide(i: usize, s: &Value) -> Slide {
         .map(presenter_core::slide::SlideGroup::new);
 
     let content = SlideContent::new(main_text, translation_text, stage_text, group);
-    Slide::new(i as u32, content)
+    let mut slide = Slide::new(i as u32, content);
+    if is_bible {
+        let ref_label = s["stage"].as_str().unwrap_or("").to_string();
+        let meta = SlideMetadata::new().with_bible(BibleSlideMetadata {
+            translation_code: String::new(),
+            secondary_translation_code: None,
+            book: String::new(),
+            book_code: None,
+            book_number: None,
+            chapter: 0,
+            verses: Vec::new(),
+            main_reference_label: if ref_label.is_empty() {
+                None
+            } else {
+                Some(ref_label)
+            },
+            translation_reference_label: None,
+        });
+        slide = slide.with_metadata(Some(meta));
+    }
+    slide
 }
 
 /// Execute a tool call against AppState and return (result_json, preview).
@@ -348,10 +368,17 @@ pub async fn execute_tool(
             let name_val = str_field(&args, "name")?;
             let slides_arr = args["slides"].as_array();
 
+            let libs = state.libraries().await?;
+            let is_bible = libs
+                .iter()
+                .find(|l| l.id == lib_id)
+                .map(|l| l.name.eq_ignore_ascii_case("bible"))
+                .unwrap_or(false);
+
             let slides: Option<Vec<Slide>> = slides_arr.map(|arr| {
                 arr.iter()
                     .enumerate()
-                    .map(|(i, s)| make_slide(i, s))
+                    .map(|(i, s)| make_slide(i, s, is_bible))
                     .collect()
             });
 
@@ -397,8 +424,17 @@ pub async fn execute_tool(
                 let translation = args["translation"].as_str().unwrap_or("").to_string();
                 let stage = args["stage"].as_str().unwrap_or("").to_string();
                 let group = args["group"].as_str().map(String::from);
+                let metadata = bible_metadata_for_presentation(state, pres_id, &stage).await;
                 state
-                    .update_slide_content(pres_id, slide.id, main, translation, stage, group, None)
+                    .update_slide_content(
+                        pres_id,
+                        slide.id,
+                        main,
+                        translation,
+                        stage,
+                        group,
+                        metadata,
+                    )
                     .await?;
             }
             let preview = format!("Added slide (now {} total)", slides.len());
@@ -415,8 +451,9 @@ pub async fn execute_tool(
             let translation = args["translation"].as_str().unwrap_or("").to_string();
             let stage = args["stage"].as_str().unwrap_or("").to_string();
             let group = args["group"].as_str().map(String::from);
+            let metadata = bible_metadata_for_presentation(state, pres_id, &stage).await;
             state
-                .update_slide_content(pres_id, slide_id, main, translation, stage, group, None)
+                .update_slide_content(pres_id, slide_id, main, translation, stage, group, metadata)
                 .await?;
             Ok((json!({"ok": true}).to_string(), "Updated slide".to_string()))
         }
@@ -634,4 +671,34 @@ fn str_field(args: &Value, field: &str) -> anyhow::Result<String> {
 fn uuid_field(args: &Value, field: &str) -> anyhow::Result<Uuid> {
     let s = str_field(args, field)?;
     Uuid::parse_str(&s).map_err(|_| anyhow::anyhow!("{field} must be a valid UUID"))
+}
+
+/// Look up whether a presentation belongs to the Bible library.
+/// If so, return Bible metadata with the stage text as the reference label.
+async fn bible_metadata_for_presentation(
+    state: &AppState,
+    presentation_id: PresentationId,
+    stage: &str,
+) -> Option<SlideMetadata> {
+    let detail = state.presentation_detail(presentation_id).await.ok()??;
+    let (_lib_id, lib_name, _pres) = detail;
+    if !lib_name.eq_ignore_ascii_case("bible") {
+        return None;
+    }
+    let ref_label = stage.trim().to_string();
+    Some(SlideMetadata::new().with_bible(BibleSlideMetadata {
+        translation_code: String::new(),
+        secondary_translation_code: None,
+        book: String::new(),
+        book_code: None,
+        book_number: None,
+        chapter: 0,
+        verses: Vec::new(),
+        main_reference_label: if ref_label.is_empty() {
+            None
+        } else {
+            Some(ref_label)
+        },
+        translation_reference_label: None,
+    }))
 }
