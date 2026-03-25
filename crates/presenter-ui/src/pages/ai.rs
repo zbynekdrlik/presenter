@@ -393,13 +393,13 @@ pub fn AiPage() -> impl IntoView {
                                             <a class="ai-chat__login-link" href=url target="_blank" rel="noopener">"Open Claude Authorization"</a>
                                             <div class="ai-chat__login-step">
                                                 <span class="ai-chat__login-step-num">"2"</span>
-                                                <p>"After authorizing, Claude will show you a code. Copy it and paste it here:"</p>
+                                                <p>"After authorizing, your browser will show an error page. Copy the full URL from your browser's address bar and paste it here:"</p>
                                             </div>
                                             <div class="ai-chat__login-paste">
                                                 <input
                                                     type="text"
                                                     data-role="ai-callback-input"
-                                                    placeholder="Paste the code here..."
+                                                    placeholder="Paste the localhost URL here..."
                                                     prop:value=move || callback_input.get()
                                                     on:input=move |ev| callback_input.set(event_target_value(&ev))
                                                 />
@@ -409,13 +409,13 @@ pub fn AiPage() -> impl IntoView {
                                                     data-role="ai-complete-login"
                                                     prop:disabled=move || callback_input.get().trim().is_empty() || proxy_loading.get()
                                                     on:click=move |_| {
-                                                        let code = callback_input.get().trim().to_string();
-                                                        if code.is_empty() { return; }
+                                                        let url = callback_input.get().trim().to_string();
+                                                        if url.is_empty() { return; }
                                                         proxy_loading.set(true);
                                                         let toast = ctx.toast_message;
                                                         let toast_variant = ctx.toast_variant;
                                                         leptos::task::spawn_local(async move {
-                                                            match ai_api::proxy_complete_login(&code).await {
+                                                            match ai_api::proxy_complete_login(&url).await {
                                                                 Ok(status) => {
                                                                     proxy_running.set(status.running);
                                                                     proxy_authenticated.set(status.claude_authenticated);

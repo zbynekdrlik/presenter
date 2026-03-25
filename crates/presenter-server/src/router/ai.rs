@@ -310,14 +310,15 @@ pub(super) struct LoginResponse {
     pub login_url: String,
 }
 
-/// Generate the Claude OAuth URL. User opens it, authorizes, gets a code.
+/// Start the Claude login flow. Returns the auth URL for the user to open.
 #[instrument(skip_all)]
 pub(super) async fn proxy_login(
     State(state): State<AppState>,
 ) -> Result<Json<LoginResponse>, AppError> {
     let url = state
         .ai_proxy()
-        .generate_oauth_url()
+        .claude_login()
+        .await
         .map_err(|e| AppError::internal(format!("Login failed: {e}")))?;
     Ok(Json(LoginResponse { login_url: url }))
 }
@@ -325,31 +326,27 @@ pub(super) async fn proxy_login(
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub(super) struct CompleteLoginRequest {
-    pub code: String,
+    pub callback_url: String,
 }
 
-/// Exchange the authorization code for a token and store it.
+/// Complete the login by forwarding the callback URL to CLIProxyAPI.
 #[instrument(skip_all)]
 pub(super) async fn proxy_complete_login(
     State(state): State<AppState>,
     Json(payload): Json<CompleteLoginRequest>,
 ) -> Result<Json<ProxyStatus>, AppError> {
-    let code = payload.code.trim();
-    if code.is_empty() {
-        return Err(AppError::bad_request_message("code cannot be empty"));
+    let url = payload.callback_url.trim();
+    if url.is_empty() {
+        return Err(AppError::bad_request_message(
+            "callback URL cannot be empty",
+        ));
     }
-
-    let token = state
-        .ai_proxy()
-        .exchange_code(code)
-        .await
-        .map_err(|e| AppError::internal(format!("Token exchange failed: {e}")))?;
 
     state
         .ai_proxy()
-        .store_token_and_restart(&token)
+        .complete_login(url)
         .await
-        .map_err(|e| AppError::internal(format!("Failed to store token: {e}")))?;
+        .map_err(|e| AppError::internal(format!("Login completion failed: {e}")))?;
 
     Ok(Json(state.ai_proxy().status().await))
 }

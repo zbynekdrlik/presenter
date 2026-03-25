@@ -302,3 +302,9 @@
 {"timestamp": "2026-03-25T13:39:53.282449+00:00", "files_changed": 2, "commit": "cbd1928 fix(ci): add schema validation to deploys, add WASM build to release", "duration_hint": "completed"}
 {"timestamp": "2026-03-25T13:43:36.357265+00:00", "files_changed": 2, "commit": "cbd1928 fix(ci): add schema validation to deploys, add WASM build to release", "duration_hint": "completed"}
 {"timestamp": "2026-03-25T13:49:26.782638+00:00", "files_changed": 2, "commit": "a09a407 fix(ci): add missing CLIProxyAPI deploy step to release.yml", "duration_hint": "completed"}
+{"timestamp": "2026-03-25T14:05:23.848388+00:00", "files_changed": 0, "commit": "3e1c157 fix(ai): restore PKCE OAuth login flow, remove SSH tunnel requirement", "duration_hint": "completed"}
+{"timestamp": "2026-03-25T14:22:09.757260+00:00", "files_changed": 2, "commit": "3e1c157 fix(ai): restore PKCE OAuth login flow, remove SSH tunnel requirement", "duration_hint": "completed"}
+{"timestamp": "2026-03-25T14:35:54.426853+00:00", "files_changed": 2, "commit": "51ed6cd fix(ai): strip URL fragment from OAuth code before token exchange", "duration_hint": "completed"}
+{"timestamp": "2026-03-25T14:39:24.947412+00:00", "files_changed": 2, "commit": "51ed6cd fix(ai): strip URL fragment from OAuth code before token exchange", "duration_hint": "completed"}
+{"timestamp": "2026-03-25T14:42:32.188919+00:00", "files_changed": 2, "commit": "51ed6cd fix(ai): strip URL fragment from OAuth code before token exchange", "duration_hint": "completed"}
+{"timestamp": "2026-03-25T14:42:36.669871+00:00", "files_changed": 2, "commit": "51ed6cd fix(ai): strip URL fragment from OAuth code before token exchange", "duration_hint": "completed"}

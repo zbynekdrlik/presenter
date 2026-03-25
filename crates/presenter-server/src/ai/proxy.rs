@@ -2,32 +2,31 @@
 //!
 //! CLIProxyAPI is a Go binary that provides an OpenAI-compatible API by
 //! authenticating with Claude via OAuth. Presenter bundles it, manages
-//! its lifecycle, and handles Claude OAuth authentication directly using
-//! the PKCE flow with `platform.claude.com/oauth/code/callback`.
+//! its lifecycle, and handles Claude OAuth login via CLIProxyAPI's
+//! native `-claude-login` flow with callback URL forwarding.
 
-use base64::engine::general_purpose::URL_SAFE_NO_PAD;
-use base64::Engine;
-use sha2::{Digest, Sha256};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
-use tokio::process::{Child, Command};
+use tokio::io::AsyncBufReadExt;
+use tokio::process::{Child, ChildStdout, Command};
 use tokio::sync::RwLock;
 use tracing::{info, warn};
+
+/// Holds a login child process and its stdout handle.
+/// The stdout must be kept alive to prevent SIGPIPE from killing the process.
+struct LoginProcess {
+    child: Child,
+    _stdout: ChildStdout,
+}
 
 /// Default port for the embedded CLIProxyAPI instance.
 const DEFAULT_PROXY_PORT: u16 = 18787;
 
+/// OAuth callback port used by CLIProxyAPI for Claude login.
+const OAUTH_CALLBACK_PORT: u16 = 54545;
+
 /// Name of the CLIProxyAPI binary.
 const PROXY_BINARY_NAME: &str = "cli-proxy-api";
-
-/// Claude OAuth client ID (same one used by Claude Code / CLIProxyAPI).
-const CLAUDE_CLIENT_ID: &str = "9d1c250a-e61b-44d9-88ed-5944d1962f5e";
-
-/// Redirect URI that shows the code on a Claude page for the user to copy.
-const CLAUDE_REDIRECT_URI: &str = "https://platform.claude.com/oauth/code/callback";
-
-/// Claude OAuth token exchange endpoint.
-const CLAUDE_TOKEN_ENDPOINT: &str = "https://api.anthropic.com/v1/oauth/token";
 
 /// State of the managed CLIProxyAPI process.
 #[derive(Debug, Clone, serde::Serialize)]
@@ -67,15 +66,10 @@ impl Default for ProxyConfig {
     }
 }
 
-/// PKCE state stored between the auth URL generation and code exchange.
-struct PkceState {
-    code_verifier: String,
-}
-
 /// Manages the CLIProxyAPI child process and Claude OAuth.
 pub struct ProxyManager {
     child: Arc<RwLock<Option<Child>>>,
-    pkce_state: Arc<RwLock<Option<PkceState>>>,
+    login_child: Arc<RwLock<Option<LoginProcess>>>,
     config: Arc<RwLock<ProxyConfig>>,
     deploy_dir: PathBuf,
 }
@@ -84,7 +78,7 @@ impl ProxyManager {
     pub fn new(deploy_dir: PathBuf) -> Self {
         Self {
             child: Arc::new(RwLock::new(None)),
-            pkce_state: Arc::new(RwLock::new(None)),
+            login_child: Arc::new(RwLock::new(None)),
             config: Arc::new(RwLock::new(ProxyConfig::default())),
             deploy_dir,
         }
@@ -126,13 +120,11 @@ impl ProxyManager {
 
     /// Check if Claude credentials exist (either OAuth tokens or API key in config).
     pub fn is_claude_authenticated(&self) -> bool {
-        // Check for claude-api-key in config
         if let Ok(content) = std::fs::read_to_string(self.config_path()) {
             if content.contains("claude-api-key:") {
                 return true;
             }
         }
-        // Check for token files in auth dir
         let auth_dir = self.auth_dir();
         auth_dir.exists()
             && std::fs::read_dir(&auth_dir)
@@ -191,7 +183,6 @@ request-retry: 2
             .binary_path()
             .ok_or_else(|| anyhow::anyhow!("CLIProxyAPI binary not found"))?;
 
-        // Write config preserving any existing API key
         let existing_key = self.read_existing_api_key().await;
         self.write_config_with_key(existing_key.as_deref()).await?;
 
@@ -246,12 +237,6 @@ request-retry: 2
         Ok(())
     }
 
-    /// Restart the process.
-    pub async fn restart(&self) -> anyhow::Result<()> {
-        self.stop().await?;
-        self.start().await
-    }
-
     /// Get current status.
     pub async fn status(&self) -> ProxyStatus {
         let config = self.config.read().await;
@@ -282,121 +267,160 @@ request-retry: 2
         }
     }
 
-    // ── Claude OAuth (PKCE flow) ──
+    // ── Claude Login via CLIProxyAPI ──
 
-    /// Generate the Claude OAuth authorization URL using PKCE.
+    /// Start the Claude OAuth login flow.
     ///
-    /// The user opens this URL in their browser, authorizes, and Claude shows
-    /// them a code on `platform.claude.com/oauth/code/callback`. The user
-    /// copies the code and pastes it into Presenter's "Complete Login" field.
-    pub fn generate_oauth_url(&self) -> anyhow::Result<String> {
-        let code_verifier = generate_code_verifier();
-        let code_challenge = generate_code_challenge(&code_verifier);
-        let state = generate_state();
-
-        let url = format!(
-            "https://claude.ai/oauth/authorize\
-             ?code=true\
-             &client_id={CLAUDE_CLIENT_ID}\
-             &response_type=code\
-             &redirect_uri={redirect}\
-             &scope={scope}\
-             &code_challenge={code_challenge}\
-             &code_challenge_method=S256\
-             &state={state}",
-            redirect = urlencod(CLAUDE_REDIRECT_URI),
-            scope = urlencod("org:create_api_key user:profile user:inference"),
-        );
-
-        // Store PKCE state synchronously using try_write
-        if let Ok(mut guard) = self.pkce_state.try_write() {
-            *guard = Some(PkceState { code_verifier });
-        } else {
-            anyhow::bail!("failed to store PKCE state — try again");
+    /// Spawns `cli-proxy-api -claude-login -no-browser` and reads the auth URL
+    /// from stdout. The login process listens on port 54545 for the OAuth
+    /// callback. After the user authorizes, the browser redirects to
+    /// `localhost:54545/callback?code=...` which fails (since the server is
+    /// remote). The user copies the full URL from the browser error page and
+    /// pastes it into Presenter, which forwards it via `complete_login()`.
+    pub async fn claude_login(&self) -> anyhow::Result<String> {
+        // Kill any previous login process
+        {
+            let mut guard = self.login_child.write().await;
+            if let Some(mut proc) = guard.take() {
+                proc.child.kill().await.ok();
+                proc.child.wait().await.ok();
+            }
         }
 
-        info!("generated Claude OAuth URL");
+        let binary = self
+            .binary_path()
+            .ok_or_else(|| anyhow::anyhow!("CLIProxyAPI binary not found"))?;
+
+        let existing_key = self.read_existing_api_key().await;
+        self.write_config_with_key(existing_key.as_deref()).await?;
+
+        info!(binary = %binary.display(), "starting CLIProxyAPI claude-login");
+
+        let mut child = Command::new(&binary)
+            .arg("-claude-login")
+            .arg("-no-browser")
+            .arg("-config")
+            .arg(self.config_path())
+            .stdout(std::process::Stdio::piped())
+            .stderr(std::process::Stdio::null())
+            .kill_on_drop(true)
+            .spawn()?;
+
+        let stdout = child
+            .stdout
+            .take()
+            .ok_or_else(|| anyhow::anyhow!("failed to capture login process stdout"))?;
+
+        let mut reader = tokio::io::BufReader::new(stdout);
+        let mut auth_url: Option<String> = None;
+        let mut line_buf = String::new();
+
+        let deadline = tokio::time::Instant::now() + tokio::time::Duration::from_secs(10);
+        loop {
+            let remaining = deadline.saturating_duration_since(tokio::time::Instant::now());
+            if remaining.is_zero() {
+                break;
+            }
+
+            line_buf.clear();
+            match tokio::time::timeout(remaining, reader.read_line(&mut line_buf)).await {
+                Ok(Ok(0)) => break,
+                Ok(Ok(_)) => {
+                    let line = line_buf.trim_end();
+                    info!(line = %line, "claude-login stdout");
+                    if let Some(url_start) = line.find("https://") {
+                        let url = line[url_start..].split_whitespace().next().unwrap_or("");
+                        if !url.is_empty() {
+                            auth_url = Some(url.to_string());
+                            break;
+                        }
+                    }
+                }
+                Ok(Err(e)) => {
+                    warn!(?e, "error reading claude-login stdout");
+                    break;
+                }
+                Err(_) => break,
+            }
+        }
+
+        let url = auth_url.ok_or_else(|| {
+            anyhow::anyhow!("claude-login did not produce an auth URL within 10s")
+        })?;
+
+        // Keep both child AND stdout handle alive — dropping stdout closes the
+        // pipe and kills the process via SIGPIPE.
+        let stdout_handle = reader.into_inner();
+        {
+            let mut guard = self.login_child.write().await;
+            *guard = Some(LoginProcess {
+                child,
+                _stdout: stdout_handle,
+            });
+        }
+
+        info!("claude-login URL obtained, waiting for user to paste callback URL");
         Ok(url)
     }
 
-    /// Exchange an authorization code for an API key/token.
+    /// Complete the OAuth login by forwarding the callback URL to CLIProxyAPI.
     ///
-    /// The user copies the code from `platform.claude.com/oauth/code/callback`
-    /// and pastes it into Presenter. This method exchanges it at Anthropic's
-    /// token endpoint using the stored PKCE code_verifier.
-    pub async fn exchange_code(&self, raw_code: &str) -> anyhow::Result<String> {
-        // Strip URL fragment (e.g. "CODE#fragment" → "CODE")
-        let code = raw_code.split('#').next().unwrap_or(raw_code).trim();
-
-        let code_verifier = {
-            let guard = self.pkce_state.read().await;
-            guard
-                .as_ref()
-                .map(|s| s.code_verifier.clone())
-                .ok_or_else(|| {
-                    anyhow::anyhow!("no pending OAuth flow — click 'Claude Login' first")
-                })?
+    /// After the user authorizes, the browser redirects to
+    /// `localhost:54545/callback?code=XXX&state=YYY`. Since the server is
+    /// remote, this fails in the browser. The user copies the full URL and
+    /// pastes it here. Presenter forwards it to CLIProxyAPI's callback
+    /// endpoint on localhost.
+    pub async fn complete_login(&self, callback_url: &str) -> anyhow::Result<()> {
+        let query = if let Some(pos) = callback_url.find('?') {
+            &callback_url[pos..]
+        } else {
+            anyhow::bail!("callback URL must contain query parameters (?code=...&state=...)");
         };
 
-        info!("exchanging OAuth code for token");
+        let target = format!("http://127.0.0.1:{OAUTH_CALLBACK_PORT}/callback{query}");
+        info!("forwarding OAuth callback to CLIProxyAPI");
 
-        let body = format!(
-            "grant_type=authorization_code\
-             &client_id={CLAUDE_CLIENT_ID}\
-             &code={encoded_code}\
-             &code_verifier={code_verifier}\
-             &redirect_uri={redirect}",
-            encoded_code = urlencod(code),
-            redirect = urlencod(CLAUDE_REDIRECT_URI),
-        );
-
-        let resp = reqwest::Client::new()
-            .post(CLAUDE_TOKEN_ENDPOINT)
-            .header("Content-Type", "application/x-www-form-urlencoded")
-            .body(body)
-            .timeout(std::time::Duration::from_secs(15))
+        // Don't follow redirects — CLIProxyAPI returns 302 on success
+        let resp = reqwest::Client::builder()
+            .redirect(reqwest::redirect::Policy::none())
+            .build()?
+            .get(&target)
+            .timeout(std::time::Duration::from_secs(10))
             .send()
             .await?;
 
-        if !resp.status().is_success() {
-            let status = resp.status();
-            let text = resp.text().await.unwrap_or_default();
-            anyhow::bail!("token exchange failed (HTTP {status}): {text}");
+        let status = resp.status().as_u16();
+        if status >= 400 {
+            let body = resp.text().await.unwrap_or_default();
+            anyhow::bail!("OAuth callback failed (HTTP {status}): {body}");
         }
 
-        let json: serde_json::Value = resp.json().await?;
-        let token = json["access_token"]
-            .as_str()
-            .ok_or_else(|| anyhow::anyhow!("no access_token in response: {json}"))?;
+        // Give CLIProxyAPI a moment to save tokens
+        tokio::time::sleep(tokio::time::Duration::from_secs(2)).await;
 
-        // Clear PKCE state
+        // Kill the login process — it's done
         {
-            let mut guard = self.pkce_state.write().await;
-            *guard = None;
+            let mut guard = self.login_child.write().await;
+            if let Some(mut proc) = guard.take() {
+                proc.child.kill().await.ok();
+                proc.child.wait().await.ok();
+            }
         }
 
-        info!("OAuth token exchange successful");
-        Ok(token.to_string())
-    }
-
-    /// Store a Claude API key in the CLIProxyAPI config and restart the proxy.
-    pub async fn store_token_and_restart(&self, token: &str) -> anyhow::Result<()> {
-        info!("storing Claude token in CLIProxyAPI config");
-        self.write_config_with_key(Some(token)).await?;
-
+        // Restart the main proxy to pick up new credentials
         if self.is_running().await {
-            self.restart().await?;
-        } else {
+            info!("restarting CLIProxyAPI to use new credentials");
+            self.stop().await?;
             self.start().await?;
         }
 
+        info!("Claude OAuth login completed");
         Ok(())
     }
 
     /// Read existing API key from config file (if any).
     async fn read_existing_api_key(&self) -> Option<String> {
         let content = tokio::fs::read_to_string(self.config_path()).await.ok()?;
-        // Simple extraction: look for api-key: "..." line
         for line in content.lines() {
             let trimmed = line.trim();
             if trimmed.starts_with("- api-key:") || trimmed.starts_with("api-key:") {
@@ -421,40 +445,6 @@ request-retry: 2
             }
         }
     }
-}
-
-// ── PKCE Helpers ──
-
-/// Generate a random code_verifier (43-128 URL-safe characters).
-fn generate_code_verifier() -> String {
-    use rand::Rng;
-    const CHARSET: &[u8] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-._~";
-    let mut rng = rand::rng();
-    (0..64)
-        .map(|_| {
-            let idx = rng.random_range(0..CHARSET.len());
-            CHARSET[idx] as char
-        })
-        .collect()
-}
-
-/// Generate code_challenge = BASE64URL_NO_PAD(SHA256(code_verifier)).
-fn generate_code_challenge(code_verifier: &str) -> String {
-    let hash = Sha256::digest(code_verifier.as_bytes());
-    URL_SAFE_NO_PAD.encode(hash)
-}
-
-/// Generate a random state parameter (32 hex chars).
-fn generate_state() -> String {
-    use rand::Rng;
-    let mut rng = rand::rng();
-    let bytes: [u8; 16] = rng.random();
-    bytes.iter().map(|b| format!("{b:02x}")).collect()
-}
-
-/// Percent-encode a string for use in a URL query parameter.
-fn urlencod(s: &str) -> String {
-    s.replace(':', "%3A").replace('/', "%2F").replace(' ', "+")
 }
 
 /// Determine the deploy directory (where presenter-server lives).
