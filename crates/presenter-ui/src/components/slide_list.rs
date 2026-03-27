@@ -409,6 +409,12 @@ pub fn SlideList() -> impl IntoView {
                         let group_display = group_name.clone().unwrap_or_default();
                         let group_placeholder = inherited_group.clone().unwrap_or_default();
 
+                        // Group label for per-slide display
+                        let group_label_text_live = group_name.clone().or_else(|| inherited_group.clone());
+                        let group_label_inherited_live = group_name.is_none() && inherited_group.is_some();
+                        let group_label_text_edit = group_label_text_live.clone();
+                        let group_label_inherited_edit = group_label_inherited_live;
+
                         let trigger = trigger_slide;
 
                         // Clone for drag
@@ -651,6 +657,14 @@ pub fn SlideList() -> impl IntoView {
                                             >
                                                 {format!("Line exceeds {line_limit} characters")}
                                             </div>
+                                            {group_label_text_live.map(|g| {
+                                                let class = if group_label_inherited_live {
+                                                    "operator__slide-group-label operator__slide-group-label--inherited"
+                                                } else {
+                                                    "operator__slide-group-label"
+                                                };
+                                                view! { <div class=class data-role="slide-group-label">{g}</div> }
+                                            })}
                                         }.into_any()
                                     } else {
                                         // Create reactive warning signals for real-time updates
@@ -690,6 +704,14 @@ pub fn SlideList() -> impl IntoView {
                                             >
                                                 {format!("Line exceeds {line_limit} characters")}
                                             </div>
+                                            {group_label_text_edit.map(|g| {
+                                                let class = if group_label_inherited_edit {
+                                                    "operator__slide-group-label operator__slide-group-label--inherited"
+                                                } else {
+                                                    "operator__slide-group-label"
+                                                };
+                                                view! { <div class=class data-role="slide-group-label">{g}</div> }
+                                            })}
                                             <div class="operator__slide-editor">
                                                 <label>
                                                     <span>"Main"</span>
