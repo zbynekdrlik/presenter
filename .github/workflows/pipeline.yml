@@ -395,9 +395,11 @@ jobs:
       - name: Install trunk
         run: command -v trunk >/dev/null 2>&1 || cargo install trunk --locked
 
+      - name: Install esbuild
+        run: npm install -g esbuild
+
       - name: Build WASM UI
-        run: trunk build --release
-        working-directory: crates/presenter-ui
+        run: bash scripts/build-ui.sh
 
       - name: Build release binaries
         run: cargo build --release -p presenter-server -p presenter-importer
