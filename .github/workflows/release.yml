@@ -23,11 +23,28 @@ jobs:
       - name: Install Rust toolchain
         uses: dtolnay/rust-toolchain@stable
 
+      - name: Add wasm32 target
+        run: rustup target add wasm32-unknown-unknown
+
       - name: Setup Rust cache
         uses: Swatinem/rust-cache@v2
         with:
           shared-key: build
           cache-on-failure: false
+
+      - name: Cache trunk binary
+        uses: actions/cache@v4
+        with:
+          path: ~/.cargo/bin/trunk
+          key: trunk-${{ runner.os }}-${{ hashFiles('Cargo.lock') }}
+          restore-keys: trunk-${{ runner.os }}-
+
+      - name: Install trunk
+        run: command -v trunk >/dev/null 2>&1 || cargo install trunk --locked
+
+      - name: Build WASM UI
+        run: trunk build --release
+        working-directory: crates/presenter-ui
 
       - name: Build release binaries
         run: cargo build --release -p presenter-server -p presenter-importer
@@ -112,6 +129,19 @@ jobs:
             deploy-target:${{ env.DEPLOY_DIR }}/
           ssh deploy-target "chmod +x ${{ env.DEPLOY_DIR }}/presenter-server ${{ env.DEPLOY_DIR }}/import_propresenter ${{ env.DEPLOY_DIR }}/ingest_bibles"
 
+      - name: Deploy CLIProxyAPI
+        run: |
+          CLIPROXY_VERSION="6.9.1"
+          CLIPROXY_URL="https://github.com/router-for-me/CLIProxyAPI/releases/download/v${CLIPROXY_VERSION}/CLIProxyAPI_${CLIPROXY_VERSION}_linux_amd64.tar.gz"
+          ssh deploy-target "if [ ! -f ${{ env.DEPLOY_DIR }}/cli-proxy-api ]; then
+            echo 'Downloading CLIProxyAPI v${CLIPROXY_VERSION}...'
+            curl -sL '${CLIPROXY_URL}' | tar xz -C ${{ env.DEPLOY_DIR }}/
+            chmod +x ${{ env.DEPLOY_DIR }}/cli-proxy-api
+            echo 'CLIProxyAPI deployed'
+          else
+            echo 'CLIProxyAPI already present'
+          fi"
+
       - name: Backup database
         run: |
           ssh deploy-target << 'REMOTE_SCRIPT'
@@ -126,6 +156,30 @@ jobs:
             ls -t "$BACKUP_DIR"/presenter-*.db 2>/dev/null | tail -n +6 | xargs -r rm --
           else
             echo "No existing database to back up"
+          fi
+          REMOTE_SCRIPT
+
+      - name: Validate database schema
+        run: |
+          ssh deploy-target << 'REMOTE_SCRIPT'
+          set -e
+          DB_PATH="/opt/presenter/presenter.db"
+          if [ ! -f "$DB_PATH" ] || [ ! -s "$DB_PATH" ]; then
+            echo "No database - will be created on first start"
+            exit 0
+          fi
+          echo "Validating schema compatibility with new binary..."
+          PRESENTER_DB_URL=sqlite:///opt/presenter/presenter.db \
+            timeout 10 /opt/presenter/presenter-server &
+          SERVER_PID=$!
+          sleep 3
+          if kill -0 $SERVER_PID 2>/dev/null; then
+            echo "Schema is compatible"
+            kill $SERVER_PID 2>/dev/null || true
+            wait $SERVER_PID 2>/dev/null || true
+          else
+            echo "::warning::Schema mismatch detected - database will be recreated from import"
+            rm -f "$DB_PATH" "${DB_PATH}-wal" "${DB_PATH}-shm"
           fi
           REMOTE_SCRIPT
 
@@ -148,13 +202,13 @@ jobs:
             data/libraries/ \
             deploy-target:${{ env.DEPLOY_DIR }}/libraries/
 
-      - name: Import ProPresenter (first deploy only)
+      - name: Import ProPresenter (first deploy or schema reset)
         run: |
           ssh deploy-target << 'REMOTE_SCRIPT'
           set -e
           DB_PATH="/opt/presenter/presenter.db"
           if [ ! -f "$DB_PATH" ] || [ ! -s "$DB_PATH" ]; then
-            echo "First deploy detected - running ProPresenter import"
+            echo "Fresh database - running ProPresenter import"
             PRESENTER_DB_URL=sqlite:///opt/presenter/presenter.db \
               /opt/presenter/import_propresenter --root "/opt/presenter/libraries"
           else

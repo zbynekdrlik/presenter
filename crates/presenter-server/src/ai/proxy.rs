@@ -2,8 +2,8 @@
 //!
 //! CLIProxyAPI is a Go binary that provides an OpenAI-compatible API by
 //! authenticating with Claude via OAuth. Presenter bundles it, manages
-//! its lifecycle, and delegates Claude OAuth login to CLIProxyAPI's
-//! native `-claude-login` flow (accessed via SSH tunnel).
+//! its lifecycle, and handles Claude OAuth login via CLIProxyAPI's
+//! native `-claude-login` flow with callback URL forwarding.
 
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
@@ -21,6 +21,9 @@ struct LoginProcess {
 
 /// Default port for the embedded CLIProxyAPI instance.
 const DEFAULT_PROXY_PORT: u16 = 18787;
+
+/// OAuth callback port used by CLIProxyAPI for Claude login.
+const OAUTH_CALLBACK_PORT: u16 = 54545;
 
 /// Name of the CLIProxyAPI binary.
 const PROXY_BINARY_NAME: &str = "cli-proxy-api";
@@ -117,13 +120,11 @@ impl ProxyManager {
 
     /// Check if Claude credentials exist (either OAuth tokens or API key in config).
     pub fn is_claude_authenticated(&self) -> bool {
-        // Check for claude-api-key in config
         if let Ok(content) = std::fs::read_to_string(self.config_path()) {
             if content.contains("claude-api-key:") {
                 return true;
             }
         }
-        // Check for token files in auth dir
         let auth_dir = self.auth_dir();
         auth_dir.exists()
             && std::fs::read_dir(&auth_dir)
@@ -182,7 +183,6 @@ request-retry: 2
             .binary_path()
             .ok_or_else(|| anyhow::anyhow!("CLIProxyAPI binary not found"))?;
 
-        // Write config preserving any existing API key
         let existing_key = self.read_existing_api_key().await;
         self.write_config_with_key(existing_key.as_deref()).await?;
 
@@ -269,11 +269,14 @@ request-retry: 2
 
     // ── Claude Login via CLIProxyAPI ──
 
-    /// Spawn `cli-proxy-api -claude-login -no-browser` and read the auth URL
-    /// from its stdout. The login process listens on port 54545 for the OAuth
-    /// callback — the user establishes an SSH tunnel to reach it.
+    /// Start the Claude OAuth login flow.
     ///
-    /// Returns the authorization URL the user should open in their browser.
+    /// Spawns `cli-proxy-api -claude-login -no-browser` and reads the auth URL
+    /// from stdout. The login process listens on port 54545 for the OAuth
+    /// callback. After the user authorizes, the browser redirects to
+    /// `localhost:54545/callback?code=...` which fails (since the server is
+    /// remote). The user copies the full URL from the browser error page and
+    /// pastes it into Presenter, which forwards it via `complete_login()`.
     pub async fn claude_login(&self) -> anyhow::Result<String> {
         // Kill any previous login process
         {
@@ -288,7 +291,6 @@ request-retry: 2
             .binary_path()
             .ok_or_else(|| anyhow::anyhow!("CLIProxyAPI binary not found"))?;
 
-        // Ensure config exists so -config flag works
         let existing_key = self.read_existing_api_key().await;
         self.write_config_with_key(existing_key.as_deref()).await?;
 
@@ -304,9 +306,6 @@ request-retry: 2
             .kill_on_drop(true)
             .spawn()?;
 
-        // Read stdout lines looking for the auth URL.
-        // IMPORTANT: We must keep the stdout handle alive after reading —
-        // dropping it closes the pipe which sends SIGPIPE and kills the process.
         let stdout = child
             .stdout
             .take()
@@ -316,7 +315,6 @@ request-retry: 2
         let mut auth_url: Option<String> = None;
         let mut line_buf = String::new();
 
-        // Give the process up to 10 seconds to print the URL
         let deadline = tokio::time::Instant::now() + tokio::time::Duration::from_secs(10);
         loop {
             let remaining = deadline.saturating_duration_since(tokio::time::Instant::now());
@@ -326,7 +324,7 @@ request-retry: 2
 
             line_buf.clear();
             match tokio::time::timeout(remaining, reader.read_line(&mut line_buf)).await {
-                Ok(Ok(0)) => break, // EOF
+                Ok(Ok(0)) => break,
                 Ok(Ok(_)) => {
                     let line = line_buf.trim_end();
                     info!(line = %line, "claude-login stdout");
@@ -342,7 +340,7 @@ request-retry: 2
                     warn!(?e, "error reading claude-login stdout");
                     break;
                 }
-                Err(_) => break, // timeout
+                Err(_) => break,
             }
         }
 
@@ -350,8 +348,8 @@ request-retry: 2
             anyhow::anyhow!("claude-login did not produce an auth URL within 10s")
         })?;
 
-        // Keep both the child AND the stdout handle alive — dropping stdout
-        // closes the pipe and kills the process via SIGPIPE.
+        // Keep both child AND stdout handle alive — dropping stdout closes the
+        // pipe and kills the process via SIGPIPE.
         let stdout_handle = reader.into_inner();
         {
             let mut guard = self.login_child.write().await;
@@ -361,14 +359,68 @@ request-retry: 2
             });
         }
 
-        info!("claude-login URL obtained, waiting for OAuth callback via SSH tunnel");
+        info!("claude-login URL obtained, waiting for user to paste callback URL");
         Ok(url)
+    }
+
+    /// Complete the OAuth login by forwarding the callback URL to CLIProxyAPI.
+    ///
+    /// After the user authorizes, the browser redirects to
+    /// `localhost:54545/callback?code=XXX&state=YYY`. Since the server is
+    /// remote, this fails in the browser. The user copies the full URL and
+    /// pastes it here. Presenter forwards it to CLIProxyAPI's callback
+    /// endpoint on localhost.
+    pub async fn complete_login(&self, callback_url: &str) -> anyhow::Result<()> {
+        let query = if let Some(pos) = callback_url.find('?') {
+            &callback_url[pos..]
+        } else {
+            anyhow::bail!("callback URL must contain query parameters (?code=...&state=...)");
+        };
+
+        let target = format!("http://127.0.0.1:{OAUTH_CALLBACK_PORT}/callback{query}");
+        info!("forwarding OAuth callback to CLIProxyAPI");
+
+        // Don't follow redirects — CLIProxyAPI returns 302 on success
+        let resp = reqwest::Client::builder()
+            .redirect(reqwest::redirect::Policy::none())
+            .build()?
+            .get(&target)
+            .timeout(std::time::Duration::from_secs(10))
+            .send()
+            .await?;
+
+        let status = resp.status().as_u16();
+        if status >= 400 {
+            let body = resp.text().await.unwrap_or_default();
+            anyhow::bail!("OAuth callback failed (HTTP {status}): {body}");
+        }
+
+        // Give CLIProxyAPI a moment to save tokens
+        tokio::time::sleep(tokio::time::Duration::from_secs(2)).await;
+
+        // Kill the login process — it's done
+        {
+            let mut guard = self.login_child.write().await;
+            if let Some(mut proc) = guard.take() {
+                proc.child.kill().await.ok();
+                proc.child.wait().await.ok();
+            }
+        }
+
+        // Restart the main proxy to pick up new credentials
+        if self.is_running().await {
+            info!("restarting CLIProxyAPI to use new credentials");
+            self.stop().await?;
+            self.start().await?;
+        }
+
+        info!("Claude OAuth login completed");
+        Ok(())
     }
 
     /// Read existing API key from config file (if any).
     async fn read_existing_api_key(&self) -> Option<String> {
         let content = tokio::fs::read_to_string(self.config_path()).await.ok()?;
-        // Simple extraction: look for api-key: "..." line
         for line in content.lines() {
             let trimmed = line.trim();
             if trimmed.starts_with("- api-key:") || trimmed.starts_with("api-key:") {

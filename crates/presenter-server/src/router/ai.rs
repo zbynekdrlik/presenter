@@ -302,16 +302,15 @@ pub(super) async fn proxy_stop(
     Ok(Json(state.ai_proxy().status().await))
 }
 
-// ── Claude Login (via CLIProxyAPI native flow + SSH tunnel) ──
+// ── Claude OAuth ──
 
 #[derive(Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub(super) struct LoginResponse {
     pub login_url: String,
-    pub ssh_command: String,
 }
 
-/// Start the CLIProxyAPI login flow. Returns the auth URL and SSH tunnel command.
+/// Start the Claude login flow. Returns the auth URL for the user to open.
 #[instrument(skip_all)]
 pub(super) async fn proxy_login(
     State(state): State<AppState>,
@@ -321,10 +320,35 @@ pub(super) async fn proxy_login(
         .claude_login()
         .await
         .map_err(|e| AppError::internal(format!("Login failed: {e}")))?;
-    Ok(Json(LoginResponse {
-        login_url: url,
-        ssh_command: "ssh -L 54545:127.0.0.1:54545 newlevel@10.77.8.134".to_string(),
-    }))
+    Ok(Json(LoginResponse { login_url: url }))
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub(super) struct CompleteLoginRequest {
+    pub callback_url: String,
+}
+
+/// Complete the login by forwarding the callback URL to CLIProxyAPI.
+#[instrument(skip_all)]
+pub(super) async fn proxy_complete_login(
+    State(state): State<AppState>,
+    Json(payload): Json<CompleteLoginRequest>,
+) -> Result<Json<ProxyStatus>, AppError> {
+    let url = payload.callback_url.trim();
+    if url.is_empty() {
+        return Err(AppError::bad_request_message(
+            "callback URL cannot be empty",
+        ));
+    }
+
+    state
+        .ai_proxy()
+        .complete_login(url)
+        .await
+        .map_err(|e| AppError::internal(format!("Login completion failed: {e}")))?;
+
+    Ok(Json(state.ai_proxy().status().await))
 }
 
 async fn get_settings_internal(state: &AppState) -> anyhow::Result<AiSettings> {

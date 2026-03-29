@@ -165,6 +165,30 @@ jobs:
           fi
           REMOTE_SCRIPT
 
+      - name: Validate database schema
+        run: |
+          ssh deploy-target << 'REMOTE_SCRIPT'
+          set -e
+          DB_PATH="/opt/presenter/presenter.db"
+          if [ ! -f "$DB_PATH" ] || [ ! -s "$DB_PATH" ]; then
+            echo "No database - will be created on first start"
+            exit 0
+          fi
+          echo "Validating schema compatibility with new binary..."
+          PRESENTER_DB_URL=sqlite:///opt/presenter/presenter.db \
+            timeout 10 /opt/presenter/presenter-server &
+          SERVER_PID=$!
+          sleep 3
+          if kill -0 $SERVER_PID 2>/dev/null; then
+            echo "Schema is compatible"
+            kill $SERVER_PID 2>/dev/null || true
+            wait $SERVER_PID 2>/dev/null || true
+          else
+            echo "::warning::Schema mismatch detected - database will be recreated from import"
+            rm -f "$DB_PATH" "${DB_PATH}-wal" "${DB_PATH}-shm"
+          fi
+          REMOTE_SCRIPT
+
       - name: Deploy Bible files
         run: |
           ssh deploy-target "mkdir -p ${{ env.DEPLOY_DIR }}/bibles"
@@ -184,13 +208,13 @@ jobs:
             data/libraries/ \
             deploy-target:${{ env.DEPLOY_DIR }}/libraries/
 
-      - name: Import ProPresenter (first deploy only)
+      - name: Import ProPresenter (first deploy or schema reset)
         run: |
           ssh deploy-target << 'REMOTE_SCRIPT'
           set -e
           DB_PATH="/opt/presenter/presenter.db"
           if [ ! -f "$DB_PATH" ] || [ ! -s "$DB_PATH" ]; then
-            echo "First deploy detected - running ProPresenter import"
+            echo "Fresh database - running ProPresenter import"
             PRESENTER_DB_URL=sqlite:///opt/presenter/presenter.db \
               /opt/presenter/import_propresenter --root "/opt/presenter/libraries"
           else

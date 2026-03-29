@@ -172,3 +172,139 @@
 {"timestamp": "2026-03-21T13:05:43.626712+00:00", "files_changed": 1, "commit": "4562a8f Merge pull request #187 from zbynekdrlik/dev", "duration_hint": "completed"}
 {"timestamp": "2026-03-21T16:01:06.524287+00:00", "files_changed": 0, "commit": "36cc61a ci: trigger pipeline re-run", "duration_hint": "completed"}
 {"timestamp": "2026-03-21T16:04:22.607201+00:00", "files_changed": 0, "commit": "d9ea24d fix(bible): make ingestion resilient to individual translation failures", "duration_hint": "completed"}
+{"timestamp": "2026-03-21T17:36:16.865072+00:00", "files_changed": 0, "commit": "40b2994 fix(ci): use blob reporter for E2E shard merge", "duration_hint": "completed"}
+{"timestamp": "2026-03-21T17:36:26.398357+00:00", "files_changed": 1, "commit": "40b2994 fix(ci): use blob reporter for E2E shard merge", "duration_hint": "completed"}
+{"timestamp": "2026-03-21T17:42:03.766838+00:00", "files_changed": 1, "commit": "2ec580d Merge pull request #188 from zbynekdrlik/dev", "duration_hint": "completed"}
+{"timestamp": "2026-03-21T17:47:03.754787+00:00", "files_changed": 1, "commit": "2ec580d Merge pull request #188 from zbynekdrlik/dev", "duration_hint": "completed"}
+{"timestamp": "2026-03-21T17:51:35.640438+00:00", "files_changed": 1, "commit": "2ec580d Merge pull request #188 from zbynekdrlik/dev", "duration_hint": "completed"}
+{"timestamp": "2026-03-21T18:06:19.714250+00:00", "files_changed": 1, "commit": "2ec580d Merge pull request #188 from zbynekdrlik/dev", "duration_hint": "completed"}
+{"timestamp": "2026-03-21T18:07:08.764266+00:00", "files_changed": 1, "commit": "2ec580d Merge pull request #188 from zbynekdrlik/dev", "duration_hint": "completed"}
+{"timestamp": "2026-03-21T19:58:16.801721+00:00", "files_changed": 1, "commit": "25a7206 fix(tablet): support verses array in slide metadata for active detection", "duration_hint": "completed"}
+{"timestamp": "2026-03-21T19:58:22.280023+00:00", "files_changed": 1, "commit": "25a7206 fix(tablet): support verses array in slide metadata for active detection", "duration_hint": "completed"}
+{"timestamp": "2026-03-21T22:39:44.265177+00:00", "files_changed": 1, "commit": "531cfbe test(e2e): remove flaky empty presentation test", "duration_hint": "completed"}
+{"timestamp": "2026-03-21T22:39:51.005223+00:00", "files_changed": 1, "commit": "531cfbe test(e2e): remove flaky empty presentation test", "duration_hint": "completed"}
+{"timestamp": "2026-03-22T06:24:22.185697+00:00", "files_changed": 1, "commit": "f3327c5 fix(tablet): UX parity fixes for toast timer, back button, and toast variant", "duration_hint": "completed"}
+{"timestamp": "2026-03-22T06:24:26.237714+00:00", "files_changed": 1, "commit": "f3327c5 fix(tablet): UX parity fixes for toast timer, back button, and toast variant", "duration_hint": "completed"}
+{"timestamp": "2026-03-22T06:56:23.349454+00:00", "files_changed": 1, "commit": "f3327c5 fix(tablet): UX parity fixes for toast timer, back button, and toast variant", "duration_hint": "completed"}
+{"timestamp": "2026-03-22T07:22:02.890941+00:00", "files_changed": 1, "commit": "f3327c5 fix(tablet): UX parity fixes for toast timer, back button, and toast variant", "duration_hint": "completed"}
+{"timestamp": "2026-03-22T07:23:34.217474+00:00", "files_changed": 1, "commit": "f3327c5 fix(tablet): UX parity fixes for toast timer, back button, and toast variant", "duration_hint": "completed"}
+{"timestamp": "2026-03-23T10:27:00.485627+00:00", "files_changed": 1, "commit": "1bbba98 fix(tablet): use individual class directives for slide shade and active state", "duration_hint": "completed"}
+{"timestamp": "2026-03-23T10:27:05.466941+00:00", "files_changed": 1, "commit": "1bbba98 fix(tablet): use individual class directives for slide shade and active state", "duration_hint": "completed"}
+{"timestamp": "2026-03-23T10:34:00.778981+00:00", "files_changed": 1, "commit": "1bbba98 fix(tablet): use individual class directives for slide shade and active state", "duration_hint": "completed"}
+{"timestamp": "2026-03-23T10:35:14.467118+00:00", "files_changed": 1, "commit": "1bbba98 fix(tablet): use individual class directives for slide shade and active state", "duration_hint": "completed"}
+{"timestamp": "2026-03-23T11:26:00.285735+00:00", "files_changed": 1, "commit": "34bfe54 fix(bible): move clear broadcast button to slides toolbar", "duration_hint": "completed"}
+{"timestamp": "2026-03-23T11:26:44.530117+00:00", "files_changed": 1, "commit": "34bfe54 fix(bible): move clear broadcast button to slides toolbar", "duration_hint": "completed"}
+{"timestamp": "2026-03-23T11:53:41.918749+00:00", "files_changed": 1, "commit": "52c6dbc fix(bible): simplify Bible UI \u2014 remove clear button, history, and selector", "duration_hint": "completed"}
+{"timestamp": "2026-03-23T12:21:24.984911+00:00", "files_changed": 1, "commit": "af917ba feat(bible): add slides to both new and existing presentations", "duration_hint": "completed"}
+{"timestamp": "2026-03-23T12:26:00.867610+00:00", "files_changed": 1, "commit": "af917ba feat(bible): add slides to both new and existing presentations", "duration_hint": "completed"}
+{"timestamp": "2026-03-23T13:03:40.306022+00:00", "files_changed": 1, "commit": "efd86a1 refactor(bible): move selection controls to bible_controls.rs", "duration_hint": "completed"}
+{"timestamp": "2026-03-23T13:03:45.455316+00:00", "files_changed": 1, "commit": "efd86a1 refactor(bible): move selection controls to bible_controls.rs", "duration_hint": "completed"}
+{"timestamp": "2026-03-23T14:06:50.340858+00:00", "files_changed": 1, "commit": "de23795 feat(bible): prompt for presentation name when creating new", "duration_hint": "completed"}
+{"timestamp": "2026-03-23T14:24:05.647536+00:00", "files_changed": 1, "commit": "de23795 feat(bible): prompt for presentation name when creating new", "duration_hint": "completed"}
+{"timestamp": "2026-03-23T14:24:14.490353+00:00", "files_changed": 1, "commit": "de23795 feat(bible): prompt for presentation name when creating new", "duration_hint": "completed"}
+{"timestamp": "2026-03-23T17:01:35.914860+00:00", "files_changed": 1, "commit": "473f3b5 fix(e2e): use API creation and JS click for Bible delete test robustness", "duration_hint": "completed"}
+{"timestamp": "2026-03-23T17:01:42.506517+00:00", "files_changed": 1, "commit": "473f3b5 fix(e2e): use API creation and JS click for Bible delete test robustness", "duration_hint": "completed"}
+{"timestamp": "2026-03-23T18:20:33.645128+00:00", "files_changed": 1, "commit": "f0b2e82 fix(bible): fix modal z-index, drag-drop reorder, and selection clearing", "duration_hint": "completed"}
+{"timestamp": "2026-03-23T18:20:39.354195+00:00", "files_changed": 1, "commit": "f0b2e82 fix(bible): fix modal z-index, drag-drop reorder, and selection clearing", "duration_hint": "completed"}
+{"timestamp": "2026-03-24T07:31:35.880436+00:00", "files_changed": 1, "commit": "96f4d4c fix(bible): move modal outside grid stacking context, add scrollable presentation list", "duration_hint": "completed"}
+{"timestamp": "2026-03-24T07:31:40.010791+00:00", "files_changed": 1, "commit": "96f4d4c fix(bible): move modal outside grid stacking context, add scrollable presentation list", "duration_hint": "completed"}
+{"timestamp": "2026-03-24T08:20:45.331228+00:00", "files_changed": 1, "commit": "96f4d4c fix(bible): move modal outside grid stacking context, add scrollable presentation list", "duration_hint": "completed"}
+{"timestamp": "2026-03-24T10:25:07.018281+00:00", "files_changed": 1, "commit": "b2cd3f4 feat(ai): add AI chat tab with agentic tool-use for presentation creation", "duration_hint": "completed"}
+{"timestamp": "2026-03-24T10:25:11.397999+00:00", "files_changed": 1, "commit": "b2cd3f4 feat(ai): add AI chat tab with agentic tool-use for presentation creation", "duration_hint": "completed"}
+{"timestamp": "2026-03-24T10:27:10.465518+00:00", "files_changed": 1, "commit": "b2cd3f4 feat(ai): add AI chat tab with agentic tool-use for presentation creation", "duration_hint": "completed"}
+{"timestamp": "2026-03-24T11:04:47.690865+00:00", "files_changed": 1, "commit": "7c18e9c feat(ai): embed CLIProxyAPI as managed subprocess for Claude Max access", "duration_hint": "completed"}
+{"timestamp": "2026-03-24T12:21:22.322130+00:00", "files_changed": 1, "commit": "0619e8a test(e2e): add comprehensive AI chat tab E2E tests", "duration_hint": "completed"}
+{"timestamp": "2026-03-24T12:21:27.596650+00:00", "files_changed": 1, "commit": "0619e8a test(e2e): add comprehensive AI chat tab E2E tests", "duration_hint": "completed"}
+{"timestamp": "2026-03-24T12:27:16.035869+00:00", "files_changed": 1, "commit": "0619e8a test(e2e): add comprehensive AI chat tab E2E tests", "duration_hint": "completed"}
+{"timestamp": "2026-03-24T12:33:48.522624+00:00", "files_changed": 1, "commit": "0619e8a test(e2e): add comprehensive AI chat tab E2E tests", "duration_hint": "completed"}
+{"timestamp": "2026-03-24T12:39:46.753958+00:00", "files_changed": 1, "commit": "7f7ac14 feat(ai): implement 2-step Claude OAuth login flow in UI", "duration_hint": "completed"}
+{"timestamp": "2026-03-24T12:41:44.497631+00:00", "files_changed": 1, "commit": "f35a4f4 fix(ai): read auth URL from stdout (not stderr), handle 302 callback response", "duration_hint": "completed"}
+{"timestamp": "2026-03-24T12:45:00.020690+00:00", "files_changed": 1, "commit": "f35a4f4 fix(ai): read auth URL from stdout (not stderr), handle 302 callback response", "duration_hint": "completed"}
+{"timestamp": "2026-03-24T13:06:42.166680+00:00", "files_changed": 1, "commit": "f35a4f4 fix(ai): read auth URL from stdout (not stderr), handle 302 callback response", "duration_hint": "completed"}
+{"timestamp": "2026-03-24T13:52:46.676150+00:00", "files_changed": 1, "commit": "faba827 fix(ai): auto-redirect OAuth callback through Presenter, fix toast colors", "duration_hint": "completed"}
+{"timestamp": "2026-03-24T14:18:30.724756+00:00", "files_changed": 1, "commit": "b6a3958 fix(ai): revert OAuth redirect rewrite, use paste-callback flow instead", "duration_hint": "completed"}
+{"timestamp": "2026-03-24T14:49:26.783694+00:00", "files_changed": 2, "commit": "2382f07 feat(ai): implement direct OAuth PKCE flow with platform.claude.com code page", "duration_hint": "completed"}
+{"timestamp": "2026-03-24T15:02:27.899446+00:00", "files_changed": 2, "commit": "2382f07 feat(ai): implement direct OAuth PKCE flow with platform.claude.com code page", "duration_hint": "completed"}
+{"timestamp": "2026-03-24T15:20:25.072546+00:00", "files_changed": 2, "commit": "eebe8df fix(ai): strip hash fragment from OAuth code before token exchange", "duration_hint": "completed"}
+{"timestamp": "2026-03-24T15:56:33.312719+00:00", "files_changed": 2, "commit": "51f6120 fix(ai): use correct token endpoint (platform.claude.com) and JSON format", "duration_hint": "completed"}
+{"timestamp": "2026-03-24T15:56:38.363024+00:00", "files_changed": 2, "commit": "51f6120 fix(ai): use correct token endpoint (platform.claude.com) and JSON format", "duration_hint": "completed"}
+{"timestamp": "2026-03-24T16:33:42.102600+00:00", "files_changed": 2, "commit": "1b8ebdf fix(ai): use form-urlencoded for OAuth token exchange (not JSON)", "duration_hint": "completed"}
+{"timestamp": "2026-03-24T16:33:46.735167+00:00", "files_changed": 2, "commit": "1b8ebdf fix(ai): use form-urlencoded for OAuth token exchange (not JSON)", "duration_hint": "completed"}
+{"timestamp": "2026-03-24T17:37:10.109043+00:00", "files_changed": 2, "commit": "e9bb4ae fix(ai): add claude-code user-agent to token exchange, use reqwest .form()", "duration_hint": "completed"}
+{"timestamp": "2026-03-24T17:37:16.405348+00:00", "files_changed": 2, "commit": "e9bb4ae fix(ai): add claude-code user-agent to token exchange, use reqwest .form()", "duration_hint": "completed"}
+{"timestamp": "2026-03-24T18:29:56.384275+00:00", "files_changed": 1, "commit": "f52337c refactor(ai): replace custom OAuth PKCE with CLIProxyAPI native login via SSH tunnel", "duration_hint": "completed"}
+{"timestamp": "2026-03-24T18:29:59.818614+00:00", "files_changed": 1, "commit": "f52337c refactor(ai): replace custom OAuth PKCE with CLIProxyAPI native login via SSH tunnel", "duration_hint": "completed"}
+{"timestamp": "2026-03-24T18:35:54.798842+00:00", "files_changed": 1, "commit": "f52337c refactor(ai): replace custom OAuth PKCE with CLIProxyAPI native login via SSH tunnel", "duration_hint": "completed"}
+{"timestamp": "2026-03-24T18:36:27.862527+00:00", "files_changed": 1, "commit": "f52337c refactor(ai): replace custom OAuth PKCE with CLIProxyAPI native login via SSH tunnel", "duration_hint": "completed"}
+{"timestamp": "2026-03-24T18:39:53.052546+00:00", "files_changed": 1, "commit": "986ec90 fix(ai): keep stdout handle alive to prevent SIGPIPE killing login process", "duration_hint": "completed"}
+{"timestamp": "2026-03-24T18:41:33.289941+00:00", "files_changed": 1, "commit": "986ec90 fix(ai): keep stdout handle alive to prevent SIGPIPE killing login process", "duration_hint": "completed"}
+{"timestamp": "2026-03-24T18:43:30.322892+00:00", "files_changed": 1, "commit": "986ec90 fix(ai): keep stdout handle alive to prevent SIGPIPE killing login process", "duration_hint": "completed"}
+{"timestamp": "2026-03-24T18:49:34.342205+00:00", "files_changed": 1, "commit": "986ec90 fix(ai): keep stdout handle alive to prevent SIGPIPE killing login process", "duration_hint": "completed"}
+{"timestamp": "2026-03-24T18:53:11.856442+00:00", "files_changed": 1, "commit": "e76f427 fix(bible): add Slovak abbreviation aliases and increase agent step limit", "duration_hint": "completed"}
+{"timestamp": "2026-03-24T19:08:47.902368+00:00", "files_changed": 1, "commit": "7ddd851 feat(ai): persistent chat, library targeting, SSE streaming progress", "duration_hint": "completed"}
+{"timestamp": "2026-03-24T19:14:28.197318+00:00", "files_changed": 1, "commit": "f115189 fix(ui): add web_sys features for SSE streaming, use opus model", "duration_hint": "completed"}
+{"timestamp": "2026-03-24T19:19:14.118195+00:00", "files_changed": 1, "commit": "f115189 fix(ui): add web_sys features for SSE streaming, use opus model", "duration_hint": "completed"}
+{"timestamp": "2026-03-24T19:25:43.924966+00:00", "files_changed": 1, "commit": "65f4fe8 fix(ai): rewrite system prompt for smarter Bible verse workflow", "duration_hint": "completed"}
+{"timestamp": "2026-03-24T19:31:13.700672+00:00", "files_changed": 1, "commit": "65f4fe8 fix(ai): rewrite system prompt for smarter Bible verse workflow", "duration_hint": "completed"}
+{"timestamp": "2026-03-24T19:40:04.148284+00:00", "files_changed": 1, "commit": "79ca791 fix(resolume): emit BibleUpdate when slide has reference in stage field", "duration_hint": "completed"}
+{"timestamp": "2026-03-24T19:49:22.174070+00:00", "files_changed": 1, "commit": "a9085ae fix(bible): set stage/group to reference label in compose_bible_slides", "duration_hint": "completed"}
+{"timestamp": "2026-03-24T20:00:05.597245+00:00", "files_changed": 1, "commit": "d23a819 fix(ai): mandate translation code in references, add translation detection", "duration_hint": "completed"}
+{"timestamp": "2026-03-24T20:13:03.045306+00:00", "files_changed": 1, "commit": "b36b257 fix(bible): auto-refresh Bible tab + fix slide reference fallback", "duration_hint": "completed"}
+{"timestamp": "2026-03-24T20:28:59.992137+00:00", "files_changed": 1, "commit": "3d5f309 fix(bible): unify PreparedSlideCard editor to match LiveSlideCard fields", "duration_hint": "completed"}
+{"timestamp": "2026-03-24T20:29:34.195240+00:00", "files_changed": 1, "commit": "3d5f309 fix(bible): unify PreparedSlideCard editor to match LiveSlideCard fields", "duration_hint": "completed"}
+{"timestamp": "2026-03-24T20:34:32.178041+00:00", "files_changed": 1, "commit": "420893e refactor(bible): extract shared bible_slide_editor_view for both tabs", "duration_hint": "completed"}
+{"timestamp": "2026-03-24T20:36:38.274713+00:00", "files_changed": 1, "commit": "420893e refactor(bible): extract shared bible_slide_editor_view for both tabs", "duration_hint": "completed"}
+{"timestamp": "2026-03-24T20:42:23.683033+00:00", "files_changed": 1, "commit": "420893e refactor(bible): extract shared bible_slide_editor_view for both tabs", "duration_hint": "completed"}
+{"timestamp": "2026-03-24T20:45:14.783585+00:00", "files_changed": 1, "commit": "420893e refactor(bible): extract shared bible_slide_editor_view for both tabs", "duration_hint": "completed"}
+{"timestamp": "2026-03-24T20:52:26.241167+00:00", "files_changed": 1, "commit": "2605a9f fix(bible): emit BibleSlidesChanged when AI creates presentation", "duration_hint": "completed"}
+{"timestamp": "2026-03-24T20:56:16.748013+00:00", "files_changed": 1, "commit": "2605a9f fix(bible): emit BibleSlidesChanged when AI creates presentation", "duration_hint": "completed"}
+{"timestamp": "2026-03-24T20:57:16.625350+00:00", "files_changed": 1, "commit": "2605a9f fix(bible): emit BibleSlidesChanged when AI creates presentation", "duration_hint": "completed"}
+{"timestamp": "2026-03-24T20:58:32.248503+00:00", "files_changed": 1, "commit": "2605a9f fix(bible): emit BibleSlidesChanged when AI creates presentation", "duration_hint": "completed"}
+{"timestamp": "2026-03-24T21:08:13.092823+00:00", "files_changed": 1, "commit": "242d3d6 fix(ai): enforce configured character limit in AI slide creation", "duration_hint": "completed"}
+{"timestamp": "2026-03-24T21:09:38.152302+00:00", "files_changed": 1, "commit": "242d3d6 fix(ai): enforce configured character limit in AI slide creation", "duration_hint": "completed"}
+{"timestamp": "2026-03-24T21:11:10.256209+00:00", "files_changed": 1, "commit": "242d3d6 fix(ai): enforce configured character limit in AI slide creation", "duration_hint": "completed"}
+{"timestamp": "2026-03-24T21:12:10.406642+00:00", "files_changed": 1, "commit": "242d3d6 fix(ai): enforce configured character limit in AI slide creation", "duration_hint": "completed"}
+{"timestamp": "2026-03-24T21:23:10.135087+00:00", "files_changed": 1, "commit": "37a5ddb feat(ai): convert bold text from clipboard to ## markers on paste", "duration_hint": "completed"}
+{"timestamp": "2026-03-24T21:28:14.339686+00:00", "files_changed": 1, "commit": "b313562 fix(ai): rewrite ## marker rules to handle bold references correctly", "duration_hint": "completed"}
+{"timestamp": "2026-03-24T21:33:39.585464+00:00", "files_changed": 1, "commit": "b313562 fix(ai): rewrite ## marker rules to handle bold references correctly", "duration_hint": "completed"}
+{"timestamp": "2026-03-24T21:36:20.889774+00:00", "files_changed": 1, "commit": "2935b84 fix(ai): require verse numbers in slide main text", "duration_hint": "completed"}
+{"timestamp": "2026-03-24T21:39:13.718449+00:00", "files_changed": 1, "commit": "2935b84 fix(ai): require verse numbers in slide main text", "duration_hint": "completed"}
+{"timestamp": "2026-03-24T21:40:09.906072+00:00", "files_changed": 1, "commit": "2935b84 fix(ai): require verse numbers in slide main text", "duration_hint": "completed"}
+{"timestamp": "2026-03-24T21:42:28.209540+00:00", "files_changed": 1, "commit": "08fc60e fix(ai): merge short consecutive verses onto same slide", "duration_hint": "completed"}
+{"timestamp": "2026-03-24T21:48:51.550414+00:00", "files_changed": 1, "commit": "dddde66 fix(ai): stronger instruction to merge short verses onto same slide", "duration_hint": "completed"}
+{"timestamp": "2026-03-24T21:53:41.710680+00:00", "files_changed": 1, "commit": "dddde66 fix(ai): stronger instruction to merge short verses onto same slide", "duration_hint": "completed"}
+{"timestamp": "2026-03-24T22:32:10.106443+00:00", "files_changed": 3, "commit": "dddde66 fix(ai): stronger instruction to merge short verses onto same slide", "duration_hint": "completed"}
+{"timestamp": "2026-03-24T22:33:12.844449+00:00", "files_changed": 3, "commit": "dddde66 fix(ai): stronger instruction to merge short verses onto same slide", "duration_hint": "completed"}
+{"timestamp": "2026-03-24T22:38:13.148722+00:00", "files_changed": 3, "commit": "dddde66 fix(ai): stronger instruction to merge short verses onto same slide", "duration_hint": "completed"}
+{"timestamp": "2026-03-24T23:36:03.720073+00:00", "files_changed": 1, "commit": "6e9a8ff fix(e2e): update AI error assertion to match both error message variants", "duration_hint": "completed"}
+{"timestamp": "2026-03-24T23:36:07.264098+00:00", "files_changed": 1, "commit": "6e9a8ff fix(e2e): update AI error assertion to match both error message variants", "duration_hint": "completed"}
+{"timestamp": "2026-03-25T08:15:39.172866+00:00", "files_changed": 1, "commit": "64a9fd5 fix(e2e): set Bible env vars in test support so translations import locally", "duration_hint": "completed"}
+{"timestamp": "2026-03-25T08:18:43.073690+00:00", "files_changed": 1, "commit": "64a9fd5 fix(e2e): set Bible env vars in test support so translations import locally", "duration_hint": "completed"}
+{"timestamp": "2026-03-25T08:33:14.018886+00:00", "files_changed": 1, "commit": "ecd5001 fix(bible): remove worship group field from Bible code", "duration_hint": "completed"}
+{"timestamp": "2026-03-25T08:36:06.885074+00:00", "files_changed": 1, "commit": "ecd5001 fix(bible): remove worship group field from Bible code", "duration_hint": "completed"}
+{"timestamp": "2026-03-25T08:50:13.918462+00:00", "files_changed": 1, "commit": "7cda9e9 refactor(bible): use metadata for references, stop using worship stage field", "duration_hint": "completed"}
+{"timestamp": "2026-03-25T10:28:07.940912+00:00", "files_changed": 1, "commit": "1568ae5 fix(ui): update bible_controls.rs to use new BibleSlideDto field names", "duration_hint": "completed"}
+{"timestamp": "2026-03-25T10:28:15.371564+00:00", "files_changed": 1, "commit": "1568ae5 fix(ui): update bible_controls.rs to use new BibleSlideDto field names", "duration_hint": "completed"}
+{"timestamp": "2026-03-25T11:17:23.647796+00:00", "files_changed": 1, "commit": "890931d test(ai): add tests for Bible metadata on AI-created slides", "duration_hint": "completed"}
+{"timestamp": "2026-03-25T11:19:03.059064+00:00", "files_changed": 1, "commit": "890931d test(ai): add tests for Bible metadata on AI-created slides", "duration_hint": "completed"}
+{"timestamp": "2026-03-25T11:24:03.530250+00:00", "files_changed": 1, "commit": "890931d test(ai): add tests for Bible metadata on AI-created slides", "duration_hint": "completed"}
+{"timestamp": "2026-03-25T11:35:05.626725+00:00", "files_changed": 1, "commit": "890931d test(ai): add tests for Bible metadata on AI-created slides", "duration_hint": "completed"}
+{"timestamp": "2026-03-25T11:44:18.078762+00:00", "files_changed": 1, "commit": "890931d test(ai): add tests for Bible metadata on AI-created slides", "duration_hint": "completed"}
+{"timestamp": "2026-03-25T11:47:12.241816+00:00", "files_changed": 1, "commit": "890931d test(ai): add tests for Bible metadata on AI-created slides", "duration_hint": "completed"}
+{"timestamp": "2026-03-25T12:22:09.511683+00:00", "files_changed": 1, "commit": "a25cd21 fix(ai): instruct LLM to use full passage reference on multi-slide Bible passages", "duration_hint": "completed"}
+{"timestamp": "2026-03-25T12:22:15.878310+00:00", "files_changed": 1, "commit": "a25cd21 fix(ai): instruct LLM to use full passage reference on multi-slide Bible passages", "duration_hint": "completed"}
+{"timestamp": "2026-03-25T13:01:24.378928+00:00", "files_changed": 2, "commit": "bd7d3ca chore: bump version to 0.2.0", "duration_hint": "completed"}
+{"timestamp": "2026-03-25T13:01:29.512394+00:00", "files_changed": 2, "commit": "bd7d3ca chore: bump version to 0.2.0", "duration_hint": "completed"}
+{"timestamp": "2026-03-25T13:28:42.133332+00:00", "files_changed": 2, "commit": "56b5a1b chore: bump version to 0.2.1 for next development cycle", "duration_hint": "completed"}
+{"timestamp": "2026-03-25T13:32:17.226402+00:00", "files_changed": 2, "commit": "56b5a1b chore: bump version to 0.2.1 for next development cycle", "duration_hint": "completed"}
+{"timestamp": "2026-03-25T13:35:23.809524+00:00", "files_changed": 2, "commit": "cbd1928 fix(ci): add schema validation to deploys, add WASM build to release", "duration_hint": "completed"}
+{"timestamp": "2026-03-25T13:39:45.789521+00:00", "files_changed": 2, "commit": "cbd1928 fix(ci): add schema validation to deploys, add WASM build to release", "duration_hint": "completed"}
+{"timestamp": "2026-03-25T13:39:53.282449+00:00", "files_changed": 2, "commit": "cbd1928 fix(ci): add schema validation to deploys, add WASM build to release", "duration_hint": "completed"}
+{"timestamp": "2026-03-25T13:43:36.357265+00:00", "files_changed": 2, "commit": "cbd1928 fix(ci): add schema validation to deploys, add WASM build to release", "duration_hint": "completed"}
+{"timestamp": "2026-03-25T13:49:26.782638+00:00", "files_changed": 2, "commit": "a09a407 fix(ci): add missing CLIProxyAPI deploy step to release.yml", "duration_hint": "completed"}
+{"timestamp": "2026-03-25T14:05:23.848388+00:00", "files_changed": 0, "commit": "3e1c157 fix(ai): restore PKCE OAuth login flow, remove SSH tunnel requirement", "duration_hint": "completed"}
+{"timestamp": "2026-03-25T14:22:09.757260+00:00", "files_changed": 2, "commit": "3e1c157 fix(ai): restore PKCE OAuth login flow, remove SSH tunnel requirement", "duration_hint": "completed"}
+{"timestamp": "2026-03-25T14:35:54.426853+00:00", "files_changed": 2, "commit": "51ed6cd fix(ai): strip URL fragment from OAuth code before token exchange", "duration_hint": "completed"}
+{"timestamp": "2026-03-25T14:39:24.947412+00:00", "files_changed": 2, "commit": "51ed6cd fix(ai): strip URL fragment from OAuth code before token exchange", "duration_hint": "completed"}
+{"timestamp": "2026-03-25T14:42:32.188919+00:00", "files_changed": 2, "commit": "51ed6cd fix(ai): strip URL fragment from OAuth code before token exchange", "duration_hint": "completed"}
+{"timestamp": "2026-03-25T14:42:36.669871+00:00", "files_changed": 2, "commit": "51ed6cd fix(ai): strip URL fragment from OAuth code before token exchange", "duration_hint": "completed"}

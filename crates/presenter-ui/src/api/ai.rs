@@ -57,7 +57,6 @@ pub struct ProxyStatus {
 #[serde(rename_all = "camelCase")]
 pub struct LoginResponse {
     pub login_url: String,
-    pub ssh_command: String,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -126,4 +125,12 @@ pub async fn proxy_stop() -> Result<ProxyStatus, ApiError> {
 
 pub async fn proxy_login() -> Result<LoginResponse, ApiError> {
     super::post_json("/ai/proxy/login", &serde_json::json!({})).await
+}
+
+pub async fn proxy_complete_login(callback_url: &str) -> Result<ProxyStatus, ApiError> {
+    super::post_json(
+        "/ai/proxy/complete-login",
+        &serde_json::json!({"callbackUrl": callback_url}),
+    )
+    .await
 }
