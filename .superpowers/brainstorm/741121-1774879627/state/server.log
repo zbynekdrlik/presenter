@@ -1,0 +1,2 @@
+{"type":"server-started","port":63543,"host":"0.0.0.0","url_host":"10.77.8.134","url":"http://10.77.8.134:63543","screen_dir":"/home/newlevel/devel/presenter/presenter-dev2/.superpowers/brainstorm/741121-1774879627/content","state_dir":"/home/newlevel/devel/presenter/presenter-dev2/.superpowers/brainstorm/741121-1774879627/state"}
+{"type":"server-stopped","reason":"idle timeout"}

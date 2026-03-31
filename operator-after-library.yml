@@ -1,0 +1,108 @@
+- generic [ref=e1]:
+  - banner [ref=e2]:
+    - generic [ref=e3]:
+      - heading "Presenter" [level=1] [ref=e4]
+      - generic [ref=e5]: v0.2.2
+      - search [ref=e6]:
+        - searchbox "Search presenter content" [ref=e8]
+        - button "Clear search" [ref=e9] [cursor=pointer]:
+          - text: ×
+          - generic [ref=e10]: Clear search
+    - navigation [ref=e11]:
+      - button "Worship" [ref=e12] [cursor=pointer]
+      - button "Bible" [ref=e13] [cursor=pointer]
+      - button "Timers" [ref=e14] [cursor=pointer]
+      - button "AI" [ref=e15] [cursor=pointer]
+      - button "Settings" [ref=e16] [cursor=pointer]
+    - generic [ref=e17]:
+      - generic "Stage display mode" [ref=e18]:
+        - generic [ref=e19]: Stage Output
+        - combobox "Stage Output" [ref=e20] [cursor=pointer]:
+          - option "WORSHIP SNV" [selected]
+          - option "WORSHIP PP"
+          - option "TIMER"
+          - option "PREACH"
+      - generic [ref=e21]:
+        - generic [ref=e22]:
+          - generic [ref=e23]
+          - generic [ref=e29]: sláva ti lev z júdy nech teraz reve lev
+        - button "Stage display health" [ref=e30] [cursor=pointer]:
+          - generic [ref=e31]: "0"
+          - generic [ref=e32]: /
+          - generic [ref=e33]: "2"
+        - button "Clear live outputs" [ref=e34] [cursor=pointer]: 🧹
+      - generic [ref=e35]:
+        - button "Live" [ref=e36] [cursor=pointer]
+        - button "Edit" [ref=e37] [cursor=pointer]
+  - main [ref=e38]:
+    - generic [ref=e39]:
+      - generic [ref=e40]:
+        - generic [ref=e41]:
+          - generic [ref=e42]
+          - generic [ref=e56]
+        - generic [ref=e71]:
+          - generic [ref=e72]
+          - list
+      - generic [ref=e78]:
+        - button "+" [ref=e80] [cursor=pointer]
+        - generic [ref=e81]:
+          - generic [ref=e561]: Vsetci
+          - article [ref=e562]
+          - article [ref=e569]
+          - article [ref=e576]
+          - article [ref=e582]
+          - article [ref=e588]
+          - article [ref=e594]
+          - article [ref=e600]
+          - article [ref=e606]
+          - article [ref=e612]
+          - article [ref=e619]
+          - article [ref=e625]
+          - article [ref=e632]
+          - article [ref=e641]
+          - article [ref=e647]
+          - article [ref=e653]
+          - article [ref=e659]
+          - article [ref=e665]
+          - article [ref=e671]
+          - article [ref=e678]
+          - article [ref=e684]
+          - article [ref=e691]
+          - article [ref=e697]
+          - article [ref=e704]
+          - article [ref=e713]
+          - article [ref=e719]
+          - article [ref=e726]
+          - article [ref=e733]
+          - article [ref=e742]
+          - article [ref=e751]
+          - article [ref=e760]
+          - article [ref=e769]
+          - article [ref=e778]
+          - article [ref=e787]
+          - article [ref=e796]
+          - article [ref=e805]
+          - article [ref=e814]
+          - article [ref=e823]
+          - article [ref=e832]
+          - article [ref=e841]
+          - article [ref=e850]
+          - article [ref=e856]
+          - article [ref=e863]
+          - article [ref=e869]
+          - article [ref=e876]
+          - article [ref=e882]
+          - article [ref=e889]
+          - article [ref=e898]
+          - article [ref=e907]
+          - article [ref=e916]
+          - article [ref=e925]
+          - article [ref=e934]
+          - article [ref=e943]
+          - article [ref=e952]
+          - article [ref=e961]
+          - article [ref=e967]
+          - article [ref=e973]
+          - article [ref=e979]
+          - article [ref=e985]
+  - contentinfo: v0.2.2

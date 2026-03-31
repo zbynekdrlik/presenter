@@ -1110,8 +1110,7 @@ async fn stage_displays_endpoint_returns_builtins() {
         .unwrap();
     // Accept either 200 (dist/ exists) or 503 (dist/ not built)
     assert!(
-        response.status() == StatusCode::OK
-            || response.status() == StatusCode::SERVICE_UNAVAILABLE
+        response.status() == StatusCode::OK || response.status() == StatusCode::SERVICE_UNAVAILABLE
     );
 
     let response = app
