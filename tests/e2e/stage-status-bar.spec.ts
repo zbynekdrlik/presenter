@@ -298,8 +298,8 @@ test("status bar contains clock, LIVE, and connection status", async ({
   await expect(liveEl).toBeVisible();
   await expect(connectionEl).toBeVisible();
 
-  // Verify connection shows "Connected"
-  await expect(connectionEl).toHaveText("Connected");
+  // Verify connection shows "CONNECTED" (latency is in a nested span)
+  await expect(connectionEl).toContainText("CONNECTED");
 
   await stagePage.close();
 });
