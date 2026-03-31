@@ -42,6 +42,8 @@ fn App() -> impl IntoView {
             view! { <pages::operator::OperatorPage initial_view=initial_view /> }.into_any()
         } else if p == "/ui/tablet" {
             view! { <pages::tablet::TabletPage /> }.into_any()
+        } else if p == "/stage" {
+            view! { <pages::stage::StagePage /> }.into_any()
         } else {
             view! {
                 <div data-role="not-found">

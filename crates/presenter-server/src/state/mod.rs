@@ -437,10 +437,6 @@ impl AppState {
         self.stage_connections.clone()
     }
 
-    pub fn heartbeat_config(&self) -> StageHeartbeatConfig {
-        self.heartbeat_config
-    }
-
     pub async fn stage_connections_snapshot(&self) -> Vec<StageClientSnapshot> {
         self.stage_connections.snapshot().await
     }
@@ -665,7 +661,7 @@ impl AppState {
         Ok(())
     }
 
-    // Stage display, appearance, and design methods are in stage_display.rs
+    // Stage display methods are in stage_display.rs
     // Slide editing methods are in slides.rs
     // Timer methods are in timers.rs
     // Broadcasting methods are in broadcasting.rs

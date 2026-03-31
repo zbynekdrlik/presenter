@@ -1,0 +1,343 @@
+body.stage {
+    margin: 0;
+    padding: 0;
+    background: #000;
+    color: #fff;
+    overflow: hidden;
+    font-family: 'Inter', system-ui, -apple-system, sans-serif;
+    width: 100vw;
+    height: 100vh;
+}
+
+.stage-container {
+    position: relative;
+    width: 100vw;
+    height: 100vh;
+    overflow: hidden;
+}
+
+/* ===== worship-snv layout ===== */
+
+.stage__current-group {
+    position: absolute;
+    left: 25%;
+    top: 1%;
+    width: 50%;
+    height: 5%;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    overflow: hidden;
+}
+
+.stage__current-slide {
+    position: absolute;
+    left: 2%;
+    top: 7%;
+    width: 96%;
+    height: 48%;
+    display: flex;
+    align-items: flex-start;
+    justify-content: center;
+    overflow: hidden;
+}
+
+.stage__next-group {
+    position: absolute;
+    left: 25%;
+    top: 56%;
+    width: 50%;
+    height: 4%;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    overflow: hidden;
+}
+
+.stage__next-slide {
+    position: absolute;
+    left: 2%;
+    top: 61%;
+    width: 96%;
+    height: 30%;
+    display: flex;
+    align-items: flex-start;
+    justify-content: center;
+    overflow: hidden;
+}
+
+/* ===== Status bar ===== */
+
+.stage__status-bar {
+    position: absolute;
+    left: 0;
+    bottom: 0;
+    width: 100%;
+    height: 7%;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 0 2%;
+    box-sizing: border-box;
+    overflow: hidden;
+}
+
+.stage__clock {
+    color: #38bdf8;
+    font-weight: 700;
+    font-variant-numeric: tabular-nums;
+    white-space: nowrap;
+    font-size: 2vw;
+}
+
+.stage__live-pill {
+    padding: 0.3rem 1.2rem;
+    border-radius: 999px;
+    font-weight: 700;
+    font-size: 0.9vw;
+    letter-spacing: 0.12em;
+    text-transform: uppercase;
+    white-space: nowrap;
+    flex-shrink: 0;
+}
+
+.stage__live-pill--off {
+    background: rgba(34, 197, 94, 0.9);
+    color: #fff;
+    box-shadow: 0 0 20px rgba(34, 197, 94, 0.5);
+}
+
+.stage__live-pill--on {
+    background: rgba(239, 68, 68, 0.95);
+    color: #fff;
+    box-shadow: 0 0 30px rgba(239, 68, 68, 0.7);
+    animation: stage-pulse 2s ease-in-out infinite;
+}
+
+@keyframes stage-pulse {
+    0%, 100% { opacity: 1; }
+    50% { opacity: 0.7; }
+}
+
+.stage__connection {
+    color: #38bdf8;
+    font-size: 0.9vw;
+    font-weight: 600;
+    letter-spacing: 0.1em;
+    text-transform: uppercase;
+    white-space: nowrap;
+}
+
+.stage__connection-latency {
+    opacity: 0.7;
+    font-variant-numeric: tabular-nums;
+}
+
+/* ===== Group pills ===== */
+
+.stage__group-pill {
+    border-radius: 999px;
+    padding: 0.15rem 0.6rem;
+    letter-spacing: 0.18em;
+    text-transform: uppercase;
+    font-weight: 700;
+}
+
+.stage__current-group .stage__group-pill {
+    font-size: 0.9vw;
+}
+
+.stage__next-group .stage__group-pill {
+    font-size: 0.7vw;
+}
+
+/* ===== Slide text ===== */
+
+.stage__slide-text {
+    text-align: center;
+    line-height: 1.1;
+    margin: 0;
+    white-space: pre-wrap;
+    font-weight: 700;
+    width: 100%;
+}
+
+.stage__current-slide .stage__slide-text {
+    color: #f8fafc;
+}
+
+.stage__next-slide .stage__slide-text {
+    color: #cbd5f5;
+}
+
+/* ===== Bible overlay ===== */
+
+.stage__bible-overlay {
+    position: absolute;
+    top: 0;
+    left: 0;
+    width: 100%;
+    height: 100%;
+    background: rgba(0, 0, 0, 0.92);
+    z-index: 100;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    padding: 4%;
+    box-sizing: border-box;
+}
+
+.stage__bible-overlay[data-visible="false"] {
+    display: none;
+}
+
+.stage__bible-text {
+    color: #f8fafc;
+    font-size: 3vw;
+    font-weight: 700;
+    text-align: center;
+    line-height: 1.3;
+    margin-bottom: 1rem;
+}
+
+.stage__bible-reference {
+    color: #94a3b8;
+    font-size: 1.5vw;
+    font-weight: 600;
+    text-align: center;
+    letter-spacing: 0.05em;
+}
+
+.stage__bible-secondary {
+    margin-top: 2rem;
+    padding-top: 2rem;
+    border-top: 1px solid rgba(255, 255, 255, 0.15);
+    text-align: center;
+}
+
+.stage__bible-secondary[data-visible="false"] {
+    display: none;
+}
+
+.stage__bible-secondary-text {
+    color: #cbd5e1;
+    font-size: 2.2vw;
+    font-weight: 600;
+    line-height: 1.3;
+    margin-bottom: 0.5rem;
+}
+
+.stage__bible-secondary-ref {
+    color: #64748b;
+    font-size: 1.2vw;
+    font-weight: 600;
+    letter-spacing: 0.05em;
+}
+
+/* ===== worship-pp layout ===== */
+
+.stage-pp__slides-area {
+    position: absolute;
+    left: 0;
+    top: 0;
+    width: 70%;
+    height: 92%;
+    overflow: hidden;
+}
+
+.stage-pp__playlist-sidebar {
+    position: absolute;
+    right: 0;
+    top: 0;
+    width: 30%;
+    height: 92%;
+    overflow-y: auto;
+    border-left: 1px solid rgba(255, 255, 255, 0.1);
+    padding: 1% 1.5%;
+    box-sizing: border-box;
+}
+
+.stage-pp__playlist-entry {
+    padding: 0.4rem 0.6rem;
+    color: #94a3b8;
+    font-size: 0.9vw;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    border-radius: 4px;
+    margin-bottom: 2px;
+}
+
+.stage-pp__playlist-entry--active {
+    background: rgba(56, 189, 248, 0.15);
+    color: #f8fafc;
+    font-weight: 700;
+}
+
+/* ===== timer layout ===== */
+
+.stage-timer__display {
+    position: absolute;
+    left: 5%;
+    top: 10%;
+    width: 90%;
+    height: 75%;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    overflow: hidden;
+}
+
+.stage-timer__text {
+    color: #f8fafc;
+    font-weight: 700;
+    font-variant-numeric: tabular-nums;
+    text-align: center;
+}
+
+/* ===== preach layout ===== */
+
+.stage-preach__display {
+    position: absolute;
+    left: 5%;
+    top: 10%;
+    width: 90%;
+    height: 75%;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    overflow: hidden;
+}
+
+.stage-preach__text {
+    font-weight: 700;
+    font-variant-numeric: tabular-nums;
+    text-align: center;
+}
+
+.stage-preach__text--normal {
+    color: #f8fafc;
+}
+
+.stage-preach__text--overtime {
+    color: #ef4444;
+}
+
+/* ===== Connection state indicators ===== */
+
+.stage__connection--connecting {
+    color: #fbbf24;
+}
+
+.stage__connection--connected {
+    color: #38bdf8;
+}
+
+.stage__connection--reconnecting {
+    color: #fb923c;
+}
+
+.stage__connection--disconnected {
+    color: #ef4444;
+}

@@ -263,18 +263,6 @@ impl StageHeartbeatConfig {
             Duration::milliseconds(millis)
         })
     }
-
-    pub fn interval_ms(&self) -> u64 {
-        self.interval.as_millis().min(u64::MAX as u128) as u64
-    }
-
-    pub fn grace_ms(&self) -> u64 {
-        self.grace.as_millis().min(u64::MAX as u128) as u64
-    }
-
-    pub fn disconnect_ms(&self) -> u64 {
-        self.disconnect_after.as_millis().min(u64::MAX as u128) as u64
-    }
 }
 
 #[cfg(test)]
