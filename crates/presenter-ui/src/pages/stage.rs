@@ -97,6 +97,29 @@ pub fn StagePage() -> impl IntoView {
         });
     }
 
+    // Sync body attributes for E2E test compatibility
+    {
+        let bible_overlay = ctx.bible_overlay;
+        Effect::new(move |_| {
+            if let Some(body) = crate::utils::window::document_body() {
+                let active = if bible_overlay.get().is_some() {
+                    "true"
+                } else {
+                    "false"
+                };
+                let _ = body.set_attribute("data-bible-active", active);
+            }
+        });
+    }
+    {
+        let layout_code = ctx.layout_code;
+        Effect::new(move |_| {
+            if let Some(body) = crate::utils::window::document_body() {
+                let _ = body.set_attribute("data-layout-code", &layout_code.get());
+            }
+        });
+    }
+
     let ws_state = ws_handle.state;
     let latency_ms = ws_handle.latency_ms;
     let layout_code = ctx.layout_code;
