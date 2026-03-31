@@ -94,50 +94,46 @@ test.describe("WASM Stage Display", () => {
     );
     const libs = await libsResp.json();
 
-    if (libs.length > 0) {
-      const firstLib = libs[0];
-      const presResp = await context.request.get(
-        new URL(
-          `/libraries/${firstLib.id}/presentations`,
-          baseURL,
-        ).toString(),
-      );
-      const presentations = await presResp.json();
+    expect(libs.length).toBeGreaterThan(0);
+    const firstLib = libs[0];
 
-      if (presentations.length > 0) {
-        const pres = presentations[0];
-        const detailResp = await context.request.get(
-          new URL(`/presentations/${pres.id}`, baseURL).toString(),
-        );
-        const detail = await detailResp.json();
+    // Get library detail which includes presentations with slides
+    const libDetailResp = await context.request.get(
+      new URL(`/libraries`, baseURL).toString(),
+    );
+    const libDetails = await libDetailResp.json();
+    const lib = libDetails.find(
+      (l: { id: string }) => l.id === firstLib.id,
+    );
+    expect(lib).toBeTruthy();
+    expect(lib.presentations.length).toBeGreaterThan(0);
 
-        if (detail.slides && detail.slides.length >= 2) {
-          // Trigger a slide
-          await context.request.post(
-            new URL("/stage/state", baseURL).toString(),
-            {
-              data: {
-                presentationId: pres.id,
-                currentSlideId: detail.slides[0].id,
-                nextSlideId: detail.slides[1].id,
-              },
-            },
-          );
+    const pres = lib.presentations[0];
+    expect(pres.slides.length).toBeGreaterThanOrEqual(2);
 
-          // Wait for current slide text to appear
-          const currentSlide = stagePage.locator(
-            ".stage__current-slide .stage__slide-text",
-          );
-          await expect(currentSlide).not.toBeEmpty({ timeout: 5_000 });
+    // Trigger a slide
+    await context.request.post(
+      new URL("/stage/state", baseURL).toString(),
+      {
+        data: {
+          presentationId: pres.id,
+          currentSlideId: pres.slides[0].id,
+          nextSlideId: pres.slides[1].id,
+        },
+      },
+    );
 
-          // Next slide should also have text
-          const nextSlide = stagePage.locator(
-            ".stage__next-slide .stage__slide-text",
-          );
-          await expect(nextSlide).not.toBeEmpty({ timeout: 5_000 });
-        }
-      }
-    }
+    // Wait for current slide text to appear
+    const currentSlide = stagePage.locator(
+      ".stage__current-slide .stage__slide-text",
+    );
+    await expect(currentSlide).not.toBeEmpty({ timeout: 5_000 });
+
+    // Next slide should also have text
+    const nextSlide = stagePage.locator(
+      ".stage__next-slide .stage__slide-text",
+    );
+    await expect(nextSlide).not.toBeEmpty({ timeout: 5_000 });
 
     expect(consoleMessages).toEqual([]);
     await stagePage.close();
