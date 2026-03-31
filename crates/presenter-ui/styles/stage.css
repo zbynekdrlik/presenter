@@ -160,6 +160,8 @@ body.stage {
     white-space: pre-wrap;
     font-weight: 700;
     width: 100%;
+    height: 100%;
+    overflow: hidden;
 }
 
 .stage__current-slide .stage__slide-text {
@@ -294,6 +296,9 @@ body.stage {
     font-weight: 700;
     font-variant-numeric: tabular-nums;
     text-align: center;
+    width: 100%;
+    height: 100%;
+    overflow: hidden;
 }
 
 /* ===== preach layout ===== */
@@ -314,6 +319,9 @@ body.stage {
     font-weight: 700;
     font-variant-numeric: tabular-nums;
     text-align: center;
+    width: 100%;
+    height: 100%;
+    overflow: hidden;
 }
 
 .stage-preach__text--normal {
