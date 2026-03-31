@@ -1,30 +1,13 @@
-use axum::{
-    extract::{Path, State},
-    response::{IntoResponse, Response},
-    Json,
-};
+use axum::{extract::State, Json};
 use serde::{Deserialize, Serialize};
 use tracing::instrument;
 
 use super::{parse_uuid, AppError};
-use crate::{stage_ui, state::AppState};
+use crate::state::AppState;
 use axum::http::StatusCode;
 use presenter_core::{
-    PlaylistId, PresentationId, SlideId, StageAppearance, StageDesign, StageDisplayLayout,
-    StageDisplaySnapshot,
+    PlaylistId, PresentationId, SlideId, StageDisplayLayout, StageDisplaySnapshot,
 };
-
-#[instrument(skip_all)]
-pub(super) async fn stage_display_selected_html(
-    State(state): State<AppState>,
-) -> Result<Response, AppError> {
-    match state.selected_stage_display_snapshot().await? {
-        Some(snapshot) => {
-            Ok(stage_ui::render_stage_display(snapshot, state.heartbeat_config()).into_response())
-        }
-        None => Ok((StatusCode::SERVICE_UNAVAILABLE, "Stage display unavailable").into_response()),
-    }
-}
 
 #[instrument(skip_all)]
 pub(super) async fn stage_display_selected_snapshot_json(
@@ -149,25 +132,6 @@ pub(super) async fn clear_stage_state(
     Ok(StatusCode::NO_CONTENT)
 }
 
-#[instrument(skip_all)]
-pub(super) async fn get_stage_appearance(
-    State(state): State<AppState>,
-    Path(layout): Path<String>,
-) -> Result<Json<StageAppearance>, AppError> {
-    let appearance = state.get_stage_appearance(&layout).await?;
-    Ok(Json(appearance))
-}
-
-#[instrument(skip_all)]
-pub(super) async fn update_stage_appearance(
-    State(state): State<AppState>,
-    Path(layout): Path<String>,
-    Json(appearance): Json<StageAppearance>,
-) -> Result<StatusCode, AppError> {
-    state.set_stage_appearance(&layout, appearance).await?;
-    Ok(StatusCode::NO_CONTENT)
-}
-
 #[derive(Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub(super) struct BroadcastLiveResponse {
@@ -181,40 +145,4 @@ pub(super) async fn get_broadcast_live(
     Json(BroadcastLiveResponse {
         enabled: state.broadcast_live(),
     })
-}
-
-// Stage Design endpoints
-
-#[instrument(skip_all)]
-pub(super) async fn get_stage_design(
-    State(state): State<AppState>,
-    Path(layout): Path<String>,
-) -> Result<Json<StageDesign>, AppError> {
-    // Use shared status bar settings from worship-snv for all layouts
-    let design = state.get_stage_design_with_shared_status(&layout).await?;
-    Ok(Json(design))
-}
-
-#[instrument(skip_all)]
-pub(super) async fn update_stage_design(
-    State(state): State<AppState>,
-    Path(layout): Path<String>,
-    Json(design): Json<StageDesign>,
-) -> Result<StatusCode, AppError> {
-    if design.layout_code != layout {
-        return Err(AppError::bad_request_message(
-            "layout_code in body must match URL parameter",
-        ));
-    }
-    state.set_stage_design(&layout, design).await?;
-    Ok(StatusCode::NO_CONTENT)
-}
-
-#[instrument(skip_all)]
-pub(super) async fn reset_stage_design(
-    State(state): State<AppState>,
-    Path(layout): Path<String>,
-) -> Result<Json<StageDesign>, AppError> {
-    let design = state.reset_stage_design(&layout).await?;
-    Ok(Json(design))
 }

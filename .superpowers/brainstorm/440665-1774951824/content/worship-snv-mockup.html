@@ -1,0 +1,76 @@
+<h2>worship-snv Layout — Fixed Grid</h2>
+<p class="subtitle">This is the primary stage display layout. All boxes have fixed positions — content shrinks to fit, never overflows.</p>
+
+<div class="mockup">
+  <div class="mockup-header">Stage Display — worship-snv (16:9 aspect ratio)</div>
+  <div class="mockup-body" style="padding:0; background:#000; aspect-ratio:16/9; position:relative; overflow:hidden; font-family: system-ui, sans-serif;">
+
+    <!-- Current Group Label -->
+    <div style="position:absolute; top:1%; left:2%; width:96%; height:6%; display:flex; align-items:center; overflow:hidden;">
+      <span style="color:#4ecdc4; font-size:1.4vw; font-weight:700; text-transform:uppercase; letter-spacing:0.05em;">CHORUS</span>
+    </div>
+
+    <!-- Current Slide (main area — 55% height) -->
+    <div style="position:absolute; top:7%; left:2%; width:96%; height:53%; display:flex; align-items:center; justify-content:center; overflow:hidden; border-bottom: 1px solid rgba(255,255,255,0.1);">
+      <p style="color:#fff; font-size:3.5vw; text-align:center; line-height:1.3; margin:0;">Hosana, Hosana<br>Hosana v výšinách</p>
+    </div>
+
+    <!-- Next Group Label -->
+    <div style="position:absolute; top:61%; left:2%; width:96%; height:5%; display:flex; align-items:center; overflow:hidden;">
+      <span style="color:#888; font-size:1.1vw; font-weight:600; text-transform:uppercase; letter-spacing:0.05em;">VERSE 2</span>
+    </div>
+
+    <!-- Next Slide (smaller area — 25% height) -->
+    <div style="position:absolute; top:66%; left:2%; width:96%; height:23%; display:flex; align-items:center; justify-content:center; overflow:hidden;">
+      <p style="color:#666; font-size:2vw; text-align:center; line-height:1.3; margin:0;">Požehnaný, kto prichádza<br>v mene Pánovom</p>
+    </div>
+
+    <!-- Status Bar (bottom) -->
+    <div style="position:absolute; bottom:0; left:0; width:100%; height:5%; display:flex; align-items:center; padding:0 2%; box-sizing:border-box; background:rgba(255,255,255,0.03); border-top:1px solid rgba(255,255,255,0.08);">
+      <!-- Clock (left) -->
+      <span style="color:#888; font-size:1vw; font-family:monospace;">10:32:15</span>
+      <!-- Spacer -->
+      <span style="flex:1;"></span>
+      <!-- Live Indicator (center-right) -->
+      <span style="color:#ff4444; font-size:0.9vw; font-weight:700; margin-right:2vw;">● LIVE</span>
+      <!-- Connection Status (right) -->
+      <span style="color:#4a4; font-size:0.9vw;">Connected · 12 ms</span>
+    </div>
+  </div>
+</div>
+
+<div class="section" style="margin-top:1.5rem;">
+  <h3>Grid Zones (fixed, never move)</h3>
+  <table style="width:100%; border-collapse:collapse; font-size:0.9rem;">
+    <tr style="border-bottom:1px solid rgba(255,255,255,0.1);">
+      <td style="padding:0.5rem; color:#aaa;">Current Group</td>
+      <td style="padding:0.5rem;">Top 1-7% — label only, auto-shrink</td>
+    </tr>
+    <tr style="border-bottom:1px solid rgba(255,255,255,0.1);">
+      <td style="padding:0.5rem; color:#aaa;">Current Lyrics</td>
+      <td style="padding:0.5rem;">7-60% — largest zone, main text, auto-shrink from max ~120px</td>
+    </tr>
+    <tr style="border-bottom:1px solid rgba(255,255,255,0.1);">
+      <td style="padding:0.5rem; color:#aaa;">Next Group</td>
+      <td style="padding:0.5rem;">61-66% — label only, auto-shrink</td>
+    </tr>
+    <tr style="border-bottom:1px solid rgba(255,255,255,0.1);">
+      <td style="padding:0.5rem; color:#aaa;">Next Lyrics</td>
+      <td style="padding:0.5rem;">66-89% — dimmed text, auto-shrink from max ~60px</td>
+    </tr>
+    <tr>
+      <td style="padding:0.5rem; color:#aaa;">Status Bar</td>
+      <td style="padding:0.5rem;">Bottom 5% — clock, live indicator, connection</td>
+    </tr>
+  </table>
+</div>
+
+<div class="section" style="margin-top:1rem;">
+  <h3>Key Behavior</h3>
+  <ul style="color:#ccc; font-size:0.9rem;">
+    <li>Text always shrinks to fit — no overflow, no minimum font size</li>
+    <li>Empty group label → zone stays reserved but empty (no layout shift)</li>
+    <li>Empty current/next slide → zone stays black (no collapse)</li>
+    <li>All zones use <code>position: absolute</code> with percentage coordinates — independent of each other</li>
+  </ul>
+</div>

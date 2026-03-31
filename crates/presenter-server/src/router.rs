@@ -134,8 +134,6 @@ pub fn build_router(state: AppState) -> Router {
             get(|| async { axum::response::Redirect::permanent("/ui/operator/bible") }),
         )
         .route("/ui/settings", get(ui_routes::settings_ui))
-        .route("/ui/stage-settings", get(ui_routes::stage_settings_ui))
-        .route("/ui/stage-design", get(ui_routes::stage_design_ui))
         .route("/overlays/timer", get(ui_routes::timer_overlay))
         .route("/stage-displays", get(stage::list_stage_displays))
         .route(
@@ -143,25 +141,13 @@ pub fn build_router(state: AppState) -> Router {
             get(stage::get_stage_layout).post(stage::set_stage_layout),
         )
         .route("/stage/connections", get(stage::list_stage_connections))
-        .route("/stage", get(stage::stage_display_selected_html))
+        .route("/stage", get(wasm_ui::wasm_ui_shell))
         .route(
             "/stage/snapshot",
             get(stage::stage_display_selected_snapshot_json),
         )
         .route("/stage/state", post(stage::update_stage_state))
         .route("/stage/clear", post(stage::clear_stage_state))
-        .route(
-            "/stage/appearance/{layout}",
-            get(stage::get_stage_appearance).put(stage::update_stage_appearance),
-        )
-        .route(
-            "/stage/design/{layout}",
-            get(stage::get_stage_design).put(stage::update_stage_design),
-        )
-        .route(
-            "/stage/design/{layout}/reset",
-            post(stage::reset_stage_design),
-        )
         .route("/stage/broadcast-live", get(stage::get_broadcast_live))
         .route(
             "/integrations/resolume/hosts",

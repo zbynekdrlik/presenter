@@ -91,7 +91,10 @@ test("stage clear broadcasts to WebSocket clients", async ({
     waitUntil: "domcontentloaded",
   });
 
-  // Wait for WebSocket connection
+  // Wait for WASM to load and WebSocket connection
+  await page.waitForSelector('body[data-wasm-ready="true"]', {
+    timeout: 30_000,
+  });
   await page.waitForFunction(
     () => window.__presenterStageConnectionState === "connected",
     { timeout: 30_000 },
@@ -129,7 +132,7 @@ test("stage clear broadcasts to WebSocket clients", async ({
   });
 
   // Wait for stage to show content
-  await expect(page.locator("#current-text")).toContainText("Visible Text", {
+  await expect(page.locator(".stage__current-slide .stage__slide-text")).toContainText("Visible Text", {
     timeout: 10_000,
   });
 
@@ -137,7 +140,7 @@ test("stage clear broadcasts to WebSocket clients", async ({
   await request.post(new URL("/stage/clear", baseURL).toString());
 
   // Stage should update via WebSocket — current text should be empty
-  await expect(page.locator("#current-text")).toHaveText("", {
+  await expect(page.locator(".stage__current-slide .stage__slide-text")).toHaveText("", {
     timeout: 10_000,
   });
 });

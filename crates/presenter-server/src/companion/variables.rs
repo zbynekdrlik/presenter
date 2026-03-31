@@ -33,8 +33,6 @@ impl CompanionVariableState {
             }
             crate::live::LiveEvent::BibleCleared => self.clear_bible(),
             crate::live::LiveEvent::StageLayout { code } => self.set_stage_layout_code(&code),
-            crate::live::LiveEvent::StageAppearance { .. } => false,
-            crate::live::LiveEvent::StageDesign { .. } => false,
             crate::live::LiveEvent::BiblePreferencesChanged { .. } => false,
             crate::live::LiveEvent::BroadcastLive { enabled } => self.apply_broadcast_live(enabled),
             crate::live::LiveEvent::BibleSlidesChanged { .. } => {

@@ -1,3 +1,5 @@
+pub mod stage;
+
 use gloo_net::websocket::{futures::WebSocket, Message};
 use gloo_timers::callback::Timeout;
 use leptos::prelude::*;

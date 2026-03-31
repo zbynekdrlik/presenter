@@ -81,7 +81,6 @@ mod osc;
 mod resolume;
 mod router;
 mod stage_connections;
-mod stage_ui;
 mod state;
 mod ui;
 

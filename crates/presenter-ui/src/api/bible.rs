@@ -119,6 +119,10 @@ pub async fn get_broadcast() -> Result<Option<BibleBroadcast>, ApiError> {
     get_json("/bible/active").await
 }
 
+pub async fn get_active_slide_output() -> Result<Option<BibleSlideOutput>, ApiError> {
+    get_json("/bible/active-slide").await
+}
+
 /// Clear the current Bible broadcast. Server endpoint: POST /bible/clear
 pub async fn clear_broadcast() -> Result<(), ApiError> {
     post_no_content("/bible/clear", &serde_json::json!({})).await

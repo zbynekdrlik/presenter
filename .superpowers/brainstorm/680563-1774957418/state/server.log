@@ -1,0 +1,4 @@
+{"type":"server-started","port":52575,"host":"0.0.0.0","url_host":"10.77.8.134","url":"http://10.77.8.134:52575","screen_dir":"/home/newlevel/devel/presenter/presenter-dev2/.superpowers/brainstorm/680563-1774957418/content","state_dir":"/home/newlevel/devel/presenter/presenter-dev2/.superpowers/brainstorm/680563-1774957418/state"}
+{"type":"screen-added","file":"/home/newlevel/devel/presenter/presenter-dev2/.superpowers/brainstorm/680563-1774957418/content/worship-snv-v3.html"}
+{"type":"screen-added","file":"/home/newlevel/devel/presenter/presenter-dev2/.superpowers/brainstorm/680563-1774957418/content/waiting.html"}
+{"type":"server-stopped","reason":"idle timeout"}

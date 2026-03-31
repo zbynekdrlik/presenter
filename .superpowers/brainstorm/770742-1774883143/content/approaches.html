@@ -1,0 +1,81 @@
+<h2>Stage View Redesign — Approaches</h2>
+<p class="subtitle">How to fix layout stability and move to WASM</p>
+
+<div class="options">
+  <div class="option" data-choice="a" onclick="toggleSelect(this)">
+    <div class="letter">A</div>
+    <div class="content">
+      <h3>WASM Stage with CSS Grid + Container Queries</h3>
+      <p><strong>Full WASM rewrite.</strong> Leptos components with CSS Grid for fixed boxes. Rust-side text fitting algorithm. Keep the WYSIWYG editor but make it work properly.</p>
+      <div class="pros-cons">
+        <div class="pros"><h4>Pros</h4>
+          <ul>
+            <li>Boxes truly fixed — CSS Grid cells don't shift</li>
+            <li>Text fitting in Rust is type-safe and testable</li>
+            <li>Shared codebase with operator/tablet</li>
+            <li>Remove ~500 lines of embedded JS</li>
+          </ul>
+        </div>
+        <div class="cons"><h4>Cons</h4>
+          <ul>
+            <li>Keeps the complex WYSIWYG editor code</li>
+            <li>More configuration surface to maintain</li>
+          </ul>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <div class="option" data-choice="b" onclick="toggleSelect(this)">
+    <div class="letter">B</div>
+    <div class="content">
+      <h3>Fix Current Server-Rendered HTML + JS</h3>
+      <p>Keep existing approach, fix the text scaling and overflow with better CSS and JS.</p>
+      <div class="pros-cons">
+        <div class="pros"><h4>Pros</h4>
+          <ul>
+            <li>Least work — patch CSS/JS without rewriting</li>
+            <li>No WASM dependency for stage</li>
+            <li>Fastest initial page load</li>
+          </ul>
+        </div>
+        <div class="cons"><h4>Cons</h4>
+          <ul>
+            <li>Keeps ~500 lines of JS in Rust strings</li>
+            <li>Two rendering stacks (WASM + HTML/JS)</li>
+            <li>Patches symptoms, not root cause</li>
+          </ul>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <div class="option" data-choice="c" onclick="toggleSelect(this)">
+    <div class="letter">C</div>
+    <div class="content">
+      <h3>WASM Stage with Predefined Layout Presets (Recommended)</h3>
+      <p><strong>Full WASM rewrite + delete the WYSIWYG editor.</strong> Replace with 4-6 hardcoded layout presets as Leptos components. Operator picks a preset from a dropdown. No dragging boxes, no appearance sliders.</p>
+      <div class="pros-cons">
+        <div class="pros"><h4>Pros</h4>
+          <ul>
+            <li>Everything from A, plus massively simpler code</li>
+            <li>Delete design editor UI, StageDesign/StageBox models, StageAppearance settings</li>
+            <li>Layouts tested as Rust code, not user-configured JSON</li>
+            <li>ProPresenter-like: layouts just work, zero tuning</li>
+          </ul>
+        </div>
+        <div class="cons"><h4>Cons</h4>
+          <ul>
+            <li>Less flexible — can't make arbitrary layouts</li>
+            <li>New layouts = Rust code (but that means tested &amp; typed)</li>
+          </ul>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<div class="section" style="margin-top: 2rem; padding: 1.2rem; background: rgba(255,255,255,0.03); border-radius: 8px; border: 1px solid rgba(255,255,255,0.08);">
+  <h3 style="margin-top:0">Recommendation: C</h3>
+  <p>The WYSIWYG editor was a workaround. You want ProPresenter-like stability. Runtime flexibility is rarely needed. Approach C gives rock-solid layouts with zero configuration, removes complex code, and you get all WASM benefits.</p>
+</div>

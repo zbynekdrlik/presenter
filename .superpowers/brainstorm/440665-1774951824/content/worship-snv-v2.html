@@ -1,0 +1,121 @@
+<h2>worship-snv Layout — Based on Production Design</h2>
+<p class="subtitle">Exact production colors, group color hashing, live indicator pill, and box positions. Text auto-shrinks to fit — boxes never move.</p>
+
+<div class="split">
+  <!-- Normal content -->
+  <div class="mockup">
+    <div class="mockup-header">Normal lyrics (fits easily)</div>
+    <div class="mockup-body" style="padding:0; background:#000; aspect-ratio:16/9; position:relative; overflow:hidden; font-family: 'Inter', system-ui, sans-serif;">
+
+      <!-- Current Group (x:25% y:2% w:50% h:6%) -->
+      <div style="position:absolute; left:25%; top:2%; width:50%; height:6%; display:flex; align-items:center; justify-content:center; overflow:hidden;">
+        <span style="color:#34d399; background:rgba(52,211,153,0.25); border-radius:999px; padding:0.15rem 0.6rem; letter-spacing:0.18em; text-transform:uppercase; font-weight:700; font-size:0.9vw;">CHORUS</span>
+      </div>
+
+      <!-- Current Slide (x:2% y:10% w:96% h:45%) -->
+      <div style="position:absolute; left:2%; top:10%; width:96%; height:45%; display:flex; align-items:center; justify-content:center; overflow:hidden;">
+        <p style="color:#f8fafc; font-size:3vw; text-align:center; line-height:1.1; margin:0; white-space:pre-wrap; font-weight:700;">Hosana, Hosana
+Hosana v výšinách</p>
+      </div>
+
+      <!-- Next Group (x:25% y:58% w:50% h:5%) -->
+      <div style="position:absolute; left:25%; top:58%; width:50%; height:5%; display:flex; align-items:center; justify-content:center; overflow:hidden;">
+        <span style="color:#fbbf24; background:rgba(251,191,36,0.25); border-radius:999px; padding:0.15rem 0.6rem; letter-spacing:0.18em; text-transform:uppercase; font-weight:700; font-size:0.7vw;">VERSE 2</span>
+      </div>
+
+      <!-- Next Slide (x:2% y:64% w:96% h:28%) -->
+      <div style="position:absolute; left:2%; top:64%; width:96%; height:28%; display:flex; align-items:center; justify-content:center; overflow:hidden;">
+        <p style="color:#cbd5f5; font-size:1.8vw; text-align:center; line-height:1.1; margin:0; white-space:pre-wrap; font-weight:700;">Požehnaný, kto prichádza
+v mene Pánovom</p>
+      </div>
+
+      <!-- Clock (x:2% y:92% w:20% h:6%) -->
+      <div style="position:absolute; left:2%; top:92%; width:20%; height:6%; display:flex; align-items:center; overflow:hidden;">
+        <span style="color:#38bdf8; font-size:1.2vw; font-weight:700; font-variant-numeric:tabular-nums;">10:32:15</span>
+      </div>
+
+      <!-- Live Indicator (x:40% y:92% w:20% h:6%) -->
+      <div style="position:absolute; left:40%; top:92%; width:20%; height:6%; display:flex; align-items:center; justify-content:center; overflow:hidden;">
+        <span style="background:rgba(34,197,94,0.9); color:#fff; padding:0.3rem 1rem; border-radius:999px; font-weight:700; font-size:0.8vw; letter-spacing:0.12em; text-transform:uppercase; box-shadow:0 0 20px rgba(34,197,94,0.5);">VYSIELANIE JE VYPNUTE</span>
+      </div>
+
+      <!-- Connection Status (x:75% y:92% w:23% h:6%) -->
+      <div style="position:absolute; left:75%; top:92%; width:23%; height:6%; display:flex; align-items:center; justify-content:flex-end; overflow:hidden;">
+        <span style="color:#38bdf8; font-size:0.8vw; font-weight:600; letter-spacing:0.1em; text-transform:uppercase;">CONNECTED <span style="opacity:0.7; font-variant-numeric:tabular-nums;">· 012 ms</span></span>
+      </div>
+    </div>
+  </div>
+
+  <!-- Long content (text shrinks) -->
+  <div class="mockup">
+    <div class="mockup-header">Long lyrics (text auto-shrinks to fit)</div>
+    <div class="mockup-body" style="padding:0; background:#000; aspect-ratio:16/9; position:relative; overflow:hidden; font-family: 'Inter', system-ui, sans-serif;">
+
+      <!-- Current Group -->
+      <div style="position:absolute; left:25%; top:2%; width:50%; height:6%; display:flex; align-items:center; justify-content:center; overflow:hidden;">
+        <span style="color:#60a5fa; background:rgba(96,165,250,0.25); border-radius:999px; padding:0.15rem 0.6rem; letter-spacing:0.18em; text-transform:uppercase; font-weight:700; font-size:0.9vw;">BRIDGE</span>
+      </div>
+
+      <!-- Current Slide — SMALLER FONT because more text -->
+      <div style="position:absolute; left:2%; top:10%; width:96%; height:45%; display:flex; align-items:center; justify-content:center; overflow:hidden;">
+        <p style="color:#f8fafc; font-size:1.8vw; text-align:center; line-height:1.1; margin:0; white-space:pre-wrap; font-weight:700;">A tak veľmi Boh miloval svet
+že svojho jednorodeného Syna dal
+aby každý kto verí v Neho nezahynul
+ale mal život večný
+Ján 3:16</p>
+      </div>
+
+      <!-- Next Group -->
+      <div style="position:absolute; left:25%; top:58%; width:50%; height:5%; display:flex; align-items:center; justify-content:center; overflow:hidden;">
+        <span style="color:#fb7185; background:rgba(251,113,133,0.25); border-radius:999px; padding:0.15rem 0.6rem; letter-spacing:0.18em; text-transform:uppercase; font-weight:700; font-size:0.7vw;">OUTRO</span>
+      </div>
+
+      <!-- Next Slide — SMALLER FONT because more text -->
+      <div style="position:absolute; left:2%; top:64%; width:96%; height:28%; display:flex; align-items:center; justify-content:center; overflow:hidden;">
+        <p style="color:#cbd5f5; font-size:1.2vw; text-align:center; line-height:1.1; margin:0; white-space:pre-wrap; font-weight:700;">Lebo milosťou ste spasení skrze vieru
+a to nie je z vás, je to Boží dar
+nie zo skutkov, aby sa nikto nechválil
+Efezským 2:8-9</p>
+      </div>
+
+      <!-- Clock -->
+      <div style="position:absolute; left:2%; top:92%; width:20%; height:6%; display:flex; align-items:center; overflow:hidden;">
+        <span style="color:#38bdf8; font-size:1.2vw; font-weight:700; font-variant-numeric:tabular-nums;">10:32:15</span>
+      </div>
+
+      <!-- Live Indicator — ACTIVE -->
+      <div style="position:absolute; left:40%; top:92%; width:20%; height:6%; display:flex; align-items:center; justify-content:center; overflow:hidden;">
+        <span style="background:rgba(239,68,68,0.95); color:#fff; padding:0.3rem 1rem; border-radius:999px; font-weight:700; font-size:0.8vw; letter-spacing:0.12em; text-transform:uppercase; box-shadow:0 0 30px rgba(239,68,68,0.7);">LIVE</span>
+      </div>
+
+      <!-- Connection Status -->
+      <div style="position:absolute; left:75%; top:92%; width:23%; height:6%; display:flex; align-items:center; justify-content:flex-end; overflow:hidden;">
+        <span style="color:#38bdf8; font-size:0.8vw; font-weight:600; letter-spacing:0.1em; text-transform:uppercase;">CONNECTED <span style="opacity:0.7; font-variant-numeric:tabular-nums;">· 008 ms</span></span>
+      </div>
+    </div>
+  </div>
+</div>
+
+<div class="section" style="margin-top:1.5rem;">
+  <h3>Production Design Preserved</h3>
+  <ul style="color:#ccc; font-size:0.9rem;">
+    <li><strong>Group colors:</strong> FNV-1a hash → 8 curated colors (rose, orange, amber, emerald, cyan, blue, violet, pink) with 25% opacity background pill</li>
+    <li><strong>Current lyrics:</strong> #f8fafc, bold, max 120px — shrinks to fit</li>
+    <li><strong>Next lyrics:</strong> #cbd5f5 (dimmed), bold, max 80px — shrinks to fit</li>
+    <li><strong>Live indicator:</strong> Green pill "VYSIELANIE JE VYPNUTE" / Red pulsing "LIVE"</li>
+    <li><strong>Clock:</strong> #38bdf8, tabular-nums, left-aligned</li>
+    <li><strong>Connection:</strong> #38bdf8, uppercase, right-aligned with latency</li>
+    <li><strong>All boxes:</strong> position:absolute with exact % from production config — independent, never shift</li>
+  </ul>
+</div>
+
+<div class="section" style="margin-top:1rem;">
+  <h3>What Changes (WASM) vs What Stays (Visual)</h3>
+  <ul style="color:#ccc; font-size:0.9rem;">
+    <li>✅ <strong>Visual design stays identical</strong> — same colors, same positions, same styling</li>
+    <li>🔄 <strong>Rendering engine changes</strong> — from server-HTML+embedded-JS to Leptos WASM components</li>
+    <li>🔄 <strong>Text scaling changes</strong> — from JS binary search to Rust/WASM binary search (same algorithm, typed)</li>
+    <li>🗑️ <strong>WYSIWYG editor removed</strong> — positions hardcoded in Rust (from current production values)</li>
+    <li>🗑️ <strong>Appearance settings removed</strong> — values baked into preset components</li>
+  </ul>
+</div>

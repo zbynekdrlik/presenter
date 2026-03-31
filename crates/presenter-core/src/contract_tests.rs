@@ -6,9 +6,8 @@
 #[cfg(test)]
 mod tests {
     use crate::{
-        InboundMessage, LiveEvent, StageAppearance, StageClientSnapshot, StageClientStatus,
-        StageDesign, StageDisplayLayout, StageDisplaySlide, StageDisplaySnapshot, StageState,
-        TimersOverview,
+        InboundMessage, LiveEvent, StageClientSnapshot, StageClientStatus, StageDisplayLayout,
+        StageDisplaySlide, StageDisplaySnapshot, StageState, TimersOverview,
     };
     use chrono::Utc;
     use uuid::Uuid;
@@ -108,28 +107,6 @@ mod tests {
     }
 
     #[test]
-    fn live_event_stage_appearance_roundtrip() {
-        let event = LiveEvent::StageAppearance {
-            layout: "worship-snv".to_string(),
-            appearance: StageAppearance::default(),
-        };
-        let json = serde_json::to_string(&event).expect("serialize");
-        assert!(json.contains(r#""type":"stage_appearance""#));
-        let _: LiveEvent = serde_json::from_str(&json).expect("deserialize");
-    }
-
-    #[test]
-    fn live_event_stage_design_roundtrip() {
-        let event = LiveEvent::StageDesign {
-            layout: "worship-snv".to_string(),
-            design: StageDesign::default_for("worship-snv"),
-        };
-        let json = serde_json::to_string(&event).expect("serialize");
-        assert!(json.contains(r#""type":"stage_design""#));
-        let _: LiveEvent = serde_json::from_str(&json).expect("deserialize");
-    }
-
-    #[test]
     fn live_event_bible_preferences_changed_roundtrip() {
         let event = LiveEvent::BiblePreferencesChanged {
             character_limit: 500,
@@ -199,22 +176,6 @@ mod tests {
     }
 
     // ── Domain type roundtrips ──────────────────────────────────────
-
-    #[test]
-    fn stage_appearance_roundtrip() {
-        let appearance = StageAppearance::default();
-        let result = roundtrip_json(&appearance);
-        assert!((result.body_padding_v - appearance.body_padding_v).abs() < f32::EPSILON);
-        assert!((result.current_max_font - appearance.current_max_font).abs() < f32::EPSILON);
-    }
-
-    #[test]
-    fn stage_appearance_layout_specific_defaults() {
-        let default = StageAppearance::default();
-        let pp = StageAppearance::default_for("worship-pp");
-        assert!((pp.current_max_font - 100.0).abs() < f32::EPSILON);
-        assert!((default.current_max_font - 120.0).abs() < f32::EPSILON);
-    }
 
     #[test]
     fn stage_client_snapshot_roundtrip() {
@@ -293,14 +254,6 @@ mod tests {
         let result = roundtrip_json(&state);
         assert_eq!(result.presentation_id, state.presentation_id);
         assert!(result.next_slide_id.is_none());
-    }
-
-    #[test]
-    fn stage_design_roundtrip() {
-        let design = StageDesign::default_for("worship-snv");
-        let result = roundtrip_json(&design);
-        assert_eq!(result.layout_code, "worship-snv");
-        assert!(!result.boxes.is_empty());
     }
 
     #[test]

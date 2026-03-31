@@ -1,0 +1,85 @@
+<h2>Stage View Redesign — Approaches</h2>
+<p class="subtitle">How to fix layout stability and move to WASM</p>
+
+<div class="options">
+  <div class="option" data-choice="a" onclick="toggleSelect(this)">
+    <div class="letter">A</div>
+    <div class="content">
+      <h3>WASM Stage with CSS Grid + Container Queries</h3>
+      <p><strong>Recommended.</strong> Rewrite stage display as a Leptos WASM component using CSS Grid for fixed-position boxes and a Rust-side text fitting algorithm. Each box is an absolute grid cell that never moves. Text scales via binary search in Rust/WASM (measuring DOM, shrinking until it fits). No JavaScript text scaler.</p>
+      <div class="pros-cons">
+        <div class="pros"><h4>Pros</h4>
+          <ul>
+            <li>Boxes are truly fixed — CSS Grid cells don't shift</li>
+            <li>Text fitting in Rust is type-safe and testable</li>
+            <li>Shared codebase with operator/tablet (same Leptos stack)</li>
+            <li>Reactive updates via WebSocket signals — no manual DOM manipulation</li>
+            <li>Remove ~500 lines of embedded JS from server code</li>
+          </ul>
+        </div>
+        <div class="cons"><h4>Cons</h4>
+          <ul>
+            <li>Need Safari 12 MVP WASM build (already solved for tablet)</li>
+            <li>Initial WASM load slightly slower than server-rendered HTML</li>
+          </ul>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <div class="option" data-choice="b" onclick="toggleSelect(this)">
+    <div class="letter">B</div>
+    <div class="content">
+      <h3>Fix Current Server-Rendered HTML + JS</h3>
+      <p>Keep the existing server-rendered approach but fix the text scaling and box overflow. Replace the JS binary-search scaler with CSS <code>overflow: hidden</code> on all boxes + improved <code>font-size: clamp()</code> calculations. Add <code>position: absolute</code> to all stage boxes so they never affect each other's layout.</p>
+      <div class="pros-cons">
+        <div class="pros"><h4>Pros</h4>
+          <ul>
+            <li>Least work — fix CSS/JS without rewriting</li>
+            <li>No WASM dependency for stage displays</li>
+            <li>Fastest initial page load</li>
+          </ul>
+        </div>
+        <div class="cons"><h4>Cons</h4>
+          <ul>
+            <li>Keeps ~500 lines of JS embedded in Rust strings (maintenance nightmare)</li>
+            <li>CSS clamp() alone can't guarantee text always fits — still needs JS measurement</li>
+            <li>Two rendering stacks (WASM for operator/tablet, HTML/JS for stage)</li>
+            <li>Doesn't solve the root cause — just patches symptoms</li>
+          </ul>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <div class="option" data-choice="c" onclick="toggleSelect(this)">
+    <div class="letter">C</div>
+    <div class="content">
+      <h3>WASM Stage with Predefined Layout Presets</h3>
+      <p>Like approach A (full WASM rewrite) but <strong>remove the WYSIWYG editor entirely</strong> and replace with 4-6 hardcoded layout presets. Each preset is a Leptos component with fixed proportions. Operator picks a preset from a dropdown — no dragging boxes. Runtime: just switch preset or toggle an element.</p>
+      <div class="pros-cons">
+        <div class="pros"><h4>Pros</h4>
+          <ul>
+            <li>Everything from A, plus massively simpler code</li>
+            <li>Delete the entire design editor UI + StageDesign/StageBox models</li>
+            <li>Delete StageAppearance settings — presets handle everything</li>
+            <li>Layouts are tested as Rust code, not as user-configured JSON</li>
+            <li>ProPresenter-like: layouts just work, no tuning needed</li>
+          </ul>
+        </div>
+        <div class="cons"><h4>Cons</h4>
+          <ul>
+            <li>Less flexible — can't make arbitrary layouts</li>
+            <li>Adding a new layout means writing Rust code, not dragging boxes</li>
+            <li>If an artist needs something unusual, you're limited to presets</li>
+          </ul>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<div class="section" style="margin-top: 2rem; padding: 1.2rem; background: rgba(255,255,255,0.03); border-radius: 8px; border: 1px solid rgba(255,255,255,0.08);">
+  <h3 style="margin-top:0">My Recommendation: C</h3>
+  <p>You said the WYSIWYG editor was a workaround. You want ProPresenter-like stability. You said runtime flexibility is rarely needed. Approach C gives you rock-solid layouts with zero configuration, removes a lot of complex code (design editor, appearance settings, box models), and you get the WASM benefits. If you ever need a new layout, it's a Rust component — tested, typed, reliable.</p>
+</div>

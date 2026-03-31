@@ -2,9 +2,8 @@ use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
-use crate::stage_appearance::StageAppearance;
 use crate::stage_client::StageClientSnapshot;
-use crate::{BibleBroadcast, BibleSlideOutput, StageDesign, StageDisplaySnapshot, TimersOverview};
+use crate::{BibleBroadcast, BibleSlideOutput, StageDisplaySnapshot, TimersOverview};
 
 /// Events broadcast over the `/live/ws` WebSocket to all connected clients.
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -34,14 +33,6 @@ pub enum LiveEvent {
     BibleCleared,
     StageLayout {
         code: String,
-    },
-    StageAppearance {
-        layout: String,
-        appearance: StageAppearance,
-    },
-    StageDesign {
-        layout: String,
-        design: StageDesign,
     },
     BiblePreferencesChanged {
         character_limit: u32,

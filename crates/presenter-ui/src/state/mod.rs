@@ -1,6 +1,7 @@
 pub mod bible;
 pub mod operator;
 pub mod session;
+pub mod stage;
 pub mod tablet;
 
 use leptos::prelude::*;

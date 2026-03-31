@@ -18,9 +18,7 @@ pub mod presentation;
 pub mod resolume;
 pub mod search;
 pub mod slide;
-pub mod stage_appearance;
 pub mod stage_client;
-pub mod stage_design;
 pub mod stage_display;
 pub mod timer;
 
@@ -48,9 +46,7 @@ pub use presentation::Presentation;
 pub use resolume::{ResolumeHost, ResolumeHostDraft, ResolumeHostValidationError};
 pub use search::{SearchMatchField, SearchResult, SearchResultKind};
 pub use slide::{ResolvedSlide, Slide, SlideContent, SlideGroup, SlideText};
-pub use stage_appearance::StageAppearance;
 pub use stage_client::{StageClientSnapshot, StageClientStatus};
-pub use stage_design::{StageBox, StageBoxType, StageDesign, TextAlign};
 pub use stage_display::{
     StageDisplayLayout, StageDisplaySlide, StageDisplaySnapshot, StagePlaylistEntry, StageState,
     DEFAULT_STAGE_LAYOUT_CODE,

@@ -24,6 +24,9 @@ async function openStageDisplay(context: BrowserContext) {
   await stagePage.goto(new URL("/stage", baseURL).toString(), {
     waitUntil: "domcontentloaded",
   });
+  await stagePage.waitForSelector('body[data-wasm-ready="true"]', {
+    timeout: 30_000,
+  });
   await stagePage.waitForFunction(
     () => window.__presenterStageConnectionState === "connected",
     { timeout: 30_000 },
@@ -139,7 +142,7 @@ test("stage status bar shows clock with current time", async ({ context }) => {
   const stagePage = await openStageDisplay(context);
 
   // Check that clock element exists and has content
-  const clockEl = stagePage.locator("#stage-clock");
+  const clockEl = stagePage.locator(".stage__clock");
   await expect(clockEl).toBeVisible();
 
   // Clock should show time in HH:MM:SS format
@@ -152,7 +155,7 @@ test("stage status bar shows clock with current time", async ({ context }) => {
 test("stage clock updates every second", async ({ context }) => {
   const stagePage = await openStageDisplay(context);
 
-  const clockEl = stagePage.locator("#stage-clock");
+  const clockEl = stagePage.locator(".stage__clock");
   await expect(clockEl).toBeVisible();
 
   // Get initial time
@@ -177,9 +180,9 @@ test("LIVE indicator is initially inactive with Slovak text", async ({
 }) => {
   const stagePage = await openStageDisplay(context);
 
-  const liveEl = stagePage.locator("#stage-live");
+  const liveEl = stagePage.locator(".stage__live-pill");
   await expect(liveEl).toBeVisible();
-  await expect(liveEl).toHaveAttribute("data-active", "false");
+  await expect(liveEl).toHaveClass(/stage__live-pill--off/);
   await expect(liveEl).toHaveText("VYSIELANIE JE VYPNUTE");
 
   await stagePage.close();
@@ -190,8 +193,8 @@ test("LIVE indicator responds to Companion broadcast.set_live command", async ({
 }) => {
   const stagePage = await openStageDisplay(context);
 
-  const liveEl = stagePage.locator("#stage-live");
-  await expect(liveEl).toHaveAttribute("data-active", "false");
+  const liveEl = stagePage.locator(".stage__live-pill");
+  await expect(liveEl).toHaveClass(/stage__live-pill--off/);
   await expect(liveEl).toHaveText("VYSIELANIE JE VYPNUTE");
 
   // Connect to Companion and send broadcast.set_live command
@@ -207,12 +210,13 @@ test("LIVE indicator responds to Companion broadcast.set_live command", async ({
   // Wait for the stage display to receive the WebSocket event
   await stagePage.waitForFunction(
     () =>
-      document.getElementById("stage-live")?.getAttribute("data-active") ===
-      "true",
+      document
+        .querySelector(".stage__live-pill")
+        ?.classList.contains("stage__live-pill--on"),
     { timeout: 5_000 },
   );
 
-  await expect(liveEl).toHaveAttribute("data-active", "true");
+  await expect(liveEl).toHaveClass(/stage__live-pill--on/);
   await expect(liveEl).toHaveText("LIVE");
 
   // Disable broadcast live
@@ -224,46 +228,59 @@ test("LIVE indicator responds to Companion broadcast.set_live command", async ({
   // Wait for the stage display to receive the WebSocket event
   await stagePage.waitForFunction(
     () =>
-      document.getElementById("stage-live")?.getAttribute("data-active") ===
-      "false",
+      document
+        .querySelector(".stage__live-pill")
+        ?.classList.contains("stage__live-pill--off"),
     { timeout: 5_000 },
   );
 
-  await expect(liveEl).toHaveAttribute("data-active", "false");
+  await expect(liveEl).toHaveClass(/stage__live-pill--off/);
   await expect(liveEl).toHaveText("VYSIELANIE JE VYPNUTE");
 
   socket.close();
   await stagePage.close();
 });
 
-test("LIVE indicator can be controlled via debug helper", async ({
+test("LIVE indicator can be toggled on and off via Companion", async ({
   context,
 }) => {
   const stagePage = await openStageDisplay(context);
 
-  const liveEl = stagePage.locator("#stage-live");
-  await expect(liveEl).toHaveAttribute("data-active", "false");
+  const liveEl = stagePage.locator(".stage__live-pill");
+  await expect(liveEl).toHaveClass(/stage__live-pill--off/);
 
-  // Use debug helper to enable
-  await stagePage.evaluate(() => {
-    window.__presenterStageDebug?.setBroadcastLive(true);
-  });
+  // Connect to Companion and enable broadcast live
+  const { socket, handshake, sendCommand } = createCompanionSocket(wsURL);
+  await handshake();
 
-  await expect(liveEl).toHaveAttribute("data-active", "true");
+  await sendCommand("broadcast.set_live", { enabled: true });
 
-  // Check state via debug helper
-  const isLive = await stagePage.evaluate(() =>
-    window.__presenterStageDebug?.getBroadcastLive(),
+  await stagePage.waitForFunction(
+    () =>
+      document
+        .querySelector(".stage__live-pill")
+        ?.classList.contains("stage__live-pill--on"),
+    { timeout: 5_000 },
   );
-  expect(isLive).toBe(true);
 
-  // Use debug helper to disable
-  await stagePage.evaluate(() => {
-    window.__presenterStageDebug?.setBroadcastLive(false);
-  });
+  await expect(liveEl).toHaveClass(/stage__live-pill--on/);
+  await expect(liveEl).toHaveText("LIVE");
 
-  await expect(liveEl).toHaveAttribute("data-active", "false");
+  // Disable broadcast live
+  await sendCommand("broadcast.set_live", { enabled: false });
 
+  await stagePage.waitForFunction(
+    () =>
+      document
+        .querySelector(".stage__live-pill")
+        ?.classList.contains("stage__live-pill--off"),
+    { timeout: 5_000 },
+  );
+
+  await expect(liveEl).toHaveClass(/stage__live-pill--off/);
+  await expect(liveEl).toHaveText("VYSIELANIE JE VYPNUTE");
+
+  socket.close();
   await stagePage.close();
 });
 
@@ -272,25 +289,17 @@ test("status bar contains clock, LIVE, and connection status", async ({
 }) => {
   const stagePage = await openStageDisplay(context);
 
-  // Check all three design-driven boxes exist
-  const clockBox = stagePage.locator(".stage__box--clock");
-  const liveBox = stagePage.locator(".stage__box--live-indicator");
-  const connectionBox = stagePage.locator(".stage__box--connection-status");
-
-  await expect(clockBox).toBeVisible();
-  await expect(liveBox).toBeVisible();
-  await expect(connectionBox).toBeVisible();
-
-  const clockEl = stagePage.locator("#stage-clock");
-  const liveEl = stagePage.locator("#stage-live");
-  const connectionEl = stagePage.locator("#stage-status-connection");
+  // Check all three status bar elements exist
+  const clockEl = stagePage.locator(".stage__clock");
+  const liveEl = stagePage.locator(".stage__live-pill");
+  const connectionEl = stagePage.locator(".stage__connection");
 
   await expect(clockEl).toBeVisible();
   await expect(liveEl).toBeVisible();
   await expect(connectionEl).toBeVisible();
 
-  // Verify connection shows "Connected"
-  await expect(connectionEl).toHaveText("Connected");
+  // Verify connection shows "CONNECTED" (latency is in a nested span)
+  await expect(connectionEl).toContainText("CONNECTED");
 
   await stagePage.close();
 });
@@ -301,10 +310,10 @@ test("status bar elements are positioned left to right: clock, LIVE, connection"
   const stagePage = await openStageDisplay(context);
 
   // Get bounding boxes of all three elements
-  const clockBox = await stagePage.locator("#stage-clock").boundingBox();
-  const liveBox = await stagePage.locator("#stage-live").boundingBox();
+  const clockBox = await stagePage.locator(".stage__clock").boundingBox();
+  const liveBox = await stagePage.locator(".stage__live-pill").boundingBox();
   const connectionBox = await stagePage
-    .locator(".stage__box--connection-status")
+    .locator(".stage__connection")
     .boundingBox();
 
   expect(clockBox).toBeTruthy();
@@ -335,13 +344,17 @@ test("broadcast_live state persists across stage reconnections", async ({
 
   await stagePage.waitForFunction(
     () =>
-      document.getElementById("stage-live")?.getAttribute("data-active") ===
-      "true",
+      document
+        .querySelector(".stage__live-pill")
+        ?.classList.contains("stage__live-pill--on"),
     { timeout: 5_000 },
   );
 
   // Reload the page
   await stagePage.reload({ waitUntil: "domcontentloaded" });
+  await stagePage.waitForSelector('body[data-wasm-ready="true"]', {
+    timeout: 30_000,
+  });
   await stagePage.waitForFunction(
     () => window.__presenterStageConnectionState === "connected",
     { timeout: 30_000 },
@@ -350,8 +363,9 @@ test("broadcast_live state persists across stage reconnections", async ({
   // The LIVE state should still be true (server remembers the state)
   await stagePage.waitForFunction(
     () =>
-      document.getElementById("stage-live")?.getAttribute("data-active") ===
-      "true",
+      document
+        .querySelector(".stage__live-pill")
+        ?.classList.contains("stage__live-pill--on"),
     { timeout: 5_000 },
   );
 
@@ -366,12 +380,5 @@ test("broadcast_live state persists across stage reconnections", async ({
 declare global {
   interface Window {
     __presenterStageConnectionState?: string;
-    __presenterStageDebug?: {
-      setBroadcastLive: (enabled: boolean) => void;
-      getBroadcastLive: () => boolean;
-      simulateHeartbeatLoss: () => void;
-      resumeHeartbeats: () => void;
-    };
-    __presenterStageBroadcastLive?: boolean;
   }
 }
