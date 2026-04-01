@@ -140,7 +140,6 @@ body.stage {
 /* ===== Group pills ===== */
 
 .stage__group-pill {
-    border-radius: 999px;
     padding: 0 0.6rem;
     letter-spacing: 0.18em;
     text-transform: uppercase;
