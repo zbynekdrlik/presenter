@@ -25,9 +25,11 @@ body.stage {
     width: 50%;
     height: 5%;
     display: flex;
-    align-items: center;
+    align-items: stretch;
     justify-content: center;
     overflow: hidden;
+    padding: 0;
+    margin: 0;
 }
 
 .stage__current-slide {
@@ -49,9 +51,11 @@ body.stage {
     width: 50%;
     height: 4%;
     display: flex;
-    align-items: center;
+    align-items: stretch;
     justify-content: center;
     overflow: hidden;
+    padding: 0;
+    margin: 0;
 }
 
 .stage__next-slide {
@@ -137,10 +141,13 @@ body.stage {
 
 .stage__group-pill {
     border-radius: 999px;
-    padding: 0.15rem 0.6rem;
+    padding: 0 0.6rem;
     letter-spacing: 0.18em;
     text-transform: uppercase;
     font-weight: 700;
+    display: flex;
+    align-items: center;
+    margin: 0;
 }
 
 .stage__current-group .stage__group-pill {
