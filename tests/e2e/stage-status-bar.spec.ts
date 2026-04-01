@@ -381,12 +381,20 @@ test("stage latency shows server-measured round-trip under 500ms", async ({
 }) => {
   const stagePage = await openStageDisplay(context);
 
-  // Wait for latency to appear (server needs to send a heartbeat + connection update)
-  const latencyEl = stagePage.locator(".stage__connection-latency");
-  await expect(latencyEl).toBeVisible({ timeout: 10_000 });
+  // Wait for connection element to show latency (e.g., "CONNECTED · 012 ms")
+  const connectionEl = stagePage.locator(".stage__connection");
+  await expect(connectionEl).toBeVisible({ timeout: 10_000 });
 
-  // Extract the latency value from text like "· 012 ms"
-  const text = await latencyEl.textContent();
+  // Wait for latency value to appear in the connection text
+  await stagePage.waitForFunction(
+    () => {
+      const el = document.querySelector(".stage__connection");
+      return el?.textContent?.match(/\d+\s*ms/) != null;
+    },
+    { timeout: 10_000 },
+  );
+
+  const text = await connectionEl.textContent();
   const match = text?.match(/(\d+)\s*ms/);
   expect(match).toBeTruthy();
 
