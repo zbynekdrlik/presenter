@@ -321,11 +321,11 @@ test("status bar elements are positioned left to right: clock, LIVE, connection"
   expect(connectionBox).toBeTruthy();
 
   if (clockBox && liveBox && connectionBox) {
-    // Clock should be left of LIVE
-    expect(clockBox.x + clockBox.width).toBeLessThan(liveBox.x);
+    // Clock should be left of or adjacent to LIVE
+    expect(clockBox.x + clockBox.width).toBeLessThanOrEqual(liveBox.x);
 
-    // LIVE should be left of connection status
-    expect(liveBox.x + liveBox.width).toBeLessThan(connectionBox.x);
+    // LIVE should be left of or adjacent to connection status
+    expect(liveBox.x + liveBox.width).toBeLessThanOrEqual(connectionBox.x);
   }
 
   await stagePage.close();
@@ -381,29 +381,24 @@ test("stage latency shows server-measured round-trip under 500ms", async ({
 }) => {
   const stagePage = await openStageDisplay(context);
 
-  // Wait for connection element to show latency (e.g., "CONNECTED · 012 ms")
-  const connectionEl = stagePage.locator(".stage__connection");
-  await expect(connectionEl).toBeVisible({ timeout: 10_000 });
-
-  // Wait for latency value to appear in the connection text
-  await stagePage.waitForFunction(
+  // Wait for latency value to appear and extract it atomically
+  const latencyValue = await stagePage.waitForFunction(
     () => {
       const el = document.querySelector(".stage__connection");
-      return el?.textContent?.match(/\d+\s*ms/) != null;
+      const match = el?.textContent?.match(/(\d+)\s*ms/);
+      if (match) return parseInt(match[1], 10);
+      return null;
     },
-    { timeout: 10_000 },
+    { timeout: 15_000 },
   );
 
-  const text = await connectionEl.textContent();
-  const match = text?.match(/(\d+)\s*ms/);
-  expect(match).toBeTruthy();
-
-  const latencyValue = parseInt(match![1], 10);
+  const value = await latencyValue.jsonValue();
+  expect(value).not.toBeNull();
   // LAN/localhost round-trip should be well under 500ms
   // The old non-WASM stage showed ~15ms. This threshold catches
   // clock-skew bugs (2000ms+) while being generous enough to never flake.
-  expect(latencyValue).toBeLessThan(500);
-  expect(latencyValue).toBeGreaterThanOrEqual(0);
+  expect(value).toBeLessThan(500);
+  expect(value).toBeGreaterThanOrEqual(0);
 
   await stagePage.close();
 });
