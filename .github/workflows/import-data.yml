@@ -216,12 +216,18 @@ print('Created $MILOST_PATH')
           sleep 5
           ssh deploy-target << 'REMOTE_SCRIPT'
           set -e
-          if systemctl is-active --quiet ${{ steps.env.outputs.service_name }}; then
-            echo "Service is running"
-            curl -sf http://localhost:${{ steps.env.outputs.health_port }}/healthz || echo "Warning: healthz check failed"
-          else
-            echo "Service failed to start"
+          if ! systemctl is-active --quiet ${{ steps.env.outputs.service_name }}; then
+            echo "::error::Service failed to start"
             sudo journalctl -u ${{ steps.env.outputs.service_name }} -n 50 --no-pager
             exit 1
           fi
+          echo "Service is running"
+
+          HEALTH=$(curl -sf http://localhost:${{ steps.env.outputs.health_port }}/healthz)
+          if [ $? -ne 0 ]; then
+            echo "::error::Post-import health check FAILED"
+            sudo journalctl -u ${{ steps.env.outputs.service_name }} -n 50 --no-pager
+            exit 1
+          fi
+          echo "Health check passed: $HEALTH"
           REMOTE_SCRIPT
