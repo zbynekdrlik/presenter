@@ -650,8 +650,9 @@ jobs:
             exit 0
           fi
           echo "Validating schema compatibility with new binary..."
-          PRESENTER_DB_URL=sqlite:///opt/presenter-dev/presenter.db \
-            PRESENTER_PORT=18999 \
+          TEST_DB="/tmp/presenter-dev-schema-test-$$.db"
+          cp "$DB_PATH" "$TEST_DB"
+          PRESENTER_DB_URL="sqlite://$TEST_DB" PRESENTER_PORT=0 \
             timeout 10 /opt/presenter-dev/presenter-server &
           SERVER_PID=$!
           sleep 3
@@ -660,9 +661,9 @@ jobs:
             kill $SERVER_PID 2>/dev/null || true
             wait $SERVER_PID 2>/dev/null || true
           else
-            echo "::warning::Schema mismatch detected - database will be recreated from import"
-            rm -f "$DB_PATH" "${DB_PATH}-wal" "${DB_PATH}-shm"
+            echo "::warning::New binary failed to start with existing database. Database preserved - manual migration may be needed."
           fi
+          rm -f "$TEST_DB" "${TEST_DB}-wal" "${TEST_DB}-shm"
           REMOTE_SCRIPT
 
       - name: Deploy Bible files
@@ -725,14 +726,50 @@ jobs:
         run: |
           sleep 5
           ssh deploy-target << 'REMOTE_SCRIPT'
-          if systemctl is-active --quiet presenter-dev; then
-            echo "Service is running"
-            curl -sf http://localhost:8080/healthz || echo "Warning: healthz check failed"
-          else
-            echo "Service failed to start"
+          set -e
+          if ! systemctl is-active --quiet presenter-dev; then
+            echo "::error::Service failed to start"
             sudo journalctl -u presenter-dev -n 50 --no-pager
             exit 1
           fi
+          echo "Service is running"
+
+          HEALTH=$(curl -sf http://localhost:8080/healthz)
+          if [ $? -ne 0 ]; then
+            echo "::error::Post-deploy health check FAILED"
+            sudo journalctl -u presenter-dev -n 50 --no-pager
+            exit 1
+          fi
+          echo "Health check passed: $HEALTH"
+
+          LIBS=$(curl -sf http://localhost:8080/libraries/summary)
+          if [ $? -ne 0 ] || [ "$LIBS" = "[]" ]; then
+            echo "::error::Post-deploy data check FAILED — database appears empty or inaccessible"
+            exit 1
+          fi
+          echo "Data check passed: libraries endpoint returned data"
+          REMOTE_SCRIPT
+
+      - name: Post-deploy smoke test
+        run: |
+          ssh deploy-target << 'REMOTE_SCRIPT'
+          set -e
+          HTTP_CODE=$(curl -sf -o /dev/null -w "%{http_code}" http://localhost:8080/stage)
+          if [ "$HTTP_CODE" != "200" ]; then
+            echo "::error::Stage display returned HTTP $HTTP_CODE"
+            exit 1
+          fi
+          echo "Stage display: OK (HTTP 200)"
+
+          curl -sf http://localhost:8080/stage/snapshot > /dev/null
+          echo "Stage snapshot API: OK"
+
+          HTTP_CODE=$(curl -sf -o /dev/null -w "%{http_code}" http://localhost:8080/ui/operator)
+          if [ "$HTTP_CODE" != "200" ]; then
+            echo "::error::Operator UI returned HTTP $HTTP_CODE"
+            exit 1
+          fi
+          echo "Operator UI: OK (HTTP 200)"
           REMOTE_SCRIPT
 
       - name: Cleanup old library paths
