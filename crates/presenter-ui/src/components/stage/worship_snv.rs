@@ -50,8 +50,16 @@ pub fn WorshipSnv(
             .unwrap_or_default()
     };
 
-    let current_group = move || ctx.snapshot.get().and_then(|s| s.current.and_then(|sl| sl.group));
-    let next_group = move || ctx.snapshot.get().and_then(|s| s.next.and_then(|sl| sl.group));
+    let current_group = move || {
+        ctx.snapshot
+            .get()
+            .and_then(|s| s.current.and_then(|sl| sl.group))
+    };
+    let next_group = move || {
+        ctx.snapshot
+            .get()
+            .and_then(|s| s.next.and_then(|sl| sl.group))
+    };
 
     // Auto-fit effect for current text
     {
@@ -92,6 +100,7 @@ pub fn WorshipSnv(
     view! {
         <div class="stage-container" data-layout="worship-snv">
             <div class="stage__current-group">
+                <span class="stage__debug-label">"current-group"</span>
                 {move || {
                     current_group()
                         .map(|name| {
@@ -110,12 +119,14 @@ pub fn WorshipSnv(
             </div>
 
             <div class="stage__current-slide">
+                <span class="stage__debug-label">"current-slide"</span>
                 <div node_ref=current_text_ref class="stage__slide-text">
                     {current_text}
                 </div>
             </div>
 
             <div class="stage__next-group">
+                <span class="stage__debug-label">"next-group"</span>
                 {move || {
                     next_group()
                         .map(|name| {
@@ -134,6 +145,7 @@ pub fn WorshipSnv(
             </div>
 
             <div class="stage__next-slide">
+                <span class="stage__debug-label">"next-slide"</span>
                 <div node_ref=next_text_ref class="stage__slide-text">
                     {next_text}
                 </div>

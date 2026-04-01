@@ -376,6 +376,30 @@ test("broadcast_live state persists across stage reconnections", async ({
   await stagePage.close();
 });
 
+test("stage latency shows server-measured round-trip under 500ms", async ({
+  context,
+}) => {
+  const stagePage = await openStageDisplay(context);
+
+  // Wait for latency to appear (server needs to send a heartbeat + connection update)
+  const latencyEl = stagePage.locator(".stage__connection-latency");
+  await expect(latencyEl).toBeVisible({ timeout: 10_000 });
+
+  // Extract the latency value from text like "· 012 ms"
+  const text = await latencyEl.textContent();
+  const match = text?.match(/(\d+)\s*ms/);
+  expect(match).toBeTruthy();
+
+  const latencyValue = parseInt(match![1], 10);
+  // LAN/localhost round-trip should be well under 500ms
+  // The old non-WASM stage showed ~15ms. This threshold catches
+  // clock-skew bugs (2000ms+) while being generous enough to never flake.
+  expect(latencyValue).toBeLessThan(500);
+  expect(latencyValue).toBeGreaterThanOrEqual(0);
+
+  await stagePage.close();
+});
+
 // Type declarations for window object
 declare global {
   interface Window {

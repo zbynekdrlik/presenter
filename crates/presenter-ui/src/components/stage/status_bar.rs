@@ -44,6 +44,7 @@ pub fn StatusBar(
 
     view! {
         <div class="stage__status-bar">
+            <span class="stage__debug-label">"status-bar"</span>
             <span class="stage__clock">{clock_text}</span>
 
             {move || {

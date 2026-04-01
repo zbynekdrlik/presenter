@@ -332,6 +332,32 @@ body.stage {
     color: #ef4444;
 }
 
+/* ===== Debug frame borders (always on, invisible from distance) ===== */
+
+.stage__current-group,
+.stage__current-slide,
+.stage__next-group,
+.stage__next-slide,
+.stage__status-bar,
+.stage-pp__slides-area,
+.stage-pp__playlist-sidebar,
+.stage-timer__display,
+.stage-preach__display {
+    border: 1px solid rgba(255, 255, 255, 0.08);
+}
+
+.stage__debug-label {
+    position: absolute;
+    top: 1px;
+    left: 4px;
+    font-size: 0.4vw;
+    color: rgba(255, 255, 255, 0.12);
+    text-transform: uppercase;
+    letter-spacing: 0.08em;
+    pointer-events: none;
+    z-index: 1;
+}
+
 /* ===== Connection state indicators ===== */
 
 .stage__connection--connecting {

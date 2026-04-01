@@ -51,6 +51,7 @@ pub fn PreachLayout(
     view! {
         <div class="stage-container" data-layout="preach">
             <div class="stage-preach__display">
+                <span class="stage__debug-label">"preach-display"</span>
                 <div
                     node_ref=preach_ref
                     class=move || {

@@ -44,6 +44,7 @@ pub fn TimerLayout(
     view! {
         <div class="stage-container" data-layout="timer">
             <div class="stage-timer__display">
+                <span class="stage__debug-label">"timer-display"</span>
                 <div node_ref=timer_ref class="stage-timer__text">
                     {timer_text}
                 </div>

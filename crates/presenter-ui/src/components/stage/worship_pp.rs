@@ -50,8 +50,16 @@ pub fn WorshipPp(
             .unwrap_or_default()
     };
 
-    let current_group = move || ctx.snapshot.get().and_then(|s| s.current.and_then(|sl| sl.group));
-    let next_group = move || ctx.snapshot.get().and_then(|s| s.next.and_then(|sl| sl.group));
+    let current_group = move || {
+        ctx.snapshot
+            .get()
+            .and_then(|s| s.current.and_then(|sl| sl.group))
+    };
+    let next_group = move || {
+        ctx.snapshot
+            .get()
+            .and_then(|s| s.next.and_then(|sl| sl.group))
+    };
     let playlist_entries = move || {
         ctx.snapshot
             .get()
@@ -96,7 +104,9 @@ pub fn WorshipPp(
     view! {
         <div class="stage-container" data-layout="worship-pp">
             <div class="stage-pp__slides-area">
+                <span class="stage__debug-label">"slides-area"</span>
                 <div class="stage__current-group" style="left:14%;width:72%;">
+                    <span class="stage__debug-label">"current-group"</span>
                     {move || {
                         current_group()
                             .map(|name| {
@@ -114,11 +124,13 @@ pub fn WorshipPp(
                     }}
                 </div>
                 <div class="stage__current-slide" style="width:66%;left:2%;">
+                    <span class="stage__debug-label">"current-slide"</span>
                     <div node_ref=current_text_ref class="stage__slide-text">
                         {current_text}
                     </div>
                 </div>
                 <div class="stage__next-group" style="left:14%;width:72%;">
+                    <span class="stage__debug-label">"next-group"</span>
                     {move || {
                         next_group()
                             .map(|name| {
@@ -136,6 +148,7 @@ pub fn WorshipPp(
                     }}
                 </div>
                 <div class="stage__next-slide" style="width:66%;left:2%;">
+                    <span class="stage__debug-label">"next-slide"</span>
                     <div node_ref=next_text_ref class="stage__slide-text">
                         {next_text}
                     </div>
@@ -143,6 +156,7 @@ pub fn WorshipPp(
             </div>
 
             <div class="stage-pp__playlist-sidebar">
+                <span class="stage__debug-label">"playlist-sidebar"</span>
                 <For
                     each=playlist_entries
                     key=|entry| entry.name.clone()
