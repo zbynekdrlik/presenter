@@ -9,6 +9,28 @@ use crate::ws::stage::StageWsState;
 
 const CURRENT_MAX_FONT: f64 = 120.0;
 const NEXT_MAX_FONT: f64 = 80.0;
+const CURRENT_GROUP_MAX_FONT: f64 = 60.0;
+const NEXT_GROUP_MAX_FONT: f64 = 40.0;
+
+pub fn autofit_effect<T: 'static>(
+    node_ref: NodeRef<leptos::html::Div>,
+    max_font: f64,
+    trigger: impl Fn() -> T + 'static,
+) {
+    Effect::new(move |_| {
+        let _trigger = trigger();
+        if let Some(el) = node_ref.get() {
+            let html_el: &HtmlElement = &el;
+            let el_clone = html_el.clone();
+            let cb = wasm_bindgen::closure::Closure::once_into_js(move || {
+                autofit_text(&el_clone, max_font);
+            });
+            let _ = web_sys::window()
+                .expect("window")
+                .request_animation_frame(cb.as_ref().unchecked_ref());
+        }
+    });
+}
 
 #[component]
 pub fn WorshipSnv(
@@ -19,6 +41,8 @@ pub fn WorshipSnv(
 
     let current_text_ref = NodeRef::<leptos::html::Div>::new();
     let next_text_ref = NodeRef::<leptos::html::Div>::new();
+    let current_group_ref = NodeRef::<leptos::html::Div>::new();
+    let next_group_ref = NodeRef::<leptos::html::Div>::new();
 
     let current_text = move || {
         ctx.snapshot
@@ -61,61 +85,41 @@ pub fn WorshipSnv(
             .and_then(|s| s.next.and_then(|sl| sl.group))
     };
 
-    // Auto-fit effect for current text
-    {
-        let r = current_text_ref;
-        Effect::new(move |_| {
-            let _text = current_text();
-            if let Some(el) = r.get() {
-                let html_el: &HtmlElement = &el;
-                let el_clone = html_el.clone();
-                let cb = wasm_bindgen::closure::Closure::once_into_js(move || {
-                    autofit_text(&el_clone, CURRENT_MAX_FONT);
-                });
-                let _ = web_sys::window()
-                    .expect("window")
-                    .request_animation_frame(cb.as_ref().unchecked_ref());
-            }
-        });
-    }
+    let current_group_style = move || {
+        current_group().map_or(String::new(), |name| {
+            let color = group_color(&name);
+            let bg = hex_to_rgba(color, 0.25);
+            format!("color:{color};background:{bg};")
+        })
+    };
 
-    // Auto-fit effect for next text
-    {
-        let r = next_text_ref;
-        Effect::new(move |_| {
-            let _text = next_text();
-            if let Some(el) = r.get() {
-                let html_el: &HtmlElement = &el;
-                let el_clone = html_el.clone();
-                let cb = wasm_bindgen::closure::Closure::once_into_js(move || {
-                    autofit_text(&el_clone, NEXT_MAX_FONT);
-                });
-                let _ = web_sys::window()
-                    .expect("window")
-                    .request_animation_frame(cb.as_ref().unchecked_ref());
-            }
-        });
-    }
+    let next_group_style = move || {
+        next_group().map_or(String::new(), |name| {
+            let color = group_color(&name);
+            let bg = hex_to_rgba(color, 0.25);
+            format!("color:{color};background:{bg};")
+        })
+    };
+
+    let current_group_text = move || current_group().unwrap_or_default();
+    let next_group_text = move || next_group().unwrap_or_default();
+
+    autofit_effect(current_text_ref, CURRENT_MAX_FONT, current_text.clone());
+    autofit_effect(next_text_ref, NEXT_MAX_FONT, next_text.clone());
+    autofit_effect(
+        current_group_ref,
+        CURRENT_GROUP_MAX_FONT,
+        current_group_text.clone(),
+    );
+    autofit_effect(next_group_ref, NEXT_GROUP_MAX_FONT, next_group_text.clone());
 
     view! {
         <div class="stage-container" data-layout="worship-snv">
             <div class="stage__current-group">
                 <span class="stage__debug-label">"current-group"</span>
-                {move || {
-                    current_group()
-                        .map(|name| {
-                            let color = group_color(&name);
-                            let bg = hex_to_rgba(color, 0.25);
-                            view! {
-                                <span
-                                    class="stage__group-pill"
-                                    style=format!("color:{color};background:{bg};")
-                                >
-                                    {name}
-                                </span>
-                            }
-                        })
-                }}
+                <div node_ref=current_group_ref class="stage__group-pill" style=current_group_style>
+                    {current_group_text}
+                </div>
             </div>
 
             <div class="stage__current-slide">
@@ -127,21 +131,9 @@ pub fn WorshipSnv(
 
             <div class="stage__next-group">
                 <span class="stage__debug-label">"next-group"</span>
-                {move || {
-                    next_group()
-                        .map(|name| {
-                            let color = group_color(&name);
-                            let bg = hex_to_rgba(color, 0.25);
-                            view! {
-                                <span
-                                    class="stage__group-pill"
-                                    style=format!("color:{color};background:{bg};")
-                                >
-                                    {name}
-                                </span>
-                            }
-                        })
-                }}
+                <div node_ref=next_group_ref class="stage__group-pill" style=next_group_style>
+                    {next_group_text}
+                </div>
             </div>
 
             <div class="stage__next-slide">
