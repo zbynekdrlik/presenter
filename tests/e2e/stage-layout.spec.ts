@@ -220,6 +220,70 @@ test("slide text renders diacritics correctly", async ({ context }) => {
   await stagePage.close();
 });
 
+// ─── Slide text fills box ────────────────────────────────────────────────
+
+test("slide text autofit fills box height with no overflow", async ({
+  context,
+}) => {
+  const stagePage = await openStageDisplay(context);
+
+  // Trigger 2-line slide with diacritics (Požehnaný kto prichádza / v mene Pánovom)
+  await triggerSlide(context, 1, 2);
+  await stagePage.waitForTimeout(2_000);
+
+  const metrics = await stagePage.evaluate(() => {
+    const container = document.querySelector(".stage__current-slide");
+    const text = container?.querySelector(".stage__slide-text");
+    if (!container || !text) return null;
+    const containerH = container.getBoundingClientRect().height;
+    const fontSize = parseFloat(getComputedStyle(text).fontSize);
+    const lineHeight = parseFloat(getComputedStyle(text).lineHeight);
+    const overflows =
+      text.scrollHeight > (text as HTMLElement).clientHeight ||
+      text.scrollWidth > (text as HTMLElement).clientWidth;
+    return { containerH, fontSize, lineHeight, overflows };
+  });
+
+  expect(metrics).not.toBeNull();
+  // Text should not overflow
+  expect(metrics!.overflows).toBe(false);
+  // line-height should equal font-size (line-height: 1)
+  expect(Math.abs(metrics!.lineHeight - metrics!.fontSize)).toBeLessThan(1);
+  // Font-size should be substantial relative to container (not tiny)
+  expect(metrics!.fontSize / metrics!.containerH).toBeGreaterThan(0.15);
+
+  await stagePage.close();
+});
+
+test("single-line slide text maximizes to fill box height", async ({
+  context,
+}) => {
+  const stagePage = await openStageDisplay(context);
+
+  // Trigger single-line slide ("Short line")
+  await triggerSlide(context, 4, 0);
+  await stagePage.waitForTimeout(2_000);
+
+  const metrics = await stagePage.evaluate(() => {
+    const container = document.querySelector(".stage__current-slide");
+    const text = container?.querySelector(".stage__slide-text");
+    if (!container || !text) return null;
+    const containerH = container.getBoundingClientRect().height;
+    const fontSize = parseFloat(getComputedStyle(text).fontSize);
+    const overflows =
+      text.scrollHeight > (text as HTMLElement).clientHeight;
+    return { containerH, fontSize, overflows, ratio: fontSize / containerH };
+  });
+
+  expect(metrics).not.toBeNull();
+  expect(metrics!.overflows).toBe(false);
+  // Single line should have font-size close to container height
+  // With line-height:1, font-size ≈ containerH (autofit maximizes)
+  expect(metrics!.ratio).toBeGreaterThan(0.8);
+
+  await stagePage.close();
+});
+
 // ─── Box independence (no layout shifts) ─────────────────────────────────
 
 test("boxes maintain fixed positions regardless of content", async ({

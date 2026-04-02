@@ -161,7 +161,7 @@ body.stage {
 
 .stage__slide-text {
     text-align: center;
-    line-height: 1.1;
+    line-height: 1;
     margin: 0;
     white-space: pre-wrap;
     font-weight: 700;
