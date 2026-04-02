@@ -407,9 +407,9 @@ test("group pill autofit font fills box height tightly", async ({
       const pill = document.querySelector(".stage__group-pill");
       return pill ? parseFloat(getComputedStyle(pill).fontSize) : 0;
     });
-    // line-height should be <= 80% of font-size (we set 0.75)
+    // line-height should be <= 96% of font-size (we set 0.95 for diacritic safety)
     if (fontSize > 0) {
-      expect(lhPx / fontSize).toBeLessThanOrEqual(0.8);
+      expect(lhPx / fontSize).toBeLessThanOrEqual(0.96);
     }
   }
 
