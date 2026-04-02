@@ -7,7 +7,7 @@ use crate::state::stage::StageContext;
 use crate::utils::autofit::autofit_text;
 use crate::ws::stage::StageWsState;
 
-const STATUS_MAX_FONT: f64 = 80.0;
+const STATUS_MAX_FONT: f64 = 200.0;
 
 fn autofit_status<T: 'static>(
     node_ref: NodeRef<leptos::html::Div>,

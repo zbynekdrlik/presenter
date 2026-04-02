@@ -4,10 +4,10 @@ use crate::state::stage::StageContext;
 use crate::utils::color::{group_color, hex_to_rgba};
 use crate::ws::stage::StageWsState;
 
-const CURRENT_MAX_FONT: f64 = 100.0;
-const NEXT_MAX_FONT: f64 = 60.0;
-const CURRENT_GROUP_MAX_FONT: f64 = 60.0;
-const NEXT_GROUP_MAX_FONT: f64 = 40.0;
+const CURRENT_MAX_FONT: f64 = 800.0;
+const NEXT_MAX_FONT: f64 = 500.0;
+const CURRENT_GROUP_MAX_FONT: f64 = 200.0;
+const NEXT_GROUP_MAX_FONT: f64 = 200.0;
 
 use super::worship_snv::autofit_effect;
 

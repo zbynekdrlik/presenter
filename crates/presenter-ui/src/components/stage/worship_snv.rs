@@ -7,10 +7,10 @@ use crate::utils::autofit::autofit_text;
 use crate::utils::color::{group_color, hex_to_rgba};
 use crate::ws::stage::StageWsState;
 
-const CURRENT_MAX_FONT: f64 = 120.0;
-const NEXT_MAX_FONT: f64 = 80.0;
-const CURRENT_GROUP_MAX_FONT: f64 = 60.0;
-const NEXT_GROUP_MAX_FONT: f64 = 40.0;
+const CURRENT_MAX_FONT: f64 = 800.0;
+const NEXT_MAX_FONT: f64 = 500.0;
+const CURRENT_GROUP_MAX_FONT: f64 = 200.0;
+const NEXT_GROUP_MAX_FONT: f64 = 200.0;
 
 pub fn autofit_effect<T: 'static>(
     node_ref: NodeRef<leptos::html::Div>,
