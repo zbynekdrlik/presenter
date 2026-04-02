@@ -247,8 +247,9 @@ test("slide text autofit fills box height with no overflow", async ({
   expect(metrics).not.toBeNull();
   // Text should not overflow
   expect(metrics!.overflows).toBe(false);
-  // line-height should equal font-size (line-height: 1)
-  expect(Math.abs(metrics!.lineHeight - metrics!.fontSize)).toBeLessThan(1);
+  // line-height should be close to font-size (line-height: 1.15)
+  expect(metrics!.lineHeight / metrics!.fontSize).toBeLessThan(1.2);
+  expect(metrics!.lineHeight / metrics!.fontSize).toBeGreaterThan(1.0);
   // Font-size should be substantial relative to container (not tiny)
   expect(metrics!.fontSize / metrics!.containerH).toBeGreaterThan(0.15);
 
