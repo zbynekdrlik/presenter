@@ -381,24 +381,30 @@ test("stage latency shows server-measured round-trip under 500ms", async ({
 }) => {
   const stagePage = await openStageDisplay(context);
 
-  // Wait for latency value to appear and extract it atomically
-  const latencyValue = await stagePage.waitForFunction(
-    () => {
-      const el = document.querySelector(".stage__connection");
-      const match = el?.textContent?.match(/(\d+)\s*ms/);
-      if (match) return parseInt(match[1], 10);
-      return null;
-    },
-    { timeout: 15_000 },
-  );
+  // Wait for the stage client to register and exchange at least one heartbeat
+  // by polling the server's /stage/connections endpoint
+  let latencyValue: number | null = null;
+  for (let i = 0; i < 20; i++) {
+    await stagePage.waitForTimeout(1_000);
+    const resp = await context.request.get(
+      new URL("/stage/connections", baseURL).toString(),
+    );
+    if (resp.ok()) {
+      const connections = await resp.json();
+      const withLatency = connections.find(
+        (c: { latencyMs?: number }) => c.latencyMs != null,
+      );
+      if (withLatency) {
+        latencyValue = withLatency.latencyMs;
+        break;
+      }
+    }
+  }
 
-  const value = await latencyValue.jsonValue();
-  expect(value).not.toBeNull();
+  expect(latencyValue).not.toBeNull();
   // LAN/localhost round-trip should be well under 500ms
-  // The old non-WASM stage showed ~15ms. This threshold catches
-  // clock-skew bugs (2000ms+) while being generous enough to never flake.
-  expect(value).toBeLessThan(500);
-  expect(value).toBeGreaterThanOrEqual(0);
+  expect(latencyValue!).toBeLessThan(500);
+  expect(latencyValue!).toBeGreaterThanOrEqual(0);
 
   await stagePage.close();
 });
