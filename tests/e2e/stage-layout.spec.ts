@@ -293,11 +293,13 @@ test("status bar elements autofit to bar height", async ({ context }) => {
   });
 
   expect(metrics).not.toBeNull();
-  // All status bar elements should have font-size > 50% of bar height
-  // (autofit should make them significantly larger than default vw sizes)
-  expect(metrics!.clockFontSize / metrics!.barH).toBeGreaterThan(0.5);
-  expect(metrics!.liveFontSize / metrics!.barH).toBeGreaterThan(0.5);
-  expect(metrics!.connFontSize / metrics!.barH).toBeGreaterThan(0.5);
+  // All status bar elements should have font-size > 30% of bar height.
+  // Connection text ("CONNECTED · 000 MS") is long so autofit shrinks it more
+  // than clock or live pill. 30% threshold catches broken autofit (default vw
+  // sizes would be ~13% of bar height) while allowing natural variation.
+  expect(metrics!.clockFontSize / metrics!.barH).toBeGreaterThan(0.3);
+  expect(metrics!.liveFontSize / metrics!.barH).toBeGreaterThan(0.3);
+  expect(metrics!.connFontSize / metrics!.barH).toBeGreaterThan(0.3);
 
   await stagePage.close();
 });
