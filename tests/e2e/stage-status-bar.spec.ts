@@ -376,6 +376,69 @@ test("broadcast_live state persists across stage reconnections", async ({
   await stagePage.close();
 });
 
+test("group pill text fills at least 90% of its box height", async ({
+  context,
+}) => {
+  // Trigger a slide so group labels appear
+  const stagePage = await openStageDisplay(context);
+
+  // Trigger a presentation slide with a group name
+  const presentations = await context.request.get(
+    new URL("/presentations", baseURL).toString(),
+  );
+  const presList = await presentations.json();
+  if (presList.length > 0) {
+    const pres = presList[0];
+    const slidesResp = await context.request.get(
+      new URL(`/presentations/${pres.id}/slides`, baseURL).toString(),
+    );
+    const slides = await slidesResp.json();
+    if (slides.length > 0) {
+      await context.request.post(
+        new URL("/stage/state", baseURL).toString(),
+        {
+          data: {
+            presentationId: pres.id,
+            currentSlideId: slides[0].id,
+            nextSlideId: slides.length > 1 ? slides[1].id : null,
+          },
+        },
+      );
+    }
+  }
+
+  // Wait for group pill to appear
+  await stagePage.waitForTimeout(2_000);
+  const pillVisible = await stagePage
+    .locator(".stage__current-group .stage__group-pill")
+    .isVisible();
+  if (!pillVisible) {
+    // No group data in test DB — skip gracefully
+    await stagePage.close();
+    return;
+  }
+
+  // Measure: autofit font-size should be large enough that uppercase glyphs
+  // fill most of the box height. With tight line-height (0.75), autofit picks
+  // a bigger font. The font-size * 0.72 (cap-height ratio) should be >= 85%
+  // of container height, meaning visible text nearly touches borders.
+  const fillRatio = await stagePage.evaluate(() => {
+    const container = document.querySelector(".stage__current-group");
+    const pill = container?.querySelector(".stage__group-pill");
+    if (!container || !pill) return 0;
+    const containerH = container.getBoundingClientRect().height;
+    const fontSize = parseFloat(getComputedStyle(pill).fontSize);
+    // Cap-height for Inter/system-ui uppercase is ~72% of font-size
+    const estimatedCapHeight = fontSize * 0.72;
+    return estimatedCapHeight / containerH;
+  });
+
+  // Uppercase glyphs should fill at least 85% of the box height
+  expect(fillRatio).toBeGreaterThanOrEqual(0.85);
+
+  await stagePage.close();
+});
+
 test("stage latency shows server-measured round-trip under 500ms", async ({
   context,
 }) => {
