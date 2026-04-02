@@ -145,9 +145,9 @@ test("stage status bar shows clock with current time", async ({ context }) => {
   const clockEl = stagePage.locator(".stage__clock");
   await expect(clockEl).toBeVisible();
 
-  // Clock should show time in HH:MM:SS format
+  // Clock should show time in HH:MM:SS format (textContent includes debug label)
   const clockText = await clockEl.textContent();
-  expect(clockText).toMatch(/^\d{2}:\d{2}:\d{2}$/);
+  expect(clockText).toMatch(/\d{2}:\d{2}:\d{2}/);
 
   await stagePage.close();
 });
@@ -170,7 +170,7 @@ test("stage clock updates every second", async ({ context }) => {
 
   // Either the seconds changed or we crossed a minute boundary
   // Just verify it's still a valid time format
-  expect(updatedTime).toMatch(/^\d{2}:\d{2}:\d{2}$/);
+  expect(updatedTime).toMatch(/\d{2}:\d{2}:\d{2}/);
 
   await stagePage.close();
 });
@@ -183,7 +183,7 @@ test("LIVE indicator is initially inactive with Slovak text", async ({
   const liveEl = stagePage.locator(".stage__live-pill");
   await expect(liveEl).toBeVisible();
   await expect(liveEl).toHaveClass(/stage__live-pill--off/);
-  await expect(liveEl).toHaveText("VYSIELANIE JE VYPNUTE");
+  await expect(liveEl).toContainText("VYSIELANIE JE VYPNUTE");
 
   await stagePage.close();
 });
@@ -195,7 +195,7 @@ test("LIVE indicator responds to Companion broadcast.set_live command", async ({
 
   const liveEl = stagePage.locator(".stage__live-pill");
   await expect(liveEl).toHaveClass(/stage__live-pill--off/);
-  await expect(liveEl).toHaveText("VYSIELANIE JE VYPNUTE");
+  await expect(liveEl).toContainText("VYSIELANIE JE VYPNUTE");
 
   // Connect to Companion and send broadcast.set_live command
   const { socket, handshake, sendCommand } = createCompanionSocket(wsURL);
@@ -217,7 +217,7 @@ test("LIVE indicator responds to Companion broadcast.set_live command", async ({
   );
 
   await expect(liveEl).toHaveClass(/stage__live-pill--on/);
-  await expect(liveEl).toHaveText("LIVE");
+  await expect(liveEl).toContainText("LIVE");
 
   // Disable broadcast live
   const disableResult = await sendCommand("broadcast.set_live", {
@@ -235,7 +235,7 @@ test("LIVE indicator responds to Companion broadcast.set_live command", async ({
   );
 
   await expect(liveEl).toHaveClass(/stage__live-pill--off/);
-  await expect(liveEl).toHaveText("VYSIELANIE JE VYPNUTE");
+  await expect(liveEl).toContainText("VYSIELANIE JE VYPNUTE");
 
   socket.close();
   await stagePage.close();
@@ -264,7 +264,7 @@ test("LIVE indicator can be toggled on and off via Companion", async ({
   );
 
   await expect(liveEl).toHaveClass(/stage__live-pill--on/);
-  await expect(liveEl).toHaveText("LIVE");
+  await expect(liveEl).toContainText("LIVE");
 
   // Disable broadcast live
   await sendCommand("broadcast.set_live", { enabled: false });
@@ -278,7 +278,7 @@ test("LIVE indicator can be toggled on and off via Companion", async ({
   );
 
   await expect(liveEl).toHaveClass(/stage__live-pill--off/);
-  await expect(liveEl).toHaveText("VYSIELANIE JE VYPNUTE");
+  await expect(liveEl).toContainText("VYSIELANIE JE VYPNUTE");
 
   socket.close();
   await stagePage.close();
