@@ -305,7 +305,7 @@ test("boxes maintain fixed positions regardless of content", async ({
         ".stage__current-slide",
         ".stage__next-group",
         ".stage__next-slide",
-        ".stage__status-bar",
+        ".stage__clock",
       ];
       return boxes.map((sel) => {
         const el = document.querySelector(sel);
@@ -344,29 +344,26 @@ test("status bar elements autofit to bar height", async ({ context }) => {
   await stagePage.waitForTimeout(2_000);
 
   const metrics = await stagePage.evaluate(() => {
-    const bar = document.querySelector(".stage__status-bar");
     const clock = document.querySelector(".stage__clock");
     const live = document.querySelector(".stage__live-pill");
     const conn = document.querySelector(".stage__connection");
-    if (!bar || !clock || !live || !conn) return null;
+    if (!clock || !live || !conn) return null;
 
-    const barH = bar.getBoundingClientRect().height;
     return {
-      barH,
+      clockH: clock.getBoundingClientRect().height,
       clockFontSize: parseFloat(getComputedStyle(clock).fontSize),
+      liveH: live.getBoundingClientRect().height,
       liveFontSize: parseFloat(getComputedStyle(live).fontSize),
+      connH: conn.getBoundingClientRect().height,
       connFontSize: parseFloat(getComputedStyle(conn).fontSize),
     };
   });
 
   expect(metrics).not.toBeNull();
-  // All status bar elements should have font-size > 30% of bar height.
-  // Connection text ("CONNECTED · 000 MS") is long so autofit shrinks it more
-  // than clock or live pill. 30% threshold catches broken autofit (default vw
-  // sizes would be ~13% of bar height) while allowing natural variation.
-  expect(metrics!.clockFontSize / metrics!.barH).toBeGreaterThan(0.3);
-  expect(metrics!.liveFontSize / metrics!.barH).toBeGreaterThan(0.3);
-  expect(metrics!.connFontSize / metrics!.barH).toBeGreaterThan(0.3);
+  // Each status box has its own height. Font-size should be > 30% of its box.
+  expect(metrics!.clockFontSize / metrics!.clockH).toBeGreaterThan(0.3);
+  expect(metrics!.liveFontSize / metrics!.liveH).toBeGreaterThan(0.3);
+  expect(metrics!.connFontSize / metrics!.connH).toBeGreaterThan(0.3);
 
   await stagePage.close();
 });

@@ -92,11 +92,17 @@ pub fn StatusBar(
     autofit_status(connection_ref, connection_text.clone());
 
     view! {
-        <div class="stage__status-bar">
-            <span class="stage__debug-label">"status-bar"</span>
-            <div node_ref=clock_ref class="stage__clock">{clock_text}</div>
-            <div node_ref=live_ref class=live_class>{live_text}</div>
-            <div node_ref=connection_ref class=connection_class>{connection_text}</div>
+        <div node_ref=clock_ref class="stage__clock">
+            <span class="stage__debug-label">"clock"</span>
+            {clock_text}
+        </div>
+        <div node_ref=live_ref class=live_class>
+            <span class="stage__debug-label">"live"</span>
+            {live_text}
+        </div>
+        <div node_ref=connection_ref class=connection_class>
+            <span class="stage__debug-label">"connection"</span>
+            {connection_text}
         </div>
     }
 }
