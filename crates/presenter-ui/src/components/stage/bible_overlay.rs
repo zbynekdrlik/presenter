@@ -3,7 +3,13 @@ use presenter_core::BibleSlideOutput;
 
 #[component]
 pub fn BibleOverlay(overlay: RwSignal<Option<BibleSlideOutput>>) -> impl IntoView {
-    let data_visible = move || if overlay.get().is_some() { "true" } else { "false" };
+    let data_visible = move || {
+        if overlay.get().is_some() {
+            "true"
+        } else {
+            "false"
+        }
+    };
 
     view! {
         <div class="stage__bible-overlay" data-visible=data_visible>

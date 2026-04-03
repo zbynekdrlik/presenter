@@ -106,28 +106,31 @@ fn spawn_stage_ws(
                     match msg {
                         Ok(Message::Text(text)) => {
                             match serde_json::from_str::<LiveEvent>(&text) {
-                                Ok(LiveEvent::Heartbeat { id, timestamp }) => {
+                                Ok(LiveEvent::Heartbeat { id, timestamp: _ }) => {
                                     let now = js_sys::Date::now();
                                     *last_hb.borrow_mut() = now;
                                     set_state.set(StageWsState::Connected);
 
-                                    let ts_ms = timestamp.timestamp_millis() as f64;
-                                    let latency = (now - ts_ms).abs();
-                                    set_latency_ms.set(Some(latency));
-
-                                    // Send heartbeat ACK
+                                    // Send heartbeat ACK (latency is measured server-side)
                                     let ack = InboundMessage::StageHeartbeatAck {
                                         client_id: client_id_for_task.clone(),
                                         heartbeat_id: Some(id.to_string()),
                                     };
                                     if let Ok(json) = serde_json::to_string(&ack) {
-                                        // Take the writer out to avoid holding RefCell borrow across await
                                         let mut writer = write.borrow_mut().take();
                                         if let Some(ref mut w) = writer {
                                             let _ = w.send(Message::Text(json)).await;
                                         }
-                                        // Put it back
                                         *write.borrow_mut() = writer;
+                                    }
+                                }
+                                Ok(LiveEvent::StageConnection { snapshot }) => {
+                                    // Use server-measured round-trip latency for our client
+                                    if let Ok(our_id) = uuid::Uuid::parse_str(&client_id_for_task) {
+                                        if snapshot.id == our_id {
+                                            set_latency_ms
+                                                .set(snapshot.latency_ms.map(|ms| ms as f64));
+                                        }
                                     }
                                 }
                                 Ok(event) => {

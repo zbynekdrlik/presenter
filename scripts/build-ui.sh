@@ -17,7 +17,7 @@ RUSTUP_TOOLCHAIN=nightly trunk build --release
 # Step 2: Transpile JS glue code to ES2017 (Safari 12 compatible syntax).
 echo "==> Transpiling JS for Safari 12..."
 esbuild dist/presenter-ui-*.js \
-  --target=safari12 \
+  --target=es2017 \
   --outdir=dist/ \
   --allow-overwrite
 

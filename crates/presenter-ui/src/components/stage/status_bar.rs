@@ -2,7 +2,10 @@ use gloo_timers::callback::Interval;
 use leptos::prelude::*;
 
 use crate::state::stage::StageContext;
+use crate::utils::autofit::autofit_effect;
 use crate::ws::stage::StageWsState;
+
+const STATUS_MAX_FONT: f64 = 200.0;
 
 #[component]
 pub fn StatusBar(
@@ -11,17 +14,46 @@ pub fn StatusBar(
 ) -> impl IntoView {
     let ctx = use_context::<StageContext>().expect("StageContext not provided");
 
+    let clock_ref = NodeRef::<leptos::html::Div>::new();
+    let live_ref = NodeRef::<leptos::html::Div>::new();
+    let connection_ref = NodeRef::<leptos::html::Div>::new();
+
     let (clock_text, set_clock_text) = signal(current_time_string());
     let _clock_interval = Interval::new(1_000, move || {
         set_clock_text.set(current_time_string());
     });
     _clock_interval.forget();
 
-    let connection_label = move || match ws_state.get() {
-        StageWsState::Connecting => "CONNECTING\u{2026}",
-        StageWsState::Connected => "CONNECTED",
-        StageWsState::Reconnecting => "RECONNECTING\u{2026}",
-        StageWsState::Disconnected => "DISCONNECTED",
+    let broadcast_live = ctx.broadcast_live;
+
+    let live_text = move || {
+        if broadcast_live.get() {
+            "LIVE".to_string()
+        } else {
+            "VYSIELANIE JE VYPNUTE".to_string()
+        }
+    };
+
+    let live_class = move || {
+        if broadcast_live.get() {
+            "stage__live-pill stage__live-pill--on"
+        } else {
+            "stage__live-pill stage__live-pill--off"
+        }
+    };
+
+    let connection_text = move || {
+        let label = match ws_state.get() {
+            StageWsState::Connecting => "CONNECTING\u{2026}",
+            StageWsState::Connected => "CONNECTED",
+            StageWsState::Reconnecting => "RECONNECTING\u{2026}",
+            StageWsState::Disconnected => "DISCONNECTED",
+        };
+        let latency = latency_ms
+            .get()
+            .map(|ms| format!(" \u{00b7} {:03} ms", ms as u32))
+            .unwrap_or_default();
+        format!("{label}{latency}")
     };
 
     let connection_class = move || {
@@ -34,37 +66,22 @@ pub fn StatusBar(
         }
     };
 
-    let latency_text = move || {
-        latency_ms
-            .get()
-            .map(|ms| format!("\u{00b7} {:03} ms", ms as u32))
-    };
-
-    let broadcast_live = ctx.broadcast_live;
+    autofit_effect(clock_ref, STATUS_MAX_FONT, move || clock_text.get());
+    autofit_effect(live_ref, STATUS_MAX_FONT, live_text.clone());
+    autofit_effect(connection_ref, STATUS_MAX_FONT, connection_text.clone());
 
     view! {
-        <div class="stage__status-bar">
-            <span class="stage__clock">{clock_text}</span>
-
-            {move || {
-                let is_live = broadcast_live.get();
-                let (class, text) = if is_live {
-                    ("stage__live-pill stage__live-pill--on", "LIVE")
-                } else {
-                    ("stage__live-pill stage__live-pill--off", "VYSIELANIE JE VYPNUTE")
-                };
-                view! { <span class=class>{text}</span> }
-            }}
-
-            <span class=connection_class>
-                {connection_label}
-                {move || {
-                    latency_text()
-                        .map(|t| {
-                            view! { <span class="stage__connection-latency">{" "}{t}</span> }
-                        })
-                }}
-            </span>
+        <div node_ref=clock_ref class="stage__clock">
+            <span class="stage__debug-label">"clock"</span>
+            {clock_text}
+        </div>
+        <div node_ref=live_ref class=live_class>
+            <span class="stage__debug-label">"live"</span>
+            {live_text}
+        </div>
+        <div node_ref=connection_ref class=connection_class>
+            <span class="stage__debug-label">"connection"</span>
+            {connection_text}
         </div>
     }
 }
