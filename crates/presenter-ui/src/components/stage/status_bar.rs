@@ -1,32 +1,11 @@
 use gloo_timers::callback::Interval;
 use leptos::prelude::*;
-use wasm_bindgen::JsCast;
-use web_sys::HtmlElement;
 
 use crate::state::stage::StageContext;
-use crate::utils::autofit::autofit_text;
+use crate::utils::autofit::autofit_effect;
 use crate::ws::stage::StageWsState;
 
 const STATUS_MAX_FONT: f64 = 200.0;
-
-fn autofit_status<T: 'static>(
-    node_ref: NodeRef<leptos::html::Div>,
-    trigger: impl Fn() -> T + 'static,
-) {
-    Effect::new(move |_| {
-        let _trigger = trigger();
-        if let Some(el) = node_ref.get() {
-            let html_el: &HtmlElement = &el;
-            let el_clone = html_el.clone();
-            let cb = wasm_bindgen::closure::Closure::once_into_js(move || {
-                autofit_text(&el_clone, STATUS_MAX_FONT);
-            });
-            let _ = web_sys::window()
-                .expect("window")
-                .request_animation_frame(cb.as_ref().unchecked_ref());
-        }
-    });
-}
 
 #[component]
 pub fn StatusBar(
@@ -87,9 +66,9 @@ pub fn StatusBar(
         }
     };
 
-    autofit_status(clock_ref, move || clock_text.get());
-    autofit_status(live_ref, live_text.clone());
-    autofit_status(connection_ref, connection_text.clone());
+    autofit_effect(clock_ref, STATUS_MAX_FONT, move || clock_text.get());
+    autofit_effect(live_ref, STATUS_MAX_FONT, live_text.clone());
+    autofit_effect(connection_ref, STATUS_MAX_FONT, connection_text.clone());
 
     view! {
         <div node_ref=clock_ref class="stage__clock">

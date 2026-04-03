@@ -1,9 +1,7 @@
 use leptos::prelude::*;
-use wasm_bindgen::JsCast;
-use web_sys::HtmlElement;
 
 use crate::state::stage::StageContext;
-use crate::utils::autofit::autofit_text;
+use crate::utils::autofit::autofit_effect;
 use crate::utils::color::{group_color, hex_to_rgba};
 use crate::ws::stage::StageWsState;
 
@@ -11,26 +9,6 @@ const CURRENT_MAX_FONT: f64 = 800.0;
 const NEXT_MAX_FONT: f64 = 500.0;
 const CURRENT_GROUP_MAX_FONT: f64 = 200.0;
 const NEXT_GROUP_MAX_FONT: f64 = 200.0;
-
-pub fn autofit_effect<T: 'static>(
-    node_ref: NodeRef<leptos::html::Div>,
-    max_font: f64,
-    trigger: impl Fn() -> T + 'static,
-) {
-    Effect::new(move |_| {
-        let _trigger = trigger();
-        if let Some(el) = node_ref.get() {
-            let html_el: &HtmlElement = &el;
-            let el_clone = html_el.clone();
-            let cb = wasm_bindgen::closure::Closure::once_into_js(move || {
-                autofit_text(&el_clone, max_font);
-            });
-            let _ = web_sys::window()
-                .expect("window")
-                .request_animation_frame(cb.as_ref().unchecked_ref());
-        }
-    });
-}
 
 #[component]
 pub fn WorshipSnv(
