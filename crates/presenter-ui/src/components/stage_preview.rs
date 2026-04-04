@@ -79,9 +79,38 @@ pub fn StagePreview() -> impl IntoView {
         let status = ctx.ableset_status.get_untracked();
         let currently_following = status.map(|s| s.follow_enabled).unwrap_or(false);
         let ableset_status = ctx.ableset_status;
+        let stage_snapshot = ctx.stage_snapshot;
+        let selected_presentation_id = ctx.selected_presentation_id;
+        let selected_presentation = ctx.selected_presentation;
+        let slides_cache = ctx.slides_cache;
         leptos::task::spawn_local(async move {
             if let Ok(s) = crate::api::settings::set_ableset_follow(!currently_following).await {
+                let now_following = s.follow_enabled;
                 ableset_status.set(Some(s));
+
+                // When follow is toggled ON, immediately sync to current stage state
+                if now_following {
+                    if let Some(snap) = stage_snapshot.get_untracked() {
+                        if let Some(pres_id) = snap.presentation_id.map(|id| id.to_string()) {
+                            let current = selected_presentation_id.get_untracked();
+                            if Some(&pres_id) != current.as_ref() {
+                                selected_presentation_id.set(Some(pres_id.clone()));
+                                crate::state::session::set("currentPresentationId", &pres_id);
+                                if let Ok(detail) =
+                                    crate::api::presentations::get_presentation(&pres_id).await
+                                {
+                                    slides_cache.update(|cache| {
+                                        cache.insert(
+                                            pres_id,
+                                            detail.presentation.slides.clone(),
+                                        );
+                                    });
+                                    selected_presentation.set(Some(detail.presentation));
+                                }
+                            }
+                        }
+                    }
+                }
             }
         });
     };

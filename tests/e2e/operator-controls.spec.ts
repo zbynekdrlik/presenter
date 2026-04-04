@@ -260,4 +260,86 @@ test.describe("Operator Control Buttons", () => {
 
     expect(filterRealErrors(consoleMessages)).toEqual([]);
   });
+
+  test("Follow OFF prevents operator auto-navigation on stage change", async ({
+    page,
+  }) => {
+    const consoleMessages: string[] = [];
+    page.on("console", (msg) => {
+      if (msg.type() === "error" || msg.type() === "warning") {
+        consoleMessages.push(`[${msg.type()}] ${msg.text()}`);
+      }
+    });
+
+    // Enable Ableton but keep Follow OFF
+    await ensureAblesetSettings(page.request, true);
+    await page.request.post(`${baseURL}/integrations/ableset/follow`, {
+      data: { enabled: false },
+    });
+
+    await page.goto(`${baseURL}/ui/operator`);
+    await page.waitForSelector('[data-role="library-list"]', {
+      timeout: 30_000,
+    });
+
+    // Click on a library and presentation to establish a selection
+    const firstLibrary = page.locator('[data-role="library-item"]').first();
+    await expect(firstLibrary).toBeVisible({ timeout: 10_000 });
+    await firstLibrary.click();
+
+    const firstPresentation = page
+      .locator('[data-role="presentation-item"]')
+      .first();
+    await expect(firstPresentation).toBeVisible({ timeout: 10_000 });
+    await firstPresentation.click();
+    await page.waitForTimeout(500);
+
+    // Record the currently selected presentation name
+    const selectedName = await firstPresentation
+      .locator('[data-role="presentation-name"]')
+      .textContent();
+
+    // Get a DIFFERENT presentation to trigger on stage
+    const libs = await (
+      await page.request.get(`${baseURL}/libraries`)
+    ).json();
+    let otherPresId: string | null = null;
+    let otherSlideId: string | null = null;
+    for (const lib of libs as any[]) {
+      for (const pres of lib.presentations) {
+        if (pres.slides.length > 0) {
+          const presName = pres.name
+            .replace(/^\d{3}\s*/, "")
+            .trim();
+          if (presName !== selectedName?.trim()) {
+            otherPresId = pres.id;
+            otherSlideId = pres.slides[0].id;
+            break;
+          }
+        }
+      }
+      if (otherPresId) break;
+    }
+
+    // Trigger a different presentation on the stage
+    if (otherPresId && otherSlideId) {
+      await page.request.put(`${baseURL}/stage/state`, {
+        data: {
+          presentationId: otherPresId,
+          currentSlideId: otherSlideId,
+        },
+      });
+
+      // Wait for the stage snapshot to arrive via WebSocket
+      await page.waitForTimeout(1500);
+
+      // The operator selection should NOT have changed (follow is OFF)
+      const stillSelected = await firstPresentation
+        .locator('[data-role="presentation-name"]')
+        .textContent();
+      expect(stillSelected?.trim()).toBe(selectedName?.trim());
+    }
+
+    expect(filterRealErrors(consoleMessages)).toEqual([]);
+  });
 });
