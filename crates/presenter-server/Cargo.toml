@@ -14,6 +14,7 @@ presenter-persistence = { path = "../presenter-persistence" }
 presenter-importer = { path = "../presenter-importer" }
 presenter-bible = { path = "../presenter-bible" }
 presenter-ndi = { path = "../presenter-ndi" }
+bytes = "1"
 chrono.workspace = true
 serde.workspace = true
 serde_json.workspace = true
