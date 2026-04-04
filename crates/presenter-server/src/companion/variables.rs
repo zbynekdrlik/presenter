@@ -39,6 +39,12 @@ impl CompanionVariableState {
                 // Bible slide changes are for tablet sync, not Companion variables.
                 false
             }
+            crate::live::LiveEvent::NdiSourceActivated { .. }
+            | crate::live::LiveEvent::NdiSourceDeactivated
+            | crate::live::LiveEvent::NdiConnectionStatus { .. } => {
+                // NDI events are handled by stage display, not Companion.
+                false
+            }
         }
     }
 

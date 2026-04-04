@@ -191,6 +191,27 @@ pub fn build_router(state: AppState) -> Router {
             post(integrations::ableset::set_ableset_follow),
         )
         .route(
+            "/integrations/video-sources",
+            get(integrations::video_source::list_video_sources)
+                .post(integrations::video_source::create_video_source),
+        )
+        .route(
+            "/integrations/video-sources/deactivate",
+            post(integrations::video_source::deactivate_video_sources),
+        )
+        .route(
+            "/integrations/video-sources/{id}",
+            put(integrations::video_source::update_video_source)
+                .delete(integrations::video_source::delete_video_source),
+        )
+        .route(
+            "/integrations/video-sources/{id}/activate",
+            post(integrations::video_source::activate_video_source),
+        )
+        .route("/ndi/sources", get(integrations::ndi::discover_ndi_sources))
+        .route("/ndi/status", get(integrations::ndi::ndi_status))
+        .route("/ndi/stream", get(integrations::ndi::mjpeg_ws))
+        .route(
             "/presentations/{id}",
             get(presentations::get_presentation_detail)
                 .patch(presentations::update_presentation)
@@ -310,6 +331,13 @@ impl AppError {
     fn internal(message: impl Into<String>) -> Self {
         Self::new(
             StatusCode::INTERNAL_SERVER_ERROR,
+            anyhow::anyhow!(message.into()),
+        )
+    }
+
+    fn service_unavailable(message: impl Into<String>) -> Self {
+        Self::new(
+            StatusCode::SERVICE_UNAVAILABLE,
             anyhow::anyhow!(message.into()),
         )
     }

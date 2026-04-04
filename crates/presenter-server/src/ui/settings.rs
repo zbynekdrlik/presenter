@@ -70,6 +70,8 @@ fn SettingsDocument(
     ableset_settings: AbleSetSettings,
     ableset_status: AbleSetStatusSnapshot,
     features: FeatureFlags,
+    video_sources: Vec<presenter_core::VideoSource>,
+    ndi_available: bool,
     script: String,
 ) -> impl IntoView {
     let hosts = Arc::new(hosts);
@@ -660,6 +662,75 @@ fn SettingsDocument(
                         </div>
                     </section>
 
+                    // Video Sources section
+                    <section class="settings__card" data-role="video-sources-card">
+                        <header class="settings__card-header">
+                            <div>
+                                <h2>"Video Sources"</h2>
+                                <p>"Configure NDI sources for stage display"</p>
+                            </div>
+                            <div class="settings__badge-group">
+                                <span class={if ndi_available { "settings__badge settings__badge--ok" } else { "settings__badge settings__badge--off" }}>
+                                    {if ndi_available { "NDI Available" } else { "NDI Unavailable" }}
+                                </span>
+                            </div>
+                        </header>
+
+                        <div class="settings__source-list" data-role="video-source-list">
+                            {video_sources.iter().map(|source| {
+                                let dot_class = if source.is_active {
+                                    "settings__source-dot settings__source-dot--active"
+                                } else {
+                                    "settings__source-dot"
+                                };
+                                let id = source.id.to_string();
+                                let activate_js = format!("activateVideoSource('{id}')");
+                                let delete_js = format!("deleteVideoSource('{id}')");
+                                let label = source.label.clone();
+                                let ndi_name = source.ndi_name.clone();
+                                let is_active = source.is_active;
+                                view! {
+                                    <div class="settings__source-item" data-source-id={id}>
+                                        <div class={dot_class}></div>
+                                        <div class="settings__source-info">
+                                            <div class="settings__source-label">{label}</div>
+                                            <div class="settings__source-ndi">"NDI: " {ndi_name}</div>
+                                        </div>
+                                        {if is_active {
+                                            view! { <button class="settings__btn settings__btn--active" onclick="deactivateVideoSource()">"ACTIVE"</button> }.into_any()
+                                        } else {
+                                            view! { <button class="settings__btn settings__btn--activate" onclick={activate_js}>"Activate"</button> }.into_any()
+                                        }}
+                                        <button class="settings__btn settings__btn--delete" onclick={delete_js}>"Delete"</button>
+                                    </div>
+                                }
+                            }).collect::<Vec<_>>()}
+                        </div>
+
+                        <div class="settings__form" data-role="add-video-source-form">
+                            <div class="settings__form-header">
+                                <h3>"Add Video Source"</h3>
+                            </div>
+                            <div class="settings__form-row">
+                                <label>"Label"</label>
+                                <input type="text" placeholder="Main Camera" class="settings__input"
+                                       data-role="video-source-label" />
+                            </div>
+                            <div class="settings__form-row">
+                                <label>"NDI Source"</label>
+                                <div class="settings__ndi-select">
+                                    <input type="text" placeholder="CAM1 (usb)" class="settings__input"
+                                           data-role="video-source-ndi-name" list="ndi-sources" />
+                                    <datalist id="ndi-sources"></datalist>
+                                    <button class="settings__btn settings__btn--scan"
+                                            onclick="scanNdiSources()">"Scan"</button>
+                                </div>
+                            </div>
+                            <button class="settings__btn settings__btn--add"
+                                    onclick="addVideoSource()">"+ Add Source"</button>
+                        </div>
+                    </section>
+
                 </main>
                 <div class="settings__toast" data-role="toast" data-visible="false"></div>
                 <script>{script}</script>
@@ -678,6 +749,8 @@ pub async fn render_settings_ui(state: &AppState) -> anyhow::Result<Html<String>
     let ableset_settings = state.ableset_settings().await?;
     let ableset_status = state.ableset_status_snapshot().await;
     let feature_flags = state.feature_flags();
+    let video_sources = state.list_video_sources().await.unwrap_or_default();
+    let ndi_available = state.ndi_manager().is_some();
 
     let host_rows: Vec<SettingsHostRow> = hosts
         .into_iter()
@@ -800,6 +873,8 @@ pub async fn render_settings_ui(state: &AppState) -> anyhow::Result<Html<String>
                 ableset_settings=ableset_settings.clone()
                 ableset_status=ableset_status.clone()
                 features=feature_flags.clone()
+                video_sources=video_sources.clone()
+                ndi_available=ndi_available
                 script=script.clone()
             />
         }

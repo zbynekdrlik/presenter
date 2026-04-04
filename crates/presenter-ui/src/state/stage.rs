@@ -13,6 +13,8 @@ pub struct StageContext {
     pub snapshot: RwSignal<Option<StageDisplaySnapshot>>,
     pub broadcast_live: RwSignal<bool>,
     pub bible_overlay: RwSignal<Option<BibleSlideOutput>>,
+    pub ndi_active: RwSignal<bool>,
+    pub ndi_status: RwSignal<String>,
 }
 
 impl StageContext {
@@ -23,6 +25,8 @@ impl StageContext {
             snapshot: RwSignal::new(None),
             broadcast_live: RwSignal::new(false),
             bible_overlay: RwSignal::new(None),
+            ndi_active: RwSignal::new(false),
+            ndi_status: RwSignal::new(String::new()),
         }
     }
 }

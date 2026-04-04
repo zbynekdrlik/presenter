@@ -44,6 +44,14 @@ pub enum LiveEvent {
     BibleSlidesChanged {
         presentation_id: String,
     },
+    NdiSourceActivated {
+        ndi_name: String,
+        label: String,
+    },
+    NdiSourceDeactivated,
+    NdiConnectionStatus {
+        status: String,
+    },
 }
 
 /// Messages sent from a WebSocket client to the server.

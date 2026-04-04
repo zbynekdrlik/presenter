@@ -501,3 +501,115 @@ body.in-iframe.settings .settings__card {
     align-self: flex-end;
   }
 }
+
+/* Video Sources */
+.settings__badge--ok {
+  background: rgba(34, 197, 94, 0.2);
+  color: #22c55e;
+}
+.settings__badge--off {
+  background: rgba(239, 68, 68, 0.2);
+  color: #ef4444;
+}
+.settings__source-list {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.settings__source-item {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 12px;
+  background: rgba(255, 255, 255, 0.05);
+  border-radius: 8px;
+}
+.settings__source-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: #475569;
+  flex-shrink: 0;
+}
+.settings__source-dot--active {
+  background: #22c55e;
+}
+.settings__source-info {
+  flex: 1;
+}
+.settings__source-label {
+  font-weight: 600;
+}
+.settings__source-ndi {
+  font-size: 0.8rem;
+  color: #94a3b8;
+}
+.settings__btn {
+  border: none;
+  border-radius: 6px;
+  padding: 6px 14px;
+  font-size: 0.85rem;
+  cursor: pointer;
+  font-weight: 600;
+}
+.settings__btn--active {
+  background: #22c55e;
+  color: #000;
+}
+.settings__btn--activate {
+  background: rgba(255, 255, 255, 0.1);
+  color: #94a3b8;
+}
+.settings__btn--activate:hover {
+  background: rgba(255, 255, 255, 0.2);
+  color: #e2e8f0;
+}
+.settings__btn--delete {
+  background: transparent;
+  color: #ef4444;
+}
+.settings__btn--delete:hover {
+  background: rgba(239, 68, 68, 0.1);
+}
+.settings__btn--scan {
+  background: rgba(255, 255, 255, 0.1);
+  color: #94a3b8;
+}
+.settings__btn--add {
+  background: #3b82f6;
+  color: white;
+  padding: 10px 20px;
+  align-self: flex-start;
+}
+.settings__btn--add:hover {
+  background: #2563eb;
+}
+.settings__form-row {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.settings__form-row label {
+  font-size: 0.85rem;
+  color: #94a3b8;
+  font-weight: 600;
+}
+.settings__input {
+  background: #1e293b;
+  border: 1px solid rgba(148, 163, 184, 0.25);
+  border-radius: 8px;
+  padding: 10px 14px;
+  color: #f8fafc;
+  font-size: 0.95rem;
+}
+.settings__input:focus {
+  outline: none;
+  border-color: #3b82f6;
+}
+.settings__ndi-select {
+  display: flex;
+  gap: 8px;
+}
+.settings__ndi-select .settings__input {
+  flex: 1;
+}

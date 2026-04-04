@@ -1,8 +1,8 @@
 use std::collections::HashMap;
 
 use presenter_core::{
-    AndroidStageDisplay, AndroidStageDisplayDraft, AndroidStageDisplayId, ResolumeHost,
-    ResolumeHostDraft, ResolumeHostId,
+    AndroidStageDisplay, AndroidStageDisplayDraft, AndroidStageDisplayId, LiveEvent, ResolumeHost,
+    ResolumeHostDraft, ResolumeHostId, VideoSource, VideoSourceDraft, VideoSourceId,
 };
 
 use super::AppState;
@@ -106,6 +106,53 @@ impl AppState {
     pub(super) async fn sync_android_stage_displays(&self) -> anyhow::Result<()> {
         let displays = self.repository.list_android_stage_displays().await?;
         self.android_stage_registry.set_displays(displays).await;
+        Ok(())
+    }
+
+    // Video source methods
+    pub async fn list_video_sources(&self) -> anyhow::Result<Vec<VideoSource>> {
+        self.repository.list_video_sources().await
+    }
+
+    pub async fn create_video_source(
+        &self,
+        draft: VideoSourceDraft,
+    ) -> anyhow::Result<VideoSource> {
+        self.repository.create_video_source(&draft).await
+    }
+
+    pub async fn update_video_source(
+        &self,
+        id: VideoSourceId,
+        draft: VideoSourceDraft,
+    ) -> anyhow::Result<VideoSource> {
+        self.repository.update_video_source(id, &draft).await
+    }
+
+    pub async fn delete_video_source(&self, id: VideoSourceId) -> anyhow::Result<()> {
+        self.repository.delete_video_source(id).await
+    }
+
+    pub async fn activate_video_source(&self, id: VideoSourceId) -> anyhow::Result<VideoSource> {
+        let source = self.repository.activate_video_source(id).await?;
+        self.live_hub.publish(LiveEvent::NdiSourceActivated {
+            ndi_name: source.ndi_name.clone(),
+            label: source.label.clone(),
+        });
+        // Start NDI stream if manager is available
+        if let Some(manager) = &self.ndi_manager {
+            manager.start_stream(&source.ndi_name).await?;
+        }
+        Ok(source)
+    }
+
+    pub async fn deactivate_video_sources(&self) -> anyhow::Result<()> {
+        self.repository.deactivate_all_video_sources().await?;
+        self.live_hub.publish(LiveEvent::NdiSourceDeactivated);
+        // Stop NDI stream if manager is available
+        if let Some(manager) = &self.ndi_manager {
+            manager.stop_stream().await;
+        }
         Ok(())
     }
 }

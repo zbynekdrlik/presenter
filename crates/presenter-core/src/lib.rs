@@ -21,6 +21,7 @@ pub mod slide;
 pub mod stage_client;
 pub mod stage_display;
 pub mod timer;
+pub mod video_source;
 
 pub use ableset::{
     extract_song_prefix, AbleSetSettings, AbleSetSettingsDraft, AbleSetSettingsValidationError,
@@ -36,7 +37,7 @@ pub use bible::{
 };
 pub use id::{
     AndroidStageDisplayId, LibraryId, PlaylistEntryId, PlaylistId, PresentationId, ResolumeHostId,
-    SlideId,
+    SlideId, VideoSourceId,
 };
 pub use library::{Library, LibrarySummary, PresentationSummary};
 pub use live::{InboundMessage, LiveEvent};
@@ -55,6 +56,7 @@ pub use timer::{
     CountdownTimer, CountdownTimerSnapshot, PreachTimer, PreachTimerSnapshot, TimerCommand,
     TimerState, TimersOverview, TimersState,
 };
+pub use video_source::{VideoSource, VideoSourceDraft, VideoSourceValidationError};
 
 #[cfg(test)]
 mod contract_tests;

@@ -134,6 +134,35 @@ mod tests {
         let _: LiveEvent = serde_json::from_str(&json).expect("deserialize");
     }
 
+    #[test]
+    fn live_event_ndi_source_activated_roundtrip() {
+        let event = LiveEvent::NdiSourceActivated {
+            ndi_name: "CAM1 (usb)".to_string(),
+            label: "Main Camera".to_string(),
+        };
+        let json = serde_json::to_string(&event).expect("serialize");
+        assert!(json.contains(r#""type":"ndi_source_activated""#));
+        let _: LiveEvent = serde_json::from_str(&json).expect("deserialize");
+    }
+
+    #[test]
+    fn live_event_ndi_source_deactivated_roundtrip() {
+        let event = LiveEvent::NdiSourceDeactivated;
+        let json = serde_json::to_string(&event).expect("serialize");
+        assert!(json.contains(r#""type":"ndi_source_deactivated""#));
+        let _: LiveEvent = serde_json::from_str(&json).expect("deserialize");
+    }
+
+    #[test]
+    fn live_event_ndi_connection_status_roundtrip() {
+        let event = LiveEvent::NdiConnectionStatus {
+            status: "connected".to_string(),
+        };
+        let json = serde_json::to_string(&event).expect("serialize");
+        assert!(json.contains(r#""type":"ndi_connection_status""#));
+        let _: LiveEvent = serde_json::from_str(&json).expect("deserialize");
+    }
+
     // ── InboundMessage variants ─────────────────────────────────────
 
     #[test]

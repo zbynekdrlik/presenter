@@ -43,3 +43,4 @@ id_type!(PlaylistId);
 id_type!(PlaylistEntryId);
 id_type!(ResolumeHostId);
 id_type!(AndroidStageDisplayId);
+id_type!(VideoSourceId);
