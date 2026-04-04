@@ -290,12 +290,73 @@ if command -v rg >/dev/null 2>&1 && rg -n "std::thread::sleep|block_on\\(" \
   fi
 fi
 
-# 12) Toolchain pin
+# 12) Serde convention: Serialize structs with multi-word fields must have rename_all
+if command -v rg >/dev/null 2>&1 && command -v python3 >/dev/null 2>&1; then
+  serde_issues=$(python3 - "$ROOT_DIR" <<'SERDE_PY'
+import re, sys, os
+
+root = sys.argv[1]
+issues = []
+
+for dirpath, _, filenames in os.walk(os.path.join(root, "crates")):
+    for name in filenames:
+        if not name.endswith(".rs"):
+            continue
+        path = os.path.join(dirpath, name)
+        rel = os.path.relpath(path, root)
+        # Skip test files
+        if "/tests.rs" in rel or "/contract_tests.rs" in rel or "/tests/" in rel:
+            continue
+        with open(path, "r") as f:
+            content = f.read()
+        # Find derive(Serialize) blocks
+        for m in re.finditer(
+            r"#\[derive\([^)]*Serialize[^)]*\)\]"
+            r"((?:\s*#\[[^\]]*\])*)"
+            r"\s*(?:pub(?:\([^)]*\))?\s+)?(struct|enum)\s+(\w+)",
+            content,
+        ):
+            attrs_after = m.group(1)
+            kind = m.group(2)
+            struct_name = m.group(3)
+            if kind == "enum":
+                continue
+            if "rename_all" in (m.group(0) + attrs_after):
+                continue
+            # Check if struct has multi-word (underscore) fields
+            start = m.end()
+            brace = 0
+            body = ""
+            for i, c in enumerate(content[start:]):
+                if c == "{":
+                    brace += 1
+                elif c == "}":
+                    brace -= 1
+                    if brace == 0:
+                        body = content[start : start + i + 1]
+                        break
+            fields = re.findall(r"\b(\w+)\s*:", body)
+            if any("_" in f for f in fields):
+                line_num = content[: m.start()].count("\n") + 1
+                issues.append(f"{rel}:{line_num} struct {struct_name}")
+
+for issue in issues:
+    print(issue)
+SERDE_PY
+  )
+  if [[ -n "$serde_issues" ]]; then
+    while IFS= read -r line; do
+      fail "Serde convention: $line missing #[serde(rename_all = \"camelCase\")] with multi-word fields"
+    done <<< "$serde_issues"
+  fi
+fi
+
+# 13) Toolchain pin
 if [[ ! -f rust-toolchain.toml ]]; then
   warn "rust-toolchain.toml is missing; pin toolchain for reproducible builds"
 fi
 
-# 13) cargo check warnings (advisory)
+# 14) cargo check warnings (advisory)
 check_out=$(cargo check 2>&1 || true)
 if echo "$check_out" | grep -q "warning:"; then
   warn "cargo check reported warnings; run clippy/fixes when feasible."
