@@ -30,10 +30,6 @@ ignore = [
 [licenses]
 version = 2
 confidence-threshold = 0.92
-exceptions = [
-    # webpki 0.21.4 (transitive dep of webrtc-rs) — ISC licensed but not detected
-    { allow = ["ISC"], name = "webpki", version = "0.21.4" },
-]
 
 allow = [
     "MIT",
@@ -51,6 +47,11 @@ allow = [
     "OpenSSL",
     "BSL-1.0",
     "CDLA-Permissive-2.0",  # webpki-roots
+]
+
+exceptions = [
+    # webpki 0.21.4 (transitive dep of webrtc-rs) — ISC licensed but not detected
+    { allow = ["ISC"], name = "webpki", version = "0.21.4" },
 ]
 
 [[licenses.clarify]]
