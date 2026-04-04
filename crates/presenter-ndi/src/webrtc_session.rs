@@ -3,6 +3,7 @@ use std::time::Duration;
 
 use anyhow::Result;
 use webrtc::api::media_engine::MediaEngine;
+use webrtc::api::setting_engine::SettingEngine;
 use webrtc::api::APIBuilder;
 use webrtc::media::Sample;
 use webrtc::peer_connection::configuration::RTCConfiguration;
@@ -18,11 +19,20 @@ pub struct WebRtcSession {
 
 impl WebRtcSession {
     /// Create a new session with an H.264 video track ready for negotiation.
+    ///
+    /// Uses ICE lite mode so the server only advertises its own candidates
+    /// and doesn't need to resolve browser mDNS candidates.
     pub async fn new() -> Result<Self> {
         let mut media_engine = MediaEngine::default();
         media_engine.register_default_codecs()?;
 
-        let api = APIBuilder::new().with_media_engine(media_engine).build();
+        let mut setting_engine = SettingEngine::default();
+        setting_engine.set_lite(true);
+
+        let api = APIBuilder::new()
+            .with_media_engine(media_engine)
+            .with_setting_engine(setting_engine)
+            .build();
 
         let config = RTCConfiguration::default();
         let peer_connection = Arc::new(api.new_peer_connection(config).await?);

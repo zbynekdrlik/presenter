@@ -3334,6 +3334,7 @@ dependencies = [
  "presenter-bible",
  "presenter-core",
  "presenter-importer",
+ "presenter-ndi",
  "presenter-persistence",
  "reactive_graph",
  "reqwest",

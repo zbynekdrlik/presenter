@@ -105,6 +105,12 @@ pub fn StagePage() -> impl IntoView {
             if let Ok(Some(output)) = api::bible::get_active_slide_output().await {
                 ctx.bible_overlay.set(Some(output));
             }
+            // Check if an NDI source is already active
+            if let Ok(sources) = api::ndi::list_video_sources().await {
+                if sources.iter().any(|s| s.is_active) {
+                    ctx.ndi_active.set(true);
+                }
+            }
         });
     }
 
