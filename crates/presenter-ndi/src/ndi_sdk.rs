@@ -1,6 +1,6 @@
 use anyhow::{Context, Result};
 use libloading::{Library, Symbol};
-use std::ffi::c_char;
+use std::ffi::{c_char, CStr};
 use std::os::raw::c_int;
 use std::path::PathBuf;
 use tracing::{debug, info, warn};
@@ -48,25 +48,13 @@ pub(crate) struct NDIlib_video_frame_v2_recv_t {
     pub timestamp: i64,
 }
 
-#[repr(C)]
-pub(crate) struct NDIlib_audio_frame_v3_t {
-    pub sample_rate: c_int,
-    pub no_channels: c_int,
-    pub no_samples: c_int,
-    pub timecode: i64,
-    pub fourcc: u32,
-    pub p_data: *mut u8,
-    pub channel_stride_in_bytes: c_int,
-    pub p_metadata: *const c_char,
-    pub timestamp: i64,
-}
-
 // ---------------------------------------------------------------------------
 // Constants
 // ---------------------------------------------------------------------------
 
 pub(crate) const NDILIB_FRAME_TYPE_NONE: c_int = 0;
 pub(crate) const NDILIB_FRAME_TYPE_VIDEO: c_int = 1;
+#[allow(dead_code)]
 pub(crate) const NDILIB_FRAME_TYPE_AUDIO: c_int = 2;
 
 pub(crate) const NDILIB_RECV_COLOR_FORMAT_UYVY_BGRA: c_int = 0;
@@ -94,7 +82,7 @@ type NDIlib_recv_destroy_fn = unsafe extern "C" fn(p_instance: *mut std::ffi::c_
 type NDIlib_recv_capture_v3_fn = unsafe extern "C" fn(
     p_instance: *mut std::ffi::c_void,
     p_video_data: *mut NDIlib_video_frame_v2_recv_t,
-    p_audio_data: *mut NDIlib_audio_frame_v3_t,
+    p_audio_data: *mut std::ffi::c_void,
     p_metadata: *mut std::ffi::c_void,
     timeout_in_ms: u32,
 ) -> c_int;
@@ -102,11 +90,6 @@ type NDIlib_recv_free_video_v2_fn = unsafe extern "C" fn(
     p_instance: *mut std::ffi::c_void,
     p_video_data: *const NDIlib_video_frame_v2_recv_t,
 );
-type NDIlib_recv_free_audio_v3_fn = unsafe extern "C" fn(
-    p_instance: *mut std::ffi::c_void,
-    p_audio_data: *const NDIlib_audio_frame_v3_t,
-);
-
 // ---------------------------------------------------------------------------
 // NdiLib — loaded NDI runtime
 // ---------------------------------------------------------------------------
@@ -123,7 +106,6 @@ pub struct NdiLib {
     pub(crate) recv_destroy: NDIlib_recv_destroy_fn,
     pub(crate) recv_capture_v3: NDIlib_recv_capture_v3_fn,
     pub(crate) recv_free_video_v2: NDIlib_recv_free_video_v2_fn,
-    pub(crate) recv_free_audio_v3: NDIlib_recv_free_audio_v3_fn,
 }
 
 // NDI library handle is thread-safe — the SDK itself is designed for
@@ -232,9 +214,6 @@ impl NdiLib {
             let recv_free_video_v2: Symbol<NDIlib_recv_free_video_v2_fn> = lib
                 .get(b"NDIlib_recv_free_video_v2\0")
                 .context("symbol NDIlib_recv_free_video_v2")?;
-            let recv_free_audio_v3: Symbol<NDIlib_recv_free_audio_v3_fn> = lib
-                .get(b"NDIlib_recv_free_audio_v3\0")
-                .context("symbol NDIlib_recv_free_audio_v3")?;
 
             let ndi = Self {
                 initialize: *initialize,
@@ -247,7 +226,6 @@ impl NdiLib {
                 recv_destroy: *recv_destroy,
                 recv_capture_v3: *recv_capture_v3,
                 recv_free_video_v2: *recv_free_video_v2,
-                recv_free_audio_v3: *recv_free_audio_v3,
                 _library: lib,
             };
 
@@ -269,6 +247,27 @@ impl Drop for NdiLib {
         }
         debug!("NDI SDK destroyed");
     }
+}
+
+// ---------------------------------------------------------------------------
+// Helpers
+// ---------------------------------------------------------------------------
+
+/// Convert a C string pointer to an owned Rust `String`.
+///
+/// # Safety
+///
+/// The caller must ensure `ptr` points to a valid null-terminated C string
+/// that remains alive for the duration of this call.
+pub(crate) unsafe fn cstr_to_string(ptr: *const c_char) -> Result<String> {
+    if ptr.is_null() {
+        anyhow::bail!("null C string pointer");
+    }
+    let cstr = CStr::from_ptr(ptr);
+    Ok(cstr
+        .to_str()
+        .context("invalid UTF-8 in C string")?
+        .to_owned())
 }
 
 // ---------------------------------------------------------------------------

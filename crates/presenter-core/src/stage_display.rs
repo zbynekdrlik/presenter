@@ -44,7 +44,7 @@ impl StageDisplayLayout {
             Self::new(
                 "ndi-fullscreen",
                 "NDI FULLSCREEN",
-                "Full viewport NDI video stream via WebRTC",
+                "Full viewport NDI video stream",
             ),
         ]
     }

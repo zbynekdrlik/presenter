@@ -1,7 +1,6 @@
 use crate::ndi_sdk::{NDIlib_find_create_t, NdiLib};
-use anyhow::{Context, Result};
+use anyhow::Result;
 use serde::Serialize;
-use std::ffi::{c_char, CStr};
 use tracing::debug;
 
 /// A discovered NDI source on the network.
@@ -38,8 +37,8 @@ pub fn discover_sources(sdk: &NdiLib, timeout_ms: u32) -> Result<Vec<NdiSourceIn
         if !sources_ptr.is_null() && num_sources > 0 {
             let sources = std::slice::from_raw_parts(sources_ptr, num_sources as usize);
             for src in sources {
-                let name =
-                    cstr_to_string(src.p_ndi_name).context("failed to read NDI source name")?;
+                let name = crate::ndi_sdk::cstr_to_string(src.p_ndi_name)
+                    .map_err(|e| anyhow::anyhow!("failed to read NDI source name: {e}"))?;
                 debug!("discovered NDI source: {name}");
                 results.push(NdiSourceInfo { name });
             }
@@ -49,18 +48,4 @@ pub fn discover_sources(sdk: &NdiLib, timeout_ms: u32) -> Result<Vec<NdiSourceIn
 
         Ok(results)
     }
-}
-
-/// Convert a C string pointer to an owned Rust `String`.
-///
-/// Returns an error if the pointer is null or the bytes are not valid UTF-8.
-fn cstr_to_string(ptr: *const c_char) -> Result<String> {
-    if ptr.is_null() {
-        anyhow::bail!("null C string pointer");
-    }
-    let cstr = unsafe { CStr::from_ptr(ptr) };
-    Ok(cstr
-        .to_str()
-        .context("invalid UTF-8 in C string")?
-        .to_owned())
 }

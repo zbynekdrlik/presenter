@@ -136,4 +136,15 @@ fn connect_mjpeg_ws(img_ref: NodeRef<leptos::html::Img>) {
     });
     ws.set_onerror(Some(onerror.as_ref().unchecked_ref()));
     onerror.forget();
+
+    let img_ref_reconnect = img_ref.clone();
+    let onclose = Closure::<dyn FnMut()>::new(move || {
+        web_sys::console::log_1(&"NDI: MJPEG WebSocket closed, reconnecting in 2s...".into());
+        let img_ref = img_ref_reconnect.clone();
+        let _ = gloo_timers::callback::Timeout::new(2000, move || {
+            connect_mjpeg_ws(img_ref);
+        });
+    });
+    ws.set_onclose(Some(onclose.as_ref().unchecked_ref()));
+    onclose.forget();
 }

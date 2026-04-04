@@ -1,11 +1,10 @@
 use crate::ndi_sdk::{
-    NDIlib_audio_frame_v3_t, NDIlib_find_create_t, NDIlib_recv_create_v3_t, NDIlib_source_t,
-    NDIlib_video_frame_v2_recv_t, NdiLib, NDILIB_FRAME_TYPE_AUDIO, NDILIB_FRAME_TYPE_NONE,
-    NDILIB_FRAME_TYPE_VIDEO, NDILIB_RECV_BANDWIDTH_HIGHEST, NDILIB_RECV_COLOR_FORMAT_UYVY_BGRA,
+    NDIlib_find_create_t, NDIlib_recv_create_v3_t, NDIlib_source_t, NDIlib_video_frame_v2_recv_t,
+    NdiLib, NDILIB_FRAME_TYPE_NONE, NDILIB_FRAME_TYPE_VIDEO, NDILIB_RECV_BANDWIDTH_HIGHEST,
+    NDILIB_RECV_COLOR_FORMAT_UYVY_BGRA,
 };
 use anyhow::{Context, Result};
-use std::ffi::{CStr, CString};
-use std::os::raw::c_char;
+use std::ffi::CString;
 use std::sync::Arc;
 use tracing::debug;
 
@@ -23,17 +22,6 @@ pub struct VideoFrame {
     pub fourcc: u32,
     pub frame_rate_n: u32,
     pub frame_rate_d: u32,
-}
-
-/// A captured audio frame with sample data copied out of NDI-owned memory.
-#[derive(Debug, Clone)]
-pub struct AudioFrame {
-    pub sample_rate: u32,
-    pub channels: u32,
-    pub no_samples: u32,
-    pub data: Vec<u8>,
-    pub channel_stride: u32,
-    pub fourcc: u32,
 }
 
 // ---------------------------------------------------------------------------
@@ -79,7 +67,7 @@ impl NdiReceiver {
             if !sources_ptr.is_null() && num_sources > 0 {
                 let sources = std::slice::from_raw_parts(sources_ptr, num_sources as usize);
                 for src in sources {
-                    if let Ok(name) = cstr_to_string(src.p_ndi_name) {
+                    if let Ok(name) = crate::ndi_sdk::cstr_to_string(src.p_ndi_name) {
                         debug!("found NDI source: {name}");
                         if name.contains(source_name) {
                             matched_source = Some(*src);
@@ -155,35 +143,6 @@ impl NdiReceiver {
             Ok(None)
         }
     }
-
-    /// Capture a single audio frame, blocking up to `timeout_ms`.
-    ///
-    /// Returns `Ok(None)` when the timeout elapses without an audio frame.
-    pub fn capture_audio(&self, timeout_ms: u32) -> Result<Option<AudioFrame>> {
-        unsafe {
-            let mut audio = std::mem::zeroed::<NDIlib_audio_frame_v3_t>();
-
-            let frame_type = (self.lib.recv_capture_v3)(
-                self.receiver,
-                std::ptr::null_mut(), // no video
-                &mut audio,
-                std::ptr::null_mut(), // no metadata
-                timeout_ms,
-            );
-
-            if frame_type == NDILIB_FRAME_TYPE_AUDIO {
-                let frame = copy_audio_frame(&audio)?;
-                (self.lib.recv_free_audio_v3)(self.receiver, &audio);
-                return Ok(Some(frame));
-            }
-
-            if frame_type == NDILIB_FRAME_TYPE_NONE {
-                return Ok(None);
-            }
-
-            Ok(None)
-        }
-    }
 }
 
 impl Drop for NdiReceiver {
@@ -222,38 +181,4 @@ unsafe fn copy_video_frame(frame: &NDIlib_video_frame_v2_recv_t) -> Result<Video
         frame_rate_n: frame.frame_rate_n as u32,
         frame_rate_d: frame.frame_rate_d as u32,
     })
-}
-
-/// Copy audio frame data out of NDI-owned memory into a safe `Vec<u8>`.
-unsafe fn copy_audio_frame(frame: &NDIlib_audio_frame_v3_t) -> Result<AudioFrame> {
-    let channels = frame.no_channels as usize;
-    let channel_stride = frame.channel_stride_in_bytes as usize;
-    let total_bytes = channels * channel_stride;
-
-    if frame.p_data.is_null() || total_bytes == 0 {
-        anyhow::bail!("NDI audio frame has null data or zero size");
-    }
-
-    let data = std::slice::from_raw_parts(frame.p_data, total_bytes).to_vec();
-
-    Ok(AudioFrame {
-        sample_rate: frame.sample_rate as u32,
-        channels: channels as u32,
-        no_samples: frame.no_samples as u32,
-        data,
-        channel_stride: channel_stride as u32,
-        fourcc: frame.fourcc,
-    })
-}
-
-/// Convert a C string pointer to an owned Rust `String`.
-fn cstr_to_string(ptr: *const c_char) -> Result<String> {
-    if ptr.is_null() {
-        anyhow::bail!("null C string pointer");
-    }
-    let cstr = unsafe { CStr::from_ptr(ptr) };
-    Ok(cstr
-        .to_str()
-        .context("invalid UTF-8 in C string")?
-        .to_owned())
 }

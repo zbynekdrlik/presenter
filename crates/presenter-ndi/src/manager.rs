@@ -1,6 +1,7 @@
 use std::sync::Arc;
 
 use anyhow::Result;
+use bytes::Bytes;
 use tokio::sync::{broadcast, Mutex};
 
 use crate::discovery::{self, NdiSourceInfo};
@@ -20,7 +21,7 @@ pub struct NdiManager {
     sdk: Arc<NdiLib>,
     active_stream: Mutex<Option<ActiveStream>>,
     /// Broadcast channel for JPEG frames. Each subscriber gets every frame.
-    frame_tx: broadcast::Sender<Arc<Vec<u8>>>,
+    frame_tx: broadcast::Sender<Bytes>,
 }
 
 impl NdiManager {
@@ -48,7 +49,7 @@ impl NdiManager {
     }
 
     /// Subscribe to the JPEG frame stream.
-    pub fn subscribe_frames(&self) -> broadcast::Receiver<Arc<Vec<u8>>> {
+    pub fn subscribe_frames(&self) -> broadcast::Receiver<Bytes> {
         self.frame_tx.subscribe()
     }
 
@@ -87,7 +88,7 @@ impl NdiManager {
 /// Blocking capture loop that runs inside `spawn_blocking`.
 fn run_capture_loop(
     sdk: Arc<NdiLib>,
-    frame_tx: broadcast::Sender<Arc<Vec<u8>>>,
+    frame_tx: broadcast::Sender<Bytes>,
     source_name: String,
     mut stop_rx: tokio::sync::watch::Receiver<bool>,
 ) {
@@ -146,7 +147,7 @@ fn run_capture_loop(
 
         // Broadcast to all subscribers (WebSocket handlers)
         // If no subscribers, the frame is dropped — that's fine
-        let _ = frame_tx.send(Arc::new(jpeg));
+        let _ = frame_tx.send(Bytes::from(jpeg));
     }
 
     tracing::info!("NDI capture stream stopped");

@@ -54,13 +54,13 @@ pub(crate) async fn mjpeg_ws(
 
 async fn handle_mjpeg_ws(
     mut socket: WebSocket,
-    mut rx: tokio::sync::broadcast::Receiver<std::sync::Arc<Vec<u8>>>,
+    mut rx: tokio::sync::broadcast::Receiver<bytes::Bytes>,
 ) {
     loop {
         match rx.recv().await {
             Ok(jpeg) => {
                 if socket
-                    .send(Message::Binary((*jpeg).clone().into()))
+                    .send(Message::Binary(jpeg.to_vec().into()))
                     .await
                     .is_err()
                 {
