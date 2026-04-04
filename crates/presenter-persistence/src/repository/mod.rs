@@ -10,25 +10,26 @@ mod util;
 use util::{
     ableset_model_to_domain, android_stage_display_model_to_domain, osc_model_to_domain,
     resolume_model_to_domain, stage_state_model_to_state, timer_state_to_string,
-    timers_model_to_state, velocity_mode_to_string,
+    timers_model_to_state, velocity_mode_to_string, video_source_model_to_domain,
 };
 
 use crate::entities::{
     ableset_settings, android_stage_display, app_settings, osc_settings, resolume_host,
-    stage_state, timers,
+    stage_state, timers, video_source,
 };
 use anyhow::{anyhow, Context};
 use chrono::Utc;
 use presenter_core::{
     AbleSetSettings, AbleSetSettingsDraft, AndroidStageDisplay, AndroidStageDisplayDraft,
     AndroidStageDisplayId, OscSettings, OscSettingsDraft, ResolumeHost, ResolumeHostDraft,
-    ResolumeHostId, StageState, TimersState,
+    ResolumeHostId, StageState, TimersState, VideoSource, VideoSourceDraft, VideoSourceId,
 };
 use presenter_migration::{Migrator, MigratorTrait};
 use sea_orm::Statement;
 use sea_orm::{
-    sea_query::OnConflict, ActiveModelTrait, ConnectionTrait, Database, DatabaseConnection,
-    EntityTrait, IntoActiveModel, QueryOrder, Schema, Set,
+    sea_query::{Expr, OnConflict},
+    ActiveModelTrait, ColumnTrait, ConnectionTrait, Database, DatabaseConnection, EntityTrait,
+    IntoActiveModel, QueryFilter, QueryOrder, Schema, Set,
 };
 use std::fmt::Debug;
 use tracing::instrument;
@@ -446,6 +447,129 @@ impl Repository {
         if result.rows_affected == 0 {
             return Err(anyhow!("android stage display not found"));
         }
+        Ok(())
+    }
+
+    // ── Video Sources ──────────────────────────────────────────────
+
+    pub async fn list_video_sources(&self) -> anyhow::Result<Vec<VideoSource>> {
+        let models = video_source::Entity::find()
+            .order_by_asc(video_source::Column::Label)
+            .all(&self.db)
+            .await?;
+        models
+            .into_iter()
+            .map(video_source_model_to_domain)
+            .collect()
+    }
+
+    pub async fn get_active_video_source(&self) -> anyhow::Result<Option<VideoSource>> {
+        let model = video_source::Entity::find()
+            .filter(video_source::Column::IsActive.eq(true))
+            .one(&self.db)
+            .await?;
+        model.map(video_source_model_to_domain).transpose()
+    }
+
+    #[instrument(skip_all)]
+    pub async fn create_video_source(
+        &self,
+        draft: &VideoSourceDraft,
+    ) -> anyhow::Result<VideoSource> {
+        draft.validate().map_err(|err| anyhow!(err))?;
+        let id = VideoSourceId::new();
+        let now = Utc::now();
+        let model = video_source::ActiveModel {
+            id: Set(id.to_string()),
+            label: Set(draft.label.trim().to_string()),
+            ndi_name: Set(draft.ndi_name.trim().to_string()),
+            is_active: Set(false),
+            created_at: Set(now.into()),
+            updated_at: Set(now.into()),
+        };
+
+        video_source::Entity::insert(model).exec(&self.db).await?;
+
+        let inserted = video_source::Entity::find_by_id(id.to_string())
+            .one(&self.db)
+            .await?
+            .ok_or_else(|| anyhow!("video source missing after insert"))?;
+        video_source_model_to_domain(inserted)
+    }
+
+    #[instrument(skip_all)]
+    pub async fn update_video_source(
+        &self,
+        id: VideoSourceId,
+        draft: &VideoSourceDraft,
+    ) -> anyhow::Result<VideoSource> {
+        draft.validate().map_err(|err| anyhow!(err))?;
+        let existing = video_source::Entity::find_by_id(id.to_string())
+            .one(&self.db)
+            .await?
+            .ok_or_else(|| anyhow!("video source not found"))?;
+
+        let mut model = existing.into_active_model();
+        model.label = Set(draft.label.trim().to_string());
+        model.ndi_name = Set(draft.ndi_name.trim().to_string());
+        model.updated_at = Set(Utc::now().into());
+
+        let updated = model.update(&self.db).await?;
+        video_source_model_to_domain(updated)
+    }
+
+    #[instrument(skip_all)]
+    pub async fn delete_video_source(&self, id: VideoSourceId) -> anyhow::Result<()> {
+        let result = video_source::Entity::delete_by_id(id.to_string())
+            .exec(&self.db)
+            .await?;
+        if result.rows_affected == 0 {
+            return Err(anyhow!("video source not found"));
+        }
+        Ok(())
+    }
+
+    #[instrument(skip_all)]
+    pub async fn activate_video_source(&self, id: VideoSourceId) -> anyhow::Result<VideoSource> {
+        // Deactivate all first
+        video_source::Entity::update_many()
+            .col_expr(video_source::Column::IsActive, Expr::value(false))
+            .col_expr(
+                video_source::Column::UpdatedAt,
+                Expr::value(Into::<sea_orm::prelude::DateTimeWithTimeZone>::into(
+                    Utc::now(),
+                )),
+            )
+            .filter(video_source::Column::IsActive.eq(true))
+            .exec(&self.db)
+            .await?;
+
+        // Activate target
+        let existing = video_source::Entity::find_by_id(id.to_string())
+            .one(&self.db)
+            .await?
+            .ok_or_else(|| anyhow!("video source not found"))?;
+
+        let mut model = existing.into_active_model();
+        model.is_active = Set(true);
+        model.updated_at = Set(Utc::now().into());
+
+        let updated = model.update(&self.db).await?;
+        video_source_model_to_domain(updated)
+    }
+
+    pub async fn deactivate_all_video_sources(&self) -> anyhow::Result<()> {
+        video_source::Entity::update_many()
+            .col_expr(video_source::Column::IsActive, Expr::value(false))
+            .col_expr(
+                video_source::Column::UpdatedAt,
+                Expr::value(Into::<sea_orm::prelude::DateTimeWithTimeZone>::into(
+                    Utc::now(),
+                )),
+            )
+            .filter(video_source::Column::IsActive.eq(true))
+            .exec(&self.db)
+            .await?;
         Ok(())
     }
 

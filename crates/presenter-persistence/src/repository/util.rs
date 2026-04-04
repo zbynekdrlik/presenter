@@ -7,7 +7,7 @@ use presenter_core::{
     AbleSetSettings, AndroidStageDisplay, AndroidStageDisplayId, BiblePassage, BibleTranslation,
     CountdownTimer, OscSettings, Playlist, PlaylistEntry, PlaylistEntryId, PlaylistId, PreachTimer,
     PresentationId, ResolumeHost, ResolumeHostId, Slide, SlideContent, SlideGroup, SlideId,
-    SlideText, StageState, TimerState, TimersState, VelocityMode,
+    SlideText, StageState, TimerState, TimersState, VelocityMode, VideoSource, VideoSourceId,
 };
 use std::collections::HashSet;
 use thiserror::Error;
@@ -16,6 +16,7 @@ use uuid::Uuid;
 use crate::entities::{
     ableset_settings, android_stage_display, bible_passage, bible_translation, osc_settings,
     playlist, playlist_entry, resolume_host, slide as slide_entity, stage_state, timers,
+    video_source,
 };
 
 // Shared error and helpers for repository modules
@@ -437,3 +438,21 @@ pub(super) fn build_slide_active_model(
 }
 
 pub(super) const BIBLE_INSERT_CHUNK: usize = 500;
+
+pub(super) fn video_source_model_to_domain(
+    model: video_source::Model,
+) -> anyhow::Result<VideoSource> {
+    let id = VideoSourceId::from_uuid(
+        Uuid::parse_str(&model.id).map_err(|_| anyhow!("invalid video source id"))?,
+    );
+    let created_at: DateTime<Utc> = model.created_at.into();
+    let updated_at: DateTime<Utc> = model.updated_at.into();
+    Ok(VideoSource::new(
+        id,
+        model.label,
+        model.ndi_name,
+        model.is_active,
+        created_at,
+        updated_at,
+    ))
+}

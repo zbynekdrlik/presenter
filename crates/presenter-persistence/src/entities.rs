@@ -499,3 +499,24 @@ pub mod ableset_settings {
 
     impl ActiveModelBehavior for ActiveModel {}
 }
+
+pub mod video_source {
+    use sea_orm::entity::prelude::*;
+
+    #[derive(Clone, Debug, PartialEq, Eq, DeriveEntityModel)]
+    #[sea_orm(table_name = "video_sources")]
+    pub struct Model {
+        #[sea_orm(primary_key, auto_increment = false)]
+        pub id: String,
+        pub label: String,
+        pub ndi_name: String,
+        pub is_active: bool,
+        pub created_at: DateTimeWithTimeZone,
+        pub updated_at: DateTimeWithTimeZone,
+    }
+
+    #[derive(Copy, Clone, Debug, EnumIter, DeriveRelation)]
+    pub enum Relation {}
+
+    impl ActiveModelBehavior for ActiveModel {}
+}
