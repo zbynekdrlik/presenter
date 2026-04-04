@@ -1,6 +1,7 @@
 pub mod ai;
 pub mod bible;
 pub mod libraries;
+pub mod ndi;
 pub mod playlists;
 pub mod presentations;
 pub mod settings;

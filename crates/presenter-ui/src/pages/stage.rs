@@ -4,8 +4,8 @@ use wasm_bindgen::prelude::*;
 
 use crate::api;
 use crate::components::stage::{
-    preach_layout::PreachLayout, timer_layout::TimerLayout, worship_pp::WorshipPp,
-    worship_snv::WorshipSnv,
+    ndi_fullscreen::NdiFullscreen, preach_layout::PreachLayout, timer_layout::TimerLayout,
+    worship_pp::WorshipPp, worship_snv::WorshipSnv,
 };
 use crate::state::stage::StageContext;
 use crate::ws::stage::{self, StageWsState};
@@ -72,6 +72,17 @@ pub fn StagePage() -> impl IntoView {
                         }
                     });
                 }
+                LiveEvent::NdiSourceActivated { .. } => {
+                    ctx.ndi_active.set(true);
+                    ctx.ndi_status.set("connecting".to_string());
+                }
+                LiveEvent::NdiSourceDeactivated => {
+                    ctx.ndi_active.set(false);
+                    ctx.ndi_status.set(String::new());
+                }
+                LiveEvent::NdiConnectionStatus { status } => {
+                    ctx.ndi_status.set(status);
+                }
                 _ => {}
             }
         });
@@ -136,6 +147,9 @@ pub fn StagePage() -> impl IntoView {
                 }
                 "preach" => {
                     view! { <PreachLayout ws_state=ws_state latency_ms=latency_ms /> }.into_any()
+                }
+                "ndi-fullscreen" => {
+                    view! { <NdiFullscreen ws_state=ws_state latency_ms=latency_ms /> }.into_any()
                 }
                 _ => {
                     view! { <WorshipSnv ws_state=ws_state latency_ms=latency_ms /> }.into_any()
