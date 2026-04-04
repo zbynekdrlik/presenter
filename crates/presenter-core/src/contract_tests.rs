@@ -447,7 +447,7 @@ mod tests {
             "unexpected snake_case: {json}"
         );
         let result: FeatureFlags = serde_json::from_str(&json).expect("deserialize");
-        assert_eq!(result.companion_enabled, true);
+        assert!(result.companion_enabled);
         assert_eq!(result.companion_port, 18175);
     }
 }
