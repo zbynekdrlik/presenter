@@ -1,5 +1,6 @@
 use super::{get_json, post_json, put_json, ApiError};
-use presenter_core::{AbleSetSettings, AbleSetSettingsDraft, AbleSetStatusSnapshot};
+pub use presenter_core::AbleSetStatusSnapshot;
+use presenter_core::{AbleSetSettings, AbleSetSettingsDraft};
 use serde::Serialize;
 
 pub async fn get_ableset_status() -> Result<AbleSetStatusSnapshot, ApiError> {
