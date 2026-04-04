@@ -425,4 +425,29 @@ mod tests {
         let result: AbleSetStatusSnapshot = serde_json::from_str(&json).expect("deserialize");
         assert_eq!(result.last_error, Some("connection refused".to_string()));
     }
+
+    // ── FeatureFlags ───────────────────────────────────────────────
+
+    #[test]
+    fn feature_flags_roundtrip() {
+        use crate::FeatureFlags;
+
+        let flags = FeatureFlags {
+            companion_enabled: true,
+            companion_port: 18175,
+        };
+        let json = serde_json::to_string(&flags).expect("serialize");
+        assert!(
+            json.contains("companionEnabled"),
+            "expected camelCase: {json}"
+        );
+        assert!(json.contains("companionPort"), "expected camelCase: {json}");
+        assert!(
+            !json.contains("companion_enabled"),
+            "unexpected snake_case: {json}"
+        );
+        let result: FeatureFlags = serde_json::from_str(&json).expect("deserialize");
+        assert_eq!(result.companion_enabled, true);
+        assert_eq!(result.companion_port, 18175);
+    }
 }

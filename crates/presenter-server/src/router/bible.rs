@@ -17,6 +17,7 @@ use std::collections::HashMap;
 use tracing::instrument;
 
 #[derive(Debug, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub(super) struct BibleImportSummaryDto {
     pub(super) translation_code: String,
     pub(super) passage_count: usize,
