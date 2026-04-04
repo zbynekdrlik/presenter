@@ -1,4 +1,4 @@
-use axum::{extract::State, http::StatusCode, Json};
+use axum::{extract::State, http::StatusCode, response::IntoResponse, Json};
 use serde::Serialize;
 use tracing::instrument;
 
@@ -7,7 +7,7 @@ use crate::state::AppState;
 
 #[derive(Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
-struct NdiSourceDto {
+pub(crate) struct NdiSourceDto {
     name: String,
 }
 
@@ -35,7 +35,7 @@ pub(crate) async fn ndi_status(State(state): State<AppState>) -> Json<serde_json
 pub(crate) async fn whep_endpoint(
     State(state): State<AppState>,
     body: String,
-) -> Result<(StatusCode, [(&'static str, &'static str); 1], String), AppError> {
+) -> Result<impl IntoResponse, AppError> {
     let manager = state
         .ndi_manager()
         .ok_or_else(|| AppError::service_unavailable("NDI SDK not available"))?;
