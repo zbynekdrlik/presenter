@@ -49,16 +49,18 @@ allow = [
     "CDLA-Permissive-2.0",  # webpki-roots
 ]
 
-exceptions = [
-    # webpki 0.21.4 (transitive dep of webrtc-rs) — ISC licensed but not detected
-    { allow = ["ISC"], name = "webpki", version = "0.21.4" },
-]
-
 [[licenses.clarify]]
 name = "ring"
 expression = "ISC AND MIT AND OpenSSL"
 license-files = [
     { path = "LICENSE", hash = 0xbd0eed23 },
+]
+
+[[licenses.clarify]]
+name = "webpki"
+expression = "ISC"
+license-files = [
+    { path = "LICENSE", hash = 0x001c7e6c },
 ]
 
 [licenses.private]
