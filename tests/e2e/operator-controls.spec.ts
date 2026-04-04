@@ -288,16 +288,17 @@ test.describe("Operator Control Buttons", () => {
     await firstLibrary.click();
 
     const firstPresentation = page
-      .locator('[data-role="presentation-item"]')
+      .locator('[data-role="presentation-item"][data-type="presentation"]')
       .first();
     await expect(firstPresentation).toBeVisible({ timeout: 10_000 });
     await firstPresentation.click();
     await page.waitForTimeout(500);
 
-    // Record the currently selected presentation name
-    const selectedName = await firstPresentation
-      .locator('[data-role="presentation-name"]')
-      .textContent();
+    // Record the currently selected presentation ID
+    const selectedPresId = await firstPresentation.getAttribute(
+      "data-presentation-id",
+    );
+    expect(selectedPresId).toBeTruthy();
 
     // Get a DIFFERENT presentation to trigger on stage
     const libs = await (
@@ -307,38 +308,34 @@ test.describe("Operator Control Buttons", () => {
     let otherSlideId: string | null = null;
     for (const lib of libs as any[]) {
       for (const pres of lib.presentations) {
-        if (pres.slides.length > 0) {
-          const presName = pres.name
-            .replace(/^\d{3}\s*/, "")
-            .trim();
-          if (presName !== selectedName?.trim()) {
-            otherPresId = pres.id;
-            otherSlideId = pres.slides[0].id;
-            break;
-          }
+        if (pres.slides.length > 0 && pres.id !== selectedPresId) {
+          otherPresId = pres.id;
+          otherSlideId = pres.slides[0].id;
+          break;
         }
       }
       if (otherPresId) break;
     }
+    expect(otherPresId).toBeTruthy();
 
     // Trigger a different presentation on the stage
-    if (otherPresId && otherSlideId) {
-      await page.request.put(`${baseURL}/stage/state`, {
-        data: {
-          presentationId: otherPresId,
-          currentSlideId: otherSlideId,
-        },
-      });
+    await page.request.put(`${baseURL}/stage/state`, {
+      data: {
+        presentationId: otherPresId,
+        currentSlideId: otherSlideId,
+      },
+    });
 
-      // Wait for the stage snapshot to arrive via WebSocket
-      await page.waitForTimeout(1500);
+    // Wait for the stage snapshot to arrive via WebSocket
+    await page.waitForTimeout(2000);
 
-      // The operator selection should NOT have changed (follow is OFF)
-      const stillSelected = await firstPresentation
-        .locator('[data-role="presentation-name"]')
-        .textContent();
-      expect(stillSelected?.trim()).toBe(selectedName?.trim());
-    }
+    // The operator's active presentation should NOT have changed (follow is OFF)
+    // Check that the presentation item with data-active="true" is still our original
+    const activeItem = page.locator(
+      '[data-role="presentation-item"][data-active="true"]',
+    );
+    const activePresId = await activeItem.getAttribute("data-presentation-id");
+    expect(activePresId).toBe(selectedPresId);
 
     expect(filterRealErrors(consoleMessages)).toEqual([]);
   });
