@@ -14,5 +14,5 @@ tracing.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 libloading = "0.8"
-openh264 = "0.9"
+vpx-encode = { version = "0.6", features = ["ffi-generate"] }
 webrtc = "0.8"

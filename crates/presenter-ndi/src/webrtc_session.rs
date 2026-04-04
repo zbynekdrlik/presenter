@@ -39,7 +39,7 @@ impl WebRtcSession {
 
         let video_track = Arc::new(TrackLocalStaticSample::new(
             webrtc::rtp_transceiver::rtp_codec::RTCRtpCodecCapability {
-                mime_type: "video/h264".to_string(),
+                mime_type: "video/VP8".to_string(),
                 ..Default::default()
             },
             "video".to_string(),

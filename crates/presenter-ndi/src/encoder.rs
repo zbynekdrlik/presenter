@@ -1,48 +1,46 @@
-use anyhow::Result;
-use openh264::formats::YUVSlices;
+use anyhow::{Context, Result};
+use vpx_encode as vpx;
 
-/// Wraps an openh264 encoder that accepts YUV420 planar frames and emits H.264.
+/// Wraps a libvpx VP8 encoder that accepts YUV420 planar frames.
 pub struct VideoEncoder {
-    encoder: openh264::encoder::Encoder,
-    width: u32,
-    height: u32,
+    encoder: vpx::Encoder,
+    pts: i64,
 }
 
 impl VideoEncoder {
-    /// Create a new H.264 encoder for frames of the given dimensions.
+    /// Create a new VP8 encoder for frames of the given dimensions.
     pub fn new(width: u32, height: u32) -> Result<Self> {
-        let encoder = openh264::encoder::Encoder::new()?;
-        Ok(Self {
-            encoder,
+        let config = vpx::Config {
             width,
             height,
-        })
+            timebase: [1, 30],
+            bitrate: 2000,
+            codec: vpx::VideoCodecId::VP8,
+        };
+        let encoder = vpx::Encoder::new(config).context("failed to create VP8 encoder")?;
+        Ok(Self { encoder, pts: 0 })
     }
 
-    /// Encode a YUV420 planar frame to an H.264 bitstream.
+    /// Encode a YUV420 planar frame to VP8.
     ///
-    /// The `yuv_data` slice must contain the Y, U and V planes contiguously:
+    /// The `yuv_data` slice must contain Y, U and V planes contiguously:
     /// `[Y: w*h bytes] [U: w/2 * h/2 bytes] [V: w/2 * h/2 bytes]`.
     pub fn encode(&mut self, yuv_data: &[u8]) -> Result<Vec<u8>> {
-        let w = self.width as usize;
-        let h = self.height as usize;
-        let y_size = w * h;
-        let uv_size = (w / 2) * (h / 2);
+        let packets = self
+            .encoder
+            .encode(self.pts, yuv_data)
+            .context("VP8 encode failed")?;
+        self.pts += 1;
 
-        let y_plane = &yuv_data[..y_size];
-        let u_plane = &yuv_data[y_size..y_size + uv_size];
-        let v_plane = &yuv_data[y_size + uv_size..y_size + uv_size * 2];
-
-        let yuv = YUVSlices::new((y_plane, u_plane, v_plane), (w, h), (w, w / 2, w / 2));
-
-        let bitstream = self.encoder.encode(&yuv)?;
-        Ok(bitstream.to_vec())
+        let mut output = Vec::new();
+        for pkt in packets {
+            output.extend_from_slice(pkt.data);
+        }
+        Ok(output)
     }
 }
 
 /// Convert UYVY to YUV420 planar.
-///
-/// NDI commonly sends UYVY; openh264 expects YUV420 planar input.
 pub fn uyvy_to_yuv420(uyvy: &[u8], width: u32, height: u32) -> Vec<u8> {
     let w = width as usize;
     let h = height as usize;
@@ -76,7 +74,7 @@ pub fn uyvy_to_yuv420(uyvy: &[u8], width: u32, height: u32) -> Vec<u8> {
     yuv
 }
 
-/// Convert BGRA to YUV420 planar.
+/// Convert BGRA/BGRX to YUV420 planar.
 pub fn bgra_to_yuv420(bgra: &[u8], width: u32, height: u32) -> Vec<u8> {
     let w = width as usize;
     let h = height as usize;
