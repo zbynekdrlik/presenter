@@ -111,6 +111,7 @@ fn run_capture_loop(
 
     let fourcc_uyvy = u32::from_le_bytes([b'U', b'Y', b'V', b'Y']);
     let fourcc_bgra = u32::from_le_bytes([b'B', b'G', b'R', b'A']);
+    let fourcc_bgrx = u32::from_le_bytes([b'B', b'G', b'R', b'X']);
     let mut encoder: Option<VideoEncoder> = None;
 
     loop {
@@ -155,7 +156,7 @@ fn run_capture_loop(
         // Convert pixel format to YUV420
         let yuv = if frame.fourcc == fourcc_uyvy {
             uyvy_to_yuv420(&frame.data, frame.width, frame.height)
-        } else if frame.fourcc == fourcc_bgra {
+        } else if frame.fourcc == fourcc_bgra || frame.fourcc == fourcc_bgrx {
             bgra_to_yuv420(&frame.data, frame.width, frame.height)
         } else {
             tracing::warn!("unsupported fourcc: 0x{:08x}", frame.fourcc);
