@@ -25,7 +25,7 @@ pub mod video_source;
 
 pub use ableset::{
     extract_song_prefix, AbleSetSettings, AbleSetSettingsDraft, AbleSetSettingsValidationError,
-    AbleSetSongSnapshot,
+    AbleSetSongSnapshot, AbleSetStatusSnapshot,
 };
 pub use android_stage_display::{
     AndroidStageDisplay, AndroidStageDisplayDraft, AndroidStageDisplayValidationError,

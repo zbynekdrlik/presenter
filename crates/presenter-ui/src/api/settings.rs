@@ -1,21 +1,6 @@
 use super::{get_json, post_json, put_json, ApiError};
-use presenter_core::{AbleSetSettings, AbleSetSettingsDraft, AbleSetSongSnapshot};
+use presenter_core::{AbleSetSettings, AbleSetSettingsDraft, AbleSetStatusSnapshot};
 use serde::{Deserialize, Serialize};
-
-#[derive(Debug, Clone, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub struct AbleSetStatusSnapshot {
-    pub enabled: bool,
-    pub tracking: bool,
-    pub follow_enabled: bool,
-    pub host: String,
-    pub http_port: u16,
-    pub osc_port: u16,
-    pub library_name: String,
-    pub song_prefix_length: u8,
-    pub last_song: Option<AbleSetSongSnapshot>,
-    pub last_error: Option<String>,
-}
 
 pub async fn get_ableset_status() -> Result<AbleSetStatusSnapshot, ApiError> {
     get_json("/integrations/ableset/status").await
