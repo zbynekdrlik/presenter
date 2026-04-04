@@ -6,6 +6,7 @@ members = [
     "crates/presenter-migration",
     "crates/presenter-importer",
     "crates/presenter-bible",
+    "crates/presenter-ndi",
 ]
 exclude = ["crates/presenter-ui"]
 resolver = "2"
