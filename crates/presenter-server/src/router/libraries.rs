@@ -11,6 +11,7 @@ use tracing::instrument;
 use uuid::Uuid;
 
 #[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
 pub(super) struct FavoriteLibraryIdsResponse {
     pub(super) ids: Vec<String>,
 }

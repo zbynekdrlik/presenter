@@ -4,6 +4,7 @@ use serde::{Deserialize, Serialize};
 
 /// OpenAI-compatible chat completion request.
 #[derive(Debug, Serialize)]
+#[serde(rename_all = "snake_case")]
 pub struct ChatCompletionRequest {
     pub model: String,
     pub messages: Vec<serde_json::Value>,

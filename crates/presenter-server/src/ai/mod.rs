@@ -47,6 +47,7 @@ pub struct ChatMessage {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
 pub struct ToolCallMessage {
     pub id: String,
     #[serde(rename = "type")]

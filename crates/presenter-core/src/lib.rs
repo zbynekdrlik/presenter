@@ -23,9 +23,11 @@ pub mod stage_display;
 pub mod timer;
 pub mod video_source;
 
+pub mod feature_flags;
+
 pub use ableset::{
     extract_song_prefix, AbleSetSettings, AbleSetSettingsDraft, AbleSetSettingsValidationError,
-    AbleSetSongSnapshot,
+    AbleSetSongSnapshot, AbleSetStatusSnapshot,
 };
 pub use android_stage_display::{
     AndroidStageDisplay, AndroidStageDisplayDraft, AndroidStageDisplayValidationError,
@@ -35,6 +37,7 @@ pub use bible::{
     BibleBroadcast, BiblePassage, BiblePreferences, BiblePreferencesDraft, BibleReference,
     BibleSlideOutput, BibleTranslation,
 };
+pub use feature_flags::FeatureFlags;
 pub use id::{
     AndroidStageDisplayId, LibraryId, PlaylistEntryId, PlaylistId, PresentationId, ResolumeHostId,
     SlideId, VideoSourceId,

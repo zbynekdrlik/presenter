@@ -2,7 +2,7 @@ use anyhow::{anyhow, Context};
 use chrono::{DateTime, Utc};
 use presenter_core::{extract_song_prefix, AbleSetSettings, AbleSetSongSnapshot};
 use reqwest::Client;
-use serde::{Deserialize, Serialize};
+use serde::Deserialize;
 use std::{future::Future, pin::Pin, sync::Arc, time::Duration};
 use tokio::{
     sync::{oneshot, Mutex, RwLock},
@@ -63,19 +63,7 @@ struct TrackerGuard {
     handle: JoinHandle<()>,
 }
 
-#[derive(Debug, Clone, Serialize)]
-pub struct AbleSetStatusSnapshot {
-    pub enabled: bool,
-    pub tracking: bool,
-    pub follow_enabled: bool,
-    pub host: String,
-    pub http_port: u16,
-    pub osc_port: u16,
-    pub library_name: String,
-    pub song_prefix_length: u8,
-    pub last_song: Option<AbleSetSongSnapshot>,
-    pub last_error: Option<String>,
-}
+pub use presenter_core::AbleSetStatusSnapshot;
 
 #[derive(Clone)]
 struct AbleSetTrackerConfig {

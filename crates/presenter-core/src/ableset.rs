@@ -133,6 +133,23 @@ impl AbleSetSongSnapshot {
     }
 }
 
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AbleSetStatusSnapshot {
+    pub enabled: bool,
+    pub tracking: bool,
+    pub follow_enabled: bool,
+    pub host: String,
+    pub http_port: u16,
+    pub osc_port: u16,
+    pub library_name: String,
+    pub song_prefix_length: u8,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub last_song: Option<AbleSetSongSnapshot>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub last_error: Option<String>,
+}
+
 pub fn extract_song_prefix(name: &str, length: u8) -> Option<String> {
     if length == 0 {
         return None;

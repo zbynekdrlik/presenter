@@ -354,4 +354,100 @@ mod tests {
         let result: StageClientSnapshot = serde_json::from_str(&json).unwrap();
         assert_eq!(result.id, id);
     }
+
+    // ── AbleSetStatusSnapshot ──────────────────────────────────────
+
+    #[test]
+    fn ableset_status_snapshot_roundtrip() {
+        use crate::AbleSetStatusSnapshot;
+
+        let snapshot = AbleSetStatusSnapshot {
+            enabled: true,
+            tracking: true,
+            follow_enabled: true,
+            host: "fohabl.lan".to_string(),
+            http_port: 80,
+            osc_port: 39051,
+            library_name: "NEW LEVEL".to_string(),
+            song_prefix_length: 3,
+            last_song: Some(crate::AbleSetSongSnapshot::new(
+                "148 Amazing Grace".to_string(),
+                "148".to_string(),
+                Some(5),
+                Some(Utc::now()),
+            )),
+            last_error: None,
+        };
+        let json = serde_json::to_string(&snapshot).expect("serialize");
+        assert!(json.contains("followEnabled"), "expected camelCase: {json}");
+        assert!(json.contains("httpPort"), "expected camelCase: {json}");
+        assert!(json.contains("oscPort"), "expected camelCase: {json}");
+        assert!(json.contains("libraryName"), "expected camelCase: {json}");
+        assert!(
+            json.contains("songPrefixLength"),
+            "expected camelCase: {json}"
+        );
+        assert!(json.contains("lastSong"), "expected camelCase: {json}");
+        assert!(
+            !json.contains("follow_enabled"),
+            "unexpected snake_case: {json}"
+        );
+        assert!(!json.contains("http_port"), "unexpected snake_case: {json}");
+        let result: AbleSetStatusSnapshot = serde_json::from_str(&json).expect("deserialize");
+        assert_eq!(result.enabled, snapshot.enabled);
+        assert_eq!(result.follow_enabled, snapshot.follow_enabled);
+        assert_eq!(result.http_port, snapshot.http_port);
+        assert_eq!(result.osc_port, snapshot.osc_port);
+        assert_eq!(result.library_name, snapshot.library_name);
+        assert_eq!(result.song_prefix_length, snapshot.song_prefix_length);
+        assert!(result.last_song.is_some());
+        assert!(result.last_error.is_none());
+    }
+
+    #[test]
+    fn ableset_status_snapshot_with_error() {
+        use crate::AbleSetStatusSnapshot;
+
+        let snapshot = AbleSetStatusSnapshot {
+            enabled: false,
+            tracking: false,
+            follow_enabled: false,
+            host: "localhost".to_string(),
+            http_port: 8080,
+            osc_port: 39051,
+            library_name: "Test".to_string(),
+            song_prefix_length: 3,
+            last_song: None,
+            last_error: Some("connection refused".to_string()),
+        };
+        let json = serde_json::to_string(&snapshot).expect("serialize");
+        assert!(json.contains("lastError"), "expected camelCase: {json}");
+        let result: AbleSetStatusSnapshot = serde_json::from_str(&json).expect("deserialize");
+        assert_eq!(result.last_error, Some("connection refused".to_string()));
+    }
+
+    // ── FeatureFlags ───────────────────────────────────────────────
+
+    #[test]
+    fn feature_flags_roundtrip() {
+        use crate::FeatureFlags;
+
+        let flags = FeatureFlags {
+            companion_enabled: true,
+            companion_port: 18175,
+        };
+        let json = serde_json::to_string(&flags).expect("serialize");
+        assert!(
+            json.contains("companionEnabled"),
+            "expected camelCase: {json}"
+        );
+        assert!(json.contains("companionPort"), "expected camelCase: {json}");
+        assert!(
+            !json.contains("companion_enabled"),
+            "unexpected snake_case: {json}"
+        );
+        let result: FeatureFlags = serde_json::from_str(&json).expect("deserialize");
+        assert!(result.companion_enabled);
+        assert_eq!(result.companion_port, 18175);
+    }
 }
