@@ -1,3 +1,5 @@
+#![allow(non_camel_case_types)]
+
 pub mod discovery;
 pub mod encoder;
 mod manager;

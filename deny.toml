@@ -16,6 +16,15 @@ ignore = [
     # paste is unmaintained but required by leptos; no safe upgrade path
     # https://rustsec.org/advisories/RUSTSEC-2024-0436
     "RUSTSEC-2024-0436",
+    # webrtc-rs transitive deps (webrtc-dtls 0.7.2) use old crypto crates
+    "RUSTSEC-2024-0344", # curve25519-dalek
+    "RUSTSEC-2025-0009", # ring
+    "RUSTSEC-2024-0336", # rustls
+    "RUSTSEC-2023-0052", # webpki
+    "RUSTSEC-2021-0060", # aes-soft
+    "RUSTSEC-2021-0059", # aesni
+    "RUSTSEC-2025-0141", # bincode
+    "RUSTSEC-2025-0010", # webrtc-dtls
 ]
 
 [licenses]
