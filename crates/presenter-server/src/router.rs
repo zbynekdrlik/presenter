@@ -208,6 +208,9 @@ pub fn build_router(state: AppState) -> Router {
             "/integrations/video-sources/{id}/activate",
             post(integrations::video_source::activate_video_source),
         )
+        .route("/ndi/sources", get(integrations::ndi::discover_ndi_sources))
+        .route("/ndi/status", get(integrations::ndi::ndi_status))
+        .route("/ndi/whep", post(integrations::ndi::whep_endpoint))
         .route(
             "/presentations/{id}",
             get(presentations::get_presentation_detail)
@@ -328,6 +331,13 @@ impl AppError {
     fn internal(message: impl Into<String>) -> Self {
         Self::new(
             StatusCode::INTERNAL_SERVER_ERROR,
+            anyhow::anyhow!(message.into()),
+        )
+    }
+
+    fn service_unavailable(message: impl Into<String>) -> Self {
+        Self::new(
+            StatusCode::SERVICE_UNAVAILABLE,
             anyhow::anyhow!(message.into()),
         )
     }

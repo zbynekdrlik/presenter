@@ -139,12 +139,20 @@ impl AppState {
             ndi_name: source.ndi_name.clone(),
             label: source.label.clone(),
         });
+        // Start NDI stream if manager is available
+        if let Some(manager) = &self.ndi_manager {
+            manager.start_stream(&source.ndi_name).await?;
+        }
         Ok(source)
     }
 
     pub async fn deactivate_video_sources(&self) -> anyhow::Result<()> {
         self.repository.deactivate_all_video_sources().await?;
         self.live_hub.publish(LiveEvent::NdiSourceDeactivated);
+        // Stop NDI stream if manager is available
+        if let Some(manager) = &self.ndi_manager {
+            manager.stop_stream().await;
+        }
         Ok(())
     }
 }

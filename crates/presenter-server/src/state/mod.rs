@@ -98,6 +98,7 @@ pub struct AppState {
     broadcast_live: Arc<AtomicBool>,
     ai_conversation: Arc<RwLock<Vec<ChatMessage>>>,
     ai_proxy: Arc<ProxyManager>,
+    ndi_manager: Option<Arc<presenter_ndi::NdiManager>>,
     #[cfg(test)]
     bible_ingestion_override: Option<std::sync::Arc<dyn TestBibleIngestion + Send + Sync>>,
 }
@@ -153,6 +154,12 @@ impl AppState {
             .find(|code| code == DEFAULT_STAGE_LAYOUT_CODE)
             .unwrap_or_else(|| DEFAULT_STAGE_LAYOUT_CODE.to_string());
         let ableset_cache = Arc::new(RwLock::new(AbleSetLibraryCache::default()));
+        let ndi_manager = presenter_ndi::NdiManager::try_new().map(Arc::new);
+        if ndi_manager.is_some() {
+            tracing::info!("NDI SDK loaded successfully");
+        } else {
+            tracing::warn!("NDI SDK not found — NDI features disabled");
+        }
         let state = Self {
             repository,
             live_hub: LiveHub::new(),
@@ -174,6 +181,7 @@ impl AppState {
             broadcast_live: Arc::new(AtomicBool::new(false)),
             ai_conversation: Arc::new(RwLock::new(Vec::new())),
             ai_proxy: Arc::new(ProxyManager::new(crate::ai::proxy::detect_deploy_dir())),
+            ndi_manager,
             #[cfg(test)]
             bible_ingestion_override: None,
         };
@@ -431,6 +439,10 @@ impl AppState {
 
     pub fn ai_proxy(&self) -> &Arc<ProxyManager> {
         &self.ai_proxy
+    }
+
+    pub fn ndi_manager(&self) -> Option<&Arc<presenter_ndi::NdiManager>> {
+        self.ndi_manager.as_ref()
     }
 
     pub fn stage_connections_handle(&self) -> StageConnections {
