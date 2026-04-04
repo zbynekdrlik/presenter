@@ -895,11 +895,54 @@ impl MigrationTrait for Migration {
             )
             .await?;
 
+        manager
+            .create_table(
+                Table::create()
+                    .table(VideoSources::Table)
+                    .if_not_exists()
+                    .col(
+                        ColumnDef::new(VideoSources::Id)
+                            .string_len(36)
+                            .not_null()
+                            .primary_key(),
+                    )
+                    .col(ColumnDef::new(VideoSources::Label).string().not_null())
+                    .col(ColumnDef::new(VideoSources::NdiName).string().not_null())
+                    .col(
+                        ColumnDef::new(VideoSources::IsActive)
+                            .boolean()
+                            .not_null()
+                            .default(false),
+                    )
+                    .col(
+                        ColumnDef::new(VideoSources::CreatedAt)
+                            .timestamp_with_time_zone()
+                            .not_null()
+                            .extra("DEFAULT CURRENT_TIMESTAMP"),
+                    )
+                    .col(
+                        ColumnDef::new(VideoSources::UpdatedAt)
+                            .timestamp_with_time_zone()
+                            .not_null()
+                            .extra("DEFAULT CURRENT_TIMESTAMP"),
+                    )
+                    .to_owned(),
+            )
+            .await?;
+
         Ok(())
     }
 
     #[allow(elided_lifetimes_in_paths)]
     async fn down(&self, manager: &SchemaManager) -> Result<(), DbErr> {
+        manager
+            .drop_table(
+                Table::drop()
+                    .table(VideoSources::Table)
+                    .if_exists()
+                    .to_owned(),
+            )
+            .await?;
         manager
             .drop_table(Table::drop().table(AppSettings::Table).to_owned())
             .await?;
@@ -1144,5 +1187,15 @@ enum AppSettings {
     Table,
     Key,
     Value,
+    UpdatedAt,
+}
+#[derive(DeriveIden)]
+enum VideoSources {
+    Table,
+    Id,
+    Label,
+    NdiName,
+    IsActive,
+    CreatedAt,
     UpdatedAt,
 }
