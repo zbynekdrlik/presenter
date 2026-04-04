@@ -191,6 +191,24 @@ pub fn build_router(state: AppState) -> Router {
             post(integrations::ableset::set_ableset_follow),
         )
         .route(
+            "/integrations/video-sources",
+            get(integrations::video_source::list_video_sources)
+                .post(integrations::video_source::create_video_source),
+        )
+        .route(
+            "/integrations/video-sources/deactivate",
+            post(integrations::video_source::deactivate_video_sources),
+        )
+        .route(
+            "/integrations/video-sources/{id}",
+            put(integrations::video_source::update_video_source)
+                .delete(integrations::video_source::delete_video_source),
+        )
+        .route(
+            "/integrations/video-sources/{id}/activate",
+            post(integrations::video_source::activate_video_source),
+        )
+        .route(
             "/presentations/{id}",
             get(presentations::get_presentation_detail)
                 .patch(presentations::update_presentation)
