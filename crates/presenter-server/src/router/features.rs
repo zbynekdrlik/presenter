@@ -1,16 +1,10 @@
 use axum::{extract::State, Json};
-use serde::{Deserialize, Serialize};
+use presenter_core::FeatureFlags;
+use serde::Deserialize;
 use tracing::instrument;
 
 use super::AppError;
 use crate::state::AppState;
-
-#[derive(Debug, Serialize)]
-#[serde(rename_all = "camelCase")]
-pub(super) struct FeatureSettingsResponse {
-    pub(super) companion_enabled: bool,
-    pub(super) companion_port: u16,
-}
 
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -24,8 +18,8 @@ pub(super) struct FeatureSettingsRequest {
 #[instrument(skip_all)]
 pub(super) async fn get_feature_settings(
     State(state): State<AppState>,
-) -> Result<Json<FeatureSettingsResponse>, AppError> {
-    Ok(Json(FeatureSettingsResponse {
+) -> Result<Json<FeatureFlags>, AppError> {
+    Ok(Json(FeatureFlags {
         companion_enabled: state.companion_enabled(),
         companion_port: state.companion_port(),
     }))
@@ -35,7 +29,7 @@ pub(super) async fn get_feature_settings(
 pub(super) async fn update_feature_settings(
     State(state): State<AppState>,
     Json(payload): Json<FeatureSettingsRequest>,
-) -> Result<Json<FeatureSettingsResponse>, AppError> {
+) -> Result<Json<FeatureFlags>, AppError> {
     let requested_port = payload
         .companion_port
         .unwrap_or_else(|| state.companion_port());
@@ -48,7 +42,7 @@ pub(super) async fn update_feature_settings(
     state
         .set_companion_settings(payload.companion_enabled, requested_port)
         .await?;
-    Ok(Json(FeatureSettingsResponse {
+    Ok(Json(FeatureFlags {
         companion_enabled: state.companion_enabled(),
         companion_port: state.companion_port(),
     }))

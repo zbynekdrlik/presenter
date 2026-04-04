@@ -52,7 +52,6 @@ use presenter_core::{
     TimersOverview, DEFAULT_STAGE_LAYOUT_CODE,
 };
 use presenter_persistence::{DatabaseSettings, Repository};
-use serde::Serialize;
 use std::{
     collections::HashMap,
     env,
@@ -103,12 +102,7 @@ pub struct AppState {
     bible_ingestion_override: Option<std::sync::Arc<dyn TestBibleIngestion + Send + Sync>>,
 }
 
-#[derive(Debug, Clone, Serialize)]
-#[serde(rename_all = "camelCase")]
-pub struct FeatureFlags {
-    pub companion_enabled: bool,
-    pub companion_port: u16,
-}
+pub use presenter_core::FeatureFlags;
 
 impl AppState {
     #[cfg_attr(not(test), allow(dead_code))]
