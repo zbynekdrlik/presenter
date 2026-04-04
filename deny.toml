@@ -56,6 +56,11 @@ license-files = [
     { path = "LICENSE", hash = 0xbd0eed23 },
 ]
 
+exceptions = [
+    # webpki 0.21.4 (transitive dep of webrtc-rs) — ISC licensed but not detected by cargo-deny
+    { allow = ["ISC"], name = "webpki", version = "0.21.4" },
+]
+
 [licenses.private]
 ignore = true
 
