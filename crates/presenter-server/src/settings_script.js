@@ -1152,6 +1152,61 @@
     }
   });
 
+  // ── Video Sources ──────────────────────────────────────────────
+  window.scanNdiSources = async function() {
+    try {
+      const resp = await fetch('/ndi/sources');
+      if (!resp.ok) { showToast('NDI scan failed: ' + resp.status, true); return; }
+      const sources = await resp.json();
+      const datalist = document.getElementById('ndi-sources');
+      if (datalist) {
+        datalist.innerHTML = sources.map(s => '<option value="' + s.name + '">').join('');
+      }
+      showToast('Found ' + sources.length + ' NDI source(s)');
+    } catch (e) { showToast('Scan failed: ' + e.message, true); }
+  };
+
+  window.addVideoSource = async function() {
+    const label = document.querySelector('[data-role="video-source-label"]')?.value?.trim();
+    const ndiName = document.querySelector('[data-role="video-source-ndi-name"]')?.value?.trim();
+    if (!label || !ndiName) { showToast('Label and NDI name required', true); return; }
+    try {
+      const resp = await fetch('/integrations/video-sources', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ label, ndiName }),
+      });
+      if (!resp.ok) { showToast('Failed to add source', true); return; }
+      showToast('Source added');
+      window.location.reload();
+    } catch (e) { showToast('Error: ' + e.message, true); }
+  };
+
+  window.activateVideoSource = async function(id) {
+    try {
+      await fetch('/integrations/video-sources/' + id + '/activate', { method: 'POST' });
+      showToast('Source activated');
+      window.location.reload();
+    } catch (e) { showToast('Error: ' + e.message, true); }
+  };
+
+  window.deactivateVideoSource = async function() {
+    try {
+      await fetch('/integrations/video-sources/deactivate', { method: 'POST' });
+      showToast('Sources deactivated');
+      window.location.reload();
+    } catch (e) { showToast('Error: ' + e.message, true); }
+  };
+
+  window.deleteVideoSource = async function(id) {
+    if (!confirm('Delete this video source?')) return;
+    try {
+      await fetch('/integrations/video-sources/' + id, { method: 'DELETE' });
+      showToast('Source deleted');
+      window.location.reload();
+    } catch (e) { showToast('Error: ' + e.message, true); }
+  };
+
   renderHosts();
   renderAndroidDisplays();
   renderOscStatus();
