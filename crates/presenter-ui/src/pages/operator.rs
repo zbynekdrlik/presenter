@@ -289,32 +289,67 @@ fn setup_ws_dispatch(last_event: ReadSignal<Option<LiveEvent>>, ctx: &AppContext
     let slides_cache = ctx.slides_cache;
     let active_bible_broadcast = ctx.active_bible_broadcast;
     let bible_presentations_version = ctx.bible_presentations_version;
+    let ableset_status = ctx.ableset_status;
+    let selected_library_id = ctx.selected_library_id;
+    let selected_playlist_id = ctx.selected_playlist_id;
+    let selected_playlist = ctx.selected_playlist;
+    let presentations = ctx.presentations;
 
     Effect::new(move || {
         if let Some(event) = last_event.get() {
             match event {
                 LiveEvent::Stage { snapshot } => {
-                    // Auto-sync operator selection from stage (GAP 6)
-                    let new_pres_id = snapshot.presentation_id.map(|id| id.to_string());
-                    let current_pres_id = selected_presentation_id.get_untracked();
-                    if new_pres_id.is_some() && new_pres_id != current_pres_id {
-                        if let Some(ref pres_id) = new_pres_id {
-                            selected_presentation_id.set(Some(pres_id.clone()));
-                            crate::state::session::set("currentPresentationId", pres_id);
-                            let pid = pres_id.clone();
-                            leptos::task::spawn_local(async move {
-                                if let Ok(detail) =
-                                    crate::api::presentations::get_presentation(&pid).await
-                                {
-                                    slides_cache.update(|cache| {
-                                        cache.insert(
-                                            pid.clone(),
-                                            detail.presentation.slides.clone(),
+                    // Auto-sync operator selection from stage, gated by follow_enabled.
+                    // When follow is OFF, the stage preview still updates (snapshot is always set),
+                    // but the operator's selected presentation/slides don't auto-navigate.
+                    let follow_enabled = ableset_status
+                        .get_untracked()
+                        .map(|s| s.follow_enabled)
+                        .unwrap_or(true);
+
+                    if follow_enabled {
+                        let new_pres_id =
+                            snapshot.presentation_id.map(|id| id.to_string());
+                        let current_pres_id = selected_presentation_id.get_untracked();
+                        if new_pres_id.is_some() && new_pres_id != current_pres_id {
+                            if let Some(ref pres_id) = new_pres_id {
+                                selected_presentation_id.set(Some(pres_id.clone()));
+                                crate::state::session::set("currentPresentationId", pres_id);
+                                let pid = pres_id.clone();
+                                leptos::task::spawn_local(async move {
+                                    if let Ok(detail) =
+                                        crate::api::presentations::get_presentation(&pid)
+                                            .await
+                                    {
+                                        // Switch to the library containing this presentation
+                                        let lib_id = detail.library_id.to_string();
+                                        selected_library_id.set(Some(lib_id.clone()));
+                                        selected_playlist_id.set(None);
+                                        selected_playlist.set(None);
+                                        crate::state::session::set(
+                                            "activeLibraryId",
+                                            &lib_id,
                                         );
-                                    });
-                                    selected_presentation.set(Some(detail.presentation));
-                                }
-                            });
+                                        // Load the library's presentations list
+                                        if let Ok(pres_list) =
+                                            crate::api::libraries::list_presentations(
+                                                &lib_id,
+                                            )
+                                            .await
+                                        {
+                                            presentations.set(pres_list);
+                                        }
+                                        slides_cache.update(|cache| {
+                                            cache.insert(
+                                                pid.clone(),
+                                                detail.presentation.slides.clone(),
+                                            );
+                                        });
+                                        selected_presentation
+                                            .set(Some(detail.presentation));
+                                    }
+                                });
+                            }
                         }
                     }
                     stage_snapshot.set(Some(snapshot));
