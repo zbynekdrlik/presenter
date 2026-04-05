@@ -132,3 +132,65 @@ test("NDI discovery returns stable source count (persistent finder)", async ({
   const unique = [...new Set(counts)];
   expect(unique).toHaveLength(1);
 });
+
+test("activation state persists and is restored after restart", async ({
+  request,
+}) => {
+  // Create and activate a source
+  const created = await request.post(
+    new URL("/integrations/video-sources", baseURL).toString(),
+    { data: { label: "Persist Test", ndiName: "PERSIST-SRC (test)" } },
+  );
+  expect(created.status()).toBe(200);
+  const source = await created.json();
+
+  const activated = await request.post(
+    new URL(
+      `/integrations/video-sources/${source.id}/activate`,
+      baseURL,
+    ).toString(),
+  );
+  expect(activated.status()).toBe(200);
+
+  // Restart the server
+  await stopServer(server);
+  server = await startTestServer(port, dbUrl);
+
+  // Wait for server to be ready
+  let ready = false;
+  for (let i = 0; i < 30; i++) {
+    try {
+      const resp = await request.get(
+        new URL("/healthz", baseURL).toString(),
+      );
+      if (resp.status() === 200) {
+        ready = true;
+        break;
+      }
+    } catch {
+      // Not ready yet
+    }
+    await new Promise((r) => setTimeout(r, 1000));
+  }
+  expect(ready).toBe(true);
+
+  // Verify the source is still active after restart
+  const listResp = await request.get(
+    new URL("/integrations/video-sources", baseURL).toString(),
+  );
+  const sources = await listResp.json();
+  const restored = sources.find((s: any) => s.id === source.id);
+  expect(restored).toBeDefined();
+  expect(restored.isActive).toBe(true);
+
+  // Cleanup
+  await request.post(
+    new URL("/integrations/video-sources/deactivate", baseURL).toString(),
+  );
+  await request.delete(
+    new URL(
+      `/integrations/video-sources/${source.id}`,
+      baseURL,
+    ).toString(),
+  );
+});
