@@ -142,7 +142,7 @@ fn run_capture_thread(
     source_name: String,
     frame_slot: FrameSlot,
     condvar: Arc<std::sync::Condvar>,
-    stop_rx: tokio::sync::watch::Receiver<bool>,
+    mut stop_rx: tokio::sync::watch::Receiver<bool>,
     status_cb: Option<StatusCallback>,
 ) {
     let receiver = match NdiReceiver::connect(&sdk, &source_name, 10) {
