@@ -28,7 +28,7 @@ test.afterAll(async () => {
   await stopServer(serverHandle);
 });
 
-test("follow mode scrolls active slide into view", async ({ page }) => {
+test("follow mode scrolls active slide into view", async ({ page, request }) => {
   const consoleMessages: string[] = [];
   page.on("console", (msg) => {
     if (msg.type() === "error" || msg.type() === "warning") {
@@ -37,19 +37,20 @@ test("follow mode scrolls active slide into view", async ({ page }) => {
   });
 
   // Find a presentation with enough slides to require scrolling
-  const libsResp = await page.request.get(`${baseURL}/api/libraries`);
+  const libsResp = await request.get(`${baseURL}/api/libraries`);
+  expect(libsResp.status()).toBe(200);
   const libraries = await libsResp.json();
   expect(libraries.length).toBeGreaterThan(0);
 
   let targetPresId: string | null = null;
   let targetSlides: any[] = [];
   for (const lib of libraries) {
-    const presResp = await page.request.get(
+    const presResp = await request.get(
       `${baseURL}/api/libraries/${lib.id}/presentations`,
     );
     const presentations = await presResp.json();
     for (const pres of presentations) {
-      const detailResp = await page.request.get(
+      const detailResp = await request.get(
         `${baseURL}/api/presentations/${pres.id}`,
       );
       const detail = await detailResp.json();
@@ -65,7 +66,7 @@ test("follow mode scrolls active slide into view", async ({ page }) => {
   test.skip(!targetPresId, "No presentation with 8+ slides found");
 
   // Enable follow mode
-  await page.request.post(`${baseURL}/integrations/ableset/follow`, {
+  await request.post(`${baseURL}/integrations/ableset/follow`, {
     data: { enabled: true },
   });
 
@@ -77,7 +78,7 @@ test("follow mode scrolls active slide into view", async ({ page }) => {
 
   // Trigger the LAST slide in the presentation (should be off-screen)
   const lastSlide = targetSlides[targetSlides.length - 1];
-  await page.request.post(`${baseURL}/stage/state`, {
+  await request.post(`${baseURL}/stage/state`, {
     data: {
       presentationId: targetPresId,
       currentSlideId: lastSlide.id,
