@@ -319,7 +319,7 @@ test.describe("Operator Control Buttons", () => {
     expect(otherPresId).toBeTruthy();
 
     // Trigger a different presentation on the stage
-    await page.request.put(`${baseURL}/stage/state`, {
+    await page.request.post(`${baseURL}/stage/state`, {
       data: {
         presentationId: otherPresId,
         currentSlideId: otherSlideId,
