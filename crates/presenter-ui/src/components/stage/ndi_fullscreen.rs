@@ -68,8 +68,9 @@ pub fn NdiFullscreen(
 /// Connect to the MJPEG WebSocket stream and render frames to a `<canvas>`.
 ///
 /// Uses `createImageBitmap()` for off-main-thread JPEG decoding, then
-/// draws to canvas with `drawImage()`. This avoids the Blob URL overhead
-/// of the previous `<img>`-based approach.
+/// draws to canvas with `drawImage()`. Implements frame dropping: if the
+/// previous frame is still being decoded, new frames are skipped to prevent
+/// async task pileup on weak devices (Android WebView, Smart TVs).
 fn connect_mjpeg_ws(canvas_ref: NodeRef<leptos::html::Canvas>) {
     let window = match web_sys::window() {
         Some(w) => w,
@@ -90,9 +91,19 @@ fn connect_mjpeg_ws(canvas_ref: NodeRef<leptos::html::Canvas>) {
     };
     ws.set_binary_type(web_sys::BinaryType::Arraybuffer);
 
+    // Rendering gate: skip frames if previous decode is still in flight.
+    // This prevents async task pileup on slow devices.
+    let rendering = std::rc::Rc::new(std::cell::Cell::new(false));
+
     let canvas_ref_msg = canvas_ref.clone();
+    let rendering_msg = rendering.clone();
     let onmessage =
         Closure::<dyn FnMut(web_sys::MessageEvent)>::new(move |ev: web_sys::MessageEvent| {
+            // Frame dropping: skip if previous frame hasn't finished rendering
+            if rendering_msg.get() {
+                return;
+            }
+
             let data = ev.data();
             if let Ok(buf) = data.dyn_into::<js_sys::ArrayBuffer>() {
                 let array = js_sys::Uint8Array::new(&buf);
@@ -107,9 +118,13 @@ fn connect_mjpeg_ws(canvas_ref: NodeRef<leptos::html::Canvas>) {
                     &options,
                 ) {
                     let canvas_ref = canvas_ref_msg.clone();
-                    // createImageBitmap decodes JPEG off the main thread
+                    let rendering_flag = rendering_msg.clone();
+
                     if let Some(window) = web_sys::window() {
                         if let Ok(promise) = window.create_image_bitmap_with_blob(&blob) {
+                            // Mark as rendering — subsequent frames will be dropped
+                            rendering_flag.set(true);
+
                             let future = wasm_bindgen_futures::JsFuture::from(promise);
                             wasm_bindgen_futures::spawn_local(async move {
                                 if let Ok(bitmap_js) = future.await {
@@ -121,7 +136,6 @@ fn connect_mjpeg_ws(canvas_ref: NodeRef<leptos::html::Canvas>) {
                                         let bw = bitmap.width();
                                         let bh = bitmap.height();
 
-                                        // Match canvas internal resolution to source
                                         if html_canvas.width() != bw
                                             || html_canvas.height() != bh
                                         {
@@ -138,6 +152,8 @@ fn connect_mjpeg_ws(canvas_ref: NodeRef<leptos::html::Canvas>) {
                                         bitmap.close();
                                     }
                                 }
+                                // Done rendering — allow next frame
+                                rendering_flag.set(false);
                             });
                         }
                     }
