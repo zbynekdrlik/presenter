@@ -279,11 +279,16 @@ mod tests {
     use super::*;
 
     #[test]
-    fn sdk_load_returns_result() {
-        // NDI SDK may not be installed on CI — verify load() returns a
-        // Result (Ok or Err) without panicking.
+    fn sdk_load_returns_graceful_error_without_library() {
+        // NDI SDK may not be installed on CI. Verify load() returns
+        // a graceful error (not a panic) when the shared library is absent.
         let result = NdiLib::load();
-        // Result must be either Ok or Err — both are valid outcomes
-        assert!(result.is_ok() || result.is_err());
+        if let Err(ref e) = result {
+            // On CI without NDI SDK: must produce a meaningful error message
+            let msg = format!("{e:?}");
+            assert!(!msg.is_empty(), "Error should have a non-empty description");
+        }
+        // If Ok: SDK loaded — test passes implicitly (didn't panic,
+        // and we can't meaningfully inspect opaque function pointers).
     }
 }
