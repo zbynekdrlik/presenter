@@ -6,4 +6,6 @@ mod manager;
 pub mod ndi_sdk;
 pub mod receiver;
 
+pub use discovery::SourceList;
 pub use manager::NdiManager;
+pub use manager::StatusCallback;

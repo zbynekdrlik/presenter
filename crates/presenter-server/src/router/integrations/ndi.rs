@@ -25,7 +25,7 @@ pub(crate) async fn discover_ndi_sources(
     let manager = state
         .ndi_manager()
         .ok_or_else(|| AppError::service_unavailable("NDI SDK not available"))?;
-    let sources = manager.discover_sources(3000)?;
+    let sources = manager.discover_sources(0)?;
     let payload = sources
         .into_iter()
         .map(|s| NdiSourceDto { name: s.name })
