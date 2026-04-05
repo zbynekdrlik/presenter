@@ -54,7 +54,7 @@ pub fn StatusBar(
         };
         let latency = latency_ms
             .get()
-            .map(|ms| format!(" \u{00b7} {:03} MS", ms as u32))
+            .map(|ms| format!(" \u{00b7} {:>3} MS", ms as u32))
             .unwrap_or_default();
         format!("{label}{latency}")
     };
