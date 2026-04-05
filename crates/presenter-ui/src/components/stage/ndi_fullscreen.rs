@@ -13,17 +13,17 @@ pub fn NdiFullscreen(
     let ctx = use_context::<StageContext>().expect("StageContext not provided");
     let ndi_active = ctx.ndi_active;
     let ndi_status = ctx.ndi_status;
-    let img_ref = NodeRef::<leptos::html::Img>::new();
+    let canvas_ref = NodeRef::<leptos::html::Canvas>::new();
 
     // When ndi_active becomes true, connect to MJPEG WebSocket stream
     {
-        let img_ref = img_ref.clone();
+        let canvas_ref = canvas_ref.clone();
         Effect::new(move |_| {
             let active = ndi_active.get();
             if active {
-                let img_ref = img_ref.clone();
+                let canvas_ref = canvas_ref.clone();
                 leptos::task::spawn_local(async move {
-                    connect_mjpeg_ws(img_ref);
+                    connect_mjpeg_ws(canvas_ref);
                 });
             }
         });
@@ -31,8 +31,8 @@ pub fn NdiFullscreen(
 
     view! {
         <div class="stage-ndi">
-            <img
-                node_ref=img_ref
+            <canvas
+                node_ref=canvas_ref
                 class="stage-ndi__video"
             />
 
@@ -65,8 +65,12 @@ pub fn NdiFullscreen(
     }
 }
 
-/// Connect to the MJPEG WebSocket stream and render frames to an <img> element.
-fn connect_mjpeg_ws(img_ref: NodeRef<leptos::html::Img>) {
+/// Connect to the MJPEG WebSocket stream and render frames to a `<canvas>`.
+///
+/// Uses `createImageBitmap()` for off-main-thread JPEG decoding, then
+/// draws to canvas with `drawImage()`. This avoids the Blob URL overhead
+/// of the previous `<img>`-based approach.
+fn connect_mjpeg_ws(canvas_ref: NodeRef<leptos::html::Canvas>) {
     let window = match web_sys::window() {
         Some(w) => w,
         None => return,
@@ -86,15 +90,10 @@ fn connect_mjpeg_ws(img_ref: NodeRef<leptos::html::Img>) {
     };
     ws.set_binary_type(web_sys::BinaryType::Arraybuffer);
 
-    // Track previous blob URL for cleanup
-    let prev_url = std::rc::Rc::new(std::cell::RefCell::new(String::new()));
-
-    let img_ref_clone = img_ref.clone();
-    let prev_url_clone = prev_url.clone();
+    let canvas_ref_msg = canvas_ref.clone();
     let onmessage =
         Closure::<dyn FnMut(web_sys::MessageEvent)>::new(move |ev: web_sys::MessageEvent| {
             let data = ev.data();
-            // Binary message = JPEG frame
             if let Ok(buf) = data.dyn_into::<js_sys::ArrayBuffer>() {
                 let array = js_sys::Uint8Array::new(&buf);
                 let blob_parts = js_sys::Array::new();
@@ -107,17 +106,40 @@ fn connect_mjpeg_ws(img_ref: NodeRef<leptos::html::Img>) {
                     &blob_parts,
                     &options,
                 ) {
-                    if let Ok(url) = web_sys::Url::create_object_url_with_blob(&blob) {
-                        if let Some(img_el) = img_ref_clone.get() {
-                            let html_img: &web_sys::HtmlImageElement = img_el.as_ref();
-                            html_img.set_src(&url);
+                    let canvas_ref = canvas_ref_msg.clone();
+                    // createImageBitmap decodes JPEG off the main thread
+                    if let Some(window) = web_sys::window() {
+                        if let Ok(promise) = window.create_image_bitmap_with_blob(&blob) {
+                            let future = wasm_bindgen_futures::JsFuture::from(promise);
+                            wasm_bindgen_futures::spawn_local(async move {
+                                if let Ok(bitmap_js) = future.await {
+                                    let bitmap: web_sys::ImageBitmap =
+                                        bitmap_js.unchecked_into();
+                                    if let Some(canvas_el) = canvas_ref.get() {
+                                        let html_canvas: &web_sys::HtmlCanvasElement =
+                                            canvas_el.as_ref();
+                                        let bw = bitmap.width();
+                                        let bh = bitmap.height();
+
+                                        // Match canvas internal resolution to source
+                                        if html_canvas.width() != bw
+                                            || html_canvas.height() != bh
+                                        {
+                                            html_canvas.set_width(bw);
+                                            html_canvas.set_height(bh);
+                                        }
+
+                                        if let Ok(Some(ctx)) = html_canvas.get_context("2d") {
+                                            let ctx: web_sys::CanvasRenderingContext2d =
+                                                ctx.unchecked_into();
+                                            let _ = ctx
+                                                .draw_image_with_image_bitmap(&bitmap, 0.0, 0.0);
+                                        }
+                                        bitmap.close();
+                                    }
+                                }
+                            });
                         }
-                        // Revoke previous blob URL to prevent memory leak
-                        let mut prev = prev_url_clone.borrow_mut();
-                        if !prev.is_empty() {
-                            let _ = web_sys::Url::revoke_object_url(&prev);
-                        }
-                        *prev = url;
                     }
                 }
             }
@@ -137,12 +159,12 @@ fn connect_mjpeg_ws(img_ref: NodeRef<leptos::html::Img>) {
     ws.set_onerror(Some(onerror.as_ref().unchecked_ref()));
     onerror.forget();
 
-    let img_ref_reconnect = img_ref.clone();
+    let canvas_ref_reconnect = canvas_ref.clone();
     let onclose = Closure::<dyn FnMut()>::new(move || {
         web_sys::console::log_1(&"NDI: MJPEG WebSocket closed, reconnecting in 2s...".into());
-        let img_ref = img_ref_reconnect.clone();
+        let canvas_ref = canvas_ref_reconnect.clone();
         let _ = gloo_timers::callback::Timeout::new(2000, move || {
-            connect_mjpeg_ws(img_ref);
+            connect_mjpeg_ws(canvas_ref);
         });
     });
     ws.set_onclose(Some(onclose.as_ref().unchecked_ref()));

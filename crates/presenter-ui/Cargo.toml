@@ -63,6 +63,9 @@ web-sys = { version = "0.3", features = [
     "MessageEvent",
     "Url",
     "WebSocket",
+    "HtmlCanvasElement",
+    "CanvasRenderingContext2d",
+    "ImageBitmap",
 ] }
 js-sys = "0.3"
 console_error_panic_hook = "0.1"

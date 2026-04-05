@@ -41,8 +41,10 @@ unsafe impl Send for NdiReceiver {}
 impl NdiReceiver {
     /// Discover the named source and create a receiver connected to it.
     ///
-    /// `timeout_secs` controls how long to wait for the source to appear
-    /// on the network before giving up.
+    /// Uses a discovery loop: keeps the finder alive and retries
+    /// `find_wait_for_sources` every 5 seconds until the source appears
+    /// or `timeout_secs` expires. This is much more reliable than a
+    /// single wait, especially on networks with many NDI sources.
     pub fn connect(sdk: &Arc<NdiLib>, source_name: &str, timeout_secs: u32) -> Result<Self> {
         unsafe {
             let create_settings = NDIlib_find_create_t {
@@ -56,29 +58,48 @@ impl NdiReceiver {
                 anyhow::bail!("NDIlib_find_create_v2 returned null");
             }
 
-            let timeout_ms = timeout_secs.saturating_mul(1000);
-            let _found = (sdk.find_wait_for_sources)(finder, timeout_ms);
-
-            let mut num_sources: u32 = 0;
-            let sources_ptr = (sdk.find_get_current_sources)(finder, &mut num_sources);
-
+            let deadline =
+                std::time::Instant::now() + std::time::Duration::from_secs(timeout_secs as u64);
             let mut matched_source: Option<NDIlib_source_t> = None;
+            let mut last_num_sources: u32 = 0;
 
-            if !sources_ptr.is_null() && num_sources > 0 {
-                let sources = std::slice::from_raw_parts(sources_ptr, num_sources as usize);
-                for src in sources {
-                    if let Ok(name) = crate::ndi_sdk::cstr_to_string(src.p_ndi_name) {
-                        debug!("found NDI source: {name}");
-                        if name.contains(source_name) {
-                            matched_source = Some(*src);
-                            break;
+            // Loop: keep the finder alive and retry until source is found
+            while std::time::Instant::now() < deadline {
+                let remaining_ms = deadline
+                    .saturating_duration_since(std::time::Instant::now())
+                    .as_millis()
+                    .min(5000) as u32;
+
+                let _changed = (sdk.find_wait_for_sources)(finder, remaining_ms);
+
+                let mut num_sources: u32 = 0;
+                let sources_ptr = (sdk.find_get_current_sources)(finder, &mut num_sources);
+                last_num_sources = num_sources;
+
+                if !sources_ptr.is_null() && num_sources > 0 {
+                    let sources = std::slice::from_raw_parts(sources_ptr, num_sources as usize);
+                    for src in sources {
+                        if let Ok(name) = crate::ndi_sdk::cstr_to_string(src.p_ndi_name) {
+                            debug!("found NDI source: {name}");
+                            if name.contains(source_name) {
+                                matched_source = Some(*src);
+                                break;
+                            }
                         }
                     }
                 }
+
+                if matched_source.is_some() {
+                    break;
+                }
+
+                debug!(
+                    "NDI source '{source_name}' not yet found ({num_sources} sources visible), retrying..."
+                );
             }
 
             let source = matched_source.context(format!(
-                "NDI source '{source_name}' not found ({num_sources} sources visible)"
+                "NDI source '{source_name}' not found ({last_num_sources} sources visible after {timeout_secs}s)"
             ))?;
 
             // Create the receiver BEFORE destroying the finder, because
