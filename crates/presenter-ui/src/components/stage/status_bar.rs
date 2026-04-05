@@ -14,9 +14,6 @@ pub fn StatusBar(
     /// Hide the live/broadcast pill (used by NDI fullscreen layout)
     #[prop(default = false)]
     hide_live: bool,
-    /// NDI FPS counter (0 = not shown)
-    #[prop(default = 0u32.into())]
-    ndi_fps: Signal<u32>,
 ) -> impl IntoView {
     let ctx = use_context::<StageContext>().expect("StageContext not provided");
 
@@ -59,13 +56,7 @@ pub fn StatusBar(
             .get()
             .map(|ms| format!(" \u{00b7} {:03} MS", ms as u32))
             .unwrap_or_default();
-        let fps = ndi_fps.get();
-        let fps_text = if fps > 0 {
-            format!(" \u{00b7} {} FPS", fps)
-        } else {
-            String::new()
-        };
-        format!("{label}{latency}{fps_text}")
+        format!("{label}{latency}")
     };
 
     let connection_class = move || {
