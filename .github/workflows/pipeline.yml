@@ -287,6 +287,42 @@ jobs:
         run: cargo test --doc --workspace
 
   # ============================================
+  # Mutation Testing
+  # ============================================
+  mutation:
+    name: Mutation Testing
+    runs-on: ubuntu-latest
+    needs: test
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install system dependencies
+        run: sudo apt-get update -qq && sudo apt-get install -y -qq protobuf-compiler cmake nasm
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Setup Rust cache
+        uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: ci
+          cache-on-failure: false
+
+      - name: Cache cargo-mutants binary
+        uses: actions/cache@v4
+        with:
+          path: ~/.cargo/bin/cargo-mutants
+          key: cargo-mutants-${{ runner.os }}-v1
+          restore-keys: cargo-mutants-${{ runner.os }}-
+
+      - name: Install cargo-mutants
+        run: command -v cargo-mutants >/dev/null 2>&1 || cargo install cargo-mutants --locked
+
+      - name: Run mutation testing
+        run: cargo mutants --workspace --timeout 120 --no-shuffle
+
+  # ============================================
   # Quality Checks
   # ============================================
   quality:
@@ -367,6 +403,7 @@ jobs:
     needs:
       - test
       - quality
+      - mutation
     steps:
       - uses: actions/checkout@v4
 
