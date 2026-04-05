@@ -305,6 +305,28 @@ impl AppState {
         state.sync_resolume_hosts().await?;
         state.sync_android_stage_displays().await?;
 
+        // Restore active NDI video source from database
+        if state.ndi_manager().is_some() {
+            match state.repository.get_active_video_source().await {
+                Ok(Some(source)) => {
+                    let ndi_name = source.ndi_name.clone();
+                    if let Err(err) = state.activate_video_source(source.id).await {
+                        tracing::warn!(
+                            ?err,
+                            ndi_name = %ndi_name,
+                            "NDI source restore deferred — will connect when source appears"
+                        );
+                    } else {
+                        tracing::info!(ndi_name = %ndi_name, "NDI source restored on startup");
+                    }
+                }
+                Ok(None) => {}
+                Err(err) => {
+                    tracing::warn!(?err, "failed to query active video source on startup");
+                }
+            }
+        }
+
         Self::apply_osc_settings(&state, &osc_bridge).await?;
         Self::apply_ableset_settings(&state, &ableset_bridge).await?;
 
