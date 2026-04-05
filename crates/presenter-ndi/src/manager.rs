@@ -118,6 +118,11 @@ impl NdiManager {
         Ok(())
     }
 
+    /// Check if a capture stream is currently active.
+    pub async fn is_streaming(&self) -> bool {
+        self.active_stream.lock().await.is_some()
+    }
+
     /// Stop the active NDI capture stream, if any.
     pub async fn stop_stream(&self) {
         let mut active = self.active_stream.lock().await;

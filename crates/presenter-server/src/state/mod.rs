@@ -239,6 +239,46 @@ impl AppState {
                 }
             }
         });
+
+        // NDI auto-reconnect: if a source is marked active in DB but no stream
+        // is running, retry activation every 30 seconds. Handles the case where
+        // the NDI source comes online after server startup.
+        if self.ndi_manager().is_some() {
+            let ndi_state = self.clone();
+            tokio::spawn(async move {
+                let mut ticker = interval(TokioDuration::from_secs(30));
+                ticker.set_missed_tick_behavior(MissedTickBehavior::Delay);
+                loop {
+                    ticker.tick().await;
+                    if let Some(manager) = ndi_state.ndi_manager() {
+                        if manager.is_streaming().await {
+                            continue;
+                        }
+                        match ndi_state.repository.get_active_video_source().await {
+                            Ok(Some(source)) => {
+                                let ndi_name = source.ndi_name.clone();
+                                if let Err(err) = ndi_state.activate_video_source(source.id).await {
+                                    tracing::debug!(
+                                        ?err,
+                                        ndi_name = %ndi_name,
+                                        "NDI auto-reconnect: source not yet available"
+                                    );
+                                } else {
+                                    tracing::info!(
+                                        ndi_name = %ndi_name,
+                                        "NDI auto-reconnect: source restored"
+                                    );
+                                }
+                            }
+                            Ok(None) => {}
+                            Err(err) => {
+                                tracing::debug!(?err, "NDI auto-reconnect: DB query failed");
+                            }
+                        }
+                    }
+                }
+            });
+        }
     }
 
     #[instrument(skip_all)]

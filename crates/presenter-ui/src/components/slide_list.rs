@@ -206,14 +206,19 @@ pub fn SlideList() -> impl IntoView {
     let ctx = use_ctx!(AppContext);
     let op = use_ctx!(OperatorState);
 
-    // Scroll active slide into view when stage snapshot changes
+    // Scroll active slide into view when follow mode is ON and stage changes
     {
         let stage_snapshot = ctx.stage_snapshot;
+        let ableset_status = ctx.ableset_status;
         Effect::new(move |prev_id: Option<Option<String>>| {
             let current_id = stage_snapshot
                 .get()
                 .and_then(|s| s.current_slide_id.map(|id| id.to_string()));
-            if current_id != prev_id.flatten() {
+            let follow_on = ableset_status
+                .get_untracked()
+                .map(|s| s.follow_enabled)
+                .unwrap_or(true);
+            if follow_on && current_id != prev_id.flatten() {
                 if let Some(ref slide_id) = current_id {
                     let slide_id = slide_id.clone();
                     let _ = gloo_timers::callback::Timeout::new(0, move || {
