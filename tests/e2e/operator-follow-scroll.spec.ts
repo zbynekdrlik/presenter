@@ -15,6 +15,8 @@ test.describe.configure({ timeout: 180_000 });
 let serverHandle: ServerHandle | undefined;
 let baseURL: string;
 let dbUrl: string;
+let testPresId: string;
+let testSlideIds: string[] = [];
 
 test.beforeAll(async ({}, testInfo) => {
   const config = deriveTestConfig(testInfo);
@@ -22,6 +24,35 @@ test.beforeAll(async ({}, testInfo) => {
   dbUrl = config.dbUrl;
   await refreshDevData(dbUrl);
   serverHandle = await startTestServer(config.port, dbUrl, config.oscPort);
+
+  // Create a test library and presentation with 10 slides
+  const libResp = await fetch(
+    new URL("/libraries", baseURL).toString(),
+    {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ name: "_E2E Follow Scroll" }),
+    },
+  );
+  const lib = await libResp.json();
+
+  const slides = Array.from({ length: 10 }, (_, i) => ({
+    main: `Slide ${i + 1}\nLine two of slide ${i + 1}\nLine three`,
+  }));
+
+  const presResp = await fetch(
+    new URL(`/libraries/${lib.id}/presentations`, baseURL).toString(),
+    {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ name: "Scroll Test Song", slides }),
+    },
+  );
+  const presData = await presResp.json();
+  testPresId = presData.presentation.id;
+  testSlideIds = presData.presentation.slides.map(
+    (s: { id: string }) => s.id,
+  );
 });
 
 test.afterAll(async () => {
@@ -36,37 +67,6 @@ test("follow mode scrolls active slide into view", async ({ page }) => {
     }
   });
 
-  // Find a presentation with enough slides to require scrolling
-  const libsResp = await page.request.get(
-    new URL("/libraries", baseURL).toString(),
-  );
-  expect(libsResp.status()).toBe(200);
-  const libraries = await libsResp.json();
-  expect(libraries.length).toBeGreaterThan(0);
-
-  let targetPresId: string | null = null;
-  let targetSlides: any[] = [];
-  for (const lib of libraries) {
-    const presResp = await page.request.get(
-      new URL(`/libraries/${lib.id}/presentations`, baseURL).toString(),
-    );
-    const presentations = await presResp.json();
-    for (const pres of presentations) {
-      const detailResp = await page.request.get(
-        new URL(`/presentations/${pres.id}`, baseURL).toString(),
-      );
-      const detail = await detailResp.json();
-      if (detail.presentation.slides.length >= 8) {
-        targetPresId = pres.id;
-        targetSlides = detail.presentation.slides;
-        break;
-      }
-    }
-    if (targetPresId) break;
-  }
-
-  test.skip(!targetPresId, "No presentation with 8+ slides found");
-
   // Enable follow mode
   await page.request.post(
     new URL("/integrations/ableset/follow", baseURL).toString(),
@@ -79,30 +79,30 @@ test("follow mode scrolls active slide into view", async ({ page }) => {
     timeout: 30_000,
   });
 
-  // Trigger the LAST slide in the presentation (should be off-screen)
-  const lastSlide = targetSlides[targetSlides.length - 1];
+  // Trigger the LAST slide (index 9) — should be off-screen
+  const lastSlideId = testSlideIds[testSlideIds.length - 1];
   await page.request.post(
     new URL("/stage/state", baseURL).toString(),
     {
       data: {
-        presentationId: targetPresId,
-        currentSlideId: lastSlide.id,
+        presentationId: testPresId,
+        currentSlideId: lastSlideId,
         nextSlideId: null,
       },
     },
   );
 
-  // Wait for the slide list to load and scroll effect to fire
-  await page.waitForTimeout(2000);
+  // Wait for follow to auto-navigate and scroll effect to fire
+  await page.waitForTimeout(3000);
 
   // Verify the active slide card is visible and has is-active class
   const activeCard = page.locator(
-    `.operator__slides [data-slide-id="${lastSlide.id}"]`,
+    `.operator__slides [data-slide-id="${lastSlideId}"]`,
   );
   await expect(activeCard).toBeVisible({ timeout: 5000 });
   await expect(activeCard).toHaveClass(/is-active/);
 
-  // Verify the card is actually within the visible scroll area
+  // Verify the card is within the visible scroll area of its container
   const isInView = await activeCard.evaluate((el) => {
     const container = el.closest(".operator__slides");
     if (!container) return false;
