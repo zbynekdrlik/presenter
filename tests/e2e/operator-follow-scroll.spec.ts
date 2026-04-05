@@ -38,7 +38,7 @@ test("follow mode scrolls active slide into view", async ({ page }) => {
 
   // Find a presentation with enough slides to require scrolling
   const libsResp = await page.request.get(
-    new URL("/api/libraries", baseURL).toString(),
+    new URL("/libraries", baseURL).toString(),
   );
   expect(libsResp.status()).toBe(200);
   const libraries = await libsResp.json();
@@ -48,12 +48,12 @@ test("follow mode scrolls active slide into view", async ({ page }) => {
   let targetSlides: any[] = [];
   for (const lib of libraries) {
     const presResp = await page.request.get(
-      new URL(`/api/libraries/${lib.id}/presentations`, baseURL).toString(),
+      new URL(`/libraries/${lib.id}/presentations`, baseURL).toString(),
     );
     const presentations = await presResp.json();
     for (const pres of presentations) {
       const detailResp = await page.request.get(
-        new URL(`/api/presentations/${pres.id}`, baseURL).toString(),
+        new URL(`/presentations/${pres.id}`, baseURL).toString(),
       );
       const detail = await detailResp.json();
       if (detail.presentation.slides.length >= 8) {
