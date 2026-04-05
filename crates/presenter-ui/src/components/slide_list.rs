@@ -206,6 +206,25 @@ pub fn SlideList() -> impl IntoView {
     let ctx = use_ctx!(AppContext);
     let op = use_ctx!(OperatorState);
 
+    // Scroll active slide into view when stage snapshot changes
+    {
+        let stage_snapshot = ctx.stage_snapshot;
+        Effect::new(move |prev_id: Option<Option<String>>| {
+            let current_id = stage_snapshot
+                .get()
+                .and_then(|s| s.current_slide_id.map(|id| id.to_string()));
+            if current_id != prev_id.flatten() {
+                if let Some(ref slide_id) = current_id {
+                    let slide_id = slide_id.clone();
+                    let _ = gloo_timers::callback::Timeout::new(0, move || {
+                        scroll_slide_into_view(&slide_id);
+                    });
+                }
+            }
+            current_id
+        });
+    }
+
     let trigger_slide = move |pres_id: String, slide_id: String, next_slide_id: Option<String>| {
         let playlist_id = ctx.selected_playlist_id.get_untracked();
         // Set loading state for visual feedback
@@ -887,5 +906,18 @@ pub fn SlideList() -> impl IntoView {
                 }
             }
         </section>
+    }
+}
+
+fn scroll_slide_into_view(slide_id: &str) {
+    let Some(document) = web_sys::window().and_then(|w| w.document()) else {
+        return;
+    };
+    let selector = format!(".operator__slides [data-slide-id=\"{slide_id}\"]");
+    if let Ok(Some(el)) = document.query_selector(&selector) {
+        let mut opts = web_sys::ScrollIntoViewOptions::new();
+        opts.behavior(web_sys::ScrollBehavior::Smooth);
+        opts.block(web_sys::ScrollLogicalPosition::Nearest);
+        el.scroll_into_view_with_scroll_into_view_options(&opts);
     }
 }

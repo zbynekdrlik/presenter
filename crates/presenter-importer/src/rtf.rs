@@ -441,7 +441,10 @@ mod tests {
     fn fallback_rtf_ulnone_not_misinterpreted() {
         let raw = r"{\rtf1\ansi\ansicpg1250 \ulnone Hello}";
         let text = decode_rtf(raw.as_bytes()).expect("rtf to decode");
-        assert!(!text.contains("lnone"), "should not leak 'lnone', got: {text}");
+        assert!(
+            !text.contains("lnone"),
+            "should not leak 'lnone', got: {text}"
+        );
         assert!(text.contains("Hello"), "should contain Hello, got: {text}");
     }
 
