@@ -28,7 +28,7 @@ test.afterAll(async () => {
   await stopServer(serverHandle);
 });
 
-test("follow mode scrolls active slide into view", async ({ page, request }) => {
+test("follow mode scrolls active slide into view", async ({ page }) => {
   const consoleMessages: string[] = [];
   page.on("console", (msg) => {
     if (msg.type() === "error" || msg.type() === "warning") {
@@ -37,7 +37,9 @@ test("follow mode scrolls active slide into view", async ({ page, request }) => 
   });
 
   // Find a presentation with enough slides to require scrolling
-  const libsResp = await request.get(`${baseURL}/api/libraries`);
+  const libsResp = await page.request.get(
+    new URL("/api/libraries", baseURL).toString(),
+  );
   expect(libsResp.status()).toBe(200);
   const libraries = await libsResp.json();
   expect(libraries.length).toBeGreaterThan(0);
@@ -45,13 +47,13 @@ test("follow mode scrolls active slide into view", async ({ page, request }) => 
   let targetPresId: string | null = null;
   let targetSlides: any[] = [];
   for (const lib of libraries) {
-    const presResp = await request.get(
-      `${baseURL}/api/libraries/${lib.id}/presentations`,
+    const presResp = await page.request.get(
+      new URL(`/api/libraries/${lib.id}/presentations`, baseURL).toString(),
     );
     const presentations = await presResp.json();
     for (const pres of presentations) {
-      const detailResp = await request.get(
-        `${baseURL}/api/presentations/${pres.id}`,
+      const detailResp = await page.request.get(
+        new URL(`/api/presentations/${pres.id}`, baseURL).toString(),
       );
       const detail = await detailResp.json();
       if (detail.presentation.slides.length >= 8) {
@@ -66,25 +68,29 @@ test("follow mode scrolls active slide into view", async ({ page, request }) => 
   test.skip(!targetPresId, "No presentation with 8+ slides found");
 
   // Enable follow mode
-  await request.post(`${baseURL}/integrations/ableset/follow`, {
-    data: { enabled: true },
-  });
+  await page.request.post(
+    new URL("/integrations/ableset/follow", baseURL).toString(),
+    { data: { enabled: true } },
+  );
 
   // Navigate to operator
-  await page.goto(`${baseURL}/ui/operator`);
+  await page.goto(new URL("/ui/operator", baseURL).toString());
   await page.waitForSelector('body[data-wasm-ready="true"]', {
     timeout: 30_000,
   });
 
   // Trigger the LAST slide in the presentation (should be off-screen)
   const lastSlide = targetSlides[targetSlides.length - 1];
-  await request.post(`${baseURL}/stage/state`, {
-    data: {
-      presentationId: targetPresId,
-      currentSlideId: lastSlide.id,
-      nextSlideId: null,
+  await page.request.post(
+    new URL("/stage/state", baseURL).toString(),
+    {
+      data: {
+        presentationId: targetPresId,
+        currentSlideId: lastSlide.id,
+        nextSlideId: null,
+      },
     },
-  });
+  );
 
   // Wait for the slide list to load and scroll effect to fire
   await page.waitForTimeout(2000);
