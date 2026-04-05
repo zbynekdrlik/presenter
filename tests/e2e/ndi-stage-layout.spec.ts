@@ -69,13 +69,40 @@ test("stage page renders ndi-fullscreen layout", async ({ page }) => {
   expect(consoleMessages).toEqual([]);
 });
 
-test("uses canvas element for NDI rendering", async ({ page }) => {
+test("uses native MJPEG img for NDI rendering", async ({ page }) => {
   const consoleMessages: string[] = [];
   page.on("console", (msg) => {
     if (msg.type() === "error" || msg.type() === "warning") {
       consoleMessages.push(`[${msg.type()}] ${msg.text()}`);
     }
   });
+
+  // Need an active source for the img to appear (it's inside Show when=ndi_active)
+  const statusResp = await page.request.get(
+    new URL("/ndi/status", baseURL).toString(),
+  );
+  const { available } = await statusResp.json();
+  test.skip(!available, "NDI SDK not available");
+
+  // Wait for finder
+  await new Promise((r) => setTimeout(r, 6000));
+  const sourcesResp = await page.request.get(
+    new URL("/ndi/sources", baseURL).toString(),
+  );
+  const sources = await sourcesResp.json();
+  test.skip(sources.length === 0, "No NDI sources on network");
+
+  const createResp = await page.request.post(
+    new URL("/integrations/video-sources", baseURL).toString(),
+    { data: { label: "E2E MJPEG", ndiName: sources[0].name } },
+  );
+  const source = await createResp.json();
+  await page.request.post(
+    new URL(
+      `/integrations/video-sources/${source.id}/activate`,
+      baseURL,
+    ).toString(),
+  );
 
   await page.request.post(new URL("/stage/layout", baseURL).toString(), {
     data: { code: "ndi-fullscreen" },
@@ -89,17 +116,26 @@ test("uses canvas element for NDI rendering", async ({ page }) => {
     timeout: 10_000,
   });
 
-  // Verify canvas element exists (not img)
-  const canvas = page.locator("canvas.stage-ndi__video");
-  await expect(canvas).toBeAttached();
-
-  // Verify no img element for video
+  // Verify img element with /ndi/mjpeg src
   const img = page.locator("img.stage-ndi__video");
-  await expect(img).not.toBeAttached();
+  await expect(img).toBeAttached();
+  const src = await img.getAttribute("src");
+  expect(src).toBe("/ndi/mjpeg");
 
   expect(
     consoleMessages.filter((m) => !m.includes("favicon")),
   ).toEqual([]);
+
+  // Cleanup
+  await page.request.post(
+    new URL("/integrations/video-sources/deactivate", baseURL).toString(),
+  );
+  await page.request.delete(
+    new URL(
+      `/integrations/video-sources/${source.id}`,
+      baseURL,
+    ).toString(),
+  );
 });
 
 test("frame delivery is smooth (requires NDI source)", async ({
@@ -142,62 +178,36 @@ test("frame delivery is smooth (requires NDI source)", async ({
     timeout: 30_000,
   });
 
-  // Measure frame delivery in the browser via canvas pixel changes
-  const metrics = await page.evaluate(() => {
+  // Measure frame delivery via WebSocket (server-side quality)
+  const metrics = await page.evaluate((url: string) => {
     return new Promise<{
       frames: number;
       fps: string;
       maxIntervalMs: string;
       stutters: number;
     }>((resolve) => {
-      const canvas = document.querySelector(
-        "canvas.stage-ndi__video",
-      ) as HTMLCanvasElement | null;
-      if (!canvas)
-        return resolve({
-          frames: 0,
-          fps: "0",
-          maxIntervalMs: "0",
-          stutters: 0,
-        });
+      const wsUrl = url.replace("http", "ws") + "/ndi/stream";
+      const ws = new WebSocket(wsUrl);
+      ws.binaryType = "arraybuffer";
 
       let frameCount = 0;
       let firstTime: number | null = null;
       let lastTime: number | null = null;
       const intervals: number[] = [];
 
-      // Poll canvas pixel data changes to detect new frames
-      const checkInterval = 10;
-      let lastPixelHash = "";
-      const timer = setInterval(() => {
-        try {
-          const c = canvas.getContext("2d");
-          if (!c || canvas.width === 0) return;
-          const pixel = c.getImageData(
-            Math.floor(canvas.width / 2),
-            Math.floor(canvas.height / 2),
-            1,
-            1,
-          ).data;
-          const hash = `${pixel[0]},${pixel[1]},${pixel[2]}`;
-          if (hash !== lastPixelHash && hash !== "0,0,0") {
-            lastPixelHash = hash;
-            const now = performance.now();
-            frameCount++;
-            if (firstTime === null) {
-              firstTime = now;
-            } else {
-              intervals.push(now - lastTime!);
-            }
-            lastTime = now;
-          }
-        } catch {
-          /* ignore */
+      ws.onmessage = () => {
+        const now = performance.now();
+        frameCount++;
+        if (firstTime === null) {
+          firstTime = now;
+        } else {
+          intervals.push(now - lastTime!);
         }
-      }, checkInterval);
+        lastTime = now;
+      };
 
       setTimeout(() => {
-        clearInterval(timer);
+        ws.close();
         if (frameCount < 2) {
           return resolve({
             frames: frameCount,
@@ -220,7 +230,7 @@ test("frame delivery is smooth (requires NDI source)", async ({
         });
       }, 5000);
     });
-  });
+  }, baseURL);
 
   // Assertions
   expect(metrics.frames).toBeGreaterThan(50);
