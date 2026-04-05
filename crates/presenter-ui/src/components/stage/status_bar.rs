@@ -11,6 +11,12 @@ const STATUS_MAX_FONT: f64 = 200.0;
 pub fn StatusBar(
     ws_state: ReadSignal<StageWsState>,
     latency_ms: ReadSignal<Option<f64>>,
+    /// Hide the live/broadcast pill (used by NDI fullscreen layout)
+    #[prop(default = false)]
+    hide_live: bool,
+    /// NDI FPS counter (0 = not shown)
+    #[prop(default = 0u32.into())]
+    ndi_fps: Signal<u32>,
 ) -> impl IntoView {
     let ctx = use_context::<StageContext>().expect("StageContext not provided");
 
@@ -51,9 +57,15 @@ pub fn StatusBar(
         };
         let latency = latency_ms
             .get()
-            .map(|ms| format!(" \u{00b7} {:03} ms", ms as u32))
+            .map(|ms| format!(" \u{00b7} {:03} MS", ms as u32))
             .unwrap_or_default();
-        format!("{label}{latency}")
+        let fps = ndi_fps.get();
+        let fps_text = if fps > 0 {
+            format!(" \u{00b7} {} FPS", fps)
+        } else {
+            String::new()
+        };
+        format!("{label}{latency}{fps_text}")
     };
 
     let connection_class = move || {
@@ -67,7 +79,9 @@ pub fn StatusBar(
     };
 
     autofit_effect(clock_ref, STATUS_MAX_FONT, move || clock_text.get());
-    autofit_effect(live_ref, STATUS_MAX_FONT, live_text.clone());
+    if !hide_live {
+        autofit_effect(live_ref, STATUS_MAX_FONT, live_text.clone());
+    }
     autofit_effect(connection_ref, STATUS_MAX_FONT, connection_text.clone());
 
     view! {
@@ -75,10 +89,12 @@ pub fn StatusBar(
             <span class="stage__debug-label">"clock"</span>
             {clock_text}
         </div>
-        <div node_ref=live_ref class=live_class>
-            <span class="stage__debug-label">"live"</span>
-            {live_text}
-        </div>
+        {(!hide_live).then(|| view! {
+            <div node_ref=live_ref class=live_class>
+                <span class="stage__debug-label">"live"</span>
+                {live_text}
+            </div>
+        })}
         <div node_ref=connection_ref class=connection_class>
             <span class="stage__debug-label">"connection"</span>
             {connection_text}
