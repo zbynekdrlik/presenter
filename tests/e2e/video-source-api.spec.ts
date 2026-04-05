@@ -104,3 +104,31 @@ test("NDI sources returns 503 when SDK unavailable", async ({ request }) => {
   );
   expect(resp.status()).toBe(503);
 });
+
+test("NDI discovery returns stable source count (persistent finder)", async ({
+  request,
+}) => {
+  const statusResp = await request.get(
+    new URL("/ndi/status", baseURL).toString(),
+  );
+  const { available } = await statusResp.json();
+  test.skip(!available, "NDI SDK not available");
+
+  // Wait for persistent finder to accumulate sources via mDNS
+  await new Promise((r) => setTimeout(r, 6000));
+
+  const counts: number[] = [];
+  for (let i = 0; i < 5; i++) {
+    const resp = await request.get(
+      new URL("/ndi/sources", baseURL).toString(),
+    );
+    expect(resp.status()).toBe(200);
+    const sources = await resp.json();
+    counts.push(sources.length);
+    await new Promise((r) => setTimeout(r, 1000));
+  }
+
+  // All 5 scans should return the same count
+  const unique = [...new Set(counts)];
+  expect(unique).toHaveLength(1);
+});
