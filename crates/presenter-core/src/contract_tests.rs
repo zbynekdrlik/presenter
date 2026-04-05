@@ -291,8 +291,14 @@ mod tests {
         let result = roundtrip_json(&overview);
         // Roundtrip preserves timer states
         assert_eq!(result.preach_timer.state, overview.preach_timer.state);
-        assert_eq!(result.preach_timer.seconds_elapsed, overview.preach_timer.seconds_elapsed);
-        assert_eq!(result.countdown_to_start.state, overview.countdown_to_start.state);
+        assert_eq!(
+            result.preach_timer.seconds_elapsed,
+            overview.preach_timer.seconds_elapsed
+        );
+        assert_eq!(
+            result.countdown_to_start.state,
+            overview.countdown_to_start.state
+        );
     }
 
     #[test]
