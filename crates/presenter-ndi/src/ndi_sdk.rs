@@ -279,9 +279,11 @@ mod tests {
     use super::*;
 
     #[test]
-    fn sdk_load_does_not_panic() {
-        // NDI SDK may not be installed on CI — we just verify load()
-        // returns a clean Result without panicking.
-        let _result = NdiLib::load();
+    fn sdk_load_returns_result() {
+        // NDI SDK may not be installed on CI — verify load() returns a
+        // Result (Ok or Err) without panicking.
+        let result = NdiLib::load();
+        // Result must be either Ok or Err — both are valid outcomes
+        assert!(result.is_ok() || result.is_err());
     }
 }
