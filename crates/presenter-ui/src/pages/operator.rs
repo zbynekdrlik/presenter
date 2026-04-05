@@ -292,6 +292,8 @@ fn setup_ws_dispatch(last_event: ReadSignal<Option<LiveEvent>>, ctx: &AppContext
     let ableset_status = ctx.ableset_status;
     let selected_library_id = ctx.selected_library_id;
     let selected_playlist_id = ctx.selected_playlist_id;
+    let selected_playlist = ctx.selected_playlist;
+    let presentations = ctx.presentations;
 
     Effect::new(move || {
         if let Some(event) = last_event.get() {
@@ -323,10 +325,20 @@ fn setup_ws_dispatch(last_event: ReadSignal<Option<LiveEvent>>, ctx: &AppContext
                                         let lib_id = detail.library_id.to_string();
                                         selected_library_id.set(Some(lib_id.clone()));
                                         selected_playlist_id.set(None);
+                                        selected_playlist.set(None);
                                         crate::state::session::set(
                                             "activeLibraryId",
                                             &lib_id,
                                         );
+                                        // Load the library's presentations list
+                                        if let Ok(pres_list) =
+                                            crate::api::libraries::list_presentations(
+                                                &lib_id,
+                                            )
+                                            .await
+                                        {
+                                            presentations.set(pres_list);
+                                        }
                                         slides_cache.update(|cache| {
                                             cache.insert(
                                                 pid.clone(),
