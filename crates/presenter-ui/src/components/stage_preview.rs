@@ -82,6 +82,8 @@ pub fn StagePreview() -> impl IntoView {
         let stage_snapshot = ctx.stage_snapshot;
         let selected_presentation_id = ctx.selected_presentation_id;
         let selected_presentation = ctx.selected_presentation;
+        let selected_library_id = ctx.selected_library_id;
+        let selected_playlist_id = ctx.selected_playlist_id;
         let slides_cache = ctx.slides_cache;
         leptos::task::spawn_local(async move {
             if let Ok(s) = crate::api::settings::set_ableset_follow(!currently_following).await {
@@ -99,6 +101,11 @@ pub fn StagePreview() -> impl IntoView {
                                 if let Ok(detail) =
                                     crate::api::presentations::get_presentation(&pres_id).await
                                 {
+                                    // Switch to the library containing this presentation
+                                    let lib_id = detail.library_id.to_string();
+                                    selected_library_id.set(Some(lib_id.clone()));
+                                    selected_playlist_id.set(None);
+                                    crate::state::session::set("activeLibraryId", &lib_id);
                                     slides_cache.update(|cache| {
                                         cache.insert(
                                             pres_id,

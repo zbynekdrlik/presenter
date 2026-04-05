@@ -290,6 +290,8 @@ fn setup_ws_dispatch(last_event: ReadSignal<Option<LiveEvent>>, ctx: &AppContext
     let active_bible_broadcast = ctx.active_bible_broadcast;
     let bible_presentations_version = ctx.bible_presentations_version;
     let ableset_status = ctx.ableset_status;
+    let selected_library_id = ctx.selected_library_id;
+    let selected_playlist_id = ctx.selected_playlist_id;
 
     Effect::new(move || {
         if let Some(event) = last_event.get() {
@@ -317,6 +319,14 @@ fn setup_ws_dispatch(last_event: ReadSignal<Option<LiveEvent>>, ctx: &AppContext
                                         crate::api::presentations::get_presentation(&pid)
                                             .await
                                     {
+                                        // Switch to the library containing this presentation
+                                        let lib_id = detail.library_id.to_string();
+                                        selected_library_id.set(Some(lib_id.clone()));
+                                        selected_playlist_id.set(None);
+                                        crate::state::session::set(
+                                            "activeLibraryId",
+                                            &lib_id,
+                                        );
                                         slides_cache.update(|cache| {
                                             cache.insert(
                                                 pid.clone(),
