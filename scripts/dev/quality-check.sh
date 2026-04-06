@@ -462,6 +462,50 @@ TEST_PY
   fi
 fi
 
+# 16) Placeholder / unfinished-work detection (Issue #200)
+if command -v rg >/dev/null 2>&1; then
+  placeholder_hits=""
+
+  # Pattern group 1: multi-word phrases (always placeholder, even in comments)
+  phrase_hits=$(rg -in '(coming soon|not implemented)' \
+    -g 'crates/**/*.rs' \
+    -g 'crates/**/*.ts' \
+    -g '!**/tests.rs' -g '!**/tests/*.rs' -g '!**/test_*.rs' \
+    -g '!**/vendor/**' \
+    -g '!*/presenter-migration/**' \
+    -g '!**/*.css' \
+    2>/dev/null || true)
+  if [[ -n "$phrase_hits" ]]; then
+    placeholder_hits+="$phrase_hits"$'\n'
+  fi
+
+  # Pattern group 2: marker words — exclude comment lines (// or * or #)
+  marker_hits=$(rg -n '\b(TODO|FIXME|HACK)\b' \
+    -g 'crates/**/*.rs' \
+    -g 'crates/**/*.ts' \
+    -g '!**/tests.rs' -g '!**/tests/*.rs' -g '!**/test_*.rs' \
+    -g '!**/vendor/**' \
+    -g '!*/presenter-migration/**' \
+    -g '!**/*.css' \
+    2>/dev/null || true)
+  # Filter out comment lines
+  if [[ -n "$marker_hits" ]]; then
+    filtered_markers=$(echo "$marker_hits" | grep -vP '^\S+:\d+:\s*(//|/?\*|#)' || true)
+    if [[ -n "$filtered_markers" ]]; then
+      placeholder_hits+="$filtered_markers"$'\n'
+    fi
+  fi
+
+  # Remove trailing newlines and check
+  placeholder_hits=$(echo "$placeholder_hits" | sed '/^$/d')
+  if [[ -n "$placeholder_hits" ]]; then
+    fail "Placeholder/unfinished text found in production code:"
+    while IFS= read -r line; do
+      fail "  $line"
+    done <<< "$placeholder_hits"
+  fi
+fi
+
 # Emit results
 if (( EMIT_JSON )); then
   # Serialize bash arrays to JSON arrays correctly (empty arrays => [])
