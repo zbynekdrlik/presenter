@@ -825,7 +825,6 @@ mod tests {
                         string: "cue-c".to_string(),
                     },
                 ],
-                ..Default::default()
             }],
             ..Default::default()
         };
@@ -864,7 +863,6 @@ mod tests {
                         string: String::new(),
                     },
                 ],
-                ..Default::default()
             }],
             ..Default::default()
         };
