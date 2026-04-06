@@ -805,27 +805,30 @@ mod tests {
 
     #[test]
     fn build_group_lookup_assigns_anchor_to_first_cue() {
-        let mut presentation = proto::Presentation::default();
-        let mut cue_group = proto::presentation::CueGroup::default();
-        cue_group.group = Some(Group {
-            name: "Verse 1".to_string(),
-            uuid: Some(proto::Uuid {
-                string: "group-1".to_string(),
-            }),
+        let presentation = proto::Presentation {
+            cue_groups: vec![proto::presentation::CueGroup {
+                group: Some(Group {
+                    name: "Verse 1".to_string(),
+                    uuid: Some(proto::Uuid {
+                        string: "group-1".to_string(),
+                    }),
+                    ..Default::default()
+                }),
+                cue_identifiers: vec![
+                    proto::Uuid {
+                        string: "cue-a".to_string(),
+                    },
+                    proto::Uuid {
+                        string: "cue-b".to_string(),
+                    },
+                    proto::Uuid {
+                        string: "cue-c".to_string(),
+                    },
+                ],
+                ..Default::default()
+            }],
             ..Default::default()
-        });
-        cue_group.cue_identifiers = vec![
-            proto::Uuid {
-                string: "cue-a".to_string(),
-            },
-            proto::Uuid {
-                string: "cue-b".to_string(),
-            },
-            proto::Uuid {
-                string: "cue-c".to_string(),
-            },
-        ];
-        presentation.cue_groups = vec![cue_group];
+        };
 
         let lookup = build_group_lookup(&presentation);
         assert_eq!(lookup.len(), 3);
@@ -844,24 +847,27 @@ mod tests {
 
     #[test]
     fn build_group_lookup_skips_empty_uuids() {
-        let mut presentation = proto::Presentation::default();
-        let mut cue_group = proto::presentation::CueGroup::default();
-        cue_group.group = Some(Group {
-            name: "Chorus".to_string(),
-            uuid: Some(proto::Uuid {
-                string: "group-1".to_string(),
-            }),
+        let presentation = proto::Presentation {
+            cue_groups: vec![proto::presentation::CueGroup {
+                group: Some(Group {
+                    name: "Chorus".to_string(),
+                    uuid: Some(proto::Uuid {
+                        string: "group-1".to_string(),
+                    }),
+                    ..Default::default()
+                }),
+                cue_identifiers: vec![
+                    proto::Uuid {
+                        string: "cue-a".to_string(),
+                    },
+                    proto::Uuid {
+                        string: String::new(),
+                    },
+                ],
+                ..Default::default()
+            }],
             ..Default::default()
-        });
-        cue_group.cue_identifiers = vec![
-            proto::Uuid {
-                string: "cue-a".to_string(),
-            },
-            proto::Uuid {
-                string: String::new(),
-            },
-        ];
-        presentation.cue_groups = vec![cue_group];
+        };
 
         let lookup = build_group_lookup(&presentation);
         assert_eq!(lookup.len(), 1);
