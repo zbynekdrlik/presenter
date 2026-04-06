@@ -955,6 +955,9 @@ body.operator[data-mode="live"] .operator__line-limit {
   background: rgba(15, 23, 42, 0.82);
   border: 1px solid rgba(148, 163, 184, 0.3);
   border-radius: 10px;
+  white-space: pre;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 
 .operator__stage-preview-panel--current {
