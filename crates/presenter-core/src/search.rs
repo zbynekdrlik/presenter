@@ -61,3 +61,76 @@ pub fn fold_query(input: &str) -> String {
 pub fn query_tokens(input: &str) -> Vec<String> {
     tokens_from_normalised(&normalise_for_search(input))
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn normalise_preserves_ascii() {
+        assert_eq!(normalise_for_search("hello"), "hello");
+    }
+
+    #[test]
+    fn normalise_lowercases() {
+        assert_eq!(normalise_for_search("Hello WORLD"), "hello world");
+    }
+
+    #[test]
+    fn normalise_strips_diacritics() {
+        assert_eq!(normalise_for_search("ěščřžýáíé"), "escrzyaie");
+    }
+
+    #[test]
+    fn normalise_handles_empty_string() {
+        assert_eq!(normalise_for_search(""), "");
+    }
+
+    #[test]
+    fn normalise_strips_combined_marks() {
+        assert_eq!(normalise_for_search("ň"), "n");
+    }
+
+    #[test]
+    fn query_tokens_splits_on_non_alphanumeric() {
+        assert_eq!(
+            query_tokens("hello world"),
+            vec!["hello".to_string(), "world".to_string()]
+        );
+    }
+
+    #[test]
+    fn query_tokens_filters_empty_segments() {
+        assert_eq!(
+            query_tokens("  hello  "),
+            vec!["hello".to_string()]
+        );
+    }
+
+    #[test]
+    fn query_tokens_handles_special_chars() {
+        assert_eq!(
+            query_tokens("rock & roll"),
+            vec!["rock".to_string(), "roll".to_string()]
+        );
+    }
+
+    #[test]
+    fn query_tokens_empty_input() {
+        let result: Vec<String> = query_tokens("");
+        assert!(result.is_empty());
+    }
+
+    #[test]
+    fn query_tokens_normalises_diacritics_before_splitting() {
+        assert_eq!(
+            query_tokens("Žalm 23"),
+            vec!["zalm".to_string(), "23".to_string()]
+        );
+    }
+
+    #[test]
+    fn fold_query_joins_normalised_tokens() {
+        assert_eq!(fold_query("Ježíš Kristus"), "jezis kristus");
+    }
+}
