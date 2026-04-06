@@ -319,6 +319,7 @@ body.operator {
   background: rgba(255, 255, 255, 0.08);
   border-radius: 12px;
   padding: 0.2rem;
+  flex-shrink: 0;
 }
 
 .operator__view-nav button,
@@ -952,8 +953,8 @@ body.operator[data-mode="live"] .operator__line-limit {
 }
 
 .operator__stage-preview-panel {
-  width: 240px;
-  height: 3rem;
+  width: 200px;
+  height: 2.8rem;
   display: flex;
   align-items: center;
   justify-content: center;
@@ -964,7 +965,7 @@ body.operator[data-mode="live"] .operator__line-limit {
   border-radius: 8px;
   overflow: hidden;
   flex-shrink: 1;
-  min-width: 0;
+  min-width: 100px;
 }
 
 .operator__stage-preview-text {
@@ -984,8 +985,8 @@ body.operator[data-mode="live"] .operator__line-limit {
 }
 
 .operator__stage-preview-panel--next {
-  height: 2.5rem;
-  width: 170px;
+  height: 2.2rem;
+  width: 150px;
 }
 
 .operator__worship-preview-wrap {
