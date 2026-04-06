@@ -635,15 +635,15 @@ mod tests {
 
     #[test]
     fn sanitize_text_strips_usfm_markers() {
-        assert_eq!(sanitize_text("\\v 1 In the beginning"), "1 In the beginning");
+        assert_eq!(
+            sanitize_text("\\v 1 In the beginning"),
+            "1 In the beginning"
+        );
     }
 
     #[test]
     fn sanitize_text_strips_word_level_attributes() {
-        assert_eq!(
-            sanitize_text("\\w God|strong=\"H430\"\\w*"),
-            "God"
-        );
+        assert_eq!(sanitize_text("\\w God|strong=\"H430\"\\w*"), "God");
     }
 
     #[test]
@@ -658,10 +658,7 @@ mod tests {
 
     #[test]
     fn sanitize_mysword_strips_html_tags() {
-        assert_eq!(
-            sanitize_mysword_text("<b>Bold</b> text"),
-            "Bold text"
-        );
+        assert_eq!(sanitize_mysword_text("<b>Bold</b> text"), "Bold text");
     }
 
     #[test]

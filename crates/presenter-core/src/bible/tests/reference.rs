@@ -50,8 +50,7 @@ fn accepts_single_verse() {
 
 #[test]
 fn new_with_code_stores_code_and_number() {
-    let reference =
-        BibleReference::new_with_code("Genesis", "GEN", 1, 1, 1, 3).unwrap();
+    let reference = BibleReference::new_with_code("Genesis", "GEN", 1, 1, 1, 3).unwrap();
     assert_eq!(reference.book_code.as_deref(), Some("GEN"));
     assert_eq!(reference.book_number, Some(1));
 }

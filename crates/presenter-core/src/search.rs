@@ -101,10 +101,7 @@ mod tests {
 
     #[test]
     fn query_tokens_filters_empty_segments() {
-        assert_eq!(
-            query_tokens("  hello  "),
-            vec!["hello".to_string()]
-        );
+        assert_eq!(query_tokens("  hello  "), vec!["hello".to_string()]);
     }
 
     #[test]
