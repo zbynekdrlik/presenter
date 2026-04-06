@@ -41,8 +41,8 @@ body.operator {
 .operator__header {
   display: flex;
   align-items: center;
-  gap: 1rem;
-  padding: 0.65rem 1.5rem;
+  gap: 0.75rem;
+  padding: 0.4rem 1rem;
   background: linear-gradient(90deg, #111827, #1f2937);
   color: #ffffff;
   box-shadow: var(--shadow-soft);
@@ -53,20 +53,26 @@ body.operator {
 
 .operator__header h1 {
   margin: 0;
-  font-size: 1.1rem;
+  font-size: 1rem;
   font-weight: 600;
   white-space: nowrap;
 }
 
 .operator__header-left {
   display: flex;
-  align-items: center;
-  gap: 0.75rem;
+  flex-direction: column;
+  gap: 0.25rem;
   flex-shrink: 0;
 }
 
+.operator__header-brand {
+  display: flex;
+  align-items: baseline;
+  gap: 0.5rem;
+}
+
 .operator__version-badge {
-  font-size: 0.7rem;
+  font-size: 0.65rem;
   color: rgba(255, 255, 255, 0.45);
   font-weight: 400;
   white-space: nowrap;
@@ -75,7 +81,7 @@ body.operator {
 .operator__header-right {
   display: flex;
   align-items: center;
-  gap: 1rem;
+  gap: 0.75rem;
   margin-left: auto;
   flex-shrink: 0;
 }
@@ -258,13 +264,13 @@ body.operator {
 
 .operator__stage-layout {
   display: flex;
-  align-items: center;
-  gap: 0.5rem;
+  flex-direction: column;
+  gap: 0.2rem;
   flex-shrink: 0;
 }
 
 .operator__stage-layout-label {
-  font-size: 0.75rem;
+  font-size: 0.65rem;
   text-transform: uppercase;
   letter-spacing: 0.08em;
   color: rgba(255, 255, 255, 0.55);
@@ -306,11 +312,12 @@ body.operator {
 
 .operator__mode-toggle {
   display: inline-flex;
-  align-items: center;
-  gap: 0.5rem;
+  flex-direction: column;
+  align-items: stretch;
+  gap: 0.2rem;
   background: rgba(255, 255, 255, 0.08);
-  border-radius: 999px;
-  padding: 0.25rem;
+  border-radius: 12px;
+  padding: 0.2rem;
 }
 
 .operator__view-nav button,
@@ -944,15 +951,15 @@ body.operator[data-mode="live"] .operator__line-limit {
 
 .operator__stage-preview-panel {
   width: 280px;
-  aspect-ratio: 16 / 9;
+  height: 3.5rem;
   display: flex;
   align-items: center;
   justify-content: center;
   text-align: center;
-  padding: 0.35rem 0.5rem;
+  padding: 0.2rem 0.4rem;
   background: rgba(15, 23, 42, 0.82);
   border: 1px solid rgba(148, 163, 184, 0.3);
-  border-radius: 10px;
+  border-radius: 8px;
   overflow: hidden;
 }
 
@@ -973,6 +980,7 @@ body.operator[data-mode="live"] .operator__line-limit {
 }
 
 .operator__stage-preview-panel--next {
+  height: 2.8rem;
   width: 200px;
 }
 
