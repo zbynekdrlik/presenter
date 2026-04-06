@@ -289,8 +289,16 @@ mod tests {
     fn timers_overview_roundtrip() {
         let overview = TimersOverview::demo(Utc::now());
         let result = roundtrip_json(&overview);
-        // Default overview should have initial timer values
-        let _ = result;
+        // Roundtrip preserves timer states
+        assert_eq!(result.preach_timer.state, overview.preach_timer.state);
+        assert_eq!(
+            result.preach_timer.seconds_elapsed,
+            overview.preach_timer.seconds_elapsed
+        );
+        assert_eq!(
+            result.countdown_to_start.state,
+            overview.countdown_to_start.state
+        );
     }
 
     #[test]

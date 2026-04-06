@@ -60,11 +60,36 @@ fn fallback_rtf_to_text(raw: &str, encoding: &'static Encoding) -> String {
                     }
                 }
                 Some('u') => {
-                    chars.next();
-                    if let Some(decoded) = decode_rtf_unicode(&mut chars) {
-                        result.push(decoded);
+                    chars.next(); // consume 'u'
+                    match chars.peek() {
+                        Some('-') | Some('0'..='9') => {
+                            // Unicode escape: \u1234? or \u-3913?
+                            if let Some(decoded) = decode_rtf_unicode(&mut chars) {
+                                result.push(decoded);
+                            }
+                            skip_unicode_fallback(&mut chars, unicode_skip);
+                            // Consume delimiter space (when uc=0, no fallback eats it)
+                            if unicode_skip == 0 {
+                                if let Some(' ') = chars.peek() {
+                                    chars.next();
+                                }
+                            }
+                        }
+                        _ => {
+                            // Control word starting with 'u': \up0, \ul, \ulnone, etc.
+                            let word = read_control_word(&mut chars);
+                            let full_word = format!("u{word}");
+                            if full_word.starts_with("uc") {
+                                unicode_skip = full_word
+                                    .trim_start_matches("uc")
+                                    .parse::<usize>()
+                                    .unwrap_or(1);
+                            }
+                            if let Some(' ') = chars.peek() {
+                                chars.next();
+                            }
+                        }
                     }
-                    skip_unicode_fallback(&mut chars, unicode_skip);
                 }
                 Some(_) => {
                     let word = read_control_word(&mut chars);
@@ -396,5 +421,47 @@ mod tests {
             text.contains("PRIBLÍŽIM"),
             "expected PRIBLÍŽIM in full RTF but got: {text}"
         );
+    }
+
+    #[test]
+    fn fallback_rtf_up0_not_misinterpreted_as_unicode() {
+        let raw = r"{\rtf1\ansi\ansicpg1250\f0\fs166 \cf2 \up0 MILUJEM TA BOŽE MÔJ}";
+        let text = decode_rtf(raw.as_bytes()).expect("rtf to decode");
+        assert!(
+            !text.starts_with('0'),
+            "should not start with '0', got: {text}"
+        );
+        assert!(
+            text.contains("MILUJEM"),
+            "should contain MILUJEM, got: {text}"
+        );
+    }
+
+    #[test]
+    fn fallback_rtf_ulnone_not_misinterpreted() {
+        let raw = r"{\rtf1\ansi\ansicpg1250 \ulnone Hello}";
+        let text = decode_rtf(raw.as_bytes()).expect("rtf to decode");
+        assert!(
+            !text.contains("lnone"),
+            "should not leak 'lnone', got: {text}"
+        );
+        assert!(text.contains("Hello"), "should contain Hello, got: {text}");
+    }
+
+    #[test]
+    fn fallback_rtf_unicode_escape_still_works() {
+        let raw = r"{\rtf1\ansi\ansicpg1250 \u353?peci\u225?l}";
+        let text = decode_rtf(raw.as_bytes()).expect("rtf to decode");
+        assert!(
+            text.contains("špeciál"),
+            "unicode escapes broken, got: {text}"
+        );
+    }
+
+    #[test]
+    fn fallback_rtf_negative_unicode_still_works() {
+        let raw = r"{\rtf1\ansi\ansicpg1250 \u-3913?x}";
+        let text = decode_rtf(raw.as_bytes()).expect("rtf to decode");
+        assert!(!text.is_empty(), "should produce output");
     }
 }

@@ -362,6 +362,106 @@ if echo "$check_out" | grep -q "warning:"; then
   warn "cargo check reported warnings; run clippy/fixes when feasible."
 fi
 
+# 15) Test integrity: no assertion-free test functions
+if command -v rg >/dev/null 2>&1 && command -v python3 >/dev/null 2>&1; then
+  test_integrity=$(python3 - "$ROOT_DIR" <<'TEST_PY'
+import re, sys, os, json
+
+root = sys.argv[1]
+issues = []
+
+test_attr = re.compile(r'^\s*#\[test\]')
+fn_start = re.compile(r'^\s*(?:pub\s+)?(?:async\s+)?fn\s+(\w+)')
+assert_kw = re.compile(r'\b(assert!|assert_eq!|assert_ne!|assert_matches!|panic!|expect\(|should_panic|unwrap_err)')
+false_positive = re.compile(r'assert!\(\s*true\s*\)')
+
+for dirpath, _, filenames in os.walk(os.path.join(root, "crates")):
+    for name in filenames:
+        if not name.endswith(".rs"):
+            continue
+        path = os.path.join(dirpath, name)
+        rel = os.path.relpath(path, root)
+        with open(path, "r", encoding="utf-8") as f:
+            lines = f.readlines()
+
+        i = 0
+        while i < len(lines):
+            if test_attr.match(lines[i]):
+                # Find the fn line
+                j = i + 1
+                while j < len(lines) and not fn_start.match(lines[j]):
+                    j += 1
+                if j >= len(lines):
+                    i = j
+                    continue
+                fn_match = fn_start.match(lines[j])
+                fn_name = fn_match.group(1)
+                fn_line = j + 1
+
+                # Find function body (brace matching)
+                k = j
+                brace = 0
+                started = False
+                body_lines = []
+                while k < len(lines):
+                    brace += lines[k].count("{")
+                    brace -= lines[k].count("}")
+                    if "{" in lines[k]:
+                        started = True
+                    if started:
+                        body_lines.append(lines[k])
+                    if started and brace == 0:
+                        break
+                    k += 1
+
+                body = "".join(body_lines)
+
+                # Check: no assertions at all
+                if not assert_kw.search(body):
+                    issues.append({"file": rel, "line": fn_line, "fn": fn_name, "type": "no_assertions"})
+
+                # Check: assert!(true)
+                if false_positive.search(body):
+                    issues.append({"file": rel, "line": fn_line, "fn": fn_name, "type": "false_positive"})
+
+                # Check: low assertion density (>20 body lines, <=1 assertion)
+                body_line_count = len([l for l in body_lines if l.strip()])
+                assertion_count = len(assert_kw.findall(body))
+                if body_line_count > 20 and assertion_count <= 1:
+                    issues.append({"file": rel, "line": fn_line, "fn": fn_name, "type": "low_density",
+                                   "body_lines": body_line_count, "assertions": assertion_count})
+
+                i = k + 1
+            else:
+                i += 1
+
+print(json.dumps(issues))
+TEST_PY
+  )
+
+  if [[ -n "$test_integrity" && "$test_integrity" != "[]" ]]; then
+    while IFS= read -r row; do
+      file=$(echo "$row" | jq -r '.file')
+      line=$(echo "$row" | jq -r '.line')
+      fn_name=$(echo "$row" | jq -r '.fn')
+      issue_type=$(echo "$row" | jq -r '.type')
+      case "$issue_type" in
+        no_assertions)
+          fail "Test integrity: ${file}:${line} fn ${fn_name} has no assertions"
+          ;;
+        false_positive)
+          fail "Test integrity: ${file}:${line} fn ${fn_name} uses assert!(true)"
+          ;;
+        low_density)
+          body_lines=$(echo "$row" | jq -r '.body_lines')
+          assertions=$(echo "$row" | jq -r '.assertions')
+          warn "Test integrity: ${file}:${line} fn ${fn_name} has ${assertions} assertion(s) in ${body_lines} lines"
+          ;;
+      esac
+    done < <(echo "$test_integrity" | jq -c '.[]')
+  fi
+fi
+
 # Emit results
 if (( EMIT_JSON )); then
   # Serialize bash arrays to JSON arrays correctly (empty arrays => [])
