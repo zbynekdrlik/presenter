@@ -83,7 +83,8 @@ body.operator {
   align-items: center;
   gap: 0.75rem;
   margin-left: auto;
-  flex-shrink: 0;
+  flex-shrink: 1;
+  min-width: 0;
 }
 
 .operator__hamburger {
@@ -815,14 +816,15 @@ body.operator[data-mode="live"] .operator__line-limit {
   position: relative;
   display: inline-flex;
   align-items: stretch;
-  gap: 1rem;
-  padding: 0.65rem 1rem;
+  gap: 0.5rem;
+  padding: 0.4rem 0.5rem;
   background: #101828;
   border: 1px solid rgba(148, 163, 184, 0.25);
   color: #f8fafc;
   min-width: 0;
-  border-radius: 14px;
+  border-radius: 10px;
   box-shadow: inset 0 0 0 1px rgba(15, 23, 42, 0.25);
+  flex-shrink: 1;
 }
 
 .operator__stage-preview[data-active="false"] {
@@ -902,13 +904,13 @@ body.operator[data-mode="live"] .operator__line-limit {
   display: flex;
   flex-direction: column;
   justify-content: flex-start;
-  gap: 0.5rem;
-  min-width: 12rem;
+  gap: 0.3rem;
+  min-width: 0;
   align-items: center;
 }
 
 .operator__stage-preview-song {
-  font-size: 0.82rem;
+  font-size: 0.72rem;
   font-weight: 400;
   letter-spacing: 0.01em;
   white-space: nowrap;
@@ -920,17 +922,17 @@ body.operator[data-mode="live"] .operator__line-limit {
 
 .operator__stage-preview-actions {
   display: flex;
-  gap: 0.5rem;
+  gap: 0.3rem;
   justify-content: center;
 }
 
 .operator__stage-toggle {
   border: 1px solid rgba(148, 163, 184, 0.35);
-  border-radius: 8px;
+  border-radius: 6px;
   background: rgba(15, 23, 42, 0.6);
   color: #f1f5f9;
-  padding: 0.35rem 0.7rem;
-  font-size: 0.75rem;
+  padding: 0.2rem 0.5rem;
+  font-size: 0.68rem;
   font-weight: 600;
   cursor: pointer;
   transition:
@@ -950,17 +952,19 @@ body.operator[data-mode="live"] .operator__line-limit {
 }
 
 .operator__stage-preview-panel {
-  width: 280px;
-  height: 3.5rem;
+  width: 240px;
+  height: 3rem;
   display: flex;
   align-items: center;
   justify-content: center;
   text-align: center;
-  padding: 0.2rem 0.4rem;
+  padding: 0.15rem 0.3rem;
   background: rgba(15, 23, 42, 0.82);
   border: 1px solid rgba(148, 163, 184, 0.3);
   border-radius: 8px;
   overflow: hidden;
+  flex-shrink: 1;
+  min-width: 0;
 }
 
 .operator__stage-preview-text {
@@ -980,8 +984,8 @@ body.operator[data-mode="live"] .operator__line-limit {
 }
 
 .operator__stage-preview-panel--next {
-  height: 2.8rem;
-  width: 200px;
+  height: 2.5rem;
+  width: 170px;
 }
 
 .operator__worship-preview-wrap {
@@ -2165,10 +2169,10 @@ body.operator[data-view="settings"] [data-view-panel="settings"] {
 /* ── Responsive: tablet ── */
 @media (max-width: 1024px) {
   .operator__stage-preview-panel {
-    width: 200px;
+    width: 180px;
   }
   .operator__stage-preview-panel--next {
-    width: 140px;
+    width: 130px;
   }
   .operator__stage-preview-stack {
     min-width: 9rem;
