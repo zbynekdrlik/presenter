@@ -394,8 +394,8 @@ fn classify_text_role(name: &str) -> TextRole {
         return TextRole::Unknown;
     }
 
-    if MAIN_ALIASES.iter().any(|alias| normalized.contains(alias)) {
-        return TextRole::Main;
+    if STAGE_ALIASES.iter().any(|alias| normalized.contains(alias)) {
+        return TextRole::Stage;
     }
     if TRANSLATION_ALIASES
         .iter()
@@ -403,8 +403,8 @@ fn classify_text_role(name: &str) -> TextRole {
     {
         return TextRole::Translation;
     }
-    if STAGE_ALIASES.iter().any(|alias| normalized.contains(alias)) {
-        return TextRole::Stage;
+    if MAIN_ALIASES.iter().any(|alias| normalized.contains(alias)) {
+        return TextRole::Main;
     }
     TextRole::Unknown
 }
@@ -508,6 +508,7 @@ fn resolve_cue_sequence(raw: &proto::Presentation) -> Vec<&proto::Cue> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::proto::Group;
     use std::path::PathBuf;
 
     fn library_path(relative: &str) -> Option<PathBuf> {
@@ -703,5 +704,165 @@ mod tests {
         let libraries = repo.fetch_libraries().await.unwrap();
         assert_eq!(libraries.len(), 1);
         assert_eq!(libraries[0].name, "RACHEM");
+    }
+
+    #[test]
+    fn classify_text_role_case_insensitive() {
+        assert_eq!(classify_text_role("MAIN"), TextRole::Main);
+        assert_eq!(classify_text_role("main"), TextRole::Main);
+        assert_eq!(classify_text_role("  Main  "), TextRole::Main);
+    }
+
+    #[test]
+    fn classify_text_role_all_main_aliases() {
+        for alias in &["lyrics", "text", "hlavny", "hlavný"] {
+            assert_eq!(
+                classify_text_role(alias),
+                TextRole::Main,
+                "expected Main for alias '{alias}'"
+            );
+        }
+    }
+
+    #[test]
+    fn classify_text_role_all_translation_aliases() {
+        for alias in &["translation", "preklad", "english", "eng"] {
+            assert_eq!(
+                classify_text_role(alias),
+                TextRole::Translation,
+                "expected Translation for alias '{alias}'"
+            );
+        }
+    }
+
+    #[test]
+    fn classify_text_role_all_stage_aliases() {
+        for alias in &["stage", "stage display", "stage text"] {
+            assert_eq!(
+                classify_text_role(alias),
+                TextRole::Stage,
+                "expected Stage for alias '{alias}'"
+            );
+        }
+    }
+
+    #[test]
+    fn classify_text_role_empty_is_unknown() {
+        assert_eq!(classify_text_role(""), TextRole::Unknown);
+        assert_eq!(classify_text_role("  "), TextRole::Unknown);
+    }
+
+    #[test]
+    fn slide_content_assigns_translation_and_stage_roles() {
+        let main_text = proto::graphics::Text {
+            rtf_data: b"Main lyrics".to_vec(),
+            ..Default::default()
+        };
+        let translation_text = proto::graphics::Text {
+            rtf_data: b"Translation text".to_vec(),
+            ..Default::default()
+        };
+        let stage_text = proto::graphics::Text {
+            rtf_data: b"Stage text".to_vec(),
+            ..Default::default()
+        };
+
+        let slide = proto::Slide {
+            elements: vec![
+                proto::slide::Element {
+                    element: Some(proto::graphics::Element {
+                        name: "Main".into(),
+                        text: Some(main_text),
+                        ..Default::default()
+                    }),
+                    ..Default::default()
+                },
+                proto::slide::Element {
+                    element: Some(proto::graphics::Element {
+                        name: "Translation".into(),
+                        text: Some(translation_text),
+                        ..Default::default()
+                    }),
+                    ..Default::default()
+                },
+                proto::slide::Element {
+                    element: Some(proto::graphics::Element {
+                        name: "Stage Display".into(),
+                        text: Some(stage_text),
+                        ..Default::default()
+                    }),
+                    ..Default::default()
+                },
+            ],
+            ..Default::default()
+        };
+
+        let content = slide_content_from_proto(&slide, None).expect("content");
+        assert_eq!(content.main.value(), "Main lyrics");
+        assert_eq!(content.translation.value(), "Translation text");
+        assert_eq!(content.stage.value(), "Stage text");
+    }
+
+    #[test]
+    fn build_group_lookup_assigns_anchor_to_first_cue() {
+        let mut presentation = proto::Presentation::default();
+        let mut cue_group = proto::presentation::CueGroup::default();
+        let mut group = Group::default();
+        group.name = "Verse 1".to_string();
+        group.uuid = Some(proto::Uuid {
+            string: "group-1".to_string(),
+        });
+        cue_group.group = Some(group);
+        cue_group.cue_identifiers = vec![
+            proto::Uuid {
+                string: "cue-a".to_string(),
+            },
+            proto::Uuid {
+                string: "cue-b".to_string(),
+            },
+            proto::Uuid {
+                string: "cue-c".to_string(),
+            },
+        ];
+        presentation.cue_groups = vec![cue_group];
+
+        let lookup = build_group_lookup(&presentation);
+        assert_eq!(lookup.len(), 3);
+
+        let cue_a = &lookup["cue-a"];
+        assert_eq!(cue_a.name, "Verse 1");
+        assert!(cue_a.anchor, "first cue should be anchor");
+
+        let cue_b = &lookup["cue-b"];
+        assert_eq!(cue_b.name, "Verse 1");
+        assert!(!cue_b.anchor, "second cue should not be anchor");
+
+        let cue_c = &lookup["cue-c"];
+        assert!(!cue_c.anchor, "third cue should not be anchor");
+    }
+
+    #[test]
+    fn build_group_lookup_skips_empty_uuids() {
+        let mut presentation = proto::Presentation::default();
+        let mut cue_group = proto::presentation::CueGroup::default();
+        let mut group = Group::default();
+        group.name = "Chorus".to_string();
+        group.uuid = Some(proto::Uuid {
+            string: "group-1".to_string(),
+        });
+        cue_group.group = Some(group);
+        cue_group.cue_identifiers = vec![
+            proto::Uuid {
+                string: "cue-a".to_string(),
+            },
+            proto::Uuid {
+                string: String::new(),
+            },
+        ];
+        presentation.cue_groups = vec![cue_group];
+
+        let lookup = build_group_lookup(&presentation);
+        assert_eq!(lookup.len(), 1);
+        assert!(lookup.contains_key("cue-a"));
     }
 }
