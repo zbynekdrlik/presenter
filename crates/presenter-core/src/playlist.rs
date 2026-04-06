@@ -132,10 +132,20 @@ mod tests {
 
     #[test]
     fn midi_binding_range_check() {
-        assert!(MidiBinding::new(127).is_ok());
+        let binding = MidiBinding::new(127).unwrap();
+        assert_eq!(binding.note(), 127);
+
+        let binding_zero = MidiBinding::new(0).unwrap();
+        assert_eq!(binding_zero.note(), 0);
+
         assert_eq!(
             MidiBinding::new(128).unwrap_err(),
             PlaylistError::MidiOutOfRange(128)
+        );
+
+        assert_eq!(
+            MidiBinding::new(255).unwrap_err(),
+            PlaylistError::MidiOutOfRange(255)
         );
     }
 

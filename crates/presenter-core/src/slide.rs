@@ -269,6 +269,11 @@ mod tests {
                 Some("Chorus".to_string())
             ]
         );
+        // Verify text content is preserved through resolution
+        assert_eq!(resolved[0].main.value(), "A");
+        assert_eq!(resolved[0].translation.value(), "A tr");
+        assert_eq!(resolved[1].main.value(), "B");
+        assert_eq!(resolved[2].stage.value(), "C stage");
     }
 
     #[test]
