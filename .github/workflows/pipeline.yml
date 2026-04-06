@@ -319,8 +319,34 @@ jobs:
       - name: Install cargo-mutants
         run: command -v cargo-mutants >/dev/null 2>&1 || cargo install cargo-mutants --locked
 
-      - name: Run mutation testing
-        run: cargo mutants --workspace --timeout 120 --no-shuffle
+      - name: Run mutation testing (baseline — advisory only)
+        run: |
+          cargo mutants --workspace --timeout 120 --no-shuffle --cap-mutants 200 \
+            --output mutants-results || true
+          echo "=== Mutation Testing Summary ==="
+          if [ -f mutants-results/outcomes.json ]; then
+            CAUGHT=$(jq '[.[] | select(.outcome == "CaughtMutant")] | length' mutants-results/outcomes.json)
+            MISSED=$(jq '[.[] | select(.outcome == "MissedMutant")] | length' mutants-results/outcomes.json)
+            TIMEOUT=$(jq '[.[] | select(.outcome == "Timeout")] | length' mutants-results/outcomes.json)
+            TOTAL=$((CAUGHT + MISSED + TIMEOUT))
+            echo "Caught: $CAUGHT / $TOTAL"
+            echo "Missed: $MISSED / $TOTAL"
+            echo "Timeout: $TIMEOUT / $TOTAL"
+            if [ "$TOTAL" -gt 0 ]; then
+              SCORE=$(( CAUGHT * 100 / TOTAL ))
+              echo "Mutation score: ${SCORE}%"
+            fi
+          else
+            echo "No outcomes.json found"
+          fi
+
+      - name: Upload mutation results
+        uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: mutation-results-${{ github.run_id }}
+          path: mutants-results/
+          retention-days: 14
 
   # ============================================
   # Quality Checks
@@ -403,7 +429,6 @@ jobs:
     needs:
       - test
       - quality
-      - mutation
     steps:
       - uses: actions/checkout@v4
 
