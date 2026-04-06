@@ -161,3 +161,52 @@ pub fn extract_song_prefix(name: &str, length: u8) -> Option<String> {
     }
     None
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn extract_song_prefix_returns_digits_of_given_length() {
+        assert_eq!(
+            extract_song_prefix("123 Song Title", 3),
+            Some("123".to_string())
+        );
+    }
+
+    #[test]
+    fn extract_song_prefix_truncates_longer_digit_run() {
+        assert_eq!(
+            extract_song_prefix("12345 Song", 3),
+            Some("123".to_string())
+        );
+    }
+
+    #[test]
+    fn extract_song_prefix_returns_none_for_insufficient_digits() {
+        assert_eq!(extract_song_prefix("12 Song", 3), None);
+    }
+
+    #[test]
+    fn extract_song_prefix_returns_none_for_no_digits() {
+        assert_eq!(extract_song_prefix("Song Title", 3), None);
+    }
+
+    #[test]
+    fn extract_song_prefix_returns_none_for_empty_string() {
+        assert_eq!(extract_song_prefix("", 3), None);
+    }
+
+    #[test]
+    fn extract_song_prefix_returns_none_for_zero_length() {
+        assert_eq!(extract_song_prefix("123 Song", 0), None);
+    }
+
+    #[test]
+    fn extract_song_prefix_trims_leading_whitespace() {
+        assert_eq!(
+            extract_song_prefix("  456 Song", 3),
+            Some("456".to_string())
+        );
+    }
+}

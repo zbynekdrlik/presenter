@@ -698,3 +698,143 @@ pub(crate) fn default_book_name(code: &str) -> Option<&'static str> {
         _ => None,
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn mysword_book_code_genesis() {
+        assert_eq!(mysword_book_code(1), "GEN");
+    }
+
+    #[test]
+    fn mysword_book_code_psalms() {
+        assert_eq!(mysword_book_code(19), "PSA");
+    }
+
+    #[test]
+    fn mysword_book_code_matthew() {
+        assert_eq!(mysword_book_code(40), "MAT");
+    }
+
+    #[test]
+    fn mysword_book_code_revelation() {
+        assert_eq!(mysword_book_code(66), "REV");
+    }
+
+    #[test]
+    fn mysword_book_code_unknown() {
+        assert_eq!(mysword_book_code(0), "UNK");
+        assert_eq!(mysword_book_code(67), "UNK");
+    }
+
+    #[test]
+    fn mysword_book_code_ot_nt_boundary() {
+        assert_eq!(mysword_book_code(39), "MAL");
+        assert_eq!(mysword_book_code(40), "MAT");
+    }
+
+    #[test]
+    fn mysword_book_code_numbered_books() {
+        assert_eq!(mysword_book_code(9), "1SA");
+        assert_eq!(mysword_book_code(10), "2SA");
+        assert_eq!(mysword_book_code(46), "1CO");
+        assert_eq!(mysword_book_code(47), "2CO");
+        assert_eq!(mysword_book_code(62), "1JN");
+        assert_eq!(mysword_book_code(64), "3JN");
+    }
+
+    #[test]
+    fn default_book_name_genesis() {
+        assert_eq!(default_book_name("GEN"), Some("Genesis"));
+    }
+
+    #[test]
+    fn default_book_name_psalms() {
+        assert_eq!(default_book_name("PSA"), Some("Psalm"));
+    }
+
+    #[test]
+    fn default_book_name_revelation() {
+        assert_eq!(default_book_name("REV"), Some("Revelation"));
+    }
+
+    #[test]
+    fn default_book_name_unknown_code() {
+        assert_eq!(default_book_name("XYZ"), None);
+        assert_eq!(default_book_name(""), None);
+    }
+
+    #[test]
+    fn default_book_name_numbered_books() {
+        assert_eq!(default_book_name("1SA"), Some("1 Samuel"));
+        assert_eq!(default_book_name("2KI"), Some("2 Kings"));
+        assert_eq!(default_book_name("1TH"), Some("1 Thessalonians"));
+    }
+
+    #[test]
+    fn sanitize_text_preserves_plain_text() {
+        assert_eq!(sanitize_text("Hello world"), "Hello world");
+    }
+
+    #[test]
+    fn sanitize_text_strips_usfm_markers() {
+        assert_eq!(
+            sanitize_text("\\v 1 In the beginning"),
+            "1 In the beginning"
+        );
+    }
+
+    #[test]
+    fn sanitize_text_strips_word_level_attributes() {
+        assert_eq!(sanitize_text("\\w God|strong=\"H430\"\\w*"), "God");
+    }
+
+    #[test]
+    fn sanitize_text_normalises_whitespace() {
+        assert_eq!(sanitize_text("  hello   world  "), "hello world");
+    }
+
+    #[test]
+    fn sanitize_text_handles_empty_input() {
+        assert_eq!(sanitize_text(""), "");
+    }
+
+    #[test]
+    fn sanitize_mysword_strips_html_tags() {
+        assert_eq!(sanitize_mysword_text("<b>Bold</b> text"), "Bold text");
+    }
+
+    #[test]
+    fn sanitize_mysword_strips_footnotes() {
+        assert_eq!(
+            sanitize_mysword_text("Word<f>footnote content</f> rest"),
+            "Word rest"
+        );
+    }
+
+    #[test]
+    fn sanitize_mysword_strips_bracketed_variants() {
+        assert_eq!(
+            sanitize_mysword_text("text [ Var.: + extra] more"),
+            "text more"
+        );
+    }
+
+    #[test]
+    fn starts_with_ci_matches_case_insensitive() {
+        assert!(starts_with_ci("<Font", "<f"));
+        assert!(starts_with_ci("<FONT", "<f"));
+    }
+
+    #[test]
+    fn starts_with_ci_rejects_shorter_haystack() {
+        assert!(!starts_with_ci("a", "ab"));
+    }
+
+    #[test]
+    fn starts_with_ci_empty_needle() {
+        assert!(starts_with_ci("anything", ""));
+    }
+}

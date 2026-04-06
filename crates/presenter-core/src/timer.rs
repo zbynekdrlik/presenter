@@ -381,4 +381,44 @@ mod tests {
         assert!(overview.countdown_to_start.seconds_remaining > 0);
         assert_eq!(overview.preach_timer.state, TimerState::Paused);
     }
+
+    #[test]
+    fn countdown_remaining_returns_zero_at_exact_target() {
+        let now = Utc::now();
+        let target = now + TimeDelta::try_minutes(5).unwrap();
+        let timer = CountdownTimer::new_with_now(target, now).unwrap();
+        assert_eq!(timer.remaining(target), Duration::zero());
+    }
+
+    #[test]
+    fn countdown_remaining_returns_zero_past_target() {
+        let now = Utc::now();
+        let target = now + TimeDelta::try_minutes(5).unwrap();
+        let timer = CountdownTimer::new_with_now(target, now).unwrap();
+        let past_target = target + TimeDelta::try_seconds(10).unwrap();
+        assert_eq!(timer.remaining(past_target), Duration::zero());
+    }
+
+    #[test]
+    fn preach_timer_elapsed_accumulates_across_pause_resume() {
+        let now = Utc::now();
+        let mut timer = PreachTimer::new();
+        timer.start(now);
+        timer.pause(now + TimeDelta::try_seconds(30).unwrap());
+        assert_eq!(timer.elapsed(now).num_seconds(), 30);
+        timer.start(now + TimeDelta::try_seconds(60).unwrap());
+        let elapsed = timer.elapsed(now + TimeDelta::try_seconds(70).unwrap());
+        assert_eq!(elapsed.num_seconds(), 40);
+    }
+
+    #[test]
+    fn preach_timer_reset_clears_accumulated() {
+        let now = Utc::now();
+        let mut timer = PreachTimer::new();
+        timer.start(now);
+        timer.pause(now + TimeDelta::try_seconds(30).unwrap());
+        timer.reset();
+        assert_eq!(timer.elapsed(now).num_seconds(), 0);
+        assert_eq!(timer.state, TimerState::Idle);
+    }
 }

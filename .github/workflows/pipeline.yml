@@ -322,26 +322,34 @@ jobs:
       - name: Run mutation testing (baseline — advisory only)
         run: |
           cargo mutants --workspace --timeout 120 --no-shuffle \
-            --shard 1/12 2>&1 | tee mutants-output.txt || true
+            --shard 1/12 --output mutants.out 2>&1 | tee mutants-output.txt || true
+
           echo "=== Mutation Testing Summary ==="
-          CAUGHT=$(grep -c "^.*CAUGHT" mutants-output.txt 2>/dev/null || echo 0)
-          MISSED=$(grep -c "^.*MISSED" mutants-output.txt 2>/dev/null || echo 0)
-          TIMEOUT=$(grep -c "^.*TIMEOUT" mutants-output.txt 2>/dev/null || echo 0)
-          TOTAL=$((CAUGHT + MISSED + TIMEOUT))
-          echo "Caught: $CAUGHT / $TOTAL"
-          echo "Missed: $MISSED / $TOTAL"
-          echo "Timeout: $TIMEOUT / $TOTAL"
-          if [ "$TOTAL" -gt 0 ]; then
-            SCORE=$(( CAUGHT * 100 / TOTAL ))
-            echo "Mutation score: ${SCORE}%"
+          if [ -f mutants.out/outcomes.json ]; then
+            CAUGHT=$(jq '[.[] | select(.summary == "CaughtMutant")] | length' mutants.out/outcomes.json)
+            MISSED=$(jq '[.[] | select(.summary == "MissedMutant")] | length' mutants.out/outcomes.json)
+            TIMEOUT=$(jq '[.[] | select(.summary == "Timeout")] | length' mutants.out/outcomes.json)
+            TOTAL=$((CAUGHT + MISSED + TIMEOUT))
+            echo "Caught: $CAUGHT / $TOTAL"
+            echo "Missed: $MISSED / $TOTAL"
+            echo "Timeout: $TIMEOUT / $TOTAL"
+            if [ "$TOTAL" -gt 0 ]; then
+              SCORE=$(( CAUGHT * 100 / TOTAL ))
+              echo "Mutation score: ${SCORE}%"
+            fi
+          else
+            echo "No outcomes.json found — cargo-mutants may have failed to run"
+            cat mutants-output.txt
           fi
 
-      - name: Upload mutation log
+      - name: Upload mutation results
         uses: actions/upload-artifact@v4
         if: always()
         with:
-          name: mutation-log-${{ github.run_id }}
-          path: mutants-output.txt
+          name: mutation-results-${{ github.run_id }}
+          path: |
+            mutants.out/
+            mutants-output.txt
           retention-days: 14
 
   # ============================================

@@ -175,3 +175,24 @@ impl<P: BibleContentProvider> BibleScraper<P> {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn sanitise_url_preserves_alphanumeric_and_dots() {
+        assert_eq!(sanitise_url("file.txt"), "file.txt");
+        assert_eq!(sanitise_url("abc-123.zip"), "abc-123.zip");
+    }
+
+    #[test]
+    fn sanitise_url_replaces_special_chars() {
+        assert_eq!(sanitise_url("https://example.com/path"), "https___example.com_path");
+    }
+
+    #[test]
+    fn sanitise_url_replaces_spaces() {
+        assert_eq!(sanitise_url("my file"), "my_file");
+    }
+}

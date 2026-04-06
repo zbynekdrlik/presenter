@@ -84,3 +84,47 @@ impl ResolumeHostDraft {
         Ok(())
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn valid_draft() -> ResolumeHostDraft {
+        ResolumeHostDraft::new("Main", "192.168.1.100", 7000)
+    }
+
+    #[test]
+    fn validate_accepts_valid_draft() {
+        assert!(valid_draft().validate().is_ok());
+    }
+
+    #[test]
+    fn validate_rejects_empty_label() {
+        let mut draft = valid_draft();
+        draft.label = "  ".to_string();
+        assert_eq!(
+            draft.validate().unwrap_err(),
+            ResolumeHostValidationError::EmptyLabel
+        );
+    }
+
+    #[test]
+    fn validate_rejects_empty_host() {
+        let mut draft = valid_draft();
+        draft.host = "".to_string();
+        assert_eq!(
+            draft.validate().unwrap_err(),
+            ResolumeHostValidationError::EmptyHost
+        );
+    }
+
+    #[test]
+    fn validate_rejects_zero_port() {
+        let mut draft = valid_draft();
+        draft.port = 0;
+        assert_eq!(
+            draft.validate().unwrap_err(),
+            ResolumeHostValidationError::InvalidPort
+        );
+    }
+}
