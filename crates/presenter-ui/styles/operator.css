@@ -943,32 +943,37 @@ body.operator[data-mode="live"] .operator__line-limit {
 }
 
 .operator__stage-preview-panel {
-  width: 180px;
-  min-height: 70px;
+  width: 280px;
+  aspect-ratio: 16 / 9;
   display: flex;
   align-items: center;
   justify-content: center;
   text-align: center;
-  font-size: 0.95rem;
-  line-height: 1.3;
   padding: 0.35rem 0.5rem;
   background: rgba(15, 23, 42, 0.82);
   border: 1px solid rgba(148, 163, 184, 0.3);
   border-radius: 10px;
-  white-space: pre;
   overflow: hidden;
-  text-overflow: ellipsis;
+}
+
+.operator__stage-preview-text {
+  white-space: pre;
+  line-height: 1.15;
+  font-weight: 700;
+  width: 100%;
+  height: 100%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  overflow: hidden;
 }
 
 .operator__stage-preview-panel--current {
   background: rgba(59, 124, 255, 0.28);
-  font-weight: 600;
 }
 
 .operator__stage-preview-panel--next {
-  min-height: 3.5rem;
-  font-size: 0.82rem;
-  padding: 0.45rem 0.6rem;
+  width: 200px;
 }
 
 .operator__worship-preview-wrap {
@@ -2152,9 +2157,10 @@ body.operator[data-view="settings"] [data-view-panel="settings"] {
 /* ── Responsive: tablet ── */
 @media (max-width: 1024px) {
   .operator__stage-preview-panel {
+    width: 200px;
+  }
+  .operator__stage-preview-panel--next {
     width: 140px;
-    min-height: 55px;
-    font-size: 0.85rem;
   }
   .operator__stage-preview-stack {
     min-width: 9rem;
