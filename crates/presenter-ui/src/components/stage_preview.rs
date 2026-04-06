@@ -170,12 +170,19 @@ pub fn StagePreview() -> impl IntoView {
                     if ctx.view.get() == "bible" { "display:none" } else { "" }
                 }
             >
-                <div class="operator__stage-preview-stack">
+                <div class="operator__stage-preview-panels">
+                    <div class="operator__stage-preview-panel operator__stage-preview-panel--current" data-role="stage-current">
+                        <div node_ref=current_ref class="operator__stage-preview-text">
+                            {current_text}
+                        </div>
+                    </div>
                     <div class="operator__stage-preview-panel operator__stage-preview-panel--next" data-role="stage-next">
                         <div node_ref=next_ref class="operator__stage-preview-text">
                             {next_text}
                         </div>
                     </div>
+                </div>
+                <div class="operator__stage-preview-meta">
                     <div class="operator__stage-preview-song" data-role="stage-song-line">
                         {move || {
                             ctx.stage_snapshot.get()
@@ -218,11 +225,6 @@ pub fn StagePreview() -> impl IntoView {
                                 }
                             }}
                         </button>
-                    </div>
-                </div>
-                <div class="operator__stage-preview-panel operator__stage-preview-panel--current" data-role="stage-current">
-                    <div node_ref=current_ref class="operator__stage-preview-text">
-                        {current_text}
                     </div>
                 </div>
             </div>
