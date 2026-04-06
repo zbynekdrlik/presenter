@@ -81,3 +81,38 @@ impl Default for OscSettingsDraft {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn validate_accepts_default_settings() {
+        let settings = OscSettingsDraft::default();
+        assert!(settings.validate().is_ok());
+    }
+
+    #[test]
+    fn validate_rejects_zero_port() {
+        let settings = OscSettingsDraft {
+            listen_port: 0,
+            ..OscSettingsDraft::default()
+        };
+        assert_eq!(
+            settings.validate().unwrap_err(),
+            OscSettingsValidationError::InvalidPort
+        );
+    }
+
+    #[test]
+    fn validate_rejects_empty_address() {
+        let settings = OscSettingsDraft {
+            address_pattern: "  ".to_string(),
+            ..OscSettingsDraft::default()
+        };
+        assert_eq!(
+            settings.validate().unwrap_err(),
+            OscSettingsValidationError::EmptyAddress
+        );
+    }
+}
