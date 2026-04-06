@@ -807,12 +807,13 @@ mod tests {
     fn build_group_lookup_assigns_anchor_to_first_cue() {
         let mut presentation = proto::Presentation::default();
         let mut cue_group = proto::presentation::CueGroup::default();
-        let mut group = Group::default();
-        group.name = "Verse 1".to_string();
-        group.uuid = Some(proto::Uuid {
-            string: "group-1".to_string(),
+        cue_group.group = Some(Group {
+            name: "Verse 1".to_string(),
+            uuid: Some(proto::Uuid {
+                string: "group-1".to_string(),
+            }),
+            ..Default::default()
         });
-        cue_group.group = Some(group);
         cue_group.cue_identifiers = vec![
             proto::Uuid {
                 string: "cue-a".to_string(),
@@ -845,12 +846,13 @@ mod tests {
     fn build_group_lookup_skips_empty_uuids() {
         let mut presentation = proto::Presentation::default();
         let mut cue_group = proto::presentation::CueGroup::default();
-        let mut group = Group::default();
-        group.name = "Chorus".to_string();
-        group.uuid = Some(proto::Uuid {
-            string: "group-1".to_string(),
+        cue_group.group = Some(Group {
+            name: "Chorus".to_string(),
+            uuid: Some(proto::Uuid {
+                string: "group-1".to_string(),
+            }),
+            ..Default::default()
         });
-        cue_group.group = Some(group);
         cue_group.cue_identifiers = vec![
             proto::Uuid {
                 string: "cue-a".to_string(),
