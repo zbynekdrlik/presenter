@@ -347,6 +347,13 @@ pub(super) fn write_timer_variables(
                 "timer_preach_elapsed_readable",
                 format_duration_readable(timers.preach_timer.seconds_elapsed),
             );
+            builder.set(
+                "timer_preach_limit_seconds",
+                match timers.preach_timer.limit_seconds {
+                    Some(s) => s.to_string(),
+                    None => "".into(),
+                },
+            );
         }
         None => {
             builder.set("timer_countdown_state", "idle".into());
@@ -362,6 +369,7 @@ pub(super) fn write_timer_variables(
             builder.set("timer_preach_elapsed_mmss", "0:00".into());
             builder.set("timer_preach_elapsed_hhmm", "00:00".into());
             builder.set("timer_preach_elapsed_readable", "0s".into());
+            builder.set("timer_preach_limit_seconds", "".into());
         }
     }
 }
