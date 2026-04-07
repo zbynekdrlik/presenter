@@ -116,10 +116,11 @@ Color logic is computed client-side in WASM from `elapsed` and `limit_seconds`:
 | No limit | `limit_seconds` is `None` | `#1e293b` (neutral dark) | `#334155` |
 | Green | `elapsed < 90% of limit` | `#166534` | `#22c55e` |
 | Orange | `elapsed >= 90% && < 100%` | `#92400e` | `#f59e0b` |
-| Red | `elapsed >= 100% && < 120%` | `#991b1b` | `#ef4444` |
-| Flashing | `elapsed >= 120%` | `#991b1b` pulsing | `#ef4444` |
+| Red | `elapsed >= 100%` | `#991b1b` | `#ef4444` |
 
-CSS transition on background-color for smooth zone changes. `@keyframes` animation for the flashing state.
+Three zones only — no flashing. Red stays solid once the limit is reached.
+
+CSS transition on background-color for smooth zone changes.
 
 When preach timer is idle/paused, use the no-limit neutral style regardless of limit setting.
 
