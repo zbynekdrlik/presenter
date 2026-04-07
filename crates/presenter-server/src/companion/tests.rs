@@ -42,6 +42,7 @@ fn timer_variables_reflect_snapshot() {
         preach_timer: presenter_core::timer::PreachTimerSnapshot {
             state: TimerState::Paused,
             seconds_elapsed: 30,
+            limit_seconds: None,
         },
     };
     state.apply_timers(overview);
