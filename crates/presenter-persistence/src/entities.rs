@@ -445,6 +445,7 @@ pub mod timers {
         pub preach_state: String,
         pub preach_started_at: Option<DateTimeWithTimeZone>,
         pub preach_accumulated_seconds: i64,
+        pub preach_limit_seconds: Option<i64>,
         pub created_at: DateTimeWithTimeZone,
         pub updated_at: DateTimeWithTimeZone,
     }

@@ -651,6 +651,11 @@ impl MigrationTrait for Migration {
                             .default(0),
                     )
                     .col(
+                        ColumnDef::new(Timers::PreachLimitSeconds)
+                            .big_integer()
+                            .null(),
+                    )
+                    .col(
                         ColumnDef::new(Timers::CreatedAt)
                             .timestamp_with_time_zone()
                             .not_null()
@@ -1134,6 +1139,7 @@ enum Timers {
     PreachState,
     PreachStartedAt,
     PreachAccumulatedSeconds,
+    PreachLimitSeconds,
     CreatedAt,
     UpdatedAt,
 }
