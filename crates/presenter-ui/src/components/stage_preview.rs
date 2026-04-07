@@ -142,13 +142,13 @@ pub fn StagePreview() -> impl IntoView {
         ctx.stage_snapshot
             .get()
             .and_then(|s| s.current.as_ref().map(|slide| slide.main.clone()))
-            .unwrap_or_default()
+            .unwrap_or_else(|| "\u{2014}".to_string())
     };
     let next_text = move || {
         ctx.stage_snapshot
             .get()
             .and_then(|s| s.next.as_ref().map(|slide| slide.main.clone()))
-            .unwrap_or_default()
+            .unwrap_or_else(|| "\u{2014}".to_string())
     };
 
     autofit_effect(current_ref, PREVIEW_CURRENT_MAX_FONT, current_text.clone());
