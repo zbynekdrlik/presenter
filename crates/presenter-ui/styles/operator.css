@@ -971,7 +971,6 @@ body.operator[data-mode="live"] .operator__line-limit {
 .operator__stage-preview-text {
   white-space: pre;
   line-height: 1.15;
-  font-weight: 700;
   width: 100%;
   height: 100%;
   display: flex;
@@ -982,6 +981,7 @@ body.operator[data-mode="live"] .operator__line-limit {
 
 .operator__stage-preview-panel--current {
   background: rgba(59, 124, 255, 0.28);
+  font-weight: 600;
 }
 
 .operator__stage-preview-panel--next {
