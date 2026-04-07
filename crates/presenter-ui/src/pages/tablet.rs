@@ -1,5 +1,5 @@
 use leptos::prelude::*;
-use presenter_core::LiveEvent;
+use presenter_core::{LiveEvent, TimerState, TimersOverview};
 use wasm_bindgen::JsCast;
 
 use crate::api::bible::{self, BibleSlideDto, BibleSlideMetaBible};
@@ -72,6 +72,9 @@ pub fn TabletPage() -> impl IntoView {
                         });
                     }
                 }
+                LiveEvent::Timers { overview } => {
+                    ctx.timers.set(Some(overview));
+                }
                 _ => {}
             }
         });
@@ -135,6 +138,7 @@ pub fn TabletPage() -> impl IntoView {
     expose_tablet_test_state(&ctx);
 
     view! {
+        <TabletTimerBar />
         <TabletHeader />
         <main class="tablet-layout">
             <TabletSidebar />
@@ -147,6 +151,92 @@ pub fn TabletPage() -> impl IntoView {
 // ---------------------------------------------------------------------------
 // Sub-components
 // ---------------------------------------------------------------------------
+
+fn current_hhmm() -> String {
+    let d = js_sys::Date::new_0();
+    format!("{:02}:{:02}", d.get_hours(), d.get_minutes())
+}
+
+fn format_mmss(seconds: i64) -> String {
+    let abs = seconds.unsigned_abs();
+    let h = abs / 3600;
+    let m = (abs % 3600) / 60;
+    let s = abs % 60;
+    if h > 0 {
+        format!("{h}:{m:02}:{s:02}")
+    } else {
+        format!("{m}:{s:02}")
+    }
+}
+
+fn compute_zone(overview: &TimersOverview) -> &'static str {
+    let preach = &overview.preach_timer;
+    if preach.state != TimerState::Running {
+        return "neutral";
+    }
+    let Some(limit) = preach.limit_seconds else {
+        return "neutral";
+    };
+    if limit == 0 {
+        return "red";
+    }
+    let ratio = preach.seconds_elapsed as f64 / limit as f64;
+    if ratio >= 1.0 {
+        "red"
+    } else if ratio >= 0.9 {
+        "orange"
+    } else {
+        "green"
+    }
+}
+
+#[component]
+fn TabletTimerBar() -> impl IntoView {
+    let ctx = use_ctx!(TabletContext);
+    let clock = RwSignal::new(current_hhmm());
+
+    // Update wall clock every second
+    let interval = gloo_timers::callback::Interval::new(1_000, move || {
+        clock.set(current_hhmm());
+    });
+    interval.forget();
+
+    let elapsed_text = move || {
+        let timers = ctx.timers.get();
+        match timers {
+            Some(ref t) => format_mmss(t.preach_timer.seconds_elapsed),
+            None => "\u{2014}".to_string(), // em-dash
+        }
+    };
+
+    let state_label = move || {
+        let timers = ctx.timers.get();
+        match timers {
+            Some(ref t) => match t.preach_timer.state {
+                TimerState::Idle => "IDLE",
+                TimerState::Running => "RUNNING",
+                TimerState::Paused => "PAUSED",
+                TimerState::Completed => "DONE",
+            },
+            None => "IDLE",
+        }
+    };
+
+    let zone = move || {
+        ctx.timers
+            .get()
+            .as_ref()
+            .map_or("neutral", compute_zone)
+    };
+
+    view! {
+        <div class="tablet-timer-bar" data-zone=zone data-role="timer-bar">
+            <span class="tablet-timer-bar__clock">{move || clock.get()}</span>
+            <span class="tablet-timer-bar__elapsed" data-role="timer-elapsed">{elapsed_text}</span>
+            <span class="tablet-timer-bar__state" data-role="timer-state">{state_label}</span>
+        </div>
+    }
+}
 
 #[component]
 fn TabletHeader() -> impl IntoView {

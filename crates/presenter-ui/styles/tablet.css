@@ -385,3 +385,56 @@ body.tablet {
   opacity: 1;
   transform: translateY(0);
 }
+
+/* --- Timer bar --- */
+.tablet-timer-bar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 0.5rem 1.25rem;
+  font-family: "Inter", "Segoe UI", system-ui, sans-serif;
+  font-variant-numeric: tabular-nums;
+  color: #f8fafc;
+  background: #1e293b;
+  border-bottom: 2px solid #334155;
+  transition: background-color 0.6s ease, border-color 0.6s ease;
+  flex-shrink: 0;
+}
+
+.tablet-timer-bar[data-zone="green"] {
+  background: #166534;
+  border-bottom-color: #22c55e;
+}
+
+.tablet-timer-bar[data-zone="orange"] {
+  background: #92400e;
+  border-bottom-color: #f59e0b;
+}
+
+.tablet-timer-bar[data-zone="red"] {
+  background: #991b1b;
+  border-bottom-color: #ef4444;
+}
+
+.tablet-timer-bar__clock {
+  font-size: 1.1rem;
+  font-weight: 500;
+  opacity: 0.8;
+  min-width: 4rem;
+}
+
+.tablet-timer-bar__elapsed {
+  font-size: 1.4rem;
+  font-weight: 700;
+  letter-spacing: 0.02em;
+}
+
+.tablet-timer-bar__state {
+  font-size: 0.75rem;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  opacity: 0.7;
+  min-width: 5rem;
+  text-align: right;
+}
