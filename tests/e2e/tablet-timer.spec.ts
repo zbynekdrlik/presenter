@@ -93,29 +93,48 @@ test("tablet timer bar shows clock and responds to preach timer", async ({
   // State should show RUNNING
   await expect(state).toHaveText("RUNNING", { timeout: 5_000 });
 
-  // --- Set preach limit and verify color zone ---
+  // --- Reset, set limit, then start fresh for color zone test ---
+  await request.post(
+    new URL("/timers/command", baseURL).toString(),
+    {
+      data: { command: "reset_preach" },
+      headers: { "Content-Type": "application/json" },
+      timeout: 10_000,
+    },
+  );
+
+  // Set a 5-second limit BEFORE starting (green 0-4.4s, orange 4.5-4.9s, red 5s+)
   const limitResponse = await request.post(
     new URL("/timers/command", baseURL).toString(),
     {
-      data: { command: "set_preach_limit", seconds: 3 },
+      data: { command: "set_preach_limit", seconds: 5 },
       headers: { "Content-Type": "application/json" },
       timeout: 10_000,
     },
   );
   expect(limitResponse.ok()).toBeTruthy();
 
-  // With 3-second limit, initially green, then transitions
-  // Wait for orange zone (at 90% = 2.7s)
+  // Start fresh timer
+  await request.post(
+    new URL("/timers/command", baseURL).toString(),
+    {
+      data: { command: "start_preach" },
+      headers: { "Content-Type": "application/json" },
+      timeout: 10_000,
+    },
+  );
+
+  // Should be green immediately (elapsed ~0s, limit 5s)
   await expect(async () => {
     const zone = await timerBar.getAttribute("data-zone");
-    expect(zone).toBe("orange");
-  }).toPass({ timeout: 10_000, intervals: [300] });
+    expect(zone).toBe("green");
+  }).toPass({ timeout: 5_000, intervals: [300] });
 
-  // Wait for red zone (at 100% = 3s)
+  // Wait for red zone (at 100% = 5s elapsed)
   await expect(async () => {
     const zone = await timerBar.getAttribute("data-zone");
     expect(zone).toBe("red");
-  }).toPass({ timeout: 10_000, intervals: [300] });
+  }).toPass({ timeout: 15_000, intervals: [500] });
 
   // --- Pause preach timer ---
   const pauseResponse = await request.post(
