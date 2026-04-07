@@ -147,8 +147,10 @@ pub fn Header() -> impl IntoView {
     view! {
         <header class="operator__header">
             <div class="operator__header-left">
-                <h1>"Presenter"</h1>
-                <span class="operator__version-badge">{move || version_text.get()}</span>
+                <div class="operator__header-brand">
+                    <h1>"Presenter"</h1>
+                    <span class="operator__version-badge">{move || version_text.get()}</span>
+                </div>
                 <form class="operator__search" data-role="global-search-form" role="search" autocomplete="off"
                     on:submit=on_search_submit
                 >

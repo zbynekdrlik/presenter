@@ -1,10 +1,17 @@
 use crate::state::{save_baseline_to_storage, AppContext};
+use crate::utils::autofit::autofit_effect;
 use leptos::prelude::*;
+
+const PREVIEW_CURRENT_MAX_FONT: f64 = 40.0;
+const PREVIEW_NEXT_MAX_FONT: f64 = 18.0;
 
 /// Stage preview panel rendered inside the header.
 #[component]
 pub fn StagePreview() -> impl IntoView {
     let ctx = use_ctx!(AppContext);
+
+    let current_ref = NodeRef::<leptos::html::Div>::new();
+    let next_ref = NodeRef::<leptos::html::Div>::new();
 
     // Compute alert state: connected < baseline connected
     let has_alert = move || {
@@ -131,6 +138,22 @@ pub fn StagePreview() -> impl IntoView {
         });
     };
 
+    let current_text = move || {
+        ctx.stage_snapshot
+            .get()
+            .and_then(|s| s.current.as_ref().map(|slide| slide.main.clone()))
+            .unwrap_or_else(|| "\u{2014}".to_string())
+    };
+    let next_text = move || {
+        ctx.stage_snapshot
+            .get()
+            .and_then(|s| s.next.as_ref().map(|slide| slide.main.clone()))
+            .unwrap_or_else(|| "\u{2014}".to_string())
+    };
+
+    autofit_effect(current_ref, PREVIEW_CURRENT_MAX_FONT, current_text.clone());
+    autofit_effect(next_ref, PREVIEW_NEXT_MAX_FONT, next_text.clone());
+
     view! {
         <div
             class="operator__stage-preview"
@@ -149,11 +172,9 @@ pub fn StagePreview() -> impl IntoView {
             >
                 <div class="operator__stage-preview-stack">
                     <div class="operator__stage-preview-panel operator__stage-preview-panel--next" data-role="stage-next">
-                        {move || {
-                            ctx.stage_snapshot.get()
-                                .and_then(|s| s.next.as_ref().map(|slide| slide.main.clone()))
-                                .unwrap_or_else(|| "\u{2014}".to_string())
-                        }}
+                        <div node_ref=next_ref class="operator__stage-preview-text">
+                            {next_text}
+                        </div>
                     </div>
                     <div class="operator__stage-preview-song" data-role="stage-song-line">
                         {move || {
@@ -200,11 +221,9 @@ pub fn StagePreview() -> impl IntoView {
                     </div>
                 </div>
                 <div class="operator__stage-preview-panel operator__stage-preview-panel--current" data-role="stage-current">
-                    {move || {
-                        ctx.stage_snapshot.get()
-                            .and_then(|s| s.current.as_ref().map(|slide| slide.main.clone()))
-                            .unwrap_or_else(|| "\u{2014}".to_string())
-                    }}
+                    <div node_ref=current_ref class="operator__stage-preview-text">
+                        {current_text}
+                    </div>
                 </div>
             </div>
             <div
