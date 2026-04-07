@@ -980,6 +980,7 @@ body.operator[data-mode="live"] .operator__line-limit {
 }
 
 .operator__stage-preview-panel--current {
+  width: 200px;
   background: rgba(59, 124, 255, 0.28);
   font-weight: 600;
 }

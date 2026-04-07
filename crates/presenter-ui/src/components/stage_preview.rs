@@ -3,7 +3,7 @@ use crate::utils::autofit::autofit_effect;
 use leptos::prelude::*;
 
 const PREVIEW_CURRENT_MAX_FONT: f64 = 40.0;
-const PREVIEW_NEXT_MAX_FONT: f64 = 30.0;
+const PREVIEW_NEXT_MAX_FONT: f64 = 18.0;
 
 /// Stage preview panel rendered inside the header.
 #[component]
