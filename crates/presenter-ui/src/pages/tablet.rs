@@ -180,7 +180,7 @@ fn compute_zone(overview: &TimersOverview) -> &'static str {
     if limit == 0 {
         return "red";
     }
-    let ratio = preach.seconds_elapsed as f64 / limit as f64;
+    let ratio = preach.seconds_elapsed.max(0) as f64 / limit as f64;
     if ratio >= 1.0 {
         "red"
     } else if ratio >= 0.9 {
