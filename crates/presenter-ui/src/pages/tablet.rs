@@ -204,8 +204,10 @@ fn TabletTimerBar() -> impl IntoView {
     let elapsed_text = move || {
         let timers = ctx.timers.get();
         match timers {
-            Some(ref t) => format_mmss(t.preach_timer.seconds_elapsed),
-            None => "\u{2014}".to_string(), // em-dash
+            Some(ref t) if t.preach_timer.state != TimerState::Idle => {
+                format_mmss(t.preach_timer.seconds_elapsed)
+            }
+            _ => "\u{2014}".to_string(), // em-dash
         }
     };
 
@@ -231,7 +233,7 @@ fn TabletTimerBar() -> impl IntoView {
 
     view! {
         <div class="tablet-timer-bar" data-zone=zone data-role="timer-bar">
-            <span class="tablet-timer-bar__clock">{move || clock.get()}</span>
+            <span class="tablet-timer-bar__clock" data-role="timer-clock">{move || clock.get()}</span>
             <span class="tablet-timer-bar__elapsed" data-role="timer-elapsed">{elapsed_text}</span>
             <span class="tablet-timer-bar__state" data-role="timer-state">{state_label}</span>
         </div>
