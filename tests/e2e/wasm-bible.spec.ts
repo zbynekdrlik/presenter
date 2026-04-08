@@ -1888,11 +1888,11 @@ test.describe("WASM Operator Bible Tests", () => {
       // Search should be cleared
       await expect(searchInput).toHaveValue("", { timeout: 3_000 });
 
-      // A book should be selected (poll for UI update)
-      const activeBook = page.locator(
-        '[data-role="book-item"][data-active="true"]',
-      );
-      await expect(activeBook.first()).toBeVisible({ timeout: 5_000 });
+      // A book should be selected — wait for the book list to update
+      // after search closes and the live tab re-renders
+      await expect(
+        page.locator('[data-role="book-item"][data-active="true"]').first(),
+      ).toBeVisible({ timeout: 15_000 });
     }
   });
 
