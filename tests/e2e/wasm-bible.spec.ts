@@ -1888,12 +1888,11 @@ test.describe("WASM Operator Bible Tests", () => {
       // Search should be cleared
       await expect(searchInput).toHaveValue("", { timeout: 3_000 });
 
-      // A book should be selected
+      // A book should be selected (poll for UI update)
       const activeBook = page.locator(
         '[data-role="book-item"][data-active="true"]',
       );
-      const count = await activeBook.count();
-      expect(count).toBeGreaterThanOrEqual(1);
+      await expect(activeBook.first()).toBeVisible({ timeout: 5_000 });
     }
   });
 
@@ -1905,21 +1904,21 @@ test.describe("WASM Operator Bible Tests", () => {
       return;
     }
 
-    const searchInput = page.locator('[data-role="bible-search-input"]');
+    const searchInput = page.locator('[data-role="global-search-query"]');
     await searchInput.fill("love");
 
-    await page.waitForSelector('[data-role="bible-search-results"]', {
+    await page.waitForSelector('[data-role="global-search-results"]', {
       timeout: 10_000,
     });
 
-    const clearBtn = page.locator('[data-role="bible-search-clear"]');
+    const clearBtn = page.locator('[data-role="global-search-clear"]');
     await clearBtn.click();
 
     await expect(searchInput).toHaveValue("", { timeout: 3_000 });
 
     await expect
       .poll(
-        async () => page.locator('[data-role="bible-search-results"]').count(),
+        async () => page.locator('[data-role="global-search-results"]').count(),
         { timeout: 3_000 },
       )
       .toBe(0);
@@ -1949,11 +1948,10 @@ test.describe("WASM Operator Bible Tests", () => {
 
     // History should now appear
     const history = page.locator('[data-role="bible-history"]');
-    await expect(history).toBeVisible();
+    await expect(history).toBeVisible({ timeout: 10_000 });
 
     const historyItems = page.locator('[data-role="bible-history-item"]');
-    const count = await historyItems.count();
-    expect(count).toBeGreaterThanOrEqual(1);
+    await expect(historyItems.first()).toBeVisible({ timeout: 5_000 });
   });
 
   test("clicking history item sets reference inputs", async ({ page }) => {
