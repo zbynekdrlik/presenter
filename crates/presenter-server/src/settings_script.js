@@ -626,10 +626,20 @@
           const latency = typeof latencySource === 'number'
             ? `${latencySource.toFixed(1)} ms`
             : '—';
+          // Diagnostics: error detail with retry info
+          let statusDetail = '';
           const errorMessage = statusObj.lastError || host.statusMessage;
-          const statusDetail = errorMessage
-            ? `<p class="settings__list-meta settings__list-meta--warning">⚠ ${errorMessage}</p>`
-            : '';
+          if (errorMessage && normalizedState === 'error') {
+            const failures = statusObj.consecutiveFailures || 0;
+            const errorSince = statusObj.errorSince;
+            let sinceText = '';
+            if (errorSince) {
+              try { sinceText = ` since ${formatDate(errorSince)}`; } catch (_) {}
+            }
+            statusDetail = `<p class="settings__list-meta settings__list-meta--warning" data-role="host-error-detail">\u26a0 Retrying\u2026 (${failures} failure${failures !== 1 ? 's' : ''}${sinceText})</p>`;
+          } else if (errorMessage) {
+            statusDetail = `<p class="settings__list-meta settings__list-meta--warning">\u26a0 ${errorMessage}</p>`;
+          }
           return `
 <li class="settings__list-item" data-id="${host.id}" data-enabled="${host.isEnabled}">
   <div class="settings__list-primary">
@@ -644,6 +654,7 @@
     ${statusDetail}
   </div>
   <div class="settings__list-actions">
+    <button type="button" class="settings__button settings__button--ghost" data-role="host-test" data-id="${host.id}">Test</button>
     <button type="button" class="settings__button settings__button--ghost" data-role="host-edit" data-id="${host.id}">Edit</button>
     <button type="button" class="settings__button settings__button--danger" data-role="host-delete" data-id="${host.id}">Delete</button>
   </div>
@@ -997,7 +1008,25 @@
     }
     const id = target.dataset.id;
     if (!id) return;
-    if (target.dataset.role === 'host-edit') {
+    if (target.dataset.role === 'host-test') {
+      target.disabled = true;
+      target.textContent = 'Testing\u2026';
+      try {
+        const resp = await fetch(`/integrations/resolume/hosts/${id}/test`, { method: 'POST' });
+        const result = await resp.json();
+        if (result.success) {
+          showToast(`Connection OK (${result.latencyMs.toFixed(1)} ms)`);
+        } else {
+          showToast(`Connection failed: ${result.error || 'unknown error'}`);
+        }
+      } catch (err) {
+        showToast(`Test failed: ${err.message}`);
+      } finally {
+        target.disabled = false;
+        target.textContent = 'Test';
+        await refreshHosts();
+      }
+    } else if (target.dataset.role === 'host-edit') {
       startEdit(id);
     } else if (target.dataset.role === 'host-delete') {
       await deleteHost(id);
