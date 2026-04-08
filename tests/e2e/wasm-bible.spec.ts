@@ -2095,11 +2095,15 @@ test.describe("WASM Operator Bible Tests", () => {
 
     const countBefore = await page.locator('[data-role="slide-card"]').count();
 
+    // Switch to edit mode so delete buttons are visible
+    await page.locator('[data-role="mode-toggle"][data-mode="edit"]').click();
+
     // Handle confirm dialog
     page.once("dialog", (dialog) => dialog.accept());
 
     // Click delete on first slide
     const deleteBtn = page.locator('[data-role="slide-delete"]').first();
+    await expect(deleteBtn).toBeVisible({ timeout: 5_000 });
     await deleteBtn.click();
 
     // Wait for slide count to decrease
@@ -2192,9 +2196,10 @@ test.describe("WASM Operator Bible Tests", () => {
       { timeout: 10_000 },
     );
 
-    // Verify slides have draggable attribute
-    const firstSlide = page.locator('[data-role="slide-card"]').first();
-    await expect(firstSlide).toHaveAttribute("draggable", "true");
+    // Verify slides have a draggable handle
+    const firstDragHandle = page.locator('[data-role="slide-drag-handle"]').first();
+    await expect(firstDragHandle).toBeVisible({ timeout: 5_000 });
+    await expect(firstDragHandle).toHaveAttribute("draggable", "true");
 
     // Cleanup
     await page.evaluate(
@@ -2332,7 +2337,9 @@ test.describe("WASM Operator Bible Tests", () => {
 
     // 10. Clear broadcast
     await page.locator('[data-role="bible-tab"][data-tab="live"]').click();
-    await page.locator('[data-role="clear-broadcast"]').click();
+    const clearBtn = page.locator('[data-role="clear-broadcast"]');
+    await expect(clearBtn).toBeVisible({ timeout: 10_000 });
+    await clearBtn.click();
 
     await page.waitForFunction(
       () => {
