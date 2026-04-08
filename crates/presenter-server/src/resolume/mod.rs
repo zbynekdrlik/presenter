@@ -15,7 +15,7 @@ use tracing::error;
 
 use driver::{run_host_worker, HostCommand};
 
-const DEFAULT_TIMEOUT: Duration = Duration::from_millis(500);
+const CONNECT_TIMEOUT: Duration = Duration::from_secs(3);
 const HOST_COMMAND_CAPACITY: usize = 16;
 
 #[derive(Debug, Clone, Serialize, PartialEq, Eq)]
@@ -113,7 +113,7 @@ struct HostEntry {
 impl ResolumeRegistry {
     pub fn new() -> anyhow::Result<Self> {
         let client = Client::builder()
-            .timeout(DEFAULT_TIMEOUT)
+            .connect_timeout(CONNECT_TIMEOUT)
             .build()
             .map_err(|e| anyhow!("failed to build reqwest client: {e}"))?;
         Ok(Self {

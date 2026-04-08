@@ -3,7 +3,7 @@ use super::driver::HostDriver;
 use super::handlers::translation_short_code;
 use super::types::TextTransform;
 use super::{
-    BibleUpdate, ResolumeConnectionSnapshot, ResolumeConnectionState, TimerFrame, DEFAULT_TIMEOUT,
+    BibleUpdate, ResolumeConnectionSnapshot, ResolumeConnectionState, TimerFrame, CONNECT_TIMEOUT,
 };
 use chrono::Utc;
 use presenter_core::{
@@ -192,7 +192,7 @@ async fn stage_updates_alternate_main_and_translation_lanes() {
     );
 
     let client = Client::builder()
-        .timeout(DEFAULT_TIMEOUT)
+        .connect_timeout(CONNECT_TIMEOUT)
         .build()
         .expect("client build");
     let mut driver = HostDriver::new(client, config);
@@ -355,7 +355,7 @@ async fn clip_name_transforms_apply_to_payload() {
     );
 
     let client = Client::builder()
-        .timeout(DEFAULT_TIMEOUT)
+        .connect_timeout(CONNECT_TIMEOUT)
         .build()
         .expect("client");
 
@@ -444,7 +444,7 @@ async fn timer_updates_send_text_without_trigger() {
     );
 
     let client = Client::builder()
-        .timeout(DEFAULT_TIMEOUT)
+        .connect_timeout(CONNECT_TIMEOUT)
         .build()
         .expect("client");
 
@@ -586,7 +586,7 @@ async fn refreshes_mapping_after_cache_ttl_for_new_deck() {
     );
 
     let client = Client::builder()
-        .timeout(DEFAULT_TIMEOUT)
+        .connect_timeout(CONNECT_TIMEOUT)
         .build()
         .expect("client");
 
@@ -757,7 +757,7 @@ async fn setup_bible_driver() -> (
     );
 
     let client = Client::builder()
-        .timeout(DEFAULT_TIMEOUT)
+        .connect_timeout(CONNECT_TIMEOUT)
         .build()
         .expect("client");
     let driver = HostDriver::new(client, config);
