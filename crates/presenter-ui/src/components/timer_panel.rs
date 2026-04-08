@@ -125,6 +125,61 @@ pub fn TimerPanel() -> impl IntoView {
         send_timer_cmd(TimerCommand::ResetPreach);
     };
 
+    let on_preach_limit_focus = {
+        let active = op.preach_limit_input_active;
+        move |_| {
+            active.set(true);
+        }
+    };
+
+    let on_preach_limit_blur = {
+        let active = op.preach_limit_input_active;
+        let dirty = op.preach_limit_input_dirty;
+        move |ev: web_sys::FocusEvent| {
+            active.set(false);
+            if dirty.get_untracked() {
+                if let Some(input) = ev.target().and_then(|t| {
+                    use wasm_bindgen::JsCast;
+                    t.dyn_into::<web_sys::HtmlInputElement>().ok()
+                }) {
+                    let val = input.value();
+                    if let Some(seconds) = parse_limit_input(&val) {
+                        send_timer_cmd(TimerCommand::SetPreachLimit { seconds });
+                    }
+                }
+                dirty.set(false);
+            }
+        }
+    };
+
+    let on_preach_limit_input = {
+        let dirty = op.preach_limit_input_dirty;
+        move |_| {
+            dirty.set(true);
+        }
+    };
+
+    let on_preach_limit_keydown = move |ev: web_sys::KeyboardEvent| {
+        if ev.key() != "Enter" {
+            return;
+        }
+        let input = ev.target().and_then(|t| {
+            use wasm_bindgen::JsCast;
+            t.dyn_into::<web_sys::HtmlInputElement>().ok()
+        });
+        if let Some(el) = input {
+            let val = el.value();
+            if let Some(seconds) = parse_limit_input(&val) {
+                send_timer_cmd(TimerCommand::SetPreachLimit { seconds });
+                op.preach_limit_input_dirty.set(false);
+            }
+        }
+    };
+
+    let on_preach_limit_clear = move |_| {
+        send_timer_cmd(TimerCommand::ClearPreachLimit);
+    };
+
     let on_overlay_open = move |_| {
         let window = crate::utils::window::window();
         let _ = window.open_with_url("/overlays/timer");
@@ -185,11 +240,12 @@ pub fn TimerPanel() -> impl IntoView {
                             .unwrap_or_else(|| "0:00".to_string())
                     }}
                 </p>
-                <small id="preach-elapsed">
+                <small id="preach-limit">
                     {move || {
                         ctx.timers.get()
-                            .map(|t| format!("Elapsed {}", format_seconds(t.preach_timer.seconds_elapsed)))
-                            .unwrap_or_default()
+                            .and_then(|t| t.preach_timer.limit_seconds)
+                            .map(|s| format!("Limit: {}", format_seconds(s as i64)))
+                            .unwrap_or_else(|| "No limit".to_string())
                     }}
                 </small>
             </article>
@@ -228,6 +284,26 @@ pub fn TimerPanel() -> impl IntoView {
             </div>
             <div class="operator__timer-group">
                 <h3>"Preach"</h3>
+                <label class="operator__timer-field">
+                    <span>"Preach limit"</span>
+                    <input
+                        type="text"
+                        inputmode="numeric"
+                        placeholder="5"
+                        data-role="preach-limit-input"
+                        aria-label="Preach limit (HH:MM or minutes)"
+                        on:focus=on_preach_limit_focus
+                        on:blur=on_preach_limit_blur
+                        on:input=on_preach_limit_input
+                        on:keydown=on_preach_limit_keydown
+                    />
+                </label>
+                <p class="operator__timer-help">
+                    "Type minutes (or HH:MM) and press Enter. "
+                    <button type="button" data-role="preach-limit-clear" on:click=on_preach_limit_clear>
+                        "Clear limit"
+                    </button>
+                </p>
                 <div class="operator__timer-buttons">
                     <button type="button" data-command="start_preach" on:click=on_preach_start>"Start"</button>
                     <button type="button" data-command="pause_preach" on:click=on_preach_pause>"Pause"</button>
@@ -272,4 +348,27 @@ fn parse_time_input(input: &str) -> Option<chrono::DateTime<chrono::Utc>> {
     }
 
     Some(target)
+}
+
+fn parse_limit_input(input: &str) -> Option<u64> {
+    let trimmed = input.trim();
+    if trimmed.is_empty() {
+        return None;
+    }
+    let parts: Vec<&str> = trimmed.split(':').collect();
+    match parts.len() {
+        1 => {
+            let mins: u64 = parts[0].parse().ok()?;
+            Some(mins * 60)
+        }
+        2 => {
+            let h: u64 = parts[0].trim().parse().ok()?;
+            let m: u64 = parts[1].trim().parse().ok()?;
+            if m > 59 {
+                return None;
+            }
+            Some(h * 3600 + m * 60)
+        }
+        _ => None,
+    }
 }
