@@ -935,6 +935,9 @@ async fn record_error_transitions_to_error_state_and_clears_cache() {
     let snap = status.read().await;
     assert_eq!(snap.state, ResolumeConnectionState::Error);
     assert_eq!(snap.last_error.as_deref(), Some("connection refused"));
+    assert_eq!(snap.consecutive_failures, 1);
+    assert!(snap.last_attempt.is_some());
+    assert!(snap.error_since.is_some());
     drop(snap);
 
     // Verify caches are cleared
@@ -942,6 +945,64 @@ async fn record_error_transitions_to_error_state_and_clears_cache() {
     assert!(driver.endpoint.is_none());
     assert!(driver.last_mapping_refresh.is_none());
     assert!(driver.last_timer_payload.is_none());
+}
+
+#[tokio::test]
+async fn record_error_increments_consecutive_failures_and_preserves_error_since() {
+    let (_server, mut driver, status) = setup_bible_driver().await;
+
+    // Record first error
+    driver
+        .record_error(anyhow::anyhow!("first error"), &status)
+        .await;
+
+    let first_error_since;
+    {
+        let snap = status.read().await;
+        assert_eq!(snap.consecutive_failures, 1);
+        assert!(snap.error_since.is_some());
+        first_error_since = snap.error_since;
+    }
+
+    // Record second error
+    driver
+        .record_error(anyhow::anyhow!("second error"), &status)
+        .await;
+
+    let snap = status.read().await;
+    assert_eq!(snap.consecutive_failures, 2);
+    assert_eq!(snap.last_error.as_deref(), Some("second error"));
+    // error_since should be preserved from the first error
+    assert_eq!(snap.error_since, first_error_since);
+}
+
+#[tokio::test]
+async fn mark_connected_resets_failure_diagnostics() {
+    let (_server, mut driver, status) = setup_bible_driver().await;
+
+    // Record two errors to build up failure state
+    driver
+        .record_error(anyhow::anyhow!("error 1"), &status)
+        .await;
+    driver
+        .record_error(anyhow::anyhow!("error 2"), &status)
+        .await;
+
+    {
+        let snap = status.read().await;
+        assert_eq!(snap.consecutive_failures, 2);
+        assert!(snap.error_since.is_some());
+    }
+
+    // Mark connected — should reset diagnostics
+    driver.mark_connected(&status).await;
+
+    let snap = status.read().await;
+    assert_eq!(snap.state, ResolumeConnectionState::Connected);
+    assert_eq!(snap.consecutive_failures, 0);
+    assert!(snap.error_since.is_none());
+    assert!(snap.last_attempt.is_some());
+    assert!(snap.last_success.is_some());
 }
 
 // ── update_config tests ─────────────────────────────────────────────

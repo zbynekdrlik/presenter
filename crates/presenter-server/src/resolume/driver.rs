@@ -328,8 +328,12 @@ impl HostDriver {
     pub(super) async fn mark_connected(&self, status: &Arc<RwLock<ResolumeConnectionSnapshot>>) {
         let mut guard = status.write().await;
         guard.state = ResolumeConnectionState::Connected;
-        guard.last_success = Some(Utc::now());
+        let now = Utc::now();
+        guard.last_success = Some(now);
+        guard.last_attempt = Some(now);
         guard.last_error = None;
+        guard.consecutive_failures = 0;
+        guard.error_since = None;
     }
 
     pub(super) async fn note_latency(
@@ -348,8 +352,14 @@ impl HostDriver {
     ) {
         error!(host = %self.config.host, error = ?err, "resolume host error");
         let mut guard = status.write().await;
+        let now = Utc::now();
+        if guard.state != ResolumeConnectionState::Error {
+            guard.error_since = Some(now);
+        }
         guard.state = ResolumeConnectionState::Error;
         guard.last_error = Some(err.to_string());
+        guard.consecutive_failures += 1;
+        guard.last_attempt = Some(now);
         self.mapping = None;
         self.endpoint = None;
         self.last_mapping_refresh = None;

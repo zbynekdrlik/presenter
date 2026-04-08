@@ -35,6 +35,9 @@ pub struct ResolumeConnectionSnapshot {
     pub last_latency_ms: Option<f64>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub last_error: Option<String>,
+    pub consecutive_failures: u32,
+    pub last_attempt: Option<DateTime<Utc>>,
+    pub error_since: Option<DateTime<Utc>>,
 }
 
 impl ResolumeConnectionSnapshot {
@@ -44,6 +47,9 @@ impl ResolumeConnectionSnapshot {
             last_success: None,
             last_latency_ms: None,
             last_error: None,
+            consecutive_failures: 0,
+            last_attempt: None,
+            error_since: None,
         }
     }
 }
@@ -164,6 +170,9 @@ impl ResolumeRegistry {
                 last_success: None,
                 last_latency_ms: None,
                 last_error: None,
+                consecutive_failures: 0,
+                last_attempt: None,
+                error_since: None,
             }
         } else {
             ResolumeConnectionSnapshot::disabled()
