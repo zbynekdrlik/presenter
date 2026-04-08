@@ -217,6 +217,66 @@ test.describe("WASM Operator Timer Tests", () => {
     );
   });
 
+  test("preach limit input sets and clears limit", async ({
+    page,
+    request,
+  }) => {
+    const consoleMessages: string[] = [];
+    page.on("console", (msg) => {
+      if (msg.type() === "error" || msg.type() === "warning") {
+        consoleMessages.push(`[${msg.type()}] ${msg.text()}`);
+      }
+    });
+
+    await navigateToTimers(page);
+
+    // Preach limit input should be visible
+    const limitInput = page.locator('[data-role="preach-limit-input"]');
+    await expect(limitInput).toBeVisible({ timeout: 5_000 });
+
+    // Preach card should show "No limit" initially
+    const preachLimit = page.locator("#preach-limit");
+    await expect(preachLimit).toContainText("No limit", { timeout: 5_000 });
+
+    // Type "5" and press Enter → sets limit to 300 seconds (5 min)
+    await limitInput.click();
+    await limitInput.fill("5");
+    await limitInput.press("Enter");
+
+    // Verify limit is set via API
+    await expect(async () => {
+      const response = await request.get(
+        new URL("/timers/overview", baseURL).toString(),
+        { timeout: 10_000 },
+      );
+      const data = await response.json();
+      expect(data.preachTimer.limitSeconds).toBe(300);
+    }).toPass({ timeout: 10_000, intervals: [500] });
+
+    // Preach card should show "Limit: 5:00"
+    await expect(preachLimit).toContainText("Limit: 5:00", { timeout: 5_000 });
+
+    // Clear limit
+    const clearButton = page.locator('[data-role="preach-limit-clear"]');
+    await clearButton.click();
+
+    // Verify limit is cleared via API
+    await expect(async () => {
+      const response = await request.get(
+        new URL("/timers/overview", baseURL).toString(),
+        { timeout: 10_000 },
+      );
+      const data = await response.json();
+      expect(data.preachTimer.limitSeconds).toBeNull();
+    }).toPass({ timeout: 10_000, intervals: [500] });
+
+    // Preach card should show "No limit" again
+    await expect(preachLimit).toContainText("No limit", { timeout: 5_000 });
+
+    // Clean console
+    expect(consoleMessages).toEqual([]);
+  });
+
   test("preach timer start/pause/reset works", async ({ page }) => {
     await navigateToTimers(page);
 
