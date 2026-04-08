@@ -135,6 +135,14 @@ pub(super) fn parse_command(command: &str, payload: Value) -> Result<CompanionCo
         "timer.start_preach" => Ok(CompanionCommand::Timer(TimerCommand::StartPreach)),
         "timer.pause_preach" => Ok(CompanionCommand::Timer(TimerCommand::PausePreach)),
         "timer.reset_preach" => Ok(CompanionCommand::Timer(TimerCommand::ResetPreach)),
+        "timer.set_preach_limit" => {
+            let data: PreachLimitPayload = serde_json::from_value(payload)
+                .map_err(|err| format!("invalid timer.set_preach_limit payload: {err}"))?;
+            Ok(CompanionCommand::Timer(TimerCommand::SetPreachLimit {
+                seconds: data.seconds,
+            }))
+        }
+        "timer.clear_preach_limit" => Ok(CompanionCommand::Timer(TimerCommand::ClearPreachLimit)),
         "bible.trigger" => {
             let data: BibleTriggerPayload = serde_json::from_value(payload)
                 .map_err(|err| format!("invalid bible.trigger payload: {err}"))?;
@@ -344,6 +352,12 @@ struct BibleTriggerPayload {
 #[serde(deny_unknown_fields)]
 struct BroadcastSetLivePayload {
     enabled: bool,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct PreachLimitPayload {
+    seconds: u64,
 }
 
 pub(super) async fn handle_command(

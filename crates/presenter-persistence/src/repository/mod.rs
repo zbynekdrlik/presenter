@@ -632,6 +632,7 @@ impl Repository {
             preach_state: Set(timer_state_to_string(state.preach.state)),
             preach_started_at: Set(state.preach.started_at().map(Into::into)),
             preach_accumulated_seconds: Set(state.preach.accumulated_duration().num_seconds()),
+            preach_limit_seconds: Set(state.preach.limit_seconds().map(|s| s as i64)),
             created_at: Set(now.into()),
             updated_at: Set(now.into()),
         };
@@ -645,6 +646,7 @@ impl Repository {
                         timers::Column::PreachState,
                         timers::Column::PreachStartedAt,
                         timers::Column::PreachAccumulatedSeconds,
+                        timers::Column::PreachLimitSeconds,
                         timers::Column::UpdatedAt,
                     ])
                     .to_owned(),

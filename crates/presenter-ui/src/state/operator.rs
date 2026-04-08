@@ -38,6 +38,10 @@ pub struct OperatorState {
     pub countdown_input_active: RwSignal<bool>,
     /// Whether countdown input has unsaved changes
     pub countdown_input_dirty: RwSignal<bool>,
+    /// Whether preach limit input is focused
+    pub preach_limit_input_active: RwSignal<bool>,
+    /// Whether preach limit input has unsaved changes
+    pub preach_limit_input_dirty: RwSignal<bool>,
     /// Snapshot of reorder state before drag (for undo)
     pub reorder_snapshot: RwSignal<Option<Vec<String>>>,
     /// Initial playlist state when editing (for change detection)
@@ -84,6 +88,8 @@ impl OperatorState {
             clearing_slide: RwSignal::new(false),
             countdown_input_active: RwSignal::new(false),
             countdown_input_dirty: RwSignal::new(false),
+            preach_limit_input_active: RwSignal::new(false),
+            preach_limit_input_dirty: RwSignal::new(false),
             reorder_snapshot: RwSignal::new(None),
             playlist_edit_initial: RwSignal::new(None),
             stage_layout_loading: RwSignal::new(false),

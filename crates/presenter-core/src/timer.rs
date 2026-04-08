@@ -117,6 +117,7 @@ pub struct PreachTimer {
     pub state: TimerState,
     started_at: Option<DateTime<Utc>>,
     accumulated: Duration,
+    limit: Option<Duration>,
 }
 
 impl Default for PreachTimer {
@@ -131,6 +132,7 @@ impl PreachTimer {
             state: TimerState::Idle,
             started_at: None,
             accumulated: Duration::zero(),
+            limit: None,
         }
     }
 
@@ -173,15 +175,29 @@ impl PreachTimer {
         self.accumulated
     }
 
+    pub fn set_limit(&mut self, seconds: u64) {
+        self.limit = Some(Duration::seconds(seconds as i64));
+    }
+
+    pub fn clear_limit(&mut self) {
+        self.limit = None;
+    }
+
+    pub fn limit_seconds(&self) -> Option<u64> {
+        self.limit.map(|d| d.num_seconds().max(0) as u64)
+    }
+
     pub fn from_parts(
         state: TimerState,
         started_at: Option<DateTime<Utc>>,
         accumulated: Duration,
+        limit: Option<Duration>,
     ) -> Self {
         Self {
             state,
             started_at,
             accumulated,
+            limit,
         }
     }
 }
@@ -196,6 +212,8 @@ pub enum TimerCommand {
     StartPreach,
     PausePreach,
     ResetPreach,
+    SetPreachLimit { seconds: u64 },
+    ClearPreachLimit,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -254,6 +272,12 @@ impl TimersState {
             TimerCommand::ResetPreach => {
                 self.preach.reset();
             }
+            TimerCommand::SetPreachLimit { seconds } => {
+                self.preach.set_limit(*seconds);
+            }
+            TimerCommand::ClearPreachLimit => {
+                self.preach.clear_limit();
+            }
         }
         Ok(())
     }
@@ -271,6 +295,7 @@ impl TimersState {
             preach_timer: PreachTimerSnapshot {
                 state: self.preach.state,
                 seconds_elapsed: elapsed_seconds,
+                limit_seconds: self.preach.limit_seconds(),
             },
         }
     }
@@ -289,6 +314,7 @@ pub struct CountdownTimerSnapshot {
 pub struct PreachTimerSnapshot {
     pub state: TimerState,
     pub seconds_elapsed: i64,
+    pub limit_seconds: Option<u64>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -311,6 +337,7 @@ impl TimersOverview {
             preach_timer: PreachTimerSnapshot {
                 state: TimerState::Paused,
                 seconds_elapsed: 0,
+                limit_seconds: None,
             },
         }
     }
@@ -420,5 +447,60 @@ mod tests {
         timer.reset();
         assert_eq!(timer.elapsed(now).num_seconds(), 0);
         assert_eq!(timer.state, TimerState::Idle);
+    }
+
+    #[test]
+    fn preach_timer_set_limit() {
+        let mut timer = PreachTimer::new();
+        timer.set_limit(2700);
+        assert_eq!(timer.limit_seconds(), Some(2700));
+    }
+
+    #[test]
+    fn preach_timer_clear_limit() {
+        let mut timer = PreachTimer::new();
+        timer.set_limit(2700);
+        timer.clear_limit();
+        assert_eq!(timer.limit_seconds(), None);
+    }
+
+    #[test]
+    fn preach_timer_limit_in_snapshot() {
+        let now = Utc::now();
+        let mut state = TimersState::default(now);
+        state.preach.set_limit(1800);
+        let overview = state.overview(now);
+        assert_eq!(overview.preach_timer.limit_seconds, Some(1800));
+    }
+
+    #[test]
+    fn preach_timer_snapshot_no_limit() {
+        let now = Utc::now();
+        let state = TimersState::default(now);
+        let overview = state.overview(now);
+        assert_eq!(overview.preach_timer.limit_seconds, None);
+    }
+
+    #[test]
+    fn set_preach_limit_command() {
+        let now = Utc::now();
+        let mut state = TimersState::default(now);
+        state
+            .apply_command(&TimerCommand::SetPreachLimit { seconds: 3600 }, now)
+            .unwrap();
+        assert_eq!(state.preach.limit_seconds(), Some(3600));
+    }
+
+    #[test]
+    fn clear_preach_limit_command() {
+        let now = Utc::now();
+        let mut state = TimersState::default(now);
+        state
+            .apply_command(&TimerCommand::SetPreachLimit { seconds: 3600 }, now)
+            .unwrap();
+        state
+            .apply_command(&TimerCommand::ClearPreachLimit, now)
+            .unwrap();
+        assert_eq!(state.preach.limit_seconds(), None);
     }
 }

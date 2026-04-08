@@ -1,5 +1,5 @@
 use leptos::prelude::*;
-use presenter_core::BibleBroadcast;
+use presenter_core::{BibleBroadcast, TimersOverview};
 use std::collections::HashMap;
 use wasm_bindgen::{JsCast, UnwrapThrowExt};
 
@@ -24,6 +24,7 @@ pub struct TabletContext {
     pub toast_timer_handle: RwSignal<Option<i32>>,
     pub active_slide_id: RwSignal<Option<String>>,
     pub ws_connected: RwSignal<bool>,
+    pub timers: RwSignal<Option<TimersOverview>>,
 }
 
 impl TabletContext {
@@ -47,6 +48,7 @@ impl TabletContext {
             toast_variant: RwSignal::new("info".to_string()),
             toast_timer_handle: RwSignal::new(None),
             ws_connected: RwSignal::new(false),
+            timers: RwSignal::new(None),
         }
     }
 

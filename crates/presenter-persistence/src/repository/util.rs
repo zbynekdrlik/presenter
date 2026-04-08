@@ -343,6 +343,7 @@ pub(super) fn timers_model_to_state(model: timers::Model) -> Result<TimersState,
         preach_state,
         model.preach_started_at.map(Into::into),
         chrono::Duration::seconds(model.preach_accumulated_seconds),
+        model.preach_limit_seconds.map(chrono::Duration::seconds),
     );
 
     Ok(TimersState::new(countdown, preach))
