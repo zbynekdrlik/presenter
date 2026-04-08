@@ -648,6 +648,44 @@ jobs:
               IdentityFile ~/.ssh/id_deploy
           EOF
 
+      - name: Setup SSH for production DB access
+        run: |
+          echo "${{ secrets.DEPLOY_SSH_KEY }}" > ~/.ssh/id_prod
+          chmod 600 ~/.ssh/id_prod
+          ssh-keyscan 10.77.9.205 >> ~/.ssh/known_hosts 2>/dev/null
+          cat >> ~/.ssh/config <<EOF
+          Host prod-server
+              HostName 10.77.9.205
+              User newlevel
+              IdentityFile ~/.ssh/id_prod
+          EOF
+
+      - name: Test migration against production DB
+        run: |
+          set -e
+          echo "Copying production database for migration testing..."
+          PROD_DB="/tmp/prod-migration-test-$$.db"
+          scp -i ~/.ssh/id_prod prod-server:/opt/presenter/presenter.db "$PROD_DB" 2>/dev/null || {
+            echo "::warning::Could not copy production database (server may be unreachable). Skipping prod DB migration test."
+            exit 0
+          }
+          echo "Testing new binary against production database..."
+          chmod +x target/release/presenter-server
+          PRESENTER_DB_URL="sqlite://$PROD_DB" PRESENTER_PORT=0 \
+            timeout 10 target/release/presenter-server &
+          SERVER_PID=$!
+          sleep 3
+          if kill -0 $SERVER_PID 2>/dev/null; then
+            echo "✅ Migration works against production database"
+            kill $SERVER_PID 2>/dev/null || true
+            wait $SERVER_PID 2>/dev/null || true
+          else
+            echo "::error::New binary failed to start with PRODUCTION database — migration is broken. This would cause a production outage. Fix the migration before merging."
+            rm -f "$PROD_DB" "${PROD_DB}-wal" "${PROD_DB}-shm"
+            exit 1
+          fi
+          rm -f "$PROD_DB" "${PROD_DB}-wal" "${PROD_DB}-shm"
+
       - name: Create deploy directory
         run: |
           ssh deploy-target "sudo mkdir -p ${{ env.DEPLOY_DIR }} && sudo chown -R ${{ env.DEPLOY_USER }}:${{ env.DEPLOY_USER }} ${{ env.DEPLOY_DIR }}"
@@ -737,7 +775,7 @@ jobs:
           fi
           REMOTE_SCRIPT
 
-      - name: Validate database schema
+      - name: Validate database schema (dev DB)
         run: |
           ssh deploy-target << 'REMOTE_SCRIPT'
           set -e
@@ -746,7 +784,7 @@ jobs:
             echo "No database - will be created on first start"
             exit 0
           fi
-          echo "Validating schema compatibility with new binary..."
+          echo "Validating schema compatibility with dev database..."
           TEST_DB="/tmp/presenter-dev-schema-test-$$.db"
           cp "$DB_PATH" "$TEST_DB"
           PRESENTER_DB_URL="sqlite://$TEST_DB" PRESENTER_PORT=0 \
@@ -754,11 +792,13 @@ jobs:
           SERVER_PID=$!
           sleep 3
           if kill -0 $SERVER_PID 2>/dev/null; then
-            echo "Schema is compatible"
+            echo "Schema is compatible with dev DB"
             kill $SERVER_PID 2>/dev/null || true
             wait $SERVER_PID 2>/dev/null || true
           else
-            echo "::warning::New binary failed to start with existing database. Database preserved - manual migration may be needed."
+            echo "::error::New binary failed to start with existing dev database — migration is broken."
+            rm -f "$TEST_DB" "${TEST_DB}-wal" "${TEST_DB}-shm"
+            exit 1
           fi
           rm -f "$TEST_DB" "${TEST_DB}-wal" "${TEST_DB}-shm"
           REMOTE_SCRIPT

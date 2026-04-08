@@ -225,7 +225,9 @@ jobs:
             kill $SERVER_PID 2>/dev/null || true
             wait $SERVER_PID 2>/dev/null || true
           else
-            echo "::warning::New binary failed to start with existing database. Database preserved - manual migration may be needed."
+            echo "::error::New binary failed to start with existing database — migration is broken. Fix the migration before deploying."
+            rm -f "$TEST_DB" "${TEST_DB}-wal" "${TEST_DB}-shm"
+            exit 1
           fi
           rm -f "$TEST_DB" "${TEST_DB}-wal" "${TEST_DB}-shm"
           REMOTE_SCRIPT
