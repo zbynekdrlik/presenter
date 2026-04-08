@@ -4,6 +4,10 @@
 
 This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
 
+## Local Build Policy
+
+**Local Rust builds (cargo build, cargo clippy, cargo test) are ALLOWED on this machine.** This is the powerful dev2 build machine. Run fmt, clippy, test, and build locally before pushing. The global airuleset default (CI-only) does NOT apply here.
+
 <!-- Global rules applied via airuleset modules (~/devel/airuleset/):
      core/complete-planned-work, core/completion-report, core/autonomous-verification,
      core/ci-monitoring, core/ci-push-discipline, core/pr-merge-policy,
@@ -249,9 +253,10 @@ crates/
 
 Schema is mutable during pre-release:
 
-1. **Never add incremental migrations** - Edit initial migration directly
-2. The server auto-migrates on startup via `Repository::connect()`
-3. For destructive schema changes, manually trigger the Import Data workflow after deploy
+1. **New columns:** Add an incremental migration (e.g., `m20260408_000001_add_column.rs`) that uses `ALTER TABLE ADD COLUMN` with an idempotent guard (check `pragma_table_info` first). Register it in `lib.rs`. This ensures existing databases are upgraded automatically on startup.
+2. **New tables:** May be added to the initial migration (uses `if_not_exists()`) or as an incremental migration.
+3. **Destructive schema changes** (column renames, type changes): Add an incremental migration. If data must be re-imported, manually trigger the Import Data workflow after deploy.
+4. The server auto-migrates on startup via `Repository::connect()`
 
 ### Deploy Safety
 
@@ -304,7 +309,7 @@ cargo clippy --workspace --all-targets -- -D warnings -W clippy::all  # Must pas
 
 ## Anti-Patterns (Never Do These)
 
-- **Don't add incremental migrations** - Edit initial migration directly
+- **Don't delete production databases** - Use incremental migrations for schema changes
 - **Don't use arbitrary sleeps in tests** - Use retry-with-assert helpers
 
 ---
