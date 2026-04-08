@@ -132,7 +132,7 @@ impl ResolumeRegistry {
         for id in existing_ids {
             if !desired.contains_key(&id) {
                 if let Some(entry) = guard.remove(&id) {
-                    let _ = entry.command_tx.try_send(HostCommand::Shutdown);
+                    let _ = entry.command_tx.send(HostCommand::Shutdown).await;
                     entry.handle.abort();
                 }
             }
@@ -148,7 +148,8 @@ impl ResolumeRegistry {
                     {
                         let _ = entry
                             .command_tx
-                            .try_send(HostCommand::RefreshConfig(host.clone()));
+                            .send(HostCommand::RefreshConfig(host.clone()))
+                            .await;
                         entry.config = host;
                     } else if entry.config.label != host.label {
                         entry.config = host;
@@ -195,24 +196,38 @@ impl ResolumeRegistry {
     }
 
     pub async fn stage_update(&self, update: StageUpdate) {
-        for entry in self.hosts.read().await.values() {
-            let _ = entry
+        for (id, entry) in self.hosts.read().await.iter() {
+            if entry
                 .command_tx
-                .try_send(HostCommand::Stage(update.clone()));
+                .try_send(HostCommand::Stage(update.clone()))
+                .is_err()
+            {
+                tracing::warn!(host_id = %id, "resolume command channel full, dropping stage update");
+            }
         }
     }
 
     pub async fn bible_update(&self, update: BibleUpdate) {
-        for entry in self.hosts.read().await.values() {
-            let _ = entry
+        for (id, entry) in self.hosts.read().await.iter() {
+            if entry
                 .command_tx
-                .try_send(HostCommand::Bible(update.clone()));
+                .try_send(HostCommand::Bible(update.clone()))
+                .is_err()
+            {
+                tracing::warn!(host_id = %id, "resolume command channel full, dropping bible update");
+            }
         }
     }
 
     pub async fn timer_update(&self, frame: TimerFrame) {
-        for entry in self.hosts.read().await.values() {
-            let _ = entry.command_tx.try_send(HostCommand::Timer(frame.clone()));
+        for (id, entry) in self.hosts.read().await.iter() {
+            if entry
+                .command_tx
+                .try_send(HostCommand::Timer(frame.clone()))
+                .is_err()
+            {
+                tracing::warn!(host_id = %id, "resolume command channel full, dropping timer update");
+            }
         }
     }
 
