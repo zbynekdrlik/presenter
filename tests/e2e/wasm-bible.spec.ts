@@ -473,16 +473,17 @@ test.describe("WASM Operator Bible Tests", () => {
       { timeout: 5_000 },
     );
 
-    // Verify actual stage content via active-slide API
-    const activeSlide = await page.evaluate(async (url: string) => {
-      const resp = await fetch(`${url}/bible/active-slide`);
-      return resp.json();
-    }, baseURL);
-
-    expect(activeSlide).not.toBeNull();
-    expect(activeSlide.mainText).toBeTruthy();
-    expect(activeSlide.mainText.length).toBeGreaterThan(0);
-    expect(activeSlide.mainReference).toBeTruthy();
+    // Verify actual stage content via active-slide API (poll for propagation)
+    await expect(async () => {
+      const activeSlide = await page.evaluate(async (url: string) => {
+        const resp = await fetch(`${url}/bible/active-slide`);
+        return resp.json();
+      }, baseURL);
+      expect(activeSlide).not.toBeNull();
+      expect(activeSlide.mainText).toBeTruthy();
+      expect(activeSlide.mainText.length).toBeGreaterThan(0);
+      expect(activeSlide.mainReference).toBeTruthy();
+    }).toPass({ timeout: 10_000, intervals: [500] });
   });
 
   // -----------------------------------------------------------------------
@@ -1590,16 +1591,17 @@ test.describe("WASM Operator Bible Tests", () => {
       { timeout: 5_000 },
     );
 
-    // Verify stage content via active-slide API (single-source-of-truth format)
-    const activeSlide = await page.evaluate(async (url: string) => {
-      const resp = await fetch(`${url}/bible/active-slide`);
-      return resp.json();
-    }, baseURL);
-
-    expect(activeSlide).not.toBeNull();
-    expect(activeSlide.mainText).toBeTruthy();
-    expect(activeSlide.mainText.length).toBeGreaterThan(0);
-    expect(activeSlide.mainReference).toBeTruthy();
+    // Verify stage content via active-slide API (poll for propagation)
+    await expect(async () => {
+      const activeSlide = await page.evaluate(async (url: string) => {
+        const resp = await fetch(`${url}/bible/active-slide`);
+        return resp.json();
+      }, baseURL);
+      expect(activeSlide).not.toBeNull();
+      expect(activeSlide.mainText).toBeTruthy();
+      expect(activeSlide.mainText.length).toBeGreaterThan(0);
+      expect(activeSlide.mainReference).toBeTruthy();
+    }).toPass({ timeout: 10_000, intervals: [500] });
   });
 
   // -----------------------------------------------------------------------
@@ -1758,14 +1760,15 @@ test.describe("WASM Operator Bible Tests", () => {
       { timeout: 5_000 },
     );
 
-    // Verify the active-slide has the EDITED text (not just toast)
-    const activeSlide = await page.evaluate(async (url: string) => {
-      const resp = await fetch(`${url}/bible/active-slide`);
-      return resp.json();
-    }, baseURL);
-
-    expect(activeSlide).not.toBeNull();
-    expect(activeSlide.mainText).toBe("EDITED TEXT FOR TRIGGER TEST");
+    // Verify the active-slide has the EDITED text (poll for propagation)
+    await expect(async () => {
+      const activeSlide = await page.evaluate(async (url: string) => {
+        const resp = await fetch(`${url}/bible/active-slide`);
+        return resp.json();
+      }, baseURL);
+      expect(activeSlide).not.toBeNull();
+      expect(activeSlide.mainText).toBe("EDITED TEXT FOR TRIGGER TEST");
+    }).toPass({ timeout: 10_000, intervals: [500] });
 
     await clearBroadcast();
   });
@@ -2317,13 +2320,15 @@ test.describe("WASM Operator Bible Tests", () => {
       { timeout: 5_000 },
     );
 
-    // 9. Verify stage content via active-slide API
-    const activeSlide = await page.evaluate(async (url: string) => {
-      const resp = await fetch(`${url}/bible/active-slide`);
-      return resp.json();
-    }, baseURL);
-    expect(activeSlide).not.toBeNull();
-    expect(activeSlide.mainText).toBeTruthy();
+    // 9. Verify stage content via active-slide API (poll for propagation)
+    await expect(async () => {
+      const activeSlide = await page.evaluate(async (url: string) => {
+        const resp = await fetch(`${url}/bible/active-slide`);
+        return resp.json();
+      }, baseURL);
+      expect(activeSlide).not.toBeNull();
+      expect(activeSlide.mainText).toBeTruthy();
+    }).toPass({ timeout: 10_000, intervals: [500] });
 
     // 10. Clear broadcast
     await page.locator('[data-role="bible-tab"][data-tab="live"]').click();
@@ -2337,13 +2342,16 @@ test.describe("WASM Operator Bible Tests", () => {
       { timeout: 5_000 },
     );
 
-    // Cleanup
-    await page.evaluate(
-      async ({ url, id }: { url: string; id: string }) => {
-        await fetch(`${url}/bible/presentations/${id}`, { method: "DELETE" });
-      },
-      { url: baseURL, id: presId },
-    );
+    // Cleanup — get the presentation ID from the prepared tab
+    const lastPresId = await allPres.last().getAttribute("data-presentation-id");
+    if (lastPresId) {
+      await page.evaluate(
+        async ({ url, id }: { url: string; id: string }) => {
+          await fetch(`${url}/bible/presentations/${id}`, { method: "DELETE" });
+        },
+        { url: baseURL, id: lastPresId },
+      );
+    }
   });
 
   // -----------------------------------------------------------------------
