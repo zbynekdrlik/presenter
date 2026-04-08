@@ -248,5 +248,47 @@ impl ResolumeRegistry {
     }
 }
 
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct TestConnectionResult {
+    pub success: bool,
+    pub latency_ms: Option<f64>,
+    pub error: Option<String>,
+}
+
+pub async fn test_connection(host: &ResolumeHost) -> anyhow::Result<TestConnectionResult> {
+    use std::time::Instant;
+
+    let client = Client::builder()
+        .connect_timeout(Duration::from_secs(3))
+        .build()
+        .map_err(|e| anyhow!("failed to build test client: {e}"))?;
+
+    let url = format!("http://{}:{}/api/v1/composition", host.host, host.port);
+    let start = Instant::now();
+    match client
+        .get(&url)
+        .timeout(Duration::from_secs(5))
+        .send()
+        .await
+    {
+        Ok(response) if response.status().is_success() => Ok(TestConnectionResult {
+            success: true,
+            latency_ms: Some(start.elapsed().as_secs_f64() * 1000.0),
+            error: None,
+        }),
+        Ok(response) => Ok(TestConnectionResult {
+            success: false,
+            latency_ms: Some(start.elapsed().as_secs_f64() * 1000.0),
+            error: Some(format!("HTTP {}", response.status())),
+        }),
+        Err(err) => Ok(TestConnectionResult {
+            success: false,
+            latency_ms: None,
+            error: Some(err.to_string()),
+        }),
+    }
+}
+
 #[cfg(test)]
 mod tests;

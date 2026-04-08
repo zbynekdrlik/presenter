@@ -160,6 +160,10 @@ pub fn build_router(state: AppState) -> Router {
                 .delete(integrations::resolume::delete_resolume_host),
         )
         .route(
+            "/integrations/resolume/hosts/{id}/test",
+            post(integrations::resolume::test_resolume_host),
+        )
+        .route(
             "/integrations/android-stage/displays",
             get(integrations::android_stage::list_android_stage_displays)
                 .post(integrations::android_stage::create_android_stage_display),

@@ -110,3 +110,26 @@ pub(crate) async fn delete_resolume_host(
         .await?;
     Ok(axum::http::StatusCode::NO_CONTENT)
 }
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct TestConnectionResponse {
+    success: bool,
+    latency_ms: Option<f64>,
+    error: Option<String>,
+}
+
+#[instrument(skip_all)]
+pub(crate) async fn test_resolume_host(
+    State(state): State<AppState>,
+    Path(id): Path<Uuid>,
+) -> Result<Json<TestConnectionResponse>, AppError> {
+    let result = state
+        .test_resolume_host_connection(ResolumeHostId::from_uuid(id))
+        .await?;
+    Ok(Json(TestConnectionResponse {
+        success: result.success,
+        latency_ms: result.latency_ms,
+        error: result.error,
+    }))
+}
