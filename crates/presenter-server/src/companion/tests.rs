@@ -37,7 +37,12 @@ fn timer_variables_reflect_snapshot() {
         countdown_to_start: presenter_core::timer::CountdownTimerSnapshot {
             state: TimerState::Running,
             target: Utc.with_ymd_and_hms(2025, 9, 27, 18, 0, 0).unwrap(),
-            target_local: "20:00:00".to_string(),
+            target_local: chrono::Utc
+                .with_ymd_and_hms(2025, 9, 27, 18, 0, 0)
+                .unwrap()
+                .with_timezone(&chrono::Local)
+                .format("%H:%M:%S")
+                .to_string(),
             seconds_remaining: 120,
         },
         preach_timer: presenter_core::timer::PreachTimerSnapshot {

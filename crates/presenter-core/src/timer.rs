@@ -95,6 +95,23 @@ impl CountdownTimer {
         Ok(())
     }
 
+    /// Sets a new target while preserving the current timer state (Running/Paused).
+    /// `set_target_with_now` resets to Idle; this wrapper re-applies the prior state.
+    pub fn set_target_preserving_state(
+        &mut self,
+        target: DateTime<Utc>,
+        now: DateTime<Utc>,
+    ) -> Result<(), TimerError> {
+        let previous_state = self.state;
+        self.set_target_with_now(target, now)?;
+        match previous_state {
+            TimerState::Running => self.start(),
+            TimerState::Paused => self.state = TimerState::Paused,
+            _ => {}
+        }
+        Ok(())
+    }
+
     pub fn remaining(&self, now: DateTime<Utc>) -> Duration {
         let delta = self.target - now;
         if delta <= Duration::zero() {
@@ -248,13 +265,7 @@ impl TimersState {
     ) -> Result<(), TimerError> {
         match command {
             TimerCommand::SetCountdownTarget { target } => {
-                let previous_state = self.countdown.state;
-                self.countdown.set_target(*target)?;
-                match previous_state {
-                    TimerState::Running => self.countdown.start(),
-                    TimerState::Paused => self.countdown.state = TimerState::Paused,
-                    _ => {}
-                }
+                self.countdown.set_target_preserving_state(*target, now)?;
             }
             TimerCommand::SetCountdownTargetLocal { hours, minutes } => {
                 let time = NaiveTime::from_hms_opt(*hours, *minutes, 0)
@@ -272,24 +283,14 @@ impl TimersState {
                     candidate
                 };
                 let target_utc = target_local.with_timezone(&Utc);
-                let previous_state = self.countdown.state;
-                self.countdown.set_target_with_now(target_utc, now)?;
-                match previous_state {
-                    TimerState::Running => self.countdown.start(),
-                    TimerState::Paused => self.countdown.state = TimerState::Paused,
-                    _ => {}
-                }
+                self.countdown
+                    .set_target_preserving_state(target_utc, now)?;
             }
             TimerCommand::AdjustCountdownTarget { offset_minutes } => {
                 let new_target =
                     self.countdown.target + Duration::minutes(i64::from(*offset_minutes));
-                let previous_state = self.countdown.state;
-                self.countdown.set_target_with_now(new_target, now)?;
-                match previous_state {
-                    TimerState::Running => self.countdown.start(),
-                    TimerState::Paused => self.countdown.state = TimerState::Paused,
-                    _ => {}
-                }
+                self.countdown
+                    .set_target_preserving_state(new_target, now)?;
             }
             TimerCommand::StartCountdown => {
                 if self.countdown.target <= now {
@@ -332,11 +333,7 @@ impl TimersState {
         self.overview_with_local_format(now, &target_local)
     }
 
-    pub fn overview_with_local_format(
-        &self,
-        now: DateTime<Utc>,
-        target_local: &str,
-    ) -> TimersOverview {
+    fn overview_with_local_format(&self, now: DateTime<Utc>, target_local: &str) -> TimersOverview {
         let countdown_remaining = self.countdown.remaining(now).num_seconds();
         let remaining_seconds = max(countdown_remaining, 0);
         let elapsed_seconds = self.preach.elapsed(now).num_seconds();
