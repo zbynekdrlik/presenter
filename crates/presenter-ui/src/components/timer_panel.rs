@@ -62,8 +62,8 @@ pub fn TimerPanel() -> impl IntoView {
                     t.dyn_into::<web_sys::HtmlInputElement>().ok()
                 }) {
                     let val = input.value();
-                    if let Some(target) = parse_time_input(&val) {
-                        send_timer_cmd(TimerCommand::SetCountdownTarget { target });
+                    if let Some((hours, minutes)) = parse_time_input(&val) {
+                        send_timer_cmd(TimerCommand::SetCountdownTargetLocal { hours, minutes });
                     }
                 }
                 countdown_input_dirty.set(false);
@@ -88,29 +88,19 @@ pub fn TimerPanel() -> impl IntoView {
         });
         if let Some(el) = input {
             let val = el.value();
-            if let Some(target) = parse_time_input(&val) {
-                send_timer_cmd(TimerCommand::SetCountdownTarget { target });
+            if let Some((hours, minutes)) = parse_time_input(&val) {
+                send_timer_cmd(TimerCommand::SetCountdownTargetLocal { hours, minutes });
                 op.countdown_input_dirty.set(false);
             }
         }
     };
 
     let on_offset_minus = move |_| {
-        let timers = ctx.timers.get_untracked();
-        if let Some(overview) = timers {
-            let current_target = overview.countdown_to_start.target;
-            let new_target = current_target - chrono::Duration::minutes(5);
-            send_timer_cmd(TimerCommand::SetCountdownTarget { target: new_target });
-        }
+        send_timer_cmd(TimerCommand::AdjustCountdownTarget { offset_minutes: -5 });
     };
 
     let on_offset_plus = move |_| {
-        let timers = ctx.timers.get_untracked();
-        if let Some(overview) = timers {
-            let current_target = overview.countdown_to_start.target;
-            let new_target = current_target + chrono::Duration::minutes(5);
-            send_timer_cmd(TimerCommand::SetCountdownTarget { target: new_target });
-        }
+        send_timer_cmd(TimerCommand::AdjustCountdownTarget { offset_minutes: 5 });
     };
 
     let on_preach_start = move |_| {
@@ -216,7 +206,7 @@ pub fn TimerPanel() -> impl IntoView {
                 <small id="countdown-target">
                     {move || {
                         ctx.timers.get()
-                            .map(|t| format!("Target {}", t.countdown_to_start.target.format("%H:%M:%S")))
+                            .map(|t| format!("Target {}", t.countdown_to_start.target_local))
                             .unwrap_or_default()
                     }}
                 </small>
@@ -314,40 +304,32 @@ pub fn TimerPanel() -> impl IntoView {
     }
 }
 
-fn parse_time_input(input: &str) -> Option<chrono::DateTime<chrono::Utc>> {
+fn parse_time_input(input: &str) -> Option<(u32, u32)> {
     let trimmed = input.trim();
+    if trimmed.is_empty() {
+        return None;
+    }
     let parts: Vec<&str> = trimmed.split(':').collect();
 
-    let (hours, minutes) = match parts.len() {
+    match parts.len() {
         1 => {
-            // Just minutes - interpret as minutes from now
-            let mins: u32 = parts[0].parse().ok()?;
-            let target = chrono::Utc::now() + chrono::Duration::minutes(i64::from(mins));
-            return Some(target);
+            // Single number: interpret as hours (e.g. "18" → 18:00)
+            let hours: u32 = parts[0].parse().ok()?;
+            if hours > 23 {
+                return None;
+            }
+            Some((hours, 0))
         }
         2 => {
             let h: u32 = parts[0].trim().parse().ok()?;
             let m: u32 = parts[1].trim().parse().ok()?;
-            (h, m)
+            if h > 23 || m > 59 {
+                return None;
+            }
+            Some((h, m))
         }
-        _ => return None,
-    };
-
-    if hours > 23 || minutes > 59 {
-        return None;
+        _ => None,
     }
-
-    let now = chrono::Utc::now();
-    let today = now.date_naive();
-    let time = chrono::NaiveTime::from_hms_opt(hours, minutes, 0)?;
-    let mut target = today.and_time(time).and_utc();
-
-    // If the target is in the past, set it for tomorrow
-    if target <= now {
-        target += chrono::Duration::days(1);
-    }
-
-    Some(target)
 }
 
 fn parse_limit_input(input: &str) -> Option<u64> {
