@@ -71,7 +71,9 @@ pub fn BiblePage() -> impl IntoView {
                     secondary_translation: sec,
                     character_limit: Some(limit),
                 };
-                let _ = bible::update_preferences(&draft).await;
+                if let Err(e) = bible::update_preferences(&draft).await {
+                    web_sys::console::warn_1(&format!("auto-save preferences failed: {e}").into());
+                }
             });
         });
     }

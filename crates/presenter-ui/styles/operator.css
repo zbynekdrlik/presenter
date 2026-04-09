@@ -826,9 +826,6 @@ body.operator[data-mode="live"] .operator__line-limit {
   box-shadow: inset 0 0 0 1px rgba(15, 23, 42, 0.25);
 }
 
-.operator__stage-preview[data-active="false"] {
-  opacity: 1;
-}
 
 .operator__stage-monitor {
   position: absolute;

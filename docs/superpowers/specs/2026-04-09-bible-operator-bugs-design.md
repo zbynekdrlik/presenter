@@ -62,7 +62,7 @@ Six bugs on the Bible operator page (`/ui/operator/bible`) affecting search, per
 
 **Root Cause:** `.operator__stage-preview[data-active="false"]` in `operator.css:829-831` sets `opacity: 0.6` on the entire preview container when no slide is actively displayed. On the Bible page, this makes preview text nearly illegible against the dark background.
 
-**Fix:** Increase the inactive preview opacity from 0.6 to 0.85. The dimming hint is preserved but text remains legible.
+**Fix:** Remove the `opacity: 0.6` rule entirely so the preview always renders at full opacity.
 
 **Files:** `crates/presenter-ui/styles/operator.css`
 
@@ -72,11 +72,11 @@ Six bugs on the Bible operator page (`/ui/operator/bible`) affecting search, per
 
 **Symptom:** When switching to Edit mode, Bible slide textareas are too small. Users must manually stretch them to see content.
 
-**Root Cause:** `bible.css:559` sets `min-height: 2.5rem` on Bible editor textareas, overriding the dynamic sizing from `operator.css` which uses `--bible-textarea-lines` (defaults to 4 lines). The fixed 2.5rem is roughly 1.5 lines of text.
+**Root Cause:** `bible.css:559` sets a fixed `min-height: 2.5rem` on Bible editor textareas, and `operator.css` uses a static `--bible-textarea-lines` variable that doesn't scale to content.
 
-**Fix:** Remove the `min-height: 2.5rem` from the Bible textarea rule in `bible.css` so the operator.css dynamic sizing (4 lines based on `--bible-textarea-lines`) takes effect.
+**Fix:** Remove the fixed `min-height: 2.5rem` and use `field-sizing: content` so textareas auto-size to their actual text. A main field with 4 verses shows 4 lines; an empty translation field shows 1 line. Falls back to `rows="2"` on older browsers.
 
-**Files:** `crates/presenter-ui/styles/bible.css`
+**Files:** `crates/presenter-ui/styles/bible.css`, `crates/presenter-ui/styles/operator.css`
 
 ---
 
