@@ -2796,18 +2796,26 @@ test.describe("WASM Operator Bible Tests", () => {
     await editButton.click();
     await page.waitForTimeout(500);
 
-    // Textarea height should be calculated from character limit (default 320)
-    // and line width (default 32 chars), giving ceil(320/32) = 10 lines.
-    // At ~1.35 line-height and ~0.85rem font-size, 10 lines ≈ 150-180px
-    const textarea = page
-      .locator(".operator--bible .operator__slide-editor textarea")
+    // Textareas use field-sizing: content — they auto-size to their text.
+    // Main textarea with verses should be taller than an empty one.
+    const mainTextarea = page
+      .locator(".operator--bible .operator__slide-editor textarea[data-field='main']")
       .first();
-    if ((await textarea.count()) > 0) {
-      const height = await textarea.evaluate((el) => {
-        return el.getBoundingClientRect().height;
-      });
-      // 10 lines of text should be well over 100px
-      expect(height).toBeGreaterThan(100);
+    const transTextarea = page
+      .locator(".operator--bible .operator__slide-editor textarea[data-field='translation']")
+      .first();
+    if ((await mainTextarea.count()) > 0) {
+      const mainHeight = await mainTextarea.evaluate((el) => el.getBoundingClientRect().height);
+      // Main textarea with verse text should be at least 30px (visible)
+      expect(mainHeight).toBeGreaterThan(30);
+      // If translation is empty, it should be smaller than main
+      if ((await transTextarea.count()) > 0) {
+        const transHeight = await transTextarea.evaluate((el) => el.getBoundingClientRect().height);
+        const transValue = await transTextarea.inputValue();
+        if (!transValue) {
+          expect(transHeight).toBeLessThan(mainHeight);
+        }
+      }
     }
 
     // Switch back to live mode

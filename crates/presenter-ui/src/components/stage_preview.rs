@@ -126,10 +126,7 @@ pub fn StagePreview() -> impl IntoView {
                                         presentations.set(pres_list);
                                     }
                                     slides_cache.update(|cache| {
-                                        cache.insert(
-                                            pres_id,
-                                            detail.presentation.slides.clone(),
-                                        );
+                                        cache.insert(pres_id, detail.presentation.slides.clone());
                                     });
                                     selected_presentation.set(Some(detail.presentation));
                                 }

@@ -308,8 +308,7 @@ fn setup_ws_dispatch(last_event: ReadSignal<Option<LiveEvent>>, ctx: &AppContext
                         .unwrap_or(true);
 
                     if follow_enabled {
-                        let new_pres_id =
-                            snapshot.presentation_id.map(|id| id.to_string());
+                        let new_pres_id = snapshot.presentation_id.map(|id| id.to_string());
                         let current_pres_id = selected_presentation_id.get_untracked();
                         if new_pres_id.is_some() && new_pres_id != current_pres_id {
                             if let Some(ref pres_id) = new_pres_id {
@@ -318,24 +317,17 @@ fn setup_ws_dispatch(last_event: ReadSignal<Option<LiveEvent>>, ctx: &AppContext
                                 let pid = pres_id.clone();
                                 leptos::task::spawn_local(async move {
                                     if let Ok(detail) =
-                                        crate::api::presentations::get_presentation(&pid)
-                                            .await
+                                        crate::api::presentations::get_presentation(&pid).await
                                     {
                                         // Switch to the library containing this presentation
                                         let lib_id = detail.library_id.to_string();
                                         selected_library_id.set(Some(lib_id.clone()));
                                         selected_playlist_id.set(None);
                                         selected_playlist.set(None);
-                                        crate::state::session::set(
-                                            "activeLibraryId",
-                                            &lib_id,
-                                        );
+                                        crate::state::session::set("activeLibraryId", &lib_id);
                                         // Load the library's presentations list
                                         if let Ok(pres_list) =
-                                            crate::api::libraries::list_presentations(
-                                                &lib_id,
-                                            )
-                                            .await
+                                            crate::api::libraries::list_presentations(&lib_id).await
                                         {
                                             presentations.set(pres_list);
                                         }
@@ -345,8 +337,7 @@ fn setup_ws_dispatch(last_event: ReadSignal<Option<LiveEvent>>, ctx: &AppContext
                                                 detail.presentation.slides.clone(),
                                             );
                                         });
-                                        selected_presentation
-                                            .set(Some(detail.presentation));
+                                        selected_presentation.set(Some(detail.presentation));
                                     }
                                 });
                             }

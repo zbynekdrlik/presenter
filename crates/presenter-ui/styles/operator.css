@@ -1332,12 +1332,10 @@ body.operator[data-mode="live"] .operator__line-limit {
   resize: none;
 }
 
-/* Bible-specific: taller textareas based on character limit */
+/* Bible-specific: auto-size textareas to their content */
 .operator--bible .operator__slide-editor textarea {
-  min-height: calc(
-    var(--operator-line-line-height, 1.35) * var(--bible-textarea-lines, 4) *
-      1em + 0.6rem
-  );
+  field-sizing: content;
+  min-height: 1.5em;
   max-height: none;
   height: auto;
   overflow-y: visible;
