@@ -277,6 +277,190 @@ test.describe("WASM Operator Timer Tests", () => {
     expect(consoleMessages).toEqual([]);
   });
 
+  test("typing hour number sets local time target (#212 bug 1+3)", async ({
+    page,
+    request,
+  }) => {
+    const consoleMessages: string[] = [];
+    page.on("console", (msg) => {
+      if (msg.type() === "error" || msg.type() === "warning") {
+        consoleMessages.push(`[${msg.type()}] ${msg.text()}`);
+      }
+    });
+
+    await navigateToTimers(page);
+
+    // Use SetCountdownTargetLocal via API to set a known future time
+    const now = new Date();
+    const futureHour = (now.getHours() + 2) % 24;
+
+    const response = await request.post(
+      new URL("/timers/command", baseURL).toString(),
+      {
+        data: {
+          command: "set_countdown_target_local",
+          hours: futureHour,
+          minutes: 0,
+        },
+        headers: { "Content-Type": "application/json" },
+        timeout: 10_000,
+      },
+    );
+    expect(response.ok()).toBeTruthy();
+    const data = await response.json();
+
+    // target_local should show the local time we set
+    const expectedPrefix = `${String(futureHour).padStart(2, "0")}:00`;
+    expect(data.countdownToStart.targetLocal).toContain(expectedPrefix);
+
+    // Remaining should be roughly 2 hours (within 10 min tolerance)
+    expect(data.countdownToStart.secondsRemaining).toBeGreaterThan(6000);
+    expect(data.countdownToStart.secondsRemaining).toBeLessThan(8000);
+
+    // Verify the operator UI shows the local target
+    const targetDisplay = page.locator("#countdown-target");
+    await expect(targetDisplay).toContainText(expectedPrefix, {
+      timeout: 10_000,
+    });
+
+    // Now test typing the hour in the input
+    const countdownInput = page.locator('[data-role="countdown-target-input"]');
+    await countdownInput.fill(String(futureHour));
+    await countdownInput.press("Enter");
+
+    // Wait for API response
+    await page
+      .waitForResponse(
+        (resp) => resp.url().includes("/timers/") && resp.status() === 200,
+        { timeout: 5_000 },
+      )
+      .catch(() => {});
+
+    // Target display should still show the same local time
+    await expect(targetDisplay).toContainText(expectedPrefix, {
+      timeout: 5_000,
+    });
+
+    expect(consoleMessages).toEqual([]);
+  });
+
+  test("adjust countdown target +5/-5 via API (#212 bug 3)", async ({
+    request,
+  }) => {
+    // Set initial target
+    const now = new Date();
+    const futureHour = (now.getHours() + 2) % 24;
+    await request.post(new URL("/timers/command", baseURL).toString(), {
+      data: {
+        command: "set_countdown_target_local",
+        hours: futureHour,
+        minutes: 0,
+      },
+      headers: { "Content-Type": "application/json" },
+    });
+
+    // Get baseline
+    const baselineResp = await request.get(
+      new URL("/timers/overview", baseURL).toString(),
+    );
+    const baseline = await baselineResp.json();
+    const baselineRemaining = baseline.countdownToStart.secondsRemaining;
+
+    // Adjust +5
+    const plusResp = await request.post(
+      new URL("/timers/command", baseURL).toString(),
+      {
+        data: { command: "adjust_countdown_target", offset_minutes: 5 },
+        headers: { "Content-Type": "application/json" },
+      },
+    );
+    expect(plusResp.ok()).toBeTruthy();
+    const plusData = await plusResp.json();
+    const plusDiff =
+      plusData.countdownToStart.secondsRemaining - baselineRemaining;
+    expect(plusDiff).toBeGreaterThan(290);
+    expect(plusDiff).toBeLessThan(310);
+
+    // Adjust -5 (back to baseline)
+    const minusResp = await request.post(
+      new URL("/timers/command", baseURL).toString(),
+      {
+        data: { command: "adjust_countdown_target", offset_minutes: -5 },
+        headers: { "Content-Type": "application/json" },
+      },
+    );
+    expect(minusResp.ok()).toBeTruthy();
+    const minusData = await minusResp.json();
+    const totalDiff = Math.abs(
+      minusData.countdownToStart.secondsRemaining - baselineRemaining,
+    );
+    expect(totalDiff).toBeLessThan(5);
+  });
+
+  test("timer overlay renders without flicker (#212 bug 4)", async ({
+    page,
+    request,
+  }) => {
+    const consoleMessages: string[] = [];
+    page.on("console", (msg) => {
+      if (msg.type() === "error" || msg.type() === "warning") {
+        consoleMessages.push(`[${msg.type()}] ${msg.text()}`);
+      }
+    });
+
+    // Set a target and start the countdown
+    const now = new Date();
+    const futureHour = (now.getHours() + 1) % 24;
+    await request.post(new URL("/timers/command", baseURL).toString(), {
+      data: {
+        command: "set_countdown_target_local",
+        hours: futureHour,
+        minutes: 0,
+      },
+      headers: { "Content-Type": "application/json" },
+    });
+    await request.post(new URL("/timers/command", baseURL).toString(), {
+      data: { command: "start_countdown" },
+      headers: { "Content-Type": "application/json" },
+    });
+
+    // Open overlay
+    await page.goto(new URL("/overlays/timer", baseURL).toString());
+    await page.waitForSelector("#timer-value", { timeout: 10_000 });
+
+    // Collect displayed values over 5 seconds
+    const values: string[] = [];
+    for (let i = 0; i < 10; i++) {
+      await page.waitForTimeout(500);
+      const text = await page.locator("#timer-value").textContent();
+      if (text) values.push(text);
+    }
+
+    // Parse values to seconds for monotonicity check
+    const toSeconds = (v: string): number => {
+      const parts = v.split(":").map(Number);
+      if (parts.length === 1) return parts[0];
+      return parts[0] * 60 + parts[1];
+    };
+
+    const seconds = values.map(toSeconds);
+
+    // No value should jump UP (flicker = value goes down then up)
+    let flickerCount = 0;
+    for (let i = 1; i < seconds.length; i++) {
+      if (seconds[i] > seconds[i - 1]) flickerCount++;
+    }
+    expect(flickerCount).toBe(0);
+
+    // Clean up
+    await request.post(new URL("/timers/command", baseURL).toString(), {
+      data: { command: "reset_countdown" },
+      headers: { "Content-Type": "application/json" },
+    });
+
+    expect(consoleMessages).toEqual([]);
+  });
+
   test("preach timer start/pause/reset works", async ({ page }) => {
     await navigateToTimers(page);
 
