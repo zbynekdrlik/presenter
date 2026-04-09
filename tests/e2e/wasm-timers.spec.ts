@@ -313,9 +313,9 @@ test.describe("WASM Operator Timer Tests", () => {
     const expectedPrefix = `${String(futureHour).padStart(2, "0")}:00`;
     expect(data.countdownToStart.targetLocal).toContain(expectedPrefix);
 
-    // Remaining should be roughly 2 hours (within 10 min tolerance)
-    expect(data.countdownToStart.secondsRemaining).toBeGreaterThan(6000);
-    expect(data.countdownToStart.secondsRemaining).toBeLessThan(8000);
+    // Remaining should be between 1-2 hours (depends on where in the hour the test runs)
+    expect(data.countdownToStart.secondsRemaining).toBeGreaterThan(3500);
+    expect(data.countdownToStart.secondsRemaining).toBeLessThan(7500);
 
     // Verify the operator UI shows the local target
     const targetDisplay = page.locator("#countdown-target");
