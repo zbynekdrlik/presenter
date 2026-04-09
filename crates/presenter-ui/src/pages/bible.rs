@@ -16,12 +16,17 @@ pub fn BiblePage() -> impl IntoView {
     let bs = BibleState::new();
     provide_context(bs.clone());
 
+    // Flag: set to true after initial preferences + translations are loaded.
+    // Prevents the auto-save effect from firing during initial hydration.
+    let translations_loaded = RwSignal::new(false);
+
     // Load translations + preferences on mount
     {
         let translations = bs.translations;
         let selected_translation = bs.selected_translation;
         let secondary_translation = bs.secondary_translation;
         let character_limit = bs.character_limit;
+        let translations_loaded = translations_loaded;
         leptos::task::spawn_local(async move {
             // Load preferences first to set saved translation choices
             if let Ok(prefs) = bible::get_preferences().await {
@@ -42,6 +47,32 @@ pub fn BiblePage() -> impl IntoView {
                 }
                 translations.set(trans);
             }
+            // Mark loaded AFTER all initial sets are done
+            translations_loaded.set(true);
+        });
+    }
+
+    // Auto-save translation preferences when the user changes them
+    {
+        let selected_translation = bs.selected_translation;
+        let secondary_translation = bs.secondary_translation;
+        let character_limit = bs.character_limit;
+        Effect::new(move || {
+            let main = selected_translation.get();
+            let sec = secondary_translation.get();
+            // Skip if translations haven't loaded yet (initial hydration)
+            if !translations_loaded.get_untracked() {
+                return;
+            }
+            let limit = character_limit.get_untracked();
+            leptos::task::spawn_local(async move {
+                let draft = presenter_core::BiblePreferencesDraft {
+                    main_translation: main,
+                    secondary_translation: sec,
+                    character_limit: Some(limit),
+                };
+                let _ = bible::update_preferences(&draft).await;
+            });
         });
     }
 
