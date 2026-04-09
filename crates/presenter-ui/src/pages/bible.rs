@@ -3,6 +3,7 @@ use wasm_bindgen::JsCast;
 
 use crate::api::bible;
 use crate::state::bible::{BibleState, LoadedPassage, SelectedBook};
+use crate::state::operator::OperatorState;
 use crate::state::AppContext;
 
 use super::bible_controls::SelectionControls;
@@ -121,6 +122,23 @@ pub fn BiblePage() -> impl IntoView {
                         selected_book.set(None);
                     }
                 });
+            }
+        });
+    }
+
+    // Sync --bible-textarea-lines CSS variable from character limit
+    {
+        let character_limit = bs.character_limit;
+        let op = use_ctx!(OperatorState);
+        let line_limit = op.line_limit;
+        Effect::new(move || {
+            let char_limit = character_limit.get();
+            let line_ch = line_limit.get().max(1);
+            let lines = (char_limit + line_ch - 1) / line_ch; // ceil division
+            if let Some(body) = crate::utils::window::document_body() {
+                let _ = body
+                    .style()
+                    .set_property("--bible-textarea-lines", &lines.to_string());
             }
         });
     }

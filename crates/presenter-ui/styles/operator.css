@@ -827,7 +827,7 @@ body.operator[data-mode="live"] .operator__line-limit {
 }
 
 .operator__stage-preview[data-active="false"] {
-  opacity: 0.85;
+  opacity: 1;
 }
 
 .operator__stage-monitor {

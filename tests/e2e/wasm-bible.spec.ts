@@ -2752,8 +2752,8 @@ test.describe("WASM Operator Bible Tests", () => {
       const opacity = await preview.evaluate((el) => {
         return parseFloat(window.getComputedStyle(el).opacity);
       });
-      // Should be at least 0.8 (we set it to 0.85)
-      expect(opacity).toBeGreaterThanOrEqual(0.8);
+      // Should be full opacity (1.0) — no dimming
+      expect(opacity).toBe(1);
     }
 
     expect(consoleMessages).toEqual([]);
@@ -2796,7 +2796,9 @@ test.describe("WASM Operator Bible Tests", () => {
     await editButton.click();
     await page.waitForTimeout(500);
 
-    // Check textarea min-height is at least 4rem (roughly 64px at default font size)
+    // Textarea height should be calculated from character limit (default 320)
+    // and line width (default 32 chars), giving ceil(320/32) = 10 lines.
+    // At ~1.35 line-height and ~0.85rem font-size, 10 lines ≈ 150-180px
     const textarea = page
       .locator(".operator--bible .operator__slide-editor textarea")
       .first();
@@ -2804,8 +2806,8 @@ test.describe("WASM Operator Bible Tests", () => {
       const height = await textarea.evaluate((el) => {
         return el.getBoundingClientRect().height;
       });
-      // 4 lines of text at ~1.35 line-height should be ~50px minimum
-      expect(height).toBeGreaterThan(45);
+      // 10 lines of text should be well over 100px
+      expect(height).toBeGreaterThan(100);
     }
 
     // Switch back to live mode
