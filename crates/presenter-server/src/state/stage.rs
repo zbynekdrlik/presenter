@@ -234,15 +234,17 @@ pub(crate) fn build_stage_snapshot(
     )
 }
 
-pub(crate) fn extract_song_number(name: &str) -> Option<String> {
-    let trimmed = name.trim_start();
-    let bytes = trimmed.as_bytes();
-    if bytes.len() >= 4
+fn has_song_number_prefix(bytes: &[u8]) -> bool {
+    bytes.len() >= 4
         && bytes[0].is_ascii_digit()
         && bytes[1].is_ascii_digit()
         && bytes[2].is_ascii_digit()
         && bytes[3].is_ascii_whitespace()
-    {
+}
+
+pub(crate) fn extract_song_number(name: &str) -> Option<String> {
+    let trimmed = name.trim_start();
+    if has_song_number_prefix(trimmed.as_bytes()) {
         Some(trimmed[..3].to_string())
     } else {
         None
@@ -251,15 +253,8 @@ pub(crate) fn extract_song_number(name: &str) -> Option<String> {
 
 pub(crate) fn sanitize_song_title(name: &str) -> String {
     let trimmed = name.trim_start();
-    let bytes = trimmed.as_bytes();
-    if bytes.len() >= 4
-        && bytes[0].is_ascii_digit()
-        && bytes[1].is_ascii_digit()
-        && bytes[2].is_ascii_digit()
-        && bytes[3].is_ascii_whitespace()
-    {
-        let remainder = trimmed[4..].trim_start();
-        remainder.to_string()
+    if has_song_number_prefix(trimmed.as_bytes()) {
+        trimmed[4..].trim_start().to_string()
     } else {
         trimmed.to_string()
     }
