@@ -565,7 +565,7 @@ test("song number is hidden for presentation without number prefix", async ({
 
   // Wait for slide text to appear (confirms snapshot arrived)
   await expect(
-    stagePage.locator(".stage__slide-text"),
+    stagePage.locator(".stage__slide-text").first(),
   ).toContainText("Just a song", { timeout: 10_000 });
 
   // Song number element should NOT be visible
