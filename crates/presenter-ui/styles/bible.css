@@ -556,7 +556,14 @@ body.operator.operator--bible .operator__panel--bible {
   background: #0f172a;
   color: #f8fafc;
   resize: vertical;
-  min-height: 2.5rem;
+}
+
+/* Bug #219: Bible verse text was truncated by text-overflow: ellipsis
+   inherited from .operator__slide-text. Override to wrap naturally. */
+.operator__slide-card--bible .operator__slide-text {
+  white-space: pre-wrap;
+  text-overflow: clip;
+  overflow-x: visible;
 }
 
 /* ---------- Presentation modal ---------- */

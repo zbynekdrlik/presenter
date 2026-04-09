@@ -48,12 +48,15 @@ pub fn StagePreview() -> impl IntoView {
 
     let on_clear = {
         let stage_snapshot = ctx.stage_snapshot;
+        let active_bible_broadcast = ctx.active_bible_broadcast;
         let toast_message = ctx.toast_message;
         let toast_variant = ctx.toast_variant;
         move |_| {
             leptos::task::spawn_local(async move {
                 let _ = crate::api::stage::clear().await;
+                let _ = crate::api::bible::clear_broadcast().await;
                 stage_snapshot.set(None);
+                active_bible_broadcast.set(None);
                 toast_variant.set("info".to_string());
                 toast_message.set(Some("Slide outputs cleared".to_string()));
             });
@@ -123,10 +126,7 @@ pub fn StagePreview() -> impl IntoView {
                                         presentations.set(pres_list);
                                     }
                                     slides_cache.update(|cache| {
-                                        cache.insert(
-                                            pres_id,
-                                            detail.presentation.slides.clone(),
-                                        );
+                                        cache.insert(pres_id, detail.presentation.slides.clone());
                                     });
                                     selected_presentation.set(Some(detail.presentation));
                                 }

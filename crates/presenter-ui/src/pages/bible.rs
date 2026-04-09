@@ -16,12 +16,17 @@ pub fn BiblePage() -> impl IntoView {
     let bs = BibleState::new();
     provide_context(bs.clone());
 
+    // Flag: set to true after initial preferences + translations are loaded.
+    // Prevents the auto-save effect from firing during initial hydration.
+    let translations_loaded = RwSignal::new(false);
+
     // Load translations + preferences on mount
     {
         let translations = bs.translations;
         let selected_translation = bs.selected_translation;
         let secondary_translation = bs.secondary_translation;
         let character_limit = bs.character_limit;
+        let translations_loaded = translations_loaded;
         leptos::task::spawn_local(async move {
             // Load preferences first to set saved translation choices
             if let Ok(prefs) = bible::get_preferences().await {
@@ -42,6 +47,34 @@ pub fn BiblePage() -> impl IntoView {
                 }
                 translations.set(trans);
             }
+            // Mark loaded AFTER all initial sets are done
+            translations_loaded.set(true);
+        });
+    }
+
+    // Auto-save translation preferences when the user changes them
+    {
+        let selected_translation = bs.selected_translation;
+        let secondary_translation = bs.secondary_translation;
+        let character_limit = bs.character_limit;
+        Effect::new(move || {
+            let main = selected_translation.get();
+            let sec = secondary_translation.get();
+            // Skip if translations haven't loaded yet (initial hydration)
+            if !translations_loaded.get_untracked() {
+                return;
+            }
+            let limit = character_limit.get_untracked();
+            leptos::task::spawn_local(async move {
+                let draft = presenter_core::BiblePreferencesDraft {
+                    main_translation: main,
+                    secondary_translation: sec,
+                    character_limit: Some(limit),
+                };
+                if let Err(e) = bible::update_preferences(&draft).await {
+                    web_sys::console::warn_1(&format!("auto-save preferences failed: {e}").into());
+                }
+            });
         });
     }
 
@@ -100,8 +133,7 @@ pub fn BiblePage() -> impl IntoView {
         let view = ctx.view;
         Effect::new(move || {
             let tab = bible_tab.get();
-            let v = view.get();
-            if v == "bible" {
+            if view.get() == "bible" {
                 if let Some(body) = crate::utils::window::document_body() {
                     let _ = body.set_attribute("data-bible-tab", &tab);
                 }
@@ -285,13 +317,19 @@ fn TranslationSelectors() -> impl IntoView {
 fn BookFilter() -> impl IntoView {
     let bs = use_ctx!(BibleState);
     let book_filter = bs.book_filter;
+    let selected_book = bs.selected_book;
 
     let on_input = move |ev: web_sys::Event| {
         let target = ev
             .target()
             .and_then(|t| t.dyn_into::<web_sys::HtmlInputElement>().ok());
         if let Some(input) = target {
-            book_filter.set(input.value());
+            let val = input.value();
+            book_filter.set(val.clone());
+            // Auto-deselect current book when user starts typing a new search
+            if !val.is_empty() && selected_book.get_untracked().is_some() {
+                selected_book.set(None);
+            }
         }
     };
 
