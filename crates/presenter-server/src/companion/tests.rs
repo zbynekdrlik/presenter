@@ -84,6 +84,7 @@ fn stage_variables_update_across_layouts() {
         Some("001 Alpha Song".to_string()),
         Some("Alpha Library".to_string()),
         Some("Alpha Song".to_string()),
+        Some("001".to_string()),
         Some(slide_id),
         Some(presenter_core::stage_display::StageDisplaySlide {
             main: "Alpha".to_string(),
@@ -118,6 +119,7 @@ fn stage_variables_update_across_layouts() {
         Some("002 Beta Hymn".to_string()),
         Some("Beta Library".to_string()),
         Some("Beta Hymn".to_string()),
+        Some("002".to_string()),
         Some(presenter_core::SlideId::new()),
         Some(presenter_core::stage_display::StageDisplaySlide {
             main: "Beta".to_string(),

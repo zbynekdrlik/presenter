@@ -215,6 +215,11 @@ pub(crate) fn build_stage_snapshot(
             .presentation_name
             .clone()
             .map(|name| sanitize_song_title(&name)),
+        context
+            .resolution
+            .presentation_name
+            .as_deref()
+            .and_then(extract_song_number),
         context.resolution.current_slide_id,
         context.resolution.current.clone(),
         context.resolution.next_slide_id,
@@ -227,6 +232,21 @@ pub(crate) fn build_stage_snapshot(
         context.resolution.playlist_name.clone(),
         context.resolution.playlist_entries.clone(),
     )
+}
+
+pub(crate) fn extract_song_number(name: &str) -> Option<String> {
+    let trimmed = name.trim_start();
+    let bytes = trimmed.as_bytes();
+    if bytes.len() >= 4
+        && bytes[0].is_ascii_digit()
+        && bytes[1].is_ascii_digit()
+        && bytes[2].is_ascii_digit()
+        && bytes[3].is_ascii_whitespace()
+    {
+        Some(trimmed[..3].to_string())
+    } else {
+        None
+    }
 }
 
 pub(crate) fn sanitize_song_title(name: &str) -> String {
@@ -302,5 +322,48 @@ pub(crate) fn format_countdown_text(seconds_remaining: i64) -> String {
         let minutes = total / 60;
         let seconds = total % 60;
         format!("{minutes:02}:{seconds:02}")
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn extract_song_number_returns_prefix_for_numbered_songs() {
+        assert_eq!(
+            extract_song_number("042 Amazing Grace"),
+            Some("042".to_string())
+        );
+        assert_eq!(
+            extract_song_number("001 First Song"),
+            Some("001".to_string())
+        );
+        assert_eq!(
+            extract_song_number("115 Last Song"),
+            Some("115".to_string())
+        );
+    }
+
+    #[test]
+    fn extract_song_number_returns_none_for_unnumbered_songs() {
+        assert_eq!(extract_song_number("Amazing Grace"), None);
+        assert_eq!(extract_song_number(""), None);
+        assert_eq!(extract_song_number("12 Two Digit"), None);
+        assert_eq!(extract_song_number("1 One Digit"), None);
+    }
+
+    #[test]
+    fn extract_song_number_handles_leading_whitespace() {
+        assert_eq!(extract_song_number("  042 Song"), Some("042".to_string()));
+    }
+
+    #[test]
+    fn sanitize_song_title_strips_number_prefix() {
+        assert_eq!(sanitize_song_title("042 Amazing Grace"), "Amazing Grace");
+        assert_eq!(
+            sanitize_song_title("Song Without Number"),
+            "Song Without Number"
+        );
     }
 }
