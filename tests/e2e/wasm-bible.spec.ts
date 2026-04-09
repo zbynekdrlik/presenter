@@ -2515,4 +2515,305 @@ test.describe("WASM Operator Bible Tests", () => {
     const url = new URL(page.url());
     expect(url.pathname).toBe("/ui/operator");
   });
+
+  // -----------------------------------------------------------------------
+  // Bug fixes (#219)
+  // -----------------------------------------------------------------------
+
+  test("book filter re-search after book selection (#219 bug 1)", async ({
+    page,
+  }) => {
+    const consoleMessages: string[] = [];
+    page.on("console", (msg) => {
+      if (msg.type() === "error" || msg.type() === "warning") {
+        consoleMessages.push(`[${msg.type()}] ${msg.text()}`);
+      }
+    });
+
+    await navigateToBible(page);
+    if (!(await hasBibleData(page))) {
+      test.skip();
+      return;
+    }
+
+    const panel = biblePanel(page);
+    const bookList = panel.locator('[data-role="book-list"]');
+    const filterInput = panel.locator('[data-role="book-filter"]');
+
+    // Select the first book
+    const firstBook = bookList.locator('[data-role="book-item"]').first();
+    await expect(firstBook).toBeVisible({ timeout: 10_000 });
+    await firstBook.click();
+
+    // Book should now be selected (collapsed view with "Change")
+    await expect(
+      bookList.locator('[data-role="book-item"][data-active="true"]'),
+    ).toHaveCount(1);
+
+    // Type a new search term — the selected book should auto-deselect
+    await filterInput.fill("Psalm");
+    await page.waitForTimeout(300);
+
+    // Should see filtered book list (not the collapsed single-book view)
+    const items = bookList.locator('[data-role="book-item"]');
+    const count = await items.count();
+    expect(count).toBeGreaterThan(0);
+
+    // At least one item should contain "Psalm" in its label
+    const labels = await items.allTextContents();
+    const hasPsalm = labels.some((l) =>
+      l.toLowerCase().includes("psalm"),
+    );
+    expect(hasPsalm).toBe(true);
+
+    // Clear filter — should show all books
+    await filterInput.fill("");
+    await page.waitForTimeout(300);
+    const allCount = await bookList
+      .locator('[data-role="book-item"]')
+      .count();
+    expect(allCount).toBeGreaterThan(10);
+
+    expect(consoleMessages).toEqual([]);
+  });
+
+  test("translation selection persists after reload (#219 bug 2)", async ({
+    page,
+  }) => {
+    const consoleMessages: string[] = [];
+    page.on("console", (msg) => {
+      if (msg.type() === "error" || msg.type() === "warning") {
+        consoleMessages.push(`[${msg.type()}] ${msg.text()}`);
+      }
+    });
+
+    await navigateToBible(page);
+    if (!(await hasBibleData(page))) {
+      test.skip();
+      return;
+    }
+
+    const panel = biblePanel(page);
+    const mainSelect = panel.locator('[data-role="main-translation"]');
+    await expect(mainSelect).toBeVisible({ timeout: 10_000 });
+
+    // Get available translations
+    const options = await mainSelect.locator("option").allTextContents();
+    if (options.length < 2) {
+      test.skip();
+      return;
+    }
+
+    // Select the second translation
+    const secondValue = await mainSelect
+      .locator("option")
+      .nth(1)
+      .getAttribute("value");
+    await mainSelect.selectOption(secondValue!);
+
+    // Wait for auto-save to complete
+    await page.waitForTimeout(1000);
+
+    // Reload and navigate back to bible
+    await navigateToBible(page);
+    await page.waitForTimeout(2000);
+
+    // Verify the translation is still selected
+    const currentValue = await panel
+      .locator('[data-role="main-translation"]')
+      .inputValue();
+    expect(currentValue).toBe(secondValue);
+
+    expect(consoleMessages).toEqual([]);
+  });
+
+  test("broom button clears bible broadcast (#219 bug 3)", async ({
+    page,
+  }) => {
+    const consoleMessages: string[] = [];
+    page.on("console", (msg) => {
+      if (msg.type() === "error" || msg.type() === "warning") {
+        consoleMessages.push(`[${msg.type()}] ${msg.text()}`);
+      }
+    });
+
+    await navigateToBible(page);
+    if (!(await hasBibleData(page))) {
+      test.skip();
+      return;
+    }
+
+    const panel = biblePanel(page);
+
+    // Select a book and load verses to create a broadcast
+    const firstBook = panel
+      .locator('[data-role="book-list"] [data-role="book-item"]')
+      .first();
+    await expect(firstBook).toBeVisible({ timeout: 10_000 });
+    await firstBook.click();
+
+    // Wait for chapter/verse inputs and load
+    const loadButton = panel.locator('[data-role="load-verses"]');
+    if ((await loadButton.count()) > 0) {
+      await loadButton.click();
+      await page.waitForTimeout(2000);
+    }
+
+    // Trigger the first slide to broadcast it
+    const slideCard = page
+      .locator('[data-role="slide-card"]')
+      .first();
+    if ((await slideCard.count()) > 0) {
+      await slideCard.click();
+      await page.waitForTimeout(1000);
+    }
+
+    // Click broom button
+    const broomButton = page.locator('[data-role="clear-slide"]');
+    await expect(broomButton).toBeVisible({ timeout: 5_000 });
+    await broomButton.click();
+
+    // Wait for toast confirmation
+    await page.waitForTimeout(500);
+
+    // Verify bible broadcast is cleared via API
+    const response = await page.evaluate(async (url) => {
+      const resp = await fetch(`${url}/bible/broadcast`);
+      return resp.json();
+    }, baseURL);
+
+    // broadcast should be null/empty after clear
+    expect(response).toBeNull();
+
+    expect(consoleMessages).toEqual([]);
+  });
+
+  test("bible verse text is not truncated with ellipsis (#219 bug 4)", async ({
+    page,
+  }) => {
+    const consoleMessages: string[] = [];
+    page.on("console", (msg) => {
+      if (msg.type() === "error" || msg.type() === "warning") {
+        consoleMessages.push(`[${msg.type()}] ${msg.text()}`);
+      }
+    });
+
+    await navigateToBible(page);
+    if (!(await hasBibleData(page))) {
+      test.skip();
+      return;
+    }
+
+    const panel = biblePanel(page);
+
+    // Select a book and load verses
+    const firstBook = panel
+      .locator('[data-role="book-list"] [data-role="book-item"]')
+      .first();
+    await expect(firstBook).toBeVisible({ timeout: 10_000 });
+    await firstBook.click();
+    const loadButton = panel.locator('[data-role="load-verses"]');
+    if ((await loadButton.count()) > 0) {
+      await loadButton.click();
+      await page.waitForTimeout(2000);
+    }
+
+    // Check that slide text uses pre-wrap, not ellipsis
+    const slideText = page.locator(".operator__slide-card--bible .operator__slide-text").first();
+    if ((await slideText.count()) > 0) {
+      const styles = await slideText.evaluate((el) => {
+        const cs = window.getComputedStyle(el);
+        return {
+          whiteSpace: cs.whiteSpace,
+          textOverflow: cs.textOverflow,
+        };
+      });
+      expect(styles.whiteSpace).toBe("pre-wrap");
+      expect(styles.textOverflow).not.toBe("ellipsis");
+    }
+
+    expect(consoleMessages).toEqual([]);
+  });
+
+  test("stage preview is legible when inactive (#219 bug 5)", async ({
+    page,
+  }) => {
+    const consoleMessages: string[] = [];
+    page.on("console", (msg) => {
+      if (msg.type() === "error" || msg.type() === "warning") {
+        consoleMessages.push(`[${msg.type()}] ${msg.text()}`);
+      }
+    });
+
+    await navigateToBible(page);
+
+    const preview = page.locator(".operator__stage-preview");
+    if ((await preview.count()) > 0) {
+      const opacity = await preview.evaluate((el) => {
+        return parseFloat(window.getComputedStyle(el).opacity);
+      });
+      // Should be at least 0.8 (we set it to 0.85)
+      expect(opacity).toBeGreaterThanOrEqual(0.8);
+    }
+
+    expect(consoleMessages).toEqual([]);
+  });
+
+  test("bible edit mode textareas are not too small (#219 bug 6)", async ({
+    page,
+  }) => {
+    const consoleMessages: string[] = [];
+    page.on("console", (msg) => {
+      if (msg.type() === "error" || msg.type() === "warning") {
+        consoleMessages.push(`[${msg.type()}] ${msg.text()}`);
+      }
+    });
+
+    await navigateToBible(page);
+    if (!(await hasBibleData(page))) {
+      test.skip();
+      return;
+    }
+
+    const panel = biblePanel(page);
+
+    // Load some verses
+    const firstBook = panel
+      .locator('[data-role="book-list"] [data-role="book-item"]')
+      .first();
+    await expect(firstBook).toBeVisible({ timeout: 10_000 });
+    await firstBook.click();
+    const loadButton = panel.locator('[data-role="load-verses"]');
+    if ((await loadButton.count()) > 0) {
+      await loadButton.click();
+      await page.waitForTimeout(2000);
+    }
+
+    // Switch to edit mode
+    const editButton = page.locator(
+      '[data-role="mode-toggle"][data-mode="edit"]',
+    );
+    await editButton.click();
+    await page.waitForTimeout(500);
+
+    // Check textarea min-height is at least 4rem (roughly 64px at default font size)
+    const textarea = page
+      .locator(".operator--bible .operator__slide-editor textarea")
+      .first();
+    if ((await textarea.count()) > 0) {
+      const height = await textarea.evaluate((el) => {
+        return el.getBoundingClientRect().height;
+      });
+      // 4 lines of text at ~1.35 line-height should be ~50px minimum
+      expect(height).toBeGreaterThan(45);
+    }
+
+    // Switch back to live mode
+    const liveButton = page.locator(
+      '[data-role="mode-toggle"][data-mode="live"]',
+    );
+    await liveButton.click();
+
+    expect(consoleMessages).toEqual([]);
+  });
 });
