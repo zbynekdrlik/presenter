@@ -2678,11 +2678,11 @@ test.describe("WASM Operator Bible Tests", () => {
 
     // Verify bible broadcast is cleared via API
     const response = await page.evaluate(async (url) => {
-      const resp = await fetch(`${url}/bible/broadcast`);
+      const resp = await fetch(`${url}/bible/active`);
       return resp.json();
     }, baseURL);
 
-    // broadcast should be null/empty after clear
+    // Endpoint returns null when no broadcast is active
     expect(response).toBeNull();
 
     expect(consoleMessages).toEqual([]);
