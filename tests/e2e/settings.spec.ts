@@ -57,7 +57,7 @@ test.afterAll(async () => {
   }
 });
 
-async function waitForToast(page, expected: string) {
+async function waitForToast(page, expected: string | RegExp) {
   const toast = page.locator(selectors.toast);
   await expect(toast).toHaveAttribute('data-visible', 'true', { timeout: 20_000 });
   await expect(toast).toHaveText(expected);
@@ -73,7 +73,7 @@ async function getHostsViaApi(page) {
     id: string;
     label: string;
     host: string;
-    status: { state: string };
+    status: { state: string; consecutiveFailures?: number };
   }>;
 }
 
@@ -189,6 +189,97 @@ test('resolume settings CRUD with status feedback', async ({ page }) => {
 
   const hostsAfterDelete = await getHostsViaApi(page);
   expect(hostsAfterDelete).toHaveLength(0);
+});
+
+test('resolume connection diagnostics and test button', async ({ page }) => {
+  const consoleMessages: string[] = [];
+  page.on('console', (msg) => {
+    if (msg.type() === 'error' || msg.type() === 'warning') {
+      consoleMessages.push(`[${msg.type()}] ${msg.text()}`);
+    }
+  });
+
+  if (!mockResolume) {
+    throw new Error('Mock Resolume server not started');
+  }
+
+  const mockHost = '127.0.0.1';
+  const mockPort = String(mockResolume.port);
+
+  await page.goto(new URL('/ui/settings', baseURL).toString());
+  await page.waitForLoadState('networkidle');
+
+  // Create a connection pointing at mock Resolume
+  const testLabel = `Diag Test ${Date.now()}`;
+  await page.fill(selectors.labelInput, testLabel);
+  await page.fill(selectors.hostInput, mockHost);
+  await page.fill(selectors.portInput, mockPort);
+  await page.check(selectors.enabledCheckbox);
+  await page.click(selectors.submitButton);
+  await waitForToast(page, 'Added Resolume connection.');
+
+  // Wait for connected state
+  await expect.poll(async () => {
+    const hosts = await getHostsViaApi(page);
+    return hosts[0]?.status.state;
+  }, { timeout: 30_000 }).toEqual('connected');
+
+  // Test Connection button should work
+  const hostsAfter = await getHostsViaApi(page);
+  const hostId = hostsAfter[0].id;
+
+  // Reload to get the Test button rendered
+  await page.reload();
+  await page.waitForLoadState('networkidle');
+
+  // Click test button
+  const testBtn = page.locator(`[data-role="host-test"][data-id="${hostId}"]`);
+  await expect(testBtn).toBeVisible({ timeout: 10_000 });
+  await testBtn.click();
+  await waitForToast(page, /Connection OK/);
+
+  // Take connection offline — verify diagnostics appear
+  mockResolume.setOnline(false);
+
+  // Wait for error state with consecutive failures
+  await expect.poll(async () => {
+    const hosts = await getHostsViaApi(page);
+    const status = hosts[0]?.status;
+    return status?.state === 'error' && (status?.consecutiveFailures ?? 0) > 0;
+  }, { timeout: 30_000 }).toBeTruthy();
+
+  // Verify the error detail is displayed in UI
+  await page.reload();
+  await page.waitForLoadState('networkidle');
+  const errorDetail = page.locator('[data-role="host-error-detail"]');
+  await expect(errorDetail).toContainText('Retrying', { timeout: 20_000 });
+  await expect(errorDetail).toContainText('failure', { timeout: 5_000 });
+
+  // Test connection while offline should fail
+  const testBtnAfterReload = page.locator(`[data-role="host-test"][data-id="${hostId}"]`);
+  await testBtnAfterReload.click();
+  await waitForToast(page, /Connection failed/);
+
+  // Bring back online — should recover
+  mockResolume.setOnline(true);
+  await expect.poll(async () => {
+    const hosts = await getHostsViaApi(page);
+    return hosts[0]?.status.state;
+  }, { timeout: 30_000 }).toEqual('connected');
+
+  // Verify diagnostics reset
+  await expect.poll(async () => {
+    const hosts = await getHostsViaApi(page);
+    return hosts[0]?.status.consecutiveFailures;
+  }, { timeout: 10_000 }).toEqual(0);
+
+  // Clean up — delete the host
+  page.once('dialog', (dialog) => dialog.accept());
+  await page.locator(`[data-role="host-delete"][data-id="${hostId}"]`).click();
+  await waitForToast(page, 'Deleted Resolume connection.');
+
+  // Clean console check
+  expect(consoleMessages).toEqual([]);
 });
 
 test('android stage launchers CRUD', async ({ page }) => {

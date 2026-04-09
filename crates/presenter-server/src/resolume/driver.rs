@@ -27,6 +27,8 @@ pub(super) const TRIGGER_DELAY: Duration = Duration::from_millis(0);
 const MAPPING_REFRESH_INTERVAL: Duration = Duration::from_secs(10);
 const MAPPING_CACHE_TTL: Duration = Duration::from_secs(1);
 const RESOLUTION_TTL: Duration = Duration::from_secs(300);
+const COMPOSITION_TIMEOUT: Duration = Duration::from_secs(5);
+const ACTION_TIMEOUT: Duration = Duration::from_secs(2);
 
 #[derive(Debug)]
 pub(super) enum HostCommand {
@@ -167,6 +169,7 @@ impl HostDriver {
         let url = format!("{}/composition", endpoint.base_url);
         let response = self
             .apply_host_header(self.client.get(&url), &endpoint)
+            .timeout(COMPOSITION_TIMEOUT)
             .send()
             .await
             .with_context(|| format!("failed to fetch composition from {}", url))?;
@@ -209,6 +212,7 @@ impl HostDriver {
         let response = self
             .apply_host_header(self.client.put(&url), endpoint)
             .json(&serde_json::json!({ "value": payload.as_ref() }))
+            .timeout(ACTION_TIMEOUT)
             .send()
             .await
             .with_context(|| format!("failed to update text parameter {}", param_id))?;
@@ -245,6 +249,7 @@ impl HostDriver {
                     request = request.header(HOST, host);
                 }
                 let response = request
+                    .timeout(ACTION_TIMEOUT)
                     .send()
                     .await
                     .with_context(|| format!("failed to trigger clip {}", clip_id))?;
@@ -328,8 +333,12 @@ impl HostDriver {
     pub(super) async fn mark_connected(&self, status: &Arc<RwLock<ResolumeConnectionSnapshot>>) {
         let mut guard = status.write().await;
         guard.state = ResolumeConnectionState::Connected;
-        guard.last_success = Some(Utc::now());
+        let now = Utc::now();
+        guard.last_success = Some(now);
+        guard.last_attempt = Some(now);
         guard.last_error = None;
+        guard.consecutive_failures = 0;
+        guard.error_since = None;
     }
 
     pub(super) async fn note_latency(
@@ -348,8 +357,14 @@ impl HostDriver {
     ) {
         error!(host = %self.config.host, error = ?err, "resolume host error");
         let mut guard = status.write().await;
+        let now = Utc::now();
+        if guard.state != ResolumeConnectionState::Error {
+            guard.error_since = Some(now);
+        }
         guard.state = ResolumeConnectionState::Error;
         guard.last_error = Some(err.to_string());
+        guard.consecutive_failures += 1;
+        guard.last_attempt = Some(now);
         self.mapping = None;
         self.endpoint = None;
         self.last_mapping_refresh = None;

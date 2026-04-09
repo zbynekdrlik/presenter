@@ -15,7 +15,7 @@ use tracing::error;
 
 use driver::{run_host_worker, HostCommand};
 
-const DEFAULT_TIMEOUT: Duration = Duration::from_millis(500);
+const CONNECT_TIMEOUT: Duration = Duration::from_secs(3);
 const HOST_COMMAND_CAPACITY: usize = 16;
 
 #[derive(Debug, Clone, Serialize, PartialEq, Eq)]
@@ -35,6 +35,9 @@ pub struct ResolumeConnectionSnapshot {
     pub last_latency_ms: Option<f64>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub last_error: Option<String>,
+    pub consecutive_failures: u32,
+    pub last_attempt: Option<DateTime<Utc>>,
+    pub error_since: Option<DateTime<Utc>>,
 }
 
 impl ResolumeConnectionSnapshot {
@@ -44,6 +47,9 @@ impl ResolumeConnectionSnapshot {
             last_success: None,
             last_latency_ms: None,
             last_error: None,
+            consecutive_failures: 0,
+            last_attempt: None,
+            error_since: None,
         }
     }
 }
@@ -107,7 +113,7 @@ struct HostEntry {
 impl ResolumeRegistry {
     pub fn new() -> anyhow::Result<Self> {
         let client = Client::builder()
-            .timeout(DEFAULT_TIMEOUT)
+            .connect_timeout(CONNECT_TIMEOUT)
             .build()
             .map_err(|e| anyhow!("failed to build reqwest client: {e}"))?;
         Ok(Self {
@@ -126,7 +132,7 @@ impl ResolumeRegistry {
         for id in existing_ids {
             if !desired.contains_key(&id) {
                 if let Some(entry) = guard.remove(&id) {
-                    let _ = entry.command_tx.try_send(HostCommand::Shutdown);
+                    let _ = entry.command_tx.send(HostCommand::Shutdown).await;
                     entry.handle.abort();
                 }
             }
@@ -142,7 +148,8 @@ impl ResolumeRegistry {
                     {
                         let _ = entry
                             .command_tx
-                            .try_send(HostCommand::RefreshConfig(host.clone()));
+                            .send(HostCommand::RefreshConfig(host.clone()))
+                            .await;
                         entry.config = host;
                     } else if entry.config.label != host.label {
                         entry.config = host;
@@ -164,6 +171,9 @@ impl ResolumeRegistry {
                 last_success: None,
                 last_latency_ms: None,
                 last_error: None,
+                consecutive_failures: 0,
+                last_attempt: None,
+                error_since: None,
             }
         } else {
             ResolumeConnectionSnapshot::disabled()
@@ -186,24 +196,38 @@ impl ResolumeRegistry {
     }
 
     pub async fn stage_update(&self, update: StageUpdate) {
-        for entry in self.hosts.read().await.values() {
-            let _ = entry
+        for (id, entry) in self.hosts.read().await.iter() {
+            if entry
                 .command_tx
-                .try_send(HostCommand::Stage(update.clone()));
+                .try_send(HostCommand::Stage(update.clone()))
+                .is_err()
+            {
+                tracing::warn!(host_id = %id, "resolume command channel full, dropping stage update");
+            }
         }
     }
 
     pub async fn bible_update(&self, update: BibleUpdate) {
-        for entry in self.hosts.read().await.values() {
-            let _ = entry
+        for (id, entry) in self.hosts.read().await.iter() {
+            if entry
                 .command_tx
-                .try_send(HostCommand::Bible(update.clone()));
+                .try_send(HostCommand::Bible(update.clone()))
+                .is_err()
+            {
+                tracing::warn!(host_id = %id, "resolume command channel full, dropping bible update");
+            }
         }
     }
 
     pub async fn timer_update(&self, frame: TimerFrame) {
-        for entry in self.hosts.read().await.values() {
-            let _ = entry.command_tx.try_send(HostCommand::Timer(frame.clone()));
+        for (id, entry) in self.hosts.read().await.iter() {
+            if entry
+                .command_tx
+                .try_send(HostCommand::Timer(frame.clone()))
+                .is_err()
+            {
+                tracing::warn!(host_id = %id, "resolume command channel full, dropping timer update");
+            }
         }
     }
 
@@ -221,6 +245,48 @@ impl ResolumeRegistry {
         } else {
             ResolumeConnectionSnapshot::disabled()
         }
+    }
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct TestConnectionResult {
+    pub success: bool,
+    pub latency_ms: Option<f64>,
+    pub error: Option<String>,
+}
+
+pub async fn test_connection(host: &ResolumeHost) -> anyhow::Result<TestConnectionResult> {
+    use std::time::Instant;
+
+    let client = Client::builder()
+        .connect_timeout(Duration::from_secs(3))
+        .build()
+        .map_err(|e| anyhow!("failed to build test client: {e}"))?;
+
+    let url = format!("http://{}:{}/api/v1/composition", host.host, host.port);
+    let start = Instant::now();
+    match client
+        .get(&url)
+        .timeout(Duration::from_secs(5))
+        .send()
+        .await
+    {
+        Ok(response) if response.status().is_success() => Ok(TestConnectionResult {
+            success: true,
+            latency_ms: Some(start.elapsed().as_secs_f64() * 1000.0),
+            error: None,
+        }),
+        Ok(response) => Ok(TestConnectionResult {
+            success: false,
+            latency_ms: Some(start.elapsed().as_secs_f64() * 1000.0),
+            error: Some(format!("HTTP {}", response.status())),
+        }),
+        Err(err) => Ok(TestConnectionResult {
+            success: false,
+            latency_ms: None,
+            error: Some(err.to_string()),
+        }),
     }
 }
 

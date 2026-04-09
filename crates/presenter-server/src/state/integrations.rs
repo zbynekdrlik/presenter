@@ -26,6 +26,20 @@ impl AppState {
         self.resolume_registry.snapshot_for(id).await
     }
 
+    pub async fn test_resolume_host_connection(
+        &self,
+        id: ResolumeHostId,
+    ) -> anyhow::Result<crate::resolume::TestConnectionResult> {
+        let host = self
+            .repository
+            .list_resolume_hosts()
+            .await?
+            .into_iter()
+            .find(|h| h.id == id)
+            .ok_or_else(|| anyhow::anyhow!("Resolume host not found"))?;
+        crate::resolume::test_connection(&host).await
+    }
+
     pub async fn create_resolume_host(
         &self,
         draft: ResolumeHostDraft,
