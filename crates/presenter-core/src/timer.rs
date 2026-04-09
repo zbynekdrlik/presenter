@@ -292,6 +292,9 @@ impl TimersState {
                 }
             }
             TimerCommand::StartCountdown => {
+                if self.countdown.target <= now {
+                    self.countdown.target = now + Duration::minutes(15);
+                }
                 self.countdown.start();
             }
             TimerCommand::PauseCountdown => {
@@ -701,5 +704,29 @@ mod tests {
             )
             .unwrap();
         assert_eq!(state.countdown.state, TimerState::Running);
+    }
+
+    #[test]
+    fn start_countdown_auto_sets_target_when_expired() {
+        let now = Utc::now();
+        let past_target = now - TimeDelta::try_minutes(10).unwrap();
+        let mut state = TimersState::new(
+            CountdownTimer {
+                target: past_target,
+                state: TimerState::Idle,
+            },
+            PreachTimer::new(),
+        );
+        state
+            .apply_command(&TimerCommand::StartCountdown, now)
+            .unwrap();
+        assert_eq!(state.countdown.state, TimerState::Running);
+        assert!(state.countdown.target > now);
+        let remaining = state.countdown.remaining(now);
+        assert!(
+            remaining.num_minutes() >= 14 && remaining.num_minutes() <= 15,
+            "expected ~15 min, got {} min",
+            remaining.num_minutes()
+        );
     }
 }
