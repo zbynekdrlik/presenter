@@ -1,14 +1,11 @@
 use super::Repository;
 use chrono::{Duration, Utc};
 use presenter_core::{
-    bible::BibleIngestionBatch,
-    playlist::PlaylistEntryKind,
-    slide::{BibleSlideMetadata, SlideMetadata},
-    AndroidStageDisplayDraft, BiblePassage, BibleReference, BibleTranslation, CountdownTimer,
-    Library, LibraryId, OscSettingsDraft, PlaylistEntry, PlaylistEntryId, PreachTimer,
-    Presentation, PresentationId, ResolumeHostDraft, SearchResultKind, Slide, SlideContent,
-    SlideGroup, SlideId, SlideText, StageState, TimerState, TimersState, VelocityMode,
-    DEFAULT_ADB_PORT, DEFAULT_LAUNCH_COMPONENT,
+    bible::BibleIngestionBatch, playlist::PlaylistEntryKind, AndroidStageDisplayDraft,
+    BiblePassage, BibleReference, BibleTranslation, CountdownTimer, Library, LibraryId,
+    OscSettingsDraft, PlaylistEntry, PlaylistEntryId, PreachTimer, Presentation, PresentationId,
+    ResolumeHostDraft, SearchResultKind, Slide, SlideContent, SlideGroup, SlideId, SlideText,
+    StageState, TimerState, TimersState, VelocityMode, DEFAULT_ADB_PORT, DEFAULT_LAUNCH_COMPONENT,
 };
 
 fn sample_library() -> Library {
@@ -676,7 +673,7 @@ async fn app_setting_round_trip_set_get_delete() {
 // ── update_slide_content_with_metadata tests ────────────────────────
 
 #[tokio::test]
-async fn update_slide_content_with_metadata_persists_all_fields() {
+async fn update_slide_content_with_metadata_persists_worship_fields() {
     let repo = Repository::connect_in_memory().await.unwrap();
     let library = sample_library();
     let presentation = library.presentations[0].clone();
@@ -684,32 +681,15 @@ async fn update_slide_content_with_metadata_persists_all_fields() {
     repo.upsert_library(&library).await.unwrap();
 
     let new_content = SlideContent::new(
-        SlideText::new("John 3:16 text").unwrap(),
-        SlideText::new("Jan 3:16 text").unwrap(),
-        SlideText::new("Stage bible").unwrap(),
-        None,
+        SlideText::new("Updated main").unwrap(),
+        SlideText::new("Updated translation").unwrap(),
+        SlideText::new("Updated stage").unwrap(),
+        Some(SlideGroup::new("Verse 1")),
     );
 
-    let metadata = SlideMetadata::new().with_bible(BibleSlideMetadata {
-        translation_code: "en-kjv".to_string(),
-        secondary_translation_code: Some("cs-cep".to_string()),
-        book: "John".to_string(),
-        book_code: Some("JHN".to_string()),
-        book_number: Some(43),
-        chapter: 3,
-        verses: vec![presenter_core::slide::BibleSlideVerseRef::new(16, 16)],
-        main_reference_label: Some("John 3:16 (KJV)".to_string()),
-        translation_reference_label: Some("Jan 3:16 (CEP)".to_string()),
-    });
-
-    repo.update_slide_content_with_metadata(
-        presentation.id,
-        slide.id,
-        &new_content,
-        Some(&metadata),
-    )
-    .await
-    .unwrap();
+    repo.update_slide_content_with_metadata(presentation.id, slide.id, &new_content, None)
+        .await
+        .unwrap();
 
     let detail = repo
         .fetch_presentation_detail(presentation.id)
@@ -723,13 +703,11 @@ async fn update_slide_content_with_metadata_persists_all_fields() {
         .find(|s| s.id == slide.id)
         .expect("slide");
 
-    assert_eq!(updated.content.main.value(), "John 3:16 text");
-    assert_eq!(updated.content.translation.value(), "Jan 3:16 text");
-    // Verify metadata was persisted and loaded back
-    assert!(updated.metadata.is_some());
-    let meta = updated.metadata.as_ref().unwrap();
-    let bible = meta.bible.as_ref().expect("bible metadata");
-    assert_eq!(bible.translation_code, "en-kjv");
-    assert_eq!(bible.book, "John");
-    assert_eq!(bible.chapter, 3);
+    assert_eq!(updated.content.main.value(), "Updated main");
+    assert_eq!(updated.content.translation.value(), "Updated translation");
+    assert_eq!(updated.content.stage.value(), "Updated stage");
+    assert_eq!(
+        updated.content.group.as_ref().map(|g| g.name()),
+        Some("Verse 1")
+    );
 }

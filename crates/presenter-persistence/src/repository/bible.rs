@@ -1,19 +1,25 @@
+use anyhow::anyhow;
 use chrono::Utc;
 use sea_orm::{
-    ActiveModelTrait, ColumnTrait, EntityTrait, QueryFilter, QueryOrder, QuerySelect,
-    TransactionTrait,
+    sea_query::Expr as SeaExpr, ActiveModelTrait, ColumnTrait, EntityTrait, PaginatorTrait,
+    QueryFilter, QueryOrder, QuerySelect, TransactionTrait,
 };
 use tracing::instrument;
 
-use crate::entities::{bible_passage, bible_translation};
+use crate::entities::{bible_passage, bible_presentation, bible_slide, bible_translation};
 use presenter_core::{
     bible::{canonical_book_by_name, BibleIngestionBatch},
-    BiblePassage, BibleReference, BibleTranslation,
+    search::fold_query,
+    slide::BibleSlideMetadata,
+    BiblePassage, BiblePresentation, BiblePresentationId, BiblePresentationSlide,
+    BiblePresentationSummary, BibleReference, BibleSlideId, BibleTranslation, SlideText,
 };
 use sea_orm::Set;
+use uuid::Uuid;
 
 use super::util::{
-    sanitize_like_input, to_domain_passage, to_domain_translation, BIBLE_INSERT_CHUNK,
+    sanitize_like_input, to_domain_passage, to_domain_translation, RepositoryError,
+    BIBLE_INSERT_CHUNK,
 };
 use super::Repository;
 
@@ -352,5 +358,341 @@ impl Repository {
             .exec(&self.db)
             .await?;
         Ok(result.rows_affected)
+    }
+
+    // ── Bible presentations ────────────────────────────────────────
+
+    #[instrument(skip_all)]
+    pub async fn list_bible_presentation_summaries(
+        &self,
+    ) -> anyhow::Result<Vec<BiblePresentationSummary>> {
+        let presentations = bible_presentation::Entity::find()
+            .order_by_asc(bible_presentation::Column::Name)
+            .all(&self.db)
+            .await?;
+
+        let mut summaries = Vec::with_capacity(presentations.len());
+        for model in presentations {
+            let count = bible_slide::Entity::find()
+                .filter(bible_slide::Column::PresentationId.eq(model.id.clone()))
+                .count(&self.db)
+                .await?;
+            let uuid = Uuid::parse_str(&model.id)
+                .map_err(|_| RepositoryError::InvalidUuid(model.id.clone()))?;
+            summaries.push(BiblePresentationSummary {
+                id: BiblePresentationId::from_uuid(uuid),
+                name: model.name,
+                slide_count: count as usize,
+            });
+        }
+        Ok(summaries)
+    }
+
+    #[instrument(skip_all)]
+    pub async fn fetch_bible_presentation(
+        &self,
+        id: BiblePresentationId,
+    ) -> anyhow::Result<Option<BiblePresentation>> {
+        let id_str = id.to_string();
+        let Some(model) = bible_presentation::Entity::find_by_id(id_str.clone())
+            .one(&self.db)
+            .await?
+        else {
+            return Ok(None);
+        };
+
+        let slide_models = bible_slide::Entity::find()
+            .filter(bible_slide::Column::PresentationId.eq(id_str))
+            .order_by_asc(bible_slide::Column::SlideOrder)
+            .all(&self.db)
+            .await?;
+
+        let mut slides = Vec::with_capacity(slide_models.len());
+        for slide_model in slide_models {
+            slides.push(model_to_bible_slide(slide_model)?);
+        }
+
+        Ok(Some(BiblePresentation {
+            id,
+            name: model.name,
+            slides,
+            created_at: model.created_at.into(),
+        }))
+    }
+
+    #[instrument(skip_all)]
+    pub async fn create_bible_presentation(&self, name: &str) -> anyhow::Result<BiblePresentation> {
+        let trimmed = name.trim();
+        if trimmed.is_empty() {
+            return Err(anyhow!("bible presentation name cannot be empty"));
+        }
+        let id = BiblePresentationId::new();
+        let now = Utc::now();
+        let active = bible_presentation::ActiveModel {
+            id: Set(id.to_string()),
+            name: Set(trimmed.to_string()),
+            created_at: Set(now.into()),
+        };
+        bible_presentation::Entity::insert(active)
+            .exec(&self.db)
+            .await?;
+
+        Ok(BiblePresentation {
+            id,
+            name: trimmed.to_string(),
+            slides: Vec::new(),
+            created_at: now,
+        })
+    }
+
+    #[instrument(skip_all)]
+    pub async fn rename_bible_presentation(
+        &self,
+        id: BiblePresentationId,
+        name: &str,
+    ) -> anyhow::Result<()> {
+        let trimmed = name.trim();
+        if trimmed.is_empty() {
+            return Err(anyhow!("bible presentation name cannot be empty"));
+        }
+        let result = bible_presentation::Entity::update_many()
+            .col_expr(bible_presentation::Column::Name, SeaExpr::value(trimmed))
+            .filter(bible_presentation::Column::Id.eq(id.to_string()))
+            .exec(&self.db)
+            .await?;
+        if result.rows_affected == 0 {
+            return Err(anyhow!("bible presentation not found"));
+        }
+        Ok(())
+    }
+
+    #[instrument(skip_all)]
+    pub async fn delete_bible_presentation(&self, id: BiblePresentationId) -> anyhow::Result<()> {
+        let result = bible_presentation::Entity::delete_by_id(id.to_string())
+            .exec(&self.db)
+            .await?;
+        if result.rows_affected == 0 {
+            return Err(anyhow!("bible presentation not found"));
+        }
+        Ok(())
+    }
+
+    #[instrument(skip_all)]
+    pub async fn replace_bible_presentation_slides(
+        &self,
+        id: BiblePresentationId,
+        slides: &[BiblePresentationSlide],
+    ) -> anyhow::Result<()> {
+        let id_str = id.to_string();
+        let txn = self.db.begin().await?;
+
+        if bible_presentation::Entity::find_by_id(id_str.clone())
+            .one(&txn)
+            .await?
+            .is_none()
+        {
+            return Err(anyhow!("bible presentation not found"));
+        }
+
+        bible_slide::Entity::delete_many()
+            .filter(bible_slide::Column::PresentationId.eq(id_str.clone()))
+            .exec(&txn)
+            .await?;
+
+        for (index, slide) in slides.iter().enumerate() {
+            let mut normalized = slide.clone();
+            normalized.order = index as u32;
+            let active = bible_slide_to_active_model(&normalized, &id_str)?;
+            bible_slide::Entity::insert(active).exec(&txn).await?;
+        }
+
+        txn.commit().await?;
+        Ok(())
+    }
+
+    #[instrument(skip_all)]
+    pub async fn append_bible_presentation_slides(
+        &self,
+        id: BiblePresentationId,
+        slides: &[BiblePresentationSlide],
+    ) -> anyhow::Result<BiblePresentation> {
+        let id_str = id.to_string();
+        let txn = self.db.begin().await?;
+
+        if bible_presentation::Entity::find_by_id(id_str.clone())
+            .one(&txn)
+            .await?
+            .is_none()
+        {
+            return Err(anyhow!("bible presentation not found"));
+        }
+
+        let existing_count = bible_slide::Entity::find()
+            .filter(bible_slide::Column::PresentationId.eq(id_str.clone()))
+            .count(&txn)
+            .await? as u32;
+
+        for (index, slide) in slides.iter().enumerate() {
+            let mut normalized = slide.clone();
+            normalized.order = existing_count + index as u32;
+            let active = bible_slide_to_active_model(&normalized, &id_str)?;
+            bible_slide::Entity::insert(active).exec(&txn).await?;
+        }
+
+        txn.commit().await?;
+
+        self.fetch_bible_presentation(id)
+            .await?
+            .ok_or_else(|| anyhow!("bible presentation disappeared after append"))
+    }
+}
+
+fn model_to_bible_slide(model: bible_slide::Model) -> anyhow::Result<BiblePresentationSlide> {
+    let uuid =
+        Uuid::parse_str(&model.id).map_err(|_| RepositoryError::InvalidUuid(model.id.clone()))?;
+    let metadata = match model.metadata_json.as_deref() {
+        Some(raw) if !raw.trim().is_empty() => serde_json::from_str::<BibleSlideMetadata>(raw).ok(),
+        _ => None,
+    };
+    let main = SlideText::new(model.main_text).map_err(RepositoryError::from)?;
+    let secondary = SlideText::new(model.secondary_text).map_err(RepositoryError::from)?;
+    Ok(BiblePresentationSlide {
+        id: BibleSlideId::from_uuid(uuid),
+        order: model.slide_order.max(0) as u32,
+        main,
+        main_reference: model.main_reference,
+        secondary,
+        secondary_reference: model.secondary_reference,
+        metadata,
+    })
+}
+
+fn bible_slide_to_active_model(
+    slide: &BiblePresentationSlide,
+    presentation_id: &str,
+) -> anyhow::Result<bible_slide::ActiveModel> {
+    let metadata_json = match slide.metadata.as_ref() {
+        Some(meta) => Some(serde_json::to_string(meta)?),
+        None => None,
+    };
+    Ok(bible_slide::ActiveModel {
+        id: Set(slide.id.to_string()),
+        presentation_id: Set(presentation_id.to_string()),
+        slide_order: Set(slide.order as i32),
+        main_text: Set(slide.main.value().to_owned()),
+        main_search: Set(fold_query(slide.main.value())),
+        main_reference: Set(slide.main_reference.clone()),
+        secondary_text: Set(slide.secondary.value().to_owned()),
+        secondary_search: Set(fold_query(slide.secondary.value())),
+        secondary_reference: Set(slide.secondary_reference.clone()),
+        metadata_json: Set(metadata_json),
+    })
+}
+
+#[cfg(test)]
+mod presentation_tests {
+    use super::*;
+    use crate::repository::Repository;
+    use presenter_core::SlideText;
+
+    async fn fresh_repo() -> Repository {
+        Repository::connect_in_memory()
+            .await
+            .expect("in-memory repo")
+    }
+
+    fn sample_slide(main: &str, reference: &str) -> BiblePresentationSlide {
+        BiblePresentationSlide {
+            id: BibleSlideId::new(),
+            order: 0,
+            main: SlideText::new(main).unwrap(),
+            main_reference: reference.to_string(),
+            secondary: SlideText::new("").unwrap(),
+            secondary_reference: String::new(),
+            metadata: None,
+        }
+    }
+
+    #[tokio::test]
+    async fn create_and_fetch_bible_presentation() {
+        let repo = fresh_repo().await;
+        let created = repo.create_bible_presentation("My Sermon").await.unwrap();
+        assert_eq!(created.name, "My Sermon");
+        assert!(created.slides.is_empty());
+
+        let fetched = repo
+            .fetch_bible_presentation(created.id)
+            .await
+            .unwrap()
+            .expect("should exist");
+        assert_eq!(fetched.id, created.id);
+        assert_eq!(fetched.name, "My Sermon");
+    }
+
+    #[tokio::test]
+    async fn list_bible_presentation_summaries_returns_all() {
+        let repo = fresh_repo().await;
+        repo.create_bible_presentation("Bravo").await.unwrap();
+        repo.create_bible_presentation("Alpha").await.unwrap();
+        let list = repo.list_bible_presentation_summaries().await.unwrap();
+        assert_eq!(list.len(), 2);
+        assert_eq!(list[0].name, "Alpha");
+        assert_eq!(list[1].name, "Bravo");
+    }
+
+    #[tokio::test]
+    async fn rename_bible_presentation_updates_name() {
+        let repo = fresh_repo().await;
+        let p = repo.create_bible_presentation("Old").await.unwrap();
+        repo.rename_bible_presentation(p.id, "New").await.unwrap();
+        let fetched = repo.fetch_bible_presentation(p.id).await.unwrap().unwrap();
+        assert_eq!(fetched.name, "New");
+    }
+
+    #[tokio::test]
+    async fn delete_bible_presentation_removes_it() {
+        let repo = fresh_repo().await;
+        let p = repo.create_bible_presentation("Doomed").await.unwrap();
+        repo.delete_bible_presentation(p.id).await.unwrap();
+        assert!(repo.fetch_bible_presentation(p.id).await.unwrap().is_none());
+    }
+
+    #[tokio::test]
+    async fn replace_bible_slides_overwrites_existing() {
+        let repo = fresh_repo().await;
+        let p = repo.create_bible_presentation("Test").await.unwrap();
+        let slide = sample_slide("For God so loved the world", "John 3:16");
+        repo.replace_bible_presentation_slides(p.id, &[slide])
+            .await
+            .unwrap();
+        let fetched = repo.fetch_bible_presentation(p.id).await.unwrap().unwrap();
+        assert_eq!(fetched.slides.len(), 1);
+        assert_eq!(fetched.slides[0].main_reference, "John 3:16");
+
+        repo.replace_bible_presentation_slides(p.id, &[])
+            .await
+            .unwrap();
+        let fetched = repo.fetch_bible_presentation(p.id).await.unwrap().unwrap();
+        assert!(fetched.slides.is_empty());
+    }
+
+    #[tokio::test]
+    async fn append_bible_slides_preserves_order() {
+        let repo = fresh_repo().await;
+        let p = repo.create_bible_presentation("Test").await.unwrap();
+        let slide_a = sample_slide("First", "Gen 1:1");
+        let slide_b = sample_slide("Second", "Gen 1:2");
+        repo.append_bible_presentation_slides(p.id, &[slide_a])
+            .await
+            .unwrap();
+        let result = repo
+            .append_bible_presentation_slides(p.id, &[slide_b])
+            .await
+            .unwrap();
+        assert_eq!(result.slides.len(), 2);
+        assert_eq!(result.slides[0].order, 0);
+        assert_eq!(result.slides[1].order, 1);
+        assert_eq!(result.slides[0].main_reference, "Gen 1:1");
+        assert_eq!(result.slides[1].main_reference, "Gen 1:2");
     }
 }
