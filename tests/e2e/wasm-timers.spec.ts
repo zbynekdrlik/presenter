@@ -100,27 +100,81 @@ test.describe("WASM Operator Timer Tests", () => {
     await expect(errorToast).not.toBeVisible();
   });
 
-  test("countdown start button toggles timer", async ({ page }) => {
+  test("setting countdown target auto-starts the countdown", async ({
+    page,
+    request,
+  }) => {
     await navigateToTimers(page);
 
-    const startButton = page.locator('[data-role="countdown-start"]');
-    await expect(startButton).toBeVisible();
+    // Pick an hour at least 2 hours in the future so the test is stable
+    // even when run near hour boundaries.
+    const futureHour = (new Date().getHours() + 2) % 24;
+    const compactInput = String(futureHour).padStart(2, "0") + "00";
 
-    await startButton.click();
+    const countdownInput = page.locator('[data-role="countdown-target-input"]');
+    await countdownInput.fill(compactInput);
+    await countdownInput.press("Enter");
 
-    // Wait for API response
-    await page
-      .waitForResponse(
-        (resp) => resp.url().includes("/timers/") && resp.status() === 200,
-        { timeout: 5_000 },
-      )
-      .catch(() => {});
+    // After auto-start, the API should report the countdown as Running
+    // (not Idle) and the target should match what we typed.
+    await expect(async () => {
+      const response = await request.get(
+        new URL("/timers/overview", baseURL).toString(),
+        { timeout: 10_000 },
+      );
+      const data = await response.json();
+      expect(data.countdownToStart.state).toBe("running");
+      expect(data.countdownToStart.targetLocal).toMatch(
+        new RegExp(`^${String(futureHour).padStart(2, "0")}:00:00$`),
+      );
+    }).toPass({ timeout: 10_000, intervals: [500] });
+  });
 
-    // Should not show error
-    const errorToast = page.locator(
-      '[data-role="toast"][data-variant="error"]',
-    );
-    await expect(errorToast).not.toBeVisible();
+  test("countdown HHMM compact form sets correct target", async ({
+    page,
+    request,
+  }) => {
+    await navigateToTimers(page);
+
+    // Use 4-digit compact form: 1915 → 19:15
+    const countdownInput = page.locator('[data-role="countdown-target-input"]');
+    await countdownInput.fill("1915");
+    await countdownInput.press("Enter");
+
+    await expect(async () => {
+      const response = await request.get(
+        new URL("/timers/overview", baseURL).toString(),
+        { timeout: 10_000 },
+      );
+      const data = await response.json();
+      expect(data.countdownToStart.targetLocal).toBe("19:15:00");
+      expect(data.countdownToStart.state).toBe("running");
+    }).toPass({ timeout: 10_000, intervals: [500] });
+  });
+
+  test("countdown panel does not show Start/Pause/Reset buttons", async ({
+    page,
+  }) => {
+    await navigateToTimers(page);
+
+    // These were removed because wall-clock countdowns don't need them.
+    await expect(
+      page.locator('[data-role="countdown-start"]'),
+    ).toHaveCount(0);
+    await expect(
+      page.locator('[data-role="countdown-pause"]'),
+    ).toHaveCount(0);
+    await expect(
+      page.locator('[data-role="countdown-reset"]'),
+    ).toHaveCount(0);
+
+    // ±5 buttons stay
+    await expect(
+      page.locator('[data-role="countdown-offset-minus"]'),
+    ).toBeVisible();
+    await expect(
+      page.locator('[data-role="countdown-offset-plus"]'),
+    ).toBeVisible();
   });
 
   test("countdown offset minus decreases by 5 minutes", async ({ page }) => {
