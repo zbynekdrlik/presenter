@@ -122,15 +122,7 @@ pub mod slide {
         pub worship_stage: String,
         pub worship_stage_search: String,
         pub worship_group: Option<String>,
-        // Bible columns
-        pub bible_main: String,
-        pub bible_main_search: String,
-        pub bible_translation: String,
-        pub bible_translation_search: String,
-        pub bible_main_reference: String,
-        pub bible_translation_reference: String,
         pub created_at: DateTimeWithTimeZone,
-        pub metadata_json: Option<String>,
     }
 
     #[derive(Copy, Clone, Debug, EnumIter, DeriveRelation)]
@@ -405,8 +397,79 @@ pub mod bible_passage {
     impl ActiveModelBehavior for ActiveModel {}
 }
 
+pub mod bible_presentation {
+    use super::bible_slide;
+    use sea_orm::entity::prelude::*;
+
+    #[derive(Clone, Debug, PartialEq, Eq, DeriveEntityModel)]
+    #[sea_orm(table_name = "bible_presentations")]
+    pub struct Model {
+        #[sea_orm(primary_key, auto_increment = false)]
+        pub id: String,
+        pub name: String,
+        pub created_at: DateTimeWithTimeZone,
+    }
+
+    #[derive(Copy, Clone, Debug, EnumIter, DeriveRelation)]
+    pub enum Relation {
+        #[sea_orm(has_many = "bible_slide::Entity")]
+        Slides,
+    }
+
+    impl Related<bible_slide::Entity> for Entity {
+        fn to() -> RelationDef {
+            Relation::Slides.def()
+        }
+    }
+
+    impl ActiveModelBehavior for ActiveModel {}
+}
+
+pub mod bible_slide {
+    use super::bible_presentation;
+    use sea_orm::entity::prelude::*;
+
+    #[derive(Clone, Debug, PartialEq, Eq, DeriveEntityModel)]
+    #[sea_orm(table_name = "bible_slides")]
+    pub struct Model {
+        #[sea_orm(primary_key, auto_increment = false)]
+        pub id: String,
+        pub presentation_id: String,
+        pub slide_order: i32,
+        pub main_text: String,
+        pub main_search: String,
+        pub main_reference: String,
+        pub secondary_text: String,
+        pub secondary_search: String,
+        pub secondary_reference: String,
+        pub metadata_json: Option<String>,
+    }
+
+    #[derive(Copy, Clone, Debug, EnumIter, DeriveRelation)]
+    pub enum Relation {
+        #[sea_orm(
+            belongs_to = "bible_presentation::Entity",
+            from = "Column::PresentationId",
+            to = "bible_presentation::Column::Id",
+            on_update = "Cascade",
+            on_delete = "Cascade"
+        )]
+        Presentation,
+    }
+
+    impl Related<bible_presentation::Entity> for Entity {
+        fn to() -> RelationDef {
+            Relation::Presentation.def()
+        }
+    }
+
+    impl ActiveModelBehavior for ActiveModel {}
+}
+
 pub use app_settings::Entity as AppSettingsEntity;
 pub use bible_passage::Entity as BiblePassageEntity;
+pub use bible_presentation::Entity as BiblePresentationEntity;
+pub use bible_slide::Entity as BibleSlideEntity;
 pub use bible_translation::Entity as BibleTranslationEntity;
 pub use library::Entity as LibraryEntity;
 pub use playlist::Entity as PlaylistEntity;
