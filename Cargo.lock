@@ -2652,6 +2652,7 @@ dependencies = [
  "async-trait",
  "sea-orm",
  "sea-orm-migration",
+ "tokio",
  "tracing",
 ]
 

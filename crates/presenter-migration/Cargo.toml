@@ -15,4 +15,5 @@ tracing.workspace = true
 [dev-dependencies]
 sea-orm.workspace = true
 sea-orm-migration.workspace = true
+tokio = { workspace = true, features = ["macros", "rt-multi-thread"] }
 
