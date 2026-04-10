@@ -63,14 +63,6 @@ pub async fn render_timer_overlay(state: &AppState) -> anyhow::Result<Html<Strin
       nextOverview.countdown_to_start ||
       nextOverview.countdownToStart ||
       {{}};
-    const rawSeconds = Number(
-      nextCountdown.seconds_remaining ??
-        nextCountdown.secondsRemaining ??
-        remaining
-    );
-    if (Number.isFinite(rawSeconds)) {{
-      remaining = Math.floor(rawSeconds);
-    }}
     if (typeof nextCountdown.state === 'string') {{
       state = nextCountdown.state.toLowerCase();
     }}
@@ -83,22 +75,34 @@ pub async fn render_timer_overlay(state: &AppState) -> anyhow::Result<Html<Strin
     if (parsedTarget !== null) {{
       targetEpochMs = parsedTarget;
     }}
+    // Derive remaining from target, not from seconds_remaining
+    const derived = remainingFromTarget();
+    if (derived !== null) {{
+      remaining = derived;
+    }}
     render();
   }};
 
+  // Initial render
   applyOverview(overview);
 
-  window.setInterval(() => {{
+  // Use requestAnimationFrame for smooth, drift-free updates
+  let lastRenderedSecond = -1;
+  const tick = () => {{
     if (state === 'running') {{
       const derived = remainingFromTarget();
       if (derived !== null) {{
         remaining = derived;
-      }} else {{
-        remaining = Math.max(0, remaining - 1);
       }}
-      render();
+      const currentSecond = Math.floor(remaining);
+      if (currentSecond !== lastRenderedSecond) {{
+        lastRenderedSecond = currentSecond;
+        render();
+      }}
     }}
-  }}, 1000);
+    requestAnimationFrame(tick);
+  }};
+  requestAnimationFrame(tick);
 
   const connect = () => {{
     const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
@@ -109,8 +113,7 @@ pub async fn render_timer_overlay(state: &AppState) -> anyhow::Result<Html<Strin
       try {{
         const data = JSON.parse(event.data);
         if (data.type === 'timers') {{
-          overview = data.overview || overview;
-          applyOverview(overview);
+          applyOverview(data.overview);
         }}
       }} catch (error) {{
         console.warn('timer overlay parse error', error);

@@ -13,6 +13,10 @@ let baseURL: string;
 let dbUrl: string;
 let port: number;
 let wsURL: string;
+let numberedPresentationId: string;
+let numberedSlideIds: string[];
+let unnumberedPresentationId: string;
+let unnumberedSlideIds: string[];
 
 test.describe.configure({ timeout: 180_000 });
 
@@ -131,6 +135,50 @@ test.beforeAll(async ({}, testInfo) => {
   const base = new URL(baseURL);
   const wsOrigin = `${base.protocol.replace("http", "ws")}//${base.hostname}:${desiredPort}`;
   wsURL = `${wsOrigin}/companion/ws`;
+
+  // Create test library for song number tests
+  const libResp = await fetch(new URL("/libraries", baseURL).toString(), {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ name: "_E2E Song Number Test" }),
+  });
+  const lib = await libResp.json();
+
+  // Create presentation WITH number prefix
+  const numberedResp = await fetch(
+    new URL(`/libraries/${lib.id}/presentations`, baseURL).toString(),
+    {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        name: "042 Amazing Grace",
+        slides: [{ main: "How sweet the sound", group: "Verse 1" }],
+      }),
+    },
+  );
+  const numberedData = await numberedResp.json();
+  numberedPresentationId = numberedData.presentation.id;
+  numberedSlideIds = numberedData.presentation.slides.map(
+    (s: { id: string }) => s.id,
+  );
+
+  // Create presentation WITHOUT number prefix
+  const unnumberedResp = await fetch(
+    new URL(`/libraries/${lib.id}/presentations`, baseURL).toString(),
+    {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        name: "Song Without Number",
+        slides: [{ main: "Just a song", group: "Verse 1" }],
+      }),
+    },
+  );
+  const unnumberedData = await unnumberedResp.json();
+  unnumberedPresentationId = unnumberedData.presentation.id;
+  unnumberedSlideIds = unnumberedData.presentation.slides.map(
+    (s: { id: string }) => s.id,
+  );
 });
 
 test.afterAll(async () => {
@@ -445,6 +493,86 @@ test("stage latency shows server-measured round-trip under 500ms", async ({
   // LAN/localhost round-trip should be well under 500ms
   expect(latencyValue!).toBeLessThan(500);
   expect(latencyValue!).toBeGreaterThanOrEqual(0);
+
+  await stagePage.close();
+});
+
+test("song number displays #042 for numbered presentation", async ({
+  context,
+}) => {
+  const consoleMessages: string[] = [];
+
+  const stagePage = await openStageDisplay(context);
+  stagePage.on("console", (msg) => {
+    if (msg.type() === "error" || msg.type() === "warning") {
+      consoleMessages.push(`[${msg.type()}] ${msg.text()}`);
+    }
+  });
+
+  // Trigger numbered presentation
+  await context.request.post(new URL("/stage/state", baseURL).toString(), {
+    data: {
+      presentationId: numberedPresentationId,
+      currentSlideId: numberedSlideIds[0],
+      nextSlideId: null,
+    },
+  });
+
+  // Wait for song number to appear
+  const songNumberEl = stagePage.locator('[data-role="song-number"]');
+  await expect(songNumberEl).toBeVisible({ timeout: 10_000 });
+  await expect(songNumberEl).toContainText("#042");
+
+  // Verify it's positioned between clock and LIVE pill
+  const clockBox = await stagePage.locator(".stage__clock").boundingBox();
+  const songBox = await songNumberEl.boundingBox();
+  const liveBox = await stagePage.locator(".stage__live-pill").boundingBox();
+
+  expect(clockBox).toBeTruthy();
+  expect(songBox).toBeTruthy();
+  expect(liveBox).toBeTruthy();
+
+  if (clockBox && songBox && liveBox) {
+    expect(clockBox.x + clockBox.width).toBeLessThanOrEqual(songBox.x + 1);
+    expect(songBox.x + songBox.width).toBeLessThanOrEqual(liveBox.x + 1);
+  }
+
+  expect(consoleMessages).toEqual([]);
+
+  await stagePage.close();
+});
+
+test("song number is hidden for presentation without number prefix", async ({
+  context,
+}) => {
+  const consoleMessages: string[] = [];
+
+  const stagePage = await openStageDisplay(context);
+  stagePage.on("console", (msg) => {
+    if (msg.type() === "error" || msg.type() === "warning") {
+      consoleMessages.push(`[${msg.type()}] ${msg.text()}`);
+    }
+  });
+
+  // Trigger unnumbered presentation
+  await context.request.post(new URL("/stage/state", baseURL).toString(), {
+    data: {
+      presentationId: unnumberedPresentationId,
+      currentSlideId: unnumberedSlideIds[0],
+      nextSlideId: null,
+    },
+  });
+
+  // Wait for slide text to appear (confirms snapshot arrived)
+  await expect(
+    stagePage.locator(".stage__slide-text").first(),
+  ).toContainText("Just a song", { timeout: 10_000 });
+
+  // Song number element should NOT be visible
+  const songNumberEl = stagePage.locator('[data-role="song-number"]');
+  await expect(songNumberEl).not.toBeVisible();
+
+  expect(consoleMessages).toEqual([]);
 
   await stagePage.close();
 });

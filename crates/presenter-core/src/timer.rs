@@ -1,6 +1,6 @@
 #[cfg(test)]
 use chrono::TimeDelta;
-use chrono::{DateTime, Duration, Utc};
+use chrono::{DateTime, Duration, Local, NaiveTime, Utc};
 use serde::{Deserialize, Serialize};
 use std::cmp::max;
 use thiserror::Error;
@@ -92,6 +92,23 @@ impl CountdownTimer {
         }
         self.target = target;
         self.state = TimerState::Idle;
+        Ok(())
+    }
+
+    /// Sets a new target while preserving the current timer state (Running/Paused).
+    /// `set_target_with_now` resets to Idle; this wrapper re-applies the prior state.
+    pub fn set_target_preserving_state(
+        &mut self,
+        target: DateTime<Utc>,
+        now: DateTime<Utc>,
+    ) -> Result<(), TimerError> {
+        let previous_state = self.state;
+        self.set_target_with_now(target, now)?;
+        match previous_state {
+            TimerState::Running => self.start(),
+            TimerState::Paused => self.state = TimerState::Paused,
+            _ => {}
+        }
         Ok(())
     }
 
@@ -206,6 +223,8 @@ impl PreachTimer {
 #[serde(rename_all = "snake_case", tag = "command")]
 pub enum TimerCommand {
     SetCountdownTarget { target: DateTime<Utc> },
+    SetCountdownTargetLocal { hours: u32, minutes: u32 },
+    AdjustCountdownTarget { offset_minutes: i32 },
     StartCountdown,
     PauseCountdown,
     ResetCountdown,
@@ -246,15 +265,37 @@ impl TimersState {
     ) -> Result<(), TimerError> {
         match command {
             TimerCommand::SetCountdownTarget { target } => {
-                let previous_state = self.countdown.state;
-                self.countdown.set_target(*target)?;
-                match previous_state {
-                    TimerState::Running => self.countdown.start(),
-                    TimerState::Paused => self.countdown.state = TimerState::Paused,
-                    _ => {}
-                }
+                self.countdown.set_target_preserving_state(*target, now)?;
+            }
+            TimerCommand::SetCountdownTargetLocal { hours, minutes } => {
+                let time = NaiveTime::from_hms_opt(*hours, *minutes, 0)
+                    .ok_or(TimerError::InvalidCommand("invalid hours/minutes"))?;
+                let local_now = Local::now();
+                let today = local_now.date_naive();
+                let candidate = today
+                    .and_time(time)
+                    .and_local_timezone(Local)
+                    .single()
+                    .ok_or(TimerError::InvalidCommand("ambiguous local time"))?;
+                let target_local = if candidate <= local_now {
+                    candidate + Duration::days(1)
+                } else {
+                    candidate
+                };
+                let target_utc = target_local.with_timezone(&Utc);
+                self.countdown
+                    .set_target_preserving_state(target_utc, now)?;
+            }
+            TimerCommand::AdjustCountdownTarget { offset_minutes } => {
+                let new_target =
+                    self.countdown.target + Duration::minutes(i64::from(*offset_minutes));
+                self.countdown
+                    .set_target_preserving_state(new_target, now)?;
             }
             TimerCommand::StartCountdown => {
+                if self.countdown.target <= now {
+                    self.countdown.target = now + Duration::minutes(15);
+                }
                 self.countdown.start();
             }
             TimerCommand::PauseCountdown => {
@@ -283,6 +324,16 @@ impl TimersState {
     }
 
     pub fn overview(&self, now: DateTime<Utc>) -> TimersOverview {
+        let target_local = self
+            .countdown
+            .target
+            .with_timezone(&Local)
+            .format("%H:%M:%S")
+            .to_string();
+        self.overview_with_local_format(now, &target_local)
+    }
+
+    fn overview_with_local_format(&self, now: DateTime<Utc>, target_local: &str) -> TimersOverview {
         let countdown_remaining = self.countdown.remaining(now).num_seconds();
         let remaining_seconds = max(countdown_remaining, 0);
         let elapsed_seconds = self.preach.elapsed(now).num_seconds();
@@ -290,6 +341,7 @@ impl TimersState {
             countdown_to_start: CountdownTimerSnapshot {
                 state: self.countdown.state,
                 target: self.countdown.target,
+                target_local: target_local.to_string(),
                 seconds_remaining: remaining_seconds,
             },
             preach_timer: PreachTimerSnapshot {
@@ -306,6 +358,7 @@ impl TimersState {
 pub struct CountdownTimerSnapshot {
     pub state: TimerState,
     pub target: DateTime<Utc>,
+    pub target_local: String,
     pub seconds_remaining: i64,
 }
 
@@ -328,10 +381,15 @@ impl TimersOverview {
     /// Produces a demo snapshot that can be used before real timers are implemented.
     pub fn demo(now: DateTime<Utc>) -> Self {
         let countdown_target = now + Duration::minutes(15);
+        let target_local = countdown_target
+            .with_timezone(&Local)
+            .format("%H:%M:%S")
+            .to_string();
         Self {
             countdown_to_start: CountdownTimerSnapshot {
                 state: TimerState::Running,
                 target: countdown_target,
+                target_local,
                 seconds_remaining: (countdown_target - now).num_seconds(),
             },
             preach_timer: PreachTimerSnapshot {
@@ -346,6 +404,7 @@ impl TimersOverview {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use chrono::Timelike;
 
     #[test]
     fn countdown_cannot_target_past() {
@@ -502,5 +561,169 @@ mod tests {
             .apply_command(&TimerCommand::ClearPreachLimit, now)
             .unwrap();
         assert_eq!(state.preach.limit_seconds(), None);
+    }
+
+    #[test]
+    fn set_countdown_target_local_converts_to_utc() {
+        let now = Utc::now();
+        let mut state = TimersState::default(now);
+        let future_hour = (chrono::Local::now().hour() + 2) % 24;
+        state
+            .apply_command(
+                &TimerCommand::SetCountdownTargetLocal {
+                    hours: future_hour,
+                    minutes: 0,
+                },
+                now,
+            )
+            .unwrap();
+        assert!(state.countdown.target > now);
+        assert_eq!(state.countdown.state, TimerState::Idle);
+    }
+
+    #[test]
+    fn set_countdown_target_local_past_time_rolls_to_tomorrow() {
+        let now = Utc::now();
+        let mut state = TimersState::default(now);
+        let local_now = chrono::Local::now();
+        let past_hour = if local_now.hour() == 0 {
+            23
+        } else {
+            local_now.hour() - 1
+        };
+        state
+            .apply_command(
+                &TimerCommand::SetCountdownTargetLocal {
+                    hours: past_hour,
+                    minutes: 0,
+                },
+                now,
+            )
+            .unwrap();
+        let remaining = state.countdown.remaining(now);
+        assert!(
+            remaining.num_hours() >= 22,
+            "expected tomorrow, got {} hours remaining",
+            remaining.num_hours()
+        );
+    }
+
+    #[test]
+    fn set_countdown_target_local_preserves_running_state() {
+        let now = Utc::now();
+        let mut state = TimersState::default(now);
+        state.countdown.start();
+        assert_eq!(state.countdown.state, TimerState::Running);
+        let future_hour = (chrono::Local::now().hour() + 2) % 24;
+        state
+            .apply_command(
+                &TimerCommand::SetCountdownTargetLocal {
+                    hours: future_hour,
+                    minutes: 0,
+                },
+                now,
+            )
+            .unwrap();
+        assert_eq!(state.countdown.state, TimerState::Running);
+    }
+
+    #[test]
+    fn set_countdown_target_local_rejects_invalid_time() {
+        let now = Utc::now();
+        let mut state = TimersState::default(now);
+        let result = state.apply_command(
+            &TimerCommand::SetCountdownTargetLocal {
+                hours: 25,
+                minutes: 0,
+            },
+            now,
+        );
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn adjust_countdown_target_adds_minutes() {
+        let now = Utc::now();
+        let mut state = TimersState::default(now);
+        let original_target = state.countdown.target;
+        state
+            .apply_command(
+                &TimerCommand::AdjustCountdownTarget { offset_minutes: 5 },
+                now,
+            )
+            .unwrap();
+        let diff = state.countdown.target - original_target;
+        assert_eq!(diff.num_minutes(), 5);
+    }
+
+    #[test]
+    fn adjust_countdown_target_subtracts_minutes() {
+        let now = Utc::now();
+        let target = now + Duration::minutes(30);
+        let mut state = TimersState::new(
+            CountdownTimer::new_with_now(target, now).unwrap(),
+            PreachTimer::new(),
+        );
+        state
+            .apply_command(
+                &TimerCommand::AdjustCountdownTarget { offset_minutes: -5 },
+                now,
+            )
+            .unwrap();
+        let diff = target - state.countdown.target;
+        assert_eq!(diff.num_minutes(), 5);
+    }
+
+    #[test]
+    fn adjust_countdown_target_rejects_result_in_past() {
+        let now = Utc::now();
+        let target = now + Duration::minutes(3);
+        let mut state = TimersState::new(
+            CountdownTimer::new_with_now(target, now).unwrap(),
+            PreachTimer::new(),
+        );
+        let result = state.apply_command(
+            &TimerCommand::AdjustCountdownTarget { offset_minutes: -5 },
+            now,
+        );
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn adjust_countdown_target_preserves_running_state() {
+        let now = Utc::now();
+        let mut state = TimersState::default(now);
+        state.countdown.start();
+        state
+            .apply_command(
+                &TimerCommand::AdjustCountdownTarget { offset_minutes: 5 },
+                now,
+            )
+            .unwrap();
+        assert_eq!(state.countdown.state, TimerState::Running);
+    }
+
+    #[test]
+    fn start_countdown_auto_sets_target_when_expired() {
+        let now = Utc::now();
+        let past_target = now - TimeDelta::try_minutes(10).unwrap();
+        let mut state = TimersState::new(
+            CountdownTimer {
+                target: past_target,
+                state: TimerState::Idle,
+            },
+            PreachTimer::new(),
+        );
+        state
+            .apply_command(&TimerCommand::StartCountdown, now)
+            .unwrap();
+        assert_eq!(state.countdown.state, TimerState::Running);
+        assert!(state.countdown.target > now);
+        let remaining = state.countdown.remaining(now);
+        assert!(
+            remaining.num_minutes() >= 14 && remaining.num_minutes() <= 15,
+            "expected ~15 min, got {} min",
+            remaining.num_minutes()
+        );
     }
 }

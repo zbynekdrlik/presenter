@@ -1,7 +1,7 @@
 use super::*;
 use axum::body::Body;
 use axum::http::{Request, StatusCode};
-use chrono::{Duration as ChronoDuration, Utc};
+use chrono::{Duration as ChronoDuration, Local, Timelike, Utc};
 use presenter_core::{
     BiblePassage, BibleReference, BibleTranslation, Library, LibrarySummary, SearchResult,
     SearchResultKind, Slide, TimerState, DEFAULT_STAGE_LAYOUT_CODE,
@@ -1447,6 +1447,127 @@ async fn timers_command_endpoint_rejects_past_targets() {
         .unwrap();
 
     assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+}
+
+#[tokio::test]
+async fn timers_command_set_countdown_target_local() {
+    let app = build_router(AppState::in_memory().await.unwrap());
+    let future_hour = (Local::now().hour() + 2) % 24;
+
+    let response = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/timers/command")
+                .header("content-type", "application/json")
+                .body(Body::from(
+                    json!({
+                        "command": "set_countdown_target_local",
+                        "hours": future_hour,
+                        "minutes": 0
+                    })
+                    .to_string(),
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    let status = response.status();
+    let body = axum::body::to_bytes(response.into_body(), usize::MAX)
+        .await
+        .unwrap();
+    assert_eq!(
+        status,
+        StatusCode::OK,
+        "error body: {}",
+        String::from_utf8_lossy(&body)
+    );
+
+    let payload: TimersOverview = serde_json::from_slice(&body).unwrap();
+    assert!(payload.countdown_to_start.seconds_remaining > 0);
+    assert!(!payload.countdown_to_start.target_local.is_empty());
+}
+
+#[tokio::test]
+async fn timers_command_adjust_countdown_target() {
+    let app = build_router(AppState::in_memory().await.unwrap());
+
+    let response = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .uri("/timers/overview")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    let bytes = axum::body::to_bytes(response.into_body(), usize::MAX)
+        .await
+        .unwrap();
+    let initial: TimersOverview = serde_json::from_slice(&bytes).unwrap();
+    let initial_remaining = initial.countdown_to_start.seconds_remaining;
+
+    let response = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/timers/command")
+                .header("content-type", "application/json")
+                .body(Body::from(
+                    json!({
+                        "command": "adjust_countdown_target",
+                        "offset_minutes": 5
+                    })
+                    .to_string(),
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    let status = response.status();
+    let body = axum::body::to_bytes(response.into_body(), usize::MAX)
+        .await
+        .unwrap();
+    assert_eq!(
+        status,
+        StatusCode::OK,
+        "error body: {}",
+        String::from_utf8_lossy(&body)
+    );
+
+    let payload: TimersOverview = serde_json::from_slice(&body).unwrap();
+    let diff = payload.countdown_to_start.seconds_remaining - initial_remaining;
+    assert!(
+        (295..=305).contains(&diff),
+        "expected ~300s increase, got {diff}"
+    );
+}
+
+#[tokio::test]
+async fn timers_overview_includes_target_local() {
+    let app = build_router(AppState::in_memory().await.unwrap());
+    let response = app
+        .oneshot(
+            Request::builder()
+                .uri("/timers/overview")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    let bytes = axum::body::to_bytes(response.into_body(), usize::MAX)
+        .await
+        .unwrap();
+    let payload: TimersOverview = serde_json::from_slice(&bytes).unwrap();
+    assert!(
+        payload.countdown_to_start.target_local.len() >= 7,
+        "expected HH:MM:SS format, got: {}",
+        payload.countdown_to_start.target_local
+    );
 }
 
 #[tokio::test]

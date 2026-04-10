@@ -665,10 +665,10 @@ jobs:
           set -e
           echo "Copying production database for migration testing..."
           PROD_DB="/tmp/prod-migration-test-$$.db"
-          scp -i ~/.ssh/id_prod prod-server:/opt/presenter/presenter.db "$PROD_DB" 2>/dev/null || {
-            echo "::warning::Could not copy production database (server may be unreachable). Skipping prod DB migration test."
-            exit 0
-          }
+          if ! scp -i ~/.ssh/id_prod prod-server:/opt/presenter/presenter.db "$PROD_DB"; then
+            echo "::error::Could not copy production database from prod-server. The migration test cannot run, which means we cannot verify the new binary won't break production. Fix prod SSH access (DEPLOY_SSH_KEY secret must be installed in prod's authorized_keys) before retrying."
+            exit 1
+          fi
           echo "Testing new binary against production database..."
           chmod +x target/release/presenter-server
           PRESENTER_DB_URL="sqlite://$PROD_DB" PRESENTER_PORT=0 \
@@ -775,6 +775,32 @@ jobs:
           fi
           REMOTE_SCRIPT
 
+      - name: Replace dev database with production snapshot
+        run: |
+          set -e
+          echo "Fetching production database snapshot..."
+          PROD_TMP="/tmp/prod-db-snapshot-$$.db"
+          if ! scp -i ~/.ssh/id_prod prod-server:/opt/presenter/presenter.db "$PROD_TMP" 2>/dev/null; then
+            echo "::error::Could not copy production database. Dev DB will retain its current state — this is a regression risk. Fix prod SSH access before proceeding."
+            exit 1
+          fi
+          PROD_SIZE=$(stat -c %s "$PROD_TMP")
+          if [ "$PROD_SIZE" -lt 1024 ]; then
+            echo "::error::Production DB snapshot suspiciously small (${PROD_SIZE} bytes). Aborting to avoid wiping dev with garbage."
+            rm -f "$PROD_TMP"
+            exit 1
+          fi
+          echo "Production snapshot fetched (${PROD_SIZE} bytes). Uploading to dev server..."
+          scp -i ~/.ssh/id_deploy "$PROD_TMP" deploy-target:/opt/presenter-dev/presenter.db.new
+          rm -f "$PROD_TMP"
+          ssh deploy-target << 'REMOTE_SCRIPT'
+          set -e
+          mv /opt/presenter-dev/presenter.db.new /opt/presenter-dev/presenter.db
+          rm -f /opt/presenter-dev/presenter.db-wal /opt/presenter-dev/presenter.db-shm
+          DB_SIZE=$(stat -c %s /opt/presenter-dev/presenter.db)
+          echo "Dev database replaced with production snapshot (${DB_SIZE} bytes)"
+          REMOTE_SCRIPT
+
       - name: Validate database schema (dev DB)
         run: |
           ssh deploy-target << 'REMOTE_SCRIPT'
@@ -822,17 +848,17 @@ jobs:
             data/libraries/ \
             deploy-target:${{ env.DEPLOY_DIR }}/libraries/
 
-      - name: Import ProPresenter (first deploy or schema reset)
+      - name: Import ProPresenter (safety net — only if DB missing)
         run: |
           ssh deploy-target << 'REMOTE_SCRIPT'
           set -e
           DB_PATH="/opt/presenter-dev/presenter.db"
           if [ ! -f "$DB_PATH" ] || [ ! -s "$DB_PATH" ]; then
-            echo "Fresh database - running ProPresenter import"
+            echo "No database after prod snapshot copy — falling back to ProPresenter import"
             PRESENTER_DB_URL=sqlite:///opt/presenter-dev/presenter.db \
               /opt/presenter-dev/import_propresenter --root "/opt/presenter-dev/libraries"
           else
-            echo "Existing database found - preserving presentations"
+            echo "Database present from production snapshot — skipping ProPresenter import"
           fi
           REMOTE_SCRIPT
 

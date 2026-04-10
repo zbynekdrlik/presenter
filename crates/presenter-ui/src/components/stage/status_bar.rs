@@ -20,6 +20,7 @@ pub fn StatusBar(
     let clock_ref = NodeRef::<leptos::html::Div>::new();
     let live_ref = NodeRef::<leptos::html::Div>::new();
     let connection_ref = NodeRef::<leptos::html::Div>::new();
+    let song_number_ref = NodeRef::<leptos::html::Div>::new();
 
     let (clock_text, set_clock_text) = signal(current_time_string());
     let _clock_interval = Interval::new(1_000, move || {
@@ -28,6 +29,16 @@ pub fn StatusBar(
     _clock_interval.forget();
 
     let broadcast_live = ctx.broadcast_live;
+
+    let song_number = move || {
+        ctx.snapshot
+            .get()
+            .and_then(|s| s.song_number)
+            .map(|n| format!("#{n}"))
+            .unwrap_or_default()
+    };
+
+    let has_song_number = move || ctx.snapshot.get().and_then(|s| s.song_number).is_some();
 
     let live_text = move || {
         if broadcast_live.get() {
@@ -74,12 +85,19 @@ pub fn StatusBar(
         autofit_effect(live_ref, STATUS_MAX_FONT, live_text.clone());
     }
     autofit_effect(connection_ref, STATUS_MAX_FONT, connection_text.clone());
+    autofit_effect(song_number_ref, STATUS_MAX_FONT, song_number.clone());
 
     view! {
         <div node_ref=clock_ref class="stage__clock">
             <span class="stage__debug-label">"clock"</span>
             {clock_text}
         </div>
+        {move || has_song_number().then(|| view! {
+            <div node_ref=song_number_ref class="stage__song-number" data-role="song-number">
+                <span class="stage__debug-label">"song-number"</span>
+                {song_number.clone()}
+            </div>
+        })}
         {(!hide_live).then(|| view! {
             <div node_ref=live_ref class=live_class>
                 <span class="stage__debug-label">"live"</span>
