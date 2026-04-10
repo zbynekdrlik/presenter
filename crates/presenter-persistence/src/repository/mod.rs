@@ -40,7 +40,7 @@ const OSC_SETTINGS_SINGLETON_ID: &str = "osc";
 const ABLESET_SETTINGS_SINGLETON_ID: &str = "ableset";
 #[derive(Debug, Clone)]
 pub struct Repository {
-    db: DatabaseConnection,
+    pub(crate) db: DatabaseConnection,
 }
 
 #[derive(Debug, Clone)]
