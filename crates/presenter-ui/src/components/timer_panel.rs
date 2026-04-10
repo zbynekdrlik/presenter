@@ -171,11 +171,14 @@ pub fn TimerPanel() -> impl IntoView {
             .origin()
             .unwrap_or_default();
         let url = format!("{origin}/overlays/timer");
-        let window = crate::utils::window::window();
-        let clipboard = window.navigator().clipboard();
-        let _ = clipboard.write_text(&url);
-        toast_variant.set("success".to_string());
-        toast_message.set(Some("Timer overlay URL copied".to_string()));
+        let copied = copy_to_clipboard(&url);
+        if copied {
+            toast_variant.set("success".to_string());
+            toast_message.set(Some("Timer overlay URL copied".to_string()));
+        } else {
+            toast_variant.set("error".to_string());
+            toast_message.set(Some(format!("Could not copy. URL: {url}")));
+        }
     };
 
     view! {
@@ -291,6 +294,58 @@ pub fn TimerPanel() -> impl IntoView {
             </div>
         </div>
     }
+}
+
+/// Copy `text` to the system clipboard. Returns `true` on success.
+///
+/// Uses the legacy `document.execCommand('copy')` path because
+/// `navigator.clipboard.writeText()` is only available in secure
+/// contexts (HTTPS or localhost). The operator UI is served over plain
+/// HTTP on the LAN, so the modern API is `undefined` there.
+///
+/// `execCommand` is deprecated in web-sys (gated behind an unstable
+/// feature flag), so we call it dynamically through js_sys::Reflect.
+fn copy_to_clipboard(text: &str) -> bool {
+    use js_sys::{Function, Reflect};
+    use wasm_bindgen::{JsCast, JsValue};
+
+    let Some(document) = crate::utils::window::window().document() else {
+        return false;
+    };
+    let Ok(element) = document.create_element("textarea") else {
+        return false;
+    };
+    let Ok(textarea) = element.dyn_into::<web_sys::HtmlTextAreaElement>() else {
+        return false;
+    };
+    textarea.set_value(text);
+    // Position off-screen so the page doesn't scroll or flash visibly.
+    let _ = textarea.set_attribute(
+        "style",
+        "position:fixed;left:-9999px;top:0;opacity:0;pointer-events:none;",
+    );
+    let _ = textarea.set_attribute("readonly", "");
+    let Some(body) = document.body() else {
+        return false;
+    };
+    if body.append_child(&textarea).is_err() {
+        return false;
+    }
+    let _ = textarea.focus();
+    textarea.select();
+
+    // document.execCommand("copy") via reflection (web-sys gates the
+    // direct binding behind an unstable_apis feature flag).
+    let copied = (|| -> Option<bool> {
+        let exec_command = Reflect::get(&document, &"execCommand".into()).ok()?;
+        let func = exec_command.dyn_into::<Function>().ok()?;
+        let result = func.call1(&document, &JsValue::from_str("copy")).ok()?;
+        result.as_bool()
+    })()
+    .unwrap_or(false);
+
+    let _ = body.remove_child(&textarea);
+    copied
 }
 
 /// Parse a time-of-day input written by the operator.
