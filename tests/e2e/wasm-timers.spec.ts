@@ -253,15 +253,48 @@ test.describe("WASM Operator Timer Tests", () => {
     await newPage.close();
   });
 
-  test("timer overlay URL can be copied", async ({ page }) => {
+  test("timer overlay URL can be copied via execCommand on HTTP", async ({
+    page,
+  }) => {
+    // This test guards the fix for the operator HTTP clipboard bug.
+    //
+    // Background: navigator.clipboard is undefined on plain HTTP (LAN
+    // access), so the old code silently failed. The fix uses
+    // document.execCommand('copy') with a temporary textarea. The
+    // existing toast-only check was insufficient because the old
+    // broken code ALSO set a success toast — it just never put
+    // anything on the clipboard.
+    //
+    // We can't read the system clipboard from a non-secure context,
+    // so instead we intercept document.execCommand and capture the
+    // selected textarea value at the moment of the copy call.
+
     await navigateToTimers(page);
+
+    // Install a spy on document.execCommand BEFORE clicking. The spy
+    // records the selected text and the command name, then delegates
+    // to the original implementation so the real path runs end-to-end.
+    await page.evaluate(() => {
+      const captured: { command?: string; selectedText?: string } = {};
+      const original = document.execCommand.bind(document);
+      // @ts-expect-error attaching for test inspection
+      window.__execCommandSpy = captured;
+      document.execCommand = function (command: string, ...rest: unknown[]) {
+        captured.command = command;
+        const active = document.activeElement;
+        if (active && active instanceof HTMLTextAreaElement) {
+          captured.selectedText = active.value;
+        }
+        // @ts-expect-error forwarding rest args
+        return original(command, ...rest);
+      };
+    });
 
     const copyButton = page.locator('[data-role="timer-overlay-copy"]');
     await expect(copyButton).toBeVisible();
-
     await copyButton.click();
 
-    // Should show success toast
+    // Success toast must appear (existing assertion)
     await page.waitForFunction(
       () => {
         const toast = document.querySelector('[data-role="toast"]');
@@ -269,6 +302,22 @@ test.describe("WASM Operator Timer Tests", () => {
       },
       { timeout: 3_000 },
     );
+
+    // Toast must be the SUCCESS variant, not the error fallback.
+    const toastVariant = await page
+      .locator('[data-role="toast"]')
+      .getAttribute("data-variant");
+    expect(toastVariant).toBe("success");
+
+    // The spy must have observed execCommand('copy') with the correct
+    // URL in the textarea. This is the part that genuinely regression-
+    // guards the HTTP clipboard fix.
+    const spy = await page.evaluate(
+      // @ts-expect-error reading the spy installed above
+      () => window.__execCommandSpy,
+    );
+    expect(spy?.command).toBe("copy");
+    expect(spy?.selectedText).toMatch(/\/overlays\/timer$/);
   });
 
   test("preach limit input sets and clears limit", async ({

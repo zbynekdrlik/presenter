@@ -397,27 +397,37 @@ fn parse_time_input(input: &str) -> Option<(u32, u32)> {
     Some((h, m))
 }
 
+/// Parse a duration input written by the operator for the preach limit.
+///
+/// Accepted forms:
+/// - `"5"`     → 300 seconds (bare number = minutes)
+/// - `"45"`    → 2700 seconds
+/// - `"1:30"`  → 5400 seconds (hours:minutes)
+/// - `"1:00"`  → 3600 seconds
+///
+/// Note: single numbers mean MINUTES here (not hour-of-day like
+/// `parse_time_input`), because preach-limit is a duration, not a
+/// wall-clock time.
+///
+/// Returns `None` for invalid input. Minutes must be 0–59.
 fn parse_limit_input(input: &str) -> Option<u64> {
     let trimmed = input.trim();
     if trimmed.is_empty() {
         return None;
     }
-    let parts: Vec<&str> = trimmed.split(':').collect();
-    match parts.len() {
-        1 => {
-            let mins: u64 = parts[0].parse().ok()?;
-            Some(mins * 60)
+
+    if let Some((h_str, m_str)) = trimmed.split_once(':') {
+        let h: u64 = h_str.trim().parse().ok()?;
+        let m: u64 = m_str.trim().parse().ok()?;
+        if m > 59 {
+            return None;
         }
-        2 => {
-            let h: u64 = parts[0].trim().parse().ok()?;
-            let m: u64 = parts[1].trim().parse().ok()?;
-            if m > 59 {
-                return None;
-            }
-            Some(h * 3600 + m * 60)
-        }
-        _ => None,
+        return Some(h * 3600 + m * 60);
     }
+
+    // Bare number = minutes.
+    let mins: u64 = trimmed.parse().ok()?;
+    Some(mins * 60)
 }
 
 #[cfg(test)]
@@ -479,5 +489,37 @@ mod tests {
     fn parse_time_input_trims_whitespace() {
         assert_eq!(parse_time_input("  18  "), Some((18, 0)));
         assert_eq!(parse_time_input(" 1915 "), Some((19, 15)));
+    }
+
+    #[test]
+    fn parse_limit_input_bare_number_is_minutes() {
+        assert_eq!(parse_limit_input("5"), Some(300));
+        assert_eq!(parse_limit_input("45"), Some(2700));
+        assert_eq!(parse_limit_input("0"), Some(0));
+        // Not capped at 59 because bare number is minutes, not minutes-of-hour.
+        assert_eq!(parse_limit_input("90"), Some(5400));
+    }
+
+    #[test]
+    fn parse_limit_input_with_colon_is_hours_minutes() {
+        assert_eq!(parse_limit_input("1:30"), Some(5400));
+        assert_eq!(parse_limit_input("0:45"), Some(2700));
+        assert_eq!(parse_limit_input("2:00"), Some(7200));
+    }
+
+    #[test]
+    fn parse_limit_input_rejects_invalid() {
+        assert_eq!(parse_limit_input(""), None);
+        assert_eq!(parse_limit_input("   "), None);
+        assert_eq!(parse_limit_input("abc"), None);
+        assert_eq!(parse_limit_input("1:60"), None); // minutes > 59
+        assert_eq!(parse_limit_input("1:ab"), None);
+        assert_eq!(parse_limit_input("1:"), None);
+    }
+
+    #[test]
+    fn parse_limit_input_trims_whitespace() {
+        assert_eq!(parse_limit_input("  5  "), Some(300));
+        assert_eq!(parse_limit_input(" 1:30 "), Some(5400));
     }
 }
