@@ -423,15 +423,14 @@ pub async fn update_bible_slide(
     .await
 }
 
-/// Delete a slide from a Bible presentation. Uses the generic presentations endpoint.
-/// Server: DELETE /presentations/{id}/slides/{slide_id}
+/// Delete a slide from a Bible presentation.
+/// Server: DELETE /bible/presentations/{id}/slides/{slide_id}
 pub async fn delete_presentation_slide(
     presentation_id: &str,
     slide_id: &str,
 ) -> Result<(), ApiError> {
-    // The generic endpoint returns Vec<Slide> but we just need success
-    let _slides: Vec<serde_json::Value> = super::delete_json(&format!(
-        "/presentations/{presentation_id}/slides/{slide_id}"
+    let _detail: BiblePresentationDetail = super::delete_json(&format!(
+        "/bible/presentations/{presentation_id}/slides/{slide_id}"
     ))
     .await?;
     Ok(())
@@ -443,14 +442,14 @@ struct ReorderSlidesRequest {
     slide_ids: Vec<String>,
 }
 
-/// Reorder slides in a Bible presentation. Uses the generic presentations endpoint.
-/// Server: POST /presentations/{id}/slides/reorder
+/// Reorder slides in a Bible presentation.
+/// Server: POST /bible/presentations/{id}/slides/reorder
 pub async fn reorder_presentation_slides(
     presentation_id: &str,
     slide_ids: Vec<String>,
 ) -> Result<(), ApiError> {
-    let _slides: Vec<serde_json::Value> = super::post_json(
-        &format!("/presentations/{presentation_id}/slides/reorder"),
+    let _detail: BiblePresentationDetail = super::post_json(
+        &format!("/bible/presentations/{presentation_id}/slides/reorder"),
         &ReorderSlidesRequest { slide_ids },
     )
     .await?;

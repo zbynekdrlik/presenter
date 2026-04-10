@@ -236,19 +236,101 @@ impl AppState {
         id: BiblePresentationId,
         new_slides: Vec<BiblePresentationSlide>,
     ) -> anyhow::Result<BiblePresentation> {
-        // Filter out empty placeholder slides (empty main text and empty reference)
-        let filtered: Vec<BiblePresentationSlide> = new_slides
-            .into_iter()
-            .filter(|s| !s.main.value().is_empty() || !s.main_reference.is_empty())
-            .collect();
+        // Note: empty slides are permitted — the operator UI's "add empty
+        // slide" button intentionally creates placeholder slides that the
+        // operator fills in by editing text in place.
         let presentation = self
             .repository
-            .append_bible_presentation_slides(id, &filtered)
+            .append_bible_presentation_slides(id, &new_slides)
             .await?;
         self.live_hub.publish(LiveEvent::BibleSlidesChanged {
             presentation_id: presentation.id.to_string(),
         });
         Ok(presentation)
+    }
+
+    /// Delete a single slide from a bible presentation. Implemented via
+    /// fetch + modify + replace_all — bible presentation slide counts are
+    /// small (typically a few to a few dozen), so read-modify-write is fine.
+    pub async fn delete_bible_slide(
+        &self,
+        presentation_id: BiblePresentationId,
+        slide_id: BibleSlideId,
+    ) -> anyhow::Result<BiblePresentation> {
+        let mut presentation = self
+            .repository
+            .fetch_bible_presentation(presentation_id)
+            .await?
+            .ok_or_else(|| anyhow::anyhow!("bible presentation not found"))?;
+
+        let before = presentation.slides.len();
+        presentation.slides.retain(|s| s.id != slide_id);
+        if presentation.slides.len() == before {
+            return Err(anyhow::anyhow!("slide not found in presentation"));
+        }
+
+        self.repository
+            .replace_bible_presentation_slides(presentation_id, &presentation.slides)
+            .await?;
+
+        self.live_hub.publish(LiveEvent::BibleSlidesChanged {
+            presentation_id: presentation_id.to_string(),
+        });
+
+        // Re-fetch to get the normalized orders assigned by replace_all.
+        self.repository
+            .fetch_bible_presentation(presentation_id)
+            .await?
+            .ok_or_else(|| anyhow::anyhow!("bible presentation disappeared after delete"))
+    }
+
+    /// Reorder slides in a bible presentation by providing the desired slide
+    /// ID sequence. Missing IDs are dropped; unknown IDs are ignored.
+    pub async fn reorder_bible_slides(
+        &self,
+        presentation_id: BiblePresentationId,
+        slide_ids: Vec<BibleSlideId>,
+    ) -> anyhow::Result<BiblePresentation> {
+        let presentation = self
+            .repository
+            .fetch_bible_presentation(presentation_id)
+            .await?
+            .ok_or_else(|| anyhow::anyhow!("bible presentation not found"))?;
+
+        // Build a lookup of existing slides by ID.
+        let mut by_id: HashMap<BibleSlideId, BiblePresentationSlide> = presentation
+            .slides
+            .iter()
+            .cloned()
+            .map(|s| (s.id, s))
+            .collect();
+
+        let mut reordered: Vec<BiblePresentationSlide> = Vec::with_capacity(by_id.len());
+        for id in slide_ids {
+            if let Some(slide) = by_id.remove(&id) {
+                reordered.push(slide);
+            }
+        }
+        // Append any slides not mentioned in the reorder list to preserve them.
+        for slide in presentation.slides {
+            if by_id.contains_key(&slide.id) {
+                reordered.push(slide.clone());
+                by_id.remove(&slide.id);
+            }
+        }
+
+        self.repository
+            .replace_bible_presentation_slides(presentation_id, &reordered)
+            .await?;
+
+        self.live_hub.publish(LiveEvent::BibleSlidesChanged {
+            presentation_id: presentation_id.to_string(),
+        });
+
+        self.repository
+            .fetch_bible_presentation(presentation_id)
+            .await?
+            .ok_or_else(|| anyhow::anyhow!("bible presentation disappeared after reorder"))
     }
 
     /// Replace a single slide within a bible presentation. Implemented via

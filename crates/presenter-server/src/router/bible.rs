@@ -828,3 +828,58 @@ pub(super) async fn append_bible_presentation_handler(
         .await?;
     Ok(Json(bible_presentation_to_detail(&presentation)))
 }
+
+/// DELETE /bible/presentations/{id}/slides/{slide_id}
+///
+/// Deletes a single slide from a bible presentation and returns the updated
+/// presentation detail.
+#[instrument(skip_all)]
+pub(super) async fn delete_bible_presentation_slide(
+    State(state): State<AppState>,
+    axum::extract::Path((presentation_id, slide_id)): axum::extract::Path<(String, String)>,
+) -> Result<Json<BiblePresentationDetailDto>, AppError> {
+    let pres_uuid = presentation_id
+        .parse::<uuid::Uuid>()
+        .map_err(|_| AppError::bad_request_message("Invalid presentation ID"))?;
+    let slide_uuid = slide_id
+        .parse::<uuid::Uuid>()
+        .map_err(|_| AppError::bad_request_message("Invalid slide ID"))?;
+
+    let presentation = state
+        .delete_bible_slide(
+            BiblePresentationId::from_uuid(pres_uuid),
+            BibleSlideId::from_uuid(slide_uuid),
+        )
+        .await?;
+    Ok(Json(bible_presentation_to_detail(&presentation)))
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub(super) struct ReorderBibleSlidesRequest {
+    pub(super) slide_ids: Vec<String>,
+}
+
+/// POST /bible/presentations/{id}/slides/reorder
+///
+/// Reorders slides in a bible presentation according to the supplied ID list
+/// and returns the updated presentation detail.
+#[instrument(skip_all)]
+pub(super) async fn reorder_bible_presentation_slides(
+    State(state): State<AppState>,
+    axum::extract::Path(id): axum::extract::Path<uuid::Uuid>,
+    Json(payload): Json<ReorderBibleSlidesRequest>,
+) -> Result<Json<BiblePresentationDetailDto>, AppError> {
+    let mut slide_ids = Vec::with_capacity(payload.slide_ids.len());
+    for raw in payload.slide_ids {
+        let uuid = raw
+            .parse::<uuid::Uuid>()
+            .map_err(|_| AppError::bad_request_message("Invalid slide ID"))?;
+        slide_ids.push(BibleSlideId::from_uuid(uuid));
+    }
+
+    let presentation = state
+        .reorder_bible_slides(BiblePresentationId::from_uuid(id), slide_ids)
+        .await?;
+    Ok(Json(bible_presentation_to_detail(&presentation)))
+}
