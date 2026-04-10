@@ -665,10 +665,10 @@ jobs:
           set -e
           echo "Copying production database for migration testing..."
           PROD_DB="/tmp/prod-migration-test-$$.db"
-          scp -i ~/.ssh/id_prod prod-server:/opt/presenter/presenter.db "$PROD_DB" 2>/dev/null || {
-            echo "::warning::Could not copy production database (server may be unreachable). Skipping prod DB migration test."
-            exit 0
-          }
+          if ! scp -i ~/.ssh/id_prod prod-server:/opt/presenter/presenter.db "$PROD_DB"; then
+            echo "::error::Could not copy production database from prod-server. The migration test cannot run, which means we cannot verify the new binary won't break production. Fix prod SSH access (DEPLOY_SSH_KEY secret must be installed in prod's authorized_keys) before retrying."
+            exit 1
+          fi
           echo "Testing new binary against production database..."
           chmod +x target/release/presenter-server
           PRESENTER_DB_URL="sqlite://$PROD_DB" PRESENTER_PORT=0 \

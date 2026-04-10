@@ -80,6 +80,20 @@ if command -v rg >/dev/null 2>&1 && rg -n "continue-on-error" .github/workflows/
   fail "Found continue-on-error in workflows - remove for strict CI"
 fi
 
+# 6b) No shell-level soft-fail patterns in workflows
+# Catches the equivalent of continue-on-error but written in shell:
+#   ... || {
+#     echo "::warning::..."
+#     exit 0
+#   }
+# This pattern silently turns failures into green CI and is exactly what
+# allowed the dev DB drift regression on 2026-04-10 (prod SSH key never
+# installed → migration test silently skipped for weeks).
+if command -v rg >/dev/null 2>&1 && \
+   rg -nU --multiline 'echo[^\n]*::warning::[^\n]*\n[^\n]*exit 0' .github/workflows/*.yml >/dev/null 2>&1; then
+  fail "Found shell soft-fail pattern (echo ::warning:: followed by exit 0) in workflows. CI steps must fail loudly. If a step is genuinely optional, document why and exit non-zero on failure with a clear ::error::."
+fi
+
 # Determine changed files vs base
 git fetch -q origin || true
 if command -v rg >/dev/null 2>&1; then
