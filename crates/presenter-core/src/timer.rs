@@ -95,23 +95,6 @@ impl CountdownTimer {
         Ok(())
     }
 
-    /// Sets a new target while preserving the current timer state (Running/Paused).
-    /// `set_target_with_now` resets to Idle; this wrapper re-applies the prior state.
-    pub fn set_target_preserving_state(
-        &mut self,
-        target: DateTime<Utc>,
-        now: DateTime<Utc>,
-    ) -> Result<(), TimerError> {
-        let previous_state = self.state;
-        self.set_target_with_now(target, now)?;
-        match previous_state {
-            TimerState::Running => self.start(),
-            TimerState::Paused => self.state = TimerState::Paused,
-            _ => {}
-        }
-        Ok(())
-    }
-
     pub fn remaining(&self, now: DateTime<Utc>) -> Duration {
         let delta = self.target - now;
         if delta <= Duration::zero() {
@@ -265,7 +248,10 @@ impl TimersState {
     ) -> Result<(), TimerError> {
         match command {
             TimerCommand::SetCountdownTarget { target } => {
-                self.countdown.set_target_preserving_state(*target, now)?;
+                self.countdown.set_target_with_now(*target, now)?;
+                // Auto-start: setting a countdown target always activates it,
+                // regardless of source (operator UI, Companion, etc).
+                self.countdown.start();
             }
             TimerCommand::SetCountdownTargetLocal { hours, minutes } => {
                 let time = NaiveTime::from_hms_opt(*hours, *minutes, 0)
@@ -283,14 +269,18 @@ impl TimersState {
                     candidate
                 };
                 let target_utc = target_local.with_timezone(&Utc);
-                self.countdown
-                    .set_target_preserving_state(target_utc, now)?;
+                self.countdown.set_target_with_now(target_utc, now)?;
+                // Auto-start: setting a wall-clock target always activates the
+                // countdown so the operator never needs a separate Start step.
+                self.countdown.start();
             }
             TimerCommand::AdjustCountdownTarget { offset_minutes } => {
                 let new_target =
                     self.countdown.target + Duration::minutes(i64::from(*offset_minutes));
-                self.countdown
-                    .set_target_preserving_state(new_target, now)?;
+                self.countdown.set_target_with_now(new_target, now)?;
+                // Auto-start: ±5 min adjustments always leave the countdown
+                // running, even if it was previously idle/paused.
+                self.countdown.start();
             }
             TimerCommand::StartCountdown => {
                 if self.countdown.target <= now {
@@ -564,7 +554,7 @@ mod tests {
     }
 
     #[test]
-    fn set_countdown_target_local_converts_to_utc() {
+    fn set_countdown_target_local_converts_to_utc_and_auto_starts() {
         let now = Utc::now();
         let mut state = TimersState::default(now);
         let future_hour = (chrono::Local::now().hour() + 2) % 24;
@@ -578,7 +568,8 @@ mod tests {
             )
             .unwrap();
         assert!(state.countdown.target > now);
-        assert_eq!(state.countdown.state, TimerState::Idle);
+        // Auto-start: setting a wall-clock target always activates the countdown.
+        assert_eq!(state.countdown.state, TimerState::Running);
     }
 
     #[test]
@@ -609,7 +600,8 @@ mod tests {
     }
 
     #[test]
-    fn set_countdown_target_local_preserves_running_state() {
+    fn set_countdown_target_local_keeps_running_when_already_running() {
+        // After auto-start, setting a new target while already running stays running.
         let now = Utc::now();
         let mut state = TimersState::default(now);
         state.countdown.start();
@@ -690,7 +682,23 @@ mod tests {
     }
 
     #[test]
-    fn adjust_countdown_target_preserves_running_state() {
+    fn adjust_countdown_target_auto_starts_from_idle() {
+        let now = Utc::now();
+        let mut state = TimersState::default(now);
+        // Confirm precondition: default state is idle.
+        assert_eq!(state.countdown.state, TimerState::Idle);
+        state
+            .apply_command(
+                &TimerCommand::AdjustCountdownTarget { offset_minutes: 5 },
+                now,
+            )
+            .unwrap();
+        // ±5 min should auto-start the countdown.
+        assert_eq!(state.countdown.state, TimerState::Running);
+    }
+
+    #[test]
+    fn adjust_countdown_target_keeps_running_when_already_running() {
         let now = Utc::now();
         let mut state = TimersState::default(now);
         state.countdown.start();

@@ -30,18 +30,6 @@ pub fn TimerPanel() -> impl IntoView {
         });
     };
 
-    let on_countdown_start = move |_| {
-        send_timer_cmd(TimerCommand::StartCountdown);
-    };
-
-    let on_countdown_pause = move |_| {
-        send_timer_cmd(TimerCommand::PauseCountdown);
-    };
-
-    let on_countdown_reset = move |_| {
-        send_timer_cmd(TimerCommand::ResetCountdown);
-    };
-
     // Focus/blur tracking for countdown input
     let on_countdown_focus = {
         let countdown_input_active = op.countdown_input_active;
@@ -258,12 +246,13 @@ pub fn TimerPanel() -> impl IntoView {
                     />
                 </label>
                 <p class="operator__timer-help">
-                    "Type HH:MM (or minutes only) and press Enter or Set to update while the timer runs."
+                    "Type the service start time and press Enter. Examples: "
+                    <code>"18"</code>" → 18:00, "
+                    <code>"830"</code>" → 8:30, "
+                    <code>"1915"</code>" → 19:15, "
+                    <code>"18:30"</code>" → 18:30. Setting a target starts the countdown automatically."
                 </p>
                 <div class="operator__timer-buttons">
-                    <button type="button" data-role="countdown-start" on:click=on_countdown_start>"Start"</button>
-                    <button type="button" data-role="countdown-pause" on:click=on_countdown_pause>"Pause"</button>
-                    <button type="button" data-role="countdown-reset" on:click=on_countdown_reset>"Reset"</button>
                     <button type="button" data-role="countdown-offset-minus" on:click=on_offset_minus>"-5 min"</button>
                     <button type="button" data-role="countdown-offset-plus" on:click=on_offset_plus>"+5 min"</button>
                 </div>
@@ -304,32 +293,53 @@ pub fn TimerPanel() -> impl IntoView {
     }
 }
 
+/// Parse a time-of-day input written by the operator.
+///
+/// Accepted forms (alarm-clock convention):
+/// - `"18"`        → 18:00 (1–2 digits = hour-of-day, minutes = 0)
+/// - `"8"`         → 08:00
+/// - `"830"`       → 08:30 (3 digits = H:MM)
+/// - `"1915"`      → 19:15 (4 digits = HH:MM)
+/// - `"18:30"`     → 18:30 (with colon)
+/// - `"8:05"`      → 08:05
+///
+/// Returns `None` for invalid input. Hours must be 0–23, minutes 0–59.
 fn parse_time_input(input: &str) -> Option<(u32, u32)> {
     let trimmed = input.trim();
     if trimmed.is_empty() {
         return None;
     }
-    let parts: Vec<&str> = trimmed.split(':').collect();
 
-    match parts.len() {
-        1 => {
-            // Single number: interpret as hours (e.g. "18" → 18:00)
-            let hours: u32 = parts[0].parse().ok()?;
-            if hours > 23 {
-                return None;
-            }
-            Some((hours, 0))
+    // Form with explicit colon: "H:MM" or "HH:MM"
+    if let Some((h_str, m_str)) = trimmed.split_once(':') {
+        let h: u32 = h_str.trim().parse().ok()?;
+        let m: u32 = m_str.trim().parse().ok()?;
+        if h > 23 || m > 59 {
+            return None;
         }
-        2 => {
-            let h: u32 = parts[0].trim().parse().ok()?;
-            let m: u32 = parts[1].trim().parse().ok()?;
-            if h > 23 || m > 59 {
-                return None;
-            }
-            Some((h, m))
-        }
-        _ => None,
+        return Some((h, m));
     }
+
+    // Compact digit-only form: "H", "HH", "HMM", "HHMM"
+    if !trimmed.chars().all(|c| c.is_ascii_digit()) {
+        return None;
+    }
+    let (h, m) = match trimmed.len() {
+        1 | 2 => (trimmed.parse::<u32>().ok()?, 0),
+        3 => (
+            trimmed[..1].parse::<u32>().ok()?,
+            trimmed[1..].parse::<u32>().ok()?,
+        ),
+        4 => (
+            trimmed[..2].parse::<u32>().ok()?,
+            trimmed[2..].parse::<u32>().ok()?,
+        ),
+        _ => return None,
+    };
+    if h > 23 || m > 59 {
+        return None;
+    }
+    Some((h, m))
 }
 
 fn parse_limit_input(input: &str) -> Option<u64> {
@@ -352,5 +362,67 @@ fn parse_limit_input(input: &str) -> Option<u64> {
             Some(h * 3600 + m * 60)
         }
         _ => None,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn parse_time_input_single_digit_hour() {
+        assert_eq!(parse_time_input("8"), Some((8, 0)));
+        assert_eq!(parse_time_input("0"), Some((0, 0)));
+    }
+
+    #[test]
+    fn parse_time_input_two_digit_hour() {
+        assert_eq!(parse_time_input("18"), Some((18, 0)));
+        assert_eq!(parse_time_input("23"), Some((23, 0)));
+        assert_eq!(parse_time_input("08"), Some((8, 0)));
+    }
+
+    #[test]
+    fn parse_time_input_three_digit_compact() {
+        // 3-digit form: H + MM
+        assert_eq!(parse_time_input("830"), Some((8, 30)));
+        assert_eq!(parse_time_input("905"), Some((9, 5)));
+        assert_eq!(parse_time_input("100"), Some((1, 0)));
+    }
+
+    #[test]
+    fn parse_time_input_four_digit_compact() {
+        // 4-digit form: HH + MM
+        assert_eq!(parse_time_input("1915"), Some((19, 15)));
+        assert_eq!(parse_time_input("1830"), Some((18, 30)));
+        assert_eq!(parse_time_input("0800"), Some((8, 0)));
+        assert_eq!(parse_time_input("2359"), Some((23, 59)));
+    }
+
+    #[test]
+    fn parse_time_input_with_colon() {
+        assert_eq!(parse_time_input("18:30"), Some((18, 30)));
+        assert_eq!(parse_time_input("8:05"), Some((8, 5)));
+        assert_eq!(parse_time_input("0:00"), Some((0, 0)));
+    }
+
+    #[test]
+    fn parse_time_input_rejects_invalid() {
+        assert_eq!(parse_time_input(""), None);
+        assert_eq!(parse_time_input("   "), None);
+        assert_eq!(parse_time_input("abc"), None);
+        assert_eq!(parse_time_input("25"), None); // hour > 23
+        assert_eq!(parse_time_input("24:00"), None);
+        assert_eq!(parse_time_input("1860"), None); // 18:60 invalid minutes
+        assert_eq!(parse_time_input("12:60"), None);
+        assert_eq!(parse_time_input("99999"), None); // 5 digits
+        assert_eq!(parse_time_input("18:"), None);
+        assert_eq!(parse_time_input("18:ab"), None);
+    }
+
+    #[test]
+    fn parse_time_input_trims_whitespace() {
+        assert_eq!(parse_time_input("  18  "), Some((18, 0)));
+        assert_eq!(parse_time_input(" 1915 "), Some((19, 15)));
     }
 }
