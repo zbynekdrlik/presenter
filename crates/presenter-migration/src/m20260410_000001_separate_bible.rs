@@ -89,6 +89,12 @@ impl MigrationTrait for Migration {
     async fn down(&self, manager: &SchemaManager) -> Result<(), DbErr> {
         let db = manager.get_connection();
 
+        // NOTE: The bible library row deleted in up() step 4 is NOT restored here.
+        // Any data that was cascade-deleted (presentations + slides under that
+        // library) is permanently gone. This rollback only undoes the schema
+        // changes — re-adds the dropped columns and the dead category column,
+        // then drops the new bible_presentations and bible_slides tables.
+
         // Re-add the dropped columns to slides (with empty defaults).
         for (col, sql_type) in [
             ("bible_main", "text NOT NULL DEFAULT ''"),
@@ -154,6 +160,7 @@ async fn column_exists(
 #[cfg(test)]
 mod tests {
     use sea_orm::{ConnectionTrait, Database, DatabaseConnection, Statement};
+    use sea_orm_migration::MigrationTrait;
 
     use crate::{Migrator, MigratorTrait};
 
@@ -228,8 +235,14 @@ mod tests {
     #[tokio::test]
     async fn migration_is_idempotent() {
         let db: DatabaseConnection = Database::connect("sqlite::memory:").await.unwrap();
-        // Run migrations twice — second run should succeed (tables already exist)
+        // First run via the framework (creates the seaql_migrations tracking table)
         Migrator::up(&db, None).await.unwrap();
-        Migrator::up(&db, None).await.unwrap();
+        // Second run: call our migration's up() directly to actually exercise
+        // the IF NOT EXISTS / column_exists guards. Without this bypass, the
+        // framework would skip the second run because the migration is already
+        // recorded as applied.
+        let migration = super::Migration;
+        let manager = sea_orm_migration::SchemaManager::new(&db);
+        migration.up(&manager).await.unwrap();
     }
 }
