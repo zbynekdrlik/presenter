@@ -8,7 +8,7 @@
 //!
 //! # Naming convention
 //! - Unprefixed types (`Library`, `Presentation`, `Slide`, `SlideContent`) mean WORSHIP.
-//! - Bible-prefixed types (`BiblePresentation`, `BibleSlide`) mean BIBLE.
+//! - Bible-prefixed types (`BiblePresentation`, `BiblePresentationSlide`) mean BIBLE.
 //! - Bible has no library wrapper — there is exactly one bible per system.
 
 pub mod ableset;
@@ -40,7 +40,8 @@ pub use android_stage_display::{
 };
 pub use bible::{
     BibleBroadcast, BiblePassage, BiblePreferences, BiblePreferencesDraft, BiblePresentation,
-    BiblePresentationSummary, BibleReference, BibleSlide, BibleSlideOutput, BibleTranslation,
+    BiblePresentationSlide, BiblePresentationSummary, BibleReference, BibleSlideOutput,
+    BibleTranslation,
 };
 pub use feature_flags::FeatureFlags;
 pub use id::{

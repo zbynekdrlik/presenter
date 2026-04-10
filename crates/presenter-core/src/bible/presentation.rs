@@ -10,14 +10,14 @@ use crate::slide::{BibleSlideMetadata, SlideText};
 pub struct BiblePresentation {
     pub id: BiblePresentationId,
     pub name: String,
-    pub slides: Vec<BibleSlide>,
+    pub slides: Vec<BiblePresentationSlide>,
     pub created_at: DateTime<Utc>,
 }
 
 /// A single bible slide within a `BiblePresentation`.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
-pub struct BibleSlide {
+pub struct BiblePresentationSlide {
     pub id: BibleSlideId,
     pub order: u32,
     pub main: SlideText,
@@ -75,5 +75,35 @@ mod tests {
         let json = serde_json::to_string(&pres).unwrap();
         assert!(json.contains(r#""createdAt""#));
         assert!(!json.contains(r#""created_at""#));
+    }
+
+    #[test]
+    fn bible_presentation_slide_serialization_uses_camel_case() {
+        let slide = BiblePresentationSlide {
+            id: BibleSlideId::from_uuid(Uuid::nil()),
+            order: 0,
+            main: SlideText::new("text").unwrap(),
+            main_reference: "John 3:16".to_string(),
+            secondary: SlideText::new("").unwrap(),
+            secondary_reference: String::new(),
+            metadata: None,
+        };
+        let json = serde_json::to_string(&slide).unwrap();
+        assert!(
+            json.contains(r#""mainReference""#),
+            "expected mainReference in {json}"
+        );
+        assert!(
+            json.contains(r#""secondaryReference""#),
+            "expected secondaryReference in {json}"
+        );
+        assert!(
+            !json.contains(r#""main_reference""#),
+            "should NOT contain snake_case main_reference"
+        );
+        assert!(
+            !json.contains(r#""secondary_reference""#),
+            "should NOT contain snake_case secondary_reference"
+        );
     }
 }
