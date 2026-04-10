@@ -1,4 +1,5 @@
 mod canonical;
+mod presentation;
 mod reference;
 mod search;
 mod translation;
@@ -6,6 +7,7 @@ mod translation;
 pub use canonical::{
     canonical_book_by_code, canonical_book_by_name, canonical_book_by_number, BibleBookCanonical,
 };
+pub use presentation::{BiblePresentation, BiblePresentationSummary, BibleSlide};
 pub use reference::{BibleReference, BibleReferenceError};
 pub use translation::{
     BibleBookChapterSummary, BibleBroadcast, BibleIngestionBatch, BibleIngestionError,
