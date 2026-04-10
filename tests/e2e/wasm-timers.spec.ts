@@ -100,27 +100,81 @@ test.describe("WASM Operator Timer Tests", () => {
     await expect(errorToast).not.toBeVisible();
   });
 
-  test("countdown start button toggles timer", async ({ page }) => {
+  test("setting countdown target auto-starts the countdown", async ({
+    page,
+    request,
+  }) => {
     await navigateToTimers(page);
 
-    const startButton = page.locator('[data-role="countdown-start"]');
-    await expect(startButton).toBeVisible();
+    // Pick an hour at least 2 hours in the future so the test is stable
+    // even when run near hour boundaries.
+    const futureHour = (new Date().getHours() + 2) % 24;
+    const compactInput = String(futureHour).padStart(2, "0") + "00";
 
-    await startButton.click();
+    const countdownInput = page.locator('[data-role="countdown-target-input"]');
+    await countdownInput.fill(compactInput);
+    await countdownInput.press("Enter");
 
-    // Wait for API response
-    await page
-      .waitForResponse(
-        (resp) => resp.url().includes("/timers/") && resp.status() === 200,
-        { timeout: 5_000 },
-      )
-      .catch(() => {});
+    // After auto-start, the API should report the countdown as Running
+    // (not Idle) and the target should match what we typed.
+    await expect(async () => {
+      const response = await request.get(
+        new URL("/timers/overview", baseURL).toString(),
+        { timeout: 10_000 },
+      );
+      const data = await response.json();
+      expect(data.countdownToStart.state).toBe("running");
+      expect(data.countdownToStart.targetLocal).toMatch(
+        new RegExp(`^${String(futureHour).padStart(2, "0")}:00:00$`),
+      );
+    }).toPass({ timeout: 10_000, intervals: [500] });
+  });
 
-    // Should not show error
-    const errorToast = page.locator(
-      '[data-role="toast"][data-variant="error"]',
-    );
-    await expect(errorToast).not.toBeVisible();
+  test("countdown HHMM compact form sets correct target", async ({
+    page,
+    request,
+  }) => {
+    await navigateToTimers(page);
+
+    // Use 4-digit compact form: 1915 → 19:15
+    const countdownInput = page.locator('[data-role="countdown-target-input"]');
+    await countdownInput.fill("1915");
+    await countdownInput.press("Enter");
+
+    await expect(async () => {
+      const response = await request.get(
+        new URL("/timers/overview", baseURL).toString(),
+        { timeout: 10_000 },
+      );
+      const data = await response.json();
+      expect(data.countdownToStart.targetLocal).toBe("19:15:00");
+      expect(data.countdownToStart.state).toBe("running");
+    }).toPass({ timeout: 10_000, intervals: [500] });
+  });
+
+  test("countdown panel does not show Start/Pause/Reset buttons", async ({
+    page,
+  }) => {
+    await navigateToTimers(page);
+
+    // These were removed because wall-clock countdowns don't need them.
+    await expect(
+      page.locator('[data-role="countdown-start"]'),
+    ).toHaveCount(0);
+    await expect(
+      page.locator('[data-role="countdown-pause"]'),
+    ).toHaveCount(0);
+    await expect(
+      page.locator('[data-role="countdown-reset"]'),
+    ).toHaveCount(0);
+
+    // ±5 buttons stay
+    await expect(
+      page.locator('[data-role="countdown-offset-minus"]'),
+    ).toBeVisible();
+    await expect(
+      page.locator('[data-role="countdown-offset-plus"]'),
+    ).toBeVisible();
   });
 
   test("countdown offset minus decreases by 5 minutes", async ({ page }) => {
@@ -199,15 +253,48 @@ test.describe("WASM Operator Timer Tests", () => {
     await newPage.close();
   });
 
-  test("timer overlay URL can be copied", async ({ page }) => {
+  test("timer overlay URL can be copied via execCommand on HTTP", async ({
+    page,
+  }) => {
+    // This test guards the fix for the operator HTTP clipboard bug.
+    //
+    // Background: navigator.clipboard is undefined on plain HTTP (LAN
+    // access), so the old code silently failed. The fix uses
+    // document.execCommand('copy') with a temporary textarea. The
+    // existing toast-only check was insufficient because the old
+    // broken code ALSO set a success toast — it just never put
+    // anything on the clipboard.
+    //
+    // We can't read the system clipboard from a non-secure context,
+    // so instead we intercept document.execCommand and capture the
+    // selected textarea value at the moment of the copy call.
+
     await navigateToTimers(page);
+
+    // Install a spy on document.execCommand BEFORE clicking. The spy
+    // records the selected text and the command name, then delegates
+    // to the original implementation so the real path runs end-to-end.
+    await page.evaluate(() => {
+      const captured: { command?: string; selectedText?: string } = {};
+      const original = document.execCommand.bind(document);
+      // @ts-expect-error attaching for test inspection
+      window.__execCommandSpy = captured;
+      document.execCommand = function (command: string, ...rest: unknown[]) {
+        captured.command = command;
+        const active = document.activeElement;
+        if (active && active instanceof HTMLTextAreaElement) {
+          captured.selectedText = active.value;
+        }
+        // @ts-expect-error forwarding rest args
+        return original(command, ...rest);
+      };
+    });
 
     const copyButton = page.locator('[data-role="timer-overlay-copy"]');
     await expect(copyButton).toBeVisible();
-
     await copyButton.click();
 
-    // Should show success toast
+    // Success toast must appear (existing assertion)
     await page.waitForFunction(
       () => {
         const toast = document.querySelector('[data-role="toast"]');
@@ -215,6 +302,22 @@ test.describe("WASM Operator Timer Tests", () => {
       },
       { timeout: 3_000 },
     );
+
+    // Toast must be the SUCCESS variant, not the error fallback.
+    const toastVariant = await page
+      .locator('[data-role="toast"]')
+      .getAttribute("data-variant");
+    expect(toastVariant).toBe("success");
+
+    // The spy must have observed execCommand('copy') with the correct
+    // URL in the textarea. This is the part that genuinely regression-
+    // guards the HTTP clipboard fix.
+    const spy = await page.evaluate(
+      // @ts-expect-error reading the spy installed above
+      () => window.__execCommandSpy,
+    );
+    expect(spy?.command).toBe("copy");
+    expect(spy?.selectedText).toMatch(/\/overlays\/timer$/);
   });
 
   test("preach limit input sets and clears limit", async ({
