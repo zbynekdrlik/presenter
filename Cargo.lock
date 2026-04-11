@@ -2711,6 +2711,7 @@ dependencies = [
  "presenter-ndi",
  "presenter-persistence",
  "reactive_graph",
+ "regex",
  "reqwest",
  "rosc",
  "serde",
