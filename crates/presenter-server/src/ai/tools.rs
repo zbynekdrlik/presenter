@@ -1146,4 +1146,172 @@ mod tests {
         assert_eq!(after.slides.len(), 1);
         assert_eq!(after.slides[0].main_reference, "Ref 1:2");
     }
+
+    #[tokio::test]
+    async fn get_bible_presentation_returns_slides() {
+        let state = AppState::in_memory().await.unwrap();
+
+        let args = json!({
+            "name": "Get Test",
+            "slides": [{"main": "text one", "main_reference": "Gen 1:1"}]
+        });
+        let (create_result, _) =
+            execute_tool("create_bible_presentation", &args.to_string(), &state, 320)
+                .await
+                .unwrap();
+        let created: Value = serde_json::from_str(&create_result).unwrap();
+        let pres_id = created["id"].as_str().unwrap();
+
+        let get_args = json!({"presentation_id": pres_id});
+        let (get_result, preview) =
+            execute_tool("get_bible_presentation", &get_args.to_string(), &state, 320)
+                .await
+                .unwrap();
+        let fetched: Value = serde_json::from_str(&get_result).unwrap();
+        assert_eq!(fetched["name"], "Get Test");
+        let slides = fetched["slides"].as_array().unwrap();
+        assert_eq!(slides.len(), 1);
+        assert_eq!(slides[0]["main"], "text one");
+        assert_eq!(slides[0]["main_reference"], "Gen 1:1");
+        assert!(preview.contains("Get Test"));
+    }
+
+    #[tokio::test]
+    async fn rename_bible_presentation_updates_name() {
+        let state = AppState::in_memory().await.unwrap();
+
+        let (create_result, _) = execute_tool(
+            "create_bible_presentation",
+            &json!({"name": "Old Name"}).to_string(),
+            &state,
+            320,
+        )
+        .await
+        .unwrap();
+        let created: Value = serde_json::from_str(&create_result).unwrap();
+        let pres_id = created["id"].as_str().unwrap();
+
+        let rename_args = json!({"presentation_id": pres_id, "name": "New Name"});
+        let (rename_result, preview) = execute_tool(
+            "rename_bible_presentation",
+            &rename_args.to_string(),
+            &state,
+            320,
+        )
+        .await
+        .unwrap();
+        let parsed: Value = serde_json::from_str(&rename_result).unwrap();
+        assert!(parsed["ok"].as_bool().unwrap());
+        assert!(preview.contains("New Name"));
+
+        // Verify via list
+        let (list_result, _) = execute_tool("list_bible_presentations", "{}", &state, 320)
+            .await
+            .unwrap();
+        let list: Vec<Value> = serde_json::from_str(&list_result).unwrap();
+        let found = list
+            .iter()
+            .find(|p| p["id"].as_str() == Some(pres_id))
+            .expect("presentation should exist");
+        assert_eq!(found["name"], "New Name");
+    }
+
+    #[tokio::test]
+    async fn delete_bible_presentation_removes_it() {
+        let state = AppState::in_memory().await.unwrap();
+
+        let (create_result, _) = execute_tool(
+            "create_bible_presentation",
+            &json!({"name": "Doomed"}).to_string(),
+            &state,
+            320,
+        )
+        .await
+        .unwrap();
+        let created: Value = serde_json::from_str(&create_result).unwrap();
+        let pres_id = created["id"].as_str().unwrap();
+
+        // Verify exists first
+        let (list_before, _) = execute_tool("list_bible_presentations", "{}", &state, 320)
+            .await
+            .unwrap();
+        let list_before: Vec<Value> = serde_json::from_str(&list_before).unwrap();
+        assert!(list_before
+            .iter()
+            .any(|p| p["id"].as_str() == Some(pres_id)));
+
+        // Delete
+        let delete_args = json!({"presentation_id": pres_id});
+        let (delete_result, _) = execute_tool(
+            "delete_bible_presentation",
+            &delete_args.to_string(),
+            &state,
+            320,
+        )
+        .await
+        .unwrap();
+        let parsed: Value = serde_json::from_str(&delete_result).unwrap();
+        assert!(parsed["ok"].as_bool().unwrap());
+
+        // Verify gone
+        let (list_after, _) = execute_tool("list_bible_presentations", "{}", &state, 320)
+            .await
+            .unwrap();
+        let list_after: Vec<Value> = serde_json::from_str(&list_after).unwrap();
+        assert!(!list_after.iter().any(|p| p["id"].as_str() == Some(pres_id)));
+    }
+
+    #[tokio::test]
+    async fn update_bible_slide_changes_text_and_references() {
+        let state = AppState::in_memory().await.unwrap();
+
+        // Create a presentation with one slide
+        let args = json!({
+            "name": "Update Test",
+            "slides": [{"main": "original", "main_reference": "Ref 1:1"}]
+        });
+        let (create_result, _) =
+            execute_tool("create_bible_presentation", &args.to_string(), &state, 320)
+                .await
+                .unwrap();
+        let created: Value = serde_json::from_str(&create_result).unwrap();
+        let pres_id = created["id"].as_str().unwrap();
+
+        // Fetch to get the slide ID
+        let get_args = json!({"presentation_id": pres_id});
+        let (get_result, _) =
+            execute_tool("get_bible_presentation", &get_args.to_string(), &state, 320)
+                .await
+                .unwrap();
+        let fetched: Value = serde_json::from_str(&get_result).unwrap();
+        let slide_id = fetched["slides"][0]["id"].as_str().unwrap();
+
+        // Update the slide
+        let update_args = json!({
+            "presentation_id": pres_id,
+            "slide_id": slide_id,
+            "main": "updated",
+            "main_reference": "Ref 2:2",
+            "secondary": "trans",
+            "secondary_reference": "Ref 2:2 trans"
+        });
+        let (update_result, _) =
+            execute_tool("update_bible_slide", &update_args.to_string(), &state, 320)
+                .await
+                .unwrap();
+        let parsed: Value = serde_json::from_str(&update_result).unwrap();
+        assert!(parsed["ok"].as_bool().unwrap());
+
+        // Verify by fetching again
+        let (get_result2, _) =
+            execute_tool("get_bible_presentation", &get_args.to_string(), &state, 320)
+                .await
+                .unwrap();
+        let fetched2: Value = serde_json::from_str(&get_result2).unwrap();
+        let slide = &fetched2["slides"][0];
+        assert_eq!(slide["main"], "updated");
+        assert_eq!(slide["main_reference"], "Ref 2:2");
+        assert_eq!(slide["secondary"], "trans");
+        assert_eq!(slide["secondary_reference"], "Ref 2:2 trans");
+    }
 }
