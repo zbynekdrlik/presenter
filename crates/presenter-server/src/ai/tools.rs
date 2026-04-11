@@ -1,7 +1,10 @@
 use crate::state::bible::BibleTriggerOverrides;
 use crate::state::AppState;
 use presenter_core::slide::{SlideContent, SlideText};
-use presenter_core::{BibleReference, LibraryId, PresentationId, Slide, SlideId};
+use presenter_core::{
+    BiblePresentationId, BiblePresentationSlide, BibleReference, BibleSlideId, LibraryId,
+    PresentationId, Slide, SlideId,
+};
 use serde_json::{json, Value};
 use uuid::Uuid;
 
@@ -10,12 +13,12 @@ pub fn tool_definitions() -> Vec<Value> {
     vec![
         tool_def(
             "list_libraries",
-            "List all presentation libraries",
+            "[WORSHIP only] List all worship presentation libraries (songs, lyrics). For Bible content use the bible_* tools instead.",
             json!({"type": "object", "properties": {}, "required": []}),
         ),
         tool_def(
             "create_library",
-            "Create a new presentation library",
+            "[WORSHIP only] Create a new worship presentation library (songs, lyrics). For Bible content use the bible_* tools instead.",
             json!({
                 "type": "object",
                 "properties": {
@@ -26,7 +29,7 @@ pub fn tool_definitions() -> Vec<Value> {
         ),
         tool_def(
             "list_presentations",
-            "List presentations in a library",
+            "[WORSHIP only] List worship presentations in a library (songs, lyrics). For Bible content use the bible_* tools instead.",
             json!({
                 "type": "object",
                 "properties": {
@@ -37,7 +40,7 @@ pub fn tool_definitions() -> Vec<Value> {
         ),
         tool_def(
             "get_presentation",
-            "Get full presentation detail including slides",
+            "[WORSHIP only] Get full worship presentation detail including slides. For Bible content use the bible_* tools instead.",
             json!({
                 "type": "object",
                 "properties": {
@@ -48,7 +51,7 @@ pub fn tool_definitions() -> Vec<Value> {
         ),
         tool_def(
             "create_presentation",
-            "Create a new presentation with slides in a library",
+            "[WORSHIP only] Create a new worship presentation (songs, lyrics) with slides in a library. For Bible content use create_bible_presentation instead.",
             json!({
                 "type": "object",
                 "properties": {
@@ -74,7 +77,7 @@ pub fn tool_definitions() -> Vec<Value> {
         ),
         tool_def(
             "rename_presentation",
-            "Rename an existing presentation",
+            "[WORSHIP only] Rename an existing worship presentation. For Bible content use rename_bible_presentation instead.",
             json!({
                 "type": "object",
                 "properties": {
@@ -86,7 +89,7 @@ pub fn tool_definitions() -> Vec<Value> {
         ),
         tool_def(
             "delete_presentation",
-            "Delete a presentation",
+            "[WORSHIP only] Delete a worship presentation. For Bible content use delete_bible_presentation instead.",
             json!({
                 "type": "object",
                 "properties": {
@@ -97,7 +100,7 @@ pub fn tool_definitions() -> Vec<Value> {
         ),
         tool_def(
             "add_slide",
-            "Add a slide to an existing presentation",
+            "[WORSHIP only] Add a slide to an existing worship presentation. For Bible content use add_bible_slide instead.",
             json!({
                 "type": "object",
                 "properties": {
@@ -113,7 +116,7 @@ pub fn tool_definitions() -> Vec<Value> {
         ),
         tool_def(
             "update_slide",
-            "Update the content of an existing slide",
+            "[WORSHIP only] Update the content of an existing worship slide. For Bible content use update_bible_slide instead.",
             json!({
                 "type": "object",
                 "properties": {
@@ -129,7 +132,7 @@ pub fn tool_definitions() -> Vec<Value> {
         ),
         tool_def(
             "delete_slide",
-            "Delete a slide from a presentation",
+            "[WORSHIP only] Delete a slide from a worship presentation. For Bible content use delete_bible_slide instead.",
             json!({
                 "type": "object",
                 "properties": {
@@ -141,7 +144,7 @@ pub fn tool_definitions() -> Vec<Value> {
         ),
         tool_def(
             "reorder_slides",
-            "Reorder slides in a presentation",
+            "[WORSHIP only] Reorder slides in a worship presentation. For Bible content use the bible_* tools instead.",
             json!({
                 "type": "object",
                 "properties": {
@@ -229,6 +232,113 @@ pub fn tool_definitions() -> Vec<Value> {
                     "verse_end": {"type": "integer"}
                 },
                 "required": ["translation", "book", "chapter", "verse_start"]
+            }),
+        ),
+        tool_def(
+            "list_bible_presentations",
+            "[BIBLE only] List all Bible presentations (user-curated collections of Bible slides). Use this when the user asks about Bible passages, verses, or collections.",
+            json!({"type": "object", "properties": {}, "required": []}),
+        ),
+        tool_def(
+            "get_bible_presentation",
+            "[BIBLE only] Get a Bible presentation with all its slides (main text, references, metadata).",
+            json!({
+                "type": "object",
+                "properties": {
+                    "presentation_id": {"type": "string", "description": "Bible presentation UUID"}
+                },
+                "required": ["presentation_id"]
+            }),
+        ),
+        tool_def(
+            "create_bible_presentation",
+            "[BIBLE only] Create a new Bible presentation (a named collection of Bible slides, e.g. a sermon series or topical study). Optionally include initial slides. Use this when the user asks to create a Bible presentation, sermon, or verse collection.",
+            json!({
+                "type": "object",
+                "properties": {
+                    "name": {"type": "string", "description": "Presentation name (e.g. 'Sunday Sermon 2026-04-14')"},
+                    "slides": {
+                        "type": "array",
+                        "description": "Optional initial slides. Each slide represents one bible verse or passage.",
+                        "items": {
+                            "type": "object",
+                            "properties": {
+                                "main": {"type": "string", "description": "Main verse text (e.g. 'For God so loved the world...')"},
+                                "main_reference": {"type": "string", "description": "Reference label (e.g. 'John 3:16')"},
+                                "secondary": {"type": "string", "description": "Secondary translation text (optional)"},
+                                "secondary_reference": {"type": "string", "description": "Secondary reference label (optional)"}
+                            },
+                            "required": ["main", "main_reference"]
+                        }
+                    }
+                },
+                "required": ["name"]
+            }),
+        ),
+        tool_def(
+            "rename_bible_presentation",
+            "[BIBLE only] Rename an existing Bible presentation.",
+            json!({
+                "type": "object",
+                "properties": {
+                    "presentation_id": {"type": "string", "description": "Bible presentation UUID"},
+                    "name": {"type": "string", "description": "New name"}
+                },
+                "required": ["presentation_id", "name"]
+            }),
+        ),
+        tool_def(
+            "delete_bible_presentation",
+            "[BIBLE only] Delete a Bible presentation and all its slides.",
+            json!({
+                "type": "object",
+                "properties": {
+                    "presentation_id": {"type": "string", "description": "Bible presentation UUID"}
+                },
+                "required": ["presentation_id"]
+            }),
+        ),
+        tool_def(
+            "add_bible_slide",
+            "[BIBLE only] Append a single slide to an existing Bible presentation. For adding multiple slides at once, prefer create_bible_presentation with the slides array.",
+            json!({
+                "type": "object",
+                "properties": {
+                    "presentation_id": {"type": "string", "description": "Bible presentation UUID"},
+                    "main": {"type": "string", "description": "Main verse text"},
+                    "main_reference": {"type": "string", "description": "Reference label (e.g. 'John 3:16')"},
+                    "secondary": {"type": "string", "description": "Secondary translation text (optional)"},
+                    "secondary_reference": {"type": "string", "description": "Secondary reference label (optional)"}
+                },
+                "required": ["presentation_id", "main", "main_reference"]
+            }),
+        ),
+        tool_def(
+            "update_bible_slide",
+            "[BIBLE only] Update the text and references on a single Bible slide.",
+            json!({
+                "type": "object",
+                "properties": {
+                    "presentation_id": {"type": "string", "description": "Bible presentation UUID"},
+                    "slide_id": {"type": "string", "description": "Bible slide UUID"},
+                    "main": {"type": "string"},
+                    "main_reference": {"type": "string"},
+                    "secondary": {"type": "string"},
+                    "secondary_reference": {"type": "string"}
+                },
+                "required": ["presentation_id", "slide_id", "main", "main_reference"]
+            }),
+        ),
+        tool_def(
+            "delete_bible_slide",
+            "[BIBLE only] Delete a single slide from a Bible presentation.",
+            json!({
+                "type": "object",
+                "properties": {
+                    "presentation_id": {"type": "string", "description": "Bible presentation UUID"},
+                    "slide_id": {"type": "string", "description": "Bible slide UUID"}
+                },
+                "required": ["presentation_id", "slide_id"]
             }),
         ),
     ]
@@ -617,6 +727,210 @@ pub async fn execute_tool(
             Ok((json!({"ok": true}).to_string(), preview))
         }
 
+        "list_bible_presentations" => {
+            let summaries = state.list_bible_presentations().await?;
+            let list: Vec<Value> = summaries
+                .iter()
+                .map(|s| {
+                    json!({
+                        "id": s.id.to_string(),
+                        "name": s.name,
+                        "slide_count": s.slide_count,
+                    })
+                })
+                .collect();
+            let preview = format!("Found {} bible presentations", summaries.len());
+            Ok((serde_json::to_string(&list)?, preview))
+        }
+
+        "get_bible_presentation" => {
+            let pres_id = BiblePresentationId::from_uuid(uuid_field(&args, "presentation_id")?);
+            match state.bible_presentation_detail(pres_id).await? {
+                Some(p) => {
+                    let slides: Vec<Value> = p
+                        .slides
+                        .iter()
+                        .map(|s| {
+                            json!({
+                                "id": s.id.to_string(),
+                                "order": s.order,
+                                "main": s.main.value(),
+                                "main_reference": s.main_reference,
+                                "secondary": s.secondary.value(),
+                                "secondary_reference": s.secondary_reference,
+                            })
+                        })
+                        .collect();
+                    let preview = format!("'{}' - {} slides", p.name, p.slides.len());
+                    Ok((
+                        json!({
+                            "id": p.id.to_string(),
+                            "name": p.name,
+                            "slides": slides,
+                        })
+                        .to_string(),
+                        preview,
+                    ))
+                }
+                None => Ok((
+                    json!({"error": "bible presentation not found"}).to_string(),
+                    "Not found".to_string(),
+                )),
+            }
+        }
+
+        "create_bible_presentation" => {
+            let name = str_field(&args, "name")?;
+            let presentation = state.create_bible_presentation(&name).await?;
+
+            // If slides were provided, append them.
+            let slides_arr = args["slides"].as_array();
+            let final_presentation = if let Some(arr) = slides_arr {
+                let mut new_slides: Vec<BiblePresentationSlide> = Vec::with_capacity(arr.len());
+                for s in arr {
+                    let main_text = s["main"].as_str().unwrap_or("").to_string();
+                    let main_reference = s["main_reference"].as_str().unwrap_or("").to_string();
+                    let secondary_text = s["secondary"].as_str().unwrap_or("").to_string();
+                    let secondary_reference =
+                        s["secondary_reference"].as_str().unwrap_or("").to_string();
+                    new_slides.push(BiblePresentationSlide {
+                        id: BibleSlideId::new(),
+                        order: 0,
+                        main: SlideText::new(&main_text)
+                            .unwrap_or_else(|_| SlideText::new("").unwrap()),
+                        main_reference,
+                        secondary: SlideText::new(&secondary_text)
+                            .unwrap_or_else(|_| SlideText::new("").unwrap()),
+                        secondary_reference,
+                        metadata: None,
+                    });
+                }
+                if !new_slides.is_empty() {
+                    state
+                        .append_bible_presentation_slides(presentation.id, new_slides)
+                        .await?
+                } else {
+                    presentation
+                }
+            } else {
+                presentation
+            };
+
+            let preview = format!(
+                "Created bible presentation '{}' with {} slides",
+                final_presentation.name,
+                final_presentation.slides.len()
+            );
+            Ok((
+                json!({
+                    "id": final_presentation.id.to_string(),
+                    "name": final_presentation.name,
+                    "slide_count": final_presentation.slides.len(),
+                })
+                .to_string(),
+                preview,
+            ))
+        }
+
+        "rename_bible_presentation" => {
+            let pres_id = BiblePresentationId::from_uuid(uuid_field(&args, "presentation_id")?);
+            let name = str_field(&args, "name")?;
+            state.rename_bible_presentation(pres_id, &name).await?;
+            let preview = format!("Renamed bible presentation to '{name}'");
+            Ok((json!({"ok": true}).to_string(), preview))
+        }
+
+        "delete_bible_presentation" => {
+            let pres_id = BiblePresentationId::from_uuid(uuid_field(&args, "presentation_id")?);
+            state.delete_bible_presentation(pres_id).await?;
+            Ok((
+                json!({"ok": true}).to_string(),
+                "Deleted bible presentation".to_string(),
+            ))
+        }
+
+        "add_bible_slide" => {
+            let pres_id = BiblePresentationId::from_uuid(uuid_field(&args, "presentation_id")?);
+            let main_text = str_field(&args, "main")?;
+            let main_reference = str_field(&args, "main_reference")?;
+            let secondary_text = args["secondary"].as_str().unwrap_or("").to_string();
+            let secondary_reference = args["secondary_reference"]
+                .as_str()
+                .unwrap_or("")
+                .to_string();
+
+            let slide = BiblePresentationSlide {
+                id: BibleSlideId::new(),
+                order: 0,
+                main: SlideText::new(&main_text).unwrap_or_else(|_| SlideText::new("").unwrap()),
+                main_reference,
+                secondary: SlideText::new(&secondary_text)
+                    .unwrap_or_else(|_| SlideText::new("").unwrap()),
+                secondary_reference,
+                metadata: None,
+            };
+            let updated = state
+                .append_bible_presentation_slides(pres_id, vec![slide])
+                .await?;
+            let preview = format!(
+                "Added bible slide to '{}' (now {} total)",
+                updated.name,
+                updated.slides.len()
+            );
+            Ok((
+                json!({"ok": true, "slide_count": updated.slides.len()}).to_string(),
+                preview,
+            ))
+        }
+
+        "update_bible_slide" => {
+            let pres_id = BiblePresentationId::from_uuid(uuid_field(&args, "presentation_id")?);
+            let slide_id = BibleSlideId::from_uuid(uuid_field(&args, "slide_id")?);
+            let main_text = str_field(&args, "main")?;
+            let main_reference = str_field(&args, "main_reference")?;
+            let secondary_text = args["secondary"].as_str().unwrap_or("").to_string();
+            let secondary_reference = args["secondary_reference"]
+                .as_str()
+                .unwrap_or("")
+                .to_string();
+
+            // Preserve existing metadata if present.
+            let existing_metadata = match state.bible_presentation_detail(pres_id).await? {
+                Some(p) => p
+                    .slides
+                    .iter()
+                    .find(|s| s.id == slide_id)
+                    .and_then(|s| s.metadata.clone()),
+                None => None,
+            };
+
+            state
+                .update_bible_slide(
+                    pres_id,
+                    slide_id,
+                    main_text,
+                    main_reference,
+                    secondary_text,
+                    secondary_reference,
+                    existing_metadata,
+                )
+                .await?;
+            Ok((
+                json!({"ok": true}).to_string(),
+                "Updated bible slide".to_string(),
+            ))
+        }
+
+        "delete_bible_slide" => {
+            let pres_id = BiblePresentationId::from_uuid(uuid_field(&args, "presentation_id")?);
+            let slide_id = BibleSlideId::from_uuid(uuid_field(&args, "slide_id")?);
+            state.delete_bible_slide(pres_id, slide_id).await?;
+            Ok((
+                json!({"ok": true}).to_string(),
+                "Deleted bible slide".to_string(),
+            ))
+        }
+
         _ => Ok((
             json!({"error": format!("unknown tool: {name}")}).to_string(),
             format!("Unknown tool: {name}"),
@@ -672,5 +986,164 @@ mod tests {
                 "non-Bible slide should not have metadata"
             );
         }
+    }
+
+    #[tokio::test]
+    async fn create_bible_presentation_with_slides() {
+        let state = AppState::in_memory().await.unwrap();
+
+        let args = json!({
+            "name": "Sunday Sermon",
+            "slides": [
+                {
+                    "main": "For God so loved the world...",
+                    "main_reference": "John 3:16",
+                    "secondary": "Lebo tak Boh miloval svet...",
+                    "secondary_reference": "Ján 3:16"
+                },
+                {
+                    "main": "The Lord is my shepherd...",
+                    "main_reference": "Psalm 23:1"
+                }
+            ]
+        });
+        let (result, preview) =
+            execute_tool("create_bible_presentation", &args.to_string(), &state, 320)
+                .await
+                .unwrap();
+
+        let parsed: Value = serde_json::from_str(&result).unwrap();
+        assert_eq!(parsed["name"].as_str().unwrap(), "Sunday Sermon");
+        assert_eq!(parsed["slide_count"].as_u64().unwrap(), 2);
+        assert!(preview.contains("Sunday Sermon"));
+
+        // Verify from state
+        let pres_id_str = parsed["id"].as_str().unwrap();
+        let pres_id = BiblePresentationId::from_uuid(Uuid::parse_str(pres_id_str).unwrap());
+        let presentation = state
+            .bible_presentation_detail(pres_id)
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(presentation.slides.len(), 2);
+        assert_eq!(presentation.slides[0].main_reference, "John 3:16");
+        assert_eq!(presentation.slides[1].main_reference, "Psalm 23:1");
+    }
+
+    #[tokio::test]
+    async fn list_bible_presentations_returns_summaries() {
+        let state = AppState::in_memory().await.unwrap();
+
+        execute_tool(
+            "create_bible_presentation",
+            &json!({"name": "First"}).to_string(),
+            &state,
+            320,
+        )
+        .await
+        .unwrap();
+        execute_tool(
+            "create_bible_presentation",
+            &json!({"name": "Second"}).to_string(),
+            &state,
+            320,
+        )
+        .await
+        .unwrap();
+
+        let (result, preview) = execute_tool("list_bible_presentations", "{}", &state, 320)
+            .await
+            .unwrap();
+        let list: Vec<Value> = serde_json::from_str(&result).unwrap();
+        assert_eq!(list.len(), 2);
+        let names: Vec<&str> = list.iter().filter_map(|v| v["name"].as_str()).collect();
+        assert!(names.contains(&"First"));
+        assert!(names.contains(&"Second"));
+        assert!(preview.contains("2"));
+    }
+
+    #[tokio::test]
+    async fn add_bible_slide_appends() {
+        let state = AppState::in_memory().await.unwrap();
+
+        let (result, _) = execute_tool(
+            "create_bible_presentation",
+            &json!({"name": "My Study"}).to_string(),
+            &state,
+            320,
+        )
+        .await
+        .unwrap();
+        let parsed: Value = serde_json::from_str(&result).unwrap();
+        let pres_id = parsed["id"].as_str().unwrap();
+
+        let args = json!({
+            "presentation_id": pres_id,
+            "main": "In the beginning was the Word",
+            "main_reference": "John 1:1"
+        });
+        let (result, preview) = execute_tool("add_bible_slide", &args.to_string(), &state, 320)
+            .await
+            .unwrap();
+        let parsed: Value = serde_json::from_str(&result).unwrap();
+        assert_eq!(parsed["slide_count"].as_u64().unwrap(), 1);
+        assert!(preview.contains("1 total"));
+
+        // Add another
+        let args = json!({
+            "presentation_id": pres_id,
+            "main": "And the Word was with God",
+            "main_reference": "John 1:1b"
+        });
+        let (result, _) = execute_tool("add_bible_slide", &args.to_string(), &state, 320)
+            .await
+            .unwrap();
+        let parsed: Value = serde_json::from_str(&result).unwrap();
+        assert_eq!(parsed["slide_count"].as_u64().unwrap(), 2);
+    }
+
+    #[tokio::test]
+    async fn delete_bible_slide_removes_it() {
+        let state = AppState::in_memory().await.unwrap();
+
+        let args = json!({
+            "name": "Deletable",
+            "slides": [
+                {"main": "Verse one", "main_reference": "Ref 1:1"},
+                {"main": "Verse two", "main_reference": "Ref 1:2"}
+            ]
+        });
+        let (result, _) = execute_tool("create_bible_presentation", &args.to_string(), &state, 320)
+            .await
+            .unwrap();
+        let parsed: Value = serde_json::from_str(&result).unwrap();
+        let pres_id_str = parsed["id"].as_str().unwrap();
+        let pres_id = BiblePresentationId::from_uuid(Uuid::parse_str(pres_id_str).unwrap());
+
+        let presentation = state
+            .bible_presentation_detail(pres_id)
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(presentation.slides.len(), 2);
+        let first_slide_id = presentation.slides[0].id.to_string();
+
+        let args = json!({
+            "presentation_id": pres_id_str,
+            "slide_id": first_slide_id
+        });
+        let (result, _) = execute_tool("delete_bible_slide", &args.to_string(), &state, 320)
+            .await
+            .unwrap();
+        let parsed: Value = serde_json::from_str(&result).unwrap();
+        assert!(parsed["ok"].as_bool().unwrap());
+
+        let after = state
+            .bible_presentation_detail(pres_id)
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(after.slides.len(), 1);
+        assert_eq!(after.slides[0].main_reference, "Ref 1:2");
     }
 }
