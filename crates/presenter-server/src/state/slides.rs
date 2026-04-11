@@ -20,7 +20,7 @@ fn translation_short_code(code: &str) -> String {
 /// and the server composes slides out of the stream respecting the
 /// character limit — same splitting rules as live mode.
 #[derive(Debug, Clone)]
-pub enum BibleItem {
+pub(crate) enum BibleItem {
     Verse {
         number: u32,
         text: String,
@@ -36,7 +36,7 @@ pub enum BibleItem {
 /// A slide produced by `compose_bible_items_into_slides`. Plain data —
 /// the tool handler wraps it into `BiblePresentationSlide` for persistence.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct ComposedBibleSlide {
+pub(crate) struct ComposedBibleSlide {
     pub main: String,
     pub main_reference: String,
 }
@@ -49,7 +49,7 @@ pub struct ComposedBibleSlide {
 /// If a single verse item is longer than `character_limit`, it is emitted
 /// as its own oversized slide — the validator's `MainExceedsCharacterLimit`
 /// rule catches this downstream and the LLM sees a rule-keyed error.
-pub fn compose_bible_items_into_slides(
+pub(crate) fn compose_bible_items_into_slides(
     items: &[BibleItem],
     character_limit: u32,
 ) -> Vec<ComposedBibleSlide> {
