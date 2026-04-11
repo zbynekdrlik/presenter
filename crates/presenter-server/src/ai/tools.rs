@@ -342,41 +342,67 @@ pub async fn execute_tool(
                 .unwrap_or(&main_trans.code)
                 .to_uppercase();
 
-            // Load the passage range one verse at a time to build the
-            // per-verse reference labels. We reuse find_bible_passage so
-            // we do not depend on repository-level range APIs here.
-            let mut verses: Vec<Value> = Vec::new();
-            for v in verse_start..=verse_end {
-                let reference = BibleReference {
-                    book: book.clone(),
-                    book_code: None,
-                    book_number: None,
+            // Single range query instead of per-verse round trips. The
+            // repository returns only the verses that exist, so we walk
+            // the requested range and fill gaps with explicit not-found
+            // entries — the LLM sees exactly which verses are missing
+            // and can decide whether to use the sermon's text as-is,
+            // shorten the range, or report back to the user.
+            let loaded = state
+                .bible_passage_range(
+                    &main_trans.code,
+                    &book,
+                    None,
                     chapter,
-                    verse_start: v,
-                    verse_end: v,
-                };
-                if let Some(p) = state
-                    .find_bible_passage(&main_trans.code, &reference)
-                    .await?
-                {
-                    verses.push(json!({
-                        "number": p.reference.verse_start,
-                        "text": p.text,
-                        "reference": format!(
-                            "{} {}:{} ({})",
-                            p.reference.book, p.reference.chapter, p.reference.verse_start, short_code
-                        ),
-                    }));
+                    verse_start,
+                    verse_end,
+                )
+                .await?;
+            let loaded_by_number: std::collections::HashMap<u16, &presenter_core::BiblePassage> =
+                loaded
+                    .iter()
+                    .map(|p| (p.reference.verse_start, p))
+                    .collect();
+
+            let mut verses: Vec<Value> = Vec::with_capacity((verse_end - verse_start + 1) as usize);
+            let mut found_count: usize = 0;
+            for v in verse_start..=verse_end {
+                match loaded_by_number.get(&v) {
+                    Some(p) => {
+                        found_count += 1;
+                        verses.push(json!({
+                            "number": p.reference.verse_start,
+                            "text": p.text,
+                            "reference": format!(
+                                "{} {}:{} ({})",
+                                p.reference.book,
+                                p.reference.chapter,
+                                p.reference.verse_start,
+                                short_code,
+                            ),
+                        }));
+                    }
+                    None => {
+                        verses.push(json!({
+                            "number": v,
+                            "error": "not_found",
+                            "reference": format!(
+                                "{} {}:{} ({})",
+                                book, chapter, v, short_code
+                            ),
+                        }));
+                    }
                 }
             }
 
             let preview = format!(
-                "{} {}:{}-{} ({}) - {} verses",
+                "{} {}:{}-{} ({}) - {}/{} verses",
                 book,
                 chapter,
                 verse_start,
                 verse_end,
                 short_code,
+                found_count,
                 verses.len()
             );
             Ok((serde_json::to_string(&verses)?, preview))

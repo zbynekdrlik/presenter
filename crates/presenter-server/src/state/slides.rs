@@ -61,17 +61,33 @@ pub(crate) fn compose_bible_items_into_slides(
     let mut cur_numbers: Vec<u32> = Vec::new();
     let mut cur_group: Option<(String, u32, String)> = None; // (book, chapter, translation)
 
+    // Flush the current verse accumulator into a slide. Uses let-else
+    // pattern matching instead of expect()/unwrap() so there is no panic
+    // path at all — if an invariant is ever broken by a future refactor
+    // (e.g., group set without lines, or lines without group), the flush
+    // is a no-op rather than a crash.
     let flush_verses = |slides: &mut Vec<ComposedBibleSlide>,
                         lines: &mut Vec<String>,
                         numbers: &mut Vec<u32>,
                         group: &mut Option<(String, u32, String)>| {
         if lines.is_empty() {
+            // Also drop any stale group metadata to keep invariants aligned.
+            *group = None;
             return;
         }
+        let Some((book, chapter, translation)) = group.take() else {
+            // Lines present but group missing — treat as invariant break
+            // and reset the accumulator instead of producing a bogus slide.
+            lines.clear();
+            numbers.clear();
+            return;
+        };
+        let (Some(&start), Some(&end)) = (numbers.first(), numbers.last()) else {
+            lines.clear();
+            numbers.clear();
+            return;
+        };
         let main = lines.join("\n");
-        let (book, chapter, translation) = group.clone().expect("group set when lines present");
-        let start = *numbers.first().unwrap();
-        let end = *numbers.last().unwrap();
         let reference = if start == end {
             format!("{} {}:{} ({})", book, chapter, start, translation)
         } else {
@@ -83,7 +99,6 @@ pub(crate) fn compose_bible_items_into_slides(
         });
         lines.clear();
         numbers.clear();
-        *group = None;
     };
 
     for item in items {
