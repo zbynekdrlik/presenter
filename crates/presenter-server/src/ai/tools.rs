@@ -1106,6 +1106,119 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn create_bible_presentation_with_long_passage_composes_many_slides() {
+        // Simulates the realistic AI path: a full sermon passage with many
+        // verses of varying lengths. The server must split them into multiple
+        // slides and every slide must fit under the character limit.
+        //
+        // This is the end-to-end proof that moving slide-break decisions from
+        // the LLM to the server actually enforces the limit. The /ai/chat
+        // endpoint itself requires a live LLM we can't test in CI — this
+        // Rust test exercises the exact same execute_tool() dispatch path.
+        let state = AppState::in_memory().await.unwrap();
+        let char_limit: u32 = 200;
+
+        // 12 verses of real-ish Slovak bible text with varied lengths. The
+        // total is far above the 200-char limit, so the server MUST produce
+        // multiple slides. Mix of short and long verses tests the packing
+        // logic: short verses should cluster, long verses should split.
+        let items: Vec<serde_json::Value> = vec![
+            json!({"kind": "verse", "number": 1, "text": "Na počiatku bolo Slovo a to Slovo bolo u Boha a to Slovo bolo Boh.", "book": "Ján", "chapter": 1, "translation": "SEB"}),
+            json!({"kind": "verse", "number": 2, "text": "Ono bolo na počiatku u Boha.", "book": "Ján", "chapter": 1, "translation": "SEB"}),
+            json!({"kind": "verse", "number": 3, "text": "Všetko povstalo skrze neho a bez neho nepovstalo nič, čo povstalo.", "book": "Ján", "chapter": 1, "translation": "SEB"}),
+            json!({"kind": "verse", "number": 4, "text": "V ňom bol život a život bol svetlom ľudí.", "book": "Ján", "chapter": 1, "translation": "SEB"}),
+            json!({"kind": "verse", "number": 5, "text": "A svetlo svieti v tme, ale tma ho nepohltila.", "book": "Ján", "chapter": 1, "translation": "SEB"}),
+            json!({"kind": "emphasis", "text": "NOVÁ ZMLUVA"}),
+            json!({"kind": "verse", "number": 6, "text": "Bol človek, poslaný od Boha, ktorý sa volal Ján.", "book": "Ján", "chapter": 1, "translation": "SEB"}),
+            json!({"kind": "verse", "number": 7, "text": "Ten prišiel na svedectvo, aby svedčil o svetle, aby skrze neho všetci uverili.", "book": "Ján", "chapter": 1, "translation": "SEB"}),
+            json!({"kind": "verse", "number": 8, "text": "On sám nebol svetlo, ale prišiel svedčiť o svetle.", "book": "Ján", "chapter": 1, "translation": "SEB"}),
+            json!({"kind": "verse", "number": 9, "text": "Pravé svetlo, ktoré osvecuje každého človeka, prichádzalo na svet.", "book": "Ján", "chapter": 1, "translation": "SEB"}),
+            json!({"kind": "verse", "number": 10, "text": "Bol na svete a svet povstal skrze neho, ale svet ho nepoznal.", "book": "Ján", "chapter": 1, "translation": "SEB"}),
+            json!({"kind": "verse", "number": 11, "text": "Prišiel do svojho vlastného, ale vlastní ho neprijali.", "book": "Ján", "chapter": 1, "translation": "SEB"}),
+        ];
+
+        let args = json!({
+            "name": "Ján 1 — End-to-End Composition Proof",
+            "items": items,
+        });
+        let (body, _preview) = execute_tool(
+            "create_bible_presentation",
+            &args.to_string(),
+            &state,
+            char_limit,
+        )
+        .await
+        .unwrap();
+
+        // Parse response — should be the created presentation, NOT an error.
+        let parsed: Value = serde_json::from_str(&body).unwrap();
+        assert!(
+            parsed["error"].is_null(),
+            "expected successful creation, got error: {body}"
+        );
+        assert_eq!(
+            parsed["name"].as_str().unwrap(),
+            "Ján 1 — End-to-End Composition Proof"
+        );
+        let slide_count = parsed["slide_count"].as_u64().unwrap();
+
+        // With 12 items and a 200-char limit, the server MUST split into
+        // multiple slides. Exact count depends on packing, but must be > 1
+        // (proves the server is actually splitting) and reasonably bounded
+        // (proves the packer is not producing one-slide-per-verse when they
+        // could group).
+        assert!(
+            slide_count > 1,
+            "expected multiple slides from a long passage, got {slide_count}"
+        );
+        assert!(
+            slide_count < 12,
+            "expected server to pack verses into fewer slides than 1-per-verse, got {slide_count} for 12 items"
+        );
+
+        // Fetch the persisted presentation and verify every slide's main
+        // text fits under the character limit. THIS IS THE CORE ASSERTION —
+        // it proves the fix works end-to-end.
+        let pres_id_str = parsed["id"].as_str().unwrap();
+        let pres_id = BiblePresentationId::from_uuid(Uuid::parse_str(pres_id_str).unwrap());
+        let pres = state
+            .bible_presentation_detail(pres_id)
+            .await
+            .unwrap()
+            .unwrap();
+
+        assert_eq!(pres.slides.len() as u64, slide_count);
+
+        for (idx, slide) in pres.slides.iter().enumerate() {
+            let main = slide.main.value();
+            assert!(
+                main.len() <= char_limit as usize,
+                "slide[{idx}] main.len()={} exceeds limit {}: {:?}",
+                main.len(),
+                char_limit,
+                main
+            );
+            // Sanity: no raw ## markers survived.
+            assert!(
+                !main.contains("##"),
+                "slide[{idx}] main should not contain ## markers: {main}"
+            );
+        }
+
+        // At least one slide should be the emphasis slide with empty reference.
+        let emphasis_slides: Vec<&_> = pres
+            .slides
+            .iter()
+            .filter(|s| s.main_reference.is_empty() && s.main.value() == "NOVÁ ZMLUVA")
+            .collect();
+        assert_eq!(
+            emphasis_slides.len(),
+            1,
+            "expected exactly 1 emphasis slide with main='NOVÁ ZMLUVA' and empty reference"
+        );
+    }
+
+    #[tokio::test]
     async fn load_bible_verses_handler_is_registered() {
         // The in-memory state seeds no bible translations, so we expect
         // "translation not found" error. This proves the tool is registered
