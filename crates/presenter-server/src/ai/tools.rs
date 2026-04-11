@@ -182,6 +182,11 @@ pub fn tool_definitions() -> Vec<Value> {
             }),
         ),
         tool_def(
+            "get_style_guide",
+            "[REFERENCE] Get the detailed formatting guide for Bible references, Slovak book names, translation codes, multi-slide rules, and markdown conventions. The live system prompt only has essentials. Call this once at the start of a session if you need detailed rules.",
+            json!({"type": "object", "properties": {}, "required": []}),
+        ),
+        tool_def(
             "list_bible_translations",
             "List all available Bible translations",
             json!({"type": "object", "properties": {}, "required": []}),
@@ -619,6 +624,11 @@ pub async fn execute_tool(
                     "Passage not found".to_string(),
                 )),
             }
+        }
+
+        "get_style_guide" => {
+            let guide = include_str!("style_guide.md");
+            Ok((guide.to_string(), "Style guide loaded".to_string()))
         }
 
         "list_bible_translations" => {
@@ -1313,5 +1323,28 @@ mod tests {
         assert_eq!(slide["main_reference"], "Ref 2:2");
         assert_eq!(slide["secondary"], "trans");
         assert_eq!(slide["secondary_reference"], "Ref 2:2 trans");
+    }
+
+    #[tokio::test]
+    async fn get_style_guide_returns_expected_sections() {
+        let state = AppState::in_memory().await.unwrap();
+        let (result, preview) = execute_tool("get_style_guide", "{}", &state, 320)
+            .await
+            .unwrap();
+
+        // Must contain the key section headers
+        assert!(result.contains("# AI Presentation Style Guide"));
+        assert!(result.contains("## Slide field usage"));
+        assert!(result.contains("## Reference format"));
+        assert!(result.contains("## Multi-slide passages"));
+        assert!(result.contains("## Slovak Bible book abbreviations"));
+        assert!(result.contains("## Translation code mapping"));
+
+        // Must contain specific known content
+        assert!(result.contains("Roháčkov preklad"));
+        assert!(result.contains("Žalm 52:1-11"));
+
+        // Preview should be short
+        assert_eq!(preview, "Style guide loaded");
     }
 }
