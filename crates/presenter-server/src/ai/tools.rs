@@ -465,7 +465,9 @@ pub async fn execute_tool(
                 for (idx, s) in arr.iter().enumerate() {
                     let main_text = s["main"].as_str().unwrap_or("");
                     let main_reference = s["main_reference"].as_str().unwrap_or("");
-                    if let Err(mut err) = validate_bible_slide(main_text, main_reference) {
+                    if let Err(mut err) =
+                        validate_bible_slide(main_text, main_reference, default_char_limit)
+                    {
                         // Annotate the `got` field with the slide index so the
                         // LLM knows which slide in the batch to fix.
                         err.got = format!("slide[{idx}]: {}", err.got);
@@ -553,7 +555,8 @@ pub async fn execute_tool(
                 .to_string();
 
             // Validate before touching the DB.
-            if let Err(err) = validate_bible_slide(&main_text, &main_reference) {
+            if let Err(err) = validate_bible_slide(&main_text, &main_reference, default_char_limit)
+            {
                 return Ok(validation_error_response(err));
             }
 
@@ -593,7 +596,8 @@ pub async fn execute_tool(
                 .to_string();
 
             // Validate before touching the DB.
-            if let Err(err) = validate_bible_slide(&main_text, &main_reference) {
+            if let Err(err) = validate_bible_slide(&main_text, &main_reference, default_char_limit)
+            {
                 return Ok(validation_error_response(err));
             }
 
