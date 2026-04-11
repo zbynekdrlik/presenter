@@ -2,6 +2,7 @@ pub(crate) mod agent;
 pub(crate) mod bible_validator;
 pub(crate) mod client;
 pub(crate) mod proxy;
+pub(crate) mod tool_defs;
 pub(crate) mod tools;
 
 use serde::{Deserialize, Serialize};
