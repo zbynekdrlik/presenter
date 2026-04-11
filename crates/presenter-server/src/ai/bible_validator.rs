@@ -93,20 +93,30 @@ impl ValidationError {
 
 // Rule 1 regex: "Book Ch:V(-V)?( (CODE))?".
 //
-// - `^[A-Za-zÀ-ž0-9\. ]+ ` — book name + trailing space. Includes Slovak
-//   diacritics and digits for "1. Samuelova".
+// - `^[\p{L}0-9\. ]+ ` — book name + trailing space. `\p{L}` is the
+//   Unicode letter class (all alphabetic letters, including Slovak,
+//   Czech, and other scripts) plus `0-9` for numbered books like
+//   "1. Samuelova" and `\.` / space inside the name. Earlier revisions
+//   used `[A-Za-zÀ-ž]` whose range accidentally admitted `×` (U+00D7)
+//   and `÷` (U+00F7) as valid book-name characters.
 // - `\d+:\d+[a-z]?` — chapter:verse, optional partial letter ("3a").
 // - `(-\d+[a-z]?)?` — optional verse range end.
 // - `( \([A-Z]+\))?` — optional translation code in parens.
 // - `$` — anchored.
+//
+// The `expect()` below can only trigger at first use of the static if
+// this literal regex is malformed — that is a programmer bug which the
+// unit tests in this module catch immediately. It is unreachable in
+// production because the pattern is a compile-time constant.
 static REFERENCE_RE: LazyLock<Regex> = LazyLock::new(|| {
-    Regex::new(r"^[A-Za-zÀ-ž0-9\. ]+ \d+:\d+[a-z]?(-\d+[a-z]?)?( \([A-Z]+\))?$")
-        .expect("reference regex is valid")
+    Regex::new(r"^[\p{L}0-9\. ]+ \d+:\d+[a-z]?(-\d+[a-z]?)?( \([A-Z]+\))?$")
+        .expect("REFERENCE_RE literal must compile")
 });
 
 // Rule 2 regex: multi-line mode, match any line starting with "N. ".
+// Same `expect()` rationale as `REFERENCE_RE` above.
 static VERSE_PREFIX_RE: LazyLock<Regex> =
-    LazyLock::new(|| Regex::new(r"(?m)^\d+\. ").expect("verse prefix regex is valid"));
+    LazyLock::new(|| Regex::new(r"(?m)^\d+\. ").expect("VERSE_PREFIX_RE literal must compile"));
 
 /// Validate a single bible slide's `main` and `main_reference` strings.
 ///
@@ -202,11 +212,23 @@ mod tests {
     }
 
     #[test]
-    fn reference_format_rejects_code_without_parens() {
-        // The exact production bug.
+    fn reference_format_rejects_code_without_parens_production_bug() {
+        // Regression guard for the exact reference produced by the AI in
+        // production before this validator shipped.
         let err = validate_bible_slide("13. A nieto tvora...", "Židom 4:13 SEB").unwrap_err();
         assert_eq!(err.rule, ValidationRule::ReferenceFormatRequiresParens);
         assert_eq!(err.got, "Židom 4:13 SEB");
+    }
+
+    #[test]
+    fn reference_format_rejects_unicode_symbols_in_book_name() {
+        // Regression guard for the earlier character class `[À-ž]` which
+        // accidentally admitted U+00D7 (`×`) and U+00F7 (`÷`). Switching
+        // to `\p{L}` excludes all Unicode symbols.
+        let err = validate_bible_slide("1. test", "Bo×k 1:1 (MIL)").unwrap_err();
+        assert_eq!(err.rule, ValidationRule::ReferenceFormatRequiresParens);
+        let err2 = validate_bible_slide("1. test", "Bo÷k 1:1 (MIL)").unwrap_err();
+        assert_eq!(err2.rule, ValidationRule::ReferenceFormatRequiresParens);
     }
 
     #[test]
@@ -242,8 +264,9 @@ mod tests {
     }
 
     #[test]
-    fn verse_prefix_rejects_plain_text_main() {
-        // The exact production bug — text has no "N. " prefix but reference is set.
+    fn verse_prefix_rejects_plain_text_main_production_bug() {
+        // Regression guard: AI shipped verse text with no "N. " prefix
+        // while still setting a valid reference. Both conditions reproduced.
         let err =
             validate_bible_slide("A nieto tvora, čo by bol...", "Židom 4:13 (SEB)").unwrap_err();
         assert_eq!(err.rule, ValidationRule::MissingVerseNumberPrefix);
