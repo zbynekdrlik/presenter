@@ -313,37 +313,6 @@ pub fn tool_definitions() -> Vec<Value> {
             }),
         ),
         tool_def(
-            "add_bible_slide",
-            "[BIBLE only] Append a single slide to an existing Bible presentation. For adding multiple slides at once, prefer create_bible_presentation with the slides array.",
-            json!({
-                "type": "object",
-                "properties": {
-                    "presentation_id": {"type": "string", "description": "Bible presentation UUID"},
-                    "main": {"type": "string", "description": "Main verse text"},
-                    "main_reference": {"type": "string", "description": "Reference label (e.g. 'John 3:16')"},
-                    "secondary": {"type": "string", "description": "Secondary translation text (optional)"},
-                    "secondary_reference": {"type": "string", "description": "Secondary reference label (optional)"}
-                },
-                "required": ["presentation_id", "main", "main_reference"]
-            }),
-        ),
-        tool_def(
-            "update_bible_slide",
-            "[BIBLE only] Update the text and references on a single Bible slide.",
-            json!({
-                "type": "object",
-                "properties": {
-                    "presentation_id": {"type": "string", "description": "Bible presentation UUID"},
-                    "slide_id": {"type": "string", "description": "Bible slide UUID"},
-                    "main": {"type": "string"},
-                    "main_reference": {"type": "string"},
-                    "secondary": {"type": "string"},
-                    "secondary_reference": {"type": "string"}
-                },
-                "required": ["presentation_id", "slide_id", "main", "main_reference"]
-            }),
-        ),
-        tool_def(
             "delete_bible_slide",
             "[BIBLE only] Delete a single slide from a Bible presentation.",
             json!({
