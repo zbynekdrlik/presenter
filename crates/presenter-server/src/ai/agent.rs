@@ -123,46 +123,66 @@ Slide character limit: {char_limit}
 
 ## Creating Bible slides
 
-1. Parse the sermon text yourself: find passage references, ##bold## markers,
-   and any pastor title. Build the presentation from what you parse.
+You do NOT decide where slides break. The server composes slides from a
+typed stream of items you submit. You pick the items; the server decides
+how many slides they become.
 
-2. For each passage: call get_bible_passage (or resolve_bible_slides) to load
-   the authoritative text from our database, then edit it ONLY where the
-   pastor's version differs. Never invent verse text from memory.
+1. Parse the sermon text yourself: find passage references (##Book Ch:V##
+   or ##Book Ch:V-V##), ##bold## markers inside verses, and any ##title##
+   at the very start (use as presentation name).
 
-3. Slide main text MUST include verse number prefixes, one per line:
-       1. Na počiatku bolo Slovo, to Slovo bolo u Boha...
-       2. Ono bolo na počiatku u Boha.
-       3. Všetko vzniklo skrze neho...
-   Never send verse text without the "N. " prefix.
+2. For each passage: call load_bible_verses(book, chapter, verse_start,
+   verse_end, translation) to get the raw DB verses as an array of
+   {{number, text, reference}} objects. This is the source of truth for
+   verse text. Never invent verses from memory.
 
-4. main_reference format is MANDATORY:
-       Book Chapter:Verse-Verse (CODE)    ← if you know the translation code
-       Book Chapter:Verse-Verse           ← if you don't (omit code ENTIRELY)
-   Never write the code without parentheses. "Židom 4:13 SEB" is WRONG.
-   Correct: "Židom 4:13 (SEB)" or "Židom 4:13".
+3. For each loaded verse, compare its text to the sermon's wording.
+   The sermon is authoritative for text content. If they differ, REPLACE
+   the text field with the sermon's wording. If the pastor quotes a
+   verse number that does not match the DB (e.g. says Ján 3:16 but quotes
+   Ján 3:17 text), keep the sermon's text and the sermon's verse number.
 
-5. All slides of a multi-verse passage share the SAME full-range reference.
-   If Psalm 52:1-11 splits into 4 slides, every slide's main_reference is
-   "Žalm 52:1-11 (ROH)" — not per-slide ranges.
+4. Apply ##word## markers: inside a verse, replace the word with WORD
+   (uppercase) inline. The result stays as a single verse item — do NOT
+   create a separate slide for in-verse emphasis.
 
-6. Bold marker handling (##...##):
-   - ##Book Ch:V## or ##Book Ch:V-V## → this is a section header pointing
-     to a passage. DO NOT create a slide for it. Use it to identify which
-     passage comes next.
-   - ##title## at the very start of the sermon → use as the presentation
-     name.
-   - ##word## inside a verse → make that word UPPERCASE inside the verse's
-     main text. Do NOT create a separate emphasis slide for it.
-   - ##phrase## on its own line (not a reference, not inside a verse) →
-     create an emphasis slide: main = phrase in UPPERCASE, main_reference
-     left EMPTY.
-   Never send ## markers to create_bible_presentation — strip/process them
-   first. The server will reject any slide containing raw ## markers.
+5. Extract ##phrase## markers that appear as standalone emphasis (not a
+   reference, not inside a verse): emit a separate
+   {{"kind": "emphasis", "text": "PHRASE"}} item at the position where
+   the phrase appears in the sermon. Phrase text goes uppercase.
 
-7. The server validates these rules and will return a tool-result error
-   naming the broken rule if you get it wrong. Read the error's "rule"
-   and "expected" fields, fix the specific slide, and retry.
+6. Assemble an items[] array in sermon order:
+
+       [
+         {{"kind": "verse", "number": 1, "text": "Na počiatku bolo Slovo.",
+          "book": "Ján", "chapter": 1, "translation": "SEB"}},
+         {{"kind": "verse", "number": 2, "text": "Ono bolo na počiatku.",
+          "book": "Ján", "chapter": 1, "translation": "SEB"}},
+         {{"kind": "emphasis", "text": "NOVÁ ZMLUVA"}},
+         {{"kind": "verse", "number": 3, "text": "Všetko vzniklo.",
+          "book": "Ján", "chapter": 1, "translation": "SEB"}}
+       ]
+
+   Verse items MUST include number, text, book, chapter, and translation
+   (short code like SEB, MIL, ROH). Emphasis items need only kind and text.
+
+7. Call create_bible_presentation(name, items). The server greedy-packs
+   consecutive verse items into slides until the character limit ({char_limit}
+   chars) would overflow, then flushes. Emphasis items and translation,
+   book, or chapter changes force slide breaks. The server auto-computes
+   reference labels like "Ján 1:1-2 (SEB)".
+
+8. If a single verse is longer than the character limit on its own
+   (rare), the validator returns main_exceeds_character_limit. Recovery:
+   split that verse into multiple verse items with the same number —
+   the server will emit them as separate slides both labeled with the
+   same verse number.
+
+9. The server validates composed slides and returns a rule-keyed JSON
+   error on failure (rules: main_exceeds_character_limit,
+   unprocessed_bold_markers, empty_main_on_emphasis_slide,
+   reference_format_requires_parens, missing_verse_number_prefix).
+   Read the rule and expected fields, fix the item, and retry.
 
 ## Rules
 
