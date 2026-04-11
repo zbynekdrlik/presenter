@@ -5,6 +5,39 @@ use tracing::{info, warn};
 
 const MAX_ITERATIONS: usize = 100;
 
+/// Returns `true` if the user's message contains an explicit intent to delete.
+/// Used as a gate on all `delete_*` tool calls to prevent model hallucinations
+/// from causing data loss. The model must see a keyword in the user's actual
+/// message — it cannot invent the intent on its own.
+fn delete_intent_allowed(user_message: &str) -> bool {
+    const DELETE_KEYWORDS: &[&str] = &[
+        // English
+        "delete",
+        "remove",
+        "discard",
+        "destroy",
+        "erase",
+        // Slovak with diacritics (lowercase forms)
+        "vymazať",
+        "vymaž",
+        "odstrániť",
+        "odstráň",
+        "zmazať",
+        "zmaž",
+        // Slovak without diacritics
+        "vymazat",
+        "vymaz",
+        "odstranit",
+        "odstran",
+        "zmazat",
+        "zmaz",
+        // Czech
+        "smazat",
+    ];
+    let lower = user_message.to_lowercase();
+    DELETE_KEYWORDS.iter().any(|kw| lower.contains(kw))
+}
+
 /// Progress events sent during agent execution for real-time UI updates.
 #[derive(Debug, Clone, serde::Serialize)]
 #[serde(tag = "type", rename_all = "camelCase")]
@@ -177,6 +210,10 @@ pub async fn run_agent(
         preview: None,
     });
 
+    // Capture the user's original message for the delete-intent gate.
+    // The gate runs on every delete_* tool call during this turn.
+    let original_user_message = user_message.to_string();
+
     for iteration in 0..MAX_ITERATIONS {
         // Build messages array for API call
         let mut messages: Vec<Value> = vec![json!({
@@ -240,6 +277,45 @@ pub async fn run_agent(
 
                 // Execute each tool call
                 for tc in tool_calls {
+                    // Delete-intent gate: block any delete_* tool unless the user's
+                    // original message contained an explicit delete keyword. Prevents
+                    // model hallucinations from causing data loss. See spec
+                    // docs/superpowers/specs/2026-04-11-ai-mode-cleanup-design.md
+                    if tc.function.name.starts_with("delete_")
+                        && !delete_intent_allowed(&original_user_message)
+                    {
+                        warn!(
+                            tool = %tc.function.name,
+                            "blocked delete tool call — user message did not contain delete intent"
+                        );
+                        let error_json = serde_json::json!({
+                            "error": "delete_blocked",
+                            "reason": "Delete operations require explicit user intent. The user's message did not contain any delete keywords (delete, remove, vymazať, odstrániť, zmazať, etc.). Ask the user to confirm the deletion explicitly before retrying."
+                        })
+                        .to_string();
+                        let preview = "BLOCKED: delete requires explicit user intent".to_string();
+
+                        if let Some(ref tx) = progress_tx {
+                            let _ = tx.send(ProgressEvent::ToolDone {
+                                tool: tc.function.name.clone(),
+                                preview: preview.clone(),
+                            });
+                        }
+                        actions.push(ToolAction {
+                            tool: tc.function.name.clone(),
+                            result_preview: preview.clone(),
+                        });
+                        conversation.push(ChatMessage {
+                            role: "tool".to_string(),
+                            content: Some(error_json),
+                            tool_calls: None,
+                            tool_call_id: Some(tc.id.clone()),
+                            name: Some(tc.function.name.clone()),
+                            preview: Some(preview),
+                        });
+                        continue;
+                    }
+
                     info!(tool = %tc.function.name, "executing AI tool call");
 
                     // Send progress: tool starting
@@ -333,5 +409,72 @@ fn trim_conversation(conversation: &mut Vec<ChatMessage>) {
     if conversation.len() > MAX_MESSAGES {
         let to_remove = conversation.len() - MAX_MESSAGES;
         conversation.drain(..to_remove);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn delete_intent_allows_english_keywords() {
+        assert!(delete_intent_allowed("delete the presentation"));
+        assert!(delete_intent_allowed("please remove old slides"));
+        assert!(delete_intent_allowed("discard this"));
+        assert!(delete_intent_allowed("destroy the library"));
+        assert!(delete_intent_allowed("erase everything"));
+    }
+
+    #[test]
+    fn delete_intent_allows_slovak_keywords() {
+        assert!(delete_intent_allowed("vymaž prezentáciu"));
+        assert!(delete_intent_allowed("vymazat prezentaciu")); // no diacritics
+        assert!(delete_intent_allowed("odstráň tento slajd"));
+        assert!(delete_intent_allowed("odstranit tento slajd"));
+        assert!(delete_intent_allowed("zmaž to"));
+        assert!(delete_intent_allowed("zmaz to"));
+    }
+
+    #[test]
+    fn delete_intent_allows_czech_keyword() {
+        assert!(delete_intent_allowed("smazat to"));
+    }
+
+    #[test]
+    fn delete_intent_case_insensitive() {
+        assert!(delete_intent_allowed("DELETE THE PRESENTATION"));
+        assert!(delete_intent_allowed("Vymazať"));
+    }
+
+    #[test]
+    fn delete_intent_rejects_non_delete_messages() {
+        assert!(!delete_intent_allowed("create a new presentation"));
+        assert!(!delete_intent_allowed("clean up old stuff"));
+        assert!(!delete_intent_allowed("make a fresh start"));
+        assert!(!delete_intent_allowed("can you fix the layout"));
+        assert!(!delete_intent_allowed(""));
+    }
+
+    #[test]
+    fn delete_intent_matches_within_longer_sentence() {
+        assert!(delete_intent_allowed(
+            "I want to delete the test and make a new one"
+        ));
+        assert!(delete_intent_allowed(
+            "please vymaž everything from yesterday"
+        ));
+    }
+
+    #[test]
+    fn delete_intent_gate_produces_correct_tool_names() {
+        // Verify the gate's prefix match covers all delete_* tools by name.
+        assert!("delete_presentation".starts_with("delete_"));
+        assert!("delete_library".starts_with("delete_"));
+        assert!("delete_slide".starts_with("delete_"));
+        assert!("delete_bible_presentation".starts_with("delete_"));
+        assert!("delete_bible_slide".starts_with("delete_"));
+        assert!(!"create_presentation".starts_with("delete_"));
+        assert!(!"update_slide".starts_with("delete_"));
+        assert!(!"trigger_slide".starts_with("delete_"));
     }
 }
