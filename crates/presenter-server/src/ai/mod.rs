@@ -44,6 +44,12 @@ pub struct ChatMessage {
     pub tool_call_id: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub name: Option<String>,
+    /// Human-readable summary of a tool result. Only set on role="tool"
+    /// messages. This field is in-memory / internal state only and is
+    /// NEVER sent to the LLM. The wire format built in `agent.rs` explicitly
+    /// reads only the 5 other fields, so adding fields here cannot leak.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub preview: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

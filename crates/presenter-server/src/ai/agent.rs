@@ -174,6 +174,7 @@ pub async fn run_agent(
         tool_calls: None,
         tool_call_id: None,
         name: None,
+        preview: None,
     });
 
     for iteration in 0..MAX_ITERATIONS {
@@ -234,6 +235,7 @@ pub async fn run_agent(
                     tool_calls: Some(tc_messages),
                     tool_call_id: None,
                     name: None,
+                    preview: None,
                 });
 
                 // Execute each tool call
@@ -293,6 +295,7 @@ pub async fn run_agent(
                         tool_calls: None,
                         tool_call_id: Some(tc.id.clone()),
                         name: Some(tc.function.name.clone()),
+                        preview: None,
                     });
                 }
 
@@ -308,6 +311,7 @@ pub async fn run_agent(
             tool_calls: None,
             tool_call_id: None,
             name: None,
+            preview: None,
         });
 
         // Trim conversation to max ~20 user/assistant pairs (keep system working)
