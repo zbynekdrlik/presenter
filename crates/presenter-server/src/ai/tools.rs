@@ -547,10 +547,16 @@ pub async fn execute_tool(
                 let kind = raw["kind"].as_str().unwrap_or("");
                 match kind {
                     "verse" => {
-                        let number = raw["number"].as_u64().unwrap_or(0) as u32;
+                        // try_from(u64->u32): any u64 that does not fit in u32
+                        // collapses to 0 and is rejected by the number>=1 /
+                        // chapter>=1 checks below. Avoids silent truncation
+                        // of e.g. 2^33+5 → 5 that a raw `as u32` cast would do.
+                        let number =
+                            u32::try_from(raw["number"].as_u64().unwrap_or(0)).unwrap_or(0);
                         let text = raw["text"].as_str().unwrap_or("").to_string();
                         let book = raw["book"].as_str().unwrap_or("").to_string();
-                        let chapter = raw["chapter"].as_u64().unwrap_or(0) as u32;
+                        let chapter =
+                            u32::try_from(raw["chapter"].as_u64().unwrap_or(0)).unwrap_or(0);
                         let translation = raw["translation"].as_str().unwrap_or("").to_string();
                         if number == 0
                             || text.is_empty()
@@ -620,24 +626,39 @@ pub async fn execute_tool(
                 }
             }
 
-            // Persist.
+            // Persist. Empty items[] produces an empty presentation, which
+            // is used intentionally by some tests (and by the operator UI
+            // when a user wants a blank bible presentation to populate by
+            // hand). The LLM should submit non-empty items in practice;
+            // there is no explicit rejection because the prompt guides it
+            // and an empty presentation is harmless.
             let presentation = state.create_bible_presentation(&name).await?;
             let final_presentation = if composed.is_empty() {
                 presentation
             } else {
-                let new_slides: Vec<BiblePresentationSlide> = composed
-                    .into_iter()
-                    .map(|c| BiblePresentationSlide {
+                // SlideText::new only fails at ~4000 chars; the validator
+                // has already guaranteed slide.main.len() <= default_char_limit
+                // (typically 320) above, so this is statically unreachable.
+                // Propagate the error anyway so a future limit change does
+                // not silently drop slide content through an unwrap_or fallback.
+                let mut new_slides: Vec<BiblePresentationSlide> =
+                    Vec::with_capacity(composed.len());
+                for c in composed {
+                    let main = SlideText::new(&c.main).map_err(|e| {
+                        anyhow::anyhow!("composed slide main SlideText failed: {e}")
+                    })?;
+                    let secondary = SlideText::new("")
+                        .map_err(|e| anyhow::anyhow!("empty SlideText failed: {e}"))?;
+                    new_slides.push(BiblePresentationSlide {
                         id: BibleSlideId::new(),
                         order: 0,
-                        main: SlideText::new(&c.main)
-                            .unwrap_or_else(|_| SlideText::new("").unwrap()),
+                        main,
                         main_reference: c.main_reference,
-                        secondary: SlideText::new("").unwrap(),
+                        secondary,
                         secondary_reference: String::new(),
                         metadata: None,
-                    })
-                    .collect();
+                    });
+                }
                 state
                     .append_bible_presentation_slides(presentation.id, new_slides)
                     .await?
@@ -827,6 +848,47 @@ mod tests {
                 .unwrap();
         let parsed: Value = serde_json::from_str(&body).unwrap();
         assert_eq!(parsed["error"], "missing_items");
+    }
+
+    #[tokio::test]
+    async fn create_bible_presentation_with_empty_items_creates_empty_presentation() {
+        // Locks in the documented behavior: an explicit items: [] is allowed
+        // and creates a zero-slide presentation. This is used by the operator
+        // UI and by other tests as a scaffolding shortcut. A future change
+        // that rejects empty items would need to update this test and the
+        // inline comment in the handler.
+        let state = AppState::in_memory().await.unwrap();
+        let args = json!({"name": "Empty Scaffold", "items": []});
+        let (body, _preview) =
+            execute_tool("create_bible_presentation", &args.to_string(), &state, 320)
+                .await
+                .unwrap();
+        let parsed: Value = serde_json::from_str(&body).unwrap();
+        assert!(parsed["error"].is_null(), "expected success, got: {body}");
+        assert_eq!(parsed["name"], "Empty Scaffold");
+        assert_eq!(parsed["slide_count"], 0);
+    }
+
+    #[tokio::test]
+    async fn create_bible_presentation_rejects_huge_verse_number() {
+        // Regression guard for the u64->u32 cast: a u64 that overflows u32
+        // must be rejected cleanly, not silently truncated. Picks a value
+        // that used to produce a non-zero u32 after `as u32` truncation
+        // (2^32 + 7 → 7) and would have slipped through.
+        let state = AppState::in_memory().await.unwrap();
+        let args = json!({
+            "name": "Overflow Test",
+            "items": [
+                {"kind": "verse", "number": 4_294_967_303u64, "text": "hi",
+                 "book": "Ján", "chapter": 1, "translation": "SEB"}
+            ]
+        });
+        let (body, _preview) =
+            execute_tool("create_bible_presentation", &args.to_string(), &state, 320)
+                .await
+                .unwrap();
+        let parsed: Value = serde_json::from_str(&body).unwrap();
+        assert_eq!(parsed["error"], "invalid_verse_item");
     }
 
     #[tokio::test]
