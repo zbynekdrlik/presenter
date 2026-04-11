@@ -390,8 +390,9 @@ pub async fn run_agent(
             preview: None,
         });
 
-        // Trim conversation to max ~20 user/assistant pairs (keep system working)
-        trim_conversation(conversation);
+        // Trim conversation to last 10 user turns, preserving tool_call/result
+        // pairs. A "turn" is user msg + subsequent assistant/tool messages.
+        trim_conversation(conversation, 10);
 
         return Ok((response_text, actions));
     }
@@ -403,18 +404,218 @@ pub async fn run_agent(
     ))
 }
 
-/// Keep conversation at a manageable size by trimming old messages.
-fn trim_conversation(conversation: &mut Vec<ChatMessage>) {
-    const MAX_MESSAGES: usize = 40;
-    if conversation.len() > MAX_MESSAGES {
-        let to_remove = conversation.len() - MAX_MESSAGES;
-        conversation.drain(..to_remove);
+/// Trim the conversation to at most `max_turns` user turns, preserving
+/// tool_call/result pairs. A "turn" is defined as a user message and all
+/// subsequent assistant/tool messages up to the next user message. Trimming
+/// at turn boundaries guarantees that no tool result is ever orphaned from
+/// its originating tool_call, which would break the OpenAI API contract.
+///
+/// Also enforces a hard ceiling of 200 total messages to prevent unbounded
+/// growth within a small number of turns (e.g., a session where the model
+/// makes 50 tool calls per turn). When the ceiling is hit, the oldest user
+/// turn is dropped repeatedly until the conversation fits.
+fn trim_conversation(conversation: &mut Vec<ChatMessage>, max_turns: usize) {
+    const HARD_CEILING: usize = 200;
+
+    // Turn-based trimming: find the (max_turns)-th-from-the-end user message
+    // and drop everything before it.
+    let user_positions: Vec<usize> = conversation
+        .iter()
+        .enumerate()
+        .filter(|(_, m)| m.role == "user")
+        .map(|(i, _)| i)
+        .collect();
+
+    if user_positions.len() > max_turns {
+        let drop_before = user_positions[user_positions.len() - max_turns];
+        if drop_before > 0 {
+            conversation.drain(0..drop_before);
+        }
+    }
+
+    // Hard ceiling: even after turn trim, drop oldest user turns until
+    // conversation fits under HARD_CEILING messages. We always drop
+    // complete turns (to the next user message), never part of a turn.
+    while conversation.len() > HARD_CEILING {
+        let user_positions: Vec<usize> = conversation
+            .iter()
+            .enumerate()
+            .filter(|(_, m)| m.role == "user")
+            .map(|(i, _)| i)
+            .collect();
+        if user_positions.len() < 2 {
+            // Only one user message left; can't drop more without losing it.
+            break;
+        }
+        let next_user = user_positions[1];
+        conversation.drain(0..next_user);
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    // --- helpers for trim tests ---
+
+    fn user_msg(content: &str) -> ChatMessage {
+        ChatMessage {
+            role: "user".to_string(),
+            content: Some(content.to_string()),
+            tool_calls: None,
+            tool_call_id: None,
+            name: None,
+            preview: None,
+        }
+    }
+
+    fn assistant_msg(content: &str) -> ChatMessage {
+        ChatMessage {
+            role: "assistant".to_string(),
+            content: Some(content.to_string()),
+            tool_calls: None,
+            tool_call_id: None,
+            name: None,
+            preview: None,
+        }
+    }
+
+    fn assistant_tool_call_msg(id: &str, name: &str) -> ChatMessage {
+        ChatMessage {
+            role: "assistant".to_string(),
+            content: None,
+            tool_calls: Some(vec![ToolCallMessage {
+                id: id.to_string(),
+                call_type: "function".to_string(),
+                function: ToolCallFunction {
+                    name: name.to_string(),
+                    arguments: "{}".to_string(),
+                },
+            }]),
+            tool_call_id: None,
+            name: None,
+            preview: None,
+        }
+    }
+
+    fn tool_result_msg(id: &str, name: &str, result: &str) -> ChatMessage {
+        ChatMessage {
+            role: "tool".to_string(),
+            content: Some(result.to_string()),
+            tool_calls: None,
+            tool_call_id: Some(id.to_string()),
+            name: Some(name.to_string()),
+            preview: Some("done".to_string()),
+        }
+    }
+
+    #[test]
+    fn trim_preserves_all_turns_when_under_limit() {
+        let mut conv = vec![
+            user_msg("hi"),
+            assistant_msg("hello"),
+            user_msg("how are you"),
+            assistant_msg("I am fine"),
+        ];
+        let before_len = conv.len();
+        trim_conversation(&mut conv, 10);
+        assert_eq!(conv.len(), before_len);
+    }
+
+    #[test]
+    fn trim_drops_oldest_turns_when_over_limit() {
+        let mut conv = Vec::new();
+        for i in 0..15 {
+            conv.push(user_msg(&format!("msg {}", i)));
+            conv.push(assistant_msg(&format!("reply {}", i)));
+        }
+        trim_conversation(&mut conv, 5);
+        // Should keep only the last 5 user turns = 10 messages
+        assert_eq!(conv.len(), 10);
+        assert_eq!(conv[0].role, "user");
+        assert_eq!(conv[0].content.as_deref(), Some("msg 10"));
+        assert_eq!(conv[conv.len() - 1].role, "assistant");
+        assert_eq!(conv[conv.len() - 1].content.as_deref(), Some("reply 14"));
+    }
+
+    #[test]
+    fn trim_never_orphans_tool_result() {
+        // Each turn: user → assistant_tool_call → tool_result → assistant_text
+        let mut conv = Vec::new();
+        for i in 0..12 {
+            conv.push(user_msg(&format!("user {}", i)));
+            conv.push(assistant_tool_call_msg(&format!("call_{}", i), "test_tool"));
+            conv.push(tool_result_msg(&format!("call_{}", i), "test_tool", "{}"));
+            conv.push(assistant_msg(&format!("final {}", i)));
+        }
+        assert_eq!(conv.len(), 48); // 12 turns × 4 messages
+
+        trim_conversation(&mut conv, 5);
+
+        // Should keep exactly 5 turns = 20 messages
+        assert_eq!(conv.len(), 20);
+        // First remaining must be a user message (turn boundary)
+        assert_eq!(conv[0].role, "user");
+        // Every tool_call_id in the remaining conversation must have a matching
+        // assistant tool_calls entry earlier in the slice
+        for (idx, msg) in conv.iter().enumerate() {
+            if let Some(ref tcid) = msg.tool_call_id {
+                let earlier_has_call = conv[..idx].iter().any(|m| {
+                    m.tool_calls
+                        .as_ref()
+                        .map(|tcs| tcs.iter().any(|t| &t.id == tcid))
+                        .unwrap_or(false)
+                });
+                assert!(
+                    earlier_has_call,
+                    "tool result with id {tcid:?} has no matching tool_call earlier in conversation"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn trim_enforces_hard_ceiling_of_200_messages() {
+        // 5 user turns but each has 50 tool calls = ~252 messages total
+        let mut conv = Vec::new();
+        for turn in 0..5 {
+            conv.push(user_msg(&format!("user {}", turn)));
+            for call in 0..50 {
+                let id = format!("turn_{}_call_{}", turn, call);
+                conv.push(assistant_tool_call_msg(&id, "test_tool"));
+                conv.push(tool_result_msg(&id, "test_tool", "{}"));
+            }
+            conv.push(assistant_msg(&format!("final {}", turn)));
+        }
+        assert!(conv.len() > 200);
+
+        trim_conversation(&mut conv, 10); // max_turns won't trigger (only 5 turns)
+
+        // Hard ceiling must reduce it to <= 200
+        assert!(
+            conv.len() <= 200,
+            "expected <= 200 messages after trim, got {}",
+            conv.len()
+        );
+        // First remaining must still be a user message (boundary preserved)
+        assert_eq!(conv[0].role, "user");
+    }
+
+    #[test]
+    fn trim_empty_conversation_is_noop() {
+        let mut conv: Vec<ChatMessage> = Vec::new();
+        trim_conversation(&mut conv, 10);
+        assert_eq!(conv.len(), 0);
+    }
+
+    #[test]
+    fn trim_single_user_message_is_noop() {
+        let mut conv = vec![user_msg("first and only")];
+        trim_conversation(&mut conv, 10);
+        assert_eq!(conv.len(), 1);
+    }
+
+    // --- delete_intent tests ---
 
     #[test]
     fn delete_intent_allows_english_keywords() {
