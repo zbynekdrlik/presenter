@@ -312,6 +312,75 @@ pub async fn execute_tool(
             Ok((serde_json::to_string(&results)?, preview))
         }
 
+        "load_bible_verses" => {
+            let translation = str_field(&args, "translation")?;
+            let book = str_field(&args, "book")?;
+            let chapter = args["chapter"].as_u64().unwrap_or(1) as u16;
+            let verse_start = args["verse_start"].as_u64().unwrap_or(1) as u16;
+            let verse_end = args["verse_end"].as_u64().unwrap_or(verse_start as u64) as u16;
+
+            // Resolve the translation to get its short code for reference labels.
+            let translations = state.list_bible_translations().await?;
+            let main_trans = match translations
+                .iter()
+                .find(|t| t.code.eq_ignore_ascii_case(&translation))
+            {
+                Some(t) => t.clone(),
+                None => {
+                    return Ok((
+                        json!({"error": "translation not found", "translation": translation})
+                            .to_string(),
+                        format!("Translation '{translation}' not found"),
+                    ));
+                }
+            };
+            let short_code = main_trans
+                .code
+                .rsplit('-')
+                .next()
+                .unwrap_or(&main_trans.code)
+                .to_uppercase();
+
+            // Load the passage range one verse at a time to build the
+            // per-verse reference labels. We reuse find_bible_passage so
+            // we do not depend on repository-level range APIs here.
+            let mut verses: Vec<Value> = Vec::new();
+            for v in verse_start..=verse_end {
+                let reference = BibleReference {
+                    book: book.clone(),
+                    book_code: None,
+                    book_number: None,
+                    chapter,
+                    verse_start: v,
+                    verse_end: v,
+                };
+                if let Some(p) = state
+                    .find_bible_passage(&main_trans.code, &reference)
+                    .await?
+                {
+                    verses.push(json!({
+                        "number": p.reference.verse_start,
+                        "text": p.text,
+                        "reference": format!(
+                            "{} {}:{} ({})",
+                            p.reference.book, p.reference.chapter, p.reference.verse_start, short_code
+                        ),
+                    }));
+                }
+            }
+
+            let preview = format!(
+                "{} {}:{}-{} ({}) - {} verses",
+                book,
+                chapter,
+                verse_start,
+                verse_end,
+                short_code,
+                verses.len()
+            );
+            Ok((serde_json::to_string(&verses)?, preview))
+        }
+
         "resolve_bible_slides" => {
             let translation = str_field(&args, "translation")?;
             let book = str_field(&args, "book")?;
@@ -1279,5 +1348,37 @@ mod tests {
                 .unwrap();
         let after: Value = serde_json::from_str(&get_after).unwrap();
         assert_eq!(after["slides"][0]["main"], "1. original text");
+    }
+
+    #[tokio::test]
+    async fn load_bible_verses_handler_is_registered() {
+        // The in-memory state seeds no bible translations, so we expect
+        // "translation not found" error. This proves the tool is registered
+        // and the handler exists (not the "unknown tool" fallthrough).
+        let state = AppState::in_memory().await.unwrap();
+        let args = json!({
+            "translation": "slk-seb",
+            "book": "Ján",
+            "chapter": 1,
+            "verse_start": 1,
+            "verse_end": 3
+        });
+        let result = execute_tool("load_bible_verses", &args.to_string(), &state, 320).await;
+        match result {
+            Ok((body, _preview)) => {
+                assert!(
+                    !body.contains("unknown tool"),
+                    "tool must be registered, got body: {body}"
+                );
+                // Expected: "translation not found" error JSON
+                assert!(
+                    body.contains("translation not found") || body.contains("not found"),
+                    "expected translation-not-found error, got: {body}"
+                );
+            }
+            Err(_) => {
+                // Also acceptable — the handler exists but errored looking up translations.
+            }
+        }
     }
 }

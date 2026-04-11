@@ -184,6 +184,21 @@ pub fn tool_definitions() -> Vec<Value> {
             json!({"type": "object", "properties": {}, "required": []}),
         ),
         tool_def(
+            "load_bible_verses",
+            "[BIBLE only] Load raw verse text from the database for a passage range. Returns an array of {number, text, reference} objects — NOT pre-split slides. Use this as the source of truth for verse text when building a bible presentation. Compare each returned verse to the sermon wording and override `text` where they differ.",
+            json!({
+                "type": "object",
+                "properties": {
+                    "translation": {"type": "string", "description": "Translation code (e.g. slk-seb)"},
+                    "book": {"type": "string", "description": "Full book name (e.g. Ján)"},
+                    "chapter": {"type": "integer"},
+                    "verse_start": {"type": "integer"},
+                    "verse_end": {"type": "integer"}
+                },
+                "required": ["translation", "book", "chapter", "verse_start", "verse_end"]
+            }),
+        ),
+        tool_def(
             "resolve_bible_slides",
             "Generate slides from a Bible passage, automatically split by character limit",
             json!({
