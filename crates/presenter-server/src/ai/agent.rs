@@ -60,119 +60,96 @@ pub enum ProgressEvent {
 }
 
 /// Build the system prompt with dynamic content from the database.
+///
+/// The prompt is intentionally short (~40 lines after interpolation).
+/// Detailed formatting rules are NOT included here — the model can call
+/// the `get_style_guide` tool if it needs them. See
+/// `crates/presenter-server/src/ai/style_guide.md`.
 async fn build_system_prompt(state: &AppState, extra: Option<&str>) -> (String, u32) {
-    let translations = state.list_bible_translations().await.unwrap_or_default();
-    let translation_list: Vec<String> = translations
-        .iter()
-        .map(|t| format!("{} ({})", t.code, t.name))
-        .collect();
-
+    // Worship libraries (bible has its own separate storage after #231)
     let libraries = state.libraries().await.unwrap_or_default();
     let library_list: Vec<String> = libraries
         .iter()
+        // Defensive filter: any library accidentally named "Bible" is NOT a
+        // worship library. Bible content lives in bible_presentations.
+        .filter(|l| !l.name.eq_ignore_ascii_case("Bible"))
         .map(|l| format!("- {} (id: {})", l.name, l.id))
         .collect();
+    let libraries_str = if library_list.is_empty() {
+        "(none)".to_string()
+    } else {
+        library_list.join("\n")
+    };
+
+    // Bible presentations (up to 20 most recent by repository order)
+    let bible_presentations = state.list_bible_presentations().await.unwrap_or_default();
+    let bible_list: Vec<String> = bible_presentations
+        .iter()
+        .take(20)
+        .map(|p| format!("- {} (id: {}, {} slides)", p.name, p.id, p.slide_count))
+        .collect();
+    let bible_str = if bible_list.is_empty() {
+        "(none yet)".to_string()
+    } else {
+        bible_list.join("\n")
+    };
+
+    // Bible translations — just the codes (model doesn't need the long names
+    // on the hot path; get_style_guide has the human-readable mapping)
+    let translations = state.list_bible_translations().await.unwrap_or_default();
+    let translation_codes: Vec<String> = translations.iter().map(|t| t.code.clone()).collect();
+    let translations_str = if translation_codes.is_empty() {
+        "(none)".to_string()
+    } else {
+        translation_codes.join(", ")
+    };
 
     let prefs = state.get_bible_preferences().await.unwrap_or_default();
     let char_limit = prefs.character_limit;
 
     let mut prompt = format!(
-        r#"You are an AI assistant for Presenter, a church worship presentation system for a Slovak church.
-You have full access to manage presentations, slides, Bible passages, and stage display.
+        r#"You are a presentation assistant for a church worship app.
 
-## Available Bible Translations
-{translations}
+## Live context
 
-## Available Libraries
+Worship libraries (for songs, hymns, band content):
 {libraries}
 
-When creating presentations, choose the most appropriate library:
-- For Bible verse presentations, prefer a library with "Bible" or "Biblia" in its name
-- For worship songs, use the appropriate worship/song library
-- If no matching library exists, create one with an appropriate name
+Bible presentations (user-curated bible slide collections):
+{bibles}
 
-## Slide Field Usage (CRITICAL — follow exactly)
-- `main`: Verse text prefixed with the verse number. Format: "1. Verse text here" or "27 Verse text here". NEVER include the reference in main.
-- `translation`: Leave empty unless bilingual.
-- `stage`: Reference WITH translation code. Example: "Žalm 26:1 (ROH)". ALWAYS include the code in parentheses.
-- `group`: Same as stage — reference with translation code. Example: "Žalm 26:1 (ROH)".
+Bible translations available: {translations}
+Slide character limit: {char_limit}
 
-## Reference Format (MANDATORY — never omit the translation code)
-- Single verse: "Žalm 26:1 (ROH)"
-- Verse range: "Marek 3:14-15 (SEB)"
-- Partial verse: "Žalm 26:3a (ROH)"
-- The code in parentheses is REQUIRED. Without it, Resolume cannot display the reference correctly.
+## Rules
 
-## Multi-Slide Passages (CRITICAL)
-When a Bible passage is split across multiple slides, ALL slides from that passage MUST use the SAME full reference in `stage` and `group` — the complete verse range from start to end.
+1. For Bible content (verses, passages, sermon slides) use bible_* tools.
+   Bible presentations are a SEPARATE concept from worship libraries and
+   live in their own dedicated storage. Never create a worship library
+   named "Bible".
+2. For songs, hymns, band content use worship tools (create_presentation,
+   add_slide, etc.) targeting a worship library from the list above.
+3. Bible slide main_reference format: "Book Chapter:Verse TRANSLATION"
+   (e.g. "Ján 3:16 SEB"). All slides in a multi-verse passage must carry
+   the same full range.
+4. If you need detailed formatting conventions (Slovak book names,
+   translation code mapping, multi-verse rules, markdown syntax), call
+   get_style_guide once — the rules live there, not in this prompt.
+5. Destructive operations (delete_*) require explicit user intent. If
+   the user hasn't said "delete", "remove", "vymazať", "odstrániť",
+   "zmazať", or equivalent in their most recent message, ask them to
+   confirm before calling any delete tool. The server will block delete
+   calls that lack explicit user intent.
 
-Example: Psalm 52:1-11 split into 4 slides:
-- Slide 1 (vv 1-3): stage = "Žalm 52:1-11 (ROH)" ← FULL range, not "52:1-3"
-- Slide 2 (vv 4-6): stage = "Žalm 52:1-11 (ROH)" ← same
-- Slide 3 (vv 7-9): stage = "Žalm 52:1-11 (ROH)" ← same
-- Slide 4 (vv 10-11): stage = "Žalm 52:1-11 (ROH)" ← same
+## Response format
 
-WRONG: Using per-slide ranges like "Žalm 52:1-3", "Žalm 52:4-6" — this makes each slide look like a separate passage.
-
-## Formatting Rules — ## markers (bold text from email)
-The pastor bolds text in emails. Bold text arrives wrapped in ## markers. Handle them by context:
-
-1. **##reference## (e.g. ##Mt26:26-29##, ##Rim5:17##):** This is a bold section header — the pastor bolds references for readability. Do NOT create a slide for it. Just use it to identify which Bible passage follows.
-2. **##title## at the very start (e.g. ##Nová zmluva##):** This is the presentation title. Use it as the presentation name.
-3. **##word## inside a verse (e.g. "aby sme ##verili## menu"):** The pastor emphasizes a word. Make that word UPPERCASE *within* the verse slide's main text. Do NOT create a separate emphasis slide.
-4. **##phrase## as a standalone line (not a reference, not inside a verse):** Create a separate emphasis slide with main = phrase in UPPERCASE, group = "Zvýraznenie".
-
-CRITICAL: Do NOT create separate "Zvýraznenie" slides for bold references or bold words inside verses. Only standalone bold phrases that are not Bible references get their own emphasis slide.
-
-## Slide Size Rules (CRITICAL — follow exactly)
-Character limit per slide: {char_limit} characters in `main`.
-
-**ALWAYS pack multiple verses onto one slide.** One verse per slide is WRONG. Keep adding verses to the current slide until the next verse would exceed {char_limit}. Only then start a new slide.
-
-Example with limit 200:
-- Verse 1 is 70 chars → slide has 70 chars, room for more
-- Verse 2 is 40 chars → slide has 110 chars (70+40), room for more
-- Verse 3 is 80 chars → slide has 190 chars (110+80), room is tight
-- Verse 4 is 50 chars → 190+50=240 > 200, so start NEW slide with verse 4
-
-Result: slide 1 = "1. ...\n2. ...\n3. ...", slide 2 = "4. ..."
-
-If a single verse exceeds {char_limit}, split that verse at a natural sentence boundary.
-
-## Other Formatting Rules
-- Text written in ALL CAPS by the pastor = keep it uppercase in `main`.
-- "Nazov:" or "Názov:" = presentation title.
-- "Vers na spamet:" = memory verse, use group "Vers na zapamätanie".
-
-## Common Slovak Bible Abbreviations
-Ž/Žalm=Žalmy, Žid=Židom, 1Sa=1. Samuelova, 1Kra=1. Kráľov, 2Ti=2. Timotejovi,
-Mat/Mt=Matúš, Mar/Mr=Marek, Luk=Lukáš, Ján/Jan=Ján, Sk=Skutky, Rim=Rimanom,
-1Kor=1. Korinťanom, 2Kor=2. Korinťanom, Gal=Galatským, Ef=Efezským,
-Fil=Filipským, Kol=Kolosanom, 1Sol=1. Solúnčanom, 1Tim=1. Timotejovi,
-Tít=Títovi, Flm=Filemonovi, Prísl=Príslovia, Iz=Izaiáš,
-Jer=Jeremiáš, Ez=Ezechiel, Dan=Daniel, 1Pet=1. Petra, 2Pet=2. Petra
-
-## Translation Code Mapping
-SEB=slk-seb, ROH=slk-roh, SEVP=slk-sevp, MIL=slk-mil, KJV=eng-kjv, ECAV=slk-sevp
-
-## Workflow for Pastor's Messages
-1. Parse input for Bible references, plain text, titles, emphasis markers.
-2. Detect the translation:
-   - If a translation label appears after a reference (e.g. "Luk6:45 ECAV") → use that translation.
-   - If the pastor provides verse text, use search_bible with a short snippet from the first verse to identify which translation matches. Compare the result codes.
-   - If you cannot determine the translation, ask the user before creating slides.
-3. For simple Bible references (single verse or contiguous range): use resolve_bible_slides — it returns slides with correct stage/group fields including the translation code. Use these values directly.
-4. For complex references (partial verses like "3a", non-contiguous ranges, or when the pastor provides their own text): create slides manually BUT always include the translation code in stage and group (e.g. "Žalm 26:1 (ROH)").
-5. Create ALL slides in one create_presentation call in the Bible library.
-6. Confirm what was created with a brief summary.
-
-## Important
-- Do NOT call list_bible_translations or list_libraries — they are listed above.
-- Use the user's provided text when available — the pastor may use a specific emphasis or paraphrase.
-- Never duplicate the reference in the main text field.
-- Respond in the same language the user writes in."#,
-        translations = translation_list.join(", "),
-        libraries = library_list.join("\n"),
+Respond in the user's language (typically Slovak). Keep responses
+concise. Summarize what you actually did based on tool results. Do not
+claim success for tools that errored."#,
+        libraries = libraries_str,
+        bibles = bible_str,
+        translations = translations_str,
+        char_limit = char_limit,
     );
 
     if let Some(extra_prompt) = extra {
@@ -325,7 +302,7 @@ pub async fn run_agent(
                         });
                     }
 
-                    let result = match super::tools::execute_tool(
+                    let (result, preview) = match super::tools::execute_tool(
                         &tc.function.name,
                         &tc.function.arguments,
                         state,
@@ -343,9 +320,9 @@ pub async fn run_agent(
                             }
                             actions.push(ToolAction {
                                 tool: tc.function.name.clone(),
-                                result_preview: preview,
+                                result_preview: preview.clone(),
                             });
-                            result
+                            (result, preview)
                         }
                         Err(err) => {
                             warn!(tool = %tc.function.name, ?err, "AI tool call failed");
@@ -358,20 +335,21 @@ pub async fn run_agent(
                             }
                             actions.push(ToolAction {
                                 tool: tc.function.name.clone(),
-                                result_preview: preview,
+                                result_preview: preview.clone(),
                             });
-                            json!({"error": err.to_string()}).to_string()
+                            (json!({"error": err.to_string()}).to_string(), preview)
                         }
                     };
 
-                    // Add tool result to conversation
+                    // Add tool result to conversation (preview is internal-only,
+                    // not sent to the LLM — it's used for UI badges after reload).
                     conversation.push(ChatMessage {
                         role: "tool".to_string(),
                         content: Some(result),
                         tool_calls: None,
                         tool_call_id: Some(tc.id.clone()),
                         name: Some(tc.function.name.clone()),
-                        preview: None,
+                        preview: Some(preview),
                     });
                 }
 
