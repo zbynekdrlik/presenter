@@ -11,8 +11,6 @@
 //! and mutation test. See
 //! `docs/superpowers/specs/2026-04-11-ai-bible-slide-validation-design.md`.
 
-#![allow(dead_code)]
-
 use regex::Regex;
 use std::sync::LazyLock;
 
