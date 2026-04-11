@@ -144,24 +144,27 @@ pub(super) async fn get_conversation(
                 });
             }
             "tool" => {
-                // Accumulate tool results as actions for the next assistant text
+                // Accumulate tool results as actions for the next assistant text.
+                // Prefer the persisted preview field (populated in agent.rs at tool
+                // execution time). Fall back to extracting from content for legacy
+                // messages that were stored before the preview field existed.
                 if let Some(ref name) = msg.name {
-                    let preview = msg
-                        .content
-                        .as_deref()
-                        .and_then(|c| {
-                            // Try to extract a short preview from the result
-                            serde_json::from_str::<serde_json::Value>(c)
-                                .ok()
-                                .and_then(|v| {
-                                    if let Some(arr) = v.as_array() {
-                                        Some(format!("{} results", arr.len()))
-                                    } else {
-                                        v.get("error").map(|err| format!("Error: {err}"))
-                                    }
-                                })
-                        })
-                        .unwrap_or_else(|| "done".to_string());
+                    let preview = msg.preview.clone().unwrap_or_else(|| {
+                        // Legacy fallback: best-effort extraction from tool result JSON.
+                        let Some(content) = msg.content.as_deref() else {
+                            return "done".to_string();
+                        };
+                        let Ok(json) = serde_json::from_str::<serde_json::Value>(content) else {
+                            return "done".to_string();
+                        };
+                        if let Some(err) = json.get("error").and_then(|v| v.as_str()) {
+                            return format!("Error: {err}");
+                        }
+                        if let Some(arr) = json.as_array() {
+                            return format!("{} results", arr.len());
+                        }
+                        "done".to_string()
+                    });
                     pending_actions.push(ToolAction {
                         tool: name.clone(),
                         result_preview: preview,

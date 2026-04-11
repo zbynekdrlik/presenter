@@ -198,7 +198,11 @@ jobs:
         run: rm -rf ~/.cargo/advisory-db
 
       - name: Run cargo audit
-        run: cargo audit --deny warnings
+        # RUSTSEC-2026-0097: rand soundness issue only triggers with a custom
+        # logger that recursively calls rand::rng() — we use tracing_subscriber
+        # which does not. Affects rand 0.8.5 (via sqlx) which has no patched
+        # 0.8.x release; rand 0.9.3+ is patched and we use 0.9.3.
+        run: cargo audit --deny warnings --ignore RUSTSEC-2026-0097
 
   # ============================================
   # Dependency Policy (cargo-deny)
