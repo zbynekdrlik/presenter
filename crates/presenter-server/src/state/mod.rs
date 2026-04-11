@@ -26,7 +26,7 @@ mod companion;
 mod integrations;
 mod presentations;
 mod seed;
-mod slides;
+pub(crate) mod slides;
 mod stage;
 mod stage_display;
 #[cfg(test)]

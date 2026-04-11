@@ -264,27 +264,29 @@ pub fn tool_definitions() -> Vec<Value> {
         ),
         tool_def(
             "create_bible_presentation",
-            "[BIBLE only] Create a new Bible presentation (a named collection of Bible slides, e.g. a sermon series or topical study). Optionally include initial slides. Use this when the user asks to create a Bible presentation, sermon, or verse collection.",
+            "[BIBLE only] Create a Bible presentation from a stream of typed items. The server composes slides from your items — you do NOT decide where slide breaks happen. Emphasis items and translation/book/chapter changes force slide breaks; otherwise consecutive verse items pack together until the character limit. Always call load_bible_verses first to get DB verse text, edit the text to match the sermon where needed, then assemble items[] in sermon order.",
             json!({
                 "type": "object",
                 "properties": {
                     "name": {"type": "string", "description": "Presentation name (e.g. 'Sunday Sermon 2026-04-14')"},
-                    "slides": {
+                    "items": {
                         "type": "array",
-                        "description": "Optional initial slides. Each slide represents one bible verse or passage.",
+                        "description": "Ordered stream of verse and emphasis items. The server composes slides respecting the character limit.",
                         "items": {
                             "type": "object",
                             "properties": {
-                                "main": {"type": "string", "description": "Main verse text (e.g. 'For God so loved the world...')"},
-                                "main_reference": {"type": "string", "description": "Reference label (e.g. 'John 3:16')"},
-                                "secondary": {"type": "string", "description": "Secondary translation text (optional)"},
-                                "secondary_reference": {"type": "string", "description": "Secondary reference label (optional)"}
+                                "kind": {"type": "string", "enum": ["verse", "emphasis"]},
+                                "number": {"type": "integer", "description": "[verse] Verse number"},
+                                "text": {"type": "string", "description": "Verse text (with any uppercase ##word## transformations applied) or the emphasis phrase"},
+                                "book": {"type": "string", "description": "[verse] Full book name (e.g. Ján)"},
+                                "chapter": {"type": "integer", "description": "[verse] Chapter number"},
+                                "translation": {"type": "string", "description": "[verse] Short translation code (e.g. SEB, MIL, ROH)"}
                             },
-                            "required": ["main", "main_reference"]
+                            "required": ["kind", "text"]
                         }
                     }
                 },
-                "required": ["name"]
+                "required": ["name", "items"]
             }),
         ),
         tool_def(
