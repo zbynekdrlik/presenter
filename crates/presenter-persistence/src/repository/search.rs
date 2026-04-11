@@ -249,9 +249,7 @@ impl Repository {
             slide_condition = slide_condition
                 .add(slide_entity::Column::WorshipMain.contains(&ctx.trimmed))
                 .add(slide_entity::Column::WorshipTranslate.contains(&ctx.trimmed))
-                .add(slide_entity::Column::WorshipStage.contains(&ctx.trimmed))
-                .add(slide_entity::Column::BibleMain.contains(&ctx.trimmed))
-                .add(slide_entity::Column::BibleTranslation.contains(&ctx.trimmed));
+                .add(slide_entity::Column::WorshipStage.contains(&ctx.trimmed));
         }
         if ctx.has_tokens {
             let mut token_condition = Condition::all();
@@ -259,9 +257,7 @@ impl Repository {
                 let per_token = Condition::any()
                     .add(slide_entity::Column::WorshipMainSearch.contains(token.clone()))
                     .add(slide_entity::Column::WorshipTranslateSearch.contains(token.clone()))
-                    .add(slide_entity::Column::WorshipStageSearch.contains(token.clone()))
-                    .add(slide_entity::Column::BibleMainSearch.contains(token.clone()))
-                    .add(slide_entity::Column::BibleTranslationSearch.contains(token.clone()));
+                    .add(slide_entity::Column::WorshipStageSearch.contains(token.clone()));
                 token_condition = token_condition.add(per_token);
             }
             slide_condition = slide_condition.add(token_condition);
@@ -324,38 +320,13 @@ impl Repository {
             let presentation_id = PresentationId::from_uuid(parse_uuid(&presentation_model.id)?);
             let slide_id = SlideId::from_uuid(parse_uuid(&slide_model.id)?);
 
-            // Determine effective text fields (worship or Bible)
-            let is_bible = !slide_model.bible_main.is_empty();
-            let (eff_main, eff_main_search) = if is_bible {
-                (
-                    slide_model.bible_main.as_str(),
-                    slide_model.bible_main_search.as_str(),
-                )
-            } else {
-                (
-                    slide_model.worship_main.as_str(),
-                    slide_model.worship_main_search.as_str(),
-                )
-            };
-            let (eff_translation, eff_translation_search) = if is_bible {
-                (
-                    slide_model.bible_translation.as_str(),
-                    slide_model.bible_translation_search.as_str(),
-                )
-            } else {
-                (
-                    slide_model.worship_translate.as_str(),
-                    slide_model.worship_translate_search.as_str(),
-                )
-            };
-            let (eff_stage, eff_stage_search) = if is_bible {
-                ("", "")
-            } else {
-                (
-                    slide_model.worship_stage.as_str(),
-                    slide_model.worship_stage_search.as_str(),
-                )
-            };
+            // Worship slide text fields (bible slides live in a separate table).
+            let eff_main = slide_model.worship_main.as_str();
+            let eff_main_search = slide_model.worship_main_search.as_str();
+            let eff_translation = slide_model.worship_translate.as_str();
+            let eff_translation_search = slide_model.worship_translate_search.as_str();
+            let eff_stage = slide_model.worship_stage.as_str();
+            let eff_stage_search = slide_model.worship_stage_search.as_str();
 
             if ctx.has_tokens {
                 let combined = fold_query(&format!(

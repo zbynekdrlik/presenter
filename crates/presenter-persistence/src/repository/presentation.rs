@@ -231,89 +231,43 @@ impl Repository {
         presentation_id: PresentationId,
         slide_id: SlideId,
         content: &SlideContent,
-        metadata: Option<&presenter_core::slide::SlideMetadata>,
+        _metadata: Option<&presenter_core::slide::SlideMetadata>,
     ) -> anyhow::Result<()> {
-        let is_bible = metadata.and_then(|m| m.bible.as_ref()).is_some();
-        let metadata_json = metadata.map(|m| serde_json::to_string(m)).transpose()?;
-
-        let result = if is_bible {
-            slide_entity::Entity::update_many()
-                .col_expr(
-                    slide_entity::Column::BibleMain,
-                    Expr::value(content.main.value().to_owned()),
-                )
-                .col_expr(
-                    slide_entity::Column::BibleMainSearch,
-                    Expr::value(fold_query(content.main.value())),
-                )
-                .col_expr(
-                    slide_entity::Column::BibleTranslation,
-                    Expr::value(content.translation.value().to_owned()),
-                )
-                .col_expr(
-                    slide_entity::Column::BibleTranslationSearch,
-                    Expr::value(fold_query(content.translation.value())),
-                )
-                .col_expr(
-                    slide_entity::Column::BibleMainReference,
-                    Expr::value(content.stage.value().to_owned()),
-                )
-                .col_expr(
-                    slide_entity::Column::BibleTranslationReference,
-                    Expr::value(
-                        metadata
-                            .and_then(|m| m.bible.as_ref())
-                            .and_then(|b| b.translation_reference_label.clone())
-                            .unwrap_or_default(),
-                    ),
-                )
-                .col_expr(
-                    slide_entity::Column::MetadataJson,
-                    Expr::value(metadata_json),
-                )
-                .filter(slide_entity::Column::Id.eq(slide_id.to_string()))
-                .filter(slide_entity::Column::PresentationId.eq(presentation_id.to_string()))
-                .exec(&self.db)
-                .await?
-        } else {
-            slide_entity::Entity::update_many()
-                .col_expr(
-                    slide_entity::Column::WorshipMain,
-                    Expr::value(content.main.value().to_owned()),
-                )
-                .col_expr(
-                    slide_entity::Column::WorshipMainSearch,
-                    Expr::value(fold_query(content.main.value())),
-                )
-                .col_expr(
-                    slide_entity::Column::WorshipTranslate,
-                    Expr::value(content.translation.value().to_owned()),
-                )
-                .col_expr(
-                    slide_entity::Column::WorshipTranslateSearch,
-                    Expr::value(fold_query(content.translation.value())),
-                )
-                .col_expr(
-                    slide_entity::Column::WorshipStage,
-                    Expr::value(content.stage.value().to_owned()),
-                )
-                .col_expr(
-                    slide_entity::Column::WorshipStageSearch,
-                    Expr::value(fold_query(content.stage.value())),
-                )
-                .col_expr(
-                    slide_entity::Column::WorshipGroup,
-                    Expr::value(content.group.as_ref().map(|group| group.name().to_owned())),
-                )
-                .col_expr(
-                    slide_entity::Column::MetadataJson,
-                    Expr::value(metadata_json),
-                )
-                .filter(slide_entity::Column::Id.eq(slide_id.to_string()))
-                .filter(slide_entity::Column::PresentationId.eq(presentation_id.to_string()))
-                .exec(&self.db)
-                .await?
-        };
+        // Worship slides no longer carry metadata — bible slides live in a separate table.
+        // The metadata parameter is accepted for API compatibility but ignored.
+        let result = slide_entity::Entity::update_many()
+            .col_expr(
+                slide_entity::Column::WorshipMain,
+                Expr::value(content.main.value().to_owned()),
+            )
+            .col_expr(
+                slide_entity::Column::WorshipMainSearch,
+                Expr::value(fold_query(content.main.value())),
+            )
+            .col_expr(
+                slide_entity::Column::WorshipTranslate,
+                Expr::value(content.translation.value().to_owned()),
+            )
+            .col_expr(
+                slide_entity::Column::WorshipTranslateSearch,
+                Expr::value(fold_query(content.translation.value())),
+            )
+            .col_expr(
+                slide_entity::Column::WorshipStage,
+                Expr::value(content.stage.value().to_owned()),
+            )
+            .col_expr(
+                slide_entity::Column::WorshipStageSearch,
+                Expr::value(fold_query(content.stage.value())),
+            )
+            .col_expr(
+                slide_entity::Column::WorshipGroup,
+                Expr::value(content.group.as_ref().map(|group| group.name().to_owned())),
+            )
+            .filter(slide_entity::Column::Id.eq(slide_id.to_string()))
+            .filter(slide_entity::Column::PresentationId.eq(presentation_id.to_string()))
+            .exec(&self.db)
+            .await?;
 
         if result.rows_affected == 0 {
             return Err(anyhow!(

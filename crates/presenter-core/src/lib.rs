@@ -5,6 +5,11 @@
 )]
 
 //! Core domain models for the Presenter application.
+//!
+//! # Naming convention
+//! - Unprefixed types (`Library`, `Presentation`, `Slide`, `SlideContent`) mean WORSHIP.
+//! - Bible-prefixed types (`BiblePresentation`, `BiblePresentationSlide`) mean BIBLE.
+//! - Bible has no library wrapper — there is exactly one bible per system.
 
 pub mod ableset;
 pub mod android_stage_display;
@@ -34,13 +39,14 @@ pub use android_stage_display::{
     DEFAULT_ADB_PORT, DEFAULT_LAUNCH_COMPONENT,
 };
 pub use bible::{
-    BibleBroadcast, BiblePassage, BiblePreferences, BiblePreferencesDraft, BibleReference,
-    BibleSlideOutput, BibleTranslation,
+    BibleBroadcast, BiblePassage, BiblePreferences, BiblePreferencesDraft, BiblePresentation,
+    BiblePresentationSlide, BiblePresentationSummary, BibleReference, BibleSlideOutput,
+    BibleTranslation,
 };
 pub use feature_flags::FeatureFlags;
 pub use id::{
-    AndroidStageDisplayId, LibraryId, PlaylistEntryId, PlaylistId, PresentationId, ResolumeHostId,
-    SlideId, VideoSourceId,
+    AndroidStageDisplayId, BiblePresentationId, BibleSlideId, LibraryId, PlaylistEntryId,
+    PlaylistId, PresentationId, ResolumeHostId, SlideId, VideoSourceId,
 };
 pub use library::{Library, LibrarySummary, PresentationSummary};
 pub use live::{InboundMessage, LiveEvent};

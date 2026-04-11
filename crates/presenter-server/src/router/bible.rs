@@ -9,8 +9,9 @@ use axum::{
 use chrono::Utc;
 use presenter_core::slide::SlideMetadata;
 use presenter_core::{
-    BiblePassage, BiblePreferences, BiblePreferencesDraft, BibleReference, BibleSlideOutput,
-    BibleTranslation, Slide,
+    BiblePassage, BiblePreferences, BiblePreferencesDraft, BiblePresentation, BiblePresentationId,
+    BiblePresentationSlide, BibleReference, BibleSlideId, BibleSlideOutput, BibleTranslation,
+    Slide, SlideText,
 };
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
@@ -370,7 +371,7 @@ pub(super) async fn trigger_presentation_slide(
         .parse::<uuid::Uuid>()
         .map_err(|_| AppError::bad_request_message("Invalid presentation ID"))?;
     let presentation = state
-        .bible_presentation_detail(presenter_core::PresentationId::from_uuid(pres_uuid))
+        .bible_presentation_detail(BiblePresentationId::from_uuid(pres_uuid))
         .await?
         .ok_or_else(|| AppError::not_found("Presentation not found"))?;
 
@@ -380,34 +381,18 @@ pub(super) async fn trigger_presentation_slide(
     let slide = presentation
         .slides
         .iter()
-        .find(|s| s.id == presenter_core::SlideId::from_uuid(slide_uuid))
+        .find(|s| s.id == BibleSlideId::from_uuid(slide_uuid))
         .ok_or_else(|| AppError::not_found("Slide not found in presentation"))?;
 
-    let main_reference = slide
-        .metadata
-        .as_ref()
-        .and_then(|m| m.bible.as_ref())
-        .and_then(|b| b.main_reference_label.clone())
-        .unwrap_or_default();
-
-    let secondary_reference = slide
-        .metadata
-        .as_ref()
-        .and_then(|m| m.bible.as_ref())
-        .and_then(|b| b.translation_reference_label.clone())
-        .unwrap_or_default();
-
-    let bible_translation_text = slide.content.translation.value().to_string();
-
     let output = BibleSlideOutput::new(
-        slide.content.main.value().to_string(),
-        main_reference,
-        bible_translation_text,
-        secondary_reference,
+        slide.main.value().to_string(),
+        slide.main_reference.clone(),
+        slide.secondary.value().to_string(),
+        slide.secondary_reference.clone(),
         Utc::now(),
     );
 
-    let meta = slide.metadata.as_ref().and_then(|m| m.bible.as_ref());
+    let meta = slide.metadata.as_ref();
     let (verse_start, verse_end) = meta
         .and_then(|m| m.verse_span())
         .map(|(s, e)| (Some(s), Some(e)))
@@ -499,7 +484,35 @@ pub(super) struct BibleSlideDto {
     bible_translation_reference: String,
 }
 
-fn bible_slide_to_dto(slide: &Slide) -> Result<BibleSlideDto, AppError> {
+/// Convert a stored `BiblePresentationSlide` (from the bible repository) to
+/// the wire DTO. The DTO field names remain unchanged to preserve wire
+/// compatibility with the existing frontend.
+fn bible_slide_to_dto(slide: &BiblePresentationSlide) -> BibleSlideDto {
+    // Wrap the structured `BibleSlideMetadata` into the legacy `SlideMetadata`
+    // envelope the frontend expects: `{ metadata: { bible: { ... } } }`.
+    let metadata = slide.metadata.as_ref().map(|bible_meta| {
+        let mut sm = SlideMetadata::new();
+        sm.bible = Some(bible_meta.clone());
+        sm
+    });
+
+    BibleSlideDto {
+        id: slide.id.to_string(),
+        order: slide.order,
+        bible_main: slide.main.value().to_string(),
+        bible_translation: slide.secondary.value().to_string(),
+        metadata,
+        bible_main_reference: slide.main_reference.clone(),
+        bible_translation_reference: slide.secondary_reference.clone(),
+    }
+}
+
+/// Convert a generated worship `Slide` (from `compose_bible_slides`) to the
+/// wire DTO. The composer currently stores the reference label in
+/// `content.stage` and the structured metadata inside `metadata.bible`. This
+/// conversion is used only by the `/bible/resolve` preview endpoint and the
+/// `resolve_bible_slides` AI tool — neither persists these slides.
+fn generated_slide_to_dto(slide: &Slide) -> BibleSlideDto {
     let metadata = slide.metadata.clone();
     let (main_reference, translation_reference) = metadata
         .as_ref()
@@ -512,7 +525,7 @@ fn bible_slide_to_dto(slide: &Slide) -> Result<BibleSlideDto, AppError> {
         })
         .unwrap_or_default();
 
-    Ok(BibleSlideDto {
+    BibleSlideDto {
         id: slide.id.to_string(),
         order: slide.order,
         bible_main: slide.content.main.value().to_string(),
@@ -520,7 +533,7 @@ fn bible_slide_to_dto(slide: &Slide) -> Result<BibleSlideDto, AppError> {
         metadata,
         bible_main_reference: main_reference,
         bible_translation_reference: translation_reference,
-    })
+    }
 }
 
 #[instrument(skip_all)]
@@ -582,10 +595,7 @@ pub(super) async fn resolve_bible_slides(
             character_limit,
         )
         .await?;
-    let mut slide_dtos = Vec::with_capacity(slides.len());
-    for slide in slides {
-        slide_dtos.push(bible_slide_to_dto(&slide)?);
-    }
+    let slide_dtos: Vec<BibleSlideDto> = slides.iter().map(generated_slide_to_dto).collect();
     Ok(Json(BibleResolveResponse {
         main_translation,
         secondary_translation,
@@ -641,74 +651,36 @@ pub(super) struct BibleSlideInput {
     metadata: Option<SlideMetadata>,
 }
 
-fn request_slide_to_domain(input: BibleSlideInput) -> Result<Slide, AppError> {
-    let content = presenter_core::SlideContent::new(
-        presenter_core::SlideText::new(&input.bible_main)
-            .map_err(|e| AppError::bad_request_message(e.to_string()))?,
-        presenter_core::SlideText::new(&input.bible_translation)
-            .map_err(|e| AppError::bad_request_message(e.to_string()))?,
-        presenter_core::SlideText::new(&input.bible_main_reference)
-            .map_err(|e| AppError::bad_request_message(e.to_string()))?,
-        if input.bible_main_reference.is_empty() {
-            None
-        } else {
-            Some(presenter_core::SlideGroup::new(&input.bible_main_reference))
-        },
-    );
-    let mut slide = Slide::new(0, content);
-    // Build metadata with reference labels
-    let metadata = match input.metadata {
-        Some(mut meta) => {
-            if let Some(ref mut bible) = meta.bible {
-                if bible.main_reference_label.is_none() && !input.bible_main_reference.is_empty() {
-                    bible.main_reference_label = Some(input.bible_main_reference.clone());
-                }
-                if bible.translation_reference_label.is_none()
-                    && !input.bible_translation_reference.is_empty()
-                {
-                    bible.translation_reference_label =
-                        Some(input.bible_translation_reference.clone());
-                }
-            }
-            Some(meta)
-        }
-        None if !input.bible_main_reference.is_empty() => Some(SlideMetadata::new().with_bible(
-            presenter_core::slide::BibleSlideMetadata {
-                translation_code: String::new(),
-                secondary_translation_code: None,
-                book: String::new(),
-                book_code: None,
-                book_number: None,
-                chapter: 0,
-                verses: Vec::new(),
-                main_reference_label: Some(input.bible_main_reference.clone()),
-                translation_reference_label: if input.bible_translation_reference.is_empty() {
-                    None
-                } else {
-                    Some(input.bible_translation_reference.clone())
-                },
-            },
-        )),
-        None => None,
-    };
-    if let Some(meta) = metadata {
-        slide = slide.with_metadata(Some(meta));
-    }
-    Ok(slide)
+fn request_slide_to_domain(input: BibleSlideInput) -> Result<BiblePresentationSlide, AppError> {
+    let main = SlideText::new(&input.bible_main)
+        .map_err(|e| AppError::bad_request_message(e.to_string()))?;
+    let secondary = SlideText::new(&input.bible_translation)
+        .map_err(|e| AppError::bad_request_message(e.to_string()))?;
+
+    // Unwrap the structured bible metadata from the legacy wire envelope
+    // (`{ metadata: { bible: { ... } } }`) — the frontend still sends it in
+    // that shape for backwards compatibility.
+    let metadata = input.metadata.and_then(|m| m.bible);
+
+    Ok(BiblePresentationSlide {
+        id: BibleSlideId::new(),
+        // The repository assigns the final order on insert; zero here is a
+        // placeholder.
+        order: 0,
+        main,
+        main_reference: input.bible_main_reference,
+        secondary,
+        secondary_reference: input.bible_translation_reference,
+        metadata,
+    })
 }
 
-fn bible_presentation_to_detail(
-    presentation: &presenter_core::Presentation,
-) -> Result<BiblePresentationDetailDto, AppError> {
-    let mut slides = Vec::with_capacity(presentation.slides.len());
-    for slide in &presentation.slides {
-        slides.push(bible_slide_to_dto(slide)?);
-    }
-    Ok(BiblePresentationDetailDto {
+fn bible_presentation_to_detail(presentation: &BiblePresentation) -> BiblePresentationDetailDto {
+    BiblePresentationDetailDto {
         id: presentation.id.to_string(),
         name: presentation.name.clone(),
-        slides,
-    })
+        slides: presentation.slides.iter().map(bible_slide_to_dto).collect(),
+    }
 }
 
 #[instrument(skip_all)]
@@ -716,19 +688,14 @@ pub(super) async fn list_bible_presentations(
     State(state): State<AppState>,
 ) -> Result<Json<Vec<BiblePresentationSummaryDto>>, AppError> {
     let summaries = state.list_bible_presentations().await?;
-    let mut result = Vec::with_capacity(summaries.len());
-    for summary in summaries {
-        let slide_count = state
-            .bible_presentation_detail(summary.id)
-            .await?
-            .map(|presentation| presentation.slides.len())
-            .unwrap_or(0);
-        result.push(BiblePresentationSummaryDto {
-            id: summary.id.to_string(),
-            name: summary.name,
-            slide_count,
-        });
-    }
+    let result = summaries
+        .into_iter()
+        .map(|s| BiblePresentationSummaryDto {
+            id: s.id.to_string(),
+            name: s.name,
+            slide_count: s.slide_count,
+        })
+        .collect();
     Ok(Json(result))
 }
 
@@ -742,8 +709,7 @@ pub(super) async fn create_bible_presentation_handler(
         return Err(AppError::bad_request_message("name cannot be empty"));
     }
     let presentation = state.create_bible_presentation(name).await?;
-    let dto = bible_presentation_to_detail(&presentation)?;
-    Ok(Json(dto))
+    Ok(Json(bible_presentation_to_detail(&presentation)))
 }
 
 #[instrument(skip_all)]
@@ -752,11 +718,10 @@ pub(super) async fn get_bible_presentation(
     axum::extract::Path(id): axum::extract::Path<uuid::Uuid>,
 ) -> Result<Json<BiblePresentationDetailDto>, AppError> {
     let presentation = state
-        .bible_presentation_detail(presenter_core::PresentationId::from_uuid(id))
+        .bible_presentation_detail(BiblePresentationId::from_uuid(id))
         .await?
         .ok_or_else(|| AppError::not_found("presentation not found"))?;
-    let dto = bible_presentation_to_detail(&presentation)?;
-    Ok(Json(dto))
+    Ok(Json(bible_presentation_to_detail(&presentation)))
 }
 
 #[instrument(skip_all)]
@@ -770,7 +735,7 @@ pub(super) async fn rename_bible_presentation_handler(
         return Err(AppError::bad_request_message("name cannot be empty"));
     }
     state
-        .rename_bible_presentation(presenter_core::PresentationId::from_uuid(id), name)
+        .rename_bible_presentation(BiblePresentationId::from_uuid(id), name)
         .await?;
     Ok(axum::http::StatusCode::NO_CONTENT)
 }
@@ -781,7 +746,7 @@ pub(super) async fn delete_bible_presentation_handler(
     axum::extract::Path(id): axum::extract::Path<uuid::Uuid>,
 ) -> Result<axum::http::StatusCode, AppError> {
     state
-        .delete_presentation(presenter_core::PresentationId::from_uuid(id))
+        .delete_bible_presentation(BiblePresentationId::from_uuid(id))
         .await?;
     Ok(axum::http::StatusCode::NO_CONTENT)
 }
@@ -797,9 +762,10 @@ pub(super) struct UpdateBibleSlideRequest {
 }
 
 /// PATCH /bible/presentations/{id}/slides/{slide_id}
-/// Updates a Bible slide's content (main, translation) and metadata references
-/// (main_reference_label, translation_reference_label). Also writes mainReference
-/// to content.stage for Resolume compatibility (transparent to UI). Does NOT touch group.
+///
+/// Updates a Bible slide's text and reference labels. The structured bible
+/// metadata (book, chapter, verses, translation code) is preserved from the
+/// existing slide — the UI only edits text and reference labels.
 #[instrument(skip_all)]
 pub(super) async fn update_bible_slide(
     State(state): State<AppState>,
@@ -813,90 +779,35 @@ pub(super) async fn update_bible_slide(
         .parse::<uuid::Uuid>()
         .map_err(|_| AppError::bad_request_message("Invalid slide ID"))?;
 
-    let pres_id = presenter_core::PresentationId::from_uuid(pres_uuid);
-    let s_id = presenter_core::SlideId::from_uuid(slide_uuid);
+    let pres_id = BiblePresentationId::from_uuid(pres_uuid);
+    let s_id = BibleSlideId::from_uuid(slide_uuid);
 
-    // Look up the existing slide to preserve its metadata structure and group
+    // Preserve the existing structured metadata (book, chapter, verses, etc.)
+    // — the UI only edits text and reference labels, not the structured data.
     let presentation = state
         .bible_presentation_detail(pres_id)
         .await?
         .ok_or_else(|| AppError::not_found("Presentation not found"))?;
-
     let existing_slide = presentation
         .slides
         .iter()
         .find(|s| s.id == s_id)
         .ok_or_else(|| AppError::not_found("Slide not found in presentation"))?;
-
-    // Build updated metadata: preserve existing bible metadata but update reference labels
-    let updated_metadata = {
-        let mut meta = existing_slide
-            .metadata
-            .clone()
-            .unwrap_or_else(SlideMetadata::new);
-        if let Some(ref mut bible) = meta.bible {
-            bible.main_reference_label = if payload.bible_main_reference.is_empty() {
-                None
-            } else {
-                Some(payload.bible_main_reference.clone())
-            };
-            bible.translation_reference_label = if payload.bible_translation_reference.is_empty() {
-                None
-            } else {
-                Some(payload.bible_translation_reference.clone())
-            };
-        }
-        // If there's no bible metadata at all but references are provided, we still store them
-        if meta.bible.is_none()
-            && (!payload.bible_main_reference.is_empty()
-                || !payload.bible_translation_reference.is_empty())
-        {
-            meta.bible = Some(presenter_core::slide::BibleSlideMetadata {
-                translation_code: String::new(),
-                secondary_translation_code: None,
-                book: String::new(),
-                book_code: None,
-                book_number: None,
-                chapter: 0,
-                verses: Vec::new(),
-                main_reference_label: if payload.bible_main_reference.is_empty() {
-                    None
-                } else {
-                    Some(payload.bible_main_reference.clone())
-                },
-                translation_reference_label: if payload.bible_translation_reference.is_empty() {
-                    None
-                } else {
-                    Some(payload.bible_translation_reference.clone())
-                },
-            });
-        }
-        Some(meta)
-    };
-
-    // Stage stores the main reference for Resolume compatibility
-    let stage_value = payload.bible_main_reference.clone();
-
-    // Group stores reference label for grouping
-    let existing_group = if stage_value.is_empty() {
-        None
-    } else {
-        Some(stage_value.clone())
-    };
+    let existing_metadata = existing_slide.metadata.clone();
 
     let updated = state
-        .update_slide_content(
+        .update_bible_slide(
             pres_id,
             s_id,
             payload.bible_main,
+            payload.bible_main_reference,
             payload.bible_translation,
-            stage_value,
-            existing_group,
-            updated_metadata,
+            payload.bible_translation_reference,
+            existing_metadata,
         )
         .await?;
 
-    bible_slide_to_dto(&updated).map(Json)
+    Ok(Json(bible_slide_to_dto(&updated)))
 }
 
 #[instrument(skip_all)]
@@ -913,8 +824,62 @@ pub(super) async fn append_bible_presentation_handler(
         slides.push(request_slide_to_domain(input)?);
     }
     let presentation = state
-        .append_bible_presentation_slides(presenter_core::PresentationId::from_uuid(id), slides)
+        .append_bible_presentation_slides(BiblePresentationId::from_uuid(id), slides)
         .await?;
-    let dto = bible_presentation_to_detail(&presentation)?;
-    Ok(Json(dto))
+    Ok(Json(bible_presentation_to_detail(&presentation)))
+}
+
+/// DELETE /bible/presentations/{id}/slides/{slide_id}
+///
+/// Deletes a single slide from a bible presentation and returns the updated
+/// presentation detail.
+#[instrument(skip_all)]
+pub(super) async fn delete_bible_presentation_slide(
+    State(state): State<AppState>,
+    axum::extract::Path((presentation_id, slide_id)): axum::extract::Path<(String, String)>,
+) -> Result<Json<BiblePresentationDetailDto>, AppError> {
+    let pres_uuid = presentation_id
+        .parse::<uuid::Uuid>()
+        .map_err(|_| AppError::bad_request_message("Invalid presentation ID"))?;
+    let slide_uuid = slide_id
+        .parse::<uuid::Uuid>()
+        .map_err(|_| AppError::bad_request_message("Invalid slide ID"))?;
+
+    let presentation = state
+        .delete_bible_slide(
+            BiblePresentationId::from_uuid(pres_uuid),
+            BibleSlideId::from_uuid(slide_uuid),
+        )
+        .await?;
+    Ok(Json(bible_presentation_to_detail(&presentation)))
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub(super) struct ReorderBibleSlidesRequest {
+    pub(super) slide_ids: Vec<String>,
+}
+
+/// POST /bible/presentations/{id}/slides/reorder
+///
+/// Reorders slides in a bible presentation according to the supplied ID list
+/// and returns the updated presentation detail.
+#[instrument(skip_all)]
+pub(super) async fn reorder_bible_presentation_slides(
+    State(state): State<AppState>,
+    axum::extract::Path(id): axum::extract::Path<uuid::Uuid>,
+    Json(payload): Json<ReorderBibleSlidesRequest>,
+) -> Result<Json<BiblePresentationDetailDto>, AppError> {
+    let mut slide_ids = Vec::with_capacity(payload.slide_ids.len());
+    for raw in payload.slide_ids {
+        let uuid = raw
+            .parse::<uuid::Uuid>()
+            .map_err(|_| AppError::bad_request_message("Invalid slide ID"))?;
+        slide_ids.push(BibleSlideId::from_uuid(uuid));
+    }
+
+    let presentation = state
+        .reorder_bible_slides(BiblePresentationId::from_uuid(id), slide_ids)
+        .await?;
+    Ok(Json(bible_presentation_to_detail(&presentation)))
 }
