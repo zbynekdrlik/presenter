@@ -747,6 +747,54 @@ mod presentation_tests {
     }
 
     #[tokio::test]
+    async fn bible_slide_metadata_round_trips_through_replace_and_fetch() {
+        use presenter_core::slide::{BibleSlideMetadata, BibleSlideVerseRef};
+
+        let repo = fresh_repo().await;
+        let p = repo
+            .create_bible_presentation("Metadata Test")
+            .await
+            .unwrap();
+
+        let metadata = BibleSlideMetadata {
+            translation_code: "en-kjv".to_string(),
+            secondary_translation_code: Some("sk-sevp".to_string()),
+            book: "John".to_string(),
+            book_code: Some("JHN".to_string()),
+            book_number: Some(43),
+            chapter: 3,
+            verses: vec![
+                BibleSlideVerseRef::new(16, 16),
+                BibleSlideVerseRef::new(17, 17),
+            ],
+            main_reference_label: Some("John 3:16-17".to_string()),
+            translation_reference_label: Some("Ján 3:16-17".to_string()),
+        };
+
+        let slide = BiblePresentationSlide {
+            id: BibleSlideId::new(),
+            order: 0,
+            main: SlideText::new("For God so loved the world").unwrap(),
+            main_reference: "John 3:16-17".to_string(),
+            secondary: SlideText::new("Lebo tak Boh miloval svet").unwrap(),
+            secondary_reference: "Ján 3:16-17".to_string(),
+            metadata: Some(metadata.clone()),
+        };
+
+        repo.replace_bible_presentation_slides(p.id, std::slice::from_ref(&slide))
+            .await
+            .unwrap();
+
+        let fetched = repo.fetch_bible_presentation(p.id).await.unwrap().unwrap();
+        assert_eq!(fetched.slides.len(), 1);
+        let fetched_slide = &fetched.slides[0];
+        assert_eq!(fetched_slide.metadata, Some(metadata));
+        assert_eq!(fetched_slide.main.value(), "For God so loved the world");
+        assert_eq!(fetched_slide.main_reference, "John 3:16-17");
+        assert_eq!(fetched_slide.secondary_reference, "Ján 3:16-17");
+    }
+
+    #[tokio::test]
     async fn append_bible_slides_preserves_order() {
         let repo = fresh_repo().await;
         let p = repo.create_bible_presentation("Test").await.unwrap();

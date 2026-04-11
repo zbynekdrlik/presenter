@@ -220,7 +220,11 @@ impl AppState {
         id: BiblePresentationId,
         name: &str,
     ) -> anyhow::Result<()> {
-        self.repository.rename_bible_presentation(id, name).await
+        self.repository.rename_bible_presentation(id, name).await?;
+        self.live_hub.publish(LiveEvent::BibleSlidesChanged {
+            presentation_id: id.to_string(),
+        });
+        Ok(())
     }
 
     pub async fn delete_bible_presentation(&self, id: BiblePresentationId) -> anyhow::Result<()> {

@@ -162,8 +162,8 @@ fn build_trigger_request(
         book_code: meta.and_then(|m| m.book_code.clone()),
         book_number: meta.and_then(|m| m.book_number),
         chapter: meta.and_then(|m| m.chapter),
-        verse_start: meta.and_then(|m| m.verse_start),
-        verse_end: meta.and_then(|m| m.verse_end),
+        verse_start: meta.and_then(|m| m.effective_verse_start()),
+        verse_end: meta.and_then(|m| m.effective_verse_end()),
     }
 }
 
