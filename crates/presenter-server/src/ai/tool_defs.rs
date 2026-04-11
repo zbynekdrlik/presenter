@@ -184,6 +184,21 @@ pub fn tool_definitions() -> Vec<Value> {
             json!({"type": "object", "properties": {}, "required": []}),
         ),
         tool_def(
+            "load_bible_verses",
+            "[BIBLE only] Load raw verse text from the database for a passage range. Returns an array of {number, text, reference} objects — NOT pre-split slides. Use this as the source of truth for verse text when building a bible presentation. Compare each returned verse to the sermon wording and override `text` where they differ.",
+            json!({
+                "type": "object",
+                "properties": {
+                    "translation": {"type": "string", "description": "Translation code (e.g. slk-seb)"},
+                    "book": {"type": "string", "description": "Full book name (e.g. Ján)"},
+                    "chapter": {"type": "integer"},
+                    "verse_start": {"type": "integer"},
+                    "verse_end": {"type": "integer"}
+                },
+                "required": ["translation", "book", "chapter", "verse_start", "verse_end"]
+            }),
+        ),
+        tool_def(
             "resolve_bible_slides",
             "Generate slides from a Bible passage, automatically split by character limit",
             json!({
@@ -249,27 +264,29 @@ pub fn tool_definitions() -> Vec<Value> {
         ),
         tool_def(
             "create_bible_presentation",
-            "[BIBLE only] Create a new Bible presentation (a named collection of Bible slides, e.g. a sermon series or topical study). Optionally include initial slides. Use this when the user asks to create a Bible presentation, sermon, or verse collection.",
+            "[BIBLE only] Create a Bible presentation from a stream of typed items. The server composes slides from your items — you do NOT decide where slide breaks happen. Emphasis items and translation/book/chapter changes force slide breaks; otherwise consecutive verse items pack together until the character limit. Always call load_bible_verses first to get DB verse text, edit the text to match the sermon where needed, then assemble items[] in sermon order.",
             json!({
                 "type": "object",
                 "properties": {
                     "name": {"type": "string", "description": "Presentation name (e.g. 'Sunday Sermon 2026-04-14')"},
-                    "slides": {
+                    "items": {
                         "type": "array",
-                        "description": "Optional initial slides. Each slide represents one bible verse or passage.",
+                        "description": "Ordered stream of verse and emphasis items. The server composes slides respecting the character limit.",
                         "items": {
                             "type": "object",
                             "properties": {
-                                "main": {"type": "string", "description": "Main verse text (e.g. 'For God so loved the world...')"},
-                                "main_reference": {"type": "string", "description": "Reference label (e.g. 'John 3:16')"},
-                                "secondary": {"type": "string", "description": "Secondary translation text (optional)"},
-                                "secondary_reference": {"type": "string", "description": "Secondary reference label (optional)"}
+                                "kind": {"type": "string", "enum": ["verse", "emphasis"]},
+                                "number": {"type": "integer", "description": "[verse] Verse number"},
+                                "text": {"type": "string", "description": "Verse text (with any uppercase ##word## transformations applied) or the emphasis phrase"},
+                                "book": {"type": "string", "description": "[verse] Full book name (e.g. Ján)"},
+                                "chapter": {"type": "integer", "description": "[verse] Chapter number"},
+                                "translation": {"type": "string", "description": "[verse] Short translation code (e.g. SEB, MIL, ROH)"}
                             },
-                            "required": ["main", "main_reference"]
+                            "required": ["kind", "text"]
                         }
                     }
                 },
-                "required": ["name"]
+                "required": ["name", "items"]
             }),
         ),
         tool_def(
@@ -293,37 +310,6 @@ pub fn tool_definitions() -> Vec<Value> {
                     "presentation_id": {"type": "string", "description": "Bible presentation UUID"}
                 },
                 "required": ["presentation_id"]
-            }),
-        ),
-        tool_def(
-            "add_bible_slide",
-            "[BIBLE only] Append a single slide to an existing Bible presentation. For adding multiple slides at once, prefer create_bible_presentation with the slides array.",
-            json!({
-                "type": "object",
-                "properties": {
-                    "presentation_id": {"type": "string", "description": "Bible presentation UUID"},
-                    "main": {"type": "string", "description": "Main verse text"},
-                    "main_reference": {"type": "string", "description": "Reference label (e.g. 'John 3:16')"},
-                    "secondary": {"type": "string", "description": "Secondary translation text (optional)"},
-                    "secondary_reference": {"type": "string", "description": "Secondary reference label (optional)"}
-                },
-                "required": ["presentation_id", "main", "main_reference"]
-            }),
-        ),
-        tool_def(
-            "update_bible_slide",
-            "[BIBLE only] Update the text and references on a single Bible slide.",
-            json!({
-                "type": "object",
-                "properties": {
-                    "presentation_id": {"type": "string", "description": "Bible presentation UUID"},
-                    "slide_id": {"type": "string", "description": "Bible slide UUID"},
-                    "main": {"type": "string"},
-                    "main_reference": {"type": "string"},
-                    "secondary": {"type": "string"},
-                    "secondary_reference": {"type": "string"}
-                },
-                "required": ["presentation_id", "slide_id", "main", "main_reference"]
             }),
         ),
         tool_def(

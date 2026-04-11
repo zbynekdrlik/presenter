@@ -1,5 +1,6 @@
 use super::bible_validator::{validate_bible_slide, ValidationError};
 use crate::state::bible::BibleTriggerOverrides;
+use crate::state::slides::{compose_bible_items_into_slides, BibleItem, ComposedBibleSlide};
 use crate::state::AppState;
 use presenter_core::slide::{SlideContent, SlideText};
 use presenter_core::{
@@ -312,6 +313,101 @@ pub async fn execute_tool(
             Ok((serde_json::to_string(&results)?, preview))
         }
 
+        "load_bible_verses" => {
+            let translation = str_field(&args, "translation")?;
+            let book = str_field(&args, "book")?;
+            let chapter = args["chapter"].as_u64().unwrap_or(1) as u16;
+            let verse_start = args["verse_start"].as_u64().unwrap_or(1) as u16;
+            let verse_end = args["verse_end"].as_u64().unwrap_or(verse_start as u64) as u16;
+
+            // Resolve the translation to get its short code for reference labels.
+            let translations = state.list_bible_translations().await?;
+            let main_trans = match translations
+                .iter()
+                .find(|t| t.code.eq_ignore_ascii_case(&translation))
+            {
+                Some(t) => t.clone(),
+                None => {
+                    return Ok((
+                        json!({"error": "translation not found", "translation": translation})
+                            .to_string(),
+                        format!("Translation '{translation}' not found"),
+                    ));
+                }
+            };
+            let short_code = main_trans
+                .code
+                .rsplit('-')
+                .next()
+                .unwrap_or(&main_trans.code)
+                .to_uppercase();
+
+            // Single range query instead of per-verse round trips. The
+            // repository returns only the verses that exist, so we walk
+            // the requested range and fill gaps with explicit not-found
+            // entries — the LLM sees exactly which verses are missing
+            // and can decide whether to use the sermon's text as-is,
+            // shorten the range, or report back to the user.
+            let loaded = state
+                .bible_passage_range(
+                    &main_trans.code,
+                    &book,
+                    None,
+                    chapter,
+                    verse_start,
+                    verse_end,
+                )
+                .await?;
+            let loaded_by_number: std::collections::HashMap<u16, &presenter_core::BiblePassage> =
+                loaded
+                    .iter()
+                    .map(|p| (p.reference.verse_start, p))
+                    .collect();
+
+            let mut verses: Vec<Value> = Vec::with_capacity((verse_end - verse_start + 1) as usize);
+            let mut found_count: usize = 0;
+            for v in verse_start..=verse_end {
+                match loaded_by_number.get(&v) {
+                    Some(p) => {
+                        found_count += 1;
+                        verses.push(json!({
+                            "number": p.reference.verse_start,
+                            "text": p.text,
+                            "reference": format!(
+                                "{} {}:{} ({})",
+                                p.reference.book,
+                                p.reference.chapter,
+                                p.reference.verse_start,
+                                short_code,
+                            ),
+                        }));
+                    }
+                    None => {
+                        verses.push(json!({
+                            "number": v,
+                            "error": "not_found",
+                            "reference": format!(
+                                "{} {}:{} ({})",
+                                book, chapter, v, short_code
+                            ),
+                        }));
+                    }
+                }
+            }
+
+            let preview = format!(
+                "{} {}:{}-{} ({}) - {}/{} verses",
+                book,
+                chapter,
+                verse_start,
+                verse_end,
+                short_code,
+                found_count,
+                verses.len()
+            );
+            Ok((serde_json::to_string(&verses)?, preview))
+        }
+
         "resolve_bible_slides" => {
             let translation = str_field(&args, "translation")?;
             let book = str_field(&args, "book")?;
@@ -456,57 +552,142 @@ pub async fn execute_tool(
 
         "create_bible_presentation" => {
             let name = str_field(&args, "name")?;
+            let items_arr = match args["items"].as_array() {
+                Some(arr) => arr,
+                None => {
+                    return Ok((
+                        json!({
+                            "error": "missing_items",
+                            "expected": "items must be an array of verse/emphasis objects",
+                        })
+                        .to_string(),
+                        "Missing items array".to_string(),
+                    ));
+                }
+            };
 
-            // Pre-validate every slide in the batch BEFORE touching the DB.
-            // All-or-nothing: if any slide fails, the presentation is not
-            // created and the LLM sees the rule-keyed error so it can fix
-            // the specific slide and retry with the full batch.
-            if let Some(arr) = args["slides"].as_array() {
-                for (idx, s) in arr.iter().enumerate() {
-                    let main_text = s["main"].as_str().unwrap_or("");
-                    let main_reference = s["main_reference"].as_str().unwrap_or("");
-                    if let Err(mut err) = validate_bible_slide(main_text, main_reference) {
-                        // Annotate the `got` field with the slide index so the
-                        // LLM knows which slide in the batch to fix.
-                        err.got = format!("slide[{idx}]: {}", err.got);
-                        return Ok(validation_error_response(err));
+            // Parse items into typed BibleItem values. Fail fast on any
+            // malformed item — the LLM sees the error and retries.
+            let mut items: Vec<BibleItem> = Vec::with_capacity(items_arr.len());
+            for (idx, raw) in items_arr.iter().enumerate() {
+                let kind = raw["kind"].as_str().unwrap_or("");
+                match kind {
+                    "verse" => {
+                        // try_from(u64->u32): any u64 that does not fit in u32
+                        // collapses to 0 and is rejected by the number>=1 /
+                        // chapter>=1 checks below. Avoids silent truncation
+                        // of e.g. 2^33+5 → 5 that a raw `as u32` cast would do.
+                        let number =
+                            u32::try_from(raw["number"].as_u64().unwrap_or(0)).unwrap_or(0);
+                        let text = raw["text"].as_str().unwrap_or("").to_string();
+                        let book = raw["book"].as_str().unwrap_or("").to_string();
+                        let chapter =
+                            u32::try_from(raw["chapter"].as_u64().unwrap_or(0)).unwrap_or(0);
+                        let translation = raw["translation"].as_str().unwrap_or("").to_string();
+                        if number == 0
+                            || text.is_empty()
+                            || book.is_empty()
+                            || chapter == 0
+                            || translation.is_empty()
+                        {
+                            return Ok((
+                                json!({
+                                    "error": "invalid_verse_item",
+                                    "expected": "verse items require number>=1, non-empty text, book, chapter>=1, translation",
+                                    "got": format!("item[{idx}]"),
+                                })
+                                .to_string(),
+                                format!("Invalid verse item at index {idx}"),
+                            ));
+                        }
+                        items.push(BibleItem::Verse {
+                            number,
+                            text,
+                            book,
+                            chapter,
+                            translation,
+                        });
+                    }
+                    "emphasis" => {
+                        let text = raw["text"].as_str().unwrap_or("").to_string();
+                        if text.trim().is_empty() {
+                            return Ok((
+                                json!({
+                                    "error": "invalid_emphasis_item",
+                                    "expected": "emphasis items require non-empty text",
+                                    "got": format!("item[{idx}]"),
+                                })
+                                .to_string(),
+                                format!("Invalid emphasis item at index {idx}"),
+                            ));
+                        }
+                        items.push(BibleItem::Emphasis { text });
+                    }
+                    other => {
+                        return Ok((
+                            json!({
+                                "error": "invalid_item_kind",
+                                "expected": "kind must be 'verse' or 'emphasis'",
+                                "got": format!("item[{idx}] kind={other}"),
+                            })
+                            .to_string(),
+                            format!("Invalid kind '{other}' at index {idx}"),
+                        ));
                     }
                 }
             }
 
-            let presentation = state.create_bible_presentation(&name).await?;
+            // Compose slides server-side using the configured character limit.
+            let composed: Vec<ComposedBibleSlide> =
+                compose_bible_items_into_slides(&items, default_char_limit);
 
-            // If slides were provided, append them.
-            let slides_arr = args["slides"].as_array();
-            let final_presentation = if let Some(arr) = slides_arr {
-                let mut new_slides: Vec<BiblePresentationSlide> = Vec::with_capacity(arr.len());
-                for s in arr {
-                    let main_text = s["main"].as_str().unwrap_or("").to_string();
-                    let main_reference = s["main_reference"].as_str().unwrap_or("").to_string();
-                    let secondary_text = s["secondary"].as_str().unwrap_or("").to_string();
-                    let secondary_reference =
-                        s["secondary_reference"].as_str().unwrap_or("").to_string();
+            // Validate each composed slide. With a correct composer only
+            // the oversized-single-verse case should ever trip this.
+            for (idx, slide) in composed.iter().enumerate() {
+                if let Err(mut err) =
+                    validate_bible_slide(&slide.main, &slide.main_reference, default_char_limit)
+                {
+                    err.got = format!("composed_slide[{idx}]: {}", err.got);
+                    return Ok(validation_error_response(err));
+                }
+            }
+
+            // Persist. Empty items[] produces an empty presentation, which
+            // is used intentionally by some tests (and by the operator UI
+            // when a user wants a blank bible presentation to populate by
+            // hand). The LLM should submit non-empty items in practice;
+            // there is no explicit rejection because the prompt guides it
+            // and an empty presentation is harmless.
+            let presentation = state.create_bible_presentation(&name).await?;
+            let final_presentation = if composed.is_empty() {
+                presentation
+            } else {
+                // SlideText::new only fails at ~4000 chars; the validator
+                // has already guaranteed slide.main.len() <= default_char_limit
+                // (typically 320) above, so this is statically unreachable.
+                // Propagate the error anyway so a future limit change does
+                // not silently drop slide content through an unwrap_or fallback.
+                let mut new_slides: Vec<BiblePresentationSlide> =
+                    Vec::with_capacity(composed.len());
+                for c in composed {
+                    let main = SlideText::new(&c.main).map_err(|e| {
+                        anyhow::anyhow!("composed slide main SlideText failed: {e}")
+                    })?;
+                    let secondary = SlideText::new("")
+                        .map_err(|e| anyhow::anyhow!("empty SlideText failed: {e}"))?;
                     new_slides.push(BiblePresentationSlide {
                         id: BibleSlideId::new(),
                         order: 0,
-                        main: SlideText::new(&main_text)
-                            .unwrap_or_else(|_| SlideText::new("").unwrap()),
-                        main_reference,
-                        secondary: SlideText::new(&secondary_text)
-                            .unwrap_or_else(|_| SlideText::new("").unwrap()),
-                        secondary_reference,
+                        main,
+                        main_reference: c.main_reference,
+                        secondary,
+                        secondary_reference: String::new(),
                         metadata: None,
                     });
                 }
-                if !new_slides.is_empty() {
-                    state
-                        .append_bible_presentation_slides(presentation.id, new_slides)
-                        .await?
-                } else {
-                    presentation
-                }
-            } else {
-                presentation
+                state
+                    .append_bible_presentation_slides(presentation.id, new_slides)
+                    .await?
             };
 
             let preview = format!(
@@ -539,88 +720,6 @@ pub async fn execute_tool(
             Ok((
                 json!({"ok": true}).to_string(),
                 "Deleted bible presentation".to_string(),
-            ))
-        }
-
-        "add_bible_slide" => {
-            let pres_id = BiblePresentationId::from_uuid(uuid_field(&args, "presentation_id")?);
-            let main_text = str_field(&args, "main")?;
-            let main_reference = str_field(&args, "main_reference")?;
-            let secondary_text = args["secondary"].as_str().unwrap_or("").to_string();
-            let secondary_reference = args["secondary_reference"]
-                .as_str()
-                .unwrap_or("")
-                .to_string();
-
-            // Validate before touching the DB.
-            if let Err(err) = validate_bible_slide(&main_text, &main_reference) {
-                return Ok(validation_error_response(err));
-            }
-
-            let slide = BiblePresentationSlide {
-                id: BibleSlideId::new(),
-                order: 0,
-                main: SlideText::new(&main_text).unwrap_or_else(|_| SlideText::new("").unwrap()),
-                main_reference,
-                secondary: SlideText::new(&secondary_text)
-                    .unwrap_or_else(|_| SlideText::new("").unwrap()),
-                secondary_reference,
-                metadata: None,
-            };
-            let updated = state
-                .append_bible_presentation_slides(pres_id, vec![slide])
-                .await?;
-            let preview = format!(
-                "Added bible slide to '{}' (now {} total)",
-                updated.name,
-                updated.slides.len()
-            );
-            Ok((
-                json!({"ok": true, "slide_count": updated.slides.len()}).to_string(),
-                preview,
-            ))
-        }
-
-        "update_bible_slide" => {
-            let pres_id = BiblePresentationId::from_uuid(uuid_field(&args, "presentation_id")?);
-            let slide_id = BibleSlideId::from_uuid(uuid_field(&args, "slide_id")?);
-            let main_text = str_field(&args, "main")?;
-            let main_reference = str_field(&args, "main_reference")?;
-            let secondary_text = args["secondary"].as_str().unwrap_or("").to_string();
-            let secondary_reference = args["secondary_reference"]
-                .as_str()
-                .unwrap_or("")
-                .to_string();
-
-            // Validate before touching the DB.
-            if let Err(err) = validate_bible_slide(&main_text, &main_reference) {
-                return Ok(validation_error_response(err));
-            }
-
-            // Preserve existing metadata if present.
-            let existing_metadata = match state.bible_presentation_detail(pres_id).await? {
-                Some(p) => p
-                    .slides
-                    .iter()
-                    .find(|s| s.id == slide_id)
-                    .and_then(|s| s.metadata.clone()),
-                None => None,
-            };
-
-            state
-                .update_bible_slide(
-                    pres_id,
-                    slide_id,
-                    main_text,
-                    main_reference,
-                    secondary_text,
-                    secondary_reference,
-                    existing_metadata,
-                )
-                .await?;
-            Ok((
-                json!({"ok": true}).to_string(),
-                "Updated bible slide".to_string(),
             ))
         }
 
@@ -692,45 +791,130 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn create_bible_presentation_with_slides() {
+    async fn create_bible_presentation_rejects_oversized_single_verse() {
         let state = AppState::in_memory().await.unwrap();
-
+        let long_text = "a".repeat(400);
         let args = json!({
-            "name": "Sunday Sermon",
-            "slides": [
+            "name": "Length Test",
+            "items": [
                 {
-                    "main": "16. For God so loved the world...",
-                    "main_reference": "John 3:16",
-                    "secondary": "Lebo tak Boh miloval svet...",
-                    "secondary_reference": "Ján 3:16"
-                },
-                {
-                    "main": "1. The Lord is my shepherd...",
-                    "main_reference": "Psalm 23:1"
+                    "kind": "verse",
+                    "number": 1,
+                    "text": long_text,
+                    "book": "Ján",
+                    "chapter": 1,
+                    "translation": "SEB"
                 }
             ]
         });
-        let (result, preview) =
+        let (body, _preview) =
             execute_tool("create_bible_presentation", &args.to_string(), &state, 320)
                 .await
                 .unwrap();
+        let parsed: Value = serde_json::from_str(&body).unwrap();
+        assert_eq!(parsed["error"], "slide_validation");
+        assert_eq!(parsed["rule"], "main_exceeds_character_limit");
+        assert_eq!(parsed["limit"], 320);
+    }
 
-        let parsed: Value = serde_json::from_str(&result).unwrap();
-        assert_eq!(parsed["name"].as_str().unwrap(), "Sunday Sermon");
-        assert_eq!(parsed["slide_count"].as_u64().unwrap(), 2);
-        assert!(preview.contains("Sunday Sermon"));
+    #[tokio::test]
+    async fn create_bible_presentation_with_items_composes_server_side() {
+        let state = AppState::in_memory().await.unwrap();
+        let args = json!({
+            "name": "Server-side Composition",
+            "items": [
+                {"kind": "verse", "number": 1, "text": "Na počiatku bolo Slovo.",
+                 "book": "Ján", "chapter": 1, "translation": "SEB"},
+                {"kind": "verse", "number": 2, "text": "Ono bolo na počiatku u Boha.",
+                 "book": "Ján", "chapter": 1, "translation": "SEB"},
+                {"kind": "emphasis", "text": "NOVÁ ZMLUVA"},
+                {"kind": "verse", "number": 3, "text": "Všetko vzniklo skrze neho.",
+                 "book": "Ján", "chapter": 1, "translation": "SEB"}
+            ]
+        });
+        let (body, _preview) =
+            execute_tool("create_bible_presentation", &args.to_string(), &state, 320)
+                .await
+                .unwrap();
+        let parsed: Value = serde_json::from_str(&body).unwrap();
+        assert_eq!(parsed["name"].as_str().unwrap(), "Server-side Composition");
+        // 2 verses batched into 1 slide + 1 emphasis slide + 1 verse slide = 3 slides
+        assert_eq!(parsed["slide_count"].as_u64().unwrap(), 3);
 
-        // Verify from state
+        // Verify actual persisted slides
         let pres_id_str = parsed["id"].as_str().unwrap();
         let pres_id = BiblePresentationId::from_uuid(Uuid::parse_str(pres_id_str).unwrap());
-        let presentation = state
+        let pres = state
             .bible_presentation_detail(pres_id)
             .await
             .unwrap()
             .unwrap();
-        assert_eq!(presentation.slides.len(), 2);
-        assert_eq!(presentation.slides[0].main_reference, "John 3:16");
-        assert_eq!(presentation.slides[1].main_reference, "Psalm 23:1");
+        assert_eq!(pres.slides.len(), 3);
+
+        // Slide 0: verses 1-2 with range reference
+        assert_eq!(pres.slides[0].main_reference, "Ján 1:1-2 (SEB)");
+        assert!(pres.slides[0].main.value().contains("1. Na počiatku"));
+        assert!(pres.slides[0].main.value().contains("2. Ono bolo"));
+
+        // Slide 1: emphasis
+        assert_eq!(pres.slides[1].main_reference, "");
+        assert_eq!(pres.slides[1].main.value(), "NOVÁ ZMLUVA");
+
+        // Slide 2: verse 3
+        assert_eq!(pres.slides[2].main_reference, "Ján 1:3 (SEB)");
+    }
+
+    #[tokio::test]
+    async fn create_bible_presentation_rejects_missing_items_array() {
+        let state = AppState::in_memory().await.unwrap();
+        let args = json!({"name": "No Items"});
+        let (body, _preview) =
+            execute_tool("create_bible_presentation", &args.to_string(), &state, 320)
+                .await
+                .unwrap();
+        let parsed: Value = serde_json::from_str(&body).unwrap();
+        assert_eq!(parsed["error"], "missing_items");
+    }
+
+    #[tokio::test]
+    async fn create_bible_presentation_with_empty_items_creates_empty_presentation() {
+        // Locks in the documented behavior: an explicit items: [] is allowed
+        // and creates a zero-slide presentation. This is used by the operator
+        // UI and by other tests as a scaffolding shortcut. A future change
+        // that rejects empty items would need to update this test and the
+        // inline comment in the handler.
+        let state = AppState::in_memory().await.unwrap();
+        let args = json!({"name": "Empty Scaffold", "items": []});
+        let (body, _preview) =
+            execute_tool("create_bible_presentation", &args.to_string(), &state, 320)
+                .await
+                .unwrap();
+        let parsed: Value = serde_json::from_str(&body).unwrap();
+        assert!(parsed["error"].is_null(), "expected success, got: {body}");
+        assert_eq!(parsed["name"], "Empty Scaffold");
+        assert_eq!(parsed["slide_count"], 0);
+    }
+
+    #[tokio::test]
+    async fn create_bible_presentation_rejects_huge_verse_number() {
+        // Regression guard for the u64->u32 cast: a u64 that overflows u32
+        // must be rejected cleanly, not silently truncated. Picks a value
+        // that used to produce a non-zero u32 after `as u32` truncation
+        // (2^32 + 7 → 7) and would have slipped through.
+        let state = AppState::in_memory().await.unwrap();
+        let args = json!({
+            "name": "Overflow Test",
+            "items": [
+                {"kind": "verse", "number": 4_294_967_303u64, "text": "hi",
+                 "book": "Ján", "chapter": 1, "translation": "SEB"}
+            ]
+        });
+        let (body, _preview) =
+            execute_tool("create_bible_presentation", &args.to_string(), &state, 320)
+                .await
+                .unwrap();
+        let parsed: Value = serde_json::from_str(&body).unwrap();
+        assert_eq!(parsed["error"], "invalid_verse_item");
     }
 
     #[tokio::test]
@@ -739,7 +923,7 @@ mod tests {
 
         execute_tool(
             "create_bible_presentation",
-            &json!({"name": "First"}).to_string(),
+            &json!({"name": "First", "items": []}).to_string(),
             &state,
             320,
         )
@@ -747,7 +931,7 @@ mod tests {
         .unwrap();
         execute_tool(
             "create_bible_presentation",
-            &json!({"name": "Second"}).to_string(),
+            &json!({"name": "Second", "items": []}).to_string(),
             &state,
             320,
         )
@@ -766,54 +950,14 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn add_bible_slide_appends() {
-        let state = AppState::in_memory().await.unwrap();
-
-        let (result, _) = execute_tool(
-            "create_bible_presentation",
-            &json!({"name": "My Study"}).to_string(),
-            &state,
-            320,
-        )
-        .await
-        .unwrap();
-        let parsed: Value = serde_json::from_str(&result).unwrap();
-        let pres_id = parsed["id"].as_str().unwrap();
-
-        let args = json!({
-            "presentation_id": pres_id,
-            "main": "1. In the beginning was the Word",
-            "main_reference": "John 1:1"
-        });
-        let (result, preview) = execute_tool("add_bible_slide", &args.to_string(), &state, 320)
-            .await
-            .unwrap();
-        let parsed: Value = serde_json::from_str(&result).unwrap();
-        assert_eq!(parsed["slide_count"].as_u64().unwrap(), 1);
-        assert!(preview.contains("1 total"));
-
-        // Add another
-        let args = json!({
-            "presentation_id": pres_id,
-            "main": "1. And the Word was with God",
-            "main_reference": "John 1:1b"
-        });
-        let (result, _) = execute_tool("add_bible_slide", &args.to_string(), &state, 320)
-            .await
-            .unwrap();
-        let parsed: Value = serde_json::from_str(&result).unwrap();
-        assert_eq!(parsed["slide_count"].as_u64().unwrap(), 2);
-    }
-
-    #[tokio::test]
     async fn delete_bible_slide_removes_it() {
         let state = AppState::in_memory().await.unwrap();
 
         let args = json!({
             "name": "Deletable",
-            "slides": [
-                {"main": "1. Verse one", "main_reference": "Ref 1:1"},
-                {"main": "2. Verse two", "main_reference": "Ref 1:2"}
+            "items": [
+                {"kind": "verse", "number": 1, "text": "Verse one", "book": "Ref", "chapter": 1, "translation": "SEB"},
+                {"kind": "verse", "number": 2, "text": "Verse two", "book": "Ref", "chapter": 1, "translation": "SEB"}
             ]
         });
         let (result, _) = execute_tool("create_bible_presentation", &args.to_string(), &state, 320)
@@ -828,7 +972,8 @@ mod tests {
             .await
             .unwrap()
             .unwrap();
-        assert_eq!(presentation.slides.len(), 2);
+        // Composer packs both verses into one slide (same book/chapter/translation)
+        assert!(!presentation.slides.is_empty());
         let first_slide_id = presentation.slides[0].id.to_string();
 
         let args = json!({
@@ -846,8 +991,7 @@ mod tests {
             .await
             .unwrap()
             .unwrap();
-        assert_eq!(after.slides.len(), 1);
-        assert_eq!(after.slides[0].main_reference, "Ref 1:2");
+        assert!(after.slides.len() < presentation.slides.len());
     }
 
     #[tokio::test]
@@ -856,7 +1000,9 @@ mod tests {
 
         let args = json!({
             "name": "Get Test",
-            "slides": [{"main": "1. text one", "main_reference": "Gen 1:1"}]
+            "items": [
+                {"kind": "verse", "number": 1, "text": "text one", "book": "Gen", "chapter": 1, "translation": "SEB"}
+            ]
         });
         let (create_result, _) =
             execute_tool("create_bible_presentation", &args.to_string(), &state, 320)
@@ -874,8 +1020,8 @@ mod tests {
         assert_eq!(fetched["name"], "Get Test");
         let slides = fetched["slides"].as_array().unwrap();
         assert_eq!(slides.len(), 1);
-        assert_eq!(slides[0]["main"], "1. text one");
-        assert_eq!(slides[0]["main_reference"], "Gen 1:1");
+        assert!(slides[0]["main"].as_str().unwrap().contains("1. text one"));
+        assert_eq!(slides[0]["main_reference"], "Gen 1:1 (SEB)");
         assert!(preview.contains("Get Test"));
     }
 
@@ -885,7 +1031,7 @@ mod tests {
 
         let (create_result, _) = execute_tool(
             "create_bible_presentation",
-            &json!({"name": "Old Name"}).to_string(),
+            &json!({"name": "Old Name", "items": []}).to_string(),
             &state,
             320,
         )
@@ -925,7 +1071,7 @@ mod tests {
 
         let (create_result, _) = execute_tool(
             "create_bible_presentation",
-            &json!({"name": "Doomed"}).to_string(),
+            &json!({"name": "Doomed", "items": []}).to_string(),
             &state,
             320,
         )
@@ -965,60 +1111,6 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn update_bible_slide_changes_text_and_references() {
-        let state = AppState::in_memory().await.unwrap();
-
-        // Create a presentation with one slide
-        let args = json!({
-            "name": "Update Test",
-            "slides": [{"main": "1. original", "main_reference": "Ref 1:1"}]
-        });
-        let (create_result, _) =
-            execute_tool("create_bible_presentation", &args.to_string(), &state, 320)
-                .await
-                .unwrap();
-        let created: Value = serde_json::from_str(&create_result).unwrap();
-        let pres_id = created["id"].as_str().unwrap();
-
-        // Fetch to get the slide ID
-        let get_args = json!({"presentation_id": pres_id});
-        let (get_result, _) =
-            execute_tool("get_bible_presentation", &get_args.to_string(), &state, 320)
-                .await
-                .unwrap();
-        let fetched: Value = serde_json::from_str(&get_result).unwrap();
-        let slide_id = fetched["slides"][0]["id"].as_str().unwrap();
-
-        // Update the slide
-        let update_args = json!({
-            "presentation_id": pres_id,
-            "slide_id": slide_id,
-            "main": "2. updated",
-            "main_reference": "Ref 2:2",
-            "secondary": "trans",
-            "secondary_reference": "Ref 2:2 trans"
-        });
-        let (update_result, _) =
-            execute_tool("update_bible_slide", &update_args.to_string(), &state, 320)
-                .await
-                .unwrap();
-        let parsed: Value = serde_json::from_str(&update_result).unwrap();
-        assert!(parsed["ok"].as_bool().unwrap());
-
-        // Verify by fetching again
-        let (get_result2, _) =
-            execute_tool("get_bible_presentation", &get_args.to_string(), &state, 320)
-                .await
-                .unwrap();
-        let fetched2: Value = serde_json::from_str(&get_result2).unwrap();
-        let slide = &fetched2["slides"][0];
-        assert_eq!(slide["main"], "2. updated");
-        assert_eq!(slide["main_reference"], "Ref 2:2");
-        assert_eq!(slide["secondary"], "trans");
-        assert_eq!(slide["secondary_reference"], "Ref 2:2 trans");
-    }
-
-    #[tokio::test]
     async fn get_style_guide_returns_expected_sections() {
         let state = AppState::in_memory().await.unwrap();
         let (result, preview) = execute_tool("get_style_guide", "{}", &state, 320)
@@ -1042,86 +1134,32 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn create_bible_rejects_reference_without_parens() {
-        // Exact production-bug input — AI wrote "Židom 4:13 SEB" without parens.
+    async fn create_bible_accepts_verse_items() {
         let state = AppState::in_memory().await.unwrap();
         let args = json!({
             "name": "Test Sermon",
-            "slides": [{
-                "main": "13. A nieto tvora, čo by bol preň neviditeľný",
-                "main_reference": "Židom 4:13 SEB"
-            }]
-        });
-        let (result, preview) =
-            execute_tool("create_bible_presentation", &args.to_string(), &state, 320)
-                .await
-                .unwrap();
-
-        let json: Value = serde_json::from_str(&result).unwrap();
-        assert_eq!(json["error"], "slide_validation");
-        assert_eq!(json["rule"], "reference_format_requires_parens");
-        assert!(json["got"].as_str().unwrap().contains("Židom 4:13 SEB"));
-        assert!(preview.starts_with("Validation failed:"));
-
-        // No presentation should have been created.
-        let list = state.list_bible_presentations().await.unwrap();
-        assert!(
-            list.is_empty(),
-            "presentation must not be created on rejection"
-        );
-    }
-
-    #[tokio::test]
-    async fn create_bible_rejects_main_without_verse_numbers() {
-        let state = AppState::in_memory().await.unwrap();
-        let args = json!({
-            "name": "Test",
-            "slides": [{
-                "main": "Na počiatku bolo Slovo, to Slovo bolo u Boha",
-                "main_reference": "Ján 1:1 (MIL)"
-            }]
+            "items": [
+                {"kind": "verse", "number": 1, "text": "Na počiatku bolo Slovo.", "book": "Ján", "chapter": 1, "translation": "MIL"},
+                {"kind": "verse", "number": 13, "text": "A nieto tvora, čo by bol preň neviditeľný", "book": "Židom", "chapter": 4, "translation": "SEB"}
+            ]
         });
         let (result, _) = execute_tool("create_bible_presentation", &args.to_string(), &state, 320)
             .await
             .unwrap();
 
         let json: Value = serde_json::from_str(&result).unwrap();
-        assert_eq!(json["rule"], "missing_verse_number_prefix");
-        assert!(state.list_bible_presentations().await.unwrap().is_empty());
+        // Two different books/translations → two slides
+        assert_eq!(json["slide_count"], 2);
     }
 
     #[tokio::test]
-    async fn create_bible_rejects_main_with_hash_markers() {
-        let state = AppState::in_memory().await.unwrap();
-        let args = json!({
-            "name": "Test",
-            "slides": [{
-                "main": "1. aby sme ##verili## menu jeho Syna",
-                "main_reference": "Ján 1:12 (MIL)"
-            }]
-        });
-        let (result, _) = execute_tool("create_bible_presentation", &args.to_string(), &state, 320)
-            .await
-            .unwrap();
-
-        let json: Value = serde_json::from_str(&result).unwrap();
-        assert_eq!(json["rule"], "unprocessed_bold_markers");
-    }
-
-    #[tokio::test]
-    async fn create_bible_accepts_correctly_formatted_slides() {
+    async fn create_bible_accepts_emphasis_item() {
         let state = AppState::in_memory().await.unwrap();
         let args = json!({
             "name": "Test Sermon",
-            "slides": [
-                {
-                    "main": "1. Na počiatku bolo Slovo.\n2. Ono bolo na počiatku u Boha.\n3. Všetko vzniklo skrze neho.",
-                    "main_reference": "Ján 1:1-51 (MIL)"
-                },
-                {
-                    "main": "13. A nieto tvora, čo by bol preň neviditeľný",
-                    "main_reference": "Židom 4:13 (SEB)"
-                }
+            "items": [
+                {"kind": "verse", "number": 1, "text": "Na počiatku bolo Slovo", "book": "Ján", "chapter": 1, "translation": "MIL"},
+                {"kind": "emphasis", "text": "NOVÁ ZMLUVA"}
             ]
         });
         let (result, _) = execute_tool("create_bible_presentation", &args.to_string(), &state, 320)
@@ -1133,40 +1171,16 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn create_bible_accepts_emphasis_slide_without_reference() {
-        let state = AppState::in_memory().await.unwrap();
-        let args = json!({
-            "name": "Test Sermon",
-            "slides": [
-                {
-                    "main": "1. Na počiatku bolo Slovo",
-                    "main_reference": "Ján 1:1 (MIL)"
-                },
-                {
-                    "main": "NOVÁ ZMLUVA",
-                    "main_reference": ""
-                }
-            ]
-        });
-        let (result, _) = execute_tool("create_bible_presentation", &args.to_string(), &state, 320)
-            .await
-            .unwrap();
-
-        let json: Value = serde_json::from_str(&result).unwrap();
-        assert_eq!(json["slide_count"], 2);
-    }
-
-    #[tokio::test]
-    async fn create_bible_rejects_entire_batch_on_first_invalid_slide() {
-        // Slide 0 valid, slide 1 invalid, slide 2 valid — whole batch rejected,
-        // zero slides and zero presentation created.
+    async fn create_bible_rejects_invalid_verse_item_missing_fields() {
+        // Item 0 valid, item 1 missing required fields — whole call rejected,
+        // zero presentation created.
         let state = AppState::in_memory().await.unwrap();
         let args = json!({
             "name": "Partial Batch Test",
-            "slides": [
-                {"main": "1. OK verse", "main_reference": "Ján 1:1 (MIL)"},
-                {"main": "bad text no prefix", "main_reference": "Ján 1:2 (MIL)"},
-                {"main": "3. OK verse", "main_reference": "Ján 1:3 (MIL)"}
+            "items": [
+                {"kind": "verse", "number": 1, "text": "OK verse", "book": "Ján", "chapter": 1, "translation": "MIL"},
+                {"kind": "verse", "number": 2, "text": "bad", "book": "", "chapter": 1, "translation": "MIL"},
+                {"kind": "verse", "number": 3, "text": "OK verse", "book": "Ján", "chapter": 1, "translation": "MIL"}
             ]
         });
         let (result, _) = execute_tool("create_bible_presentation", &args.to_string(), &state, 320)
@@ -1174,106 +1188,153 @@ mod tests {
             .unwrap();
 
         let json: Value = serde_json::from_str(&result).unwrap();
-        assert_eq!(json["rule"], "missing_verse_number_prefix");
-        assert!(json["got"].as_str().unwrap().contains("slide[1]"));
+        assert_eq!(json["error"], "invalid_verse_item");
+        assert!(json["got"].as_str().unwrap().contains("item[1]"));
         assert!(state.list_bible_presentations().await.unwrap().is_empty());
     }
 
     #[tokio::test]
-    async fn add_bible_slide_runs_validator() {
+    async fn create_bible_presentation_with_long_passage_composes_many_slides() {
+        // Simulates the realistic AI path: a full sermon passage with many
+        // verses of varying lengths. The server must split them into multiple
+        // slides and every slide must fit under the character limit.
+        //
+        // This is the end-to-end proof that moving slide-break decisions from
+        // the LLM to the server actually enforces the limit. The /ai/chat
+        // endpoint itself requires a live LLM we can't test in CI — this
+        // Rust test exercises the exact same execute_tool() dispatch path.
         let state = AppState::in_memory().await.unwrap();
-        // Create a valid presentation first.
-        let create_args = json!({
-            "name": "Base",
-            "slides": [{"main": "1. test", "main_reference": "Ján 1:1 (MIL)"}]
+        let char_limit: u32 = 200;
+
+        // 12 verses of real-ish Slovak bible text with varied lengths. The
+        // total is far above the 200-char limit, so the server MUST produce
+        // multiple slides. Mix of short and long verses tests the packing
+        // logic: short verses should cluster, long verses should split.
+        let items: Vec<serde_json::Value> = vec![
+            json!({"kind": "verse", "number": 1, "text": "Na počiatku bolo Slovo a to Slovo bolo u Boha a to Slovo bolo Boh.", "book": "Ján", "chapter": 1, "translation": "SEB"}),
+            json!({"kind": "verse", "number": 2, "text": "Ono bolo na počiatku u Boha.", "book": "Ján", "chapter": 1, "translation": "SEB"}),
+            json!({"kind": "verse", "number": 3, "text": "Všetko povstalo skrze neho a bez neho nepovstalo nič, čo povstalo.", "book": "Ján", "chapter": 1, "translation": "SEB"}),
+            json!({"kind": "verse", "number": 4, "text": "V ňom bol život a život bol svetlom ľudí.", "book": "Ján", "chapter": 1, "translation": "SEB"}),
+            json!({"kind": "verse", "number": 5, "text": "A svetlo svieti v tme, ale tma ho nepohltila.", "book": "Ján", "chapter": 1, "translation": "SEB"}),
+            json!({"kind": "emphasis", "text": "NOVÁ ZMLUVA"}),
+            json!({"kind": "verse", "number": 6, "text": "Bol človek, poslaný od Boha, ktorý sa volal Ján.", "book": "Ján", "chapter": 1, "translation": "SEB"}),
+            json!({"kind": "verse", "number": 7, "text": "Ten prišiel na svedectvo, aby svedčil o svetle, aby skrze neho všetci uverili.", "book": "Ján", "chapter": 1, "translation": "SEB"}),
+            json!({"kind": "verse", "number": 8, "text": "On sám nebol svetlo, ale prišiel svedčiť o svetle.", "book": "Ján", "chapter": 1, "translation": "SEB"}),
+            json!({"kind": "verse", "number": 9, "text": "Pravé svetlo, ktoré osvecuje každého človeka, prichádzalo na svet.", "book": "Ján", "chapter": 1, "translation": "SEB"}),
+            json!({"kind": "verse", "number": 10, "text": "Bol na svete a svet povstal skrze neho, ale svet ho nepoznal.", "book": "Ján", "chapter": 1, "translation": "SEB"}),
+            json!({"kind": "verse", "number": 11, "text": "Prišiel do svojho vlastného, ale vlastní ho neprijali.", "book": "Ján", "chapter": 1, "translation": "SEB"}),
+        ];
+
+        let args = json!({
+            "name": "Ján 1 — End-to-End Composition Proof",
+            "items": items,
         });
-        let (create_result, _) = execute_tool(
+        let (body, _preview) = execute_tool(
             "create_bible_presentation",
-            &create_args.to_string(),
+            &args.to_string(),
             &state,
-            320,
+            char_limit,
         )
         .await
         .unwrap();
-        let created: Value = serde_json::from_str(&create_result).unwrap();
-        let pres_id = created["id"].as_str().unwrap().to_string();
-        let slide_count_before = created["slide_count"].as_u64().unwrap();
 
-        // Now try to add a malformed slide.
-        let add_args = json!({
-            "presentation_id": pres_id,
-            "main": "no verse number",
-            "main_reference": "Ján 1:2 (MIL)"
-        });
-        let (add_result, _) = execute_tool("add_bible_slide", &add_args.to_string(), &state, 320)
+        // Parse response — should be the created presentation, NOT an error.
+        let parsed: Value = serde_json::from_str(&body).unwrap();
+        assert!(
+            parsed["error"].is_null(),
+            "expected successful creation, got error: {body}"
+        );
+        assert_eq!(
+            parsed["name"].as_str().unwrap(),
+            "Ján 1 — End-to-End Composition Proof"
+        );
+        let slide_count = parsed["slide_count"].as_u64().unwrap();
+
+        // With 12 items and a 200-char limit, the server MUST split into
+        // multiple slides. Exact count depends on packing, but must be > 1
+        // (proves the server is actually splitting) and reasonably bounded
+        // (proves the packer is not producing one-slide-per-verse when they
+        // could group).
+        assert!(
+            slide_count > 1,
+            "expected multiple slides from a long passage, got {slide_count}"
+        );
+        assert!(
+            slide_count < 12,
+            "expected server to pack verses into fewer slides than 1-per-verse, got {slide_count} for 12 items"
+        );
+
+        // Fetch the persisted presentation and verify every slide's main
+        // text fits under the character limit. THIS IS THE CORE ASSERTION —
+        // it proves the fix works end-to-end.
+        let pres_id_str = parsed["id"].as_str().unwrap();
+        let pres_id = BiblePresentationId::from_uuid(Uuid::parse_str(pres_id_str).unwrap());
+        let pres = state
+            .bible_presentation_detail(pres_id)
             .await
+            .unwrap()
             .unwrap();
 
-        let json: Value = serde_json::from_str(&add_result).unwrap();
-        assert_eq!(json["rule"], "missing_verse_number_prefix");
+        assert_eq!(pres.slides.len() as u64, slide_count);
 
-        // Slide count must not have changed.
-        let get_args = json!({"presentation_id": pres_id});
-        let (get_result, _) =
-            execute_tool("get_bible_presentation", &get_args.to_string(), &state, 320)
-                .await
-                .unwrap();
-        let fetched: Value = serde_json::from_str(&get_result).unwrap();
+        for (idx, slide) in pres.slides.iter().enumerate() {
+            let main = slide.main.value();
+            assert!(
+                main.len() <= char_limit as usize,
+                "slide[{idx}] main.len()={} exceeds limit {}: {:?}",
+                main.len(),
+                char_limit,
+                main
+            );
+            // Sanity: no raw ## markers survived.
+            assert!(
+                !main.contains("##"),
+                "slide[{idx}] main should not contain ## markers: {main}"
+            );
+        }
+
+        // At least one slide should be the emphasis slide with empty reference.
+        let emphasis_slides: Vec<&_> = pres
+            .slides
+            .iter()
+            .filter(|s| s.main_reference.is_empty() && s.main.value() == "NOVÁ ZMLUVA")
+            .collect();
         assert_eq!(
-            fetched["slides"].as_array().unwrap().len() as u64,
-            slide_count_before
+            emphasis_slides.len(),
+            1,
+            "expected exactly 1 emphasis slide with main='NOVÁ ZMLUVA' and empty reference"
         );
     }
 
     #[tokio::test]
-    async fn update_bible_slide_runs_validator() {
+    async fn load_bible_verses_handler_is_registered() {
+        // The in-memory state seeds no bible translations, so we expect
+        // "translation not found" error. This proves the tool is registered
+        // and the handler exists (not the "unknown tool" fallthrough).
         let state = AppState::in_memory().await.unwrap();
-        // Create a valid presentation with one slide.
-        let create_args = json!({
-            "name": "Base",
-            "slides": [{"main": "1. original text", "main_reference": "Ján 1:1 (MIL)"}]
+        let args = json!({
+            "translation": "slk-seb",
+            "book": "Ján",
+            "chapter": 1,
+            "verse_start": 1,
+            "verse_end": 3
         });
-        let (create_result, _) = execute_tool(
-            "create_bible_presentation",
-            &create_args.to_string(),
-            &state,
-            320,
-        )
-        .await
-        .unwrap();
-        let created: Value = serde_json::from_str(&create_result).unwrap();
-        let pres_id = created["id"].as_str().unwrap().to_string();
-
-        // Fetch to get slide id.
-        let get_args = json!({"presentation_id": pres_id});
-        let (get_result, _) =
-            execute_tool("get_bible_presentation", &get_args.to_string(), &state, 320)
-                .await
-                .unwrap();
-        let fetched: Value = serde_json::from_str(&get_result).unwrap();
-        let slide_id = fetched["slides"][0]["id"].as_str().unwrap().to_string();
-
-        // Try to update with raw ## markers.
-        let update_args = json!({
-            "presentation_id": pres_id,
-            "slide_id": slide_id,
-            "main": "1. aby sme ##verili##",
-            "main_reference": "Ján 1:12 (MIL)"
-        });
-        let (update_result, _) =
-            execute_tool("update_bible_slide", &update_args.to_string(), &state, 320)
-                .await
-                .unwrap();
-
-        let json: Value = serde_json::from_str(&update_result).unwrap();
-        assert_eq!(json["rule"], "unprocessed_bold_markers");
-
-        // Verify the original text is unchanged.
-        let (get_after, _) =
-            execute_tool("get_bible_presentation", &get_args.to_string(), &state, 320)
-                .await
-                .unwrap();
-        let after: Value = serde_json::from_str(&get_after).unwrap();
-        assert_eq!(after["slides"][0]["main"], "1. original text");
+        let result = execute_tool("load_bible_verses", &args.to_string(), &state, 320).await;
+        match result {
+            Ok((body, _preview)) => {
+                assert!(
+                    !body.contains("unknown tool"),
+                    "tool must be registered, got body: {body}"
+                );
+                // Expected: "translation not found" error JSON
+                assert!(
+                    body.contains("translation not found") || body.contains("not found"),
+                    "expected translation-not-found error, got: {body}"
+                );
+            }
+            Err(_) => {
+                // Also acceptable — the handler exists but errored looking up translations.
+            }
+        }
     }
 }

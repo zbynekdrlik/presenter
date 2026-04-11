@@ -101,6 +101,32 @@ impl AppState {
             .await
     }
 
+    /// Load a contiguous verse range from the DB in a single query. Used
+    /// by the AI `load_bible_verses` tool to return raw per-verse objects
+    /// to the LLM. Thin wrapper over the repository method — no splitting,
+    /// no grouping, no composition; the caller decides what to do with
+    /// the verses.
+    pub async fn bible_passage_range(
+        &self,
+        translation_code: &str,
+        book: &str,
+        book_code: Option<&str>,
+        chapter: u16,
+        verse_start: u16,
+        verse_end: u16,
+    ) -> anyhow::Result<Vec<presenter_core::BiblePassage>> {
+        self.repository
+            .bible_passage_range(
+                translation_code,
+                book,
+                book_code,
+                chapter,
+                verse_start,
+                verse_end,
+            )
+            .await
+    }
+
     pub async fn list_bible_books(
         &self,
         translation_code: &str,

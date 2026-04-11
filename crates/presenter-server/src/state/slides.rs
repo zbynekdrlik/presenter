@@ -15,6 +15,161 @@ fn translation_short_code(code: &str) -> String {
     code.rsplit('-').next().unwrap_or(code).to_uppercase()
 }
 
+/// Typed input for the AI-facing bible composer. A stream of these is
+/// produced by the LLM after it edits DB verses against the sermon text,
+/// and the server composes slides out of the stream respecting the
+/// character limit — same splitting rules as live mode.
+#[derive(Debug, Clone)]
+pub(crate) enum BibleItem {
+    Verse {
+        number: u32,
+        text: String,
+        book: String,
+        chapter: u32,
+        translation: String,
+    },
+    Emphasis {
+        text: String,
+    },
+}
+
+/// A slide produced by `compose_bible_items_into_slides`. Plain data —
+/// the tool handler wraps it into `BiblePresentationSlide` for persistence.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct ComposedBibleSlide {
+    pub main: String,
+    pub main_reference: String,
+}
+
+/// Compose a stream of `BibleItem` into slides. Same greedy-packing rule
+/// as `compose_bible_slides`: accumulate verses into one slide until the
+/// next verse would overflow the character limit, then flush. Emphasis
+/// items and translation/book/chapter changes force a slide break.
+///
+/// If a single verse item is longer than `character_limit`, it is emitted
+/// as its own oversized slide — the validator's `MainExceedsCharacterLimit`
+/// rule catches this downstream and the LLM sees a rule-keyed error.
+pub(crate) fn compose_bible_items_into_slides(
+    items: &[BibleItem],
+    character_limit: u32,
+) -> Vec<ComposedBibleSlide> {
+    let limit = character_limit as usize;
+    let mut slides: Vec<ComposedBibleSlide> = Vec::new();
+
+    // Accumulator for the current verse slide.
+    let mut cur_lines: Vec<String> = Vec::new();
+    let mut cur_numbers: Vec<u32> = Vec::new();
+    let mut cur_group: Option<(String, u32, String)> = None; // (book, chapter, translation)
+
+    // Flush the current verse accumulator into a slide. Uses let-else
+    // pattern matching instead of expect()/unwrap() so there is no panic
+    // path at all — if an invariant is ever broken by a future refactor
+    // (e.g., group set without lines, or lines without group), the flush
+    // is a no-op rather than a crash.
+    let flush_verses = |slides: &mut Vec<ComposedBibleSlide>,
+                        lines: &mut Vec<String>,
+                        numbers: &mut Vec<u32>,
+                        group: &mut Option<(String, u32, String)>| {
+        if lines.is_empty() {
+            // Also drop any stale group metadata to keep invariants aligned.
+            *group = None;
+            return;
+        }
+        let Some((book, chapter, translation)) = group.take() else {
+            // Lines present but group missing — treat as invariant break
+            // and reset the accumulator instead of producing a bogus slide.
+            lines.clear();
+            numbers.clear();
+            return;
+        };
+        let (Some(&start), Some(&end)) = (numbers.first(), numbers.last()) else {
+            lines.clear();
+            numbers.clear();
+            return;
+        };
+        let main = lines.join("\n");
+        let reference = if start == end {
+            format!("{} {}:{} ({})", book, chapter, start, translation)
+        } else {
+            format!("{} {}:{}-{} ({})", book, chapter, start, end, translation)
+        };
+        slides.push(ComposedBibleSlide {
+            main,
+            main_reference: reference,
+        });
+        lines.clear();
+        numbers.clear();
+    };
+
+    for item in items {
+        match item {
+            BibleItem::Emphasis { text } => {
+                flush_verses(
+                    &mut slides,
+                    &mut cur_lines,
+                    &mut cur_numbers,
+                    &mut cur_group,
+                );
+                slides.push(ComposedBibleSlide {
+                    main: text.clone(),
+                    main_reference: String::new(),
+                });
+            }
+            BibleItem::Verse {
+                number,
+                text,
+                book,
+                chapter,
+                translation,
+            } => {
+                // Translation / book / chapter change forces a slide break.
+                if let Some((cur_book, cur_chapter, cur_tr)) = &cur_group {
+                    if cur_book != book || cur_chapter != chapter || cur_tr != translation {
+                        flush_verses(
+                            &mut slides,
+                            &mut cur_lines,
+                            &mut cur_numbers,
+                            &mut cur_group,
+                        );
+                    }
+                }
+
+                let line = format!("{}. {}", number, text);
+                let existing_len: usize = cur_lines.iter().map(String::len).sum();
+                let prospective = if cur_lines.is_empty() {
+                    line.len()
+                } else {
+                    // existing lines joined by "\n" = existing_len + (cur_lines.len() - 1)
+                    // plus "\n" + new line = + 1 + line.len()
+                    // total = existing_len + cur_lines.len() + line.len()
+                    existing_len + cur_lines.len() + line.len()
+                };
+
+                if prospective > limit && !cur_lines.is_empty() {
+                    flush_verses(
+                        &mut slides,
+                        &mut cur_lines,
+                        &mut cur_numbers,
+                        &mut cur_group,
+                    );
+                }
+
+                cur_lines.push(line);
+                cur_numbers.push(*number);
+                cur_group = Some((book.clone(), *chapter, translation.clone()));
+            }
+        }
+    }
+
+    flush_verses(
+        &mut slides,
+        &mut cur_lines,
+        &mut cur_numbers,
+        &mut cur_group,
+    );
+    slides
+}
+
 pub(crate) fn compose_bible_slides(
     main_translation: &BibleTranslation,
     secondary_translation: Option<&BibleTranslation>,
@@ -479,5 +634,174 @@ mod tests {
 
         // stage = main reference (NOT secondary)
         assert_eq!(slide.content.stage.value(), "John 3:16 (SEB)");
+    }
+
+    // --- compose_bible_items_into_slides tests ---
+
+    fn verse(number: u32, text: &str) -> BibleItem {
+        BibleItem::Verse {
+            number,
+            text: text.to_string(),
+            book: "Ján".to_string(),
+            chapter: 1,
+            translation: "SEB".to_string(),
+        }
+    }
+
+    fn emphasis(text: &str) -> BibleItem {
+        BibleItem::Emphasis {
+            text: text.to_string(),
+        }
+    }
+
+    #[test]
+    fn compose_items_single_short_verse_emits_one_slide() {
+        let items = vec![verse(1, "Na počiatku bolo Slovo.")];
+        let slides = compose_bible_items_into_slides(&items, 320);
+        assert_eq!(slides.len(), 1);
+        assert_eq!(slides[0].main, "1. Na počiatku bolo Slovo.");
+        assert_eq!(slides[0].main_reference, "Ján 1:1 (SEB)");
+    }
+
+    #[test]
+    fn compose_items_two_verses_that_fit_emit_one_slide_with_range() {
+        let items = vec![
+            verse(1, "Na počiatku bolo Slovo."),
+            verse(2, "Ono bolo na počiatku u Boha."),
+        ];
+        let slides = compose_bible_items_into_slides(&items, 320);
+        assert_eq!(slides.len(), 1);
+        assert!(slides[0].main.contains("1. Na počiatku"));
+        assert!(slides[0].main.contains("2. Ono bolo"));
+        assert_eq!(slides[0].main_reference, "Ján 1:1-2 (SEB)");
+    }
+
+    #[test]
+    fn compose_items_two_verses_that_overflow_emit_two_slides() {
+        // limit = 30; each verse line exceeds ~24 chars; together they exceed 30.
+        let items = vec![
+            verse(1, "Na počiatku bolo Slovo."), // "1. Na počiatku bolo Slovo."
+            verse(2, "Ono bolo na počiatku."),   // "2. Ono bolo na počiatku."
+        ];
+        let slides = compose_bible_items_into_slides(&items, 30);
+        assert_eq!(slides.len(), 2);
+        assert_eq!(slides[0].main_reference, "Ján 1:1 (SEB)");
+        assert_eq!(slides[1].main_reference, "Ján 1:2 (SEB)");
+    }
+
+    #[test]
+    fn compose_items_emphasis_between_verses_breaks_slide() {
+        let items = vec![
+            verse(1, "Na počiatku."),
+            emphasis("NOVÁ ZMLUVA"),
+            verse(2, "Ono bolo."),
+        ];
+        let slides = compose_bible_items_into_slides(&items, 320);
+        assert_eq!(slides.len(), 3);
+        assert_eq!(slides[0].main, "1. Na počiatku.");
+        assert_eq!(slides[0].main_reference, "Ján 1:1 (SEB)");
+        assert_eq!(slides[1].main, "NOVÁ ZMLUVA");
+        assert_eq!(slides[1].main_reference, "");
+        assert_eq!(slides[2].main, "2. Ono bolo.");
+        assert_eq!(slides[2].main_reference, "Ján 1:2 (SEB)");
+    }
+
+    #[test]
+    fn compose_items_translation_change_forces_break() {
+        let items = vec![
+            BibleItem::Verse {
+                number: 1,
+                text: "Na počiatku bolo Slovo.".to_string(),
+                book: "Ján".to_string(),
+                chapter: 1,
+                translation: "SEB".to_string(),
+            },
+            BibleItem::Verse {
+                number: 2,
+                text: "Ono bolo na počiatku.".to_string(),
+                book: "Ján".to_string(),
+                chapter: 1,
+                translation: "MIL".to_string(),
+            },
+        ];
+        let slides = compose_bible_items_into_slides(&items, 320);
+        assert_eq!(slides.len(), 2);
+        assert_eq!(slides[0].main_reference, "Ján 1:1 (SEB)");
+        assert_eq!(slides[1].main_reference, "Ján 1:2 (MIL)");
+    }
+
+    #[test]
+    fn compose_items_chapter_change_forces_break() {
+        let items = vec![
+            BibleItem::Verse {
+                number: 14,
+                text: "last verse ch1".to_string(),
+                book: "Ján".to_string(),
+                chapter: 1,
+                translation: "SEB".to_string(),
+            },
+            BibleItem::Verse {
+                number: 1,
+                text: "first verse ch2".to_string(),
+                book: "Ján".to_string(),
+                chapter: 2,
+                translation: "SEB".to_string(),
+            },
+        ];
+        let slides = compose_bible_items_into_slides(&items, 320);
+        assert_eq!(slides.len(), 2);
+        assert_eq!(slides[0].main_reference, "Ján 1:14 (SEB)");
+        assert_eq!(slides[1].main_reference, "Ján 2:1 (SEB)");
+    }
+
+    #[test]
+    fn compose_items_book_change_forces_break() {
+        let items = vec![
+            BibleItem::Verse {
+                number: 1,
+                text: "first".to_string(),
+                book: "Ján".to_string(),
+                chapter: 1,
+                translation: "SEB".to_string(),
+            },
+            BibleItem::Verse {
+                number: 1,
+                text: "second".to_string(),
+                book: "Marek".to_string(),
+                chapter: 1,
+                translation: "SEB".to_string(),
+            },
+        ];
+        let slides = compose_bible_items_into_slides(&items, 320);
+        assert_eq!(slides.len(), 2);
+        assert_eq!(slides[0].main_reference, "Ján 1:1 (SEB)");
+        assert_eq!(slides[1].main_reference, "Marek 1:1 (SEB)");
+    }
+
+    #[test]
+    fn compose_items_empty_returns_empty() {
+        let slides = compose_bible_items_into_slides(&[], 320);
+        assert!(slides.is_empty());
+    }
+
+    #[test]
+    fn compose_items_single_verse_longer_than_limit_emits_oversized_slide() {
+        // Limit 20; verse line is much longer. Composer still emits it —
+        // the validator catches oversize downstream.
+        let items = vec![verse(1, "Na počiatku bolo Slovo a Slovo bolo u Boha.")];
+        let slides = compose_bible_items_into_slides(&items, 20);
+        assert_eq!(slides.len(), 1);
+        assert!(slides[0].main.len() > 20);
+        assert_eq!(slides[0].main_reference, "Ján 1:1 (SEB)");
+    }
+
+    #[test]
+    fn compose_items_adjacent_emphasis_emit_separate_slides() {
+        let items = vec![emphasis("FIRST"), emphasis("SECOND"), verse(1, "verse")];
+        let slides = compose_bible_items_into_slides(&items, 320);
+        assert_eq!(slides.len(), 3);
+        assert_eq!(slides[0].main, "FIRST");
+        assert_eq!(slides[1].main, "SECOND");
+        assert_eq!(slides[2].main_reference, "Ján 1:1 (SEB)");
     }
 }
