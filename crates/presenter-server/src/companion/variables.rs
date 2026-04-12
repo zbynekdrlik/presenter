@@ -417,6 +417,7 @@ pub(super) fn write_bible_variables(
 ) {
     if let Some(ov) = slide_override {
         builder.set("bible_translation_code", ov.translation_code.clone());
+        // BibleSlideOutput doesn't carry translation name; use code as fallback
         builder.set("bible_translation_name", ov.translation_code.clone());
         builder.set("bible_reference", ov.reference.clone());
         builder.set("bible_text", ov.text.clone());

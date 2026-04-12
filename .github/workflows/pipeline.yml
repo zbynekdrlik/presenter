@@ -988,6 +988,10 @@ jobs:
           echo "${{ secrets.DEPLOY_SSH_KEY_PP }}" > ~/.ssh/id_pp
           chmod 600 ~/.ssh/id_pp
           ssh-keyscan companion-pp.lan >> ~/.ssh/known_hosts 2>/dev/null
+          if [ ! -s ~/.ssh/known_hosts ]; then
+            echo "::error::ssh-keyscan failed — known_hosts is empty. Cannot verify companion-pp.lan host."
+            exit 1
+          fi
           cat >> ~/.ssh/config <<EOF
           Host companion-pp
               HostName companion-pp.lan
@@ -998,9 +1002,8 @@ jobs:
       - name: Deploy to companion-snv.lan
         run: |
           MODULE_DIR="/home/companion/.config/companion-nodejs/modules/presenter"
-          STAGE_DIR="/tmp/companion-module-stage-$$"
-          echo "Deploying Companion plugin to companion-snv.lan..."
-          ssh companion-snv "mkdir -p $STAGE_DIR"
+          STAGE_DIR=$(ssh companion-snv "mktemp -d /tmp/companion-module-XXXXXX")
+          echo "Deploying Companion plugin to companion-snv.lan (staging: $STAGE_DIR)..."
           scp -r ops/companion/presenter/* companion-snv:$STAGE_DIR/
           ssh companion-snv "cd $STAGE_DIR && npm install --omit=dev"
           ssh companion-snv "sudo rm -rf $MODULE_DIR && sudo mkdir -p $(dirname $MODULE_DIR) && sudo mv $STAGE_DIR $MODULE_DIR && sudo chown -R companion:companion $MODULE_DIR"
