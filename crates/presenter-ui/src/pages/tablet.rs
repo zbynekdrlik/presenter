@@ -240,15 +240,18 @@ fn TabletHeader() -> impl IntoView {
     let ctx = use_ctx!(TabletContext);
     let text_scale = ctx.text_scale;
 
-    let on_scale_input = move |ev: web_sys::Event| {
-        let target = ev
-            .target()
-            .and_then(|t| t.dyn_into::<web_sys::HtmlInputElement>().ok());
-        if let Some(el) = target {
-            if let Ok(val) = el.value().parse::<u32>() {
-                text_scale.set(val);
-                apply_scale(val);
-                ctx.persist_scale();
+    let on_scale_input = {
+        let ctx = ctx.clone();
+        move |ev: web_sys::Event| {
+            let target = ev
+                .target()
+                .and_then(|t| t.dyn_into::<web_sys::HtmlInputElement>().ok());
+            if let Some(el) = target {
+                if let Ok(val) = el.value().parse::<u32>() {
+                    text_scale.set(val);
+                    apply_scale(val);
+                    ctx.persist_scale();
+                }
             }
         }
     };
