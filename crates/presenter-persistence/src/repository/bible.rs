@@ -1,8 +1,9 @@
 use anyhow::anyhow;
 use chrono::Utc;
 use sea_orm::{
-    sea_query::Expr as SeaExpr, ActiveModelTrait, ColumnTrait, EntityTrait, PaginatorTrait,
-    QueryFilter, QueryOrder, QuerySelect, TransactionTrait,
+    sea_query::Expr as SeaExpr, ActiveModelTrait, ColumnTrait, DatabaseBackend, EntityTrait,
+    FromQueryResult, PaginatorTrait, QueryFilter, QueryOrder, QuerySelect, Statement,
+    TransactionTrait,
 };
 use tracing::instrument;
 
@@ -22,6 +23,29 @@ use super::util::{
     BIBLE_INSERT_CHUNK,
 };
 use super::Repository;
+
+/// Build an FTS5 MATCH query from free-text input.
+///
+/// Splits into words, drops tokens shorter than 2 chars, appends `*` for
+/// prefix matching, and joins with spaces (implicit AND in FTS5).
+/// Returns `None` if no usable tokens remain.
+fn build_fts_query(input: &str) -> Option<String> {
+    let tokens: Vec<String> = input
+        .split_whitespace()
+        .filter(|w| w.len() >= 2)
+        .map(|w| {
+            // Strip FTS5 special characters to prevent query syntax errors
+            let cleaned: String = w.chars().filter(|c| c.is_alphanumeric()).collect();
+            format!("{cleaned}*")
+        })
+        .filter(|t| t.len() > 1) // skip bare "*"
+        .collect();
+    if tokens.is_empty() {
+        None
+    } else {
+        Some(tokens.join(" "))
+    }
+}
 
 impl Repository {
     #[instrument(skip_all)]
@@ -125,15 +149,8 @@ impl Repository {
             return Ok(Vec::new());
         };
 
-        let pattern = format!("%{}%", sanitize_like_input(query));
-        let rows = bible_passage::Entity::find()
-            .filter(bible_passage::Column::TranslationCode.eq(translation_code.to_string()))
-            .filter(bible_passage::Column::Content.like(pattern))
-            .order_by_asc(bible_passage::Column::Book)
-            .order_by_asc(bible_passage::Column::Chapter)
-            .order_by_asc(bible_passage::Column::VerseStart)
-            .limit(limit as u64)
-            .all(&self.db)
+        let rows = self
+            .fts_search(query, Some(translation_code), limit)
             .await?;
 
         let mut results = Vec::with_capacity(rows.len());
@@ -170,25 +187,102 @@ impl Repository {
             return Ok(Vec::new());
         }
 
-        let pattern = format!("%{}%", sanitize_like_input(query));
-        let rows = bible_passage::Entity::find()
-            .filter(bible_passage::Column::Content.like(pattern))
-            .order_by_asc(bible_passage::Column::BookNumber)
-            .order_by_asc(bible_passage::Column::Chapter)
-            .order_by_asc(bible_passage::Column::VerseStart)
-            .order_by_asc(bible_passage::Column::TranslationCode)
-            .limit(limit as u64)
-            .all(&self.db)
-            .await?;
+        let rows = self.fts_search(query, None, limit).await?;
 
         let mut results = Vec::with_capacity(rows.len());
         for row in rows {
-            let translation_code = row.translation_code.clone();
-            if let Some(translation) = all_translations.get(&translation_code) {
+            let tc = row.translation_code.clone();
+            if let Some(translation) = all_translations.get(&tc) {
                 results.push(to_domain_passage(row, translation.clone())?);
             }
         }
         Ok(results)
+    }
+
+    /// Execute a full-text search against `bible_passage_fts`.
+    /// Falls back to LIKE if the FTS table does not exist.
+    async fn fts_search(
+        &self,
+        query: &str,
+        translation_code: Option<&str>,
+        limit: u32,
+    ) -> anyhow::Result<Vec<bible_passage::Model>> {
+        if let Some(fts_query) = build_fts_query(query) {
+            let result = self
+                .fts_search_raw(&fts_query, translation_code, limit)
+                .await;
+            match result {
+                Ok(rows) => return Ok(rows),
+                Err(e) => {
+                    // FTS table might not exist (e.g. old database). Fall back to LIKE.
+                    tracing::warn!(error = %e, "FTS search failed, falling back to LIKE");
+                }
+            }
+        }
+
+        // Fallback: LIKE-based search
+        let pattern = format!("%{}%", sanitize_like_input(query));
+        let mut q =
+            bible_passage::Entity::find().filter(bible_passage::Column::Content.like(pattern));
+        if let Some(code) = translation_code {
+            q = q.filter(bible_passage::Column::TranslationCode.eq(code.to_string()));
+        }
+        Ok(q.order_by_asc(bible_passage::Column::BookNumber)
+            .order_by_asc(bible_passage::Column::Chapter)
+            .order_by_asc(bible_passage::Column::VerseStart)
+            .limit(limit as u64)
+            .all(&self.db)
+            .await?)
+    }
+
+    /// Raw FTS5 query returning passage models joined via passage_id.
+    async fn fts_search_raw(
+        &self,
+        fts_query: &str,
+        translation_code: Option<&str>,
+        limit: u32,
+    ) -> anyhow::Result<Vec<bible_passage::Model>> {
+        let (sql, values) = if let Some(code) = translation_code {
+            (
+                "SELECT bp.id, bp.translation_code, bp.book, bp.book_code, \
+                        bp.book_number, bp.chapter, bp.verse_start, bp.verse_end, \
+                        bp.content, bp.created_at \
+                 FROM bible_passage_fts fts \
+                 JOIN bible_passages bp ON bp.id = fts.passage_id \
+                 WHERE bible_passage_fts MATCH ?1 \
+                   AND fts.translation_code = ?2 \
+                 ORDER BY fts.rank \
+                 LIMIT ?3"
+                    .to_string(),
+                vec![
+                    sea_orm::Value::from(fts_query.to_string()),
+                    sea_orm::Value::from(code.to_string()),
+                    sea_orm::Value::from(limit as i32),
+                ],
+            )
+        } else {
+            (
+                "SELECT bp.id, bp.translation_code, bp.book, bp.book_code, \
+                        bp.book_number, bp.chapter, bp.verse_start, bp.verse_end, \
+                        bp.content, bp.created_at \
+                 FROM bible_passage_fts fts \
+                 JOIN bible_passages bp ON bp.id = fts.passage_id \
+                 WHERE bible_passage_fts MATCH ?1 \
+                 ORDER BY fts.rank \
+                 LIMIT ?2"
+                    .to_string(),
+                vec![
+                    sea_orm::Value::from(fts_query.to_string()),
+                    sea_orm::Value::from(limit as i32),
+                ],
+            )
+        };
+
+        let stmt = Statement::from_sql_and_values(DatabaseBackend::Sqlite, &sql, values);
+        let rows = bible_passage::Model::find_by_statement(stmt)
+            .all(&self.db)
+            .await?;
+        Ok(rows)
     }
 
     #[instrument(skip_all)]
@@ -224,7 +318,6 @@ impl Repository {
 
 use presenter_core::bible::BibleBookChapterSummary;
 use sea_orm::sea_query::Expr;
-use sea_orm::FromQueryResult;
 
 impl Repository {
     #[instrument(skip_all)]

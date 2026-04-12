@@ -224,12 +224,7 @@ fn TabletTimerBar() -> impl IntoView {
         }
     };
 
-    let zone = move || {
-        ctx.timers
-            .get()
-            .as_ref()
-            .map_or("neutral", compute_zone)
-    };
+    let zone = move || ctx.timers.get().as_ref().map_or("neutral", compute_zone);
 
     view! {
         <div class="tablet-timer-bar" data-zone=zone data-role="timer-bar">
@@ -245,32 +240,60 @@ fn TabletHeader() -> impl IntoView {
     let ctx = use_ctx!(TabletContext);
     let text_scale = ctx.text_scale;
 
-    let on_scale_input = move |ev: web_sys::Event| {
-        let target = ev
-            .target()
-            .and_then(|t| t.dyn_into::<web_sys::HtmlInputElement>().ok());
-        if let Some(el) = target {
-            if let Ok(val) = el.value().parse::<u32>() {
-                text_scale.set(val);
-                apply_scale(val);
-                ctx.persist_scale();
+    let on_scale_input = {
+        let ctx = ctx.clone();
+        move |ev: web_sys::Event| {
+            let target = ev
+                .target()
+                .and_then(|t| t.dyn_into::<web_sys::HtmlInputElement>().ok());
+            if let Some(el) = target {
+                if let Ok(val) = el.value().parse::<u32>() {
+                    text_scale.set(val);
+                    apply_scale(val);
+                    ctx.persist_scale();
+                }
             }
+        }
+    };
+
+    let on_clear = {
+        let ctx = ctx.clone();
+        move |_| {
+            let ctx = ctx.clone();
+            leptos::task::spawn_local(async move {
+                match bible::clear_broadcast().await {
+                    Ok(()) => {
+                        ctx.active_broadcast.set(None);
+                        ctx.active_slide_id.set(None);
+                        ctx.show_toast("Bible cleared", "success");
+                    }
+                    Err(e) => {
+                        ctx.show_toast(&format!("Clear failed: {e}"), "error");
+                    }
+                }
+            });
         }
     };
 
     view! {
         <header class="tablet-header">
             <h1>"Bible Tablet"</h1>
-            <div class="tablet-scale">
-                <label for="scale-slider">"Text size"</label>
-                <input type="range" id="scale-slider" data-role="scale-slider"
-                    min="50" max="200" step="10"
-                    prop:value=move || text_scale.get().to_string()
-                    on:input=on_scale_input
-                />
-                <span data-role="scale-value">
-                    {move || format!("{}%", text_scale.get())}
-                </span>
+            <div class="tablet-header__actions">
+                <button type="button" class="tablet-clear-btn"
+                    data-role="clear-bible"
+                    on:click=on_clear
+                >"Clear"</button>
+                <div class="tablet-scale">
+                    <label for="scale-slider">"Text size"</label>
+                    <input type="range" id="scale-slider" data-role="scale-slider"
+                        min="50" max="200" step="10"
+                        prop:value=move || text_scale.get().to_string()
+                        on:input=on_scale_input
+                    />
+                    <span data-role="scale-value">
+                        {move || format!("{}%", text_scale.get())}
+                    </span>
+                </div>
             </div>
         </header>
     }
