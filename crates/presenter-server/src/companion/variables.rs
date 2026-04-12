@@ -15,6 +15,15 @@ pub(super) struct CompanionVariableState {
     pub(super) stage_layout: Option<StageLayoutVariables>,
     stage_layouts: HashMap<String, StageDisplayLayout>,
     pub(super) broadcast_live: bool,
+    pub(super) bible_slide: Option<BibleSlideOverride>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(super) struct BibleSlideOverride {
+    pub(super) translation_code: String,
+    pub(super) reference: String,
+    pub(super) text: String,
+    pub(super) triggered_at: String,
 }
 
 impl CompanionVariableState {
@@ -25,12 +34,7 @@ impl CompanionVariableState {
             crate::live::LiveEvent::StageConnection { .. } => false,
             crate::live::LiveEvent::Timers { overview } => self.apply_timers(overview),
             crate::live::LiveEvent::Bible { broadcast } => self.apply_bible(broadcast),
-            crate::live::LiveEvent::BibleSlide { .. } => {
-                // BibleSlide uses a new architecture; Companion uses legacy BibleBroadcast.
-                // For now, BibleSlide events don't update Companion variables.
-                // Users of the new trigger-slide endpoint will see updates via WebSocket.
-                false
-            }
+            crate::live::LiveEvent::BibleSlide { output } => self.apply_bible_slide(output),
             crate::live::LiveEvent::BibleCleared => self.clear_bible(),
             crate::live::LiveEvent::StageLayout { code } => self.set_stage_layout_code(&code),
             crate::live::LiveEvent::BiblePreferencesChanged { .. } => false,
@@ -119,17 +123,49 @@ impl CompanionVariableState {
     }
 
     pub(super) fn apply_bible(&mut self, broadcast: BibleBroadcast) -> bool {
-        if self.bible.as_ref() == Some(&broadcast) {
+        if self.bible.as_ref() == Some(&broadcast) && self.bible_slide.is_none() {
             false
         } else {
+            self.bible_slide = None;
             self.bible = Some(broadcast);
             true
         }
     }
 
+    pub(super) fn apply_bible_slide(
+        &mut self,
+        output: presenter_core::bible::BibleSlideOutput,
+    ) -> bool {
+        let translation_code = output
+            .main_reference
+            .rfind('(')
+            .and_then(|start| {
+                output.main_reference[start + 1..]
+                    .find(')')
+                    .map(|end| output.main_reference[start + 1..start + 1 + end].to_string())
+            })
+            .unwrap_or_default();
+
+        let override_data = BibleSlideOverride {
+            translation_code,
+            reference: output.main_reference,
+            text: output.main_text,
+            triggered_at: output.triggered_at.to_rfc3339(),
+        };
+
+        if self.bible_slide.as_ref() == Some(&override_data) {
+            return false;
+        }
+
+        self.bible = None;
+        self.bible_slide = Some(override_data);
+        true
+    }
+
     pub(super) fn clear_bible(&mut self) -> bool {
-        if self.bible.is_some() {
+        if self.bible.is_some() || self.bible_slide.is_some() {
             self.bible = None;
+            self.bible_slide = None;
             true
         } else {
             false
@@ -141,7 +177,7 @@ impl CompanionVariableState {
         write_stage_layout_variables(&mut builder, self.stage_layout.as_ref());
         write_stage_variables(&mut builder, self.stage.as_ref());
         write_timer_variables(&mut builder, self.timers.as_ref());
-        write_bible_variables(&mut builder, self.bible.as_ref());
+        write_bible_variables(&mut builder, self.bible.as_ref(), self.bible_slide.as_ref());
         builder.set(
             "broadcast_live",
             if self.broadcast_live { "true" } else { "false" }.to_string(),
@@ -377,8 +413,16 @@ pub(super) fn write_timer_variables(
 pub(super) fn write_bible_variables(
     builder: &mut VariableBuilder,
     broadcast: Option<&BibleBroadcast>,
+    slide_override: Option<&BibleSlideOverride>,
 ) {
-    if let Some(broadcast) = broadcast {
+    if let Some(ov) = slide_override {
+        builder.set("bible_translation_code", ov.translation_code.clone());
+        // BibleSlideOutput doesn't carry translation name; use code as fallback
+        builder.set("bible_translation_name", ov.translation_code.clone());
+        builder.set("bible_reference", ov.reference.clone());
+        builder.set("bible_text", ov.text.clone());
+        builder.set("bible_triggered_at", ov.triggered_at.clone());
+    } else if let Some(broadcast) = broadcast {
         let reference = broadcast.passage.reference.to_human_readable();
         builder.set(
             "bible_translation_code",

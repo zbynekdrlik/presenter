@@ -327,6 +327,8 @@ fn parse_command_accepts_all_documented_commands() {
         ("timer.start_preach", json!({})),
         ("timer.pause_preach", json!({})),
         ("timer.reset_preach", json!({})),
+        ("timer.set_preach_limit", json!({ "seconds": 2700 })),
+        ("timer.clear_preach_limit", json!({})),
         ("stage.layout", json!({ "code": "timer" })),
         (
             "stage.set",
@@ -345,6 +347,7 @@ fn parse_command_accepts_all_documented_commands() {
             }),
         ),
         ("bible.clear", json!({})),
+        ("broadcast.set_live", json!({ "enabled": true })),
     ];
 
     for (command, payload) in &cases {
@@ -358,4 +361,65 @@ fn parse_command_accepts_all_documented_commands() {
 
     let unknown = parse_command("nonexistent.command", json!({}));
     assert!(unknown.is_err(), "unknown command should return error");
+}
+
+#[test]
+fn bible_slide_event_updates_companion_variables() {
+    use presenter_core::bible::BibleSlideOutput;
+
+    let mut state = CompanionVariableState::default();
+    let now = Utc::now();
+
+    let output = BibleSlideOutput {
+        main_text: "For God so loved the world".into(),
+        main_reference: "John 3:16 (KJV)".into(),
+        secondary_text: String::new(),
+        secondary_reference: String::new(),
+        triggered_at: now,
+    };
+
+    let changed = state.apply_live_event(LiveEvent::BibleSlide { output });
+    assert!(changed, "BibleSlide should mark variables as changed");
+
+    let vars: std::collections::HashMap<_, _> = state
+        .to_variables()
+        .into_iter()
+        .map(|v| (v.name, v.value))
+        .collect();
+
+    assert_eq!(vars.get("bible_reference").unwrap(), "John 3:16 (KJV)");
+    assert_eq!(
+        vars.get("bible_text").unwrap(),
+        "For God so loved the world"
+    );
+    assert_eq!(vars.get("bible_translation_code").unwrap(), "KJV");
+    assert!(!vars.get("bible_triggered_at").unwrap().is_empty());
+}
+
+#[test]
+fn bible_slide_event_cleared_by_bible_cleared() {
+    use presenter_core::bible::BibleSlideOutput;
+
+    let mut state = CompanionVariableState::default();
+
+    let output = BibleSlideOutput {
+        main_text: "In the beginning".into(),
+        main_reference: "Genesis 1:1 (SEB)".into(),
+        secondary_text: String::new(),
+        secondary_reference: String::new(),
+        triggered_at: Utc::now(),
+    };
+
+    state.apply_live_event(LiveEvent::BibleSlide { output });
+    assert!(state.apply_live_event(LiveEvent::BibleCleared));
+
+    let vars: std::collections::HashMap<_, _> = state
+        .to_variables()
+        .into_iter()
+        .map(|v| (v.name, v.value))
+        .collect();
+
+    assert_eq!(vars.get("bible_text").unwrap(), "");
+    assert_eq!(vars.get("bible_reference").unwrap(), "");
+    assert_eq!(vars.get("bible_translation_code").unwrap(), "");
 }

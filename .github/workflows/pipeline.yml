@@ -956,3 +956,79 @@ jobs:
           echo "Service: ${{ env.SERVICE_NAME }}"
           echo "URL: http://10.77.8.134:8080"
           ssh deploy-target "systemctl status ${{ env.SERVICE_NAME }} --no-pager" || true
+
+  # ============================================
+  # Deploy Companion Plugin to both hosts
+  # ============================================
+  deploy-companion:
+    name: Deploy Companion Plugin
+    runs-on: self-hosted
+    needs: deploy-dev
+    concurrency:
+      group: deploy-companion
+      cancel-in-progress: false
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup SSH for SNV (companion-snv.lan = production host)
+        run: |
+          mkdir -p ~/.ssh
+          echo "${{ secrets.DEPLOY_SSH_KEY }}" > ~/.ssh/id_snv
+          chmod 600 ~/.ssh/id_snv
+          ssh-keyscan 10.77.9.205 >> ~/.ssh/known_hosts 2>/dev/null
+          cat >> ~/.ssh/config <<EOF
+          Host companion-snv
+              HostName 10.77.9.205
+              User newlevel
+              IdentityFile ~/.ssh/id_snv
+          EOF
+
+      - name: Setup SSH for PP (companion-pp.lan)
+        run: |
+          echo "${{ secrets.DEPLOY_SSH_KEY_PP }}" > ~/.ssh/id_pp
+          chmod 600 ~/.ssh/id_pp
+          ssh-keyscan companion-pp.lan >> ~/.ssh/known_hosts 2>/dev/null
+          if [ ! -s ~/.ssh/known_hosts ]; then
+            echo "::error::ssh-keyscan failed — known_hosts is empty. Cannot verify companion-pp.lan host."
+            exit 1
+          fi
+          cat >> ~/.ssh/config <<EOF
+          Host companion-pp
+              HostName companion-pp.lan
+              User newlevel
+              IdentityFile ~/.ssh/id_pp
+          EOF
+
+      - name: Deploy to companion-snv.lan
+        run: |
+          MODULE_DIR="/home/companion/.config/companion-nodejs/modules/presenter"
+          STAGE_DIR=$(ssh companion-snv "mktemp -d /tmp/companion-module-XXXXXX")
+          echo "Deploying Companion plugin to companion-snv.lan (staging: $STAGE_DIR)..."
+          scp -r ops/companion/presenter/* companion-snv:$STAGE_DIR/
+          ssh companion-snv "cd $STAGE_DIR && npm install --omit=dev"
+          ssh companion-snv "sudo rm -rf $MODULE_DIR && sudo mkdir -p $(dirname $MODULE_DIR) && sudo mv $STAGE_DIR $MODULE_DIR && sudo chown -R companion:companion $MODULE_DIR"
+          echo "Restarting Companion on SNV..."
+          ssh companion-snv "sudo systemctl restart companion"
+          sleep 5
+          ssh companion-snv "systemctl is-active companion" || { echo "::error::Companion failed to restart on SNV"; exit 1; }
+          echo "Companion plugin deployed to companion-snv.lan"
+
+      - name: Deploy to companion-pp.lan
+        run: |
+          MODULE_DIR="/opt/companion/v4.1/modules/presenter"
+          echo "Deploying Companion plugin to companion-pp.lan..."
+          ssh companion-pp "mkdir -p $MODULE_DIR"
+          scp -r ops/companion/presenter/* companion-pp:$MODULE_DIR/
+          ssh companion-pp "cd $MODULE_DIR && npm install --omit=dev"
+          echo "Restarting Companion on PP..."
+          ssh companion-pp "docker restart companion"
+          sleep 10
+          ssh companion-pp "docker exec companion curl -sf http://127.0.0.1:8000 > /dev/null" || { echo "::error::Companion failed to restart on PP"; exit 1; }
+          echo "Companion plugin deployed to companion-pp.lan"
+
+      - name: Show deployment info
+        run: |
+          VERSION=$(node -e "console.log(require('./ops/companion/presenter/package.json').version)")
+          echo "=== Companion Plugin Deployment Complete ==="
+          echo "Version: $VERSION"
+          echo "Deployed to: companion-snv.lan, companion-pp.lan"
