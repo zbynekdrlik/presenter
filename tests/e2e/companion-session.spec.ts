@@ -315,6 +315,61 @@ test.describe("@companion Companion control socket", () => {
     socket.close();
   });
 
+  test("@companion preach limit commands", async () => {
+    const { socket, errors, sendCommand, extractVarMap, handshake } =
+      createCompanionSocket(wsURL);
+    await handshake();
+
+    // Set preach limit to 45 minutes (2700 seconds)
+    const setResult = await sendCommand("timer.set_preach_limit", {
+      seconds: 2700,
+    });
+    expect(setResult.error).toBeNull();
+    expect(setResult.vars).toBeTruthy();
+    if (setResult.vars) {
+      const vars = extractVarMap(setResult.vars);
+      expect(vars.get("timer_preach_limit_seconds")).toBe("2700");
+    }
+
+    // Clear preach limit
+    const clearResult = await sendCommand("timer.clear_preach_limit");
+    expect(clearResult.error).toBeNull();
+    expect(clearResult.vars).toBeTruthy();
+    if (clearResult.vars) {
+      const vars = extractVarMap(clearResult.vars);
+      expect(vars.get("timer_preach_limit_seconds")).toBe("");
+    }
+
+    expect(errors).toHaveLength(0);
+    socket.close();
+  });
+
+  test("@companion ndi-fullscreen layout", async () => {
+    const { socket, errors, sendCommand, extractVarMap, handshake } =
+      createCompanionSocket(wsURL);
+    await handshake();
+
+    const result = await sendCommand("stage.layout", {
+      code: "ndi-fullscreen",
+    });
+    expect(result.vars).toBeTruthy();
+    if (result.vars) {
+      const vars = extractVarMap(result.vars);
+      expect(vars.get("stage_layout_code")).toBe("ndi-fullscreen");
+    }
+
+    // Switch back to default
+    const result2 = await sendCommand("stage.layout", { code: "worship-snv" });
+    expect(result2.vars).toBeTruthy();
+    if (result2.vars) {
+      const vars = extractVarMap(result2.vars);
+      expect(vars.get("stage_layout_code")).toBe("worship-snv");
+    }
+
+    expect(errors).toHaveLength(0);
+    socket.close();
+  });
+
   test("@companion stage.set via WebSocket", async () => {
     const { socket, errors, sendCommand, extractVarMap, handshake } =
       createCompanionSocket(wsURL);
