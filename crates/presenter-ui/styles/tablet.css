@@ -50,6 +50,28 @@ body.tablet {
   font-size: 1.35rem;
 }
 
+.tablet-header__actions {
+  display: flex;
+  align-items: center;
+  gap: 1rem;
+}
+
+.tablet-clear-btn {
+  padding: 0.4rem 1rem;
+  background: #ef4444;
+  color: white;
+  border: none;
+  border-radius: 0.4rem;
+  font-size: 0.9rem;
+  font-weight: 600;
+  cursor: pointer;
+  white-space: nowrap;
+}
+
+.tablet-clear-btn:active {
+  background: #dc2626;
+}
+
 .tablet-scale {
   display: flex;
   align-items: center;
