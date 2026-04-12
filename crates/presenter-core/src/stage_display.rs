@@ -46,6 +46,7 @@ impl StageDisplayLayout {
                 "NDI FULLSCREEN",
                 "Full viewport NDI video stream",
             ),
+            Self::new("bible", "BIBLE", "Full-screen Bible passage display"),
         ]
     }
 
