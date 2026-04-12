@@ -38,6 +38,7 @@ const VARIABLE_DEFINITIONS = [
   "timer_preach_elapsed_mmss",
   "timer_preach_elapsed_hhmm",
   "timer_preach_elapsed_readable",
+  "timer_preach_limit_seconds",
   "bible_translation_code",
   "bible_translation_name",
   "bible_reference",
@@ -58,7 +59,10 @@ const COMMANDS = [
   { id: "timer.start_preach", label: "Timer: start preach" },
   { id: "timer.pause_preach", label: "Timer: pause preach" },
   { id: "timer.reset_preach", label: "Timer: reset preach" },
+  { id: "timer.set_preach_limit", label: "Timer: set preach limit (seconds)" },
+  { id: "timer.clear_preach_limit", label: "Timer: clear preach limit" },
   { id: "stage.layout", label: "Stage: set layout" },
+  { id: "stage.set", label: "Stage: set presentation/slide" },
   { id: "bible.trigger", label: "Bible: trigger passage" },
   { id: "bible.clear", label: "Bible: clear passage" },
   { id: "broadcast.set_live", label: "Broadcast: set live state" },
@@ -69,6 +73,7 @@ const STAGE_LAYOUT_CHOICES = [
   { id: "worship-pp", label: "WORSHIP PP" },
   { id: "timer", label: "TIMER" },
   { id: "preach", label: "PREACH" },
+  { id: "ndi-fullscreen", label: "NDI FULLSCREEN" },
 ];
 
 class PresenterInstance extends InstanceBase {
@@ -352,6 +357,37 @@ class PresenterInstance extends InstanceBase {
             min: 0,
           },
         ];
+      case "timer.set_preach_limit":
+        return [
+          {
+            type: "number",
+            id: "seconds",
+            label: "Limit (seconds)",
+            default: 2700,
+            min: 1,
+          },
+        ];
+      case "stage.set":
+        return [
+          {
+            type: "textinput",
+            id: "presentationId",
+            label: "Presentation ID (UUID)",
+            default: "",
+          },
+          {
+            type: "textinput",
+            id: "currentSlideId",
+            label: "Current Slide ID (UUID)",
+            default: "",
+          },
+          {
+            type: "textinput",
+            id: "nextSlideId",
+            label: "Next Slide ID (UUID, optional)",
+            default: "",
+          },
+        ];
       case "broadcast.set_live":
         return [
           {
@@ -402,6 +438,17 @@ class PresenterInstance extends InstanceBase {
         bgcolor: 0x00ff00,
       },
       callback: () => this.variables.get("timer_countdown_state") === "running",
+    };
+
+    feedbacks["preach_running"] = {
+      type: "boolean",
+      name: "Preach running",
+      options: [],
+      defaultStyle: {
+        color: 0xffffff,
+        bgcolor: 0x00ff00,
+      },
+      callback: () => this.variables.get("timer_preach_state") === "running",
     };
 
     feedbacks["broadcast_live"] = {
@@ -457,6 +504,22 @@ class PresenterInstance extends InstanceBase {
         };
         if (Number(options.verseEnd) > 0) {
           payload.verseEnd = Number(options.verseEnd);
+        }
+        break;
+      }
+      case "timer.set_preach_limit": {
+        payload = {
+          seconds: Number(options.seconds) || 2700,
+        };
+        break;
+      }
+      case "stage.set": {
+        payload = {
+          presentationId: options.presentationId || "",
+          currentSlideId: options.currentSlideId || "",
+        };
+        if (options.nextSlideId) {
+          payload.nextSlideId = options.nextSlideId;
         }
         break;
       }
