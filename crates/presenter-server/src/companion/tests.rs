@@ -327,6 +327,8 @@ fn parse_command_accepts_all_documented_commands() {
         ("timer.start_preach", json!({})),
         ("timer.pause_preach", json!({})),
         ("timer.reset_preach", json!({})),
+        ("timer.set_preach_limit", json!({ "seconds": 2700 })),
+        ("timer.clear_preach_limit", json!({})),
         ("stage.layout", json!({ "code": "timer" })),
         (
             "stage.set",
@@ -345,6 +347,7 @@ fn parse_command_accepts_all_documented_commands() {
             }),
         ),
         ("bible.clear", json!({})),
+        ("broadcast.set_live", json!({ "enabled": true })),
     ];
 
     for (command, payload) in &cases {
