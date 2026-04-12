@@ -998,11 +998,12 @@ jobs:
       - name: Deploy to companion-snv.lan
         run: |
           MODULE_DIR="/home/companion/.config/companion-nodejs/modules/presenter"
+          STAGE_DIR="/tmp/companion-module-stage-$$"
           echo "Deploying Companion plugin to companion-snv.lan..."
-          ssh companion-snv "sudo mkdir -p $MODULE_DIR && sudo chown -R newlevel:newlevel $MODULE_DIR"
-          scp -r ops/companion/presenter/* companion-snv:$MODULE_DIR/
-          ssh companion-snv "cd $MODULE_DIR && npm install --omit=dev"
-          ssh companion-snv "sudo chown -R companion:companion $MODULE_DIR"
+          ssh companion-snv "mkdir -p $STAGE_DIR"
+          scp -r ops/companion/presenter/* companion-snv:$STAGE_DIR/
+          ssh companion-snv "cd $STAGE_DIR && npm install --omit=dev"
+          ssh companion-snv "sudo rm -rf $MODULE_DIR && sudo mkdir -p $(dirname $MODULE_DIR) && sudo mv $STAGE_DIR $MODULE_DIR && sudo chown -R companion:companion $MODULE_DIR"
           echo "Restarting Companion on SNV..."
           ssh companion-snv "sudo systemctl restart companion"
           sleep 5
