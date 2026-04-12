@@ -1,3 +1,4 @@
+pub mod bible_layout;
 pub mod bible_overlay;
 pub mod ndi_fullscreen;
 pub mod preach_layout;

@@ -67,7 +67,6 @@ pub fn PreachLayout(
                 </div>
             </div>
             <super::status_bar::StatusBar ws_state=ws_state latency_ms=latency_ms />
-            <super::bible_overlay::BibleOverlay overlay=ctx.bible_overlay />
         </div>
     }
 }

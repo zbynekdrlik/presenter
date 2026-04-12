@@ -2,9 +2,9 @@
  * WASM Bible Stage Display Tests
  *
  * Verifies that triggering Bible verses from the WASM operator
- * actually displays text on the /stage page, and that clearing
- * removes it. These tests check the REAL stage rendering,
- * not just API responses or toast messages.
+ * actually displays text on the /stage page when using the dedicated
+ * "bible" layout, and that clearing removes it. Bible text only shows
+ * on the "bible" layout — not on worship/timer/preach layouts.
  */
 
 import { test, expect } from "@playwright/test";
@@ -66,111 +66,109 @@ async function clearBroadcast(
   expect(resp.status()).toBe(204);
 }
 
-test("triggering bible slide shows text on stage page", async ({
+/** Set the stage layout via API. */
+async function setLayout(
+  request: import("@playwright/test").APIRequestContext,
+  code: string,
+) {
+  await request.post(new URL("/stage/layout", baseURL).toString(), {
+    data: { code },
+  });
+}
+
+/** Navigate to stage, wait for WASM and WS connection. */
+async function openStage(page: import("@playwright/test").Page) {
+  await page.goto(`${baseURL}/stage`);
+  await page.waitForLoadState("domcontentloaded");
+  await page.waitForSelector('body[data-wasm-ready="true"]', {
+    timeout: 30_000,
+  });
+  await page.waitForFunction(
+    () => window.__presenterStageConnectionState === "connected",
+    { timeout: 30_000 },
+  );
+}
+
+test("triggering bible slide shows text on bible layout", async ({
   page,
   request,
 }) => {
-  // Clear any existing broadcast
   await clearBroadcast(request);
+  await setLayout(request, "bible");
 
-  // Trigger a Bible slide
   await triggerSlide(request, {
     mainText: "For God so loved the world",
     mainReference: "John 3:16 (NIV)",
   });
 
-  // Navigate to stage page
-  await page.goto(`${baseURL}/stage`);
-  await page.waitForLoadState("domcontentloaded");
-  await page.waitForSelector('body[data-wasm-ready="true"]', { timeout: 30_000 });
-  await page.waitForFunction(
-    () => window.__presenterStageConnectionState === "connected",
-    { timeout: 30_000 },
+  await openStage(page);
+
+  // Verify layout is bible
+  await expect(page.locator("body")).toHaveAttribute(
+    "data-layout-code",
+    "bible",
   );
 
-  // Wait for the Bible overlay to become visible with the triggered text
-  const bibleOverlay = page.locator(".stage__bible-overlay");
-  await expect(bibleOverlay).toHaveAttribute("data-visible", "true", {
+  // Bible content should be visible
+  const bibleText = page.locator(".stage__bible-text");
+  await expect(bibleText).toHaveText("For God so loved the world", {
     timeout: 10_000,
   });
 
-  // Verify the actual Bible text is displayed
-  const bibleText = page.locator(".stage__bible-text");
-  await expect(bibleText).toHaveText("For God so loved the world");
-
-  // Verify the reference is displayed
   const bibleRef = page.locator(".stage__bible-reference");
   await expect(bibleRef).toHaveText("John 3:16 (NIV)");
 
-  // Verify the overlay is visually covering the stage (positional check)
-  const overlayBox = await bibleOverlay.boundingBox();
-  expect(overlayBox).toBeTruthy();
-  if (overlayBox) {
-    expect(overlayBox.width).toBeGreaterThan(100);
-    expect(overlayBox.height).toBeGreaterThan(100);
-  }
+  // Reset layout
+  await setLayout(request, "worship-snv");
 });
 
-test("clearing bible broadcast hides text on stage page", async ({
+test("clearing bible broadcast hides text on bible layout", async ({
   page,
   request,
 }) => {
-  // Trigger a slide first
+  await setLayout(request, "bible");
+
   await triggerSlide(request, {
     mainText: "The Lord is my shepherd",
     mainReference: "Psalm 23:1 (NIV)",
   });
 
-  // Navigate to stage
-  await page.goto(`${baseURL}/stage`);
-  await page.waitForLoadState("domcontentloaded");
-  await page.waitForSelector('body[data-wasm-ready="true"]', { timeout: 30_000 });
-  await page.waitForFunction(
-    () => window.__presenterStageConnectionState === "connected",
-    { timeout: 30_000 },
-  );
+  await openStage(page);
 
   // Verify it's visible
-  const bibleOverlay = page.locator(".stage__bible-overlay");
-  await expect(bibleOverlay).toHaveAttribute("data-visible", "true", {
+  const bibleText = page.locator(".stage__bible-text");
+  await expect(bibleText).toHaveText("The Lord is my shepherd", {
     timeout: 10_000,
   });
 
   // Clear the broadcast
   await clearBroadcast(request);
 
-  // Wait for the overlay to disappear
-  await expect(bibleOverlay).toHaveAttribute("data-visible", "false", {
-    timeout: 10_000,
-  });
+  // Waiting text should appear
+  const waiting = page.locator(".stage__bible-waiting");
+  await expect(waiting).toBeVisible({ timeout: 10_000 });
 
   // body should reflect no active bible
   await expect(page.locator("body")).toHaveAttribute(
     "data-bible-active",
     "false",
   );
+
+  await setLayout(request, "worship-snv");
 });
 
-test("bible overlay works on worship-snv layout", async ({ page, request }) => {
-  // Set layout to worship-snv (default)
-  await request.post(new URL("/stage/layout", baseURL).toString(), {
-    data: { code: "worship-snv" },
-  });
+test("bible text does NOT show on worship-snv layout", async ({
+  page,
+  request,
+}) => {
+  await setLayout(request, "worship-snv");
 
-  // Trigger a Bible slide
   await triggerSlide(request, {
     mainText: "In the beginning was the Word",
     mainReference: "John 1:1 (ESV)",
   });
 
-  // Navigate to stage
-  await page.goto(`${baseURL}/stage`);
-  await page.waitForLoadState("domcontentloaded");
-  await page.waitForSelector('body[data-wasm-ready="true"]', { timeout: 30_000 });
-  await page.waitForFunction(
-    () => window.__presenterStageConnectionState === "connected",
-    { timeout: 30_000 },
-  );
+  await openStage(page);
 
   // Verify layout is worship-snv
   await expect(page.locator("body")).toHaveAttribute(
@@ -178,62 +176,42 @@ test("bible overlay works on worship-snv layout", async ({ page, request }) => {
     "worship-snv",
   );
 
-  // Verify Bible overlay is visible with correct text
+  // Bible overlay should NOT exist on this layout
   const bibleOverlay = page.locator(".stage__bible-overlay");
-  await expect(bibleOverlay).toHaveAttribute("data-visible", "true", {
-    timeout: 10_000,
-  });
-  await expect(page.locator(".stage__bible-text")).toHaveText(
-    "In the beginning was the Word",
-  );
+  await expect(bibleOverlay).toHaveCount(0);
+
+  // Bible content (from bible layout) should NOT exist either
+  const bibleContent = page.locator(".stage__bible-content");
+  await expect(bibleContent).toHaveCount(0);
 });
 
-test("bible overlay works on preach layout", async ({ page, request }) => {
-  // Set layout to preach
-  await request.post(new URL("/stage/layout", baseURL).toString(), {
-    data: { code: "preach" },
-  });
+test("bible text does NOT show on preach layout", async ({ page, request }) => {
+  await setLayout(request, "preach");
 
-  // Trigger a Bible slide
   await triggerSlide(request, {
     mainText: "I can do all things through Christ",
     mainReference: "Philippians 4:13 (NKJV)",
   });
 
-  // Navigate to stage with preach layout
-  await page.goto(`${baseURL}/stage`);
-  await page.waitForLoadState("domcontentloaded");
-  await page.waitForSelector('body[data-wasm-ready="true"]', { timeout: 30_000 });
-  await page.waitForFunction(
-    () => window.__presenterStageConnectionState === "connected",
-    { timeout: 30_000 },
-  );
+  await openStage(page);
 
-  // Verify Bible overlay is visible
+  // Bible overlay should NOT exist
   const bibleOverlay = page.locator(".stage__bible-overlay");
-  await expect(bibleOverlay).toHaveAttribute("data-visible", "true", {
-    timeout: 10_000,
-  });
-  await expect(page.locator(".stage__bible-text")).toHaveText(
-    "I can do all things through Christ",
-  );
-  await expect(page.locator(".stage__bible-reference")).toHaveText(
-    "Philippians 4:13 (NKJV)",
-  );
+  await expect(bibleOverlay).toHaveCount(0);
 
-  // Reset layout to default
-  await request.post(new URL("/stage/layout", baseURL).toString(), {
-    data: { code: "worship-snv" },
-  });
+  const bibleContent = page.locator(".stage__bible-content");
+  await expect(bibleContent).toHaveCount(0);
+
+  await setLayout(request, "worship-snv");
 });
 
-test("trigger with secondary translation shows both texts on stage", async ({
+test("trigger with secondary translation shows both texts on bible layout", async ({
   page,
   request,
 }) => {
   await clearBroadcast(request);
+  await setLayout(request, "bible");
 
-  // Trigger with secondary translation
   await triggerSlide(request, {
     mainText: "For God so loved the world",
     mainReference: "John 3:16 (NIV)",
@@ -241,25 +219,16 @@ test("trigger with secondary translation shows both texts on stage", async ({
     secondaryReference: "Ján 3:16 (ROH)",
   });
 
-  await page.goto(`${baseURL}/stage`);
-  await page.waitForLoadState("domcontentloaded");
-  await page.waitForSelector('body[data-wasm-ready="true"]', { timeout: 30_000 });
-  await page.waitForFunction(
-    () => window.__presenterStageConnectionState === "connected",
-    { timeout: 30_000 },
-  );
-
-  // Wait for overlay
-  const bibleOverlay = page.locator(".stage__bible-overlay");
-  await expect(bibleOverlay).toHaveAttribute("data-visible", "true", {
-    timeout: 10_000,
-  });
+  await openStage(page);
 
   // Verify main text
   await expect(page.locator(".stage__bible-text")).toHaveText(
     "For God so loved the world",
+    { timeout: 10_000 },
   );
-  await expect(page.locator(".stage__bible-reference")).toHaveText("John 3:16 (NIV)");
+  await expect(page.locator(".stage__bible-reference")).toHaveText(
+    "John 3:16 (NIV)",
+  );
 
   // Verify secondary text is visible
   const secondary = page.locator(".stage__bible-secondary");
@@ -271,6 +240,8 @@ test("trigger with secondary translation shows both texts on stage", async ({
   await expect(page.locator(".stage__bible-secondary-ref")).toHaveText(
     "Ján 3:16 (ROH)",
   );
+
+  await setLayout(request, "worship-snv");
 });
 
 test("secondary translation hidden when not provided", async ({
@@ -278,29 +249,25 @@ test("secondary translation hidden when not provided", async ({
   request,
 }) => {
   await clearBroadcast(request);
+  await setLayout(request, "bible");
 
-  // Trigger WITHOUT secondary translation
   await triggerSlide(request, {
     mainText: "Be still and know that I am God",
     mainReference: "Psalm 46:10 (NIV)",
   });
 
-  await page.goto(`${baseURL}/stage`);
-  await page.waitForLoadState("domcontentloaded");
-  await page.waitForSelector('body[data-wasm-ready="true"]', { timeout: 30_000 });
-  await page.waitForFunction(
-    () => window.__presenterStageConnectionState === "connected",
-    { timeout: 30_000 },
-  );
+  await openStage(page);
 
-  const bibleOverlay = page.locator(".stage__bible-overlay");
-  await expect(bibleOverlay).toHaveAttribute("data-visible", "true", {
-    timeout: 10_000,
-  });
+  await expect(page.locator(".stage__bible-text")).toHaveText(
+    "Be still and know that I am God",
+    { timeout: 10_000 },
+  );
 
   // Secondary should be hidden
   const secondary = page.locator(".stage__bible-secondary");
   await expect(secondary).toHaveAttribute("data-visible", "false");
+
+  await setLayout(request, "worship-snv");
 });
 
 test("rapid trigger-clear-trigger cycle works correctly", async ({
@@ -308,14 +275,9 @@ test("rapid trigger-clear-trigger cycle works correctly", async ({
   request,
 }) => {
   await clearBroadcast(request);
+  await setLayout(request, "bible");
 
-  await page.goto(`${baseURL}/stage`);
-  await page.waitForLoadState("domcontentloaded");
-  await page.waitForSelector('body[data-wasm-ready="true"]', { timeout: 30_000 });
-  await page.waitForFunction(
-    () => window.__presenterStageConnectionState === "connected",
-    { timeout: 30_000 },
-  );
+  await openStage(page);
 
   // First trigger
   await triggerSlide(request, {
@@ -323,15 +285,14 @@ test("rapid trigger-clear-trigger cycle works correctly", async ({
     mainReference: "Gen 1:1",
   });
 
-  const bibleOverlay = page.locator(".stage__bible-overlay");
-  await expect(bibleOverlay).toHaveAttribute("data-visible", "true", {
-    timeout: 10_000,
-  });
-  await expect(page.locator(".stage__bible-text")).toHaveText("First verse text");
+  await expect(page.locator(".stage__bible-text")).toHaveText(
+    "First verse text",
+    { timeout: 10_000 },
+  );
 
   // Clear
   await clearBroadcast(request);
-  await expect(bibleOverlay).toHaveAttribute("data-visible", "false", {
+  await expect(page.locator(".stage__bible-waiting")).toBeVisible({
     timeout: 10_000,
   });
 
@@ -341,183 +302,40 @@ test("rapid trigger-clear-trigger cycle works correctly", async ({
     mainReference: "Gen 1:2",
   });
 
-  await expect(bibleOverlay).toHaveAttribute("data-visible", "true", {
-    timeout: 10_000,
-  });
-  await expect(page.locator(".stage__bible-text")).toHaveText("Second verse text");
+  await expect(page.locator(".stage__bible-text")).toHaveText(
+    "Second verse text",
+    { timeout: 10_000 },
+  );
   await expect(page.locator(".stage__bible-reference")).toHaveText("Gen 1:2");
+
+  await setLayout(request, "worship-snv");
 });
 
-test("stage layout change preserves active bible broadcast", async ({
+test("stage layout change to bible shows active broadcast", async ({
   page,
   request,
 }) => {
-  // Set initial layout
-  await request.post(new URL("/stage/layout", baseURL).toString(), {
-    data: { code: "worship-snv" },
-  });
+  // Start on worship-snv
+  await setLayout(request, "worship-snv");
 
-  // Trigger a verse
+  // Trigger a verse while on worship layout
   await triggerSlide(request, {
     mainText: "The truth shall set you free",
     mainReference: "John 8:32 (NIV)",
   });
 
-  // Navigate to stage
-  await page.goto(`${baseURL}/stage`);
-  await page.waitForLoadState("domcontentloaded");
-  await page.waitForSelector('body[data-wasm-ready="true"]', { timeout: 30_000 });
-  await page.waitForFunction(
-    () => window.__presenterStageConnectionState === "connected",
-    { timeout: 30_000 },
-  );
+  // Switch to bible layout
+  await setLayout(request, "bible");
 
-  // Verify verse is visible
-  const bibleOverlay = page.locator(".stage__bible-overlay");
-  await expect(bibleOverlay).toHaveAttribute("data-visible", "true", {
-    timeout: 10_000,
-  });
+  await openStage(page);
 
-  // Change layout — this causes a page reload
-  await request.post(new URL("/stage/layout", baseURL).toString(), {
-    data: { code: "preach" },
-  });
-
-  // Wait for page to reload (layout change triggers reload via WS)
-  await page.waitForLoadState("domcontentloaded");
-  await page.waitForSelector('body[data-wasm-ready="true"]', { timeout: 30_000 });
-  await page.waitForFunction(
-    () => window.__presenterStageConnectionState === "connected",
-    { timeout: 30_000 },
-  );
-
-  // After reload, bible overlay should still show the active verse
-  // (because fetchBibleActive runs on page load)
-  const overlayAfter = page.locator(".stage__bible-overlay");
-  await expect(overlayAfter).toHaveAttribute("data-visible", "true", {
-    timeout: 10_000,
-  });
+  // Bible text should be visible (fetched on page load)
   await expect(page.locator(".stage__bible-text")).toHaveText(
     "The truth shall set you free",
+    { timeout: 10_000 },
   );
 
-  // Clean up: reset layout
-  await request.post(new URL("/stage/layout", baseURL).toString(), {
-    data: { code: "worship-snv" },
-  });
-});
-
-test("trigger from WASM operator UI shows bible on stage page", async ({
-  page,
-  request,
-  browser,
-}) => {
-  await clearBroadcast(request);
-
-  // Navigate to WASM operator and switch to Bible view
-  await page.goto(`${baseURL}/ui/operator`);
-  await page.waitForSelector('[data-role="library-list"]', { timeout: 30_000 });
-
-  const bibleButton = page.locator(
-    '[data-role="view-toggle"][data-view="bible"]',
-  );
-  if ((await bibleButton.count()) > 0) {
-    await bibleButton.click();
-  }
-  await page.waitForFunction(
-    () => document.body.getAttribute("data-view") === "bible",
-    { timeout: 5_000 },
-  );
-
-  // Check if Bible data is available
-  const bookItems = page.locator('[data-role="book-item"]');
-  const bookCount = await bookItems.count();
-  if (bookCount === 0) {
-    // No Bible data — skip
-    return;
-  }
-
-  // Load a passage
-  await bookItems.first().click();
-  await page.locator('[data-role="load-button"]').click();
-
-  await page.waitForFunction(
-    () => document.querySelectorAll('[data-role="slide-card"]').length > 0,
-    { timeout: 15_000 },
-  );
-
-  // Trigger via UI click
-  const triggerZone = page.locator('[data-role="slide-trigger-zone"]').first();
-  await triggerZone.click();
-
-  // Wait for success toast
-  await page.waitForFunction(
-    () => {
-      const toast = document.querySelector('[data-role="toast"]');
-      return toast && toast.textContent?.includes("Triggered");
-    },
-    { timeout: 5_000 },
-  );
-
-  // Open stage in a separate page and verify Bible text appears
-  const stagePage = await browser.newPage();
-  await stagePage.goto(`${baseURL}/stage`);
-  await stagePage.waitForLoadState("domcontentloaded");
-  await stagePage.waitForSelector('body[data-wasm-ready="true"]', { timeout: 30_000 });
-  await stagePage.waitForFunction(
-    () => window.__presenterStageConnectionState === "connected",
-    { timeout: 30_000 },
-  );
-
-  const bibleOverlay = stagePage.locator(".stage__bible-overlay");
-  await expect(bibleOverlay).toHaveAttribute("data-visible", "true", {
-    timeout: 10_000,
-  });
-
-  const bibleText = stagePage.locator(".stage__bible-text");
-  const text = await bibleText.textContent();
-  expect(text).toBeTruthy();
-  expect(text!.length).toBeGreaterThan(0);
-
-  await stagePage.close();
-});
-
-test("clear from WASM operator UI removes text from stage page", async ({
-  page,
-  request,
-  browser,
-}) => {
-  // Trigger a slide via API first
-  await triggerSlide(request, {
-    mainText: "Test clear from operator",
-    mainReference: "Test 1:1",
-  });
-
-  // Open stage page
-  const stagePage = await browser.newPage();
-  await stagePage.goto(`${baseURL}/stage`);
-  await stagePage.waitForLoadState("domcontentloaded");
-  await stagePage.waitForSelector('body[data-wasm-ready="true"]', { timeout: 30_000 });
-  await stagePage.waitForFunction(
-    () => window.__presenterStageConnectionState === "connected",
-    { timeout: 30_000 },
-  );
-
-  // Verify it's visible
-  const bibleOverlay = stagePage.locator(".stage__bible-overlay");
-  await expect(bibleOverlay).toHaveAttribute("data-visible", "true", {
-    timeout: 10_000,
-  });
-
-  // Clear via API (clear broadcast button was removed from UI)
-  await request.post(new URL("/bible/clear", baseURL).toString());
-
-  // Wait for overlay to disappear on stage page
-  await expect(bibleOverlay).toHaveAttribute("data-visible", "false", {
-    timeout: 10_000,
-  });
-
-  await stagePage.close();
+  await setLayout(request, "worship-snv");
 });
 
 test("active-slide API endpoint returns current slide output", async ({

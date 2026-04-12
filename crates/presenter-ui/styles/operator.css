@@ -1350,7 +1350,7 @@ body.operator[data-mode="edit"] .operator__slide-editor input {
 
 .operator__slide-editor-grid {
   display: grid;
-  grid-template-columns: 1fr 1fr;
+  grid-template-columns: 1fr;
   gap: 0.65rem;
 }
 

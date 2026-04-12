@@ -212,6 +212,35 @@ body.stage {
     display: none;
 }
 
+/* ===== Bible layout (dedicated) ===== */
+
+.stage-container[data-layout="bible"] {
+    background: #0a0a0a;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    height: 100vh;
+    padding: 4%;
+    box-sizing: border-box;
+}
+
+.stage__bible-content {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    flex: 1;
+    width: 100%;
+}
+
+.stage__bible-waiting {
+    color: #475569;
+    font-size: 2vw;
+    font-style: italic;
+    text-align: center;
+}
+
 .stage__bible-text {
     color: #f8fafc;
     font-size: 3vw;
