@@ -45,50 +45,51 @@ type SelectionTarget = {
 };
 
 /**
- * Fetches /libraries and picks a worship presentation that exercises the
- * rendering paths we care about. Prefers presentations where a group repeats
- * (so the inherited modifier is provably in the DOM). Returns `null` if the
- * corpus has no worship presentations with groups — the test will then fail
- * loudly instead of silently passing.
+ * Queries the server's /libraries endpoint directly (via Playwright's fetch,
+ * not in-page) and picks a worship presentation that exercises the rendering
+ * paths we care about. Returns `null` if the corpus has no suitable fixture —
+ * callers MUST fail loudly rather than silently pass.
  */
 async function pickWorshipTarget(
   page: Page,
   { requiresRepeatedGroups }: { requiresRepeatedGroups: boolean },
 ): Promise<SelectionTarget | null> {
-  return page.evaluate<SelectionTarget | null, { requiresRepeatedGroups: boolean }>(
-    async ({ requiresRepeatedGroups }) => {
-      const libs = await (await fetch("/libraries")).json();
-      let best: SelectionTarget | null = null;
-      for (const lib of libs) {
-        for (const p of lib.presentations ?? []) {
-          const slides = p.slides ?? [];
-          if (slides.length === 0) continue;
-          const groups = slides
-            .map((s: any) => s.content?.group?.name as string | undefined)
-            .filter((g: string | undefined): g is string => !!g);
-          const hasGroups = groups.length > 0;
-          const hasRepeatedGroups = new Set(groups).size < groups.length;
-          if (requiresRepeatedGroups && !hasRepeatedGroups) continue;
-          if (!requiresRepeatedGroups && !hasGroups) continue;
-          const candidate: SelectionTarget = {
-            libraryId: lib.id,
-            libraryName: lib.name,
-            presentationId: p.id,
-            presentationName: p.name,
-            hasGroups,
-            hasRepeatedGroups,
-          };
-          // Prefer larger presentations — more realistic worship content.
-          if (!best || slides.length > (best as any)._size) {
-            (candidate as any)._size = slides.length;
-            best = candidate;
-          }
-        }
+  const response = await page.request.get(`${baseURL}/libraries`);
+  expect(response.ok()).toBe(true);
+  const libs = (await response.json()) as any[];
+
+  type Candidate = SelectionTarget & { size: number };
+  let best: Candidate | null = null;
+
+  for (const lib of libs) {
+    for (const p of lib.presentations ?? []) {
+      const slides = p.slides ?? [];
+      if (slides.length === 0) continue;
+      const groups = slides
+        .map((s: any) => s.content?.group?.name as string | undefined)
+        .filter((g: string | undefined): g is string => !!g);
+      const hasGroups = groups.length > 0;
+      const hasRepeatedGroups = new Set(groups).size < groups.length;
+      if (requiresRepeatedGroups && !hasRepeatedGroups) continue;
+      if (!requiresRepeatedGroups && !hasGroups) continue;
+      const candidate: Candidate = {
+        libraryId: lib.id,
+        libraryName: lib.name,
+        presentationId: p.id,
+        presentationName: p.name,
+        hasGroups,
+        hasRepeatedGroups,
+        size: slides.length,
+      };
+      if (!best || candidate.size > best.size) {
+        best = candidate;
       }
-      return best;
-    },
-    { requiresRepeatedGroups },
-  );
+    }
+  }
+
+  if (!best) return null;
+  const { size: _size, ...target } = best;
+  return target;
 }
 
 /**
