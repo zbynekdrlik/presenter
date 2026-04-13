@@ -207,19 +207,16 @@ pub fn SlideList() -> impl IntoView {
     let ctx = use_ctx!(AppContext);
     let op = use_ctx!(OperatorState);
 
-    // Scroll active slide into view when follow mode is ON and stage changes
+    // Scroll active slide into view whenever the stage's current slide changes.
+    // This covers all trigger sources: click, keyboard arrows, Ableton follow,
+    // Companion, API — the visible list should always follow the stage.
     {
         let stage_snapshot = ctx.stage_snapshot;
-        let ableset_status = ctx.ableset_status;
         Effect::new(move |prev_id: Option<Option<String>>| {
             let current_id = stage_snapshot
                 .get()
                 .and_then(|s| s.current_slide_id.map(|id| id.to_string()));
-            let follow_on = ableset_status
-                .get_untracked()
-                .map(|s| s.follow_enabled)
-                .unwrap_or(true);
-            if follow_on && current_id != prev_id.flatten() {
+            if current_id != prev_id.flatten() {
                 if let Some(ref slide_id) = current_id {
                     let slide_id = slide_id.clone();
                     let _ = gloo_timers::callback::Timeout::new(0, move || {
@@ -322,6 +319,21 @@ pub fn SlideList() -> impl IntoView {
                                         if let Some(card) = el.closest("[data-slide-id]").ok().flatten() {
                                             let target_id = card.get_attribute("data-slide-id").unwrap_or_default();
                                             if target_id != dragged_id {
+                                                // Determine whether to insert before or after the target
+                                                // based on whether the drop was in the upper or lower half
+                                                // of the target card's bounding box.
+                                                let insert_after = card
+                                                    .clone()
+                                                    .dyn_into::<web_sys::HtmlElement>()
+                                                    .ok()
+                                                    .map(|html_el| {
+                                                        let rect = html_el.get_bounding_client_rect();
+                                                        let drop_y = ev.client_y() as f64;
+                                                        let midpoint = rect.top() + rect.height() / 2.0;
+                                                        drop_y > midpoint
+                                                    })
+                                                    .unwrap_or(false);
+
                                                 let pres = ctx.selected_presentation.get_untracked();
                                                 if let Some(p) = pres {
                                                     let pres_id = p.id.to_string();
@@ -330,7 +342,8 @@ pub fn SlideList() -> impl IntoView {
                                                         slide_ids.remove(drag_pos);
                                                     }
                                                     if let Some(target_pos) = slide_ids.iter().position(|id| id == &target_id) {
-                                                        slide_ids.insert(target_pos, dragged_id);
+                                                        let insert_idx = if insert_after { target_pos + 1 } else { target_pos };
+                                                        slide_ids.insert(insert_idx, dragged_id);
                                                     }
                                                     let selected_pres = ctx.selected_presentation;
                                                     leptos::task::spawn_local(async move {
