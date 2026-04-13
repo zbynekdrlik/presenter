@@ -1251,23 +1251,6 @@ body.operator[data-mode="live"] .operator__line-limit {
   font-size: 0.95rem;
 }
 
-.operator__slide-group {
-  font-size: 0.68rem;
-  color: var(--operator-muted);
-  text-transform: uppercase;
-  letter-spacing: 0.08em;
-  text-align: center;
-  margin-top: auto;
-  min-height: 1rem;
-  display: flex;
-  align-items: flex-end;
-  justify-content: center;
-}
-
-.operator__slide-group[data-hidden="true"] {
-  visibility: hidden;
-}
-
 .operator__slide-text.is-warning {
   color: #dc2626;
 }
@@ -1381,30 +1364,37 @@ body.operator[data-mode="live"] .operator__slide-handle {
   color: var(--operator-accent-dark);
   border-radius: 999px;
   padding: 0.15rem 0.6rem;
-  align-self: center;
-  grid-column: 1 / -1;
-  justify-self: center;
+  white-space: nowrap;
 }
 
-.operator__slide-group.is-inherited {
+.operator__slide-group--inherited {
   background: rgba(148, 163, 184, 0.15);
   color: var(--operator-muted);
+  opacity: 0.8;
 }
 
-.operator__slide-group-label {
-  font-size: 0.68rem;
-  text-transform: uppercase;
-  letter-spacing: 0.06em;
-  color: var(--operator-accent-dark);
-  text-align: center;
-  margin-top: auto;
-  padding-top: 0.25rem;
+/* Worship slide card variant — make edit textareas grow like bible */
+.operator__slide-card--worship .operator__slide-editor textarea {
+  field-sizing: content;
+  min-height: 2.5em;
+  max-height: none;
+  height: auto;
+  overflow-y: visible;
 }
 
-.operator__slide-group-label--inherited {
-  font-style: italic;
-  color: var(--operator-muted);
-  opacity: 0.7;
+/* Worship slide header layout — group badge inline with index and controls */
+.operator__slide-card--worship .operator__slide-header {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  flex-wrap: wrap;
+}
+
+.operator__slide-card--worship .operator__slide-header-left {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  flex: 0 0 auto;
 }
 
 .operator__panel {
