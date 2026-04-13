@@ -1,4 +1,5 @@
 use leptos::prelude::*;
+use presenter_core::{resolve_sequence, ResolvedSlide};
 use wasm_bindgen::JsCast;
 
 use crate::api;
@@ -206,24 +207,29 @@ pub fn SlideList() -> impl IntoView {
     let ctx = use_ctx!(AppContext);
     let op = use_ctx!(OperatorState);
 
-    // Scroll active slide into view when follow mode is ON and stage changes
+    // Scroll active slide into view whenever the stage's current slide changes.
+    // This covers all trigger sources: click, keyboard arrows, Ableton follow,
+    // Companion, API — the visible list should always follow the stage.
+    //
+    // The `prev_id: Option<Option<String>>` signature is Leptos's convention:
+    // outer Option = "Effect has run before", inner Option = the previous return
+    // value. `prev_id.flatten()` collapses both into the actual prior slide id.
     {
         let stage_snapshot = ctx.stage_snapshot;
-        let ableset_status = ctx.ableset_status;
         Effect::new(move |prev_id: Option<Option<String>>| {
             let current_id = stage_snapshot
                 .get()
                 .and_then(|s| s.current_slide_id.map(|id| id.to_string()));
-            let follow_on = ableset_status
-                .get_untracked()
-                .map(|s| s.follow_enabled)
-                .unwrap_or(true);
-            if follow_on && current_id != prev_id.flatten() {
+            if current_id != prev_id.flatten() {
                 if let Some(ref slide_id) = current_id {
                     let slide_id = slide_id.clone();
-                    let _ = gloo_timers::callback::Timeout::new(0, move || {
+                    // Use forget() so the timeout isn't cancelled by being dropped.
+                    // 0ms defers until after Leptos has flushed the DOM update that
+                    // sets is-active on the new card.
+                    gloo_timers::callback::Timeout::new(0, move || {
                         scroll_slide_into_view(&slide_id);
-                    });
+                    })
+                    .forget();
                 }
             }
             current_id
@@ -320,20 +326,13 @@ pub fn SlideList() -> impl IntoView {
                                     if let Ok(el) = target.dyn_into::<web_sys::Element>() {
                                         if let Some(card) = el.closest("[data-slide-id]").ok().flatten() {
                                             let target_id = card.get_attribute("data-slide-id").unwrap_or_default();
-                                            if target_id != dragged_id {
-                                                let pres = ctx.selected_presentation.get_untracked();
-                                                if let Some(p) = pres {
-                                                    let pres_id = p.id.to_string();
-                                                    let mut slide_ids: Vec<String> = p.slides.iter().map(|s| s.id.to_string()).collect();
-                                                    if let Some(drag_pos) = slide_ids.iter().position(|id| id == &dragged_id) {
-                                                        slide_ids.remove(drag_pos);
-                                                    }
-                                                    if let Some(target_pos) = slide_ids.iter().position(|id| id == &target_id) {
-                                                        slide_ids.insert(target_pos, dragged_id);
-                                                    }
+                                            if let Some(p) = ctx.selected_presentation.get_untracked() {
+                                                let pres_id = p.id.to_string();
+                                                let ids: Vec<String> = p.slides.iter().map(|s| s.id.to_string()).collect();
+                                                if let Some(new_ids) = reorder_slide_ids(ids, &dragged_id, &target_id) {
                                                     let selected_pres = ctx.selected_presentation;
                                                     leptos::task::spawn_local(async move {
-                                                        if let Ok(slides) = api::presentations::reorder_slides(&pres_id, slide_ids).await {
+                                                        if let Ok(slides) = api::presentations::reorder_slides(&pres_id, new_ids).await {
                                                             selected_pres.update(|p| {
                                                                 if let Some(pres) = p.as_mut() {
                                                                     pres.slides = slides;
@@ -373,37 +372,58 @@ pub fn SlideList() -> impl IntoView {
                     };
 
                     let pres_id = presentation.id.to_string();
-                    let slides = presentation.slides.clone();
+                    let raw_slides = presentation.slides.clone();
+                    let resolved: Vec<ResolvedSlide> = resolve_sequence(&raw_slides);
                     let is_live = mode == "live";
                     let is_edit = !is_live;
 
-                    let mut current_group: Option<String> = None;
+                    // Track previous effective_group to decide whether the current slide
+                    // is showing the group for the first time ("explicit") or inheriting
+                    // it ("inherited").
+                    let mut prev_effective: Option<String> = None;
 
-                    slides.into_iter().enumerate().map(|(i, slide)| {
-                        let slide_id = slide.id.to_string();
-                        let main_text = slide.content.main.value().to_string();
-                        let translation_text = slide.content.translation.value().to_string();
-                        let stage_text = slide.content.stage.value().to_string();
-                        let group_name = slide.content.group.as_ref().map(|g| g.name().to_string());
+                    raw_slides
+                        .iter()
+                        .cloned()
+                        .zip(resolved.into_iter())
+                        .enumerate()
+                        .map(|(i, (raw_slide, resolved_slide))| {
+                        let slide_id = resolved_slide.id.to_string();
+                        let main_text = resolved_slide.main.value().to_string();
+                        let translation_text = resolved_slide.translation.value().to_string();
+                        let stage_text = resolved_slide.stage.value().to_string();
 
-                        // Track inherited vs explicit group for placeholder
-                        let inherited_group = if group_name.is_none() {
-                            current_group.clone()
+                        // The explicit group for this slide (None if inherited).
+                        let explicit_group_name = raw_slide
+                            .content
+                            .group
+                            .as_ref()
+                            .map(|g| g.name().to_string());
+
+                        // The effective (inherited or explicit) group for display.
+                        let effective_group_name = resolved_slide
+                            .effective_group
+                            .as_ref()
+                            .map(|g| g.name().to_string());
+
+                        // Is this slide the first one showing this effective group?
+                        let group_is_new = effective_group_name != prev_effective;
+                        prev_effective = effective_group_name.clone();
+                        let group_inherited =
+                            effective_group_name.is_some() && !group_is_new;
+
+                        // Header badge: always render the effective group. Dim if inherited.
+                        let group_badge_text = effective_group_name.clone();
+                        let group_badge_inherited = group_inherited;
+
+                        // Edit-mode group input:
+                        // - value = explicit group (empty if this slide doesn't have one)
+                        // - placeholder = effective group (shows what would be inherited)
+                        let group_edit_value = explicit_group_name.clone().unwrap_or_default();
+                        let group_edit_placeholder = if explicit_group_name.is_none() {
+                            effective_group_name.clone().unwrap_or_default()
                         } else {
-                            None
-                        };
-
-                        let group_inherited = if group_name != current_group {
-                            current_group.clone_from(&group_name);
-                            false
-                        } else {
-                            group_name.is_some()
-                        };
-
-                        let show_group = if !group_inherited {
-                            group_name.clone()
-                        } else {
-                            None
+                            String::new()
                         };
 
                         // is_active is now computed reactively in the class= closure
@@ -430,15 +450,6 @@ pub fn SlideList() -> impl IntoView {
                         let slide_id_for_article = slide_id.clone();
                         let slide_index = i;
 
-                        let group_display = group_name.clone().unwrap_or_default();
-                        let group_placeholder = inherited_group.clone().unwrap_or_default();
-
-                        // Group label for per-slide display
-                        let group_label_text_live = group_name.clone().or_else(|| inherited_group.clone());
-                        let group_label_inherited_live = group_name.is_none() && inherited_group.is_some();
-                        let group_label_text_edit = group_label_text_live.clone();
-                        let group_label_inherited_edit = group_label_inherited_live;
-
                         let trigger = trigger_slide;
 
                         // Clone for drag
@@ -458,12 +469,9 @@ pub fn SlideList() -> impl IntoView {
                         let slide_id_class = slide_id.clone();
 
                         view! {
-                            {show_group.map(|g| view! {
-                                <div class="operator__slide-group" data-role="slide-group">{g}</div>
-                            })}
                             <article
                                 class=move || {
-                                    let mut c = "operator__slide-card stage-control__slide".to_string();
+                                    let mut c = "operator__slide-card operator__slide-card--worship".to_string();
                                     // Read stage_snapshot reactively HERE (in class closure)
                                     // so it only updates this element's class, not the entire view.
                                     let snap = ctx.stage_snapshot.get();
@@ -582,6 +590,16 @@ pub fn SlideList() -> impl IntoView {
                                             })}
                                         </span>
                                     </div>
+                                    {group_badge_text.clone().map(|g| {
+                                        let class = if group_badge_inherited {
+                                            "operator__slide-group operator__slide-group--inherited"
+                                        } else {
+                                            "operator__slide-group"
+                                        };
+                                        view! {
+                                            <span class=class data-role="slide-group">{g}</span>
+                                        }
+                                    })}
                                     {is_edit.then(|| {
                                         let pres_id_save = pres_id_edit.clone();
                                         let slide_id_save = slide_id_edit.clone();
@@ -681,14 +699,6 @@ pub fn SlideList() -> impl IntoView {
                                             >
                                                 {format!("Line exceeds {line_limit} characters")}
                                             </div>
-                                            {group_label_text_live.map(|g| {
-                                                let class = if group_label_inherited_live {
-                                                    "operator__slide-group-label operator__slide-group-label--inherited"
-                                                } else {
-                                                    "operator__slide-group-label"
-                                                };
-                                                view! { <div class=class data-role="slide-group-label">{g}</div> }
-                                            })}
                                         }.into_any()
                                     } else {
                                         // Create reactive warning signals for real-time updates
@@ -728,14 +738,6 @@ pub fn SlideList() -> impl IntoView {
                                             >
                                                 {format!("Line exceeds {line_limit} characters")}
                                             </div>
-                                            {group_label_text_edit.map(|g| {
-                                                let class = if group_label_inherited_edit {
-                                                    "operator__slide-group-label operator__slide-group-label--inherited"
-                                                } else {
-                                                    "operator__slide-group-label"
-                                                };
-                                                view! { <div class=class data-role="slide-group-label">{g}</div> }
-                                            })}
                                             <div class="operator__slide-editor">
                                                 <label>
                                                     <span>"Main"</span>
@@ -850,9 +852,9 @@ pub fn SlideList() -> impl IntoView {
                                                     <input
                                                         type="text"
                                                         data-field="group"
-                                                        prop:value=group_display.clone()
+                                                        prop:value=group_edit_value.clone()
                                                         // CRITICAL #8 fix: Show inherited group as placeholder
-                                                        placeholder=group_placeholder
+                                                        placeholder=group_edit_placeholder
                                                         on:blur={
                                                             let pres_id = pres_id_edit.clone();
                                                             let sid = slide_id_edit.clone();
@@ -914,15 +916,130 @@ pub fn SlideList() -> impl IntoView {
     }
 }
 
+/// Assumes a vertically scrolling container (`.operator__slides`). If the list
+/// ever becomes horizontally scrollable, this function needs a companion branch.
 fn scroll_slide_into_view(slide_id: &str) {
     let Some(document) = web_sys::window().and_then(|w| w.document()) else {
         return;
     };
     let selector = format!(".operator__slides [data-slide-id=\"{slide_id}\"]");
-    if let Ok(Some(el)) = document.query_selector(&selector) {
-        let mut opts = web_sys::ScrollIntoViewOptions::new();
-        opts.behavior(web_sys::ScrollBehavior::Smooth);
-        opts.block(web_sys::ScrollLogicalPosition::Nearest);
-        el.scroll_into_view_with_scroll_into_view_options(&opts);
+    let Ok(Some(el)) = document.query_selector(&selector) else {
+        return;
+    };
+    // Compute scroll position on the container so the active slide is in view.
+    // Find the scrollable ancestor (.operator__slides).
+    let Ok(Some(container)) = el.closest(".operator__slides") else {
+        return;
+    };
+    let Ok(container) = container.dyn_into::<web_sys::HtmlElement>() else {
+        return;
+    };
+    let Ok(el_html) = el.dyn_into::<web_sys::HtmlElement>() else {
+        return;
+    };
+    let el_rect = el_html.get_bounding_client_rect();
+    let container_rect = container.get_bounding_client_rect();
+    let el_top = el_rect.top();
+    let el_bottom = el_rect.bottom();
+    let c_top = container_rect.top();
+    let c_bottom = container_rect.bottom();
+    let scroll_top = container.scroll_top() as f64;
+    // If above viewport, scroll so element top is at container top.
+    if el_top < c_top {
+        let delta = c_top - el_top;
+        container.set_scroll_top((scroll_top - delta) as i32);
+    } else if el_bottom > c_bottom {
+        // If below viewport, scroll so element bottom is at container bottom.
+        let delta = el_bottom - c_bottom;
+        container.set_scroll_top((scroll_top + delta) as i32);
+    }
+}
+
+/// Pure reorder: given a slide id list and a drag/target pair, returns the new
+/// ordering, or `None` if the drag is a no-op (same id, missing ids).
+///
+/// Direction-based insertion: forward drags land AFTER the target, backward
+/// drags land BEFORE. This guarantees every distinct drag visibly moves the
+/// slide (the previous drop-position heuristic could be a no-op on forward
+/// drags into a target's upper half).
+fn reorder_slide_ids(
+    ids: Vec<String>,
+    dragged: &str,
+    target: &str,
+) -> Option<Vec<String>> {
+    if dragged == target {
+        return None;
+    }
+    let drag_pos = ids.iter().position(|id| id == dragged)?;
+    let target_pos = ids.iter().position(|id| id == target)?;
+    let forward = drag_pos < target_pos;
+    let mut new_ids = ids;
+    new_ids.remove(drag_pos);
+    // After removal, target_pos shifts down by 1 if the dragged slide was before it.
+    let adjusted_target = if forward { target_pos - 1 } else { target_pos };
+    let insert_idx = if forward {
+        adjusted_target + 1
+    } else {
+        adjusted_target
+    };
+    new_ids.insert(insert_idx, dragged.to_string());
+    Some(new_ids)
+}
+
+#[cfg(test)]
+mod reorder_tests {
+    use super::reorder_slide_ids;
+
+    fn ids(items: &[&str]) -> Vec<String> {
+        items.iter().map(|s| s.to_string()).collect()
+    }
+
+    #[test]
+    fn forward_drag_lands_after_target() {
+        // Drag "a" (pos 0) onto "d" (pos 3) → "a" ends up at pos 3.
+        let result = reorder_slide_ids(ids(&["a", "b", "c", "d", "e"]), "a", "d").unwrap();
+        assert_eq!(result, ids(&["b", "c", "d", "a", "e"]));
+    }
+
+    #[test]
+    fn backward_drag_lands_on_target_position() {
+        // Drag "d" (pos 3) onto "a" (pos 0) → "d" ends up at pos 0.
+        let result = reorder_slide_ids(ids(&["a", "b", "c", "d", "e"]), "d", "a").unwrap();
+        assert_eq!(result, ids(&["d", "a", "b", "c", "e"]));
+    }
+
+    #[test]
+    fn adjacent_forward_swap() {
+        // Drag "b" onto "c" → "b" and "c" swap.
+        let result = reorder_slide_ids(ids(&["a", "b", "c", "d"]), "b", "c").unwrap();
+        assert_eq!(result, ids(&["a", "c", "b", "d"]));
+    }
+
+    #[test]
+    fn adjacent_backward_swap() {
+        // Drag "c" onto "b" → "c" and "b" swap.
+        let result = reorder_slide_ids(ids(&["a", "b", "c", "d"]), "c", "b").unwrap();
+        assert_eq!(result, ids(&["a", "c", "b", "d"]));
+    }
+
+    #[test]
+    fn same_id_returns_none() {
+        assert!(reorder_slide_ids(ids(&["a", "b"]), "a", "a").is_none());
+    }
+
+    #[test]
+    fn missing_dragged_returns_none() {
+        assert!(reorder_slide_ids(ids(&["a", "b"]), "z", "a").is_none());
+    }
+
+    #[test]
+    fn missing_target_returns_none() {
+        assert!(reorder_slide_ids(ids(&["a", "b"]), "a", "z").is_none());
+    }
+
+    #[test]
+    fn preserves_length() {
+        let result = reorder_slide_ids(ids(&["a", "b", "c", "d", "e"]), "a", "e").unwrap();
+        assert_eq!(result.len(), 5);
     }
 }

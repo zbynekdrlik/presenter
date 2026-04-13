@@ -266,7 +266,9 @@ fn presentation_from_proto(raw: &proto::Presentation) -> Result<Presentation> {
             } else {
                 None
             };
-            let content = slide_content_from_proto(base_slide, group)?;
+            let Some(content) = slide_content_from_proto(base_slide, group)? else {
+                continue;
+            };
             slides.push(Slide::new(order as u32, content));
             first_action = false;
         }
@@ -285,7 +287,7 @@ fn presentation_from_proto(raw: &proto::Presentation) -> Result<Presentation> {
 fn slide_content_from_proto(
     base_slide: &proto::Slide,
     group: Option<SlideGroup>,
-) -> Result<SlideContent> {
+) -> Result<Option<SlideContent>> {
     let mut buckets: Vec<(TextRole, String)> = Vec::new();
 
     for element in &base_slide.elements {
@@ -305,8 +307,10 @@ fn slide_content_from_proto(
         }
     }
 
-    if buckets.is_empty() {
-        buckets.push((TextRole::Main, String::new()));
+    // Skip slides that have no text content AND no group assignment
+    // (these are artifacts of ProPresenter slides with only placeholder elements).
+    if buckets.is_empty() && group.is_none() {
+        return Ok(None);
     }
 
     let main = select_text(&buckets, TextRole::Main)
@@ -320,12 +324,12 @@ fn slide_content_from_proto(
     let translation = select_text(&buckets, TextRole::Translation).unwrap_or_default();
     let stage = select_text(&buckets, TextRole::Stage).unwrap_or_default();
 
-    Ok(SlideContent::new(
+    Ok(Some(SlideContent::new(
         SlideText::new(main)?,
         SlideText::new(translation)?,
         SlideText::new(stage)?,
         group,
-    ))
+    )))
 }
 
 fn select_text(buckets: &[(TextRole, String)], role: TextRole) -> Option<String> {
@@ -555,7 +559,10 @@ mod tests {
             ..Default::default()
         };
 
-        let content = super::slide_content_from_proto(&slide, None).expect("content");
+        let group = Some(SlideGroup::new("Verse 1".to_string()));
+        let content = super::slide_content_from_proto(&slide, group)
+            .expect("result")
+            .expect("slide kept due to group");
         assert!(content.main.value().is_empty(), "main text should be blank");
     }
 
@@ -597,7 +604,9 @@ mod tests {
             ..Default::default()
         };
 
-        let content = super::slide_content_from_proto(&slide, None).expect("content");
+        let content = super::slide_content_from_proto(&slide, None)
+            .expect("result")
+            .expect("non-empty slide");
         assert_eq!(content.main.value(), "Verse");
         assert!(
             content.stage.value().is_empty(),
@@ -606,12 +615,24 @@ mod tests {
     }
 
     #[test]
-    fn slide_content_defaults_to_blank_when_no_elements_present() {
+    fn slide_content_returns_none_when_no_elements_and_no_group() {
         let slide = proto::Slide::default();
-        let content = super::slide_content_from_proto(&slide, None).expect("content");
-        assert!(content.main.value().is_empty());
-        assert!(content.translation.value().is_empty());
-        assert!(content.stage.value().is_empty());
+        let result = super::slide_content_from_proto(&slide, None).expect("result");
+        assert!(
+            result.is_none(),
+            "empty slide with no group should be skipped"
+        );
+    }
+
+    #[test]
+    fn slide_content_returns_some_when_empty_but_has_group() {
+        let slide = proto::Slide::default();
+        let group = Some(SlideGroup::new("Verse 1".to_string()));
+        let result = super::slide_content_from_proto(&slide, group).expect("result");
+        assert!(
+            result.is_some(),
+            "slide with group should be kept even if text is empty"
+        );
     }
 
     #[tokio::test]
@@ -797,7 +818,9 @@ mod tests {
             ..Default::default()
         };
 
-        let content = slide_content_from_proto(&slide, None).expect("content");
+        let content = slide_content_from_proto(&slide, None)
+            .expect("result")
+            .expect("non-empty slide");
         assert_eq!(content.main.value(), "Main lyrics");
         assert_eq!(content.translation.value(), "Translation text");
         assert_eq!(content.stage.value(), "Stage text");
