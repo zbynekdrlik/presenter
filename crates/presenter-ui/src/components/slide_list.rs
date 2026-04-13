@@ -219,9 +219,13 @@ pub fn SlideList() -> impl IntoView {
             if current_id != prev_id.flatten() {
                 if let Some(ref slide_id) = current_id {
                     let slide_id = slide_id.clone();
-                    let _ = gloo_timers::callback::Timeout::new(0, move || {
+                    // Use forget() so the timeout isn't cancelled by being dropped.
+                    // 0ms defers until after Leptos has flushed the DOM update that
+                    // sets is-active on the new card.
+                    gloo_timers::callback::Timeout::new(0, move || {
                         scroll_slide_into_view(&slide_id);
-                    });
+                    })
+                    .forget();
                 }
             }
             current_id
@@ -319,42 +323,50 @@ pub fn SlideList() -> impl IntoView {
                                         if let Some(card) = el.closest("[data-slide-id]").ok().flatten() {
                                             let target_id = card.get_attribute("data-slide-id").unwrap_or_default();
                                             if target_id != dragged_id {
-                                                // Determine whether to insert before or after the target
-                                                // based on whether the drop was in the upper or lower half
-                                                // of the target card's bounding box.
-                                                let insert_after = card
-                                                    .clone()
-                                                    .dyn_into::<web_sys::HtmlElement>()
-                                                    .ok()
-                                                    .map(|html_el| {
-                                                        let rect = html_el.get_bounding_client_rect();
-                                                        let drop_y = ev.client_y() as f64;
-                                                        let midpoint = rect.top() + rect.height() / 2.0;
-                                                        drop_y > midpoint
-                                                    })
-                                                    .unwrap_or(false);
-
                                                 let pres = ctx.selected_presentation.get_untracked();
                                                 if let Some(p) = pres {
                                                     let pres_id = p.id.to_string();
                                                     let mut slide_ids: Vec<String> = p.slides.iter().map(|s| s.id.to_string()).collect();
-                                                    if let Some(drag_pos) = slide_ids.iter().position(|id| id == &dragged_id) {
+                                                    // Find ORIGINAL positions before removing the dragged slide.
+                                                    let orig_drag_pos = slide_ids.iter().position(|id| id == &dragged_id);
+                                                    let orig_target_pos = slide_ids.iter().position(|id| id == &target_id);
+
+                                                    if let (Some(drag_pos), Some(target_pos)) = (orig_drag_pos, orig_target_pos) {
+                                                        // Direction-based insertion: forward drags land AFTER
+                                                        // the target, backward drags land BEFORE the target.
+                                                        // This guarantees every drag visibly moves the slide.
+                                                        let forward = drag_pos < target_pos;
+
+                                                        // Remove from original position.
                                                         slide_ids.remove(drag_pos);
-                                                    }
-                                                    if let Some(target_pos) = slide_ids.iter().position(|id| id == &target_id) {
-                                                        let insert_idx = if insert_after { target_pos + 1 } else { target_pos };
+
+                                                        // After removal, target_pos shifts down by 1 if the
+                                                        // dragged slide was before it.
+                                                        let adjusted_target = if drag_pos < target_pos {
+                                                            target_pos - 1
+                                                        } else {
+                                                            target_pos
+                                                        };
+
+                                                        let insert_idx = if forward {
+                                                            adjusted_target + 1
+                                                        } else {
+                                                            adjusted_target
+                                                        };
+
                                                         slide_ids.insert(insert_idx, dragged_id);
+
+                                                        let selected_pres = ctx.selected_presentation;
+                                                        leptos::task::spawn_local(async move {
+                                                            if let Ok(slides) = api::presentations::reorder_slides(&pres_id, slide_ids).await {
+                                                                selected_pres.update(|p| {
+                                                                    if let Some(pres) = p.as_mut() {
+                                                                        pres.slides = slides;
+                                                                    }
+                                                                });
+                                                            }
+                                                        });
                                                     }
-                                                    let selected_pres = ctx.selected_presentation;
-                                                    leptos::task::spawn_local(async move {
-                                                        if let Ok(slides) = api::presentations::reorder_slides(&pres_id, slide_ids).await {
-                                                            selected_pres.update(|p| {
-                                                                if let Some(pres) = p.as_mut() {
-                                                                    pres.slides = slides;
-                                                                }
-                                                            });
-                                                        }
-                                                    });
                                                 }
                                             }
                                         }
@@ -936,10 +948,34 @@ fn scroll_slide_into_view(slide_id: &str) {
         return;
     };
     let selector = format!(".operator__slides [data-slide-id=\"{slide_id}\"]");
-    if let Ok(Some(el)) = document.query_selector(&selector) {
-        let mut opts = web_sys::ScrollIntoViewOptions::new();
-        opts.behavior(web_sys::ScrollBehavior::Smooth);
-        opts.block(web_sys::ScrollLogicalPosition::Nearest);
-        el.scroll_into_view_with_scroll_into_view_options(&opts);
+    let Ok(Some(el)) = document.query_selector(&selector) else {
+        return;
+    };
+    // Compute scroll position on the container so the active slide is in view.
+    // Find the scrollable ancestor (.operator__slides).
+    let Ok(Some(container)) = el.closest(".operator__slides") else {
+        return;
+    };
+    let Ok(container) = container.dyn_into::<web_sys::HtmlElement>() else {
+        return;
+    };
+    let Ok(el_html) = el.dyn_into::<web_sys::HtmlElement>() else {
+        return;
+    };
+    let el_rect = el_html.get_bounding_client_rect();
+    let container_rect = container.get_bounding_client_rect();
+    let el_top = el_rect.top();
+    let el_bottom = el_rect.bottom();
+    let c_top = container_rect.top();
+    let c_bottom = container_rect.bottom();
+    let scroll_top = container.scroll_top() as f64;
+    // If above viewport, scroll so element top is at container top.
+    if el_top < c_top {
+        let delta = c_top - el_top;
+        container.set_scroll_top((scroll_top - delta) as i32);
+    } else if el_bottom > c_bottom {
+        // If below viewport, scroll so element bottom is at container bottom.
+        let delta = el_bottom - c_bottom;
+        container.set_scroll_top((scroll_top + delta) as i32);
     }
 }

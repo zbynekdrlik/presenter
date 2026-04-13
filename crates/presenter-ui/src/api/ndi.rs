@@ -40,10 +40,7 @@ pub async fn discover_ndi_sources() -> Result<Vec<NdiSourceDto>, ApiError> {
     get_json("/ndi/sources").await
 }
 
-pub async fn create_video_source(
-    label: &str,
-    ndi_name: &str,
-) -> Result<VideoSourceDto, ApiError> {
+pub async fn create_video_source(label: &str, ndi_name: &str) -> Result<VideoSourceDto, ApiError> {
     post_json(
         "/integrations/video-sources",
         &CreateVideoSourceRequest {
@@ -63,7 +60,11 @@ pub async fn activate_video_source(id: &str) -> Result<VideoSourceDto, ApiError>
 }
 
 pub async fn deactivate_video_sources() -> Result<(), ApiError> {
-    post_no_content("/integrations/video-sources/deactivate", &serde_json::json!({})).await
+    post_no_content(
+        "/integrations/video-sources/deactivate",
+        &serde_json::json!({}),
+    )
+    .await
 }
 
 pub async fn delete_video_source(id: &str) -> Result<(), ApiError> {
