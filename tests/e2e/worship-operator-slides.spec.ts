@@ -6,9 +6,10 @@
  * - Group badges are inside slide cards (not floating outside)
  * - No inline .operator__slide-group-label elements
  * - Zero console errors/warnings
+ * - Repeated groups render with the --inherited modifier
  */
 
-import { test, expect } from "@playwright/test";
+import { test, expect, type Page } from "@playwright/test";
 import {
   deriveTestConfig,
   refreshDevData,
@@ -34,40 +35,107 @@ test.afterAll(async () => {
   server = undefined;
 });
 
-async function openFirstPresentation(page: import("@playwright/test").Page) {
+type SelectionTarget = {
+  libraryId: string;
+  libraryName: string;
+  presentationId: string;
+  presentationName: string;
+  hasGroups: boolean;
+  hasRepeatedGroups: boolean;
+};
+
+/**
+ * Fetches /libraries and picks a worship presentation that exercises the
+ * rendering paths we care about. Prefers presentations where a group repeats
+ * (so the inherited modifier is provably in the DOM). Returns `null` if the
+ * corpus has no worship presentations with groups — the test will then fail
+ * loudly instead of silently passing.
+ */
+async function pickWorshipTarget(
+  page: Page,
+  { requiresRepeatedGroups }: { requiresRepeatedGroups: boolean },
+): Promise<SelectionTarget | null> {
+  return page.evaluate<SelectionTarget | null, { requiresRepeatedGroups: boolean }>(
+    async ({ requiresRepeatedGroups }) => {
+      const libs = await (await fetch("/libraries")).json();
+      let best: SelectionTarget | null = null;
+      for (const lib of libs) {
+        for (const p of lib.presentations ?? []) {
+          const slides = p.slides ?? [];
+          if (slides.length === 0) continue;
+          const groups = slides
+            .map((s: any) => s.content?.group?.name as string | undefined)
+            .filter((g: string | undefined): g is string => !!g);
+          const hasGroups = groups.length > 0;
+          const hasRepeatedGroups = new Set(groups).size < groups.length;
+          if (requiresRepeatedGroups && !hasRepeatedGroups) continue;
+          if (!requiresRepeatedGroups && !hasGroups) continue;
+          const candidate: SelectionTarget = {
+            libraryId: lib.id,
+            libraryName: lib.name,
+            presentationId: p.id,
+            presentationName: p.name,
+            hasGroups,
+            hasRepeatedGroups,
+          };
+          // Prefer larger presentations — more realistic worship content.
+          if (!best || slides.length > (best as any)._size) {
+            (candidate as any)._size = slides.length;
+            best = candidate;
+          }
+        }
+      }
+      return best;
+    },
+    { requiresRepeatedGroups },
+  );
+}
+
+/**
+ * Opens the operator UI, navigates to a specific library + presentation by id.
+ * Uses DOM clicks on data attributes rather than text matching.
+ */
+async function openPresentation(page: Page, target: SelectionTarget) {
   await page.goto(`${baseURL}/ui/operator`);
   await page.waitForSelector('body[data-wasm-ready="true"]', {
     timeout: 30_000,
   });
 
-  // Click first library via JS (clicks can be intercepted by overlays)
-  await page.evaluate(() => {
-    const lib = document.querySelector(
-      '[data-role="library-list"] li button, .operator__library-card button',
-    ) as HTMLElement | null;
-    lib?.click();
-  });
+  // Click the specific library card by id.
+  const libClicked = await page.evaluate((libId: string) => {
+    const cards = document.querySelectorAll<HTMLElement>(
+      `[data-role="library-list"] [data-library-id="${libId}"], [data-library-id="${libId}"]`,
+    );
+    if (cards.length === 0) return false;
+    const btn =
+      (cards[0].querySelector("button") as HTMLElement | null) ?? cards[0];
+    btn.click();
+    return true;
+  }, target.libraryId);
+  expect(libClicked, `library ${target.libraryName} not found in UI`).toBe(true);
 
-  // Wait for presentations to load
   await page.waitForSelector('[data-role="presentation-item"]', {
     timeout: 10_000,
   });
 
-  // Click first presentation via JS
-  await page.evaluate(() => {
-    const item = document.querySelector(
-      '[data-role="presentation-item"]',
-    ) as HTMLElement | null;
-    if (item) {
-      item.scrollIntoView({ block: "center" });
-      const btn =
-        (item.querySelector('button, [role="button"]') as HTMLElement | null) ||
-        item;
-      btn.click();
-    }
-  });
+  // Click the specific presentation by id.
+  const presClicked = await page.evaluate((presId: string) => {
+    const item = document.querySelector<HTMLElement>(
+      `[data-role="presentation-item"][data-presentation-id="${presId}"]`,
+    );
+    if (!item) return false;
+    item.scrollIntoView({ block: "center" });
+    const btn =
+      (item.querySelector("button, [role='button']") as HTMLElement | null) ??
+      item;
+    btn.click();
+    return true;
+  }, target.presentationId);
+  expect(
+    presClicked,
+    `presentation ${target.presentationName} not found in UI`,
+  ).toBe(true);
 
-  // Wait for slides to load
   await page.waitForSelector("[data-slide-id]", { timeout: 10_000 });
 }
 
@@ -81,7 +149,15 @@ test("worship slides render without phantom class or outside-card groups", async
     }
   });
 
-  await openFirstPresentation(page);
+  // Just need a worship presentation with any slides + groups — doesn't
+  // have to have repeated groups for this test.
+  const target = await pickWorshipTarget(page, { requiresRepeatedGroups: false });
+  expect(
+    target,
+    "test corpus has no worship presentations with groups — fixtures broken",
+  ).not.toBeNull();
+
+  await openPresentation(page, target!);
 
   // No element has the phantom "stage-control__slide" class
   const phantomCount = await page.locator(".stage-control__slide").count();
@@ -102,6 +178,10 @@ test("worship slides render without phantom class or outside-card groups", async
     );
   expect(orphanGroups).toBe(0);
 
+  // At least one group badge is rendered (the chosen presentation has groups).
+  const badges = await page.locator('[data-role="slide-group"]').count();
+  expect(badges).toBeGreaterThan(0);
+
   // No inline .operator__slide-group-label (removed in #215)
   const inlineLabels = await page
     .locator(".operator__slide-group-label")
@@ -115,22 +195,27 @@ test("worship slides render without phantom class or outside-card groups", async
 test("worship slides use --inherited modifier for repeated groups", async ({
   page,
 }) => {
-  await openFirstPresentation(page);
+  // This test specifically asserts inherited-group rendering, so it MUST
+  // open a presentation that has at least one repeated group. Fail loudly
+  // if no such fixture exists.
+  const target = await pickWorshipTarget(page, { requiresRepeatedGroups: true });
+  expect(
+    target,
+    "test corpus has no worship presentations with repeated groups — cannot assert inherited modifier",
+  ).not.toBeNull();
 
-  // Find presentations known to have multiple slides sharing a group.
-  // If the current presentation has groups, at least one badge must exist.
-  const anyBadge = await page.locator('[data-role="slide-group"]').count();
-  if (anyBadge === 0) {
-    // Skip gracefully if the test presentation has no groups.
-    return;
-  }
+  await openPresentation(page, target!);
 
-  // If there are multiple slides in a group, the non-first ones should be inherited.
-  // We can't assert this without knowing the presentation structure, so we at least
-  // verify the inherited modifier class exists on at least one badge when duplicates
-  // are present.
-  const total = await page
-    .locator(".operator__slide-group, .operator__slide-group--inherited")
+  // At least one inherited badge must be in the DOM, since by definition
+  // a repeated group means the 2nd+ occurrence is inherited.
+  const inheritedCount = await page
+    .locator(".operator__slide-group--inherited")
     .count();
-  expect(total).toBeGreaterThan(0);
+  expect(inheritedCount).toBeGreaterThan(0);
+
+  // And at least one NON-inherited badge (the first occurrence).
+  const nonInheritedCount = await page
+    .locator('.operator__slide-group:not(.operator__slide-group--inherited)')
+    .count();
+  expect(nonInheritedCount).toBeGreaterThan(0);
 });

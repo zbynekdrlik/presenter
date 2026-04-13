@@ -210,6 +210,10 @@ pub fn SlideList() -> impl IntoView {
     // Scroll active slide into view whenever the stage's current slide changes.
     // This covers all trigger sources: click, keyboard arrows, Ableton follow,
     // Companion, API — the visible list should always follow the stage.
+    //
+    // The `prev_id: Option<Option<String>>` signature is Leptos's convention:
+    // outer Option = "Effect has run before", inner Option = the previous return
+    // value. `prev_id.flatten()` collapses both into the actual prior slide id.
     {
         let stage_snapshot = ctx.stage_snapshot;
         Effect::new(move |prev_id: Option<Option<String>>| {
@@ -322,51 +326,20 @@ pub fn SlideList() -> impl IntoView {
                                     if let Ok(el) = target.dyn_into::<web_sys::Element>() {
                                         if let Some(card) = el.closest("[data-slide-id]").ok().flatten() {
                                             let target_id = card.get_attribute("data-slide-id").unwrap_or_default();
-                                            if target_id != dragged_id {
-                                                let pres = ctx.selected_presentation.get_untracked();
-                                                if let Some(p) = pres {
-                                                    let pres_id = p.id.to_string();
-                                                    let mut slide_ids: Vec<String> = p.slides.iter().map(|s| s.id.to_string()).collect();
-                                                    // Find ORIGINAL positions before removing the dragged slide.
-                                                    let orig_drag_pos = slide_ids.iter().position(|id| id == &dragged_id);
-                                                    let orig_target_pos = slide_ids.iter().position(|id| id == &target_id);
-
-                                                    if let (Some(drag_pos), Some(target_pos)) = (orig_drag_pos, orig_target_pos) {
-                                                        // Direction-based insertion: forward drags land AFTER
-                                                        // the target, backward drags land BEFORE the target.
-                                                        // This guarantees every drag visibly moves the slide.
-                                                        let forward = drag_pos < target_pos;
-
-                                                        // Remove from original position.
-                                                        slide_ids.remove(drag_pos);
-
-                                                        // After removal, target_pos shifts down by 1 if the
-                                                        // dragged slide was before it.
-                                                        let adjusted_target = if drag_pos < target_pos {
-                                                            target_pos - 1
-                                                        } else {
-                                                            target_pos
-                                                        };
-
-                                                        let insert_idx = if forward {
-                                                            adjusted_target + 1
-                                                        } else {
-                                                            adjusted_target
-                                                        };
-
-                                                        slide_ids.insert(insert_idx, dragged_id);
-
-                                                        let selected_pres = ctx.selected_presentation;
-                                                        leptos::task::spawn_local(async move {
-                                                            if let Ok(slides) = api::presentations::reorder_slides(&pres_id, slide_ids).await {
-                                                                selected_pres.update(|p| {
-                                                                    if let Some(pres) = p.as_mut() {
-                                                                        pres.slides = slides;
-                                                                    }
-                                                                });
-                                                            }
-                                                        });
-                                                    }
+                                            if let Some(p) = ctx.selected_presentation.get_untracked() {
+                                                let pres_id = p.id.to_string();
+                                                let ids: Vec<String> = p.slides.iter().map(|s| s.id.to_string()).collect();
+                                                if let Some(new_ids) = reorder_slide_ids(ids, &dragged_id, &target_id) {
+                                                    let selected_pres = ctx.selected_presentation;
+                                                    leptos::task::spawn_local(async move {
+                                                        if let Ok(slides) = api::presentations::reorder_slides(&pres_id, new_ids).await {
+                                                            selected_pres.update(|p| {
+                                                                if let Some(pres) = p.as_mut() {
+                                                                    pres.slides = slides;
+                                                                }
+                                                            });
+                                                        }
+                                                    });
                                                 }
                                             }
                                         }
@@ -943,6 +916,8 @@ pub fn SlideList() -> impl IntoView {
     }
 }
 
+/// Assumes a vertically scrolling container (`.operator__slides`). If the list
+/// ever becomes horizontally scrollable, this function needs a companion branch.
 fn scroll_slide_into_view(slide_id: &str) {
     let Some(document) = web_sys::window().and_then(|w| w.document()) else {
         return;
@@ -977,5 +952,94 @@ fn scroll_slide_into_view(slide_id: &str) {
         // If below viewport, scroll so element bottom is at container bottom.
         let delta = el_bottom - c_bottom;
         container.set_scroll_top((scroll_top + delta) as i32);
+    }
+}
+
+/// Pure reorder: given a slide id list and a drag/target pair, returns the new
+/// ordering, or `None` if the drag is a no-op (same id, missing ids).
+///
+/// Direction-based insertion: forward drags land AFTER the target, backward
+/// drags land BEFORE. This guarantees every distinct drag visibly moves the
+/// slide (the previous drop-position heuristic could be a no-op on forward
+/// drags into a target's upper half).
+fn reorder_slide_ids(
+    ids: Vec<String>,
+    dragged: &str,
+    target: &str,
+) -> Option<Vec<String>> {
+    if dragged == target {
+        return None;
+    }
+    let drag_pos = ids.iter().position(|id| id == dragged)?;
+    let target_pos = ids.iter().position(|id| id == target)?;
+    let forward = drag_pos < target_pos;
+    let mut new_ids = ids;
+    new_ids.remove(drag_pos);
+    // After removal, target_pos shifts down by 1 if the dragged slide was before it.
+    let adjusted_target = if forward { target_pos - 1 } else { target_pos };
+    let insert_idx = if forward {
+        adjusted_target + 1
+    } else {
+        adjusted_target
+    };
+    new_ids.insert(insert_idx, dragged.to_string());
+    Some(new_ids)
+}
+
+#[cfg(test)]
+mod reorder_tests {
+    use super::reorder_slide_ids;
+
+    fn ids(items: &[&str]) -> Vec<String> {
+        items.iter().map(|s| s.to_string()).collect()
+    }
+
+    #[test]
+    fn forward_drag_lands_after_target() {
+        // Drag "a" (pos 0) onto "d" (pos 3) → "a" ends up at pos 3.
+        let result = reorder_slide_ids(ids(&["a", "b", "c", "d", "e"]), "a", "d").unwrap();
+        assert_eq!(result, ids(&["b", "c", "d", "a", "e"]));
+    }
+
+    #[test]
+    fn backward_drag_lands_on_target_position() {
+        // Drag "d" (pos 3) onto "a" (pos 0) → "d" ends up at pos 0.
+        let result = reorder_slide_ids(ids(&["a", "b", "c", "d", "e"]), "d", "a").unwrap();
+        assert_eq!(result, ids(&["d", "a", "b", "c", "e"]));
+    }
+
+    #[test]
+    fn adjacent_forward_swap() {
+        // Drag "b" onto "c" → "b" and "c" swap.
+        let result = reorder_slide_ids(ids(&["a", "b", "c", "d"]), "b", "c").unwrap();
+        assert_eq!(result, ids(&["a", "c", "b", "d"]));
+    }
+
+    #[test]
+    fn adjacent_backward_swap() {
+        // Drag "c" onto "b" → "c" and "b" swap.
+        let result = reorder_slide_ids(ids(&["a", "b", "c", "d"]), "c", "b").unwrap();
+        assert_eq!(result, ids(&["a", "c", "b", "d"]));
+    }
+
+    #[test]
+    fn same_id_returns_none() {
+        assert!(reorder_slide_ids(ids(&["a", "b"]), "a", "a").is_none());
+    }
+
+    #[test]
+    fn missing_dragged_returns_none() {
+        assert!(reorder_slide_ids(ids(&["a", "b"]), "z", "a").is_none());
+    }
+
+    #[test]
+    fn missing_target_returns_none() {
+        assert!(reorder_slide_ids(ids(&["a", "b"]), "a", "z").is_none());
+    }
+
+    #[test]
+    fn preserves_length() {
+        let result = reorder_slide_ids(ids(&["a", "b", "c", "d", "e"]), "a", "e").unwrap();
+        assert_eq!(result.len(), 5);
     }
 }
