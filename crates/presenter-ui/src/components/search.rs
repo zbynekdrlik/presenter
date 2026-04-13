@@ -197,7 +197,12 @@ pub fn SearchResults() -> impl IntoView {
                                 let ref_label = hit.reference.to_human_readable();
                                 let text_preview = {
                                     let t = &hit.text;
-                                    if t.len() > 80 { format!("{}\u{2026}", &t[..80]) } else { t.clone() }
+                                    if t.chars().count() > 80 {
+                                        let end: usize = t.char_indices().nth(80).map(|(i, _)| i).unwrap_or(t.len());
+                                        format!("{}\u{2026}", &t[..end])
+                                    } else {
+                                        t.clone()
+                                    }
                                 };
                                 let book = hit.reference.book.clone();
                                 let book_code = hit.reference.book_code.clone();
