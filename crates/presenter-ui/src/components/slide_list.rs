@@ -1,4 +1,5 @@
 use leptos::prelude::*;
+use presenter_core::{resolve_sequence, ResolvedSlide};
 use wasm_bindgen::JsCast;
 
 use crate::api;
@@ -373,37 +374,58 @@ pub fn SlideList() -> impl IntoView {
                     };
 
                     let pres_id = presentation.id.to_string();
-                    let slides = presentation.slides.clone();
+                    let raw_slides = presentation.slides.clone();
+                    let resolved: Vec<ResolvedSlide> = resolve_sequence(&raw_slides);
                     let is_live = mode == "live";
                     let is_edit = !is_live;
 
-                    let mut current_group: Option<String> = None;
+                    // Track previous effective_group to decide whether the current slide
+                    // is showing the group for the first time ("explicit") or inheriting
+                    // it ("inherited").
+                    let mut prev_effective: Option<String> = None;
 
-                    slides.into_iter().enumerate().map(|(i, slide)| {
-                        let slide_id = slide.id.to_string();
-                        let main_text = slide.content.main.value().to_string();
-                        let translation_text = slide.content.translation.value().to_string();
-                        let stage_text = slide.content.stage.value().to_string();
-                        let group_name = slide.content.group.as_ref().map(|g| g.name().to_string());
+                    raw_slides
+                        .iter()
+                        .cloned()
+                        .zip(resolved.into_iter())
+                        .enumerate()
+                        .map(|(i, (raw_slide, resolved_slide))| {
+                        let slide_id = resolved_slide.id.to_string();
+                        let main_text = resolved_slide.main.value().to_string();
+                        let translation_text = resolved_slide.translation.value().to_string();
+                        let stage_text = resolved_slide.stage.value().to_string();
 
-                        // Track inherited vs explicit group for placeholder
-                        let inherited_group = if group_name.is_none() {
-                            current_group.clone()
+                        // The explicit group for this slide (None if inherited).
+                        let explicit_group_name = raw_slide
+                            .content
+                            .group
+                            .as_ref()
+                            .map(|g| g.name().to_string());
+
+                        // The effective (inherited or explicit) group for display.
+                        let effective_group_name = resolved_slide
+                            .effective_group
+                            .as_ref()
+                            .map(|g| g.name().to_string());
+
+                        // Is this slide the first one showing this effective group?
+                        let group_is_new = effective_group_name != prev_effective;
+                        prev_effective = effective_group_name.clone();
+                        let group_inherited =
+                            effective_group_name.is_some() && !group_is_new;
+
+                        // Header badge: always render the effective group. Dim if inherited.
+                        let group_badge_text = effective_group_name.clone();
+                        let group_badge_inherited = group_inherited;
+
+                        // Edit-mode group input:
+                        // - value = explicit group (empty if this slide doesn't have one)
+                        // - placeholder = effective group (shows what would be inherited)
+                        let group_edit_value = explicit_group_name.clone().unwrap_or_default();
+                        let group_edit_placeholder = if explicit_group_name.is_none() {
+                            effective_group_name.clone().unwrap_or_default()
                         } else {
-                            None
-                        };
-
-                        let group_inherited = if group_name != current_group {
-                            current_group.clone_from(&group_name);
-                            false
-                        } else {
-                            group_name.is_some()
-                        };
-
-                        let show_group = if !group_inherited {
-                            group_name.clone()
-                        } else {
-                            None
+                            String::new()
                         };
 
                         // is_active is now computed reactively in the class= closure
@@ -430,15 +452,6 @@ pub fn SlideList() -> impl IntoView {
                         let slide_id_for_article = slide_id.clone();
                         let slide_index = i;
 
-                        let group_display = group_name.clone().unwrap_or_default();
-                        let group_placeholder = inherited_group.clone().unwrap_or_default();
-
-                        // Group label for per-slide display
-                        let group_label_text_live = group_name.clone().or_else(|| inherited_group.clone());
-                        let group_label_inherited_live = group_name.is_none() && inherited_group.is_some();
-                        let group_label_text_edit = group_label_text_live.clone();
-                        let group_label_inherited_edit = group_label_inherited_live;
-
                         let trigger = trigger_slide;
 
                         // Clone for drag
@@ -458,12 +471,9 @@ pub fn SlideList() -> impl IntoView {
                         let slide_id_class = slide_id.clone();
 
                         view! {
-                            {show_group.map(|g| view! {
-                                <div class="operator__slide-group" data-role="slide-group">{g}</div>
-                            })}
                             <article
                                 class=move || {
-                                    let mut c = "operator__slide-card stage-control__slide".to_string();
+                                    let mut c = "operator__slide-card operator__slide-card--worship".to_string();
                                     // Read stage_snapshot reactively HERE (in class closure)
                                     // so it only updates this element's class, not the entire view.
                                     let snap = ctx.stage_snapshot.get();
@@ -582,6 +592,16 @@ pub fn SlideList() -> impl IntoView {
                                             })}
                                         </span>
                                     </div>
+                                    {group_badge_text.clone().map(|g| {
+                                        let class = if group_badge_inherited {
+                                            "operator__slide-group operator__slide-group--inherited"
+                                        } else {
+                                            "operator__slide-group"
+                                        };
+                                        view! {
+                                            <span class=class data-role="slide-group">{g}</span>
+                                        }
+                                    })}
                                     {is_edit.then(|| {
                                         let pres_id_save = pres_id_edit.clone();
                                         let slide_id_save = slide_id_edit.clone();
@@ -681,14 +701,6 @@ pub fn SlideList() -> impl IntoView {
                                             >
                                                 {format!("Line exceeds {line_limit} characters")}
                                             </div>
-                                            {group_label_text_live.map(|g| {
-                                                let class = if group_label_inherited_live {
-                                                    "operator__slide-group-label operator__slide-group-label--inherited"
-                                                } else {
-                                                    "operator__slide-group-label"
-                                                };
-                                                view! { <div class=class data-role="slide-group-label">{g}</div> }
-                                            })}
                                         }.into_any()
                                     } else {
                                         // Create reactive warning signals for real-time updates
@@ -728,14 +740,6 @@ pub fn SlideList() -> impl IntoView {
                                             >
                                                 {format!("Line exceeds {line_limit} characters")}
                                             </div>
-                                            {group_label_text_edit.map(|g| {
-                                                let class = if group_label_inherited_edit {
-                                                    "operator__slide-group-label operator__slide-group-label--inherited"
-                                                } else {
-                                                    "operator__slide-group-label"
-                                                };
-                                                view! { <div class=class data-role="slide-group-label">{g}</div> }
-                                            })}
                                             <div class="operator__slide-editor">
                                                 <label>
                                                     <span>"Main"</span>
@@ -850,9 +854,9 @@ pub fn SlideList() -> impl IntoView {
                                                     <input
                                                         type="text"
                                                         data-field="group"
-                                                        prop:value=group_display.clone()
+                                                        prop:value=group_edit_value.clone()
                                                         // CRITICAL #8 fix: Show inherited group as placeholder
-                                                        placeholder=group_placeholder
+                                                        placeholder=group_edit_placeholder
                                                         on:blur={
                                                             let pres_id = pres_id_edit.clone();
                                                             let sid = slide_id_edit.clone();
