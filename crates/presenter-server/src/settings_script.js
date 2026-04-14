@@ -861,9 +861,12 @@
         throw new Error(await extractError(response));
       }
       showToast('Launch queued — refreshing status…', 'success');
+      // 600ms is typically enough for the worker to finish adb connect +
+      // am start and update its status snapshot. A reachable TV completes
+      // in ~130ms locally; add headroom for LAN latency and slow devices.
       setTimeout(() => {
         refreshAndroidDisplays(false);
-      }, 1500);
+      }, 600);
     } catch (error) {
       console.error('Failed to trigger android launch', error);
       showToast(error.message || 'Unable to trigger launch.', 'error');

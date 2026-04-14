@@ -288,8 +288,11 @@ test('android stage launchers CRUD', async ({ page }) => {
 
   // The seed migration adds 4 displays on a fresh DB — establish the baseline
   // so we can write assertions relative to it instead of assuming an empty list.
+  // Lock in the seed's existence so a future regression that empties the table
+  // silently makes this test "pass" with a zero baseline.
   const initialDisplays = await getAndroidDisplaysViaApi(page);
   const initialCount = initialDisplays.length;
+  expect(initialCount).toBeGreaterThanOrEqual(4);
 
   const label = `Stage Display ${Date.now()}`;
   await page.fill(selectors.androidLabel, label);

@@ -3,6 +3,11 @@ use sea_orm_migration::prelude::*;
 #[derive(DeriveMigrationName)]
 pub struct Migration;
 
+/// Seed displays for the production presenter LAN. These hostnames are
+/// specific to our site; a deployment to a different site should delete
+/// these rows via the Settings UI and add their own. The `COUNT(*) > 0`
+/// guard in `up()` makes that delete-and-replace flow safe across future
+/// redeploys — once any operator row exists, the seed never runs again.
 const SEED_ROWS: &[(&str, &str)] = &[
     ("Stage SD1", "sd1l.lan"),
     ("Stage SD2", "sd2l.lan"),
