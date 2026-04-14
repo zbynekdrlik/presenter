@@ -235,6 +235,33 @@ impl<P: BibleContentProvider> BibleScraper<P> {
     }
 }
 
+/// Read the bytes of a `LocalFile` spec's archive without going through a
+/// `BibleContentProvider`. Returns `Err` for `Url` specs — callers that need
+/// URL support should use `BibleScraper::scrape` or fetch bytes themselves.
+pub fn read_local_file_bytes(spec: &BibleTranslationSpec) -> anyhow::Result<Vec<u8>> {
+    use anyhow::{anyhow, Context};
+    match &spec.source {
+        BibleSource::LocalFile { env_var, .. } => {
+            let path = std::env::var(env_var).with_context(|| {
+                format!(
+                    "environment variable {} must be set to the bible archive for {}",
+                    env_var, spec.translation.code
+                )
+            })?;
+            std::fs::read(&path).with_context(|| {
+                format!(
+                    "failed to read bible archive for {} from {}",
+                    spec.translation.code, path
+                )
+            })
+        }
+        BibleSource::Url { .. } => Err(anyhow!(
+            "read_local_file_bytes called on URL spec {}",
+            spec.translation.code
+        )),
+    }
+}
+
 pub fn default_translation_specs() -> Vec<BibleTranslationSpec> {
     vec![
         king_james_spec(),

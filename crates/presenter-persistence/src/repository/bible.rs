@@ -1150,13 +1150,13 @@ mod fast_import_tests {
     #[tokio::test]
     async fn fast_import_preserves_existing_digest() {
         let repo = fresh_repo().await;
-        let translation = BibleTranslation::new("eng-dig", "Dig", "en")
-            .with_source("test");
-        let batch = BibleIngestionBatch::new(translation.clone(), Vec::new())
-            .expect("valid batch");
+        let translation = BibleTranslation::new("eng-dig", "Dig", "en").with_source("test");
+        let batch = BibleIngestionBatch::new(translation.clone(), Vec::new()).expect("valid batch");
 
         // Initial import — no digest yet
-        repo.replace_bible_translation_passages(&batch).await.unwrap();
+        repo.replace_bible_translation_passages(&batch)
+            .await
+            .unwrap();
         assert_eq!(
             repo.get_bible_source_digest("eng-dig").await.unwrap(),
             None,
@@ -1169,7 +1169,9 @@ mod fast_import_tests {
             .unwrap();
 
         // Re-import — digest must survive
-        repo.replace_bible_translation_passages(&batch).await.unwrap();
+        repo.replace_bible_translation_passages(&batch)
+            .await
+            .unwrap();
         assert_eq!(
             repo.get_bible_source_digest("eng-dig").await.unwrap(),
             Some("keepme".to_string()),

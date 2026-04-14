@@ -36,6 +36,18 @@ where
         Ok(summary)
     }
 
+    pub async fn ingest_with_bytes(
+        &self,
+        spec: &BibleTranslationSpec,
+        bytes: &[u8],
+    ) -> Result<BibleImportSummary> {
+        let (batch, summary) = self.scraper.scrape_with_bytes(spec, bytes)?;
+        self.repository
+            .replace_bible_translation_passages(&batch)
+            .await?;
+        Ok(summary)
+    }
+
     pub async fn ingest_specs<I>(&self, specs: I) -> Result<Vec<BibleImportSummary>>
     where
         I: IntoIterator<Item = BibleTranslationSpec>,
