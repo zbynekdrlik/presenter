@@ -2638,6 +2638,7 @@ dependencies = [
  "prost",
  "prost-build",
  "rusqlite",
+ "sha2",
  "tempfile",
  "tokio",
  "tracing",
