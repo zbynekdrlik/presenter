@@ -141,6 +141,25 @@ impl AndroidStageRegistry {
         }
     }
 
+    /// Tell the worker for `id` to run a launch immediately, bypassing the
+    /// 20-second tick. Returns an error if no such display exists or if the
+    /// display is currently disabled. The launch runs asynchronously — the
+    /// caller should poll `snapshot_for(id)` to observe the state change.
+    pub async fn launch_now(&self, id: AndroidStageDisplayId) -> anyhow::Result<()> {
+        let guard = self.displays.read().await;
+        let entry = guard
+            .get(&id)
+            .ok_or_else(|| anyhow!("unknown android stage display {id}"))?;
+        if !entry.config.is_enabled {
+            return Err(anyhow!("android stage display {id} is disabled"));
+        }
+        entry
+            .command_tx
+            .try_send(DeviceCommand::LaunchNow)
+            .map_err(|err| anyhow!("failed to enqueue launch for {id}: {err}"))?;
+        Ok(())
+    }
+
     fn spawn_display(&self, display: AndroidStageDisplay) -> DeviceEntry {
         let (command_tx, command_rx) = mpsc::channel(COMMAND_CHANNEL_CAPACITY);
         let status = Arc::new(RwLock::new(if display.is_enabled {
@@ -374,5 +393,24 @@ fn truncate_error(message: &str) -> String {
         message.to_string()
     } else {
         format!("{}…", &message[..MAX_LEN - 1])
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use presenter_core::AndroidStageDisplayId;
+    use uuid::Uuid;
+
+    #[tokio::test]
+    async fn launch_now_errors_on_unknown_id() {
+        let registry = AndroidStageRegistry::new();
+        let unknown = AndroidStageDisplayId::from_uuid(Uuid::new_v4());
+        let err = registry.launch_now(unknown).await;
+        assert!(err.is_err(), "launch_now must error on unknown id");
+        assert!(
+            err.unwrap_err().to_string().contains("unknown android stage display"),
+            "error message should identify the unknown-id case",
+        );
     }
 }
