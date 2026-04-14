@@ -49,10 +49,21 @@ fn build_fts_query(input: &str) -> Option<String> {
 
 impl Repository {
     #[instrument(skip_all)]
+    /// Replace all passages for a translation via the fast-import path:
+    /// drop the `bible_passage_fts` triggers inside the transaction,
+    /// bulk-insert passages, bulk-populate FTS with one `INSERT ... SELECT`,
+    /// recreate the triggers. A rollback restores the triggers atomically.
+    ///
+    /// Callers MUST ensure no other connection is writing to `bible_passages`
+    /// during this call — the triggers are briefly absent mid-transaction, so
+    /// concurrent inserts/updates/deletes from another writer would leave FTS
+    /// out of sync. The deploy workflow stops the server before running
+    /// `ingest_bibles`, which guarantees this.
     pub async fn replace_bible_translation_passages(
         &self,
         batch: &BibleIngestionBatch,
     ) -> anyhow::Result<()> {
+        use presenter_migration::bible_fts_triggers::{CREATE_TRIGGER_STATEMENTS, TRIGGER_NAMES};
         const SQLITE: DatabaseBackend = DatabaseBackend::Sqlite;
 
         let (translation, passages) = batch.clone().into_parts();
@@ -79,11 +90,7 @@ impl Repository {
 
         // 2. Drop the FTS triggers inside the transaction. SQLite supports DDL
         //    in transactions; if we roll back, the triggers are restored.
-        for trig in [
-            "bible_passage_fts_insert",
-            "bible_passage_fts_delete",
-            "bible_passage_fts_update",
-        ] {
+        for trig in TRIGGER_NAMES {
             txn.execute(Statement::from_string(
                 SQLITE,
                 format!("DROP TRIGGER IF EXISTS {trig}"),
@@ -157,37 +164,13 @@ impl Repository {
         ))
         .await?;
 
-        // 7. Recreate the FTS triggers with the same bodies as the original migration
-        txn.execute(Statement::from_string(
-            SQLITE,
-            "CREATE TRIGGER bible_passage_fts_insert \
-             AFTER INSERT ON bible_passages BEGIN \
-                INSERT INTO bible_passage_fts(passage_id, translation_code, book, content) \
-                VALUES (new.id, new.translation_code, new.book, new.content); \
-             END"
-            .to_string(),
-        ))
-        .await?;
-        txn.execute(Statement::from_string(
-            SQLITE,
-            "CREATE TRIGGER bible_passage_fts_delete \
-             AFTER DELETE ON bible_passages BEGIN \
-                DELETE FROM bible_passage_fts WHERE passage_id = old.id; \
-             END"
-            .to_string(),
-        ))
-        .await?;
-        txn.execute(Statement::from_string(
-            SQLITE,
-            "CREATE TRIGGER bible_passage_fts_update \
-             AFTER UPDATE ON bible_passages BEGIN \
-                DELETE FROM bible_passage_fts WHERE passage_id = old.id; \
-                INSERT INTO bible_passage_fts(passage_id, translation_code, book, content) \
-                VALUES (new.id, new.translation_code, new.book, new.content); \
-             END"
-            .to_string(),
-        ))
-        .await?;
+        // 7. Recreate the FTS triggers. Bodies live in
+        //    presenter_migration::bible_fts_triggers so the schema and the
+        //    fast-import path can never drift.
+        for stmt in CREATE_TRIGGER_STATEMENTS {
+            txn.execute(Statement::from_string(SQLITE, stmt.to_string()))
+                .await?;
+        }
 
         txn.commit().await?;
         Ok(())

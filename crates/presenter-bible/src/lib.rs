@@ -218,42 +218,37 @@ impl<P: BibleContentProvider> BibleScraper<P> {
                 .await
                 .with_context(|| format!("failed to fetch bible archive from {}", url)),
             BibleSource::LocalFile { env_var, .. } => {
-                let path = std::env::var(env_var).with_context(|| {
-                    format!(
-                        "environment variable {} must be set to the bible archive for {}",
-                        env_var, spec.translation.code
-                    )
-                })?;
-                std::fs::read(&path).with_context(|| {
-                    format!(
-                        "failed to read bible archive for {} from {}",
-                        spec.translation.code, path
-                    )
-                })
+                read_local_archive_file(env_var, &spec.translation.code)
             }
         }
     }
+}
+
+/// Read a `LocalFile` spec's archive bytes from the path held in `env_var`.
+/// Used by both `BibleScraper::fetch_spec_bytes` and the pub `read_local_file_bytes`
+/// free function so error messages and lookup logic stay consistent.
+fn read_local_archive_file(env_var: &str, translation_code: &str) -> anyhow::Result<Vec<u8>> {
+    let path = std::env::var(env_var).with_context(|| {
+        format!(
+            "environment variable {} must be set to the bible archive for {}",
+            env_var, translation_code
+        )
+    })?;
+    std::fs::read(&path).with_context(|| {
+        format!(
+            "failed to read bible archive for {} from {}",
+            translation_code, path
+        )
+    })
 }
 
 /// Read the bytes of a `LocalFile` spec's archive without going through a
 /// `BibleContentProvider`. Returns `Err` for `Url` specs — callers that need
 /// URL support should use `BibleScraper::scrape` or fetch bytes themselves.
 pub fn read_local_file_bytes(spec: &BibleTranslationSpec) -> anyhow::Result<Vec<u8>> {
-    use anyhow::{anyhow, Context};
     match &spec.source {
         BibleSource::LocalFile { env_var, .. } => {
-            let path = std::env::var(env_var).with_context(|| {
-                format!(
-                    "environment variable {} must be set to the bible archive for {}",
-                    env_var, spec.translation.code
-                )
-            })?;
-            std::fs::read(&path).with_context(|| {
-                format!(
-                    "failed to read bible archive for {} from {}",
-                    spec.translation.code, path
-                )
-            })
+            read_local_archive_file(env_var, &spec.translation.code)
         }
         BibleSource::Url { .. } => Err(anyhow!(
             "read_local_file_bytes called on URL spec {}",

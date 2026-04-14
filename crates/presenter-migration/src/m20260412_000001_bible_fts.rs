@@ -1,5 +1,7 @@
 use sea_orm_migration::prelude::*;
 
+use crate::bible_fts_triggers::{CREATE_TRIGGER_STATEMENTS, TRIGGER_NAMES};
+
 #[derive(DeriveMigrationName)]
 pub struct Migration;
 
@@ -31,45 +33,22 @@ impl MigrationTrait for Migration {
         ))
         .await?;
 
-        // Keep FTS in sync via triggers
-        db.execute_unprepared(&format!(
-            "CREATE TRIGGER IF NOT EXISTS bible_passage_fts_insert \
-             AFTER INSERT ON bible_passages BEGIN \
-                INSERT INTO {FTS_TABLE}(passage_id, translation_code, book, content) \
-                VALUES (new.id, new.translation_code, new.book, new.content); \
-             END"
-        ))
-        .await?;
-
-        db.execute_unprepared(&format!(
-            "CREATE TRIGGER IF NOT EXISTS bible_passage_fts_delete \
-             AFTER DELETE ON bible_passages BEGIN \
-                DELETE FROM {FTS_TABLE} WHERE passage_id = old.id; \
-             END"
-        ))
-        .await?;
-
-        db.execute_unprepared(&format!(
-            "CREATE TRIGGER IF NOT EXISTS bible_passage_fts_update \
-             AFTER UPDATE ON bible_passages BEGIN \
-                DELETE FROM {FTS_TABLE} WHERE passage_id = old.id; \
-                INSERT INTO {FTS_TABLE}(passage_id, translation_code, book, content) \
-                VALUES (new.id, new.translation_code, new.book, new.content); \
-             END"
-        ))
-        .await?;
+        // Keep FTS in sync via triggers. The exact same trigger bodies are
+        // recreated inside the fast-import transaction in presenter-persistence,
+        // so both sites share the constants in bible_fts_triggers.
+        for stmt in CREATE_TRIGGER_STATEMENTS {
+            db.execute_unprepared(stmt).await?;
+        }
 
         Ok(())
     }
 
     async fn down(&self, manager: &SchemaManager) -> Result<(), DbErr> {
         let db = manager.get_connection();
-        db.execute_unprepared("DROP TRIGGER IF EXISTS bible_passage_fts_insert")
-            .await?;
-        db.execute_unprepared("DROP TRIGGER IF EXISTS bible_passage_fts_delete")
-            .await?;
-        db.execute_unprepared("DROP TRIGGER IF EXISTS bible_passage_fts_update")
-            .await?;
+        for name in TRIGGER_NAMES {
+            db.execute_unprepared(&format!("DROP TRIGGER IF EXISTS {name}"))
+                .await?;
+        }
         db.execute_unprepared(&format!("DROP TABLE IF EXISTS {FTS_TABLE}"))
             .await?;
         Ok(())
