@@ -286,13 +286,14 @@ test('android stage launchers CRUD', async ({ page }) => {
   await page.goto(new URL('/ui/settings', baseURL).toString());
   await page.waitForLoadState('networkidle');
 
-  await expect(page.locator(selectors.androidList).first()).toContainText(
-    'No Android stage displays configured yet.'
-  );
+  // The seed migration adds 4 displays on a fresh DB — establish the baseline
+  // so we can write assertions relative to it instead of assuming an empty list.
+  const initialDisplays = await getAndroidDisplaysViaApi(page);
+  const initialCount = initialDisplays.length;
 
   const label = `Stage Display ${Date.now()}`;
   await page.fill(selectors.androidLabel, label);
-  await page.fill(selectors.androidHost, 'sd1l.lan');
+  await page.fill(selectors.androidHost, 'test-stage.invalid');
   await page.fill(selectors.androidPort, '5555');
   await page.fill(
     selectors.androidComponent,
@@ -303,48 +304,48 @@ test('android stage launchers CRUD', async ({ page }) => {
   await waitForToast(page, 'Added Android stage display.');
 
   const displaysAfterCreate = await getAndroidDisplaysViaApi(page);
-  expect(displaysAfterCreate).toHaveLength(1);
-  const created = displaysAfterCreate[0];
-  expect(created.label).toBe(label);
-  expect(created.host).toBe('sd1l.lan');
+  expect(displaysAfterCreate).toHaveLength(initialCount + 1);
+  const created = displaysAfterCreate.find((d) => d.label === label);
+  expect(created).toBeDefined();
+  expect(created!.host).toBe('test-stage.invalid');
   const androidListItem = page.locator(
-    `${selectors.androidList} li[data-id="${created.id}"]`
+    `${selectors.androidList} li[data-id="${created!.id}"]`
   );
   await expect(androidListItem).toContainText(label);
 
   // Edit display details.
-  await page.locator(`[data-role="android-edit"][data-id="${created.id}"]`).click();
+  await page.locator(`[data-role="android-edit"][data-id="${created!.id}"]`).click();
   const updatedLabel = `${label} Updated`;
   await page.fill(selectors.androidLabel, updatedLabel);
-  await page.fill(selectors.androidHost, 'sd2l.lan');
+  await page.fill(selectors.androidHost, 'other-stage.invalid');
   await page.fill(selectors.androidPort, '5566');
   await page.fill(selectors.androidComponent, 'com.example/.Main');
   await page.uncheck(selectors.androidEnabled);
   await page.click(selectors.androidSubmit);
   await waitForToast(page, 'Saved Android stage display.');
   await expect(androidListItem).toContainText(updatedLabel);
-  await expect(androidListItem).toContainText('sd2l.lan');
+  await expect(androidListItem).toContainText('other-stage.invalid');
 
   const displaysAfterUpdate = await getAndroidDisplaysViaApi(page);
-  expect(displaysAfterUpdate[0].label).toBe(updatedLabel);
-  expect(displaysAfterUpdate[0].host).toBe('sd2l.lan');
-  expect(displaysAfterUpdate[0].port).toBe(5566);
+  const updated = displaysAfterUpdate.find((d) => d.id === created!.id);
+  expect(updated).toBeDefined();
+  expect(updated!.label).toBe(updatedLabel);
+  expect(updated!.host).toBe('other-stage.invalid');
+  expect(updated!.port).toBe(5566);
   expect(
-    displaysAfterUpdate[0].launchComponent ?? displaysAfterUpdate[0].launch_component
+    updated!.launchComponent ?? updated!.launch_component
   ).toBe('com.example/.Main');
 
   // Delete the display.
   page.once('dialog', (dialog) => dialog.accept());
   await page
-    .locator(`[data-role="android-delete"][data-id="${created.id}"]`)
+    .locator(`[data-role="android-delete"][data-id="${created!.id}"]`)
     .click();
   await waitForToast(page, 'Deleted Android stage display.');
 
   const displaysAfterDelete = await getAndroidDisplaysViaApi(page);
-  expect(displaysAfterDelete).toHaveLength(0);
-  await expect(page.locator('[data-role="android-display-list"] [data-role="android-empty"]').first()).toHaveText(
-    'No Android stage displays configured yet.'
-  );
+  expect(displaysAfterDelete).toHaveLength(initialCount);
+  expect(displaysAfterDelete.find((d) => d.id === created!.id)).toBeUndefined();
 });
 
 test('companion settings reflect feature flags', async ({ page }) => {
