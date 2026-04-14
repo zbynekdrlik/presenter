@@ -10,8 +10,7 @@ const SEED_ROWS: &[(&str, &str)] = &[
     ("Stage SD4", "sd4l.lan"),
 ];
 
-const DEFAULT_LAUNCH_COMPONENT: &str =
-    "com.fullykiosk.videokiosk/de.ozerov.fully.MainActivity";
+const DEFAULT_LAUNCH_COMPONENT: &str = "com.fullykiosk.videokiosk/de.ozerov.fully.MainActivity";
 
 #[async_trait::async_trait]
 impl MigrationTrait for Migration {

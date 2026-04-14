@@ -110,6 +110,11 @@ impl Repository {
         &self.db
     }
 
+    #[cfg(test)]
+    pub fn connection_for_tests(&self) -> &DatabaseConnection {
+        &self.db
+    }
+
     #[instrument(skip_all)]
     pub async fn get_app_setting(&self, key: &str) -> anyhow::Result<Option<String>> {
         let result = app_settings::Entity::find_by_id(key.to_string())

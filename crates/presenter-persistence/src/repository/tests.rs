@@ -252,10 +252,14 @@ async fn resolume_host_crud_round_trip() {
 #[tokio::test]
 async fn android_stage_display_crud_round_trip() {
     let repo = Repository::connect_in_memory().await.unwrap();
-    let draft = AndroidStageDisplayDraft::new("Stage Left", "sd1l.lan");
+
+    let initial = repo.list_android_stage_displays().await.unwrap();
+    let initial_count = initial.len();
+
+    let draft = AndroidStageDisplayDraft::new("Stage Left", "test-stage.invalid");
     let created = repo.create_android_stage_display(&draft).await.unwrap();
     assert_eq!(created.label, "Stage Left");
-    assert_eq!(created.host, "sd1l.lan");
+    assert_eq!(created.host, "test-stage.invalid");
     assert_eq!(created.port, DEFAULT_ADB_PORT);
     assert_eq!(
         created.launch_component,
@@ -264,9 +268,10 @@ async fn android_stage_display_crud_round_trip() {
     assert!(created.is_enabled);
 
     let displays = repo.list_android_stage_displays().await.unwrap();
-    assert_eq!(displays.len(), 1);
+    assert_eq!(displays.len(), initial_count + 1);
+    assert!(displays.iter().any(|d| d.id == created.id));
 
-    let updated_draft = AndroidStageDisplayDraft::new("Stage Right", "sd2l.lan")
+    let updated_draft = AndroidStageDisplayDraft::new("Stage Right", "test-stage2.invalid")
         .with_port(5566)
         .with_launch_component("com.example/.Main")
         .with_enabled(false);
@@ -275,14 +280,15 @@ async fn android_stage_display_crud_round_trip() {
         .await
         .unwrap();
     assert_eq!(updated.label, "Stage Right");
-    assert_eq!(updated.host, "sd2l.lan");
+    assert_eq!(updated.host, "test-stage2.invalid");
     assert_eq!(updated.port, 5566);
     assert_eq!(updated.launch_component, "com.example/.Main");
     assert!(!updated.is_enabled);
 
     repo.delete_android_stage_display(created.id).await.unwrap();
     let after_delete = repo.list_android_stage_displays().await.unwrap();
-    assert!(after_delete.is_empty());
+    assert_eq!(after_delete.len(), initial_count);
+    assert!(after_delete.iter().all(|d| d.id != created.id));
 }
 
 #[tokio::test]
@@ -709,5 +715,68 @@ async fn update_slide_content_with_metadata_persists_worship_fields() {
     assert_eq!(
         updated.content.group.as_ref().map(|g| g.name()),
         Some("Verse 1")
+    );
+}
+
+#[tokio::test]
+async fn seed_migration_populates_four_android_stage_displays_on_empty_table() {
+    let repo = Repository::connect_in_memory().await.unwrap();
+    let displays = repo.list_android_stage_displays().await.unwrap();
+    assert_eq!(displays.len(), 4, "seed should have inserted 4 displays");
+    let mut hosts: Vec<_> = displays.iter().map(|d| d.host.clone()).collect();
+    hosts.sort();
+    assert_eq!(
+        hosts,
+        vec![
+            "sd1l.lan".to_string(),
+            "sd2l.lan".to_string(),
+            "sd3l.lan".to_string(),
+            "sd4l.lan".to_string(),
+        ],
+        "seed hosts should be sd1l..sd4l",
+    );
+    for d in &displays {
+        assert_eq!(d.port, 5555);
+        assert_eq!(
+            d.launch_component,
+            "com.fullykiosk.videokiosk/de.ozerov.fully.MainActivity",
+        );
+        assert!(d.is_enabled, "seeded displays should be enabled");
+    }
+}
+
+#[tokio::test]
+async fn seed_migration_is_idempotent_when_rerun() {
+    use presenter_migration::{MigrationTrait, MigratorTrait};
+    use sea_orm_migration::SchemaManager;
+
+    let repo = Repository::connect_in_memory().await.unwrap();
+    // Initial connect ran migrations → 4 seed rows present.
+    assert_eq!(repo.list_android_stage_displays().await.unwrap().len(), 4);
+
+    // Operator adds a fifth display manually.
+    let draft = AndroidStageDisplayDraft::new("Operator Custom", "custom.invalid");
+    repo.create_android_stage_display(&draft).await.unwrap();
+    assert_eq!(repo.list_android_stage_displays().await.unwrap().len(), 5);
+
+    // Manually invoke the seed migration's `up()` a second time.
+    let connection = repo.connection_for_tests();
+    let schema = SchemaManager::new(connection);
+    let migration: Box<dyn MigrationTrait> = presenter_migration::Migrator::migrations()
+        .into_iter()
+        .find(|m| m.name() == "m20260414_000002_seed_android_stage_displays")
+        .expect("seed migration present in registry");
+    migration.up(&schema).await.expect("rerun seed");
+
+    // Row count stays at 5 — guard prevented re-insertion.
+    let displays = repo.list_android_stage_displays().await.unwrap();
+    assert_eq!(
+        displays.len(),
+        5,
+        "seed rerun must not insert duplicates once any row exists",
+    );
+    assert!(
+        displays.iter().any(|d| d.host == "custom.invalid"),
+        "operator's custom display must survive the rerun",
     );
 }
