@@ -124,6 +124,26 @@ impl Repository {
     }
 
     #[instrument(skip_all)]
+    pub async fn get_bible_source_digest(&self, code: &str) -> anyhow::Result<Option<String>> {
+        let model = bible_translation::Entity::find_by_id(code.to_string())
+            .one(&self.db)
+            .await?;
+        Ok(model.and_then(|m| m.source_digest))
+    }
+
+    #[instrument(skip_all)]
+    pub async fn set_bible_source_digest(&self, code: &str, digest: &str) -> anyhow::Result<()> {
+        let existing = bible_translation::Entity::find_by_id(code.to_string())
+            .one(&self.db)
+            .await?
+            .ok_or_else(|| anyhow!("bible_translation {code} not found"))?;
+        let mut active: bible_translation::ActiveModel = existing.into();
+        active.source_digest = Set(Some(digest.to_string()));
+        active.update(&self.db).await?;
+        Ok(())
+    }
+
+    #[instrument(skip_all)]
     pub async fn list_bible_translations(&self) -> anyhow::Result<Vec<BibleTranslation>> {
         let models = bible_translation::Entity::find()
             .order_by_asc(bible_translation::Column::Name)
@@ -906,5 +926,57 @@ mod presentation_tests {
         assert_eq!(result.slides[1].order, 1);
         assert_eq!(result.slides[0].main_reference, "Gen 1:1");
         assert_eq!(result.slides[1].main_reference, "Gen 1:2");
+    }
+}
+
+#[cfg(test)]
+mod digest_tests {
+    use crate::repository::Repository;
+    use presenter_core::bible::BibleIngestionBatch;
+    use presenter_core::BibleTranslation;
+
+    async fn fresh_repo() -> Repository {
+        Repository::connect_in_memory()
+            .await
+            .expect("in-memory repo")
+    }
+
+    async fn seed_translation(repo: &Repository, code: &str) {
+        let translation = BibleTranslation::new(code, code, "xx").with_source("test");
+        let batch =
+            BibleIngestionBatch::new(translation, Vec::new()).expect("empty batch is valid");
+        repo.replace_bible_translation_passages(&batch)
+            .await
+            .expect("seed translation");
+    }
+
+    #[tokio::test]
+    async fn set_and_get_source_digest_round_trip() {
+        let repo = fresh_repo().await;
+        seed_translation(&repo, "eng-test").await;
+
+        assert_eq!(
+            repo.get_bible_source_digest("eng-test").await.unwrap(),
+            None,
+            "fresh translation has no digest",
+        );
+
+        repo.set_bible_source_digest("eng-test", "abc123")
+            .await
+            .expect("set digest");
+
+        assert_eq!(
+            repo.get_bible_source_digest("eng-test").await.unwrap(),
+            Some("abc123".to_string()),
+        );
+    }
+
+    #[tokio::test]
+    async fn get_digest_for_unknown_code_is_none() {
+        let repo = fresh_repo().await;
+        assert_eq!(
+            repo.get_bible_source_digest("nope-none").await.unwrap(),
+            None,
+        );
     }
 }
