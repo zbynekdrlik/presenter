@@ -19,7 +19,10 @@
 )]
 
 pub mod bible;
+mod bible_digest;
 mod rtf;
+
+pub use bible_digest::{compute_source_digest, PARSER_VERSION};
 
 use std::collections::HashMap;
 use std::env;

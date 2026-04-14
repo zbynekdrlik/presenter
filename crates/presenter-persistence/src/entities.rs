@@ -339,6 +339,7 @@ pub mod bible_translation {
         pub show_in_dashboard: bool,
         pub source: Option<String>,
         pub created_at: DateTimeWithTimeZone,
+        pub source_digest: Option<String>,
     }
 
     #[derive(Copy, Clone, Debug, EnumIter, DeriveRelation)]
