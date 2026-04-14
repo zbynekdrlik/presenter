@@ -1146,4 +1146,34 @@ mod fast_import_tests {
         );
         assert_eq!(first_hits.len(), 2);
     }
+
+    #[tokio::test]
+    async fn fast_import_preserves_existing_digest() {
+        let repo = fresh_repo().await;
+        let translation = BibleTranslation::new("eng-dig", "Dig", "en")
+            .with_source("test");
+        let batch = BibleIngestionBatch::new(translation.clone(), Vec::new())
+            .expect("valid batch");
+
+        // Initial import — no digest yet
+        repo.replace_bible_translation_passages(&batch).await.unwrap();
+        assert_eq!(
+            repo.get_bible_source_digest("eng-dig").await.unwrap(),
+            None,
+            "fresh translation has no digest",
+        );
+
+        // Stamp a digest
+        repo.set_bible_source_digest("eng-dig", "keepme")
+            .await
+            .unwrap();
+
+        // Re-import — digest must survive
+        repo.replace_bible_translation_passages(&batch).await.unwrap();
+        assert_eq!(
+            repo.get_bible_source_digest("eng-dig").await.unwrap(),
+            Some("keepme".to_string()),
+            "re-import must NOT nuke an existing digest",
+        );
+    }
 }
