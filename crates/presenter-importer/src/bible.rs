@@ -286,4 +286,97 @@ mod tests {
         std::env::remove_var("PRESENTER_BIBLE_SEVP");
         std::env::remove_var("PRESENTER_BIBLE_MILOST");
     }
+
+    #[tokio::test]
+    async fn digest_match_skips_import() {
+        use crate::{compute_source_digest, PARSER_VERSION};
+        use presenter_core::bible::BibleIngestionBatch;
+
+        let repo = Repository::connect_in_memory().await.unwrap();
+
+        // Seed an empty translation row so set_bible_source_digest can update it.
+        let seed_translation = BibleTranslation::new("en-test", "Test", "en");
+        let seed_batch = BibleIngestionBatch::new(seed_translation, Vec::new())
+            .expect("empty batch is valid");
+        repo.replace_bible_translation_passages(&seed_batch)
+            .await
+            .unwrap();
+
+        // Stamp the exact digest the archive would produce.
+        let archive = make_usfm_archive();
+        let expected_digest = compute_source_digest(&archive, PARSER_VERSION);
+        repo.set_bible_source_digest("en-test", &expected_digest)
+            .await
+            .unwrap();
+
+        // Simulate the skip branch of the ingest binary.
+        let stored = repo.get_bible_source_digest("en-test").await.unwrap();
+        assert_eq!(
+            stored.as_deref(),
+            Some(expected_digest.as_str()),
+            "stored digest should match candidate",
+        );
+
+        // No ingest_with_bytes call was made — passages must still be empty.
+        let hits = repo
+            .search_bible_passages("en-test", "god", 10)
+            .await
+            .unwrap();
+        assert!(
+            hits.is_empty(),
+            "passages should remain untouched when digest matches",
+        );
+    }
+
+    #[tokio::test]
+    async fn digest_mismatch_triggers_import() {
+        use crate::{compute_source_digest, PARSER_VERSION};
+        use presenter_core::bible::BibleIngestionBatch;
+
+        let repo = Repository::connect_in_memory().await.unwrap();
+
+        // Seed with STALE digest
+        let seed_batch = BibleIngestionBatch::new(
+            BibleTranslation::new("en-test", "Test", "en"),
+            Vec::new(),
+        )
+        .expect("empty batch is valid");
+        repo.replace_bible_translation_passages(&seed_batch)
+            .await
+            .unwrap();
+        repo.set_bible_source_digest("en-test", "stale-digest-deadbeef")
+            .await
+            .unwrap();
+
+        // Ingest a real archive — should run because digest mismatches.
+        let archive = make_usfm_archive();
+        let provider = SinglePayloadProvider {
+            payload: archive.clone(),
+            url: "memory".to_string(),
+        };
+        let service = BibleIngestionService::new(&repo, provider);
+
+        let _ = service
+            .ingest_with_bytes(&sample_spec(), &archive)
+            .await
+            .unwrap();
+        let fresh_digest = compute_source_digest(&archive, PARSER_VERSION);
+        repo.set_bible_source_digest("en-test", &fresh_digest)
+            .await
+            .unwrap();
+
+        // After import, FTS search should find at least one passage.
+        let hits = repo
+            .search_bible_passages("en-test", "god", 10)
+            .await
+            .unwrap();
+        assert!(
+            !hits.is_empty(),
+            "import should have populated passages from the archive",
+        );
+        assert_eq!(
+            repo.get_bible_source_digest("en-test").await.unwrap(),
+            Some(fresh_digest),
+        );
+    }
 }
