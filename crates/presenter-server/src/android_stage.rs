@@ -409,7 +409,9 @@ mod tests {
         let err = registry.launch_now(unknown).await;
         assert!(err.is_err(), "launch_now must error on unknown id");
         assert!(
-            err.unwrap_err().to_string().contains("unknown android stage display"),
+            err.unwrap_err()
+                .to_string()
+                .contains("unknown android stage display"),
             "error message should identify the unknown-id case",
         );
     }
