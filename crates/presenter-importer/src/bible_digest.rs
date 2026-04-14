@@ -53,4 +53,15 @@ mod tests {
         assert_eq!(digest.len(), 64);
         assert!(digest.chars().all(|c| c.is_ascii_hexdigit()));
     }
+
+    #[test]
+    fn golden_vector_hello_world_v1() {
+        // Pins the exact algorithm: SHA-256 of b"hello world" concatenated
+        // with 1u32.to_le_bytes(). Regenerate only if the algorithm itself
+        // changes deliberately (which invalidates every stored digest).
+        assert_eq!(
+            compute_source_digest(b"hello world", 1),
+            "08f06e2c00ab9ba6aed0980a436856b02feec3435bae117aeb8bdb2b35b444ba",
+        );
+    }
 }
