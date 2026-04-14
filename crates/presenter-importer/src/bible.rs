@@ -296,8 +296,8 @@ mod tests {
 
         // Seed an empty translation row so set_bible_source_digest can update it.
         let seed_translation = BibleTranslation::new("en-test", "Test", "en");
-        let seed_batch = BibleIngestionBatch::new(seed_translation, Vec::new())
-            .expect("empty batch is valid");
+        let seed_batch =
+            BibleIngestionBatch::new(seed_translation, Vec::new()).expect("empty batch is valid");
         repo.replace_bible_translation_passages(&seed_batch)
             .await
             .unwrap();
@@ -336,11 +336,9 @@ mod tests {
         let repo = Repository::connect_in_memory().await.unwrap();
 
         // Seed with STALE digest
-        let seed_batch = BibleIngestionBatch::new(
-            BibleTranslation::new("en-test", "Test", "en"),
-            Vec::new(),
-        )
-        .expect("empty batch is valid");
+        let seed_batch =
+            BibleIngestionBatch::new(BibleTranslation::new("en-test", "Test", "en"), Vec::new())
+                .expect("empty batch is valid");
         repo.replace_bible_translation_passages(&seed_batch)
             .await
             .unwrap();
