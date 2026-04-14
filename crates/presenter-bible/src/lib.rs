@@ -191,40 +191,45 @@ impl<P: BibleContentProvider> BibleScraper<P> {
         Self { provider }
     }
 
+    /// Fetch bytes for `spec` (URL or LocalFile) and return the parsed batch.
     pub async fn scrape(
         &self,
         spec: &BibleTranslationSpec,
     ) -> Result<(BibleIngestionBatch, BibleImportSummary)> {
-        match (&spec.source, &spec.format) {
-            (BibleSource::Url { url }, BibleSourceFormat::UsfmZip { .. })
-            | (BibleSource::Url { url }, BibleSourceFormat::MySwordSqlite { .. })
-            | (BibleSource::Url { url }, BibleSourceFormat::ObohuSqlite) => {
-                let bytes = self
-                    .provider
-                    .fetch_bytes(url)
-                    .await
-                    .with_context(|| format!("failed to fetch bible archive from {}", url))?;
-                parsers::build_ingestion_batch(&bytes, spec)
-            }
-            (
-                BibleSource::LocalFile { env_var, .. },
-                BibleSourceFormat::UsfmZip { .. }
-                | BibleSourceFormat::MySwordSqlite { .. }
-                | BibleSourceFormat::ObohuSqlite,
-            ) => {
+        let bytes = self.fetch_spec_bytes(spec).await?;
+        self.scrape_with_bytes(spec, &bytes)
+    }
+
+    /// Parse bytes that the caller has already fetched. Used by the ingest
+    /// binary so it can hash the bytes once and pass them in.
+    pub fn scrape_with_bytes(
+        &self,
+        spec: &BibleTranslationSpec,
+        bytes: &[u8],
+    ) -> Result<(BibleIngestionBatch, BibleImportSummary)> {
+        parsers::build_ingestion_batch(bytes, spec)
+    }
+
+    async fn fetch_spec_bytes(&self, spec: &BibleTranslationSpec) -> Result<Vec<u8>> {
+        match &spec.source {
+            BibleSource::Url { url } => self
+                .provider
+                .fetch_bytes(url)
+                .await
+                .with_context(|| format!("failed to fetch bible archive from {}", url)),
+            BibleSource::LocalFile { env_var, .. } => {
                 let path = std::env::var(env_var).with_context(|| {
                     format!(
                         "environment variable {} must be set to the bible archive for {}",
                         env_var, spec.translation.code
                     )
                 })?;
-                let bytes = std::fs::read(&path).with_context(|| {
+                std::fs::read(&path).with_context(|| {
                     format!(
                         "failed to read bible archive for {} from {}",
                         spec.translation.code, path
                     )
-                })?;
-                parsers::build_ingestion_batch(&bytes, spec)
+                })
             }
         }
     }
