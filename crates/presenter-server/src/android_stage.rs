@@ -238,6 +238,20 @@ async fn connect_and_launch(
 
     let adb_bin = adb_path.as_os_str();
 
+    // Clear any stale offline device entry from a previous attempt.
+    // ADB leaves stale entries after TV power cycles which then cause
+    // subsequent `-s serial` commands to fail until the daemon is restarted.
+    // Errors are intentionally ignored — the typical case is "not connected"
+    // which returns a non-zero exit code we don't care about.
+    let _ = timeout(
+        ADB_COMMAND_TIMEOUT,
+        Command::new(adb_bin)
+            .arg("disconnect")
+            .arg(&serial)
+            .output(),
+    )
+    .await;
+
     // Run adb connect
     let connect_result = timeout(
         ADB_COMMAND_TIMEOUT,
