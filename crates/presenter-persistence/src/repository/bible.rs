@@ -1,8 +1,8 @@
 use anyhow::anyhow;
 use chrono::Utc;
 use sea_orm::{
-    sea_query::Expr as SeaExpr, ActiveModelTrait, ColumnTrait, DatabaseBackend, EntityTrait,
-    FromQueryResult, PaginatorTrait, QueryFilter, QueryOrder, QuerySelect, Statement,
+    sea_query::Expr as SeaExpr, ActiveModelTrait, ColumnTrait, ConnectionTrait, DatabaseBackend,
+    EntityTrait, FromQueryResult, PaginatorTrait, QueryFilter, QueryOrder, QuerySelect, Statement,
     TransactionTrait,
 };
 use tracing::instrument;
@@ -53,6 +53,8 @@ impl Repository {
         &self,
         batch: &BibleIngestionBatch,
     ) -> anyhow::Result<()> {
+        const SQLITE: DatabaseBackend = DatabaseBackend::Sqlite;
+
         let (translation, passages) = batch.clone().into_parts();
         let existing = bible_translation::Entity::find_by_id(translation.code.clone())
             .one(&self.db)
@@ -61,12 +63,40 @@ impl Repository {
             .as_ref()
             .map(|model| model.show_in_dashboard)
             .unwrap_or(translation.show_in_dashboard);
-        let mut txn = self.db.begin().await?;
+        let preserve_digest = existing
+            .as_ref()
+            .and_then(|model| model.source_digest.clone());
 
+        let txn = self.db.begin().await?;
+
+        // 1. Clear this translation's FTS rows (other translations untouched)
+        txn.execute(Statement::from_sql_and_values(
+            SQLITE,
+            "DELETE FROM bible_passage_fts WHERE translation_code = ?",
+            [translation.code.clone().into()],
+        ))
+        .await?;
+
+        // 2. Drop the FTS triggers inside the transaction. SQLite supports DDL
+        //    in transactions; if we roll back, the triggers are restored.
+        for trig in [
+            "bible_passage_fts_insert",
+            "bible_passage_fts_delete",
+            "bible_passage_fts_update",
+        ] {
+            txn.execute(Statement::from_string(
+                SQLITE,
+                format!("DROP TRIGGER IF EXISTS {trig}"),
+            ))
+            .await?;
+        }
+
+        // 3. Delete old translation row (cascades to old passages via FK)
         bible_translation::Entity::delete_by_id(translation.code.clone())
-            .exec(&mut txn)
+            .exec(&txn)
             .await?;
 
+        // 4. Insert fresh translation row (preserving show_in_dashboard and existing digest)
         let translation_model = bible_translation::ActiveModel {
             code: Set(translation.code.clone()),
             name: Set(translation.name.clone()),
@@ -74,13 +104,13 @@ impl Repository {
             show_in_dashboard: Set(preserve_dashboard),
             source: Set(translation.source.clone()),
             created_at: Set(Utc::now().into()),
-            source_digest: Set(None),
+            source_digest: Set(preserve_digest),
         };
-
         bible_translation::Entity::insert(translation_model)
-            .exec(&mut txn)
+            .exec(&txn)
             .await?;
 
+        // 5. Batch-insert passages (no trigger overhead because triggers are dropped)
         let mut chunk = Vec::with_capacity(BIBLE_INSERT_CHUNK);
         for passage in passages {
             let reference = &passage.reference;
@@ -92,7 +122,7 @@ impl Repository {
                 },
             };
             let model = bible_passage::ActiveModel {
-                id: Set(uuid::Uuid::new_v4().to_string()),
+                id: Set(Uuid::new_v4().to_string()),
                 translation_code: Set(translation.code.clone()),
                 book: Set(reference.book.clone()),
                 book_code: Set(code),
@@ -108,16 +138,56 @@ impl Repository {
             if chunk.len() == BIBLE_INSERT_CHUNK {
                 let to_insert = std::mem::take(&mut chunk);
                 bible_passage::Entity::insert_many(to_insert)
-                    .exec(&mut txn)
+                    .exec(&txn)
                     .await?;
             }
         }
 
         if !chunk.is_empty() {
-            bible_passage::Entity::insert_many(chunk)
-                .exec(&mut txn)
-                .await?;
+            bible_passage::Entity::insert_many(chunk).exec(&txn).await?;
         }
+
+        // 6. Bulk populate FTS from the freshly-inserted passages
+        txn.execute(Statement::from_sql_and_values(
+            SQLITE,
+            "INSERT INTO bible_passage_fts(passage_id, translation_code, book, content) \
+             SELECT id, translation_code, book, content FROM bible_passages \
+             WHERE translation_code = ?",
+            [translation.code.clone().into()],
+        ))
+        .await?;
+
+        // 7. Recreate the FTS triggers with the same bodies as the original migration
+        txn.execute(Statement::from_string(
+            SQLITE,
+            "CREATE TRIGGER bible_passage_fts_insert \
+             AFTER INSERT ON bible_passages BEGIN \
+                INSERT INTO bible_passage_fts(passage_id, translation_code, book, content) \
+                VALUES (new.id, new.translation_code, new.book, new.content); \
+             END"
+            .to_string(),
+        ))
+        .await?;
+        txn.execute(Statement::from_string(
+            SQLITE,
+            "CREATE TRIGGER bible_passage_fts_delete \
+             AFTER DELETE ON bible_passages BEGIN \
+                DELETE FROM bible_passage_fts WHERE passage_id = old.id; \
+             END"
+            .to_string(),
+        ))
+        .await?;
+        txn.execute(Statement::from_string(
+            SQLITE,
+            "CREATE TRIGGER bible_passage_fts_update \
+             AFTER UPDATE ON bible_passages BEGIN \
+                DELETE FROM bible_passage_fts WHERE passage_id = old.id; \
+                INSERT INTO bible_passage_fts(passage_id, translation_code, book, content) \
+                VALUES (new.id, new.translation_code, new.book, new.content); \
+             END"
+            .to_string(),
+        ))
+        .await?;
 
         txn.commit().await?;
         Ok(())
@@ -978,5 +1048,102 @@ mod digest_tests {
             repo.get_bible_source_digest("nope-none").await.unwrap(),
             None,
         );
+    }
+}
+
+#[cfg(test)]
+mod fast_import_tests {
+    use crate::repository::Repository;
+    use presenter_core::bible::BibleIngestionBatch;
+    use presenter_core::{BiblePassage, BibleReference, BibleTranslation};
+
+    fn make_passage(
+        translation: &BibleTranslation,
+        book: &str,
+        chapter: u16,
+        verse: u16,
+        content: &str,
+    ) -> BiblePassage {
+        let reference =
+            BibleReference::new(book.to_string(), chapter, verse, verse).expect("valid reference");
+        BiblePassage::new(reference, translation.clone(), content.to_string())
+    }
+
+    async fn fresh_repo() -> Repository {
+        Repository::connect_in_memory()
+            .await
+            .expect("in-memory repo")
+    }
+
+    #[tokio::test]
+    async fn fast_import_preserves_fts_search() {
+        let repo = fresh_repo().await;
+        let translation = BibleTranslation::new("eng-fast", "Fast Test", "en").with_source("test");
+        let passages = vec![
+            make_passage(&translation, "John", 3, 16, "For God so loved the world"),
+            make_passage(
+                &translation,
+                "Genesis",
+                1,
+                1,
+                "In the beginning God created",
+            ),
+        ];
+        let batch = BibleIngestionBatch::new(translation, passages).expect("valid batch");
+
+        repo.replace_bible_translation_passages(&batch)
+            .await
+            .expect("import");
+
+        let hits = repo
+            .search_bible_passages("eng-fast", "beginning", 10)
+            .await
+            .expect("search");
+        assert!(
+            hits.iter().any(|p| p.text.contains("In the beginning")),
+            "FTS search should find 'beginning' after fast import, got {:?}",
+            hits,
+        );
+    }
+
+    #[tokio::test]
+    async fn fast_import_idempotent_row_counts() {
+        let repo = fresh_repo().await;
+        let translation = BibleTranslation::new("eng-idem", "Idem Test", "en").with_source("test");
+        let passages = vec![
+            make_passage(&translation, "John", 1, 1, "In the beginning was the Word"),
+            make_passage(
+                &translation,
+                "John",
+                1,
+                2,
+                "He was with God in the beginning",
+            ),
+        ];
+        let batch = BibleIngestionBatch::new(translation, passages).expect("valid batch");
+
+        repo.replace_bible_translation_passages(&batch)
+            .await
+            .unwrap();
+        let first_hits = repo
+            .search_bible_passages("eng-idem", "beginning", 10)
+            .await
+            .unwrap();
+
+        // Second import with identical data
+        repo.replace_bible_translation_passages(&batch)
+            .await
+            .unwrap();
+        let second_hits = repo
+            .search_bible_passages("eng-idem", "beginning", 10)
+            .await
+            .unwrap();
+
+        assert_eq!(
+            first_hits.len(),
+            second_hits.len(),
+            "re-import should produce identical hit count (not accumulating FTS rows)",
+        );
+        assert_eq!(first_hits.len(), 2);
     }
 }
