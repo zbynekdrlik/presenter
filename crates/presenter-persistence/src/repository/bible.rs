@@ -74,6 +74,7 @@ impl Repository {
             show_in_dashboard: Set(preserve_dashboard),
             source: Set(translation.source.clone()),
             created_at: Set(Utc::now().into()),
+            source_digest: Set(None),
         };
 
         bible_translation::Entity::insert(translation_model)
