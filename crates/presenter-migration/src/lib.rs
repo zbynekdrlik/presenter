@@ -7,6 +7,7 @@ mod m20260408_000001_add_preach_limit;
 mod m20260410_000001_separate_bible;
 mod m20260412_000001_bible_fts;
 mod m20260414_000001_bible_translation_digest;
+mod m20260414_000002_seed_android_stage_displays;
 
 pub struct Migrator;
 
@@ -18,6 +19,7 @@ impl MigratorTrait for Migrator {
             Box::new(m20260410_000001_separate_bible::Migration),
             Box::new(m20260412_000001_bible_fts::Migration),
             Box::new(m20260414_000001_bible_translation_digest::Migration),
+            Box::new(m20260414_000002_seed_android_stage_displays::Migration),
         ]
     }
 }

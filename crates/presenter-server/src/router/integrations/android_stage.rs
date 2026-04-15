@@ -136,3 +136,15 @@ pub(crate) async fn delete_android_stage_display(
         .await?;
     Ok(axum::http::StatusCode::NO_CONTENT)
 }
+
+#[instrument(skip_all)]
+pub(crate) async fn launch_now_android_stage_display(
+    State(state): State<AppState>,
+    Path(id): Path<Uuid>,
+) -> Result<axum::http::StatusCode, AppError> {
+    state
+        .launch_now_android_stage_display(AndroidStageDisplayId::from_uuid(id))
+        .await
+        .map_err(|err| AppError::bad_request_message(err.to_string()))?;
+    Ok(axum::http::StatusCode::NO_CONTENT)
+}

@@ -411,6 +411,7 @@ pub fn AndroidStageSettingsCard(
                                     </p>
                                 }
                             });
+                            let display_id_test = display.id.clone();
                             let display_id_edit = display.id.clone();
                             let display_id_delete = display.id.clone();
                             view! {
@@ -436,6 +437,12 @@ pub fn AndroidStageSettingsCard(
                                         {warning_view}
                                     </div>
                                     <div class="settings__list-actions">
+                                        <button
+                                            type="button"
+                                            class="settings__button settings__button--ghost"
+                                            data-role="android-test"
+                                            data-id={display_id_test}
+                                        >"Test"</button>
                                         <button
                                             type="button"
                                             class="settings__button settings__button--ghost"

@@ -708,6 +708,7 @@
     ${warningDetail}
   </div>
   <div class="settings__list-actions">
+    <button type="button" class="settings__button settings__button--ghost" data-role="android-test" data-id="${normalized.id}">Test</button>
     <button type="button" class="settings__button settings__button--ghost" data-role="android-edit" data-id="${normalized.id}">Edit</button>
     <button type="button" class="settings__button settings__button--danger" data-role="android-delete" data-id="${normalized.id}">Delete</button>
   </div>
@@ -850,6 +851,28 @@
     }
   }
 
+  async function testAndroidDisplay(id) {
+    if (!id) return;
+    try {
+      const response = await fetch(`${ANDROID_API_ROOT}/${id}/launch-now`, {
+        method: 'POST',
+      });
+      if (!response.ok) {
+        throw new Error(await extractError(response));
+      }
+      showToast('Launch queued — refreshing status…', 'success');
+      // 600ms is typically enough for the worker to finish adb connect +
+      // am start and update its status snapshot. A reachable TV completes
+      // in ~130ms locally; add headroom for LAN latency and slow devices.
+      setTimeout(() => {
+        refreshAndroidDisplays(false);
+      }, 600);
+    } catch (error) {
+      console.error('Failed to trigger android launch', error);
+      showToast(error.message || 'Unable to trigger launch.', 'error');
+    }
+  }
+
   async function deleteAndroidDisplay(id) {
     if (!id) return;
     const display = state.android.displays.find((item) => item.id === id);
@@ -886,6 +909,8 @@
       startAndroidEdit(id);
     } else if (target.dataset.role === 'android-delete') {
       await deleteAndroidDisplay(id);
+    } else if (target.dataset.role === 'android-test') {
+      await testAndroidDisplay(id);
     }
   }
 

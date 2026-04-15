@@ -178,6 +178,10 @@ pub fn build_router(state: AppState) -> Router {
                 .delete(integrations::android_stage::delete_android_stage_display),
         )
         .route(
+            "/integrations/android-stage/displays/{id}/launch-now",
+            post(integrations::android_stage::launch_now_android_stage_display),
+        )
+        .route(
             "/integrations/osc/settings",
             get(integrations::osc::get_osc_settings).put(integrations::osc::update_osc_settings),
         )

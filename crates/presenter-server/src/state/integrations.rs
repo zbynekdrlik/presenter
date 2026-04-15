@@ -118,6 +118,13 @@ impl AppState {
         self.sync_android_stage_displays().await
     }
 
+    pub async fn launch_now_android_stage_display(
+        &self,
+        id: AndroidStageDisplayId,
+    ) -> anyhow::Result<()> {
+        self.android_stage_registry.launch_now(id).await
+    }
+
     pub(super) async fn sync_android_stage_displays(&self) -> anyhow::Result<()> {
         let displays = self.repository.list_android_stage_displays().await?;
         self.android_stage_registry.set_displays(displays).await;
