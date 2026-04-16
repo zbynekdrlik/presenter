@@ -3,6 +3,7 @@ mod bible;
 mod features;
 mod integrations;
 mod libraries;
+pub mod network_mode;
 mod playlists;
 mod presentations;
 mod search;
