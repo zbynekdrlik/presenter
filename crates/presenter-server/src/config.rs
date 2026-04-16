@@ -14,6 +14,8 @@ pub struct ServerConfig {
     pub stage: StageConfig,
     #[allow(dead_code)] // Android stage feature in development
     pub android: AndroidConfig,
+    #[allow(dead_code)] // Consumed in Task 2 (AppState) — not yet wired
+    pub network: NetworkConfig,
 }
 
 #[derive(Debug, Clone)]
@@ -62,6 +64,7 @@ impl ServerConfig {
             osc: OscConfig::load(),
             stage: StageConfig::load(),
             android: AndroidConfig::load(),
+            network: NetworkConfig::load(),
         })
     }
 }
@@ -140,6 +143,25 @@ impl AndroidConfig {
     fn load() -> Self {
         let adb_path = env::var_os("PRESENTER_ANDROID_ADB_BIN");
         Self { adb_path }
+    }
+}
+
+#[derive(Debug, Clone, Default)]
+pub struct NetworkConfig {
+    /// The church's outbound public IP as seen by Cloudflare.
+    /// Used by `/api/network-mode` to classify tunnel clients.
+    /// Optional — falls back to private-range heuristic when unset.
+    #[allow(dead_code)] // Consumed in Task 4 (/api/network-mode handler) — not yet wired
+    pub local_public_ip: Option<String>,
+}
+
+impl NetworkConfig {
+    fn load() -> Self {
+        let local_public_ip = env::var("PRESENTER_LOCAL_PUBLIC_IP")
+            .ok()
+            .map(|s| s.trim().to_string())
+            .filter(|s| !s.is_empty());
+        Self { local_public_ip }
     }
 }
 
