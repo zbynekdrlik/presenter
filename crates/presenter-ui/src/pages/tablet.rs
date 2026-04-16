@@ -3,6 +3,7 @@ use presenter_core::{LiveEvent, TimerState, TimersOverview};
 use wasm_bindgen::JsCast;
 
 use crate::api::bible::{self, BibleSlideDto, BibleSlideMetaBible};
+use crate::components::info_popover::InfoPopover;
 use crate::state::tablet::TabletContext;
 use crate::ws::{self, WsState};
 
@@ -251,6 +252,7 @@ fn TabletTimerBar() -> impl IntoView {
                 }}
             </Show>
             <span class="tablet-timer-bar__state" data-role="timer-state">{state_label}</span>
+            <InfoPopover network_mode=network_mode />
         </div>
     }
 }
