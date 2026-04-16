@@ -223,6 +223,31 @@ mod tests {
     }
 
     #[test]
+    fn network_config_parses_public_ip_trimming_whitespace_and_treating_empty_as_unset() {
+        let original = env::var("PRESENTER_LOCAL_PUBLIC_IP").ok();
+
+        env::remove_var("PRESENTER_LOCAL_PUBLIC_IP");
+        assert_eq!(NetworkConfig::load().local_public_ip, None);
+
+        env::set_var("PRESENTER_LOCAL_PUBLIC_IP", "");
+        assert_eq!(NetworkConfig::load().local_public_ip, None);
+
+        env::set_var("PRESENTER_LOCAL_PUBLIC_IP", "   ");
+        assert_eq!(NetworkConfig::load().local_public_ip, None);
+
+        env::set_var("PRESENTER_LOCAL_PUBLIC_IP", "  203.0.113.50  ");
+        assert_eq!(
+            NetworkConfig::load().local_public_ip,
+            Some("203.0.113.50".to_string())
+        );
+
+        match original {
+            Some(value) => env::set_var("PRESENTER_LOCAL_PUBLIC_IP", value),
+            None => env::remove_var("PRESENTER_LOCAL_PUBLIC_IP"),
+        }
+    }
+
+    #[test]
     fn duration_override_rejects_zero_and_invalid_values() {
         let original = env::var("PRESENTER_HEARTBEAT_INTERVAL_MS").ok();
         env::set_var("PRESENTER_HEARTBEAT_INTERVAL_MS", "1500");

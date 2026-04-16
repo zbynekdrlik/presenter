@@ -361,7 +361,12 @@ jobs:
               -e "s|__BACKEND_PORT__|$BACKEND_PORT|g" \
               deploy/cloudflared-config.yml.tmpl > /tmp/cf-config.yml
 
-          # 2. Write credentials JSON (short-lived)
+          # 2. Write credentials JSON (short-lived). Fail loudly if the
+          # matching secret isn't set — vars without creds can't work.
+          if [ -z "$CREDS" ]; then
+            echo "::error::CLOUDFLARED_CREDS_PROD secret is empty but CLOUDFLARED_TUNNEL_ID_PROD / _HOSTNAME_PROD vars are set. Register the credentials JSON in repo settings."
+            exit 1
+          fi
           printf '%s' "$CREDS" > /tmp/cf-creds.json
           chmod 600 /tmp/cf-creds.json
 
