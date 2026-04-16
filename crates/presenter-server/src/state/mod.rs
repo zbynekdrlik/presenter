@@ -98,6 +98,7 @@ pub struct AppState {
     ai_conversation: Arc<RwLock<Vec<ChatMessage>>>,
     ai_proxy: Arc<ProxyManager>,
     ndi_manager: Option<Arc<presenter_ndi::NdiManager>>,
+    pub local_public_ip: Arc<Option<String>>,
     #[cfg(test)]
     bible_ingestion_override: Option<std::sync::Arc<dyn TestBibleIngestion + Send + Sync>>,
 }
@@ -127,6 +128,7 @@ impl AppState {
             osc_bridge,
             ableset_bridge,
             heartbeat_config,
+            Arc::new(None),
         )
     }
 
@@ -140,6 +142,7 @@ impl AppState {
         osc_bridge: OscBridge,
         ableset_bridge: AbleSetBridge,
         heartbeat_config: StageHeartbeatConfig,
+        local_public_ip: Arc<Option<String>>,
     ) -> Self {
         let stage_connections = StageConnections::new();
         let default_layout = StageDisplayLayout::built_in()
@@ -176,6 +179,7 @@ impl AppState {
             ai_conversation: Arc::new(RwLock::new(Vec::new())),
             ai_proxy: Arc::new(ProxyManager::new(crate::ai::proxy::detect_deploy_dir())),
             ndi_manager,
+            local_public_ip,
             #[cfg(test)]
             bible_ingestion_override: None,
         };
@@ -329,6 +333,7 @@ impl AppState {
         let osc_bridge = OscBridge::new(&config.osc);
         let ableset_bridge = AbleSetBridge::new();
         let heartbeat_config = config.stage.heartbeat;
+        let local_public_ip = Arc::new(config.network.local_public_ip);
         let state = Self::new_with_heartbeat(
             repo,
             companion_token,
@@ -339,6 +344,7 @@ impl AppState {
             osc_bridge.clone(),
             ableset_bridge.clone(),
             heartbeat_config,
+            local_public_ip,
         );
         state.ensure_seed_library().await?;
         state.ensure_demo_playlist().await?;
