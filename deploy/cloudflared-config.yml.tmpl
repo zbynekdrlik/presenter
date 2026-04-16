@@ -1,0 +1,8 @@
+tunnel: __TUNNEL_ID__
+credentials-file: /etc/cloudflared/__TUNNEL_ID__.json
+no-autoupdate: true
+
+ingress:
+  - hostname: __HOSTNAME__
+    service: http://localhost:__BACKEND_PORT__
+  - service: http_status:404
