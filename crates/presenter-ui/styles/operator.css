@@ -2708,3 +2708,84 @@ body.operator[data-mode="live"][data-bible-tab="prepared"]
   color: var(--operator-text);
   font-size: 0.8rem;
 }
+
+/* Network mode indicator (LAN/WAN pill) */
+.network-indicator {
+  font-size: 0.75rem;
+  font-weight: 700;
+  padding: 0.15rem 0.45rem;
+  border-radius: 999px;
+  letter-spacing: 0.04em;
+  white-space: nowrap;
+  margin: 0 0.35rem;
+}
+.network-indicator--local {
+  background: rgba(74, 222, 128, 0.18);
+  color: #22c55e;
+  border: 1px solid rgba(74, 222, 128, 0.4);
+}
+.network-indicator--remote {
+  background: rgba(124, 111, 255, 0.2);
+  color: #a094ff;
+  border: 1px solid rgba(124, 111, 255, 0.4);
+}
+
+/* Info button + popover */
+.info-popover-wrap {
+  position: relative;
+  display: inline-block;
+}
+.info-button {
+  appearance: none;
+  background: transparent;
+  color: inherit;
+  border: 1px solid rgba(148, 163, 184, 0.3);
+  border-radius: 50%;
+  width: 1.6rem;
+  height: 1.6rem;
+  font-size: 1rem;
+  line-height: 1;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+  padding: 0;
+  margin-left: 0.35rem;
+}
+.info-button:hover { background: rgba(148, 163, 184, 0.15); }
+.info-popover {
+  position: absolute;
+  right: 0;
+  top: calc(100% + 0.4rem);
+  min-width: 220px;
+  background: #1f2937;
+  color: #e5e7eb;
+  border: 1px solid rgba(148, 163, 184, 0.25);
+  border-radius: 0.5rem;
+  padding: 0.6rem 0.75rem;
+  box-shadow: 0 6px 24px rgba(0, 0, 0, 0.35);
+  z-index: 1000;
+  font-size: 0.85rem;
+}
+.info-popover dl {
+  display: grid;
+  grid-template-columns: max-content 1fr;
+  gap: 0.2rem 0.75rem;
+  margin: 0 0 0.5rem 0;
+}
+.info-popover dt {
+  font-weight: 600;
+  color: rgba(229, 231, 235, 0.7);
+}
+.info-popover dd { margin: 0; }
+.info-popover__reload {
+  appearance: none;
+  background: rgba(148, 163, 184, 0.15);
+  color: inherit;
+  border: 1px solid rgba(148, 163, 184, 0.3);
+  border-radius: 0.35rem;
+  padding: 0.3rem 0.6rem;
+  cursor: pointer;
+  font-size: 0.8rem;
+}
+.info-popover__reload:hover { background: rgba(148, 163, 184, 0.25); }
