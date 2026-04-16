@@ -2593,7 +2593,7 @@ dependencies = [
 
 [[package]]
 name = "presenter-bible"
-version = "0.4.24"
+version = "0.4.25"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -2609,7 +2609,7 @@ dependencies = [
 
 [[package]]
 name = "presenter-core"
-version = "0.4.24"
+version = "0.4.25"
 dependencies = [
  "anyhow",
  "chrono",
@@ -2627,7 +2627,7 @@ dependencies = [
 
 [[package]]
 name = "presenter-importer"
-version = "0.4.24"
+version = "0.4.25"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -2648,7 +2648,7 @@ dependencies = [
 
 [[package]]
 name = "presenter-migration"
-version = "0.4.24"
+version = "0.4.25"
 dependencies = [
  "async-trait",
  "sea-orm",
@@ -2660,7 +2660,7 @@ dependencies = [
 
 [[package]]
 name = "presenter-ndi"
-version = "0.4.24"
+version = "0.4.25"
 dependencies = [
  "anyhow",
  "axum",
@@ -2675,7 +2675,7 @@ dependencies = [
 
 [[package]]
 name = "presenter-persistence"
-version = "0.4.24"
+version = "0.4.25"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -2696,7 +2696,7 @@ dependencies = [
 
 [[package]]
 name = "presenter-server"
-version = "0.4.24"
+version = "0.4.25"
 dependencies = [
  "anyhow",
  "async-stream",
