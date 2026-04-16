@@ -306,8 +306,8 @@ jobs:
           echo "Service: ${{ env.SERVICE_NAME }}"
           ssh deploy-target "systemctl status ${{ env.SERVICE_NAME }} --no-pager" || true
 
-      - name: Install & configure cloudflared (skipped if secret unset)
-        if: ${{ secrets.CLOUDFLARED_CREDS_PP != '' && vars.CLOUDFLARED_TUNNEL_ID_PP != '' && vars.CLOUDFLARED_HOSTNAME_PP != '' }}
+      - name: Install & configure cloudflared (skipped if vars unset)
+        if: ${{ vars.CLOUDFLARED_TUNNEL_ID_PP != '' && vars.CLOUDFLARED_HOSTNAME_PP != '' }}
         env:
           TUNNEL_ID: ${{ vars.CLOUDFLARED_TUNNEL_ID_PP }}
           HOSTNAME: ${{ vars.CLOUDFLARED_HOSTNAME_PP }}
