@@ -3,6 +3,7 @@ mod bible;
 mod features;
 mod integrations;
 mod libraries;
+pub mod network_mode;
 mod playlists;
 mod presentations;
 mod search;
@@ -265,6 +266,7 @@ pub fn build_router(state: AppState) -> Router {
         .route("/ai/proxy/stop", post(ai::proxy_stop))
         .route("/ai/proxy/login", post(ai::proxy_login))
         .route("/ai/proxy/complete-login", post(ai::proxy_complete_login))
+        .route("/api/network-mode", get(network_mode::get_network_mode))
         .with_state(state)
 }
 

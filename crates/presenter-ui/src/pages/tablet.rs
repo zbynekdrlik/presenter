@@ -3,6 +3,7 @@ use presenter_core::{LiveEvent, TimerState, TimersOverview};
 use wasm_bindgen::JsCast;
 
 use crate::api::bible::{self, BibleSlideDto, BibleSlideMetaBible};
+use crate::components::info_popover::InfoPopover;
 use crate::state::tablet::TabletContext;
 use crate::ws::{self, WsState};
 
@@ -226,11 +227,32 @@ fn TabletTimerBar() -> impl IntoView {
 
     let zone = move || ctx.timers.get().as_ref().map_or("neutral", compute_zone);
 
+    let (network_mode, set_network_mode) = leptos::prelude::signal(String::new());
+    leptos::task::spawn_local(async move {
+        if let Ok(mode) = crate::api::network::fetch_network_mode().await {
+            let _ = set_network_mode.try_set(mode);
+        }
+    });
+
     view! {
         <div class="tablet-timer-bar" data-zone=zone data-role="timer-bar">
             <span class="tablet-timer-bar__clock" data-role="timer-clock">{move || clock.get()}</span>
             <span class="tablet-timer-bar__elapsed" data-role="timer-elapsed">{elapsed_text}</span>
+            <Show when=move || !network_mode.get().is_empty() fallback=|| ()>
+                {move || {
+                    let mode = network_mode.get();
+                    let (class, label) = if mode == "local" {
+                        ("network-indicator network-indicator--local", "LAN")
+                    } else {
+                        ("network-indicator network-indicator--remote", "WAN")
+                    };
+                    view! {
+                        <span class=class data-role="network-indicator">{label}</span>
+                    }
+                }}
+            </Show>
             <span class="tablet-timer-bar__state" data-role="timer-state">{state_label}</span>
+            <InfoPopover network_mode=network_mode />
         </div>
     }
 }

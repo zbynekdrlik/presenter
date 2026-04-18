@@ -239,11 +239,12 @@ crates/
 
 | Variable                      | Default                 | Purpose                 |
 | ----------------------------- | ----------------------- | ----------------------- |
-| `PRESENTER_PORT`              | 80                      | Server port             |
-| `PRESENTER_DB_URL`            | `sqlite://presenter.db` | Database connection     |
-| `PRESENTER_COMPANION_ENABLED` | 0                       | Enable Companion socket |
-| `PRESENTER_COMPANION_PORT`    | 18175                   | Companion listen port   |
-| `RUST_LOG`                    | `info,tower_http=debug` | Tracing filter          |
+| `PRESENTER_PORT`              | 80                      | Server port                                                          |
+| `PRESENTER_DB_URL`            | `sqlite://presenter.db` | Database connection                                                  |
+| `PRESENTER_COMPANION_ENABLED` | 0                       | Enable Companion socket                                              |
+| `PRESENTER_COMPANION_PORT`    | 18175                   | Companion listen port                                                |
+| `PRESENTER_LOCAL_PUBLIC_IP`   | unset                   | Church's public egress IP for LAN/WAN detection via Cloudflare Tunnel |
+| `RUST_LOG`                    | `info,tower_http=debug` | Tracing filter                                                       |
 
 ---
 

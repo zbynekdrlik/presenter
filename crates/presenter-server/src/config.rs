@@ -14,6 +14,8 @@ pub struct ServerConfig {
     pub stage: StageConfig,
     #[allow(dead_code)] // Android stage feature in development
     pub android: AndroidConfig,
+    #[allow(dead_code)] // Consumed in Task 2 (AppState) — not yet wired
+    pub network: NetworkConfig,
 }
 
 #[derive(Debug, Clone)]
@@ -62,6 +64,7 @@ impl ServerConfig {
             osc: OscConfig::load(),
             stage: StageConfig::load(),
             android: AndroidConfig::load(),
+            network: NetworkConfig::load(),
         })
     }
 }
@@ -143,6 +146,25 @@ impl AndroidConfig {
     }
 }
 
+#[derive(Debug, Clone, Default)]
+pub struct NetworkConfig {
+    /// The church's outbound public IP as seen by Cloudflare.
+    /// Used by `/api/network-mode` to classify tunnel clients.
+    /// Optional — falls back to private-range heuristic when unset.
+    #[allow(dead_code)] // Consumed in Task 4 (/api/network-mode handler) — not yet wired
+    pub local_public_ip: Option<String>,
+}
+
+impl NetworkConfig {
+    fn load() -> Self {
+        let local_public_ip = env::var("PRESENTER_LOCAL_PUBLIC_IP")
+            .ok()
+            .map(|s| s.trim().to_string())
+            .filter(|s| !s.is_empty());
+        Self { local_public_ip }
+    }
+}
+
 fn duration_override(var: &str) -> Option<Duration> {
     env::var(var)
         .ok()
@@ -198,6 +220,31 @@ mod tests {
             (None, Some("bad".to_string()))
         );
         assert_eq!(parse_listen_port_override(None), (None, None));
+    }
+
+    #[test]
+    fn network_config_parses_public_ip_trimming_whitespace_and_treating_empty_as_unset() {
+        let original = env::var("PRESENTER_LOCAL_PUBLIC_IP").ok();
+
+        env::remove_var("PRESENTER_LOCAL_PUBLIC_IP");
+        assert_eq!(NetworkConfig::load().local_public_ip, None);
+
+        env::set_var("PRESENTER_LOCAL_PUBLIC_IP", "");
+        assert_eq!(NetworkConfig::load().local_public_ip, None);
+
+        env::set_var("PRESENTER_LOCAL_PUBLIC_IP", "   ");
+        assert_eq!(NetworkConfig::load().local_public_ip, None);
+
+        env::set_var("PRESENTER_LOCAL_PUBLIC_IP", "  203.0.113.50  ");
+        assert_eq!(
+            NetworkConfig::load().local_public_ip,
+            Some("203.0.113.50".to_string())
+        );
+
+        match original {
+            Some(value) => env::set_var("PRESENTER_LOCAL_PUBLIC_IP", value),
+            None => env::remove_var("PRESENTER_LOCAL_PUBLIC_IP"),
+        }
     }
 
     #[test]

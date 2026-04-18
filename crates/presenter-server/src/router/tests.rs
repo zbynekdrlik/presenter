@@ -1761,3 +1761,49 @@ fn update_playlist_request_defaults_flags() {
     assert!(payload.name.is_none());
     assert!(payload.show_in_dashboard.is_none());
 }
+
+#[tokio::test]
+async fn network_mode_endpoint_returns_local_for_direct_request() {
+    let state = AppState::in_memory().await.unwrap();
+    let app = build_router(state);
+
+    let response = app
+        .oneshot(
+            Request::builder()
+                .uri("/api/network-mode")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    let body = axum::body::to_bytes(response.into_body(), usize::MAX)
+        .await
+        .unwrap();
+    let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    assert_eq!(json["mode"], "local");
+}
+
+#[tokio::test]
+async fn network_mode_endpoint_returns_remote_with_foreign_cf_ip() {
+    // State without a configured local_public_ip → falls back to private-range check.
+    let state = AppState::in_memory().await.unwrap();
+    let app = build_router(state);
+
+    let response = app
+        .oneshot(
+            Request::builder()
+                .uri("/api/network-mode")
+                .header("CF-Connecting-IP", "198.51.100.10")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    let body = axum::body::to_bytes(response.into_body(), usize::MAX)
+        .await
+        .unwrap();
+    let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    assert_eq!(json["mode"], "remote");
+}

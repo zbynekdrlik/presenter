@@ -6,11 +6,12 @@ All environment variables and feature flags for Presenter.
 
 ### Server
 
-| Variable           | Default                     | Description              |
-| ------------------ | --------------------------- | ------------------------ |
-| `PRESENTER_PORT`   | `80`                        | HTTP server port         |
-| `PRESENTER_DB_URL` | `sqlite://presenter_dev.db` | SQLite connection string |
-| `RUST_LOG`         | `info,tower_http=debug`     | Tracing filter           |
+| Variable                    | Default                     | Description                                                                                                                                                        |
+| --------------------------- | --------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `PRESENTER_PORT`            | `80`                        | HTTP server port                                                                                                                                                   |
+| `PRESENTER_DB_URL`          | `sqlite://presenter_dev.db` | SQLite connection string                                                                                                                                           |
+| `RUST_LOG`                  | `info,tower_http=debug`     | Tracing filter                                                                                                                                                     |
+| `PRESENTER_LOCAL_PUBLIC_IP` | unset                       | Church's outbound public IP. When set, `/api/network-mode` classifies a tunnel request with matching `CF-Connecting-IP` as `local` (LAN). See `cloudflare-tunnel-setup.md`. |
 
 ### Companion Integration
 
