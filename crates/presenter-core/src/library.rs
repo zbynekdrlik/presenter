@@ -75,7 +75,7 @@ impl Library {
     pub fn add_presentation(&mut self, presentation: Presentation) -> Result<(), LibraryError> {
         self.presentations.push(presentation);
         self.presentations
-            .sort_by(|a, b| a.name.to_lowercase().cmp(&b.name.to_lowercase()));
+            .sort_by_key(|p| p.name.to_lowercase());
         Ok(())
     }
 
