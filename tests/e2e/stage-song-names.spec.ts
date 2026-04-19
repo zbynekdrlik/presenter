@@ -141,12 +141,18 @@ test("worship-snv shows next song from playlist", async ({
     presentation: { id: string; slides: Array<{ id: string }> };
   } = await pres2Resp.json();
 
-  // Create a playlist with both presentations
+  // Create a playlist and add entries
   const playlistResp = await request.post(
     new URL("/playlists", baseURL).toString(),
+    { data: { name: `Test Playlist ${Date.now()}` } },
+  );
+  expect(playlistResp.ok()).toBeTruthy();
+  const playlist: { id: string } = await playlistResp.json();
+
+  const entriesResp = await request.put(
+    new URL(`/playlists/${playlist.id}/entries`, baseURL).toString(),
     {
       data: {
-        name: `Test Playlist ${Date.now()}`,
         entries: [
           { type: "presentation", presentationId: pres1.presentation.id },
           { type: "presentation", presentationId: pres2.presentation.id },
@@ -154,8 +160,7 @@ test("worship-snv shows next song from playlist", async ({
       },
     },
   );
-  expect(playlistResp.ok()).toBeTruthy();
-  const playlist: { id: string } = await playlistResp.json();
+  expect(entriesResp.ok()).toBeTruthy();
 
   // Trigger first song with playlist context
   await request.post(new URL("/stage/state", baseURL).toString(), {
