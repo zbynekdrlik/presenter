@@ -334,7 +334,7 @@ impl AppState {
         let ableset_bridge = AbleSetBridge::new();
         let heartbeat_config = config.stage.heartbeat;
         let local_public_ip = Arc::new(config.network.local_public_ip);
-        let state = Self::new_with_heartbeat(
+        let mut state = Self::new_with_heartbeat(
             repo,
             companion_token,
             companion_enabled,
@@ -369,6 +369,23 @@ impl AppState {
                 Ok(None) => {}
                 Err(err) => {
                     tracing::warn!(?err, "failed to query active video source on startup");
+                }
+            }
+        }
+
+        // Auto-detect public IP for LAN/WAN classification via Cloudflare Tunnel.
+        // Only runs if PRESENTER_LOCAL_PUBLIC_IP is not set (the env var is an
+        // optional override, not a requirement). Mirrors the reaperiem pattern.
+        if state.local_public_ip.is_none() {
+            match detect_public_ip().await {
+                Some(ip) => {
+                    tracing::info!(ip = %ip, "auto-detected public IP for LAN/WAN detection");
+                    state.local_public_ip = Arc::new(Some(ip));
+                }
+                None => {
+                    tracing::warn!(
+                        "could not auto-detect public IP; LAN/WAN detection will use private IP fallback"
+                    );
                 }
             }
         }
@@ -793,4 +810,34 @@ impl AppState {
         }
         Ok(())
     }
+}
+
+/// Auto-detect the server's public IP by querying external services.
+/// Tries multiple providers for reliability. Returns `None` if all fail
+/// (e.g., no internet on startup — LAN/WAN detection falls back to the
+/// private-range heuristic in that case).
+async fn detect_public_ip() -> Option<String> {
+    let client = reqwest::Client::builder()
+        .timeout(std::time::Duration::from_secs(3))
+        .build()
+        .ok()?;
+    let services = [
+        "https://api.ipify.org",
+        "https://ifconfig.me/ip",
+        "https://icanhazip.com",
+    ];
+    for url in services {
+        match client.get(url).send().await {
+            Ok(resp) if resp.status().is_success() => {
+                if let Ok(ip) = resp.text().await {
+                    let ip = ip.trim().to_string();
+                    if !ip.is_empty() && ip.len() < 46 {
+                        return Some(ip);
+                    }
+                }
+            }
+            _ => continue,
+        }
+    }
+    None
 }

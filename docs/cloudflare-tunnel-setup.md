@@ -57,30 +57,13 @@ For each environment in the repository (Settings → Environments → Dev / Prod
 | `CLOUDFLARED_HOSTNAME_DEV` / `_PROD` / `_PP` | `presenter-dev.newlevel.media` / `presenter.newlevel.media` / `presenter-pp.newlevel.media` |
 | `CLOUDFLARED_BACKEND_PORT_DEV` / `_PROD` / `_PP` | `8080` for dev, `80` for prod and PP |
 
-## Configure the church public IP
+## Public IP detection (automatic)
 
-The server uses `PRESENTER_LOCAL_PUBLIC_IP` to classify requests arriving via the tunnel as LAN (if the tunnel's `CF-Connecting-IP` matches this value) vs WAN (everything else).
+The server auto-detects its public IP at startup by querying `api.ipify.org` / `ifconfig.me` / `icanhazip.com` (tries all three for reliability). This is used to classify tunnel requests as LAN vs WAN: if `CF-Connecting-IP` matches the detected IP, the client is on the same network as the server.
 
-Get the church's outbound IP from any machine on the church LAN:
+**No manual configuration needed.** Works with dynamic IPs. If all three services are unreachable (no internet at startup), the server falls back to a private-range heuristic.
 
-```bash
-curl -s ifconfig.me
-```
-
-Set it in each presenter-server service's env file (e.g., `/etc/default/presenter-dev` or `/etc/systemd/system/presenter-dev.service.d/override.conf`):
-
-```
-PRESENTER_LOCAL_PUBLIC_IP=203.0.113.50
-```
-
-Restart the service. Verify from the same machine:
-
-```bash
-curl http://localhost:80/api/network-mode
-# → {"mode":"local"}
-```
-
-If `PRESENTER_LOCAL_PUBLIC_IP` is unset, the server falls back to the private-range heuristic (10.x / 172.16-31.x / 192.168.x + loopback → local). This is correct for direct LAN access but can't distinguish "on church LAN via tunnel" from "on WAN via tunnel" — both show up with a public `CF-Connecting-IP`.
+Optional override: set `PRESENTER_LOCAL_PUBLIC_IP` in the service env to force a specific IP instead of auto-detecting. This is only useful if auto-detection fails or you want to pin it for testing.
 
 ## Deploy + verify
 
