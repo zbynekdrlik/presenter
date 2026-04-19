@@ -85,7 +85,7 @@ test("worship-snv shows current song name in amber box", async ({
     ".stage__current-song .stage__song-name-text",
   );
   await expect(currentSongBox).toBeVisible({ timeout: 10_000 });
-  await expect(currentSongBox).toContainText("HODNY CHVALY", {
+  await expect(currentSongBox).toContainText("Hodny Chvaly", {
     timeout: 10_000,
   });
 
@@ -178,7 +178,7 @@ test("worship-snv shows next song from playlist", async ({
   const currentSongBox = stagePage.locator(
     ".stage__current-song .stage__song-name-text",
   );
-  await expect(currentSongBox).toContainText("FIRST SONG", {
+  await expect(currentSongBox).toContainText("First Song", {
     timeout: 10_000,
   });
 
@@ -186,7 +186,7 @@ test("worship-snv shows next song from playlist", async ({
   const nextSongBox = stagePage.locator(
     ".stage__next-song .stage__song-name-text",
   );
-  await expect(nextSongBox).toContainText("SECOND SONG", {
+  await expect(nextSongBox).toContainText("Second Song", {
     timeout: 10_000,
   });
 
