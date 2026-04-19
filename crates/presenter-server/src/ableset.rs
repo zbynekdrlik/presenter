@@ -47,15 +47,23 @@ struct AbleSetStatusInner {
     song_prefix_length: u8,
     tracking: bool,
     last_song: Option<SongState>,
+    setlist_songs: Vec<SetlistCachedSong>,
     last_error: Option<String>,
     follow_enabled: bool,
 }
 
 struct SongState {
+    id: String,
     name: String,
     prefix: String,
     index: Option<u32>,
     last_seen_at: DateTime<Utc>,
+}
+
+#[derive(Clone)]
+struct SetlistCachedSong {
+    id: String,
+    name: String,
 }
 
 struct TrackerGuard {
@@ -127,6 +135,7 @@ impl AbleSetBridge {
                     song_prefix_length: 3,
                     tracking: false,
                     last_song: None,
+                    setlist_songs: Vec::new(),
                     last_error: None,
                     follow_enabled: false,
                 }),
@@ -181,6 +190,17 @@ impl AbleSetBridge {
                 Some(song.last_seen_at),
             )
         })
+    }
+
+    pub async fn next_song_name(&self) -> Option<String> {
+        let status = self.inner.status.read().await;
+        let last_song = status.last_song.as_ref()?;
+        let active_idx = status
+            .setlist_songs
+            .iter()
+            .position(|s| s.id == last_song.id)?;
+        let next = status.setlist_songs.get(active_idx + 1)?;
+        Some(crate::state::stage::sanitize_song_title(&next.name))
     }
 
     pub async fn status_snapshot(&self) -> AbleSetStatusSnapshot {
@@ -379,29 +399,60 @@ async fn run_tracker(
                 break;
             }
             _ = interval.tick() => {
-                match fetch_active_song(&client, &host, http_port).await {
-                    Ok(Some((name, index))) => {
-                        if let Some(prefix) = extract_song_prefix(&name, song_prefix_length) {
-                            let snapshot = SongState {
-                                name: name.clone(),
-                                prefix: prefix.clone(),
-                                index,
-                                last_seen_at: Utc::now(),
-                            };
-                            let mut status = inner.status.write().await;
-                            status.last_song = Some(snapshot);
-                            status.last_error = None;
+                match fetch_setlist(&client, &host, http_port).await {
+                    Ok(Some(setlist)) => {
+                        let mut status = inner.status.write().await;
+                        status.setlist_songs = setlist.songs.iter().map(|s| {
+                            let name = s.meta.as_ref()
+                                .and_then(|m| m.name.as_ref().cloned().or_else(|| m.raw.clone()))
+                                .or_else(|| s.cue.as_ref().and_then(|c| c.name.clone()))
+                                .unwrap_or_default();
+                            SetlistCachedSong {
+                                id: s.id.clone().unwrap_or_default(),
+                                name,
+                            }
+                        }).collect();
+
+                        if let Some(active_id) = &setlist.active_song_id {
+                            let mut found = false;
+                            for (idx, song) in setlist.songs.iter().enumerate() {
+                                if song.id.as_deref() == Some(active_id.as_str()) {
+                                    let name = status.setlist_songs[idx].name.clone();
+                                    if let Some(prefix) = extract_song_prefix(&name, song_prefix_length) {
+                                        let index = song.internal_meta
+                                            .as_ref()
+                                            .and_then(|m| m.order)
+                                            .or(Some(idx as u32));
+                                        status.last_song = Some(SongState {
+                                            id: active_id.clone(),
+                                            name,
+                                            prefix,
+                                            index,
+                                            last_seen_at: Utc::now(),
+                                        });
+                                        status.last_error = None;
+                                        found = true;
+                                    } else {
+                                        status.last_error = Some(format!(
+                                            "unable to extract prefix of length {} from song '{name}'",
+                                            song_prefix_length
+                                        ));
+                                    }
+                                    break;
+                                }
+                            }
+                            if !found && status.last_error.is_none() {
+                                status.last_song = None;
+                            }
                         } else {
-                            let mut status = inner.status.write().await;
-                            status.last_error = Some(format!(
-                                "unable to extract prefix of length {} from song '{name}'",
-                                song_prefix_length
-                            ));
+                            status.last_song = None;
+                            status.last_error = None;
                         }
                     }
                     Ok(None) => {
                         let mut status = inner.status.write().await;
                         status.last_song = None;
+                        status.setlist_songs.clear();
                         status.last_error = None;
                     }
                     Err(err) => {
@@ -418,11 +469,11 @@ async fn run_tracker(
     status.tracking = false;
 }
 
-async fn fetch_active_song(
+async fn fetch_setlist(
     client: &Client,
     host: &str,
     http_port: u16,
-) -> anyhow::Result<Option<(String, Option<u32>)>> {
+) -> anyhow::Result<Option<SetlistResponse>> {
     let url = format!("http://{host}:{http_port}{SETLIST_ENDPOINT}");
     let response = client
         .get(&url)
@@ -435,30 +486,7 @@ async fn fetch_active_song(
             .json()
             .await
             .context("failed to parse AbleSet setlist payload")?;
-        let Some(active_id) = payload.active_song_id else {
-            return Ok(None);
-        };
-        for (idx, song) in payload.songs.iter().enumerate() {
-            let Some(song_id) = song.id.as_ref() else {
-                continue;
-            };
-            if song_id != &active_id {
-                continue;
-            }
-            let name = song
-                .meta
-                .as_ref()
-                .and_then(|meta| meta.name.as_ref().cloned().or_else(|| meta.raw.clone()))
-                .or_else(|| song.cue.as_ref().and_then(|cue| cue.name.clone()))
-                .unwrap_or_else(|| active_id.clone());
-            let index = song
-                .internal_meta
-                .as_ref()
-                .and_then(|meta| meta.order)
-                .or(Some(idx as u32));
-            return Ok(Some((name, index)));
-        }
-        return Ok(None);
+        return Ok(Some(payload));
     }
 
     if response.status().as_u16() == 404 {
@@ -469,4 +497,81 @@ async fn fetch_active_song(
         "AbleSet responded with status {}",
         response.status()
     ))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[tokio::test]
+    async fn next_song_name_returns_next_when_active_song_exists() {
+        let bridge = AbleSetBridge::new();
+        {
+            let mut status = bridge.inner.status.write().await;
+            status.setlist_songs = vec![
+                SetlistCachedSong {
+                    id: "s1".into(),
+                    name: "001 First Song".into(),
+                },
+                SetlistCachedSong {
+                    id: "s2".into(),
+                    name: "002 Second Song".into(),
+                },
+                SetlistCachedSong {
+                    id: "s3".into(),
+                    name: "003 Third Song".into(),
+                },
+            ];
+            status.last_song = Some(SongState {
+                id: "s1".into(),
+                name: "001 First Song".into(),
+                prefix: "001".into(),
+                index: Some(0),
+                last_seen_at: Utc::now(),
+            });
+        }
+        let next = bridge.next_song_name().await;
+        assert_eq!(next, Some("Second Song".to_string()));
+    }
+
+    #[tokio::test]
+    async fn next_song_name_returns_none_when_last_in_setlist() {
+        let bridge = AbleSetBridge::new();
+        {
+            let mut status = bridge.inner.status.write().await;
+            status.setlist_songs = vec![
+                SetlistCachedSong {
+                    id: "s1".into(),
+                    name: "001 First Song".into(),
+                },
+                SetlistCachedSong {
+                    id: "s2".into(),
+                    name: "002 Second Song".into(),
+                },
+            ];
+            status.last_song = Some(SongState {
+                id: "s2".into(),
+                name: "002 Second Song".into(),
+                prefix: "002".into(),
+                index: Some(1),
+                last_seen_at: Utc::now(),
+            });
+        }
+        let next = bridge.next_song_name().await;
+        assert_eq!(next, None);
+    }
+
+    #[tokio::test]
+    async fn next_song_name_returns_none_when_no_active_song() {
+        let bridge = AbleSetBridge::new();
+        {
+            let mut status = bridge.inner.status.write().await;
+            status.setlist_songs = vec![SetlistCachedSong {
+                id: "s1".into(),
+                name: "001 First Song".into(),
+            }];
+        }
+        let next = bridge.next_song_name().await;
+        assert_eq!(next, None);
+    }
 }
