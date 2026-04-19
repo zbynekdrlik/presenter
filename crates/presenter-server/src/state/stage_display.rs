@@ -17,9 +17,13 @@ impl AppState {
         let Some(layout) = layout else {
             return Ok(None);
         };
-        let Some(context) = self.build_stage_context().await? else {
+        let Some(mut context) = self.build_stage_context().await? else {
             return Ok(None);
         };
+        if context.resolution.next_song_name.is_none() {
+            context.resolution.next_song_name =
+                self.resolve_next_song_name(&context.resolution).await;
+        }
         Ok(Some(build_stage_snapshot(layout, &context)))
     }
 

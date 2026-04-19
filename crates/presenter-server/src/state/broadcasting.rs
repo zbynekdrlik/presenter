@@ -102,7 +102,10 @@ impl AppState {
         Ok(())
     }
 
-    async fn resolve_next_song_name(&self, resolution: &StageResolution) -> Option<String> {
+    pub(super) async fn resolve_next_song_name(
+        &self,
+        resolution: &StageResolution,
+    ) -> Option<String> {
         // Try AbleSet first
         if let Some(name) = self.ableset_bridge.next_song_name().await {
             return Some(name);
