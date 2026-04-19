@@ -92,6 +92,9 @@ impl AppState {
         };
 
         let mut context = context.clone();
+        if context.resolution.override_song_name.is_none() {
+            context.resolution.override_song_name = self.resolve_current_song_name().await;
+        }
         if context.resolution.next_song_name.is_none() {
             context.resolution.next_song_name =
                 self.resolve_next_song_name(&context.resolution).await;
@@ -100,6 +103,11 @@ impl AppState {
         let snapshot = build_stage_snapshot(layout, &context);
         self.publish_stage_update(snapshot);
         Ok(())
+    }
+
+    pub(super) async fn resolve_current_song_name(&self) -> Option<String> {
+        let snapshot = self.ableset_bridge.song_snapshot().await?;
+        Some(sanitize_song_title(&snapshot.name))
     }
 
     pub(super) async fn resolve_next_song_name(
