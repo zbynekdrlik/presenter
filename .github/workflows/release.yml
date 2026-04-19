@@ -309,48 +309,20 @@ jobs:
       - name: Install & configure cloudflared (skipped if vars unset)
         if: ${{ vars.CLOUDFLARED_TUNNEL_ID_PP != '' && vars.CLOUDFLARED_HOSTNAME_PP != '' }}
         env:
-          TUNNEL_ID: ${{ vars.CLOUDFLARED_TUNNEL_ID_PP }}
-          HOSTNAME: ${{ vars.CLOUDFLARED_HOSTNAME_PP }}
-          BACKEND_PORT: ${{ vars.CLOUDFLARED_BACKEND_PORT_PP || '80' }}
-          CREDS: ${{ secrets.CLOUDFLARED_CREDS_PP }}
+          TUNNEL_TOKEN: ${{ secrets.CLOUDFLARED_CREDS_PP }}
         run: |
           set -euo pipefail
-
-          # 1. Render config.yml locally from the template
-          sed -e "s|__TUNNEL_ID__|$TUNNEL_ID|g" \
-              -e "s|__HOSTNAME__|$HOSTNAME|g" \
-              -e "s|__BACKEND_PORT__|$BACKEND_PORT|g" \
-              deploy/cloudflared-config.yml.tmpl > /tmp/cf-config.yml
-
-          # 2. Write credentials JSON (short-lived). Fail loudly if the
-          # matching secret isn't set — vars without creds can't work.
-          if [ -z "$CREDS" ]; then
-            echo "::error::CLOUDFLARED_CREDS_PP secret is empty but CLOUDFLARED_TUNNEL_ID_PP / _HOSTNAME_PP vars are set. Register the credentials JSON in repo settings."
+          if [ -z "$TUNNEL_TOKEN" ]; then
+            echo "::error::CLOUDFLARED_CREDS_PP secret is empty. Register the tunnel token in repo settings."
             exit 1
           fi
-          printf '%s' "$CREDS" > /tmp/cf-creds.json
-          chmod 600 /tmp/cf-creds.json
-
-          # 3. Ship files to target
-          scp /tmp/cf-config.yml deploy-target:/tmp/cf-config.yml
-          scp /tmp/cf-creds.json deploy-target:/tmp/cf-creds.json
-          scp deploy/cloudflared.service deploy-target:/tmp/cloudflared.service
-          rm /tmp/cf-config.yml /tmp/cf-creds.json
-
-          # 4. Install + activate on target
           ssh deploy-target "set -euo pipefail
             if ! command -v cloudflared >/dev/null 2>&1; then
               wget -q https://github.com/cloudflare/cloudflared/releases/latest/download/cloudflared-linux-amd64.deb -O /tmp/cf.deb
               sudo dpkg -i /tmp/cf.deb
               rm /tmp/cf.deb
             fi
-            sudo mkdir -p /etc/cloudflared
-            sudo mv /tmp/cf-config.yml /etc/cloudflared/config.yml
-            sudo mv /tmp/cf-creds.json /etc/cloudflared/${TUNNEL_ID}.json
-            sudo chown root:root /etc/cloudflared/config.yml /etc/cloudflared/${TUNNEL_ID}.json
-            sudo chmod 600 /etc/cloudflared/${TUNNEL_ID}.json
-            sudo mv /tmp/cloudflared.service /etc/systemd/system/cloudflared.service
-            sudo systemctl daemon-reload
+            sudo cloudflared service uninstall 2>/dev/null || true
+            sudo cloudflared service install ${TUNNEL_TOKEN}
             sudo systemctl enable --now cloudflared
-            sudo systemctl restart cloudflared
           "

@@ -177,21 +177,13 @@ fn parse_clip_destinations(
         }
         "#bibleclear" => ClipKind::BibleClear,
         "#timer" => ClipKind::Timer,
-        "#song" => {
-            if tokens.get(index) == Some(&"name") {
-                index += 1;
-                ClipKind::SongName
-            } else {
-                return result;
-            }
+        "#song" if tokens.get(index) == Some(&"name") => {
+            index += 1;
+            ClipKind::SongName
         }
-        "#band" => {
-            if tokens.get(index) == Some(&"name") {
-                index += 1;
-                ClipKind::BandName
-            } else {
-                return result;
-            }
+        "#band" if tokens.get(index) == Some(&"name") => {
+            index += 1;
+            ClipKind::BandName
         }
         _ => return result,
     };
@@ -319,15 +311,13 @@ fn parse_transforms(tokens: &[&str]) -> Vec<TextTransform> {
     let mut transforms = Vec::new();
     for token in tokens {
         match *token {
-            "u" | "upper" => {
-                if !transforms.contains(&TextTransform::Uppercase) {
-                    transforms.push(TextTransform::Uppercase);
-                }
+            "u" | "upper" if !transforms.contains(&TextTransform::Uppercase) => {
+                transforms.push(TextTransform::Uppercase);
             }
-            "re" | "noenter" | "singleline" => {
-                if !transforms.contains(&TextTransform::RemoveLineBreaks) {
-                    transforms.push(TextTransform::RemoveLineBreaks);
-                }
+            "re" | "noenter" | "singleline"
+                if !transforms.contains(&TextTransform::RemoveLineBreaks) =>
+            {
+                transforms.push(TextTransform::RemoveLineBreaks);
             }
             _ => {}
         }
