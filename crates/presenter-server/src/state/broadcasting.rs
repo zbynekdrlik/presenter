@@ -107,7 +107,7 @@ impl AppState {
 
     pub(super) async fn resolve_current_song_name(&self) -> Option<String> {
         let snapshot = self.ableset_bridge.song_snapshot().await?;
-        Some(sanitize_song_title(&snapshot.name))
+        Some(snapshot.name.clone())
     }
 
     pub(super) async fn resolve_next_song_name(
@@ -126,7 +126,16 @@ impl AppState {
             .iter()
             .position(|e| e.presentation_id == Some(current_id))?;
         let next_entry = entries.get(current_idx + 1)?;
-        if next_entry.entry_type == "presentation" && !next_entry.name.is_empty() {
+        if next_entry.entry_type != "presentation" {
+            return None;
+        }
+        // Look up the raw presentation name (with number prefix)
+        let next_id = next_entry.presentation_id?;
+        if let Ok(Some((_, _, presentation))) =
+            self.repository.fetch_presentation_detail(next_id).await
+        {
+            Some(presentation.name.clone())
+        } else if !next_entry.name.is_empty() {
             Some(next_entry.name.clone())
         } else {
             None

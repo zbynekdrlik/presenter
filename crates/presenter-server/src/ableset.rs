@@ -200,7 +200,7 @@ impl AbleSetBridge {
             .iter()
             .position(|s| s.id == last_song.id)?;
         let next = status.setlist_songs.get(active_idx + 1)?;
-        Some(crate::state::stage::sanitize_song_title(&next.name))
+        Some(next.name.clone())
     }
 
     pub async fn status_snapshot(&self) -> AbleSetStatusSnapshot {
@@ -531,7 +531,7 @@ mod tests {
             });
         }
         let next = bridge.next_song_name().await;
-        assert_eq!(next, Some("Second Song".to_string()));
+        assert_eq!(next, Some("002 Second Song".to_string()));
     }
 
     #[tokio::test]

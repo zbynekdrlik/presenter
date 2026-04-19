@@ -220,13 +220,11 @@ pub(crate) fn build_stage_snapshot(
         context.resolution.presentation_id,
         context.resolution.presentation_name.clone(),
         context.resolution.library_name.clone(),
-        context.resolution.override_song_name.clone().or_else(|| {
-            context
-                .resolution
-                .presentation_name
-                .clone()
-                .map(|name| sanitize_song_title(&name))
-        }),
+        context
+            .resolution
+            .override_song_name
+            .clone()
+            .or_else(|| context.resolution.presentation_name.clone()),
         context
             .resolution
             .presentation_name
