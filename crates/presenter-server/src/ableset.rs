@@ -202,11 +202,10 @@ impl AbleSetBridge {
             .setlist_songs
             .iter()
             .position(|s| s.id == last_song.id)?;
-        // Find the next song in the active setlist:
-        // skip songs marked as skipped (not in tonight's set) AND MODE markers
+        // Find the next entry in the active setlist (skip songs not in tonight's set)
         status.setlist_songs[active_idx + 1..]
             .iter()
-            .find(|s| !s.skipped && !s.name.starts_with("MODE "))
+            .find(|s| !s.skipped)
             .map(|s| s.name.clone())
     }
 
