@@ -76,6 +76,8 @@ pub struct StageDisplaySlide {
     pub translation: String,
     pub stage: String,
     pub group: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub group_color: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -124,6 +126,7 @@ impl From<&DomainSlide> for StageDisplaySlide {
             translation: content.translation.value().to_string(),
             stage: content.stage.value().to_string(),
             group: content.group.as_ref().map(|g| g.name().to_string()),
+            group_color: None,
         }
     }
 }
@@ -138,6 +141,7 @@ impl From<&ResolvedSlide> for StageDisplaySlide {
                 .effective_group
                 .as_ref()
                 .map(|group| group.name().to_string()),
+            group_color: None,
         }
     }
 }

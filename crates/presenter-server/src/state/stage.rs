@@ -74,6 +74,7 @@ impl<'a> SlideCtx<'a> {
             translation: self.slide.content.translation.value().to_string(),
             stage: self.slide.content.stage.value().to_string(),
             group: self.effective_group.clone(),
+            group_color: None,
         }
     }
 }

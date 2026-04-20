@@ -319,6 +319,7 @@ mod tests {
             translation: "Translation".to_string(),
             stage: "Stage text".to_string(),
             group: Some("Verse 1".to_string()),
+            group_color: None,
         };
         let result = roundtrip_json(&slide);
         assert_eq!(result.main, "Main text");
