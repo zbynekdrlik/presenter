@@ -199,8 +199,11 @@ impl AbleSetBridge {
             .setlist_songs
             .iter()
             .position(|s| s.id == last_song.id)?;
-        let next = status.setlist_songs.get(active_idx + 1)?;
-        Some(next.name.clone())
+        // Skip non-song entries (MODE markers) to find the actual next song
+        status.setlist_songs[active_idx + 1..]
+            .iter()
+            .find(|s| !s.name.starts_with("MODE "))
+            .map(|s| s.name.clone())
     }
 
     pub async fn status_snapshot(&self) -> AbleSetStatusSnapshot {
@@ -559,6 +562,41 @@ mod tests {
         }
         let next = bridge.next_song_name().await;
         assert_eq!(next, None);
+    }
+
+    #[tokio::test]
+    async fn next_song_name_skips_mode_entries() {
+        let bridge = AbleSetBridge::new();
+        {
+            let mut status = bridge.inner.status.write().await;
+            status.setlist_songs = vec![
+                SetlistCachedSong {
+                    id: "s1".into(),
+                    name: "076 Arriba".into(),
+                },
+                SetlistCachedSong {
+                    id: "s2".into(),
+                    name: "MODE modlitba 3".into(),
+                },
+                SetlistCachedSong {
+                    id: "s3".into(),
+                    name: "MODE GO LIVE 2 !!!".into(),
+                },
+                SetlistCachedSong {
+                    id: "s4".into(),
+                    name: "138 Ja v Teba verim".into(),
+                },
+            ];
+            status.last_song = Some(SongState {
+                id: "s1".into(),
+                name: "076 Arriba".into(),
+                prefix: "076".into(),
+                index: Some(0),
+                last_seen_at: Utc::now(),
+            });
+        }
+        let next = bridge.next_song_name().await;
+        assert_eq!(next, Some("138 Ja v Teba verim".to_string()));
     }
 
     #[tokio::test]
