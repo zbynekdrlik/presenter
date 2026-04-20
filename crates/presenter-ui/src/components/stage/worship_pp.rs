@@ -2,7 +2,7 @@ use leptos::prelude::*;
 
 use crate::state::stage::StageContext;
 use crate::utils::autofit::autofit_effect;
-use crate::utils::color::{group_color, hex_to_rgba};
+use crate::utils::color::group_pill_style;
 use crate::ws::stage::StageWsState;
 
 const CURRENT_MAX_FONT: f64 = 800.0;
@@ -70,18 +70,18 @@ pub fn WorshipPp(
     };
 
     let current_group_style = move || {
-        current_group().map_or(String::new(), |name| {
-            let color = group_color(&name);
-            let bg = hex_to_rgba(color, 0.25);
-            format!("color:{color};background:{bg};")
-        })
+        ctx.snapshot
+            .get()
+            .and_then(|s| s.current.and_then(|sl| sl.group_color))
+            .map(|color| group_pill_style(&color))
+            .unwrap_or_default()
     };
     let next_group_style = move || {
-        next_group().map_or(String::new(), |name| {
-            let color = group_color(&name);
-            let bg = hex_to_rgba(color, 0.25);
-            format!("color:{color};background:{bg};")
-        })
+        ctx.snapshot
+            .get()
+            .and_then(|s| s.next.and_then(|sl| sl.group_color))
+            .map(|color| group_pill_style(&color))
+            .unwrap_or_default()
     };
     let current_group_text = move || current_group().unwrap_or_default();
     let next_group_text = move || next_group().unwrap_or_default();

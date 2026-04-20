@@ -1,34 +1,29 @@
-const GROUP_COLORS: [&str; 8] = [
-    "#fb7185", // rose
-    "#fb923c", // orange
-    "#fbbf24", // amber
-    "#34d399", // emerald
-    "#22d3ee", // cyan
-    "#60a5fa", // blue
-    "#a78bfa", // violet
-    "#f472b6", // pink
-];
-
-pub fn group_color(name: &str) -> &'static str {
-    let hash = fnv1a(name);
-    GROUP_COLORS[(hash as usize) % GROUP_COLORS.len()]
-}
-
-fn fnv1a(s: &str) -> u32 {
-    let mut hash: u32 = 2166136261;
-    for byte in s.bytes() {
-        hash ^= byte as u32;
-        hash = hash.wrapping_mul(16777619);
-    }
-    hash
-}
-
-pub fn hex_to_rgba(hex: &str, opacity: f32) -> String {
+/// Compute WCAG relative luminance from a hex color string.
+/// Returns a value between 0.0 (black) and 1.0 (white).
+fn luminance(hex: &str) -> f64 {
     let hex = hex.trim_start_matches('#');
-    let r = u8::from_str_radix(&hex[0..2], 16).unwrap_or(0);
-    let g = u8::from_str_radix(&hex[2..4], 16).unwrap_or(0);
-    let b = u8::from_str_radix(&hex[4..6], 16).unwrap_or(0);
-    format!("rgba({r},{g},{b},{opacity})")
+    if hex.len() < 6 {
+        return 0.0;
+    }
+    let r = u8::from_str_radix(&hex[0..2], 16).unwrap_or(0) as f64 / 255.0;
+    let g = u8::from_str_radix(&hex[2..4], 16).unwrap_or(0) as f64 / 255.0;
+    let b = u8::from_str_radix(&hex[4..6], 16).unwrap_or(0) as f64 / 255.0;
+    0.2126 * r + 0.7152 * g + 0.0722 * b
+}
+
+/// Returns "#000000" for light backgrounds, "#ffffff" for dark backgrounds.
+pub fn text_color_for_bg(hex: &str) -> &'static str {
+    if luminance(hex) > 0.4 {
+        "#000000"
+    } else {
+        "#ffffff"
+    }
+}
+
+/// Build inline style for a group pill: solid background + contrast text.
+pub fn group_pill_style(bg_color: &str) -> String {
+    let text = text_color_for_bg(bg_color);
+    format!("background:{bg_color};color:{text};")
 }
 
 #[cfg(test)]
@@ -36,30 +31,35 @@ mod tests {
     use super::*;
 
     #[test]
-    fn group_color_deterministic() {
-        assert_eq!(group_color("Verse 1"), group_color("Verse 1"));
-        assert_eq!(group_color("Chorus"), group_color("Chorus"));
+    fn dark_background_gets_white_text() {
+        assert_eq!(text_color_for_bg("#2E2E8F"), "#ffffff");
+        assert_eq!(text_color_for_bg("#1A1A1A"), "#ffffff");
+        assert_eq!(text_color_for_bg("#8B1A1A"), "#ffffff");
     }
 
     #[test]
-    fn group_color_returns_valid_color() {
-        let c = group_color("Bridge");
-        assert!(GROUP_COLORS.contains(&c));
+    fn light_background_gets_black_text() {
+        assert_eq!(text_color_for_bg("#F0E020"), "#000000");
+        assert_eq!(text_color_for_bg("#E89B7A"), "#000000");
+        assert_eq!(text_color_for_bg("#6FE020"), "#000000");
     }
 
     #[test]
-    fn group_color_empty_string() {
-        let c = group_color("");
-        assert!(GROUP_COLORS.contains(&c));
+    fn medium_backgrounds() {
+        assert_eq!(text_color_for_bg("#E08A3C"), "#000000");
+        assert_eq!(text_color_for_bg("#3CB371"), "#000000");
+        assert_eq!(text_color_for_bg("#9A9A9A"), "#000000");
     }
 
     #[test]
-    fn hex_to_rgba_with_hash() {
-        assert_eq!(hex_to_rgba("#fb7185", 0.25), "rgba(251,113,133,0.25)");
+    fn group_pill_style_format() {
+        let style = group_pill_style("#E02020");
+        assert_eq!(style, "background:#E02020;color:#ffffff;");
     }
 
     #[test]
-    fn hex_to_rgba_without_hash() {
-        assert_eq!(hex_to_rgba("60a5fa", 0.5), "rgba(96,165,250,0.5)");
+    fn invalid_hex_defaults_dark() {
+        assert_eq!(text_color_for_bg(""), "#ffffff");
+        assert_eq!(text_color_for_bg("xyz"), "#ffffff");
     }
 }
