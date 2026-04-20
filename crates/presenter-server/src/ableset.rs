@@ -64,6 +64,7 @@ struct SongState {
 struct SetlistCachedSong {
     id: String,
     name: String,
+    skipped: bool,
 }
 
 struct TrackerGuard {
@@ -114,6 +115,8 @@ struct SetlistSongMeta {
 struct SetlistSongInternalMeta {
     #[serde(default)]
     order: Option<u32>,
+    #[serde(default)]
+    skipped: bool,
 }
 
 #[derive(Debug, Deserialize)]
@@ -199,10 +202,11 @@ impl AbleSetBridge {
             .setlist_songs
             .iter()
             .position(|s| s.id == last_song.id)?;
-        // Skip non-song entries (MODE markers) to find the actual next song
+        // Find the next song in the active setlist:
+        // skip songs marked as skipped (not in tonight's set) AND MODE markers
         status.setlist_songs[active_idx + 1..]
             .iter()
-            .find(|s| !s.name.starts_with("MODE "))
+            .find(|s| !s.skipped && !s.name.starts_with("MODE "))
             .map(|s| s.name.clone())
     }
 
@@ -410,9 +414,11 @@ async fn run_tracker(
                                 .and_then(|m| m.name.as_ref().cloned().or_else(|| m.raw.clone()))
                                 .or_else(|| s.cue.as_ref().and_then(|c| c.name.clone()))
                                 .unwrap_or_default();
+                            let skipped = s.internal_meta.as_ref().map_or(false, |m| m.skipped);
                             SetlistCachedSong {
                                 id: s.id.clone().unwrap_or_default(),
                                 name,
+                                skipped,
                             }
                         }).collect();
 
@@ -507,7 +513,7 @@ mod tests {
     use super::*;
 
     #[tokio::test]
-    async fn next_song_name_returns_next_when_active_song_exists() {
+    async fn next_song_name_returns_next_non_skipped_song() {
         let bridge = AbleSetBridge::new();
         {
             let mut status = bridge.inner.status.write().await;
@@ -515,14 +521,17 @@ mod tests {
                 SetlistCachedSong {
                     id: "s1".into(),
                     name: "001 First Song".into(),
+                    skipped: false,
                 },
                 SetlistCachedSong {
                     id: "s2".into(),
                     name: "002 Second Song".into(),
+                    skipped: false,
                 },
                 SetlistCachedSong {
                     id: "s3".into(),
                     name: "003 Third Song".into(),
+                    skipped: false,
                 },
             ];
             status.last_song = Some(SongState {
@@ -538,34 +547,9 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn next_song_name_returns_none_when_last_in_setlist() {
-        let bridge = AbleSetBridge::new();
-        {
-            let mut status = bridge.inner.status.write().await;
-            status.setlist_songs = vec![
-                SetlistCachedSong {
-                    id: "s1".into(),
-                    name: "001 First Song".into(),
-                },
-                SetlistCachedSong {
-                    id: "s2".into(),
-                    name: "002 Second Song".into(),
-                },
-            ];
-            status.last_song = Some(SongState {
-                id: "s2".into(),
-                name: "002 Second Song".into(),
-                prefix: "002".into(),
-                index: Some(1),
-                last_seen_at: Utc::now(),
-            });
-        }
-        let next = bridge.next_song_name().await;
-        assert_eq!(next, None);
-    }
-
-    #[tokio::test]
-    async fn next_song_name_skips_mode_entries() {
+    async fn next_song_name_skips_songs_not_in_setlist() {
+        // Simulates real AbleSet: Arriba is active, next two songs are
+        // skipped (not in tonight's setlist), Ja v Teba verim is next
         let bridge = AbleSetBridge::new();
         {
             let mut status = bridge.inner.status.write().await;
@@ -573,18 +557,22 @@ mod tests {
                 SetlistCachedSong {
                     id: "s1".into(),
                     name: "076 Arriba".into(),
+                    skipped: false,
                 },
                 SetlistCachedSong {
                     id: "s2".into(),
-                    name: "MODE modlitba 3".into(),
+                    name: "140 Pane zosli".into(),
+                    skipped: true,
                 },
                 SetlistCachedSong {
                     id: "s3".into(),
-                    name: "MODE GO LIVE 2 !!!".into(),
+                    name: "134 Tancujem".into(),
+                    skipped: true,
                 },
                 SetlistCachedSong {
                     id: "s4".into(),
                     name: "138 Ja v Teba verim".into(),
+                    skipped: false,
                 },
             ];
             status.last_song = Some(SongState {
@@ -600,6 +588,41 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn next_song_name_returns_none_when_last_in_setlist() {
+        // Active song is the last non-skipped song — no next
+        let bridge = AbleSetBridge::new();
+        {
+            let mut status = bridge.inner.status.write().await;
+            status.setlist_songs = vec![
+                SetlistCachedSong {
+                    id: "s1".into(),
+                    name: "001 First Song".into(),
+                    skipped: false,
+                },
+                SetlistCachedSong {
+                    id: "s2".into(),
+                    name: "002 Last Song".into(),
+                    skipped: false,
+                },
+                SetlistCachedSong {
+                    id: "s3".into(),
+                    name: "003 Not In Set".into(),
+                    skipped: true,
+                },
+            ];
+            status.last_song = Some(SongState {
+                id: "s2".into(),
+                name: "002 Last Song".into(),
+                prefix: "002".into(),
+                index: Some(1),
+                last_seen_at: Utc::now(),
+            });
+        }
+        let next = bridge.next_song_name().await;
+        assert_eq!(next, None);
+    }
+
+    #[tokio::test]
     async fn next_song_name_returns_none_when_no_active_song() {
         let bridge = AbleSetBridge::new();
         {
@@ -607,6 +630,7 @@ mod tests {
             status.setlist_songs = vec![SetlistCachedSong {
                 id: "s1".into(),
                 name: "001 First Song".into(),
+                skipped: false,
             }];
         }
         let next = bridge.next_song_name().await;
