@@ -91,6 +91,14 @@ impl AppState {
             return Ok(());
         };
 
+        let context = self.enrich_stage_context(context).await;
+        let snapshot = build_stage_snapshot(layout, &context);
+        self.publish_stage_update(snapshot);
+        Ok(())
+    }
+
+    /// Populates AbleSet song names on a stage context if not already set.
+    pub(super) async fn enrich_stage_context(&self, context: &StageContext) -> StageContext {
         let mut context = context.clone();
         if context.resolution.override_song_name.is_none() {
             context.resolution.override_song_name = self.resolve_current_song_name().await;
@@ -99,13 +107,10 @@ impl AppState {
             context.resolution.next_song_name =
                 self.resolve_next_song_name(&context.resolution).await;
         }
-
-        let snapshot = build_stage_snapshot(layout, &context);
-        self.publish_stage_update(snapshot);
-        Ok(())
+        context
     }
 
-    pub(super) async fn resolve_current_song_name(&self) -> Option<String> {
+    async fn resolve_current_song_name(&self) -> Option<String> {
         let snapshot = self.ableset_bridge.song_snapshot().await?;
         Some(snapshot.name.clone())
     }

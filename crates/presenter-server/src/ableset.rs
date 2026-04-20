@@ -416,25 +416,37 @@ async fn run_tracker(
                 match fetch_setlist(&client, &host, http_port).await {
                     Ok(Some(setlist)) => {
                         let new_active_id = setlist.active_song_id.clone();
+                        let song_changed = new_active_id != prev_active_id;
                         let mut status = inner.status.write().await;
-                        status.setlist_songs = setlist.songs.iter().map(|s| {
-                            let name = s.meta.as_ref()
-                                .and_then(|m| m.name.as_ref().cloned().or_else(|| m.raw.clone()))
-                                .or_else(|| s.cue.as_ref().and_then(|c| c.name.clone()))
-                                .unwrap_or_default();
-                            let skipped = s.internal_meta.as_ref().map_or(false, |m| m.skipped);
-                            SetlistCachedSong {
-                                id: s.id.clone().unwrap_or_default(),
-                                name,
-                                skipped,
-                            }
-                        }).collect();
+
+                        if song_changed {
+                            // Rebuild cached song list only when the active song
+                            // changes to avoid unnecessary allocations every 250ms
+                            status.setlist_songs = setlist.songs.iter().map(|s| {
+                                let name = s.meta.as_ref()
+                                    .and_then(|m| m.name.as_ref().cloned().or_else(|| m.raw.clone()))
+                                    .or_else(|| s.cue.as_ref().and_then(|c| c.name.clone()))
+                                    .unwrap_or_default();
+                                let skipped = s.internal_meta.as_ref().map_or(false, |m| m.skipped);
+                                SetlistCachedSong {
+                                    id: s.id.clone().unwrap_or_default(),
+                                    name,
+                                    skipped,
+                                }
+                            }).collect();
+                        }
 
                         if let Some(active_id) = &setlist.active_song_id {
                             let mut found = false;
                             for (idx, song) in setlist.songs.iter().enumerate() {
                                 if song.id.as_deref() == Some(active_id.as_str()) {
-                                    let name = status.setlist_songs[idx].name.clone();
+                                    let name = if song_changed {
+                                        status.setlist_songs[idx].name.clone()
+                                    } else if let Some(last) = &status.last_song {
+                                        last.name.clone()
+                                    } else {
+                                        continue;
+                                    };
                                     if let Some(prefix) = extract_song_prefix(&name, song_prefix_length) {
                                         let index = song.internal_meta
                                             .as_ref()
@@ -466,7 +478,7 @@ async fn run_tracker(
                             status.last_error = None;
                         }
                         drop(status);
-                        if new_active_id != prev_active_id {
+                        if song_changed {
                             prev_active_id = new_active_id;
                             let _ = inner.song_changed_tx.send(());
                         }

@@ -227,8 +227,9 @@ pub(crate) fn build_stage_snapshot(
             .or_else(|| context.resolution.presentation_name.clone()),
         context
             .resolution
-            .presentation_name
+            .override_song_name
             .as_deref()
+            .or(context.resolution.presentation_name.as_deref())
             .and_then(extract_song_number),
         context.resolution.next_song_name.clone(),
         context.resolution.current_slide_id,

@@ -17,16 +17,10 @@ impl AppState {
         let Some(layout) = layout else {
             return Ok(None);
         };
-        let Some(mut context) = self.build_stage_context().await? else {
+        let Some(context) = self.build_stage_context().await? else {
             return Ok(None);
         };
-        if context.resolution.override_song_name.is_none() {
-            context.resolution.override_song_name = self.resolve_current_song_name().await;
-        }
-        if context.resolution.next_song_name.is_none() {
-            context.resolution.next_song_name =
-                self.resolve_next_song_name(&context.resolution).await;
-        }
+        let context = self.enrich_stage_context(&context).await;
         Ok(Some(build_stage_snapshot(layout, &context)))
     }
 
