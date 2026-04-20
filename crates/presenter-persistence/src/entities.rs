@@ -585,3 +585,20 @@ pub mod video_source {
 
     impl ActiveModelBehavior for ActiveModel {}
 }
+
+pub mod group_color {
+    use sea_orm::entity::prelude::*;
+
+    #[derive(Clone, Debug, PartialEq, Eq, DeriveEntityModel)]
+    #[sea_orm(table_name = "group_colors")]
+    pub struct Model {
+        #[sea_orm(primary_key, auto_increment = false)]
+        pub name: String,
+        pub color: String,
+    }
+
+    #[derive(Copy, Clone, Debug, EnumIter, DeriveRelation)]
+    pub enum Relation {}
+
+    impl ActiveModelBehavior for ActiveModel {}
+}

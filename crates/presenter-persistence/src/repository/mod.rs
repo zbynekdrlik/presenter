@@ -1,4 +1,5 @@
 mod bible;
+mod group_color;
 mod library;
 mod playlist;
 mod presentation;
