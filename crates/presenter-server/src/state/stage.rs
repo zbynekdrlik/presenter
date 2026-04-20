@@ -25,6 +25,10 @@ pub(crate) struct StageResolution {
     pub(crate) next_slide_id: Option<SlideId>,
     pub(crate) next: Option<StageDisplaySlide>,
     #[serde(skip_serializing_if = "Option::is_none")]
+    pub(crate) override_song_name: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(crate) next_song_name: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub(crate) current_index: Option<u32>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub(crate) total_slides: Option<u32>,
@@ -46,6 +50,8 @@ impl StageResolution {
             current: None,
             next_slide_id: None,
             next: None,
+            override_song_name: None,
+            next_song_name: None,
             current_index: None,
             total_slides: None,
             playlist_id: None,
@@ -94,6 +100,8 @@ pub(crate) fn stage_resolution_from_presentation(
             current: None,
             next_slide_id: None,
             next: None,
+            override_song_name: None,
+            next_song_name: None,
             current_index: None,
             total_slides: Some(total_slides),
             playlist_id: None,
@@ -128,6 +136,8 @@ pub(crate) fn stage_resolution_from_presentation(
         current: current_slide,
         next_slide_id: next_slide_id_value,
         next: next_slide,
+        override_song_name: None,
+        next_song_name: None,
         current_index: current_index_value,
         total_slides: Some(total_slides),
         playlist_id: None,
@@ -212,14 +222,16 @@ pub(crate) fn build_stage_snapshot(
         context.resolution.library_name.clone(),
         context
             .resolution
-            .presentation_name
+            .override_song_name
             .clone()
-            .map(|name| sanitize_song_title(&name)),
+            .or_else(|| context.resolution.presentation_name.clone()),
         context
             .resolution
-            .presentation_name
+            .override_song_name
             .as_deref()
+            .or(context.resolution.presentation_name.as_deref())
             .and_then(extract_song_number),
+        context.resolution.next_song_name.clone(),
         context.resolution.current_slide_id,
         context.resolution.current.clone(),
         context.resolution.next_slide_id,

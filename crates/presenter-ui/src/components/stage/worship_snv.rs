@@ -9,6 +9,8 @@ const CURRENT_MAX_FONT: f64 = 800.0;
 const NEXT_MAX_FONT: f64 = 500.0;
 const CURRENT_GROUP_MAX_FONT: f64 = 200.0;
 const NEXT_GROUP_MAX_FONT: f64 = 200.0;
+const CURRENT_SONG_MAX_FONT: f64 = 200.0;
+const NEXT_SONG_MAX_FONT: f64 = 200.0;
 
 #[component]
 pub fn WorshipSnv(
@@ -21,6 +23,8 @@ pub fn WorshipSnv(
     let next_text_ref = NodeRef::<leptos::html::Div>::new();
     let current_group_ref = NodeRef::<leptos::html::Div>::new();
     let next_group_ref = NodeRef::<leptos::html::Div>::new();
+    let current_song_ref = NodeRef::<leptos::html::Div>::new();
+    let next_song_ref = NodeRef::<leptos::html::Div>::new();
 
     let current_text = move || {
         ctx.snapshot
@@ -82,6 +86,20 @@ pub fn WorshipSnv(
     let current_group_text = move || current_group().unwrap_or_default();
     let next_group_text = move || next_group().unwrap_or_default();
 
+    let current_song_text = move || {
+        ctx.snapshot
+            .get()
+            .and_then(|s| s.song_name)
+            .unwrap_or_default()
+    };
+
+    let next_song_text = move || {
+        ctx.snapshot
+            .get()
+            .and_then(|s| s.next_song_name)
+            .unwrap_or_default()
+    };
+
     autofit_effect(current_text_ref, CURRENT_MAX_FONT, current_text.clone());
     autofit_effect(next_text_ref, NEXT_MAX_FONT, next_text.clone());
     autofit_effect(
@@ -90,6 +108,8 @@ pub fn WorshipSnv(
         current_group_text.clone(),
     );
     autofit_effect(next_group_ref, NEXT_GROUP_MAX_FONT, next_group_text.clone());
+    autofit_effect(current_song_ref, CURRENT_SONG_MAX_FONT, current_song_text.clone());
+    autofit_effect(next_song_ref, NEXT_SONG_MAX_FONT, next_song_text.clone());
 
     view! {
         <div class="stage-container" data-layout="worship-snv">
@@ -97,6 +117,13 @@ pub fn WorshipSnv(
                 <span class="stage__debug-label">"current-group"</span>
                 <div node_ref=current_group_ref class="stage__group-pill" style=current_group_style>
                     {current_group_text}
+                </div>
+            </div>
+
+            <div class="stage__current-song">
+                <span class="stage__debug-label">"current-song"</span>
+                <div node_ref=current_song_ref class="stage__song-name-text">
+                    {current_song_text}
                 </div>
             </div>
 
@@ -111,6 +138,13 @@ pub fn WorshipSnv(
                 <span class="stage__debug-label">"next-group"</span>
                 <div node_ref=next_group_ref class="stage__group-pill" style=next_group_style>
                     {next_group_text}
+                </div>
+            </div>
+
+            <div class="stage__next-song">
+                <span class="stage__debug-label">"next-song"</span>
+                <div node_ref=next_song_ref class="stage__song-name-text">
+                    {next_song_text}
                 </div>
             </div>
 

@@ -27,7 +27,7 @@ mod integrations;
 mod presentations;
 mod seed;
 pub(crate) mod slides;
-mod stage;
+pub(crate) mod stage;
 mod stage_display;
 #[cfg(test)]
 mod tests;
@@ -392,6 +392,28 @@ impl AppState {
 
         Self::apply_osc_settings(&state, &osc_bridge).await?;
         Self::apply_ableset_settings(&state, &ableset_bridge).await?;
+
+        // Re-broadcast stage snapshots whenever AbleSet switches songs
+        {
+            let mut rx = ableset_bridge.subscribe_song_changes();
+            let app = state.clone();
+            tokio::spawn(async move {
+                loop {
+                    match rx.recv().await {
+                        Ok(()) => {
+                            if let Err(err) = app.broadcast_stage_snapshots().await {
+                                tracing::warn!(
+                                    ?err,
+                                    "failed to broadcast stage after AbleSet song change"
+                                );
+                            }
+                        }
+                        Err(tokio::sync::broadcast::error::RecvError::Lagged(_)) => continue,
+                        Err(tokio::sync::broadcast::error::RecvError::Closed) => break,
+                    }
+                }
+            });
+        }
 
         state
             .configure_companion_service(companion_enabled, companion_port)

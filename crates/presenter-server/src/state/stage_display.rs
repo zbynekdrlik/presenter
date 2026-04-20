@@ -20,6 +20,7 @@ impl AppState {
         let Some(context) = self.build_stage_context().await? else {
             return Ok(None);
         };
+        let context = self.enrich_stage_context(&context).await;
         Ok(Some(build_stage_snapshot(layout, &context)))
     }
 

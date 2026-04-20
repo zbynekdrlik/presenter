@@ -90,9 +90,61 @@ impl AppState {
         else {
             return Ok(());
         };
-        let snapshot = build_stage_snapshot(layout, context);
+
+        let context = self.enrich_stage_context(context).await;
+        let snapshot = build_stage_snapshot(layout, &context);
         self.publish_stage_update(snapshot);
         Ok(())
+    }
+
+    /// Populates AbleSet song names on a stage context if not already set.
+    pub(super) async fn enrich_stage_context(&self, context: &StageContext) -> StageContext {
+        let mut context = context.clone();
+        if context.resolution.override_song_name.is_none() {
+            context.resolution.override_song_name = self.resolve_current_song_name().await;
+        }
+        if context.resolution.next_song_name.is_none() {
+            context.resolution.next_song_name =
+                self.resolve_next_song_name(&context.resolution).await;
+        }
+        context
+    }
+
+    async fn resolve_current_song_name(&self) -> Option<String> {
+        let snapshot = self.ableset_bridge.song_snapshot().await?;
+        Some(snapshot.name.clone())
+    }
+
+    pub(super) async fn resolve_next_song_name(
+        &self,
+        resolution: &StageResolution,
+    ) -> Option<String> {
+        // Try AbleSet first
+        if let Some(name) = self.ableset_bridge.next_song_name().await {
+            return Some(name);
+        }
+
+        // Fall back to playlist: find next presentation after current
+        let current_id = resolution.presentation_id?;
+        let entries = resolution.playlist_entries.as_ref()?;
+        let current_idx = entries
+            .iter()
+            .position(|e| e.presentation_id == Some(current_id))?;
+        let next_entry = entries.get(current_idx + 1)?;
+        if next_entry.entry_type != "presentation" {
+            return None;
+        }
+        // Look up the raw presentation name (with number prefix)
+        let next_id = next_entry.presentation_id?;
+        if let Ok(Some((_, _, presentation))) =
+            self.repository.fetch_presentation_detail(next_id).await
+        {
+            Some(presentation.name.clone())
+        } else if !next_entry.name.is_empty() {
+            Some(next_entry.name.clone())
+        } else {
+            None
+        }
     }
 
     pub(super) async fn build_stage_context(&self) -> anyhow::Result<Option<StageContext>> {
