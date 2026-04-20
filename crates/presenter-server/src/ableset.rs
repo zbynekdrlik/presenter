@@ -36,6 +36,7 @@ pub type DynAbleSetClient = Arc<dyn AbleSetClient>;
 struct AbleSetInner {
     status: RwLock<AbleSetStatusInner>,
     tracker: Mutex<Option<TrackerGuard>>,
+    song_changed_tx: tokio::sync::broadcast::Sender<()>,
 }
 
 struct AbleSetStatusInner {
@@ -143,8 +144,14 @@ impl AbleSetBridge {
                     follow_enabled: false,
                 }),
                 tracker: Mutex::new(None),
+                song_changed_tx: tokio::sync::broadcast::channel(16).0,
             }),
         }
+    }
+
+    /// Returns a receiver that fires whenever the active song changes.
+    pub fn subscribe_song_changes(&self) -> tokio::sync::broadcast::Receiver<()> {
+        self.inner.song_changed_tx.subscribe()
     }
 
     pub async fn apply_settings(&self, mut settings: AbleSetSettings) -> anyhow::Result<()> {
@@ -396,6 +403,7 @@ async fn run_tracker(
         http_port,
         song_prefix_length,
     } = config;
+    let mut prev_active_id: Option<String> = None;
     let mut interval = interval(Duration::from_millis(POLL_INTERVAL_MS));
     interval.set_missed_tick_behavior(MissedTickBehavior::Skip);
 
@@ -407,6 +415,7 @@ async fn run_tracker(
             _ = interval.tick() => {
                 match fetch_setlist(&client, &host, http_port).await {
                     Ok(Some(setlist)) => {
+                        let new_active_id = setlist.active_song_id.clone();
                         let mut status = inner.status.write().await;
                         status.setlist_songs = setlist.songs.iter().map(|s| {
                             let name = s.meta.as_ref()
@@ -455,6 +464,11 @@ async fn run_tracker(
                         } else {
                             status.last_song = None;
                             status.last_error = None;
+                        }
+                        drop(status);
+                        if new_active_id != prev_active_id {
+                            prev_active_id = new_active_id;
+                            let _ = inner.song_changed_tx.send(());
                         }
                     }
                     Ok(None) => {
