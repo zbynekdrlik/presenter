@@ -97,8 +97,8 @@ test("group pill renders with legacy color and correct text contrast", async ({
     }
   });
 
-  // Wait for the group pill to appear with the correct text
-  const groupPill = stagePage.locator(".stage__group-pill");
+  // Wait for the current group pill to appear with the correct text
+  const groupPill = stagePage.locator(".stage__current-group .stage__group-pill");
   await expect(groupPill).toBeVisible({ timeout: 10_000 });
   await expect(groupPill).toContainText("Vsetci", { timeout: 10_000 });
 
@@ -174,8 +174,8 @@ test("unknown group gets auto-generated color", async ({
     }
   });
 
-  // Wait for the group pill to appear with the unique group text
-  const groupPill = stagePage.locator(".stage__group-pill");
+  // Wait for the current group pill to appear with the unique group text
+  const groupPill = stagePage.locator(".stage__current-group .stage__group-pill");
   await expect(groupPill).toBeVisible({ timeout: 10_000 });
   await expect(groupPill).toContainText(uniqueGroup, { timeout: 10_000 });
 
