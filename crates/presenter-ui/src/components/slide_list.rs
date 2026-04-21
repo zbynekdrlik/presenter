@@ -1,3 +1,5 @@
+use std::collections::HashMap;
+
 use leptos::prelude::*;
 use presenter_core::{resolve_sequence, ResolvedSlide};
 use wasm_bindgen::JsCast;
@@ -5,59 +7,11 @@ use wasm_bindgen::JsCast;
 use crate::api;
 use crate::state::operator::OperatorState;
 use crate::state::AppContext;
+use crate::utils::color::group_pill_style;
 
-/// Format text with `<br>` for line breaks and highlight lines exceeding limit.
-fn format_multiline(text: &str, limit: u32) -> String {
-    text.lines()
-        .map(|line| {
-            let escaped = html_escape(line);
-            if limit > 0 && line.len() as u32 > limit {
-                format!("<span class=\"operator__slide-overflow\">{escaped}</span>")
-            } else {
-                escaped
-            }
-        })
-        .collect::<Vec<_>>()
-        .join("<br>")
-}
-
-fn html_escape(s: &str) -> String {
-    s.replace('&', "&amp;")
-        .replace('<', "&lt;")
-        .replace('>', "&gt;")
-        .replace('"', "&quot;")
-}
-
-fn field_has_warning(text: &str, limit: u32) -> bool {
-    limit > 0 && text.lines().any(|line| line.len() as u32 > limit)
-}
-
-fn slide_has_any_warning(main: &str, translation: &str, stage: &str, limit: u32) -> bool {
-    field_has_warning(main, limit)
-        || field_has_warning(translation, limit)
-        || field_has_warning(stage, limit)
-}
-
-/// Apply is-focused class to a slide card via DOM manipulation.
-/// This avoids reactive re-renders from focused_slide_id signal changes.
-fn apply_focused_class(slide_id: &str) {
-    let doc = crate::utils::window::document();
-    // Remove is-focused from all slide cards
-    if let Ok(cards) = doc.query_selector_all(".is-focused") {
-        for i in 0..cards.length() {
-            if let Some(el) = cards.item(i) {
-                if let Ok(el) = el.dyn_into::<web_sys::Element>() {
-                    let _ = el.class_list().remove_1("is-focused");
-                }
-            }
-        }
-    }
-    // Add is-focused to the target slide card
-    let selector = format!("[data-slide-id=\"{}\"]", slide_id);
-    if let Ok(Some(el)) = doc.query_selector(&selector) {
-        let _ = el.class_list().add_1("is-focused");
-    }
-}
+use super::slide_list_utils::{
+    apply_focused_class, field_has_warning, format_multiline, slide_has_any_warning,
+};
 
 /// Get a textarea/input value from the DOM by slide_id and field name.
 fn get_field_value(doc: &web_sys::Document, slide_id: &str, field: &str) -> String {
@@ -207,13 +161,17 @@ pub fn SlideList() -> impl IntoView {
     let ctx = use_ctx!(AppContext);
     let op = use_ctx!(OperatorState);
 
-    // Scroll active slide into view whenever the stage's current slide changes.
-    // This covers all trigger sources: click, keyboard arrows, Ableton follow,
-    // Companion, API — the visible list should always follow the stage.
-    //
-    // The `prev_id: Option<Option<String>>` signature is Leptos's convention:
-    // outer Option = "Effect has run before", inner Option = the previous return
-    // value. `prev_id.flatten()` collapses both into the actual prior slide id.
+    let group_colors = RwSignal::new(HashMap::<String, String>::new());
+    {
+        let group_colors = group_colors;
+        leptos::task::spawn_local(async move {
+            if let Ok(colors) = api::presentations::fetch_group_colors().await {
+                group_colors.set(colors);
+            }
+        });
+    }
+
+    // Scroll active slide into view when stage's current slide changes.
     {
         let stage_snapshot = ctx.stage_snapshot;
         Effect::new(move |prev_id: Option<Option<String>>| {
@@ -223,9 +181,6 @@ pub fn SlideList() -> impl IntoView {
             if current_id != prev_id.flatten() {
                 if let Some(ref slide_id) = current_id {
                     let slide_id = slide_id.clone();
-                    // Use forget() so the timeout isn't cancelled by being dropped.
-                    // 0ms defers until after Leptos has flushed the DOM update that
-                    // sets is-active on the new card.
                     gloo_timers::callback::Timeout::new(0, move || {
                         scroll_slide_into_view(&slide_id);
                     })
@@ -238,7 +193,6 @@ pub fn SlideList() -> impl IntoView {
 
     let trigger_slide = move |pres_id: String, slide_id: String, next_slide_id: Option<String>| {
         let playlist_id = ctx.selected_playlist_id.get_untracked();
-        // Set loading state for visual feedback
         op.triggering_slide_id.set(Some(slide_id.clone()));
         let triggering_signal = op.triggering_slide_id;
         leptos::task::spawn_local(async move {
@@ -249,7 +203,6 @@ pub fn SlideList() -> impl IntoView {
                 playlist_id,
             })
             .await;
-            // Clear loading state after API call completes
             triggering_signal.set(None);
         });
     };
@@ -377,9 +330,6 @@ pub fn SlideList() -> impl IntoView {
                     let is_live = mode == "live";
                     let is_edit = !is_live;
 
-                    // Track previous effective_group to decide whether the current slide
-                    // is showing the group for the first time ("explicit") or inheriting
-                    // it ("inherited").
                     let mut prev_effective: Option<String> = None;
 
                     raw_slides
@@ -591,13 +541,17 @@ pub fn SlideList() -> impl IntoView {
                                         </span>
                                     </div>
                                     {group_badge_text.clone().map(|g| {
+                                        let color_style = group_colors.get()
+                                            .get(&g)
+                                            .map(|c| group_pill_style(c))
+                                            .unwrap_or_default();
                                         let class = if group_badge_inherited {
                                             "operator__slide-group operator__slide-group--inherited"
                                         } else {
                                             "operator__slide-group"
                                         };
                                         view! {
-                                            <span class=class data-role="slide-group">{g}</span>
+                                            <span class=class style=color_style data-role="slide-group">{g}</span>
                                         }
                                     })}
                                     {is_edit.then(|| {

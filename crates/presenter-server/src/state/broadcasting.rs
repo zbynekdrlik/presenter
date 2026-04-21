@@ -107,6 +107,21 @@ impl AppState {
             context.resolution.next_song_name =
                 self.resolve_next_song_name(&context.resolution).await;
         }
+        // Resolve group colors
+        if let Some(ref mut slide) = context.resolution.current {
+            if let Some(ref name) = slide.group {
+                if slide.group_color.is_none() {
+                    slide.group_color = self.resolve_group_color(name).await;
+                }
+            }
+        }
+        if let Some(ref mut slide) = context.resolution.next {
+            if let Some(ref name) = slide.group {
+                if slide.group_color.is_none() {
+                    slide.group_color = self.resolve_group_color(name).await;
+                }
+            }
+        }
         context
     }
 

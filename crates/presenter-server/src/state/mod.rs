@@ -15,6 +15,7 @@
 //!    - `presentation_cache`: Cached presentation data for stage display
 //!    - `stage_layout`: Selected stage display layout code
 //!    - `ableset_cache`: Cached AbleSet library-to-playlist mapping
+//!    - `group_color_cache`: Cached group name → hex color mapping
 //!
 //! If future changes require holding multiple locks, establish and document a consistent
 //! acquisition order (e.g., alphabetical by field name) to prevent deadlocks.
@@ -98,6 +99,7 @@ pub struct AppState {
     ai_conversation: Arc<RwLock<Vec<ChatMessage>>>,
     ai_proxy: Arc<ProxyManager>,
     ndi_manager: Option<Arc<presenter_ndi::NdiManager>>,
+    group_color_cache: Arc<RwLock<HashMap<String, String>>>,
     pub local_public_ip: Arc<Option<String>>,
     #[cfg(test)]
     bible_ingestion_override: Option<std::sync::Arc<dyn TestBibleIngestion + Send + Sync>>,
@@ -179,6 +181,7 @@ impl AppState {
             ai_conversation: Arc::new(RwLock::new(Vec::new())),
             ai_proxy: Arc::new(ProxyManager::new(crate::ai::proxy::detect_deploy_dir())),
             ndi_manager,
+            group_color_cache: Arc::new(RwLock::new(HashMap::new())),
             local_public_ip,
             #[cfg(test)]
             bible_ingestion_override: None,
@@ -347,6 +350,14 @@ impl AppState {
             local_public_ip,
         );
         state.ensure_seed_library().await?;
+
+        // Pre-load group color cache from database
+        let group_colors = state
+            .repository
+            .load_all_group_colors()
+            .await
+            .unwrap_or_default();
+        *state.group_color_cache.write().await = group_colors;
         state.ensure_demo_playlist().await?;
         state.sync_resolume_hosts().await?;
         state.sync_android_stage_displays().await?;
@@ -685,6 +696,27 @@ impl AppState {
         let mut guard = self.presentation_cache.write().await;
         guard.insert(presentation_id, arc.clone());
         Ok(arc)
+    }
+
+    pub(crate) async fn get_all_group_colors(&self) -> HashMap<String, String> {
+        self.group_color_cache.read().await.clone()
+    }
+
+    pub(crate) async fn resolve_group_color(&self, name: &str) -> Option<String> {
+        {
+            let cache = self.group_color_cache.read().await;
+            if let Some(color) = cache.get(name) {
+                return Some(color.clone());
+            }
+        }
+        match self.repository.resolve_group_color(name).await {
+            Ok(color) => {
+                let mut cache = self.group_color_cache.write().await;
+                cache.insert(name.to_string(), color.clone());
+                Some(color)
+            }
+            Err(_) => None,
+        }
     }
 
     async fn cache_presentation_ref(&self, presentation: &Presentation) {
