@@ -1,3 +1,5 @@
+use std::collections::HashMap;
+
 use leptos::prelude::*;
 use presenter_core::{resolve_sequence, ResolvedSlide};
 use wasm_bindgen::JsCast;
@@ -5,6 +7,7 @@ use wasm_bindgen::JsCast;
 use crate::api;
 use crate::state::operator::OperatorState;
 use crate::state::AppContext;
+use crate::utils::color::group_pill_style;
 
 /// Format text with `<br>` for line breaks and highlight lines exceeding limit.
 fn format_multiline(text: &str, limit: u32) -> String {
@@ -206,6 +209,17 @@ fn capture_selection(ev: &web_sys::Event) -> (u32, u32) {
 pub fn SlideList() -> impl IntoView {
     let ctx = use_ctx!(AppContext);
     let op = use_ctx!(OperatorState);
+
+    // Fetch group colors once on mount
+    let group_colors = RwSignal::new(HashMap::<String, String>::new());
+    {
+        let group_colors = group_colors;
+        leptos::task::spawn_local(async move {
+            if let Ok(colors) = api::presentations::fetch_group_colors().await {
+                group_colors.set(colors);
+            }
+        });
+    }
 
     // Scroll active slide into view whenever the stage's current slide changes.
     // This covers all trigger sources: click, keyboard arrows, Ableton follow,
@@ -591,13 +605,17 @@ pub fn SlideList() -> impl IntoView {
                                         </span>
                                     </div>
                                     {group_badge_text.clone().map(|g| {
+                                        let color_style = group_colors.get()
+                                            .get(&g)
+                                            .map(|c| group_pill_style(c))
+                                            .unwrap_or_default();
                                         let class = if group_badge_inherited {
                                             "operator__slide-group operator__slide-group--inherited"
                                         } else {
                                             "operator__slide-group"
                                         };
                                         view! {
-                                            <span class=class data-role="slide-group">{g}</span>
+                                            <span class=class style=color_style data-role="slide-group">{g}</span>
                                         }
                                     })}
                                     {is_edit.then(|| {

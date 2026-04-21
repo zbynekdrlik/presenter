@@ -698,6 +698,10 @@ impl AppState {
         Ok(arc)
     }
 
+    pub(crate) async fn get_all_group_colors(&self) -> HashMap<String, String> {
+        self.group_color_cache.read().await.clone()
+    }
+
     pub(crate) async fn resolve_group_color(&self, name: &str) -> Option<String> {
         {
             let cache = self.group_color_cache.read().await;

@@ -7,6 +7,7 @@ use axum::{
 };
 use presenter_core::{LibraryId, Presentation, PresentationId, Slide, SlideId};
 use serde::{Deserialize, Serialize};
+use std::collections::HashMap;
 use tracing::instrument;
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -183,4 +184,11 @@ pub(super) async fn update_slide_content(
         )
         .await?;
     Ok(Json(updated))
+}
+
+#[instrument(skip_all)]
+pub(super) async fn get_group_colors(
+    State(state): State<AppState>,
+) -> Json<HashMap<String, String>> {
+    Json(state.get_all_group_colors().await)
 }

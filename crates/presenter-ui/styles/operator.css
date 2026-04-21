@@ -1368,8 +1368,6 @@ body.operator[data-mode="live"] .operator__slide-handle {
 }
 
 .operator__slide-group--inherited {
-  background: rgba(148, 163, 184, 0.15);
-  color: var(--operator-muted);
   opacity: 0.8;
 }
 

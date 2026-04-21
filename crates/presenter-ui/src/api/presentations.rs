@@ -1,6 +1,7 @@
 use super::{delete, delete_json, get_json, patch_no_content, post_form_data, post_json, ApiError};
 use presenter_core::{LibraryId, LibrarySummary, Presentation, Slide};
 use serde::{Deserialize, Serialize};
+use std::collections::HashMap;
 
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -188,4 +189,8 @@ pub async fn reorder_slides(pres_id: &str, slide_ids: Vec<String>) -> Result<Vec
         &ReorderSlidesRequest { slide_ids },
     )
     .await
+}
+
+pub async fn fetch_group_colors() -> Result<HashMap<String, String>, ApiError> {
+    get_json("/group-colors").await
 }

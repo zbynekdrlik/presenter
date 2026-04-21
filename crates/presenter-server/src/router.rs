@@ -225,6 +225,7 @@ pub fn build_router(state: AppState) -> Router {
         .route("/ndi/status", get(integrations::ndi::ndi_status))
         .route("/ndi/stream", get(integrations::ndi::mjpeg_ws))
         .route("/ndi/mjpeg", get(integrations::ndi::mjpeg_http))
+        .route("/group-colors", get(presentations::get_group_colors))
         .route(
             "/presentations/{id}",
             get(presentations::get_presentation_detail)
