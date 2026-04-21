@@ -9,6 +9,7 @@ pub mod presentation_list;
 pub mod presentation_modal;
 pub mod search;
 pub mod slide_list;
+mod slide_list_utils;
 pub mod stage;
 pub mod stage_preview;
 pub mod timer_panel;
