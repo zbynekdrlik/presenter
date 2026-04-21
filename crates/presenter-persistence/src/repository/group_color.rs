@@ -1,6 +1,6 @@
 use crate::entities::group_color;
 use anyhow::Context;
-use sea_orm::{ActiveModelTrait, ColumnTrait, EntityTrait, QueryFilter, Set};
+use sea_orm::{ColumnTrait, ConnectionTrait, EntityTrait, QueryFilter, Statement};
 use std::collections::HashMap;
 
 use super::Repository;
@@ -51,12 +51,13 @@ impl Repository {
         }
 
         let color = generate_color(name).to_string();
-        let model = group_color::ActiveModel {
-            name: Set(name.to_string()),
-            color: Set(color.clone()),
-        };
-        model
-            .insert(&self.db)
+        let backend = self.db.get_database_backend();
+        self.db
+            .execute(Statement::from_sql_and_values(
+                backend,
+                "INSERT OR IGNORE INTO group_colors (name, color) VALUES (?, ?)",
+                [name.into(), color.clone().into()],
+            ))
             .await
             .context("failed to insert generated group color")?;
 
