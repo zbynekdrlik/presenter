@@ -2526,6 +2526,7 @@ test.describe("WASM Operator Bible Tests", () => {
     const consoleMessages: string[] = [];
     page.on("console", (msg) => {
       if (msg.type() === "error" || msg.type() === "warning") {
+        if (msg.text().includes("crbug.com/981419")) return;
         consoleMessages.push(`[${msg.type()}] ${msg.text()}`);
       }
     });
@@ -2545,16 +2546,16 @@ test.describe("WASM Operator Bible Tests", () => {
     await expect(firstBook).toBeVisible({ timeout: 10_000 });
     await firstBook.click();
 
-    // Book should now be selected (collapsed view with "Change")
+    // Book should now be selected (collapsed view)
     await expect(
       bookList.locator('[data-role="book-item"][data-active="true"]'),
     ).toHaveCount(1);
 
-    // Type a new search term — the selected book should auto-deselect
+    // Type a new search term — list expands with matches, selection is preserved
     await filterInput.fill("Psalm");
     await page.waitForTimeout(300);
 
-    // Should see filtered book list (not the collapsed single-book view)
+    // Should see filtered book list
     const items = bookList.locator('[data-role="book-item"]');
     const count = await items.count();
     expect(count).toBeGreaterThan(0);
@@ -2566,14 +2567,6 @@ test.describe("WASM Operator Bible Tests", () => {
     );
     expect(hasPsalm).toBe(true);
 
-    // Clear filter — should show all books
-    await filterInput.fill("");
-    await page.waitForTimeout(300);
-    const allCount = await bookList
-      .locator('[data-role="book-item"]')
-      .count();
-    expect(allCount).toBeGreaterThan(10);
-
     expect(consoleMessages).toEqual([]);
   });
 
@@ -2583,6 +2576,7 @@ test.describe("WASM Operator Bible Tests", () => {
     const consoleMessages: string[] = [];
     page.on("console", (msg) => {
       if (msg.type() === "error" || msg.type() === "warning") {
+        if (msg.text().includes("crbug.com/981419")) return;
         consoleMessages.push(`[${msg.type()}] ${msg.text()}`);
       }
     });
@@ -2633,6 +2627,7 @@ test.describe("WASM Operator Bible Tests", () => {
     const consoleMessages: string[] = [];
     page.on("console", (msg) => {
       if (msg.type() === "error" || msg.type() === "warning") {
+        if (msg.text().includes("crbug.com/981419")) return;
         consoleMessages.push(`[${msg.type()}] ${msg.text()}`);
       }
     });
@@ -2694,6 +2689,7 @@ test.describe("WASM Operator Bible Tests", () => {
     const consoleMessages: string[] = [];
     page.on("console", (msg) => {
       if (msg.type() === "error" || msg.type() === "warning") {
+        if (msg.text().includes("crbug.com/981419")) return;
         consoleMessages.push(`[${msg.type()}] ${msg.text()}`);
       }
     });
@@ -2741,6 +2737,7 @@ test.describe("WASM Operator Bible Tests", () => {
     const consoleMessages: string[] = [];
     page.on("console", (msg) => {
       if (msg.type() === "error" || msg.type() === "warning") {
+        if (msg.text().includes("crbug.com/981419")) return;
         consoleMessages.push(`[${msg.type()}] ${msg.text()}`);
       }
     });
@@ -2765,6 +2762,7 @@ test.describe("WASM Operator Bible Tests", () => {
     const consoleMessages: string[] = [];
     page.on("console", (msg) => {
       if (msg.type() === "error" || msg.type() === "warning") {
+        if (msg.text().includes("crbug.com/981419")) return;
         consoleMessages.push(`[${msg.type()}] ${msg.text()}`);
       }
     });
@@ -2869,6 +2867,11 @@ test.describe("Bible workflow fixes (issue #256)", () => {
       }
     });
     await navigateToBible(page);
+
+    // Wait for books to load first
+    await expect(
+      page.locator('[data-role="book-item"]').first(),
+    ).toBeVisible({ timeout: 10_000 });
 
     // Type into filter to narrow
     await page.locator('[data-role="book-filter"]').fill("Ge");
