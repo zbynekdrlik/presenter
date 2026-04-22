@@ -1,4 +1,5 @@
 mod ai;
+mod api_stage;
 mod bible;
 mod features;
 mod integrations;
@@ -154,6 +155,7 @@ pub fn build_router(state: AppState) -> Router {
         .route("/stage/state", post(stage::update_stage_state))
         .route("/stage/clear", post(stage::clear_stage_state))
         .route("/stage/broadcast-live", get(stage::get_broadcast_live))
+        .route("/api/stage", put(api_stage::update_api_stage))
         .route(
             "/integrations/resolume/hosts",
             get(integrations::resolume::list_resolume_hosts)
