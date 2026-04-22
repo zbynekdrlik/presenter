@@ -1094,12 +1094,13 @@ async fn stage_displays_endpoint_returns_builtins() {
         .await
         .unwrap();
     let payload: Vec<StageDisplayLayout> = serde_json::from_slice(&bytes).unwrap();
-    assert_eq!(payload.len(), 6);
+    assert_eq!(payload.len(), 7);
     assert!(payload
         .iter()
         .any(|layout| layout.code == DEFAULT_STAGE_LAYOUT_CODE));
     assert!(payload.iter().any(|layout| layout.code == "ndi-fullscreen"));
     assert!(payload.iter().any(|layout| layout.code == "bible"));
+    assert!(payload.iter().any(|layout| layout.code == "api"));
 
     // /stage now serves the WASM shell (or 503 if dist/ not built).
     // In unit tests without a Trunk build, it returns 503 with a fallback message.
