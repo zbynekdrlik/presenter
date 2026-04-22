@@ -80,6 +80,11 @@ impl AppState {
 
     async fn publish_stage_context(&self, context: &StageContext) -> anyhow::Result<()> {
         let code = self.stage_layout_code().await;
+        // The "api" layout is driven by PUT /api/stage, not by internal state.
+        // Skip normal broadcasting to avoid overwriting API-pushed data.
+        if code == "api" {
+            return Ok(());
+        }
         let mut layouts = StageDisplayLayout::built_in()
             .into_iter()
             .map(|layout| (layout.code.clone(), layout))
