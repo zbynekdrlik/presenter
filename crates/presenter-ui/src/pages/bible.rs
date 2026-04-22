@@ -391,23 +391,26 @@ fn BookList() -> impl IntoView {
                 let selected_chapter = bs.selected_chapter;
                 let verse_start = bs.verse_start;
                 let verse_end = bs.verse_end;
+                let book_filter = bs.book_filter;
 
-                // If a book is already selected, collapse the list to just that book
-                if let Some(selected) = selected_book.get() {
-                    return view! {
-                        <div class="operator__list-item">
-                            <button
-                                type="button"
-                                class="operator__list-button"
-                                data-role="book-item"
-                                data-active="true"
-                                on:click=move |_| { selected_book.set(None); }
-                            >
-                                <span class="operator__list-label">{selected.book.clone()}</span>
-                                <span class="operator__list-meta">"Change"</span>
-                            </button>
-                        </div>
-                    }.into_any();
+                // When a book is selected AND the filter is empty, collapse
+                // the list to show just the selected book. Typing in the
+                // filter expands the list again with matching books.
+                let filter_value = book_filter.get();
+                if filter_value.is_empty() {
+                    if let Some(selected) = selected_book.get() {
+                        return view! {
+                            <div class="operator__list-item">
+                                <div
+                                    class="operator__list-button"
+                                    data-role="book-item"
+                                    data-active="true"
+                                >
+                                    <span class="operator__list-label">{selected.book.clone()}</span>
+                                </div>
+                            </div>
+                        }.into_any();
+                    }
                 }
 
                 if filtered.is_empty() {
@@ -438,6 +441,17 @@ fn BookList() -> impl IntoView {
                             let code = code.clone();
                             let verse_counts = verse_counts.clone();
                             move |_| {
+                                // Preserve chapter/verse if they fit the new book.
+                                let current_chapter = selected_chapter.get_untracked();
+                                let current_v_start = verse_start.get_untracked();
+                                let current_v_end = verse_end.get_untracked();
+                                let clamped = crate::state::bible::clamp_selection(
+                                    chapter_count,
+                                    &verse_counts,
+                                    current_chapter,
+                                    current_v_start,
+                                    current_v_end,
+                                );
                                 selected_book.set(Some(SelectedBook {
                                     book: book_name.clone(),
                                     code: code.clone(),
@@ -445,9 +459,12 @@ fn BookList() -> impl IntoView {
                                     chapter_count,
                                     verse_counts: verse_counts.clone(),
                                 }));
-                                selected_chapter.set(1);
-                                verse_start.set(1);
-                                verse_end.set(None);
+                                selected_chapter.set(clamped.chapter);
+                                verse_start.set(clamped.verse_start);
+                                verse_end.set(clamped.verse_end);
+                                // Clear the filter so the list collapses and
+                                // is ready for the next search.
+                                book_filter.set(String::new());
                             }
                         };
 
