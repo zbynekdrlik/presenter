@@ -165,6 +165,36 @@ pub fn BiblePage() -> impl IntoView {
         });
     }
 
+    // Debounced auto-load: when chapter / verse_start / verse_end change, wait
+    // 300ms then resolve the passage. Rapid typing only fires one request when
+    // the user stops.
+    {
+        use std::cell::RefCell;
+        use std::rc::Rc;
+        let bs_inner = bs.clone();
+        let chapter_sig = bs.selected_chapter;
+        let v_start_sig = bs.verse_start;
+        let v_end_sig = bs.verse_end;
+        let pending: Rc<RefCell<Option<gloo_timers::callback::Timeout>>> =
+            Rc::new(RefCell::new(None));
+        Effect::new(move |prev: Option<()>| {
+            // Track the three signals.
+            let _c = chapter_sig.get();
+            let _vs = v_start_sig.get();
+            let _ve = v_end_sig.get();
+            // Skip the very first run (initial signal reads, not a user change).
+            if prev.is_none() {
+                return;
+            }
+            // Replace any pending timer with a new one.
+            let bs_for_timer = bs_inner.clone();
+            let new_timer = gloo_timers::callback::Timeout::new(300, move || {
+                load_passage(&bs_for_timer, false);
+            });
+            *pending.borrow_mut() = Some(new_timer);
+        });
+    }
+
     // Sync data-bible-tab on body for CSS
     {
         let bible_tab = bs.bible_tab;
@@ -571,84 +601,98 @@ fn ReferenceInputs() -> impl IntoView {
     }
 }
 
-#[component]
-fn LoadButton() -> impl IntoView {
-    let bs = use_ctx!(BibleState);
+/// Resolve the currently-selected passage and update state. Called both by
+/// the manual Load button and the debounced auto-load effect. Silently no-ops
+/// when the selection is incomplete (so auto-load fires early in typing
+/// don't error-toast the user).
+fn load_passage(bs: &BibleState, show_toast_on_missing: bool) {
     let ctx = use_ctx!(AppContext);
 
-    let on_load = move |_| {
-        let selected_book = bs.selected_book.get_untracked();
-        let Some(book) = selected_book else {
+    let Some(book) = bs.selected_book.get_untracked() else {
+        if show_toast_on_missing {
             ctx.show_toast("Select a book first", "error");
-            return;
-        };
-        let main_trans = bs.selected_translation.get_untracked();
-        let Some(main_code) = main_trans else {
+        }
+        return;
+    };
+    let Some(main_code) = bs.selected_translation.get_untracked() else {
+        if show_toast_on_missing {
             ctx.show_toast("Select a translation first", "error");
-            return;
-        };
-        let secondary = bs.secondary_translation.get_untracked();
-        let chapter = bs.selected_chapter.get_untracked();
-        let v_start = bs.verse_start.get_untracked();
-        let v_end = bs.verse_end.get_untracked();
-        let char_limit = bs.character_limit.get_untracked();
+        }
+        return;
+    };
+    let secondary = bs.secondary_translation.get_untracked();
+    let chapter = bs.selected_chapter.get_untracked();
+    let v_start = bs.verse_start.get_untracked();
+    let v_end = bs.verse_end.get_untracked();
+    let char_limit = bs.character_limit.get_untracked();
 
-        let slides = bs.slides;
-        let loading = bs.loading_slides;
-        let selected_ids = bs.selected_slide_ids;
-        let toast_message = ctx.toast_message;
-        let toast_variant = ctx.toast_variant;
+    let slides = bs.slides;
+    let loading = bs.loading_slides;
+    let selected_ids = bs.selected_slide_ids;
+    let toast_message = ctx.toast_message;
+    let toast_variant = ctx.toast_variant;
 
-        loading.set(true);
-        selected_ids.set(std::collections::HashSet::new());
+    loading.set(true);
+    selected_ids.set(std::collections::HashSet::new());
 
-        // Build history label
-        let label = if let Some(ve) = v_end {
-            format!("{} {}:{}-{}", book.book, chapter, v_start, ve)
-        } else {
-            format!("{} {}:{}", book.book, chapter, v_start)
-        };
-        let history_entry = LoadedPassage {
-            book: book.book.clone(),
-            book_code: book.code.clone(),
-            book_number: book.number,
-            chapter,
-            verse_start: v_start,
-            verse_end: v_end,
-            translation_code: main_code.clone(),
-            label,
-        };
+    let label = if let Some(ve) = v_end {
+        format!("{} {}:{}-{}", book.book, chapter, v_start, ve)
+    } else {
+        format!("{} {}:{}", book.book, chapter, v_start)
+    };
+    let history_entry = LoadedPassage {
+        book: book.book.clone(),
+        book_code: book.code.clone(),
+        book_number: book.number,
+        chapter,
+        verse_start: v_start,
+        verse_end: v_end,
+        translation_code: main_code.clone(),
+        label,
+    };
 
-        let req = bible::ResolveRequest {
-            main_translation: main_code,
-            secondary_translation: secondary.filter(|s| !s.is_empty()),
-            book: book.book,
-            book_code: Some(book.code),
-            chapter,
-            verse_start: v_start,
-            verse_end: v_end,
-            character_limit: Some(char_limit),
-        };
+    let req = bible::ResolveRequest {
+        main_translation: main_code,
+        secondary_translation: secondary.filter(|s| !s.is_empty()),
+        book: book.book,
+        book_code: Some(book.code),
+        chapter,
+        verse_start: v_start,
+        verse_end: v_end,
+        character_limit: Some(char_limit),
+    };
 
-        let history_signal = bs.loaded_passages_history;
-        leptos::task::spawn_local(async move {
-            match bible::resolve_slides(&req).await {
-                Ok(resp) => {
-                    slides.set(resp.slides);
-                    // Push to history on successful load
-                    history_signal.update(|history| {
-                        history.retain(|p| p.label != history_entry.label);
-                        history.insert(0, history_entry);
-                        history.truncate(12);
-                    });
-                }
-                Err(e) => {
+    let history_signal = bs.loaded_passages_history;
+    leptos::task::spawn_local(async move {
+        match bible::resolve_slides(&req).await {
+            Ok(resp) => {
+                slides.set(resp.slides);
+                history_signal.update(|history| {
+                    history.retain(|p| p.label != history_entry.label);
+                    history.insert(0, history_entry);
+                    history.truncate(12);
+                });
+            }
+            Err(e) => {
+                if show_toast_on_missing {
                     toast_variant.set("error".to_string());
                     toast_message.set(Some(format!("Failed to load passage: {e}")));
                 }
             }
-            loading.set(false);
-        });
+        }
+        loading.set(false);
+    });
+}
+
+#[component]
+fn LoadButton() -> impl IntoView {
+    let bs = use_ctx!(BibleState);
+
+    let on_load = {
+        let bs = bs.clone();
+        move |_| {
+            load_passage(&bs, true);
+        }
     };
 
     let is_disabled = move || {
