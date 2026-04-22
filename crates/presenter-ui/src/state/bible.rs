@@ -123,3 +123,120 @@ impl Default for BibleState {
         Self::new()
     }
 }
+
+/// Result of clamping a chapter/verse selection against a book's structure.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ClampedSelection {
+    pub chapter: u16,
+    pub verse_start: u16,
+    pub verse_end: Option<u16>,
+}
+
+/// Clamp chapter/verse values against a book's chapter and verse counts.
+///
+/// Preserves values when they fit; clamps when they don't. If `verse_end`
+/// becomes less than or equal to `verse_start`, returns `verse_end = None`
+/// (single-verse semantics).
+///
+/// `chapter_count` is the number of chapters in the book (1-based max chapter).
+/// `verse_counts` must have one entry per chapter, indexed by `chapter - 1`.
+pub fn clamp_selection(
+    chapter_count: u16,
+    verse_counts: &[u16],
+    chapter: u16,
+    verse_start: u16,
+    verse_end: Option<u16>,
+) -> ClampedSelection {
+    if chapter_count == 0 || verse_counts.is_empty() {
+        return ClampedSelection {
+            chapter: 1,
+            verse_start: 1,
+            verse_end: None,
+        };
+    }
+
+    let clamped_chapter = chapter.clamp(1, chapter_count);
+    let idx = (clamped_chapter - 1) as usize;
+    let max_verse = verse_counts.get(idx).copied().unwrap_or(1).max(1);
+
+    let clamped_start = verse_start.clamp(1, max_verse);
+
+    let clamped_end = match verse_end {
+        Some(end) => {
+            let bounded = end.min(max_verse);
+            if bounded <= clamped_start {
+                None
+            } else {
+                Some(bounded)
+            }
+        }
+        None => None,
+    };
+
+    ClampedSelection {
+        chapter: clamped_chapter,
+        verse_start: clamped_start,
+        verse_end: clamped_end,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn preserves_values_when_they_fit() {
+        let result = clamp_selection(50, &vec![31; 50], 3, 5, Some(10));
+        assert_eq!(
+            result,
+            ClampedSelection {
+                chapter: 3,
+                verse_start: 5,
+                verse_end: Some(10),
+            }
+        );
+    }
+
+    #[test]
+    fn clamps_chapter_when_too_high() {
+        let result = clamp_selection(5, &vec![20; 5], 10, 3, Some(7));
+        assert_eq!(result.chapter, 5);
+        assert_eq!(result.verse_start, 3);
+        assert_eq!(result.verse_end, Some(7));
+    }
+
+    #[test]
+    fn clamps_verse_start_when_chapter_has_fewer_verses() {
+        let result = clamp_selection(5, &vec![10, 5, 10, 10, 10], 2, 8, None);
+        assert_eq!(result.chapter, 2);
+        assert_eq!(result.verse_start, 5);
+        assert_eq!(result.verse_end, None);
+    }
+
+    #[test]
+    fn clamps_verse_end_to_chapter_max() {
+        let result = clamp_selection(5, &vec![10, 5, 10, 10, 10], 2, 1, Some(20));
+        assert_eq!(result.verse_start, 1);
+        assert_eq!(result.verse_end, Some(5));
+    }
+
+    #[test]
+    fn clears_verse_end_when_it_collapses_to_verse_start() {
+        let result = clamp_selection(5, &vec![10, 5, 10, 10, 10], 2, 5, Some(20));
+        assert_eq!(result.verse_start, 5);
+        assert_eq!(result.verse_end, None);
+    }
+
+    #[test]
+    fn returns_defaults_for_empty_book() {
+        let result = clamp_selection(0, &[], 3, 5, Some(10));
+        assert_eq!(
+            result,
+            ClampedSelection {
+                chapter: 1,
+                verse_start: 1,
+                verse_end: None,
+            }
+        );
+    }
+}
