@@ -173,6 +173,7 @@ pub fn BiblePage() -> impl IntoView {
         use std::cell::RefCell;
         use std::rc::Rc;
         let bs_inner = bs.clone();
+        let ctx_inner = ctx.clone();
         let chapter_sig = bs.selected_chapter;
         let v_start_sig = bs.verse_start;
         let v_end_sig = bs.verse_end;
@@ -189,8 +190,9 @@ pub fn BiblePage() -> impl IntoView {
             }
             // Replace any pending timer with a new one.
             let bs_for_timer = bs_inner.clone();
+            let ctx_for_timer = ctx_inner.clone();
             let new_timer = gloo_timers::callback::Timeout::new(300, move || {
-                load_passage(&bs_for_timer, false);
+                load_passage(&bs_for_timer, &ctx_for_timer, false);
             });
             *pending.borrow_mut() = Some(new_timer);
         });
@@ -606,9 +608,7 @@ fn ReferenceInputs() -> impl IntoView {
 /// the manual Load button and the debounced auto-load effect. Silently no-ops
 /// when the selection is incomplete (so auto-load fires early in typing
 /// don't error-toast the user).
-fn load_passage(bs: &BibleState, show_toast_on_missing: bool) {
-    let ctx = use_ctx!(AppContext);
-
+fn load_passage(bs: &BibleState, ctx: &AppContext, show_toast_on_missing: bool) {
     let Some(book) = bs.selected_book.get_untracked() else {
         if show_toast_on_missing {
             ctx.show_toast("Select a book first", "error");
@@ -632,6 +632,7 @@ fn load_passage(bs: &BibleState, show_toast_on_missing: bool) {
     let selected_ids = bs.selected_slide_ids;
     let toast_message = ctx.toast_message;
     let toast_variant = ctx.toast_variant;
+    let show_errors = show_toast_on_missing;
 
     loading.set(true);
     selected_ids.set(std::collections::HashSet::new());
@@ -675,7 +676,7 @@ fn load_passage(bs: &BibleState, show_toast_on_missing: bool) {
                 });
             }
             Err(e) => {
-                if show_toast_on_missing {
+                if show_errors {
                     toast_variant.set("error".to_string());
                     toast_message.set(Some(format!("Failed to load passage: {e}")));
                 }
@@ -688,11 +689,13 @@ fn load_passage(bs: &BibleState, show_toast_on_missing: bool) {
 #[component]
 fn LoadButton() -> impl IntoView {
     let bs = use_ctx!(BibleState);
+    let ctx = use_ctx!(AppContext);
 
     let on_load = {
         let bs = bs.clone();
+        let ctx = ctx.clone();
         move |_| {
-            load_passage(&bs, true);
+            load_passage(&bs, &ctx, true);
         }
     };
 

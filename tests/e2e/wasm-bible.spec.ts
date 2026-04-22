@@ -3002,21 +3002,23 @@ test.describe("Bible workflow fixes (issue #256)", () => {
     });
     await navigateToBible(page);
 
-    // Select first book
+    // Wait for translation to auto-select (first translation in list)
+    await expect(page.locator('[data-role="main-translation"]')).toHaveValue(
+      /.+/,
+      { timeout: 10_000 },
+    );
+
     const firstBook = page.locator('[data-role="book-item"]').first();
     await expect(firstBook).toBeVisible({ timeout: 10_000 });
     await firstBook.click();
 
-    // Change verse_end - auto-load should fire after debounce
+    // Change verse_end — auto-load should fire after 300ms debounce
     await page.locator('[data-role="verse-end"]').fill("2");
     await page.locator('[data-role="verse-end"]').press("Tab");
 
-    // Wait for slides to appear without clicking the Load button.
-    // Different selectors possible; try both.
-    const slideLocator = page.locator(
-      '[data-role="bible-slide"], [data-role="slide-item"]',
-    );
-    await expect(slideLocator.first()).toBeVisible({ timeout: 10_000 });
+    // Wait for slides to appear without clicking the Load button
+    const slideLocator = page.locator('[data-role="slide-card"]');
+    await expect(slideLocator.first()).toBeVisible({ timeout: 15_000 });
 
     expect(consoleMessages).toEqual([]);
   });
