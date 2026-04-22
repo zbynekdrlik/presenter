@@ -40,6 +40,11 @@ async function openApiStage(context: BrowserContext) {
     () => window.__presenterStageConnectionState === "connected",
     { timeout: 30_000 },
   );
+  // Wait for the WASM client to fetch and apply the "api" layout code
+  await stagePage.waitForFunction(
+    () => window.__presenterStageLayout === "api",
+    { timeout: 10_000 },
+  );
   return stagePage;
 }
 
@@ -226,6 +231,16 @@ test("API stage does not interfere with normal stage", async ({
     () => window.__presenterStageConnectionState === "connected",
     { timeout: 30_000 },
   );
+  // Wait for layout to be applied
+  await normalPage.waitForFunction(
+    () => window.__presenterStageLayout === "worship-snv",
+    { timeout: 10_000 },
+  );
+
+  // Re-trigger the slide to ensure snapshot is sent after page is connected
+  await request.post(new URL("/stage/state", baseURL).toString(), {
+    data: { presentationId, currentSlideId: slideId },
+  });
 
   // Verify normal stage shows normal text
   const normalText = normalPage.locator(".stage__current-text");
