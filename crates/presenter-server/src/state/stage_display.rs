@@ -11,6 +11,9 @@ impl AppState {
         &self,
         layout_code: &str,
     ) -> anyhow::Result<Option<StageDisplaySnapshot>> {
+        if layout_code == "api" {
+            return Ok(Some(self.api_stage_snapshot().await));
+        }
         let layout = StageDisplayLayout::built_in()
             .into_iter()
             .find(|layout| layout.code == layout_code);
@@ -31,6 +34,9 @@ impl AppState {
             let guard = self.stage_layout.read().await;
             guard.clone()
         };
+        if code == "api" {
+            return Ok(Some(self.api_stage_snapshot().await));
+        }
         self.stage_display_snapshot(&code).await
     }
 
