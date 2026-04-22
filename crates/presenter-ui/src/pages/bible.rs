@@ -355,19 +355,13 @@ fn TranslationSelectors() -> impl IntoView {
 fn BookFilter() -> impl IntoView {
     let bs = use_ctx!(BibleState);
     let book_filter = bs.book_filter;
-    let selected_book = bs.selected_book;
 
     let on_input = move |ev: web_sys::Event| {
         let target = ev
             .target()
             .and_then(|t| t.dyn_into::<web_sys::HtmlInputElement>().ok());
         if let Some(input) = target {
-            let val = input.value();
-            book_filter.set(val.clone());
-            // Auto-deselect current book when user starts typing a new search
-            if !val.is_empty() && selected_book.get_untracked().is_some() {
-                selected_book.set(None);
-            }
+            book_filter.set(input.value());
         }
     };
 
