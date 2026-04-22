@@ -47,6 +47,7 @@ impl StageDisplayLayout {
                 "Full viewport NDI video stream",
             ),
             Self::new("bible", "BIBLE", "Full-screen Bible passage display"),
+            Self::new("api", "API", "External API-driven stage display"),
         ]
     }
 
@@ -230,7 +231,7 @@ mod tests {
     #[test]
     fn built_in_layouts_cover_expected_variants() {
         let layouts = StageDisplayLayout::built_in();
-        assert_eq!(layouts.len(), 6);
+        assert_eq!(layouts.len(), 7);
         let codes: Vec<_> = layouts.iter().map(|layout| layout.code.as_str()).collect();
         assert!(codes.contains(&DEFAULT_STAGE_LAYOUT_CODE));
         assert!(codes.contains(&"worship-pp"));
@@ -238,5 +239,6 @@ mod tests {
         assert!(codes.contains(&"preach"));
         assert!(codes.contains(&"ndi-fullscreen"));
         assert!(codes.contains(&"bible"));
+        assert!(codes.contains(&"api"));
     }
 }
