@@ -107,21 +107,59 @@ pub fn BiblePage() -> impl IntoView {
         });
     }
 
-    // Load books when translation changes
+    // Load books when translation changes.
+    // If the currently-selected book exists in the new translation (matched
+    // by book code), preserve the selection and clamp chapter/verse against
+    // the new book's structure. Otherwise clear the selection.
     {
         let selected_translation = bs.selected_translation;
         let books = bs.books;
         let selected_book = bs.selected_book;
+        let selected_chapter = bs.selected_chapter;
+        let verse_start = bs.verse_start;
+        let verse_end = bs.verse_end;
         Effect::new(move || {
             let trans = selected_translation.get();
             if let Some(code) = trans {
-                let books = books;
-                let selected_book = selected_book;
                 leptos::task::spawn_local(async move {
-                    if let Ok(book_list) = bible::list_books(&code).await {
-                        books.set(book_list);
+                    let Ok(book_list) = bible::list_books(&code).await else {
+                        return;
+                    };
+                    let current = selected_book.get_untracked();
+                    let current_chapter = selected_chapter.get_untracked();
+                    let current_v_start = verse_start.get_untracked();
+                    let current_v_end = verse_end.get_untracked();
+                    books.set(book_list.clone());
+
+                    let Some(current) = current else {
+                        return;
+                    };
+                    // Find the same book (by code) in the new translation
+                    let Some(new_book) = book_list.iter().find(|b| b.code == current.code) else {
+                        // Book doesn't exist in new translation - clear selection
                         selected_book.set(None);
-                    }
+                        return;
+                    };
+                    let chapter_count = new_book.chapters.len() as u16;
+                    let verse_counts: Vec<u16> =
+                        new_book.chapters.iter().map(|c| c.verse_count).collect();
+                    let clamped = crate::state::bible::clamp_selection(
+                        chapter_count,
+                        &verse_counts,
+                        current_chapter,
+                        current_v_start,
+                        current_v_end,
+                    );
+                    selected_book.set(Some(SelectedBook {
+                        book: new_book.book.clone(),
+                        code: new_book.code.clone(),
+                        number: new_book.number,
+                        chapter_count,
+                        verse_counts,
+                    }));
+                    selected_chapter.set(clamped.chapter);
+                    verse_start.set(clamped.verse_start);
+                    verse_end.set(clamped.verse_end);
                 });
             }
         });
