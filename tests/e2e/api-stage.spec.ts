@@ -213,7 +213,7 @@ test("API stage does not interfere with normal stage", async ({
   normalPage.on("console", (msg) => {
     if (msg.type() === "error" || msg.type() === "warning") {
       // Ignore Chrome's subresource integrity preload warning (browser-level, not app)
-      if (msg.text().includes("integrity")) return;
+      if (msg.text().includes("crbug.com/981419")) return;
       consoleMessages.push(`[${msg.type()}] ${msg.text()}`);
     }
   });

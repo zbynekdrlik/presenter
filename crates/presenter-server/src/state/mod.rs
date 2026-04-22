@@ -758,49 +758,12 @@ impl AppState {
             .find(|l| l.code == "api")
             .expect("api layout must exist in built_in");
 
-        let current = if state.current_text.is_empty() && state.current_group.is_empty() {
-            None
-        } else {
-            let group = if state.current_group.is_empty() {
-                None
-            } else {
-                Some(state.current_group.clone())
-            };
-            let group_color = if let Some(ref name) = group {
-                self.resolve_group_color(name).await
-            } else {
-                None
-            };
-            Some(StageDisplaySlide {
-                main: state.current_text.clone(),
-                translation: String::new(),
-                stage: String::new(),
-                group,
-                group_color,
-            })
-        };
-
-        let next = if state.next_text.is_empty() && state.next_group.is_empty() {
-            None
-        } else {
-            let group = if state.next_group.is_empty() {
-                None
-            } else {
-                Some(state.next_group.clone())
-            };
-            let group_color = if let Some(ref name) = group {
-                self.resolve_group_color(name).await
-            } else {
-                None
-            };
-            Some(StageDisplaySlide {
-                main: state.next_text.clone(),
-                translation: String::new(),
-                stage: String::new(),
-                group,
-                group_color,
-            })
-        };
+        let current = self
+            .build_api_slide(&state.current_text, &state.current_group)
+            .await;
+        let next = self
+            .build_api_slide(&state.next_text, &state.next_group)
+            .await;
 
         let song_name = if state.current_song.is_empty() {
             None
@@ -841,6 +804,29 @@ impl AppState {
             None,           // playlist_name
             None,           // playlist_entries
         )
+    }
+
+    async fn build_api_slide(&self, text: &str, group_name: &str) -> Option<StageDisplaySlide> {
+        if text.is_empty() && group_name.is_empty() {
+            return None;
+        }
+        let group = if group_name.is_empty() {
+            None
+        } else {
+            Some(group_name.to_string())
+        };
+        let group_color = if let Some(ref name) = group {
+            self.resolve_group_color(name).await
+        } else {
+            None
+        };
+        Some(StageDisplaySlide {
+            main: text.to_string(),
+            translation: String::new(),
+            stage: String::new(),
+            group,
+            group_color,
+        })
     }
 
     async fn cache_presentation_ref(&self, presentation: &Presentation) {
