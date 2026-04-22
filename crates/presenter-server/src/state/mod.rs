@@ -49,8 +49,8 @@ use crate::{
 use chrono::Utc;
 use presenter_core::{
     BibleBroadcast, BibleSlideOutput, OscSettings, OscSettingsDraft, PlaylistId, Presentation,
-    PresentationId, Slide, SlideId, StageClientSnapshot, StageDisplayLayout, StageState,
-    TimersOverview, DEFAULT_STAGE_LAYOUT_CODE,
+    PresentationId, Slide, SlideId, StageClientSnapshot, StageDisplayLayout, StageDisplaySlide,
+    StageDisplaySnapshot, StageState, TimersOverview, DEFAULT_STAGE_LAYOUT_CODE,
 };
 use presenter_persistence::{DatabaseSettings, Repository};
 use std::{
@@ -74,6 +74,25 @@ use seed::sample_library;
 #[cfg(test)]
 pub use seed::TestBibleIngestion;
 use stage::{build_stage_playlist_entries, stage_resolution_from_presentation, StageResolution};
+
+/// External API-driven stage state. All fields default to empty strings.
+/// Missing or null JSON fields deserialize to "".
+#[derive(Debug, Clone, Default, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct ApiStageState {
+    #[serde(default)]
+    pub(crate) current_text: String,
+    #[serde(default)]
+    pub(crate) next_text: String,
+    #[serde(default)]
+    pub(crate) current_group: String,
+    #[serde(default)]
+    pub(crate) next_group: String,
+    #[serde(default)]
+    pub(crate) current_song: String,
+    #[serde(default)]
+    pub(crate) next_song: String,
+}
 
 #[derive(Clone)]
 pub struct AppState {
@@ -100,6 +119,7 @@ pub struct AppState {
     ai_proxy: Arc<ProxyManager>,
     ndi_manager: Option<Arc<presenter_ndi::NdiManager>>,
     group_color_cache: Arc<RwLock<HashMap<String, String>>>,
+    api_stage: Arc<RwLock<ApiStageState>>,
     pub local_public_ip: Arc<Option<String>>,
     #[cfg(test)]
     bible_ingestion_override: Option<std::sync::Arc<dyn TestBibleIngestion + Send + Sync>>,
@@ -182,6 +202,7 @@ impl AppState {
             ai_proxy: Arc::new(ProxyManager::new(crate::ai::proxy::detect_deploy_dir())),
             ndi_manager,
             group_color_cache: Arc::new(RwLock::new(HashMap::new())),
+            api_stage: Arc::new(RwLock::new(ApiStageState::default())),
             local_public_ip,
             #[cfg(test)]
             bible_ingestion_override: None,
@@ -717,6 +738,109 @@ impl AppState {
             }
             Err(_) => None,
         }
+    }
+
+    pub(crate) async fn update_api_stage(&self, state: ApiStageState) -> anyhow::Result<()> {
+        let snapshot = self.build_api_stage_snapshot(&state).await;
+        *self.api_stage.write().await = state;
+        self.live_hub.publish(LiveEvent::Stage { snapshot });
+        Ok(())
+    }
+
+    pub(crate) async fn api_stage_snapshot(&self) -> StageDisplaySnapshot {
+        let state = self.api_stage.read().await;
+        self.build_api_stage_snapshot(&state).await
+    }
+
+    async fn build_api_stage_snapshot(&self, state: &ApiStageState) -> StageDisplaySnapshot {
+        let layout = StageDisplayLayout::built_in()
+            .into_iter()
+            .find(|l| l.code == "api")
+            .expect("api layout must exist in built_in");
+
+        let current = if state.current_text.is_empty() && state.current_group.is_empty() {
+            None
+        } else {
+            let group = if state.current_group.is_empty() {
+                None
+            } else {
+                Some(state.current_group.clone())
+            };
+            let group_color = if let Some(ref name) = group {
+                self.resolve_group_color(name).await
+            } else {
+                None
+            };
+            Some(StageDisplaySlide {
+                main: state.current_text.clone(),
+                translation: String::new(),
+                stage: String::new(),
+                group,
+                group_color,
+            })
+        };
+
+        let next = if state.next_text.is_empty() && state.next_group.is_empty() {
+            None
+        } else {
+            let group = if state.next_group.is_empty() {
+                None
+            } else {
+                Some(state.next_group.clone())
+            };
+            let group_color = if let Some(ref name) = group {
+                self.resolve_group_color(name).await
+            } else {
+                None
+            };
+            Some(StageDisplaySlide {
+                main: state.next_text.clone(),
+                translation: String::new(),
+                stage: String::new(),
+                group,
+                group_color,
+            })
+        };
+
+        let song_name = if state.current_song.is_empty() {
+            None
+        } else {
+            Some(state.current_song.clone())
+        };
+        let next_song_name = if state.next_song.is_empty() {
+            None
+        } else {
+            Some(state.next_song.clone())
+        };
+
+        let now = Utc::now();
+        let timers = self
+            .load_or_init_timers(now)
+            .await
+            .map(|t| t.overview(now))
+            .unwrap_or_else(|_| TimersOverview::demo(now));
+
+        StageDisplaySnapshot::new(
+            layout,
+            now,
+            None,           // presentation_id
+            None,           // presentation_name
+            None,           // library_name
+            song_name,      // song_name
+            None,           // song_number
+            next_song_name, // next_song_name
+            None,           // current_slide_id
+            current,        // current
+            None,           // next_slide_id
+            next,           // next
+            timers,         // timers
+            None,           // latency_ms
+            None,           // current_position
+            None,           // total_slides
+            None,           // playlist_id
+            None,           // playlist_name
+            None,           // playlist_entries
+        )
     }
 
     async fn cache_presentation_ref(&self, presentation: &Presentation) {
