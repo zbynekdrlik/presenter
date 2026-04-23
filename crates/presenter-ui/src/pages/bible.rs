@@ -6,6 +6,7 @@ use crate::state::bible::{BibleState, LoadedPassage, SelectedBook};
 use crate::state::AppContext;
 
 use super::bible_controls::SelectionControls;
+use super::bible_prepared::{BiblePreparedTab, BiblePresentationModal, BibleSettingsTab};
 use super::bible_slides::BibleSlidesColumn;
 
 /// Bible page — 2-column layout matching the legacy Bible UI.
@@ -107,23 +108,93 @@ pub fn BiblePage() -> impl IntoView {
         });
     }
 
-    // Load books when translation changes
+    // Load books when translation changes.
+    // If the currently-selected book exists in the new translation (matched
+    // by book code), preserve the selection and clamp chapter/verse against
+    // the new book's structure. Otherwise clear the selection.
     {
         let selected_translation = bs.selected_translation;
         let books = bs.books;
         let selected_book = bs.selected_book;
+        let selected_chapter = bs.selected_chapter;
+        let verse_start = bs.verse_start;
+        let verse_end = bs.verse_end;
         Effect::new(move || {
             let trans = selected_translation.get();
             if let Some(code) = trans {
-                let books = books;
-                let selected_book = selected_book;
                 leptos::task::spawn_local(async move {
-                    if let Ok(book_list) = bible::list_books(&code).await {
-                        books.set(book_list);
+                    let Ok(book_list) = bible::list_books(&code).await else {
+                        return;
+                    };
+                    let current = selected_book.get_untracked();
+                    let current_chapter = selected_chapter.get_untracked();
+                    let current_v_start = verse_start.get_untracked();
+                    let current_v_end = verse_end.get_untracked();
+                    books.set(book_list.clone());
+
+                    let Some(current) = current else {
+                        return;
+                    };
+                    // Find the same book (by code) in the new translation
+                    let Some(new_book) = book_list.iter().find(|b| b.code == current.code) else {
+                        // Book doesn't exist in new translation - clear selection
                         selected_book.set(None);
-                    }
+                        return;
+                    };
+                    let chapter_count = new_book.chapters.len() as u16;
+                    let verse_counts: Vec<u16> =
+                        new_book.chapters.iter().map(|c| c.verse_count).collect();
+                    let clamped = crate::state::bible::clamp_selection(
+                        chapter_count,
+                        &verse_counts,
+                        current_chapter,
+                        current_v_start,
+                        current_v_end,
+                    );
+                    selected_book.set(Some(SelectedBook {
+                        book: new_book.book.clone(),
+                        code: new_book.code.clone(),
+                        number: new_book.number,
+                        chapter_count,
+                        verse_counts,
+                    }));
+                    selected_chapter.set(clamped.chapter);
+                    verse_start.set(clamped.verse_start);
+                    verse_end.set(clamped.verse_end);
                 });
             }
+        });
+    }
+
+    // Debounced auto-load: when chapter / verse_start / verse_end change, wait
+    // 300ms then resolve the passage. Rapid typing only fires one request when
+    // the user stops.
+    {
+        use std::cell::RefCell;
+        use std::rc::Rc;
+        let bs_inner = bs.clone();
+        let ctx_inner = ctx.clone();
+        let chapter_sig = bs.selected_chapter;
+        let v_start_sig = bs.verse_start;
+        let v_end_sig = bs.verse_end;
+        let pending: Rc<RefCell<Option<gloo_timers::callback::Timeout>>> =
+            Rc::new(RefCell::new(None));
+        Effect::new(move |prev: Option<()>| {
+            // Track the three signals.
+            let _c = chapter_sig.get();
+            let _vs = v_start_sig.get();
+            let _ve = v_end_sig.get();
+            // Skip the very first run (initial signal reads, not a user change).
+            if prev.is_none() {
+                return;
+            }
+            // Replace any pending timer with a new one.
+            let bs_for_timer = bs_inner.clone();
+            let ctx_for_timer = ctx_inner.clone();
+            let new_timer = gloo_timers::callback::Timeout::new(300, move || {
+                load_passage(&bs_for_timer, &ctx_for_timer, false);
+            });
+            *pending.borrow_mut() = Some(new_timer);
         });
     }
 
@@ -317,19 +388,13 @@ fn TranslationSelectors() -> impl IntoView {
 fn BookFilter() -> impl IntoView {
     let bs = use_ctx!(BibleState);
     let book_filter = bs.book_filter;
-    let selected_book = bs.selected_book;
 
     let on_input = move |ev: web_sys::Event| {
         let target = ev
             .target()
             .and_then(|t| t.dyn_into::<web_sys::HtmlInputElement>().ok());
         if let Some(input) = target {
-            let val = input.value();
-            book_filter.set(val.clone());
-            // Auto-deselect current book when user starts typing a new search
-            if !val.is_empty() && selected_book.get_untracked().is_some() {
-                selected_book.set(None);
-            }
+            book_filter.set(input.value());
         }
     };
 
@@ -359,21 +424,24 @@ fn BookList() -> impl IntoView {
                 let selected_chapter = bs.selected_chapter;
                 let verse_start = bs.verse_start;
                 let verse_end = bs.verse_end;
+                let book_filter = bs.book_filter;
 
-                // If a book is already selected, collapse the list to just that book
-                if let Some(selected) = selected_book.get() {
+                // When a book is selected AND the filter is empty, collapse
+                // the list to show just the selected book. Typing in the
+                // filter expands the list again with matching books.
+                let collapsed = selected_book
+                    .get()
+                    .filter(|_| book_filter.get().is_empty());
+                if let Some(selected) = collapsed {
                     return view! {
                         <div class="operator__list-item">
-                            <button
-                                type="button"
+                            <div
                                 class="operator__list-button"
                                 data-role="book-item"
                                 data-active="true"
-                                on:click=move |_| { selected_book.set(None); }
                             >
                                 <span class="operator__list-label">{selected.book.clone()}</span>
-                                <span class="operator__list-meta">"Change"</span>
-                            </button>
+                            </div>
                         </div>
                     }.into_any();
                 }
@@ -406,6 +474,17 @@ fn BookList() -> impl IntoView {
                             let code = code.clone();
                             let verse_counts = verse_counts.clone();
                             move |_| {
+                                // Preserve chapter/verse if they fit the new book.
+                                let current_chapter = selected_chapter.get_untracked();
+                                let current_v_start = verse_start.get_untracked();
+                                let current_v_end = verse_end.get_untracked();
+                                let clamped = crate::state::bible::clamp_selection(
+                                    chapter_count,
+                                    &verse_counts,
+                                    current_chapter,
+                                    current_v_start,
+                                    current_v_end,
+                                );
                                 selected_book.set(Some(SelectedBook {
                                     book: book_name.clone(),
                                     code: code.clone(),
@@ -413,9 +492,12 @@ fn BookList() -> impl IntoView {
                                     chapter_count,
                                     verse_counts: verse_counts.clone(),
                                 }));
-                                selected_chapter.set(1);
-                                verse_start.set(1);
-                                verse_end.set(None);
+                                selected_chapter.set(clamped.chapter);
+                                verse_start.set(clamped.verse_start);
+                                verse_end.set(clamped.verse_end);
+                                // Clear the filter so the list collapses and
+                                // is ready for the next search.
+                                book_filter.set(String::new());
                             }
                         };
 
@@ -522,84 +604,99 @@ fn ReferenceInputs() -> impl IntoView {
     }
 }
 
+/// Resolve the currently-selected passage and update state. Called by both
+/// the manual Load button and the debounced auto-load effect. Silently no-ops
+/// when the selection is incomplete. `show_errors` controls whether missing-
+/// selection and resolve errors surface as toasts (true for button, false for
+/// debounced auto-load to avoid toast spam while the user is still typing).
+fn load_passage(bs: &BibleState, ctx: &AppContext, show_errors: bool) {
+    let Some(book) = bs.selected_book.get_untracked() else {
+        if show_errors {
+            ctx.show_toast("Select a book first", "error");
+        }
+        return;
+    };
+    let Some(main_code) = bs.selected_translation.get_untracked() else {
+        if show_errors {
+            ctx.show_toast("Select a translation first", "error");
+        }
+        return;
+    };
+    let secondary = bs.secondary_translation.get_untracked();
+    let chapter = bs.selected_chapter.get_untracked();
+    let v_start = bs.verse_start.get_untracked();
+    let v_end = bs.verse_end.get_untracked();
+    let char_limit = bs.character_limit.get_untracked();
+
+    let slides = bs.slides;
+    let loading = bs.loading_slides;
+    let selected_ids = bs.selected_slide_ids;
+    let toast_message = ctx.toast_message;
+    let toast_variant = ctx.toast_variant;
+
+    loading.set(true);
+    selected_ids.set(std::collections::HashSet::new());
+
+    let label = if let Some(ve) = v_end {
+        format!("{} {}:{}-{}", book.book, chapter, v_start, ve)
+    } else {
+        format!("{} {}:{}", book.book, chapter, v_start)
+    };
+    let history_entry = LoadedPassage {
+        book: book.book.clone(),
+        book_code: book.code.clone(),
+        book_number: book.number,
+        chapter,
+        verse_start: v_start,
+        verse_end: v_end,
+        translation_code: main_code.clone(),
+        label,
+    };
+
+    let req = bible::ResolveRequest {
+        main_translation: main_code,
+        secondary_translation: secondary.filter(|s| !s.is_empty()),
+        book: book.book,
+        book_code: Some(book.code),
+        chapter,
+        verse_start: v_start,
+        verse_end: v_end,
+        character_limit: Some(char_limit),
+    };
+
+    let history_signal = bs.loaded_passages_history;
+    leptos::task::spawn_local(async move {
+        match bible::resolve_slides(&req).await {
+            Ok(resp) => {
+                slides.set(resp.slides);
+                history_signal.update(|history| {
+                    history.retain(|p| p.label != history_entry.label);
+                    history.insert(0, history_entry);
+                    history.truncate(12);
+                });
+            }
+            Err(e) => {
+                if show_errors {
+                    toast_variant.set("error".to_string());
+                    toast_message.set(Some(format!("Failed to load passage: {e}")));
+                }
+            }
+        }
+        loading.set(false);
+    });
+}
+
 #[component]
 fn LoadButton() -> impl IntoView {
     let bs = use_ctx!(BibleState);
     let ctx = use_ctx!(AppContext);
 
-    let on_load = move |_| {
-        let selected_book = bs.selected_book.get_untracked();
-        let Some(book) = selected_book else {
-            ctx.show_toast("Select a book first", "error");
-            return;
-        };
-        let main_trans = bs.selected_translation.get_untracked();
-        let Some(main_code) = main_trans else {
-            ctx.show_toast("Select a translation first", "error");
-            return;
-        };
-        let secondary = bs.secondary_translation.get_untracked();
-        let chapter = bs.selected_chapter.get_untracked();
-        let v_start = bs.verse_start.get_untracked();
-        let v_end = bs.verse_end.get_untracked();
-        let char_limit = bs.character_limit.get_untracked();
-
-        let slides = bs.slides;
-        let loading = bs.loading_slides;
-        let selected_ids = bs.selected_slide_ids;
-        let toast_message = ctx.toast_message;
-        let toast_variant = ctx.toast_variant;
-
-        loading.set(true);
-        selected_ids.set(std::collections::HashSet::new());
-
-        // Build history label
-        let label = if let Some(ve) = v_end {
-            format!("{} {}:{}-{}", book.book, chapter, v_start, ve)
-        } else {
-            format!("{} {}:{}", book.book, chapter, v_start)
-        };
-        let history_entry = LoadedPassage {
-            book: book.book.clone(),
-            book_code: book.code.clone(),
-            book_number: book.number,
-            chapter,
-            verse_start: v_start,
-            verse_end: v_end,
-            translation_code: main_code.clone(),
-            label,
-        };
-
-        let req = bible::ResolveRequest {
-            main_translation: main_code,
-            secondary_translation: secondary.filter(|s| !s.is_empty()),
-            book: book.book,
-            book_code: Some(book.code),
-            chapter,
-            verse_start: v_start,
-            verse_end: v_end,
-            character_limit: Some(char_limit),
-        };
-
-        let history_signal = bs.loaded_passages_history;
-        leptos::task::spawn_local(async move {
-            match bible::resolve_slides(&req).await {
-                Ok(resp) => {
-                    slides.set(resp.slides);
-                    // Push to history on successful load
-                    history_signal.update(|history| {
-                        history.retain(|p| p.label != history_entry.label);
-                        history.insert(0, history_entry);
-                        history.truncate(12);
-                    });
-                }
-                Err(e) => {
-                    toast_variant.set("error".to_string());
-                    toast_message.set(Some(format!("Failed to load passage: {e}")));
-                }
-            }
-            loading.set(false);
-        });
+    let on_load = {
+        let bs = bs.clone();
+        let ctx = ctx.clone();
+        move |_| {
+            load_passage(&bs, &ctx, true);
+        }
     };
 
     let is_disabled = move || {
@@ -622,366 +719,4 @@ fn LoadButton() -> impl IntoView {
 }
 
 // SelectionControls and AddToPresentationButtons are in bible_controls.rs
-
-// ---------------------------------------------------------------------------
-// Prepared tab
-// ---------------------------------------------------------------------------
-
-#[component]
-fn BiblePreparedTab() -> impl IntoView {
-    let bs = use_ctx!(BibleState);
-    let ctx = use_ctx!(AppContext);
-    let bible_tab = bs.bible_tab;
-    let presentations = bs.presentations;
-    let active_presentation_id = bs.active_presentation_id;
-
-    let on_create = {
-        let ctx = ctx.clone();
-        move |_| {
-            let window = crate::utils::window::window();
-            let name = match window.prompt_with_message("Presentation name:") {
-                Ok(Some(n)) if !n.trim().is_empty() => n.trim().to_string(),
-                _ => return,
-            };
-            let toast_message = ctx.toast_message;
-            let toast_variant = ctx.toast_variant;
-            leptos::task::spawn_local(async move {
-                match bible::create_presentation(&name).await {
-                    Ok(detail) => {
-                        let new_id = detail.id.clone();
-                        toast_variant.set("success".to_string());
-                        toast_message.set(Some(format!("Created \"{}\"", detail.name)));
-                        if let Ok(pres) = bible::list_presentations().await {
-                            presentations.set(pres);
-                        }
-                        active_presentation_id.set(Some(new_id));
-                    }
-                    Err(e) => {
-                        toast_variant.set("error".to_string());
-                        toast_message.set(Some(format!("Failed to create: {e}")));
-                    }
-                }
-            });
-        }
-    };
-
-    view! {
-        <div
-            class="bible__tab-panel"
-            data-bible-panel="prepared"
-            data-visible=move || if bible_tab.get() == "prepared" { "true" } else { "false" }
-        >
-            <div class="bible__prepared-header">
-                <h3>"Presentations"</h3>
-                <button
-                    type="button"
-                    class="operator__list-action"
-                    data-role="presentation-create"
-                    aria-label="Create presentation"
-                    on:click=on_create
-                >"+"</button>
-            </div>
-            <div class="bible__prepared-list" data-role="presentations-list">
-                {move || {
-                    let pres_list = presentations.get();
-                    if pres_list.is_empty() {
-                        view! {
-                            <p class="operator__slides-empty">"No Bible presentations yet."</p>
-                        }.into_any()
-                    } else {
-                        pres_list.into_iter().map(|p| {
-                            view! { <PresentationCard presentation=p /> }
-                        }).collect_view().into_any()
-                    }
-                }}
-            </div>
-        </div>
-    }
-}
-
-#[component]
-fn PresentationCard(presentation: bible::BiblePresentationSummary) -> impl IntoView {
-    let bs = use_ctx!(BibleState);
-    let active_presentation_id = bs.active_presentation_id;
-    let active_presentation_slides = bs.active_presentation_slides;
-
-    let id = presentation.id.clone();
-    let name = presentation.name.clone();
-    let count = presentation.slide_count;
-    let id_for_click = id.clone();
-    let id_for_edit = id.clone();
-    let name_for_edit = name.clone();
-
-    let is_active = {
-        let id = id.clone();
-        move || active_presentation_id.get().as_ref() == Some(&id)
-    };
-
-    let on_click = move |_| {
-        let id = id_for_click.clone();
-        active_presentation_id.set(Some(id.clone()));
-        leptos::task::spawn_local(async move {
-            if let Ok(detail) = bible::get_presentation(&id).await {
-                active_presentation_slides.set(detail.slides);
-            }
-        });
-    };
-
-    let on_edit = move |ev: web_sys::MouseEvent| {
-        ev.stop_propagation();
-        bs.modal_presentation_id.set(Some(id_for_edit.clone()));
-        bs.modal_presentation_name.set(name_for_edit.clone());
-    };
-
-    view! {
-        <div
-            class="operator__presentation-card"
-            class:is-active=is_active
-            data-presentation-id=id.clone()
-            data-role="presentation-card"
-            on:click=on_click
-        >
-            <div style="display:flex;justify-content:space-between;align-items:center;">
-                <strong>{name.clone()}</strong>
-                <button
-                    type="button"
-                    class="operator__presentation-action"
-                    data-role="presentation-edit"
-                    on:click=on_edit
-                    title="Edit presentation"
-                >"\u{270F}\u{FE0F}"</button>
-            </div>
-            <p>{format!("{} slide(s)", count)}</p>
-        </div>
-    }
-}
-
-#[component]
-fn BiblePresentationModal() -> impl IntoView {
-    let bs = use_ctx!(BibleState);
-    let ctx = use_ctx!(AppContext);
-    let modal_id = bs.modal_presentation_id;
-    let modal_name = bs.modal_presentation_name;
-
-    let is_open = move || modal_id.get().is_some();
-
-    let on_close = move |_: web_sys::MouseEvent| {
-        modal_id.set(None);
-        modal_name.set(String::new());
-    };
-
-    let on_name_input = move |ev: web_sys::Event| {
-        let target = ev
-            .target()
-            .and_then(|t| t.dyn_into::<web_sys::HtmlInputElement>().ok());
-        if let Some(input) = target {
-            modal_name.set(input.value());
-        }
-    };
-
-    let on_save = {
-        let ctx = ctx.clone();
-        move |ev: web_sys::SubmitEvent| {
-            ev.prevent_default();
-            let Some(id) = modal_id.get_untracked() else {
-                return;
-            };
-            let new_name = modal_name.get_untracked().trim().to_string();
-            if new_name.is_empty() {
-                return;
-            }
-            let presentations = bs.presentations;
-            let toast_message = ctx.toast_message;
-            let toast_variant = ctx.toast_variant;
-            leptos::task::spawn_local(async move {
-                match bible::rename_presentation(&id, &new_name).await {
-                    Ok(()) => {
-                        toast_variant.set("success".to_string());
-                        toast_message.set(Some("Renamed".to_string()));
-                        if let Ok(pres) = bible::list_presentations().await {
-                            presentations.set(pres);
-                        }
-                        modal_id.set(None);
-                        modal_name.set(String::new());
-                    }
-                    Err(e) => {
-                        toast_variant.set("error".to_string());
-                        toast_message.set(Some(format!("Rename failed: {e}")));
-                    }
-                }
-            });
-        }
-    };
-
-    let on_delete = {
-        let ctx = ctx.clone();
-        move |_: web_sys::MouseEvent| {
-            let Some(id) = modal_id.get_untracked() else {
-                return;
-            };
-            let window = crate::utils::window::window();
-            if let Ok(confirmed) = window.confirm_with_message("Delete this presentation?") {
-                if !confirmed {
-                    return;
-                }
-            }
-            let presentations = bs.presentations;
-            let active_id = bs.active_presentation_id;
-            let active_slides = bs.active_presentation_slides;
-            let toast_message = ctx.toast_message;
-            let toast_variant = ctx.toast_variant;
-            leptos::task::spawn_local(async move {
-                match bible::delete_presentation(&id).await {
-                    Ok(()) => {
-                        active_id.set(None);
-                        active_slides.set(Vec::new());
-                        toast_variant.set("success".to_string());
-                        toast_message.set(Some("Deleted".to_string()));
-                        if let Ok(pres) = bible::list_presentations().await {
-                            presentations.set(pres);
-                        }
-                        modal_id.set(None);
-                        modal_name.set(String::new());
-                    }
-                    Err(e) => {
-                        toast_variant.set("error".to_string());
-                        toast_message.set(Some(format!("Delete failed: {e}")));
-                    }
-                }
-            });
-        }
-    };
-
-    let on_backdrop = move |ev: web_sys::MouseEvent| {
-        // Close only if clicking the backdrop itself
-        let target = ev.target();
-        let current = ev.current_target();
-        if target == current {
-            modal_id.set(None);
-            modal_name.set(String::new());
-        }
-    };
-
-    view! {
-        <div
-            class="bible__modal-overlay"
-            data-role="presentation-modal"
-            style:display=move || if is_open() { "flex" } else { "none" }
-            on:click=on_backdrop
-        >
-            <form class="bible__modal" on:submit=on_save>
-                <h3>"Edit presentation"</h3>
-                    <label class="operator__field">
-                        <span>"Name"</span>
-                        <input
-                            type="text"
-                            data-role="modal-presentation-name"
-                            prop:value=move || modal_name.get()
-                            on:input=on_name_input
-                        />
-                    </label>
-                    <div class="bible__modal-actions">
-                        <button
-                            type="button"
-                            class="bible__modal-btn bible__modal-btn--danger"
-                            data-role="modal-delete"
-                            on:click=on_delete
-                        >"Delete"</button>
-                        <div class="bible__modal-actions-right">
-                            <button
-                                type="button"
-                                class="bible__modal-btn"
-                                data-role="modal-cancel"
-                                on:click=on_close
-                            >"Cancel"</button>
-                            <button
-                                type="submit"
-                                class="bible__modal-btn bible__modal-btn--primary"
-                                data-role="modal-save"
-                            >"Save"</button>
-                        </div>
-                    </div>
-            </form>
-        </div>
-    }
-}
-// ---------------------------------------------------------------------------
-// Settings tab
-// ---------------------------------------------------------------------------
-
-#[component]
-fn BibleSettingsTab() -> impl IntoView {
-    let bs = use_ctx!(BibleState);
-    let ctx = use_ctx!(AppContext);
-    let bible_tab = bs.bible_tab;
-    let character_limit = bs.character_limit;
-
-    let on_char_limit_change = move |ev: web_sys::Event| {
-        let target = ev
-            .target()
-            .and_then(|t| t.dyn_into::<web_sys::HtmlInputElement>().ok());
-        if let Some(input) = target {
-            if let Ok(val) = input.value().parse::<u32>() {
-                character_limit.set(val.clamp(1, 4000));
-            }
-        }
-    };
-
-    let on_save = {
-        let ctx = ctx.clone();
-        move |_| {
-            let limit = character_limit.get_untracked();
-            let main = bs.selected_translation.get_untracked();
-            let sec = bs.secondary_translation.get_untracked();
-            let toast_message = ctx.toast_message;
-            let toast_variant = ctx.toast_variant;
-
-            let draft = presenter_core::BiblePreferencesDraft {
-                main_translation: main,
-                secondary_translation: sec,
-                character_limit: Some(limit),
-            };
-
-            leptos::task::spawn_local(async move {
-                match bible::update_preferences(&draft).await {
-                    Ok(()) => {
-                        toast_variant.set("success".to_string());
-                        toast_message.set(Some("Preferences saved".to_string()));
-                    }
-                    Err(e) => {
-                        toast_variant.set("error".to_string());
-                        toast_message.set(Some(format!("Save failed: {e}")));
-                    }
-                }
-            });
-        }
-    };
-
-    view! {
-        <div
-            class="bible__tab-panel"
-            data-bible-panel="settings"
-            data-visible=move || if bible_tab.get() == "settings" { "true" } else { "false" }
-        >
-            <div class="operator__form-group">
-                <label class="operator__field">
-                    <span>"Character limit"</span>
-                    <input
-                        type="number"
-                        data-role="char-limit"
-                        min="1"
-                        max="4000"
-                        prop:value=move || character_limit.get().to_string()
-                        on:change=on_char_limit_change
-                    />
-                </label>
-                <button
-                    type="button"
-                    class="operator__list-action operator__list-action--primary"
-                    data-role="save-preferences"
-                    on:click=on_save
-                >"Save preferences"</button>
-            </div>
-        </div>
-    }
-}
+// BiblePreparedTab, PresentationCard, BiblePresentationModal, BibleSettingsTab are in bible_prepared.rs
