@@ -429,21 +429,21 @@ fn BookList() -> impl IntoView {
                 // When a book is selected AND the filter is empty, collapse
                 // the list to show just the selected book. Typing in the
                 // filter expands the list again with matching books.
-                let filter_value = book_filter.get();
-                if filter_value.is_empty() {
-                    if let Some(selected) = selected_book.get() {
-                        return view! {
-                            <div class="operator__list-item">
-                                <div
-                                    class="operator__list-button"
-                                    data-role="book-item"
-                                    data-active="true"
-                                >
-                                    <span class="operator__list-label">{selected.book.clone()}</span>
-                                </div>
+                let collapsed = selected_book
+                    .get()
+                    .filter(|_| book_filter.get().is_empty());
+                if let Some(selected) = collapsed {
+                    return view! {
+                        <div class="operator__list-item">
+                            <div
+                                class="operator__list-button"
+                                data-role="book-item"
+                                data-active="true"
+                            >
+                                <span class="operator__list-label">{selected.book.clone()}</span>
                             </div>
-                        }.into_any();
-                    }
+                        </div>
+                    }.into_any();
                 }
 
                 if filtered.is_empty() {
@@ -604,19 +604,20 @@ fn ReferenceInputs() -> impl IntoView {
     }
 }
 
-/// Resolve the currently-selected passage and update state. Called both by
+/// Resolve the currently-selected passage and update state. Called by both
 /// the manual Load button and the debounced auto-load effect. Silently no-ops
-/// when the selection is incomplete (so auto-load fires early in typing
-/// don't error-toast the user).
-fn load_passage(bs: &BibleState, ctx: &AppContext, show_toast_on_missing: bool) {
+/// when the selection is incomplete. `show_errors` controls whether missing-
+/// selection and resolve errors surface as toasts (true for button, false for
+/// debounced auto-load to avoid toast spam while the user is still typing).
+fn load_passage(bs: &BibleState, ctx: &AppContext, show_errors: bool) {
     let Some(book) = bs.selected_book.get_untracked() else {
-        if show_toast_on_missing {
+        if show_errors {
             ctx.show_toast("Select a book first", "error");
         }
         return;
     };
     let Some(main_code) = bs.selected_translation.get_untracked() else {
-        if show_toast_on_missing {
+        if show_errors {
             ctx.show_toast("Select a translation first", "error");
         }
         return;
@@ -632,7 +633,6 @@ fn load_passage(bs: &BibleState, ctx: &AppContext, show_toast_on_missing: bool) 
     let selected_ids = bs.selected_slide_ids;
     let toast_message = ctx.toast_message;
     let toast_variant = ctx.toast_variant;
-    let show_errors = show_toast_on_missing;
 
     loading.set(true);
     selected_ids.set(std::collections::HashSet::new());
