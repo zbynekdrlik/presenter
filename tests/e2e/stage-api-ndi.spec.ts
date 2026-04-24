@@ -92,3 +92,42 @@ test("api layout renders ApiStage wrapper with no NDI source active", async ({ p
 
   expect(consoleMessages).toEqual([]);
 });
+
+test("worship-snv layout is not affected by api stage changes", async ({ page }) => {
+  const consoleMessages: string[] = [];
+  const ALLOWED = [/integrity.*ignored.*preload/i, /ResizeObserver loop/i];
+  page.on("console", (msg) => {
+    if (msg.type() === "error" || msg.type() === "warning") {
+      const text = msg.text();
+      if (!ALLOWED.some((pattern) => pattern.test(text))) {
+        consoleMessages.push(`[${msg.type()}] ${text}`);
+      }
+    }
+  });
+
+  // Switch back to worship-snv
+  await page.request.post(
+    new URL("/stage/layout", baseURL).toString(),
+    { data: { code: "worship-snv" } },
+  );
+
+  await page.goto(new URL("/stage", baseURL).toString());
+  await page.waitForSelector('body[data-wasm-ready="true"]', {
+    timeout: 30_000,
+  });
+  await page.waitForSelector('body[data-layout-code="worship-snv"]', {
+    timeout: 10_000,
+  });
+
+  // No api wrapper
+  await expect(page.locator("div.stage-api")).toHaveCount(0);
+  await expect(page.locator("img.stage-api__ndi")).toHaveCount(0);
+
+  // Worship-snv slide text must NOT have a text-shadow (only api layout gets it)
+  const slideShadow = await page
+    .locator('div.stage-container[data-layout="worship-snv"] .stage__current-slide .stage__slide-text')
+    .evaluate((el) => window.getComputedStyle(el).textShadow);
+  expect(slideShadow).toBe("none");
+
+  expect(consoleMessages).toEqual([]);
+});
