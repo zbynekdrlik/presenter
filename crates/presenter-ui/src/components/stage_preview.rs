@@ -151,8 +151,8 @@ pub fn StagePreview() -> impl IntoView {
             .unwrap_or_else(|| "\u{2014}".to_string())
     };
 
-    autofit_effect(current_ref, PREVIEW_CURRENT_MAX_FONT, current_text.clone());
-    autofit_effect(next_ref, PREVIEW_NEXT_MAX_FONT, next_text.clone());
+    autofit_effect(current_ref, PREVIEW_CURRENT_MAX_FONT, current_text);
+    autofit_effect(next_ref, PREVIEW_NEXT_MAX_FONT, next_text);
 
     view! {
         <div

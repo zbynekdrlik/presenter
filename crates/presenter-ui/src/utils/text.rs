@@ -23,12 +23,10 @@ pub fn break_if_long(text: String, threshold: usize) -> String {
     }
 
     let mut best_split: Option<usize> = None;
-    let mut char_count: usize = 0;
-    for (byte_idx, ch) in text.char_indices() {
+    for (char_count, (byte_idx, ch)) in text.char_indices().enumerate() {
         if ch == ' ' && char_count <= threshold {
             best_split = Some(byte_idx);
         }
-        char_count += 1;
     }
 
     match best_split {

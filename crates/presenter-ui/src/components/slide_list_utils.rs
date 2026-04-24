@@ -37,6 +37,24 @@ pub(super) fn slide_has_any_warning(
         || field_has_warning(stage, limit)
 }
 
+/// Apply is-focused class to a slide card via DOM manipulation.
+pub(super) fn apply_focused_class(slide_id: &str) {
+    let doc = crate::utils::window::document();
+    if let Ok(cards) = doc.query_selector_all(".is-focused") {
+        for i in 0..cards.length() {
+            if let Some(el) = cards.item(i) {
+                if let Ok(el) = el.dyn_into::<web_sys::Element>() {
+                    let _ = el.class_list().remove_1("is-focused");
+                }
+            }
+        }
+    }
+    let selector = format!("[data-slide-id=\"{}\"]", slide_id);
+    if let Ok(Some(el)) = doc.query_selector(&selector) {
+        let _ = el.class_list().add_1("is-focused");
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -111,23 +129,5 @@ mod tests {
     fn zero_limit_disables_warnings() {
         let long = "abcdefghijklmnopqrstuvwxyz0123456";
         assert!(!field_has_warning(long, 0));
-    }
-}
-
-/// Apply is-focused class to a slide card via DOM manipulation.
-pub(super) fn apply_focused_class(slide_id: &str) {
-    let doc = crate::utils::window::document();
-    if let Ok(cards) = doc.query_selector_all(".is-focused") {
-        for i in 0..cards.length() {
-            if let Some(el) = cards.item(i) {
-                if let Ok(el) = el.dyn_into::<web_sys::Element>() {
-                    let _ = el.class_list().remove_1("is-focused");
-                }
-            }
-        }
-    }
-    let selector = format!("[data-slide-id=\"{}\"]", slide_id);
-    if let Ok(Some(el)) = doc.query_selector(&selector) {
-        let _ = el.class_list().add_1("is-focused");
     }
 }

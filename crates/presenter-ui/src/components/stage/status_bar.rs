@@ -82,10 +82,10 @@ pub fn StatusBar(
 
     autofit_effect(clock_ref, STATUS_MAX_FONT, move || clock_text.get());
     if !hide_live {
-        autofit_effect(live_ref, STATUS_MAX_FONT, live_text.clone());
+        autofit_effect(live_ref, STATUS_MAX_FONT, live_text);
     }
-    autofit_effect(connection_ref, STATUS_MAX_FONT, connection_text.clone());
-    autofit_effect(song_number_ref, STATUS_MAX_FONT, song_number.clone());
+    autofit_effect(connection_ref, STATUS_MAX_FONT, connection_text);
+    autofit_effect(song_number_ref, STATUS_MAX_FONT, song_number);
 
     view! {
         <div node_ref=clock_ref class="stage__clock">
@@ -95,7 +95,7 @@ pub fn StatusBar(
         {move || has_song_number().then(|| view! {
             <div node_ref=song_number_ref class="stage__song-number" data-role="song-number">
                 <span class="stage__debug-label">"song-number"</span>
-                {song_number.clone()}
+                {song_number}
             </div>
         })}
         {(!hide_live).then(|| view! {

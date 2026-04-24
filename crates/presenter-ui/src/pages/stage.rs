@@ -50,13 +50,12 @@ pub fn StagePage() -> impl IntoView {
                 return;
             };
             match event {
-                LiveEvent::Stage { snapshot } => {
+                LiveEvent::Stage { snapshot }
                     // Only accept snapshots matching our layout to keep
                     // API stage and normal stage independent.
-                    if snapshot.layout.code == ctx.layout_code.get_untracked() {
+                    if snapshot.layout.code == ctx.layout_code.get_untracked() => {
                         ctx.snapshot.set(Some(snapshot));
                     }
-                }
                 LiveEvent::StageLayout { code } => {
                     ctx.layout_code.set(code.clone());
                     set_global_string("__presenterStageLayout", &code);

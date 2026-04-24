@@ -186,7 +186,7 @@ mod tests {
 
     #[test]
     fn preserves_values_when_they_fit() {
-        let result = clamp_selection(50, &vec![31; 50], 3, 5, Some(10));
+        let result = clamp_selection(50, &[31; 50], 3, 5, Some(10));
         assert_eq!(
             result,
             ClampedSelection {
@@ -199,7 +199,7 @@ mod tests {
 
     #[test]
     fn clamps_chapter_when_too_high() {
-        let result = clamp_selection(5, &vec![20; 5], 10, 3, Some(7));
+        let result = clamp_selection(5, &[20; 5], 10, 3, Some(7));
         assert_eq!(result.chapter, 5);
         assert_eq!(result.verse_start, 3);
         assert_eq!(result.verse_end, Some(7));
@@ -207,7 +207,7 @@ mod tests {
 
     #[test]
     fn clamps_verse_start_when_chapter_has_fewer_verses() {
-        let result = clamp_selection(5, &vec![10, 5, 10, 10, 10], 2, 8, None);
+        let result = clamp_selection(5, &[10, 5, 10, 10, 10], 2, 8, None);
         assert_eq!(result.chapter, 2);
         assert_eq!(result.verse_start, 5);
         assert_eq!(result.verse_end, None);
@@ -215,14 +215,14 @@ mod tests {
 
     #[test]
     fn clamps_verse_end_to_chapter_max() {
-        let result = clamp_selection(5, &vec![10, 5, 10, 10, 10], 2, 1, Some(20));
+        let result = clamp_selection(5, &[10, 5, 10, 10, 10], 2, 1, Some(20));
         assert_eq!(result.verse_start, 1);
         assert_eq!(result.verse_end, Some(5));
     }
 
     #[test]
     fn clears_verse_end_when_it_collapses_to_verse_start() {
-        let result = clamp_selection(5, &vec![10, 5, 10, 10, 10], 2, 5, Some(20));
+        let result = clamp_selection(5, &[10, 5, 10, 10, 10], 2, 5, Some(20));
         assert_eq!(result.verse_start, 5);
         assert_eq!(result.verse_end, None);
     }

@@ -623,19 +623,12 @@ fn matches_bible_metadata(
     broadcast_verse_start: u16,
     broadcast_verse_end: u16,
 ) -> bool {
-    let translation_match = meta
-        .translation_code
-        .as_deref()
-        .map_or(false, |c| c == broadcast_translation);
-    let book_match = meta.book.as_deref().map_or(false, |b| b == broadcast_book);
-    let chapter_match = meta.chapter.map_or(false, |c| c == broadcast_chapter);
+    let translation_match = meta.translation_code.as_deref() == Some(broadcast_translation);
+    let book_match = meta.book.as_deref() == Some(broadcast_book);
+    let chapter_match = meta.chapter == Some(broadcast_chapter);
     // Use effective_verse_start/end which prefers `verses` array over flat fields
-    let verse_start_match = meta
-        .effective_verse_start()
-        .map_or(false, |v| v == broadcast_verse_start);
-    let verse_end_match = meta
-        .effective_verse_end()
-        .map_or(false, |v| v == broadcast_verse_end);
+    let verse_start_match = meta.effective_verse_start() == Some(broadcast_verse_start);
+    let verse_end_match = meta.effective_verse_end() == Some(broadcast_verse_end);
 
     translation_match && book_match && chapter_match && verse_start_match && verse_end_match
 }
@@ -698,7 +691,7 @@ async fn refresh_presentations(ctx: &TabletContext) {
         fresh.iter().any(|f| {
             old.iter()
                 .find(|o| o.id == f.id)
-                .map_or(true, |o| o.slide_count != f.slide_count)
+                .is_none_or(|o| o.slide_count != f.slide_count)
         })
     };
 
@@ -710,7 +703,7 @@ async fn refresh_presentations(ctx: &TabletContext) {
     ctx.slides_cache.update(|cache| {
         for pres in &fresh {
             let old_match = old.iter().find(|o| o.id == pres.id);
-            if old_match.map_or(true, |o| o.slide_count != pres.slide_count) {
+            if old_match.is_none_or(|o| o.slide_count != pres.slide_count) {
                 cache.remove(&pres.id);
             }
         }
@@ -744,6 +737,9 @@ async fn refresh_presentations(ctx: &TabletContext) {
 // PWA support
 // ---------------------------------------------------------------------------
 
+/// `(tag_name, text_content, &[(attr_name, attr_value)])`
+type MetaTagSpec<'a> = (&'a str, &'a str, &'a [(&'a str, &'a str)]);
+
 fn inject_pwa_meta_tags() {
     let document = crate::utils::window::document();
     let head = match document.head() {
@@ -751,7 +747,7 @@ fn inject_pwa_meta_tags() {
         None => return,
     };
 
-    let tags: &[(&str, &str, &[(&str, &str)])] = &[
+    let tags: &[MetaTagSpec<'_>] = &[
         (
             "link",
             "",
