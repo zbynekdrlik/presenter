@@ -4,8 +4,9 @@ use wasm_bindgen::prelude::*;
 
 use crate::api;
 use crate::components::stage::{
-    bible_layout::BibleLayout, ndi_fullscreen::NdiFullscreen, preach_layout::PreachLayout,
-    timer_layout::TimerLayout, worship_pp::WorshipPp, worship_snv::WorshipSnv,
+    api_stage::ApiStage, bible_layout::BibleLayout, ndi_fullscreen::NdiFullscreen,
+    preach_layout::PreachLayout, timer_layout::TimerLayout, worship_pp::WorshipPp,
+    worship_snv::WorshipSnv,
 };
 use crate::state::stage::StageContext;
 use crate::ws::stage::{self, StageWsState};
@@ -163,6 +164,9 @@ pub fn StagePage() -> impl IntoView {
                 }
                 "bible" => {
                     view! { <BibleLayout ws_state=ws_state latency_ms=latency_ms /> }.into_any()
+                }
+                "api" => {
+                    view! { <ApiStage ws_state=ws_state latency_ms=latency_ms /> }.into_any()
                 }
                 _ => {
                     view! { <WorshipSnv ws_state=ws_state latency_ms=latency_ms /> }.into_any()

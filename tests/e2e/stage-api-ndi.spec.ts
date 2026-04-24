@@ -30,9 +30,14 @@ test.afterAll(async () => {
 
 test("api layout renders ApiStage wrapper with no NDI source active", async ({ page }) => {
   const consoleMessages: string[] = [];
+  // Ignore Chrome's subresource integrity preload warning (browser-level, not app)
+  const ALLOWED = [/integrity.*ignored.*preload/i, /ResizeObserver loop/i];
   page.on("console", (msg) => {
     if (msg.type() === "error" || msg.type() === "warning") {
-      consoleMessages.push(`[${msg.type()}] ${msg.text()}`);
+      const text = msg.text();
+      if (!ALLOWED.some((pattern) => pattern.test(text))) {
+        consoleMessages.push(`[${msg.type()}] ${text}`);
+      }
     }
   });
 

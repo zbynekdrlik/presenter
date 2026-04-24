@@ -1,3 +1,4 @@
+pub mod api_stage;
 pub mod bible_layout;
 pub mod bible_overlay;
 pub mod ndi_fullscreen;
