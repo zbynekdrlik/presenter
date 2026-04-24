@@ -3,6 +3,7 @@ use leptos::prelude::*;
 use crate::state::stage::StageContext;
 use crate::utils::autofit::autofit_effect;
 use crate::utils::color::group_pill_style;
+use crate::utils::text::break_if_long;
 use crate::ws::stage::StageWsState;
 
 const CURRENT_MAX_FONT: f64 = 800.0;
@@ -11,6 +12,7 @@ const CURRENT_GROUP_MAX_FONT: f64 = 200.0;
 const NEXT_GROUP_MAX_FONT: f64 = 200.0;
 const CURRENT_SONG_MAX_FONT: f64 = 200.0;
 const NEXT_SONG_MAX_FONT: f64 = 200.0;
+const STAGE_SLIDE_BREAK_THRESHOLD: usize = 26;
 
 #[component]
 pub fn WorshipSnv(
@@ -27,7 +29,8 @@ pub fn WorshipSnv(
     let next_song_ref = NodeRef::<leptos::html::Div>::new();
 
     let current_text = move || {
-        ctx.snapshot
+        let raw = ctx
+            .snapshot
             .get()
             .and_then(|s| {
                 s.current.map(|slide| {
@@ -38,11 +41,13 @@ pub fn WorshipSnv(
                     }
                 })
             })
-            .unwrap_or_default()
+            .unwrap_or_default();
+        break_if_long(&raw, STAGE_SLIDE_BREAK_THRESHOLD)
     };
 
     let next_text = move || {
-        ctx.snapshot
+        let raw = ctx
+            .snapshot
             .get()
             .and_then(|s| {
                 s.next.map(|slide| {
@@ -53,7 +58,8 @@ pub fn WorshipSnv(
                     }
                 })
             })
-            .unwrap_or_default()
+            .unwrap_or_default();
+        break_if_long(&raw, STAGE_SLIDE_BREAK_THRESHOLD)
     };
 
     let current_group = move || {
