@@ -24,6 +24,10 @@ const TEST_SLIDES = [
   },
   { main: "Veľký je náš Boh\na hoden chvály", group: "Všetci" },
   { main: "Short line", group: "A" },
+  // index 5: single-line, 30 chars with diacritics — should auto-break at last space
+  { main: "Nad všetkých vyvyšený bude Pán", group: "Auto" },
+  // index 6: single-line, 12 chars — below threshold, must NOT break
+  { main: "Ježiš je Pán", group: "Auto" },
 ];
 
 let testPresentationId: string;
@@ -395,6 +399,67 @@ test("stage display has no console errors", async ({ context }) => {
   expect(real).toEqual([]);
 
   await stagePage.close();
+});
+
+// ─── Auto-break (single-line slides over threshold) ──────────────────────
+
+test("stage auto-breaks single-line slide over 26 chars", async ({
+  context,
+}) => {
+  const consoleMessages: string[] = [];
+
+  const stagePage = await openStageDisplay(context);
+  stagePage.on("console", (msg) => {
+    if (msg.type() === "error" || msg.type() === "warning") {
+      consoleMessages.push(`[${msg.type()}] ${msg.text()}`);
+    }
+  });
+
+  await triggerSlide(context, 5);
+  await stagePage.waitForTimeout(2_000);
+
+  const currentText = await stagePage
+    .locator(".stage__current-slide .stage__slide-text")
+    .first()
+    .evaluate((el) => el.textContent ?? "");
+
+  expect(
+    currentText.includes("\n"),
+    `Expected a newline to be injected into the slide text, got: ${JSON.stringify(currentText)}`,
+  ).toBe(true);
+
+  // Tail-break: the last word "Pán" should be alone on line 2.
+  const lines = currentText.split("\n");
+  expect(lines.length).toBe(2);
+  expect(lines[1].trim()).toBe("Pán");
+  // Line 1 must be within the 26-char threshold.
+  expect([...lines[0]].length).toBeLessThanOrEqual(26);
+
+  expect(consoleMessages).toEqual([]);
+});
+
+test("stage does not break slide below threshold", async ({ context }) => {
+  const consoleMessages: string[] = [];
+
+  const stagePage = await openStageDisplay(context);
+  stagePage.on("console", (msg) => {
+    if (msg.type() === "error" || msg.type() === "warning") {
+      consoleMessages.push(`[${msg.type()}] ${msg.text()}`);
+    }
+  });
+
+  await triggerSlide(context, 6);
+  await stagePage.waitForTimeout(2_000);
+
+  const currentText = await stagePage
+    .locator(".stage__current-slide .stage__slide-text")
+    .first()
+    .evaluate((el) => el.textContent ?? "");
+
+  expect(currentText).toBe("Ježiš je Pán");
+  expect(currentText.includes("\n")).toBe(false);
+
+  expect(consoleMessages).toEqual([]);
 });
 
 // ─── Edge-to-edge layout (issue: maximize lyrics area) ───────────────────
