@@ -72,5 +72,23 @@ test("api layout renders ApiStage wrapper with no NDI source active", async ({ p
   const slide = page.locator("div.stage-api .stage__current-slide");
   await expect(slide).toBeAttached();
 
+  // Wrapper should be absolutely sized to viewport
+  const wrapperStyle = await wrapper.evaluate((el) => {
+    const cs = window.getComputedStyle(el);
+    return {
+      position: cs.position,
+      width: cs.width,
+      height: cs.height,
+    };
+  });
+  expect(wrapperStyle.position).toBe("relative");
+
+  // Slide text inside .stage-api must have a non-empty text-shadow
+  const slideShadow = await page
+    .locator("div.stage-api .stage__current-slide .stage__slide-text")
+    .evaluate((el) => window.getComputedStyle(el).textShadow);
+  expect(slideShadow).not.toBe("none");
+  expect(slideShadow).not.toBe("");
+
   expect(consoleMessages).toEqual([]);
 });
