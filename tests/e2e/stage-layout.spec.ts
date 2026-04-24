@@ -28,10 +28,14 @@ const TEST_SLIDES = [
   { main: "Nad všetkých vyvyšený bude Pán", group: "Auto" },
   // index 6: single-line, 12 chars — below threshold, must NOT break
   { main: "Ježiš je Pán", group: "Auto" },
+  // index 7: 28 visible chars with diacritics — bytes > 32 but chars <= 32,
+  // must NOT be flagged by the operator overflow warning (char-count fix).
+  { main: "Nad všetkých vyvyšený bude P", group: "Auto" },
 ];
 
 let testPresentationId: string;
 let testSlideIds: string[];
+let testLibraryId: string;
 
 async function openStageDisplay(context: BrowserContext) {
   await context.request.post(new URL("/stage/layout", baseURL).toString(), {
@@ -77,6 +81,7 @@ test.beforeAll(async ({}, testInfo) => {
     body: JSON.stringify({ name: "_E2E Layout Test" }),
   });
   const lib = await libResp.json();
+  testLibraryId = lib.id;
 
   // Create test presentation with edge-case slides
   const presResp = await fetch(
@@ -528,4 +533,75 @@ test("stage worship-snv boxes snap to viewport edges", async ({ context }) => {
   expect(Math.abs(geom.nextSong!.width - halfVw)).toBeLessThanOrEqual(TOL);
 
   await stagePage.close();
+});
+
+// ─── Operator overflow warning (byte→char fix) ───────────────────────────
+
+test("operator UI does not flag 28-char diacritic line as overflow", async ({
+  context,
+}) => {
+  const consoleMessages: string[] = [];
+  const page = await context.newPage();
+  page.on("console", (msg) => {
+    if (msg.type() === "error" || msg.type() === "warning") {
+      consoleMessages.push(`[${msg.type()}] ${msg.text()}`);
+    }
+  });
+
+  await page.goto(new URL("/ui/operator", baseURL).toString(), {
+    waitUntil: "domcontentloaded",
+  });
+  await page.waitForSelector('body[data-wasm-ready="true"]', {
+    timeout: 30_000,
+  });
+
+  // Open the library via the "more" modal (works regardless of favorites).
+  await page.locator('[data-role="library-more"]').click();
+  await page.waitForFunction(
+    () => {
+      const modal = document.querySelector('[data-role="library-modal"]');
+      return modal && modal.getAttribute("data-open") === "true";
+    },
+    { timeout: 10_000 },
+  );
+  // The modal lists all libraries. Find our test library by data-library-id and click it.
+  await page
+    .locator(
+      `[data-role="library-modal-list"] [data-library-id="${testLibraryId}"] .operator__list-button`,
+    )
+    .click();
+
+  // After selecting from the modal the presentations list should update.
+  await page.waitForSelector(
+    `[data-role="presentation-item"][data-presentation-id="${testPresentationId}"]`,
+    { timeout: 15_000 },
+  );
+  await page
+    .locator(
+      `[data-role="presentation-item"][data-presentation-id="${testPresentationId}"]`,
+    )
+    .click();
+
+  // Wait for slide cards to render.
+  await page.waitForSelector(`[data-slide-id="${testSlideIds[7]}"]`, {
+    timeout: 15_000,
+  });
+
+  const slideCard = page.locator(`[data-slide-id="${testSlideIds[7]}"]`);
+  await expect(slideCard).toBeVisible();
+
+  const overflowCount = await slideCard
+    .locator(".operator__slide-overflow")
+    .count();
+  expect(
+    overflowCount,
+    "28-char diacritic line must not trigger overflow warning after byte->char fix",
+  ).toBe(0);
+
+  // Filter known browser-level warnings that are not app errors.
+  const ALLOWED = [/integrity.*ignored.*preload/i, /ResizeObserver loop/i];
+  const realMessages = consoleMessages.filter(
+    (m) => !ALLOWED.some((r) => r.test(m)),
+  );
+  expect(realMessages).toEqual([]);
 });
