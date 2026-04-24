@@ -396,3 +396,71 @@ test("stage display has no console errors", async ({ context }) => {
 
   await stagePage.close();
 });
+
+// ─── Edge-to-edge layout (issue: maximize lyrics area) ───────────────────
+
+test("stage worship-snv boxes snap to viewport edges", async ({ context }) => {
+  const stagePage = await openStageDisplay(context);
+
+  // Trigger a slide so boxes render with content (some layouts short-circuit
+  // when empty). The selectors we assert on exist regardless of content.
+  await triggerSlide(context, 0, 1);
+  await stagePage.waitForTimeout(2_000);
+
+  const geom = await stagePage.evaluate(() => {
+    const vw = window.innerWidth;
+    const read = (sel: string) => {
+      const el = document.querySelector(sel);
+      if (!el) return null;
+      const r = el.getBoundingClientRect();
+      return {
+        left: Math.round(r.left),
+        right: Math.round(vw - r.right),
+        width: Math.round(r.width),
+      };
+    };
+    return {
+      vw,
+      currentSlide: read(".stage__current-slide"),
+      nextSlide: read(".stage__next-slide"),
+      currentGroup: read(".stage__current-group"),
+      currentSong: read(".stage__current-song"),
+      nextGroup: read(".stage__next-group"),
+      nextSong: read(".stage__next-song"),
+    };
+  });
+
+  const TOL = 2; // ±2px tolerance for sub-pixel rounding
+
+  // Full-width slides: left edge at 0, right edge at viewport width
+  expect(geom.currentSlide).not.toBeNull();
+  expect(geom.currentSlide!.left).toBeLessThanOrEqual(TOL);
+  expect(geom.currentSlide!.right).toBeLessThanOrEqual(TOL);
+  expect(Math.abs(geom.currentSlide!.width - geom.vw)).toBeLessThanOrEqual(TOL);
+
+  expect(geom.nextSlide).not.toBeNull();
+  expect(geom.nextSlide!.left).toBeLessThanOrEqual(TOL);
+  expect(geom.nextSlide!.right).toBeLessThanOrEqual(TOL);
+  expect(Math.abs(geom.nextSlide!.width - geom.vw)).toBeLessThanOrEqual(TOL);
+
+  // Left pills: flush left, 50% width
+  const halfVw = geom.vw / 2;
+  expect(geom.currentGroup).not.toBeNull();
+  expect(geom.currentGroup!.left).toBeLessThanOrEqual(TOL);
+  expect(Math.abs(geom.currentGroup!.width - halfVw)).toBeLessThanOrEqual(TOL);
+
+  expect(geom.nextGroup).not.toBeNull();
+  expect(geom.nextGroup!.left).toBeLessThanOrEqual(TOL);
+  expect(Math.abs(geom.nextGroup!.width - halfVw)).toBeLessThanOrEqual(TOL);
+
+  // Right pills: flush right, 50% width
+  expect(geom.currentSong).not.toBeNull();
+  expect(geom.currentSong!.right).toBeLessThanOrEqual(TOL);
+  expect(Math.abs(geom.currentSong!.width - halfVw)).toBeLessThanOrEqual(TOL);
+
+  expect(geom.nextSong).not.toBeNull();
+  expect(geom.nextSong!.right).toBeLessThanOrEqual(TOL);
+  expect(Math.abs(geom.nextSong!.width - halfVw)).toBeLessThanOrEqual(TOL);
+
+  await stagePage.close();
+});
