@@ -916,11 +916,7 @@ fn scroll_slide_into_view(slide_id: &str) {
 /// drags land BEFORE. This guarantees every distinct drag visibly moves the
 /// slide (the previous drop-position heuristic could be a no-op on forward
 /// drags into a target's upper half).
-fn reorder_slide_ids(
-    ids: Vec<String>,
-    dragged: &str,
-    target: &str,
-) -> Option<Vec<String>> {
+fn reorder_slide_ids(ids: Vec<String>, dragged: &str, target: &str) -> Option<Vec<String>> {
     if dragged == target {
         return None;
     }
