@@ -26,7 +26,12 @@ pub(super) fn field_has_warning(text: &str, limit: u32) -> bool {
     limit > 0 && text.lines().any(|line| line.chars().count() as u32 > limit)
 }
 
-pub(super) fn slide_has_any_warning(main: &str, translation: &str, stage: &str, limit: u32) -> bool {
+pub(super) fn slide_has_any_warning(
+    main: &str,
+    translation: &str,
+    stage: &str,
+    limit: u32,
+) -> bool {
     field_has_warning(main, limit)
         || field_has_warning(translation, limit)
         || field_has_warning(stage, limit)
@@ -55,7 +60,10 @@ mod tests {
         let line = "Nad všetkých vyvyšený bude P";
         assert_eq!(line.chars().count(), 28);
         assert!(line.len() >= 32, "sanity: byte length meets or exceeds 32");
-        assert!(!field_has_warning(line, 32), "28 visible chars must not warn at limit 32");
+        assert!(
+            !field_has_warning(line, 32),
+            "28 visible chars must not warn at limit 32"
+        );
     }
 
     #[test]

@@ -114,7 +114,11 @@ pub fn WorshipSnv(
         current_group_text.clone(),
     );
     autofit_effect(next_group_ref, NEXT_GROUP_MAX_FONT, next_group_text.clone());
-    autofit_effect(current_song_ref, CURRENT_SONG_MAX_FONT, current_song_text.clone());
+    autofit_effect(
+        current_song_ref,
+        CURRENT_SONG_MAX_FONT,
+        current_song_text.clone(),
+    );
     autofit_effect(next_song_ref, NEXT_SONG_MAX_FONT, next_song_text.clone());
 
     view! {
