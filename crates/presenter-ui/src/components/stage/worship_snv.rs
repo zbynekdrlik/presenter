@@ -42,7 +42,7 @@ pub fn WorshipSnv(
                 })
             })
             .unwrap_or_default();
-        break_if_long(&raw, STAGE_SLIDE_BREAK_THRESHOLD)
+        break_if_long(raw, STAGE_SLIDE_BREAK_THRESHOLD)
     };
 
     let next_text = move || {
@@ -59,7 +59,7 @@ pub fn WorshipSnv(
                 })
             })
             .unwrap_or_default();
-        break_if_long(&raw, STAGE_SLIDE_BREAK_THRESHOLD)
+        break_if_long(raw, STAGE_SLIDE_BREAK_THRESHOLD)
     };
 
     let current_group = move || {

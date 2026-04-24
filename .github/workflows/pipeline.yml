@@ -290,6 +290,10 @@ jobs:
       - name: Run doc tests
         run: cargo test --doc --workspace
 
+      - name: Run presenter-ui unit tests (crate excluded from workspace)
+        run: cargo test --lib
+        working-directory: crates/presenter-ui
+
   # ============================================
   # Mutation Testing
   # ============================================
