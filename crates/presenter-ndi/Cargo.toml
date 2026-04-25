@@ -16,3 +16,4 @@ serde_json.workspace = true
 libloading = "0.8"
 turbojpeg = "1.4"
 bytes = "1"
+image = { version = "0.25", default-features = false }
