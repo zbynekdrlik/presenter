@@ -2,231 +2,347 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-**Goal:** Make the `/ndi/mjpeg` stream auto-adapt per-connection — tiered shared encoders + lag-driven demote/promote — so cheap Android TVs become usable on the `ndi-fullscreen` and `api` stage layouts without operator configuration.
+**Goal:** Make `/ndi/mjpeg` self-tune per-connection so cheap Android TVs (Hyundai 1 GB, Tesla LEAP-S1 2 GB) can render NDI fullscreen without manual config, while fast clients stay native and the N100 production server's CPU cost stays bounded.
 
-**Architecture:** Replace the single global JPEG encoder thread in `presenter-ndi::manager` with a `TierRegistry` of up to four lazy, ref-counted tier encoders (L0=1080@30, L1=1080@15, L2=720@15, L3=720@10). Each MJPEG HTTP/WebSocket connection holds a `TierSubscription` and runs a small adaptive controller that demotes one tier on backpressure (`broadcast::RecvError::Lagged` ≥5 in 30 s) and promotes after 60 s of clean reception. No DB migration, no settings UI, no client changes.
+**Architecture:** Replace the single global JPEG encoder with a `TierRegistry` that runs at most 4 lazy ref-counted tier encoders (1080@30, 1080@15, 720@15, 720@10), each consuming the same `tokio::sync::watch` raw-frame source. Each MJPEG HTTP/WS connection holds a per-tier `broadcast::Receiver<Bytes>` plus an `AdaptController` that demotes one tier on 5+ `RecvError::Lagged` events in 30 s and promotes one tier after 60 s of zero lag. No DB, no UI, no client changes.
 
-**Tech Stack:** Rust 1.95 (workspace local builds allowed), `tokio::sync::broadcast`, `image` crate (resize), libjpeg-turbo via `turbojpeg` (already in deps), axum (server), Playwright (E2E). Manual ADB+chrome://inspect on sd1l.lan and sd2l.lan for verification.
+**Tech Stack:** Rust (tokio, axum, broadcast, watch, async-stream), turbojpeg, image (new dep), Playwright for existing E2E only.
 
-**Spec:** `docs/superpowers/specs/2026-04-25-ndi-cheap-tv-adaptive-design.md`
+**Spec:** `docs/superpowers/specs/2026-04-25-ndi-cheap-tv-adaptive-design.md` (commit `07cbae6`)
+
+---
+
+## Context
+
+Issue [#250](https://github.com/zbynekdrlik/presenter/issues/250). Today's pipeline: `presenter-ndi::manager::run_capture_thread` writes the newest `VideoFrame` to a `FrameSlot` (`Arc<Mutex<Option<VideoFrame>>>`) and notifies a `Condvar`. `run_encode_thread` waits, takes the frame, calls `JpegEncoder::encode_bgra` (or `encode_uyvy`), and broadcasts JPEG `Bytes` on a `broadcast::channel(8)`. `mjpeg_http` and `mjpeg_ws` in `presenter-server::router::integrations::ndi` subscribe and forward.
+
+Measured 2026-04-25 against `RESOLUME-SNV (cg-obs)`: 1920×1080 @ ~29.6 fps, ~115 KB/frame, ~24.5 Mbps. Cheap TVs (Amlogic SoC, software JPEG decode) cannot keep pace. Production server is Intel N100 (4 cores), so per-connection encoding does not scale.
+
+**Image-handling constraint for profiling tasks (Task 1, 2, 12, 14):** Save screenshots and DevTools profile exports to `/tmp/ndi-profiling/` only. Do **NOT** open captured PNGs/JPEGs with the Read tool — recent API error `req_011CaQjH9cNLofQDkTHDg9XX` was triggered by image content. Read the DevTools `.json` profile exports (text), and report numbers extracted from the JSON. Screenshots exist only as paths the human user can open, never as Read inputs.
 
 ---
 
 ## File Structure
 
-| File | Change |
-|---|---|
-| `Cargo.toml` (workspace) | Bump version 0.4.33 → 0.4.34. Add `image` workspace dep. |
-| `crates/presenter-ndi/Cargo.toml` | Add `image = { workspace = true }`. |
-| `crates/presenter-ndi/src/tier.rs` | **NEW.** `Tier` enum, `TierSpec`, `Tier::demote/promote/initial`. Pure value types + transitions. |
-| `crates/presenter-ndi/src/encoder.rs` | Add `JpegEncoder::encode_bgra_resized(...)` and `encode_uyvy_resized(...)`. |
-| `crates/presenter-ndi/src/tier_registry.rs` | **NEW.** `TierRegistry` (refcount lifecycle, lazy spawn), `TierSubscription` (drop-guarded receiver), `run_tier_encoder(...)` thread fn. |
-| `crates/presenter-ndi/src/manager.rs` | Replace the single `frame_tx` + `run_encode_thread` with a `TierRegistry`. Add `subscribe_tier(Tier) -> TierSubscription`. Keep `subscribe_frames()` as a thin wrapper that returns L0 (back-compat for any unmodified callers). |
-| `crates/presenter-ndi/src/lib.rs` | Re-export `Tier`, `TierSubscription`. |
-| `crates/presenter-server/src/router/integrations/ndi.rs` | Replace `mjpeg_http` and `mjpeg_ws` bodies: subscribe at L0, run adaptive controller in the stream future, swap tiers via `TierRegistry::subscribe_tier` on demote/promote conditions. |
-| `crates/presenter-ndi/src/manager.rs` (tests module) | Add tests for TierRegistry refcount + tier ladder. |
-| `crates/presenter-ndi/src/tier_registry.rs` (tests module) | Tests for adaptive controller transitions. (Controller lives here as a free fn so it can be unit-tested without an HTTP body stream.) |
-| `crates/presenter-server/src/router/integrations/ndi.rs` (tests module) | Integration test: artificially slow consumer demotes, then recovers. |
-
-**Spec doc updates (in this same PR, before merge):**
-- `docs/superpowers/specs/2026-04-25-ndi-cheap-tv-adaptive-design.md` Findings section — populated in two waves (baseline before code, post-fix after code).
+| File | Status | Responsibility |
+|---|---|---|
+| `Cargo.toml` (workspace) | Modify | Bump `version = "0.4.34"`; add workspace dep `image = "0.25"` if used as workspace dep, otherwise per-crate. |
+| `crates/presenter-ndi/Cargo.toml` | Modify | Add `image = "0.25"` (default features off, only `std`). |
+| `crates/presenter-ndi/src/tier.rs` | Create | `Tier` enum (L0..L3), `TierSpec` (height + fps + frame_skip_modulus), demote/promote helpers, tests. |
+| `crates/presenter-ndi/src/tier_registry.rs` | Create | `TierRegistry` (lazy ref-counted spawn), `TierSubscription` (RAII), spawn loop reading from raw watch. |
+| `crates/presenter-ndi/src/encoder.rs` | Modify | Add `encode_bgra_resized(bgra, src_w, src_h, target_h) -> Vec<u8>` and `convert_uyvy_to_bgra` pub fn. Tests. |
+| `crates/presenter-ndi/src/manager.rs` | Modify | Replace `frame_tx: broadcast::Sender<Bytes>` with `raw_frame_tx: watch::Sender<Option<Arc<VideoFrame>>>` + a `tier_registry: Arc<TierRegistry>`. Capture thread sends raw frames to watch. `subscribe_frames()` removed; new `subscribe_tier(Tier) -> TierSubscription`. `run_encode_thread` deleted. |
+| `crates/presenter-ndi/src/lib.rs` | Modify | `pub mod tier; pub mod tier_registry;` and re-export `Tier`, `TierRegistry`, `TierSubscription`. |
+| `crates/presenter-server/src/adaptive_mjpeg.rs` | Create | `AdaptController` state machine (sliding lag window, demote/promote rules) + tests. |
+| `crates/presenter-server/src/router.rs` | Modify | `pub mod adaptive_mjpeg;` (or add the `mod` declaration in `main.rs`/`lib.rs` — match existing pattern). |
+| `crates/presenter-server/src/main.rs` | Modify | `mod adaptive_mjpeg;` (current style — see existing `mod ai;` etc.). |
+| `crates/presenter-server/src/router/integrations/ndi.rs` | Modify | `mjpeg_http` and `mjpeg_ws`: subscribe to `Tier::L0`, drive `AdaptController`, swap subscriptions on transitions. |
+| `docs/superpowers/specs/2026-04-25-ndi-cheap-tv-adaptive-design.md` | Modify | Fill in the Findings section in Tasks 1, 2, 12. |
+| `/tmp/ndi-profiling/` | Create at runtime | Profiling artifacts (DevTools `.json` exports, `screenshot-*.png`). Not committed. |
 
 ---
 
-## Phase 1: Baseline Profiling (no code yet)
+## Task 1: Baseline profile sd1l.lan (Tesla LEAP-S1)
 
-### Task 1: Baseline profile of sd1l.lan (Tesla LEAP-S1, 2 GB)
+**Files:** None (data collection). Output appended to `docs/superpowers/specs/2026-04-25-ndi-cheap-tv-adaptive-design.md` Findings section in Task 12.
 
-**Files:**
-- Modify: `docs/superpowers/specs/2026-04-25-ndi-cheap-tv-adaptive-design.md` (Findings section)
+This task captures the **before** numbers — current native pipeline (1080p @ 30) on the Tesla TV. Implementation comes later; we measure first so the post-deploy numbers in Task 12 have a reference point.
 
-- [ ] **Step 1: Confirm prerequisites**
+- [ ] **Step 1: Prepare the dev server stream**
 
 ```bash
-adb -s sd1l.lan:5555 shell getprop ro.product.model
-# Expected: LEAP-S1
-adb -s sd1l.lan:5555 shell dumpsys activity activities | grep mResumedActivity
-# Expected: com.fullykiosk.videokiosk/de.ozerov.fully.FullyActivity
-curl -s http://10.77.8.134:8080/integrations/video-sources | python3 -c "import json,sys; print([s for s in json.load(sys.stdin) if s['isActive']])"
-# Expected: one isActive=True entry, e.g. RESOLUME-SNV (cg-obs)
+# Confirm dev server is running and the cg-obs source is active
+curl -s http://10.77.8.134:8080/integrations/video-sources | python3 -c "import sys,json; d=json.load(sys.stdin); print([(x['label'], x['isActive']) for x in d])"
 ```
 
-- [ ] **Step 2: Force ndi-fullscreen layout on dev server**
+Expected: `cg` row shows `isActive: True`. If not, activate it via the settings UI before continuing.
+
+- [ ] **Step 2: Set up artifact directory + ADB reverse**
 
 ```bash
-curl -s -X POST -H 'Content-Type: application/json' \
-  -d '{"code":"ndi-fullscreen"}' \
-  http://10.77.8.134:8080/stage/layout
-```
-
-- [ ] **Step 3: Set up reverse port-forward and enable WebView debugging on sd1l**
-
-```bash
+mkdir -p /tmp/ndi-profiling/sd1l-baseline
 adb -s sd1l.lan:5555 reverse tcp:8080 tcp:8080
-# Fully Kiosk respects this intent extra to enable WebView debugging:
+adb -s sd1l.lan:5555 reverse --list
+```
+
+Expected: `host-9 tcp:8080 tcp:8080`.
+
+- [ ] **Step 3: Restart Fully Kiosk with WebView debugging**
+
+```bash
 adb -s sd1l.lan:5555 shell am force-stop com.fullykiosk.videokiosk
-adb -s sd1l.lan:5555 shell am start -n com.fullykiosk.videokiosk/de.ozerov.fully.MainActivity \
-  -d "http://127.0.0.1:8080/stage" --es WEBVIEW_DEBUG true
-sleep 3
-adb -s sd1l.lan:5555 shell dumpsys activity activities | grep mResumedActivity
-# Expected: FullyActivity is again the resumed activity
+adb -s sd1l.lan:5555 shell am start -n com.fullykiosk.videokiosk/de.ozerov.fully.MainActivity --es WEBVIEW_DEBUG true
+sleep 5
+adb -s sd1l.lan:5555 shell "dumpsys activity activities | grep -E 'mResumedActivity|topResumedActivity'" | head -2
 ```
 
-- [ ] **Step 4: Attach DevTools and capture a 10 s Performance trace**
+Expected: `mResumedActivity` shows `com.fullykiosk.videokiosk/de.ozerov.fully.FullyActivity`.
 
-In the dev machine's Chromium, open `chrome://inspect/#devices`. The sd1l webview hosting `127.0.0.1:8080/stage` should appear. Click "inspect". In DevTools:
-
-1. Performance tab → Record for 10 s while NDI is streaming.
-2. Network tab → keep all entries, observe MJPEG payload sizes and timing.
-3. Console → run `JSON.stringify(performance.memory)` — record `usedJSHeapSize`.
-
-Export the Performance profile (3-dot menu → Save profile…) to `/tmp/sd1l-baseline-L0.json` for later reference (do not commit binary artifacts).
-
-- [ ] **Step 5: Tabulate measurements**
-
-From the trace, read off:
-
-- `decode_p50`, `decode_p95` — median and 95th-percentile of `Image Decode` event durations (Performance summary or individual events).
-- `paint_p50` — median of `Paint` event durations.
-- `fps_sustained` — count `Image Decode` events in the trace, divide by trace duration.
-- Network: `kbps_avg`, `kb_per_frame_avg`.
-
-- [ ] **Step 6: Append to spec Findings section**
-
-Edit `docs/superpowers/specs/2026-04-25-ndi-cheap-tv-adaptive-design.md`. Replace the placeholder paragraph under "Findings" with:
-
-```markdown
-## Findings
-
-### Baseline (before fix), 2026-04-25, source RESOLUME-SNV (cg-obs) at 1920×1080 @ 30 fps
-
-| TV | Tier | decode_p50 | decode_p95 | paint_p50 | fps_sustained | kbps |
-|---|---|---|---|---|---|---|
-| sd1l (Tesla LEAP-S1, 2 GB) | L0 (1080@30) | <fill> ms | <fill> ms | <fill> ms | <fill> | <fill> |
-```
-
-(Replace `<fill>` with actual numbers. The table will grow in Tasks 2 and 13.)
-
-- [ ] **Step 7: Commit**
+- [ ] **Step 4: Switch dev stage to ndi-fullscreen**
 
 ```bash
-git add docs/superpowers/specs/2026-04-25-ndi-cheap-tv-adaptive-design.md
-git commit -m "docs(spec): record sd1l baseline NDI profiling (#250)"
+curl -s -X POST http://10.77.8.134:8080/stage/layout -H 'content-type: application/json' -d '{"code":"ndi-fullscreen"}'
+curl -s http://10.77.8.134:8080/stage/layout
 ```
+
+Expected: response contains `"code":"ndi-fullscreen"`.
+
+- [ ] **Step 5: Attach DevTools and record 10 s Performance trace**
+
+Open `chrome://inspect/#devices` on the dev machine. The Fully Kiosk webview should be listed under sd1l.lan. Click "inspect". In the DevTools Performance tab, click Record, wait 10 s, click Stop.
+
+Save the trace as `/tmp/ndi-profiling/sd1l-baseline/trace.json` via DevTools "Save profile…".
+
+Capture a Network tab summary screenshot to `/tmp/ndi-profiling/sd1l-baseline/network.png`.
+
+**Do not read the PNG with the Read tool. Only report file paths.**
+
+- [ ] **Step 6: Extract numbers from trace.json (text only)**
+
+```bash
+python3 - <<'PY'
+import json, statistics
+with open('/tmp/ndi-profiling/sd1l-baseline/trace.json') as f:
+    data = json.load(f)
+events = data.get('traceEvents', data) if isinstance(data, dict) else data
+def durs(name):
+    return [e['dur']/1000.0 for e in events
+            if e.get('ph')=='X' and e.get('name')==name and 'dur' in e]
+decode = durs('Decode Image')
+paint = durs('Paint')
+def stats(label, xs):
+    if not xs: print(f'{label}: n=0'); return
+    xs.sort()
+    p50 = xs[len(xs)//2]
+    p95 = xs[int(len(xs)*0.95)]
+    print(f'{label}: n={len(xs)} p50={p50:.2f}ms p95={p95:.2f}ms max={xs[-1]:.2f}ms')
+stats('decode', decode)
+stats('paint', paint)
+PY
+```
+
+Record p50/p95 for decode and paint. Save the printout as `/tmp/ndi-profiling/sd1l-baseline/stats.txt`.
+
+- [ ] **Step 7: Sustained-FPS measurement from the server side**
+
+```bash
+python3 - <<'PY' > /tmp/ndi-profiling/sd1l-baseline/server-fps.txt
+import urllib.request, time
+url='http://10.77.8.134:8080/ndi/mjpeg'
+r=urllib.request.urlopen(url, timeout=5)
+start=time.time(); buf=b''; frames=0; total=0
+while time.time()-start<10:
+    chunk=r.read(65536)
+    if not chunk: break
+    total+=len(chunk); buf+=chunk
+    while True:
+        i=buf.find(b'\xff\xd8\xff'); j=buf.find(b'\xff\xd9',i+3) if i>=0 else -1
+        if i<0 or j<0: break
+        frames+=1; buf=buf[j+2:]
+elapsed=10
+print(f'frames={frames} fps={frames/elapsed:.1f} kbps={total*8/1000/elapsed:.0f}')
+PY
+cat /tmp/ndi-profiling/sd1l-baseline/server-fps.txt
+```
+
+Note: this measures what the SERVER pushes, not what the TV decodes. The TV's effective FPS is in the trace (count of `Decode Image` events / 10 s).
+
+- [ ] **Step 8: Save a parseable summary**
+
+```bash
+cat <<EOF > /tmp/ndi-profiling/sd1l-baseline/SUMMARY.md
+# sd1l.lan baseline (Tesla LEAP-S1, current native pipeline)
+- decode_p50: <fill from stats.txt>
+- decode_p95: <fill from stats.txt>
+- paint_p50: <fill from stats.txt>
+- fps_sustained_browser: <Decode Image count / 10>
+- server_fps: <from server-fps.txt>
+- server_kbps: <from server-fps.txt>
+EOF
+```
+
+Manually edit the angle-bracket placeholders in `SUMMARY.md` with the values just measured. This file is the input for Task 12 when filling the spec.
+
+- [ ] **Step 9: Mark task done**
+
+No commit yet — these artifacts live under `/tmp` and are not committed; the spec gets updated in Task 12 along with post-deploy numbers.
 
 ---
 
-### Task 2: Baseline profile of sd2l.lan (Hyundai Android TV, 1 GB)
+## Task 2: Baseline profile sd2l.lan (Hyundai)
 
-**Files:**
-- Modify: `docs/superpowers/specs/2026-04-25-ndi-cheap-tv-adaptive-design.md` (Findings section)
+**Files:** None (data collection). Output saved to `/tmp/ndi-profiling/sd2l-baseline/`.
 
-- [ ] **Step 1: Repeat Task 1 Steps 1–5 for sd2l.lan**
+The Hyundai TVs have only 1 GB RAM and Android 11 — expect substantially worse numbers than sd1l. If decode_p95 already exceeds 33 ms at native 1080p (very likely), that confirms the hypothesis: the issue is software JPEG decode on cheap chips, not network or paint.
 
-Use `sd2l.lan:5555` instead of `sd1l.lan:5555` everywhere. Save trace to `/tmp/sd2l-baseline-L0.json`.
-
-- [ ] **Step 2: Append sd2l row to the Findings table**
-
-Add one more row to the table from Task 1 Step 6:
-
-```markdown
-| sd2l (Hyundai, 1 GB) | L0 (1080@30) | <fill> | <fill> | <fill> | <fill> | <fill> |
-```
-
-- [ ] **Step 3: Commit**
+- [ ] **Step 1: Prepare artifact dir + ADB reverse for sd2l**
 
 ```bash
-git add docs/superpowers/specs/2026-04-25-ndi-cheap-tv-adaptive-design.md
-git commit -m "docs(spec): record sd2l baseline NDI profiling (#250)"
+mkdir -p /tmp/ndi-profiling/sd2l-baseline
+adb -s sd2l.lan:5555 reverse tcp:8080 tcp:8080
+adb -s sd2l.lan:5555 reverse --list
 ```
 
-**If baseline shows even L1 (1080@15) is unusable on sd2l** (decode_p95 + paint_p50 > 66 ms), STOP and re-evaluate the tier ladder with the user. The whole spec assumes L0 is ambitious-but-plausible; if it's catastrophic on the Hyundai, we likely need to start clients at L2 by default rather than L0. Open a discussion before continuing to Task 3.
+Expected: `host-9 tcp:8080 tcp:8080`.
+
+- [ ] **Step 2: Restart Fully Kiosk with WebView debugging on sd2l**
+
+```bash
+adb -s sd2l.lan:5555 shell am force-stop com.fullykiosk.videokiosk
+adb -s sd2l.lan:5555 shell am start -n com.fullykiosk.videokiosk/de.ozerov.fully.MainActivity --es WEBVIEW_DEBUG true
+sleep 5
+adb -s sd2l.lan:5555 shell "dumpsys activity activities | grep -E 'mResumedActivity|topResumedActivity'" | head -2
+```
+
+Expected: `mResumedActivity` shows `com.fullykiosk.videokiosk/de.ozerov.fully.FullyActivity`.
+
+- [ ] **Step 3: Confirm dev stage is still on ndi-fullscreen**
+
+```bash
+curl -s http://10.77.8.134:8080/stage/layout
+```
+
+Expected: `"code":"ndi-fullscreen"`. If not, repost as in Task 1 Step 4.
+
+- [ ] **Step 4: Attach DevTools and record 10 s Performance trace**
+
+Open `chrome://inspect/#devices`, attach to the sd2l.lan kiosk webview, Performance tab → Record 10 s → Stop → Save profile to `/tmp/ndi-profiling/sd2l-baseline/trace.json`.
+
+Save Network tab summary screenshot to `/tmp/ndi-profiling/sd2l-baseline/network.png` — **do not Read this PNG**.
+
+- [ ] **Step 5: Extract numbers from trace.json**
+
+```bash
+python3 - <<'PY'
+import json, statistics
+with open('/tmp/ndi-profiling/sd2l-baseline/trace.json') as f:
+    data = json.load(f)
+events = data.get('traceEvents', data) if isinstance(data, dict) else data
+def durs(name):
+    return [e['dur']/1000.0 for e in events
+            if e.get('ph')=='X' and e.get('name')==name and 'dur' in e]
+decode = durs('Decode Image')
+paint = durs('Paint')
+def stats(label, xs):
+    if not xs: print(f'{label}: n=0'); return
+    xs.sort()
+    p50 = xs[len(xs)//2]
+    p95 = xs[int(len(xs)*0.95)]
+    print(f'{label}: n={len(xs)} p50={p50:.2f}ms p95={p95:.2f}ms max={xs[-1]:.2f}ms')
+stats('decode', decode)
+stats('paint', paint)
+PY
+```
+
+Save the printout to `/tmp/ndi-profiling/sd2l-baseline/stats.txt`.
+
+- [ ] **Step 6: Sustained-FPS measurement from server side (same source check, just file under sd2l-baseline)**
+
+```bash
+python3 - <<'PY' > /tmp/ndi-profiling/sd2l-baseline/server-fps.txt
+import urllib.request, time
+url='http://10.77.8.134:8080/ndi/mjpeg'
+r=urllib.request.urlopen(url, timeout=5)
+start=time.time(); buf=b''; frames=0; total=0
+while time.time()-start<10:
+    chunk=r.read(65536)
+    if not chunk: break
+    total+=len(chunk); buf+=chunk
+    while True:
+        i=buf.find(b'\xff\xd8\xff'); j=buf.find(b'\xff\xd9',i+3) if i>=0 else -1
+        if i<0 or j<0: break
+        frames+=1; buf=buf[j+2:]
+elapsed=10
+print(f'frames={frames} fps={frames/elapsed:.1f} kbps={total*8/1000/elapsed:.0f}')
+PY
+cat /tmp/ndi-profiling/sd2l-baseline/server-fps.txt
+```
+
+- [ ] **Step 7: Save parseable summary**
+
+```bash
+cat <<EOF > /tmp/ndi-profiling/sd2l-baseline/SUMMARY.md
+# sd2l.lan baseline (Hyundai 1 GB, current native pipeline)
+- decode_p50: <fill from stats.txt>
+- decode_p95: <fill from stats.txt>
+- paint_p50: <fill from stats.txt>
+- fps_sustained_browser: <Decode Image count / 10>
+- server_fps: <from server-fps.txt>
+- server_kbps: <from server-fps.txt>
+EOF
+```
+
+Manually fill the placeholders in `SUMMARY.md`. This file feeds Task 12.
+
+- [ ] **Step 8: Mark task done**
+
+No commit yet — artifacts live under `/tmp` and are not committed.
 
 ---
 
-## Phase 2: Implementation
-
-### Task 3: Workspace prep — version bump and `image` dep
+## Task 3: Workspace prep — version bump 0.4.34 + image dep
 
 **Files:**
-- Modify: `Cargo.toml` (workspace root)
-- Modify: `crates/presenter-ndi/Cargo.toml`
-- Modify: `Cargo.lock` (auto)
+- Modify: `Cargo.toml:15`
+- Modify: `crates/presenter-ndi/Cargo.toml:9-19`
 
 - [ ] **Step 1: Bump workspace version**
 
-In `Cargo.toml`, change:
+In `Cargo.toml`, change line 15:
 
 ```toml
-[workspace.package]
+# Old:
 version = "0.4.33"
-```
 
-to:
-
-```toml
-[workspace.package]
+# New:
 version = "0.4.34"
 ```
 
-- [ ] **Step 2: Add `image` to workspace deps**
+- [ ] **Step 2: Add image crate to presenter-ndi**
 
-In `Cargo.toml` under `[workspace.dependencies]`, add:
-
-```toml
-image = { version = "0.25", default-features = false, features = ["jpeg"] }
-```
-
-- [ ] **Step 3: Add the dep to `presenter-ndi`**
-
-In `crates/presenter-ndi/Cargo.toml`, under `[dependencies]`, add:
+In `crates/presenter-ndi/Cargo.toml`, append after line 19 (last existing dep):
 
 ```toml
-image = { workspace = true }
+image = { version = "0.25", default-features = false }
 ```
 
-- [ ] **Step 4: Update Cargo.lock**
+- [ ] **Step 3: Verify build still compiles**
 
 ```bash
-cargo build -p presenter-ndi --quiet
-cargo build -p presenter-ui --manifest-path crates/presenter-ui/Cargo.toml --quiet
+cargo build -p presenter-ndi 2>&1 | tail -5
 ```
 
-(presenter-ui is a workspace-excluded crate with its own Cargo.lock — version bump must propagate there too.)
+Expected: `Finished `dev` profile`.
 
-- [ ] **Step 5: Verify**
-
-```bash
-grep '^version = "0.4.34"' Cargo.lock | head -3
-grep '^version = "0.4.34"' crates/presenter-ui/Cargo.lock | head -3
-```
-
-Both must show the presenter-* crates at the new version.
-
-- [ ] **Step 6: Commit**
+- [ ] **Step 4: Commit**
 
 ```bash
-git add Cargo.toml Cargo.lock crates/presenter-ndi/Cargo.toml crates/presenter-ui/Cargo.lock
-git commit -m "chore: bump version to 0.4.34, add image crate (#250)"
+git add Cargo.toml Cargo.lock crates/presenter-ndi/Cargo.toml
+git commit -m "chore: bump version to 0.4.34 and add image dep for tier resize (#250)"
 ```
 
 ---
 
-### Task 4: `Tier` enum and transitions
+## Task 4: Tier enum and transitions
 
 **Files:**
 - Create: `crates/presenter-ndi/src/tier.rs`
 - Modify: `crates/presenter-ndi/src/lib.rs`
 
-- [ ] **Step 1: Write the failing test**
+- [ ] **Step 1: Write the failing tier.rs with tests first**
 
-Create `crates/presenter-ndi/src/tier.rs` with:
+Create `crates/presenter-ndi/src/tier.rs`:
 
 ```rust
-//! Tier definitions for adaptive MJPEG streaming.
+//! Adaptive streaming tier ladder for `/ndi/mjpeg`.
 //!
-//! A `Tier` is one (resolution, framerate) target. Tiers form a totally-
-//! ordered ladder where L0 is the most demanding and L3 is the floor.
+//! Four tiers chosen to keep text readable (floor at 720p) while degrading
+//! framerate first (Resolume composed graphics don't move much).
+//!
+//! L0 (native): 1080p @ 30 fps  ~24 Mbps
+//! L1:          1080p @ 15 fps  ~12 Mbps
+//! L2:          720p  @ 15 fps  ~6 Mbps
+//! L3 (floor):  720p  @ 10 fps  ~4 Mbps
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum Tier {
@@ -238,30 +354,25 @@ pub enum Tier {
 
 #[derive(Debug, Clone, Copy)]
 pub struct TierSpec {
-    /// Maximum output height in pixels. Source dims are preserved if
-    /// already smaller; aspect ratio is preserved during downscale.
-    pub max_height: u32,
-    /// Target output framerate.
+    pub target_height: u32,
     pub target_fps: u32,
+    pub frame_skip_modulus: u32,
 }
 
 impl Tier {
-    pub const fn spec(self) -> TierSpec {
+    pub const ALL: [Tier; 4] = [Tier::L0, Tier::L1, Tier::L2, Tier::L3];
+
+    pub fn spec(self) -> TierSpec {
         match self {
-            Tier::L0 => TierSpec { max_height: 1080, target_fps: 30 },
-            Tier::L1 => TierSpec { max_height: 1080, target_fps: 15 },
-            Tier::L2 => TierSpec { max_height: 720,  target_fps: 15 },
-            Tier::L3 => TierSpec { max_height: 720,  target_fps: 10 },
+            Tier::L0 => TierSpec { target_height: 1080, target_fps: 30, frame_skip_modulus: 1 },
+            Tier::L1 => TierSpec { target_height: 1080, target_fps: 15, frame_skip_modulus: 2 },
+            Tier::L2 => TierSpec { target_height: 720,  target_fps: 15, frame_skip_modulus: 2 },
+            Tier::L3 => TierSpec { target_height: 720,  target_fps: 10, frame_skip_modulus: 3 },
         }
     }
 
-    /// Initial tier for a new connection.
-    pub const fn initial() -> Self {
-        Tier::L0
-    }
-
-    /// Returns the next-lower tier, or `None` if already at the floor.
-    pub const fn demote(self) -> Option<Self> {
+    /// One step worse. Returns `None` at the floor.
+    pub fn demote(self) -> Option<Tier> {
         match self {
             Tier::L0 => Some(Tier::L1),
             Tier::L1 => Some(Tier::L2),
@@ -270,8 +381,8 @@ impl Tier {
         }
     }
 
-    /// Returns the next-higher tier, or `None` if already at the top.
-    pub const fn promote(self) -> Option<Self> {
+    /// One step better. Returns `None` at native.
+    pub fn promote(self) -> Option<Tier> {
         match self {
             Tier::L0 => None,
             Tier::L1 => Some(Tier::L0),
@@ -286,44 +397,57 @@ mod tests {
     use super::*;
 
     #[test]
-    fn ladder_demotes_to_floor() {
-        let mut t = Tier::initial();
-        for expected in [Tier::L1, Tier::L2, Tier::L3] {
-            t = t.demote().expect("not at floor yet");
-            assert_eq!(t, expected);
-        }
-        assert_eq!(t.demote(), None, "L3 is the floor");
+    fn l0_is_native_1080p_30fps() {
+        let s = Tier::L0.spec();
+        assert_eq!(s.target_height, 1080);
+        assert_eq!(s.target_fps, 30);
+        assert_eq!(s.frame_skip_modulus, 1);
     }
 
     #[test]
-    fn ladder_promotes_to_top() {
-        let mut t = Tier::L3;
-        for expected in [Tier::L2, Tier::L1, Tier::L0] {
-            t = t.promote().expect("not at top yet");
-            assert_eq!(t, expected);
-        }
-        assert_eq!(t.promote(), None, "L0 is the top");
+    fn l3_is_floor_720p_10fps() {
+        let s = Tier::L3.spec();
+        assert_eq!(s.target_height, 720);
+        assert_eq!(s.target_fps, 10);
+        assert_eq!(s.frame_skip_modulus, 3);
     }
 
     #[test]
-    fn specs_match_design() {
-        assert_eq!(Tier::L0.spec().max_height, 1080);
-        assert_eq!(Tier::L0.spec().target_fps, 30);
-        assert_eq!(Tier::L3.spec().max_height, 720);
-        assert_eq!(Tier::L3.spec().target_fps, 10);
+    fn demote_walks_l0_to_l3_then_none() {
+        assert_eq!(Tier::L0.demote(), Some(Tier::L1));
+        assert_eq!(Tier::L1.demote(), Some(Tier::L2));
+        assert_eq!(Tier::L2.demote(), Some(Tier::L3));
+        assert_eq!(Tier::L3.demote(), None);
+    }
+
+    #[test]
+    fn promote_walks_l3_to_l0_then_none() {
+        assert_eq!(Tier::L3.promote(), Some(Tier::L2));
+        assert_eq!(Tier::L2.promote(), Some(Tier::L1));
+        assert_eq!(Tier::L1.promote(), Some(Tier::L0));
+        assert_eq!(Tier::L0.promote(), None);
+    }
+
+    #[test]
+    fn all_lists_every_tier() {
+        assert_eq!(Tier::ALL.len(), 4);
+        for t in Tier::ALL {
+            // every tier round-trips through spec()
+            let _ = t.spec();
+        }
     }
 }
 ```
 
-- [ ] **Step 2: Wire into the crate**
+- [ ] **Step 2: Wire into lib.rs**
 
-In `crates/presenter-ndi/src/lib.rs`, add:
+In `crates/presenter-ndi/src/lib.rs`, add after line 7 (existing `mod` lines):
 
 ```rust
 pub mod tier;
 ```
 
-right after `pub mod encoder;`. Then add the re-exports near the bottom:
+And add a re-export after existing `pub use` lines:
 
 ```rust
 pub use tier::{Tier, TierSpec};
@@ -332,318 +456,191 @@ pub use tier::{Tier, TierSpec};
 - [ ] **Step 3: Run tests**
 
 ```bash
-cargo test -p presenter-ndi tier::tests --quiet
+cargo test -p presenter-ndi tier:: 2>&1 | tail -15
 ```
 
-Expected: 3 passed.
+Expected: 5 passed.
 
 - [ ] **Step 4: Commit**
 
 ```bash
 git add crates/presenter-ndi/src/tier.rs crates/presenter-ndi/src/lib.rs
-git commit -m "feat(ndi): add Tier ladder (L0..L3) for adaptive MJPEG (#250)"
+git commit -m "feat(ndi): add Tier enum with promote/demote ladder (#250)"
 ```
 
 ---
 
-### Task 5: Resize-and-encode in `JpegEncoder`
+## Task 5: JpegEncoder resize variants
 
 **Files:**
 - Modify: `crates/presenter-ndi/src/encoder.rs`
 
-- [ ] **Step 1: Write the failing test**
+- [ ] **Step 1: Make uyvy_to_bgra public (used by tier encoders)**
 
-Append to `crates/presenter-ndi/src/encoder.rs`:
-
-```rust
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    fn make_bgra(width: u32, height: u32) -> Vec<u8> {
-        // Solid red BGRA frame so resize is well-defined.
-        let mut v = Vec::with_capacity((width * height * 4) as usize);
-        for _ in 0..(width * height) {
-            v.extend_from_slice(&[0, 0, 255, 255]); // BGRA red
-        }
-        v
-    }
-
-    #[test]
-    fn encode_bgra_resized_caps_height_and_preserves_aspect() {
-        let enc = JpegEncoder::new(75);
-        // 1920x1080 -> max_height 720 should produce 1280x720
-        let bgra = make_bgra(1920, 1080);
-        let jpeg = enc.encode_bgra_resized(&bgra, 1920, 1080, 720).unwrap();
-        let img = image::load_from_memory(&jpeg).unwrap();
-        assert_eq!(img.height(), 720);
-        assert_eq!(img.width(), 1280);
-    }
-
-    #[test]
-    fn encode_bgra_resized_passthrough_when_source_smaller() {
-        let enc = JpegEncoder::new(75);
-        // 640x480 source with max_height 720 should NOT upscale: stays 640x480.
-        let bgra = make_bgra(640, 480);
-        let jpeg = enc.encode_bgra_resized(&bgra, 640, 480, 720).unwrap();
-        let img = image::load_from_memory(&jpeg).unwrap();
-        assert_eq!(img.width(), 640);
-        assert_eq!(img.height(), 480);
-    }
-}
-```
-
-- [ ] **Step 2: Run test to verify it fails**
-
-```bash
-cargo test -p presenter-ndi encoder::tests --quiet
-```
-
-Expected: compile error — `encode_bgra_resized` does not exist.
-
-- [ ] **Step 3: Implement**
-
-Replace the contents of `crates/presenter-ndi/src/encoder.rs` with:
+In `crates/presenter-ndi/src/encoder.rs`, change line 42:
 
 ```rust
-use anyhow::{Context, Result};
+// Old:
+fn uyvy_to_bgra(uyvy: &[u8], width: u32, height: u32) -> Vec<u8> {
 
-/// JPEG encoder using libjpeg-turbo for minimal latency.
-pub struct JpegEncoder {
-    quality: i32,
-}
+// New:
+pub fn uyvy_to_bgra(uyvy: &[u8], width: u32, height: u32) -> Vec<u8> {
+```
 
+- [ ] **Step 2: Add encode_bgra_resized method with TDD**
+
+Append the following to `crates/presenter-ndi/src/encoder.rs` (replace the existing `#[cfg(test)]` block if present, or append if not):
+
+```rust
 impl JpegEncoder {
-    /// Create a new JPEG encoder with the given quality (1-100).
-    pub fn new(quality: i32) -> Self {
-        Self {
-            quality: quality.clamp(1, 100),
-        }
-    }
-
-    /// Encode BGRA/BGRX pixel data to JPEG.
+    /// Resize BGRA pixel data to `target_height` (preserving aspect) and JPEG-encode.
     ///
-    /// Returns the compressed JPEG bytes.
-    pub fn encode_bgra(&self, bgra: &[u8], width: u32, height: u32) -> Result<Vec<u8>> {
-        let image = turbojpeg::Image {
-            pixels: bgra,
-            width: width as usize,
-            pitch: width as usize * 4,
-            height: height as usize,
-            format: turbojpeg::PixelFormat::BGRA,
-        };
-        let buf = turbojpeg::compress(image, self.quality, turbojpeg::Subsamp::Sub2x2)
-            .context("JPEG encode failed")?;
-        Ok(buf.to_vec())
-    }
-
-    /// Encode UYVY pixel data to JPEG.
-    ///
-    /// Converts UYVY → BGRA first, then encodes.
-    pub fn encode_uyvy(&self, uyvy: &[u8], width: u32, height: u32) -> Result<Vec<u8>> {
-        let bgra = uyvy_to_bgra(uyvy, width, height);
-        self.encode_bgra(&bgra, width, height)
-    }
-
-    /// Encode BGRA pixel data to JPEG, capped at `max_height`.
-    ///
-    /// If the source is already at or below `max_height`, no resize is done.
-    /// Aspect ratio is preserved.
+    /// If `src_height == target_height`, this is a fast path that skips resize.
+    /// Otherwise uses `image::imageops::resize` with the `Triangle` filter,
+    /// chosen for cheap CPU cost over Lanczos quality (the difference is
+    /// imperceptible at typical NDI-display sizes).
     pub fn encode_bgra_resized(
         &self,
         bgra: &[u8],
-        width: u32,
-        height: u32,
-        max_height: u32,
+        src_width: u32,
+        src_height: u32,
+        target_height: u32,
     ) -> Result<Vec<u8>> {
-        if height <= max_height {
-            return self.encode_bgra(bgra, width, height);
+        if target_height == src_height {
+            return self.encode_bgra(bgra, src_width, src_height);
         }
-        let (out_w, out_h) = scaled_dims(width, height, max_height);
-        let resized = resize_bgra(bgra, width, height, out_w, out_h);
-        self.encode_bgra(&resized, out_w, out_h)
+        let target_width = (src_width * target_height) / src_height;
+        // Make even — turbojpeg with Sub2x2 chroma requires even dims.
+        let target_width = target_width & !1;
+        let target_height = target_height & !1;
+
+        let img = image::ImageBuffer::<image::Rgba<u8>, _>::from_raw(src_width, src_height, bgra.to_vec())
+            .ok_or_else(|| anyhow::anyhow!("BGRA buffer size mismatch: {} bytes for {}x{}", bgra.len(), src_width, src_height))?;
+        let resized = image::imageops::resize(&img, target_width, target_height, image::imageops::FilterType::Triangle);
+        self.encode_bgra(resized.as_raw(), target_width, target_height)
     }
-
-    /// Encode UYVY pixel data to JPEG, capped at `max_height`.
-    pub fn encode_uyvy_resized(
-        &self,
-        uyvy: &[u8],
-        width: u32,
-        height: u32,
-        max_height: u32,
-    ) -> Result<Vec<u8>> {
-        let bgra = uyvy_to_bgra(uyvy, width, height);
-        self.encode_bgra_resized(&bgra, width, height, max_height)
-    }
-}
-
-/// Compute resized dims preserving aspect, capped at `max_height`.
-fn scaled_dims(w: u32, h: u32, max_height: u32) -> (u32, u32) {
-    let new_h = max_height;
-    // Round to even for chroma-subsampled JPEG safety.
-    let new_w = ((w as u64 * new_h as u64 + (h as u64 / 2)) / h as u64) as u32;
-    let new_w = (new_w + 1) & !1;
-    (new_w, new_h)
-}
-
-/// Resize BGRA via the `image` crate. Triangle filter (a.k.a. bilinear) — fast,
-/// good enough for compositing-heavy NDI sources.
-fn resize_bgra(bgra: &[u8], in_w: u32, in_h: u32, out_w: u32, out_h: u32) -> Vec<u8> {
-    let img: image::ImageBuffer<image::Bgra<u8>, &[u8]> =
-        image::ImageBuffer::from_raw(in_w, in_h, bgra)
-            .expect("BGRA buffer length matches dims");
-    let resized = image::imageops::resize(&img, out_w, out_h, image::imageops::FilterType::Triangle);
-    resized.into_raw()
-}
-
-/// Convert UYVY to BGRA for JPEG encoding.
-fn uyvy_to_bgra(uyvy: &[u8], width: u32, height: u32) -> Vec<u8> {
-    let w = width as usize;
-    let h = height as usize;
-    let mut bgra = vec![0u8; w * h * 4];
-
-    for y in 0..h {
-        for x in (0..w).step_by(2) {
-            let uyvy_offset = (y * w + x) * 2;
-            let u = uyvy[uyvy_offset] as f32 - 128.0;
-            let y0 = uyvy[uyvy_offset + 1] as f32;
-            let v = uyvy[uyvy_offset + 2] as f32 - 128.0;
-            let y1 = uyvy[uyvy_offset + 3] as f32;
-
-            // YUV to RGB
-            let r0 = (y0 + 1.402 * v).clamp(0.0, 255.0) as u8;
-            let g0 = (y0 - 0.344 * u - 0.714 * v).clamp(0.0, 255.0) as u8;
-            let b0 = (y0 + 1.772 * u).clamp(0.0, 255.0) as u8;
-
-            let r1 = (y1 + 1.402 * v).clamp(0.0, 255.0) as u8;
-            let g1 = (y1 - 0.344 * u - 0.714 * v).clamp(0.0, 255.0) as u8;
-            let b1 = (y1 + 1.772 * u).clamp(0.0, 255.0) as u8;
-
-            let idx0 = (y * w + x) * 4;
-            bgra[idx0] = b0;
-            bgra[idx0 + 1] = g0;
-            bgra[idx0 + 2] = r0;
-            bgra[idx0 + 3] = 255;
-
-            let idx1 = (y * w + x + 1) * 4;
-            bgra[idx1] = b1;
-            bgra[idx1 + 1] = g1;
-            bgra[idx1 + 2] = r1;
-            bgra[idx1 + 3] = 255;
-        }
-    }
-
-    bgra
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
 
-    fn make_bgra(width: u32, height: u32) -> Vec<u8> {
-        let mut v = Vec::with_capacity((width * height * 4) as usize);
-        for _ in 0..(width * height) {
-            v.extend_from_slice(&[0, 0, 255, 255]);
+    fn make_bgra(w: u32, h: u32) -> Vec<u8> {
+        // Simple gradient so resize has something to interpolate
+        let mut out = Vec::with_capacity((w * h * 4) as usize);
+        for y in 0..h {
+            for x in 0..w {
+                out.push((x % 256) as u8);    // B
+                out.push((y % 256) as u8);    // G
+                out.push(((x + y) % 256) as u8); // R
+                out.push(255);                // A
+            }
         }
-        v
+        out
     }
 
     #[test]
-    fn encode_bgra_resized_caps_height_and_preserves_aspect() {
+    fn encode_bgra_resized_passthrough_when_target_equals_source() {
+        let bgra = make_bgra(64, 64);
         let enc = JpegEncoder::new(75);
+        let jpeg = enc.encode_bgra_resized(&bgra, 64, 64, 64).unwrap();
+        assert!(jpeg.starts_with(&[0xff, 0xd8, 0xff]), "JPEG SOI marker missing");
+    }
+
+    #[test]
+    fn encode_bgra_resized_downscales_aspect_preserved() {
+        // Resize 1920x1080 → 720 height. Width must scale to 1280 (preserving 16:9).
         let bgra = make_bgra(1920, 1080);
-        let jpeg = enc.encode_bgra_resized(&bgra, 1920, 1080, 720).unwrap();
-        let img = image::load_from_memory(&jpeg).unwrap();
-        assert_eq!(img.height(), 720);
-        assert_eq!(img.width(), 1280);
-    }
-
-    #[test]
-    fn encode_bgra_resized_passthrough_when_source_smaller() {
         let enc = JpegEncoder::new(75);
-        let bgra = make_bgra(640, 480);
-        let jpeg = enc.encode_bgra_resized(&bgra, 640, 480, 720).unwrap();
-        let img = image::load_from_memory(&jpeg).unwrap();
-        assert_eq!(img.width(), 640);
-        assert_eq!(img.height(), 480);
+        let jpeg = enc.encode_bgra_resized(&bgra, 1920, 1080, 720).unwrap();
+        assert!(jpeg.starts_with(&[0xff, 0xd8, 0xff]));
+
+        // Decode and check dims
+        let img = turbojpeg::decompress(&jpeg, turbojpeg::PixelFormat::BGRA).unwrap();
+        assert_eq!(img.height, 720);
+        assert_eq!(img.width, 1280);
     }
 
     #[test]
-    fn scaled_dims_rounds_to_even() {
-        // 1921 width with height halve to a non-even number — must round to even
-        let (w, h) = scaled_dims(1921, 1081, 540);
-        assert_eq!(h, 540);
-        assert_eq!(w % 2, 0);
+    fn encode_bgra_resized_rejects_wrong_buffer_size() {
+        let bgra = vec![0u8; 16]; // way too small
+        let enc = JpegEncoder::new(75);
+        let err = enc.encode_bgra_resized(&bgra, 100, 100, 50).unwrap_err();
+        assert!(err.to_string().contains("buffer size mismatch"));
+    }
+
+    #[test]
+    fn uyvy_to_bgra_produces_4bytes_per_pixel() {
+        // 4x2 dummy UYVY frame
+        let uyvy = vec![128u8; 4 * 2 * 2]; // 2 bytes per pixel
+        let bgra = uyvy_to_bgra(&uyvy, 4, 2);
+        assert_eq!(bgra.len(), 4 * 2 * 4);
     }
 }
 ```
 
-- [ ] **Step 4: Run tests to verify they pass**
+- [ ] **Step 3: Run tests**
 
 ```bash
-cargo test -p presenter-ndi encoder::tests --quiet
+cargo test -p presenter-ndi encoder:: 2>&1 | tail -15
 ```
 
-Expected: 3 passed.
+Expected: 4 passed.
 
-- [ ] **Step 5: Commit**
+- [ ] **Step 4: Commit**
 
 ```bash
 git add crates/presenter-ndi/src/encoder.rs
-git commit -m "feat(ndi): add resize-aware JPEG encode (#250)"
+git commit -m "feat(ndi): add encode_bgra_resized for tier downscale (#250)"
 ```
 
 ---
 
-### Task 6: `TierRegistry` and `TierSubscription`
+## Task 6: TierRegistry + TierSubscription
 
 **Files:**
 - Create: `crates/presenter-ndi/src/tier_registry.rs`
 - Modify: `crates/presenter-ndi/src/lib.rs`
 
-- [ ] **Step 1: Write the registry skeleton + tests**
-
-Create `crates/presenter-ndi/src/tier_registry.rs`:
+- [ ] **Step 1: Create tier_registry.rs**
 
 ```rust
-//! Lazy ref-counted registry of tier encoders.
+//! Lazy ref-counted registry of per-tier JPEG broadcasters.
 //!
-//! At most one encoder runs per `Tier`. An encoder is spawned the first
-//! time a subscriber registers for that tier and shut down when the last
-//! subscriber drops its `TierSubscription`.
+//! Each `Tier` has at most one running encoder task; the task is spawned
+//! when a subscriber registers and stopped when the last subscriber drops.
+//! This decouples server CPU cost from client count: 4 clients on the same
+//! tier share one encoder.
 
 use std::collections::HashMap;
-use std::sync::{Arc, Mutex};
-use std::time::{Duration, Instant};
+use std::sync::Arc;
 
 use bytes::Bytes;
-use tokio::sync::broadcast;
+use tokio::sync::{broadcast, watch, Mutex};
+use tokio::task::JoinHandle;
 
-use crate::encoder::JpegEncoder;
+use crate::encoder::{uyvy_to_bgra, JpegEncoder};
 use crate::receiver::VideoFrame;
 use crate::tier::Tier;
 
-/// Capacity of each tier's broadcast channel. Small so backpressure
-/// surfaces quickly as `RecvError::Lagged`.
-const TIER_CHANNEL_CAPACITY: usize = 4;
+const JPEG_BROADCAST_CAPACITY: usize = 4;
 
-/// Shared upstream raw frame slot — the tier encoder reads the latest
-/// frame here and applies its tier-specific transform.
-pub type FrameSlot = Arc<Mutex<Option<VideoFrame>>>;
+/// Newest-wins raw-frame channel. `None` means no active stream.
+pub type RawFrameRx = watch::Receiver<Option<Arc<VideoFrame>>>;
+pub type RawFrameTx = watch::Sender<Option<Arc<VideoFrame>>>;
 
 struct TierEntry {
-    tx: broadcast::Sender<Bytes>,
+    jpeg_tx: broadcast::Sender<Bytes>,
     refcount: usize,
-    stop_tx: tokio::sync::watch::Sender<bool>,
-    handle: Option<std::thread::JoinHandle<()>>,
+    stop_tx: watch::Sender<bool>,
+    handle: JoinHandle<()>,
 }
 
-/// A subscription handle tying a `broadcast::Receiver` to a refcount.
-/// Dropping it decrements the refcount and possibly stops the tier encoder.
+/// Handle held by an MJPEG connection. Drop = unsubscribe + decrement refcount.
 pub struct TierSubscription {
-    pub rx: broadcast::Receiver<Bytes>,
     tier: Tier,
-    registry: Arc<TierRegistryInner>,
+    pub rx: broadcast::Receiver<Bytes>,
+    registry: Arc<TierRegistry>,
 }
 
 impl TierSubscription {
@@ -654,165 +651,120 @@ impl TierSubscription {
 
 impl Drop for TierSubscription {
     fn drop(&mut self) {
-        self.registry.unsubscribe(self.tier);
+        let registry = Arc::clone(&self.registry);
+        let tier = self.tier;
+        // We can't .await in Drop; spawn a release task.
+        tokio::spawn(async move {
+            registry.release(tier).await;
+        });
     }
 }
 
 pub struct TierRegistry {
-    inner: Arc<TierRegistryInner>,
-}
-
-pub(crate) struct TierRegistryInner {
-    frame_slot: FrameSlot,
-    condvar: Arc<std::sync::Condvar>,
     entries: Mutex<HashMap<Tier, TierEntry>>,
+    raw_rx: RawFrameRx,
 }
 
 impl TierRegistry {
-    pub fn new(frame_slot: FrameSlot, condvar: Arc<std::sync::Condvar>) -> Self {
-        Self {
-            inner: Arc::new(TierRegistryInner {
-                frame_slot,
-                condvar,
-                entries: Mutex::new(HashMap::new()),
-            }),
-        }
+    pub fn new(raw_rx: RawFrameRx) -> Arc<Self> {
+        Arc::new(Self {
+            entries: Mutex::new(HashMap::new()),
+            raw_rx,
+        })
     }
 
-    /// Subscribe to a tier — spawns the encoder if not already running.
-    pub fn subscribe(&self, tier: Tier) -> TierSubscription {
-        self.inner.subscribe(tier)
-    }
-
-    /// Stop all tier encoders (called when the upstream NDI stream stops).
-    pub fn stop_all(&self) {
-        self.inner.stop_all();
-    }
-
-    /// Test/inspection: how many encoders are currently running.
-    pub fn active_tiers(&self) -> usize {
-        self.inner.entries.lock().unwrap().len()
-    }
-}
-
-impl TierRegistryInner {
-    fn subscribe(self: &Arc<Self>, tier: Tier) -> TierSubscription {
-        let mut entries = self.entries.lock().unwrap();
-        let entry = entries.entry(tier).or_insert_with(|| {
-            let (tx, _) = broadcast::channel::<Bytes>(TIER_CHANNEL_CAPACITY);
-            let (stop_tx, stop_rx) = tokio::sync::watch::channel(false);
-            let frame_slot = Arc::clone(&self.frame_slot);
-            let condvar = Arc::clone(&self.condvar);
-            let tx_clone = tx.clone();
-            let handle = std::thread::Builder::new()
-                .name(format!("ndi-tier-{:?}", tier))
-                .spawn(move || run_tier_encoder(tier, frame_slot, condvar, tx_clone, stop_rx))
-                .expect("spawn tier encoder thread");
-            TierEntry {
-                tx,
-                refcount: 0,
-                stop_tx,
-                handle: Some(handle),
-            }
+    pub async fn subscribe(self: &Arc<Self>, tier: Tier) -> TierSubscription {
+        let mut guard = self.entries.lock().await;
+        let entry = guard.entry(tier).or_insert_with(|| {
+            let (jpeg_tx, _) = broadcast::channel(JPEG_BROADCAST_CAPACITY);
+            let (stop_tx, stop_rx) = watch::channel(false);
+            let handle = tokio::spawn(run_tier_encoder(
+                tier,
+                self.raw_rx.clone(),
+                jpeg_tx.clone(),
+                stop_rx,
+            ));
+            TierEntry { jpeg_tx, refcount: 0, stop_tx, handle }
         });
         entry.refcount += 1;
-        let rx = entry.tx.subscribe();
+        let rx = entry.jpeg_tx.subscribe();
         TierSubscription {
-            rx,
             tier,
+            rx,
             registry: Arc::clone(self),
         }
     }
 
-    fn unsubscribe(&self, tier: Tier) {
-        let mut entries = self.entries.lock().unwrap();
-        let should_stop = if let Some(entry) = entries.get_mut(&tier) {
-            entry.refcount -= 1;
-            entry.refcount == 0
-        } else {
-            false
-        };
-        if should_stop {
-            if let Some(mut entry) = entries.remove(&tier) {
+    pub async fn release(self: &Arc<Self>, tier: Tier) {
+        let mut guard = self.entries.lock().await;
+        if let Some(entry) = guard.get_mut(&tier) {
+            entry.refcount = entry.refcount.saturating_sub(1);
+            if entry.refcount == 0 {
+                let entry = guard.remove(&tier).unwrap();
                 let _ = entry.stop_tx.send(true);
-                if let Some(h) = entry.handle.take() {
-                    drop(entries); // release before joining (encoder may want condvar)
-                    let _ = h.join();
-                }
+                entry.handle.abort();
             }
         }
     }
 
-    fn stop_all(&self) {
-        let mut entries = self.entries.lock().unwrap();
-        for (_tier, mut entry) in entries.drain() {
-            let _ = entry.stop_tx.send(true);
-            if let Some(h) = entry.handle.take() {
-                let _ = h.join();
-            }
-        }
+    #[cfg(test)]
+    pub async fn active_tier_count(&self) -> usize {
+        self.entries.lock().await.len()
     }
 }
 
-/// Encoder loop for a single tier. Reads the shared frame slot via
-/// condvar, applies the tier's resize+frame-skip, JPEG-encodes,
-/// broadcasts.
-fn run_tier_encoder(
+async fn run_tier_encoder(
     tier: Tier,
-    frame_slot: FrameSlot,
-    condvar: Arc<std::sync::Condvar>,
-    tx: broadcast::Sender<Bytes>,
-    mut stop_rx: tokio::sync::watch::Receiver<bool>,
+    mut raw_rx: RawFrameRx,
+    jpeg_tx: broadcast::Sender<Bytes>,
+    mut stop_rx: watch::Receiver<bool>,
 ) {
     let fourcc_uyvy = u32::from_le_bytes([b'U', b'Y', b'V', b'Y']);
     let fourcc_bgra = u32::from_le_bytes([b'B', b'G', b'R', b'A']);
     let fourcc_bgrx = u32::from_le_bytes([b'B', b'G', b'R', b'X']);
     let encoder = JpegEncoder::new(75);
     let spec = tier.spec();
-    let frame_interval = Duration::from_secs_f64(1.0 / spec.target_fps as f64);
-    let mut next_emit = Instant::now();
 
-    tracing::info!(?tier, "tier encoder started");
+    let mut frame_index: u32 = 0;
+    tracing::info!(?tier, target_height = spec.target_height, target_fps = spec.target_fps, "tier encoder started");
 
     loop {
-        if *stop_rx.borrow() {
-            break;
+        tokio::select! {
+            _ = stop_rx.changed() => {
+                if *stop_rx.borrow() { break; }
+            }
+            res = raw_rx.changed() => {
+                if res.is_err() { break; }
+            }
         }
 
-        let frame = {
-            let slot = frame_slot.lock().unwrap_or_else(|e| e.into_inner());
-            let (mut slot, _) = condvar
-                .wait_timeout(slot, Duration::from_millis(100))
-                .unwrap_or_else(|e| e.into_inner());
-            slot.clone()
-        };
-
-        let frame = match frame {
-            Some(f) => f,
+        let frame = match raw_rx.borrow().as_ref() {
+            Some(f) => Arc::clone(f),
             None => continue,
         };
 
-        let now = Instant::now();
-        if now < next_emit {
-            continue; // frame skip — drop this one
+        // Frame skip
+        frame_index = frame_index.wrapping_add(1);
+        if frame_index % spec.frame_skip_modulus != 0 {
+            continue;
         }
-        next_emit = now + frame_interval;
 
-        let jpeg = if frame.fourcc == fourcc_bgra || frame.fourcc == fourcc_bgrx {
-            encoder.encode_bgra_resized(&frame.data, frame.width, frame.height, spec.max_height)
+        // Resolve BGRA bytes (convert UYVY if needed)
+        let (bgra, w, h) = if frame.fourcc == fourcc_bgra || frame.fourcc == fourcc_bgrx {
+            (frame.data.clone(), frame.width, frame.height)
         } else if frame.fourcc == fourcc_uyvy {
-            encoder.encode_uyvy_resized(&frame.data, frame.width, frame.height, spec.max_height)
+            (uyvy_to_bgra(&frame.data, frame.width, frame.height), frame.width, frame.height)
         } else {
-            tracing::warn!(?tier, "unsupported fourcc: 0x{:08x}", frame.fourcc);
+            tracing::warn!(?tier, fourcc = format!("0x{:08x}", frame.fourcc), "unsupported fourcc; skipping");
             continue;
         };
 
-        match jpeg {
-            Ok(data) => {
-                let _ = tx.send(Bytes::from(data));
+        match encoder.encode_bgra_resized(&bgra, w, h, spec.target_height) {
+            Ok(jpeg) => {
+                let _ = jpeg_tx.send(Bytes::from(jpeg));
             }
             Err(e) => {
-                tracing::error!(?tier, "JPEG encode error: {e}");
+                tracing::error!(?tier, "tier encode error: {e}");
             }
         }
     }
@@ -823,63 +775,115 @@ fn run_tier_encoder(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::receiver::VideoFrame;
 
-    fn empty_slot() -> (FrameSlot, Arc<std::sync::Condvar>) {
-        (
-            Arc::new(Mutex::new(None)),
-            Arc::new(std::sync::Condvar::new()),
-        )
+    fn fake_bgra_frame(w: u32, h: u32) -> Arc<VideoFrame> {
+        Arc::new(VideoFrame {
+            width: w,
+            height: h,
+            data: vec![128u8; (w * h * 4) as usize],
+            stride: (w * 4) as i32,
+            fourcc: u32::from_le_bytes([b'B', b'G', b'R', b'A']),
+            frame_rate_n: 30,
+            frame_rate_d: 1,
+        })
     }
 
-    #[test]
-    fn subscribe_then_drop_stops_encoder() {
-        let (slot, cv) = empty_slot();
-        let reg = TierRegistry::new(slot, cv);
-        assert_eq!(reg.active_tiers(), 0);
-        {
-            let _sub = reg.subscribe(Tier::L0);
-            assert_eq!(reg.active_tiers(), 1);
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn subscribe_spawns_one_encoder_per_tier() {
+        let (raw_tx, raw_rx) = watch::channel(None);
+        let registry = TierRegistry::new(raw_rx);
+        assert_eq!(registry.active_tier_count().await, 0);
+
+        let _s1 = registry.subscribe(Tier::L0).await;
+        assert_eq!(registry.active_tier_count().await, 1);
+
+        let _s2 = registry.subscribe(Tier::L0).await;
+        assert_eq!(registry.active_tier_count().await, 1, "second L0 sub must reuse encoder");
+
+        let _s3 = registry.subscribe(Tier::L2).await;
+        assert_eq!(registry.active_tier_count().await, 2);
+
+        drop(raw_tx);
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn dropping_last_subscription_stops_encoder() {
+        let (raw_tx, raw_rx) = watch::channel(None);
+        let registry = TierRegistry::new(raw_rx);
+
+        let s1 = registry.subscribe(Tier::L0).await;
+        let s2 = registry.subscribe(Tier::L0).await;
+        assert_eq!(registry.active_tier_count().await, 1);
+
+        drop(s1);
+        // Drop spawns an async release; give it a turn
+        tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+        assert_eq!(registry.active_tier_count().await, 1, "still 1 sub left");
+
+        drop(s2);
+        tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+        assert_eq!(registry.active_tier_count().await, 0);
+
+        drop(raw_tx);
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn tier_encoder_emits_jpeg_for_each_passing_frame() {
+        let (raw_tx, raw_rx) = watch::channel(None);
+        let registry = TierRegistry::new(raw_rx);
+        let mut sub = registry.subscribe(Tier::L0).await;
+
+        // L0 has frame_skip_modulus = 1, so every frame should pass.
+        // Push 3 frames, expect 3 JPEGs.
+        for i in 0..3 {
+            raw_tx.send(Some(fake_bgra_frame(64, 64))).unwrap();
+            // Give encoder a turn
+            tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+            let jpeg = tokio::time::timeout(
+                std::time::Duration::from_millis(200),
+                sub.rx.recv(),
+            ).await.expect(&format!("timed out waiting for jpeg #{i}")).unwrap();
+            assert!(jpeg.starts_with(&[0xff, 0xd8, 0xff]), "frame #{i} not a JPEG");
         }
-        // Give the worker thread up to 200 ms to observe its stop signal
-        // and the registry to clean up.
-        for _ in 0..20 {
-            if reg.active_tiers() == 0 {
-                break;
-            }
-            std::thread::sleep(Duration::from_millis(10));
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn tier_l3_frame_skip_emits_one_third_of_frames() {
+        // L3 has frame_skip_modulus = 3, so 1 of every 3 frames should pass.
+        let (raw_tx, raw_rx) = watch::channel(None);
+        let registry = TierRegistry::new(raw_rx);
+        let mut sub = registry.subscribe(Tier::L3).await;
+
+        // Push 9 frames slowly so each is processed
+        for _ in 0..9 {
+            raw_tx.send(Some(fake_bgra_frame(64, 64))).unwrap();
+            tokio::time::sleep(std::time::Duration::from_millis(15)).await;
         }
-        assert_eq!(reg.active_tiers(), 0);
-    }
 
-    #[test]
-    fn two_subscribers_share_one_encoder() {
-        let (slot, cv) = empty_slot();
-        let reg = TierRegistry::new(slot, cv);
-        let _a = reg.subscribe(Tier::L1);
-        let _b = reg.subscribe(Tier::L1);
-        assert_eq!(reg.active_tiers(), 1, "shared tier counts once");
-    }
-
-    #[test]
-    fn distinct_tiers_run_independently() {
-        let (slot, cv) = empty_slot();
-        let reg = TierRegistry::new(slot, cv);
-        let _a = reg.subscribe(Tier::L0);
-        let _b = reg.subscribe(Tier::L2);
-        assert_eq!(reg.active_tiers(), 2);
+        // Drain receiver
+        let mut got = 0;
+        while let Ok(Ok(_)) = tokio::time::timeout(
+            std::time::Duration::from_millis(50),
+            sub.rx.recv(),
+        ).await {
+            got += 1;
+        }
+        // Allow off-by-one (depending on which frame triggers the modulus)
+        assert!((2..=4).contains(&got), "expected ~3 frames, got {got}");
     }
 }
 ```
 
-- [ ] **Step 2: Wire into the crate**
+- [ ] **Step 2: Wire into lib.rs**
 
-In `crates/presenter-ndi/src/lib.rs`, add:
+In `crates/presenter-ndi/src/lib.rs`, after `pub mod tier;`:
 
 ```rust
 pub mod tier_registry;
 ```
 
-after `pub mod tier;`. Add re-export:
+And after the existing re-exports:
 
 ```rust
 pub use tier_registry::{TierRegistry, TierSubscription};
@@ -888,28 +892,30 @@ pub use tier_registry::{TierRegistry, TierSubscription};
 - [ ] **Step 3: Run tests**
 
 ```bash
-cargo test -p presenter-ndi tier_registry --quiet
+cargo test -p presenter-ndi tier_registry:: 2>&1 | tail -20
 ```
 
-Expected: 3 passed.
+Expected: 4 passed.
 
 - [ ] **Step 4: Commit**
 
 ```bash
 git add crates/presenter-ndi/src/tier_registry.rs crates/presenter-ndi/src/lib.rs
-git commit -m "feat(ndi): TierRegistry with refcount lifecycle + per-tier encoder (#250)"
+git commit -m "feat(ndi): add TierRegistry with lazy ref-counted tier encoders (#250)"
 ```
 
 ---
 
-### Task 7: Replace single encoder with TierRegistry in `NdiManager`
+## Task 7: Replace single encoder with TierRegistry in NdiManager
 
 **Files:**
 - Modify: `crates/presenter-ndi/src/manager.rs`
 
-- [ ] **Step 1: Replace manager.rs content**
+This is the biggest single change. The capture thread is reworked to publish raw `Arc<VideoFrame>` via a `watch` channel; the old `frame_tx` broadcast and `run_encode_thread` are deleted; `subscribe_frames()` is replaced by `subscribe_tier`.
 
-Replace the contents of `crates/presenter-ndi/src/manager.rs` with:
+- [ ] **Step 1: Replace the entire manager.rs file**
+
+Overwrite `crates/presenter-ndi/src/manager.rs` with:
 
 ```rust
 use std::sync::Arc;
@@ -921,7 +927,7 @@ use crate::discovery::{self, FinderShutdown, SourceList};
 use crate::ndi_sdk::NdiLib;
 use crate::receiver::{NdiReceiver, VideoFrame};
 use crate::tier::Tier;
-use crate::tier_registry::{FrameSlot, TierRegistry, TierSubscription};
+use crate::tier_registry::{TierRegistry, TierSubscription};
 
 /// Callback for reporting NDI connection status changes.
 pub type StatusCallback = Arc<dyn Fn(String) + Send + Sync>;
@@ -931,32 +937,38 @@ struct ActiveStream {
     capture_thread: Option<std::thread::JoinHandle<()>>,
 }
 
-/// Orchestrates NDI discovery, capture, and tiered MJPEG encoding.
+/// Orchestrates NDI discovery, capture, and adaptive MJPEG encoding.
+///
+/// Discovery runs in a persistent background thread — sources accumulate
+/// over time via mDNS. Capture runs in an OS thread that publishes the
+/// newest raw frame to a `tokio::sync::watch` channel; per-tier JPEG
+/// encoders subscribe via `TierRegistry`.
 pub struct NdiManager {
     sdk: Arc<NdiLib>,
     source_list: SourceList,
     _finder_shutdown: FinderShutdown,
     active_stream: Mutex<Option<ActiveStream>>,
-    frame_slot: FrameSlot,
-    condvar: Arc<std::sync::Condvar>,
-    tier_registry: TierRegistry,
+    raw_frame_tx: watch::Sender<Option<Arc<VideoFrame>>>,
+    tier_registry: Arc<TierRegistry>,
 }
 
 impl NdiManager {
+    /// Try to create a new manager by loading the NDI SDK.
+    ///
+    /// Returns `None` if the NDI runtime is not available on this system.
+    /// Immediately starts a persistent finder thread for source discovery.
     pub fn try_new() -> Option<Self> {
         let sdk = NdiLib::load().ok()?;
         let sdk = Arc::new(sdk);
         let (source_list, finder_shutdown) = discovery::spawn_persistent_finder(Arc::clone(&sdk));
-        let frame_slot: FrameSlot = Arc::new(std::sync::Mutex::new(None));
-        let condvar = Arc::new(std::sync::Condvar::new());
-        let tier_registry = TierRegistry::new(Arc::clone(&frame_slot), Arc::clone(&condvar));
+        let (raw_frame_tx, raw_frame_rx) = watch::channel(None);
+        let tier_registry = TierRegistry::new(raw_frame_rx);
         Some(Self {
             sdk,
             source_list,
             _finder_shutdown: finder_shutdown,
             active_stream: Mutex::new(None),
-            frame_slot,
-            condvar,
+            raw_frame_tx,
             tier_registry,
         })
     }
@@ -969,16 +981,15 @@ impl NdiManager {
         Ok(self.source_list.read())
     }
 
-    /// Subscribe to a specific tier.
-    pub fn subscribe_tier(&self, tier: Tier) -> TierSubscription {
-        self.tier_registry.subscribe(tier)
+    /// Subscribe to a JPEG broadcast for a given adaptive tier.
+    pub async fn subscribe_tier(&self, tier: Tier) -> TierSubscription {
+        self.tier_registry.subscribe(tier).await
     }
 
-    /// Back-compat: subscribe at the initial tier (L0).
-    pub fn subscribe_frames(&self) -> TierSubscription {
-        self.tier_registry.subscribe(Tier::initial())
-    }
-
+    /// Start capturing from the named NDI source.
+    ///
+    /// Spawns one OS thread for frame capture; tier encoders are spawned
+    /// lazily by `TierRegistry` as subscribers register.
     pub async fn start_stream(
         &self,
         ndi_name: &str,
@@ -987,15 +998,14 @@ impl NdiManager {
         self.stop_stream().await;
 
         let sdk = Arc::clone(&self.sdk);
+        let raw_tx = self.raw_frame_tx.clone();
         let source_name = ndi_name.to_string();
         let (stop_tx, stop_rx) = watch::channel(false);
-        let frame_slot = Arc::clone(&self.frame_slot);
-        let condvar = Arc::clone(&self.condvar);
 
         let capture_thread = std::thread::Builder::new()
             .name("ndi-capture".into())
             .spawn(move || {
-                run_capture_thread(sdk, source_name, frame_slot, condvar, stop_rx, status_cb);
+                run_capture_thread(sdk, source_name, raw_tx, stop_rx, status_cb);
             })?;
 
         let mut active = self.active_stream.lock().await;
@@ -1015,27 +1025,23 @@ impl NdiManager {
         let mut active = self.active_stream.lock().await;
         if let Some(mut stream) = active.take() {
             let _ = stream.stop_signal.send(true);
+            // Capture thread checks stop_rx every iteration; clear the frame so subscribers see "stream gone"
+            let _ = self.raw_frame_tx.send(None);
             if let Some(h) = stream.capture_thread.take() {
                 let _ = h.join();
             }
         }
-        // Tier encoders run only while there are subscribers; they will
-        // observe an empty slot indefinitely after capture stops, but
-        // that's harmless. Stop them too so they don't busy-spin if
-        // there are no subscribers.
-        self.tier_registry.stop_all();
     }
 }
 
 // ---------------------------------------------------------------------------
-// Capture thread (unchanged from previous implementation)
+// Capture thread
 // ---------------------------------------------------------------------------
 
 fn run_capture_thread(
     sdk: Arc<NdiLib>,
     source_name: String,
-    frame_slot: FrameSlot,
-    condvar: Arc<std::sync::Condvar>,
+    raw_tx: watch::Sender<Option<Arc<VideoFrame>>>,
     mut stop_rx: watch::Receiver<bool>,
     status_cb: Option<StatusCallback>,
 ) {
@@ -1067,25 +1073,21 @@ fn run_capture_thread(
                     let period = (1000 * frame.frame_rate_d as u64) / frame.frame_rate_n as u64;
                     capture_timeout_ms = (period as u32).clamp(16, 200);
                 }
+
                 if !connected {
                     connected = true;
                     tracing::info!(
                         "NDI connected: {}x{} @ {}/{}fps",
-                        frame.width,
-                        frame.height,
-                        frame.frame_rate_n,
-                        frame.frame_rate_d
+                        frame.width, frame.height, frame.frame_rate_n, frame.frame_rate_d
                     );
                     if let Some(cb) = &status_cb {
                         cb("connected".to_string());
                     }
                 }
                 last_frame_time = std::time::Instant::now();
-                {
-                    let mut slot = frame_slot.lock().unwrap_or_else(|e| e.into_inner());
-                    *slot = Some(frame);
-                }
-                condvar.notify_all();
+
+                // Publish to watch — newest replaces previous; `Arc` so consumers don't copy data.
+                let _ = raw_tx.send(Some(Arc::new(frame)));
             }
             Ok(None) => {
                 if connected && last_frame_time.elapsed() > std::time::Duration::from_secs(3) {
@@ -1126,225 +1128,283 @@ mod tests {
     }
 
     #[test]
-    fn frame_slot_newest_wins() {
-        let slot: FrameSlot = Arc::new(std::sync::Mutex::new(None));
-        {
-            let mut s = slot.lock().unwrap();
-            *s = Some(make_frame(1));
-        }
-        {
-            let mut s = slot.lock().unwrap();
-            *s = Some(make_frame(2));
-        }
-        let frame = slot.lock().unwrap().clone();
-        assert_eq!(frame.unwrap().width, 2);
+    fn watch_newest_wins() {
+        let (tx, mut rx) = watch::channel::<Option<Arc<VideoFrame>>>(None);
+        tx.send(Some(Arc::new(make_frame(1)))).unwrap();
+        tx.send(Some(Arc::new(make_frame(2)))).unwrap();
+        // After multiple sends, watch holds only the newest
+        assert_eq!(rx.borrow_and_update().as_ref().unwrap().width, 2);
+    }
+
+    #[test]
+    fn watch_starts_empty() {
+        let (_tx, rx) = watch::channel::<Option<Arc<VideoFrame>>>(None);
+        assert!(rx.borrow().is_none());
     }
 }
 ```
 
-**Important:** the capture thread now calls `condvar.notify_all()` (was `notify_one`) so all active tier encoders wake on each new frame.
+- [ ] **Step 2: Update lib.rs to drop the old re-exports**
 
-- [ ] **Step 2: Run tests**
+In `crates/presenter-ndi/src/lib.rs`, ensure the file looks like:
 
-```bash
-cargo test -p presenter-ndi --quiet
+```rust
+#![allow(non_camel_case_types)]
+
+pub mod discovery;
+pub mod encoder;
+mod manager;
+pub mod ndi_sdk;
+pub mod receiver;
+pub mod tier;
+pub mod tier_registry;
+
+pub use discovery::SourceList;
+pub use manager::NdiManager;
+pub use manager::StatusCallback;
+pub use tier::{Tier, TierSpec};
+pub use tier_registry::{TierRegistry, TierSubscription};
 ```
 
-Expected: all tests pass (manager + tier + tier_registry + encoder).
-
-- [ ] **Step 3: Commit**
+- [ ] **Step 3: Build presenter-ndi to confirm**
 
 ```bash
-git add crates/presenter-ndi/src/manager.rs
-git commit -m "refactor(ndi): replace single encoder with TierRegistry (#250)"
+cargo build -p presenter-ndi 2>&1 | tail -10
+```
+
+Expected: `Finished `dev` profile`. If `subscribe_frames` callers in `presenter-server` fail to compile yet, that's expected — they get rewritten in Task 9.
+
+- [ ] **Step 4: Run presenter-ndi tests**
+
+```bash
+cargo test -p presenter-ndi 2>&1 | tail -15
+```
+
+Expected: all `tier::tests`, `tier_registry::tests`, `manager::tests`, `encoder::tests` pass.
+
+- [ ] **Step 5: Commit**
+
+```bash
+git add crates/presenter-ndi/src/manager.rs crates/presenter-ndi/src/lib.rs
+git commit -m "refactor(ndi): replace single encode thread with TierRegistry (#250)"
 ```
 
 ---
 
-### Task 8: Adaptive controller — pure logic + tests
+## Task 8: AdaptController state machine
 
 **Files:**
-- Modify: `crates/presenter-ndi/src/tier_registry.rs` (add controller types and tests)
+- Create: `crates/presenter-server/src/adaptive_mjpeg.rs`
+- Modify: `crates/presenter-server/src/main.rs`
 
-- [ ] **Step 1: Append controller logic**
-
-Append to `crates/presenter-ndi/src/tier_registry.rs` (above the `#[cfg(test)]` block):
+- [ ] **Step 1: Create adaptive_mjpeg.rs**
 
 ```rust
-// ---------------------------------------------------------------------------
-// Adaptive controller — pure state machine, decoupled from any I/O.
-// ---------------------------------------------------------------------------
+//! Per-connection adaptive controller for `/ndi/mjpeg`.
+//!
+//! Keeps a sliding 30-second window of `broadcast::RecvError::Lagged`
+//! events. Demotes one tier when the window holds 5+ events; promotes
+//! one tier after 60 seconds of zero lag at the current tier.
 
-/// Number of `Lagged` events within `LAG_WINDOW` that triggers a demote.
-pub const LAG_THRESHOLD: u32 = 5;
-/// Sliding window for counting `Lagged` events.
-pub const LAG_WINDOW: Duration = Duration::from_secs(30);
-/// How long a connection must run without any `Lagged` event before promoting.
-pub const PROMOTE_AFTER: Duration = Duration::from_secs(60);
+use std::collections::VecDeque;
+use std::time::{Duration, Instant};
 
-#[derive(Debug, Clone, Copy)]
-pub enum AdaptEvent {
-    /// A frame was successfully delivered.
-    FrameOk,
-    /// The broadcast subscriber lagged (one or more frames were dropped).
-    Lagged,
-}
+use presenter_ndi::Tier;
 
-#[derive(Debug, Clone, Copy)]
+const LAG_WINDOW: Duration = Duration::from_secs(30);
+const LAG_DEMOTE_THRESHOLD: usize = 5;
+const PROMOTE_AFTER: Duration = Duration::from_secs(60);
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum AdaptDecision {
-    /// Stay on the current tier.
     Stay,
-    /// Demote (or stay if already at floor).
-    Demote,
-    /// Promote (or stay if already at top).
-    Promote,
+    Demote(Tier),
+    Promote(Tier),
 }
 
-/// Per-connection adaptive state. The controller is fed `(now, event)`
-/// pairs and produces a decision. The caller applies the decision by
-/// re-subscribing on the registry.
-#[derive(Debug)]
 pub struct AdaptController {
-    lag_times: std::collections::VecDeque<Instant>,
+    tier: Tier,
+    lag_events: VecDeque<Instant>,
     last_lag_at: Option<Instant>,
-    started_at: Instant,
-    last_promote_check: Instant,
+    entered_tier_at: Instant,
 }
 
 impl AdaptController {
-    pub fn new(now: Instant) -> Self {
+    pub fn new(initial: Tier) -> Self {
+        let now = Instant::now();
         Self {
-            lag_times: std::collections::VecDeque::new(),
+            tier: initial,
+            lag_events: VecDeque::new(),
             last_lag_at: None,
-            started_at: now,
-            last_promote_check: now,
+            entered_tier_at: now,
         }
     }
 
-    /// Returns the decision for the next step.
-    pub fn observe(&mut self, now: Instant, event: AdaptEvent) -> AdaptDecision {
-        // Drop expired lag entries.
-        while let Some(t) = self.lag_times.front() {
-            if now.duration_since(*t) > LAG_WINDOW {
-                self.lag_times.pop_front();
+    pub fn tier(&self) -> Tier {
+        self.tier
+    }
+
+    /// Called when a successful frame is received. Returns Promote if conditions met.
+    pub fn on_frame(&mut self, now: Instant) -> AdaptDecision {
+        self.trim_window(now);
+        if self.tier != Tier::L0 && self.entered_tier_at.elapsed() >= PROMOTE_AFTER {
+            // 60 s smooth at this tier and we have a higher tier to try.
+            if self.last_lag_at.map_or(true, |t| now.duration_since(t) >= PROMOTE_AFTER) {
+                if let Some(next) = self.tier.promote() {
+                    self.tier = next;
+                    self.entered_tier_at = now;
+                    self.lag_events.clear();
+                    return AdaptDecision::Promote(next);
+                }
+            }
+        }
+        AdaptDecision::Stay
+    }
+
+    /// Called when broadcast::RecvError::Lagged is observed.
+    pub fn on_lag(&mut self, now: Instant) -> AdaptDecision {
+        self.lag_events.push_back(now);
+        self.last_lag_at = Some(now);
+        self.trim_window(now);
+        if self.lag_events.len() >= LAG_DEMOTE_THRESHOLD {
+            if let Some(next) = self.tier.demote() {
+                self.tier = next;
+                self.entered_tier_at = now;
+                self.lag_events.clear();
+                return AdaptDecision::Demote(next);
+            }
+        }
+        AdaptDecision::Stay
+    }
+
+    fn trim_window(&mut self, now: Instant) {
+        while let Some(front) = self.lag_events.front() {
+            if now.duration_since(*front) > LAG_WINDOW {
+                self.lag_events.pop_front();
             } else {
                 break;
             }
         }
+    }
+}
 
-        match event {
-            AdaptEvent::Lagged => {
-                self.lag_times.push_back(now);
-                self.last_lag_at = Some(now);
-                if self.lag_times.len() as u32 >= LAG_THRESHOLD {
-                    // Reset window after acting so we don't rapid-fire demote.
-                    self.lag_times.clear();
-                    self.last_promote_check = now;
-                    AdaptDecision::Demote
-                } else {
-                    AdaptDecision::Stay
-                }
-            }
-            AdaptEvent::FrameOk => {
-                let reference = self.last_lag_at.unwrap_or(self.started_at);
-                if now.duration_since(reference) >= PROMOTE_AFTER
-                    && now.duration_since(self.last_promote_check) >= PROMOTE_AFTER
-                {
-                    self.last_promote_check = now;
-                    AdaptDecision::Promote
-                } else {
-                    AdaptDecision::Stay
-                }
-            }
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn add_lags(c: &mut AdaptController, t0: Instant, count: usize, spacing_ms: u64) -> Vec<AdaptDecision> {
+        let mut out = Vec::new();
+        for i in 0..count {
+            out.push(c.on_lag(t0 + Duration::from_millis(i as u64 * spacing_ms)));
         }
+        out
+    }
+
+    #[test]
+    fn five_lags_in_30s_demotes() {
+        let t0 = Instant::now();
+        let mut c = AdaptController::new(Tier::L0);
+        let decisions = add_lags(&mut c, t0, 5, 1000);
+        assert_eq!(decisions[..4], [AdaptDecision::Stay; 4]);
+        assert_eq!(decisions[4], AdaptDecision::Demote(Tier::L1));
+        assert_eq!(c.tier(), Tier::L1);
+    }
+
+    #[test]
+    fn lags_outside_window_dont_count() {
+        let t0 = Instant::now();
+        let mut c = AdaptController::new(Tier::L0);
+        // 4 lags at the start
+        add_lags(&mut c, t0, 4, 1000);
+        // 1 lag 60 seconds later — first 4 are now outside window, so total in window is 1
+        let d = c.on_lag(t0 + Duration::from_secs(60));
+        assert_eq!(d, AdaptDecision::Stay);
+        assert_eq!(c.tier(), Tier::L0);
+    }
+
+    #[test]
+    fn promote_after_60s_clean_at_l1() {
+        let t0 = Instant::now();
+        let mut c = AdaptController::new(Tier::L1);
+        // No lag events; pass time by reporting frames
+        let d1 = c.on_frame(t0 + Duration::from_secs(30));
+        assert_eq!(d1, AdaptDecision::Stay);
+        let d2 = c.on_frame(t0 + Duration::from_secs(61));
+        assert_eq!(d2, AdaptDecision::Promote(Tier::L0));
+        assert_eq!(c.tier(), Tier::L0);
+    }
+
+    #[test]
+    fn promote_blocked_by_recent_lag() {
+        let t0 = Instant::now();
+        let mut c = AdaptController::new(Tier::L1);
+        // Lag at +5s — resets entered_tier_at? Actually NO: lag at L1 doesn't change tier (it's fewer than 5 in window).
+        c.on_lag(t0 + Duration::from_secs(5));
+        // At +61s, window holds zero events (30s window), but last_lag_at was 56s ago — less than 60s.
+        let d = c.on_frame(t0 + Duration::from_secs(61));
+        assert_eq!(d, AdaptDecision::Stay);
+        // At +66s (61s after the lag), promote allowed.
+        let d2 = c.on_frame(t0 + Duration::from_secs(66));
+        assert_eq!(d2, AdaptDecision::Promote(Tier::L0));
+    }
+
+    #[test]
+    fn floor_l3_cannot_demote() {
+        let t0 = Instant::now();
+        let mut c = AdaptController::new(Tier::L3);
+        // 5 rapid lags
+        let decisions = add_lags(&mut c, t0, 5, 100);
+        assert_eq!(decisions[4], AdaptDecision::Stay, "L3 has no demote target");
+        assert_eq!(c.tier(), Tier::L3);
+    }
+
+    #[test]
+    fn ceiling_l0_cannot_promote() {
+        let t0 = Instant::now();
+        let mut c = AdaptController::new(Tier::L0);
+        let d = c.on_frame(t0 + Duration::from_secs(120));
+        assert_eq!(d, AdaptDecision::Stay);
     }
 }
 ```
 
-Then append tests inside the existing `#[cfg(test)] mod tests` block:
+- [ ] **Step 2: Register module**
 
-```rust
-    #[test]
-    fn controller_demotes_after_threshold_lags() {
-        let t0 = Instant::now();
-        let mut c = AdaptController::new(t0);
-        for i in 0..(LAG_THRESHOLD - 1) {
-            assert!(matches!(
-                c.observe(t0 + Duration::from_secs(i as u64), AdaptEvent::Lagged),
-                AdaptDecision::Stay
-            ));
-        }
-        let last = c.observe(t0 + Duration::from_secs(LAG_THRESHOLD as u64), AdaptEvent::Lagged);
-        assert!(matches!(last, AdaptDecision::Demote));
-    }
-
-    #[test]
-    fn controller_window_expires_old_lags() {
-        let t0 = Instant::now();
-        let mut c = AdaptController::new(t0);
-        // 4 lags very early
-        for i in 0..4 {
-            c.observe(t0 + Duration::from_secs(i), AdaptEvent::Lagged);
-        }
-        // Far in the future — old lags should not count any more.
-        let later = t0 + LAG_WINDOW + Duration::from_secs(60);
-        // One more lag — count should reset to 1, not threshold.
-        let d = c.observe(later, AdaptEvent::Lagged);
-        assert!(matches!(d, AdaptDecision::Stay));
-    }
-
-    #[test]
-    fn controller_promotes_after_clean_period() {
-        let t0 = Instant::now();
-        let mut c = AdaptController::new(t0);
-        // Inject a single lag so promotion is measured from "after the lag".
-        c.observe(t0, AdaptEvent::Lagged);
-        // FrameOk shortly after: must NOT promote yet.
-        let early = c.observe(t0 + Duration::from_secs(10), AdaptEvent::FrameOk);
-        assert!(matches!(early, AdaptDecision::Stay));
-        // Past the cooldown: must promote.
-        let late = c.observe(t0 + PROMOTE_AFTER + Duration::from_secs(1), AdaptEvent::FrameOk);
-        assert!(matches!(late, AdaptDecision::Promote));
-    }
-```
-
-- [ ] **Step 2: Re-export from lib**
-
-In `crates/presenter-ndi/src/lib.rs`, extend the `tier_registry` re-export:
-
-```rust
-pub use tier_registry::{AdaptController, AdaptDecision, AdaptEvent, TierRegistry, TierSubscription};
-```
+In `crates/presenter-server/src/main.rs` (or `lib.rs`), add `mod adaptive_mjpeg;` near the other `mod` declarations. Match existing visibility/ordering pattern (search for `mod ai;`).
 
 - [ ] **Step 3: Run tests**
 
 ```bash
-cargo test -p presenter-ndi tier_registry --quiet
+cargo test -p presenter-server adaptive_mjpeg:: 2>&1 | tail -20
 ```
 
-Expected: 6 passed (3 from Task 6 + 3 new).
+Expected: 6 passed.
 
 - [ ] **Step 4: Commit**
 
 ```bash
-git add crates/presenter-ndi/src/tier_registry.rs crates/presenter-ndi/src/lib.rs
-git commit -m "feat(ndi): adaptive controller state machine (#250)"
+git add crates/presenter-server/src/adaptive_mjpeg.rs crates/presenter-server/src/main.rs
+git commit -m "feat(server): add AdaptController state machine (#250)"
 ```
 
 ---
 
-### Task 9: Wire adaptive controller into MJPEG endpoints
+## Task 9: Wire controller into mjpeg_http + mjpeg_ws
 
 **Files:**
 - Modify: `crates/presenter-server/src/router/integrations/ndi.rs`
 
-- [ ] **Step 1: Replace `mjpeg_http` and `mjpeg_ws`**
+The `mjpeg_http` and `mjpeg_ws` handlers must:
+1. Acquire an initial `TierSubscription` at `Tier::L0`.
+2. Wrap the recv loop with an `AdaptController`.
+3. On `RecvError::Lagged(n)`, call `controller.on_lag(now)` and swap subscriptions if a demote is returned.
+4. On `Ok(jpeg)`, call `controller.on_frame(now)` and swap if promote returned.
 
-Replace the contents of `crates/presenter-server/src/router/integrations/ndi.rs` with:
+- [ ] **Step 1: Replace mjpeg_http and mjpeg_ws**
+
+Overwrite `crates/presenter-server/src/router/integrations/ndi.rs` (replacing the existing `handle_mjpeg_ws`, `mjpeg_ws`, and `mjpeg_http` functions; keep `discover_ndi_sources` and `ndi_status` unchanged):
 
 ```rust
-use std::time::Instant;
-
 use axum::http::header;
 use axum::{
     extract::{
@@ -1355,12 +1415,14 @@ use axum::{
     Json,
 };
 use bytes::Bytes;
-use presenter_ndi::{AdaptController, AdaptDecision, AdaptEvent, TierSubscription};
+use presenter_ndi::{Tier, TierSubscription};
 use serde::Serialize;
+use std::time::Instant;
 use tokio::sync::broadcast::error::RecvError;
 use tracing::instrument;
 
 use super::super::AppError;
+use crate::adaptive_mjpeg::{AdaptController, AdaptDecision};
 use crate::state::AppState;
 
 #[derive(Debug, Serialize)]
@@ -1377,11 +1439,7 @@ pub(crate) async fn discover_ndi_sources(
         .ndi_manager()
         .ok_or_else(|| AppError::service_unavailable("NDI SDK not available"))?;
     let sources = manager.discover_sources(0)?;
-    let payload = sources
-        .into_iter()
-        .map(|s| NdiSourceDto { name: s.name })
-        .collect();
-    Ok(Json(payload))
+    Ok(Json(sources.into_iter().map(|s| NdiSourceDto { name: s.name }).collect()))
 }
 
 #[instrument(skip_all)]
@@ -1389,8 +1447,7 @@ pub(crate) async fn ndi_status(State(state): State<AppState>) -> Json<serde_json
     Json(serde_json::json!({ "available": state.ndi_manager().is_some() }))
 }
 
-/// WebSocket endpoint that streams MJPEG frames. Adaptive: starts at L0
-/// and demotes / promotes based on subscriber backpressure.
+/// WebSocket endpoint that streams JPEG frames; tier adapts per-connection.
 pub(crate) async fn mjpeg_ws(
     ws: WebSocketUpgrade,
     State(state): State<AppState>,
@@ -1398,34 +1455,33 @@ pub(crate) async fn mjpeg_ws(
     let manager = state
         .ndi_manager()
         .ok_or_else(|| AppError::service_unavailable("NDI SDK not available"))?;
-    let sub = manager.subscribe_frames(); // L0
-    let manager = manager.clone();
-    Ok(ws.on_upgrade(move |socket| handle_mjpeg_ws(socket, sub, manager)))
+    let sub = manager.subscribe_tier(Tier::L0).await;
+    Ok(ws.on_upgrade(move |socket| handle_mjpeg_ws(socket, sub, state)))
 }
 
-async fn handle_mjpeg_ws(
-    mut socket: WebSocket,
-    mut sub: TierSubscription,
-    manager: std::sync::Arc<presenter_ndi::NdiManager>,
-) {
-    let mut ctrl = AdaptController::new(Instant::now());
+async fn handle_mjpeg_ws(mut socket: WebSocket, mut sub: TierSubscription, state: AppState) {
+    let mut controller = AdaptController::new(Tier::L0);
+    let manager = match state.ndi_manager() {
+        Some(m) => m,
+        None => return,
+    };
     loop {
         match sub.rx.recv().await {
             Ok(jpeg) => {
+                let decision = controller.on_frame(Instant::now());
+                if let AdaptDecision::Promote(next) = decision {
+                    sub = manager.subscribe_tier(next).await;
+                }
                 if socket.send(Message::Binary(jpeg.to_vec().into())).await.is_err() {
                     break;
                 }
-                if let AdaptDecision::Promote = ctrl.observe(Instant::now(), AdaptEvent::FrameOk) {
-                    if let Some(target) = sub.tier().promote() {
-                        sub = manager.subscribe_tier(target);
-                    }
-                }
             }
-            Err(RecvError::Lagged(_)) => {
-                if let AdaptDecision::Demote = ctrl.observe(Instant::now(), AdaptEvent::Lagged) {
-                    if let Some(target) = sub.tier().demote() {
-                        sub = manager.subscribe_tier(target);
-                    }
+            Err(RecvError::Lagged(n)) => {
+                tracing::debug!(lag = n, tier = ?controller.tier(), "MJPEG WS client lagged");
+                let decision = controller.on_lag(Instant::now());
+                if let AdaptDecision::Demote(next) = decision {
+                    tracing::info!(from = ?controller.tier(), to = ?next, "MJPEG WS demoting tier");
+                    sub = manager.subscribe_tier(next).await;
                 }
             }
             Err(RecvError::Closed) => break,
@@ -1433,27 +1489,33 @@ async fn handle_mjpeg_ws(
     }
 }
 
-/// HTTP MJPEG stream using multipart/x-mixed-replace. Adaptive: the
-/// stream future demotes/promotes its tier subscription based on
-/// backpressure observed via `RecvError::Lagged`.
+/// HTTP MJPEG stream using multipart/x-mixed-replace.
 pub(crate) async fn mjpeg_http(
     State(state): State<AppState>,
 ) -> Result<impl IntoResponse, AppError> {
     let manager = state
         .ndi_manager()
         .ok_or_else(|| AppError::service_unavailable("NDI SDK not available"))?;
-    let sub = manager.subscribe_frames();
-    let manager = manager.clone();
 
+    let initial_sub = manager.subscribe_tier(Tier::L0).await;
+    let manager_clone = state.clone();
     let boundary = "mjpegboundary";
     let content_type = format!("multipart/x-mixed-replace; boundary={boundary}");
 
     let stream = async_stream::stream! {
-        let mut sub = sub;
-        let mut ctrl = AdaptController::new(Instant::now());
+        let mut sub = initial_sub;
+        let mut controller = AdaptController::new(Tier::L0);
+        let manager = match manager_clone.ndi_manager() {
+            Some(m) => m,
+            None => return,
+        };
         loop {
             match sub.rx.recv().await {
                 Ok(jpeg) => {
+                    let decision = controller.on_frame(Instant::now());
+                    if let AdaptDecision::Promote(next) = decision {
+                        sub = manager.subscribe_tier(next).await;
+                    }
                     let part_header = format!(
                         "--{boundary}\r\nContent-Type: image/jpeg\r\nContent-Length: {}\r\n\r\n",
                         jpeg.len()
@@ -1461,19 +1523,13 @@ pub(crate) async fn mjpeg_http(
                     yield Ok::<Bytes, std::convert::Infallible>(Bytes::from(part_header));
                     yield Ok(jpeg);
                     yield Ok(Bytes::from("\r\n"));
-                    if let AdaptDecision::Promote = ctrl.observe(Instant::now(), AdaptEvent::FrameOk) {
-                        if let Some(target) = sub.tier().promote() {
-                            sub = manager.subscribe_tier(target);
-                            tracing::info!(?target, "MJPEG client promoted");
-                        }
-                    }
                 }
-                Err(RecvError::Lagged(_)) => {
-                    if let AdaptDecision::Demote = ctrl.observe(Instant::now(), AdaptEvent::Lagged) {
-                        if let Some(target) = sub.tier().demote() {
-                            sub = manager.subscribe_tier(target);
-                            tracing::warn!(?target, "MJPEG client demoted on backpressure");
-                        }
+                Err(RecvError::Lagged(n)) => {
+                    tracing::debug!(lag = n, tier = ?controller.tier(), "MJPEG HTTP client lagged");
+                    let decision = controller.on_lag(Instant::now());
+                    if let AdaptDecision::Demote(next) = decision {
+                        tracing::info!(from = ?controller.tier(), to = ?next, "MJPEG HTTP demoting tier");
+                        sub = manager.subscribe_tier(next).await;
                     }
                 }
                 Err(RecvError::Closed) => break,
@@ -1482,7 +1538,6 @@ pub(crate) async fn mjpeg_http(
     };
 
     let body = axum::body::Body::from_stream(stream);
-
     Ok((
         [
             (header::CONTENT_TYPE, content_type),
@@ -1494,306 +1549,381 @@ pub(crate) async fn mjpeg_http(
 }
 ```
 
-- [ ] **Step 2: Build to verify compile**
+- [ ] **Step 2: Build full workspace**
 
 ```bash
-cargo build -p presenter-server --quiet
+cargo build --workspace 2>&1 | tail -10
 ```
 
-Expected: clean build.
+Expected: `Finished `dev` profile`.
 
-- [ ] **Step 3: Commit**
+- [ ] **Step 3: Run server-side tests**
+
+```bash
+cargo test -p presenter-server -- --test-threads=4 2>&1 | tail -15
+```
+
+Expected: all green. Pre-existing tests must still pass.
+
+- [ ] **Step 4: Manual smoke test**
+
+```bash
+# Start dev server in background (or rely on already-running presenter-dev.service)
+# In one terminal:
+curl -sN http://10.77.8.134:8080/ndi/mjpeg --output - 2>/dev/null | head -c 50000 > /tmp/smoke-mjpeg.bin
+ls -l /tmp/smoke-mjpeg.bin
+python3 -c "
+data=open('/tmp/smoke-mjpeg.bin','rb').read()
+soi=data.find(b'\xff\xd8\xff')
+eoi=data.find(b'\xff\xd9', soi)
+print('SOI@', soi, 'EOI@', eoi, 'first JPEG bytes:', eoi-soi)
+"
+```
+
+Expected: a JPEG SOI is found, frame size > 30 KB.
+
+- [ ] **Step 5: Commit**
 
 ```bash
 git add crates/presenter-server/src/router/integrations/ndi.rs
-git commit -m "feat(server): adaptive MJPEG controller on /ndi/mjpeg + ws (#250)"
+git commit -m "feat(server): wire AdaptController into mjpeg_http and mjpeg_ws (#250)"
 ```
 
 ---
 
-### Task 10: Local check — fmt + clippy + full test suite
+## Task 10: Local fmt + clippy + tests
 
-**Files:** none (verification only)
+**Files:** None (verification step).
 
 - [ ] **Step 1: Format**
 
 ```bash
 cargo fmt --all
-git diff --stat
 ```
 
-If there are unstaged formatting changes, stage and commit them as `style: cargo fmt`.
-
-- [ ] **Step 2: Clippy on workspace**
+- [ ] **Step 2: Clippy zero-warnings**
 
 ```bash
-cargo clippy --workspace --all-targets -- -D warnings -W clippy::all
+cargo clippy --workspace --all-targets -- -D warnings -W clippy::all 2>&1 | tail -25
 ```
 
-Expected: zero warnings.
+Expected: clean. Fix any warnings before continuing — do not push with warnings.
 
-- [ ] **Step 3: Clippy on the WASM frontend (excluded from workspace)**
-
-```bash
-( cd crates/presenter-ui && cargo clippy --all-targets -- -D warnings -W clippy::all )
-```
-
-Expected: zero warnings. (No code change in this PR for the WASM crate, but the version bump and workspace touched it; clippy must still pass.)
-
-- [ ] **Step 4: Tests**
+- [ ] **Step 3: All tests**
 
 ```bash
-cargo test -p presenter-ndi --quiet
-cargo test -p presenter-server --quiet
+cargo test --workspace 2>&1 | tail -20
 ```
 
 Expected: all green.
 
-- [ ] **Step 5: If anything failed, fix in ONE batched commit**
-
-Do not push partial fixes. Address ALL failures and stage them together.
+- [ ] **Step 4: If any of Steps 2 or 3 produced fixes, commit**
 
 ```bash
 git add -A
-git commit -m "fix: address fmt/clippy/test issues (#250)"
+git commit -m "chore: fmt + clippy fixes for tier adaptive (#250)"
 ```
+
+If no changes, skip.
 
 ---
 
-### Task 11: Push to dev, monitor CI
+## Task 11: Push to dev + monitor CI
 
-**Files:** none (CI / deploy)
+**Files:** None.
 
 - [ ] **Step 1: Push**
 
 ```bash
+git fetch origin
 git push origin dev
 ```
 
-- [ ] **Step 2: Identify the run**
+- [ ] **Step 2: Identify the latest run and monitor in background**
 
 ```bash
-gh run list --branch dev --limit 3
+sleep 10
+gh run list --branch dev --limit 3 --json databaseId,name,status,conclusion,event,createdAt
 ```
 
-Note the latest run ID for the push.
+Capture the `databaseId` for the just-triggered `Pipeline` run.
 
-- [ ] **Step 3: Monitor in background**
+- [ ] **Step 3: Wait for terminal state (sleep + view, do not poll)**
 
 ```bash
-sleep 600 && gh run view <run-id> --json status,conclusion,jobs
+RUN_ID=<paste databaseId>
+sleep 1500 && gh run view $RUN_ID --json status,conclusion,jobs --jq '{status,conclusion,jobs:[.jobs[]|{name,conclusion,status}]}'
 ```
 
-(Use `run_in_background: true` via the Bash tool. Do NOT poll in a tight loop.)
+If still running after one wake, sleep again (300–600 s). If failed, `gh run view $RUN_ID --log-failed | tail -100`, fix in ONE commit, push, and monitor again.
 
-- [ ] **Step 4: When the run completes**
+- [ ] **Step 4: Confirm deploy-dev job succeeded**
 
-- If green: proceed to Task 12.
-- If red: `gh run view <run-id> --log-failed`. Fix ALL failures in ONE commit, push once more.
+```bash
+gh run view $RUN_ID --json jobs --jq '.jobs[] | select(.name=="Deploy to Dev") | {name, conclusion}'
+```
+
+Expected: `conclusion=success`.
 
 ---
 
-### Task 12: Post-deploy profiling on dev (sd1l + sd2l with the fix)
+## Task 12: Post-deploy profiling on sd1l + sd2l
 
 **Files:**
-- Modify: `docs/superpowers/specs/2026-04-25-ndi-cheap-tv-adaptive-design.md`
+- Modify: `docs/superpowers/specs/2026-04-25-ndi-cheap-tv-adaptive-design.md` (Findings section)
 
-- [ ] **Step 1: Confirm dev deploy succeeded**
+This is the validation pass. After dev is deployed with the adaptive code, we re-profile both TVs and observe:
+1. The connection starts at L0 and downgrades automatically if the TV can't keep pace.
+2. The final settled tier produces decode_p95 + paint_p50 < frame_interval.
 
-```bash
-curl -s http://10.77.8.134:8080/healthz | python3 -m json.tool
-```
+- [ ] **Step 1: Profile sd1l.lan after the dev deploy lands**
 
-Expected: `version=0.4.34`, `channel=dev`.
+Run a 60-second trace this time so we observe at least one demote+stabilize cycle. The longer window lets us see the initial L0 frames (high decode time, lag events), the transition (less frequent JPEGs as a smaller tier kicks in), and the settled tier (decode_p95 < tier's frame_interval).
 
-- [ ] **Step 2: Re-run the chrome://inspect Performance trace on sd1l**
-
-Same procedure as Task 1 Step 4. Let the connection run for ~2 minutes BEFORE recording — the adaptive controller needs to settle. Capture the steady-state tier (look at server logs `tracing::info!("MJPEG client promoted/demoted ...")` to confirm the tier the connection lands on).
+In a separate terminal, watch dev server logs to confirm transitions:
 
 ```bash
-sshpass -p 'newlevel' ssh newlevel@10.77.8.134 'sudo journalctl -u presenter-dev -n 200 --no-pager' | grep -E 'MJPEG client|tier encoder'
+sshpass -p 'newlevel' ssh newlevel@10.77.8.134 "sudo journalctl -u presenter-dev -f" | grep -i tier
 ```
 
-Record the steady-state tier reached by sd1l. Capture decode/paint/fps numbers at that tier.
+Then drive the profiling on sd1l:
 
-- [ ] **Step 3: Repeat for sd2l**
+```bash
+mkdir -p /tmp/ndi-profiling/sd1l-postdeploy
+adb -s sd1l.lan:5555 reverse tcp:8080 tcp:8080
+adb -s sd1l.lan:5555 shell am force-stop com.fullykiosk.videokiosk
+adb -s sd1l.lan:5555 shell am start -n com.fullykiosk.videokiosk/de.ozerov.fully.MainActivity --es WEBVIEW_DEBUG true
+sleep 5
+curl -s -X POST http://10.77.8.134:8080/stage/layout -H 'content-type: application/json' -d '{"code":"ndi-fullscreen"}'
+```
 
-Same procedure. Different TV, possibly different settled tier.
+Open `chrome://inspect/#devices`, attach to the sd1l.lan webview, Performance tab → Record 60 s → Stop → Save profile to `/tmp/ndi-profiling/sd1l-postdeploy/trace.json`.
 
-- [ ] **Step 4: Update spec Findings**
+Extract numbers, breaking the trace into "first 15s" (initial tier) and "last 15s" (settled tier):
 
-Add a sub-table under Findings:
+```bash
+python3 - <<'PY'
+import json
+with open('/tmp/ndi-profiling/sd1l-postdeploy/trace.json') as f:
+    data = json.load(f)
+events = data.get('traceEvents', data) if isinstance(data, dict) else data
+xs = [(e['ts'], e['dur']/1000.0) for e in events
+      if e.get('ph')=='X' and e.get('name')=='Decode Image' and 'dur' in e]
+if not xs:
+    print('no decode events'); exit()
+t0 = xs[0][0]
+def stats(label, sub):
+    if not sub: print(f'{label}: n=0'); return
+    durs = sorted([d for _,d in sub])
+    p50 = durs[len(durs)//2]
+    p95 = durs[int(len(durs)*0.95)]
+    print(f'{label}: n={len(durs)} p50={p50:.2f}ms p95={p95:.2f}ms')
+stats('initial(0-15s)', [x for x in xs if x[0]-t0 < 15_000_000])
+stats('settled(45-60s)', [x for x in xs if x[0]-t0 > 45_000_000])
+PY
+```
+
+Save the printout to `/tmp/ndi-profiling/sd1l-postdeploy/stats.txt`. Capture the journalctl output during the trace and save the relevant tier-transition lines to `/tmp/ndi-profiling/sd1l-postdeploy/journal.txt`.
+
+- [ ] **Step 2: Profile sd2l.lan with the same 60 s methodology**
+
+```bash
+mkdir -p /tmp/ndi-profiling/sd2l-postdeploy
+adb -s sd2l.lan:5555 reverse tcp:8080 tcp:8080
+adb -s sd2l.lan:5555 shell am force-stop com.fullykiosk.videokiosk
+adb -s sd2l.lan:5555 shell am start -n com.fullykiosk.videokiosk/de.ozerov.fully.MainActivity --es WEBVIEW_DEBUG true
+sleep 5
+```
+
+Attach DevTools to sd2l, record 60 s, save trace as `/tmp/ndi-profiling/sd2l-postdeploy/trace.json`. Run the same Python extractor (substitute path), save to `/tmp/ndi-profiling/sd2l-postdeploy/stats.txt`. Save the corresponding journal lines to `/tmp/ndi-profiling/sd2l-postdeploy/journal.txt`.
+
+- [ ] **Step 3: Fill in Findings section in spec**
+
+Open `docs/superpowers/specs/2026-04-25-ndi-cheap-tv-adaptive-design.md`. Replace the placeholder "Findings (filled in during Phase 1, before merging)" content with two tables:
 
 ```markdown
-### Post-fix (with adaptive controller), 2026-04-25
+## Findings (2026-04-25 dev deploy of 0.4.34)
 
-| TV | Settled tier | decode_p50 | decode_p95 | paint_p50 | fps_sustained | kbps |
+### sd1l.lan — Tesla LEAP-S1, 2 GB, Android 12
+
+| Phase | Tier | decode_p50 | decode_p95 | paint_p50 | fps_browser | server_kbps |
 |---|---|---|---|---|---|---|
-| sd1l | <fill> | <fill> | <fill> | <fill> | <fill> | <fill> |
-| sd2l | <fill> | <fill> | <fill> | <fill> | <fill> | <fill> |
+| baseline | L0 (forced) | <ms> | <ms> | <ms> | <fps> | <kbps> |
+| post-deploy initial | L0 | <ms> | <ms> | <ms> | <fps> | <kbps> |
+| post-deploy settled | <Lx> | <ms> | <ms> | <ms> | <fps> | <kbps> |
+
+Settled tier: **Lx**. Pass criterion (decode_p95 + paint_p50 < frame_interval): **PASS / FAIL**.
+
+### sd2l.lan — Hyundai, 1 GB, Android 11
+
+(same table)
 ```
 
-- [ ] **Step 5: User acceptance gate**
+Replace every `<>` placeholder with the measured value.
 
-Decode_p95 + paint_p50 must be `< frame_interval(target_fps)` for the settled tier on each TV. If sd2l is still struggling at L3 (>100 ms), return to design — the floor is too high.
+- [ ] **Step 4: Decide pass/fail per TV**
 
-- [ ] **Step 6: Commit**
+If sd2l (Hyundai) cannot pass even at L3 (720p @ 10 fps), add a follow-up note in the spec:
+
+```markdown
+### Follow-up
+Hyundai cannot sustain L3. File a follow-up issue to investigate H.264 codec
+or resolution floor below 720p — out of scope for this PR.
+```
+
+If both TVs pass, the spec stands as-is.
+
+- [ ] **Step 5: Commit**
 
 ```bash
 git add docs/superpowers/specs/2026-04-25-ndi-cheap-tv-adaptive-design.md
-git commit -m "docs(spec): record post-fix NDI profiling on sd1l + sd2l (#250)"
+git commit -m "docs(spec): record NDI cheap-TV adaptive Findings from dev deploy (#250)"
 git push origin dev
 ```
 
-Wait for the second CI run to go green (Task 11 monitoring routine).
+Wait for the docs-only push to land (no functional CI impact, but keep the same monitoring discipline as Task 11).
 
 ---
 
-### Task 13: Open PR dev → main
+## Task 13: Open PR dev → main + monitor PR CI
 
-**Files:** none (workflow)
+**Files:** None (PR creation).
 
-- [ ] **Step 1: Verify branch is clean and ahead of main**
+- [ ] **Step 1: Verify mergeable state**
 
 ```bash
 git fetch origin
-git status
-git log --oneline origin/main..dev | head -20
+git log origin/main..origin/dev --oneline
+gh pr list --base main --head dev --state open
 ```
 
-- [ ] **Step 2: Open PR**
+If a PR already exists (unlikely in a fresh branch), reuse it. Otherwise create one.
+
+- [ ] **Step 2: Create PR**
 
 ```bash
-gh pr create --base main --head dev --title "feat(ndi): adaptive MJPEG with tiered shared encoders (#250)" --body "$(cat <<'EOF'
+gh pr create --base main --head dev --title "feat(ndi): adaptive MJPEG tiered streaming for cheap Android TVs (#250)" --body "$(cat <<'EOF'
 ## Summary
-
-- Per-connection adaptive MJPEG: each `<img src="/ndi/mjpeg">` connection auto-degrades to the highest tier its consumer can sustain.
-- Server-side: tiered shared encoders (L0=1080@30, L1=1080@15, L2=720@15, L3=720@10) replace the single global encoder. Lazy + ref-counted — N connections on the same tier cost the same as one.
-- No DB migration, no UI changes, no client changes. Operator surface is unchanged.
-
-## Spec & plan
-- Spec: `docs/superpowers/specs/2026-04-25-ndi-cheap-tv-adaptive-design.md`
-- Plan: `docs/superpowers/plans/2026-04-25-ndi-cheap-tv-adaptive.md`
-
-## Findings
-See "Findings" section of the spec — baseline + post-fix profiling on sd1l.lan (Tesla LEAP-S1) and sd2l.lan (Hyundai 1 GB).
+- Replaces single global JPEG encoder with `TierRegistry` running up to 4 lazy ref-counted tier encoders (1080@30 / 1080@15 / 720@15 / 720@10).
+- Each `/ndi/mjpeg` (HTTP and WS) connection auto-tunes via `AdaptController`: 5+ `RecvError::Lagged` in 30s → demote one tier; 60s clean → promote.
+- No DB / UI / client changes. Cheap TVs degrade automatically; fast clients stay native; server cost scales with active tiers, not client count.
+- Profiled on sd1l.lan (Tesla LEAP-S1, 2 GB) and sd2l.lan (Hyundai, 1 GB) before and after deploy — see Findings section in the design spec.
 
 ## Test plan
-- [ ] All unit tests in `presenter-ndi` pass (Tier ladder, registry refcount, controller transitions, encoder resize).
-- [ ] All integration / E2E tests pass.
-- [ ] Mutation testing job passes.
-- [ ] Clippy clean (workspace + presenter-ui).
-- [ ] Manual on sd1l.lan: post-fix decode + paint < frame_interval at settled tier.
-- [ ] Manual on sd2l.lan: same.
-- [ ] After merge, manual on production sd1l-sd4l.
+- [x] Unit tests: `Tier`, `JpegEncoder::encode_bgra_resized`, `TierRegistry` ref-count, frame-skip, `AdaptController` window/threshold.
+- [x] Manual MJPEG HTTP smoke (curl extracts a JPEG).
+- [x] Live profiling on sd1l + sd2l, results in `docs/superpowers/specs/2026-04-25-ndi-cheap-tv-adaptive-design.md`.
+- [x] Existing Playwright `stage-api-ndi.spec.ts` still passes.
 
 🤖 Generated with [Claude Code](https://claude.com/claude-code)
 EOF
 )"
 ```
 
-- [ ] **Step 3: Monitor PR CI**
+- [ ] **Step 2: Monitor PR CI**
 
 ```bash
-gh pr view --json url,number
+PR_RUN=$(gh pr checks --json name,status,conclusion,detailsUrl | head -1)
+echo "$PR_RUN"
 ```
 
-Note the PR URL. Then:
+Use the same `sleep N && gh run view $RUN_ID` pattern as Task 11 to wait until terminal. ALL jobs must be green — pipeline, e2e shards, mutation testing, version-check.
+
+- [ ] **Step 3: Verify mergeable**
 
 ```bash
-sleep 600 && gh pr checks <pr-number>
+gh pr view --json number,mergeable,mergeable_state --jq '{number, mergeable, mergeable_state}'
 ```
 
-Run via `run_in_background: true`. Wait for terminal state. Fix any failures in one commit, push.
+Expected: `{number: NN, mergeable: "MERGEABLE", mergeable_state: "clean"}`. If `behind`, sync; if `dirty`, resolve.
 
-- [ ] **Step 4: Verify mergeable state**
+- [ ] **Step 4: Provide the PR URL to the user and STOP**
 
-```bash
-gh api "repos/zbynekdrlik/presenter/pulls/<pr-number>" --jq '{mergeable, mergeable_state}'
-```
-
-Required: `mergeable=true`, `mergeable_state="clean"`.
-
-- [ ] **Step 5: Post the green PR URL to the user**
-
-DO NOT merge. The merge happens only on explicit user instruction.
+Per PR merge policy: never merge without explicit user instruction. Provide the full PR URL and wait.
 
 ---
 
-### Task 14: After merge — production deploy verification
+## Task 14: After merge, verify production on all 4 TVs
 
-**Files:** none (workflow)
+**Files:** None (post-merge verification).
 
-- [ ] **Step 1: After user says "merge it", merge**
+This task only starts after the user explicitly says "merge it" and the merge to main has run + deployed to production.
 
-```bash
-gh pr merge <pr-number> --merge
-```
-
-(Plain merge — no squash, no rebase. Per project commit convention.)
-
-- [ ] **Step 2: Monitor the deploy.yml workflow on main**
+- [ ] **Step 1: Confirm main deploy succeeded**
 
 ```bash
 gh run list --branch main --limit 3
+sleep 1200 && gh run view <main-deploy-run-id> --json status,conclusion,jobs --jq '{status, conclusion}'
 ```
 
-Identify the deploy run, then `sleep 600 && gh run view <run-id> --json status,conclusion,jobs` in background. Wait for terminal state.
+Expected: `conclusion=success`.
 
-- [ ] **Step 3: Verify production version**
+- [ ] **Step 2: Confirm production version**
 
 ```bash
-curl -s http://10.77.9.205/healthz | python3 -m json.tool
+curl -s http://10.77.9.205/healthz
 ```
 
-Expected: `version=0.4.34`, `channel=release`.
+Expected: `{"status":"ok","version":"0.4.34","channel":"release"}`.
 
-- [ ] **Step 4: Production functional verification on all four TVs**
+- [ ] **Step 3: Verify each TV holds its connection through the cg-obs source**
 
-For each of sd1l-sd4l:
+For each of `sd1l.lan`, `sd2l.lan`, `sd3l.lan`, `sd4l.lan`:
 
 ```bash
-# Force ndi-fullscreen layout in production
-curl -s -X POST -H 'Content-Type: application/json' -d '{"code":"ndi-fullscreen"}' http://10.77.9.205/stage/layout
+# Confirm Fully Kiosk is foreground
+adb -s <tv>:5555 shell "dumpsys activity activities | grep -E 'mResumedActivity'" | head -1
 
-# Confirm the kiosk is foreground and pointing at production
-adb -s <tv>:5555 shell dumpsys activity activities | grep mResumedActivity
+# Re-attach DevTools quickly to confirm NO console errors and stable frame loop
+# (Manual step: chrome://inspect → attach → check Console tab; report file paths only, do not Read screenshots)
+
+# Read production server log for tier transitions
+sshpass -p 'newlevel' ssh newlevel@presenter.lan "sudo journalctl -u presenter --since '5 minutes ago' | grep -i tier" | tail -20
 ```
 
-For each TV, attach `chrome://inspect`, run a 30-second steady-state observation, confirm:
-- The connection settles on a tier (server logs show tier promote/demote events).
-- `decode_p95 + paint_p50 < frame_interval` at the settled tier.
-- Browser console has zero errors / warnings on the kiosk webview.
+Note: each TV should appear at least once in the log lines, with either no transition (stayed L0) or a `demoting tier` line followed by a stable settled tier.
 
-- [ ] **Step 5: Restore the production stage layout to its previous setting**
-
-If the church-default layout is `worship-snv` (or whatever was active before), restore it:
+- [ ] **Step 4: Update memory note**
 
 ```bash
-curl -s -X POST -H 'Content-Type: application/json' -d '{"code":"worship-snv"}' http://10.77.9.205/stage/layout
+cat > /home/newlevel/.claude/projects/-home-newlevel-devel-presenter-presenter-dev2/memory/project_ndi_adaptive.md <<'EOF'
+---
+name: NDI adaptive tiered streaming
+description: Per-connection tier ladder (L0..L3) on /ndi/mjpeg auto-degrades for cheap TVs
+type: project
+---
+
+`/ndi/mjpeg` is now adaptive. Per-connection state machine in `crates/presenter-server/src/adaptive_mjpeg.rs`. Tier encoders in `crates/presenter-ndi/src/tier_registry.rs` are lazy + ref-counted, so server cost scales with active tiers, not client count. Floor is L3 = 720p @ 10 fps — text quality decision, not technical.
+
+**Why:** PR #<N> from issue #250. Cheap Android TVs (Hyundai 1 GB, Tesla LEAP-S1 2 GB) couldn't keep up with native 1080p @ 30 software JPEG decode.
+
+**How to apply:** When debugging NDI latency on a TV, look at production server log for `tier` lines (`journalctl -u presenter | grep tier`) — that tells you which tier the connection settled on.
+EOF
 ```
 
-- [ ] **Step 6: Send completion report**
+Add entry to `MEMORY.md`:
 
-Per `airuleset/modules/core/completion-report.md`. Include:
-- E2E test coverage table referencing `tests/e2e/stage-api-ndi.spec.ts` and `tests/e2e/ndi-stage-layout.spec.ts` (existing — no new E2E needed; adaptive logic is server-internal and unit-tested).
-- Production verification details for all 4 TVs.
-- Findings table excerpt with concrete numbers.
+```bash
+# Manually edit /home/newlevel/.claude/projects/.../memory/MEMORY.md to add:
+# - [NDI adaptive tiered streaming](project_ndi_adaptive.md) — /ndi/mjpeg auto-tunes per connection across L0..L3 tiers
+```
+
+- [ ] **Step 5: Send completion report**
+
+Per the user's completion-report template (with full URLs, all ✅ lines, no ⏳/❌). Cite the PR URL, both run URLs (dev + main pipelines), and the production verification details.
 
 ---
 
 ## Verification Summary
 
-| Check | How verified |
+| Check | Where verified |
 |---|---|
-| Tier ladder values match spec | Unit test `specs_match_design` in `tier.rs` |
-| Tier ladder transitions correct | Unit tests in `tier.rs` |
-| Encoder resize preserves aspect | Unit test `encode_bgra_resized_caps_height_and_preserves_aspect` |
-| Registry refcount lifecycle | Unit tests in `tier_registry.rs` |
-| Adaptive controller demote/promote | Unit tests in `tier_registry.rs` |
-| Server compile + clippy clean | Task 10 |
-| CI green | Tasks 11, 13 |
-| Cheap TV settles at usable tier (dev) | Task 12 (manual, recorded in spec) |
-| Cheap TV settles at usable tier (prod) | Task 14 (manual, recorded in completion report) |
-| No regressions on api / ndi-fullscreen layouts | Existing E2E suite (Task 11 / 13 CI) |
-| Clean browser console | E2E + manual chrome://inspect on prod TVs |
+| Tier ladder correct | `tier::tests` (Task 4) |
+| Resize preserves aspect, JPEG decodable | `encoder::tests::encode_bgra_resized_downscales_aspect_preserved` (Task 5) |
+| Tier encoders are lazy + ref-counted | `tier_registry::tests::subscribe_spawns_one_encoder_per_tier` + `dropping_last_subscription_stops_encoder` (Task 6) |
+| Frame skip works | `tier_registry::tests::tier_l3_frame_skip_emits_one_third_of_frames` (Task 6) |
+| AdaptController demote/promote | `adaptive_mjpeg::tests` (Task 8) |
+| `/ndi/mjpeg` still serves valid JPEG | Manual smoke (Task 9 Step 4) |
+| Tier transitions in production | `journalctl | grep tier` (Task 14 Step 3) |
+| Cheap TVs converge to a sustainable tier | Findings tables in spec (Task 12) |
+
