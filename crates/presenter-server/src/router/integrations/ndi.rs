@@ -81,19 +81,23 @@ async fn handle_mjpeg_ws(mut socket: WebSocket, mut sub: TierSubscription, state
                     let elapsed = now.duration_since(prev);
                     if elapsed > slow_tick_threshold(controller.tier()) {
                         let dropped = estimate_dropped(controller.tier(), elapsed);
+                        let prev_tier = controller.tier();
                         tracing::info!(
                             elapsed_ms = elapsed.as_millis() as u64,
                             dropped,
-                            tier = ?controller.tier(),
+                            tier = ?prev_tier,
                             "MJPEG WS slow tick"
                         );
                         if let AdaptDecision::Demote(next) = controller.on_lag(now, dropped) {
-                            tracing::info!(from = ?controller.tier(), to = ?next, "MJPEG WS demoting tier");
+                            tracing::info!(from = ?prev_tier, to = ?next, "MJPEG WS demoting tier");
                             next_tier = Some(next);
                         }
-                    } else if let AdaptDecision::Promote(next) = controller.on_frame(now) {
-                        tracing::info!(from = ?controller.tier(), to = ?next, "MJPEG WS promoting tier");
-                        next_tier = Some(next);
+                    } else {
+                        let prev_tier = controller.tier();
+                        if let AdaptDecision::Promote(next) = controller.on_frame(now) {
+                            tracing::info!(from = ?prev_tier, to = ?next, "MJPEG WS promoting tier");
+                            next_tier = Some(next);
+                        }
                     }
                 }
                 last_ok = Some(now);
@@ -111,10 +115,10 @@ async fn handle_mjpeg_ws(mut socket: WebSocket, mut sub: TierSubscription, state
                 }
             }
             Err(RecvError::Lagged(n)) => {
-                tracing::info!(lag = n, tier = ?controller.tier(), "MJPEG WS client lagged");
-                let decision = controller.on_lag(Instant::now(), n);
-                if let AdaptDecision::Demote(next) = decision {
-                    tracing::info!(from = ?controller.tier(), to = ?next, "MJPEG WS demoting tier");
+                let prev_tier = controller.tier();
+                tracing::info!(lag = n, tier = ?prev_tier, "MJPEG WS client lagged");
+                if let AdaptDecision::Demote(next) = controller.on_lag(Instant::now(), n) {
+                    tracing::info!(from = ?prev_tier, to = ?next, "MJPEG WS demoting tier");
                     if let Some(manager) = state.ndi_manager() {
                         sub = manager.subscribe_tier(next).await;
                     }
@@ -151,19 +155,23 @@ pub(crate) async fn mjpeg_http(
                         let elapsed = now.duration_since(prev);
                         if elapsed > slow_tick_threshold(controller.tier()) {
                             let dropped = estimate_dropped(controller.tier(), elapsed);
+                            let prev_tier = controller.tier();
                             tracing::info!(
                                 elapsed_ms = elapsed.as_millis() as u64,
                                 dropped,
-                                tier = ?controller.tier(),
+                                tier = ?prev_tier,
                                 "MJPEG HTTP slow tick"
                             );
                             if let AdaptDecision::Demote(next) = controller.on_lag(now, dropped) {
-                                tracing::info!(from = ?controller.tier(), to = ?next, "MJPEG HTTP demoting tier");
+                                tracing::info!(from = ?prev_tier, to = ?next, "MJPEG HTTP demoting tier");
                                 next_tier = Some(next);
                             }
-                        } else if let AdaptDecision::Promote(next) = controller.on_frame(now) {
-                            tracing::info!(from = ?controller.tier(), to = ?next, "MJPEG HTTP promoting tier");
-                            next_tier = Some(next);
+                        } else {
+                            let prev_tier = controller.tier();
+                            if let AdaptDecision::Promote(next) = controller.on_frame(now) {
+                                tracing::info!(from = ?prev_tier, to = ?next, "MJPEG HTTP promoting tier");
+                                next_tier = Some(next);
+                            }
                         }
                     }
                     last_ok = Some(now);
@@ -181,10 +189,10 @@ pub(crate) async fn mjpeg_http(
                     yield Ok(Bytes::from("\r\n"));
                 }
                 Err(RecvError::Lagged(n)) => {
-                    tracing::info!(lag = n, tier = ?controller.tier(), "MJPEG HTTP client lagged");
-                    let decision = controller.on_lag(Instant::now(), n);
-                    if let AdaptDecision::Demote(next) = decision {
-                        tracing::info!(from = ?controller.tier(), to = ?next, "MJPEG HTTP demoting tier");
+                    let prev_tier = controller.tier();
+                    tracing::info!(lag = n, tier = ?prev_tier, "MJPEG HTTP client lagged");
+                    if let AdaptDecision::Demote(next) = controller.on_lag(Instant::now(), n) {
+                        tracing::info!(from = ?prev_tier, to = ?next, "MJPEG HTTP demoting tier");
                         if let Some(manager) = state_clone.ndi_manager() {
                             sub = manager.subscribe_tier(next).await;
                         }

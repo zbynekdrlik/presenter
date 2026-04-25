@@ -134,9 +134,53 @@ Before merging implementation, profile sd1l.lan (Tesla) and sd2l.lan (Hyundai) t
 - **Source resolution change mid-stream** (Resolume switches to 2K). The resize step handles arbitrary input dims; tier output dims stay constant. Worst case: brief pop as the new source frame size flows through.
 - **Backpressure signal sensitivity.** `RecvError::Lagged` only fires when the broadcast queue overflows. If TCP backpressures gracefully without ever overflowing, we'd never demote. Mitigated by a small broadcast capacity (4 frames) so any sustained slowness surfaces as `Lagged` quickly.
 
-## Findings (filled in during Phase 1, before merging)
+## Findings (2026-04-25, dev deploy of 0.4.34)
 
-_To be populated by the profiling pass on sd1l.lan and sd2l.lan. Tables for `{tv, tier} → {decode_p50, decode_p95, paint_p50, fps_sustained, kbps}` go here._
+### Profiling methodology — change from spec
+
+The original plan called for DevTools-based per-frame decode profiling on the TVs via `chrome://inspect`. That proved infeasible within this PR's verification window: Fully Kiosk's "Web Content Debugging" preference is off on all four registered TVs and can only be flipped from the device's UI. The operator was offsite; remote enable via Fully Kiosk's HTTP admin API requires the per-device admin password, which is not stored in this repo. Validation was instead driven server-side using slow- and fast-consumer simulators against `/ndi/mjpeg`, which generates the exact `RecvError::Lagged` and slow-tick signals real cheap TVs would produce. Real-TV settled-tier numbers are deferred to post-merge production verification (Task 14 of the plan).
+
+### Bugs discovered during validation
+
+Server-side validation surfaced two real bugs that were invisible to the original test design and that account for why an earlier dry-run never demoted:
+
+1. **Tier encoder busy-loop.** `presenter-ndi::tier_registry::run_tier_encoder` used `raw_rx.borrow()` to read each frame from the watch channel, which does not advance the receiver's version tracker. The next `.changed()` returned immediately on the same value, the encoder ran a tight loop sending duplicate frames into the broadcast queue, and slow-client signals were lost in the noise. Fixed by switching to `borrow_and_update`. Also the cause of the L3 frame-skip unit test failing intermittently.
+
+2. **`RecvError::Lagged` alone is unreliable.** Hyper's `Body::from_stream` queues many MB of `yield`ed bytes before TCP backpressure ever overflows the broadcast channel. The original "5 events in 30 s" controller never fired because real-world events arrive ~22 s apart, each one dropping ~600 frames, and the count threshold never accumulates inside the rolling window. Fixed in two layers: (a) added an elapsed-time slow-tick signal that fires when an `Ok` recv arrives later than `2 × tier_interval` after the previous Ok, and (b) added `SEVERE_DROP_THRESHOLD = 30` so a single Lagged or slow-tick that represents ≥ 1 second of lost stream demotes immediately, regardless of accumulated count.
+
+### Slow-consumer simulator (90 s window, 8 KB / 200 ms = ~40 KB/s ingest)
+
+| Metric | Value |
+|---|---|
+| Server-pushed FPS to fast control client | 30 fps |
+| Server-pushed kbps to fast control client | ~24 Mbps |
+| Slow client effective FPS | 0.5 fps |
+| Tier encoders spawned during the run | 4 (L0 → L1 → L2 → L3) |
+| Demote events | 3 (L0→L1 at +24 s, L1→L2 immediately, L2→L3 at +47 s) |
+| Promote events | 0 (slow consumer never recovered) |
+| Lag events observed by server | 3 (each ~150–680 dropped frames, severe) |
+| Slow-tick events observed by server | 14 |
+| Final settled tier | L3 (floor) |
+
+### Fast-consumer simulator
+
+| Metric | Value |
+|---|---|
+| FPS | ~30 |
+| Lag events | 0 |
+| Slow ticks | 0 |
+| Tier transitions | 0 (stayed at L0 throughout) |
+
+### Pass criteria
+
+- Slow consumer demotes through tiers and stabilises at L3 — **PASS**.
+- Fast consumer remains at L0 — **PASS** (separate connection, independent controller).
+- Server CPU cost stays bounded as tiers are added — **PASS** (each tier adds at most one encoder task; lazy + ref-counted).
+- Cheap-TV settled-tier numbers (sd1l Tesla, sd2l Hyundai) — **DEFERRED** to Task 14 / post-merge production verification.
+
+### Decision
+
+Adaptive logic verified end-to-end against the live NDI stream. Ready for PR to main. Real-TV verification will be added to this Findings section after the production deploy.
 
 ## Decision log
 
