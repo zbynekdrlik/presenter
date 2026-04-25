@@ -9,6 +9,24 @@ import {
 
 test.describe.configure({ timeout: 180_000 });
 
+const ALLOWED_CONSOLE_NOISE = [
+  /integrity.*ignored.*preload/i,
+  /ResizeObserver loop/i,
+];
+
+function collectConsoleErrors(page: import("@playwright/test").Page): string[] {
+  const messages: string[] = [];
+  page.on("console", (msg) => {
+    if (msg.type() === "error" || msg.type() === "warning") {
+      const text = msg.text();
+      if (!ALLOWED_CONSOLE_NOISE.some((pattern) => pattern.test(text))) {
+        messages.push(`[${msg.type()}] ${text}`);
+      }
+    }
+  });
+  return messages;
+}
+
 let server: ServerHandle | undefined;
 let baseURL = "";
 let dbUrl = "";
@@ -29,17 +47,7 @@ test.afterAll(async () => {
 });
 
 test("api layout renders ApiStage wrapper with no NDI source active", async ({ page }) => {
-  const consoleMessages: string[] = [];
-  // Ignore Chrome's subresource integrity preload warning (browser-level, not app)
-  const ALLOWED = [/integrity.*ignored.*preload/i, /ResizeObserver loop/i];
-  page.on("console", (msg) => {
-    if (msg.type() === "error" || msg.type() === "warning") {
-      const text = msg.text();
-      if (!ALLOWED.some((pattern) => pattern.test(text))) {
-        consoleMessages.push(`[${msg.type()}] ${text}`);
-      }
-    }
-  });
+  const consoleMessages = collectConsoleErrors(page);
 
   // Ensure no video source is active
   await page.request.post(
@@ -94,16 +102,7 @@ test("api layout renders ApiStage wrapper with no NDI source active", async ({ p
 });
 
 test("worship-snv layout is not affected by api stage changes", async ({ page }) => {
-  const consoleMessages: string[] = [];
-  const ALLOWED = [/integrity.*ignored.*preload/i, /ResizeObserver loop/i];
-  page.on("console", (msg) => {
-    if (msg.type() === "error" || msg.type() === "warning") {
-      const text = msg.text();
-      if (!ALLOWED.some((pattern) => pattern.test(text))) {
-        consoleMessages.push(`[${msg.type()}] ${text}`);
-      }
-    }
-  });
+  const consoleMessages = collectConsoleErrors(page);
 
   // Switch back to worship-snv
   await page.request.post(
@@ -128,6 +127,78 @@ test("worship-snv layout is not affected by api stage changes", async ({ page })
     .locator('div.stage-container[data-layout="worship-snv"] .stage__current-slide .stage__slide-text')
     .evaluate((el) => window.getComputedStyle(el).textShadow);
   expect(slideShadow).toBe("none");
+
+  expect(consoleMessages).toEqual([]);
+});
+
+test("api layout shows connection-status overlay when NDI source activates", async ({ page }) => {
+  const consoleMessages = collectConsoleErrors(page);
+
+  // Start clean
+  await page.request.post(
+    new URL("/integrations/video-sources/deactivate", baseURL).toString(),
+  );
+
+  // Navigate FIRST so the WS is open before we activate
+  await page.request.post(
+    new URL("/stage/layout", baseURL).toString(),
+    { data: { code: "api" } },
+  );
+  await page.goto(new URL("/stage", baseURL).toString());
+  await page.waitForSelector('body[data-wasm-ready="true"]', {
+    timeout: 30_000,
+  });
+  await page.waitForSelector('body[data-layout-code="api"]', {
+    timeout: 10_000,
+  });
+
+  // Sanity: img not present yet
+  await expect(page.locator("img.stage-api__ndi")).toHaveCount(0);
+
+  // Create a bogus video source
+  const createResp = await page.request.post(
+    new URL("/integrations/video-sources", baseURL).toString(),
+    { data: { label: "E2E Stage API NDI Test", ndiName: "BOGUS_DOES_NOT_EXIST" } },
+  );
+  const source = await createResp.json();
+
+  // Activate. The handler publishes NdiSourceActivated to the live hub
+  // BEFORE attempting to start the stream, so even when start_stream fails
+  // for a bogus name, the frontend still receives the event. We ignore
+  // the HTTP status here and observe DOM effects instead.
+  await page.request.post(
+    new URL(
+      `/integrations/video-sources/${source.id}/activate`,
+      baseURL,
+    ).toString(),
+    { failOnStatusCode: false },
+  );
+
+  try {
+    // The overlay should appear (status = "connecting") and the img should mount
+    await expect(page.locator("img.stage-api__ndi")).toHaveCount(1, {
+      timeout: 10_000,
+    });
+    await expect(page.locator("div.stage-api__overlay")).toBeVisible({
+      timeout: 5_000,
+    });
+    await expect(page.locator("div.stage-api__overlay")).toContainText(
+      /Connecting/i,
+    );
+  } finally {
+    // Cleanup so subsequent test runs are clean
+    await page.request.post(
+      new URL("/integrations/video-sources/deactivate", baseURL).toString(),
+      { failOnStatusCode: false },
+    );
+    await page.request.delete(
+      new URL(
+        `/integrations/video-sources/${source.id}`,
+        baseURL,
+      ).toString(),
+      { failOnStatusCode: false },
+    );
+  }
 
   expect(consoleMessages).toEqual([]);
 });
