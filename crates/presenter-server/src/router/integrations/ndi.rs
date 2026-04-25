@@ -15,7 +15,7 @@ use tokio::sync::broadcast::error::RecvError;
 use tracing::instrument;
 
 use super::super::AppError;
-use crate::adaptive_mjpeg::{AdaptController, AdaptDecision};
+use crate::adaptive_mjpeg::{slow_tick_threshold, AdaptController, AdaptDecision};
 use crate::state::AppState;
 
 #[derive(Debug, Serialize)]
@@ -59,11 +59,31 @@ pub(crate) async fn mjpeg_ws(
 
 async fn handle_mjpeg_ws(mut socket: WebSocket, mut sub: TierSubscription, state: AppState) {
     let mut controller = AdaptController::new(Tier::L0);
+    let mut last_ok: Option<Instant> = None;
     loop {
         match sub.rx.recv().await {
             Ok(jpeg) => {
-                let decision = controller.on_frame(Instant::now());
-                if let AdaptDecision::Promote(next) = decision {
+                let now = Instant::now();
+                let mut demoted_to = None;
+                if let Some(prev) = last_ok {
+                    let elapsed = now.duration_since(prev);
+                    if elapsed > slow_tick_threshold(controller.tier()) {
+                        tracing::info!(
+                            elapsed_ms = elapsed.as_millis() as u64,
+                            tier = ?controller.tier(),
+                            "MJPEG WS slow tick"
+                        );
+                        if let AdaptDecision::Demote(next) = controller.on_lag(now) {
+                            tracing::info!(from = ?controller.tier(), to = ?next, "MJPEG WS demoting tier");
+                            demoted_to = Some(next);
+                        }
+                    } else if let AdaptDecision::Promote(next) = controller.on_frame(now) {
+                        tracing::info!(from = ?controller.tier(), to = ?next, "MJPEG WS promoting tier");
+                        demoted_to = Some(next);
+                    }
+                }
+                last_ok = Some(now);
+                if let Some(next) = demoted_to {
                     if let Some(manager) = state.ndi_manager() {
                         sub = manager.subscribe_tier(next).await;
                     }
@@ -107,11 +127,31 @@ pub(crate) async fn mjpeg_http(
     let stream = async_stream::stream! {
         let mut sub = initial_sub;
         let mut controller = AdaptController::new(Tier::L0);
+        let mut last_ok: Option<Instant> = None;
         loop {
             match sub.rx.recv().await {
                 Ok(jpeg) => {
-                    let decision = controller.on_frame(Instant::now());
-                    if let AdaptDecision::Promote(next) = decision {
+                    let now = Instant::now();
+                    let mut next_tier: Option<Tier> = None;
+                    if let Some(prev) = last_ok {
+                        let elapsed = now.duration_since(prev);
+                        if elapsed > slow_tick_threshold(controller.tier()) {
+                            tracing::info!(
+                                elapsed_ms = elapsed.as_millis() as u64,
+                                tier = ?controller.tier(),
+                                "MJPEG HTTP slow tick"
+                            );
+                            if let AdaptDecision::Demote(next) = controller.on_lag(now) {
+                                tracing::info!(from = ?controller.tier(), to = ?next, "MJPEG HTTP demoting tier");
+                                next_tier = Some(next);
+                            }
+                        } else if let AdaptDecision::Promote(next) = controller.on_frame(now) {
+                            tracing::info!(from = ?controller.tier(), to = ?next, "MJPEG HTTP promoting tier");
+                            next_tier = Some(next);
+                        }
+                    }
+                    last_ok = Some(now);
+                    if let Some(next) = next_tier {
                         if let Some(manager) = state_clone.ndi_manager() {
                             sub = manager.subscribe_tier(next).await;
                         }

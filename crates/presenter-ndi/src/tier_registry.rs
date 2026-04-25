@@ -16,11 +16,7 @@ use crate::encoder::{uyvy_to_bgra, JpegEncoder};
 use crate::receiver::VideoFrame;
 use crate::tier::Tier;
 
-// Capacity of 1: any single frame the consumer doesn't read in time before the
-// next one arrives counts as a Lagged event on the next recv(). The
-// AdaptController demotes after 5 such events in 30s; legitimate fast clients
-// keep pace and don't see Lagged.
-const JPEG_BROADCAST_CAPACITY: usize = 1;
+const JPEG_BROADCAST_CAPACITY: usize = 4;
 
 /// Newest-wins raw-frame channel. `None` means no active stream.
 pub type RawFrameRx = watch::Receiver<Option<Arc<VideoFrame>>>;
@@ -145,7 +141,10 @@ async fn run_tier_encoder(
             }
         }
 
-        let frame = match raw_rx.borrow().as_ref() {
+        // borrow_and_update advances the watch version tracker so the next
+        // `.changed()` waits for a fresh send instead of busy-looping on the
+        // current value.
+        let frame = match raw_rx.borrow_and_update().as_ref() {
             Some(f) => Arc::clone(f),
             None => continue,
         };

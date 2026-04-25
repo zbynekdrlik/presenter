@@ -1,8 +1,15 @@
 //! Per-connection adaptive controller for `/ndi/mjpeg`.
 //!
-//! Keeps a sliding 30-second window of `broadcast::RecvError::Lagged`
-//! events. Demotes one tier when the window holds 5+ events; promotes
-//! one tier after 60 seconds of zero lag at the current tier.
+//! Maintains a sliding 30-second window of "slow events". A slow event is
+//! either a `broadcast::RecvError::Lagged` OR a successful `Ok` recv that
+//! arrives more than `SLOW_MULTIPLIER × tier_interval` after the previous
+//! Ok (caught by the caller and reported via `on_lag`). The latter is
+//! essential because hyper's body buffer can absorb tens of MB before TCP
+//! backpressure ever overflows the broadcast queue, so `RecvError::Lagged`
+//! alone is an unreliable signal for "this client is slow".
+//!
+//! Demotes one tier when the window holds 5+ slow events; promotes one
+//! tier after 60 seconds of zero slow events at the current tier.
 
 use std::collections::VecDeque;
 use std::time::{Duration, Instant};
@@ -12,6 +19,17 @@ use presenter_ndi::Tier;
 const LAG_WINDOW: Duration = Duration::from_secs(30);
 const LAG_DEMOTE_THRESHOLD: usize = 5;
 const PROMOTE_AFTER: Duration = Duration::from_secs(60);
+const SLOW_MULTIPLIER: u32 = 2;
+
+/// Returns the threshold for treating an inter-Ok gap as a "slow tick" at the given tier.
+pub fn slow_tick_threshold(tier: Tier) -> Duration {
+    let fps = match tier {
+        Tier::L0 => 30,
+        Tier::L1 | Tier::L2 => 15,
+        Tier::L3 => 10,
+    };
+    Duration::from_millis(1000 * SLOW_MULTIPLIER as u64 / fps)
+}
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum AdaptDecision {
@@ -170,5 +188,17 @@ mod tests {
         let mut c = AdaptController::new(Tier::L0);
         let d = c.on_frame(t0 + Duration::from_secs(120));
         assert_eq!(d, AdaptDecision::Stay);
+    }
+
+    #[test]
+    fn slow_tick_threshold_scales_with_tier() {
+        // L0 = 30 fps → interval 33ms → threshold 66ms
+        assert_eq!(slow_tick_threshold(Tier::L0), Duration::from_millis(66));
+        // L1 = 15 fps → interval 66ms → threshold 132ms (rounds to 133ms via integer math)
+        assert_eq!(slow_tick_threshold(Tier::L1), Duration::from_millis(133));
+        // L2 = 15 fps → 133ms
+        assert_eq!(slow_tick_threshold(Tier::L2), Duration::from_millis(133));
+        // L3 = 10 fps → 200ms
+        assert_eq!(slow_tick_threshold(Tier::L3), Duration::from_millis(200));
     }
 }
