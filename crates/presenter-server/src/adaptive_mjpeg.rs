@@ -45,7 +45,7 @@ impl AdaptController {
     /// Called when a successful frame is received. Returns Promote if conditions met.
     pub fn on_frame(&mut self, now: Instant) -> AdaptDecision {
         self.trim_window(now);
-        if self.tier != Tier::L0 && self.entered_tier_at.elapsed() >= PROMOTE_AFTER {
+        if self.tier != Tier::L0 && now.duration_since(self.entered_tier_at) >= PROMOTE_AFTER {
             // 60 s smooth at this tier and we have a higher tier to try.
             if self.last_lag_at.map_or(true, |t| now.duration_since(t) >= PROMOTE_AFTER) {
                 if let Some(next) = self.tier.promote() {
