@@ -16,7 +16,11 @@ use crate::encoder::{uyvy_to_bgra, JpegEncoder};
 use crate::receiver::VideoFrame;
 use crate::tier::Tier;
 
-const JPEG_BROADCAST_CAPACITY: usize = 4;
+// Capacity of 1: any single frame the consumer doesn't read in time before the
+// next one arrives counts as a Lagged event on the next recv(). The
+// AdaptController demotes after 5 such events in 30s; legitimate fast clients
+// keep pace and don't see Lagged.
+const JPEG_BROADCAST_CAPACITY: usize = 1;
 
 /// Newest-wins raw-frame channel. `None` means no active stream.
 pub type RawFrameRx = watch::Receiver<Option<Arc<VideoFrame>>>;

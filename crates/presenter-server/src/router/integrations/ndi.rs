@@ -77,7 +77,7 @@ async fn handle_mjpeg_ws(mut socket: WebSocket, mut sub: TierSubscription, state
                 }
             }
             Err(RecvError::Lagged(n)) => {
-                tracing::debug!(lag = n, tier = ?controller.tier(), "MJPEG WS client lagged");
+                tracing::info!(lag = n, tier = ?controller.tier(), "MJPEG WS client lagged");
                 let decision = controller.on_lag(Instant::now());
                 if let AdaptDecision::Demote(next) = decision {
                     tracing::info!(from = ?controller.tier(), to = ?next, "MJPEG WS demoting tier");
@@ -125,7 +125,7 @@ pub(crate) async fn mjpeg_http(
                     yield Ok(Bytes::from("\r\n"));
                 }
                 Err(RecvError::Lagged(n)) => {
-                    tracing::debug!(lag = n, tier = ?controller.tier(), "MJPEG HTTP client lagged");
+                    tracing::info!(lag = n, tier = ?controller.tier(), "MJPEG HTTP client lagged");
                     let decision = controller.on_lag(Instant::now());
                     if let AdaptDecision::Demote(next) = decision {
                         tracing::info!(from = ?controller.tier(), to = ?next, "MJPEG HTTP demoting tier");
