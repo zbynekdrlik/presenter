@@ -14,12 +14,16 @@ const ALLOWED_CONSOLE_NOISE = [
   /ResizeObserver loop/i,
 ];
 
-function collectConsoleErrors(page: import("@playwright/test").Page): string[] {
+function collectConsoleErrors(
+  page: import("@playwright/test").Page,
+  extraAllowed: RegExp[] = [],
+): string[] {
   const messages: string[] = [];
+  const allowed = [...ALLOWED_CONSOLE_NOISE, ...extraAllowed];
   page.on("console", (msg) => {
     if (msg.type() === "error" || msg.type() === "warning") {
       const text = msg.text();
-      if (!ALLOWED_CONSOLE_NOISE.some((pattern) => pattern.test(text))) {
+      if (!allowed.some((pattern) => pattern.test(text))) {
         messages.push(`[${msg.type()}] ${text}`);
       }
     }
@@ -132,7 +136,14 @@ test("worship-snv layout is not affected by api stage changes", async ({ page })
 });
 
 test("api layout shows connection-status overlay when NDI source activates", async ({ page }) => {
-  const consoleMessages = collectConsoleErrors(page);
+  // We deliberately activate a bogus NDI source so the WS event fires while
+  // the page is open. Once `ndi_active=true`, the browser starts loading
+  // `<img src="/ndi/mjpeg">`, but the server returns 503 because the
+  // bogus name has no real stream — that 503 is expected noise for this
+  // test scenario only.
+  const consoleMessages = collectConsoleErrors(page, [
+    /Failed to load resource.*503/i,
+  ]);
 
   // Start clean
   await page.request.post(
