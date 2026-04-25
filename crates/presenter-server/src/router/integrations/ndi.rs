@@ -57,6 +57,18 @@ pub(crate) async fn mjpeg_ws(
     Ok(ws.on_upgrade(move |socket| handle_mjpeg_ws(socket, sub, state)))
 }
 
+/// Approximate how many frames a slow-tick gap missed at the current tier's
+/// expected rate. Used to feed `on_lag(dropped)` so a single very-late Ok
+/// can trigger immediate demote via SEVERE_DROP_THRESHOLD.
+fn estimate_dropped(tier: Tier, elapsed: std::time::Duration) -> u64 {
+    let fps = match tier {
+        Tier::L0 => 30u64,
+        Tier::L1 | Tier::L2 => 15,
+        Tier::L3 => 10,
+    };
+    elapsed.as_millis() as u64 * fps / 1000
+}
+
 async fn handle_mjpeg_ws(mut socket: WebSocket, mut sub: TierSubscription, state: AppState) {
     let mut controller = AdaptController::new(Tier::L0);
     let mut last_ok: Option<Instant> = None;
@@ -64,26 +76,28 @@ async fn handle_mjpeg_ws(mut socket: WebSocket, mut sub: TierSubscription, state
         match sub.rx.recv().await {
             Ok(jpeg) => {
                 let now = Instant::now();
-                let mut demoted_to = None;
+                let mut next_tier: Option<Tier> = None;
                 if let Some(prev) = last_ok {
                     let elapsed = now.duration_since(prev);
                     if elapsed > slow_tick_threshold(controller.tier()) {
+                        let dropped = estimate_dropped(controller.tier(), elapsed);
                         tracing::info!(
                             elapsed_ms = elapsed.as_millis() as u64,
+                            dropped,
                             tier = ?controller.tier(),
                             "MJPEG WS slow tick"
                         );
-                        if let AdaptDecision::Demote(next) = controller.on_lag(now) {
+                        if let AdaptDecision::Demote(next) = controller.on_lag(now, dropped) {
                             tracing::info!(from = ?controller.tier(), to = ?next, "MJPEG WS demoting tier");
-                            demoted_to = Some(next);
+                            next_tier = Some(next);
                         }
                     } else if let AdaptDecision::Promote(next) = controller.on_frame(now) {
                         tracing::info!(from = ?controller.tier(), to = ?next, "MJPEG WS promoting tier");
-                        demoted_to = Some(next);
+                        next_tier = Some(next);
                     }
                 }
                 last_ok = Some(now);
-                if let Some(next) = demoted_to {
+                if let Some(next) = next_tier {
                     if let Some(manager) = state.ndi_manager() {
                         sub = manager.subscribe_tier(next).await;
                     }
@@ -98,7 +112,7 @@ async fn handle_mjpeg_ws(mut socket: WebSocket, mut sub: TierSubscription, state
             }
             Err(RecvError::Lagged(n)) => {
                 tracing::info!(lag = n, tier = ?controller.tier(), "MJPEG WS client lagged");
-                let decision = controller.on_lag(Instant::now());
+                let decision = controller.on_lag(Instant::now(), n);
                 if let AdaptDecision::Demote(next) = decision {
                     tracing::info!(from = ?controller.tier(), to = ?next, "MJPEG WS demoting tier");
                     if let Some(manager) = state.ndi_manager() {
@@ -136,12 +150,14 @@ pub(crate) async fn mjpeg_http(
                     if let Some(prev) = last_ok {
                         let elapsed = now.duration_since(prev);
                         if elapsed > slow_tick_threshold(controller.tier()) {
+                            let dropped = estimate_dropped(controller.tier(), elapsed);
                             tracing::info!(
                                 elapsed_ms = elapsed.as_millis() as u64,
+                                dropped,
                                 tier = ?controller.tier(),
                                 "MJPEG HTTP slow tick"
                             );
-                            if let AdaptDecision::Demote(next) = controller.on_lag(now) {
+                            if let AdaptDecision::Demote(next) = controller.on_lag(now, dropped) {
                                 tracing::info!(from = ?controller.tier(), to = ?next, "MJPEG HTTP demoting tier");
                                 next_tier = Some(next);
                             }
@@ -166,7 +182,7 @@ pub(crate) async fn mjpeg_http(
                 }
                 Err(RecvError::Lagged(n)) => {
                     tracing::info!(lag = n, tier = ?controller.tier(), "MJPEG HTTP client lagged");
-                    let decision = controller.on_lag(Instant::now());
+                    let decision = controller.on_lag(Instant::now(), n);
                     if let AdaptDecision::Demote(next) = decision {
                         tracing::info!(from = ?controller.tier(), to = ?next, "MJPEG HTTP demoting tier");
                         if let Some(manager) = state_clone.ndi_manager() {
