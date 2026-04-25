@@ -18,7 +18,9 @@ Issue [#250](https://github.com/zbynekdrlik/presenter/issues/250). Today's pipel
 
 Measured 2026-04-25 against `RESOLUME-SNV (cg-obs)`: 1920×1080 @ ~29.6 fps, ~115 KB/frame, ~24.5 Mbps. Cheap TVs (Amlogic SoC, software JPEG decode) cannot keep pace. Production server is Intel N100 (4 cores), so per-connection encoding does not scale.
 
-**Image-handling constraint for profiling tasks (Task 1, 2, 12, 14):** Save screenshots and DevTools profile exports to `/tmp/ndi-profiling/` only. Do **NOT** open captured PNGs/JPEGs with the Read tool — recent API error `req_011CaQjH9cNLofQDkTHDg9XX` was triggered by image content. Read the DevTools `.json` profile exports (text), and report numbers extracted from the JSON. Screenshots exist only as paths the human user can open, never as Read inputs.
+**Profiling methodology — server-side only.** Originally this plan called for DevTools attachment via `chrome://inspect`. That requires Fully Kiosk's "Web Content Debugging" preference enabled per device, which can only be toggled via the Fully Kiosk Settings UI on the TV (no remote method without the Fully Kiosk admin password). Since the TVs are at the church and the operator is remote, we use server-side measurements only. The signal that actually drives the adaptive design is `tokio::sync::broadcast::error::RecvError::Lagged` — observed from the **server** end of the same TCP connection. We measure that, plus the tier-transition logs the implementation will emit, and the operator's qualitative "is the text readable now?" judgment.
+
+**No image content is read into conversation context** under any circumstance — recent API error `req_011CaQjH9cNLofQDkTHDg9XX` was triggered by image bytes. All artifacts stay text/JSON or live as files on disk.
 
 ---
 
@@ -42,93 +44,71 @@ Measured 2026-04-25 against `RESOLUME-SNV (cg-obs)`: 1920×1080 @ ~29.6 fps, ~11
 
 ---
 
-## Task 1: Baseline profile sd1l.lan (Tesla LEAP-S1)
+## Task 1: Baseline measurement — sd1l.lan (Tesla LEAP-S1)
 
-**Files:** None (data collection). Output appended to `docs/superpowers/specs/2026-04-25-ndi-cheap-tv-adaptive-design.md` Findings section in Task 12.
+**Files:** None (data collection). Output saved to `/tmp/ndi-profiling/sd1l-baseline/SUMMARY.md`.
 
-This task captures the **before** numbers — current native pipeline (1080p @ 30) on the Tesla TV. Implementation comes later; we measure first so the post-deploy numbers in Task 12 have a reference point.
+We measure the **current behavior** (production, version 0.4.33, no adaptive code yet) by counting how many `RecvError::Lagged` events the **server** observes for each connected client. The TVs already have a long-running `/ndi/mjpeg` connection to production, so we just:
 
-- [ ] **Step 1: Prepare the dev server stream**
+1. Compare its server-pushed-FPS to a fast control client we open from dev2 against the same production endpoint.
+2. Look at production tracing logs for the existing `MJPEG WS client lagged` lines that fire per `Lagged` event.
 
-```bash
-# Confirm dev server is running and the cg-obs source is active
-curl -s http://10.77.8.134:8080/integrations/video-sources | python3 -c "import sys,json; d=json.load(sys.stdin); print([(x['label'], x['isActive']) for x in d])"
-```
+This avoids any DevTools / kiosk-debug requirement.
 
-Expected: `cg` row shows `isActive: True`. If not, activate it via the settings UI before continuing.
-
-- [ ] **Step 2: Set up artifact directory + ADB reverse**
+- [ ] **Step 1: Prepare artifact dir**
 
 ```bash
 mkdir -p /tmp/ndi-profiling/sd1l-baseline
-adb -s sd1l.lan:5555 reverse tcp:8080 tcp:8080
-adb -s sd1l.lan:5555 reverse --list
 ```
 
-Expected: `host-9 tcp:8080 tcp:8080`.
-
-- [ ] **Step 3: Restart Fully Kiosk with WebView debugging**
+- [ ] **Step 2: Confirm cg-obs source is active on production**
 
 ```bash
-adb -s sd1l.lan:5555 shell am force-stop com.fullykiosk.videokiosk
-adb -s sd1l.lan:5555 shell am start -n com.fullykiosk.videokiosk/de.ozerov.fully.MainActivity --es WEBVIEW_DEBUG true
-sleep 5
-adb -s sd1l.lan:5555 shell "dumpsys activity activities | grep -E 'mResumedActivity|topResumedActivity'" | head -2
+curl -s http://10.77.9.205/integrations/video-sources | python3 -c "
+import sys,json
+d=json.load(sys.stdin)
+for x in d:
+    print(f\"  {x['label']:>20s}: active={x['isActive']}\")"
 ```
 
-Expected: `mResumedActivity` shows `com.fullykiosk.videokiosk/de.ozerov.fully.FullyActivity`.
+Expected: `cg` row shows `active=True`. If not, abort and ask the user to activate it.
 
-- [ ] **Step 4: Switch dev stage to ndi-fullscreen**
+- [ ] **Step 3: Confirm sd1l is currently connected to production**
 
 ```bash
-curl -s -X POST http://10.77.8.134:8080/stage/layout -H 'content-type: application/json' -d '{"code":"ndi-fullscreen"}'
-curl -s http://10.77.8.134:8080/stage/layout
+adb -s sd1l.lan:5555 shell "netstat -tn 2>/dev/null" | grep -E '10\.77\.9\.205:80\s+ESTABLISHED'
 ```
 
-Expected: response contains `"code":"ndi-fullscreen"`.
+Expected: at least one ESTABLISHED line. If none, sd1l isn't streaming — check the device.
 
-- [ ] **Step 5: Attach DevTools and record 10 s Performance trace**
-
-Open `chrome://inspect/#devices` on the dev machine. The Fully Kiosk webview should be listed under sd1l.lan. Click "inspect". In the DevTools Performance tab, click Record, wait 10 s, click Stop.
-
-Save the trace as `/tmp/ndi-profiling/sd1l-baseline/trace.json` via DevTools "Save profile…".
-
-Capture a Network tab summary screenshot to `/tmp/ndi-profiling/sd1l-baseline/network.png`.
-
-**Do not read the PNG with the Read tool. Only report file paths.**
-
-- [ ] **Step 6: Extract numbers from trace.json (text only)**
+- [ ] **Step 4: Capture 30 s of production server logs (collect baseline lag rate)**
 
 ```bash
-python3 - <<'PY'
-import json, statistics
-with open('/tmp/ndi-profiling/sd1l-baseline/trace.json') as f:
-    data = json.load(f)
-events = data.get('traceEvents', data) if isinstance(data, dict) else data
-def durs(name):
-    return [e['dur']/1000.0 for e in events
-            if e.get('ph')=='X' and e.get('name')==name and 'dur' in e]
-decode = durs('Decode Image')
-paint = durs('Paint')
-def stats(label, xs):
-    if not xs: print(f'{label}: n=0'); return
-    xs.sort()
-    p50 = xs[len(xs)//2]
-    p95 = xs[int(len(xs)*0.95)]
-    print(f'{label}: n={len(xs)} p50={p50:.2f}ms p95={p95:.2f}ms max={xs[-1]:.2f}ms')
-stats('decode', decode)
-stats('paint', paint)
-PY
+sshpass -p 'newlevel' ssh -o StrictHostKeyChecking=no newlevel@presenter.lan \
+  "sudo journalctl -u presenter --since '30 seconds ago' --no-pager" \
+  > /tmp/ndi-profiling/sd1l-baseline/journal-pre.txt
+sleep 30
+sshpass -p 'newlevel' ssh -o StrictHostKeyChecking=no newlevel@presenter.lan \
+  "sudo journalctl -u presenter --since '60 seconds ago' --no-pager" \
+  > /tmp/ndi-profiling/sd1l-baseline/journal-post.txt
+
+# Count MJPEG lag events in the last 30 s
+diff /tmp/ndi-profiling/sd1l-baseline/journal-pre.txt /tmp/ndi-profiling/sd1l-baseline/journal-post.txt | \
+  grep -c "MJPEG.*lagged" \
+  > /tmp/ndi-profiling/sd1l-baseline/lag-count.txt
+cat /tmp/ndi-profiling/sd1l-baseline/lag-count.txt
 ```
 
-Record p50/p95 for decode and paint. Save the printout as `/tmp/ndi-profiling/sd1l-baseline/stats.txt`.
+Note: if production at 0.4.33 doesn't actually emit a "lagged" log line, this count will be 0 even when lagging is happening — the existing code at `crates/presenter-server/src/router/integrations/ndi.rs:72` only logs `Lagged` for the WS path at `debug` level (filtered out by default `info` log level in production). In that case, this baseline step records "no lag observable from production logs at info level" and Task 11 deploys the new code that explicitly counts events at `info` level.
 
-- [ ] **Step 7: Sustained-FPS measurement from the server side**
+If the count is 0, that's an acceptable baseline result — the **post-deploy** measurement in Task 12 is what actually proves the design works.
+
+- [ ] **Step 5: Measure server-pushed FPS to a fast control client (dev2 → prod)**
 
 ```bash
-python3 - <<'PY' > /tmp/ndi-profiling/sd1l-baseline/server-fps.txt
+python3 - <<'PY' > /tmp/ndi-profiling/sd1l-baseline/control-fps.txt
 import urllib.request, time
-url='http://10.77.8.134:8080/ndi/mjpeg'
+url='http://10.77.9.205/ndi/mjpeg'
 r=urllib.request.urlopen(url, timeout=5)
 start=time.time(); buf=b''; frames=0; total=0
 while time.time()-start<10:
@@ -140,143 +120,80 @@ while time.time()-start<10:
         if i<0 or j<0: break
         frames+=1; buf=buf[j+2:]
 elapsed=10
-print(f'frames={frames} fps={frames/elapsed:.1f} kbps={total*8/1000/elapsed:.0f}')
+print(f'control_frames={frames} control_fps={frames/elapsed:.1f} control_kbps={total*8/1000/elapsed:.0f}')
 PY
-cat /tmp/ndi-profiling/sd1l-baseline/server-fps.txt
+cat /tmp/ndi-profiling/sd1l-baseline/control-fps.txt
 ```
 
-Note: this measures what the SERVER pushes, not what the TV decodes. The TV's effective FPS is in the trace (count of `Decode Image` events / 10 s).
+Expected: ~30 fps, ~24 Mbps from a fast client. This proves the server can deliver native rate to a sufficiently fast consumer.
 
-- [ ] **Step 8: Save a parseable summary**
+- [ ] **Step 6: Save baseline summary**
 
 ```bash
+LAG=$(cat /tmp/ndi-profiling/sd1l-baseline/lag-count.txt)
+CTRL=$(cat /tmp/ndi-profiling/sd1l-baseline/control-fps.txt)
 cat <<EOF > /tmp/ndi-profiling/sd1l-baseline/SUMMARY.md
-# sd1l.lan baseline (Tesla LEAP-S1, current native pipeline)
-- decode_p50: <fill from stats.txt>
-- decode_p95: <fill from stats.txt>
-- paint_p50: <fill from stats.txt>
-- fps_sustained_browser: <Decode Image count / 10>
-- server_fps: <from server-fps.txt>
-- server_kbps: <from server-fps.txt>
+# sd1l.lan baseline (Tesla LEAP-S1, prod 0.4.33, current pipeline)
+- production_lag_events_30s_observable_in_journal: $LAG
+- $CTRL
+- qualitative_user_report: "text in NDI is unusable on cheap TV"
 EOF
+cat /tmp/ndi-profiling/sd1l-baseline/SUMMARY.md
 ```
 
-Manually edit the angle-bracket placeholders in `SUMMARY.md` with the values just measured. This file is the input for Task 12 when filling the spec.
+This file feeds Task 12 when filling the spec's Findings section.
 
-- [ ] **Step 9: Mark task done**
+- [ ] **Step 7: Mark task done**
 
-No commit yet — these artifacts live under `/tmp` and are not committed; the spec gets updated in Task 12 along with post-deploy numbers.
+No commit — these artifacts live under `/tmp` and are not committed.
 
 ---
 
-## Task 2: Baseline profile sd2l.lan (Hyundai)
+## Task 2: Baseline measurement — sd2l.lan (Hyundai)
 
-**Files:** None (data collection). Output saved to `/tmp/ndi-profiling/sd2l-baseline/`.
+**Files:** None (data collection). Output saved to `/tmp/ndi-profiling/sd2l-baseline/SUMMARY.md`.
 
-The Hyundai TVs have only 1 GB RAM and Android 11 — expect substantially worse numbers than sd1l. If decode_p95 already exceeds 33 ms at native 1080p (very likely), that confirms the hypothesis: the issue is software JPEG decode on cheap chips, not network or paint.
+Same methodology as Task 1, target sd2l.lan. The Hyundai (1 GB RAM, Android 11) is expected to lag harder than sd1l. We confirm the TV's TCP connection to production is alive, capture 30 s of journal logs, and record the file paths.
 
-- [ ] **Step 1: Prepare artifact dir + ADB reverse for sd2l**
+- [ ] **Step 1: Prep + connectivity check**
 
 ```bash
 mkdir -p /tmp/ndi-profiling/sd2l-baseline
-adb -s sd2l.lan:5555 reverse tcp:8080 tcp:8080
-adb -s sd2l.lan:5555 reverse --list
+adb -s sd2l.lan:5555 shell "netstat -tn 2>/dev/null" | grep -E '10\.77\.9\.205:80\s+ESTABLISHED'
 ```
 
-Expected: `host-9 tcp:8080 tcp:8080`.
+Expected: at least one ESTABLISHED to `10.77.9.205:80`. If none, sd2l isn't streaming — check the device.
 
-- [ ] **Step 2: Restart Fully Kiosk with WebView debugging on sd2l**
+- [ ] **Step 2: Capture 30 s of production journal logs (filtered for sd2l)**
+
+The journal lines don't usually carry the client IP, so we capture all MJPEG lag lines and rely on the post-deploy logs (Task 12) to disambiguate per-connection. For baseline, we just record the aggregate count.
 
 ```bash
-adb -s sd2l.lan:5555 shell am force-stop com.fullykiosk.videokiosk
-adb -s sd2l.lan:5555 shell am start -n com.fullykiosk.videokiosk/de.ozerov.fully.MainActivity --es WEBVIEW_DEBUG true
-sleep 5
-adb -s sd2l.lan:5555 shell "dumpsys activity activities | grep -E 'mResumedActivity|topResumedActivity'" | head -2
+sshpass -p 'newlevel' ssh -o StrictHostKeyChecking=no newlevel@presenter.lan \
+  "sudo journalctl -u presenter --since '60 seconds ago' --no-pager" \
+  > /tmp/ndi-profiling/sd2l-baseline/journal-window.txt
+grep -c "MJPEG.*lagged" /tmp/ndi-profiling/sd2l-baseline/journal-window.txt \
+  > /tmp/ndi-profiling/sd2l-baseline/lag-count.txt
+cat /tmp/ndi-profiling/sd2l-baseline/lag-count.txt
 ```
 
-Expected: `mResumedActivity` shows `com.fullykiosk.videokiosk/de.ozerov.fully.FullyActivity`.
+Same caveat as Task 1: at version 0.4.33 the lagged log is `debug` level and likely filtered. Acceptable. Task 12 is the real measurement.
 
-- [ ] **Step 3: Confirm dev stage is still on ndi-fullscreen**
-
-```bash
-curl -s http://10.77.8.134:8080/stage/layout
-```
-
-Expected: `"code":"ndi-fullscreen"`. If not, repost as in Task 1 Step 4.
-
-- [ ] **Step 4: Attach DevTools and record 10 s Performance trace**
-
-Open `chrome://inspect/#devices`, attach to the sd2l.lan kiosk webview, Performance tab → Record 10 s → Stop → Save profile to `/tmp/ndi-profiling/sd2l-baseline/trace.json`.
-
-Save Network tab summary screenshot to `/tmp/ndi-profiling/sd2l-baseline/network.png` — **do not Read this PNG**.
-
-- [ ] **Step 5: Extract numbers from trace.json**
+- [ ] **Step 3: Save baseline summary**
 
 ```bash
-python3 - <<'PY'
-import json, statistics
-with open('/tmp/ndi-profiling/sd2l-baseline/trace.json') as f:
-    data = json.load(f)
-events = data.get('traceEvents', data) if isinstance(data, dict) else data
-def durs(name):
-    return [e['dur']/1000.0 for e in events
-            if e.get('ph')=='X' and e.get('name')==name and 'dur' in e]
-decode = durs('Decode Image')
-paint = durs('Paint')
-def stats(label, xs):
-    if not xs: print(f'{label}: n=0'); return
-    xs.sort()
-    p50 = xs[len(xs)//2]
-    p95 = xs[int(len(xs)*0.95)]
-    print(f'{label}: n={len(xs)} p50={p50:.2f}ms p95={p95:.2f}ms max={xs[-1]:.2f}ms')
-stats('decode', decode)
-stats('paint', paint)
-PY
-```
-
-Save the printout to `/tmp/ndi-profiling/sd2l-baseline/stats.txt`.
-
-- [ ] **Step 6: Sustained-FPS measurement from server side (same source check, just file under sd2l-baseline)**
-
-```bash
-python3 - <<'PY' > /tmp/ndi-profiling/sd2l-baseline/server-fps.txt
-import urllib.request, time
-url='http://10.77.8.134:8080/ndi/mjpeg'
-r=urllib.request.urlopen(url, timeout=5)
-start=time.time(); buf=b''; frames=0; total=0
-while time.time()-start<10:
-    chunk=r.read(65536)
-    if not chunk: break
-    total+=len(chunk); buf+=chunk
-    while True:
-        i=buf.find(b'\xff\xd8\xff'); j=buf.find(b'\xff\xd9',i+3) if i>=0 else -1
-        if i<0 or j<0: break
-        frames+=1; buf=buf[j+2:]
-elapsed=10
-print(f'frames={frames} fps={frames/elapsed:.1f} kbps={total*8/1000/elapsed:.0f}')
-PY
-cat /tmp/ndi-profiling/sd2l-baseline/server-fps.txt
-```
-
-- [ ] **Step 7: Save parseable summary**
-
-```bash
+LAG=$(cat /tmp/ndi-profiling/sd2l-baseline/lag-count.txt)
 cat <<EOF > /tmp/ndi-profiling/sd2l-baseline/SUMMARY.md
-# sd2l.lan baseline (Hyundai 1 GB, current native pipeline)
-- decode_p50: <fill from stats.txt>
-- decode_p95: <fill from stats.txt>
-- paint_p50: <fill from stats.txt>
-- fps_sustained_browser: <Decode Image count / 10>
-- server_fps: <from server-fps.txt>
-- server_kbps: <from server-fps.txt>
+# sd2l.lan baseline (Hyundai 1 GB, prod 0.4.33, current pipeline)
+- production_lag_events_60s_observable_in_journal: $LAG
+- qualitative_user_report: "text in NDI is unusable on cheap TV"
 EOF
+cat /tmp/ndi-profiling/sd2l-baseline/SUMMARY.md
 ```
 
-Manually fill the placeholders in `SUMMARY.md`. This file feeds Task 12.
+- [ ] **Step 4: Mark task done**
 
-- [ ] **Step 8: Mark task done**
-
-No commit yet — artifacts live under `/tmp` and are not committed.
+No commit — artifacts live under `/tmp` and are not committed.
 
 ---
 
@@ -1667,121 +1584,172 @@ Expected: `conclusion=success`.
 
 ---
 
-## Task 12: Post-deploy profiling on sd1l + sd2l
+## Task 12: Post-deploy validation — server-side tier transitions
 
 **Files:**
 - Modify: `docs/superpowers/specs/2026-04-25-ndi-cheap-tv-adaptive-design.md` (Findings section)
 
-This is the validation pass. After dev is deployed with the adaptive code, we re-profile both TVs and observe:
-1. The connection starts at L0 and downgrades automatically if the TV can't keep pace.
-2. The final settled tier produces decode_p95 + paint_p50 < frame_interval.
+This is the validation pass. After dev is deployed with the adaptive code (version 0.4.34 at `http://10.77.8.134:8080`), we **point each TV at dev temporarily** by editing Fully Kiosk's start URL via the HTTP REST API — but only if Fully Kiosk's admin password is known. Otherwise we wait for the PR to merge and validate against production directly (Task 14).
 
-- [ ] **Step 1: Profile sd1l.lan after the dev deploy lands**
+For Task 12, we validate **without touching the TVs**:
+1. Open a slow-consumer simulator from dev2 against `http://10.77.8.134:8080/ndi/mjpeg` and observe tier transitions in dev logs.
+2. Confirm the AdaptController demotes correctly under simulated lag and promotes back when slack returns.
 
-Run a 60-second trace this time so we observe at least one demote+stabilize cycle. The longer window lets us see the initial L0 frames (high decode time, lag events), the transition (less frequent JPEGs as a smaller tier kicks in), and the settled tier (decode_p95 < tier's frame_interval).
+The actual TV validation against the new code happens in Task 14 after merge to main and prod deploy.
 
-In a separate terminal, watch dev server logs to confirm transitions:
+- [ ] **Step 1: Confirm dev server is running 0.4.34**
 
 ```bash
-sshpass -p 'newlevel' ssh newlevel@10.77.8.134 "sudo journalctl -u presenter-dev -f" | grep -i tier
+curl -s http://10.77.8.134:8080/healthz
 ```
 
-Then drive the profiling on sd1l:
+Expected: `{"status":"ok","version":"0.4.34","channel":"dev"}`.
+
+- [ ] **Step 2: Confirm dev has the cg source active and ndi-fullscreen layout set**
 
 ```bash
-mkdir -p /tmp/ndi-profiling/sd1l-postdeploy
-adb -s sd1l.lan:5555 reverse tcp:8080 tcp:8080
-adb -s sd1l.lan:5555 shell am force-stop com.fullykiosk.videokiosk
-adb -s sd1l.lan:5555 shell am start -n com.fullykiosk.videokiosk/de.ozerov.fully.MainActivity --es WEBVIEW_DEBUG true
-sleep 5
 curl -s -X POST http://10.77.8.134:8080/stage/layout -H 'content-type: application/json' -d '{"code":"ndi-fullscreen"}'
+curl -s http://10.77.8.134:8080/integrations/video-sources | python3 -c "
+import sys,json
+d=json.load(sys.stdin)
+for x in d:
+    print(f\"  {x['label']:>20s}: active={x['isActive']}\")"
 ```
 
-Open `chrome://inspect/#devices`, attach to the sd1l.lan webview, Performance tab → Record 60 s → Stop → Save profile to `/tmp/ndi-profiling/sd1l-postdeploy/trace.json`.
-
-Extract numbers, breaking the trace into "first 15s" (initial tier) and "last 15s" (settled tier):
+Expected: `cg` active. If not, activate via:
 
 ```bash
-python3 - <<'PY'
-import json
-with open('/tmp/ndi-profiling/sd1l-postdeploy/trace.json') as f:
-    data = json.load(f)
-events = data.get('traceEvents', data) if isinstance(data, dict) else data
-xs = [(e['ts'], e['dur']/1000.0) for e in events
-      if e.get('ph')=='X' and e.get('name')=='Decode Image' and 'dur' in e]
-if not xs:
-    print('no decode events'); exit()
-t0 = xs[0][0]
-def stats(label, sub):
-    if not sub: print(f'{label}: n=0'); return
-    durs = sorted([d for _,d in sub])
-    p50 = durs[len(durs)//2]
-    p95 = durs[int(len(durs)*0.95)]
-    print(f'{label}: n={len(durs)} p50={p50:.2f}ms p95={p95:.2f}ms')
-stats('initial(0-15s)', [x for x in xs if x[0]-t0 < 15_000_000])
-stats('settled(45-60s)', [x for x in xs if x[0]-t0 > 45_000_000])
+CG_ID=$(curl -s http://10.77.8.134:8080/integrations/video-sources | python3 -c "import sys,json; print([x['id'] for x in json.load(sys.stdin) if x['label']=='cg'][0])")
+curl -s -X POST "http://10.77.8.134:8080/integrations/video-sources/$CG_ID/activate"
+```
+
+- [ ] **Step 3: Run a slow-consumer simulator that triggers Lagged events**
+
+This Python client reads the MJPEG stream but artificially throttles its receive rate (sleep between reads) so the server's broadcast queue overflows on this connection. The AdaptController should detect 5+ Lagged events in 30 s and demote.
+
+```bash
+mkdir -p /tmp/ndi-profiling/postdeploy
+python3 - <<'PY' &> /tmp/ndi-profiling/postdeploy/slow-client.txt &
+import urllib.request, time
+url='http://10.77.8.134:8080/ndi/mjpeg'
+r=urllib.request.urlopen(url, timeout=10)
+start=time.time(); buf=b''; frames=0
+while time.time()-start<120:
+    # Throttle: only 5 reads/sec — simulates a cheap TV that can't keep up
+    chunk=r.read(8192)
+    if not chunk: break
+    buf+=chunk
+    if len(buf) > 200000: buf=buf[-200000:]
+    while True:
+        i=buf.find(b'\xff\xd8\xff'); j=buf.find(b'\xff\xd9',i+3) if i>=0 else -1
+        if i<0 or j<0: break
+        frames+=1; buf=buf[j+2:]
+    time.sleep(0.2)
+elapsed=time.time()-start
+print(f'received_frames={frames} elapsed={elapsed:.0f}s effective_fps={frames/elapsed:.1f}')
 PY
+SLOW_PID=$!
+echo "slow client pid=$SLOW_PID"
 ```
 
-Save the printout to `/tmp/ndi-profiling/sd1l-postdeploy/stats.txt`. Capture the journalctl output during the trace and save the relevant tier-transition lines to `/tmp/ndi-profiling/sd1l-postdeploy/journal.txt`.
-
-- [ ] **Step 2: Profile sd2l.lan with the same 60 s methodology**
+In parallel, capture the dev journal during the 120-second window:
 
 ```bash
-mkdir -p /tmp/ndi-profiling/sd2l-postdeploy
-adb -s sd2l.lan:5555 reverse tcp:8080 tcp:8080
-adb -s sd2l.lan:5555 shell am force-stop com.fullykiosk.videokiosk
-adb -s sd2l.lan:5555 shell am start -n com.fullykiosk.videokiosk/de.ozerov.fully.MainActivity --es WEBVIEW_DEBUG true
 sleep 5
+sshpass -p 'newlevel' ssh -o StrictHostKeyChecking=no newlevel@10.77.8.134 \
+  "sudo journalctl -u presenter-dev --since '5 seconds ago' --no-pager -f" \
+  > /tmp/ndi-profiling/postdeploy/journal-tier.txt &
+JOURNAL_PID=$!
+
+# Wait for the slow client to finish + a few seconds for cooldown
+sleep 130
+kill $SLOW_PID 2>/dev/null
+kill $JOURNAL_PID 2>/dev/null
+wait
 ```
 
-Attach DevTools to sd2l, record 60 s, save trace as `/tmp/ndi-profiling/sd2l-postdeploy/trace.json`. Run the same Python extractor (substitute path), save to `/tmp/ndi-profiling/sd2l-postdeploy/stats.txt`. Save the corresponding journal lines to `/tmp/ndi-profiling/sd2l-postdeploy/journal.txt`.
+- [ ] **Step 4: Verify tier transitions occurred**
 
-- [ ] **Step 3: Fill in Findings section in spec**
+```bash
+grep -E "demoting tier|promoting tier|tier encoder" /tmp/ndi-profiling/postdeploy/journal-tier.txt | head -20
+```
 
-Open `docs/superpowers/specs/2026-04-25-ndi-cheap-tv-adaptive-design.md`. Replace the placeholder "Findings (filled in during Phase 1, before merging)" content with two tables:
+Expected: at least one `MJPEG HTTP demoting tier from=L0 to=L1` line within 30 s of the slow client connecting. If the slow client kept lagging, additional demotes to L2 (and possibly L3) follow.
+
+If NO transition happens, the AdaptController is not triggering — investigate before merging.
+
+- [ ] **Step 5: Run a fast-consumer simulator and verify it stays at L0**
+
+```bash
+python3 - <<'PY' > /tmp/ndi-profiling/postdeploy/fast-client.txt
+import urllib.request, time
+url='http://10.77.8.134:8080/ndi/mjpeg'
+r=urllib.request.urlopen(url, timeout=5)
+start=time.time(); buf=b''; frames=0
+# Read at full speed for 70 seconds (longer than promote-after window)
+while time.time()-start<70:
+    chunk=r.read(65536)
+    if not chunk: break
+    buf+=chunk
+    while True:
+        i=buf.find(b'\xff\xd8\xff'); j=buf.find(b'\xff\xd9',i+3) if i>=0 else -1
+        if i<0 or j<0: break
+        frames+=1; buf=buf[j+2:]
+elapsed=time.time()-start
+print(f'fast_frames={frames} elapsed={elapsed:.0f}s fps={frames/elapsed:.1f}')
+PY
+cat /tmp/ndi-profiling/postdeploy/fast-client.txt
+```
+
+Expected: fps near 30. No demote should occur for this client (separate connection, so its own AdaptController state).
+
+- [ ] **Step 6: Update spec Findings section**
+
+Open `docs/superpowers/specs/2026-04-25-ndi-cheap-tv-adaptive-design.md`. Replace the placeholder "Findings (filled in during Phase 1, before merging)" content with:
 
 ```markdown
 ## Findings (2026-04-25 dev deploy of 0.4.34)
 
-### sd1l.lan — Tesla LEAP-S1, 2 GB, Android 12
+### Validation methodology
 
-| Phase | Tier | decode_p50 | decode_p95 | paint_p50 | fps_browser | server_kbps |
-|---|---|---|---|---|---|---|
-| baseline | L0 (forced) | <ms> | <ms> | <ms> | <fps> | <kbps> |
-| post-deploy initial | L0 | <ms> | <ms> | <ms> | <fps> | <kbps> |
-| post-deploy settled | <Lx> | <ms> | <ms> | <ms> | <fps> | <kbps> |
+DevTools-based per-frame decode profiling on the TVs proved infeasible — Fully Kiosk's "Web Content Debugging" preference is off on all four registered TVs and can only be toggled via the device's UI (no remote API method without the operator admin password). The TVs are at the church and the operator was not on-site during this PR's verification window.
 
-Settled tier: **Lx**. Pass criterion (decode_p95 + paint_p50 < frame_interval): **PASS / FAIL**.
+Validation instead drives the AdaptController from a slow-consumer simulator on the dev host, which reproduces the `RecvError::Lagged` backpressure signal that real cheap TVs would generate. This proves the controller demotes/promotes correctly under load. Real-TV verification is deferred to Task 14 (post-merge production deploy).
 
-### sd2l.lan — Hyundai, 1 GB, Android 11
+### Slow-consumer simulator (dev 0.4.34, ndi-fullscreen, cg-obs source)
 
-(same table)
+| Metric | Value |
+|---|---|
+| Throttled read rate | 5 chunks/sec at 8 KB/chunk = ~40 KB/s |
+| Effective fps received | <fill from /tmp/ndi-profiling/postdeploy/slow-client.txt> |
+| Time to first demote | <fill from journal-tier.txt> |
+| Final tier reached | <fill — observed last "demoting tier to=Lx" line> |
+
+### Fast-consumer simulator
+
+| Metric | Value |
+|---|---|
+| FPS | <fill from /tmp/ndi-profiling/postdeploy/fast-client.txt> |
+| Tier transitions | None (stayed at L0) |
+
+### Pass criterion
+
+The slow client must demote at least one tier within 30 s and the fast client must remain at L0. Result: **PASS / FAIL**.
+
+Real-TV settled-tier numbers will be added by Task 14 (production verification on sd1l..sd4l).
 ```
 
-Replace every `<>` placeholder with the measured value.
+Replace the `<fill...>` placeholders with the actual measurements.
 
-- [ ] **Step 4: Decide pass/fail per TV**
-
-If sd2l (Hyundai) cannot pass even at L3 (720p @ 10 fps), add a follow-up note in the spec:
-
-```markdown
-### Follow-up
-Hyundai cannot sustain L3. File a follow-up issue to investigate H.264 codec
-or resolution floor below 720p — out of scope for this PR.
-```
-
-If both TVs pass, the spec stands as-is.
-
-- [ ] **Step 5: Commit**
+- [ ] **Step 7: Commit**
 
 ```bash
 git add docs/superpowers/specs/2026-04-25-ndi-cheap-tv-adaptive-design.md
-git commit -m "docs(spec): record NDI cheap-TV adaptive Findings from dev deploy (#250)"
+git commit -m "docs(spec): record dev-deploy validation Findings (#250)"
 git push origin dev
 ```
 
-Wait for the docs-only push to land (no functional CI impact, but keep the same monitoring discipline as Task 11).
+Wait for CI to be green on this docs-only push (same monitoring discipline as Task 11).
 
 ---
 
@@ -1866,22 +1834,35 @@ curl -s http://10.77.9.205/healthz
 
 Expected: `{"status":"ok","version":"0.4.34","channel":"release"}`.
 
-- [ ] **Step 3: Verify each TV holds its connection through the cg-obs source**
+- [ ] **Step 3: Verify each TV holds its connection and observe tier behavior in prod logs**
 
 For each of `sd1l.lan`, `sd2l.lan`, `sd3l.lan`, `sd4l.lan`:
 
 ```bash
-# Confirm Fully Kiosk is foreground
+# Confirm Fully Kiosk is foreground (still running stage page)
 adb -s <tv>:5555 shell "dumpsys activity activities | grep -E 'mResumedActivity'" | head -1
-
-# Re-attach DevTools quickly to confirm NO console errors and stable frame loop
-# (Manual step: chrome://inspect → attach → check Console tab; report file paths only, do not Read screenshots)
-
-# Read production server log for tier transitions
-sshpass -p 'newlevel' ssh newlevel@presenter.lan "sudo journalctl -u presenter --since '5 minutes ago' | grep -i tier" | tail -20
+# Confirm TCP connection to prod is alive
+adb -s <tv>:5555 shell "netstat -tn 2>/dev/null" | grep -E '10\.77\.9\.205:80\s+ESTABLISHED'
 ```
 
-Note: each TV should appear at least once in the log lines, with either no transition (stayed L0) or a `demoting tier` line followed by a stable settled tier.
+Then read the production server log for the most recent ten minutes and inspect tier-related lines:
+
+```bash
+sshpass -p 'newlevel' ssh -o StrictHostKeyChecking=no newlevel@presenter.lan \
+  "sudo journalctl -u presenter --since '10 minutes ago' --no-pager" \
+  > /tmp/ndi-profiling/prod-verify/journal.txt
+mkdir -p /tmp/ndi-profiling/prod-verify
+grep -E "tier encoder|demoting tier|promoting tier|MJPEG.*lagged" \
+  /tmp/ndi-profiling/prod-verify/journal.txt | tail -40
+```
+
+For each TV connection in production logs, classify into one of:
+- **Stayed at L0** — TV is decoding 1080p @ 30 fps without lag (best outcome).
+- **Settled at L1/L2/L3** — TV demoted but stabilized; no further transitions for 60+ seconds (working as designed).
+- **Flapping** — TV oscillates between tiers (means hysteresis is too tight; file a follow-up issue).
+- **Stuck on disconnect** — connection drops repeatedly (means something else is wrong; investigate).
+
+Record the per-TV outcome in the spec's Findings section in Step 4.
 
 - [ ] **Step 4: Update memory note**
 
