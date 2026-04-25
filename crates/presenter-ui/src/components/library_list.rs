@@ -116,7 +116,7 @@ pub fn LibraryList() -> impl IntoView {
                     let visible: Vec<_> = if favs.is_empty() {
                         // No favorites - show all libraries sorted alphabetically
                         let mut all = libs.clone();
-                        all.sort_by(|a, b| a.name.to_lowercase().cmp(&b.name.to_lowercase()));
+                        all.sort_by_key(|a| a.name.to_lowercase());
                         all
                     } else {
                         // Show favorites + active library (JS behavior)

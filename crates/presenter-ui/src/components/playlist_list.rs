@@ -108,7 +108,7 @@ pub fn PlaylistList() -> impl IntoView {
                     // If no dashboard items, show full sorted list
                     let visible = if dashboard_visible.is_empty() {
                         let mut sorted = playlists;
-                        sorted.sort_by(|a, b| a.name.to_lowercase().cmp(&b.name.to_lowercase()));
+                        sorted.sort_by_key(|a| a.name.to_lowercase());
                         sorted
                     } else {
                         dashboard_visible

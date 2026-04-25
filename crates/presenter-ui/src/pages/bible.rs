@@ -27,7 +27,6 @@ pub fn BiblePage() -> impl IntoView {
         let selected_translation = bs.selected_translation;
         let secondary_translation = bs.secondary_translation;
         let character_limit = bs.character_limit;
-        let translations_loaded = translations_loaded;
         leptos::task::spawn_local(async move {
             // Load preferences first to set saved translation choices
             if let Ok(prefs) = bible::get_preferences().await {

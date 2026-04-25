@@ -13,8 +13,6 @@ pub fn SettingsPage() -> impl IntoView {
 
     // Load initial data
     {
-        let sources = sources;
-        let ndi_available = ndi_available;
         leptos::task::spawn_local(async move {
             if let Ok(status) = ndi::get_ndi_status().await {
                 ndi_available.set(status.available);
@@ -49,7 +47,7 @@ pub fn SettingsPage() -> impl IntoView {
         }
         let refresh = refresh;
         leptos::task::spawn_local(async move {
-            if let Ok(_) = ndi::create_video_source(&label, &ndi_name).await {
+            if ndi::create_video_source(&label, &ndi_name).await.is_ok() {
                 new_label.set(String::new());
                 new_ndi_name.set(String::new());
                 refresh();
@@ -130,7 +128,7 @@ pub fn SettingsPage() -> impl IntoView {
                                                 <button class="settings__btn settings__btn--active" on:click=move |_| (deactivate)(web_sys::MouseEvent::new("click").unwrap())>"ACTIVE"</button>
                                             }.into_any()
                                         } else {
-                                            let activate = activate.clone();
+                                            let activate = activate;
                                             view! {
                                                 <button class="settings__btn settings__btn--activate" on:click=move |_| (activate)(id_activate.clone())>"Activate"</button>
                                             }.into_any()

@@ -27,6 +27,12 @@ pub struct TabletContext {
     pub timers: RwSignal<Option<TimersOverview>>,
 }
 
+impl Default for TabletContext {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl TabletContext {
     pub fn new() -> Self {
         let saved_scale = session::get_persistent(SCALE_KEY)

@@ -163,7 +163,6 @@ pub fn SlideList() -> impl IntoView {
 
     let group_colors = RwSignal::new(HashMap::<String, String>::new());
     {
-        let group_colors = group_colors;
         leptos::task::spawn_local(async move {
             if let Ok(colors) = api::presentations::fetch_group_colors().await {
                 group_colors.set(colors);

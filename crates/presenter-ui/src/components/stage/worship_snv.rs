@@ -106,20 +106,16 @@ pub fn WorshipSnv(
             .unwrap_or_default()
     };
 
-    autofit_effect(current_text_ref, CURRENT_MAX_FONT, current_text.clone());
-    autofit_effect(next_text_ref, NEXT_MAX_FONT, next_text.clone());
+    autofit_effect(current_text_ref, CURRENT_MAX_FONT, current_text);
+    autofit_effect(next_text_ref, NEXT_MAX_FONT, next_text);
     autofit_effect(
         current_group_ref,
         CURRENT_GROUP_MAX_FONT,
-        current_group_text.clone(),
+        current_group_text,
     );
-    autofit_effect(next_group_ref, NEXT_GROUP_MAX_FONT, next_group_text.clone());
-    autofit_effect(
-        current_song_ref,
-        CURRENT_SONG_MAX_FONT,
-        current_song_text.clone(),
-    );
-    autofit_effect(next_song_ref, NEXT_SONG_MAX_FONT, next_song_text.clone());
+    autofit_effect(next_group_ref, NEXT_GROUP_MAX_FONT, next_group_text);
+    autofit_effect(current_song_ref, CURRENT_SONG_MAX_FONT, current_song_text);
+    autofit_effect(next_song_ref, NEXT_SONG_MAX_FONT, next_song_text);
 
     view! {
         <div class="stage-container" data-layout="worship-snv">
