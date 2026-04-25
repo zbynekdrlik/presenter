@@ -77,7 +77,12 @@ impl TierRegistry {
                 jpeg_tx.clone(),
                 stop_rx,
             ));
-            TierEntry { jpeg_tx, refcount: 0, stop_tx, handle }
+            TierEntry {
+                jpeg_tx,
+                refcount: 0,
+                stop_tx,
+                handle,
+            }
         });
         entry.refcount += 1;
         let rx = entry.jpeg_tx.subscribe();
@@ -119,7 +124,12 @@ async fn run_tier_encoder(
     let spec = tier.spec();
 
     let mut frame_index: u32 = 0;
-    tracing::info!(?tier, target_height = spec.target_height, target_fps = spec.target_fps, "tier encoder started");
+    tracing::info!(
+        ?tier,
+        target_height = spec.target_height,
+        target_fps = spec.target_fps,
+        "tier encoder started"
+    );
 
     loop {
         tokio::select! {
@@ -146,9 +156,17 @@ async fn run_tier_encoder(
         let (bgra, w, h) = if frame.fourcc == fourcc_bgra || frame.fourcc == fourcc_bgrx {
             (frame.data.clone(), frame.width, frame.height)
         } else if frame.fourcc == fourcc_uyvy {
-            (uyvy_to_bgra(&frame.data, frame.width, frame.height), frame.width, frame.height)
+            (
+                uyvy_to_bgra(&frame.data, frame.width, frame.height),
+                frame.width,
+                frame.height,
+            )
         } else {
-            tracing::warn!(?tier, fourcc = format!("0x{:08x}", frame.fourcc), "unsupported fourcc; skipping");
+            tracing::warn!(
+                ?tier,
+                fourcc = format!("0x{:08x}", frame.fourcc),
+                "unsupported fourcc; skipping"
+            );
             continue;
         };
 
@@ -192,7 +210,11 @@ mod tests {
         assert_eq!(registry.active_tier_count().await, 1);
 
         let _s2 = registry.subscribe(Tier::L0).await;
-        assert_eq!(registry.active_tier_count().await, 1, "second L0 sub must reuse encoder");
+        assert_eq!(
+            registry.active_tier_count().await,
+            1,
+            "second L0 sub must reuse encoder"
+        );
 
         let _s3 = registry.subscribe(Tier::L2).await;
         assert_eq!(registry.active_tier_count().await, 2);
@@ -233,11 +255,14 @@ mod tests {
             raw_tx.send(Some(fake_bgra_frame(64, 64))).unwrap();
             // Give encoder a turn
             tokio::time::sleep(std::time::Duration::from_millis(20)).await;
-            let jpeg = tokio::time::timeout(
-                std::time::Duration::from_millis(200),
-                sub.rx.recv(),
-            ).await.expect(&format!("timed out waiting for jpeg #{i}")).unwrap();
-            assert!(jpeg.starts_with(&[0xff, 0xd8, 0xff]), "frame #{i} not a JPEG");
+            let jpeg = tokio::time::timeout(std::time::Duration::from_millis(200), sub.rx.recv())
+                .await
+                .unwrap_or_else(|_| panic!("timed out waiting for jpeg #{i}"))
+                .unwrap();
+            assert!(
+                jpeg.starts_with(&[0xff, 0xd8, 0xff]),
+                "frame #{i} not a JPEG"
+            );
         }
     }
 
@@ -256,10 +281,9 @@ mod tests {
 
         // Drain receiver
         let mut got = 0;
-        while let Ok(Ok(_)) = tokio::time::timeout(
-            std::time::Duration::from_millis(50),
-            sub.rx.recv(),
-        ).await {
+        while let Ok(Ok(_)) =
+            tokio::time::timeout(std::time::Duration::from_millis(50), sub.rx.recv()).await
+        {
             got += 1;
         }
         // Allow off-by-one (depending on which frame triggers the modulus)

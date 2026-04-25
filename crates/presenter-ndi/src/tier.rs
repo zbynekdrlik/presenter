@@ -28,10 +28,26 @@ impl Tier {
 
     pub fn spec(self) -> TierSpec {
         match self {
-            Tier::L0 => TierSpec { target_height: 1080, target_fps: 30, frame_skip_modulus: 1 },
-            Tier::L1 => TierSpec { target_height: 1080, target_fps: 15, frame_skip_modulus: 2 },
-            Tier::L2 => TierSpec { target_height: 720,  target_fps: 15, frame_skip_modulus: 2 },
-            Tier::L3 => TierSpec { target_height: 720,  target_fps: 10, frame_skip_modulus: 3 },
+            Tier::L0 => TierSpec {
+                target_height: 1080,
+                target_fps: 30,
+                frame_skip_modulus: 1,
+            },
+            Tier::L1 => TierSpec {
+                target_height: 1080,
+                target_fps: 15,
+                frame_skip_modulus: 2,
+            },
+            Tier::L2 => TierSpec {
+                target_height: 720,
+                target_fps: 15,
+                frame_skip_modulus: 2,
+            },
+            Tier::L3 => TierSpec {
+                target_height: 720,
+                target_fps: 10,
+                frame_skip_modulus: 3,
+            },
         }
     }
 

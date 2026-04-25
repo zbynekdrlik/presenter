@@ -100,9 +100,25 @@ impl JpegEncoder {
         let target_width = target_width & !1;
         let target_height = target_height & !1;
 
-        let img = image::ImageBuffer::<image::Rgba<u8>, _>::from_raw(src_width, src_height, bgra.to_vec())
-            .ok_or_else(|| anyhow::anyhow!("BGRA buffer size mismatch: {} bytes for {}x{}", bgra.len(), src_width, src_height))?;
-        let resized = image::imageops::resize(&img, target_width, target_height, image::imageops::FilterType::Triangle);
+        let img = image::ImageBuffer::<image::Rgba<u8>, _>::from_raw(
+            src_width,
+            src_height,
+            bgra.to_vec(),
+        )
+        .ok_or_else(|| {
+            anyhow::anyhow!(
+                "BGRA buffer size mismatch: {} bytes for {}x{}",
+                bgra.len(),
+                src_width,
+                src_height
+            )
+        })?;
+        let resized = image::imageops::resize(
+            &img,
+            target_width,
+            target_height,
+            image::imageops::FilterType::Triangle,
+        );
         self.encode_bgra(resized.as_raw(), target_width, target_height)
     }
 }
@@ -116,10 +132,10 @@ mod tests {
         let mut out = Vec::with_capacity((w * h * 4) as usize);
         for y in 0..h {
             for x in 0..w {
-                out.push((x % 256) as u8);    // B
-                out.push((y % 256) as u8);    // G
+                out.push((x % 256) as u8); // B
+                out.push((y % 256) as u8); // G
                 out.push(((x + y) % 256) as u8); // R
-                out.push(255);                // A
+                out.push(255); // A
             }
         }
         out
@@ -130,7 +146,10 @@ mod tests {
         let bgra = make_bgra(64, 64);
         let enc = JpegEncoder::new(75);
         let jpeg = enc.encode_bgra_resized(&bgra, 64, 64, 64).unwrap();
-        assert!(jpeg.starts_with(&[0xff, 0xd8, 0xff]), "JPEG SOI marker missing");
+        assert!(
+            jpeg.starts_with(&[0xff, 0xd8, 0xff]),
+            "JPEG SOI marker missing"
+        );
     }
 
     #[test]

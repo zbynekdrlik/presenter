@@ -158,7 +158,10 @@ fn run_capture_thread(
                     connected = true;
                     tracing::info!(
                         "NDI connected: {}x{} @ {}/{}fps",
-                        frame.width, frame.height, frame.frame_rate_n, frame.frame_rate_d
+                        frame.width,
+                        frame.height,
+                        frame.frame_rate_n,
+                        frame.frame_rate_d
                     );
                     if let Some(cb) = &status_cb {
                         cb("connected".to_string());

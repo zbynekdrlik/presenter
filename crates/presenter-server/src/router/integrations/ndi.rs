@@ -32,7 +32,12 @@ pub(crate) async fn discover_ndi_sources(
         .ndi_manager()
         .ok_or_else(|| AppError::service_unavailable("NDI SDK not available"))?;
     let sources = manager.discover_sources(0)?;
-    Ok(Json(sources.into_iter().map(|s| NdiSourceDto { name: s.name }).collect()))
+    Ok(Json(
+        sources
+            .into_iter()
+            .map(|s| NdiSourceDto { name: s.name })
+            .collect(),
+    ))
 }
 
 #[instrument(skip_all)]
@@ -63,7 +68,11 @@ async fn handle_mjpeg_ws(mut socket: WebSocket, mut sub: TierSubscription, state
                         sub = manager.subscribe_tier(next).await;
                     }
                 }
-                if socket.send(Message::Binary(jpeg.to_vec().into())).await.is_err() {
+                if socket
+                    .send(Message::Binary(jpeg.to_vec().into()))
+                    .await
+                    .is_err()
+                {
                     break;
                 }
             }

@@ -47,7 +47,10 @@ impl AdaptController {
         self.trim_window(now);
         if self.tier != Tier::L0 && now.duration_since(self.entered_tier_at) >= PROMOTE_AFTER {
             // 60 s smooth at this tier and we have a higher tier to try.
-            if self.last_lag_at.map_or(true, |t| now.duration_since(t) >= PROMOTE_AFTER) {
+            if self
+                .last_lag_at
+                .map_or(true, |t| now.duration_since(t) >= PROMOTE_AFTER)
+            {
                 if let Some(next) = self.tier.promote() {
                     self.tier = next;
                     self.entered_tier_at = now;
@@ -90,7 +93,12 @@ impl AdaptController {
 mod tests {
     use super::*;
 
-    fn add_lags(c: &mut AdaptController, t0: Instant, count: usize, spacing_ms: u64) -> Vec<AdaptDecision> {
+    fn add_lags(
+        c: &mut AdaptController,
+        t0: Instant,
+        count: usize,
+        spacing_ms: u64,
+    ) -> Vec<AdaptDecision> {
         let mut out = Vec::new();
         for i in 0..count {
             out.push(c.on_lag(t0 + Duration::from_millis(i as u64 * spacing_ms)));
