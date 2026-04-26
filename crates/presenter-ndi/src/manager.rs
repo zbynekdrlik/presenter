@@ -1,36 +1,35 @@
 use std::sync::Arc;
 
 use anyhow::Result;
-use bytes::Bytes;
-use tokio::sync::{broadcast, Mutex};
+use tokio::sync::{watch, Mutex};
 
 use crate::discovery::{self, FinderShutdown, SourceList};
-use crate::encoder::JpegEncoder;
 use crate::ndi_sdk::NdiLib;
 use crate::receiver::{NdiReceiver, VideoFrame};
-
-type FrameSlot = Arc<std::sync::Mutex<Option<VideoFrame>>>;
+use crate::tier::Tier;
+use crate::tier_registry::{TierRegistry, TierSubscription};
 
 /// Callback for reporting NDI connection status changes.
 pub type StatusCallback = Arc<dyn Fn(String) + Send + Sync>;
 
 struct ActiveStream {
-    stop_signal: tokio::sync::watch::Sender<bool>,
+    stop_signal: watch::Sender<bool>,
     capture_thread: Option<std::thread::JoinHandle<()>>,
-    encode_thread: Option<std::thread::JoinHandle<()>>,
 }
 
-/// Orchestrates NDI discovery, capture, and MJPEG encoding.
+/// Orchestrates NDI discovery, capture, and adaptive MJPEG encoding.
 ///
 /// Discovery runs in a persistent background thread — sources accumulate
-/// over time via mDNS. Capture and encode run in separate OS threads
-/// connected by a shared frame slot (newest frame wins).
+/// over time via mDNS. Capture runs in an OS thread that publishes the
+/// newest raw frame to a `tokio::sync::watch` channel; per-tier JPEG
+/// encoders subscribe via `TierRegistry`.
 pub struct NdiManager {
     sdk: Arc<NdiLib>,
     source_list: SourceList,
     _finder_shutdown: FinderShutdown,
     active_stream: Mutex<Option<ActiveStream>>,
-    frame_tx: broadcast::Sender<Bytes>,
+    raw_frame_tx: watch::Sender<Option<Arc<VideoFrame>>>,
+    tier_registry: Arc<TierRegistry>,
 }
 
 impl NdiManager {
@@ -42,39 +41,35 @@ impl NdiManager {
         let sdk = NdiLib::load().ok()?;
         let sdk = Arc::new(sdk);
         let (source_list, finder_shutdown) = discovery::spawn_persistent_finder(Arc::clone(&sdk));
-        let (frame_tx, _) = broadcast::channel(8);
+        let (raw_frame_tx, raw_frame_rx) = watch::channel(None);
+        let tier_registry = TierRegistry::new(raw_frame_rx);
         Some(Self {
             sdk,
             source_list,
             _finder_shutdown: finder_shutdown,
             active_stream: Mutex::new(None),
-            frame_tx,
+            raw_frame_tx,
+            tier_registry,
         })
     }
 
-    /// Whether the NDI SDK is loaded and available.
     pub fn is_available(&self) -> bool {
         true
     }
 
-    /// Read currently known NDI sources from the persistent finder.
-    ///
-    /// Returns instantly — no network scan is performed. The `timeout_ms`
-    /// parameter is kept for API compatibility but is ignored.
     pub fn discover_sources(&self, _timeout_ms: u32) -> Result<Vec<discovery::NdiSourceInfo>> {
         Ok(self.source_list.read())
     }
 
-    /// Subscribe to the JPEG frame stream.
-    pub fn subscribe_frames(&self) -> broadcast::Receiver<Bytes> {
-        self.frame_tx.subscribe()
+    /// Subscribe to a JPEG broadcast for a given adaptive tier.
+    pub async fn subscribe_tier(&self, tier: Tier) -> TierSubscription {
+        self.tier_registry.subscribe(tier).await
     }
 
-    /// Start capturing from the named NDI source and encoding to JPEG.
+    /// Start capturing from the named NDI source.
     ///
-    /// Spawns two OS threads: one for frame capture, one for JPEG encoding.
-    /// The optional `status_cb` is called with "connected" on first frame
-    /// and "disconnected" after 3 seconds without frames.
+    /// Spawns one OS thread for frame capture; tier encoders are spawned
+    /// lazily by `TierRegistry` as subscribers register.
     pub async fn start_stream(
         &self,
         ndi_name: &str,
@@ -83,55 +78,36 @@ impl NdiManager {
         self.stop_stream().await;
 
         let sdk = Arc::clone(&self.sdk);
-        let frame_tx = self.frame_tx.clone();
+        let raw_tx = self.raw_frame_tx.clone();
         let source_name = ndi_name.to_string();
-        let (stop_tx, stop_rx) = tokio::sync::watch::channel(false);
-        let frame_slot: FrameSlot = Arc::new(std::sync::Mutex::new(None));
-        let condvar = Arc::new(std::sync::Condvar::new());
+        let (stop_tx, stop_rx) = watch::channel(false);
 
-        // Capture thread
-        let slot_c = Arc::clone(&frame_slot);
-        let condvar_c = Arc::clone(&condvar);
-        let stop_rx_c = stop_rx.clone();
         let capture_thread = std::thread::Builder::new()
             .name("ndi-capture".into())
             .spawn(move || {
-                run_capture_thread(sdk, source_name, slot_c, condvar_c, stop_rx_c, status_cb);
-            })?;
-
-        // Encode thread
-        let slot_e = Arc::clone(&frame_slot);
-        let condvar_e = Arc::clone(&condvar);
-        let encode_thread = std::thread::Builder::new()
-            .name("ndi-encode".into())
-            .spawn(move || {
-                run_encode_thread(slot_e, condvar_e, frame_tx, stop_rx);
+                run_capture_thread(sdk, source_name, raw_tx, stop_rx, status_cb);
             })?;
 
         let mut active = self.active_stream.lock().await;
         *active = Some(ActiveStream {
             stop_signal: stop_tx,
             capture_thread: Some(capture_thread),
-            encode_thread: Some(encode_thread),
         });
 
         Ok(())
     }
 
-    /// Check if a capture stream is currently active.
     pub async fn is_streaming(&self) -> bool {
         self.active_stream.lock().await.is_some()
     }
 
-    /// Stop the active NDI capture stream, if any.
     pub async fn stop_stream(&self) {
         let mut active = self.active_stream.lock().await;
         if let Some(mut stream) = active.take() {
             let _ = stream.stop_signal.send(true);
+            // Capture thread checks stop_rx every iteration; clear the frame so subscribers see "stream gone"
+            let _ = self.raw_frame_tx.send(None);
             if let Some(h) = stream.capture_thread.take() {
-                let _ = h.join();
-            }
-            if let Some(h) = stream.encode_thread.take() {
                 let _ = h.join();
             }
         }
@@ -145,9 +121,8 @@ impl NdiManager {
 fn run_capture_thread(
     sdk: Arc<NdiLib>,
     source_name: String,
-    frame_slot: FrameSlot,
-    condvar: Arc<std::sync::Condvar>,
-    mut stop_rx: tokio::sync::watch::Receiver<bool>,
+    raw_tx: watch::Sender<Option<Arc<VideoFrame>>>,
+    mut stop_rx: watch::Receiver<bool>,
     status_cb: Option<StatusCallback>,
 ) {
     let receiver = match NdiReceiver::connect(&sdk, &source_name, 10) {
@@ -163,7 +138,7 @@ fn run_capture_thread(
 
     let mut connected = false;
     let mut last_frame_time = std::time::Instant::now();
-    let mut capture_timeout_ms: u32 = 50; // fallback before first frame
+    let mut capture_timeout_ms: u32 = 50;
 
     tracing::info!("NDI capture thread started for '{source_name}'");
 
@@ -174,7 +149,6 @@ fn run_capture_thread(
 
         match receiver.capture_video(capture_timeout_ms) {
             Ok(Some(frame)) => {
-                // Adapt timeout to actual frame rate
                 if frame.frame_rate_d > 0 && frame.frame_rate_n > 0 {
                     let period = (1000 * frame.frame_rate_d as u64) / frame.frame_rate_n as u64;
                     capture_timeout_ms = (period as u32).clamp(16, 200);
@@ -195,15 +169,10 @@ fn run_capture_thread(
                 }
                 last_frame_time = std::time::Instant::now();
 
-                // Write to shared slot — newest frame wins
-                {
-                    let mut slot = frame_slot.lock().unwrap_or_else(|e| e.into_inner());
-                    *slot = Some(frame);
-                }
-                condvar.notify_one();
+                // Publish to watch — newest replaces previous; `Arc` so consumers don't copy data.
+                let _ = raw_tx.send(Some(Arc::new(frame)));
             }
             Ok(None) => {
-                // Timeout — check for disconnect
                 if connected && last_frame_time.elapsed() > std::time::Duration::from_secs(3) {
                     connected = false;
                     tracing::warn!("NDI signal lost for '{source_name}'");
@@ -225,64 +194,6 @@ fn run_capture_thread(
     tracing::info!("NDI capture thread stopped");
 }
 
-// ---------------------------------------------------------------------------
-// Encode thread
-// ---------------------------------------------------------------------------
-
-fn run_encode_thread(
-    frame_slot: FrameSlot,
-    condvar: Arc<std::sync::Condvar>,
-    frame_tx: broadcast::Sender<Bytes>,
-    stop_rx: tokio::sync::watch::Receiver<bool>,
-) {
-    let fourcc_uyvy = u32::from_le_bytes([b'U', b'Y', b'V', b'Y']);
-    let fourcc_bgra = u32::from_le_bytes([b'B', b'G', b'R', b'A']);
-    let fourcc_bgrx = u32::from_le_bytes([b'B', b'G', b'R', b'X']);
-    let encoder = JpegEncoder::new(75);
-
-    tracing::info!("NDI encode thread started");
-
-    loop {
-        if *stop_rx.borrow() {
-            break;
-        }
-
-        // Wait for a frame (with timeout so we can check stop signal)
-        let frame = {
-            let slot = frame_slot.lock().unwrap_or_else(|e| e.into_inner());
-            let (mut slot, _) = condvar
-                .wait_timeout(slot, std::time::Duration::from_millis(100))
-                .unwrap_or_else(|e| e.into_inner());
-            slot.take()
-        };
-
-        let frame = match frame {
-            Some(f) => f,
-            None => continue,
-        };
-
-        let jpeg = if frame.fourcc == fourcc_bgra || frame.fourcc == fourcc_bgrx {
-            encoder.encode_bgra(&frame.data, frame.width, frame.height)
-        } else if frame.fourcc == fourcc_uyvy {
-            encoder.encode_uyvy(&frame.data, frame.width, frame.height)
-        } else {
-            tracing::warn!("unsupported fourcc: 0x{:08x}", frame.fourcc);
-            continue;
-        };
-
-        match jpeg {
-            Ok(data) => {
-                let _ = frame_tx.send(Bytes::from(data));
-            }
-            Err(e) => {
-                tracing::error!("JPEG encode error: {e}");
-            }
-        }
-    }
-
-    tracing::info!("NDI encode thread stopped");
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -300,24 +211,17 @@ mod tests {
     }
 
     #[test]
-    fn frame_slot_newest_wins() {
-        let slot: FrameSlot = Arc::new(std::sync::Mutex::new(None));
-        {
-            let mut s = slot.lock().unwrap();
-            *s = Some(make_frame(1));
-        }
-        {
-            let mut s = slot.lock().unwrap();
-            *s = Some(make_frame(2));
-        }
-        let frame = slot.lock().unwrap().take();
-        assert_eq!(frame.unwrap().width, 2);
+    fn watch_newest_wins() {
+        let (tx, mut rx) = watch::channel::<Option<Arc<VideoFrame>>>(None);
+        tx.send(Some(Arc::new(make_frame(1)))).unwrap();
+        tx.send(Some(Arc::new(make_frame(2)))).unwrap();
+        // After multiple sends, watch holds only the newest
+        assert_eq!(rx.borrow_and_update().as_ref().unwrap().width, 2);
     }
 
     #[test]
-    fn frame_slot_empty_read() {
-        let slot: FrameSlot = Arc::new(std::sync::Mutex::new(None));
-        let frame = slot.lock().unwrap().take();
-        assert!(frame.is_none());
+    fn watch_starts_empty() {
+        let (_tx, rx) = watch::channel::<Option<Arc<VideoFrame>>>(None);
+        assert!(rx.borrow().is_none());
     }
 }

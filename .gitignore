@@ -26,3 +26,14 @@ test2
 .playwright-mcp/
 bible-ui-*.png
 .superpowers/
+
+# Claude projects metadata + memory (per-machine, not source code)
+.claude/projects/
+
+# Vendored NDI SDK (license-restricted; install separately via runbook)
+NDI SDK for Linux/
+
+# Ad-hoc screenshots written to repo root during dev sessions
+/*.png
+/*.jpeg
+/*.jpg

@@ -72,6 +72,7 @@
 )]
 
 mod ableset;
+mod adaptive_mjpeg;
 mod ai;
 mod android_stage;
 mod companion;
