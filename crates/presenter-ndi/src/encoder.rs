@@ -82,9 +82,11 @@ impl JpegEncoder {
     /// Resize BGRA pixel data to `target_height` (preserving aspect) and JPEG-encode.
     ///
     /// If `src_height == target_height`, this is a fast path that skips resize.
-    /// Otherwise uses `image::imageops::resize` with the `Triangle` filter,
-    /// chosen for cheap CPU cost over Lanczos quality (the difference is
-    /// imperceptible at typical NDI-display sizes).
+    /// Otherwise uses `fast_image_resize` with the `Bilinear` filter, chosen
+    /// for cheap CPU cost over Lanczos quality (the difference is imperceptible
+    /// at typical NDI display sizes). Allocates a fresh destination buffer per
+    /// call — for hot loops that want buffer reuse, see `ResizingEncoder` below
+    /// (added in a later commit).
     pub fn encode_bgra_resized(
         &self,
         bgra: &[u8],
@@ -96,30 +98,46 @@ impl JpegEncoder {
             return self.encode_bgra(bgra, src_width, src_height);
         }
         let target_width = (src_width * target_height) / src_height;
-        // Make even — turbojpeg with Sub2x2 chroma requires even dims.
         let target_width = target_width & !1;
         let target_height = target_height & !1;
 
-        let img = image::ImageBuffer::<image::Rgba<u8>, _>::from_raw(
-            src_width,
-            src_height,
-            bgra.to_vec(),
-        )
-        .ok_or_else(|| {
-            anyhow::anyhow!(
+        let expected = (src_width as usize) * (src_height as usize) * 4;
+        if bgra.len() < expected {
+            return Err(anyhow::anyhow!(
                 "BGRA buffer size mismatch: {} bytes for {}x{}",
                 bgra.len(),
                 src_width,
                 src_height
-            )
-        })?;
-        let resized = image::imageops::resize(
-            &img,
+            ));
+        }
+
+        let src = fast_image_resize::images::ImageRef::new(
+            src_width,
+            src_height,
+            bgra,
+            fast_image_resize::PixelType::U8x4,
+        )
+        .map_err(|e| anyhow::anyhow!("fast_image_resize source error: {e}"))?;
+
+        let mut dst = fast_image_resize::images::Image::new(
             target_width,
             target_height,
-            image::imageops::FilterType::Triangle,
+            fast_image_resize::PixelType::U8x4,
         );
-        self.encode_bgra(resized.as_raw(), target_width, target_height)
+
+        let mut resizer = fast_image_resize::Resizer::new();
+        resizer
+            .resize(
+                &src,
+                &mut dst,
+                &fast_image_resize::ResizeOptions::new()
+                    .resize_alg(fast_image_resize::ResizeAlg::Convolution(
+                        fast_image_resize::FilterType::Bilinear,
+                    )),
+            )
+            .map_err(|e| anyhow::anyhow!("fast_image_resize error: {e}"))?;
+
+        self.encode_bgra(dst.buffer(), target_width, target_height)
     }
 }
 
