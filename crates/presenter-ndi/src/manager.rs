@@ -47,8 +47,7 @@ impl NdiManager {
     pub fn try_new() -> Option<Self> {
         let sdk = NdiLib::load().ok()?;
         let sdk = Arc::new(sdk);
-        let (source_list, finder_shutdown) =
-            discovery::spawn_persistent_finder(Arc::clone(&sdk));
+        let (source_list, finder_shutdown) = discovery::spawn_persistent_finder(Arc::clone(&sdk));
         let (raw_frame_tx, raw_frame_rx) = watch::channel(None);
         let (jpeg_tx, _) = broadcast::channel(JPEG_BROADCAST_CAPACITY);
         Some(Self {
@@ -66,10 +65,7 @@ impl NdiManager {
         true
     }
 
-    pub fn discover_sources(
-        &self,
-        _timeout_ms: u32,
-    ) -> Result<Vec<discovery::NdiSourceInfo>> {
+    pub fn discover_sources(&self, _timeout_ms: u32) -> Result<Vec<discovery::NdiSourceInfo>> {
         Ok(self.source_list.read())
     }
 
@@ -171,8 +167,7 @@ fn run_capture_thread(
         match receiver.capture_video(capture_timeout_ms) {
             Ok(Some(frame)) => {
                 if frame.frame_rate_d > 0 && frame.frame_rate_n > 0 {
-                    let period = (1000 * frame.frame_rate_d as u64)
-                        / frame.frame_rate_n as u64;
+                    let period = (1000 * frame.frame_rate_d as u64) / frame.frame_rate_n as u64;
                     capture_timeout_ms = (period as u32).clamp(16, 200);
                 }
 
@@ -194,18 +189,14 @@ fn run_capture_thread(
                 let _ = raw_tx.send(Some(Arc::new(frame)));
             }
             Ok(None) => {
-                if connected
-                    && last_frame_time.elapsed() > std::time::Duration::from_secs(3)
-                {
+                if connected && last_frame_time.elapsed() > std::time::Duration::from_secs(3) {
                     connected = false;
                     tracing::warn!("NDI signal lost for '{source_name}'");
                     if let Some(cb) = &status_cb {
                         cb("disconnected".to_string());
                     }
                 }
-                if stop_rx.has_changed().unwrap_or(false)
-                    && *stop_rx.borrow_and_update()
-                {
+                if stop_rx.has_changed().unwrap_or(false) && *stop_rx.borrow_and_update() {
                     break;
                 }
             }

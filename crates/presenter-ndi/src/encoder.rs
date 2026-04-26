@@ -130,10 +130,11 @@ impl JpegEncoder {
             .resize(
                 &src,
                 &mut dst,
-                &fast_image_resize::ResizeOptions::new()
-                    .resize_alg(fast_image_resize::ResizeAlg::Convolution(
+                &fast_image_resize::ResizeOptions::new().resize_alg(
+                    fast_image_resize::ResizeAlg::Convolution(
                         fast_image_resize::FilterType::Bilinear,
-                    )),
+                    ),
+                ),
             )
             .map_err(|e| anyhow::anyhow!("fast_image_resize error: {e}"))?;
 
@@ -209,14 +210,16 @@ impl ResizingEncoder {
             .resize(
                 &src,
                 dst,
-                &fast_image_resize::ResizeOptions::new()
-                    .resize_alg(fast_image_resize::ResizeAlg::Convolution(
+                &fast_image_resize::ResizeOptions::new().resize_alg(
+                    fast_image_resize::ResizeAlg::Convolution(
                         fast_image_resize::FilterType::Bilinear,
-                    )),
+                    ),
+                ),
             )
             .map_err(|e| anyhow::anyhow!("fast_image_resize error: {e}"))?;
 
-        self.encoder.encode_bgra(dst.buffer(), target_width, target_height)
+        self.encoder
+            .encode_bgra(dst.buffer(), target_width, target_height)
     }
 }
 

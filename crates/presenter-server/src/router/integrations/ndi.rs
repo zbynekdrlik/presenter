@@ -54,10 +54,7 @@ pub(crate) async fn mjpeg_ws(
     Ok(ws.on_upgrade(move |socket| handle_mjpeg_ws(socket, rx)))
 }
 
-async fn handle_mjpeg_ws(
-    mut socket: WebSocket,
-    mut rx: tokio::sync::broadcast::Receiver<Bytes>,
-) {
+async fn handle_mjpeg_ws(mut socket: WebSocket, mut rx: tokio::sync::broadcast::Receiver<Bytes>) {
     loop {
         match rx.recv().await {
             Ok(jpeg) => {
