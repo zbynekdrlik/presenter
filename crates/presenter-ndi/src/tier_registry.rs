@@ -16,6 +16,13 @@ use crate::encoder::{uyvy_to_bgra, JpegEncoder};
 use crate::receiver::VideoFrame;
 use crate::tier::Tier;
 
+// 4 slots × ~33 ms (30 fps) = ~133 ms of buffer absorbs normal jitter without
+// firing Lagged for a fast client. Slow clients are detected by the elapsed-
+// time slow-tick path in the controller (see `adaptive_mjpeg::slow_tick_threshold`),
+// not by overflowing this queue, so capacity is sized for "comfortable" not
+// "aggressive". We considered cap=1 (more sensitive), but the unit test for
+// frame-skip semantics requires the receiver to be able to consume in a burst
+// after producing — cap=1 caused a single-frame loss in that scenario.
 const JPEG_BROADCAST_CAPACITY: usize = 4;
 
 /// Newest-wins raw-frame channel. `None` means no active stream.
@@ -133,8 +140,9 @@ async fn run_tier_encoder(
 
     loop {
         tokio::select! {
-            _ = stop_rx.changed() => {
-                if *stop_rx.borrow() { break; }
+            res = stop_rx.changed() => {
+                // Sender dropped (Err) or stop signal flipped to true -> break.
+                if res.is_err() || *stop_rx.borrow() { break; }
             }
             res = raw_rx.changed() => {
                 if res.is_err() { break; }

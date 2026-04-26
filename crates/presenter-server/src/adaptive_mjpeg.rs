@@ -110,6 +110,13 @@ impl AdaptController {
                 self.lag_events.clear();
                 return AdaptDecision::Demote(next);
             }
+            // At floor (L3): no further demote possible. Clear the window so
+            // events don't accumulate forever — trim_window already bounds
+            // growth via the 30 s window, but with high-frequency slow-tick
+            // events this could hold hundreds of timestamps. Clearing is
+            // semantically correct: we've already responded to the lag as
+            // much as we can.
+            self.lag_events.clear();
         }
         AdaptDecision::Stay
     }
