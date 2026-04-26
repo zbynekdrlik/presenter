@@ -1,13 +1,18 @@
 use std::sync::Arc;
 
 use anyhow::Result;
-use tokio::sync::{watch, Mutex};
+use bytes::Bytes;
+use tokio::sync::{broadcast, watch, Mutex};
 
 use crate::discovery::{self, FinderShutdown, SourceList};
+use crate::encoder::{uyvy_to_bgra, ResizingEncoder};
 use crate::ndi_sdk::NdiLib;
 use crate::receiver::{NdiReceiver, VideoFrame};
-use crate::tier::Tier;
-use crate::tier_registry::{TierRegistry, TierSubscription};
+
+const TARGET_HEIGHT: u32 = 720;
+const TARGET_FPS: u32 = 20;
+const JPEG_QUALITY: i32 = 75;
+const JPEG_BROADCAST_CAPACITY: usize = 8;
 
 /// Callback for reporting NDI connection status changes.
 pub type StatusCallback = Arc<dyn Fn(String) + Send + Sync>;
@@ -15,41 +20,44 @@ pub type StatusCallback = Arc<dyn Fn(String) + Send + Sync>;
 struct ActiveStream {
     stop_signal: watch::Sender<bool>,
     capture_thread: Option<std::thread::JoinHandle<()>>,
+    encode_task: Option<tokio::task::JoinHandle<()>>,
 }
 
-/// Orchestrates NDI discovery, capture, and adaptive MJPEG encoding.
+/// Orchestrates NDI discovery, capture, and a single shared MJPEG broadcast.
 ///
-/// Discovery runs in a persistent background thread — sources accumulate
-/// over time via mDNS. Capture runs in an OS thread that publishes the
-/// newest raw frame to a `tokio::sync::watch` channel; per-tier JPEG
-/// encoders subscribe via `TierRegistry`.
+/// Discovery runs in a persistent background thread (mDNS source list).
+/// Capture runs in an OS thread that publishes raw frames to a `tokio::sync::watch`
+/// channel; one async encode task consumes them, applies a frame-rate accumulator
+/// to throttle to `TARGET_FPS`, resizes to `TARGET_HEIGHT` via `ResizingEncoder`,
+/// JPEG-encodes at quality `JPEG_QUALITY`, and broadcasts to all connected clients.
 pub struct NdiManager {
     sdk: Arc<NdiLib>,
     source_list: SourceList,
     _finder_shutdown: FinderShutdown,
     active_stream: Mutex<Option<ActiveStream>>,
     raw_frame_tx: watch::Sender<Option<Arc<VideoFrame>>>,
-    tier_registry: Arc<TierRegistry>,
+    raw_frame_rx: watch::Receiver<Option<Arc<VideoFrame>>>,
+    jpeg_tx: broadcast::Sender<Bytes>,
 }
 
 impl NdiManager {
     /// Try to create a new manager by loading the NDI SDK.
     ///
     /// Returns `None` if the NDI runtime is not available on this system.
-    /// Immediately starts a persistent finder thread for source discovery.
     pub fn try_new() -> Option<Self> {
         let sdk = NdiLib::load().ok()?;
         let sdk = Arc::new(sdk);
         let (source_list, finder_shutdown) = discovery::spawn_persistent_finder(Arc::clone(&sdk));
         let (raw_frame_tx, raw_frame_rx) = watch::channel(None);
-        let tier_registry = TierRegistry::new(raw_frame_rx);
+        let (jpeg_tx, _) = broadcast::channel(JPEG_BROADCAST_CAPACITY);
         Some(Self {
             sdk,
             source_list,
             _finder_shutdown: finder_shutdown,
             active_stream: Mutex::new(None),
             raw_frame_tx,
-            tier_registry,
+            raw_frame_rx,
+            jpeg_tx,
         })
     }
 
@@ -61,15 +69,12 @@ impl NdiManager {
         Ok(self.source_list.read())
     }
 
-    /// Subscribe to a JPEG broadcast for a given adaptive tier.
-    pub async fn subscribe_tier(&self, tier: Tier) -> TierSubscription {
-        self.tier_registry.subscribe(tier).await
+    /// Subscribe to the single shared JPEG broadcast.
+    pub fn subscribe_frames(&self) -> broadcast::Receiver<Bytes> {
+        self.jpeg_tx.subscribe()
     }
 
     /// Start capturing from the named NDI source.
-    ///
-    /// Spawns one OS thread for frame capture; tier encoders are spawned
-    /// lazily by `TierRegistry` as subscribers register.
     pub async fn start_stream(
         &self,
         ndi_name: &str,
@@ -84,14 +89,24 @@ impl NdiManager {
 
         let capture_thread = std::thread::Builder::new()
             .name("ndi-capture".into())
-            .spawn(move || {
-                run_capture_thread(sdk, source_name, raw_tx, stop_rx, status_cb);
+            .spawn({
+                let stop_rx = stop_rx.clone();
+                move || {
+                    run_capture_thread(sdk, source_name, raw_tx, stop_rx, status_cb);
+                }
             })?;
+
+        let encode_task = tokio::spawn(run_encode_task(
+            self.raw_frame_rx.clone(),
+            self.jpeg_tx.clone(),
+            stop_rx,
+        ));
 
         let mut active = self.active_stream.lock().await;
         *active = Some(ActiveStream {
             stop_signal: stop_tx,
             capture_thread: Some(capture_thread),
+            encode_task: Some(encode_task),
         });
 
         Ok(())
@@ -105,10 +120,12 @@ impl NdiManager {
         let mut active = self.active_stream.lock().await;
         if let Some(mut stream) = active.take() {
             let _ = stream.stop_signal.send(true);
-            // Capture thread checks stop_rx every iteration; clear the frame so subscribers see "stream gone"
             let _ = self.raw_frame_tx.send(None);
             if let Some(h) = stream.capture_thread.take() {
                 let _ = h.join();
+            }
+            if let Some(h) = stream.encode_task.take() {
+                h.abort();
             }
         }
     }
@@ -169,7 +186,6 @@ fn run_capture_thread(
                 }
                 last_frame_time = std::time::Instant::now();
 
-                // Publish to watch — newest replaces previous; `Arc` so consumers don't copy data.
                 let _ = raw_tx.send(Some(Arc::new(frame)));
             }
             Ok(None) => {
@@ -194,17 +210,99 @@ fn run_capture_thread(
     tracing::info!("NDI capture thread stopped");
 }
 
+// ---------------------------------------------------------------------------
+// Encode task — frame-skip accumulator, SIMD resize, JPEG encode, broadcast.
+// ---------------------------------------------------------------------------
+
+async fn run_encode_task(
+    mut raw_rx: watch::Receiver<Option<Arc<VideoFrame>>>,
+    jpeg_tx: broadcast::Sender<Bytes>,
+    mut stop_rx: watch::Receiver<bool>,
+) {
+    let fourcc_uyvy = u32::from_le_bytes([b'U', b'Y', b'V', b'Y']);
+    let fourcc_bgra = u32::from_le_bytes([b'B', b'G', b'R', b'A']);
+    let fourcc_bgrx = u32::from_le_bytes([b'B', b'G', b'R', b'X']);
+    let mut encoder = ResizingEncoder::new(JPEG_QUALITY, TARGET_HEIGHT);
+
+    // Frame-skip phase accumulator: emit when phase >= source_fps.
+    let mut phase: u64 = 0;
+
+    tracing::info!(
+        target_height = TARGET_HEIGHT,
+        target_fps = TARGET_FPS,
+        "NDI encode task started"
+    );
+
+    loop {
+        tokio::select! {
+            res = stop_rx.changed() => {
+                if res.is_err() || *stop_rx.borrow() { break; }
+            }
+            res = raw_rx.changed() => {
+                if res.is_err() { break; }
+            }
+        }
+
+        let frame = match raw_rx.borrow_and_update().as_ref() {
+            Some(f) => Arc::clone(f),
+            None => continue,
+        };
+
+        // Compute source fps (Resolume sends 30/1 typically). Fall back to
+        // TARGET_FPS if metadata is missing/zero — that means "emit every frame".
+        let source_fps: u64 = if frame.frame_rate_d > 0 && frame.frame_rate_n > 0 {
+            (frame.frame_rate_n as u64) / (frame.frame_rate_d as u64).max(1)
+        } else {
+            TARGET_FPS as u64
+        };
+        let source_fps = source_fps.max(TARGET_FPS as u64);
+
+        phase += TARGET_FPS as u64;
+        if phase < source_fps {
+            continue;
+        }
+        phase -= source_fps;
+
+        let (bgra, w, h) = if frame.fourcc == fourcc_bgra || frame.fourcc == fourcc_bgrx {
+            (frame.data.clone(), frame.width, frame.height)
+        } else if frame.fourcc == fourcc_uyvy {
+            (
+                uyvy_to_bgra(&frame.data, frame.width, frame.height),
+                frame.width,
+                frame.height,
+            )
+        } else {
+            tracing::warn!(
+                fourcc = format!("0x{:08x}", frame.fourcc),
+                "unsupported fourcc; skipping"
+            );
+            continue;
+        };
+
+        match encoder.encode(&bgra, w, h) {
+            Ok(jpeg) => {
+                let _ = jpeg_tx.send(Bytes::from(jpeg));
+            }
+            Err(e) => {
+                tracing::error!("JPEG encode error: {e}");
+            }
+        }
+    }
+
+    tracing::info!("NDI encode task stopped");
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
 
-    fn make_frame(id: u32) -> VideoFrame {
+    fn make_frame(id: u32, fourcc: u32, w: u32, h: u32) -> VideoFrame {
         VideoFrame {
-            width: id,
-            height: 1,
-            data: vec![0u8; 4],
-            stride: 4,
-            fourcc: 0,
+            width: w,
+            height: h,
+            data: vec![id as u8; (w * h * 4) as usize],
+            stride: w * 4,
+            fourcc,
             frame_rate_n: 30,
             frame_rate_d: 1,
         }
@@ -213,15 +311,72 @@ mod tests {
     #[test]
     fn watch_newest_wins() {
         let (tx, mut rx) = watch::channel::<Option<Arc<VideoFrame>>>(None);
-        tx.send(Some(Arc::new(make_frame(1)))).unwrap();
-        tx.send(Some(Arc::new(make_frame(2)))).unwrap();
-        // After multiple sends, watch holds only the newest
-        assert_eq!(rx.borrow_and_update().as_ref().unwrap().width, 2);
+        tx.send(Some(Arc::new(make_frame(
+            1,
+            u32::from_le_bytes([b'B', b'G', b'R', b'A']),
+            1,
+            1,
+        ))))
+        .unwrap();
+        tx.send(Some(Arc::new(make_frame(
+            2,
+            u32::from_le_bytes([b'B', b'G', b'R', b'A']),
+            1,
+            1,
+        ))))
+        .unwrap();
+        // After multiple sends, watch holds only the newest (data filled with id=2).
+        let snap = rx.borrow_and_update();
+        assert!(snap.as_ref().unwrap().data.iter().all(|&b| b == 2));
     }
 
     #[test]
     fn watch_starts_empty() {
         let (_tx, rx) = watch::channel::<Option<Arc<VideoFrame>>>(None);
         assert!(rx.borrow().is_none());
+    }
+
+    /// 30 fps source → TARGET_FPS=20 should produce 2 emits per 3 raw frames.
+    #[test]
+    fn frame_skip_accumulator_30_to_20_emits_2_of_3() {
+        let mut phase: u64 = 0;
+        let source_fps: u64 = 30;
+        let target_fps: u64 = TARGET_FPS as u64;
+        let mut emits = 0;
+        let total = 30;
+        for _ in 0..total {
+            phase += target_fps;
+            if phase < source_fps {
+                continue;
+            }
+            phase -= source_fps;
+            emits += 1;
+        }
+        assert_eq!(
+            emits, 20,
+            "30→20 fps accumulator should emit exactly 20 of 30 frames"
+        );
+    }
+
+    /// 60 fps source → TARGET_FPS=20 should produce 1 emit per 3 raw frames.
+    #[test]
+    fn frame_skip_accumulator_60_to_20_emits_1_of_3() {
+        let mut phase: u64 = 0;
+        let source_fps: u64 = 60;
+        let target_fps: u64 = TARGET_FPS as u64;
+        let mut emits = 0;
+        let total = 60;
+        for _ in 0..total {
+            phase += target_fps;
+            if phase < source_fps {
+                continue;
+            }
+            phase -= source_fps;
+            emits += 1;
+        }
+        assert_eq!(
+            emits, 20,
+            "60→20 fps accumulator should emit exactly 20 of 60 frames"
+        );
     }
 }

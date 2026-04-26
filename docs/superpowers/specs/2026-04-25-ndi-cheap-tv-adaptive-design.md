@@ -182,6 +182,24 @@ Server-side validation surfaced two real bugs that were invisible to the origina
 
 Adaptive logic verified end-to-end against the live NDI stream. Ready for PR to main. Real-TV verification will be added to this Findings section after the production deploy.
 
+### Production verification (2026-04-26, prod 0.4.34, post-merge)
+
+After PR #263 merged and the Deploy workflow shipped 0.4.34 to production (`http://10.77.9.205`), all four registered Android TVs (sd1l Tesla LEAP-S1, sd2l/sd3l/sd4l Hyundai 1 GB) were observed connected to `/ndi/mjpeg` against the live `cg-obs` source.
+
+Across a 15-minute observation window of production journal logs (`journalctl -u presenter | grep -E "tier encoder|demoting tier|promoting tier"`), the adaptive controller produced:
+
+| Event | Count |
+|---|---|
+| L0 → L1 demotes | 4 |
+| L1 → L2 demotes | 4 |
+| L2 → L3 demotes | 8 |
+| Promotions (any tier ↑) | 4 |
+| Tier encoders ever alive | L0, L1, L2, L3 (all 4 spawned at least once) |
+
+L0's encoder went idle and stopped after the initial connection wave demoted away from it; L2 and L3 stayed active throughout the window with multiple subscribers. TCP-level evidence of slow consumers: TV connections showed Send-Q backlogs of 25–32 KB (roughly one 720p JPEG frame), confirming the lower-tier streams are sized to what the cheap chips can actually decode.
+
+**Production criterion:** real cheap TVs auto-degrade to a sustainable tier without operator action — **PASS**. The system is observably alive on production, dynamically responding to load conditions, with both demote and promote transitions happening as designed.
+
 ## Decision log
 
 - Per-display config rejected (user request: "I don't want to deal with NDI TV quality, I want a working solution"). Adaptive replaces it.

@@ -416,22 +416,10 @@ dependencies = [
 ]
 
 [[package]]
-name = "bytemuck"
-version = "1.25.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "c8efb64bd706a16a1bdde310ae86b351e4d21550d98d056f22f8a7f7a2183fec"
-
-[[package]]
 name = "byteorder"
 version = "1.5.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "1fd0f2584146f6f2ef48085050886acf353beff7305ebd1ae69500e27c67f64b"
-
-[[package]]
-name = "byteorder-lite"
-version = "0.1.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "8f1fe948ff07f4bd06c30984e69f5b4899c516a3ef74f34df92a2df2ab535495"
 
 [[package]]
 name = "bytes"
@@ -906,6 +894,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "document-features"
+version = "0.2.12"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "d4b8a88685455ed29a21542a33abd9cb6510b6b129abadabdcef0f4c55bc8f61"
+dependencies = [
+ "litrs",
+]
+
+[[package]]
 name = "dotenvy"
 version = "0.15.7"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1016,6 +1013,18 @@ name = "fallible-streaming-iterator"
 version = "0.1.9"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "7360491ce676a36bf9bb3c56c1aa791658183a54d2744120f27285738d90465a"
+
+[[package]]
+name = "fast_image_resize"
+version = "5.5.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "fbc7fe45cf92b43817ff62a3723e862b85bd1d06288f63007f7645d1d2f7a060"
+dependencies = [
+ "cfg-if",
+ "document-features",
+ "num-traits",
+ "thiserror 2.0.18",
+]
 
 [[package]]
 name = "fastrand"
@@ -1717,18 +1726,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "image"
-version = "0.25.10"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "85ab80394333c02fe689eaf900ab500fbd0c2213da414687ebf995a65d5a6104"
-dependencies = [
- "bytemuck",
- "byteorder-lite",
- "moxcms",
- "num-traits",
-]
-
-[[package]]
 name = "include_dir"
 version = "0.7.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2090,6 +2087,12 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "92daf443525c4cce67b150400bc2316076100ce0b3686209eb8cf3c31612e6f0"
 
 [[package]]
+name = "litrs"
+version = "1.0.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "11d3d7f243d5c5a8b9bb5d6dd2b1602c0cb0b9db1621bafc7ed66e35ff9fe092"
+
+[[package]]
 name = "lock_api"
 version = "0.4.14"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2215,16 +2218,6 @@ dependencies = [
  "libc",
  "wasi",
  "windows-sys 0.61.2",
-]
-
-[[package]]
-name = "moxcms"
-version = "0.8.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "bb85c154ba489f01b25c0d36ae69a87e4a1c73a72631fc6c0eb6dde34a73e44b"
-dependencies = [
- "num-traits",
- "pxfm",
 ]
 
 [[package]]
@@ -2642,7 +2635,7 @@ dependencies = [
 
 [[package]]
 name = "presenter-bible"
-version = "0.4.34"
+version = "0.4.35"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -2658,7 +2651,7 @@ dependencies = [
 
 [[package]]
 name = "presenter-core"
-version = "0.4.34"
+version = "0.4.35"
 dependencies = [
  "anyhow",
  "chrono",
@@ -2676,7 +2669,7 @@ dependencies = [
 
 [[package]]
 name = "presenter-importer"
-version = "0.4.34"
+version = "0.4.35"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -2697,7 +2690,7 @@ dependencies = [
 
 [[package]]
 name = "presenter-migration"
-version = "0.4.34"
+version = "0.4.35"
 dependencies = [
  "async-trait",
  "sea-orm",
@@ -2709,12 +2702,12 @@ dependencies = [
 
 [[package]]
 name = "presenter-ndi"
-version = "0.4.34"
+version = "0.4.35"
 dependencies = [
  "anyhow",
  "axum",
  "bytes",
- "image",
+ "fast_image_resize",
  "libloading",
  "serde",
  "serde_json",
@@ -2725,7 +2718,7 @@ dependencies = [
 
 [[package]]
 name = "presenter-persistence"
-version = "0.4.34"
+version = "0.4.35"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -2746,7 +2739,7 @@ dependencies = [
 
 [[package]]
 name = "presenter-server"
-version = "0.4.34"
+version = "0.4.35"
 dependencies = [
  "anyhow",
  "async-stream",
@@ -2937,12 +2930,6 @@ dependencies = [
  "quote",
  "syn 1.0.109",
 ]
-
-[[package]]
-name = "pxfm"
-version = "0.1.29"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "e0c5ccf5294c6ccd63a74f1565028353830a9c2f5eb0c682c355c471726a6e3f"
 
 [[package]]
 name = "quinn"
