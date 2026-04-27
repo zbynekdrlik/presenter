@@ -1756,6 +1756,69 @@ fn mock_ingestion() -> std::sync::Arc<dyn crate::state::TestBibleIngestion + Sen
     std::sync::Arc::new(Mock)
 }
 
+#[tokio::test]
+async fn get_playlist_returns_playlist_when_present() {
+    let app = build_router(AppState::in_memory().await.unwrap());
+
+    // Create a playlist
+    let create_resp = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/playlists")
+                .header("content-type", "application/json")
+                .body(Body::from(
+                    r#"{"name":"GET test","showInDashboard":false}"#.to_string(),
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(create_resp.status(), StatusCode::OK);
+    let create_bytes = axum::body::to_bytes(create_resp.into_body(), usize::MAX)
+        .await
+        .unwrap();
+    let created: serde_json::Value = serde_json::from_slice(&create_bytes).unwrap();
+    let id = created["id"].as_str().unwrap().to_string();
+
+    // GET it back
+    let get_resp = app
+        .oneshot(
+            Request::builder()
+                .method("GET")
+                .uri(format!("/playlists/{id}"))
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(get_resp.status(), StatusCode::OK);
+    let get_bytes = axum::body::to_bytes(get_resp.into_body(), usize::MAX)
+        .await
+        .unwrap();
+    let fetched: serde_json::Value = serde_json::from_slice(&get_bytes).unwrap();
+    assert_eq!(fetched["id"].as_str().unwrap(), id);
+    assert_eq!(fetched["name"].as_str().unwrap(), "GET test");
+}
+
+#[tokio::test]
+async fn get_playlist_returns_404_when_missing() {
+    let app = build_router(AppState::in_memory().await.unwrap());
+
+    let resp = app
+        .oneshot(
+            Request::builder()
+                .method("GET")
+                .uri("/playlists/00000000-0000-0000-0000-000000000000")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::NOT_FOUND);
+}
+
 #[test]
 fn update_playlist_request_defaults_flags() {
     let payload: UpdatePlaylistRequest = serde_json::from_str(r"{}").expect("deserialises");

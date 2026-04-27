@@ -106,6 +106,13 @@ impl AppState {
         self.repository.list_playlists().await
     }
 
+    pub async fn get_playlist(
+        &self,
+        playlist_id: PlaylistId,
+    ) -> anyhow::Result<Option<Playlist>> {
+        self.repository.fetch_playlist_by_id(playlist_id).await
+    }
+
     pub async fn create_playlist(
         &self,
         name: &str,

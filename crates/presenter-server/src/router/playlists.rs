@@ -77,6 +77,18 @@ pub(super) async fn create_playlist(
 }
 
 #[instrument(skip_all)]
+pub(super) async fn get_playlist(
+    State(state): State<AppState>,
+    Path(id): Path<Uuid>,
+) -> Result<Json<Playlist>, AppError> {
+    let playlist = state
+        .get_playlist(PlaylistId::from_uuid(id))
+        .await?
+        .ok_or_else(|| AppError::not_found("playlist not found"))?;
+    Ok(Json(playlist))
+}
+
+#[instrument(skip_all)]
 pub(super) async fn update_playlist(
     State(state): State<AppState>,
     Path(id): Path<Uuid>,

@@ -113,7 +113,9 @@ pub fn build_router(state: AppState) -> Router {
         )
         .route(
             "/playlists/{id}",
-            patch(playlists::update_playlist).delete(playlists::delete_playlist),
+            get(playlists::get_playlist)
+                .patch(playlists::update_playlist)
+                .delete(playlists::delete_playlist),
         )
         .route(
             "/playlists/{id}/entries",
