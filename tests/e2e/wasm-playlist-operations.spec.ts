@@ -378,10 +378,11 @@ test.describe("WASM Operator Playlist Operations", () => {
     );
 
     // 4. Programmatically dispatch dragstart → dragover → drop → dragend.
-    //    Real pointer-driven drag is unreliable in this UI because the
-    //    presentation list has hundreds of items and the playlist target
-    //    sits in a separate column; programmatic dispatch exercises the
-    //    same handlers the browser would call.
+    //    Pre-populate the DataTransfer with the presentation ID BEFORE
+    //    dispatching, so the drop handler can read it without depending on
+    //    the dragstart handler's set_data calls (which are unreliable in
+    //    synthetic event dispatch — Leptos may not propagate the in-handler
+    //    set_data writes back to our DataTransfer object).
     const dragResult = await page.evaluate((id: string) => {
       const source = document.querySelector(
         '[data-role="presentation-item"][data-presentation-id]',
@@ -396,7 +397,12 @@ test.describe("WASM Operator Playlist Operations", () => {
           hasTarget: !!targetRow,
         };
       }
+      const sourceId = source.getAttribute("data-presentation-id") || "";
       const dt = new DataTransfer();
+      // Pre-populate the dataTransfer so the drop handler reads the ID
+      // even if the dragstart handler doesn't run (synthetic-event quirk).
+      dt.setData("text/plain", sourceId);
+      dt.setData("application/x-presentation-id", sourceId);
       source.dispatchEvent(
         new DragEvent("dragstart", {
           bubbles: true,
@@ -426,7 +432,8 @@ test.describe("WASM Operator Playlist Operations", () => {
         }),
       );
       return {
-        sourceId: source.getAttribute("data-presentation-id"),
+        sourceId,
+        dtAfterDispatch: dt.getData("application/x-presentation-id"),
       };
     }, targetPlaylistId);
 
