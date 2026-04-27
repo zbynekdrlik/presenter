@@ -336,6 +336,7 @@ body.stage {
     width: 70%;
     height: 92%;
     overflow: hidden;
+    box-sizing: border-box;
 }
 
 .stage-pp__playlist-sidebar {

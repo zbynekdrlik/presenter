@@ -477,6 +477,28 @@ test.describe("WASM Operator Playlist Operations", () => {
     );
     expect(presentationEntry).toBeDefined();
 
+    // Click the playlist to make it the selected playlist, so its entries
+    // are shown in the presentation column.
+    const playlistRow = page.locator(
+      `[data-role="playlist-list"] [data-playlist-id="${targetPlaylistId}"] [data-role="playlist-item"]`,
+    );
+    await playlistRow.click();
+
+    // The first presentation entry must render with a non-empty visible name.
+    // Regression guard: previously the operator rebuilt presentations summaries
+    // with empty strings, so the name span was blank.
+    const firstEntryName = await page
+      .locator(
+        '[data-role="presentation-item"][data-type="presentation"] > span:first-child',
+      )
+      .first()
+      .textContent({ timeout: 15_000 });
+    expect(
+      firstEntryName?.trim(),
+      "playlist entry must show a non-empty presentation name",
+    ).toBeTruthy();
+    expect(firstEntryName?.trim().length ?? 0).toBeGreaterThan(0);
+
     expect(consoleErrors).toEqual([]);
   });
 });
