@@ -131,45 +131,47 @@ pub fn WorshipPp(
 
     view! {
         <div class="stage-container" data-layout="worship-pp">
-            <div class="stage__current-group">
-                <span class="stage__debug-label">"current-group"</span>
-                <div node_ref=current_group_ref class="stage__group-pill" style=current_group_style>
-                    {current_group_text}
+            <div class="stage-pp__slides-area">
+                <div class="stage__current-group">
+                    <span class="stage__debug-label">"current-group"</span>
+                    <div node_ref=current_group_ref class="stage__group-pill" style=current_group_style>
+                        {current_group_text}
+                    </div>
                 </div>
-            </div>
 
-            <div class="stage__current-song">
-                <span class="stage__debug-label">"current-song"</span>
-                <div node_ref=current_song_ref class="stage__song-name-text">
-                    {current_song_text}
+                <div class="stage__current-song">
+                    <span class="stage__debug-label">"current-song"</span>
+                    <div node_ref=current_song_ref class="stage__song-name-text">
+                        {current_song_text}
+                    </div>
                 </div>
-            </div>
 
-            <div class="stage__current-slide">
-                <span class="stage__debug-label">"current-slide"</span>
-                <div node_ref=current_text_ref class="stage__slide-text">
-                    {current_text}
+                <div class="stage__current-slide">
+                    <span class="stage__debug-label">"current-slide"</span>
+                    <div node_ref=current_text_ref class="stage__slide-text">
+                        {current_text}
+                    </div>
                 </div>
-            </div>
 
-            <div class="stage__next-group">
-                <span class="stage__debug-label">"next-group"</span>
-                <div node_ref=next_group_ref class="stage__group-pill" style=next_group_style>
-                    {next_group_text}
+                <div class="stage__next-group">
+                    <span class="stage__debug-label">"next-group"</span>
+                    <div node_ref=next_group_ref class="stage__group-pill" style=next_group_style>
+                        {next_group_text}
+                    </div>
                 </div>
-            </div>
 
-            <div class="stage__next-song">
-                <span class="stage__debug-label">"next-song"</span>
-                <div node_ref=next_song_ref class="stage__song-name-text">
-                    {next_song_text}
+                <div class="stage__next-song">
+                    <span class="stage__debug-label">"next-song"</span>
+                    <div node_ref=next_song_ref class="stage__song-name-text">
+                        {next_song_text}
+                    </div>
                 </div>
-            </div>
 
-            <div class="stage__next-slide">
-                <span class="stage__debug-label">"next-slide"</span>
-                <div node_ref=next_text_ref class="stage__slide-text">
-                    {next_text}
+                <div class="stage__next-slide">
+                    <span class="stage__debug-label">"next-slide"</span>
+                    <div node_ref=next_text_ref class="stage__slide-text">
+                        {next_text}
+                    </div>
                 </div>
             </div>
 
