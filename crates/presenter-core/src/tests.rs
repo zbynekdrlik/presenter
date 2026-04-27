@@ -36,6 +36,7 @@ fn library_and_playlist_share_ids_without_collision() {
                 kind: PlaylistEntryKind::Presentation {
                     presentation_id: first_presentation.id,
                     midi_binding: Some(crate::playlist::MidiBinding::new(1).unwrap()),
+                    presentation_name: None,
                 },
             },
             PlaylistEntry {
@@ -43,6 +44,7 @@ fn library_and_playlist_share_ids_without_collision() {
                 kind: PlaylistEntryKind::Presentation {
                     presentation_id: second_presentation.id,
                     midi_binding: Some(crate::playlist::MidiBinding::new(2).unwrap()),
+                    presentation_name: None,
                 },
             },
         ],

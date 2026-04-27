@@ -153,6 +153,7 @@ pub(super) async fn replace_playlist_entries(
                     kind: PlaylistEntryKind::Presentation {
                         presentation_id: PresentationId::from_uuid(presentation_id),
                         midi_binding: binding,
+                        presentation_name: None,
                     },
                 })
             }

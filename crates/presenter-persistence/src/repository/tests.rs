@@ -340,6 +340,7 @@ async fn playlist_round_trip_with_separator() {
             kind: PlaylistEntryKind::Presentation {
                 presentation_id: presentation.id,
                 midi_binding: None,
+                presentation_name: None,
             },
         },
     ];

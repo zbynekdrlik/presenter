@@ -161,6 +161,7 @@ impl Repository {
                 PlaylistEntryKind::Presentation {
                     presentation_id,
                     midi_binding,
+                    ..
                 } => (
                     "presentation".to_string(),
                     Some(presentation_id.to_string()),

@@ -190,6 +190,7 @@ impl AppState {
                 kind: PlaylistEntryKind::Presentation {
                     presentation_id: presentation.id,
                     midi_binding: None,
+                    presentation_name: None,
                 },
             })
             .collect();
