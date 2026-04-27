@@ -15,8 +15,9 @@ use crate::router::libraries::CreateLibraryPresentationResponse;
 use crate::router::playlists::UpdatePlaylistRequest;
 use crate::router::presentations::PresentationDetailDto;
 use crate::router::stage::StageLayoutResponse;
-use presenter_core::Playlist;
+use presenter_core::playlist::PlaylistEntryKind;
 use presenter_core::TimersOverview;
+use presenter_core::{Playlist, PlaylistEntry, PlaylistEntryId};
 use presenter_core::{StageDisplayLayout, StageDisplaySnapshot};
 
 #[derive(Debug, Deserialize)]
@@ -1870,4 +1871,110 @@ async fn network_mode_endpoint_returns_remote_with_foreign_cf_ip() {
         .unwrap();
     let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
     assert_eq!(json["mode"], "remote");
+}
+
+#[tokio::test]
+async fn get_playlist_response_includes_presentation_name() {
+    let state = AppState::in_memory().await.unwrap();
+    // Seed: create one library + presentation
+    let library = state
+        .create_library("Test Library")
+        .await
+        .expect("create library");
+    let (_, _, presentation, _) = state
+        .create_presentation(library.id, "My Song", None)
+        .await
+        .expect("create presentation");
+    // Create playlist with that presentation as an entry
+    let playlist = state
+        .create_playlist("Test Playlist", true)
+        .await
+        .expect("create playlist");
+    let entries = vec![PlaylistEntry {
+        id: PlaylistEntryId::new(),
+        kind: PlaylistEntryKind::Presentation {
+            presentation_id: presentation.id,
+            midi_binding: None,
+            presentation_name: None,
+        },
+    }];
+    state
+        .replace_playlist_entries(playlist.id, entries)
+        .await
+        .expect("replace entries");
+
+    let app = build_router(state.clone());
+    let resp = app
+        .oneshot(
+            Request::builder()
+                .uri(format!("/playlists/{}", playlist.id))
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::OK);
+    let body: serde_json::Value = serde_json::from_slice(
+        &axum::body::to_bytes(resp.into_body(), 1024 * 64)
+            .await
+            .unwrap(),
+    )
+    .unwrap();
+    let entry = &body["entries"][0];
+    assert_eq!(entry["type"], "presentation");
+    assert_eq!(
+        entry["presentation_name"], "My Song",
+        "presentation_name must be present in playlist GET response"
+    );
+}
+
+#[tokio::test]
+async fn list_playlists_response_includes_presentation_names() {
+    let state = AppState::in_memory().await.unwrap();
+    let library = state.create_library("Lib").await.unwrap();
+    let (_, _, presentation, _) = state
+        .create_presentation(library.id, "Track One", None)
+        .await
+        .unwrap();
+    let playlist = state.create_playlist("PL", true).await.unwrap();
+    state
+        .replace_playlist_entries(
+            playlist.id,
+            vec![PlaylistEntry {
+                id: PlaylistEntryId::new(),
+                kind: PlaylistEntryKind::Presentation {
+                    presentation_id: presentation.id,
+                    midi_binding: None,
+                    presentation_name: None,
+                },
+            }],
+        )
+        .await
+        .unwrap();
+    let app = build_router(state);
+    let resp = app
+        .oneshot(
+            Request::builder()
+                .uri("/playlists")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    let body: serde_json::Value = serde_json::from_slice(
+        &axum::body::to_bytes(resp.into_body(), 1024 * 64)
+            .await
+            .unwrap(),
+    )
+    .unwrap();
+    let pl = body
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|pl| pl["name"] == "PL")
+        .expect("playlist named PL must be present");
+    assert_eq!(
+        pl["entries"][0]["presentation_name"], "Track One",
+        "presentation_name must be present in list response"
+    );
 }

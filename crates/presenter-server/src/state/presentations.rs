@@ -110,6 +110,40 @@ impl AppState {
         self.repository.fetch_playlist_by_id(playlist_id).await
     }
 
+    /// Populate `presentation_name` on each `PlaylistEntryKind::Presentation`
+    /// entry. Idempotent — overwrites whatever was there.
+    pub async fn enrich_playlist_with_names(
+        &self,
+        mut playlist: presenter_core::Playlist,
+    ) -> anyhow::Result<presenter_core::Playlist> {
+        let names = self
+            .repository
+            .fetch_presentation_names_for_playlist(&playlist)
+            .await?;
+        for entry in playlist.entries.iter_mut() {
+            if let presenter_core::playlist::PlaylistEntryKind::Presentation {
+                presentation_id,
+                presentation_name,
+                ..
+            } = &mut entry.kind
+            {
+                *presentation_name = names.get(presentation_id).cloned();
+            }
+        }
+        Ok(playlist)
+    }
+
+    pub async fn enrich_playlists_with_names(
+        &self,
+        playlists: Vec<presenter_core::Playlist>,
+    ) -> anyhow::Result<Vec<presenter_core::Playlist>> {
+        let mut out = Vec::with_capacity(playlists.len());
+        for pl in playlists {
+            out.push(self.enrich_playlist_with_names(pl).await?);
+        }
+        Ok(out)
+    }
+
     pub async fn create_playlist(
         &self,
         name: &str,
