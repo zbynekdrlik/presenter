@@ -323,4 +323,153 @@ test.describe("WASM Operator Playlist Operations", () => {
       .filter({ hasText: "Test Separator" });
     await expect(separator.first()).toBeVisible();
   });
+
+  test("drop a presentation onto a playlist row appends an entry", async ({
+    page,
+  }) => {
+    // Regression guard: GET /playlists/{id} previously returned 405 because
+    // only PATCH+DELETE were registered, so the drop handler in
+    // playlist_list.rs (which fetches the current playlist before appending)
+    // silently failed. Playlists stayed at 0 entries after every drag.
+    await initPage(page);
+
+    const consoleErrors: string[] = [];
+    page.on("console", (msg) => {
+      if (msg.type() === "error" || msg.type() === "warning") {
+        const text = msg.text();
+        if (!text.includes("favicon")) {
+          consoleErrors.push(`[${msg.type()}] ${text}`);
+        }
+      }
+    });
+
+    // 1. Create a fresh playlist as the drop target.
+    const targetName = `E2E Drop Test ${Date.now()}`;
+    await page.locator('[data-role="playlist-create"]').click();
+    await page.waitForFunction(
+      () =>
+        document.querySelector(
+          '[data-role="playlist-edit-modal"][data-open="true"]',
+        ),
+      { timeout: 5_000 },
+    );
+    await page.locator('[data-role="playlist-edit-name"]').fill(targetName);
+    await page.locator('[data-role="playlist-edit-save"]').click();
+    await page.waitForFunction(
+      () =>
+        !document.querySelector(
+          '[data-role="playlist-edit-modal"][data-open="true"]',
+        ),
+      { timeout: 10_000 },
+    );
+    await page.waitForFunction(
+      (name) =>
+        Array.from(
+          document.querySelectorAll('[data-role="playlist-item"]'),
+        ).some((el) => (el.textContent || "").includes(name)),
+      targetName,
+      { timeout: 10_000 },
+    );
+
+    // 2. Select the first library so presentations render.
+    const firstLibrary = page.locator('[data-role="library-item"]').first();
+    await expect(firstLibrary).toBeVisible({ timeout: 10_000 });
+    await firstLibrary.click();
+    await page.waitForSelector(
+      '[data-role="presentation-item"][data-presentation-id]',
+      { timeout: 10_000 },
+    );
+
+    // 3. Programmatically dispatch dragstart → dragover → drop → dragend.
+    //    Real pointer-driven drag is unreliable in this UI because the
+    //    presentation list has hundreds of items and the playlist target
+    //    sits in a separate column; programmatic dispatch exercises the
+    //    same handlers the browser would call.
+    const dragResult = await page.evaluate((name: string) => {
+      const source = document.querySelector(
+        '[data-role="presentation-item"][data-presentation-id]',
+      ) as HTMLElement | null;
+      const targetRow = Array.from(
+        document.querySelectorAll("[data-playlist-id]"),
+      ).find((el) =>
+        (el.textContent || "").includes(name),
+      ) as HTMLElement | undefined;
+      if (!source || !targetRow) {
+        return {
+          error: "missing source or target",
+          hasSource: !!source,
+          hasTarget: !!targetRow,
+        };
+      }
+      const dt = new DataTransfer();
+      source.dispatchEvent(
+        new DragEvent("dragstart", {
+          bubbles: true,
+          cancelable: true,
+          dataTransfer: dt,
+        }),
+      );
+      targetRow.dispatchEvent(
+        new DragEvent("dragover", {
+          bubbles: true,
+          cancelable: true,
+          dataTransfer: dt,
+        }),
+      );
+      targetRow.dispatchEvent(
+        new DragEvent("drop", {
+          bubbles: true,
+          cancelable: true,
+          dataTransfer: dt,
+        }),
+      );
+      source.dispatchEvent(
+        new DragEvent("dragend", {
+          bubbles: true,
+          cancelable: true,
+          dataTransfer: dt,
+        }),
+      );
+      return {
+        sourceId: source.getAttribute("data-presentation-id"),
+        targetPlaylistId: targetRow.getAttribute("data-playlist-id"),
+      };
+    }, targetName);
+
+    expect(dragResult.error, JSON.stringify(dragResult)).toBeUndefined();
+    expect(dragResult.sourceId).toBeTruthy();
+    expect(dragResult.targetPlaylistId).toBeTruthy();
+
+    // 4. Wait for the playlist's entry count to flip from 0 to ≥1.
+    await page.waitForFunction(
+      (name: string) => {
+        const rows = Array.from(
+          document.querySelectorAll('[data-role="playlist-item"]'),
+        );
+        const target = rows.find((r) => (r.textContent || "").includes(name));
+        if (!target) return false;
+        const countEl = target.querySelector('[data-role="playlist-count"]');
+        const count = countEl ? Number((countEl.textContent || "0").trim()) : 0;
+        return count >= 1;
+      },
+      targetName,
+      { timeout: 15_000 },
+    );
+
+    // 5. Confirm via the API that the playlist actually has the entry.
+    const playlistId = dragResult.targetPlaylistId!;
+    const apiResp = await page.request.get(
+      new URL(`/playlists/${playlistId}`, baseURL).toString(),
+    );
+    expect(apiResp.status()).toBe(200);
+    const playlist = await apiResp.json();
+    expect(Array.isArray(playlist.entries)).toBe(true);
+    expect(playlist.entries.length).toBeGreaterThanOrEqual(1);
+    const presentationEntry = playlist.entries.find(
+      (e: { kind?: { type?: string } }) => e?.kind?.type === "presentation",
+    );
+    expect(presentationEntry).toBeDefined();
+
+    expect(consoleErrors).toEqual([]);
+  });
 });
