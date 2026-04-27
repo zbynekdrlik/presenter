@@ -63,15 +63,16 @@ struct UpdateEntriesRequest {
 }
 
 #[derive(Clone, Serialize)]
-#[serde(rename_all = "camelCase", tag = "type")]
+#[serde(tag = "type", rename_all = "camelCase")]
 pub enum PlaylistEntryPayload {
     Presentation {
-        #[serde(skip_serializing_if = "Option::is_none")]
+        #[serde(skip_serializing_if = "Option::is_none", rename = "entryId")]
         entry_id: Option<String>,
+        #[serde(rename = "presentationId")]
         presentation_id: String,
     },
     Separator {
-        #[serde(skip_serializing_if = "Option::is_none")]
+        #[serde(skip_serializing_if = "Option::is_none", rename = "entryId")]
         entry_id: Option<String>,
         name: String,
     },
@@ -99,4 +100,68 @@ pub async fn add_presentation_to_playlist(
         presentation_id: presentation_id.to_string(),
     });
     replace_entries(playlist_id, entries).await
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn presentation_entry_serializes_camelcase_fields() {
+        // Regression guard: serde's `rename_all = "camelCase"` on internally
+        // tagged enums (`tag = "type"`) does NOT rename inner-struct fields,
+        // only variant names. Without explicit `rename = "presentationId"`
+        // attributes, the WASM client sent `presentation_id` (snake_case)
+        // and the server rejected it with 422. Drag-drop into a playlist
+        // silently no-oped as a result.
+        let payload = PlaylistEntryPayload::Presentation {
+            entry_id: None,
+            presentation_id: "00000000-0000-0000-0000-000000000001".to_string(),
+        };
+        let json = serde_json::to_string(&payload).expect("serialize");
+        assert!(
+            json.contains("\"presentationId\""),
+            "expected camelCase field; got: {json}"
+        );
+        assert!(
+            !json.contains("\"presentation_id\""),
+            "snake_case field leaked through: {json}"
+        );
+        assert!(
+            json.contains("\"type\":\"presentation\""),
+            "tag should be lowercase variant: {json}"
+        );
+    }
+
+    #[test]
+    fn presentation_entry_with_existing_id_renames_entry_id() {
+        let payload = PlaylistEntryPayload::Presentation {
+            entry_id: Some("aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee".to_string()),
+            presentation_id: "00000000-0000-0000-0000-000000000002".to_string(),
+        };
+        let json = serde_json::to_string(&payload).expect("serialize");
+        assert!(
+            json.contains("\"entryId\""),
+            "expected camelCase entryId; got: {json}"
+        );
+        assert!(
+            !json.contains("\"entry_id\""),
+            "snake_case entry_id leaked through: {json}"
+        );
+    }
+
+    #[test]
+    fn separator_entry_serializes_with_renamed_entry_id() {
+        let payload = PlaylistEntryPayload::Separator {
+            entry_id: Some("aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee".to_string()),
+            name: "section".to_string(),
+        };
+        let json = serde_json::to_string(&payload).expect("serialize");
+        assert!(json.contains("\"entryId\""), "got: {json}");
+        assert!(!json.contains("\"entry_id\""), "got: {json}");
+        assert!(
+            json.contains("\"type\":\"separator\""),
+            "tag should be lowercase variant: {json}"
+        );
+    }
 }
