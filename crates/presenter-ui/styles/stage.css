@@ -362,9 +362,14 @@ body.stage {
 }
 
 .stage-pp__playlist-entry--active {
-    background: rgba(56, 189, 248, 0.15);
-    color: #f8fafc;
+    background: #38bdf8;
+    color: #0f172a;
     font-weight: 700;
+    border-left: 4px solid #0ea5e9;
+    /* Compensate for the 4px border so text alignment with non-active
+       rows stays consistent. Original padding-left from .stage-pp__playlist-entry
+       is 0.6rem; subtract the border width. */
+    padding-left: calc(0.6rem - 4px);
 }
 
 /* ===== timer layout ===== */
