@@ -347,11 +347,15 @@ test.describe("WASM Operator Playlist Operations", () => {
     });
 
     // 1. Create a fresh playlist as the drop target via the API.
+    //    showInDashboard: true so it renders in the dashboard sidebar
+    //    (which is the only list with the drop handler attached).
+    //    With showInDashboard: false the playlist only appears in the
+    //    playlist-modal (no drop handler), and the test would no-op.
     const targetName = `E2E Drop Test ${Date.now()}`;
     const createResp = await page.request.post(
       new URL("/playlists", baseURL).toString(),
       {
-        data: { name: targetName, showInDashboard: false },
+        data: { name: targetName, showInDashboard: true },
       },
     );
     expect(createResp.status()).toBe(200);
@@ -369,10 +373,14 @@ test.describe("WASM Operator Playlist Operations", () => {
       { timeout: 15_000 },
     );
 
-    // 3. Wait for the new playlist row to appear in the operator's playlist
-    //    list (operator polls for playlists; allow generous time on CI).
+    // 3. Wait for the new playlist row to appear in the dashboard sidebar
+    //    (the <li> with the drop handler — NOT the modal row).
+    //    The dashboard <li> sits inside [data-role="playlist-list"].
     await page.waitForFunction(
-      (id: string) => !!document.querySelector(`[data-playlist-id="${id}"]`),
+      (id: string) =>
+        !!document.querySelector(
+          `[data-role="playlist-list"] [data-playlist-id="${id}"]`,
+        ),
       targetPlaylistId,
       { timeout: 30_000 },
     );
@@ -388,7 +396,7 @@ test.describe("WASM Operator Playlist Operations", () => {
         '[data-role="presentation-item"][data-presentation-id]',
       ) as HTMLElement | null;
       const targetRow = document.querySelector(
-        `[data-playlist-id="${id}"]`,
+        `[data-role="playlist-list"] [data-playlist-id="${id}"]`,
       ) as HTMLElement | null;
       if (!source || !targetRow) {
         return {
