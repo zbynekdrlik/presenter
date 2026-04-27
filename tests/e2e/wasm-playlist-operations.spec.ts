@@ -470,8 +470,10 @@ test.describe("WASM Operator Playlist Operations", () => {
     );
     expect(finalResp.status()).toBe(200);
     const playlist = await finalResp.json();
+    // Server entries shape: { id, type: "presentation"|"separator", presentation_id? }
+    // (type is a flat discriminator, not nested under kind).
     const presentationEntry = playlist.entries.find(
-      (e: { kind?: { type?: string } }) => e?.kind?.type === "presentation",
+      (e: { type?: string }) => e?.type === "presentation",
     );
     expect(presentationEntry).toBeDefined();
 
