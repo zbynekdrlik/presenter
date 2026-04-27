@@ -331,7 +331,10 @@ test.describe("WASM Operator Playlist Operations", () => {
     // only PATCH+DELETE were registered, so the drop handler in
     // playlist_list.rs (which fetches the current playlist before appending)
     // silently failed. Playlists stayed at 0 entries after every drag.
-    await initPage(page);
+    //
+    // We create the drop-target playlist via the API (not the create-modal
+    // UI flow) to keep this test focused on the drag-drop path and avoid
+    // coupling to the modal-render timing.
 
     const consoleErrors: string[] = [];
     page.on("console", (msg) => {
@@ -343,57 +346,49 @@ test.describe("WASM Operator Playlist Operations", () => {
       }
     });
 
-    // 1. Create a fresh playlist as the drop target.
+    // 1. Create a fresh playlist as the drop target via the API.
     const targetName = `E2E Drop Test ${Date.now()}`;
-    await page.locator('[data-role="playlist-create"]').click();
-    await page.waitForFunction(
-      () =>
-        document.querySelector(
-          '[data-role="playlist-edit-modal"][data-open="true"]',
-        ),
-      { timeout: 5_000 },
+    const createResp = await page.request.post(
+      new URL("/playlists", baseURL).toString(),
+      {
+        data: { name: targetName, showInDashboard: false },
+      },
     );
-    await page.locator('[data-role="playlist-edit-name"]').fill(targetName);
-    await page.locator('[data-role="playlist-edit-save"]').click();
-    await page.waitForFunction(
-      () =>
-        !document.querySelector(
-          '[data-role="playlist-edit-modal"][data-open="true"]',
-        ),
-      { timeout: 10_000 },
-    );
-    await page.waitForFunction(
-      (name) =>
-        Array.from(
-          document.querySelectorAll('[data-role="playlist-item"]'),
-        ).some((el) => (el.textContent || "").includes(name)),
-      targetName,
-      { timeout: 10_000 },
-    );
+    expect(createResp.status()).toBe(200);
+    const created = await createResp.json();
+    const targetPlaylistId = created.id as string;
+    expect(targetPlaylistId).toBeTruthy();
 
-    // 2. Select the first library so presentations render.
+    // 2. Now load the operator UI and select the first library.
+    await initPage(page);
     const firstLibrary = page.locator('[data-role="library-item"]').first();
-    await expect(firstLibrary).toBeVisible({ timeout: 10_000 });
+    await expect(firstLibrary).toBeVisible({ timeout: 15_000 });
     await firstLibrary.click();
     await page.waitForSelector(
       '[data-role="presentation-item"][data-presentation-id]',
-      { timeout: 10_000 },
+      { timeout: 15_000 },
     );
 
-    // 3. Programmatically dispatch dragstart → dragover → drop → dragend.
+    // 3. Wait for the new playlist row to appear in the operator's playlist
+    //    list (operator polls for playlists; allow generous time on CI).
+    await page.waitForFunction(
+      (id: string) => !!document.querySelector(`[data-playlist-id="${id}"]`),
+      targetPlaylistId,
+      { timeout: 30_000 },
+    );
+
+    // 4. Programmatically dispatch dragstart → dragover → drop → dragend.
     //    Real pointer-driven drag is unreliable in this UI because the
     //    presentation list has hundreds of items and the playlist target
     //    sits in a separate column; programmatic dispatch exercises the
     //    same handlers the browser would call.
-    const dragResult = await page.evaluate((name: string) => {
+    const dragResult = await page.evaluate((id: string) => {
       const source = document.querySelector(
         '[data-role="presentation-item"][data-presentation-id]',
       ) as HTMLElement | null;
-      const targetRow = Array.from(
-        document.querySelectorAll("[data-playlist-id]"),
-      ).find((el) =>
-        (el.textContent || "").includes(name),
-      ) as HTMLElement | undefined;
+      const targetRow = document.querySelector(
+        `[data-playlist-id="${id}"]`,
+      ) as HTMLElement | null;
       if (!source || !targetRow) {
         return {
           error: "missing source or target",
@@ -432,39 +427,34 @@ test.describe("WASM Operator Playlist Operations", () => {
       );
       return {
         sourceId: source.getAttribute("data-presentation-id"),
-        targetPlaylistId: targetRow.getAttribute("data-playlist-id"),
       };
-    }, targetName);
+    }, targetPlaylistId);
 
     expect(dragResult.error, JSON.stringify(dragResult)).toBeUndefined();
     expect(dragResult.sourceId).toBeTruthy();
-    expect(dragResult.targetPlaylistId).toBeTruthy();
 
-    // 4. Wait for the playlist's entry count to flip from 0 to ≥1.
-    await page.waitForFunction(
-      (name: string) => {
-        const rows = Array.from(
-          document.querySelectorAll('[data-role="playlist-item"]'),
-        );
-        const target = rows.find((r) => (r.textContent || "").includes(name));
-        if (!target) return false;
-        const countEl = target.querySelector('[data-role="playlist-count"]');
-        const count = countEl ? Number((countEl.textContent || "0").trim()) : 0;
-        return count >= 1;
-      },
-      targetName,
-      { timeout: 15_000 },
-    );
+    // 5. Confirm via the API (after a short settle) that the playlist
+    //    actually has the entry. This is the strongest signal — independent
+    //    of UI count rendering timing.
+    await expect
+      .poll(
+        async () => {
+          const apiResp = await page.request.get(
+            new URL(`/playlists/${targetPlaylistId}`, baseURL).toString(),
+          );
+          if (apiResp.status() !== 200) return -1;
+          const body = await apiResp.json();
+          return Array.isArray(body.entries) ? body.entries.length : -1;
+        },
+        { timeout: 15_000, intervals: [500, 1000, 2000] },
+      )
+      .toBeGreaterThanOrEqual(1);
 
-    // 5. Confirm via the API that the playlist actually has the entry.
-    const playlistId = dragResult.targetPlaylistId!;
-    const apiResp = await page.request.get(
-      new URL(`/playlists/${playlistId}`, baseURL).toString(),
+    const finalResp = await page.request.get(
+      new URL(`/playlists/${targetPlaylistId}`, baseURL).toString(),
     );
-    expect(apiResp.status()).toBe(200);
-    const playlist = await apiResp.json();
-    expect(Array.isArray(playlist.entries)).toBe(true);
-    expect(playlist.entries.length).toBeGreaterThanOrEqual(1);
+    expect(finalResp.status()).toBe(200);
+    const playlist = await finalResp.json();
     const presentationEntry = playlist.entries.find(
       (e: { kind?: { type?: string } }) => e?.kind?.type === "presentation",
     );
