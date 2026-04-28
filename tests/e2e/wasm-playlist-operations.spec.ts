@@ -501,4 +501,144 @@ test.describe("WASM Operator Playlist Operations", () => {
 
     expect(consoleErrors).toEqual([]);
   });
+
+  test("drop a search-result onto a playlist row appends an entry", async ({
+    page,
+  }) => {
+    // Regression guard for #worship-pp-followups: dragging from
+    // [data-role="search-result-item"] (which dragstart sets
+    // effectAllowed="copy") onto a playlist row was silently
+    // rejected because the playlist's dragover never set a
+    // matching dropEffect. Also: only Presentation/Slide-kind
+    // results are draggable — Library-kind results have no
+    // presentation_id and aren't draggable.
+
+    const consoleErrors: string[] = [];
+    page.on("console", (msg) => {
+      if (msg.type() === "error" || msg.type() === "warning") {
+        const t = msg.text();
+        if (!t.includes("favicon")) consoleErrors.push(`[${msg.type()}] ${t}`);
+      }
+    });
+
+    // 1. Create the drop-target playlist via API.
+    const targetName = `Search Drop Test ${Date.now()}`;
+    const createResp = await page.request.post(
+      new URL("/playlists", baseURL).toString(),
+      { data: { name: targetName, showInDashboard: true } },
+    );
+    expect(createResp.status()).toBe(200);
+    const created = await createResp.json();
+    const targetPlaylistId = created.id as string;
+    expect(targetPlaylistId).toBeTruthy();
+
+    // 2. Load operator UI.
+    await initPage(page);
+    await page.waitForFunction(
+      (id: string) =>
+        !!document.querySelector(
+          `[data-role="playlist-list"] [data-playlist-id="${id}"]`,
+        ),
+      targetPlaylistId,
+      { timeout: 30_000 },
+    );
+
+    // 3. Type a query into the global search to populate results.
+    //    Use a query that's likely to match a song name from the
+    //    seeded fixtures.
+    const searchInput = page.locator('[data-role="global-search-query"]');
+    await searchInput.click();
+    await searchInput.fill("a");
+
+    // Wait specifically for a Presentation-kind result (Library-kind
+    // results have empty data-presentation-id and are intentionally
+    // non-draggable).
+    await page.waitForSelector(
+      '[data-role="search-result-item"][data-kind="presentation"]',
+      { timeout: 15_000 },
+    );
+
+    // 4. Programmatically drag a presentation-kind search result onto
+    //    the playlist row. Pre-populate DataTransfer (synthetic-event
+    //    quirk — see the existing presentation drop test).
+    const dragResult = await page.evaluate((id: string) => {
+      const source = document.querySelector(
+        '[data-role="search-result-item"][data-kind="presentation"][data-presentation-id]',
+      ) as HTMLElement | null;
+      const targetRow = document.querySelector(
+        `[data-role="playlist-list"] [data-playlist-id="${id}"]`,
+      ) as HTMLElement | null;
+      if (!source || !targetRow) {
+        return {
+          error: "missing source or target",
+          hasSource: !!source,
+          hasTarget: !!targetRow,
+        };
+      }
+      const sourceId = source.getAttribute("data-presentation-id") || "";
+      if (!sourceId) {
+        return {
+          error: "presentation-kind source has no data-presentation-id",
+        };
+      }
+      const dt = new DataTransfer();
+      dt.setData("text/plain", sourceId);
+      dt.setData("application/x-presentation-id", sourceId);
+      dt.setData("application/x-presenter-search", sourceId);
+      source.dispatchEvent(
+        new DragEvent("dragstart", {
+          bubbles: true,
+          cancelable: true,
+          dataTransfer: dt,
+        }),
+      );
+      targetRow.dispatchEvent(
+        new DragEvent("dragover", {
+          bubbles: true,
+          cancelable: true,
+          dataTransfer: dt,
+        }),
+      );
+      targetRow.dispatchEvent(
+        new DragEvent("drop", {
+          bubbles: true,
+          cancelable: true,
+          dataTransfer: dt,
+        }),
+      );
+      source.dispatchEvent(
+        new DragEvent("dragend", {
+          bubbles: true,
+          cancelable: true,
+          dataTransfer: dt,
+        }),
+      );
+      return { sourceId };
+    }, targetPlaylistId);
+
+    expect(dragResult.error, JSON.stringify(dragResult)).toBeUndefined();
+    expect(dragResult.sourceId).toBeTruthy();
+
+    // 5. Confirm via API that the playlist gained an entry.
+    await expect
+      .poll(
+        async () => {
+          const apiResp = await page.request.get(
+            new URL(`/playlists/${targetPlaylistId}`, baseURL).toString(),
+          );
+          if (apiResp.status() !== 200) return -1;
+          const body = await apiResp.json();
+          return Array.isArray(body.entries) ? body.entries.length : -1;
+        },
+        { timeout: 15_000, intervals: [500, 1000, 2000] },
+      )
+      .toBeGreaterThanOrEqual(1);
+
+    // 6. Cleanup.
+    await page.request.delete(
+      new URL(`/playlists/${targetPlaylistId}`, baseURL).toString(),
+    );
+
+    expect(consoleErrors).toEqual([]);
+  });
 });
