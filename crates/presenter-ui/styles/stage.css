@@ -333,7 +333,7 @@ body.stage {
     position: absolute;
     left: 0;
     top: 0;
-    width: 70%;
+    width: 78%;
     height: 92%;
     overflow: hidden;
     box-sizing: border-box;
@@ -343,7 +343,7 @@ body.stage {
     position: absolute;
     right: 0;
     top: 0;
-    width: 30%;
+    width: 22%;
     height: 92%;
     overflow-y: auto;
     border-left: 1px solid rgba(255, 255, 255, 0.1);
@@ -352,9 +352,11 @@ body.stage {
 }
 
 .stage-pp__playlist-entry {
-    padding: 0.4rem 0.6rem;
+    padding: 0.6vh 0.8rem;
     color: #94a3b8;
-    font-size: 0.9vw;
+    /* 12 entries × ~7vh row height ≈ 84vh fits in 92vh sidebar; readable from across a worship space. */
+    font-size: 2.6vh;
+    line-height: 1.1;
     white-space: nowrap;
     overflow: hidden;
     text-overflow: ellipsis;
@@ -367,10 +369,9 @@ body.stage {
     color: #0f172a;
     font-weight: 700;
     border-left: 4px solid #0ea5e9;
-    /* Compensate for the 4px border so text alignment with non-active
-       rows stays consistent. Original padding-left from .stage-pp__playlist-entry
-       is 0.6rem; subtract the border width. */
-    padding-left: calc(0.6rem - 4px);
+    /* Compensate for the 4px border so text alignment with non-active rows
+       stays consistent. Base padding-left is 0.8rem; subtract the border width. */
+    padding-left: calc(0.8rem - 4px);
 }
 
 /* ===== timer layout ===== */
