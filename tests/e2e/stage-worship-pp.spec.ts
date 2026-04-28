@@ -311,4 +311,162 @@ test.describe("Stage worship-pp layout", () => {
 
     expect(consoleErrors).toEqual([]);
   });
+
+  test("active highlight moves to the new song when the operator triggers a different presentation", async ({
+    page,
+  }) => {
+    const consoleErrors: string[] = [];
+    page.on("console", (msg) => {
+      if (msg.type() === "error" || msg.type() === "warning") {
+        const t = msg.text();
+        if (!t.includes("favicon") && !t.includes("crbug.com/981419")) {
+          consoleErrors.push(`[${msg.type()}] ${t}`);
+        }
+      }
+    });
+
+    // Set worship-pp layout
+    const layoutResp = await page.request.post(
+      new URL("/stage/layout", baseURL).toString(),
+      { data: { code: "worship-pp" } },
+    );
+    expect(layoutResp.ok()).toBeTruthy();
+
+    // Find TWO presentations with at least one slide each.
+    const libsResp = await page.request.get(
+      new URL("/libraries", baseURL).toString(),
+    );
+    const libs = (await libsResp.json()) as Array<{
+      id: string;
+      presentations?: Array<{
+        id: string;
+        name?: string;
+        slides?: Array<{ id: string }>;
+      }>;
+    }>;
+    const allPres = libs
+      .flatMap((lib) => lib.presentations ?? [])
+      .filter((p) => (p.slides?.length ?? 0) > 0 && !!p.name);
+    if (allPres.length < 2) {
+      test.skip(true, "fixture has fewer than 2 presentations with slides");
+      return;
+    }
+    const p1 = allPres[0];
+    const p2 = allPres[1];
+    if (
+      !p1.slides ||
+      !p2.slides ||
+      !p1.slides[0] ||
+      !p2.slides[0] ||
+      !p1.name ||
+      !p2.name
+    ) {
+      test.skip(true, "presentations missing required fields");
+      return;
+    }
+    const p1SlideId = p1.slides[0].id;
+    const p2SlideId = p2.slides[0].id;
+
+    // Create a playlist with both presentations.
+    const playlistResp = await page.request.post(
+      new URL("/playlists", baseURL).toString(),
+      {
+        data: {
+          name: `Highlight Move Test ${Date.now()}`,
+          showInDashboard: true,
+        },
+      },
+    );
+    const playlist = (await playlistResp.json()) as { id: string };
+    await page.request.put(
+      new URL(`/playlists/${playlist.id}/entries`, baseURL).toString(),
+      {
+        data: {
+          entries: [
+            { type: "presentation", presentationId: p1.id },
+            { type: "presentation", presentationId: p2.id },
+          ],
+        },
+      },
+    );
+
+    // Trigger P1.
+    const trig1 = await page.request.post(
+      new URL("/stage/state", baseURL).toString(),
+      {
+        data: {
+          presentationId: p1.id,
+          currentSlideId: p1SlideId,
+          playlistId: playlist.id,
+        },
+      },
+    );
+    expect(trig1.status()).toBe(204);
+
+    // Open the stage page.
+    await page.setViewportSize({ width: 1920, height: 1080 });
+    await page.goto(new URL("/stage", baseURL).toString());
+    await page.waitForFunction(
+      () => document.body.dataset.wasmReady === "true",
+      { timeout: 30_000 },
+    );
+    await page.waitForFunction(
+      () => document.body.dataset.layoutCode === "worship-pp",
+      { timeout: 30_000 },
+    );
+
+    // Wait for both rows to render.
+    await page.waitForFunction(
+      () => document.querySelectorAll(".stage-pp__playlist-entry").length >= 2,
+      { timeout: 15_000 },
+    );
+
+    // Helper: read which row index has the active class. Returns -1 if none.
+    const activeIndex = async (): Promise<number> =>
+      page.evaluate(() => {
+        const rows = Array.from(
+          document.querySelectorAll(".stage-pp__playlist-entry"),
+        );
+        return rows.findIndex((r) =>
+          r.classList.contains("stage-pp__playlist-entry--active"),
+        );
+      });
+
+    // After triggering P1, P1's row (index 0) should be active.
+    await expect.poll(activeIndex, { timeout: 10_000 }).toBe(0);
+
+    // Now trigger P2. The highlight MUST move to row index 1.
+    const trig2 = await page.request.post(
+      new URL("/stage/state", baseURL).toString(),
+      {
+        data: {
+          presentationId: p2.id,
+          currentSlideId: p2SlideId,
+          playlistId: playlist.id,
+        },
+      },
+    );
+    expect(trig2.status()).toBe(204);
+
+    // Regression guard: the active class must now be on row 1, not row 0.
+    await expect.poll(activeIndex, { timeout: 10_000 }).toBe(1);
+
+    // And ensure row 0 is no longer active.
+    const row0Active = await page.evaluate(() => {
+      const rows = Array.from(
+        document.querySelectorAll(".stage-pp__playlist-entry"),
+      );
+      return (
+        rows[0]?.classList.contains("stage-pp__playlist-entry--active") ?? false
+      );
+    });
+    expect(row0Active).toBe(false);
+
+    // Cleanup
+    await page.request.delete(
+      new URL(`/playlists/${playlist.id}`, baseURL).toString(),
+    );
+
+    expect(consoleErrors).toEqual([]);
+  });
 });
