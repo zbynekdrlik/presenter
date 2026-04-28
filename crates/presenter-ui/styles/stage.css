@@ -347,15 +347,17 @@ body.stage {
     height: 92%;
     overflow-y: auto;
     border-left: 1px solid rgba(255, 255, 255, 0.1);
-    padding: 1% 1.5%;
+    padding: 0.4% 0.5%;
     box-sizing: border-box;
 }
 
 .stage-pp__playlist-entry {
-    padding: 0.6vh 0.8rem;
+    padding: 0.3vh 0.4rem;
     color: #94a3b8;
-    /* 12 entries × ~7vh row height ≈ 84vh fits in 92vh sidebar; readable from across a worship space. */
-    font-size: 2.6vh;
+    /* Sized so ~12 typical chars fit per row at 1080p:
+       sidebar 22% × 1920 = 422px, less padding → ~390px content,
+       at 5vh font (≈54px) char-width is ~30px, ~12 chars per row. */
+    font-size: 5vh;
     line-height: 1.1;
     white-space: nowrap;
     overflow: hidden;
@@ -370,8 +372,9 @@ body.stage {
     font-weight: 700;
     border-left: 4px solid #0ea5e9;
     /* Compensate for the 4px border so text alignment with non-active rows
-       stays consistent. Base padding-left is 0.8rem; subtract the border width. */
-    padding-left: calc(0.8rem - 4px);
+       stays consistent. Base padding-left is 0.4rem (≈6.4px); subtract the
+       border width. */
+    padding-left: calc(0.4rem - 4px);
 }
 
 /* ===== timer layout ===== */
