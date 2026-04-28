@@ -298,8 +298,10 @@ test.describe("Stage worship-pp layout", () => {
       // Sidebar must be ~22% (allow ±3% slack for borders/scrollbar).
       expect(measurements.sidebarRatio).toBeGreaterThan(0.19);
       expect(measurements.sidebarRatio).toBeLessThan(0.25);
-      // Entry font must be readable from the back of a room — sanity floor at 24px.
-      expect(measurements.entryFontSizePx).toBeGreaterThanOrEqual(24);
+      // Floor of 40px locks in the 5vh × 1080p = 54px font from
+      // #worship-pp-bigger-fonts; any accidental drop back to 2.6vh
+      // (≈28px) will fail the test.
+      expect(measurements.entryFontSizePx).toBeGreaterThanOrEqual(40);
     }
 
     // Cleanup
