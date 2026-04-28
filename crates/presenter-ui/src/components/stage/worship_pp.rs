@@ -181,10 +181,33 @@ pub fn WorshipPp(
                     each=playlist_entries
                     key=|entry| entry.name.clone()
                     children=move |entry| {
-                        let class = if entry.is_active {
-                            "stage-pp__playlist-entry stage-pp__playlist-entry--active"
-                        } else {
-                            "stage-pp__playlist-entry"
+                        // Capture the entry's name once. The active-class
+                        // must be REACTIVE — read from ctx.snapshot (a
+                        // RwSignal) on every update so the highlight follows
+                        // the currently-triggered song.
+                        // Without this, Leptos's <For> reuses the row's DOM
+                        // (same key = entry.name) and the captured entry's
+                        // is_active stays at its first-render value forever.
+                        let entry_name = entry.name.clone();
+                        let snapshot = ctx.snapshot;
+                        let is_active = move || {
+                            snapshot.with(|opt| {
+                                opt.as_ref()
+                                    .and_then(|s| s.playlist_entries.as_ref())
+                                    .map(|entries| {
+                                        entries
+                                            .iter()
+                                            .any(|e| e.name == entry_name && e.is_active)
+                                    })
+                                    .unwrap_or(false)
+                            })
+                        };
+                        let class = move || {
+                            if is_active() {
+                                "stage-pp__playlist-entry stage-pp__playlist-entry--active"
+                            } else {
+                                "stage-pp__playlist-entry"
+                            }
                         };
                         let display_name = clean_song_name(&entry.name);
                         view! { <div class=class>{display_name}</div> }
