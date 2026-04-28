@@ -136,9 +136,7 @@ test.describe("Stage worship-pp layout", () => {
       new URL(`/playlists/${playlist.id}/entries`, baseURL).toString(),
       {
         data: {
-          entries: [
-            { type: "presentation", presentationId: presentation.id },
-          ],
+          entries: [{ type: "presentation", presentationId: presentation.id }],
         },
       },
     );
@@ -182,9 +180,7 @@ test.describe("Stage worship-pp layout", () => {
       ) as HTMLElement | null;
       return {
         active: a ? getComputedStyle(a).backgroundColor : null,
-        inactive: inactive
-          ? getComputedStyle(inactive).backgroundColor
-          : null,
+        inactive: inactive ? getComputedStyle(inactive).backgroundColor : null,
       };
     });
     expect(colors.active).toBeTruthy();
@@ -198,5 +194,119 @@ test.describe("Stage worship-pp layout", () => {
     await page.request.delete(
       new URL(`/playlists/${playlist.id}`, baseURL).toString(),
     );
+  });
+
+  test("sidebar is narrower (~22%) and entries have projector-readable font", async ({
+    page,
+  }) => {
+    const consoleErrors: string[] = [];
+    page.on("console", (msg) => {
+      if (msg.type() === "error" || msg.type() === "warning") {
+        const t = msg.text();
+        if (t.includes("favicon")) return;
+        if (t.includes("crbug.com/981419")) return;
+        consoleErrors.push(`[${msg.type()}] ${t}`);
+      }
+    });
+
+    // Set worship-pp layout
+    const layoutResp = await page.request.post(
+      new URL("/stage/layout", baseURL).toString(),
+      { data: { code: "worship-pp" } },
+    );
+    expect(layoutResp.ok()).toBeTruthy();
+
+    // Seed a playlist with one entry and trigger it so the sidebar has content.
+    const libsResp = await page.request.get(
+      new URL("/libraries", baseURL).toString(),
+    );
+    const libs = (await libsResp.json()) as Array<{
+      id: string;
+      presentations?: Array<{ id: string; slides?: Array<{ id: string }> }>;
+    }>;
+    const presentation = libs
+      .flatMap((lib) => lib.presentations ?? [])
+      .find((p) => (p.slides?.length ?? 0) > 0);
+    if (!presentation || !presentation.slides || !presentation.slides[0]) {
+      test.skip(true, "test fixture has no presentation with slides");
+      return;
+    }
+    const slideId = presentation.slides[0].id;
+
+    const playlistResp = await page.request.post(
+      new URL("/playlists", baseURL).toString(),
+      {
+        data: {
+          name: `Sidebar Width Test ${Date.now()}`,
+          showInDashboard: true,
+        },
+      },
+    );
+    const playlist = (await playlistResp.json()) as { id: string };
+    await page.request.put(
+      new URL(`/playlists/${playlist.id}/entries`, baseURL).toString(),
+      {
+        data: {
+          entries: [{ type: "presentation", presentationId: presentation.id }],
+        },
+      },
+    );
+    await page.request.post(new URL("/stage/state", baseURL).toString(), {
+      data: {
+        presentationId: presentation.id,
+        currentSlideId: slideId,
+        playlistId: playlist.id,
+      },
+    });
+
+    await page.goto(new URL("/stage", baseURL).toString());
+    await page.setViewportSize({ width: 1920, height: 1080 });
+    await page.waitForFunction(
+      () => document.body.dataset.wasmReady === "true",
+      { timeout: 30_000 },
+    );
+    await page.waitForFunction(
+      () => document.body.dataset.layoutCode === "worship-pp",
+      { timeout: 30_000 },
+    );
+
+    // Wait for the playlist sidebar to render with at least one entry.
+    await page.waitForSelector(".stage-pp__playlist-entry", {
+      timeout: 15_000,
+    });
+
+    // Read sidebar width and entry font-size from computed styles.
+    const measurements = await page.evaluate(() => {
+      const sidebar = document.querySelector(
+        ".stage-pp__playlist-sidebar",
+      ) as HTMLElement | null;
+      const entry = document.querySelector(
+        ".stage-pp__playlist-entry",
+      ) as HTMLElement | null;
+      if (!sidebar || !entry) return { error: "missing element" } as const;
+      const sidebarRect = sidebar.getBoundingClientRect();
+      const viewportWidth = window.innerWidth;
+      const entryStyle = getComputedStyle(entry);
+      return {
+        sidebarRatio: sidebarRect.width / viewportWidth,
+        entryFontSizePx: parseFloat(entryStyle.fontSize),
+      } as const;
+    });
+
+    expect("error" in measurements, JSON.stringify(measurements)).toBe(false);
+    if ("sidebarRatio" in measurements) {
+      // Sidebar must be ~22% (allow ±3% slack for borders/scrollbar).
+      expect(measurements.sidebarRatio).toBeGreaterThan(0.19);
+      expect(measurements.sidebarRatio).toBeLessThan(0.25);
+      // Entry font must be readable from the back of a room — sanity floor at 24px.
+      expect(measurements.entryFontSizePx).toBeGreaterThanOrEqual(24);
+    }
+
+    // Cleanup
+    await page.request.delete(
+      new URL(`/playlists/${playlist.id}`, baseURL).toString(),
+    );
+
+    expect(consoleErrors).toEqual([]);
   });
 });
