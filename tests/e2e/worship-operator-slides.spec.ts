@@ -103,14 +103,35 @@ async function openPresentation(page: Page, target: SelectionTarget) {
   });
 
   // Click the specific library card by id.
+  // We must click the LIBRARY-LOAD button (the one with class
+  // "operator__list-button"), NOT a sibling action button. In the dashboard
+  // <li> the first button IS the load button, but in the modal <div> the
+  // first button is "toggle-favorite" (the ☆ star) — picking it would
+  // toggle the favorite state instead of loading presentations, leaving
+  // the test stuck waiting for an item that never appears. If the target
+  // library isn't in the dashboard, open the library-modal first so the
+  // modal row is in a visible state (programmatic .click() works on hidden
+  // elements but it's clearer to operate on a visible UI).
   const libClicked = await page.evaluate((libId: string) => {
-    const cards = document.querySelectorAll<HTMLElement>(
-      `[data-role="library-list"] [data-library-id="${libId}"], [data-library-id="${libId}"]`,
+    let card = document.querySelector<HTMLElement>(
+      `[data-role="library-list"] [data-library-id="${libId}"]`,
     );
-    if (cards.length === 0) return false;
-    const btn =
-      (cards[0].querySelector("button") as HTMLElement | null) ?? cards[0];
-    btn.click();
+    if (!card) {
+      // Open the library-more modal, then look for the modal row.
+      const moreBtn = document.querySelector<HTMLElement>(
+        '[data-role="library-more"]',
+      );
+      moreBtn?.click();
+      card = document.querySelector<HTMLElement>(
+        `[data-role="library-modal"] [data-library-id="${libId}"]`,
+      );
+    }
+    if (!card) return false;
+    // Pick the load button specifically — never the favorite-toggle.
+    const loadBtn = card.querySelector<HTMLElement>(
+      "button.operator__list-button",
+    );
+    (loadBtn ?? card).click();
     return true;
   }, target.libraryId);
   expect(libClicked, `library ${target.libraryName} not found in UI`).toBe(
