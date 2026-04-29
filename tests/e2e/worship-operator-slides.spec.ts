@@ -103,20 +103,46 @@ async function openPresentation(page: Page, target: SelectionTarget) {
   });
 
   // Click the specific library card by id.
+  // We must click the LIBRARY-LOAD button (the one with class
+  // "operator__list-button"), NOT a sibling action button. In the dashboard
+  // <li> the first button IS the load button, but in the modal <div> the
+  // first button is "toggle-favorite" (the ☆ star) — picking it would
+  // toggle the favorite state instead of loading presentations, leaving
+  // the test stuck waiting for an item that never appears. If the target
+  // library isn't in the dashboard, open the library-modal first so the
+  // modal row is in a visible state (programmatic .click() works on hidden
+  // elements but it's clearer to operate on a visible UI).
   const libClicked = await page.evaluate((libId: string) => {
-    const cards = document.querySelectorAll<HTMLElement>(
-      `[data-role="library-list"] [data-library-id="${libId}"], [data-library-id="${libId}"]`,
+    let card = document.querySelector<HTMLElement>(
+      `[data-role="library-list"] [data-library-id="${libId}"]`,
     );
-    if (cards.length === 0) return false;
-    const btn =
-      (cards[0].querySelector("button") as HTMLElement | null) ?? cards[0];
-    btn.click();
+    if (!card) {
+      // Open the library-more modal, then look for the modal row.
+      const moreBtn = document.querySelector<HTMLElement>(
+        '[data-role="library-more"]',
+      );
+      moreBtn?.click();
+      card = document.querySelector<HTMLElement>(
+        `[data-role="library-modal"] [data-library-id="${libId}"]`,
+      );
+    }
+    if (!card) return false;
+    // Pick the load button specifically — never the favorite-toggle.
+    const loadBtn = card.querySelector<HTMLElement>(
+      "button.operator__list-button",
+    );
+    (loadBtn ?? card).click();
     return true;
   }, target.libraryId);
-  expect(libClicked, `library ${target.libraryName} not found in UI`).toBe(true);
+  expect(libClicked, `library ${target.libraryName} not found in UI`).toBe(
+    true,
+  );
 
+  // Generous timeout: largest libraries have ~500 presentations, and Leptos
+  // renders the whole For block synchronously before the first item is in
+  // the DOM. 10s wasn't enough for LIVING STONES (495).
   await page.waitForSelector('[data-role="presentation-item"]', {
-    timeout: 10_000,
+    timeout: 30_000,
   });
 
   // Click the specific presentation by id.
@@ -152,7 +178,9 @@ test("worship slides render without phantom class or outside-card groups", async
 
   // Just need a worship presentation with any slides + groups — doesn't
   // have to have repeated groups for this test.
-  const target = await pickWorshipTarget(page, { requiresRepeatedGroups: false });
+  const target = await pickWorshipTarget(page, {
+    requiresRepeatedGroups: false,
+  });
   expect(
     target,
     "test corpus has no worship presentations with groups — fixtures broken",
@@ -199,7 +227,9 @@ test("worship slides use --inherited modifier for repeated groups", async ({
   // This test specifically asserts inherited-group rendering, so it MUST
   // open a presentation that has at least one repeated group. Fail loudly
   // if no such fixture exists.
-  const target = await pickWorshipTarget(page, { requiresRepeatedGroups: true });
+  const target = await pickWorshipTarget(page, {
+    requiresRepeatedGroups: true,
+  });
   expect(
     target,
     "test corpus has no worship presentations with repeated groups — cannot assert inherited modifier",
@@ -216,7 +246,7 @@ test("worship slides use --inherited modifier for repeated groups", async ({
 
   // And at least one NON-inherited badge (the first occurrence).
   const nonInheritedCount = await page
-    .locator('.operator__slide-group:not(.operator__slide-group--inherited)')
+    .locator(".operator__slide-group:not(.operator__slide-group--inherited)")
     .count();
   expect(nonInheritedCount).toBeGreaterThan(0);
 });
