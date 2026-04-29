@@ -1041,10 +1041,13 @@ jobs:
       - name: Deploy to companion-pp.lan
         run: |
           MODULE_DIR="/opt/companion/v4.1/modules/presenter"
-          echo "Deploying Companion plugin to companion-pp.lan..."
-          ssh companion-pp "mkdir -p $MODULE_DIR"
-          scp -r ops/companion/presenter/* companion-pp:$MODULE_DIR/
-          ssh companion-pp "cd $MODULE_DIR && npm install --omit=dev"
+          STAGE_DIR=$(ssh companion-pp "mktemp -d /tmp/companion-module-XXXXXX")
+          echo "Deploying Companion plugin to companion-pp.lan (staging: $STAGE_DIR)..."
+          scp -r ops/companion/presenter/* companion-pp:$STAGE_DIR/
+          ssh companion-pp "cd $STAGE_DIR && npm install --omit=dev"
+          # Stage-then-sudo-move so we don't need write access to /opt/companion
+          # as the SSH user. Mirrors the companion-snv step above.
+          ssh companion-pp "sudo rm -rf $MODULE_DIR && sudo mkdir -p $(dirname $MODULE_DIR) && sudo mv $STAGE_DIR $MODULE_DIR"
           echo "Restarting Companion on PP..."
           ssh companion-pp "docker restart companion"
           sleep 10
