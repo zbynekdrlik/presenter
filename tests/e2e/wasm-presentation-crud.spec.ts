@@ -423,4 +423,115 @@ Multiple lines here`;
     // Close modal
     await page.keyboard.press("Escape");
   });
+
+  // Regression guard for issue #275: pasted ProPresenter clipboard with
+  // metadata (Title:/Misc N/^B) and section headers without preceding blank
+  // lines must produce one slide per section, not one giant slide.
+  test("paste with section headers splits one slide per section (#275)", async ({
+    page,
+  }) => {
+    await selectLibrary(page);
+
+    await page
+      .locator('[data-view-panel="worship"] [data-role="presentation-create"]')
+      .click();
+    await page.waitForFunction(
+      () =>
+        document.querySelector(
+          '[data-role="presentation-create-modal"][data-open="true"]',
+        ),
+      { timeout: 5_000 },
+    );
+
+    const presentationName = `Section Split #275 ${Date.now()}`;
+    await page
+      .locator('[data-role="presentation-create-name"]')
+      .fill(presentationName);
+
+    await page.locator('[data-role="presentation-create-paste"]').click();
+    await expect(
+      page.locator('[data-role="presentation-create-paste-area"]'),
+    ).toBeVisible();
+
+    // The user's exact reported input: metadata at the top with NO blank line
+    // before Verse 1, blank-line-separated Chorus, and trailing metadata.
+    const userInput = `Title: 326 Všetko, čo v sebe držím
+Misc 1
+^B
+Verse 1
+Všetko, čo v sebe držím s túžbami
+Ty ma chceš Pane mať
+
+Chorus
+Mám Spasiteľa žije vo mne
+Nikto mi Ťa nezoberie
+
+Outro
+Nikto mi Ťa nezoberie
+Misc 1
+^B`;
+
+    await page
+      .locator('[data-role="presentation-create-paste-text"]')
+      .fill(userInput);
+    await page
+      .locator('[data-role="presentation-create-paste-confirm"]')
+      .click();
+
+    // Modal closes
+    await page.waitForFunction(
+      () =>
+        !document.querySelector(
+          '[data-role="presentation-create-modal"][data-open="true"]',
+        ),
+      { timeout: 10_000 },
+    );
+
+    // Wait for slides of the newly created presentation to render
+    await page.waitForFunction(
+      () => {
+        const slides = document.querySelector(
+          '[data-view-panel="worship"] [data-role="slides"]',
+        );
+        return slides && slides.querySelectorAll("[data-slide-id]").length >= 3;
+      },
+      { timeout: 10_000 },
+    );
+
+    // Read slide group + main pairs (display mode selectors)
+    const slidePairs = await page.evaluate(() => {
+      const slides = Array.from(
+        document.querySelectorAll(
+          '[data-view-panel="worship"] [data-role="slides"] [data-slide-id]',
+        ),
+      );
+      return slides.map((slide) => {
+        const groupEl = slide.querySelector('[data-role="slide-group"]');
+        const mainEl = slide.querySelector('[data-field-display="main"]');
+        return {
+          group: (groupEl?.textContent || "").trim(),
+          main: (mainEl?.textContent || "").trim(),
+        };
+      });
+    });
+
+    // Three sections: Verse 1, Chorus, Outro
+    expect(slidePairs).toHaveLength(3);
+    expect(slidePairs[0].group).toBe("Verse 1");
+    expect(slidePairs[1].group).toBe("Chorus");
+    expect(slidePairs[2].group).toBe("Outro");
+
+    // Metadata must NOT pollute any slide's content
+    for (const slide of slidePairs) {
+      expect(slide.main).not.toMatch(/Title:/);
+      expect(slide.main).not.toMatch(/Misc 1/);
+      expect(slide.main).not.toContain("^B");
+      expect(slide.group).not.toMatch(/Title:/);
+    }
+
+    // Lyrics arrived in the right slides
+    expect(slidePairs[0].main).toContain("Všetko");
+    expect(slidePairs[1].main).toContain("Spasiteľa");
+    expect(slidePairs[2].main).toContain("nezoberie");
+  });
 });

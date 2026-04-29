@@ -85,7 +85,7 @@ const GROUP_PATTERNS: &[&str] = &[
 ];
 
 fn is_group_line(line: &str) -> bool {
-    let line_lower = line.to_lowercase();
+    let line_lower = line.to_ascii_lowercase();
     GROUP_PATTERNS.iter().any(|pattern| {
         line_lower.strip_prefix(pattern).is_some_and(|rest| {
             let rest = rest.trim();
@@ -105,7 +105,7 @@ fn is_metadata_line(line: &str) -> bool {
     if line.is_empty() {
         return false;
     }
-    let lower = line.to_lowercase();
+    let lower = line.to_ascii_lowercase();
     if lower.starts_with("title:") {
         return true;
     }
