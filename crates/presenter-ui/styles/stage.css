@@ -361,7 +361,7 @@ body.stage {
     line-height: 1.1;
     white-space: nowrap;
     overflow: hidden;
-    text-overflow: ellipsis;
+    text-overflow: clip;
     border-radius: 4px;
     margin-bottom: 2px;
 }
