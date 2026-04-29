@@ -65,45 +65,42 @@ fn flush_slide(
 }
 
 /// Recognised section/group headings (the ProPresenter-style group names).
-/// Mirrors the original list from `test_helpers.rs::is_group_line` and accepts
-/// optional trailing digits / whitespace (e.g. `Verse 2`, `Chorus`).
+/// Accepts optional trailing digits / whitespace (e.g. `Verse 2`, `Chorus`).
+/// Input must already be trimmed (the only call site trims before calling).
+const GROUP_PATTERNS: &[&str] = &[
+    "verse",
+    "chorus",
+    "bridge",
+    "intro",
+    "outro",
+    "pre-chorus",
+    "prechorus",
+    "tag",
+    "interlude",
+    "refrain",
+    "hook",
+    "coda",
+    "ending",
+    "instrumental",
+];
+
 fn is_group_line(line: &str) -> bool {
-    let line_lower = line.trim().to_lowercase();
-    let patterns = [
-        "verse",
-        "chorus",
-        "bridge",
-        "intro",
-        "outro",
-        "pre-chorus",
-        "prechorus",
-        "tag",
-        "interlude",
-        "refrain",
-        "hook",
-        "coda",
-        "ending",
-        "instrumental",
-    ];
-    for pattern in patterns {
-        if let Some(rest) = line_lower.strip_prefix(pattern) {
+    let line_lower = line.to_lowercase();
+    GROUP_PATTERNS.iter().any(|pattern| {
+        line_lower.strip_prefix(pattern).is_some_and(|rest| {
             let rest = rest.trim();
-            if rest.is_empty()
+            rest.is_empty()
                 || rest
                     .chars()
                     .all(|c| c.is_ascii_digit() || c.is_whitespace())
-            {
-                return true;
-            }
-        }
-    }
-    false
+        })
+    })
 }
 
 /// ProPresenter-style metadata / control markers we want to silently drop:
 /// - `Title:` prefix (case-insensitive)
 /// - `Misc <digits>` (case-insensitive)
-/// - `^X` where X is a single ASCII uppercase letter (control marker)
+/// - ProPresenter control marker `^X` (exactly two bytes: caret + one ASCII uppercase letter; `^BB` is NOT filtered)
 fn is_metadata_line(line: &str) -> bool {
     if line.is_empty() {
         return false;
@@ -166,8 +163,7 @@ mod tests {
             Misc 1\n\
             ^B\n";
         let slides = parse_song_text(input);
-        let groups: Vec<Option<&str>> =
-            slides.iter().map(|s| s.group.as_deref()).collect();
+        let groups: Vec<Option<&str>> = slides.iter().map(|s| s.group.as_deref()).collect();
         assert_eq!(
             groups,
             vec![
@@ -191,7 +187,10 @@ mod tests {
         }
         // Outro slide should contain only the Nikto... lyric (Misc/^B trailing
         // metadata filtered).
-        let outro = slides.iter().find(|s| s.group.as_deref() == Some("Outro")).unwrap();
+        let outro = slides
+            .iter()
+            .find(|s| s.group.as_deref() == Some("Outro"))
+            .expect("outro slide present");
         assert_eq!(outro.main, "Nikto mi Ťa už nemôže vziať!");
     }
 
