@@ -133,15 +133,32 @@ impl AppState {
         Ok(playlist)
     }
 
+    /// Batched enrichment for the list-playlists response path. Collects
+    /// all presentation_ids across the given playlists and fetches their
+    /// names in a single DB query, then maps them back into each entry —
+    /// avoids the N+1 queries that the trivial loop-with-`enrich_playlist_with_names`
+    /// would do.
     pub async fn enrich_playlists_with_names(
         &self,
-        playlists: Vec<presenter_core::Playlist>,
+        mut playlists: Vec<presenter_core::Playlist>,
     ) -> anyhow::Result<Vec<presenter_core::Playlist>> {
-        let mut out = Vec::with_capacity(playlists.len());
-        for pl in playlists {
-            out.push(self.enrich_playlist_with_names(pl).await?);
+        let names = self
+            .repository
+            .fetch_presentation_names_for_playlists(&playlists)
+            .await?;
+        for playlist in playlists.iter_mut() {
+            for entry in playlist.entries.iter_mut() {
+                if let presenter_core::playlist::PlaylistEntryKind::Presentation {
+                    presentation_id,
+                    presentation_name,
+                    ..
+                } = &mut entry.kind
+                {
+                    *presentation_name = names.get(presentation_id).cloned();
+                }
+            }
         }
-        Ok(out)
+        Ok(playlists)
     }
 
     pub async fn create_playlist(
