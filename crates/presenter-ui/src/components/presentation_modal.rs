@@ -241,7 +241,7 @@ pub fn PresentationModals() -> impl IntoView {
                 name
             };
             let text = op.paste_text.get_untracked();
-            let slides = crate::utils::test_helpers::parse_song_text(&text);
+            let slides = crate::utils::song_parser::parse_song_text(&text);
             if slides.is_empty() {
                 return;
             }
