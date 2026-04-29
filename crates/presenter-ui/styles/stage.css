@@ -354,10 +354,10 @@ body.stage {
 .stage-pp__playlist-entry {
     padding: 0.3vh 0.4rem;
     color: #94a3b8;
-    /* Sized so ~12 typical chars fit per row at 1080p:
-       sidebar 22% × 1920 = 422px, less padding → ~390px content,
-       at 5vh font (≈54px) char-width is ~30px, ~12 chars per row. */
-    font-size: 5vh;
+    /* Sized so ~10 entries fit in the 92vh sidebar at 1080p:
+       per-row ≈ 7.5vh × line-height 1.1 + 0.6vh padding ≈ 9.0vh.
+       Trades fewer chars-per-row for visibly larger text. */
+    font-size: 7.5vh;
     line-height: 1.1;
     white-space: nowrap;
     overflow: hidden;
