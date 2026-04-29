@@ -485,27 +485,13 @@ fn load_session_presentation(ctx: &AppContext) {
     if let Some(pl_id) = ctx.selected_playlist_id.get_untracked() {
         let playlists = ctx.playlists;
         let context_title = ctx.context_title;
-        let presentations = ctx.presentations;
         let selected_playlist = ctx.selected_playlist;
         leptos::task::spawn_local(async move {
-            // Fetch full playlist for entry rendering
+            // Fetch full playlist for entry rendering. The response now
+            // includes presentation_name on each entry, so the operator
+            // no longer needs to fake a presentations summary list.
             if let Ok(pl) = crate::api::playlists::get_playlist(&pl_id).await {
                 context_title.set(pl.name.clone());
-                let summaries: Vec<presenter_core::PresentationSummary> = pl
-                    .entries
-                    .iter()
-                    .filter_map(|e| match &e.kind {
-                        presenter_core::playlist::PlaylistEntryKind::Presentation {
-                            presentation_id,
-                            ..
-                        } => Some(presenter_core::PresentationSummary::new(
-                            *presentation_id,
-                            String::new(),
-                        )),
-                        _ => None,
-                    })
-                    .collect();
-                presentations.set(summaries);
                 selected_playlist.set(Some(pl));
             }
             if let Ok(pls) = crate::api::playlists::list_playlists().await {

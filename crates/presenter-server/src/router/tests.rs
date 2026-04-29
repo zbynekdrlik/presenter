@@ -15,8 +15,9 @@ use crate::router::libraries::CreateLibraryPresentationResponse;
 use crate::router::playlists::UpdatePlaylistRequest;
 use crate::router::presentations::PresentationDetailDto;
 use crate::router::stage::StageLayoutResponse;
-use presenter_core::Playlist;
+use presenter_core::playlist::PlaylistEntryKind;
 use presenter_core::TimersOverview;
+use presenter_core::{Playlist, PlaylistEntry, PlaylistEntryId};
 use presenter_core::{StageDisplayLayout, StageDisplaySnapshot};
 
 #[derive(Debug, Deserialize)]
@@ -1756,6 +1757,69 @@ fn mock_ingestion() -> std::sync::Arc<dyn crate::state::TestBibleIngestion + Sen
     std::sync::Arc::new(Mock)
 }
 
+#[tokio::test]
+async fn get_playlist_returns_playlist_when_present() {
+    let app = build_router(AppState::in_memory().await.unwrap());
+
+    // Create a playlist
+    let create_resp = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/playlists")
+                .header("content-type", "application/json")
+                .body(Body::from(
+                    r#"{"name":"GET test","showInDashboard":false}"#.to_string(),
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(create_resp.status(), StatusCode::OK);
+    let create_bytes = axum::body::to_bytes(create_resp.into_body(), usize::MAX)
+        .await
+        .unwrap();
+    let created: serde_json::Value = serde_json::from_slice(&create_bytes).unwrap();
+    let id = created["id"].as_str().unwrap().to_string();
+
+    // GET it back
+    let get_resp = app
+        .oneshot(
+            Request::builder()
+                .method("GET")
+                .uri(format!("/playlists/{id}"))
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(get_resp.status(), StatusCode::OK);
+    let get_bytes = axum::body::to_bytes(get_resp.into_body(), usize::MAX)
+        .await
+        .unwrap();
+    let fetched: serde_json::Value = serde_json::from_slice(&get_bytes).unwrap();
+    assert_eq!(fetched["id"].as_str().unwrap(), id);
+    assert_eq!(fetched["name"].as_str().unwrap(), "GET test");
+}
+
+#[tokio::test]
+async fn get_playlist_returns_404_when_missing() {
+    let app = build_router(AppState::in_memory().await.unwrap());
+
+    let resp = app
+        .oneshot(
+            Request::builder()
+                .method("GET")
+                .uri("/playlists/00000000-0000-0000-0000-000000000000")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::NOT_FOUND);
+}
+
 #[test]
 fn update_playlist_request_defaults_flags() {
     let payload: UpdatePlaylistRequest = serde_json::from_str(r"{}").expect("deserialises");
@@ -1807,4 +1871,110 @@ async fn network_mode_endpoint_returns_remote_with_foreign_cf_ip() {
         .unwrap();
     let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
     assert_eq!(json["mode"], "remote");
+}
+
+#[tokio::test]
+async fn get_playlist_response_includes_presentation_name() {
+    let state = AppState::in_memory().await.unwrap();
+    // Seed: create one library + presentation
+    let library = state
+        .create_library("Test Library")
+        .await
+        .expect("create library");
+    let (_, _, presentation, _) = state
+        .create_presentation(library.id, "My Song", None)
+        .await
+        .expect("create presentation");
+    // Create playlist with that presentation as an entry
+    let playlist = state
+        .create_playlist("Test Playlist", true)
+        .await
+        .expect("create playlist");
+    let entries = vec![PlaylistEntry {
+        id: PlaylistEntryId::new(),
+        kind: PlaylistEntryKind::Presentation {
+            presentation_id: presentation.id,
+            midi_binding: None,
+            presentation_name: None,
+        },
+    }];
+    state
+        .replace_playlist_entries(playlist.id, entries)
+        .await
+        .expect("replace entries");
+
+    let app = build_router(state.clone());
+    let resp = app
+        .oneshot(
+            Request::builder()
+                .uri(format!("/playlists/{}", playlist.id))
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::OK);
+    let body: serde_json::Value = serde_json::from_slice(
+        &axum::body::to_bytes(resp.into_body(), 1024 * 64)
+            .await
+            .unwrap(),
+    )
+    .unwrap();
+    let entry = &body["entries"][0];
+    assert_eq!(entry["type"], "presentation");
+    assert_eq!(
+        entry["presentation_name"], "My Song",
+        "presentation_name must be present in playlist GET response"
+    );
+}
+
+#[tokio::test]
+async fn list_playlists_response_includes_presentation_names() {
+    let state = AppState::in_memory().await.unwrap();
+    let library = state.create_library("Lib").await.unwrap();
+    let (_, _, presentation, _) = state
+        .create_presentation(library.id, "Track One", None)
+        .await
+        .unwrap();
+    let playlist = state.create_playlist("PL", true).await.unwrap();
+    state
+        .replace_playlist_entries(
+            playlist.id,
+            vec![PlaylistEntry {
+                id: PlaylistEntryId::new(),
+                kind: PlaylistEntryKind::Presentation {
+                    presentation_id: presentation.id,
+                    midi_binding: None,
+                    presentation_name: None,
+                },
+            }],
+        )
+        .await
+        .unwrap();
+    let app = build_router(state);
+    let resp = app
+        .oneshot(
+            Request::builder()
+                .uri("/playlists")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    let body: serde_json::Value = serde_json::from_slice(
+        &axum::body::to_bytes(resp.into_body(), 1024 * 64)
+            .await
+            .unwrap(),
+    )
+    .unwrap();
+    let pl = body
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|pl| pl["name"] == "PL")
+        .expect("playlist named PL must be present");
+    assert_eq!(
+        pl["entries"][0]["presentation_name"], "Track One",
+        "presentation_name must be present in list response"
+    );
 }

@@ -46,6 +46,11 @@ pub enum PlaylistEntryKind {
         presentation_id: PresentationId,
         #[serde(skip_serializing_if = "Option::is_none")]
         midi_binding: Option<MidiBinding>,
+        /// Display name resolved by the server when serializing the playlist
+        /// for the client. Stored as None internally; populated only on the
+        /// response path. See `enrich_playlist_with_names` in the server.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        presentation_name: Option<String>,
     },
     Separator {
         name: String,
@@ -126,6 +131,70 @@ impl Playlist {
 }
 
 #[cfg(test)]
+mod presentation_name_tests {
+    use super::*;
+    use crate::id::{PlaylistEntryId, PresentationId};
+
+    #[test]
+    fn presentation_entry_round_trips_presentation_name() {
+        let id = PlaylistEntryId::new();
+        let pres_id = PresentationId::new();
+        let entry = PlaylistEntry {
+            id,
+            kind: PlaylistEntryKind::Presentation {
+                presentation_id: pres_id,
+                midi_binding: None,
+                presentation_name: Some("My Song".to_string()),
+            },
+        };
+        let json = serde_json::to_string(&entry).expect("serialize");
+        // serde serializes struct variant fields with the rename_all from the enum,
+        // but flattening means field names come through as snake_case
+        assert!(
+            json.contains("\"presentation_name\":\"My Song\""),
+            "expected presentation_name field in JSON; got: {json}"
+        );
+        let parsed: PlaylistEntry = serde_json::from_str(&json).expect("deserialize");
+        match parsed.kind {
+            PlaylistEntryKind::Presentation {
+                presentation_name, ..
+            } => assert_eq!(presentation_name.as_deref(), Some("My Song")),
+            _ => panic!("expected Presentation"),
+        }
+    }
+
+    #[test]
+    fn presentation_entry_omits_name_when_none() {
+        let entry = PlaylistEntry {
+            id: PlaylistEntryId::new(),
+            kind: PlaylistEntryKind::Presentation {
+                presentation_id: PresentationId::new(),
+                midi_binding: None,
+                presentation_name: None,
+            },
+        };
+        let json = serde_json::to_string(&entry).expect("serialize");
+        assert!(
+            !json.contains("presentation_name"),
+            "None should be skip_serializing_if; got: {json}"
+        );
+    }
+
+    #[test]
+    fn deserializing_legacy_payload_without_name_works() {
+        // Fields use snake_case (serde flatten with tagged enum preserves snake_case)
+        let json = r#"{"id":"00000000-0000-0000-0000-000000000001","type":"presentation","presentation_id":"00000000-0000-0000-0000-000000000002"}"#;
+        let parsed: PlaylistEntry = serde_json::from_str(json).expect("deserialize");
+        match parsed.kind {
+            PlaylistEntryKind::Presentation {
+                presentation_name, ..
+            } => assert_eq!(presentation_name, None),
+            _ => panic!("expected Presentation"),
+        }
+    }
+}
+
+#[cfg(test)]
 mod tests {
     use super::*;
     use crate::id::PresentationId;
@@ -158,6 +227,7 @@ mod tests {
                 kind: PlaylistEntryKind::Presentation {
                     presentation_id,
                     midi_binding: Some(MidiBinding::new(1).unwrap()),
+                    presentation_name: None,
                 },
             },
             PlaylistEntry {
@@ -165,6 +235,7 @@ mod tests {
                 kind: PlaylistEntryKind::Presentation {
                     presentation_id: PresentationId::new(),
                     midi_binding: Some(MidiBinding::new(1).unwrap()),
+                    presentation_name: None,
                 },
             },
         ];
@@ -183,6 +254,7 @@ mod tests {
                     kind: PlaylistEntryKind::Presentation {
                         presentation_id: first,
                         midi_binding: Some(MidiBinding::new(10).unwrap()),
+                        presentation_name: None,
                     },
                 },
                 PlaylistEntry {
@@ -190,6 +262,7 @@ mod tests {
                     kind: PlaylistEntryKind::Presentation {
                         presentation_id: PresentationId::new(),
                         midi_binding: None,
+                        presentation_name: None,
                     },
                 },
             ],

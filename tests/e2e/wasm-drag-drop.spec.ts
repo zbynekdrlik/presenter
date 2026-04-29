@@ -59,22 +59,29 @@ test.describe("WASM Operator Drag-Drop", () => {
     const searchInput = page.locator('[data-role="global-search-query"]');
     await searchInput.fill("a");
 
-    // Wait for results
-    await page.waitForFunction(
-      () =>
-        document
-          .querySelector('[data-role="global-search-results"]')
-          ?.querySelectorAll('[data-role="search-result-item"]').length ??
-        0 > 0,
+    // Wait for at least one presentation-kind result. Library-kind results
+    // are intentionally non-draggable (they have no presentation_id to
+    // drop into a playlist), so we scope to presentation-kind here.
+    await page.waitForSelector(
+      '[data-role="search-result-item"][data-kind="presentation"]',
       { timeout: 10_000 },
     );
 
-    // Verify results have draggable attribute
-    const firstResult = page
-      .locator('[data-role="search-result-item"]')
+    // Verify a presentation-kind result has draggable="true".
+    const firstPresentationResult = page
+      .locator('[data-role="search-result-item"][data-kind="presentation"]')
       .first();
-    if ((await firstResult.count()) > 0) {
-      await expect(firstResult).toHaveAttribute("draggable", "true");
+    await expect(firstPresentationResult).toHaveAttribute("draggable", "true");
+
+    // And verify a library-kind result, if any, is NOT draggable.
+    const libraryResults = page.locator(
+      '[data-role="search-result-item"][data-kind="library"]',
+    );
+    if ((await libraryResults.count()) > 0) {
+      await expect(libraryResults.first()).toHaveAttribute(
+        "draggable",
+        "false",
+      );
     }
   });
 

@@ -72,8 +72,6 @@ pub fn PresentationList() -> impl IntoView {
                 let playlist_id = ctx.selected_playlist_id.get_untracked().unwrap_or_default();
                 let selected_playlist = ctx.selected_playlist;
                 let playlists = ctx.playlists;
-                // Capture signal OUTSIDE async block
-                let presentations_signal = ctx.presentations;
                 leptos::task::spawn_local(async move {
                     // Build current entries + new separator
                     let current = selected_playlist.get_untracked();
@@ -110,8 +108,6 @@ pub fn PresentationList() -> impl IntoView {
                         crate::api::playlists::replace_entries(&playlist_id, entries).await
                     {
                         selected_playlist.set(Some(updated.clone()));
-                        // Refresh presentation list from playlist entries using captured signal
-                        rebuild_playlist_presentations_with_signal(presentations_signal, &updated);
                     }
                     if let Ok(pls) = crate::api::playlists::list_playlists().await {
                         playlists.set(pls);
@@ -213,7 +209,6 @@ pub fn PresentationList() -> impl IntoView {
                                                     let playlist_id = playlist_id_reorder.clone();
                                                     let selected_playlist = ctx.selected_playlist;
                                                     let playlists = ctx.playlists;
-                                                    let presentations = ctx.presentations;
                                                     move |ev: web_sys::DragEvent| {
                                                         ev.prevent_default();
                                                         if let Some(dragged_id) = get_dragging_entry() {
@@ -232,7 +227,6 @@ pub fn PresentationList() -> impl IntoView {
                                                                         entries.insert(to, item);
                                                                         if let Ok(updated) = crate::api::playlists::replace_entries(&playlist_id, entries).await {
                                                                             selected_playlist.set(Some(updated.clone()));
-                                                                            rebuild_playlist_presentations_with_signal(presentations, &updated);
                                                                         }
                                                                         if let Ok(pls) = crate::api::playlists::list_playlists().await {
                                                                             playlists.set(pls);
@@ -269,7 +263,6 @@ pub fn PresentationList() -> impl IntoView {
                                                                     // Capture signals OUTSIDE async block
                                                                     let selected_playlist = ctx.selected_playlist;
                                                                     let playlists = ctx.playlists;
-                                                                    let presentations = ctx.presentations;
                                                                     leptos::task::spawn_local(async move {
                                                                         let current = selected_playlist.get_untracked();
                                                                         if let Some(pl) = current {
@@ -285,7 +278,6 @@ pub fn PresentationList() -> impl IntoView {
                                                                             }).collect();
                                                                             if let Ok(updated) = crate::api::playlists::replace_entries(&pl_id, entries).await {
                                                                                 selected_playlist.set(Some(updated.clone()));
-                                                                                rebuild_playlist_presentations_with_signal(presentations, &updated);
                                                                             }
                                                                             if let Ok(pls) = crate::api::playlists::list_playlists().await {
                                                                                 playlists.set(pls);
@@ -308,7 +300,6 @@ pub fn PresentationList() -> impl IntoView {
                                                                     // Capture signals OUTSIDE async block
                                                                     let selected_playlist = ctx.selected_playlist;
                                                                     let playlists = ctx.playlists;
-                                                                    let presentations = ctx.presentations;
                                                                     leptos::task::spawn_local(async move {
                                                                         let current = selected_playlist.get_untracked();
                                                                         if let Some(pl) = current {
@@ -318,7 +309,6 @@ pub fn PresentationList() -> impl IntoView {
                                                                                 .collect();
                                                                             if let Ok(updated) = crate::api::playlists::replace_entries(&pl_id, entries).await {
                                                                                 selected_playlist.set(Some(updated.clone()));
-                                                                                rebuild_playlist_presentations_with_signal(presentations, &updated);
                                                                             }
                                                                             if let Ok(pls) = crate::api::playlists::list_playlists().await {
                                                                                 playlists.set(pls);
@@ -348,12 +338,14 @@ pub fn PresentationList() -> impl IntoView {
                                         let entry_id_drop = entry_id.clone();
                                         let playlist_id_reorder = ctx.selected_playlist_id.get_untracked().unwrap_or_default();
 
-                                        // Look up presentation name from presentations list or index
-                                        let presentations = ctx.presentations.get();
-                                        let pres_name = presentations.iter()
-                                            .find(|p| p.id.to_string() == id)
-                                            .map(|p| p.name.clone())
-                                            .unwrap_or_default();
+                                        // Read presentation name directly from the playlist entry
+                                        // (server enriches it via fetch_presentation_names_for_playlist).
+                                        let pres_name = match &entry.kind {
+                                            presenter_core::playlist::PlaylistEntryKind::Presentation {
+                                                presentation_name, ..
+                                            } => presentation_name.clone().unwrap_or_default(),
+                                            _ => String::new(),
+                                        };
 
                                         // Look up library name from index
                                         let lib_name = pres_index.get(&id).cloned().unwrap_or_default();
@@ -399,7 +391,6 @@ pub fn PresentationList() -> impl IntoView {
                                                     let playlist_id = playlist_id_reorder.clone();
                                                     let selected_playlist = ctx.selected_playlist;
                                                     let playlists = ctx.playlists;
-                                                    let presentations = ctx.presentations;
                                                     move |ev: web_sys::DragEvent| {
                                                         ev.prevent_default();
                                                         if let Some(dragged_id) = get_dragging_entry() {
@@ -417,7 +408,6 @@ pub fn PresentationList() -> impl IntoView {
                                                                         entries.insert(to, item);
                                                                         if let Ok(updated) = crate::api::playlists::replace_entries(&playlist_id, entries).await {
                                                                             selected_playlist.set(Some(updated.clone()));
-                                                                            rebuild_playlist_presentations_with_signal(presentations, &updated);
                                                                         }
                                                                         if let Ok(pls) = crate::api::playlists::list_playlists().await {
                                                                             playlists.set(pls);
@@ -465,7 +455,6 @@ pub fn PresentationList() -> impl IntoView {
                                                                     // Capture signals OUTSIDE async block
                                                                     let selected_playlist = ctx.selected_playlist;
                                                                     let playlists = ctx.playlists;
-                                                                    let presentations = ctx.presentations;
                                                                     leptos::task::spawn_local(async move {
                                                                         let current = selected_playlist.get_untracked();
                                                                         if let Some(pl) = current {
@@ -475,7 +464,6 @@ pub fn PresentationList() -> impl IntoView {
                                                                                 .collect();
                                                                             if let Ok(updated) = crate::api::playlists::replace_entries(&pl_id, entries).await {
                                                                                 selected_playlist.set(Some(updated.clone()));
-                                                                                rebuild_playlist_presentations_with_signal(presentations, &updated);
                                                                             }
                                                                             if let Ok(pls) = crate::api::playlists::list_playlists().await {
                                                                                 playlists.set(pls);
@@ -598,28 +586,6 @@ fn entry_to_payload(
             }
         }
     }
-}
-
-/// Rebuild the presentations signal from a playlist's entries using a captured signal.
-/// Use this version inside async blocks where `use_context` is not available.
-fn rebuild_playlist_presentations_with_signal(
-    presentations: RwSignal<Vec<presenter_core::PresentationSummary>>,
-    playlist: &presenter_core::Playlist,
-) {
-    let summaries: Vec<presenter_core::PresentationSummary> = playlist
-        .entries
-        .iter()
-        .filter_map(|e| match &e.kind {
-            presenter_core::playlist::PlaylistEntryKind::Presentation {
-                presentation_id, ..
-            } => Some(presenter_core::PresentationSummary::new(
-                *presentation_id,
-                String::new(),
-            )),
-            _ => None,
-        })
-        .collect();
-    presentations.set(summaries);
 }
 
 /// Get entry_id from a PlaylistEntryPayload

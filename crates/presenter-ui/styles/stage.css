@@ -333,38 +333,48 @@ body.stage {
     position: absolute;
     left: 0;
     top: 0;
-    width: 70%;
+    width: 78%;
     height: 92%;
     overflow: hidden;
+    box-sizing: border-box;
 }
 
 .stage-pp__playlist-sidebar {
     position: absolute;
     right: 0;
     top: 0;
-    width: 30%;
+    width: 22%;
     height: 92%;
     overflow-y: auto;
     border-left: 1px solid rgba(255, 255, 255, 0.1);
-    padding: 1% 1.5%;
+    padding: 0.4% 0.5%;
     box-sizing: border-box;
 }
 
 .stage-pp__playlist-entry {
-    padding: 0.4rem 0.6rem;
+    padding: 0.3vh 0.4rem;
     color: #94a3b8;
-    font-size: 0.9vw;
+    /* Sized so ~10 entries fit in the 92vh sidebar at 1080p:
+       per-row ≈ 7.5vh × line-height 1.1 + 0.6vh padding ≈ 9.0vh.
+       Trades fewer chars-per-row for visibly larger text. */
+    font-size: 7.5vh;
+    line-height: 1.1;
     white-space: nowrap;
     overflow: hidden;
-    text-overflow: ellipsis;
+    text-overflow: clip;
     border-radius: 4px;
     margin-bottom: 2px;
 }
 
 .stage-pp__playlist-entry--active {
-    background: rgba(56, 189, 248, 0.15);
-    color: #f8fafc;
+    background: #38bdf8;
+    color: #0f172a;
     font-weight: 700;
+    border-left: 4px solid #0ea5e9;
+    /* Compensate for the 4px border so text alignment with non-active rows
+       stays consistent. Base padding-left is 0.4rem (≈6.4px); subtract the
+       border width. */
+    padding-left: calc(0.4rem - 4px);
 }
 
 /* ===== timer layout ===== */

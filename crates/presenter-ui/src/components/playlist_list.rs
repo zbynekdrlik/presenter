@@ -135,7 +135,8 @@ pub fn PlaylistList() -> impl IntoView {
                                         class="operator__list-item operator__list-row"
                                         data-playlist-id=id_for_row
                                         on:dragover=move |ev: web_sys::DragEvent| {
-                                            // Accept presentation drops
+                                            // Accept presentation drops (from library list, presentation list,
+                                            // or global search results).
                                             if let Some(dt) = ev.data_transfer() {
                                                 let types = dt.types();
                                                 let accepts = (0..types.length())
@@ -145,6 +146,13 @@ pub fn PlaylistList() -> impl IntoView {
                                                     });
                                                 if accepts {
                                                     ev.prevent_default();
+                                                    // Search results dragstart with effectAllowed="copy".
+                                                    // Chromium silently rejects the drop unless dropEffect
+                                                    // matches — without this, dragging from
+                                                    // [data-role="search-result-item"] visually drags but
+                                                    // never adds an entry. "copy" is also valid for the
+                                                    // existing presentation-row drag (effectAllowed="move").
+                                                    dt.set_drop_effect("copy");
                                                     if let Some(target) = ev.target() {
                                                         if let Ok(el) = target.dyn_into::<web_sys::Element>() {
                                                             let _ = el.closest(".operator__list-item")

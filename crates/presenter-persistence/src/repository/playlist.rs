@@ -161,6 +161,7 @@ impl Repository {
                 PlaylistEntryKind::Presentation {
                     presentation_id,
                     midi_binding,
+                    ..
                 } => (
                     "presentation".to_string(),
                     Some(presentation_id.to_string()),
@@ -219,16 +220,32 @@ impl Repository {
         &self,
         playlist: &Playlist,
     ) -> anyhow::Result<HashMap<PresentationId, String>> {
-        let ids: Vec<String> = playlist
-            .entries
-            .iter()
-            .filter_map(|entry| match &entry.kind {
-                PlaylistEntryKind::Presentation {
+        self.fetch_presentation_names_for_playlists(std::slice::from_ref(playlist))
+            .await
+    }
+
+    /// Batched variant: collect all presentation_ids across the given
+    /// playlists and fetch their names in a single query. Used by the
+    /// list-playlists response path so we don't issue N queries for N
+    /// playlists.
+    #[instrument(skip_all)]
+    pub async fn fetch_presentation_names_for_playlists(
+        &self,
+        playlists: &[Playlist],
+    ) -> anyhow::Result<HashMap<PresentationId, String>> {
+        let mut ids: Vec<String> = Vec::new();
+        for playlist in playlists {
+            for entry in &playlist.entries {
+                if let PlaylistEntryKind::Presentation {
                     presentation_id, ..
-                } => Some(presentation_id.to_string()),
-                _ => None,
-            })
-            .collect();
+                } = &entry.kind
+                {
+                    ids.push(presentation_id.to_string());
+                }
+            }
+        }
+        ids.sort();
+        ids.dedup();
         if ids.is_empty() {
             return Ok(HashMap::new());
         }

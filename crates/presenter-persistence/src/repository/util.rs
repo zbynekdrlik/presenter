@@ -106,6 +106,7 @@ pub(super) fn to_domain_playlist_entry(
             PlaylistEntryKind::Presentation {
                 presentation_id,
                 midi_binding,
+                presentation_name: None,
             }
         }
         other => return Err(RepositoryError::UnknownPlaylistEntryType(other.to_string())),

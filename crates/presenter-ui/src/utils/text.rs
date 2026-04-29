@@ -39,6 +39,31 @@ pub fn break_if_long(text: String, threshold: usize) -> String {
     }
 }
 
+/// Strip a leading 3-digit-then-space prefix from a ProPresenter song name.
+/// Mirrors the server-side `sanitize_song_title`:
+///
+///   "042 Amazing Grace"  -> "Amazing Grace"
+///   "  042 Padded"       -> "Padded"
+///   "12 Two Digit"       -> "12 Two Digit"   (not exactly 3 digits → unchanged)
+///   "Already Clean"      -> "Already Clean"
+///
+/// Used by the `worship-pp` playlist sidebar to keep operator-facing
+/// numeric prefixes off the stage display.
+pub fn clean_song_name(name: &str) -> String {
+    let trimmed = name.trim_start();
+    let bytes = trimmed.as_bytes();
+    if bytes.len() >= 4
+        && bytes[0].is_ascii_digit()
+        && bytes[1].is_ascii_digit()
+        && bytes[2].is_ascii_digit()
+        && bytes[3].is_ascii_whitespace()
+    {
+        trimmed[4..].trim_start().to_string()
+    } else {
+        trimmed.to_string()
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -106,5 +131,35 @@ mod tests {
         assert!(input.chars().count() > 26);
         let out = run(input, 26);
         assert_eq!(out, "A B\nvery-long-single-word-of-35-chr");
+    }
+
+    #[test]
+    fn clean_song_name_strips_3digit_prefix() {
+        assert_eq!(clean_song_name("042 Amazing Grace"), "Amazing Grace");
+    }
+
+    #[test]
+    fn clean_song_name_passes_through_non_prefixed() {
+        assert_eq!(clean_song_name("Amazing Grace"), "Amazing Grace");
+    }
+
+    #[test]
+    fn clean_song_name_rejects_two_digit_prefix() {
+        assert_eq!(clean_song_name("12 Two Digit"), "12 Two Digit");
+    }
+
+    #[test]
+    fn clean_song_name_rejects_four_digit_prefix() {
+        assert_eq!(clean_song_name("1234 Four Digit"), "1234 Four Digit");
+    }
+
+    #[test]
+    fn clean_song_name_handles_leading_whitespace() {
+        assert_eq!(clean_song_name("  042 Padded"), "Padded");
+    }
+
+    #[test]
+    fn clean_song_name_empty_input_unchanged() {
+        assert_eq!(clean_song_name(""), "");
     }
 }

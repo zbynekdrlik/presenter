@@ -58,7 +58,8 @@ pub(super) async fn list_playlists(
     State(state): State<AppState>,
 ) -> Result<Json<Vec<Playlist>>, AppError> {
     let playlists = state.playlists().await?;
-    Ok(Json(playlists))
+    let enriched = state.enrich_playlists_with_names(playlists).await?;
+    Ok(Json(enriched))
 }
 
 #[instrument(skip_all)]
@@ -73,7 +74,22 @@ pub(super) async fn create_playlist(
     let playlist = state
         .create_playlist(name, payload.show_in_dashboard)
         .await?;
-    Ok(Json(playlist))
+    // Just-created has no entries, but enrich for response shape consistency.
+    let enriched = state.enrich_playlist_with_names(playlist).await?;
+    Ok(Json(enriched))
+}
+
+#[instrument(skip_all)]
+pub(super) async fn get_playlist(
+    State(state): State<AppState>,
+    Path(id): Path<Uuid>,
+) -> Result<Json<Playlist>, AppError> {
+    let playlist = state
+        .get_playlist(PlaylistId::from_uuid(id))
+        .await?
+        .ok_or_else(|| AppError::not_found("playlist not found"))?;
+    let enriched = state.enrich_playlist_with_names(playlist).await?;
+    Ok(Json(enriched))
 }
 
 #[instrument(skip_all)]
@@ -101,8 +117,8 @@ pub(super) async fn update_playlist(
         .into_iter()
         .find(|playlist| playlist.id == playlist_id)
         .ok_or_else(|| AppError::not_found("playlist not found"))?;
-
-    Ok(Json(updated))
+    let enriched = state.enrich_playlist_with_names(updated).await?;
+    Ok(Json(enriched))
 }
 
 #[instrument(skip_all)]
@@ -141,6 +157,7 @@ pub(super) async fn replace_playlist_entries(
                     kind: PlaylistEntryKind::Presentation {
                         presentation_id: PresentationId::from_uuid(presentation_id),
                         midi_binding: binding,
+                        presentation_name: None,
                     },
                 })
             }
@@ -166,5 +183,6 @@ pub(super) async fn replace_playlist_entries(
     let playlist = state
         .replace_playlist_entries(PlaylistId::from_uuid(id), entries)
         .await?;
-    Ok(Json(playlist))
+    let enriched = state.enrich_playlist_with_names(playlist).await?;
+    Ok(Json(enriched))
 }

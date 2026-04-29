@@ -1040,15 +1040,19 @@ jobs:
 
       - name: Deploy to companion-pp.lan
         run: |
-          MODULE_DIR="/opt/companion/v4.1/modules/presenter"
-          echo "Deploying Companion plugin to companion-pp.lan..."
-          ssh companion-pp "mkdir -p $MODULE_DIR"
-          scp -r ops/companion/presenter/* companion-pp:$MODULE_DIR/
-          ssh companion-pp "cd $MODULE_DIR && npm install --omit=dev"
+          # companion-pp now runs the CompanionPi (Raspberry-Pi-style) build,
+          # not Docker. Modules go in --extra-module-path /opt/companion-module-dev,
+          # service is the systemd unit "companion", run as user "companion".
+          MODULE_DIR="/opt/companion-module-dev/presenter"
+          STAGE_DIR=$(ssh companion-pp "mktemp -d /tmp/companion-module-XXXXXX")
+          echo "Deploying Companion plugin to companion-pp.lan (staging: $STAGE_DIR)..."
+          scp -r ops/companion/presenter/* companion-pp:$STAGE_DIR/
+          ssh companion-pp "cd $STAGE_DIR && npm install --omit=dev"
+          ssh companion-pp "sudo rm -rf $MODULE_DIR && sudo mkdir -p $(dirname $MODULE_DIR) && sudo mv $STAGE_DIR $MODULE_DIR && sudo chown -R companion:companion $MODULE_DIR"
           echo "Restarting Companion on PP..."
-          ssh companion-pp "docker restart companion"
-          sleep 10
-          ssh companion-pp "docker exec companion curl -sf http://127.0.0.1:8000 > /dev/null" || { echo "::error::Companion failed to restart on PP"; exit 1; }
+          ssh companion-pp "sudo systemctl restart companion"
+          sleep 5
+          ssh companion-pp "systemctl is-active companion" || { echo "::error::Companion failed to restart on PP"; exit 1; }
           echo "Companion plugin deployed to companion-pp.lan"
 
       - name: Show deployment info

@@ -300,7 +300,7 @@ pub fn SearchResults() -> impl IntoView {
                                 data-kind=kind
                                 data-presentation-id=pres_id_attr
                                 class="operator__search-result"
-                                draggable="true"
+                                draggable=if pres_id.is_some() { "true" } else { "false" }
                                 on:click=move |_| {
                                     on_result_click(lib_click.clone(), pres_click.clone());
                                 }

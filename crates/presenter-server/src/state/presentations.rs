@@ -106,6 +106,61 @@ impl AppState {
         self.repository.list_playlists().await
     }
 
+    pub async fn get_playlist(&self, playlist_id: PlaylistId) -> anyhow::Result<Option<Playlist>> {
+        self.repository.fetch_playlist_by_id(playlist_id).await
+    }
+
+    /// Populate `presentation_name` on each `PlaylistEntryKind::Presentation`
+    /// entry. Idempotent — overwrites whatever was there.
+    pub async fn enrich_playlist_with_names(
+        &self,
+        mut playlist: presenter_core::Playlist,
+    ) -> anyhow::Result<presenter_core::Playlist> {
+        let names = self
+            .repository
+            .fetch_presentation_names_for_playlist(&playlist)
+            .await?;
+        for entry in playlist.entries.iter_mut() {
+            if let presenter_core::playlist::PlaylistEntryKind::Presentation {
+                presentation_id,
+                presentation_name,
+                ..
+            } = &mut entry.kind
+            {
+                *presentation_name = names.get(presentation_id).cloned();
+            }
+        }
+        Ok(playlist)
+    }
+
+    /// Batched enrichment for the list-playlists response path. Collects
+    /// all presentation_ids across the given playlists and fetches their
+    /// names in a single DB query, then maps them back into each entry —
+    /// avoids the N+1 queries that the trivial loop-with-`enrich_playlist_with_names`
+    /// would do.
+    pub async fn enrich_playlists_with_names(
+        &self,
+        mut playlists: Vec<presenter_core::Playlist>,
+    ) -> anyhow::Result<Vec<presenter_core::Playlist>> {
+        let names = self
+            .repository
+            .fetch_presentation_names_for_playlists(&playlists)
+            .await?;
+        for playlist in playlists.iter_mut() {
+            for entry in playlist.entries.iter_mut() {
+                if let presenter_core::playlist::PlaylistEntryKind::Presentation {
+                    presentation_id,
+                    presentation_name,
+                    ..
+                } = &mut entry.kind
+                {
+                    *presentation_name = names.get(presentation_id).cloned();
+                }
+            }
+        }
+        Ok(playlists)
+    }
+
     pub async fn create_playlist(
         &self,
         name: &str,
@@ -186,6 +241,7 @@ impl AppState {
                 kind: PlaylistEntryKind::Presentation {
                     presentation_id: presentation.id,
                     midi_binding: None,
+                    presentation_name: None,
                 },
             })
             .collect();

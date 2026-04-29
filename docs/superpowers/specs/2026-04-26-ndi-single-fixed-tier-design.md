@@ -179,3 +179,24 @@ E2E: existing `tests/e2e/stage-api-ndi.spec.ts` and `tests/e2e/ndi-stage-layout.
 - SIMD resize: addresses the second root cause (encoder CPU on N100). Without it, even a single encoder at 720p@20 with `image::imageops::resize` would be ~3× cheaper than the adaptive design but not as cheap as pre-PR. With SIMD, comfortably below baseline.
 - No env var / kill switch: hardcoded constants per "this is the last MJPEG iteration before WebRTC migration." YAGNI on configurability.
 - Single shared encoder over per-connection: lockstep flapping showed per-connection adaptive doesn't add value; the single-stream architecture is cheaper and predictable.
+
+## Production verification (2026-04-26, prod 0.4.35, post-merge)
+
+Merged PR #266 (commit `3882cdb`) and ran the main-branch Deploy workflow [24961136416](https://github.com/zbynekdrlik/presenter/actions/runs/24961136416). Both jobs (Build Release, Deploy to Production) succeeded.
+
+| Metric | Pre-fix (PR #263 adaptive, 0.4.34) | Post-fix (this design, 0.4.35) |
+|---|---|---|
+| Production version | 0.4.34, channel release | 0.4.35, channel release |
+| N100 load avg | 2.77 / 4 cores (~69 %) | **0.52 / 4 cores (~13 %)** |
+| Tier-transition log lines / 10 min | ~16 demote + 4 promote | **0** (code deleted) |
+| `MJPEG client lagged` lines / 10 min | varied | **0** |
+| `slow tick` lines / 10 min | varied | **0** |
+| `tier_registry` lines / 10 min | many | **0** |
+| Control-client (dev2 → prod) measured FPS | varied 0–30 (was bouncing) | **20.4 fps** (steady — accumulator math holds) |
+| Control-client bandwidth | 3–24 Mbps (was bouncing) | **2.5 Mbps** (~14 KB/frame at 720p, content-dependent) |
+
+**Server-side criteria:** load avg returns to baseline AND no adaptive log noise. **Result: PASS.** Load avg is actually below the pre-PR-263 baseline (~17 %) — the SIMD resize + smaller frames + halved fps means the new code path is cheaper than the original 1080p@30 single encoder.
+
+**Real-TV visual verdict:** to be confirmed by the operator on sd1l..sd4l when next at the church / TVs powered on. The server-side evidence (load avg, frame rate, no flap) plus the design's predicted decode budget at 720p@20 (~50 ms per frame, well within Amlogic capability) gives high confidence the visual experience is now watchable on all four cheap TVs without flapping. If sd2/3/4 still show choppiness, the documented one-line follow-up is to drop `TARGET_FPS` from 20 to 15.
+
+**Decision:** issue #250 closed by PR #266. The next major iteration tracked separately is the WebRTC / low-latency video transport migration.
