@@ -113,10 +113,15 @@ async function openPresentation(page: Page, target: SelectionTarget) {
     btn.click();
     return true;
   }, target.libraryId);
-  expect(libClicked, `library ${target.libraryName} not found in UI`).toBe(true);
+  expect(libClicked, `library ${target.libraryName} not found in UI`).toBe(
+    true,
+  );
 
+  // Generous timeout: largest libraries have ~500 presentations, and Leptos
+  // renders the whole For block synchronously before the first item is in
+  // the DOM. 10s wasn't enough for LIVING STONES (495).
   await page.waitForSelector('[data-role="presentation-item"]', {
-    timeout: 10_000,
+    timeout: 30_000,
   });
 
   // Click the specific presentation by id.
@@ -152,7 +157,9 @@ test("worship slides render without phantom class or outside-card groups", async
 
   // Just need a worship presentation with any slides + groups — doesn't
   // have to have repeated groups for this test.
-  const target = await pickWorshipTarget(page, { requiresRepeatedGroups: false });
+  const target = await pickWorshipTarget(page, {
+    requiresRepeatedGroups: false,
+  });
   expect(
     target,
     "test corpus has no worship presentations with groups — fixtures broken",
@@ -199,7 +206,9 @@ test("worship slides use --inherited modifier for repeated groups", async ({
   // This test specifically asserts inherited-group rendering, so it MUST
   // open a presentation that has at least one repeated group. Fail loudly
   // if no such fixture exists.
-  const target = await pickWorshipTarget(page, { requiresRepeatedGroups: true });
+  const target = await pickWorshipTarget(page, {
+    requiresRepeatedGroups: true,
+  });
   expect(
     target,
     "test corpus has no worship presentations with repeated groups — cannot assert inherited modifier",
@@ -216,7 +225,7 @@ test("worship slides use --inherited modifier for repeated groups", async ({
 
   // And at least one NON-inherited badge (the first occurrence).
   const nonInheritedCount = await page
-    .locator('.operator__slide-group:not(.operator__slide-group--inherited)')
+    .locator(".operator__slide-group:not(.operator__slide-group--inherited)")
     .count();
   expect(nonInheritedCount).toBeGreaterThan(0);
 });
