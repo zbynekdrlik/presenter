@@ -24,7 +24,7 @@ struct CreatePresentationRequest {
     slides: Option<Vec<SlideInput>>,
 }
 
-#[derive(Clone, Serialize, Deserialize)]
+#[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct SlideInput {
     pub main: String,
