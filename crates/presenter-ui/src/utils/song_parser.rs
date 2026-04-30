@@ -284,6 +284,27 @@ pub fn chunk_to_two_lines(slides: Vec<SlideInput>) -> Vec<SlideInput> {
     out
 }
 
+/// Prepend and append an empty `SlideInput` to the list, matching the
+/// worship-service convention of starting and ending on a blank slide.
+/// An empty input passes through unchanged so we don't emit two empty
+/// slides for an empty paste.
+pub fn wrap_with_empty_bookends(slides: Vec<SlideInput>) -> Vec<SlideInput> {
+    if slides.is_empty() {
+        return slides;
+    }
+    let empty = || SlideInput {
+        main: String::new(),
+        translation: None,
+        stage: None,
+        group: None,
+    };
+    let mut out = Vec::with_capacity(slides.len() + 2);
+    out.push(empty());
+    out.extend(slides);
+    out.push(empty());
+    out
+}
+
 /// Pad a leading 1-3 digit numeric prefix (followed by whitespace) to 3
 /// digits with leading zeros so songs sort correctly.
 ///
@@ -683,5 +704,40 @@ mod tests {
         assert_eq!(out.len(), 1);
         assert_eq!(out[0].main, "");
         assert_eq!(out[0].group.as_deref(), Some("Interlude"));
+    }
+
+    #[test]
+    fn wrap_with_empty_bookends_adds_front_and_back() {
+        let slides = vec![
+            SlideInput {
+                main: "a".to_string(),
+                translation: None,
+                stage: None,
+                group: Some("Verse 1".to_string()),
+            },
+            SlideInput {
+                main: "b".to_string(),
+                translation: None,
+                stage: None,
+                group: None,
+            },
+        ];
+        let out = wrap_with_empty_bookends(slides);
+        assert_eq!(out.len(), 4);
+        // First and last are empty.
+        assert_eq!(out[0].main, "");
+        assert!(out[0].group.is_none());
+        assert_eq!(out[3].main, "");
+        assert!(out[3].group.is_none());
+        // Middle slides preserved.
+        assert_eq!(out[1].main, "a");
+        assert_eq!(out[1].group.as_deref(), Some("Verse 1"));
+        assert_eq!(out[2].main, "b");
+    }
+
+    #[test]
+    fn wrap_with_empty_bookends_skips_empty_input() {
+        let out = wrap_with_empty_bookends(vec![]);
+        assert!(out.is_empty(), "no bookends on empty input");
     }
 }
