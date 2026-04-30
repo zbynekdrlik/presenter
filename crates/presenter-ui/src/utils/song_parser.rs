@@ -254,6 +254,38 @@ fn hard_break_into(out: &mut Vec<String>, current: &mut String, word: &str, limi
     }
 }
 
+/// Split each section's `main` into successive 2-line chunks, emitting
+/// one slide per chunk. The first chunk inherits the original slide's
+/// `group`; subsequent chunks have `group = None` (the operator UI
+/// renders these as `--inherited` from the preceding effective group).
+/// Slides with empty `main` (e.g. an `Interlude` heading with no body)
+/// pass through unchanged.
+pub fn chunk_to_two_lines(slides: Vec<SlideInput>) -> Vec<SlideInput> {
+    let mut out = Vec::new();
+    for slide in slides {
+        if slide.main.is_empty() {
+            out.push(slide);
+            continue;
+        }
+        let lines: Vec<&str> = slide.main.split('\n').collect();
+        if lines.len() <= 2 {
+            out.push(slide);
+            continue;
+        }
+        let mut first = true;
+        for chunk in lines.chunks(2) {
+            out.push(SlideInput {
+                main: chunk.join("\n"),
+                translation: None,
+                stage: None,
+                group: if first { slide.group.clone() } else { None },
+            });
+            first = false;
+        }
+    }
+    out
+}
+
 /// Pad a leading 1-3 digit numeric prefix (followed by whitespace) to 3
 /// digits with leading zeros so songs sort correctly.
 ///
@@ -581,5 +613,77 @@ mod tests {
         let out = wrap_long_lines(vec![slide], 32);
         assert_eq!(out.len(), 1);
         assert_eq!(out[0].main, line, "30 Slovak codepoints fit at limit 32");
+    }
+
+    #[test]
+    fn chunk_to_two_lines_splits_six_line_section() {
+        let slide = SlideInput {
+            main: "l1\nl2\nl3\nl4\nl5\nl6".to_string(),
+            translation: None,
+            stage: None,
+            group: Some("Verse 1".to_string()),
+        };
+        let out = chunk_to_two_lines(vec![slide]);
+        assert_eq!(out.len(), 3);
+        assert_eq!(out[0].group.as_deref(), Some("Verse 1"));
+        assert_eq!(out[0].main, "l1\nl2");
+        assert_eq!(out[1].group, None, "second chunk inherits");
+        assert_eq!(out[1].main, "l3\nl4");
+        assert_eq!(out[2].group, None);
+        assert_eq!(out[2].main, "l5\nl6");
+    }
+
+    #[test]
+    fn chunk_to_two_lines_handles_odd_line_count() {
+        let slide = SlideInput {
+            main: "l1\nl2\nl3\nl4\nl5".to_string(),
+            translation: None,
+            stage: None,
+            group: Some("Chorus".to_string()),
+        };
+        let out = chunk_to_two_lines(vec![slide]);
+        assert_eq!(out.len(), 3);
+        assert_eq!(out[0].group.as_deref(), Some("Chorus"));
+        assert_eq!(out[0].main, "l1\nl2");
+        assert_eq!(out[1].group, None);
+        assert_eq!(out[1].main, "l3\nl4");
+        assert_eq!(out[2].group, None);
+        assert_eq!(out[2].main, "l5");
+    }
+
+    #[test]
+    fn chunk_to_two_lines_passes_through_short_sections() {
+        let two_line = SlideInput {
+            main: "a\nb".to_string(),
+            translation: None,
+            stage: None,
+            group: Some("Verse 1".to_string()),
+        };
+        let one_line = SlideInput {
+            main: "single".to_string(),
+            translation: None,
+            stage: None,
+            group: Some("Tag".to_string()),
+        };
+        let out = chunk_to_two_lines(vec![two_line.clone(), one_line.clone()]);
+        assert_eq!(out.len(), 2);
+        assert_eq!(out[0].main, "a\nb");
+        assert_eq!(out[0].group.as_deref(), Some("Verse 1"));
+        assert_eq!(out[1].main, "single");
+        assert_eq!(out[1].group.as_deref(), Some("Tag"));
+    }
+
+    #[test]
+    fn chunk_to_two_lines_preserves_empty_interlude() {
+        let slide = SlideInput {
+            main: String::new(),
+            translation: None,
+            stage: None,
+            group: Some("Interlude".to_string()),
+        };
+        let out = chunk_to_two_lines(vec![slide]);
+        assert_eq!(out.len(), 1);
+        assert_eq!(out[0].main, "");
+        assert_eq!(out[0].group.as_deref(), Some("Interlude"));
     }
 }
