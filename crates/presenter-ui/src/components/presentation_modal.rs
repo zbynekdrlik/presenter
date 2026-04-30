@@ -453,7 +453,7 @@ pub fn PresentationModals() -> impl IntoView {
                         <h3>"Create Presentation"</h3>
                     </header>
                     <div class="operator__library-edit-body">
-                        <label>
+                        <label style:display=move || if create_step.get() == "paste" { "none" } else { "block" }>
                             <span>"Presentation name"</span>
                             <input
                                 type="text"
