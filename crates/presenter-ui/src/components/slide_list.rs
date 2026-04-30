@@ -361,8 +361,17 @@ pub fn SlideList() -> impl IntoView {
                         let group_inherited =
                             effective_group_name.is_some() && !group_is_new;
 
-                        // Header badge: always render the effective group. Dim if inherited.
-                        let group_badge_text = effective_group_name.clone();
+                        // Header badge: render the effective group; dim if inherited.
+                        // Suppress entirely for "true blank" slides — empty main AND no
+                        // explicit group — so empty bookend slides created by the paste
+                        // pipeline (#275) render as truly empty rather than picking up
+                        // an inherited badge from the previous section.
+                        let group_badge_text =
+                            if main_text.is_empty() && explicit_group_name.is_none() {
+                                None
+                            } else {
+                                effective_group_name.clone()
+                            };
                         let group_badge_inherited = group_inherited;
 
                         // Edit-mode group input:
