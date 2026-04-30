@@ -9,7 +9,7 @@
 
 Make the operator's "create presentation from paste" flow do the right thing for spevnik song exports:
 
-1. Use the pasted `Title:` line as the presentation **name** (always wins; modal name input hidden in the paste sub-screen; fallback `"Untitled"` if no `Title:`).
+1. Use the pasted `Title:` line as the presentation **name** (always wins; modal name input hidden in the paste sub-screen; fallback `"Untitled"` if no `Title:`). Pad a leading numeric prefix in the title to 3 digits with leading zeros (e.g., `76 Arriba` → `076 Arriba`) so songs sort correctly in the operator's library list.
 2. **Word-wrap** any lyric line longer than the operator's `line_limit` (default 32 chars) so no slide triggers the "Line exceeds N characters" warning.
 3. Chunk each section's lyrics into slides of **at most 2 lines** each.
 4. Strip Unicode control characters (`Cc`) and zero-width characters from every line so stray bytes don't pollute slides.
@@ -57,7 +57,7 @@ Ja chválim Ho, ja chválim Ho
 Misc 1
 ```
 
-Expected output: presentation name `"76 Arriba"`, **15 slides** total — empty bookend, then 13 lyric slides each with ≤ 2 lines and no line exceeding `line_limit`, then empty bookend. Every slide displays without the `!` warning superscript.
+Expected output: presentation name `"076 Arriba"` (numeric prefix padded to 3 digits), **15 slides** total — empty bookend, then 13 lyric slides each with ≤ 2 lines and no line exceeding `line_limit`, then empty bookend. Every slide displays without the `!` warning superscript.
 
 ## Architecture
 
@@ -83,21 +83,49 @@ The modal calls these functions in `on_paste_confirm`, reads `line_limit` from `
 
 ### `extract_title(text: &str) -> Option<String>`
 
-Scans lines top-to-bottom, returns the trimmed content after the first case-insensitive `Title:` prefix. Returns `None` if no `Title:` line is found.
+Scans lines top-to-bottom, returns the trimmed content after the first case-insensitive `Title:` prefix, with the leading numeric prefix padded to 3 digits via `pad_title_number`. Returns `None` if no `Title:` line is found.
 
 ```rust
 pub fn extract_title(text: &str) -> Option<String> {
     text.lines().find_map(|line| {
         let trimmed = line.trim();
         let lower = trimmed.to_ascii_lowercase();
-        lower.strip_prefix("title:").map(|rest| rest.trim().to_string())
+        if !lower.starts_with("title:") {
+            return None;
+        }
+        let raw = trimmed[6..].trim(); // 6 = len("title:")
+        Some(pad_title_number(raw))
     })
+}
+
+/// Pad a leading 1-3 digit numeric prefix (followed by whitespace) to 3
+/// digits with leading zeros. Leaves 4+ digit prefixes and titles without
+/// a leading number unchanged. Examples:
+///   "76 Arriba"          → "076 Arriba"
+///   "6 Foo"              → "006 Foo"
+///   "102 10000 Armád"    → "102 10000 Armád"  (already 3 digits)
+///   "1234 Bar"           → "1234 Bar"          (4+ digits, untouched)
+///   "Arriba"             → "Arriba"            (no leading number)
+///   "76Arriba"           → "76Arriba"          (no whitespace separator)
+fn pad_title_number(title: &str) -> String {
+    let trimmed = title.trim();
+    if let Some(space_idx) = trimmed.find(char::is_whitespace) {
+        let (prefix, rest) = trimmed.split_at(space_idx);
+        if !prefix.is_empty()
+            && prefix.len() <= 3
+            && prefix.chars().all(|c| c.is_ascii_digit())
+        {
+            return format!("{prefix:0>3}{rest}");
+        }
+    }
+    trimmed.to_string()
 }
 ```
 
 Edge cases:
 - `Title:` with empty content → `Some("")`. Caller treats `Some("")` like `None` (fallback to `"Untitled"`).
 - Multiple `Title:` lines — first wins (rare in practice).
+- Padding only applies when the digits are followed by whitespace (so `76Arriba` is left unchanged because we cannot tell which characters are the number vs the name).
 
 ### `parse_song_text` — modified for control-char strip
 
@@ -285,7 +313,7 @@ The presentation rename flow is unchanged — the operator can rename via the ex
 
 ## Worked example — "76 Arriba"
 
-After `extract_title`: name = `"76 Arriba"`.
+After `extract_title`: name = `"076 Arriba"` (the `76` is padded to `076`).
 
 After `parse_song_text` (5 sections): Verse 1 (4 lines), Pre-Chorus (6 lines), Chorus (8 lines), Verse 2 (4 lines), Bridge (2 lines, first is 35 chars).
 
@@ -319,30 +347,35 @@ Operator card UI numbers them 1..15. No `!` warning superscript anywhere because
 
 | # | Test | What it verifies |
 |---|------|------------------|
-| 1 | `extract_title_finds_first_title_line` | `Title: 76 Arriba\n...` → `Some("76 Arriba")` |
-| 2 | `extract_title_returns_none_when_absent` | Input with no `Title:` → `None` |
-| 3 | `extract_title_is_case_insensitive` | `TITLE: foo` → `Some("foo")` |
-| 4 | `extract_title_strips_surrounding_whitespace` | `Title:   foo  ` → `Some("foo")` |
-| 5 | `wrap_long_lines_word_wraps_at_limit` | "Ak Boh je za mňa, kto je proti mne" (35) at 32 → 2 lines, both ≤ 32 |
-| 6 | `wrap_long_lines_passes_through_short_lines` | All lines ≤ limit → unchanged |
-| 7 | `wrap_long_lines_hard_breaks_oversize_word` | Single 50-char word at 32 → 2 lines (32 + 18) |
-| 8 | `wrap_long_lines_preserves_unicode_chars` | Slovak diacritics counted as 1 char (`chars().count()`) |
-| 9 | `chunk_to_two_lines_splits_six_line_section` | 6 lines → 3 slides; first has group, rest have `None` |
-| 10 | `chunk_to_two_lines_handles_odd_line_count` | 5 lines → 3 slides; last has 1 line |
-| 11 | `chunk_to_two_lines_passes_through_short_sections` | 2-line and 1-line sections unchanged |
-| 12 | `chunk_to_two_lines_preserves_empty_interlude` | `group="Interlude", main=""` slide unchanged |
-| 13 | `wrap_with_empty_bookends_adds_front_and_back` | N input → N+2 |
-| 14 | `wrap_with_empty_bookends_skips_empty_input` | Empty input → empty output |
-| 15 | `parse_song_text_strips_control_chars` | Line containing `\x02` (STX), BOM, ZWSP → cleaned |
-| 16 | `parse_song_text_skips_lines_that_become_empty_after_strip` | Line of just `\x02` → no slide |
-| 17 | **End-to-end pipeline regression: user's `76 Arriba` paste** → name `"76 Arriba"`, 15 slides matching the worked example exactly (groups, line counts, bookends) |
+| 1 | `extract_title_pads_two_digit_prefix` | `Title: 76 Arriba` → `Some("076 Arriba")` |
+| 2 | `extract_title_pads_one_digit_prefix` | `Title: 6 Foo` → `Some("006 Foo")` |
+| 3 | `extract_title_leaves_three_digit_prefix_unchanged` | `Title: 102 10000 Armád` → `Some("102 10000 Armád")` |
+| 4 | `extract_title_leaves_four_digit_prefix_unchanged` | `Title: 1234 Bar` → `Some("1234 Bar")` |
+| 5 | `extract_title_no_leading_number_unchanged` | `Title: Arriba` → `Some("Arriba")` |
+| 6 | `extract_title_no_space_after_digits_unchanged` | `Title: 76Arriba` → `Some("76Arriba")` |
+| 7 | `extract_title_returns_none_when_absent` | Input with no `Title:` → `None` |
+| 8 | `extract_title_is_case_insensitive` | `TITLE: foo` → `Some("foo")` |
+| 9 | `extract_title_strips_surrounding_whitespace` | `Title:   foo  ` → `Some("foo")` |
+| 10 | `wrap_long_lines_word_wraps_at_limit` | "Ak Boh je za mňa, kto je proti mne" (35) at 32 → 2 lines, both ≤ 32 |
+| 11 | `wrap_long_lines_passes_through_short_lines` | All lines ≤ limit → unchanged |
+| 12 | `wrap_long_lines_hard_breaks_oversize_word` | Single 50-char word at 32 → 2 lines (32 + 18) |
+| 13 | `wrap_long_lines_preserves_unicode_chars` | Slovak diacritics counted as 1 char (`chars().count()`) |
+| 14 | `chunk_to_two_lines_splits_six_line_section` | 6 lines → 3 slides; first has group, rest have `None` |
+| 15 | `chunk_to_two_lines_handles_odd_line_count` | 5 lines → 3 slides; last has 1 line |
+| 16 | `chunk_to_two_lines_passes_through_short_sections` | 2-line and 1-line sections unchanged |
+| 17 | `chunk_to_two_lines_preserves_empty_interlude` | `group="Interlude", main=""` slide unchanged |
+| 18 | `wrap_with_empty_bookends_adds_front_and_back` | N input → N+2 |
+| 19 | `wrap_with_empty_bookends_skips_empty_input` | Empty input → empty output |
+| 20 | `parse_song_text_strips_control_chars` | Line containing `\x02` (STX), BOM, ZWSP → cleaned |
+| 21 | `parse_song_text_skips_lines_that_become_empty_after_strip` | Line of just `\x02` → no slide |
+| 22 | **End-to-end pipeline regression: user's `76 Arriba` paste** → name `"076 Arriba"` (padded), 15 slides matching the worked example exactly (groups, line counts, bookends) |
 
 ### E2E test update — `tests/e2e/wasm-presentation-crud.spec.ts:430`
 
 Replace the test body with the canonical `76 Arriba` paste. Updated assertions:
 
 - The name input is hidden when the paste sub-screen is active (`expect(page.locator('[data-role="presentation-create-name"]')).toBeHidden()`).
-- After confirm: presentation name in the operator UI is `"76 Arriba"`.
+- After confirm: presentation name in the operator UI is `"076 Arriba"` (the leading `76` is padded to `076`).
 - Slide count is **15**.
 - First and last slides have empty `main` (bookends).
 - Slide 12's main is exactly `"Ak Boh je za mňa, kto je\nproti mne"` (proves wrap_long_lines worked).
