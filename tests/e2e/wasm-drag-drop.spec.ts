@@ -348,6 +348,121 @@ test.describe("WASM Operator Drag-Drop", () => {
     );
   });
 
+  // Regression guard for issue #274: dragging a search result over a
+  // specific entry inside the open playlist must show the line indicator
+  // and insert the new entry at that exact position on drop.
+  test("drag search result into specific position in open playlist (#274)", async ({
+    page,
+  }) => {
+    const consoleMessages: string[] = [];
+    page.on("console", (msg) => {
+      if (msg.type() === "error" || msg.type() === "warning") {
+        consoleMessages.push(`[${msg.type()}] ${msg.text()}`);
+      }
+    });
+
+    await initPage(page);
+
+    // Pick the first playlist and open it.
+    const playlist = page.locator('[data-role="playlist-item"]').first();
+    const playlistCount = await playlist.count();
+    if (playlistCount === 0) {
+      test.skip(true, "No playlists available for this test");
+      return;
+    }
+    await playlist.click();
+
+    // Wait for the playlist to become active and entries to render.
+    await page.waitForFunction(
+      () =>
+        document.querySelectorAll(
+          '[data-role="presentation-item"][data-entry-index]',
+        ).length >= 2,
+      { timeout: 15_000 },
+    );
+
+    // Snapshot the playlist entries before drop.
+    const entriesBefore = await page.evaluate(() =>
+      Array.from(
+        document.querySelectorAll(
+          '[data-role="presentation-item"][data-entry-index]',
+        ),
+      ).map((el) => ({
+        entryIndex: el.getAttribute("data-entry-index"),
+        presentationId: el.getAttribute("data-presentation-id"),
+      })),
+    );
+    if (entriesBefore.length < 2) {
+      test.skip(true, "Need at least 2 entries in playlist for this test");
+      return;
+    }
+
+    // Search for ANY presentation. We will drag the first search-result
+    // presentation onto entry index 1 in the playlist (above the second
+    // entry) and assert it lands at index 1 of the resulting list.
+    const searchInput = page.locator('[data-role="global-search-query"]');
+    await searchInput.fill("a"); // broad query; 1+ results expected
+    await page.waitForSelector(
+      '[data-role="search-result-item"][data-kind="presentation"]',
+      { timeout: 10_000 },
+    );
+
+    const searchResult = page
+      .locator('[data-role="search-result-item"][data-kind="presentation"]')
+      .first();
+    const draggedPresId = await searchResult.getAttribute(
+      "data-presentation-id",
+    );
+    expect(draggedPresId, "search result must carry data-presentation-id")
+      .not.toBeNull();
+
+    const targetEntry = page.locator(
+      '[data-role="presentation-item"][data-entry-index="1"]',
+    );
+    await expect(targetEntry).toBeVisible();
+
+    // Drag the search result over the second entry. dragTo dispatches
+    // dragstart on the source, dragover/dragenter on the target, and drop
+    // on the target — exercising the real handler stack.
+    await searchResult.dragTo(targetEntry, {
+      // Drop in the TOP HALF of the target so the handler sets
+      // data-drop-position="before" → insertion at index 1.
+      targetPosition: { x: 50, y: 5 },
+    });
+
+    // Wait until the playlist re-renders with one more entry.
+    await page.waitForFunction(
+      (expectedCount) =>
+        document.querySelectorAll(
+          '[data-role="presentation-item"][data-entry-index]',
+        ).length === expectedCount,
+      entriesBefore.length + 1,
+      { timeout: 10_000 },
+    );
+
+    // Snapshot AFTER drop.
+    const entriesAfter = await page.evaluate(() =>
+      Array.from(
+        document.querySelectorAll(
+          '[data-role="presentation-item"][data-entry-index]',
+        ),
+      ).map((el) => ({
+        entryIndex: el.getAttribute("data-entry-index"),
+        presentationId: el.getAttribute("data-presentation-id"),
+      })),
+    );
+
+    // Expect: original entry that was at index 0 still at 0; the dropped
+    // presentation now at index 1; original index-1 pushed to index 2.
+    expect(entriesAfter).toHaveLength(entriesBefore.length + 1);
+    expect(entriesAfter[0].presentationId).toBe(entriesBefore[0].presentationId);
+    expect(entriesAfter[1].presentationId).toBe(draggedPresId);
+    expect(entriesAfter[2].presentationId).toBe(entriesBefore[1].presentationId);
+
+    // Browser console must remain clean.
+    expect(consoleMessages).toEqual([]);
+  });
+
   test("playlist entry is draggable when in playlist context", async ({
     page,
   }) => {
