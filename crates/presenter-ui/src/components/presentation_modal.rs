@@ -234,14 +234,22 @@ pub fn PresentationModals() -> impl IntoView {
                 Some(id) => id,
                 None => return,
             };
-            let name = create_name.get_untracked().trim().to_string();
-            let name = if name.is_empty() {
-                "New Presentation".to_string()
-            } else {
-                name
-            };
             let text = op.paste_text.get_untracked();
-            let slides = crate::utils::test_helpers::parse_song_text(&text);
+            let line_limit = op.line_limit.get_untracked() as usize;
+
+            // Title from the paste always wins; fallback to "Untitled" if
+            // the paste has no Title: line (operator can rename via the
+            // existing rename flow after creation).
+            let name = crate::utils::song_parser::extract_title(&text)
+                .filter(|s| !s.is_empty())
+                .unwrap_or_else(|| "Untitled".to_string());
+
+            // Run the full pipeline.
+            let slides = crate::utils::song_parser::parse_song_text(&text);
+            let slides = crate::utils::song_parser::wrap_long_lines(slides, line_limit);
+            let slides = crate::utils::song_parser::chunk_to_two_lines(slides);
+            let slides = crate::utils::song_parser::wrap_with_empty_bookends(slides);
+
             if slides.is_empty() {
                 return;
             }
@@ -445,7 +453,7 @@ pub fn PresentationModals() -> impl IntoView {
                         <h3>"Create Presentation"</h3>
                     </header>
                     <div class="operator__library-edit-body">
-                        <label>
+                        <label style:display=move || if create_step.get() == "paste" { "none" } else { "block" }>
                             <span>"Presentation name"</span>
                             <input
                                 type="text"

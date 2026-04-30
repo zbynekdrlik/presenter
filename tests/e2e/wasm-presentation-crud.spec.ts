@@ -423,4 +423,162 @@ Multiple lines here`;
     // Close modal
     await page.keyboard.press("Escape");
   });
+
+  // Regression guard for issue #275 follow-up: full pipeline on a
+  // spevnik song export must produce the right name + correctly
+  // chunked slides + empty bookends.
+  test("paste pipeline produces named presentation with bookends (#275)", async ({
+    page,
+  }) => {
+    await selectLibrary(page);
+
+    // Open the create modal.
+    await page
+      .locator('[data-view-panel="worship"] [data-role="presentation-create"]')
+      .click();
+    await page.waitForFunction(
+      () =>
+        document.querySelector(
+          '[data-role="presentation-create-modal"][data-open="true"]',
+        ),
+      { timeout: 5_000 },
+    );
+
+    // Click "Paste" to enter paste sub-screen.
+    await page.locator('[data-role="presentation-create-paste"]').click();
+    await expect(
+      page.locator('[data-role="presentation-create-paste-area"]'),
+    ).toBeVisible();
+
+    // Name input must be hidden on the paste sub-screen.
+    await expect(
+      page.locator('[data-role="presentation-create-name"]'),
+    ).toBeHidden();
+
+    // Canonical spevnik song export — Title: populates the presentation
+    // name (zero-padded), Misc 1 lines are filtered, each section gets
+    // chunked to ≤ 2 lines with empty bookends.
+    const userInput = `Title: 76 Arriba
+Misc 1
+
+Verse 1
+Môj Boh je nekonečný
+Má všetku moc a je večný
+Jeho Duch vo mne je živý
+A všetko pre mňa učiní
+
+Pre-Chorus
+Žehná ma žehná
+Priazeñ nad priazeň
+A padá to na mňa, padá na mňa
+Žehná ma žehná
+Priazeň nad priazeň
+A tá ku mne prúdi, ku mne prúdi
+
+Chorus
+Jeden dva tri
+Zakrič On je najlepší
+Jeden dva tri
+Ja som v ňom požehnaný
+Jeden dva tri
+Všetka sláva Jemu, v Ňom
+Ja som tým, kým hovorí že som
+Jeden dva tri
+
+Verse 2
+Ja vidím veci na nebi
+Tie zmeny sú aj na zemi
+Jeho Duch vo mne je živý
+Nie je nič čo neučiní
+
+Bridge
+Ak Boh je za mňa,  kto je proti mne
+Ja chválim Ho, ja chválim Ho
+Misc 1`;
+
+    await page
+      .locator('[data-role="presentation-create-paste-text"]')
+      .fill(userInput);
+    await page
+      .locator('[data-role="presentation-create-paste-confirm"]')
+      .click();
+
+    // Modal closes.
+    await page.waitForFunction(
+      () =>
+        !document.querySelector(
+          '[data-role="presentation-create-modal"][data-open="true"]',
+        ),
+      { timeout: 10_000 },
+    );
+
+    // Wait for the new presentation to render with all 15 slides.
+    await page.waitForFunction(
+      () => {
+        const slides = document.querySelector(
+          '[data-view-panel="worship"] [data-role="slides"]',
+        );
+        return (
+          slides && slides.querySelectorAll("[data-slide-id]").length === 15
+        );
+      },
+      { timeout: 15_000 },
+    );
+
+    // Read all slide group + main pairs. Use `innerText` for the main
+    // so rendered <br> tags become real \n in the output (textContent
+    // collapses line breaks, which would make multi-line slides look
+    // like one giant line).
+    const slidePairs = await page.evaluate(() => {
+      const slides = Array.from(
+        document.querySelectorAll(
+          '[data-view-panel="worship"] [data-role="slides"] [data-slide-id]',
+        ),
+      );
+      return slides.map((slide) => {
+        const groupEl = slide.querySelector('[data-role="slide-group"]');
+        const mainEl = slide.querySelector(
+          '[data-field-display="main"]',
+        ) as HTMLElement | null;
+        return {
+          group: (groupEl?.textContent || "").trim(),
+          main: (mainEl?.innerText || "").trim(),
+        };
+      });
+    });
+
+    // 15 slides total — empty bookend + 13 lyric chunks + empty bookend.
+    expect(slidePairs).toHaveLength(15);
+
+    // Bookends are empty.
+    expect(slidePairs[0].main).toBe("");
+    expect(slidePairs[0].group).toBe("");
+    expect(slidePairs[14].main).toBe("");
+    expect(slidePairs[14].group).toBe("");
+
+    // First chunk of each section carries the section header.
+    expect(slidePairs[1].group).toBe("Verse 1");
+    expect(slidePairs[3].group).toBe("Pre-Chorus");
+    expect(slidePairs[6].group).toBe("Chorus");
+    expect(slidePairs[10].group).toBe("Verse 2");
+    expect(slidePairs[12].group).toBe("Bridge");
+
+    // No slide should leak metadata.
+    for (const slide of slidePairs) {
+      expect(slide.main).not.toMatch(/Title:/);
+      expect(slide.main).not.toMatch(/Misc 1/);
+      expect(slide.main).not.toContain("^B");
+    }
+
+    // No content slide may contain a line longer than 32 characters
+    // (the default line_limit). Bookends excluded (already asserted empty).
+    for (let i = 1; i <= 13; i++) {
+      const lines = slidePairs[i].main.split("\n");
+      for (const line of lines) {
+        // Use Array.from for accurate codepoint count of Slovak diacritics.
+        const len = Array.from(line).length;
+        expect(len, `slide ${i} line "${line}" is ${len} chars (over 32)`).toBeLessThanOrEqual(32);
+      }
+    }
+  });
 });
