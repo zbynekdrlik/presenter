@@ -49,6 +49,8 @@ pub fn parse_song_text(text: &str) -> Vec<SlideInput> {
             continue;
         }
 
+        // Push the sanitized line (NOT trimmed) so leading indentation
+        // on indented lyric lines is preserved.
         current_main.push(sanitized);
     }
 
