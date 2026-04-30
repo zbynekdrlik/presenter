@@ -18,7 +18,26 @@ pub fn parse_song_text(text: &str) -> Vec<SlideInput> {
     let mut current_main: Vec<String> = Vec::new();
 
     for raw_line in text.lines() {
-        let trimmed = raw_line.trim();
+        // Originally-blank lines (whitespace only) flush the current slide
+        // — even if sanitization would later collapse a non-blank line to
+        // empty, that's a different signal.
+        if raw_line.trim().is_empty() {
+            if current_group.is_some() || !current_main.is_empty() {
+                flush_slide(&mut slides, &mut current_group, &mut current_main);
+            }
+            continue;
+        }
+
+        // Strip Unicode control + zero-width chars so stray bytes from any
+        // pasted source don't pollute slides.
+        let sanitized = sanitize_line(raw_line);
+        let trimmed = sanitized.trim();
+
+        // If sanitization left only whitespace, the line was entirely a
+        // stray control byte — skip silently without flushing.
+        if trimmed.is_empty() {
+            continue;
+        }
 
         if is_metadata_line(trimmed) {
             continue;
@@ -30,15 +49,7 @@ pub fn parse_song_text(text: &str) -> Vec<SlideInput> {
             continue;
         }
 
-        if trimmed.is_empty() {
-            // Only flush if we've accumulated content; otherwise ignore.
-            if current_group.is_some() || !current_main.is_empty() {
-                flush_slide(&mut slides, &mut current_group, &mut current_main);
-            }
-            continue;
-        }
-
-        current_main.push(raw_line.to_string());
+        current_main.push(sanitized);
     }
 
     flush_slide(&mut slides, &mut current_group, &mut current_main);
@@ -126,6 +137,20 @@ fn is_metadata_line(line: &str) -> bool {
         }
     }
     false
+}
+
+/// Strip Unicode control chars (Cc category) and zero-width chars (BOM,
+/// U+200B–200D) from a line. Used to clean lyric lines before pushing
+/// them onto a slide so stray bytes from any pasted source (web pages,
+/// Word, ProPresenter) don't render as a tofu/square character on stage.
+fn sanitize_line(line: &str) -> String {
+    line.chars()
+        .filter(|c| !c.is_control() && !is_zero_width(*c))
+        .collect()
+}
+
+fn is_zero_width(c: char) -> bool {
+    matches!(c, '\u{FEFF}' | '\u{200B}' | '\u{200C}' | '\u{200D}')
 }
 
 /// Extract the song title from the first `Title:` line in the input.
@@ -378,5 +403,27 @@ mod tests {
             extract_title("Title:   foo bar  "),
             Some("foo bar".to_string())
         );
+    }
+
+    #[test]
+    fn parse_song_text_strips_control_chars_from_lyric_lines() {
+        // STX (\x02), BOM (\u{FEFF}), and ZWSP (\u{200B}) all stripped;
+        // visible content survives.
+        let input = "Verse 1\n\u{FEFF}lyric\u{200B} one\x02";
+        let slides = parse_song_text(input);
+        assert_eq!(slides.len(), 1);
+        assert_eq!(slides[0].group.as_deref(), Some("Verse 1"));
+        assert_eq!(slides[0].main, "lyric one");
+    }
+
+    #[test]
+    fn parse_song_text_skips_lines_that_become_empty_after_strip() {
+        // A line that is ONLY a control byte should not produce a slide
+        // and should not flush an in-progress section.
+        let input = "Verse 1\nlyric a\n\x02\nlyric b";
+        let slides = parse_song_text(input);
+        assert_eq!(slides.len(), 1, "stray \\x02 line should not flush");
+        assert_eq!(slides[0].group.as_deref(), Some("Verse 1"));
+        assert_eq!(slides[0].main, "lyric a\nlyric b");
     }
 }
