@@ -712,12 +712,46 @@ test.describe("WASM Operator Drag-Drop", () => {
 
     const tailSpacer = page.locator('[data-role="tail-spacer"]');
     await expect(tailSpacer).toBeAttached({ timeout: 5_000 });
-    // Spacer is 16px tall — anchor drop at its center; force: true bypasses
-    // strict actionability so Playwright doesn't bail on the small target.
-    await searchResult.dragTo(tailSpacer, {
-      targetPosition: { x: 50, y: 8 },
-      force: true,
-    });
+    // Playwright's dragTo to a 16px transparent target at the bottom of
+    // a possibly-scrolled container is unreliable in CI even with
+    // force+targetPosition. Dispatch the HTML5 drag chain directly via
+    // page.evaluate — same DataTransfer threaded through dragstart on
+    // the source and dragover/drop on the spacer.
+    await page.evaluate((draggedId) => {
+      const source = document.querySelector(
+        '[data-role="search-result-item"][data-kind="presentation"]',
+      );
+      const target = document.querySelector('[data-role="tail-spacer"]');
+      if (!source || !target) return;
+      const dt = new DataTransfer();
+      dt.setData("application/x-presentation-id", draggedId as string);
+      dt.setData("application/x-presenter-search", draggedId as string);
+      source.dispatchEvent(
+        new DragEvent("dragstart", {
+          dataTransfer: dt,
+          bubbles: true,
+          cancelable: true,
+        }),
+      );
+      target.dispatchEvent(
+        new DragEvent("dragover", {
+          dataTransfer: dt,
+          bubbles: true,
+          cancelable: true,
+          clientY: target.getBoundingClientRect().top + 4,
+        }),
+      );
+      target.dispatchEvent(
+        new DragEvent("drop", {
+          dataTransfer: dt,
+          bubbles: true,
+          cancelable: true,
+        }),
+      );
+      source.dispatchEvent(
+        new DragEvent("dragend", { dataTransfer: dt, bubbles: true }),
+      );
+    }, draggedPresId);
 
     await page.waitForFunction(
       (expected) =>
