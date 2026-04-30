@@ -234,14 +234,22 @@ pub fn PresentationModals() -> impl IntoView {
                 Some(id) => id,
                 None => return,
             };
-            let name = create_name.get_untracked().trim().to_string();
-            let name = if name.is_empty() {
-                "New Presentation".to_string()
-            } else {
-                name
-            };
             let text = op.paste_text.get_untracked();
+            let line_limit = op.line_limit.get_untracked() as usize;
+
+            // Title from the paste always wins; fallback to "Untitled" if
+            // the paste has no Title: line (operator can rename via the
+            // existing rename flow after creation).
+            let name = crate::utils::song_parser::extract_title(&text)
+                .filter(|s| !s.is_empty())
+                .unwrap_or_else(|| "Untitled".to_string());
+
+            // Run the full pipeline.
             let slides = crate::utils::song_parser::parse_song_text(&text);
+            let slides = crate::utils::song_parser::wrap_long_lines(slides, line_limit);
+            let slides = crate::utils::song_parser::chunk_to_two_lines(slides);
+            let slides = crate::utils::song_parser::wrap_with_empty_bookends(slides);
+
             if slides.is_empty() {
                 return;
             }
