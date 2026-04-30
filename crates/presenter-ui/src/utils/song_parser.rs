@@ -740,4 +740,122 @@ mod tests {
         let out = wrap_with_empty_bookends(vec![]);
         assert!(out.is_empty(), "no bookends on empty input");
     }
+
+    #[test]
+    fn pipeline_user_76_arriba_paste_produces_correct_output() {
+        // Regression guard for issue #275 follow-up. Exercises the full
+        // pipeline (extract_title + parse_song_text +
+        // wrap_long_lines + chunk_to_two_lines + wrap_with_empty_bookends)
+        // on the user's canonical spevnik export.
+        let input = "Title: 76 Arriba\n\
+                     Misc 1\n\
+                     \n\
+                     Verse 1\n\
+                     Môj Boh je nekonečný\n\
+                     Má všetku moc a je večný\n\
+                     Jeho Duch vo mne je živý\n\
+                     A všetko pre mňa učiní\n\
+                     \n\
+                     Pre-Chorus\n\
+                     Žehná ma žehná\n\
+                     Priazeñ nad priazeň\n\
+                     A padá to na mňa, padá na mňa\n\
+                     Žehná ma žehná\n\
+                     Priazeň nad priazeň\n\
+                     A tá ku mne prúdi, ku mne prúdi\n\
+                     \n\
+                     Chorus\n\
+                     Jeden dva tri\n\
+                     Zakrič On je najlepší\n\
+                     Jeden dva tri\n\
+                     Ja som v ňom požehnaný\n\
+                     Jeden dva tri\n\
+                     Všetka sláva Jemu, v Ňom\n\
+                     Ja som tým, kým hovorí že som\n\
+                     Jeden dva tri\n\
+                     \n\
+                     Verse 2\n\
+                     Ja vidím veci na nebi\n\
+                     Tie zmeny sú aj na zemi\n\
+                     Jeho Duch vo mne je živý\n\
+                     Nie je nič čo neučiní\n\
+                     \n\
+                     Bridge\n\
+                     Ak Boh je za mňa,  kto je proti mne\n\
+                     Ja chválim Ho, ja chválim Ho\n\
+                     Misc 1\n";
+
+        // Title extraction with 2-digit padding.
+        let name = extract_title(input);
+        assert_eq!(name.as_deref(), Some("076 Arriba"));
+
+        // Run the full pipeline at line_limit 32.
+        let slides = parse_song_text(input);
+        let slides = wrap_long_lines(slides, 32);
+        let slides = chunk_to_two_lines(slides);
+        let slides = wrap_with_empty_bookends(slides);
+
+        // Total: empty + 13 lyric chunks + empty = 15.
+        assert_eq!(
+            slides.len(),
+            15,
+            "expected 15 slides, got {}: {:#?}",
+            slides.len(),
+            slides
+        );
+
+        // Bookends.
+        assert_eq!(slides[0].main, "");
+        assert!(slides[0].group.is_none(), "first bookend has no group");
+        assert_eq!(slides[14].main, "");
+        assert!(slides[14].group.is_none(), "last bookend has no group");
+
+        // First content slide is Verse 1, chunk 1.
+        assert_eq!(slides[1].group.as_deref(), Some("Verse 1"));
+
+        // Inherited groups: chunks 2+ of any section have group=None.
+        assert_eq!(slides[2].group, None, "Verse 1 chunk 2 inherits");
+
+        // Pre-Chorus first chunk is at index 3.
+        assert_eq!(slides[3].group.as_deref(), Some("Pre-Chorus"));
+
+        // Chorus first chunk is at index 6 (after Pre-Chorus's 3 chunks).
+        assert_eq!(slides[6].group.as_deref(), Some("Chorus"));
+
+        // Verse 2 first chunk is at index 10 (after Chorus's 4 chunks).
+        assert_eq!(slides[10].group.as_deref(), Some("Verse 2"));
+
+        // Bridge first chunk is at index 12 (after Verse 2's 2 chunks).
+        // Bridge's first input line was 35 chars at limit 32, so it
+        // wrapped — the chunked first slide may have either parts of
+        // the wrapped first line OR the wrapped line + the second line.
+        // Asserting its group + that all lines fit is enough.
+        assert_eq!(slides[12].group.as_deref(), Some("Bridge"));
+
+        // No content slide should contain Title:, Misc, ^B, or any line
+        // longer than line_limit (32). Bookends excluded.
+        for (idx, slide) in slides.iter().enumerate() {
+            assert!(
+                !slide.main.contains("Title:"),
+                "slide {idx} leaked 'Title:': {:?}",
+                slide.main
+            );
+            assert!(
+                !slide.main.to_ascii_lowercase().contains("misc "),
+                "slide {idx} leaked 'Misc': {:?}",
+                slide.main
+            );
+            assert!(
+                !slide.main.contains("^B"),
+                "slide {idx} leaked '^B': {:?}",
+                slide.main
+            );
+            for line in slide.main.split('\n') {
+                assert!(
+                    line.chars().count() <= 32,
+                    "slide {idx} line '{line}' exceeds 32 chars (line_limit)"
+                );
+            }
+        }
+    }
 }
