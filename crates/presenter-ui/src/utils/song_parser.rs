@@ -171,6 +171,79 @@ pub fn extract_title(text: &str) -> Option<String> {
     })
 }
 
+/// Word-aware greedy wrapping per `\n`-separated line, so every line in
+/// every slide's `main` fits within `line_limit` codepoints. Lines that
+/// already fit pass through unchanged. Single words longer than
+/// `line_limit` are hard-broken at the limit boundary. `line_limit == 0`
+/// is treated as "no wrapping" (defensive — keeps signature stable if
+/// the operator clears the setting).
+pub fn wrap_long_lines(slides: Vec<SlideInput>, line_limit: usize) -> Vec<SlideInput> {
+    if line_limit == 0 {
+        return slides;
+    }
+    slides
+        .into_iter()
+        .map(|slide| {
+            let wrapped: Vec<String> = slide
+                .main
+                .split('\n')
+                .flat_map(|line| wrap_one_line(line, line_limit))
+                .collect();
+            SlideInput {
+                main: wrapped.join("\n"),
+                ..slide
+            }
+        })
+        .collect()
+}
+
+fn wrap_one_line(line: &str, limit: usize) -> Vec<String> {
+    if line.chars().count() <= limit {
+        return vec![line.to_string()];
+    }
+    let mut out: Vec<String> = Vec::new();
+    let mut current = String::new();
+    for word in line.split_whitespace() {
+        let word_len = word.chars().count();
+        if current.is_empty() {
+            if word_len > limit {
+                hard_break_into(&mut out, &mut current, word, limit);
+            } else {
+                current.push_str(word);
+            }
+        } else if current.chars().count() + 1 + word_len <= limit {
+            current.push(' ');
+            current.push_str(word);
+        } else {
+            out.push(std::mem::take(&mut current));
+            if word_len > limit {
+                hard_break_into(&mut out, &mut current, word, limit);
+            } else {
+                current.push_str(word);
+            }
+        }
+    }
+    if !current.is_empty() {
+        out.push(current);
+    }
+    out
+}
+
+/// Hard-break an oversize word at codepoint boundaries. Pushes complete
+/// `limit`-sized pieces to `out` and leaves the trailing remainder in
+/// `current` so subsequent words can still accumulate onto the same line.
+fn hard_break_into(out: &mut Vec<String>, current: &mut String, word: &str, limit: usize) {
+    let chars: Vec<char> = word.chars().collect();
+    let mut idx = 0;
+    while chars.len() - idx > limit {
+        let piece: String = chars[idx..idx + limit].iter().collect();
+        out.push(piece);
+        idx += limit;
+    }
+    let remainder: String = chars[idx..].iter().collect();
+    *current = remainder;
+}
+
 /// Pad a leading 1-3 digit numeric prefix (followed by whitespace) to 3
 /// digits with leading zeros so songs sort correctly.
 ///
@@ -427,5 +500,76 @@ mod tests {
         assert_eq!(slides.len(), 1, "stray \\x02 line should not flush");
         assert_eq!(slides[0].group.as_deref(), Some("Verse 1"));
         assert_eq!(slides[0].main, "lyric a\nlyric b");
+    }
+
+    #[test]
+    fn wrap_long_lines_word_wraps_at_limit() {
+        let slide = SlideInput {
+            main: "Ak Boh je za mňa,  kto je proti mne".to_string(),
+            translation: None,
+            stage: None,
+            group: Some("Bridge".to_string()),
+        };
+        let out = wrap_long_lines(vec![slide], 32);
+        assert_eq!(out.len(), 1);
+        // Should wrap to >=2 lines, each ≤ 32 chars.
+        let lines: Vec<&str> = out[0].main.split('\n').collect();
+        assert!(lines.len() >= 2, "expected wrapping, got: {:?}", lines);
+        for line in &lines {
+            assert!(
+                line.chars().count() <= 32,
+                "wrapped line '{line}' exceeds 32 chars: {}",
+                line.chars().count()
+            );
+        }
+        // The original group should be preserved.
+        assert_eq!(out[0].group.as_deref(), Some("Bridge"));
+    }
+
+    #[test]
+    fn wrap_long_lines_passes_through_short_lines() {
+        let slide = SlideInput {
+            main: "short line\nanother short".to_string(),
+            translation: None,
+            stage: None,
+            group: Some("Verse 1".to_string()),
+        };
+        let out = wrap_long_lines(vec![slide.clone()], 32);
+        assert_eq!(out.len(), 1);
+        assert_eq!(out[0].main, slide.main);
+    }
+
+    #[test]
+    fn wrap_long_lines_hard_breaks_oversize_word() {
+        // Single 50-char word at limit 32 → 2 pieces (32 + 18).
+        let big_word: String = "a".repeat(50);
+        let slide = SlideInput {
+            main: big_word,
+            translation: None,
+            stage: None,
+            group: None,
+        };
+        let out = wrap_long_lines(vec![slide], 32);
+        let lines: Vec<&str> = out[0].main.split('\n').collect();
+        assert_eq!(lines.len(), 2);
+        assert_eq!(lines[0].chars().count(), 32);
+        assert_eq!(lines[1].chars().count(), 18);
+    }
+
+    #[test]
+    fn wrap_long_lines_counts_unicode_codepoints_not_bytes() {
+        // Slovak diacritics — each char is one codepoint (multi-byte UTF-8).
+        // 30 'á' chars = 30 codepoints = 60 bytes. At limit 32, this should
+        // pass through (≤ limit by codepoint), not wrap.
+        let line: String = "á".repeat(30);
+        let slide = SlideInput {
+            main: line.clone(),
+            translation: None,
+            stage: None,
+            group: None,
+        };
+        let out = wrap_long_lines(vec![slide], 32);
+        assert_eq!(out.len(), 1);
+        assert_eq!(out[0].main, line, "30 Slovak codepoints fit at limit 32");
     }
 }
