@@ -105,13 +105,14 @@ fn is_metadata_line(line: &str) -> bool {
     if line.is_empty() {
         return false;
     }
-    let lower = line.to_ascii_lowercase();
-    if lower.starts_with("title:") {
-        return true;
-    }
-    // ^B / ^A / ^C etc. — exactly two chars: caret + uppercase ASCII letter.
+    // Cheapest check first: ^B / ^A / ^C etc. — exactly two chars,
+    // caret + uppercase ASCII letter. No allocation needed.
     let bytes = line.as_bytes();
     if bytes.len() == 2 && bytes[0] == b'^' && bytes[1].is_ascii_uppercase() {
+        return true;
+    }
+    let lower = line.to_ascii_lowercase();
+    if lower.starts_with("title:") {
         return true;
     }
     // "Misc 1", "MISC 12", etc.
@@ -177,9 +178,10 @@ mod tests {
         );
         // No slide's main contains Title:, Misc, or ^B.
         for s in &slides {
+            let main_lower = s.main.to_ascii_lowercase();
             assert!(
-                !s.main.to_lowercase().contains("title:")
-                    && !s.main.to_lowercase().contains("misc ")
+                !main_lower.contains("title:")
+                    && !main_lower.contains("misc ")
                     && !s.main.contains("^B"),
                 "slide leaked metadata: {:?}",
                 s
