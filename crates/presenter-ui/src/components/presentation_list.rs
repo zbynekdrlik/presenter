@@ -1,4 +1,5 @@
 use leptos::prelude::*;
+use wasm_bindgen::JsCast;
 
 use crate::components::modal;
 use crate::state::operator::OperatorState;
@@ -15,6 +16,30 @@ fn set_dragging_entry(id: Option<String>) {
 
 fn get_dragging_entry() -> Option<String> {
     DRAGGING_ENTRY_ID.with(|cell| cell.borrow().clone())
+}
+
+/// Compute "before"/"after" insertion side from the cursor's Y position
+/// relative to the target entry's bounding-box midline. Returns `"before"`
+/// if the cursor is in the top half, `"after"` if in the bottom half.
+fn drop_side_for_event(ev: &web_sys::DragEvent, target: &web_sys::Element) -> &'static str {
+    let rect = target.get_bounding_client_rect();
+    let midline = rect.top() + rect.height() / 2.0;
+    if (ev.client_y() as f64) < midline {
+        "before"
+    } else {
+        "after"
+    }
+}
+
+/// Read the `data-drop-position` attribute set by the dragover handler,
+/// then clear it. Returns the position string or "after" as a safe
+/// default if the attribute is missing.
+fn take_drop_position(target: &web_sys::Element) -> String {
+    let pos = target
+        .get_attribute("data-drop-position")
+        .unwrap_or_else(|| "after".to_string());
+    let _ = target.remove_attribute("data-drop-position");
+    pos
 }
 
 #[component]
@@ -199,9 +224,35 @@ pub fn PresentationList() -> impl IntoView {
                                                 on:dragend=move |_| {
                                                     set_dragging_entry(None);
                                                 }
-                                                on:dragover=move |ev: web_sys::DragEvent| {
-                                                    if get_dragging_entry().is_some() {
+                                                on:dragover={
+                                                    let op_for_dragover = op.clone();
+                                                    move |ev: web_sys::DragEvent| {
+                                                        let is_reorder = get_dragging_entry().is_some();
+                                                        let is_search = op_for_dragover.dragging_from_search.get_untracked();
+                                                        if !is_reorder && !is_search {
+                                                            return;
+                                                        }
                                                         ev.prevent_default();
+                                                        // Only the search-drag path renders the line indicator.
+                                                        // Within-playlist reorder uses slot-replacement (existing behavior).
+                                                        if !is_search {
+                                                            return;
+                                                        }
+                                                        if let Some(target) = ev
+                                                            .current_target()
+                                                            .and_then(|t| t.dyn_into::<web_sys::Element>().ok())
+                                                        {
+                                                            let side = drop_side_for_event(&ev, &target);
+                                                            let _ = target.set_attribute("data-drop-position", side);
+                                                        }
+                                                    }
+                                                }
+                                                on:dragleave=move |ev: web_sys::DragEvent| {
+                                                    if let Some(target) = ev
+                                                        .current_target()
+                                                        .and_then(|t| t.dyn_into::<web_sys::Element>().ok())
+                                                    {
+                                                        let _ = target.remove_attribute("data-drop-position");
                                                     }
                                                 }
                                                 on:drop={
@@ -209,8 +260,73 @@ pub fn PresentationList() -> impl IntoView {
                                                     let playlist_id = playlist_id_reorder.clone();
                                                     let selected_playlist = ctx.selected_playlist;
                                                     let playlists = ctx.playlists;
+                                                    let toast_message = ctx.toast_message;
+                                                    let toast_variant = ctx.toast_variant;
+                                                    let op_for_drop = op.clone();
+                                                    let target_index = idx;
                                                     move |ev: web_sys::DragEvent| {
                                                         ev.prevent_default();
+
+                                                        // ----- New: search-drag path (issue #274) -----
+                                                        if op_for_drop.dragging_from_search.get_untracked() {
+                                                            let drop_position = ev
+                                                                .current_target()
+                                                                .and_then(|t| t.dyn_into::<web_sys::Element>().ok())
+                                                                .map(|target| take_drop_position(&target))
+                                                                .unwrap_or_else(|| "after".to_string());
+
+                                                            let presentation_id = ev
+                                                                .data_transfer()
+                                                                .and_then(|dt| {
+                                                                    dt.get_data("application/x-presentation-id").ok()
+                                                                })
+                                                                .filter(|s| !s.is_empty());
+
+                                                            if let Some(presentation_id) = presentation_id {
+                                                                let insert_idx = if drop_position == "before" {
+                                                                    target_index
+                                                                } else {
+                                                                    target_index + 1
+                                                                };
+                                                                let playlist_id = playlist_id.clone();
+                                                                leptos::task::spawn_local(async move {
+                                                                    let current = selected_playlist.get_untracked();
+                                                                    if let Some(pl) = current {
+                                                                        let mut entries: Vec<_> = pl.entries.iter().map(entry_to_payload).collect();
+                                                                        let insert_idx = insert_idx.min(entries.len());
+                                                                        entries.insert(
+                                                                            insert_idx,
+                                                                            crate::api::playlists::PlaylistEntryPayload::Presentation {
+                                                                                entry_id: None,
+                                                                                presentation_id,
+                                                                            },
+                                                                        );
+                                                                        match crate::api::playlists::replace_entries(&playlist_id, entries).await {
+                                                                            Ok(updated) => {
+                                                                                selected_playlist.set(Some(updated));
+                                                                                toast_variant.set("success".to_string());
+                                                                                toast_message.set(Some(
+                                                                                    "Added presentation to playlist".to_string(),
+                                                                                ));
+                                                                                if let Ok(pls) = crate::api::playlists::list_playlists().await {
+                                                                                    playlists.set(pls);
+                                                                                }
+                                                                            }
+                                                                            Err(e) => {
+                                                                                toast_variant.set("error".to_string());
+                                                                                toast_message.set(Some(format!("Error: {e}")));
+                                                                            }
+                                                                        }
+                                                                    }
+                                                                });
+                                                            }
+
+                                                            op_for_drop.dragging_from_search.set(false);
+                                                            op_for_drop.search_dragging.set(false);
+                                                            return;
+                                                        }
+
+                                                        // ----- Existing: within-playlist reorder path (UNCHANGED) -----
                                                         if let Some(dragged_id) = get_dragging_entry() {
                                                             if dragged_id == target_entry_id { return; }
                                                             let playlist_id = playlist_id.clone();
@@ -381,9 +497,35 @@ pub fn PresentationList() -> impl IntoView {
                                                 on:dragend=move |_| {
                                                     set_dragging_entry(None);
                                                 }
-                                                on:dragover=move |ev: web_sys::DragEvent| {
-                                                    if get_dragging_entry().is_some() {
+                                                on:dragover={
+                                                    let op_for_dragover = op.clone();
+                                                    move |ev: web_sys::DragEvent| {
+                                                        let is_reorder = get_dragging_entry().is_some();
+                                                        let is_search = op_for_dragover.dragging_from_search.get_untracked();
+                                                        if !is_reorder && !is_search {
+                                                            return;
+                                                        }
                                                         ev.prevent_default();
+                                                        // Only the search-drag path renders the line indicator.
+                                                        // Within-playlist reorder uses slot-replacement (existing behavior).
+                                                        if !is_search {
+                                                            return;
+                                                        }
+                                                        if let Some(target) = ev
+                                                            .current_target()
+                                                            .and_then(|t| t.dyn_into::<web_sys::Element>().ok())
+                                                        {
+                                                            let side = drop_side_for_event(&ev, &target);
+                                                            let _ = target.set_attribute("data-drop-position", side);
+                                                        }
+                                                    }
+                                                }
+                                                on:dragleave=move |ev: web_sys::DragEvent| {
+                                                    if let Some(target) = ev
+                                                        .current_target()
+                                                        .and_then(|t| t.dyn_into::<web_sys::Element>().ok())
+                                                    {
+                                                        let _ = target.remove_attribute("data-drop-position");
                                                     }
                                                 }
                                                 on:drop={
@@ -391,8 +533,73 @@ pub fn PresentationList() -> impl IntoView {
                                                     let playlist_id = playlist_id_reorder.clone();
                                                     let selected_playlist = ctx.selected_playlist;
                                                     let playlists = ctx.playlists;
+                                                    let toast_message = ctx.toast_message;
+                                                    let toast_variant = ctx.toast_variant;
+                                                    let op_for_drop = op.clone();
+                                                    let target_index = idx;
                                                     move |ev: web_sys::DragEvent| {
                                                         ev.prevent_default();
+
+                                                        // ----- New: search-drag path (issue #274) -----
+                                                        if op_for_drop.dragging_from_search.get_untracked() {
+                                                            let drop_position = ev
+                                                                .current_target()
+                                                                .and_then(|t| t.dyn_into::<web_sys::Element>().ok())
+                                                                .map(|target| take_drop_position(&target))
+                                                                .unwrap_or_else(|| "after".to_string());
+
+                                                            let presentation_id = ev
+                                                                .data_transfer()
+                                                                .and_then(|dt| {
+                                                                    dt.get_data("application/x-presentation-id").ok()
+                                                                })
+                                                                .filter(|s| !s.is_empty());
+
+                                                            if let Some(presentation_id) = presentation_id {
+                                                                let insert_idx = if drop_position == "before" {
+                                                                    target_index
+                                                                } else {
+                                                                    target_index + 1
+                                                                };
+                                                                let playlist_id = playlist_id.clone();
+                                                                leptos::task::spawn_local(async move {
+                                                                    let current = selected_playlist.get_untracked();
+                                                                    if let Some(pl) = current {
+                                                                        let mut entries: Vec<_> = pl.entries.iter().map(entry_to_payload).collect();
+                                                                        let insert_idx = insert_idx.min(entries.len());
+                                                                        entries.insert(
+                                                                            insert_idx,
+                                                                            crate::api::playlists::PlaylistEntryPayload::Presentation {
+                                                                                entry_id: None,
+                                                                                presentation_id,
+                                                                            },
+                                                                        );
+                                                                        match crate::api::playlists::replace_entries(&playlist_id, entries).await {
+                                                                            Ok(updated) => {
+                                                                                selected_playlist.set(Some(updated));
+                                                                                toast_variant.set("success".to_string());
+                                                                                toast_message.set(Some(
+                                                                                    "Added presentation to playlist".to_string(),
+                                                                                ));
+                                                                                if let Ok(pls) = crate::api::playlists::list_playlists().await {
+                                                                                    playlists.set(pls);
+                                                                                }
+                                                                            }
+                                                                            Err(e) => {
+                                                                                toast_variant.set("error".to_string());
+                                                                                toast_message.set(Some(format!("Error: {e}")));
+                                                                            }
+                                                                        }
+                                                                    }
+                                                                });
+                                                            }
+
+                                                            op_for_drop.dragging_from_search.set(false);
+                                                            op_for_drop.search_dragging.set(false);
+                                                            return;
+                                                        }
+
+                                                        // ----- Existing: within-playlist reorder path (UNCHANGED) -----
                                                         if let Some(dragged_id) = get_dragging_entry() {
                                                             if dragged_id == target_entry_id { return; }
                                                             let playlist_id = playlist_id.clone();
