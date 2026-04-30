@@ -541,7 +541,7 @@ test.describe("WASM Operator Drag-Drop", () => {
     ).toBeVisible({ timeout: 10_000 });
 
     // Search and drag the first presentation result onto the empty-state.
-    const searchInput = page.locator('[data-role="global-search-input"]');
+    const searchInput = page.locator('[data-role="global-search-query"]');
     await searchInput.fill("a");
     await page.waitForSelector(
       '[data-role="search-result-item"][data-kind="presentation"]',
@@ -617,7 +617,7 @@ test.describe("WASM Operator Drag-Drop", () => {
       return;
     }
 
-    const searchInput = page.locator('[data-role="global-search-input"]');
+    const searchInput = page.locator('[data-role="global-search-query"]');
     await searchInput.fill("a");
     await page.waitForSelector(
       '[data-role="search-result-item"][data-kind="presentation"]',
@@ -691,7 +691,7 @@ test.describe("WASM Operator Drag-Drop", () => {
       return;
     }
 
-    const searchInput = page.locator('[data-role="global-search-input"]');
+    const searchInput = page.locator('[data-role="global-search-query"]');
     await searchInput.fill("a");
     await page.waitForSelector(
       '[data-role="search-result-item"][data-kind="presentation"]',
