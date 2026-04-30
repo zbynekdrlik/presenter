@@ -525,7 +525,10 @@ Misc 1`;
       { timeout: 15_000 },
     );
 
-    // Read all slide group + main pairs.
+    // Read all slide group + main pairs. Use `innerText` for the main
+    // so rendered <br> tags become real \n in the output (textContent
+    // collapses line breaks, which would make multi-line slides look
+    // like one giant line).
     const slidePairs = await page.evaluate(() => {
       const slides = Array.from(
         document.querySelectorAll(
@@ -534,10 +537,12 @@ Misc 1`;
       );
       return slides.map((slide) => {
         const groupEl = slide.querySelector('[data-role="slide-group"]');
-        const mainEl = slide.querySelector('[data-field-display="main"]');
+        const mainEl = slide.querySelector(
+          '[data-field-display="main"]',
+        ) as HTMLElement | null;
         return {
           group: (groupEl?.textContent || "").trim(),
-          main: (mainEl?.textContent || "").trim(),
+          main: (mainEl?.innerText || "").trim(),
         };
       });
     });
