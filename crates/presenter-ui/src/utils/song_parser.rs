@@ -128,6 +128,48 @@ fn is_metadata_line(line: &str) -> bool {
     false
 }
 
+/// Extract the song title from the first `Title:` line in the input.
+///
+/// Returns the trimmed content after the colon, with a leading 1-3 digit
+/// numeric prefix padded to 3 digits via [`pad_title_number`]. Returns
+/// [`None`] if no `Title:` line is found.
+pub fn extract_title(text: &str) -> Option<String> {
+    text.lines().find_map(|line| {
+        let trimmed = line.trim();
+        let lower = trimmed.to_ascii_lowercase();
+        if !lower.starts_with("title:") {
+            return None;
+        }
+        // 6 = len("title:") — the prefix is ASCII so byte index works on
+        // the original (preserves casing of the title content).
+        let raw = trimmed[6..].trim();
+        Some(pad_title_number(raw))
+    })
+}
+
+/// Pad a leading 1-3 digit numeric prefix (followed by whitespace) to 3
+/// digits with leading zeros so songs sort correctly.
+///
+/// - `"76 Arriba"`        → `"076 Arriba"`
+/// - `"6 Foo"`            → `"006 Foo"`
+/// - `"102 10000 Armád"`  → `"102 10000 Armád"`  (already 3 digits)
+/// - `"1234 Bar"`         → `"1234 Bar"`          (4+ digits, untouched)
+/// - `"Arriba"`           → `"Arriba"`            (no leading number)
+/// - `"76Arriba"`         → `"76Arriba"`          (no whitespace separator)
+fn pad_title_number(title: &str) -> String {
+    let trimmed = title.trim();
+    if let Some(space_idx) = trimmed.find(char::is_whitespace) {
+        let (prefix, rest) = trimmed.split_at(space_idx);
+        if !prefix.is_empty()
+            && prefix.len() <= 3
+            && prefix.chars().all(|c| c.is_ascii_digit())
+        {
+            return format!("{prefix:0>3}{rest}");
+        }
+    }
+    trimmed.to_string()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -280,5 +322,73 @@ mod tests {
         let slides = parse_song_text(input);
         assert_eq!(slides.len(), 1);
         assert_eq!(slides[0].main, "  indented\n    more indent\nflush");
+    }
+
+    #[test]
+    fn extract_title_pads_two_digit_prefix() {
+        assert_eq!(
+            extract_title("Title: 76 Arriba\nMisc 1\n\nVerse 1\nlyric"),
+            Some("076 Arriba".to_string())
+        );
+    }
+
+    #[test]
+    fn extract_title_pads_one_digit_prefix() {
+        assert_eq!(
+            extract_title("Title: 6 Foo"),
+            Some("006 Foo".to_string())
+        );
+    }
+
+    #[test]
+    fn extract_title_leaves_three_digit_prefix_unchanged() {
+        assert_eq!(
+            extract_title("Title: 102 10000 Armád"),
+            Some("102 10000 Armád".to_string())
+        );
+    }
+
+    #[test]
+    fn extract_title_leaves_four_digit_prefix_unchanged() {
+        assert_eq!(
+            extract_title("Title: 1234 Bar"),
+            Some("1234 Bar".to_string())
+        );
+    }
+
+    #[test]
+    fn extract_title_no_leading_number_unchanged() {
+        assert_eq!(
+            extract_title("Title: Arriba"),
+            Some("Arriba".to_string())
+        );
+    }
+
+    #[test]
+    fn extract_title_no_space_after_digits_unchanged() {
+        // No whitespace separator → not a song-number prefix; leave alone.
+        assert_eq!(
+            extract_title("Title: 76Arriba"),
+            Some("76Arriba".to_string())
+        );
+    }
+
+    #[test]
+    fn extract_title_returns_none_when_absent() {
+        assert_eq!(extract_title("Verse 1\nlyric"), None);
+    }
+
+    #[test]
+    fn extract_title_is_case_insensitive() {
+        assert_eq!(extract_title("TITLE: foo"), Some("foo".to_string()));
+        assert_eq!(extract_title("title: foo"), Some("foo".to_string()));
+    }
+
+    #[test]
+    fn extract_title_strips_surrounding_whitespace() {
+        assert_eq!(
+            extract_title("Title:   foo bar  "),
+            Some("foo bar".to_string())
+        );
     }
 }
