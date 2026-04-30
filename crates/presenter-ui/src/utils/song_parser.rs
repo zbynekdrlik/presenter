@@ -177,6 +177,7 @@ pub fn extract_title(text: &str) -> Option<String> {
 /// `line_limit` are hard-broken at the limit boundary. `line_limit == 0`
 /// is treated as "no wrapping" (defensive — keeps signature stable if
 /// the operator clears the setting).
+/// Runs of whitespace within a line are collapsed to single spaces.
 pub fn wrap_long_lines(slides: Vec<SlideInput>, line_limit: usize) -> Vec<SlideInput> {
     if line_limit == 0 {
         return slides;
@@ -197,6 +198,18 @@ pub fn wrap_long_lines(slides: Vec<SlideInput>, line_limit: usize) -> Vec<SlideI
         .collect()
 }
 
+/// Start a fresh wrapped line with `word`. If the word fits within
+/// `limit`, push it onto `current`. Otherwise hard-break it: push
+/// complete `limit`-sized pieces to `out` and leave the trailing
+/// remainder in `current` so subsequent words can keep accumulating.
+fn start_new_line(out: &mut Vec<String>, current: &mut String, word: &str, limit: usize) {
+    if word.chars().count() > limit {
+        hard_break_into(out, current, word, limit);
+    } else {
+        current.push_str(word);
+    }
+}
+
 fn wrap_one_line(line: &str, limit: usize) -> Vec<String> {
     if line.chars().count() <= limit {
         return vec![line.to_string()];
@@ -206,21 +219,13 @@ fn wrap_one_line(line: &str, limit: usize) -> Vec<String> {
     for word in line.split_whitespace() {
         let word_len = word.chars().count();
         if current.is_empty() {
-            if word_len > limit {
-                hard_break_into(&mut out, &mut current, word, limit);
-            } else {
-                current.push_str(word);
-            }
+            start_new_line(&mut out, &mut current, word, limit);
         } else if current.chars().count() + 1 + word_len <= limit {
             current.push(' ');
             current.push_str(word);
         } else {
             out.push(std::mem::take(&mut current));
-            if word_len > limit {
-                hard_break_into(&mut out, &mut current, word, limit);
-            } else {
-                current.push_str(word);
-            }
+            start_new_line(&mut out, &mut current, word, limit);
         }
     }
     if !current.is_empty() {
@@ -230,18 +235,23 @@ fn wrap_one_line(line: &str, limit: usize) -> Vec<String> {
 }
 
 /// Hard-break an oversize word at codepoint boundaries. Pushes complete
-/// `limit`-sized pieces to `out` and leaves the trailing remainder in
-/// `current` so subsequent words can still accumulate onto the same line.
+/// `limit`-codepoint pieces to `out` and leaves the trailing remainder
+/// in `current` so subsequent words can still accumulate onto the same
+/// line.
 fn hard_break_into(out: &mut Vec<String>, current: &mut String, word: &str, limit: usize) {
-    let chars: Vec<char> = word.chars().collect();
-    let mut idx = 0;
-    while chars.len() - idx > limit {
-        let piece: String = chars[idx..idx + limit].iter().collect();
-        out.push(piece);
-        idx += limit;
+    let mut piece_start = 0;
+    let mut chars_in_piece = 0;
+    for (byte_idx, _) in word.char_indices() {
+        if chars_in_piece == limit {
+            out.push(word[piece_start..byte_idx].to_string());
+            piece_start = byte_idx;
+            chars_in_piece = 0;
+        }
+        chars_in_piece += 1;
     }
-    let remainder: String = chars[idx..].iter().collect();
-    *current = remainder;
+    if piece_start < word.len() {
+        *current = word[piece_start..].to_string();
+    }
 }
 
 /// Pad a leading 1-3 digit numeric prefix (followed by whitespace) to 3
