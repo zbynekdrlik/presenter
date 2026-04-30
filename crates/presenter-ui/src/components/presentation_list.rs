@@ -114,6 +114,145 @@ fn handle_search_drop(
     });
 }
 
+/// Insert at a fixed position. Used by the head spacer (insert_idx=0),
+/// the tail spacer (insert_idx=entries.len()), and the empty-state
+/// placeholder (insert_idx=0). Reads the dragged presentation id from
+/// the dataTransfer and calls replace_entries with the new presentation
+/// inserted at insert_idx. Shows success/error toast.
+#[allow(clippy::too_many_arguments)]
+fn handle_search_drop_at_fixed(
+    ev: &web_sys::DragEvent,
+    insert_idx: usize,
+    playlist_id: String,
+    selected_playlist: RwSignal<Option<presenter_core::Playlist>>,
+    playlists: RwSignal<Vec<presenter_core::Playlist>>,
+    toast_message: RwSignal<Option<String>>,
+    toast_variant: RwSignal<String>,
+) {
+    // Clear any data-drop-position attribute we may have set during dragover.
+    if let Some(target) = ev
+        .current_target()
+        .and_then(|t| t.dyn_into::<web_sys::Element>().ok())
+    {
+        let _ = target.remove_attribute("data-drop-position");
+    }
+
+    let presentation_id = ev
+        .data_transfer()
+        .and_then(|dt| dt.get_data("application/x-presentation-id").ok())
+        .filter(|s| !s.is_empty());
+
+    let Some(presentation_id) = presentation_id else {
+        toast_variant.set("error".to_string());
+        toast_message.set(Some("Drag payload missing presentation id".to_string()));
+        return;
+    };
+
+    leptos::task::spawn_local(async move {
+        let current = selected_playlist.get_untracked();
+        if let Some(pl) = current {
+            let mut entries: Vec<_> = pl.entries.iter().map(entry_to_payload).collect();
+            let insert_idx = insert_idx.min(entries.len());
+            entries.insert(
+                insert_idx,
+                crate::api::playlists::PlaylistEntryPayload::Presentation {
+                    entry_id: None,
+                    presentation_id,
+                },
+            );
+            match crate::api::playlists::replace_entries(&playlist_id, entries).await {
+                Ok(updated) => {
+                    selected_playlist.set(Some(updated));
+                    toast_variant.set("success".to_string());
+                    toast_message.set(Some("Added presentation to playlist".to_string()));
+                    if let Ok(pls) = crate::api::playlists::list_playlists().await {
+                        playlists.set(pls);
+                    }
+                }
+                Err(e) => {
+                    toast_variant.set("error".to_string());
+                    toast_message.set(Some(format!("Error: {e}")));
+                }
+            }
+        }
+    });
+}
+
+/// Render a transparent ~16px-tall <li> that captures search-drag dragover
+/// in the dead zone above the first entry (head) or below the last entry
+/// (tail). On drop, inserts at the fixed insert_idx using
+/// handle_search_drop_at_fixed.
+#[allow(clippy::too_many_arguments)]
+fn render_list_spacer(
+    role: &'static str,
+    insert_idx: usize,
+    op: OperatorState,
+    playlist_id: String,
+    selected_playlist: RwSignal<Option<presenter_core::Playlist>>,
+    playlists: RwSignal<Vec<presenter_core::Playlist>>,
+    toast_message: RwSignal<Option<String>>,
+    toast_variant: RwSignal<String>,
+) -> impl IntoView {
+    let op_for_dragover = op.clone();
+    let op_for_dragleave = op.clone();
+    let op_for_drop = op.clone();
+    let pl_id_for_drop = playlist_id;
+    // Head spacer wants the line at its bottom (visually = before entry 0)
+    // → "after". Tail spacer wants the line at its top (visually = below
+    // last entry) → "before".
+    let drop_side = if role == "head-spacer" {
+        "after"
+    } else {
+        "before"
+    };
+    view! {
+        <li
+            class="operator__list-spacer"
+            data-role=role
+            on:dragover=move |ev: web_sys::DragEvent| {
+                if !op_for_dragover.dragging_from_search.get_untracked() {
+                    return;
+                }
+                ev.prevent_default();
+                if let Some(target) = ev
+                    .current_target()
+                    .and_then(|t| t.dyn_into::<web_sys::Element>().ok())
+                {
+                    let _ = target.set_attribute("data-drop-position", drop_side);
+                }
+            }
+            on:dragleave=move |ev: web_sys::DragEvent| {
+                if !op_for_dragleave.dragging_from_search.get_untracked() {
+                    return;
+                }
+                if let Some(target) = ev
+                    .current_target()
+                    .and_then(|t| t.dyn_into::<web_sys::Element>().ok())
+                {
+                    let _ = target.remove_attribute("data-drop-position");
+                }
+            }
+            on:drop=move |ev: web_sys::DragEvent| {
+                ev.prevent_default();
+                if op_for_drop.dragging_from_search.get_untracked() {
+                    handle_search_drop_at_fixed(
+                        &ev,
+                        insert_idx,
+                        pl_id_for_drop.clone(),
+                        selected_playlist,
+                        playlists,
+                        toast_message,
+                        toast_variant,
+                    );
+                    op_for_drop.dragging_from_search.set(false);
+                    op_for_drop.search_dragging.set(false);
+                }
+            }
+        >
+        </li>
+    }
+}
+
 #[component]
 pub fn PresentationList() -> impl IntoView {
     let ctx = use_ctx!(AppContext);
@@ -262,11 +401,64 @@ pub fn PresentationList() -> impl IntoView {
                     if has_playlist {
                         if let Some(playlist) = &selected_playlist {
                             if playlist.entries.is_empty() {
+                                let playlist_id = ctx.selected_playlist_id.get_untracked().unwrap_or_default();
+                                let selected_playlist = ctx.selected_playlist;
+                                let playlists = ctx.playlists;
+                                let toast_message = ctx.toast_message;
+                                let toast_variant = ctx.toast_variant;
+                                let op_for_dragover = op.clone();
+                                let op_for_dragleave = op.clone();
+                                let op_for_drop = op.clone();
+                                let pl_id_for_drop = playlist_id.clone();
                                 return view! {
-                                    <li class="empty">"Playlist is empty. Drag songs from a library or add a separator."</li>
+                                    <li
+                                        class="empty operator__list-empty-drop"
+                                        data-role="presentation-empty-drop"
+                                        on:dragover=move |ev: web_sys::DragEvent| {
+                                            if !op_for_dragover.dragging_from_search.get_untracked() {
+                                                return;
+                                            }
+                                            ev.prevent_default();
+                                            if let Some(target) = ev
+                                                .current_target()
+                                                .and_then(|t| t.dyn_into::<web_sys::Element>().ok())
+                                            {
+                                                let _ = target.set_attribute("data-drop-position", "before");
+                                            }
+                                        }
+                                        on:dragleave=move |ev: web_sys::DragEvent| {
+                                            if !op_for_dragleave.dragging_from_search.get_untracked() {
+                                                return;
+                                            }
+                                            if let Some(target) = ev
+                                                .current_target()
+                                                .and_then(|t| t.dyn_into::<web_sys::Element>().ok())
+                                            {
+                                                let _ = target.remove_attribute("data-drop-position");
+                                            }
+                                        }
+                                        on:drop=move |ev: web_sys::DragEvent| {
+                                            ev.prevent_default();
+                                            if op_for_drop.dragging_from_search.get_untracked() {
+                                                handle_search_drop_at_fixed(
+                                                    &ev,
+                                                    0,
+                                                    pl_id_for_drop.clone(),
+                                                    selected_playlist,
+                                                    playlists,
+                                                    toast_message,
+                                                    toast_variant,
+                                                );
+                                                op_for_drop.dragging_from_search.set(false);
+                                                op_for_drop.search_dragging.set(false);
+                                            }
+                                        }
+                                    >
+                                        "Playlist is empty. Drag songs from a library or add a separator."
+                                    </li>
                                 }.into_any();
                             }
-                            return playlist.entries.iter().enumerate().map(|(idx, entry)| {
+                            let entries_view: Vec<_> = playlist.entries.iter().enumerate().map(|(idx, entry)| {
                                 let entry_id = entry.id.to_string();
                                 match &entry.kind {
                                     presenter_core::playlist::PlaylistEntryKind::Separator { name } => {
@@ -686,7 +878,38 @@ pub fn PresentationList() -> impl IntoView {
                                         }.into_any()
                                     }
                                 }
-                            }).collect_view().into_any();
+                            }).collect();
+                            let entries_len = playlist.entries.len();
+                            let playlist_id_spacer = ctx.selected_playlist_id.get_untracked().unwrap_or_default();
+                            let selected_playlist = ctx.selected_playlist;
+                            let playlists = ctx.playlists;
+                            let toast_message = ctx.toast_message;
+                            let toast_variant = ctx.toast_variant;
+                            let head_view = render_list_spacer(
+                                "head-spacer",
+                                0,
+                                op.clone(),
+                                playlist_id_spacer.clone(),
+                                selected_playlist,
+                                playlists,
+                                toast_message,
+                                toast_variant,
+                            );
+                            let tail_view = render_list_spacer(
+                                "tail-spacer",
+                                entries_len,
+                                op.clone(),
+                                playlist_id_spacer,
+                                selected_playlist,
+                                playlists,
+                                toast_message,
+                                toast_variant,
+                            );
+                            return view! {
+                                {head_view}
+                                {entries_view}
+                                {tail_view}
+                            }.into_any();
                         }
                     }
 

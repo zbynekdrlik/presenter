@@ -2787,3 +2787,50 @@ body.operator[data-mode="live"][data-bible-tab="prepared"]
   font-size: 0.8rem;
 }
 .info-popover__reload:hover { background: rgba(148, 163, 184, 0.25); }
+
+/* #274 follow-up: head/tail spacers and empty-state drop target */
+.operator__list-spacer {
+    list-style: none;
+    margin: 0;
+    padding: 0;
+    height: 16px;
+    background: transparent;
+    border: 0;
+    position: relative;
+}
+
+.operator__list-spacer[data-drop-position="before"]::before,
+.operator__list-spacer[data-drop-position="after"]::after {
+    content: "";
+    position: absolute;
+    left: 8px;
+    right: 8px;
+    height: 3px;
+    background: rgba(59, 124, 255, 0.85);
+    border-radius: 2px;
+    pointer-events: none;
+}
+
+.operator__list-spacer[data-drop-position="before"]::before {
+    top: -2px;
+}
+
+.operator__list-spacer[data-drop-position="after"]::after {
+    bottom: -2px;
+}
+
+.operator__list-empty-drop {
+    position: relative;
+}
+
+.operator__list-empty-drop[data-drop-position="before"]::before {
+    content: "";
+    position: absolute;
+    left: 8px;
+    right: 8px;
+    height: 3px;
+    background: rgba(59, 124, 255, 0.85);
+    border-radius: 2px;
+    pointer-events: none;
+    bottom: -2px;
+}
