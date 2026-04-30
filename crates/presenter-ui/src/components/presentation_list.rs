@@ -247,12 +247,18 @@ pub fn PresentationList() -> impl IntoView {
                                                         }
                                                     }
                                                 }
-                                                on:dragleave=move |ev: web_sys::DragEvent| {
-                                                    if let Some(target) = ev
-                                                        .current_target()
-                                                        .and_then(|t| t.dyn_into::<web_sys::Element>().ok())
-                                                    {
-                                                        let _ = target.remove_attribute("data-drop-position");
+                                                on:dragleave={
+                                                    let op_for_dragleave = op.clone();
+                                                    move |ev: web_sys::DragEvent| {
+                                                        if !op_for_dragleave.dragging_from_search.get_untracked() {
+                                                            return;
+                                                        }
+                                                        if let Some(target) = ev
+                                                            .current_target()
+                                                            .and_then(|t| t.dyn_into::<web_sys::Element>().ok())
+                                                        {
+                                                            let _ = target.remove_attribute("data-drop-position");
+                                                        }
                                                     }
                                                 }
                                                 on:drop={
@@ -520,12 +526,18 @@ pub fn PresentationList() -> impl IntoView {
                                                         }
                                                     }
                                                 }
-                                                on:dragleave=move |ev: web_sys::DragEvent| {
-                                                    if let Some(target) = ev
-                                                        .current_target()
-                                                        .and_then(|t| t.dyn_into::<web_sys::Element>().ok())
-                                                    {
-                                                        let _ = target.remove_attribute("data-drop-position");
+                                                on:dragleave={
+                                                    let op_for_dragleave = op.clone();
+                                                    move |ev: web_sys::DragEvent| {
+                                                        if !op_for_dragleave.dragging_from_search.get_untracked() {
+                                                            return;
+                                                        }
+                                                        if let Some(target) = ev
+                                                            .current_target()
+                                                            .and_then(|t| t.dyn_into::<web_sys::Element>().ok())
+                                                        {
+                                                            let _ = target.remove_attribute("data-drop-position");
+                                                        }
                                                     }
                                                 }
                                                 on:drop={
