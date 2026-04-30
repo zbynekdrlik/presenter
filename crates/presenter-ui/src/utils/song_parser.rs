@@ -272,15 +272,13 @@ pub fn chunk_to_two_lines(slides: Vec<SlideInput>) -> Vec<SlideInput> {
             out.push(slide);
             continue;
         }
-        let mut first = true;
-        for chunk in lines.chunks(2) {
+        for (i, chunk) in lines.chunks(2).enumerate() {
             out.push(SlideInput {
                 main: chunk.join("\n"),
                 translation: None,
                 stage: None,
-                group: if first { slide.group.clone() } else { None },
+                group: if i == 0 { slide.group.clone() } else { None },
             });
-            first = false;
         }
     }
     out
