@@ -136,14 +136,11 @@ fn is_metadata_line(line: &str) -> bool {
 pub fn extract_title(text: &str) -> Option<String> {
     text.lines().find_map(|line| {
         let trimmed = line.trim();
-        let lower = trimmed.to_ascii_lowercase();
-        if !lower.starts_with("title:") {
+        let prefix = trimmed.get(..6)?;
+        if !prefix.eq_ignore_ascii_case("title:") {
             return None;
         }
-        // 6 = len("title:") — the prefix is ASCII so byte index works on
-        // the original (preserves casing of the title content).
-        let raw = trimmed[6..].trim();
-        Some(pad_title_number(raw))
+        Some(pad_title_number(trimmed[6..].trim()))
     })
 }
 
@@ -160,10 +157,7 @@ fn pad_title_number(title: &str) -> String {
     let trimmed = title.trim();
     if let Some(space_idx) = trimmed.find(char::is_whitespace) {
         let (prefix, rest) = trimmed.split_at(space_idx);
-        if !prefix.is_empty()
-            && prefix.len() <= 3
-            && prefix.chars().all(|c| c.is_ascii_digit())
-        {
+        if !prefix.is_empty() && prefix.len() <= 3 && prefix.chars().all(|c| c.is_ascii_digit()) {
             return format!("{prefix:0>3}{rest}");
         }
     }
@@ -334,10 +328,7 @@ mod tests {
 
     #[test]
     fn extract_title_pads_one_digit_prefix() {
-        assert_eq!(
-            extract_title("Title: 6 Foo"),
-            Some("006 Foo".to_string())
-        );
+        assert_eq!(extract_title("Title: 6 Foo"), Some("006 Foo".to_string()));
     }
 
     #[test]
@@ -358,10 +349,7 @@ mod tests {
 
     #[test]
     fn extract_title_no_leading_number_unchanged() {
-        assert_eq!(
-            extract_title("Title: Arriba"),
-            Some("Arriba".to_string())
-        );
+        assert_eq!(extract_title("Title: Arriba"), Some("Arriba".to_string()));
     }
 
     #[test]
