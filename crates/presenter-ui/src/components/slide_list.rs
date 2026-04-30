@@ -156,6 +156,48 @@ fn capture_selection(ev: &web_sys::Event) -> (u32, u32) {
     (0, 0)
 }
 
+/// Renders the draggable song bubble above the slide list.
+/// Returns a reactive closure that shows the bubble when a presentation is
+/// selected, or nothing otherwise.
+fn render_song_bubble(ctx: AppContext, op: OperatorState) -> impl IntoView {
+    move || {
+        let presentation = ctx.selected_presentation.get();
+        let Some(pres) = presentation else {
+            return "".into_any();
+        };
+        let pres_id = pres.id.to_string();
+        let pres_id_drag = pres_id.clone();
+        let pres_name = pres.name.clone();
+        let op_drag = op.clone();
+        let op_end = op.clone();
+        view! {
+            <div
+                class="operator__slides-bubble"
+                data-role="slides-song-bubble"
+                data-presentation-id=pres_id
+                draggable="true"
+                title="Drag into a playlist"
+                on:dragstart=move |ev: web_sys::DragEvent| {
+                    if let Some(dt) = ev.data_transfer() {
+                        let _ = dt.set_data("text/plain", &pres_id_drag);
+                        let _ = dt.set_data("application/x-presentation-id", &pres_id_drag);
+                        dt.set_effect_allowed("copy");
+                    }
+                    op_drag.search_dragging.set(true);
+                    op_drag.dragging_from_search.set(true);
+                }
+                on:dragend=move |_| {
+                    op_end.search_dragging.set(false);
+                    op_end.dragging_from_search.set(false);
+                }
+            >
+                <span class="operator__slides-bubble-name">{pres_name}</span>
+            </div>
+        }
+        .into_any()
+    }
+}
+
 #[component]
 pub fn SlideList() -> impl IntoView {
     let ctx = use_ctx!(AppContext);
@@ -226,67 +268,21 @@ pub fn SlideList() -> impl IntoView {
     view! {
         <section class="operator__slides-column">
             <div class="operator__slides-area">
-                {
-                    let ctx_for_bubble = ctx.clone();
-                    let op_for_bubble_drag = op.clone();
-                    let op_for_bubble_end = op.clone();
-                    move || {
-                        let presentation = ctx_for_bubble.selected_presentation.get();
-                        if let Some(pres) = presentation {
-                            let pres_id = pres.id.to_string();
-                            let pres_id_drag = pres_id.clone();
-                            let pres_name = pres.name.clone();
-                            let op_drag = op_for_bubble_drag.clone();
-                            let op_end = op_for_bubble_end.clone();
-                            view! {
-                                <div
-                                    class="operator__slides-bubble"
-                                    data-role="slides-song-bubble"
-                                    data-presentation-id=pres_id.clone()
-                                    draggable="true"
-                                    title="Drag into a playlist"
-                                    on:dragstart=move |ev: web_sys::DragEvent| {
-                                        if let Some(dt) = ev.data_transfer() {
-                                            let _ = dt.set_data("text/plain", &pres_id_drag);
-                                            let _ = dt.set_data("application/x-presentation-id", &pres_id_drag);
-                                            dt.set_effect_allowed("copy");
-                                        }
-                                        op_drag.search_dragging.set(true);
-                                        op_drag.dragging_from_search.set(true);
-                                    }
-                                    on:dragend=move |_| {
-                                        op_end.search_dragging.set(false);
-                                        op_end.dragging_from_search.set(false);
-                                    }
-                                >
-                                    <span class="operator__slides-bubble-name">{pres_name}</span>
-                                </div>
-                            }.into_any()
-                        } else {
-                            "".into_any()
-                        }
-                    }
-                }
-                {
-                    let ctx_for_btn = ctx.clone();
-                    move || {
-                        if ctx_for_btn.selected_presentation.with(|p| p.is_some()) {
-                            view! {
-                                <button
-                                    type="button"
-                                    class="operator__slides-add-floating"
-                                    data-role="add-slide"
-                                    title="Add slide"
-                                    on:click=add_slide
-                                >
-                                    "+"
-                                </button>
-                            }.into_any()
-                        } else {
-                            "".into_any()
-                        }
-                    }
-                }
+                {render_song_bubble(ctx.clone(), op.clone())}
+                <Show
+                    when=move || ctx.selected_presentation.with(|p| p.is_some())
+                    fallback=|| ()
+                >
+                    <button
+                        type="button"
+                        class="operator__slides-add-floating"
+                        data-role="add-slide"
+                        title="Add slide"
+                        on:click=add_slide
+                    >
+                        "+"
+                    </button>
+                </Show>
                 {
                     // Clone op for each handler that moves it into a closure
                     let op_dragover = op.clone();
