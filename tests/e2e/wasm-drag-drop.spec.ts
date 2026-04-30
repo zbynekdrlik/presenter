@@ -632,7 +632,13 @@ test.describe("WASM Operator Drag-Drop", () => {
 
     const headSpacer = page.locator('[data-role="head-spacer"]');
     await expect(headSpacer).toBeAttached({ timeout: 5_000 });
-    await searchResult.dragTo(headSpacer);
+    await headSpacer.scrollIntoViewIfNeeded();
+    // Spacer is 16px tall — anchor drop at its center; force: true bypasses
+    // strict actionability so Playwright doesn't bail on the small target.
+    await searchResult.dragTo(headSpacer, {
+      targetPosition: { x: 50, y: 8 },
+      force: true,
+    });
 
     await page.waitForFunction(
       (expected) =>
@@ -706,7 +712,13 @@ test.describe("WASM Operator Drag-Drop", () => {
 
     const tailSpacer = page.locator('[data-role="tail-spacer"]');
     await expect(tailSpacer).toBeAttached({ timeout: 5_000 });
-    await searchResult.dragTo(tailSpacer);
+    await tailSpacer.scrollIntoViewIfNeeded();
+    // Spacer is 16px tall — anchor drop at its center; force: true bypasses
+    // strict actionability so Playwright doesn't bail on the small target.
+    await searchResult.dragTo(tailSpacer, {
+      targetPosition: { x: 50, y: 8 },
+      force: true,
+    });
 
     await page.waitForFunction(
       (expected) =>
