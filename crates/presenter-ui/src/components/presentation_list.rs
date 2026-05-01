@@ -7,7 +7,7 @@ use crate::state::AppContext;
 
 use super::presentation_list_drag::{
     drop_side_for_event, entry_to_payload, get_dragging_entry, get_entry_id, handle_search_drop,
-    handle_search_drop_at_fixed, render_list_spacer, set_dragging_entry,
+    make_fixed_drop_handlers, render_list_spacer, set_dragging_entry, FixedDropHandlers,
 };
 
 #[component]
@@ -159,57 +159,27 @@ pub fn PresentationList() -> impl IntoView {
                         if let Some(playlist) = &selected_playlist {
                             if playlist.entries.is_empty() {
                                 let playlist_id = ctx.selected_playlist_id.get_untracked().unwrap_or_default();
-                                let selected_playlist = ctx.selected_playlist;
-                                let playlists = ctx.playlists;
-                                let toast_message = ctx.toast_message;
-                                let toast_variant = ctx.toast_variant;
-                                let op_for_dragover = op.clone();
-                                let op_for_dragleave = op.clone();
-                                let op_for_drop = op.clone();
-                                let pl_id_for_drop = playlist_id.clone();
+                                let FixedDropHandlers {
+                                    on_dragover,
+                                    on_dragleave,
+                                    on_drop,
+                                } = make_fixed_drop_handlers(
+                                    0,
+                                    "before",
+                                    op.clone(),
+                                    playlist_id,
+                                    ctx.selected_playlist,
+                                    ctx.playlists,
+                                    ctx.toast_message,
+                                    ctx.toast_variant,
+                                );
                                 return view! {
                                     <li
                                         class="empty operator__list-empty-drop"
                                         data-role="presentation-empty-drop"
-                                        on:dragover=move |ev: web_sys::DragEvent| {
-                                            if !op_for_dragover.dragging_from_search.get_untracked() {
-                                                return;
-                                            }
-                                            ev.prevent_default();
-                                            if let Some(target) = ev
-                                                .current_target()
-                                                .and_then(|t| t.dyn_into::<web_sys::Element>().ok())
-                                            {
-                                                let _ = target.set_attribute("data-drop-position", "before");
-                                            }
-                                        }
-                                        on:dragleave=move |ev: web_sys::DragEvent| {
-                                            if !op_for_dragleave.dragging_from_search.get_untracked() {
-                                                return;
-                                            }
-                                            if let Some(target) = ev
-                                                .current_target()
-                                                .and_then(|t| t.dyn_into::<web_sys::Element>().ok())
-                                            {
-                                                let _ = target.remove_attribute("data-drop-position");
-                                            }
-                                        }
-                                        on:drop=move |ev: web_sys::DragEvent| {
-                                            ev.prevent_default();
-                                            if op_for_drop.dragging_from_search.get_untracked() {
-                                                handle_search_drop_at_fixed(
-                                                    &ev,
-                                                    0,
-                                                    pl_id_for_drop.clone(),
-                                                    selected_playlist,
-                                                    playlists,
-                                                    toast_message,
-                                                    toast_variant,
-                                                );
-                                                op_for_drop.dragging_from_search.set(false);
-                                                op_for_drop.search_dragging.set(false);
-                                            }
-                                        }
+                                        on:dragover=on_dragover
+                                        on:dragleave=on_dragleave
+                                        on:drop=on_drop
                                     >
                                         "Playlist is empty. Drag songs from a library or add a separator."
                                     </li>

@@ -196,6 +196,88 @@ pub(super) fn handle_search_drop_at_fixed(
     );
 }
 
+/// Three drag-event handler closures for an element that accepts a
+/// search-drag drop at a fixed insert position.
+///
+/// Created by [`make_fixed_drop_handlers`] and consumed by both
+/// `render_list_spacer` and the empty-state `<li>` in
+/// `presentation_list.rs`.
+pub(super) struct FixedDropHandlers {
+    pub on_dragover: Box<dyn FnMut(web_sys::DragEvent)>,
+    pub on_dragleave: Box<dyn FnMut(web_sys::DragEvent)>,
+    pub on_drop: Box<dyn FnMut(web_sys::DragEvent)>,
+}
+
+/// Build the three search-drop handler closures for an element that
+/// receives a search-drag at a **fixed** `insert_idx` (head spacer,
+/// tail spacer, or empty-state placeholder).
+///
+/// `drop_side` is the `data-drop-position` value set during dragover
+/// (`"before"` or `"after"`).
+#[allow(clippy::too_many_arguments)]
+pub(super) fn make_fixed_drop_handlers(
+    insert_idx: usize,
+    drop_side: &'static str,
+    op: OperatorState,
+    playlist_id: String,
+    selected_playlist: RwSignal<Option<presenter_core::Playlist>>,
+    playlists: RwSignal<Vec<presenter_core::Playlist>>,
+    toast_message: RwSignal<Option<String>>,
+    toast_variant: RwSignal<String>,
+) -> FixedDropHandlers {
+    let op_for_dragover = op.clone();
+    let op_for_dragleave = op.clone();
+    let op_for_drop = op;
+
+    let on_dragover = Box::new(move |ev: web_sys::DragEvent| {
+        if !op_for_dragover.dragging_from_search.get_untracked() {
+            return;
+        }
+        ev.prevent_default();
+        if let Some(target) = ev
+            .current_target()
+            .and_then(|t| t.dyn_into::<web_sys::Element>().ok())
+        {
+            let _ = target.set_attribute("data-drop-position", drop_side);
+        }
+    });
+
+    let on_dragleave = Box::new(move |ev: web_sys::DragEvent| {
+        if !op_for_dragleave.dragging_from_search.get_untracked() {
+            return;
+        }
+        if let Some(target) = ev
+            .current_target()
+            .and_then(|t| t.dyn_into::<web_sys::Element>().ok())
+        {
+            let _ = target.remove_attribute("data-drop-position");
+        }
+    });
+
+    let on_drop = Box::new(move |ev: web_sys::DragEvent| {
+        ev.prevent_default();
+        if op_for_drop.dragging_from_search.get_untracked() {
+            handle_search_drop_at_fixed(
+                &ev,
+                insert_idx,
+                playlist_id.clone(),
+                selected_playlist,
+                playlists,
+                toast_message,
+                toast_variant,
+            );
+            op_for_drop.dragging_from_search.set(false);
+            op_for_drop.search_dragging.set(false);
+        }
+    });
+
+    FixedDropHandlers {
+        on_dragover,
+        on_dragleave,
+        on_drop,
+    }
+}
+
 /// Render a transparent ~16px-tall <li> that captures search-drag dragover
 /// in the dead zone above the first entry (head) or below the last entry
 /// (tail). On drop, inserts at the fixed insert_idx using
@@ -211,10 +293,6 @@ pub(super) fn render_list_spacer(
     toast_message: RwSignal<Option<String>>,
     toast_variant: RwSignal<String>,
 ) -> impl IntoView {
-    let op_for_dragover = op.clone();
-    let op_for_dragleave = op.clone();
-    let op_for_drop = op.clone();
-    let pl_id_for_drop = playlist_id;
     // Head spacer wants the line at its bottom (visually = before entry 0)
     // → "after". Tail spacer wants the line at its top (visually = below
     // last entry) → "before".
@@ -223,49 +301,27 @@ pub(super) fn render_list_spacer(
     } else {
         "before"
     };
+    let FixedDropHandlers {
+        on_dragover,
+        on_dragleave,
+        on_drop,
+    } = make_fixed_drop_handlers(
+        insert_idx,
+        drop_side,
+        op,
+        playlist_id,
+        selected_playlist,
+        playlists,
+        toast_message,
+        toast_variant,
+    );
     view! {
         <li
             class="operator__list-spacer"
             data-role=role
-            on:dragover=move |ev: web_sys::DragEvent| {
-                if !op_for_dragover.dragging_from_search.get_untracked() {
-                    return;
-                }
-                ev.prevent_default();
-                if let Some(target) = ev
-                    .current_target()
-                    .and_then(|t| t.dyn_into::<web_sys::Element>().ok())
-                {
-                    let _ = target.set_attribute("data-drop-position", drop_side);
-                }
-            }
-            on:dragleave=move |ev: web_sys::DragEvent| {
-                if !op_for_dragleave.dragging_from_search.get_untracked() {
-                    return;
-                }
-                if let Some(target) = ev
-                    .current_target()
-                    .and_then(|t| t.dyn_into::<web_sys::Element>().ok())
-                {
-                    let _ = target.remove_attribute("data-drop-position");
-                }
-            }
-            on:drop=move |ev: web_sys::DragEvent| {
-                ev.prevent_default();
-                if op_for_drop.dragging_from_search.get_untracked() {
-                    handle_search_drop_at_fixed(
-                        &ev,
-                        insert_idx,
-                        pl_id_for_drop.clone(),
-                        selected_playlist,
-                        playlists,
-                        toast_message,
-                        toast_variant,
-                    );
-                    op_for_drop.dragging_from_search.set(false);
-                    op_for_drop.search_dragging.set(false);
-                }
-            }
+            on:dragover=on_dragover
+            on:dragleave=on_dragleave
+            on:drop=on_drop
         >
         </li>
     }
