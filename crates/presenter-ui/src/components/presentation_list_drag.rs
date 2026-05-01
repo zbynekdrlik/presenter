@@ -55,15 +55,58 @@ pub(super) fn take_drop_position(target: &web_sys::Element) -> String {
 
 // ----- search-drop handlers -----
 
+/// Shared async body: insert `presentation_id` at `insert_idx` in the
+/// playlist, call `replace_entries`, and show a success or error toast.
+/// Both `handle_search_drop` and `handle_search_drop_at_fixed` delegate
+/// here after computing their respective `insert_idx`.
+#[allow(clippy::too_many_arguments)]
+fn run_search_insert(
+    insert_idx: usize,
+    presentation_id: String,
+    playlist_id: String,
+    selected_playlist: RwSignal<Option<presenter_core::Playlist>>,
+    playlists: RwSignal<Vec<presenter_core::Playlist>>,
+    toast_message: RwSignal<Option<String>>,
+    toast_variant: RwSignal<String>,
+) {
+    leptos::task::spawn_local(async move {
+        let current = selected_playlist.get_untracked();
+        if let Some(pl) = current {
+            let mut entries: Vec<_> = pl.entries.iter().map(entry_to_payload).collect();
+            let insert_idx = insert_idx.min(entries.len());
+            entries.insert(
+                insert_idx,
+                crate::api::playlists::PlaylistEntryPayload::Presentation {
+                    entry_id: None,
+                    presentation_id,
+                },
+            );
+            match crate::api::playlists::replace_entries(&playlist_id, entries).await {
+                Ok(updated) => {
+                    selected_playlist.set(Some(updated));
+                    toast_variant.set("success".to_string());
+                    toast_message.set(Some("Added presentation to playlist".to_string()));
+                    if let Ok(pls) = crate::api::playlists::list_playlists().await {
+                        playlists.set(pls);
+                    }
+                }
+                Err(e) => {
+                    toast_variant.set("error".to_string());
+                    toast_message.set(Some(format!("Error: {e}")));
+                }
+            }
+        }
+    });
+}
+
 /// Handle a search-drag → playlist-insert drop.
 ///
 /// Reads `data-drop-position` from the target element, extracts the dragged
-/// presentation id from the dataTransfer, rebuilds the playlist entries Vec
-/// with the new presentation inserted at the chosen index, and calls
-/// `replace_entries`. Shows a success or error toast. The caller is
-/// responsible for resetting `dragging_from_search` / `search_dragging`
-/// signals after this returns (those resets stay outside so they're always
-/// visible alongside the early `return`).
+/// presentation id from the dataTransfer, and delegates to `run_search_insert`
+/// with the computed insert index. The caller is responsible for resetting
+/// `dragging_from_search` / `search_dragging` signals after this returns
+/// (those resets stay outside so they're always visible alongside the early
+/// `return`).
 #[allow(clippy::too_many_arguments)]
 pub(super) fn handle_search_drop(
     ev: &web_sys::DragEvent,
@@ -97,41 +140,22 @@ pub(super) fn handle_search_drop(
         target_index + 1
     };
 
-    leptos::task::spawn_local(async move {
-        let current = selected_playlist.get_untracked();
-        if let Some(pl) = current {
-            let mut entries: Vec<_> = pl.entries.iter().map(entry_to_payload).collect();
-            let insert_idx = insert_idx.min(entries.len());
-            entries.insert(
-                insert_idx,
-                crate::api::playlists::PlaylistEntryPayload::Presentation {
-                    entry_id: None,
-                    presentation_id,
-                },
-            );
-            match crate::api::playlists::replace_entries(&playlist_id, entries).await {
-                Ok(updated) => {
-                    selected_playlist.set(Some(updated));
-                    toast_variant.set("success".to_string());
-                    toast_message.set(Some("Added presentation to playlist".to_string()));
-                    if let Ok(pls) = crate::api::playlists::list_playlists().await {
-                        playlists.set(pls);
-                    }
-                }
-                Err(e) => {
-                    toast_variant.set("error".to_string());
-                    toast_message.set(Some(format!("Error: {e}")));
-                }
-            }
-        }
-    });
+    run_search_insert(
+        insert_idx,
+        presentation_id,
+        playlist_id,
+        selected_playlist,
+        playlists,
+        toast_message,
+        toast_variant,
+    );
 }
 
 /// Insert at a fixed position. Used by the head spacer (insert_idx=0),
 /// the tail spacer (insert_idx=entries.len()), and the empty-state
 /// placeholder (insert_idx=0). Reads the dragged presentation id from
-/// the dataTransfer and calls replace_entries with the new presentation
-/// inserted at insert_idx. Shows success/error toast.
+/// the dataTransfer and delegates to `run_search_insert`. Shows
+/// success/error toast.
 #[allow(clippy::too_many_arguments)]
 pub(super) fn handle_search_drop_at_fixed(
     ev: &web_sys::DragEvent,
@@ -161,34 +185,15 @@ pub(super) fn handle_search_drop_at_fixed(
         return;
     };
 
-    leptos::task::spawn_local(async move {
-        let current = selected_playlist.get_untracked();
-        if let Some(pl) = current {
-            let mut entries: Vec<_> = pl.entries.iter().map(entry_to_payload).collect();
-            let insert_idx = insert_idx.min(entries.len());
-            entries.insert(
-                insert_idx,
-                crate::api::playlists::PlaylistEntryPayload::Presentation {
-                    entry_id: None,
-                    presentation_id,
-                },
-            );
-            match crate::api::playlists::replace_entries(&playlist_id, entries).await {
-                Ok(updated) => {
-                    selected_playlist.set(Some(updated));
-                    toast_variant.set("success".to_string());
-                    toast_message.set(Some("Added presentation to playlist".to_string()));
-                    if let Ok(pls) = crate::api::playlists::list_playlists().await {
-                        playlists.set(pls);
-                    }
-                }
-                Err(e) => {
-                    toast_variant.set("error".to_string());
-                    toast_message.set(Some(format!("Error: {e}")));
-                }
-            }
-        }
-    });
+    run_search_insert(
+        insert_idx,
+        presentation_id,
+        playlist_id,
+        selected_playlist,
+        playlists,
+        toast_message,
+        toast_variant,
+    );
 }
 
 /// Render a transparent ~16px-tall <li> that captures search-drag dragover
