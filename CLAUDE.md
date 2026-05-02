@@ -263,8 +263,8 @@ Schema is mutable during pre-release:
 
 - Deploys NEVER delete the database — only binaries and service files are updated
 - Database is backed up automatically before each deploy (5 retained in `backups/`)
-- First-time deploys auto-import; subsequent deploys preserve all user data
-- Data import is a separate, explicit "Import Data" workflow in GitHub Actions
+- Imports happen only via the explicit Import Data workflow. Deploys never touch the database.
+- New server installations start with an empty libraries table. Run the Import Data workflow once after first deploy to populate it.
 
 ### Manual Import
 
