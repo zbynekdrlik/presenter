@@ -67,8 +67,15 @@ async fn put_parameter(
     Path(id): Path<String>,
     body: String,
 ) -> StatusCode {
+    // Truncate at a UTF-8 char boundary near 256 bytes. Worship lyrics
+    // contain multi-byte diacritics (Slovak/Czech: á, é, š, č, ď, etc.);
+    // a naive byte-index slice would panic mid-character.
     let preview = if body.len() > 256 {
-        Some(format!("{}...", &body[..256]))
+        let end = (0..=256)
+            .rev()
+            .find(|&i| body.is_char_boundary(i))
+            .unwrap_or(0);
+        Some(format!("{}...", &body[..end]))
     } else {
         Some(body)
     };
