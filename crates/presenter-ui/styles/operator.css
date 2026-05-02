@@ -1081,6 +1081,7 @@ body.operator {
 .operator__slides {
   flex: 1;
   overflow-y: auto;
+  overscroll-behavior: contain;
   padding: 0.35rem;
   display: grid;
   grid-template-columns: repeat(3, minmax(0, 1fr));

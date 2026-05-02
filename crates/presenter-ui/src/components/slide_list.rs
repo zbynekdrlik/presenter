@@ -305,6 +305,22 @@ pub fn SlideList() -> impl IntoView {
                         <div
                             class="operator__slides"
                             data-role="slides"
+                            on:wheel=move |ev: web_sys::WheelEvent| {
+                                // Issue #271 concern 2: neutralise macOS scroll
+                                // acceleration by intercepting wheel events and
+                                // applying a deterministic per-notch scroll.
+                                ev.prevent_default();
+                                let direction = ev.delta_y().signum();
+                                if direction == 0.0 {
+                                    return;
+                                }
+                                let Some(target) = ev.target() else { return; };
+                                let Ok(el) = target.dyn_into::<web_sys::Element>() else { return; };
+                                let Ok(Some(container_el)) = el.closest(".operator__slides") else { return; };
+                                let Ok(container) = container_el.dyn_into::<web_sys::HtmlElement>() else { return; };
+                                let step = step_for_wheel(&container);
+                                container.set_scroll_top((container.scroll_top() as f64 + direction * step) as i32);
+                            }
                         on:dragover=move |ev: web_sys::DragEvent| {
                             if op_dragover.dragging_slide_id.get_untracked().is_some() {
                                 ev.prevent_default();
@@ -1008,6 +1024,33 @@ fn scroll_slides_to_top() {
         return;
     };
     container.set_scroll_top(0);
+}
+
+/// Default fallback step for wheel scroll (pixels) when no slide card is
+/// rendered yet to measure.
+const DEFAULT_WHEEL_STEP_PX: f64 = 120.0;
+
+/// Returns the pixel distance one wheel notch should scroll the
+/// `.operator__slides` container. Measures the first rendered slide card's
+/// height + the grid row gap so the step adapts to user font-size scaling.
+/// Falls back to `DEFAULT_WHEEL_STEP_PX` if no card is rendered.
+///
+/// Issue #271 concern 2: linearises wheel scrolling to neutralise macOS
+/// scroll acceleration.
+fn step_for_wheel(container: &web_sys::HtmlElement) -> f64 {
+    let Ok(Some(card_el)) = container.query_selector(".operator__slide-card") else {
+        return DEFAULT_WHEEL_STEP_PX;
+    };
+    let Ok(card) = card_el.dyn_into::<web_sys::HtmlElement>() else {
+        return DEFAULT_WHEEL_STEP_PX;
+    };
+    let card_height = card.get_bounding_client_rect().height();
+    if card_height <= 0.0 {
+        return DEFAULT_WHEEL_STEP_PX;
+    }
+    // Grid row gap from operator.css `.operator__slides`: `gap: 0.9rem`.
+    // 0.9rem at 16px base = 14.4px. Hardcoded — if CSS changes, update here.
+    card_height + 14.4
 }
 
 /// Pure reorder: given a slide id list and a drag/target pair, returns the new
