@@ -77,6 +77,8 @@ mod android_stage;
 mod companion;
 mod config;
 mod live;
+#[cfg(feature = "mock-integrations")]
+mod mock_integrations;
 mod osc;
 mod resolume;
 mod router;
@@ -104,6 +106,8 @@ async fn main() -> anyhow::Result<()> {
         .await
         .with_context(|| format!("failed to bind to {addr}"))?;
     tracing::info!(%addr, "presenter server listening");
+    #[cfg(feature = "mock-integrations")]
+    mock_integrations::start_all().await?;
     axum::serve(listener, app).await.context("server failure")
 }
 

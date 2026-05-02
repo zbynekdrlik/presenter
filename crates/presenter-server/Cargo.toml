@@ -36,6 +36,10 @@ include_dir = "0.7"
 async-stream = "0.3"
 regex = "1"
 
+[features]
+default = []
+mock-integrations = []
+
 [dev-dependencies]
 axum.workspace = true
 serde_json.workspace = true

@@ -59,6 +59,14 @@ jobs:
         env:
           PRESENTER_BUILD_CHANNEL: release
 
+      - name: Verify prod artifact has no mock integrations
+        run: |
+          if strings target/release/presenter-server | grep -E "mock_integrations|MOCK_RESOLUME_ADDR|MOCK_ABLESET_ADDR|mock-resolume|mock-ableset" >/dev/null; then
+            echo "::error::Prod build contains mock-integrations symbols. Rebuild without --features mock-integrations."
+            exit 1
+          fi
+          echo "Prod artifact verified: no mock integration symbols"
+
       - name: Create release archive
         run: |
           mkdir -p release/bibles release/libraries
