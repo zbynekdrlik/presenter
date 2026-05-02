@@ -1,3 +1,4 @@
+#[cfg(test)]
 use presenter_core::{
     Library, LibraryId, Presentation, PresentationId, Slide, SlideContent, SlideGroup, SlideId,
     SlideText,
@@ -11,6 +12,7 @@ pub trait TestBibleIngestion {
     ) -> anyhow::Result<Vec<presenter_bible::BibleImportSummary>>;
 }
 
+#[cfg(test)]
 pub(crate) fn sample_library() -> Library {
     // These unwrap calls are safe because the sample data uses known-valid strings
     // that are well within the character limits
@@ -40,7 +42,6 @@ pub(crate) fn sample_library() -> Library {
         ],
     )
     .unwrap_or_else(|_| {
-        // Fallback with minimal content if somehow the above fails
         Presentation::new("Welcome", vec![])
             .unwrap_or_else(|_| unreachable!("empty presentation should be valid"))
     })
@@ -52,4 +53,10 @@ pub(crate) fn sample_library() -> Library {
                 .unwrap_or_else(|_| unreachable!("empty library should be valid"))
         })
         .with_id(LibraryId::new())
+}
+
+#[cfg(test)]
+pub(crate) async fn seed_sample_library(state: &super::AppState) -> anyhow::Result<()> {
+    state.repository.upsert_library(&sample_library()).await?;
+    Ok(())
 }

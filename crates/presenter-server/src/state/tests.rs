@@ -7,16 +7,22 @@ use presenter_core::{
 };
 
 #[tokio::test]
-async fn seeded_state_contains_library() {
+async fn empty_state_does_not_auto_seed_library() {
+    // Regression guard for issue #228: server startup must NOT auto-import any
+    // library. The Import Data workflow is the ONLY (re)populate path.
     let state = AppState::in_memory().await.unwrap();
     let libraries = state.libraries().await.unwrap();
-    assert_eq!(libraries.len(), 1);
-    assert_eq!(libraries[0].name, "Sample Library");
+    assert!(
+        libraries.is_empty(),
+        "expected empty libraries on fresh state, found {}",
+        libraries.len()
+    );
 }
 
 #[tokio::test]
 async fn stage_updates_emit_live_event() {
     let state = AppState::in_memory().await.unwrap();
+    super::seed_sample_library(&state).await.unwrap();
     let hub = state.live_hub();
     let mut rx = hub.subscribe();
 
@@ -90,6 +96,7 @@ async fn clear_stage_emits_blank_snapshot() {
 #[tokio::test]
 async fn update_slide_content_updates_repository() {
     let state = AppState::in_memory().await.unwrap();
+    super::seed_sample_library(&state).await.unwrap();
     let libraries = state.libraries().await.unwrap();
     let presentation = libraries[0].presentations[0].clone();
     let slide = presentation.slides[0].clone();
@@ -174,6 +181,7 @@ async fn stage_snapshot_defaults_to_first_presentation() {
 #[tokio::test]
 async fn stage_resolution_propagates_effective_group() {
     let state = AppState::in_memory().await.unwrap();
+    super::seed_sample_library(&state).await.unwrap();
     let libraries = state.libraries().await.unwrap();
     let presentation = libraries[0].presentations[0].clone();
     let first_group = presentation

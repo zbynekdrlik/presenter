@@ -352,7 +352,9 @@ async fn android_stage_display_endpoints_crud() {
 
 #[tokio::test]
 async fn libraries_endpoint_returns_seed() {
-    let app = build_router(AppState::in_memory().await.unwrap());
+    let state = AppState::in_memory().await.unwrap();
+    crate::state::seed_sample_library(&state).await.unwrap();
+    let app = build_router(state);
     let response = app
         .clone()
         .oneshot(
@@ -374,7 +376,9 @@ async fn libraries_endpoint_returns_seed() {
 
 #[tokio::test]
 async fn create_library_endpoint_persists_empty_library() {
-    let app = build_router(AppState::in_memory().await.unwrap());
+    let state = AppState::in_memory().await.unwrap();
+    crate::state::seed_sample_library(&state).await.unwrap();
+    let app = build_router(state);
     let body = serde_json::json!({ "name": "Autotest Library" }).to_string();
     let response = app
         .clone()
@@ -985,6 +989,7 @@ async fn timer_overlay_endpoint_renders_html() {
 #[tokio::test]
 async fn update_slide_content_endpoint_updates_slide() {
     let state = AppState::in_memory().await.unwrap();
+    crate::state::seed_sample_library(&state).await.unwrap();
     let libraries = state.libraries().await.unwrap();
     let presentation = &libraries[0].presentations[0];
     let slide = &presentation.slides[0];
@@ -1052,6 +1057,7 @@ async fn update_slide_content_endpoint_updates_slide() {
 #[tokio::test]
 async fn stage_displays_endpoint_returns_builtins() {
     let state = AppState::in_memory().await.unwrap();
+    crate::state::seed_sample_library(&state).await.unwrap();
     let libraries = state.libraries().await.unwrap();
     let presentation = &libraries[0].presentations[0];
     let current_slide = presentation.slides[0].id;
@@ -1138,6 +1144,7 @@ async fn stage_displays_endpoint_returns_builtins() {
 #[tokio::test]
 async fn stage_snapshot_endpoint_returns_json() {
     let state = AppState::in_memory().await.unwrap();
+    crate::state::seed_sample_library(&state).await.unwrap();
     let app = build_router(state.clone());
 
     let response = app
@@ -1236,6 +1243,7 @@ async fn stage_clear_endpoint_blanks_outputs() {
 #[tokio::test]
 async fn library_summary_endpoint_supports_filter() {
     let state = AppState::in_memory().await.unwrap();
+    crate::state::seed_sample_library(&state).await.unwrap();
     let app = build_router(state);
 
     let response = app
@@ -1276,6 +1284,7 @@ async fn library_summary_endpoint_supports_filter() {
 #[tokio::test]
 async fn presentation_detail_endpoint_returns_data() {
     let state = AppState::in_memory().await.unwrap();
+    crate::state::seed_sample_library(&state).await.unwrap();
     let libraries = state.libraries().await.unwrap();
     let presentation = &libraries[0].presentations[0];
     let app = build_router(state);
