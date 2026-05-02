@@ -369,6 +369,10 @@ export async function assertVersionLabel(
 ): Promise<void> {
   const versionEl = page.locator('[data-testid="version"]').first();
   await expect(versionEl).toBeVisible({ timeout: 10_000 });
+  // VersionLabel renders an empty <span> immediately; the version text
+  // populates asynchronously after /healthz resolves. Wait for non-empty
+  // text before reading, otherwise the assertion races with the WASM fetch.
+  await expect(versionEl).not.toHaveText("", { timeout: 10_000 });
 
   const text = (await versionEl.textContent())?.trim() ?? "";
   expect(text).toMatch(/^v\d+\.\d+\.\d+(-dev\.\d+)?(\s\(\w+\))?$/);
