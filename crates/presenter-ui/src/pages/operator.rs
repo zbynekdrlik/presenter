@@ -14,6 +14,7 @@ use crate::components::search::SearchResults;
 use crate::components::slide_list::SlideList;
 use crate::components::timer_panel::TimerPanel;
 use crate::components::toast::Toast;
+use crate::components::version_label::VersionLabel;
 use crate::pages::ai::AiPage;
 use crate::pages::bible::BiblePage;
 use crate::state::operator::OperatorState;
@@ -195,7 +196,7 @@ pub fn OperatorPage(#[prop(default = String::new())] initial_view: String) -> im
         <PlaylistModals />
         <PresentationModals />
         <footer class="operator__version">
-            <crate::components::version_label::VersionLabel />
+            <VersionLabel />
         </footer>
     }
 }
