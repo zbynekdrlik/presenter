@@ -1287,4 +1287,21 @@
       console.warn('failed to refresh AbleSet status', error);
     });
   }, STATUS_REFRESH_MS);
+
+  // #272: line-limit preference (operator-side, persisted in localStorage).
+  (function bindLineLimitPref() {
+    const input = document.querySelector('[data-role="pref-line-limit"]');
+    if (!input) return;
+    const stored = localStorage.getItem('lineLimit');
+    if (stored && /^\d+$/.test(stored)) {
+      input.value = stored;
+    }
+    input.addEventListener('input', () => {
+      const raw = input.value.trim();
+      if (!/^\d+$/.test(raw)) return;
+      const n = Number(raw);
+      if (n < 10 || n > 120) return;
+      localStorage.setItem('lineLimit', String(n));
+    });
+  })();
 })();

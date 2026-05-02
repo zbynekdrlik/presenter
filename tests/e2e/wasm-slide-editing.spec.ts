@@ -449,11 +449,13 @@ test.describe("WASM Slide Editing - Visual Feedback", () => {
   });
 
   test("line warnings update in real-time", async ({ page }) => {
+    // Line limit input moved out of the operator toolbar into /ui/settings
+    // (PR for #272). Seed localStorage BEFORE the page loads so the WASM
+    // OperatorState picks up the low limit at init.
+    await page.addInitScript(() =>
+      window.localStorage.setItem("lineLimit", "10"),
+    );
     await loadPresentationInEditMode(page);
-
-    // Set a low line limit
-    const lineLimitInput = page.locator('[data-role="line-limit"]');
-    await lineLimitInput.fill("10");
 
     const textarea = page
       .locator('[data-slide-id] textarea[data-field="main"]')
@@ -473,7 +475,6 @@ test.describe("WASM Slide Editing - Visual Feedback", () => {
     // Cleanup
     await textarea.fill(originalValue);
     await textarea.blur();
-    await lineLimitInput.fill("50");
   });
 
   test("group inheritance displays correctly", async ({ page }) => {

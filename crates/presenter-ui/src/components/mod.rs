@@ -6,6 +6,7 @@ pub mod modal;
 pub mod playlist_list;
 pub mod playlist_modal;
 pub mod presentation_list;
+mod presentation_list_drag;
 pub mod presentation_modal;
 pub mod search;
 pub mod slide_list;

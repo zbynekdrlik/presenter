@@ -202,6 +202,34 @@ fn SettingsDocument(
                             <p class="settings__form-status" data-role="feature-status" data-state="idle"></p>
                         </form>
                     </section>
+                    <section class="settings__card" data-role="preferences-card">
+                        <header class="settings__card-header">
+                            <div>
+                                <h2>"Preferences"</h2>
+                                <p class="settings__card-sub">
+                                    "Operator-side settings stored in your browser."
+                                </p>
+                            </div>
+                        </header>
+                        <form class="settings__form settings__form--compact" autocomplete="off">
+                            <div class="settings__form-row settings__form-row--compact settings__form-row--inline">
+                                <label class="settings__form-control--tiny">
+                                    <span>"Line limit (chars per line)"</span>
+                                    <input
+                                        type="number"
+                                        min="10"
+                                        max="120"
+                                        step="1"
+                                        value="32"
+                                        data-role="pref-line-limit"
+                                    />
+                                </label>
+                            </div>
+                            <p class="settings__hint">
+                                "Slides with longer lines show a warning marker. Reload the operator after changing."
+                            </p>
+                        </form>
+                    </section>
                     <section class="settings__card">
                         <header class="settings__card-header">
                             <div>

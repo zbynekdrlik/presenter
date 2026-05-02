@@ -752,49 +752,67 @@ body.operator {
   overflow: hidden;
 }
 
-.operator__slides-toolbar {
+/* #272: floating bubble + add button over the slides area */
+.operator__slides-area {
+  position: relative;
   display: flex;
-  justify-content: flex-end;
+  flex-direction: column;
+  flex: 1;
+  min-height: 0;
+}
+
+.operator__slides-bubble {
+  position: absolute;
+  top: 8px;
+  left: 8px;
+  z-index: 10;
+  display: inline-flex;
   align-items: center;
-  gap: 0.75rem;
-  padding: 0.75rem 1rem;
-  border-bottom: 1px solid var(--operator-border);
+  padding: 6px 14px;
+  border-radius: 999px;
+  background: rgba(20, 28, 50, 0.92);
+  color: #fff;
+  font-size: 13px;
+  font-weight: 600;
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.3);
+  cursor: grab;
+  user-select: none;
+  max-width: 60%;
+  overflow: hidden;
+  pointer-events: auto;
 }
 
-.operator__line-limit {
-  display: flex;
-  align-items: center;
-  gap: 0.4rem;
-  font-size: 0.78rem;
-  color: var(--operator-muted);
-  transition: opacity 0.2s ease;
+.operator__slides-bubble:active {
+  cursor: grabbing;
 }
 
-.operator__line-limit[hidden] {
-  display: none !important;
+.operator__slides-bubble-name {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
-.operator__line-limit input {
-  width: 3.5rem;
-  border-radius: 8px;
-  border: 1px solid var(--operator-border);
-  padding: 0.35rem 0.45rem;
-  font-size: 0.85rem;
-  text-align: center;
-  background: var(--operator-bg);
-  color: var(--operator-text);
+.operator__slides-add-floating {
+  position: absolute;
+  top: 8px;
+  right: 8px;
+  z-index: 10;
+  width: 36px;
+  height: 36px;
+  border-radius: 50%;
+  border: none;
+  background: rgba(59, 124, 255, 0.9);
+  color: #fff;
+  font-size: 22px;
+  font-weight: 700;
+  line-height: 1;
+  cursor: pointer;
+  box-shadow: 0 2px 6px rgba(0, 0, 0, 0.25);
+  pointer-events: auto;
 }
 
-.operator__line-limit[data-disabled="true"] {
-  opacity: 0.35;
-}
-
-.operator__line-limit[data-disabled="true"] input {
-  pointer-events: none;
-}
-
-body.operator[data-mode="live"] .operator__line-limit {
-  display: none !important;
+.operator__slides-add-floating:hover {
+  background: rgba(59, 124, 255, 1);
 }
 
 .operator__slides-actions button {
@@ -1049,21 +1067,6 @@ body.operator[data-mode="live"] .operator__line-limit {
   transform: none;
 }
 
-.operator__slides-add {
-  border: none;
-  border-radius: 8px;
-  padding: 0.35rem 0.75rem;
-  background: var(--operator-accent);
-  color: #ffffff;
-  font-weight: 600;
-  cursor: pointer;
-  box-shadow: 0 10px 18px rgba(59, 124, 255, 0.28);
-  transition: background 0.2s ease;
-}
-
-.operator__slides-add:hover {
-  background: var(--operator-accent-dark);
-}
 
 .operator__group-count--static {
   cursor: default;
@@ -1997,6 +2000,16 @@ body.operator[data-view="settings"] [data-view-panel="settings"] {
   width: 100%;
 }
 
+/* Base toolbar shared by slides column sub-UIs (e.g. Bible page uses
+   .operator__slides-toolbar--minimal to override padding/border). */
+.operator__slides-toolbar {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+  padding: 0.75rem 1rem;
+  border-bottom: 1px solid var(--operator-border);
+}
+
 .operator__slides {
   flex: 1;
   overflow-y: auto;
@@ -2253,11 +2266,11 @@ body.operator[data-view="settings"] [data-view-panel="settings"] {
   }
 }
 
-/* ── Bible: hide add slide button except in prepared tab ── */
-body.operator.operator--bible .operator__slides-add {
+/* ── Bible: hide floating add button except in prepared tab ── */
+body.operator.operator--bible .operator__slides-add-floating {
   display: none;
 }
-body.operator.operator--bible[data-bible-tab="prepared"] .operator__slides-add {
+body.operator.operator--bible[data-bible-tab="prepared"] .operator__slides-add-floating {
   display: flex;
 }
 
@@ -2787,3 +2800,50 @@ body.operator[data-mode="live"][data-bible-tab="prepared"]
   font-size: 0.8rem;
 }
 .info-popover__reload:hover { background: rgba(148, 163, 184, 0.25); }
+
+/* #274 follow-up: head/tail spacers and empty-state drop target */
+.operator__list-spacer {
+    list-style: none;
+    margin: 0;
+    padding: 0;
+    height: 16px;
+    background: transparent;
+    border: 0;
+    position: relative;
+}
+
+.operator__list-spacer[data-drop-position="before"]::before,
+.operator__list-spacer[data-drop-position="after"]::after {
+    content: "";
+    position: absolute;
+    left: 8px;
+    right: 8px;
+    height: 3px;
+    background: rgba(59, 124, 255, 0.85);
+    border-radius: 2px;
+    pointer-events: none;
+}
+
+.operator__list-spacer[data-drop-position="before"]::before {
+    top: -2px;
+}
+
+.operator__list-spacer[data-drop-position="after"]::after {
+    bottom: -2px;
+}
+
+.operator__list-empty-drop {
+    position: relative;
+}
+
+.operator__list-empty-drop[data-drop-position="before"]::before {
+    content: "";
+    position: absolute;
+    left: 8px;
+    right: 8px;
+    height: 3px;
+    background: rgba(59, 124, 255, 0.85);
+    border-radius: 2px;
+    pointer-events: none;
+    bottom: -2px;
+}

@@ -1,21 +1,14 @@
 use leptos::prelude::*;
+use wasm_bindgen::JsCast;
 
 use crate::components::modal;
 use crate::state::operator::OperatorState;
 use crate::state::AppContext;
 
-// Signal for tracking dragged entry ID during playlist reordering
-thread_local! {
-    static DRAGGING_ENTRY_ID: std::cell::RefCell<Option<String>> = const { std::cell::RefCell::new(None) };
-}
-
-fn set_dragging_entry(id: Option<String>) {
-    DRAGGING_ENTRY_ID.with(|cell| *cell.borrow_mut() = id);
-}
-
-fn get_dragging_entry() -> Option<String> {
-    DRAGGING_ENTRY_ID.with(|cell| cell.borrow().clone())
-}
+use super::presentation_list_drag::{
+    drop_side_for_event, entry_to_payload, get_dragging_entry, get_entry_id, handle_search_drop,
+    make_fixed_drop_handlers, render_list_spacer, set_dragging_entry, FixedDropHandlers,
+};
 
 #[component]
 pub fn PresentationList() -> impl IntoView {
@@ -165,11 +158,34 @@ pub fn PresentationList() -> impl IntoView {
                     if has_playlist {
                         if let Some(playlist) = &selected_playlist {
                             if playlist.entries.is_empty() {
+                                let playlist_id = ctx.selected_playlist_id.get_untracked().unwrap_or_default();
+                                let FixedDropHandlers {
+                                    on_dragover,
+                                    on_dragleave,
+                                    on_drop,
+                                } = make_fixed_drop_handlers(
+                                    0,
+                                    "before",
+                                    op.clone(),
+                                    playlist_id,
+                                    ctx.selected_playlist,
+                                    ctx.playlists,
+                                    ctx.toast_message,
+                                    ctx.toast_variant,
+                                );
                                 return view! {
-                                    <li class="empty">"Playlist is empty. Drag songs from a library or add a separator."</li>
+                                    <li
+                                        class="empty operator__list-empty-drop"
+                                        data-role="presentation-empty-drop"
+                                        on:dragover=on_dragover
+                                        on:dragleave=on_dragleave
+                                        on:drop=on_drop
+                                    >
+                                        "Playlist is empty. Drag songs from a library or add a separator."
+                                    </li>
                                 }.into_any();
                             }
-                            return playlist.entries.iter().enumerate().map(|(idx, entry)| {
+                            let entries_view: Vec<_> = playlist.entries.iter().enumerate().map(|(idx, entry)| {
                                 let entry_id = entry.id.to_string();
                                 match &entry.kind {
                                     presenter_core::playlist::PlaylistEntryKind::Separator { name } => {
@@ -199,9 +215,41 @@ pub fn PresentationList() -> impl IntoView {
                                                 on:dragend=move |_| {
                                                     set_dragging_entry(None);
                                                 }
-                                                on:dragover=move |ev: web_sys::DragEvent| {
-                                                    if get_dragging_entry().is_some() {
+                                                on:dragover={
+                                                    let op_for_dragover = op.clone();
+                                                    move |ev: web_sys::DragEvent| {
+                                                        let is_reorder = get_dragging_entry().is_some();
+                                                        let is_search = op_for_dragover.dragging_from_search.get_untracked();
+                                                        if !is_reorder && !is_search {
+                                                            return;
+                                                        }
                                                         ev.prevent_default();
+                                                        // Only the search-drag path renders the line indicator.
+                                                        // Within-playlist reorder uses slot-replacement (existing behavior).
+                                                        if !is_search {
+                                                            return;
+                                                        }
+                                                        if let Some(target) = ev
+                                                            .current_target()
+                                                            .and_then(|t| t.dyn_into::<web_sys::Element>().ok())
+                                                        {
+                                                            let side = drop_side_for_event(&ev, &target);
+                                                            let _ = target.set_attribute("data-drop-position", side);
+                                                        }
+                                                    }
+                                                }
+                                                on:dragleave={
+                                                    let op_for_dragleave = op.clone();
+                                                    move |ev: web_sys::DragEvent| {
+                                                        if !op_for_dragleave.dragging_from_search.get_untracked() {
+                                                            return;
+                                                        }
+                                                        if let Some(target) = ev
+                                                            .current_target()
+                                                            .and_then(|t| t.dyn_into::<web_sys::Element>().ok())
+                                                        {
+                                                            let _ = target.remove_attribute("data-drop-position");
+                                                        }
                                                     }
                                                 }
                                                 on:drop={
@@ -209,8 +257,30 @@ pub fn PresentationList() -> impl IntoView {
                                                     let playlist_id = playlist_id_reorder.clone();
                                                     let selected_playlist = ctx.selected_playlist;
                                                     let playlists = ctx.playlists;
+                                                    let toast_message = ctx.toast_message;
+                                                    let toast_variant = ctx.toast_variant;
+                                                    let op_for_drop = op.clone();
+                                                    let target_index = idx;
                                                     move |ev: web_sys::DragEvent| {
                                                         ev.prevent_default();
+
+                                                        // ----- New: search-drag path (issue #274) -----
+                                                        if op_for_drop.dragging_from_search.get_untracked() {
+                                                            handle_search_drop(
+                                                                &ev,
+                                                                target_index,
+                                                                playlist_id.clone(),
+                                                                selected_playlist,
+                                                                playlists,
+                                                                toast_message,
+                                                                toast_variant,
+                                                            );
+                                                            op_for_drop.dragging_from_search.set(false);
+                                                            op_for_drop.search_dragging.set(false);
+                                                            return;
+                                                        }
+
+                                                        // ----- Existing: within-playlist reorder path (UNCHANGED) -----
                                                         if let Some(dragged_id) = get_dragging_entry() {
                                                             if dragged_id == target_entry_id { return; }
                                                             let playlist_id = playlist_id.clone();
@@ -381,9 +451,41 @@ pub fn PresentationList() -> impl IntoView {
                                                 on:dragend=move |_| {
                                                     set_dragging_entry(None);
                                                 }
-                                                on:dragover=move |ev: web_sys::DragEvent| {
-                                                    if get_dragging_entry().is_some() {
+                                                on:dragover={
+                                                    let op_for_dragover = op.clone();
+                                                    move |ev: web_sys::DragEvent| {
+                                                        let is_reorder = get_dragging_entry().is_some();
+                                                        let is_search = op_for_dragover.dragging_from_search.get_untracked();
+                                                        if !is_reorder && !is_search {
+                                                            return;
+                                                        }
                                                         ev.prevent_default();
+                                                        // Only the search-drag path renders the line indicator.
+                                                        // Within-playlist reorder uses slot-replacement (existing behavior).
+                                                        if !is_search {
+                                                            return;
+                                                        }
+                                                        if let Some(target) = ev
+                                                            .current_target()
+                                                            .and_then(|t| t.dyn_into::<web_sys::Element>().ok())
+                                                        {
+                                                            let side = drop_side_for_event(&ev, &target);
+                                                            let _ = target.set_attribute("data-drop-position", side);
+                                                        }
+                                                    }
+                                                }
+                                                on:dragleave={
+                                                    let op_for_dragleave = op.clone();
+                                                    move |ev: web_sys::DragEvent| {
+                                                        if !op_for_dragleave.dragging_from_search.get_untracked() {
+                                                            return;
+                                                        }
+                                                        if let Some(target) = ev
+                                                            .current_target()
+                                                            .and_then(|t| t.dyn_into::<web_sys::Element>().ok())
+                                                        {
+                                                            let _ = target.remove_attribute("data-drop-position");
+                                                        }
                                                     }
                                                 }
                                                 on:drop={
@@ -391,8 +493,30 @@ pub fn PresentationList() -> impl IntoView {
                                                     let playlist_id = playlist_id_reorder.clone();
                                                     let selected_playlist = ctx.selected_playlist;
                                                     let playlists = ctx.playlists;
+                                                    let toast_message = ctx.toast_message;
+                                                    let toast_variant = ctx.toast_variant;
+                                                    let op_for_drop = op.clone();
+                                                    let target_index = idx;
                                                     move |ev: web_sys::DragEvent| {
                                                         ev.prevent_default();
+
+                                                        // ----- New: search-drag path (issue #274) -----
+                                                        if op_for_drop.dragging_from_search.get_untracked() {
+                                                            handle_search_drop(
+                                                                &ev,
+                                                                target_index,
+                                                                playlist_id.clone(),
+                                                                selected_playlist,
+                                                                playlists,
+                                                                toast_message,
+                                                                toast_variant,
+                                                            );
+                                                            op_for_drop.dragging_from_search.set(false);
+                                                            op_for_drop.search_dragging.set(false);
+                                                            return;
+                                                        }
+
+                                                        // ----- Existing: within-playlist reorder path (UNCHANGED) -----
                                                         if let Some(dragged_id) = get_dragging_entry() {
                                                             if dragged_id == target_entry_id { return; }
                                                             let playlist_id = playlist_id.clone();
@@ -481,7 +605,38 @@ pub fn PresentationList() -> impl IntoView {
                                         }.into_any()
                                     }
                                 }
-                            }).collect_view().into_any();
+                            }).collect();
+                            let entries_len = playlist.entries.len();
+                            let playlist_id_spacer = ctx.selected_playlist_id.get_untracked().unwrap_or_default();
+                            let selected_playlist = ctx.selected_playlist;
+                            let playlists = ctx.playlists;
+                            let toast_message = ctx.toast_message;
+                            let toast_variant = ctx.toast_variant;
+                            let head_view = render_list_spacer(
+                                "head-spacer",
+                                0,
+                                op.clone(),
+                                playlist_id_spacer.clone(),
+                                selected_playlist,
+                                playlists,
+                                toast_message,
+                                toast_variant,
+                            );
+                            let tail_view = render_list_spacer(
+                                "tail-spacer",
+                                entries_len,
+                                op.clone(),
+                                playlist_id_spacer,
+                                selected_playlist,
+                                playlists,
+                                toast_message,
+                                toast_variant,
+                            );
+                            return view! {
+                                {head_view}
+                                {entries_view}
+                                {tail_view}
+                            }.into_any();
                         }
                     }
 
@@ -565,37 +720,5 @@ pub fn PresentationList() -> impl IntoView {
                 }}
             </ul>
         </div>
-    }
-}
-
-/// Convert a playlist entry to an API payload for replace_entries calls.
-fn entry_to_payload(
-    e: &presenter_core::playlist::PlaylistEntry,
-) -> crate::api::playlists::PlaylistEntryPayload {
-    match &e.kind {
-        presenter_core::playlist::PlaylistEntryKind::Presentation {
-            presentation_id, ..
-        } => crate::api::playlists::PlaylistEntryPayload::Presentation {
-            entry_id: Some(e.id.to_string()),
-            presentation_id: presentation_id.to_string(),
-        },
-        presenter_core::playlist::PlaylistEntryKind::Separator { name } => {
-            crate::api::playlists::PlaylistEntryPayload::Separator {
-                entry_id: Some(e.id.to_string()),
-                name: name.clone(),
-            }
-        }
-    }
-}
-
-/// Get entry_id from a PlaylistEntryPayload
-fn get_entry_id(payload: &crate::api::playlists::PlaylistEntryPayload) -> Option<&String> {
-    match payload {
-        crate::api::playlists::PlaylistEntryPayload::Presentation { entry_id, .. } => {
-            entry_id.as_ref()
-        }
-        crate::api::playlists::PlaylistEntryPayload::Separator { entry_id, .. } => {
-            entry_id.as_ref()
-        }
     }
 }

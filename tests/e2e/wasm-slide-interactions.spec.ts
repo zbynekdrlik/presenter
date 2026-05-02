@@ -368,6 +368,12 @@ test.describe("WASM Operator Slide Interactions", () => {
   });
 
   test("line limit warnings display", async ({ page }) => {
+    // Line limit input moved out of the operator toolbar into /ui/settings
+    // (PR for #272). Seed localStorage BEFORE the page loads so the WASM
+    // OperatorState picks up the low limit at init.
+    await page.addInitScript(() =>
+      window.localStorage.setItem("lineLimit", "10"),
+    );
     await loadPresentationWithSlides(page);
 
     // Switch to edit mode
@@ -376,10 +382,6 @@ test.describe("WASM Operator Slide Interactions", () => {
       () => document.body.getAttribute("data-mode") === "edit",
       { timeout: 5_000 },
     );
-
-    // Set a low line limit
-    const lineLimitInput = page.locator('[data-role="line-limit"]');
-    await lineLimitInput.fill("10");
 
     // Type a long line in the textarea
     const textarea = page
@@ -393,8 +395,7 @@ test.describe("WASM Operator Slide Interactions", () => {
       .first();
     await expect(warning).toBeVisible({ timeout: 2_000 });
 
-    // Reset line limit
-    await lineLimitInput.fill("50");
+    // Cleanup
     await textarea.blur();
   });
 });
