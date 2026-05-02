@@ -13,6 +13,7 @@ use serde::Serialize;
 const MAX_ENTRIES: usize = 1024;
 
 #[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
 pub struct LogEntry {
     pub at: DateTime<Utc>,
     pub mock: &'static str,
