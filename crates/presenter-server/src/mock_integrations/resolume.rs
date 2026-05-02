@@ -27,9 +27,9 @@ const MOCK_NAME: &str = "resolume";
 pub async fn spawn(log: Arc<RequestLog>) -> anyhow::Result<()> {
     let app = Router::new()
         .route("/api/v1/composition", get(get_composition))
-        .route("/api/v1/parameter/by-id/:id", put(put_parameter))
+        .route("/api/v1/parameter/by-id/{id}", put(put_parameter))
         .route(
-            "/api/v1/composition/clips/by-id/:id/connect",
+            "/api/v1/composition/clips/by-id/{id}/connect",
             post(post_clip_connect),
         )
         .route("/__mock/log", get(log_handler))
