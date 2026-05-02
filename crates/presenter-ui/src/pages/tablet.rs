@@ -4,6 +4,7 @@ use wasm_bindgen::JsCast;
 
 use crate::api::bible::{self, BibleSlideDto, BibleSlideMetaBible};
 use crate::components::info_popover::InfoPopover;
+use crate::components::version_label::VersionLabel;
 use crate::state::tablet::TabletContext;
 use crate::ws::{self, WsState};
 
@@ -146,6 +147,9 @@ pub fn TabletPage() -> impl IntoView {
             <TabletMain />
         </main>
         <TabletToast />
+        <span class="tablet__version-badge">
+            <VersionLabel />
+        </span>
     }
 }
 
