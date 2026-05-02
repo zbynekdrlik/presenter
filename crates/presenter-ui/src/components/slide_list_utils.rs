@@ -55,6 +55,37 @@ pub(super) fn apply_focused_class(slide_id: &str) {
     }
 }
 
+/// Pure reorder: given a slide id list and a drag/target pair, returns the new
+/// ordering, or `None` if the drag is a no-op (same id, missing ids).
+///
+/// Direction-based insertion: forward drags land AFTER the target, backward
+/// drags land BEFORE. This guarantees every distinct drag visibly moves the
+/// slide (the previous drop-position heuristic could be a no-op on forward
+/// drags into a target's upper half).
+pub(super) fn reorder_slide_ids(
+    ids: Vec<String>,
+    dragged: &str,
+    target: &str,
+) -> Option<Vec<String>> {
+    if dragged == target {
+        return None;
+    }
+    let drag_pos = ids.iter().position(|id| id == dragged)?;
+    let target_pos = ids.iter().position(|id| id == target)?;
+    let forward = drag_pos < target_pos;
+    let mut new_ids = ids;
+    new_ids.remove(drag_pos);
+    // After removal, target_pos shifts down by 1 if the dragged slide was before it.
+    let adjusted_target = if forward { target_pos - 1 } else { target_pos };
+    let insert_idx = if forward {
+        adjusted_target + 1
+    } else {
+        adjusted_target
+    };
+    new_ids.insert(insert_idx, dragged.to_string());
+    Some(new_ids)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -129,5 +160,58 @@ mod tests {
     fn zero_limit_disables_warnings() {
         let long = "abcdefghijklmnopqrstuvwxyz0123456";
         assert!(!field_has_warning(long, 0));
+    }
+
+    fn ids(items: &[&str]) -> Vec<String> {
+        items.iter().map(|s| s.to_string()).collect()
+    }
+
+    #[test]
+    fn reorder_forward_drag_lands_after_target() {
+        // Drag "a" (pos 0) onto "d" (pos 3) → "a" ends up at pos 3.
+        let result = reorder_slide_ids(ids(&["a", "b", "c", "d", "e"]), "a", "d").unwrap();
+        assert_eq!(result, ids(&["b", "c", "d", "a", "e"]));
+    }
+
+    #[test]
+    fn reorder_backward_drag_lands_on_target_position() {
+        // Drag "d" (pos 3) onto "a" (pos 0) → "d" ends up at pos 0.
+        let result = reorder_slide_ids(ids(&["a", "b", "c", "d", "e"]), "d", "a").unwrap();
+        assert_eq!(result, ids(&["d", "a", "b", "c", "e"]));
+    }
+
+    #[test]
+    fn reorder_adjacent_forward_swap() {
+        // Drag "b" onto "c" → "b" and "c" swap.
+        let result = reorder_slide_ids(ids(&["a", "b", "c", "d"]), "b", "c").unwrap();
+        assert_eq!(result, ids(&["a", "c", "b", "d"]));
+    }
+
+    #[test]
+    fn reorder_adjacent_backward_swap() {
+        // Drag "c" onto "b" → "c" and "b" swap.
+        let result = reorder_slide_ids(ids(&["a", "b", "c", "d"]), "c", "b").unwrap();
+        assert_eq!(result, ids(&["a", "c", "b", "d"]));
+    }
+
+    #[test]
+    fn reorder_same_id_returns_none() {
+        assert!(reorder_slide_ids(ids(&["a", "b"]), "a", "a").is_none());
+    }
+
+    #[test]
+    fn reorder_missing_dragged_returns_none() {
+        assert!(reorder_slide_ids(ids(&["a", "b"]), "z", "a").is_none());
+    }
+
+    #[test]
+    fn reorder_missing_target_returns_none() {
+        assert!(reorder_slide_ids(ids(&["a", "b"]), "a", "z").is_none());
+    }
+
+    #[test]
+    fn reorder_preserves_length() {
+        let result = reorder_slide_ids(ids(&["a", "b", "c", "d", "e"]), "a", "e").unwrap();
+        assert_eq!(result.len(), 5);
     }
 }

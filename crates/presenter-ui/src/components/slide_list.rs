@@ -9,8 +9,10 @@ use crate::state::operator::OperatorState;
 use crate::state::AppContext;
 use crate::utils::color::group_pill_style;
 
+use super::slide_list_scroll::{handle_wheel_event, scroll_slide_into_view, scroll_slides_to_top};
 use super::slide_list_utils::{
-    apply_focused_class, field_has_warning, format_multiline, slide_has_any_warning,
+    apply_focused_class, field_has_warning, format_multiline, reorder_slide_ids,
+    slide_has_any_warning,
 };
 
 /// Get a textarea/input value from the DOM by slide_id and field name.
@@ -305,22 +307,7 @@ pub fn SlideList() -> impl IntoView {
                         <div
                             class="operator__slides"
                             data-role="slides"
-                            on:wheel=move |ev: web_sys::WheelEvent| {
-                                // Issue #271 concern 2: neutralise macOS scroll
-                                // acceleration by intercepting wheel events and
-                                // applying a deterministic per-notch scroll.
-                                ev.prevent_default();
-                                let direction = ev.delta_y().signum();
-                                if direction == 0.0 {
-                                    return;
-                                }
-                                let Some(target) = ev.target() else { return; };
-                                let Ok(el) = target.dyn_into::<web_sys::Element>() else { return; };
-                                let Ok(Some(container_el)) = el.closest(".operator__slides") else { return; };
-                                let Ok(container) = container_el.dyn_into::<web_sys::HtmlElement>() else { return; };
-                                let step = step_for_wheel(&container);
-                                container.set_scroll_top((container.scroll_top() as f64 + direction * step) as i32);
-                            }
+                            on:wheel=handle_wheel_event
                         on:dragover=move |ev: web_sys::DragEvent| {
                             if op_dragover.dragging_slide_id.get_untracked().is_some() {
                                 ev.prevent_default();
@@ -931,209 +918,5 @@ pub fn SlideList() -> impl IntoView {
                 }
             </div>
         </section>
-    }
-}
-
-/// Number of columns in the `.operator__slides` grid (CSS:
-/// `grid-template-columns: repeat(3, minmax(0, 1fr))`). The next-row anchor
-/// for an active slide at DOM index N is the slide at index N + COLUMNS_PER_ROW.
-const COLUMNS_PER_ROW: usize = 3;
-
-/// Lookahead-aware scroll: ensures the active slide AND the next row of
-/// slides are visible in the `.operator__slides` container. If the active
-/// slide is on the last row (no next-row anchor), falls back to "ensure
-/// active is visible". If the active slide is above the viewport (backward
-/// navigation), top-aligns it.
-///
-/// Issue #271 concern 1.
-fn scroll_slide_into_view(slide_id: &str) {
-    let Some(document) = web_sys::window().and_then(|w| w.document()) else {
-        return;
-    };
-    let active_selector = format!(".operator__slides [data-slide-id=\"{slide_id}\"]");
-    let Ok(Some(active_el)) = document.query_selector(&active_selector) else {
-        return;
-    };
-    let Ok(Some(container_el)) = active_el.closest(".operator__slides") else {
-        return;
-    };
-    let Ok(container) = container_el.dyn_into::<web_sys::HtmlElement>() else {
-        return;
-    };
-    let Ok(active_html) = active_el.dyn_into::<web_sys::HtmlElement>() else {
-        return;
-    };
-
-    let container_rect = container.get_bounding_client_rect();
-    let active_rect = active_html.get_bounding_client_rect();
-    let scroll_top = container.scroll_top() as f64;
-
-    // Backward navigation: top-align the active slide if it's above the viewport.
-    if active_rect.top() < container_rect.top() {
-        let delta = container_rect.top() - active_rect.top();
-        container.set_scroll_top((scroll_top - delta) as i32);
-        return;
-    }
-
-    // Find the next-row anchor: the slide at active_index + COLUMNS_PER_ROW
-    // in DOM order within the same container.
-    let cards = container.query_selector_all("[data-slide-id]").ok();
-    let next_row_el: Option<web_sys::HtmlElement> = cards.and_then(|nodes| {
-        let mut active_index: Option<usize> = None;
-        for i in 0..nodes.length() {
-            if let Some(node) = nodes.item(i) {
-                if let Ok(el) = node.dyn_into::<web_sys::Element>() {
-                    if el.get_attribute("data-slide-id").as_deref() == Some(slide_id) {
-                        active_index = Some(i as usize);
-                        break;
-                    }
-                }
-            }
-        }
-        let target_index = active_index? + COLUMNS_PER_ROW;
-        nodes
-            .item(target_index as u32)
-            .and_then(|n| n.dyn_into::<web_sys::HtmlElement>().ok())
-    });
-
-    if let Some(anchor) = next_row_el {
-        // Scroll so the next-row anchor's bottom is at the container's bottom.
-        let anchor_rect = anchor.get_bounding_client_rect();
-        if anchor_rect.bottom() > container_rect.bottom() {
-            let delta = anchor_rect.bottom() - container_rect.bottom();
-            container.set_scroll_top((scroll_top + delta) as i32);
-        }
-    } else if active_rect.bottom() > container_rect.bottom() {
-        // No next-row anchor (last row) — fall back to bottom-aligning active.
-        let delta = active_rect.bottom() - container_rect.bottom();
-        container.set_scroll_top((scroll_top + delta) as i32);
-    }
-}
-
-/// Scrolls the `.operator__slides` container to its top. Used when the
-/// operator opens a new presentation so the first slide is visible without
-/// manual scroll-up. Issue #271 concern 3.
-fn scroll_slides_to_top() {
-    let Some(document) = web_sys::window().and_then(|w| w.document()) else {
-        return;
-    };
-    let Ok(Some(container_el)) = document.query_selector(".operator__slides") else {
-        return;
-    };
-    let Ok(container) = container_el.dyn_into::<web_sys::HtmlElement>() else {
-        return;
-    };
-    container.set_scroll_top(0);
-}
-
-/// Default fallback step for wheel scroll (pixels) when no slide card is
-/// rendered yet to measure.
-const DEFAULT_WHEEL_STEP_PX: f64 = 120.0;
-
-/// Returns the pixel distance one wheel notch should scroll the
-/// `.operator__slides` container. Measures the first rendered slide card's
-/// height + the grid row gap so the step adapts to user font-size scaling.
-/// Falls back to `DEFAULT_WHEEL_STEP_PX` if no card is rendered.
-///
-/// Issue #271 concern 2: linearises wheel scrolling to neutralise macOS
-/// scroll acceleration.
-fn step_for_wheel(container: &web_sys::HtmlElement) -> f64 {
-    let Ok(Some(card_el)) = container.query_selector(".operator__slide-card") else {
-        return DEFAULT_WHEEL_STEP_PX;
-    };
-    let Ok(card) = card_el.dyn_into::<web_sys::HtmlElement>() else {
-        return DEFAULT_WHEEL_STEP_PX;
-    };
-    let card_height = card.get_bounding_client_rect().height();
-    if card_height <= 0.0 {
-        return DEFAULT_WHEEL_STEP_PX;
-    }
-    // Grid row gap from operator.css `.operator__slides`: `gap: 0.9rem`.
-    // 0.9rem at 16px base = 14.4px. Hardcoded — if CSS changes, update here.
-    card_height + 14.4
-}
-
-/// Pure reorder: given a slide id list and a drag/target pair, returns the new
-/// ordering, or `None` if the drag is a no-op (same id, missing ids).
-///
-/// Direction-based insertion: forward drags land AFTER the target, backward
-/// drags land BEFORE. This guarantees every distinct drag visibly moves the
-/// slide (the previous drop-position heuristic could be a no-op on forward
-/// drags into a target's upper half).
-fn reorder_slide_ids(ids: Vec<String>, dragged: &str, target: &str) -> Option<Vec<String>> {
-    if dragged == target {
-        return None;
-    }
-    let drag_pos = ids.iter().position(|id| id == dragged)?;
-    let target_pos = ids.iter().position(|id| id == target)?;
-    let forward = drag_pos < target_pos;
-    let mut new_ids = ids;
-    new_ids.remove(drag_pos);
-    // After removal, target_pos shifts down by 1 if the dragged slide was before it.
-    let adjusted_target = if forward { target_pos - 1 } else { target_pos };
-    let insert_idx = if forward {
-        adjusted_target + 1
-    } else {
-        adjusted_target
-    };
-    new_ids.insert(insert_idx, dragged.to_string());
-    Some(new_ids)
-}
-
-#[cfg(test)]
-mod reorder_tests {
-    use super::reorder_slide_ids;
-
-    fn ids(items: &[&str]) -> Vec<String> {
-        items.iter().map(|s| s.to_string()).collect()
-    }
-
-    #[test]
-    fn forward_drag_lands_after_target() {
-        // Drag "a" (pos 0) onto "d" (pos 3) → "a" ends up at pos 3.
-        let result = reorder_slide_ids(ids(&["a", "b", "c", "d", "e"]), "a", "d").unwrap();
-        assert_eq!(result, ids(&["b", "c", "d", "a", "e"]));
-    }
-
-    #[test]
-    fn backward_drag_lands_on_target_position() {
-        // Drag "d" (pos 3) onto "a" (pos 0) → "d" ends up at pos 0.
-        let result = reorder_slide_ids(ids(&["a", "b", "c", "d", "e"]), "d", "a").unwrap();
-        assert_eq!(result, ids(&["d", "a", "b", "c", "e"]));
-    }
-
-    #[test]
-    fn adjacent_forward_swap() {
-        // Drag "b" onto "c" → "b" and "c" swap.
-        let result = reorder_slide_ids(ids(&["a", "b", "c", "d"]), "b", "c").unwrap();
-        assert_eq!(result, ids(&["a", "c", "b", "d"]));
-    }
-
-    #[test]
-    fn adjacent_backward_swap() {
-        // Drag "c" onto "b" → "c" and "b" swap.
-        let result = reorder_slide_ids(ids(&["a", "b", "c", "d"]), "c", "b").unwrap();
-        assert_eq!(result, ids(&["a", "c", "b", "d"]));
-    }
-
-    #[test]
-    fn same_id_returns_none() {
-        assert!(reorder_slide_ids(ids(&["a", "b"]), "a", "a").is_none());
-    }
-
-    #[test]
-    fn missing_dragged_returns_none() {
-        assert!(reorder_slide_ids(ids(&["a", "b"]), "z", "a").is_none());
-    }
-
-    #[test]
-    fn missing_target_returns_none() {
-        assert!(reorder_slide_ids(ids(&["a", "b"]), "a", "z").is_none());
-    }
-
-    #[test]
-    fn preserves_length() {
-        let result = reorder_slide_ids(ids(&["a", "b", "c", "d", "e"]), "a", "e").unwrap();
-        assert_eq!(result.len(), 5);
     }
 }
