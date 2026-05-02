@@ -482,7 +482,7 @@ jobs:
         run: bash scripts/build-ui.sh
 
       - name: Build release binaries
-        run: cargo build --release -p presenter-server -p presenter-importer
+        run: cargo build --release -p presenter-server -p presenter-importer --features presenter-server/mock-integrations
         env:
           PRESENTER_BUILD_CHANNEL: dev
 
@@ -807,6 +807,21 @@ jobs:
           rm -f /opt/presenter-dev/presenter.db-wal /opt/presenter-dev/presenter.db-shm
           DB_SIZE=$(stat -c %s /opt/presenter-dev/presenter.db)
           echo "Dev database replaced with production snapshot (${DB_SIZE} bytes)"
+          REMOTE_SCRIPT
+
+      - name: Redirect integrations to mock endpoints
+        run: |
+          ssh deploy-target << 'REMOTE_SCRIPT'
+          set -e
+          DB_PATH="/opt/presenter-dev/presenter.db"
+          if [ ! -f "$DB_PATH" ]; then
+            echo "::warning::No dev database found; skipping integration redirect"
+            exit 0
+          fi
+          # Issue #279: prod-snapshot DB carries production-side hosts that would
+          # cause dev to send commands to live hardware. Rewrite to mock endpoints.
+          sqlite3 "$DB_PATH" "UPDATE resolume_hosts SET host='127.0.0.1', port=8091, label=label || ' (mock)'; UPDATE ableset_settings SET host='127.0.0.1', port=39042; DELETE FROM android_stage_displays; DELETE FROM video_sources;"
+          echo "Integration tables redirected to localhost mock endpoints"
           REMOTE_SCRIPT
 
       - name: Validate database schema (dev DB)
