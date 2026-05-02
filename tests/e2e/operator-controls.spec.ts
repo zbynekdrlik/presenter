@@ -11,6 +11,7 @@
 
 import { test, expect } from "@playwright/test";
 import {
+  assertVersionLabel,
   deriveTestConfig,
   refreshDevData,
   startTestServer,
@@ -80,6 +81,7 @@ test.describe("Operator Control Buttons", () => {
     await page.waitForSelector('[data-role="library-list"]', {
       timeout: 30_000,
     });
+    await assertVersionLabel(page, baseURL);
 
     const abletonButton = page.locator('[data-role="ableset-enable"]');
     await expect(abletonButton).toBeVisible();

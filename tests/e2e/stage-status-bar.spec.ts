@@ -1,6 +1,7 @@
 import { test, expect, Page, BrowserContext } from "@playwright/test";
 import WebSocket from "ws";
 import {
+  assertVersionLabel,
   deriveTestConfig,
   refreshDevData,
   startTestServer,
@@ -188,6 +189,7 @@ test.afterAll(async () => {
 
 test("stage status bar shows clock with current time", async ({ context }) => {
   const stagePage = await openStageDisplay(context);
+  await assertVersionLabel(stagePage, baseURL);
 
   // Check that clock element exists and has content
   const clockEl = stagePage.locator(".stage__clock");

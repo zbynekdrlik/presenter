@@ -1,6 +1,7 @@
 use gloo_timers::callback::Interval;
 use leptos::prelude::*;
 
+use crate::components::version_label::VersionLabel;
 use crate::state::stage::StageContext;
 use crate::utils::autofit::autofit_effect;
 use crate::ws::stage::StageWsState;
@@ -107,6 +108,10 @@ pub fn StatusBar(
         <div node_ref=connection_ref class=connection_class>
             <span class="stage__debug-label">"connection"</span>
             {connection_text}
+        </div>
+        <div class="stage__version">
+            <span class="stage__debug-label">"version"</span>
+            <VersionLabel />
         </div>
     }
 }

@@ -460,3 +460,14 @@ body.tablet {
   min-width: 5rem;
   text-align: right;
 }
+
+/* Version badge — bottom-right corner, small, low-opacity, non-interactive */
+.tablet__version-badge {
+  position: fixed;
+  right: 0.5rem;
+  bottom: 0.5rem;
+  font-size: 0.65rem;
+  color: rgba(255, 255, 255, 0.45);
+  pointer-events: none;
+  z-index: 1;
+}

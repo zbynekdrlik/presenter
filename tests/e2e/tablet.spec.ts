@@ -1,5 +1,6 @@
 import { test, expect } from "@playwright/test";
 import {
+  assertVersionLabel,
   deriveTestConfig,
   refreshDevData,
   startTestServer,
@@ -125,6 +126,7 @@ test("tablet shows Bible presentations, renders slides, and triggers passages", 
     state: "visible",
     timeout: 20_000,
   });
+  await assertVersionLabel(page, baseURL);
 
   // --- Verify presentation appears in sidebar ---
   const presentationButton = page.locator(
