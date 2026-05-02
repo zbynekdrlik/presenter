@@ -4,7 +4,7 @@ import http from "http";
 import path from "path";
 import type { AddressInfo } from "net";
 import type { TestInfo } from "@playwright/test";
-import { expect, type Locator } from "@playwright/test";
+import { expect, type Locator, type Page } from "@playwright/test";
 
 export const REPO_ROOT = process.cwd();
 
@@ -351,6 +351,40 @@ export async function startMockResolume(): Promise<MockResolumeHandle> {
         });
       }),
   };
+}
+
+/**
+ * Assert that the version label on the current page exists, has the expected
+ * format, and matches the backend `/healthz` response.
+ *
+ * Format: `v<major>.<minor>.<patch>(-dev.<n>)?( (<channel>))?`
+ * Examples: `v0.4.52`, `v0.4.52 (dev)`, `v0.4.52-dev.3 (dev)`
+ *
+ * Frontend version MUST equal `/healthz` `version` field — single source of
+ * truth. Channel suffix appears only for non-release builds.
+ */
+export async function assertVersionLabel(
+  page: Page,
+  baseURL: string,
+): Promise<void> {
+  const versionEl = page.locator('[data-testid="version"]').first();
+  await expect(versionEl).toBeVisible({ timeout: 10_000 });
+
+  const text = (await versionEl.textContent())?.trim() ?? "";
+  expect(text).toMatch(/^v\d+\.\d+\.\d+(-dev\.\d+)?(\s\(\w+\))?$/);
+
+  const healthRes = await page.request.get(
+    new URL("/healthz", baseURL).toString(),
+  );
+  const health = (await healthRes.json()) as {
+    version: string;
+    channel: string;
+  };
+  const expected =
+    health.channel === "release" || health.channel === ""
+      ? `v${health.version}`
+      : `v${health.version} (${health.channel})`;
+  expect(text).toBe(expected);
 }
 
 export async function startMockAbleSet(): Promise<MockAbleSetHandle> {
