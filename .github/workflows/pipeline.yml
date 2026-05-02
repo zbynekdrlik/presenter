@@ -813,14 +813,11 @@ jobs:
         run: |
           ssh deploy-target << 'REMOTE_SCRIPT'
           set -e
-          DB_PATH="/opt/presenter-dev/presenter.db"
-          if [ ! -f "$DB_PATH" ]; then
-            echo "::warning::No dev database found; skipping integration redirect"
-            exit 0
-          fi
           # Issue #279: prod-snapshot DB carries production-side hosts that would
-          # cause dev to send commands to live hardware. Rewrite to mock endpoints.
-          sqlite3 "$DB_PATH" "UPDATE resolume_hosts SET host='127.0.0.1', port=8091, label=label || ' (mock)'; UPDATE ableset_settings SET host='127.0.0.1', port=39042; DELETE FROM android_stage_displays; DELETE FROM video_sources;"
+          # cause dev to send commands to live hardware. Rewrite to mock endpoints
+          # baked into the dev binary (--features mock-integrations). The previous
+          # "Replace dev database" step guarantees the DB exists at this path.
+          sqlite3 /opt/presenter-dev/presenter.db "UPDATE resolume_hosts SET host='127.0.0.1', port=8091, label=label || ' (mock)'; UPDATE ableset_settings SET host='127.0.0.1', port=39042; DELETE FROM android_stage_displays; DELETE FROM video_sources;"
           echo "Integration tables redirected to localhost mock endpoints"
           REMOTE_SCRIPT
 
