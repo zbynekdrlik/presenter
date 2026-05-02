@@ -551,3 +551,9 @@ body.stage {
         0 0 8px rgba(0, 0, 0, 0.9),
         0 2px 4px rgba(0, 0, 0, 0.7);
 }
+
+/* Version label inside StatusBar — small, under the connection/latency display */
+.stage__version {
+  font-size: 0.5em;
+  opacity: 0.6;
+}
