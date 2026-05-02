@@ -45,3 +45,46 @@ async fn get_setlist(State(log): State<Arc<RequestLog>>) -> Json<Value> {
         "songs": [],
     }))
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    use axum::{
+        body::Body,
+        http::{Method, Request, StatusCode},
+    };
+    use tower::ServiceExt;
+
+    #[tokio::test]
+    async fn serves_setlist_shape() {
+        let log = Arc::new(RequestLog::new());
+        let app = Router::new()
+            .route("/api/setlist", get(get_setlist))
+            .with_state(log.clone());
+
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .method(Method::GET)
+                    .uri("/api/setlist")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .expect("oneshot");
+
+        assert_eq!(response.status(), StatusCode::OK);
+        let body_bytes = axum::body::to_bytes(response.into_body(), 4096)
+            .await
+            .expect("body bytes");
+        let value: serde_json::Value = serde_json::from_slice(&body_bytes).expect("json");
+        assert!(value.get("activeSongId").is_some(), "missing activeSongId");
+        assert!(value["songs"].is_array());
+
+        let entries = log.snapshot();
+        assert_eq!(entries.len(), 1);
+        assert_eq!(entries[0].method, "GET");
+        assert_eq!(entries[0].path, "/api/setlist");
+    }
+}

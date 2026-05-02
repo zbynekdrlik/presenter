@@ -101,3 +101,82 @@ async fn post_clip_connect(
     );
     StatusCode::OK
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    use axum::{
+        body::Body,
+        http::{Method, Request, StatusCode},
+    };
+    use tower::ServiceExt;
+
+    fn router(log: Arc<RequestLog>) -> Router {
+        Router::new()
+            .route("/api/v1/composition", get(get_composition))
+            .route("/api/v1/parameter/by-id/{id}", put(put_parameter))
+            .route(
+                "/api/v1/composition/clips/by-id/{id}/connect",
+                post(post_clip_connect),
+            )
+            .route("/__mock/log", get(log_handler))
+            .with_state(log)
+    }
+
+    #[tokio::test]
+    async fn accepts_composition_get() {
+        let log = Arc::new(RequestLog::new());
+        let app = router(log.clone());
+
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .method(Method::GET)
+                    .uri("/api/v1/composition")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .expect("oneshot");
+
+        assert_eq!(response.status(), StatusCode::OK);
+        let body_bytes = axum::body::to_bytes(response.into_body(), 4096)
+            .await
+            .expect("body bytes");
+        let value: serde_json::Value = serde_json::from_slice(&body_bytes).expect("json");
+        assert_eq!(value["name"], "Mock Composition");
+        assert!(value["layers"].is_array());
+        assert!(value["columns"].is_array());
+
+        let entries = log.snapshot();
+        assert_eq!(entries.len(), 1);
+        assert_eq!(entries[0].method, "GET");
+    }
+
+    #[tokio::test]
+    async fn accepts_clip_trigger_and_logs_path() {
+        let log = Arc::new(RequestLog::new());
+        let app = router(log.clone());
+
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .method(Method::POST)
+                    .uri("/api/v1/composition/clips/by-id/abc-123/connect")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .expect("oneshot");
+
+        assert_eq!(response.status(), StatusCode::OK);
+        let entries = log.snapshot();
+        assert_eq!(entries.len(), 1);
+        assert_eq!(entries[0].method, "POST");
+        assert_eq!(
+            entries[0].path,
+            "/api/v1/composition/clips/by-id/abc-123/connect"
+        );
+    }
+}
