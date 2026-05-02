@@ -232,6 +232,20 @@ pub fn SlideList() -> impl IntoView {
         });
     }
 
+    // Scroll to top when the operator opens a different presentation.
+    // Issue #271 concern 3: new song should load with the first slide
+    // visible, not at the previous song's scroll position.
+    {
+        let selected_presentation_id = ctx.selected_presentation_id;
+        Effect::new(move |prev_id: Option<Option<String>>| {
+            let current_id = selected_presentation_id.get();
+            if current_id != prev_id.flatten() && current_id.is_some() {
+                gloo_timers::callback::Timeout::new(0, scroll_slides_to_top).forget();
+            }
+            current_id
+        });
+    }
+
     let trigger_slide = move |pres_id: String, slide_id: String, next_slide_id: Option<String>| {
         let playlist_id = ctx.selected_playlist_id.get_untracked();
         op.triggering_slide_id.set(Some(slide_id.clone()));
@@ -904,43 +918,96 @@ pub fn SlideList() -> impl IntoView {
     }
 }
 
-/// Assumes a vertically scrolling container (`.operator__slides`). If the list
-/// ever becomes horizontally scrollable, this function needs a companion branch.
+/// Number of columns in the `.operator__slides` grid (CSS:
+/// `grid-template-columns: repeat(3, minmax(0, 1fr))`). The next-row anchor
+/// for an active slide at DOM index N is the slide at index N + COLUMNS_PER_ROW.
+const COLUMNS_PER_ROW: usize = 3;
+
+/// Lookahead-aware scroll: ensures the active slide AND the next row of
+/// slides are visible in the `.operator__slides` container. If the active
+/// slide is on the last row (no next-row anchor), falls back to "ensure
+/// active is visible". If the active slide is above the viewport (backward
+/// navigation), top-aligns it.
+///
+/// Issue #271 concern 1.
 fn scroll_slide_into_view(slide_id: &str) {
     let Some(document) = web_sys::window().and_then(|w| w.document()) else {
         return;
     };
-    let selector = format!(".operator__slides [data-slide-id=\"{slide_id}\"]");
-    let Ok(Some(el)) = document.query_selector(&selector) else {
+    let active_selector = format!(".operator__slides [data-slide-id=\"{slide_id}\"]");
+    let Ok(Some(active_el)) = document.query_selector(&active_selector) else {
         return;
     };
-    // Compute scroll position on the container so the active slide is in view.
-    // Find the scrollable ancestor (.operator__slides).
-    let Ok(Some(container)) = el.closest(".operator__slides") else {
+    let Ok(Some(container_el)) = active_el.closest(".operator__slides") else {
         return;
     };
-    let Ok(container) = container.dyn_into::<web_sys::HtmlElement>() else {
+    let Ok(container) = container_el.dyn_into::<web_sys::HtmlElement>() else {
         return;
     };
-    let Ok(el_html) = el.dyn_into::<web_sys::HtmlElement>() else {
+    let Ok(active_html) = active_el.dyn_into::<web_sys::HtmlElement>() else {
         return;
     };
-    let el_rect = el_html.get_bounding_client_rect();
+
     let container_rect = container.get_bounding_client_rect();
-    let el_top = el_rect.top();
-    let el_bottom = el_rect.bottom();
-    let c_top = container_rect.top();
-    let c_bottom = container_rect.bottom();
+    let active_rect = active_html.get_bounding_client_rect();
     let scroll_top = container.scroll_top() as f64;
-    // If above viewport, scroll so element top is at container top.
-    if el_top < c_top {
-        let delta = c_top - el_top;
+
+    // Backward navigation: top-align the active slide if it's above the viewport.
+    if active_rect.top() < container_rect.top() {
+        let delta = container_rect.top() - active_rect.top();
         container.set_scroll_top((scroll_top - delta) as i32);
-    } else if el_bottom > c_bottom {
-        // If below viewport, scroll so element bottom is at container bottom.
-        let delta = el_bottom - c_bottom;
+        return;
+    }
+
+    // Find the next-row anchor: the slide at active_index + COLUMNS_PER_ROW
+    // in DOM order within the same container.
+    let cards = container.query_selector_all("[data-slide-id]").ok();
+    let next_row_el: Option<web_sys::HtmlElement> = cards.and_then(|nodes| {
+        let mut active_index: Option<usize> = None;
+        for i in 0..nodes.length() {
+            if let Some(node) = nodes.item(i) {
+                if let Ok(el) = node.dyn_into::<web_sys::Element>() {
+                    if el.get_attribute("data-slide-id").as_deref() == Some(slide_id) {
+                        active_index = Some(i as usize);
+                        break;
+                    }
+                }
+            }
+        }
+        let target_index = active_index? + COLUMNS_PER_ROW;
+        nodes
+            .item(target_index as u32)
+            .and_then(|n| n.dyn_into::<web_sys::HtmlElement>().ok())
+    });
+
+    if let Some(anchor) = next_row_el {
+        // Scroll so the next-row anchor's bottom is at the container's bottom.
+        let anchor_rect = anchor.get_bounding_client_rect();
+        if anchor_rect.bottom() > container_rect.bottom() {
+            let delta = anchor_rect.bottom() - container_rect.bottom();
+            container.set_scroll_top((scroll_top + delta) as i32);
+        }
+    } else if active_rect.bottom() > container_rect.bottom() {
+        // No next-row anchor (last row) — fall back to bottom-aligning active.
+        let delta = active_rect.bottom() - container_rect.bottom();
         container.set_scroll_top((scroll_top + delta) as i32);
     }
+}
+
+/// Scrolls the `.operator__slides` container to its top. Used when the
+/// operator opens a new presentation so the first slide is visible without
+/// manual scroll-up. Issue #271 concern 3.
+fn scroll_slides_to_top() {
+    let Some(document) = web_sys::window().and_then(|w| w.document()) else {
+        return;
+    };
+    let Ok(Some(container_el)) = document.query_selector(".operator__slides") else {
+        return;
+    };
+    let Ok(container) = container_el.dyn_into::<web_sys::HtmlElement>() else {
+        return;
+    };
+    container.set_scroll_top(0);
 }
 
 /// Pure reorder: given a slide id list and a drag/target pair, returns the new
