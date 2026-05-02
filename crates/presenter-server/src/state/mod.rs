@@ -70,7 +70,8 @@ use companion::{
     parse_bool_flag, CompanionServerManager, COMPANION_FEATURE_KEY, COMPANION_PORT_KEY,
     DEFAULT_COMPANION_PORT,
 };
-use seed::sample_library;
+#[cfg(test)]
+pub(crate) use seed::seed_sample_library;
 #[cfg(test)]
 pub use seed::TestBibleIngestion;
 use stage::{build_stage_playlist_entries, stage_resolution_from_presentation, StageResolution};
@@ -370,7 +371,6 @@ impl AppState {
             heartbeat_config,
             local_public_ip,
         );
-        state.ensure_seed_library().await?;
 
         // Pre-load group color cache from database
         let group_colors = state
@@ -521,7 +521,6 @@ impl AppState {
             osc_bridge.clone(),
             ableset_bridge.clone(),
         );
-        state.ensure_seed_library().await?;
         state.ensure_demo_playlist().await?;
         state.sync_android_stage_displays().await?;
 
@@ -685,13 +684,6 @@ impl AppState {
 
         self.companion_enabled.store(enabled, Ordering::SeqCst);
         self.companion_port.store(port, Ordering::SeqCst);
-        Ok(())
-    }
-
-    async fn ensure_seed_library(&self) -> anyhow::Result<()> {
-        if self.repository.fetch_libraries().await?.is_empty() {
-            self.repository.upsert_library(&sample_library()).await?;
-        }
         Ok(())
     }
 

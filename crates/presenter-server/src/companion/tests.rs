@@ -155,6 +155,7 @@ fn stage_variables_update_across_layouts() {
 #[tokio::test]
 async fn stage_set_command_updates_state_and_emits_event() {
     let state = AppState::in_memory().await.unwrap();
+    crate::state::seed_sample_library(&state).await.unwrap();
     let libraries = state.libraries().await.unwrap();
     let presentation = &libraries[0].presentations[0];
     let current = &presentation.slides[0];

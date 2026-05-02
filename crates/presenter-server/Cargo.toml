@@ -44,4 +44,5 @@ tower.workspace = true
 presenter-persistence = { path = "../presenter-persistence" }
 async-trait.workspace = true
 wiremock = "0.6"
+tempfile = "3.10"
 
