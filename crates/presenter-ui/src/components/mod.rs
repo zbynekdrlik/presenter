@@ -15,3 +15,4 @@ pub mod stage;
 pub mod stage_preview;
 pub mod timer_panel;
 pub mod toast;
+pub mod version_label;

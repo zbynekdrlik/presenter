@@ -195,7 +195,7 @@ pub fn OperatorPage(#[prop(default = String::new())] initial_view: String) -> im
         <PlaylistModals />
         <PresentationModals />
         <footer class="operator__version">
-            <VersionFooter />
+            <crate::components::version_label::VersionLabel />
         </footer>
     }
 }
@@ -587,24 +587,6 @@ fn setup_keyboard_shortcuts(ctx: AppContext, op: OperatorState) {
     let window = crate::utils::window::window();
     let _ = window.add_event_listener_with_callback("keydown", handler.as_ref().unchecked_ref());
     handler.forget();
-}
-
-#[component]
-fn VersionFooter() -> impl IntoView {
-    let version_text = RwSignal::new(String::new());
-    leptos::task::spawn_local(async move {
-        if let Ok(health) = crate::api::get_json::<crate::api::HealthzResponse>("/healthz").await {
-            let text = if health.channel.is_empty() || health.channel == "release" {
-                format!("v{}", health.version)
-            } else {
-                format!("v{} ({})", health.version, health.channel)
-            };
-            version_text.set(text);
-        }
-    });
-    view! {
-        <span>{move || version_text.get()}</span>
-    }
 }
 
 fn setup_popstate_listener(ctx: AppContext) {
