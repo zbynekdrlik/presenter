@@ -256,3 +256,104 @@ test("API stage does not interfere with normal stage", async ({
   await normalPage.close();
   expect(consoleMessages).toEqual([]);
 });
+
+test("api put does not switch preview when layout is worship-snv", async ({
+  request,
+  page,
+  context,
+}) => {
+  const consoleMessages: string[] = [];
+  page.on("console", (msg) => {
+    if (msg.type() === "error" || msg.type() === "warning") {
+      const text = msg.text();
+      // Existing operator E2E filters this Chrome integrity-preload warning.
+      if (!text.includes("crbug.com/981419")) {
+        consoleMessages.push(`[${msg.type()}] ${text}`);
+      }
+    }
+  });
+
+  // 1. Set layout to worship-snv (a non-api layout).
+  const setLayoutRes = await request.post(
+    new URL("/stage/layout", baseURL).toString(),
+    { data: { code: "worship-snv" } },
+  );
+  expect(setLayoutRes.ok()).toBeTruthy();
+
+  // 2. Open the operator UI; wait for WASM ready.
+  await page.goto(new URL("/ui/operator", baseURL).toString());
+  await page.waitForSelector('body[data-wasm-ready="true"]', {
+    timeout: 30_000,
+  });
+  await page.waitForLoadState("networkidle");
+
+  // 3. Snapshot the current preview text BEFORE the api PUT.
+  const currentSelector =
+    '[data-role="stage-current"] .operator__stage-preview-text';
+  const previewBefore = await page
+    .locator(currentSelector)
+    .first()
+    .textContent()
+    .catch(() => "");
+
+  // 4. PUT api/stage with distinctive content. With the gate, this MUST NOT
+  // cause the operator preview to update.
+  const distinctiveText = "should-not-appear-in-worship-snv-preview-281";
+  const putRes = await request.put(
+    new URL("/api/stage", baseURL).toString(),
+    {
+      data: {
+        currentText: distinctiveText,
+        nextText: "",
+        currentGroup: "",
+        nextGroup: "",
+        currentSong: "",
+        nextSong: "",
+      },
+    },
+  );
+  expect(putRes.ok()).toBeTruthy();
+
+  // 5. Wait briefly for any potential leak event to land.
+  await page.waitForTimeout(500);
+
+  // 6. Verify the operator preview did NOT change.
+  const previewAfterPut = await page
+    .locator(currentSelector)
+    .first()
+    .textContent()
+    .catch(() => "");
+  expect(previewAfterPut ?? "").not.toContain(distinctiveText);
+  expect(previewAfterPut).toBe(previewBefore);
+
+  // 7. Switch to api layout — operator preview SHOULD now reflect the
+  // stored api content (per the switch-to-api refresh in
+  // set_stage_layout_code).
+  const switchRes = await request.post(
+    new URL("/stage/layout", baseURL).toString(),
+    { data: { code: "api" } },
+  );
+  expect(switchRes.ok()).toBeTruthy();
+
+  // 8. Wait for the preview to update with the stored api content.
+  await expect
+    .poll(
+      async () => {
+        const text = await page
+          .locator(currentSelector)
+          .first()
+          .textContent()
+          .catch(() => "");
+        return text ?? "";
+      },
+      { timeout: 5_000 },
+    )
+    .toContain(distinctiveText);
+
+  // Console must be clean.
+  expect(consoleMessages).toEqual([]);
+
+  // Suppress unused warnings for context (we keep it in the signature for
+  // symmetry with other tests in this file that use it).
+  void context;
+});
