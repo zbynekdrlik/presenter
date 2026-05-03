@@ -71,7 +71,7 @@ pub struct StageUpdate {
     pub enqueued_at: Option<Instant>,
     /// Correlation ID joining the server-side "stage click timing" log line
     /// with the per-host "resolume stage timing" log line.
-    /// Set by Task 3 click-path instrumentation.
+    /// Populated by Task 3 click-path instrumentation; read by Task 4 worker.
     #[allow(dead_code)]
     pub correlation_id: Option<Uuid>,
 }
