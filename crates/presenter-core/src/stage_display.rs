@@ -8,6 +8,10 @@ use serde::{Deserialize, Serialize};
 /// Default stage layout code used across the application.
 pub const DEFAULT_STAGE_LAYOUT_CODE: &str = "worship-snv";
 
+/// API-driven stage layout code. The `/api/stage` endpoint and its gate
+/// in `presenter-server` reference this code.
+pub const API_STAGE_LAYOUT_CODE: &str = "api";
+
 /// Built-in stage display layouts exposed by the Presenter server.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]

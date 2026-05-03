@@ -3,7 +3,7 @@
 use super::stage::build_stage_snapshot;
 use super::AppState;
 use crate::live::LiveEvent;
-use presenter_core::{StageDisplayLayout, StageDisplaySnapshot};
+use presenter_core::{StageDisplayLayout, StageDisplaySnapshot, API_STAGE_LAYOUT_CODE};
 
 impl AppState {
     // Stage display methods
@@ -59,7 +59,7 @@ impl AppState {
         self.live_hub.publish(LiveEvent::StageLayout {
             code: layout.code.clone(),
         });
-        if layout.code == "api" {
+        if layout.code == API_STAGE_LAYOUT_CODE {
             // Issue #281: when switching TO api, publish the stored
             // api_stage snapshot so the operator preview reflects the
             // most recent PUT instead of waiting for the next one.

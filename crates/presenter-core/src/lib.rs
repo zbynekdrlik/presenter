@@ -59,7 +59,7 @@ pub use slide::{resolve_sequence, ResolvedSlide, Slide, SlideContent, SlideGroup
 pub use stage_client::{StageClientSnapshot, StageClientStatus};
 pub use stage_display::{
     StageDisplayLayout, StageDisplaySlide, StageDisplaySnapshot, StagePlaylistEntry, StageState,
-    DEFAULT_STAGE_LAYOUT_CODE,
+    API_STAGE_LAYOUT_CODE, DEFAULT_STAGE_LAYOUT_CODE,
 };
 pub use timer::{
     CountdownTimer, CountdownTimerSnapshot, PreachTimer, PreachTimerSnapshot, TimerCommand,
