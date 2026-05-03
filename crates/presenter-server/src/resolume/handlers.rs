@@ -3,6 +3,7 @@ use super::driver::HostDriver;
 use super::types::{ClipTarget, LaneTarget, SlotKind};
 use super::{BibleUpdate, ResolumeConnectionSnapshot, StageUpdate, TimerFrame};
 use std::sync::Arc;
+use std::time::Instant;
 use tokio::sync::RwLock;
 use tokio::time::sleep;
 use tracing::warn;
@@ -28,7 +29,24 @@ impl HostDriver {
         if !self.config.is_enabled {
             return Ok(());
         }
+
+        let pickup_at = Instant::now();
+        let t_queue_wait_ms = update
+            .enqueued_at
+            .map(|enq| pickup_at.duration_since(enq).as_secs_f64() * 1000.0)
+            .unwrap_or(0.0);
+        let correlation_id = update.correlation_id;
+
+        let mapping_start = Instant::now();
         self.ensure_mapping().await?;
+        let t_ensure_mapping_ms = elapsed_ms(mapping_start);
+
+        let mut t_main_ms = 0.0;
+        let mut t_trans_ms = 0.0;
+        let mut t_song_ms = 0.0;
+        let mut t_band_ms = 0.0;
+        let mut t_trigger_ms = 0.0;
+
         if let Some(mapping) = self.mapping.clone() {
             let main_lane = self.lane_state.current(SlotKind::Main);
             let translation_lane = self.lane_state.current(SlotKind::Translation);
@@ -36,6 +54,7 @@ impl HostDriver {
             let mut to_trigger = Vec::new();
             let mut main_lane_filled = false;
             if let Some(ref main_text) = update.current_main {
+                let step_start = Instant::now();
                 let mut main_targets = self
                     .update_lane_text(
                         main_lane,
@@ -45,6 +64,7 @@ impl HostDriver {
                         status,
                     )
                     .await?;
+                t_main_ms = elapsed_ms(step_start);
                 if !main_targets.is_empty() {
                     to_trigger.append(&mut main_targets);
                     main_lane_filled = true;
@@ -53,6 +73,7 @@ impl HostDriver {
 
             let mut translation_lane_filled = false;
             if let Some(ref translation_text) = update.current_translation {
+                let step_start = Instant::now();
                 let mut translation_targets = self
                     .update_lane_text(
                         translation_lane,
@@ -62,6 +83,7 @@ impl HostDriver {
                         status,
                     )
                     .await?;
+                t_trans_ms = elapsed_ms(step_start);
                 if !translation_targets.is_empty() {
                     to_trigger.append(&mut translation_targets);
                     translation_lane_filled = true;
@@ -76,6 +98,7 @@ impl HostDriver {
                         "Resolume mapping missing #song-name clip"
                     );
                 } else {
+                    let step_start = Instant::now();
                     self.update_metadata_targets(
                         &mapping.song_name,
                         song_name,
@@ -83,6 +106,7 @@ impl HostDriver {
                         status,
                     )
                     .await?;
+                    t_song_ms = elapsed_ms(step_start);
                 }
             } else {
                 self.last_song_name_payload = None;
@@ -96,6 +120,7 @@ impl HostDriver {
                         "Resolume mapping missing #band-name clip"
                     );
                 } else {
+                    let step_start = Instant::now();
                     self.update_metadata_targets(
                         &mapping.band_name,
                         band_name,
@@ -103,6 +128,7 @@ impl HostDriver {
                         status,
                     )
                     .await?;
+                    t_band_ms = elapsed_ms(step_start);
                 }
             } else {
                 self.last_band_name_payload = None;
@@ -112,7 +138,9 @@ impl HostDriver {
                 if TRIGGER_DELAY.as_millis() > 0 {
                     sleep(TRIGGER_DELAY).await;
                 }
+                let trigger_start = Instant::now();
                 self.trigger_clips(&to_trigger).await?;
+                t_trigger_ms = elapsed_ms(trigger_start);
             }
 
             if main_lane_filled {
@@ -130,6 +158,23 @@ impl HostDriver {
             }
         }
         self.mark_connected(status).await;
+
+        let t_total_ms = elapsed_ms(pickup_at);
+        tracing::info!(
+            target: "presenter::resolume::timing",
+            correlation_id = correlation_id.map(|u| u.to_string()).unwrap_or_default(),
+            host = %self.config.host,
+            t_queue_wait_ms,
+            t_ensure_mapping_ms,
+            t_main_ms,
+            t_trans_ms,
+            t_song_ms,
+            t_band_ms,
+            t_trigger_delay_ms = TRIGGER_DELAY.as_secs_f64() * 1000.0,
+            t_trigger_ms,
+            t_total_ms,
+            "resolume stage timing"
+        );
         Ok(())
     }
 
@@ -554,4 +599,8 @@ impl HostDriver {
         }
         Ok(())
     }
+}
+
+fn elapsed_ms(start: Instant) -> f64 {
+    start.elapsed().as_secs_f64() * 1000.0
 }
