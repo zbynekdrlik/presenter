@@ -502,35 +502,15 @@ impl HostDriver {
             let endpoint = self.endpoint().await?;
             let mut futures = FuturesUnordered::new();
             for target in &mapping.timer {
-                let Some(param_id) = target.text_param_id else {
-                    continue;
-                };
-                let client = self.client.clone();
-                let url = format!("{}/parameter/by-id/{}", endpoint.base_url, param_id);
-                let host_header = endpoint.host_header.clone();
-                let payload = apply_transforms(&text, &target.transforms).into_owned();
-                futures.push(async move {
-                    let mut request = client.put(&url);
-                    if let Some(host) = host_header {
-                        request = request.header(HOST, host);
-                    }
-                    let start = std::time::Instant::now();
-                    let response = request
-                        .json(&serde_json::json!({ "value": payload }))
-                        .timeout(super::driver::ACTION_TIMEOUT)
-                        .send()
-                        .await
-                        .map_err(|e| {
-                            anyhow::anyhow!("failed to update text parameter {}: {}", param_id, e)
-                        })?;
-                    if !response.status().is_success() {
-                        return Err(anyhow::anyhow!(
-                            "text parameter update failed with status {}",
-                            response.status()
-                        ));
-                    }
-                    Ok(start.elapsed())
-                });
+                if let Some(fut) = put_text_param_future(
+                    self.client.clone(),
+                    &endpoint.base_url,
+                    endpoint.host_header.clone(),
+                    target,
+                    &text,
+                ) {
+                    futures.push(fut);
+                }
             }
             let mut latency_recorded = None;
             while let Some(result) = futures.next().await {
@@ -580,35 +560,15 @@ impl HostDriver {
             let endpoint = self.endpoint().await?;
             let mut futures = FuturesUnordered::new();
             for target in selected {
-                let Some(param_id) = target.text_param_id else {
-                    continue;
-                };
-                let client = self.client.clone();
-                let url = format!("{}/parameter/by-id/{}", endpoint.base_url, param_id);
-                let host_header = endpoint.host_header.clone();
-                let text_payload = apply_transforms(payload, &target.transforms).into_owned();
-                futures.push(async move {
-                    let mut request = client.put(&url);
-                    if let Some(host) = host_header {
-                        request = request.header(HOST, host);
-                    }
-                    let start = std::time::Instant::now();
-                    let response = request
-                        .json(&serde_json::json!({ "value": text_payload }))
-                        .timeout(super::driver::ACTION_TIMEOUT)
-                        .send()
-                        .await
-                        .map_err(|e| {
-                            anyhow::anyhow!("failed to update text parameter {}: {}", param_id, e)
-                        })?;
-                    if !response.status().is_success() {
-                        return Err(anyhow::anyhow!(
-                            "text parameter update failed with status {}",
-                            response.status()
-                        ));
-                    }
-                    Ok(start.elapsed())
-                });
+                if let Some(fut) = put_text_param_future(
+                    self.client.clone(),
+                    &endpoint.base_url,
+                    endpoint.host_header.clone(),
+                    target,
+                    payload,
+                ) {
+                    futures.push(fut);
+                }
             }
             let mut latency_recorded = None;
             while let Some(result) = futures.next().await {
@@ -648,35 +608,15 @@ impl HostDriver {
         let endpoint = self.endpoint().await?;
         let mut futures = FuturesUnordered::new();
         for target in targets {
-            let Some(param_id) = target.text_param_id else {
-                continue;
-            };
-            let client = self.client.clone();
-            let url = format!("{}/parameter/by-id/{}", endpoint.base_url, param_id);
-            let host_header = endpoint.host_header.clone();
-            let text_payload = apply_transforms(text, &target.transforms).into_owned();
-            futures.push(async move {
-                let mut request = client.put(&url);
-                if let Some(host) = host_header {
-                    request = request.header(HOST, host);
-                }
-                let start = std::time::Instant::now();
-                let response = request
-                    .json(&serde_json::json!({ "value": text_payload }))
-                    .timeout(super::driver::ACTION_TIMEOUT)
-                    .send()
-                    .await
-                    .map_err(|e| {
-                        anyhow::anyhow!("failed to update text parameter {}: {}", param_id, e)
-                    })?;
-                if !response.status().is_success() {
-                    return Err(anyhow::anyhow!(
-                        "text parameter update failed with status {}",
-                        response.status()
-                    ));
-                }
-                Ok(start.elapsed())
-            });
+            if let Some(fut) = put_text_param_future(
+                self.client.clone(),
+                &endpoint.base_url,
+                endpoint.host_header.clone(),
+                target,
+                text,
+            ) {
+                futures.push(fut);
+            }
         }
         let mut latency_recorded = None;
         while let Some(result) = futures.next().await {
@@ -694,6 +634,46 @@ impl HostDriver {
         }
         Ok(())
     }
+}
+
+/// Builds a future that PUTs `text` (after applying `target.transforms`) to
+/// the Resolume text parameter at `target.text_param_id`. Returns `None` if
+/// the target has no text param. The returned future resolves to the
+/// per-PUT elapsed `Duration` on success.
+///
+/// Used by `handle_timer`, `update_lane_text`, and `update_metadata_targets`
+/// to compose parallel `FuturesUnordered`. The Resolume HTTP client uses
+/// internal `Arc` sharing so `client.clone()` per future is cheap.
+fn put_text_param_future(
+    client: reqwest::Client,
+    base_url: &str,
+    host_header: Option<String>,
+    target: &ClipTarget,
+    text: &str,
+) -> Option<impl std::future::Future<Output = anyhow::Result<std::time::Duration>>> {
+    let param_id = target.text_param_id?;
+    let url = format!("{}/parameter/by-id/{}", base_url, param_id);
+    let payload = apply_transforms(text, &target.transforms).into_owned();
+    Some(async move {
+        let mut request = client.put(&url);
+        if let Some(host) = host_header {
+            request = request.header(HOST, host);
+        }
+        let start = std::time::Instant::now();
+        let response = request
+            .json(&serde_json::json!({ "value": payload }))
+            .timeout(super::driver::ACTION_TIMEOUT)
+            .send()
+            .await
+            .map_err(|e| anyhow::anyhow!("failed to update text parameter {}: {}", param_id, e))?;
+        if !response.status().is_success() {
+            return Err(anyhow::anyhow!(
+                "text parameter update failed with status {}",
+                response.status()
+            ));
+        }
+        Ok(start.elapsed())
+    })
 }
 
 fn elapsed_ms(start: Instant) -> f64 {
