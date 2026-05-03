@@ -190,9 +190,22 @@ impl HostDriver {
                 "Resolume mapping missing expected clips"
             );
         }
+
+        // #267: only reset dedup state when the #timer param IDs actually
+        // changed. A network blip that does not change the mapping must
+        // preserve last_timer_payload so the next equal-valued tick is
+        // skipped (no flicker).
+        let timer_param_ids_changed = self
+            .mapping
+            .as_ref()
+            .map(|old| old.timer_param_ids() != mapping.timer_param_ids())
+            .unwrap_or(true);
+        if timer_param_ids_changed {
+            self.last_timer_payload = None;
+        }
+
         self.mapping = Some(mapping);
         self.last_mapping_refresh = Some(Instant::now());
-        self.last_timer_payload = None;
         Ok(())
     }
 
@@ -365,9 +378,12 @@ impl HostDriver {
         guard.last_error = Some(err.to_string());
         guard.consecutive_failures += 1;
         guard.last_attempt = Some(now);
+        // #267: preserve last_timer_payload, last_song_name_payload,
+        // last_band_name_payload across transient errors. They will only
+        // be reset when refresh_mapping detects a real param-ID change.
+        // The mapping itself is invalidated so the next operation re-fetches.
         self.mapping = None;
         self.endpoint = None;
         self.last_mapping_refresh = None;
-        self.last_timer_payload = None;
     }
 }
