@@ -1,7 +1,9 @@
 use super::clip_map::ClipMapping;
 use super::driver::HostDriver;
-use super::types::{ClipTarget, LaneTarget, SlotKind};
+use super::types::{apply_transforms, ClipTarget, LaneTarget, SlotKind};
 use super::{BibleUpdate, ResolumeConnectionSnapshot, StageUpdate, TimerFrame};
+use futures_util::{stream::FuturesUnordered, StreamExt};
+use reqwest::header::HOST;
 use std::sync::Arc;
 use std::time::Instant;
 use tokio::sync::RwLock;
@@ -498,12 +500,43 @@ impl HostDriver {
             }
 
             let endpoint = self.endpoint().await?;
-            let mut latency_recorded = None;
+            let mut futures = FuturesUnordered::new();
             for target in &mapping.timer {
-                if let Some(duration) = self.update_clip_text(target, &text, &endpoint).await? {
-                    if latency_recorded.is_none() {
-                        latency_recorded = Some(duration);
+                let Some(param_id) = target.text_param_id else {
+                    continue;
+                };
+                let client = self.client.clone();
+                let url = format!("{}/parameter/by-id/{}", endpoint.base_url, param_id);
+                let host_header = endpoint.host_header.clone();
+                let payload = apply_transforms(&text, &target.transforms).into_owned();
+                futures.push(async move {
+                    let mut request = client.put(&url);
+                    if let Some(host) = host_header {
+                        request = request.header(HOST, host);
                     }
+                    let start = std::time::Instant::now();
+                    let response = request
+                        .json(&serde_json::json!({ "value": payload }))
+                        .timeout(super::driver::ACTION_TIMEOUT)
+                        .send()
+                        .await
+                        .map_err(|e| {
+                            anyhow::anyhow!("failed to update text parameter {}: {}", param_id, e)
+                        })?;
+                    if !response.status().is_success() {
+                        return Err(anyhow::anyhow!(
+                            "text parameter update failed with status {}",
+                            response.status()
+                        ));
+                    }
+                    Ok(start.elapsed())
+                });
+            }
+            let mut latency_recorded = None;
+            while let Some(result) = futures.next().await {
+                let duration = result?;
+                if latency_recorded.is_none() {
+                    latency_recorded = Some(duration);
                 }
             }
             if let Some(latency) = latency_recorded {
@@ -545,12 +578,43 @@ impl HostDriver {
 
         if let Some(payload) = text {
             let endpoint = self.endpoint().await?;
-            let mut latency_recorded = None;
+            let mut futures = FuturesUnordered::new();
             for target in selected {
-                if let Some(duration) = self.update_clip_text(target, payload, &endpoint).await? {
-                    if latency_recorded.is_none() {
-                        latency_recorded = Some(duration);
+                let Some(param_id) = target.text_param_id else {
+                    continue;
+                };
+                let client = self.client.clone();
+                let url = format!("{}/parameter/by-id/{}", endpoint.base_url, param_id);
+                let host_header = endpoint.host_header.clone();
+                let text_payload = apply_transforms(payload, &target.transforms).into_owned();
+                futures.push(async move {
+                    let mut request = client.put(&url);
+                    if let Some(host) = host_header {
+                        request = request.header(HOST, host);
                     }
+                    let start = std::time::Instant::now();
+                    let response = request
+                        .json(&serde_json::json!({ "value": text_payload }))
+                        .timeout(super::driver::ACTION_TIMEOUT)
+                        .send()
+                        .await
+                        .map_err(|e| {
+                            anyhow::anyhow!("failed to update text parameter {}: {}", param_id, e)
+                        })?;
+                    if !response.status().is_success() {
+                        return Err(anyhow::anyhow!(
+                            "text parameter update failed with status {}",
+                            response.status()
+                        ));
+                    }
+                    Ok(start.elapsed())
+                });
+            }
+            let mut latency_recorded = None;
+            while let Some(result) = futures.next().await {
+                let duration = result?;
+                if latency_recorded.is_none() {
+                    latency_recorded = Some(duration);
                 }
             }
             if let Some(latency) = latency_recorded {
@@ -582,12 +646,43 @@ impl HostDriver {
         }
 
         let endpoint = self.endpoint().await?;
-        let mut latency_recorded = None;
+        let mut futures = FuturesUnordered::new();
         for target in targets {
-            if let Some(duration) = self.update_clip_text(target, text, &endpoint).await? {
-                if latency_recorded.is_none() {
-                    latency_recorded = Some(duration);
+            let Some(param_id) = target.text_param_id else {
+                continue;
+            };
+            let client = self.client.clone();
+            let url = format!("{}/parameter/by-id/{}", endpoint.base_url, param_id);
+            let host_header = endpoint.host_header.clone();
+            let text_payload = apply_transforms(text, &target.transforms).into_owned();
+            futures.push(async move {
+                let mut request = client.put(&url);
+                if let Some(host) = host_header {
+                    request = request.header(HOST, host);
                 }
+                let start = std::time::Instant::now();
+                let response = request
+                    .json(&serde_json::json!({ "value": text_payload }))
+                    .timeout(super::driver::ACTION_TIMEOUT)
+                    .send()
+                    .await
+                    .map_err(|e| {
+                        anyhow::anyhow!("failed to update text parameter {}: {}", param_id, e)
+                    })?;
+                if !response.status().is_success() {
+                    return Err(anyhow::anyhow!(
+                        "text parameter update failed with status {}",
+                        response.status()
+                    ));
+                }
+                Ok(start.elapsed())
+            });
+        }
+        let mut latency_recorded = None;
+        while let Some(result) = futures.next().await {
+            let duration = result?;
+            if latency_recorded.is_none() {
+                latency_recorded = Some(duration);
             }
         }
         if let Some(latency) = latency_recorded {

@@ -1,5 +1,5 @@
 use super::clip_map::ClipMapping;
-use super::types::{apply_transforms, ClipTarget, ResolvedEndpoint, SlotState};
+use super::types::{ClipTarget, ResolvedEndpoint, SlotState};
 use super::{
     BibleUpdate, ResolumeConnectionSnapshot, ResolumeConnectionState, StageUpdate, TimerFrame,
 };
@@ -28,7 +28,7 @@ const MAPPING_REFRESH_INTERVAL: Duration = Duration::from_secs(10);
 const MAPPING_CACHE_TTL: Duration = Duration::from_secs(1);
 const RESOLUTION_TTL: Duration = Duration::from_secs(300);
 const COMPOSITION_TIMEOUT: Duration = Duration::from_secs(5);
-const ACTION_TIMEOUT: Duration = Duration::from_secs(2);
+pub(super) const ACTION_TIMEOUT: Duration = Duration::from_secs(2);
 
 #[derive(Debug)]
 pub(super) enum HostCommand {
@@ -207,35 +207,6 @@ impl HostDriver {
         self.mapping = Some(mapping);
         self.last_mapping_refresh = Some(Instant::now());
         Ok(())
-    }
-
-    pub(super) async fn update_clip_text(
-        &self,
-        target: &ClipTarget,
-        text: &str,
-        endpoint: &ResolvedEndpoint,
-    ) -> anyhow::Result<Option<Duration>> {
-        let Some(param_id) = target.text_param_id else {
-            return Ok(None);
-        };
-        let url = format!("{}/parameter/by-id/{}", endpoint.base_url, param_id);
-        let payload = apply_transforms(text, &target.transforms);
-        debug!(clip_id = target.clip_id, payload = %payload, "resolume.update_text");
-        let start = Instant::now();
-        let response = self
-            .apply_host_header(self.client.put(&url), endpoint)
-            .json(&serde_json::json!({ "value": payload.as_ref() }))
-            .timeout(ACTION_TIMEOUT)
-            .send()
-            .await
-            .with_context(|| format!("failed to update text parameter {}", param_id))?;
-        if !response.status().is_success() {
-            return Err(anyhow!(
-                "text parameter update failed with status {}",
-                response.status()
-            ));
-        }
-        Ok(Some(start.elapsed()))
     }
 
     pub(super) async fn trigger_clips(&mut self, targets: &[ClipTarget]) -> anyhow::Result<()> {
