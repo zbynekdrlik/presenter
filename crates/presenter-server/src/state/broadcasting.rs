@@ -72,6 +72,8 @@ impl AppState {
             current_translation: Some(current_translation),
             song_name: Some(song_name),
             band_name: Some(band_name),
+            enqueued_at: None,
+            correlation_id: None,
         };
         self.resolume_registry.stage_update(stage_update).await;
 

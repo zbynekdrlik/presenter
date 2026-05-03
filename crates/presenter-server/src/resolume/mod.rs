@@ -8,10 +8,15 @@ use chrono::{DateTime, Utc};
 use presenter_core::{BibleBroadcast, BibleSlideOutput, ResolumeHost, ResolumeHostId};
 use reqwest::Client;
 use serde::Serialize;
-use std::{collections::HashMap, sync::Arc, time::Duration};
+use std::{
+    collections::HashMap,
+    sync::Arc,
+    time::{Duration, Instant},
+};
 use tokio::sync::{mpsc, RwLock};
 use tokio::task::JoinHandle;
 use tracing::error;
+use uuid::Uuid;
 
 use driver::{run_host_worker, HostCommand};
 
@@ -60,6 +65,15 @@ pub struct StageUpdate {
     pub current_translation: Option<String>,
     pub song_name: Option<String>,
     pub band_name: Option<String>,
+    /// When the StageUpdate was enqueued for delivery to host workers.
+    /// Used to measure queue-wait latency in the worker. Populated by
+    /// `ResolumeRegistry::stage_update` if not set by the producer.
+    pub enqueued_at: Option<Instant>,
+    /// Correlation ID joining the server-side "stage click timing" log line
+    /// with the per-host "resolume stage timing" log line.
+    /// Set by Task 3 click-path instrumentation.
+    #[allow(dead_code)]
+    pub correlation_id: Option<Uuid>,
 }
 
 #[derive(Debug, Clone)]
@@ -195,7 +209,10 @@ impl ResolumeRegistry {
         }
     }
 
-    pub async fn stage_update(&self, update: StageUpdate) {
+    pub async fn stage_update(&self, mut update: StageUpdate) {
+        if update.enqueued_at.is_none() {
+            update.enqueued_at = Some(Instant::now());
+        }
         for (id, entry) in self.hosts.read().await.iter() {
             if entry
                 .command_tx

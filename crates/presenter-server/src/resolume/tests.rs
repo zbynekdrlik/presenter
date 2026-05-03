@@ -205,6 +205,8 @@ async fn stage_updates_alternate_main_and_translation_lanes() {
         current_translation: Some("Trans 1".to_string()),
         song_name: Some("First Song".to_string()),
         band_name: Some("Library".to_string()),
+        enqueued_at: None,
+        correlation_id: None,
     };
     driver
         .handle_stage(stage_first, &status)
@@ -216,6 +218,8 @@ async fn stage_updates_alternate_main_and_translation_lanes() {
         current_translation: Some("Trans 2".to_string()),
         song_name: Some("Second Song".to_string()),
         band_name: Some("Library".to_string()),
+        enqueued_at: None,
+        correlation_id: None,
     };
     driver
         .handle_stage(stage_second, &status)
@@ -373,6 +377,8 @@ Line 2"
         current_translation: None,
         song_name: Some("Song".to_string()),
         band_name: Some("Band".to_string()),
+        enqueued_at: None,
+        correlation_id: None,
     };
 
     driver
@@ -600,6 +606,8 @@ async fn refreshes_mapping_after_cache_ttl_for_new_deck() {
         current_translation: None,
         song_name: Some("First Song".to_string()),
         band_name: Some("Band A".to_string()),
+        enqueued_at: None,
+        correlation_id: None,
     };
     driver
         .handle_stage(first, &status)
@@ -643,6 +651,8 @@ async fn refreshes_mapping_after_cache_ttl_for_new_deck() {
         current_translation: None,
         song_name: Some("Second Song".to_string()),
         band_name: Some("Band B".to_string()),
+        enqueued_at: None,
+        correlation_id: None,
     };
     driver
         .handle_stage(second, &status)
@@ -1042,6 +1052,8 @@ async fn update_metadata_targets_deduplicates_same_payload() {
         current_translation: None,
         song_name: Some("Amazing Grace".to_string()),
         band_name: None,
+        enqueued_at: None,
+        correlation_id: None,
     };
     driver
         .handle_stage(stage_first, &status)
@@ -1054,6 +1066,8 @@ async fn update_metadata_targets_deduplicates_same_payload() {
         current_translation: None,
         song_name: Some("Amazing Grace".to_string()),
         band_name: None,
+        enqueued_at: None,
+        correlation_id: None,
     };
     driver
         .handle_stage(stage_second, &status)
@@ -1075,6 +1089,8 @@ async fn update_metadata_targets_sends_new_payload() {
         current_translation: None,
         song_name: Some("Amazing Grace".to_string()),
         band_name: None,
+        enqueued_at: None,
+        correlation_id: None,
     };
     driver
         .handle_stage(stage_first, &status)
@@ -1087,6 +1103,8 @@ async fn update_metadata_targets_sends_new_payload() {
         current_translation: None,
         song_name: Some("How Great Thou Art".to_string()),
         band_name: None,
+        enqueued_at: None,
+        correlation_id: None,
     };
     driver
         .handle_stage(stage_second, &status)
