@@ -365,3 +365,154 @@ async fn from_config_against_empty_db_leaves_libraries_empty() {
         libraries.len()
     );
 }
+
+#[tokio::test]
+async fn api_input_does_not_leak_when_layout_is_worship() {
+    use std::time::Duration;
+    use tokio::time::timeout;
+
+    let state = AppState::in_memory().await.unwrap();
+    state
+        .set_stage_layout_code("worship-snv")
+        .await
+        .expect("set worship-snv");
+
+    let mut rx = state.live_hub().subscribe();
+
+    let api_state = ApiStageState {
+        current_text: "test main".to_string(),
+        current_group: "test group".to_string(),
+        current_song: "test song".to_string(),
+        ..Default::default()
+    };
+    state
+        .update_api_stage(api_state)
+        .await
+        .expect("update_api_stage");
+
+    // Drain any non-Stage events for a short window. Assert no
+    // LiveEvent::Stage arrives within the timeout — that's the no-leak invariant.
+    let saw_stage = async {
+        loop {
+            match rx.recv().await {
+                Ok(LiveEvent::Stage { .. }) => return true,
+                Ok(_) => continue,
+                Err(_) => return false,
+            }
+        }
+    };
+    let result = timeout(Duration::from_millis(150), saw_stage).await;
+    assert!(
+        result.is_err(),
+        "expected NO LiveEvent::Stage when layout is worship-snv"
+    );
+
+    // Sanity: the api_stage state IS stored (not silently discarded).
+    let stored = state.api_stage.read().await.clone();
+    assert_eq!(stored.current_text, "test main");
+}
+
+#[tokio::test]
+async fn api_input_publishes_when_layout_is_api() {
+    use std::time::Duration;
+    use tokio::time::timeout;
+
+    let state = AppState::in_memory().await.unwrap();
+    state
+        .set_stage_layout_code("api")
+        .await
+        .expect("set api layout");
+
+    // Subscribe AFTER the layout switch so we don't see leftover events
+    // from set_stage_layout_code.
+    let mut rx = state.live_hub().subscribe();
+
+    let api_state = ApiStageState {
+        current_text: "live api content".to_string(),
+        ..Default::default()
+    };
+    state
+        .update_api_stage(api_state)
+        .await
+        .expect("update_api_stage");
+
+    let stage_event = async {
+        loop {
+            match rx.recv().await {
+                Ok(LiveEvent::Stage { snapshot }) => return Some(snapshot),
+                Ok(_) => continue,
+                Err(_) => return None,
+            }
+        }
+    };
+    let snapshot = timeout(Duration::from_millis(500), stage_event)
+        .await
+        .expect("Stage event arrived within timeout")
+        .expect("Stage event payload");
+
+    assert_eq!(
+        snapshot.layout.code, "api",
+        "snapshot must use the api layout"
+    );
+}
+
+#[tokio::test]
+async fn switching_to_api_publishes_stored_api_state() {
+    use std::time::Duration;
+    use tokio::time::timeout;
+
+    let state = AppState::in_memory().await.unwrap();
+    state
+        .set_stage_layout_code("worship-snv")
+        .await
+        .expect("set worship-snv");
+
+    // Pre-store API content while not in api layout (the gate prevents
+    // an event from publishing here).
+    state
+        .update_api_stage(ApiStageState {
+            current_text: "stored content".to_string(),
+            ..Default::default()
+        })
+        .await
+        .expect("update_api_stage");
+
+    // Subscribe AFTER the pre-store, BEFORE the switch.
+    let mut rx = state.live_hub().subscribe();
+
+    state
+        .set_stage_layout_code("api")
+        .await
+        .expect("switch to api");
+
+    // Expect at least one StageLayout event AND one Stage event with api
+    // layout within the timeout.
+    let mut saw_layout = false;
+    let mut saw_stage_with_api = false;
+    let collect = async {
+        for _ in 0..10 {
+            if let Ok(ev) = rx.recv().await {
+                match ev {
+                    LiveEvent::StageLayout { code } if code == "api" => saw_layout = true,
+                    LiveEvent::Stage { snapshot } if snapshot.layout.code == "api" => {
+                        saw_stage_with_api = true;
+                    }
+                    _ => {}
+                }
+                if saw_layout && saw_stage_with_api {
+                    return;
+                }
+            }
+        }
+    };
+    let _ = timeout(Duration::from_millis(500), collect).await;
+
+    assert!(
+        saw_layout,
+        "expected LiveEvent::StageLayout for api after switch"
+    );
+    assert!(
+        saw_stage_with_api,
+        "expected LiveEvent::Stage with api layout after switch"
+    );
+}
