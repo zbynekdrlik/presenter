@@ -735,7 +735,14 @@ impl AppState {
     pub(crate) async fn update_api_stage(&self, state: ApiStageState) -> anyhow::Result<()> {
         let snapshot = self.build_api_stage_snapshot(&state).await;
         *self.api_stage.write().await = state;
-        self.live_hub.publish(LiveEvent::Stage { snapshot });
+        // Issue #281: only publish a Stage event when the operator's
+        // current layout is "api". Otherwise the api state is stored but
+        // does not affect the live preview, mirroring the existing inverse
+        // gate in `broadcasting.rs::publish_stage_context` (which skips
+        // non-api updates when api layout is selected).
+        if self.stage_layout_code().await == "api" {
+            self.live_hub.publish(LiveEvent::Stage { snapshot });
+        }
         Ok(())
     }
 
