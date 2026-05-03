@@ -3,7 +3,7 @@
 use super::stage::build_stage_snapshot;
 use super::AppState;
 use crate::live::LiveEvent;
-use presenter_core::{StageDisplayLayout, StageDisplaySnapshot};
+use presenter_core::{StageDisplayLayout, StageDisplaySnapshot, API_STAGE_LAYOUT_CODE};
 
 impl AppState {
     // Stage display methods
@@ -59,7 +59,18 @@ impl AppState {
         self.live_hub.publish(LiveEvent::StageLayout {
             code: layout.code.clone(),
         });
-        self.broadcast_stage_snapshots().await?;
+        if layout.code == API_STAGE_LAYOUT_CODE {
+            // Issue #281: when switching TO api, publish the stored
+            // api_stage snapshot so the operator preview reflects the
+            // most recent PUT instead of waiting for the next one.
+            // `broadcast_stage_snapshots` short-circuits on api layout
+            // anyway (see broadcasting.rs::publish_stage_context), so we
+            // replace it with the api snapshot publish here.
+            let snapshot = self.api_stage_snapshot().await;
+            self.live_hub.publish(LiveEvent::Stage { snapshot });
+        } else {
+            self.broadcast_stage_snapshots().await?;
+        }
         Ok(layout)
     }
 

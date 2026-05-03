@@ -50,7 +50,8 @@ use chrono::Utc;
 use presenter_core::{
     BibleBroadcast, BibleSlideOutput, OscSettings, OscSettingsDraft, PlaylistId, Presentation,
     PresentationId, Slide, SlideId, StageClientSnapshot, StageDisplayLayout, StageDisplaySlide,
-    StageDisplaySnapshot, StageState, TimersOverview, DEFAULT_STAGE_LAYOUT_CODE,
+    StageDisplaySnapshot, StageState, TimersOverview, API_STAGE_LAYOUT_CODE,
+    DEFAULT_STAGE_LAYOUT_CODE,
 };
 use presenter_persistence::{DatabaseSettings, Repository};
 use std::{
@@ -735,7 +736,14 @@ impl AppState {
     pub(crate) async fn update_api_stage(&self, state: ApiStageState) -> anyhow::Result<()> {
         let snapshot = self.build_api_stage_snapshot(&state).await;
         *self.api_stage.write().await = state;
-        self.live_hub.publish(LiveEvent::Stage { snapshot });
+        // Issue #281: only publish a Stage event when the operator's
+        // current layout is "api". Otherwise the api state is stored but
+        // does not affect the live preview, mirroring the existing inverse
+        // gate in `broadcasting.rs::publish_stage_context` (which skips
+        // non-api updates when api layout is selected).
+        if self.stage_layout_code().await == API_STAGE_LAYOUT_CODE {
+            self.live_hub.publish(LiveEvent::Stage { snapshot });
+        }
         Ok(())
     }
 
