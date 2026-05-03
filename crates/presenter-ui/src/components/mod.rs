@@ -10,6 +10,7 @@ mod presentation_list_drag;
 pub mod presentation_modal;
 pub mod search;
 pub mod slide_list;
+mod slide_list_scroll;
 mod slide_list_utils;
 pub mod stage;
 pub mod stage_preview;

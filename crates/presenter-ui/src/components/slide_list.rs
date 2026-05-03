@@ -9,8 +9,10 @@ use crate::state::operator::OperatorState;
 use crate::state::AppContext;
 use crate::utils::color::group_pill_style;
 
+use super::slide_list_scroll::{handle_wheel_event, scroll_slide_into_view, scroll_slides_to_top};
 use super::slide_list_utils::{
-    apply_focused_class, field_has_warning, format_multiline, slide_has_any_warning,
+    apply_focused_class, field_has_warning, format_multiline, reorder_slide_ids,
+    slide_has_any_warning,
 };
 
 /// Get a textarea/input value from the DOM by slide_id and field name.
@@ -232,6 +234,20 @@ pub fn SlideList() -> impl IntoView {
         });
     }
 
+    // Scroll to top when the operator opens a different presentation.
+    // Issue #271 concern 3: new song should load with the first slide
+    // visible, not at the previous song's scroll position.
+    {
+        let selected_presentation_id = ctx.selected_presentation_id;
+        Effect::new(move |prev_id: Option<Option<String>>| {
+            let current_id = selected_presentation_id.get();
+            if current_id != prev_id.flatten() && current_id.is_some() {
+                gloo_timers::callback::Timeout::new(0, scroll_slides_to_top).forget();
+            }
+            current_id
+        });
+    }
+
     let trigger_slide = move |pres_id: String, slide_id: String, next_slide_id: Option<String>| {
         let playlist_id = ctx.selected_playlist_id.get_untracked();
         op.triggering_slide_id.set(Some(slide_id.clone()));
@@ -291,6 +307,7 @@ pub fn SlideList() -> impl IntoView {
                         <div
                             class="operator__slides"
                             data-role="slides"
+                            on:wheel=handle_wheel_event
                         on:dragover=move |ev: web_sys::DragEvent| {
                             if op_dragover.dragging_slide_id.get_untracked().is_some() {
                                 ev.prevent_default();
@@ -901,129 +918,5 @@ pub fn SlideList() -> impl IntoView {
                 }
             </div>
         </section>
-    }
-}
-
-/// Assumes a vertically scrolling container (`.operator__slides`). If the list
-/// ever becomes horizontally scrollable, this function needs a companion branch.
-fn scroll_slide_into_view(slide_id: &str) {
-    let Some(document) = web_sys::window().and_then(|w| w.document()) else {
-        return;
-    };
-    let selector = format!(".operator__slides [data-slide-id=\"{slide_id}\"]");
-    let Ok(Some(el)) = document.query_selector(&selector) else {
-        return;
-    };
-    // Compute scroll position on the container so the active slide is in view.
-    // Find the scrollable ancestor (.operator__slides).
-    let Ok(Some(container)) = el.closest(".operator__slides") else {
-        return;
-    };
-    let Ok(container) = container.dyn_into::<web_sys::HtmlElement>() else {
-        return;
-    };
-    let Ok(el_html) = el.dyn_into::<web_sys::HtmlElement>() else {
-        return;
-    };
-    let el_rect = el_html.get_bounding_client_rect();
-    let container_rect = container.get_bounding_client_rect();
-    let el_top = el_rect.top();
-    let el_bottom = el_rect.bottom();
-    let c_top = container_rect.top();
-    let c_bottom = container_rect.bottom();
-    let scroll_top = container.scroll_top() as f64;
-    // If above viewport, scroll so element top is at container top.
-    if el_top < c_top {
-        let delta = c_top - el_top;
-        container.set_scroll_top((scroll_top - delta) as i32);
-    } else if el_bottom > c_bottom {
-        // If below viewport, scroll so element bottom is at container bottom.
-        let delta = el_bottom - c_bottom;
-        container.set_scroll_top((scroll_top + delta) as i32);
-    }
-}
-
-/// Pure reorder: given a slide id list and a drag/target pair, returns the new
-/// ordering, or `None` if the drag is a no-op (same id, missing ids).
-///
-/// Direction-based insertion: forward drags land AFTER the target, backward
-/// drags land BEFORE. This guarantees every distinct drag visibly moves the
-/// slide (the previous drop-position heuristic could be a no-op on forward
-/// drags into a target's upper half).
-fn reorder_slide_ids(ids: Vec<String>, dragged: &str, target: &str) -> Option<Vec<String>> {
-    if dragged == target {
-        return None;
-    }
-    let drag_pos = ids.iter().position(|id| id == dragged)?;
-    let target_pos = ids.iter().position(|id| id == target)?;
-    let forward = drag_pos < target_pos;
-    let mut new_ids = ids;
-    new_ids.remove(drag_pos);
-    // After removal, target_pos shifts down by 1 if the dragged slide was before it.
-    let adjusted_target = if forward { target_pos - 1 } else { target_pos };
-    let insert_idx = if forward {
-        adjusted_target + 1
-    } else {
-        adjusted_target
-    };
-    new_ids.insert(insert_idx, dragged.to_string());
-    Some(new_ids)
-}
-
-#[cfg(test)]
-mod reorder_tests {
-    use super::reorder_slide_ids;
-
-    fn ids(items: &[&str]) -> Vec<String> {
-        items.iter().map(|s| s.to_string()).collect()
-    }
-
-    #[test]
-    fn forward_drag_lands_after_target() {
-        // Drag "a" (pos 0) onto "d" (pos 3) → "a" ends up at pos 3.
-        let result = reorder_slide_ids(ids(&["a", "b", "c", "d", "e"]), "a", "d").unwrap();
-        assert_eq!(result, ids(&["b", "c", "d", "a", "e"]));
-    }
-
-    #[test]
-    fn backward_drag_lands_on_target_position() {
-        // Drag "d" (pos 3) onto "a" (pos 0) → "d" ends up at pos 0.
-        let result = reorder_slide_ids(ids(&["a", "b", "c", "d", "e"]), "d", "a").unwrap();
-        assert_eq!(result, ids(&["d", "a", "b", "c", "e"]));
-    }
-
-    #[test]
-    fn adjacent_forward_swap() {
-        // Drag "b" onto "c" → "b" and "c" swap.
-        let result = reorder_slide_ids(ids(&["a", "b", "c", "d"]), "b", "c").unwrap();
-        assert_eq!(result, ids(&["a", "c", "b", "d"]));
-    }
-
-    #[test]
-    fn adjacent_backward_swap() {
-        // Drag "c" onto "b" → "c" and "b" swap.
-        let result = reorder_slide_ids(ids(&["a", "b", "c", "d"]), "c", "b").unwrap();
-        assert_eq!(result, ids(&["a", "c", "b", "d"]));
-    }
-
-    #[test]
-    fn same_id_returns_none() {
-        assert!(reorder_slide_ids(ids(&["a", "b"]), "a", "a").is_none());
-    }
-
-    #[test]
-    fn missing_dragged_returns_none() {
-        assert!(reorder_slide_ids(ids(&["a", "b"]), "z", "a").is_none());
-    }
-
-    #[test]
-    fn missing_target_returns_none() {
-        assert!(reorder_slide_ids(ids(&["a", "b"]), "a", "z").is_none());
-    }
-
-    #[test]
-    fn preserves_length() {
-        let result = reorder_slide_ids(ids(&["a", "b", "c", "d", "e"]), "a", "e").unwrap();
-        assert_eq!(result.len(), 5);
     }
 }
