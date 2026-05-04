@@ -230,8 +230,9 @@ test.describe("WASM Operator Timer Tests", () => {
     await expect(countdownValue).toBeVisible();
 
     const text = await countdownValue.textContent();
-    // Should show a time format like "0:00" or "-1:23:45"
-    expect(text).toMatch(/^-?\d+:\d{2}(:\d{2})?$/);
+    // Accepts all format_countdown outputs: empty (cleared), digit (< 60s),
+    // MM:SS (1-59 min), or "Xh Ym" (≥1h). See presenter_core::format_countdown.
+    expect(text ?? "").toMatch(/^(|\d+|\d{2}:\d{2}|\d+h \d+m)$/);
   });
 
   test("timer overlay opens in new window", async ({ page, context }) => {

@@ -133,7 +133,7 @@ test.describe("WASM Operator View Routing Tests", () => {
 
       // Refresh the page
       await page.reload();
-      await page.waitForSelector('[data-role="library-list"]', {
+      await page.waitForSelector('body[data-wasm-ready="true"]', {
         timeout: 30_000,
       });
 
