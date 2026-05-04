@@ -864,4 +864,161 @@ mod tests {
         assert_eq!(slides[1].main, "SECOND");
         assert_eq!(slides[2].main_reference, "Ján 1:1 (SEB)");
     }
+
+    fn verse_full(
+        number: u32,
+        text: &str,
+        book: &str,
+        chapter: u32,
+        translation: &str,
+    ) -> BibleItem {
+        BibleItem::Verse {
+            number,
+            text: text.to_string(),
+            book: book.to_string(),
+            chapter,
+            translation: translation.to_string(),
+        }
+    }
+
+    #[test]
+    fn compose_uses_full_passage_range_across_split_slides() {
+        // Numeri 13:17-20 forced to split into 2 slides via low char limit.
+        // Both slides must show the FULL range "Numeri 13:17-20 (SEB)".
+        let items = vec![
+            verse_full(
+                17,
+                "Verse seventeen text long enough to fill",
+                "Numeri",
+                13,
+                "SEB",
+            ),
+            verse_full(18, "Verse eighteen text", "Numeri", 13, "SEB"),
+            verse_full(
+                19,
+                "Verse nineteen text long enough to fill",
+                "Numeri",
+                13,
+                "SEB",
+            ),
+            verse_full(20, "Verse twenty text", "Numeri", 13, "SEB"),
+        ];
+        // Char limit chosen so that 2 verses pack into one slide and the
+        // next two pack into the second slide.
+        let slides = compose_bible_items_into_slides(&items, 80);
+        assert!(
+            slides.len() >= 2,
+            "expected at least 2 slides, got {}",
+            slides.len()
+        );
+        for (i, slide) in slides.iter().enumerate() {
+            assert_eq!(
+                slide.main_reference, "Numeri 13:17-20 (SEB)",
+                "slide {} must show full range",
+                i
+            );
+        }
+    }
+
+    #[test]
+    fn compose_handles_emphasis_between_verses_with_full_range() {
+        let items = vec![
+            verse_full(17, "Verse seventeen", "Numeri", 13, "SEB"),
+            emphasis("DÔLEŽITÉ SLOVO"),
+            verse_full(18, "Verse eighteen", "Numeri", 13, "SEB"),
+            verse_full(19, "Verse nineteen", "Numeri", 13, "SEB"),
+            verse_full(20, "Verse twenty", "Numeri", 13, "SEB"),
+        ];
+        let slides = compose_bible_items_into_slides(&items, 320);
+        // Find the emphasis slide (empty reference, main = "DÔLEŽITÉ SLOVO")
+        let emphasis_slide = slides
+            .iter()
+            .find(|s| s.main == "DÔLEŽITÉ SLOVO")
+            .expect("emphasis slide present");
+        assert_eq!(
+            emphasis_slide.main_reference, "",
+            "emphasis slide has empty reference"
+        );
+        // Every verse slide (the ones whose main contains "Verse ") must
+        // show the full passage range.
+        let verse_slides: Vec<&ComposedBibleSlide> = slides
+            .iter()
+            .filter(|s| s.main.contains("Verse "))
+            .collect();
+        assert!(verse_slides.len() >= 2, "expected at least 2 verse slides");
+        for (i, slide) in verse_slides.iter().enumerate() {
+            assert_eq!(
+                slide.main_reference, "Numeri 13:17-20 (SEB)",
+                "verse slide {} must show full range across emphasis interruption",
+                i
+            );
+        }
+    }
+
+    #[test]
+    fn compose_two_distinct_passages_get_independent_ranges() {
+        let items = vec![
+            verse_full(1, "In the beginning was the Word.", "Ján", 1, "SEB"),
+            verse_full(2, "He was in the beginning with God.", "Ján", 1, "SEB"),
+            verse_full(3, "Blessed are the poor in spirit.", "Mat", 5, "SEB"),
+        ];
+        let slides = compose_bible_items_into_slides(&items, 320);
+        let jan_slides: Vec<&ComposedBibleSlide> = slides
+            .iter()
+            .filter(|s| s.main_reference.starts_with("Ján"))
+            .collect();
+        let mat_slides: Vec<&ComposedBibleSlide> = slides
+            .iter()
+            .filter(|s| s.main_reference.starts_with("Mat"))
+            .collect();
+        assert!(!jan_slides.is_empty(), "Ján slides present");
+        assert!(!mat_slides.is_empty(), "Mat slides present");
+        for slide in &jan_slides {
+            assert_eq!(slide.main_reference, "Ján 1:1-2 (SEB)");
+        }
+        for slide in &mat_slides {
+            assert_eq!(slide.main_reference, "Mat 5:3 (SEB)");
+        }
+    }
+
+    #[test]
+    fn compose_non_contiguous_verses_render_as_comma_list() {
+        // Pastor cited only verses 1, 3, 5 — non-contiguous. Reference
+        // must show the explicit list, not a misleading 1-5 range.
+        let items = vec![
+            verse_full(1, "First cited verse content here", "Numeri", 13, "SEB"),
+            verse_full(3, "Third cited verse content here", "Numeri", 13, "SEB"),
+            verse_full(5, "Fifth cited verse content here", "Numeri", 13, "SEB"),
+        ];
+        let slides = compose_bible_items_into_slides(&items, 60);
+        assert!(!slides.is_empty(), "at least one slide");
+        for (i, slide) in slides.iter().enumerate() {
+            assert_eq!(
+                slide.main_reference, "Numeri 13:1, 3, 5 (SEB)",
+                "slide {} must show comma-list of cited verses",
+                i
+            );
+        }
+    }
+
+    #[test]
+    fn compose_mixed_gap_renders_as_comma_list() {
+        // Mixed gap (skip verse 3): 1, 2, 4, 5. Not perfectly contiguous,
+        // so the reference is a flat comma-list — no mixed "1-2, 4-5" syntax.
+        let items = vec![
+            verse_full(1, "Verse one", "Numeri", 13, "SEB"),
+            verse_full(2, "Verse two", "Numeri", 13, "SEB"),
+            verse_full(4, "Verse four", "Numeri", 13, "SEB"),
+            verse_full(5, "Verse five", "Numeri", 13, "SEB"),
+        ];
+        let slides = compose_bible_items_into_slides(&items, 320);
+        assert!(!slides.is_empty(), "at least one slide");
+        for (i, slide) in slides.iter().enumerate() {
+            assert_eq!(
+                slide.main_reference, "Numeri 13:1, 2, 4, 5 (SEB)",
+                "slide {} must show flat comma-list",
+                i
+            );
+        }
+    }
 }
