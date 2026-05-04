@@ -3,7 +3,7 @@ use presenter_core::{
     BiblePassage, BibleTranslation, PresentationId, Slide, SlideContent, SlideGroup, SlideId,
     SlideText,
 };
-use std::collections::HashMap;
+use std::collections::{BTreeSet, HashMap};
 
 use super::stage::blank_slide_content;
 use super::AppState;
@@ -41,6 +41,32 @@ pub(crate) struct ComposedBibleSlide {
     pub main_reference: String,
 }
 
+/// Format a sorted set of verse numbers as a reference suffix.
+///
+/// - Empty set → "" (caller skips the reference entirely).
+/// - Single verse → "17".
+/// - Contiguous range → "17-20".
+/// - Non-contiguous → "1, 3, 5" (flat comma-list, no mixed range syntax).
+fn format_verse_range(verses: &BTreeSet<u32>) -> String {
+    let v: Vec<u32> = verses.iter().copied().collect();
+    if v.is_empty() {
+        return String::new();
+    }
+    let min = v[0];
+    let max = v[v.len() - 1];
+    let count = v.len() as u32;
+    if min == max {
+        format!("{}", min)
+    } else if max - min + 1 == count {
+        format!("{}-{}", min, max)
+    } else {
+        v.iter()
+            .map(|n| n.to_string())
+            .collect::<Vec<_>>()
+            .join(", ")
+    }
+}
+
 /// Compose a stream of `BibleItem` into slides. Same greedy-packing rule
 /// as `compose_bible_slides`: accumulate verses into one slide until the
 /// next verse would overflow the character limit, then flush. Emphasis
@@ -56,50 +82,77 @@ pub(crate) fn compose_bible_items_into_slides(
     let limit = character_limit as usize;
     let mut slides: Vec<ComposedBibleSlide> = Vec::new();
 
+    // Pass 1: collect every verse number per (book, chapter, translation)
+    // group across the whole items[] stream. Slides flushed in pass 2 use
+    // this group's full verse list for the reference label, so all slides
+    // of one passage display the same reference (issue #292).
+    let mut group_verses: HashMap<(String, u32, String), BTreeSet<u32>> = HashMap::new();
+    for item in items {
+        if let BibleItem::Verse {
+            number,
+            book,
+            chapter,
+            translation,
+            ..
+        } = item
+        {
+            group_verses
+                .entry((book.clone(), *chapter, translation.clone()))
+                .or_default()
+                .insert(*number);
+        }
+    }
+
     // Accumulator for the current verse slide.
     let mut cur_lines: Vec<String> = Vec::new();
     let mut cur_numbers: Vec<u32> = Vec::new();
     let mut cur_group: Option<(String, u32, String)> = None; // (book, chapter, translation)
 
-    // Flush the current verse accumulator into a slide. Uses let-else
-    // pattern matching instead of expect()/unwrap() so there is no panic
-    // path at all — if an invariant is ever broken by a future refactor
-    // (e.g., group set without lines, or lines without group), the flush
-    // is a no-op rather than a crash.
-    let flush_verses = |slides: &mut Vec<ComposedBibleSlide>,
-                        lines: &mut Vec<String>,
-                        numbers: &mut Vec<u32>,
-                        group: &mut Option<(String, u32, String)>| {
-        if lines.is_empty() {
-            // Also drop any stale group metadata to keep invariants aligned.
-            *group = None;
-            return;
-        }
-        let Some((book, chapter, translation)) = group.take() else {
-            // Lines present but group missing — treat as invariant break
-            // and reset the accumulator instead of producing a bogus slide.
+    // Flush the current verse accumulator into a slide. The reference is
+    // derived from the GROUP's full verse set (built in pass 1), not from
+    // cur_numbers, so every slide of one passage displays the same label.
+    //
+    // Uses let-else pattern matching instead of expect()/unwrap() so there
+    // is no panic path — if an invariant is ever broken by a future
+    // refactor (e.g., group set without lines), the flush is a no-op
+    // rather than a crash.
+    let flush_verses =
+        |slides: &mut Vec<ComposedBibleSlide>,
+         lines: &mut Vec<String>,
+         numbers: &mut Vec<u32>,
+         group: &mut Option<(String, u32, String)>,
+         group_verses: &HashMap<(String, u32, String), BTreeSet<u32>>| {
+            if lines.is_empty() {
+                *group = None;
+                return;
+            }
+            let Some((book, chapter, translation)) = group.take() else {
+                lines.clear();
+                numbers.clear();
+                return;
+            };
+            if numbers.is_empty() {
+                lines.clear();
+                return;
+            }
+            let main = lines.join("\n");
+            let reference = match group_verses.get(&(book.clone(), chapter, translation.clone())) {
+                Some(verses) => format!(
+                    "{} {}:{} ({})",
+                    book,
+                    chapter,
+                    format_verse_range(verses),
+                    translation
+                ),
+                None => String::new(),
+            };
+            slides.push(ComposedBibleSlide {
+                main,
+                main_reference: reference,
+            });
             lines.clear();
             numbers.clear();
-            return;
         };
-        let (Some(&start), Some(&end)) = (numbers.first(), numbers.last()) else {
-            lines.clear();
-            numbers.clear();
-            return;
-        };
-        let main = lines.join("\n");
-        let reference = if start == end {
-            format!("{} {}:{} ({})", book, chapter, start, translation)
-        } else {
-            format!("{} {}:{}-{} ({})", book, chapter, start, end, translation)
-        };
-        slides.push(ComposedBibleSlide {
-            main,
-            main_reference: reference,
-        });
-        lines.clear();
-        numbers.clear();
-    };
 
     for item in items {
         match item {
@@ -109,6 +162,7 @@ pub(crate) fn compose_bible_items_into_slides(
                     &mut cur_lines,
                     &mut cur_numbers,
                     &mut cur_group,
+                    &group_verses,
                 );
                 slides.push(ComposedBibleSlide {
                     main: text.clone(),
@@ -130,6 +184,7 @@ pub(crate) fn compose_bible_items_into_slides(
                             &mut cur_lines,
                             &mut cur_numbers,
                             &mut cur_group,
+                            &group_verses,
                         );
                     }
                 }
@@ -151,6 +206,7 @@ pub(crate) fn compose_bible_items_into_slides(
                         &mut cur_lines,
                         &mut cur_numbers,
                         &mut cur_group,
+                        &group_verses,
                     );
                 }
 
@@ -166,6 +222,7 @@ pub(crate) fn compose_bible_items_into_slides(
         &mut cur_lines,
         &mut cur_numbers,
         &mut cur_group,
+        &group_verses,
     );
     slides
 }
@@ -685,8 +742,10 @@ mod tests {
         ];
         let slides = compose_bible_items_into_slides(&items, 30);
         assert_eq!(slides.len(), 2);
-        assert_eq!(slides[0].main_reference, "Ján 1:1 (SEB)");
-        assert_eq!(slides[1].main_reference, "Ján 1:2 (SEB)");
+        // Both slides show the FULL group reference (verses 1–2) even though
+        // they are split across two slides — that is the point of pass 1.
+        assert_eq!(slides[0].main_reference, "Ján 1:1-2 (SEB)");
+        assert_eq!(slides[1].main_reference, "Ján 1:1-2 (SEB)");
     }
 
     #[test]
@@ -699,11 +758,12 @@ mod tests {
         let slides = compose_bible_items_into_slides(&items, 320);
         assert_eq!(slides.len(), 3);
         assert_eq!(slides[0].main, "1. Na počiatku.");
-        assert_eq!(slides[0].main_reference, "Ján 1:1 (SEB)");
+        // Both verse slides share (Ján, 1, SEB) group → full-range reference on each.
+        assert_eq!(slides[0].main_reference, "Ján 1:1-2 (SEB)");
         assert_eq!(slides[1].main, "NOVÁ ZMLUVA");
         assert_eq!(slides[1].main_reference, "");
         assert_eq!(slides[2].main, "2. Ono bolo.");
-        assert_eq!(slides[2].main_reference, "Ján 1:2 (SEB)");
+        assert_eq!(slides[2].main_reference, "Ján 1:1-2 (SEB)");
     }
 
     #[test]
