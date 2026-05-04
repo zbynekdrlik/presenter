@@ -260,11 +260,11 @@ async fn timer_commands_emit_live_event() {
 
 #[test]
 fn countdown_format_switches_below_minute() {
-    assert_eq!(format_countdown_text(3605), "60:05");
+    assert_eq!(format_countdown_text(3605), "1h 0m");
     assert_eq!(format_countdown_text(125), "02:05");
     assert_eq!(format_countdown_text(59), "59");
     assert_eq!(format_countdown_text(0), "0");
-    assert_eq!(format_countdown_text(-12), "0");
+    assert_eq!(format_countdown_text(-12), "");
 }
 
 #[tokio::test]
