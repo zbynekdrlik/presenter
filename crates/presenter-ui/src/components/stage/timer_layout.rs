@@ -20,7 +20,7 @@ pub fn TimerLayout(
     let timer_text = move || {
         ctx.snapshot
             .get()
-            .map(|s| format_seconds(s.timers.countdown_to_start.seconds_remaining))
+            .map(|s| presenter_core::format_countdown(s.timers.countdown_to_start.seconds_remaining))
             .unwrap_or_else(|| "00:00".to_string())
     };
 
@@ -51,17 +51,5 @@ pub fn TimerLayout(
             </div>
             <super::status_bar::StatusBar ws_state=ws_state latency_ms=latency_ms />
         </div>
-    }
-}
-
-fn format_seconds(seconds: i64) -> String {
-    let secs = seconds.max(0);
-    let h = secs / 3600;
-    let m = (secs % 3600) / 60;
-    let s = secs % 60;
-    if h > 0 {
-        format!("{h:02}:{m:02}:{s:02}")
-    } else {
-        format!("{m:02}:{s:02}")
     }
 }

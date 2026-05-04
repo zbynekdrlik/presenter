@@ -323,14 +323,7 @@ pub(crate) fn build_stage_playlist_entries(
 }
 
 pub(crate) fn format_countdown_text(seconds_remaining: i64) -> String {
-    let total = seconds_remaining.max(0);
-    if total < 60 {
-        total.to_string()
-    } else {
-        let minutes = total / 60;
-        let seconds = total % 60;
-        format!("{minutes:02}:{seconds:02}")
-    }
+    presenter_core::format_countdown(seconds_remaining)
 }
 
 #[cfg(test)]

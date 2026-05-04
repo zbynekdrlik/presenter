@@ -62,8 +62,8 @@ pub use stage_display::{
     API_STAGE_LAYOUT_CODE, DEFAULT_STAGE_LAYOUT_CODE,
 };
 pub use timer::{
-    CountdownTimer, CountdownTimerSnapshot, PreachTimer, PreachTimerSnapshot, TimerCommand,
-    TimerState, TimersOverview, TimersState,
+    format_countdown, CountdownTimer, CountdownTimerSnapshot, PreachTimer, PreachTimerSnapshot,
+    TimerCommand, TimerState, TimersOverview, TimersState,
 };
 pub use video_source::{VideoSource, VideoSourceDraft, VideoSourceValidationError};
 
