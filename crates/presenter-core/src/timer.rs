@@ -2,7 +2,6 @@
 use chrono::TimeDelta;
 use chrono::{DateTime, Duration, Local, NaiveTime, Utc};
 use serde::{Deserialize, Serialize};
-use std::cmp::max;
 use thiserror::Error;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -324,15 +323,14 @@ impl TimersState {
     }
 
     fn overview_with_local_format(&self, now: DateTime<Utc>, target_local: &str) -> TimersOverview {
-        let countdown_remaining = self.countdown.remaining(now).num_seconds();
-        let remaining_seconds = max(countdown_remaining, 0);
+        let countdown_remaining = (self.countdown.target - now).num_seconds();
         let elapsed_seconds = self.preach.elapsed(now).num_seconds();
         TimersOverview {
             countdown_to_start: CountdownTimerSnapshot {
                 state: self.countdown.state,
                 target: self.countdown.target,
                 target_local: target_local.to_string(),
-                seconds_remaining: remaining_seconds,
+                seconds_remaining: countdown_remaining,
             },
             preach_timer: PreachTimerSnapshot {
                 state: self.preach.state,
@@ -389,6 +387,36 @@ impl TimersOverview {
             },
         }
     }
+}
+
+/// Format a countdown for display on Resolume, stage, and operator UI.
+///
+/// Spec: docs/superpowers/specs/2026-05-04-timer-format-design.md
+///
+/// - `< -10` → "" (cleared — 10 s past zero, send empty text)
+/// - `-10..=0` → "0"
+/// - `1..=59` → "1", "59"
+/// - `60..=3599` → "MM:SS"
+/// - `>= 3600` → "Xh Ym" (round down, drop seconds)
+pub fn format_countdown(seconds_remaining: i64) -> String {
+    if seconds_remaining < -10 {
+        return String::new();
+    }
+    if seconds_remaining <= 0 {
+        return "0".to_string();
+    }
+    let secs = seconds_remaining;
+    if secs < 60 {
+        return secs.to_string();
+    }
+    if secs < 3600 {
+        let m = secs / 60;
+        let s = secs % 60;
+        return format!("{m:02}:{s:02}");
+    }
+    let h = secs / 3600;
+    let m = (secs % 3600) / 60;
+    format!("{h}h {m}m")
 }
 
 #[cfg(test)]
@@ -733,5 +761,22 @@ mod tests {
             "expected ~15 min, got {} min",
             remaining.num_minutes()
         );
+    }
+
+    #[test]
+    fn format_countdown_covers_all_boundary_cases() {
+        assert_eq!(format_countdown(3605), "1h 0m");
+        assert_eq!(format_countdown(5430), "1h 30m");
+        assert_eq!(format_countdown(7199), "1h 59m");
+        assert_eq!(format_countdown(7200), "2h 0m");
+        assert_eq!(format_countdown(125), "02:05");
+        assert_eq!(format_countdown(60), "01:00");
+        assert_eq!(format_countdown(59), "59");
+        assert_eq!(format_countdown(1), "1");
+        assert_eq!(format_countdown(0), "0");
+        assert_eq!(format_countdown(-5), "0");
+        assert_eq!(format_countdown(-10), "0");
+        assert_eq!(format_countdown(-11), "");
+        assert_eq!(format_countdown(-100), "");
     }
 }
