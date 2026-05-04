@@ -167,7 +167,7 @@ pub fn StagePreview() -> impl IntoView {
                 data-role="worship-preview"
                 class="operator__worship-preview-wrap"
                 style=move || {
-                    if ctx.view.get() == "bible" { "display:none" } else { "" }
+                    if ctx.view.get() == "worship" { "" } else { "display:none" }
                 }
             >
                 <div class="operator__stage-preview-stack">
