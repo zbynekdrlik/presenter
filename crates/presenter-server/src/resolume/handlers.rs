@@ -1,8 +1,11 @@
 use super::clip_map::ClipMapping;
 use super::driver::HostDriver;
-use super::types::{ClipTarget, LaneTarget, SlotKind};
+use super::types::{apply_transforms, ClipTarget, LaneTarget, SlotKind};
 use super::{BibleUpdate, ResolumeConnectionSnapshot, StageUpdate, TimerFrame};
+use futures_util::{stream::FuturesUnordered, StreamExt};
+use reqwest::header::HOST;
 use std::sync::Arc;
+use std::time::Instant;
 use tokio::sync::RwLock;
 use tokio::time::sleep;
 use tracing::warn;
@@ -28,7 +31,24 @@ impl HostDriver {
         if !self.config.is_enabled {
             return Ok(());
         }
+
+        let pickup_at = Instant::now();
+        let t_queue_wait_ms = update
+            .enqueued_at
+            .map(|enq| pickup_at.duration_since(enq).as_secs_f64() * 1000.0)
+            .unwrap_or(0.0);
+        let correlation_id = update.correlation_id;
+
+        let mapping_start = Instant::now();
         self.ensure_mapping().await?;
+        let t_ensure_mapping_ms = elapsed_ms(mapping_start);
+
+        let mut t_main_ms = 0.0;
+        let mut t_trans_ms = 0.0;
+        let mut t_song_ms = 0.0;
+        let mut t_band_ms = 0.0;
+        let mut t_trigger_ms = 0.0;
+
         if let Some(mapping) = self.mapping.clone() {
             let main_lane = self.lane_state.current(SlotKind::Main);
             let translation_lane = self.lane_state.current(SlotKind::Translation);
@@ -36,6 +56,7 @@ impl HostDriver {
             let mut to_trigger = Vec::new();
             let mut main_lane_filled = false;
             if let Some(ref main_text) = update.current_main {
+                let step_start = Instant::now();
                 let mut main_targets = self
                     .update_lane_text(
                         main_lane,
@@ -45,6 +66,7 @@ impl HostDriver {
                         status,
                     )
                     .await?;
+                t_main_ms = elapsed_ms(step_start);
                 if !main_targets.is_empty() {
                     to_trigger.append(&mut main_targets);
                     main_lane_filled = true;
@@ -53,6 +75,7 @@ impl HostDriver {
 
             let mut translation_lane_filled = false;
             if let Some(ref translation_text) = update.current_translation {
+                let step_start = Instant::now();
                 let mut translation_targets = self
                     .update_lane_text(
                         translation_lane,
@@ -62,6 +85,7 @@ impl HostDriver {
                         status,
                     )
                     .await?;
+                t_trans_ms = elapsed_ms(step_start);
                 if !translation_targets.is_empty() {
                     to_trigger.append(&mut translation_targets);
                     translation_lane_filled = true;
@@ -76,6 +100,7 @@ impl HostDriver {
                         "Resolume mapping missing #song-name clip"
                     );
                 } else {
+                    let step_start = Instant::now();
                     self.update_metadata_targets(
                         &mapping.song_name,
                         song_name,
@@ -83,6 +108,7 @@ impl HostDriver {
                         status,
                     )
                     .await?;
+                    t_song_ms = elapsed_ms(step_start);
                 }
             } else {
                 self.last_song_name_payload = None;
@@ -96,6 +122,7 @@ impl HostDriver {
                         "Resolume mapping missing #band-name clip"
                     );
                 } else {
+                    let step_start = Instant::now();
                     self.update_metadata_targets(
                         &mapping.band_name,
                         band_name,
@@ -103,6 +130,7 @@ impl HostDriver {
                         status,
                     )
                     .await?;
+                    t_band_ms = elapsed_ms(step_start);
                 }
             } else {
                 self.last_band_name_payload = None;
@@ -112,7 +140,9 @@ impl HostDriver {
                 if TRIGGER_DELAY.as_millis() > 0 {
                     sleep(TRIGGER_DELAY).await;
                 }
+                let trigger_start = Instant::now();
                 self.trigger_clips(&to_trigger).await?;
+                t_trigger_ms = elapsed_ms(trigger_start);
             }
 
             if main_lane_filled {
@@ -130,6 +160,23 @@ impl HostDriver {
             }
         }
         self.mark_connected(status).await;
+
+        let t_total_ms = elapsed_ms(pickup_at);
+        tracing::info!(
+            target: "presenter::resolume::timing",
+            correlation_id = correlation_id.map(|u| u.to_string()).unwrap_or_default(),
+            host = %self.config.host,
+            t_queue_wait_ms,
+            t_ensure_mapping_ms,
+            t_main_ms,
+            t_trans_ms,
+            t_song_ms,
+            t_band_ms,
+            t_trigger_delay_ms = TRIGGER_DELAY.as_secs_f64() * 1000.0,
+            t_trigger_ms,
+            t_total_ms,
+            "resolume stage timing"
+        );
         Ok(())
     }
 
@@ -453,12 +500,23 @@ impl HostDriver {
             }
 
             let endpoint = self.endpoint().await?;
-            let mut latency_recorded = None;
+            let mut futures = FuturesUnordered::new();
             for target in &mapping.timer {
-                if let Some(duration) = self.update_clip_text(target, &text, &endpoint).await? {
-                    if latency_recorded.is_none() {
-                        latency_recorded = Some(duration);
-                    }
+                if let Some(fut) = put_text_param_future(
+                    self.client.clone(),
+                    &endpoint.base_url,
+                    endpoint.host_header.clone(),
+                    target,
+                    &text,
+                ) {
+                    futures.push(fut);
+                }
+            }
+            let mut latency_recorded = None;
+            while let Some(result) = futures.next().await {
+                let duration = result?;
+                if latency_recorded.is_none() {
+                    latency_recorded = Some(duration);
                 }
             }
             if let Some(latency) = latency_recorded {
@@ -500,12 +558,23 @@ impl HostDriver {
 
         if let Some(payload) = text {
             let endpoint = self.endpoint().await?;
-            let mut latency_recorded = None;
+            let mut futures = FuturesUnordered::new();
             for target in selected {
-                if let Some(duration) = self.update_clip_text(target, payload, &endpoint).await? {
-                    if latency_recorded.is_none() {
-                        latency_recorded = Some(duration);
-                    }
+                if let Some(fut) = put_text_param_future(
+                    self.client.clone(),
+                    &endpoint.base_url,
+                    endpoint.host_header.clone(),
+                    target,
+                    payload,
+                ) {
+                    futures.push(fut);
+                }
+            }
+            let mut latency_recorded = None;
+            while let Some(result) = futures.next().await {
+                let duration = result?;
+                if latency_recorded.is_none() {
+                    latency_recorded = Some(duration);
                 }
             }
             if let Some(latency) = latency_recorded {
@@ -537,12 +606,23 @@ impl HostDriver {
         }
 
         let endpoint = self.endpoint().await?;
-        let mut latency_recorded = None;
+        let mut futures = FuturesUnordered::new();
         for target in targets {
-            if let Some(duration) = self.update_clip_text(target, text, &endpoint).await? {
-                if latency_recorded.is_none() {
-                    latency_recorded = Some(duration);
-                }
+            if let Some(fut) = put_text_param_future(
+                self.client.clone(),
+                &endpoint.base_url,
+                endpoint.host_header.clone(),
+                target,
+                text,
+            ) {
+                futures.push(fut);
+            }
+        }
+        let mut latency_recorded = None;
+        while let Some(result) = futures.next().await {
+            let duration = result?;
+            if latency_recorded.is_none() {
+                latency_recorded = Some(duration);
             }
         }
         if let Some(latency) = latency_recorded {
@@ -554,4 +634,48 @@ impl HostDriver {
         }
         Ok(())
     }
+}
+
+/// Builds a future that PUTs `text` (after applying `target.transforms`) to
+/// the Resolume text parameter at `target.text_param_id`. Returns `None` if
+/// the target has no text param. The returned future resolves to the
+/// per-PUT elapsed `Duration` on success.
+///
+/// Used by `handle_timer`, `update_lane_text`, and `update_metadata_targets`
+/// to compose parallel `FuturesUnordered`. The Resolume HTTP client uses
+/// internal `Arc` sharing so `client.clone()` per future is cheap.
+fn put_text_param_future(
+    client: reqwest::Client,
+    base_url: &str,
+    host_header: Option<String>,
+    target: &ClipTarget,
+    text: &str,
+) -> Option<impl std::future::Future<Output = anyhow::Result<std::time::Duration>>> {
+    let param_id = target.text_param_id?;
+    let url = format!("{}/parameter/by-id/{}", base_url, param_id);
+    let payload = apply_transforms(text, &target.transforms).into_owned();
+    Some(async move {
+        let mut request = client.put(&url);
+        if let Some(host) = host_header {
+            request = request.header(HOST, host);
+        }
+        let start = std::time::Instant::now();
+        let response = request
+            .json(&serde_json::json!({ "value": payload }))
+            .timeout(super::driver::ACTION_TIMEOUT)
+            .send()
+            .await
+            .map_err(|e| anyhow::anyhow!("failed to update text parameter {}: {}", param_id, e))?;
+        if !response.status().is_success() {
+            return Err(anyhow::anyhow!(
+                "text parameter update failed with status {}",
+                response.status()
+            ));
+        }
+        Ok(start.elapsed())
+    })
+}
+
+fn elapsed_ms(start: Instant) -> f64 {
+    start.elapsed().as_secs_f64() * 1000.0
 }

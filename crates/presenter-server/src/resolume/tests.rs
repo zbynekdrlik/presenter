@@ -205,6 +205,8 @@ async fn stage_updates_alternate_main_and_translation_lanes() {
         current_translation: Some("Trans 1".to_string()),
         song_name: Some("First Song".to_string()),
         band_name: Some("Library".to_string()),
+        enqueued_at: None,
+        correlation_id: None,
     };
     driver
         .handle_stage(stage_first, &status)
@@ -216,6 +218,8 @@ async fn stage_updates_alternate_main_and_translation_lanes() {
         current_translation: Some("Trans 2".to_string()),
         song_name: Some("Second Song".to_string()),
         band_name: Some("Library".to_string()),
+        enqueued_at: None,
+        correlation_id: None,
     };
     driver
         .handle_stage(stage_second, &status)
@@ -373,6 +377,8 @@ Line 2"
         current_translation: None,
         song_name: Some("Song".to_string()),
         band_name: Some("Band".to_string()),
+        enqueued_at: None,
+        correlation_id: None,
     };
 
     driver
@@ -600,6 +606,8 @@ async fn refreshes_mapping_after_cache_ttl_for_new_deck() {
         current_translation: None,
         song_name: Some("First Song".to_string()),
         band_name: Some("Band A".to_string()),
+        enqueued_at: None,
+        correlation_id: None,
     };
     driver
         .handle_stage(first, &status)
@@ -643,6 +651,8 @@ async fn refreshes_mapping_after_cache_ttl_for_new_deck() {
         current_translation: None,
         song_name: Some("Second Song".to_string()),
         band_name: Some("Band B".to_string()),
+        enqueued_at: None,
+        correlation_id: None,
     };
     driver
         .handle_stage(second, &status)
@@ -1042,6 +1052,8 @@ async fn update_metadata_targets_deduplicates_same_payload() {
         current_translation: None,
         song_name: Some("Amazing Grace".to_string()),
         band_name: None,
+        enqueued_at: None,
+        correlation_id: None,
     };
     driver
         .handle_stage(stage_first, &status)
@@ -1054,6 +1066,8 @@ async fn update_metadata_targets_deduplicates_same_payload() {
         current_translation: None,
         song_name: Some("Amazing Grace".to_string()),
         band_name: None,
+        enqueued_at: None,
+        correlation_id: None,
     };
     driver
         .handle_stage(stage_second, &status)
@@ -1075,6 +1089,8 @@ async fn update_metadata_targets_sends_new_payload() {
         current_translation: None,
         song_name: Some("Amazing Grace".to_string()),
         band_name: None,
+        enqueued_at: None,
+        correlation_id: None,
     };
     driver
         .handle_stage(stage_first, &status)
@@ -1087,6 +1103,8 @@ async fn update_metadata_targets_sends_new_payload() {
         current_translation: None,
         song_name: Some("How Great Thou Art".to_string()),
         band_name: None,
+        enqueued_at: None,
+        correlation_id: None,
     };
     driver
         .handle_stage(stage_second, &status)
@@ -1112,4 +1130,228 @@ async fn note_latency_records_in_status() {
     assert!(snap.last_latency_ms.is_some());
     let latency = snap.last_latency_ms.expect("latency");
     assert!((latency - 42.0).abs() < 1.0);
+}
+
+// ── #267 dedup and parallelism tests ────────────────────────────────
+
+/// Helper: build a HostDriver pointing at an arbitrary MockServer.
+/// Returns (driver, status) — the caller retains ownership of the server.
+async fn build_driver_against(
+    server: &MockServer,
+) -> (HostDriver, Arc<RwLock<ResolumeConnectionSnapshot>>) {
+    let addr = server.address();
+    let now = chrono::Utc::now();
+    let config = ResolumeHost::new(
+        ResolumeHostId::new(),
+        "test".into(),
+        addr.ip().to_string(),
+        addr.port(),
+        true,
+        now,
+        now,
+    );
+    let client = reqwest::Client::builder()
+        .connect_timeout(super::CONNECT_TIMEOUT)
+        .build()
+        .expect("client");
+    let driver = HostDriver::new(client, config);
+    let status = Arc::new(RwLock::new(ResolumeConnectionSnapshot::disabled()));
+    (driver, status)
+}
+
+/// #267 fix (Task 5): a transient error must NOT reset `last_timer_payload`.
+/// Before the fix, `record_error` called `reset_dedup_state` which cleared it.
+#[tokio::test]
+async fn last_timer_payload_preserved_across_transient_error() {
+    let (_server, mut driver, status) = setup_bible_driver().await;
+
+    // Establish mapping and send one timer tick — populates dedup.
+    driver.ensure_mapping().await.expect("mapping");
+    driver
+        .handle_timer(
+            crate::resolume::TimerFrame::new("12:30".to_string()),
+            &status,
+        )
+        .await
+        .expect("first timer ok");
+    assert_eq!(driver.last_timer_payload.as_deref(), Some("12:30"));
+
+    // Simulate a transient error: invalidates mapping/endpoint but must NOT
+    // reset the timer dedup state (that was the #267 bug).
+    driver
+        .record_error(anyhow::anyhow!("network blip"), &status)
+        .await;
+
+    assert_eq!(
+        driver.last_timer_payload.as_deref(),
+        Some("12:30"),
+        "transient error must not reset timer dedup state"
+    );
+}
+
+/// #267 fix (Task 5): when `refresh_mapping` produces the SAME #timer
+/// param IDs, dedup state must be preserved (no flicker on reconnect).
+#[tokio::test]
+async fn mapping_change_resets_dedup_when_timer_param_ids_change() {
+    let (_server, mut driver, status) = setup_bible_driver().await;
+
+    driver.ensure_mapping().await.expect("mapping A");
+    driver
+        .handle_timer(
+            crate::resolume::TimerFrame::new("12:30".to_string()),
+            &status,
+        )
+        .await
+        .expect("first timer ok");
+    assert_eq!(driver.last_timer_payload.as_deref(), Some("12:30"));
+
+    let original_ids = driver
+        .mapping
+        .as_ref()
+        .map(|m| m.timer_param_ids())
+        .unwrap_or_default();
+    assert!(
+        !original_ids.is_empty(),
+        "test fixture must have at least one #timer clip"
+    );
+
+    // Expire the cache so ensure_mapping triggers a real refresh, then
+    // call refresh_mapping directly — same composition → same param IDs.
+    driver
+        .refresh_mapping()
+        .await
+        .expect("refresh same mapping");
+
+    assert_eq!(
+        driver.last_timer_payload.as_deref(),
+        Some("12:30"),
+        "same param IDs after refresh must preserve dedup state"
+    );
+}
+
+/// #267 fix (Task 6): two #timer clips must be PUT in parallel.
+/// The mock adds a 50ms delay per PUT; sequential would take ~100ms,
+/// parallel takes ~50ms. We assert < 75ms.
+#[tokio::test]
+async fn multi_clip_timer_issued_in_parallel() {
+    use std::time::Instant;
+    use wiremock::matchers::path_regex;
+
+    let server = MockServer::start().await;
+
+    // Two #timer clips sharing the same layer.
+    let composition = serde_json::json!({
+        "layers": [{
+            "clips": [
+                {
+                    "id": 1001,
+                    "name": { "value": "#timer" },
+                    "video": { "sourceparams": {
+                        "text": { "valuetype": "ParamText", "id": 9001 }
+                    }}
+                },
+                {
+                    "id": 1002,
+                    "name": { "value": "#timer" },
+                    "video": { "sourceparams": {
+                        "text": { "valuetype": "ParamText", "id": 9002 }
+                    }}
+                }
+            ]
+        }]
+    });
+    Mock::given(method("GET"))
+        .and(path("/api/v1/composition"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(&composition))
+        .mount(&server)
+        .await;
+    Mock::given(method("PUT"))
+        .and(path_regex(r"^/api/v1/parameter/by-id/\d+$"))
+        .respond_with(ResponseTemplate::new(200).set_delay(std::time::Duration::from_millis(50)))
+        .mount(&server)
+        .await;
+
+    let (mut driver, status) = build_driver_against(&server).await;
+    driver.ensure_mapping().await.expect("mapping");
+
+    let start = Instant::now();
+    driver
+        .handle_timer(
+            crate::resolume::TimerFrame::new("05:00".to_string()),
+            &status,
+        )
+        .await
+        .expect("timer ok");
+    let elapsed = start.elapsed();
+
+    assert!(
+        elapsed < std::time::Duration::from_millis(75),
+        "expected parallel timer PUTs (<75ms), got {elapsed:?}"
+    );
+}
+
+/// #267 fix (Task 6): two #main-a clips must be PUT in parallel.
+/// Same wall-time assertion shape as `multi_clip_timer_issued_in_parallel`.
+#[tokio::test]
+async fn multi_clip_lane_issued_in_parallel() {
+    use std::time::Instant;
+    use wiremock::matchers::path_regex;
+
+    let server = MockServer::start().await;
+
+    // Two #main-a clips.
+    let composition = serde_json::json!({
+        "layers": [{
+            "clips": [
+                {
+                    "id": 2001,
+                    "name": { "value": "#main-a" },
+                    "video": { "sourceparams": {
+                        "text": { "valuetype": "ParamText", "id": 8001 }
+                    }}
+                },
+                {
+                    "id": 2002,
+                    "name": { "value": "#main-a" },
+                    "video": { "sourceparams": {
+                        "text": { "valuetype": "ParamText", "id": 8002 }
+                    }}
+                }
+            ]
+        }]
+    });
+    Mock::given(method("GET"))
+        .and(path("/api/v1/composition"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(&composition))
+        .mount(&server)
+        .await;
+    Mock::given(method("PUT"))
+        .and(path_regex(r"^/api/v1/parameter/by-id/\d+$"))
+        .respond_with(ResponseTemplate::new(200).set_delay(std::time::Duration::from_millis(50)))
+        .mount(&server)
+        .await;
+
+    let (mut driver, status) = build_driver_against(&server).await;
+    driver.ensure_mapping().await.expect("mapping");
+
+    let mapping = driver.mapping.clone().expect("mapping");
+    let main_lane = driver.lane_state.current(super::types::SlotKind::Main);
+
+    let start = Instant::now();
+    driver
+        .update_lane_text(
+            main_lane,
+            &mapping.main_a,
+            &mapping.main_b,
+            Some(&"hello world".to_string()),
+            &status,
+        )
+        .await
+        .expect("lane ok");
+    let elapsed = start.elapsed();
+
+    assert!(
+        elapsed < std::time::Duration::from_millis(75),
+        "expected parallel lane PUTs (<75ms), got {elapsed:?}"
+    );
 }

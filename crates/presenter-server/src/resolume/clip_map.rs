@@ -45,6 +45,14 @@ impl ClipMapping {
     pub fn missing_tokens(&self) -> &[&'static str] {
         &self.missing_tokens
     }
+
+    /// Returns the sorted set of `#timer` clip text-param IDs for stable
+    /// equality comparison across mapping refreshes.
+    pub(super) fn timer_param_ids(&self) -> Vec<i64> {
+        let mut ids: Vec<i64> = self.timer.iter().filter_map(|t| t.text_param_id).collect();
+        ids.sort_unstable();
+        ids
+    }
 }
 
 fn ingest_clip(mapping: &mut ClipMapping, clip: &Value) {

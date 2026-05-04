@@ -1,9 +1,11 @@
 use std::collections::HashMap;
+use std::time::Instant;
 
 use chrono::Utc;
 use presenter_core::{
     StageDisplayLayout, StageDisplaySnapshot, StageState, DEFAULT_STAGE_LAYOUT_CODE,
 };
+use uuid::Uuid;
 
 use super::stage::{
     build_stage_snapshot, sanitize_song_title, stage_resolution_from_presentation, StageContext,
@@ -37,9 +39,15 @@ impl AppState {
     pub(super) async fn broadcast_stage_resolution(
         &self,
         resolution: StageResolution,
+        correlation_id: Option<Uuid>,
     ) -> anyhow::Result<()> {
+        let correlation_id = correlation_id.unwrap_or_else(Uuid::new_v4);
+        let start = Instant::now();
+
         let now = Utc::now();
         let timers_state = self.load_or_init_timers(now).await?;
+        let t_load_timers_ms = elapsed_ms(start);
+
         let latency_ms = self.sample_resolume_latency().await;
         let context = StageContext {
             generated_at: now,
@@ -47,7 +55,12 @@ impl AppState {
             resolution,
             latency_ms,
         };
+        let t_build_ctx_ms = elapsed_ms(start) - t_load_timers_ms;
+
+        let publish_start = Instant::now();
         self.publish_stage_context(&context).await?;
+        let t_live_publish_ms = elapsed_ms(publish_start);
+
         let current_main = context
             .resolution
             .current
@@ -67,13 +80,30 @@ impl AppState {
             .map(|name| sanitize_song_title(&name))
             .unwrap_or_default();
         let band_name = context.resolution.library_name.clone().unwrap_or_default();
+
+        let enqueue_start = Instant::now();
         let stage_update = StageUpdate {
             current_main: Some(current_main),
             current_translation: Some(current_translation),
             song_name: Some(song_name),
             band_name: Some(band_name),
+            enqueued_at: Some(Instant::now()),
+            correlation_id: Some(correlation_id),
         };
         self.resolume_registry.stage_update(stage_update).await;
+        let t_resolume_enqueue_ms = elapsed_ms(enqueue_start);
+
+        let t_total_ms = elapsed_ms(start);
+        tracing::info!(
+            target: "presenter::stage::timing",
+            correlation_id = %correlation_id,
+            t_load_timers_ms,
+            t_build_ctx_ms,
+            t_live_publish_ms,
+            t_resolume_enqueue_ms,
+            t_total_ms,
+            "stage click timing"
+        );
 
         Ok(())
     }
@@ -243,4 +273,8 @@ impl AppState {
             stage_resolution_from_presentation(&presentation, Some(library_name), None, None);
         Ok(Some(resolution))
     }
+}
+
+fn elapsed_ms(start: Instant) -> f64 {
+    start.elapsed().as_secs_f64() * 1000.0
 }

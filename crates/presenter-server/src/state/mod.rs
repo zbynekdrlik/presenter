@@ -58,6 +58,7 @@ use std::{
     collections::HashMap,
     env,
     sync::{atomic::AtomicBool, atomic::AtomicU16, atomic::Ordering, Arc},
+    time::Instant,
 };
 use tokio::{
     sync::RwLock,
@@ -852,6 +853,10 @@ impl AppState {
         next_slide_id: Option<SlideId>,
         playlist_id: Option<PlaylistId>,
     ) -> anyhow::Result<()> {
+        let correlation_id = Uuid::new_v4();
+        let start = Instant::now();
+
+        let validate_start = Instant::now();
         let Some((_, library_name, presentation)) =
             self.presentation_detail(presentation_id).await?
         else {
@@ -875,6 +880,7 @@ impl AppState {
                 anyhow::bail!("next slide not found in presentation");
             }
         }
+        let t_validate_ms = validate_start.elapsed().as_secs_f64() * 1000.0;
 
         let stage_state = presenter_core::StageState::new(
             Some(presentation_id),
@@ -882,7 +888,10 @@ impl AppState {
             next_slide_id,
             playlist_id,
         );
+        let db_start = Instant::now();
         self.repository.upsert_stage_state(&stage_state).await?;
+        let t_db_write_ms = db_start.elapsed().as_secs_f64() * 1000.0;
+
         let mut resolution = stage_resolution_from_presentation(
             &presentation,
             Some(library_name),
@@ -904,14 +913,30 @@ impl AppState {
                 ));
             }
         }
-        self.broadcast_stage_resolution(resolution).await?;
+
+        let broadcast_start = Instant::now();
+        self.broadcast_stage_resolution(resolution, Some(correlation_id))
+            .await?;
+        let t_broadcast_ms = broadcast_start.elapsed().as_secs_f64() * 1000.0;
+
+        let t_total_ms = start.elapsed().as_secs_f64() * 1000.0;
+        tracing::info!(
+            target: "presenter::stage::handler",
+            correlation_id = %correlation_id,
+            t_validate_ms,
+            t_db_write_ms,
+            t_broadcast_ms,
+            t_total_ms,
+            "stage handler timing"
+        );
+
         Ok(())
     }
 
     pub async fn clear_stage(&self) -> anyhow::Result<()> {
         let cleared = StageState::cleared();
         self.repository.upsert_stage_state(&cleared).await?;
-        self.broadcast_stage_resolution(StageResolution::cleared())
+        self.broadcast_stage_resolution(StageResolution::cleared(), None)
             .await?;
         Ok(())
     }
