@@ -190,7 +190,7 @@ pub fn TimerPanel() -> impl IntoView {
                 <p class="operator__timer-primary" id="countdown-value">
                     {move || {
                         ctx.timers.get()
-                            .map(|t| format_seconds(t.countdown_to_start.seconds_remaining))
+                            .map(|t| presenter_core::format_countdown(t.countdown_to_start.seconds_remaining))
                             .unwrap_or_else(|| "0:00".to_string())
                     }}
                 </p>
