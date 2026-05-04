@@ -851,8 +851,8 @@ mod tests {
             .unwrap();
         assert_eq!(pres.slides.len(), 3);
 
-        // Slide 0: verses 1-2 with range reference
-        assert_eq!(pres.slides[0].main_reference, "Ján 1:1-2 (SEB)");
+        // Slide 0: verses 1-2, ref shows full passage range across all verse items
+        assert_eq!(pres.slides[0].main_reference, "Ján 1:1-3 (SEB)");
         assert!(pres.slides[0].main.value().contains("1. Na počiatku"));
         assert!(pres.slides[0].main.value().contains("2. Ono bolo"));
 
@@ -860,8 +860,8 @@ mod tests {
         assert_eq!(pres.slides[1].main_reference, "");
         assert_eq!(pres.slides[1].main.value(), "NOVÁ ZMLUVA");
 
-        // Slide 2: verse 3
-        assert_eq!(pres.slides[2].main_reference, "Ján 1:3 (SEB)");
+        // Slide 2: verse 3, same full passage range as slide 0
+        assert_eq!(pres.slides[2].main_reference, "Ján 1:1-3 (SEB)");
     }
 
     #[tokio::test]
