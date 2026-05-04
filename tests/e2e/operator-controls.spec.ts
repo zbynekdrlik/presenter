@@ -78,7 +78,7 @@ test.describe("Operator Control Buttons", () => {
     await ensureAblesetSettings(page.request, true);
 
     await page.goto(`${baseURL}/ui/operator`);
-    await page.waitForSelector('[data-role="library-list"]', {
+    await page.waitForSelector('body[data-wasm-ready="true"]', {
       timeout: 30_000,
     });
     await assertVersionLabel(page, baseURL);
@@ -138,7 +138,7 @@ test.describe("Operator Control Buttons", () => {
     });
 
     await page.goto(`${baseURL}/ui/operator`);
-    await page.waitForSelector('[data-role="library-list"]', {
+    await page.waitForSelector('body[data-wasm-ready="true"]', {
       timeout: 30_000,
     });
 
@@ -190,7 +190,7 @@ test.describe("Operator Control Buttons", () => {
     });
 
     await page.goto(`${baseURL}/ui/operator`);
-    await page.waitForSelector('[data-role="library-list"]', {
+    await page.waitForSelector('body[data-wasm-ready="true"]', {
       timeout: 30_000,
     });
 
@@ -232,7 +232,7 @@ test.describe("Operator Control Buttons", () => {
     });
 
     await page.goto(`${baseURL}/ui/operator`);
-    await page.waitForSelector('[data-role="library-list"]', {
+    await page.waitForSelector('body[data-wasm-ready="true"]', {
       timeout: 30_000,
     });
 
@@ -248,7 +248,7 @@ test.describe("Operator Control Buttons", () => {
 
     // Reload
     await page.reload();
-    await page.waitForSelector('[data-role="library-list"]', {
+    await page.waitForSelector('body[data-wasm-ready="true"]', {
       timeout: 30_000,
     });
 
@@ -280,7 +280,7 @@ test.describe("Operator Control Buttons", () => {
     });
 
     await page.goto(`${baseURL}/ui/operator`);
-    await page.waitForSelector('[data-role="library-list"]', {
+    await page.waitForSelector('body[data-wasm-ready="true"]', {
       timeout: 30_000,
     });
 

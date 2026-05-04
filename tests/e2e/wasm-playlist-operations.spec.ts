@@ -31,7 +31,7 @@ test.afterAll(async () => {
 
 async function initPage(page: import("@playwright/test").Page) {
   await page.goto(`${baseURL}/ui/operator`);
-  await page.waitForSelector('[data-role="playlist-list"]', {
+  await page.waitForSelector('body[data-wasm-ready="true"]', {
     timeout: 30_000,
   });
 }

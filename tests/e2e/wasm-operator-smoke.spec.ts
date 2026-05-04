@@ -39,7 +39,7 @@ test.describe("WASM Operator Smoke Tests", () => {
   test.beforeEach(async ({ page }) => {
     await page.goto(`${baseURL}/ui/operator`);
     // Wait for initial load - libraries should appear
-    await page.waitForSelector('[data-role="library-list"]', {
+    await page.waitForSelector('body[data-wasm-ready="true"]', {
       timeout: 30_000,
     });
   });
@@ -225,7 +225,7 @@ test.describe("WASM Operator Smoke Tests", () => {
 
     // Navigate fresh to catch all console output
     await page.goto(`${baseURL}/ui/operator`);
-    await page.waitForSelector('[data-role="library-list"]', {
+    await page.waitForSelector('body[data-wasm-ready="true"]', {
       timeout: 30_000,
     });
 
@@ -256,7 +256,7 @@ test.describe("WASM Operator Smoke Tests", () => {
     // by making an API call to a non-existent endpoint via evaluate
 
     // First, ensure the page is loaded
-    await page.waitForSelector('[data-role="library-list"]', {
+    await page.waitForSelector('body[data-wasm-ready="true"]', {
       timeout: 30_000,
     });
 

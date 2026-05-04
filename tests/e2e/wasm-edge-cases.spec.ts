@@ -32,7 +32,7 @@ test.afterAll(async () => {
 test.describe("WASM Operator Edge Cases", () => {
   test("empty library shows message", async ({ page }) => {
     await page.goto(`${baseURL}/ui/operator`);
-    await page.waitForSelector('[data-role="library-list"]', {
+    await page.waitForSelector('body[data-wasm-ready="true"]', {
       timeout: 30_000,
     });
 
@@ -57,7 +57,7 @@ test.describe("WASM Operator Edge Cases", () => {
 
   test("empty playlist shows message", async ({ page }) => {
     await page.goto(`${baseURL}/ui/operator`);
-    await page.waitForSelector('[data-role="playlist-list"]', {
+    await page.waitForSelector('body[data-wasm-ready="true"]', {
       timeout: 30_000,
     });
 
@@ -71,7 +71,7 @@ test.describe("WASM Operator Edge Cases", () => {
 
   test("no presentation selected shows prompt", async ({ page }) => {
     await page.goto(`${baseURL}/ui/operator`);
-    await page.waitForSelector('[data-role="library-list"]', {
+    await page.waitForSelector('body[data-wasm-ready="true"]', {
       timeout: 30_000,
     });
 
@@ -87,7 +87,7 @@ test.describe("WASM Operator Edge Cases", () => {
 
   test("toast appears on element", async ({ page }) => {
     await page.goto(`${baseURL}/ui/operator`);
-    await page.waitForSelector('[data-role="library-list"]', {
+    await page.waitForSelector('body[data-wasm-ready="true"]', {
       timeout: 30_000,
     });
 
@@ -105,7 +105,7 @@ test.describe("WASM Operator Edge Cases", () => {
     });
 
     await page.goto(`${baseURL}/ui/operator`);
-    await page.waitForSelector('[data-role="library-list"]', {
+    await page.waitForSelector('body[data-wasm-ready="true"]', {
       timeout: 30_000,
     });
     await page.waitForSelector('[data-role="library-item"]', {
@@ -168,12 +168,12 @@ test.describe("WASM Operator Edge Cases", () => {
 
     // Reload page
     await page.reload();
-    await page.waitForSelector('[data-role="library-list"]', {
+    await page.waitForSelector('body[data-wasm-ready="true"]', {
       timeout: 30_000,
     });
 
     // Wait for data to load
-    await page.waitForSelector('[data-role="library-list"]', {
+    await page.waitForSelector('body[data-wasm-ready="true"]', {
       timeout: 10_000,
     });
 
@@ -225,7 +225,7 @@ test.describe("WASM Operator Edge Cases", () => {
 
   test("test helpers are exposed", async ({ page }) => {
     await page.goto(`${baseURL}/ui/operator`);
-    await page.waitForSelector('[data-role="library-list"]', {
+    await page.waitForSelector('body[data-wasm-ready="true"]', {
       timeout: 30_000,
     });
 
@@ -258,7 +258,7 @@ test.describe("WASM Operator Edge Cases", () => {
 
   test("parseSongText handles verse markers", async ({ page }) => {
     await page.goto(`${baseURL}/ui/operator`);
-    await page.waitForSelector('[data-role="library-list"]', {
+    await page.waitForSelector('body[data-wasm-ready="true"]', {
       timeout: 30_000,
     });
 
@@ -284,7 +284,7 @@ More content`);
 
   test("stage monitor baseline can be reset", async ({ page }) => {
     await page.goto(`${baseURL}/ui/operator`);
-    await page.waitForSelector('[data-role="library-list"]', {
+    await page.waitForSelector('body[data-wasm-ready="true"]', {
       timeout: 30_000,
     });
 
