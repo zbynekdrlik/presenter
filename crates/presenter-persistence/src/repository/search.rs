@@ -1,7 +1,7 @@
 use crate::entities::{library, presentation as presentation_entity, slide as slide_entity};
 use presenter_core::{
     search::{fold_query, query_tokens},
-    LibraryId, PresentationId, SearchMatchField, SearchResult, SearchResultKind, SlideId,
+    LibraryId, PresentationId, SearchMatchField, SearchResult, SearchResultKind,
 };
 use sea_orm::{ColumnTrait, Condition, EntityTrait, QueryFilter, QueryOrder, QuerySelect};
 use std::collections::{HashMap, HashSet};
@@ -13,9 +13,6 @@ use super::Repository;
 struct SearchContext {
     tokens: Vec<String>,
     has_tokens: bool,
-    folded: String,
-    has_folded: bool,
-    query_lower: String,
     trimmed: String,
     cap: usize,
     results: Vec<SearchResult>,
@@ -51,17 +48,11 @@ impl Repository {
 
         let tokens = query_tokens(trimmed);
         let has_tokens = !tokens.is_empty();
-        let folded = fold_query(trimmed);
-        let has_folded = !folded.is_empty();
-        let query_lower = trimmed.to_lowercase();
         let cap = limit.clamp(1, 100) as usize;
 
         let mut ctx = SearchContext {
             tokens,
             has_tokens,
-            folded,
-            has_folded,
-            query_lower,
             trimmed: trimmed.to_string(),
             cap,
             results: Vec::with_capacity(cap),
@@ -318,7 +309,6 @@ impl Repository {
                 .unwrap_or_default();
             let library_id = LibraryId::from_uuid(parse_uuid(&presentation_model.library_id)?);
             let presentation_id = PresentationId::from_uuid(parse_uuid(&presentation_model.id)?);
-            let slide_id = SlideId::from_uuid(parse_uuid(&slide_model.id)?);
 
             // Worship slide text fields (bible slides live in a separate table).
             let eff_main = slide_model.worship_main.as_str();
@@ -338,113 +328,70 @@ impl Repository {
                 }
             }
 
-            let main_lower = eff_main.to_lowercase();
-            let translation_lower = eff_translation.to_lowercase();
-            let stage_lower = eff_stage.to_lowercase();
-
-            let folded_ref = ctx.folded.as_str();
-            let main_matches = (!ctx.query_lower.is_empty()
-                && main_lower.contains(&ctx.query_lower))
-                || (ctx.has_folded && eff_main_search.contains(folded_ref))
-                || (ctx.has_tokens
-                    && ctx
-                        .tokens
-                        .iter()
-                        .any(|token| eff_main_search.contains(token)));
-            let translation_matches = (!ctx.query_lower.is_empty()
-                && translation_lower.contains(&ctx.query_lower))
-                || (ctx.has_folded && eff_translation_search.contains(folded_ref))
-                || (ctx.has_tokens
-                    && ctx
-                        .tokens
-                        .iter()
-                        .any(|token| eff_translation_search.contains(token)));
-            let stage_matches = !eff_stage.is_empty()
-                && ((!ctx.query_lower.is_empty() && stage_lower.contains(&ctx.query_lower))
-                    || (ctx.has_folded && eff_stage_search.contains(folded_ref))
-                    || (ctx.has_tokens
-                        && ctx
-                            .tokens
-                            .iter()
-                            .any(|token| eff_stage_search.contains(token))));
-
-            if !main_matches && !translation_matches && !stage_matches {
+            // Dedupe: a presentation already emitted by search_presentations
+            // (matched by name) must not be re-emitted from the slide-text
+            // phase. The insert returns false if the id was already present.
+            if !ctx
+                .seen_presentation_ids
+                .insert(presentation_model.id.clone())
+            {
                 continue;
             }
 
-            let (match_field, source_text) = if main_matches {
-                (SearchMatchField::MainText, eff_main)
-            } else if translation_matches {
-                (SearchMatchField::TranslationText, eff_translation)
+            // Determine WHICH field caused the match (preserves diagnostic
+            // info). Priority: Main, Translation, Stage. If tokens are present
+            // we use the search-folded fields; otherwise fall back to literal
+            // contains on the raw fields.
+            let match_field = if ctx.has_tokens {
+                if ctx
+                    .tokens
+                    .iter()
+                    .all(|token| eff_main_search.contains(token))
+                {
+                    SearchMatchField::MainText
+                } else if ctx
+                    .tokens
+                    .iter()
+                    .all(|token| eff_translation_search.contains(token))
+                {
+                    SearchMatchField::TranslationText
+                } else if ctx
+                    .tokens
+                    .iter()
+                    .all(|token| eff_stage_search.contains(token))
+                {
+                    SearchMatchField::StageText
+                } else {
+                    // Combined name+library token-match (no per-field win).
+                    // Default to MainText for the diagnostic field.
+                    SearchMatchField::MainText
+                }
+            } else if !ctx.trimmed.is_empty() {
+                if eff_main.contains(&ctx.trimmed) {
+                    SearchMatchField::MainText
+                } else if eff_translation.contains(&ctx.trimmed) {
+                    SearchMatchField::TranslationText
+                } else if eff_stage.contains(&ctx.trimmed) {
+                    SearchMatchField::StageText
+                } else {
+                    SearchMatchField::MainText
+                }
             } else {
-                (SearchMatchField::StageText, eff_stage)
+                SearchMatchField::MainText
             };
 
-            let snippet = build_snippet(source_text, &ctx.trimmed);
-
             ctx.results.push(SearchResult {
-                kind: SearchResultKind::Slide,
+                kind: SearchResultKind::Presentation,
                 library_id,
                 library_name: library_name.clone(),
                 presentation_id: Some(presentation_id),
                 presentation_name: Some(presentation_model.name.clone()),
-                slide_id: Some(slide_id),
+                slide_id: None,
                 match_field,
-                snippet,
+                snippet: None,
             });
         }
 
         Ok(())
     }
-}
-
-/// Builds a context snippet around the matched query.
-/// Optimized to avoid Vec<char> allocation using char_indices() for byte slicing.
-fn build_snippet(text: &str, query: &str) -> Option<String> {
-    let trimmed = text.trim();
-    if trimmed.is_empty() {
-        return None;
-    }
-
-    // Count chars and collect byte indices only if needed
-    let char_count = trimmed.chars().count();
-    if char_count <= 160 {
-        return Some(trimmed.to_string());
-    }
-
-    // Find match position in lowercase text (byte index)
-    let lower_text = trimmed.to_lowercase();
-    let lower_query = query.to_lowercase();
-    let match_char_index = lower_text
-        .find(&lower_query)
-        .map(|byte_index| trimmed[..byte_index].chars().count())
-        .unwrap_or(0);
-
-    // Calculate char range for snippet
-    let start_char = match_char_index.saturating_sub(20);
-    let end_char = (start_char + 160).min(char_count);
-
-    // Convert char indices to byte indices using char_indices() - zero allocation
-    let mut char_indices = trimmed.char_indices();
-    let start_byte = char_indices
-        .nth(start_char)
-        .map(|(idx, _)| idx)
-        .unwrap_or(0);
-    // Reset iterator and skip to end position
-    let end_byte = trimmed
-        .char_indices()
-        .nth(end_char)
-        .map(|(idx, _)| idx)
-        .unwrap_or(trimmed.len());
-
-    // Build snippet from byte slice
-    let mut snippet = String::with_capacity(164); // 160 chars + potential ellipses
-    if start_char > 0 {
-        snippet.push('…');
-    }
-    snippet.push_str(&trimmed[start_byte..end_byte]);
-    if end_char < char_count {
-        snippet.push('…');
-    }
-    Some(snippet)
 }

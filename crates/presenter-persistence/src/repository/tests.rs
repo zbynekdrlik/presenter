@@ -487,17 +487,16 @@ async fn search_presenter_returns_hits() {
         .iter()
         .any(|result| matches!(result.kind, SearchResultKind::Presentation)));
 
+    // Slide-text matches now surface the parent Presentation, not a Slide result.
     let slide_results = repo.search_presenter("Nadej", 10).await.unwrap();
     assert!(slide_results
         .iter()
-        .any(|result| matches!(result.kind, SearchResultKind::Slide)));
+        .any(|result| matches!(result.kind, SearchResultKind::Presentation)));
 
     let compound_results = repo.search_presenter("jezis, ja tymy", 10).await.unwrap();
     assert!(compound_results.iter().any(|result| {
-        matches!(
-            result.kind,
-            SearchResultKind::Slide | SearchResultKind::Presentation
-        ) && result.library_name == "TYMY Worship"
+        matches!(result.kind, SearchResultKind::Presentation)
+            && result.library_name == "TYMY Worship"
     }));
 }
 
