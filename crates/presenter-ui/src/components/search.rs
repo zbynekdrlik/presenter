@@ -262,19 +262,17 @@ pub fn SearchResults() -> impl IntoView {
                         return view! { <div class="operator__search-empty">"No results"</div> }.into_any();
                     }
 
-                    // Group results by kind: Libraries, Presentations, Slides
-                    let (libraries, presentations, slides): (Vec<_>, Vec<_>, Vec<_>) = {
+                    // Group results by kind: Libraries, Presentations
+                    let (libraries, presentations): (Vec<_>, Vec<_>) = {
                         let mut libs = Vec::new();
                         let mut pres = Vec::new();
-                        let mut slds = Vec::new();
                         for r in results {
                             match r.kind {
                                 presenter_core::SearchResultKind::Library => libs.push(r),
                                 presenter_core::SearchResultKind::Presentation => pres.push(r),
-                                presenter_core::SearchResultKind::Slide => slds.push(r),
                             }
                         }
-                        (libs, pres, slds)
+                        (libs, pres)
                     };
 
                     let op_for_render = op_results.clone();
@@ -339,12 +337,6 @@ pub fn SearchResults() -> impl IntoView {
                                 <section class="operator__search-group" data-kind="presentation">
                                     <h3>"Presentations"</h3>
                                     {presentations.into_iter().map(render_result).collect_view()}
-                                </section>
-                            })}
-                            {(!slides.is_empty()).then(|| view! {
-                                <section class="operator__search-group" data-kind="slide">
-                                    <h3>"Slides"</h3>
-                                    {slides.into_iter().map(render_result).collect_view()}
                                 </section>
                             })}
                         </>
