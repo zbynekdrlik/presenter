@@ -591,15 +591,18 @@ async fn search_endpoint_returns_results() {
         .await
         .unwrap();
     let results: Vec<SearchResult> = serde_json::from_slice(&bytes).unwrap();
-    assert!(results
-        .iter()
-        .any(|result| matches!(result.kind, SearchResultKind::Library)));
-    assert!(results
-        .iter()
-        .any(|result| matches!(result.kind, SearchResultKind::Presentation)));
-    assert!(results
-        .iter()
-        .any(|result| matches!(result.kind, SearchResultKind::Slide)));
+    assert!(
+        results
+            .iter()
+            .any(|result| matches!(result.kind, SearchResultKind::Library)),
+        "expected a Library result"
+    );
+    assert!(
+        results
+            .iter()
+            .any(|result| matches!(result.kind, SearchResultKind::Presentation)),
+        "expected a Presentation result"
+    );
 }
 
 #[tokio::test]
@@ -1985,5 +1988,115 @@ async fn list_playlists_response_includes_presentation_names() {
     assert_eq!(
         pl["entries"][0]["presentation_name"], "Track One",
         "presentation_name must be present in list response"
+    );
+}
+
+#[tokio::test]
+async fn search_slide_text_match_returns_parent_presentation() {
+    let state = AppState::in_memory().await.unwrap();
+    let library = state.create_library("Whole Songs Library").await.unwrap();
+    let (_, _, presentation, _) = state
+        .create_presentation(library.id, "Some Anthem", None)
+        .await
+        .unwrap();
+    let slide_id = presentation.slides.first().unwrap().id;
+    state
+        .update_slide_content(
+            presentation.id,
+            slide_id,
+            "test283-slide-marker is in the lyrics".to_string(),
+            String::new(),
+            String::new(),
+            None,
+            None,
+        )
+        .await
+        .unwrap();
+
+    let app = build_router(state);
+    let response = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .uri("/search?query=test283-slide-marker")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+
+    const MAX: usize = usize::MAX;
+    let bytes = axum::body::to_bytes(response.into_body(), MAX)
+        .await
+        .unwrap();
+    let results: Vec<SearchResult> = serde_json::from_slice(&bytes).unwrap();
+
+    let presentation_results: Vec<&SearchResult> = results
+        .iter()
+        .filter(|result| matches!(result.kind, SearchResultKind::Presentation))
+        .collect();
+    assert_eq!(
+        presentation_results.len(),
+        1,
+        "expected exactly one Presentation result, got: {:?}",
+        results
+    );
+    assert_eq!(
+        presentation_results[0].presentation_name.as_deref(),
+        Some("Some Anthem")
+    );
+}
+
+#[tokio::test]
+async fn search_dedupes_when_song_matches_both_name_and_slides() {
+    let state = AppState::in_memory().await.unwrap();
+    let library = state.create_library("Dedupe Library").await.unwrap();
+    let (_, _, presentation, _) = state
+        .create_presentation(library.id, "Marker Song", None)
+        .await
+        .unwrap();
+    let slide_id = presentation.slides.first().unwrap().id;
+    state
+        .update_slide_content(
+            presentation.id,
+            slide_id,
+            "the marker is also here".to_string(),
+            String::new(),
+            String::new(),
+            None,
+            None,
+        )
+        .await
+        .unwrap();
+
+    let app = build_router(state);
+    let response = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .uri("/search?query=marker")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+
+    const MAX: usize = usize::MAX;
+    let bytes = axum::body::to_bytes(response.into_body(), MAX)
+        .await
+        .unwrap();
+    let results: Vec<SearchResult> = serde_json::from_slice(&bytes).unwrap();
+
+    let presentation_results: Vec<&SearchResult> = results
+        .iter()
+        .filter(|result| matches!(result.kind, SearchResultKind::Presentation))
+        .collect();
+    assert_eq!(
+        presentation_results.len(),
+        1,
+        "song matched by both name and slide text must appear ONCE; got: {:?}",
+        results
     );
 }
