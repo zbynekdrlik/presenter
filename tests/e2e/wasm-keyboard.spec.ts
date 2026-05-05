@@ -31,7 +31,7 @@ test.afterAll(async () => {
 
 async function loadPresentation(page: import("@playwright/test").Page) {
   await page.goto(`${baseURL}/ui/operator`);
-  await page.waitForSelector('[data-role="library-list"]', { timeout: 30_000 });
+  await page.waitForSelector('body[data-wasm-ready="true"]', { timeout: 30_000 });
   await page.waitForSelector('[data-role="library-item"]', { timeout: 30_000 });
 
   // Click library
@@ -54,7 +54,7 @@ async function loadPresentation(page: import("@playwright/test").Page) {
 test.describe("WASM Operator Keyboard Shortcuts", () => {
   test("space focuses search in live mode", async ({ page }) => {
     await page.goto(`${baseURL}/ui/operator`);
-    await page.waitForSelector('[data-role="library-list"]', {
+    await page.waitForSelector('body[data-wasm-ready="true"]', {
       timeout: 30_000,
     });
 
@@ -76,7 +76,7 @@ test.describe("WASM Operator Keyboard Shortcuts", () => {
 
   test("space does not focus search in edit mode", async ({ page }) => {
     await page.goto(`${baseURL}/ui/operator`);
-    await page.waitForSelector('[data-role="library-list"]', {
+    await page.waitForSelector('body[data-wasm-ready="true"]', {
       timeout: 30_000,
     });
 
@@ -100,7 +100,7 @@ test.describe("WASM Operator Keyboard Shortcuts", () => {
 
   test("escape closes modals", async ({ page }) => {
     await page.goto(`${baseURL}/ui/operator`);
-    await page.waitForSelector('[data-role="library-list"]', {
+    await page.waitForSelector('body[data-wasm-ready="true"]', {
       timeout: 30_000,
     });
     await page.waitForSelector('[data-role="library-item"]', {
@@ -130,7 +130,7 @@ test.describe("WASM Operator Keyboard Shortcuts", () => {
 
   test("escape closes search", async ({ page }) => {
     await page.goto(`${baseURL}/ui/operator`);
-    await page.waitForSelector('[data-role="library-list"]', {
+    await page.waitForSelector('body[data-wasm-ready="true"]', {
       timeout: 30_000,
     });
 
@@ -260,7 +260,7 @@ test.describe("WASM Operator Keyboard Shortcuts", () => {
 
   test("Tab navigation in modals", async ({ page }) => {
     await page.goto(`${baseURL}/ui/operator`);
-    await page.waitForSelector('[data-role="library-list"]', {
+    await page.waitForSelector('body[data-wasm-ready="true"]', {
       timeout: 30_000,
     });
     await page.waitForSelector('[data-role="library-item"]', {

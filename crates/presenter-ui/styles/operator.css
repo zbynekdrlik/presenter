@@ -1411,6 +1411,10 @@ body.operator[data-view="worship"] [data-view-panel="worship"] {
   display: flex;
 }
 
+body.operator:not([data-view="worship"]) [data-view-panel="worship"] {
+  display: none;
+}
+
 body.operator[data-view="bible"] [data-view-panel="bible"],
 body.operator[data-view="timers"] [data-view-panel="timers"],
 body.operator[data-view="ai"] [data-view-panel="ai"] {

@@ -33,7 +33,7 @@ async function loadPresentationWithSlides(
   page: import("@playwright/test").Page,
 ) {
   await page.goto(`${baseURL}/ui/operator`);
-  await page.waitForSelector('[data-role="library-list"]', { timeout: 30_000 });
+  await page.waitForSelector('body[data-wasm-ready="true"]', { timeout: 30_000 });
 
   // Wait for libraries to load
   await page.waitForSelector('[data-role="library-item"]', { timeout: 30_000 });
