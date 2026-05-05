@@ -291,4 +291,48 @@ test.describe("WASM Operator Search", () => {
       await expect(meta).not.toHaveText("");
     }
   });
+
+  test("slide-text-only match returns presentation, no Slides UI group", async ({
+    page,
+  }) => {
+    const consoleMessages: string[] = [];
+    page.on("console", (msg) => {
+      if (msg.type() !== "error" && msg.type() !== "warning") return;
+      if (msg.text().includes("crbug.com/981419")) return;
+      consoleMessages.push(`[${msg.type()}] ${msg.text()}`);
+    });
+
+    await initPage(page);
+
+    // Type a phrase that exists in slide content but not in any
+    // presentation/library name. The dev seed fixture contains worship
+    // songs whose slides have lyrics text. We pick a common Slovak word
+    // that is highly likely to appear in slide bodies.
+    const searchInput = page.locator('[data-role="global-search-query"]');
+    await searchInput.fill("Pán");
+
+    // Wait for any results
+    await page.waitForFunction(
+      () => {
+        const results = document.querySelector(
+          '[data-role="global-search-results"]',
+        );
+        return (
+          results &&
+          (results.querySelectorAll('[data-role="search-result-item"]').length >
+            0 ||
+            results.textContent?.includes("No results"))
+        );
+      },
+      { timeout: 10_000 },
+    );
+
+    // The result panel must NOT contain a "Slides" group section.
+    const slideGroup = page.locator(
+      '[data-role="global-search-results"] [data-kind="slide"]',
+    );
+    await expect(slideGroup).toHaveCount(0);
+
+    expect(consoleMessages).toEqual([]);
+  });
 });
