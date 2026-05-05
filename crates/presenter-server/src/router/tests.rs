@@ -3,8 +3,8 @@ use axum::body::Body;
 use axum::http::{Request, StatusCode};
 use chrono::{Duration as ChronoDuration, Local, Timelike, Utc};
 use presenter_core::{
-    BiblePassage, BibleReference, BibleTranslation, Library, LibrarySummary, SearchResult,
-    SearchResultKind, Slide, TimerState, DEFAULT_STAGE_LAYOUT_CODE,
+    BiblePassage, BibleReference, BibleTranslation, Library, LibrarySummary, SearchMatchField,
+    SearchResult, SearchResultKind, Slide, TimerState, DEFAULT_STAGE_LAYOUT_CODE,
 };
 use serde::Deserialize;
 use serde_json::json;
@@ -2098,5 +2098,129 @@ async fn search_dedupes_when_song_matches_both_name_and_slides() {
         1,
         "song matched by both name and slide text must appear ONCE; got: {:?}",
         results
+    );
+}
+
+#[tokio::test]
+async fn search_slide_translation_match_returns_parent_presentation() {
+    // Slide text only in the translation field — verifies the
+    // TranslationText branch of match_field selection in search_slides.
+    // Library and presentation names are intentionally neutral so they
+    // don't overlap with the marker tokens and cause false deduplication.
+    let state = AppState::in_memory().await.unwrap();
+    let library = state.create_library("Worship Library").await.unwrap();
+    let (_, _, presentation, _) = state
+        .create_presentation(library.id, "Sunday Anthem", None)
+        .await
+        .unwrap();
+    let slide_id = presentation.slides.first().unwrap().id;
+    state
+        .update_slide_content(
+            presentation.id,
+            slide_id,
+            String::new(),
+            "test283-translation-marker is in the translation".to_string(),
+            String::new(),
+            None,
+            None,
+        )
+        .await
+        .unwrap();
+
+    let app = build_router(state);
+    let response = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .uri("/search?query=test283-translation-marker")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+
+    const MAX: usize = usize::MAX;
+    let bytes = axum::body::to_bytes(response.into_body(), MAX)
+        .await
+        .unwrap();
+    let results: Vec<SearchResult> = serde_json::from_slice(&bytes).unwrap();
+
+    let presentation_results: Vec<&SearchResult> = results
+        .iter()
+        .filter(|result| matches!(result.kind, SearchResultKind::Presentation))
+        .collect();
+    assert_eq!(
+        presentation_results.len(),
+        1,
+        "expected exactly one Presentation result, got: {:?}",
+        results
+    );
+    assert_eq!(
+        presentation_results[0].match_field,
+        SearchMatchField::TranslationText,
+        "match_field should indicate TranslationText caused the match"
+    );
+}
+
+#[tokio::test]
+async fn search_slide_stage_match_returns_parent_presentation() {
+    // Slide text only in the stage field — verifies the StageText
+    // branch of match_field selection in search_slides.
+    // Library and presentation names are intentionally neutral so they
+    // don't overlap with the marker tokens and cause false deduplication.
+    let state = AppState::in_memory().await.unwrap();
+    let library = state.create_library("Hymns Library").await.unwrap();
+    let (_, _, presentation, _) = state
+        .create_presentation(library.id, "Evening Song", None)
+        .await
+        .unwrap();
+    let slide_id = presentation.slides.first().unwrap().id;
+    state
+        .update_slide_content(
+            presentation.id,
+            slide_id,
+            String::new(),
+            String::new(),
+            "test283-stage-marker is in the stage".to_string(),
+            None,
+            None,
+        )
+        .await
+        .unwrap();
+
+    let app = build_router(state);
+    let response = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .uri("/search?query=test283-stage-marker")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+
+    const MAX: usize = usize::MAX;
+    let bytes = axum::body::to_bytes(response.into_body(), MAX)
+        .await
+        .unwrap();
+    let results: Vec<SearchResult> = serde_json::from_slice(&bytes).unwrap();
+
+    let presentation_results: Vec<&SearchResult> = results
+        .iter()
+        .filter(|result| matches!(result.kind, SearchResultKind::Presentation))
+        .collect();
+    assert_eq!(
+        presentation_results.len(),
+        1,
+        "expected exactly one Presentation result, got: {:?}",
+        results
+    );
+    assert_eq!(
+        presentation_results[0].match_field,
+        SearchMatchField::StageText,
+        "match_field should indicate StageText caused the match"
     );
 }
