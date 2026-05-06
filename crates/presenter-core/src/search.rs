@@ -8,7 +8,6 @@ use crate::{LibraryId, PresentationId, SlideId};
 pub enum SearchResultKind {
     Library,
     Presentation,
-    Slide,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
