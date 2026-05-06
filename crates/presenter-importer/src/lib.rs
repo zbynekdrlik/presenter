@@ -20,6 +20,7 @@
 
 pub mod bible;
 mod bible_digest;
+mod nfc;
 mod rtf;
 
 pub use bible_digest::{compute_source_digest, PARSER_VERSION};
