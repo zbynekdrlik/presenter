@@ -3,6 +3,8 @@
 use anyhow::Result;
 use encoding_rs::{Encoding, WINDOWS_1250, WINDOWS_1251, WINDOWS_1252, WINDOWS_1254};
 
+use crate::nfc;
+
 pub fn decode_rtf(bytes: &[u8]) -> Result<String> {
     let raw = String::from_utf8_lossy(bytes).to_string();
     let encoding = detect_rtf_encoding(&raw);
@@ -274,8 +276,7 @@ fn clean_text(text: String) -> String {
             || matches!(output, '\n' | '\r');
         cleaned.push(output);
     }
-    use unicode_normalization::UnicodeNormalization;
-    strip_header_lines(cleaned).nfc().collect()
+    nfc::to_nfc(&strip_header_lines(cleaned))
 }
 
 fn is_formatting_char(ch: char) -> bool {
