@@ -195,22 +195,6 @@ jobs:
             echo 'CLIProxyAPI already present'
           fi"
 
-      - name: Ensure NDI runtime (#278)
-        run: |
-          # presenter-ndi loads libndi.so.6 at startup; without it /ndi/sources is always empty.
-          if ssh deploy-target 'test -f /usr/lib/ndi/libndi.so.6'; then
-            echo 'NDI runtime already present on target'
-          elif [ -f /usr/lib/ndi/libndi.so.6 ]; then
-            echo 'Copying NDI runtime from runner to target...'
-            tar -C /usr/lib -czf /tmp/ndi-runtime-$$.tar.gz ndi
-            scp -i ~/.ssh/id_deploy /tmp/ndi-runtime-$$.tar.gz deploy-target:/tmp/ndi-runtime.tar.gz
-            rm /tmp/ndi-runtime-$$.tar.gz
-            ssh deploy-target 'sudo tar xzf /tmp/ndi-runtime.tar.gz -C /usr/lib/ && sudo ldconfig && rm /tmp/ndi-runtime.tar.gz'
-            echo 'NDI runtime installed'
-          else
-            echo '::warning::NDI runtime not found on runner (/usr/lib/ndi/libndi.so.6); skipping. Install manually per docs/ops/runbook.md.'
-          fi
-
       - name: Backup database
         run: |
           ssh deploy-target << 'REMOTE_SCRIPT'
