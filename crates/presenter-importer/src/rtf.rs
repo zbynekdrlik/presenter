@@ -274,7 +274,8 @@ fn clean_text(text: String) -> String {
             || matches!(output, '\n' | '\r');
         cleaned.push(output);
     }
-    strip_header_lines(cleaned)
+    use unicode_normalization::UnicodeNormalization;
+    strip_header_lines(cleaned).nfc().collect()
 }
 
 fn is_formatting_char(ch: char) -> bool {
@@ -463,5 +464,14 @@ mod tests {
         let raw = r"{\rtf1\ansi\ansicpg1250 \u-3913?x}";
         let text = decode_rtf(raw.as_bytes()).expect("rtf to decode");
         assert!(!text.is_empty(), "should produce output");
+    }
+
+    #[test]
+    fn clean_text_normalizes_nfd_to_nfc() {
+        // ProPresenter Mac source produces NFD: 'z' + U+030C, 'i' + U+0301.
+        let input = String::from("Po Tebe Pane z\u{30c}i\u{301}znim");
+        let cleaned = clean_text(input);
+        // Expect single-codepoint 'ž' and 'í' in the output.
+        assert_eq!(cleaned, "Po Tebe Pane \u{17e}\u{ed}znim");
     }
 }
