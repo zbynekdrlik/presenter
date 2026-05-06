@@ -141,6 +141,28 @@ Set `PRESENTER_BACKUP_ROOT` (e.g., `/var/lib/presenter/backups`) before calling 
 - Enable Companion’s “Run Macro on Connection State” option and tie the provided `macro_presenter_alert` to the Presenter module instance so operators see a red panic indicator whenever `live_ws_connected` flips to false.
 - After modifying Presenter commands or adding new cues, run `npm run test:playwright -- --grep @companion` to exercise the simulated Companion session and verify acks/variable updates still flow end-to-end.
 
+## NDI Runtime
+
+NDI source discovery (`/ndi/sources`, the operator's "Scan" button) requires the **NDI Advanced SDK v6 runtime** at `/usr/lib/ndi/libndi.so.6` on the presenter host. The library is loaded via `libloading` at startup; without it the binary still runs but `/ndi/status` reports `{"available":false}` and `/ndi/sources` always returns `[]`. NewTek does not allow redistribution, so it is not bundled with the build.
+
+Bootstrap a host (one-time, idempotent):
+
+```bash
+# From a machine that already has /usr/lib/ndi populated
+scripts/ops/install-ndi-runtime.sh newlevel@<host> --service presenter
+```
+
+The script copies the runtime, runs `ldconfig`, and (when `--service` is given) restarts the service so the library is picked up.
+
+The release (`release.yml`) and main-deploy (`deploy.yml`) workflows now run an **Ensure NDI runtime** step that performs the same idempotent copy from the self-hosted runner to the deploy target. After a clean reinstall, verify with:
+
+```bash
+curl http://<host>/ndi/status   # → {"available":true}
+curl http://<host>/ndi/sources  # → [{...}, ...] when senders are reachable
+```
+
+Source discovery uses mDNS, so `avahi-daemon` must be running on the host (`systemctl is-active avahi-daemon`). An empty list with `available:true` means the library is loaded but no NDI senders are reachable on the target's LAN — verify Resolume / cameras are powered on and not isolated by VLAN/Tailscale.
+
 ## Troubleshooting Checklist
 
 - **Service fails to start on port 80:** ensure the unit runs as a user with `CAP_NET_BIND_SERVICE`. The templated unit already applies this capability; if you override it, re-add `AmbientCapabilities=CAP_NET_BIND_SERVICE`.
