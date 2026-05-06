@@ -59,7 +59,7 @@ const COMMANDS = [
   { id: "timer.start_preach", label: "Timer: start preach" },
   { id: "timer.pause_preach", label: "Timer: pause preach" },
   { id: "timer.reset_preach", label: "Timer: reset preach" },
-  { id: "timer.set_preach_limit", label: "Timer: set preach limit (seconds)" },
+  { id: "timer.set_preach_limit", label: "Timer: set preach limit (minutes)" },
   { id: "timer.clear_preach_limit", label: "Timer: clear preach limit" },
   { id: "stage.layout", label: "Stage: set layout" },
   { id: "stage.set", label: "Stage: set presentation/slide" },
@@ -362,10 +362,11 @@ class PresenterInstance extends InstanceBase {
         return [
           {
             type: "number",
-            id: "seconds",
-            label: "Limit (seconds)",
-            default: 2700,
+            id: "minutes",
+            label: "Limit (minutes)",
+            default: 45,
             min: 1,
+            max: 240,
           },
         ];
       case "stage.set":
@@ -392,10 +393,14 @@ class PresenterInstance extends InstanceBase {
       case "broadcast.set_live":
         return [
           {
-            type: "checkbox",
-            id: "enabled",
-            label: "Live",
-            default: false,
+            type: "dropdown",
+            id: "state",
+            label: "Live state",
+            choices: [
+              { id: "on", label: "Live ON" },
+              { id: "off", label: "Live OFF" },
+            ],
+            default: "on",
           },
         ];
       default:
@@ -510,7 +515,7 @@ class PresenterInstance extends InstanceBase {
       }
       case "timer.set_preach_limit": {
         payload = {
-          seconds: Number(options.seconds) || 2700,
+          seconds: (Number(options.minutes) || 45) * 60,
         };
         break;
       }
@@ -526,7 +531,7 @@ class PresenterInstance extends InstanceBase {
       }
       case "broadcast.set_live": {
         payload = {
-          enabled: Boolean(options.enabled),
+          enabled: options.state === "on",
         };
         break;
       }

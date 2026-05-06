@@ -58,3 +58,105 @@ describe("Companion COMMANDS parity", () => {
     }
   });
 });
+
+describe("Companion action UX (#270 #249)", () => {
+  test("timer.set_preach_limit input uses 'minutes' field with default 45", () => {
+    // The action options switch case for timer.set_preach_limit must
+    // expose a 'minutes' input with default 45 (not 'seconds' / 2700).
+    const preachOptionsRegion = indexSource.match(
+      /case ["']timer\.set_preach_limit["']:\s*return\s*\[([\s\S]*?)\];/,
+    );
+    assert.ok(
+      preachOptionsRegion,
+      "Could not find timer.set_preach_limit options block",
+    );
+    const optionsText = preachOptionsRegion[1];
+    assert.match(
+      optionsText,
+      /id:\s*["']minutes["']/,
+      "preach-limit input id should be 'minutes'",
+    );
+    assert.match(
+      optionsText,
+      /label:\s*["']Limit \(minutes\)["']/,
+      "preach-limit label should say (minutes)",
+    );
+    assert.match(
+      optionsText,
+      /default:\s*45\b/,
+      "preach-limit default should be 45",
+    );
+  });
+
+  test("timer.set_preach_limit handler multiplies minutes by 60", () => {
+    const handlerRegion = indexSource.match(
+      /case ["']timer\.set_preach_limit["']:\s*\{([\s\S]*?)\}/,
+    );
+    assert.ok(handlerRegion, "Could not find timer.set_preach_limit handler");
+    const handlerText = handlerRegion[1];
+    assert.match(
+      handlerText,
+      /options\.minutes/,
+      "handler should read options.minutes",
+    );
+    assert.match(
+      handlerText,
+      /\*\s*60\b/,
+      "handler should multiply by 60 to convert minutes → seconds",
+    );
+  });
+
+  test("broadcast.set_live input is a dropdown with 'state' field", () => {
+    const liveOptionsRegion = indexSource.match(
+      /case ["']broadcast\.set_live["']:\s*return\s*\[([\s\S]*?)\];/,
+    );
+    assert.ok(
+      liveOptionsRegion,
+      "Could not find broadcast.set_live options block",
+    );
+    const optionsText = liveOptionsRegion[1];
+    assert.match(
+      optionsText,
+      /type:\s*["']dropdown["']/,
+      "broadcast.set_live input should be a dropdown",
+    );
+    assert.match(
+      optionsText,
+      /id:\s*["']state["']/,
+      "broadcast.set_live id should be 'state'",
+    );
+    assert.match(
+      optionsText,
+      /id:\s*["']on["']/,
+      "dropdown should have an 'on' choice",
+    );
+    assert.match(
+      optionsText,
+      /id:\s*["']off["']/,
+      "dropdown should have an 'off' choice",
+    );
+  });
+
+  test("broadcast.set_live handler maps state==='on' to enabled boolean", () => {
+    const handlerRegion = indexSource.match(
+      /case ["']broadcast\.set_live["']:\s*\{([\s\S]*?)\}/,
+    );
+    assert.ok(handlerRegion, "Could not find broadcast.set_live handler");
+    const handlerText = handlerRegion[1];
+    assert.match(
+      handlerText,
+      /options\.state\s*===\s*["']on["']/,
+      "handler should compare options.state === 'on'",
+    );
+  });
+
+  test("action label for timer.set_preach_limit says (minutes)", () => {
+    // The action registration entry in COMMANDS must show "(minutes)" so
+    // the operator sees the unit when picking the action.
+    assert.match(
+      indexSource,
+      /id:\s*["']timer\.set_preach_limit["'],\s*label:\s*["'][^"']*\(minutes\)/,
+      "timer.set_preach_limit label should contain '(minutes)'",
+    );
+  });
+});
