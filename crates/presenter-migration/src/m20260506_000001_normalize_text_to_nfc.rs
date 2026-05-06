@@ -7,6 +7,10 @@ pub struct Migration;
 
 #[async_trait::async_trait]
 impl MigrationTrait for Migration {
+    /// All UPDATE statements run in a single transaction so the migration is
+    /// atomic: either every NFD row is rewritten to NFC or none are.
+    /// sea-orm-migration wraps `up()` in a SQLite transaction by default,
+    /// satisfying the spec's atomicity requirement (#305 risk table).
     async fn up(&self, manager: &SchemaManager) -> Result<(), DbErr> {
         let db = manager.get_connection();
 
@@ -183,6 +187,14 @@ mod tests {
         assert_eq!(
             fetch_one_string(
                 &db,
+                "SELECT worship_translate FROM slides WHERE id='s-nfd'"
+            )
+            .await,
+            "CLEAN"
+        );
+        assert_eq!(
+            fetch_one_string(
+                &db,
                 "SELECT worship_stage FROM slides WHERE id='s-nfd'"
             )
             .await,
@@ -196,6 +208,14 @@ mod tests {
         assert_eq!(
             fetch_one_string(&db, "SELECT name FROM libraries WHERE id='lib-nfd'").await,
             "TY\u{17e}MY"
+        );
+        assert_eq!(
+            fetch_one_string(
+                &db,
+                "SELECT worship_main FROM slides WHERE id='s-nfd'"
+            )
+            .await,
+            "\u{17e}"
         );
     }
 }
