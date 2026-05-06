@@ -157,7 +157,12 @@ test("lookahead: clicking a slide makes next-row slide visible", async ({
   ).toEqual([]);
 });
 
-test("wheel: each notch scrolls a deterministic step", async ({ page }) => {
+test("wheel: large delta is capped at one row per event", async ({ page }) => {
+  // PR #301: the wheel handler is magnitude-respecting — small deltas pass
+  // through as-is, large deltas are capped at one row (step). This test
+  // verifies the cap by dispatching a deltaY larger than step and asserting
+  // the scroll advanced by step, not deltaY. A passive (broken) handler
+  // would let the native scroll apply deltaY directly.
   const consoleMessages: string[] = [];
   page.on("console", (msg) => {
     if (msg.type() === "error" || msg.type() === "warning") {
@@ -174,43 +179,88 @@ test("wheel: each notch scrolls a deterministic step", async ({ page }) => {
   });
   await page.waitForTimeout(50);
 
-  // Dispatch a WheelEvent with deltaY=100. The wheel handler should ignore the
-  // deltaY magnitude and instead apply step = card_height + 14.4 (grid gap).
-  // If the handler is passive (Leptos on:wheel default), prevent_default is
-  // silently ignored and the browser may apply deltaY=100 instead of the step.
+  // Dispatch a WheelEvent with deltaY=500 (much larger than step ≈ 221.6 px).
+  // The handler must cap the scroll advance at step, not at deltaY.
   const result = await page.evaluate(() => {
     const c = document.querySelector(".operator__slides") as HTMLElement | null;
     if (!c) return null;
     const cardEl = c.querySelector(
       ".operator__slide-card",
     ) as HTMLElement | null;
-    // Compute the expected step from the actual card height.
     const cardHeight = cardEl ? cardEl.getBoundingClientRect().height : 0;
     const expectedStep = cardHeight > 0 ? cardHeight + 14.4 : 120;
 
     const before = c.scrollTop;
     c.dispatchEvent(
-      new WheelEvent("wheel", { deltaY: 100, bubbles: true, cancelable: true }),
+      new WheelEvent("wheel", { deltaY: 500, bubbles: true, cancelable: true }),
     );
     const after = c.scrollTop;
-    return { before, after, expectedStep, deltaY: 100 };
+    return { before, after, expectedStep, deltaY: 500 };
   });
 
   expect(result).not.toBeNull();
 
   const actualDelta = result!.after - result!.before;
 
-  // If actualDelta equals deltaY (100), the handler was passive and
+  // If actualDelta equals deltaY (500), the handler was passive and
   // prevent_default had no effect — the browser applied raw native scroll.
-  // The spec requires escalating this to BLOCKED.
   expect(
     actualDelta,
-    `BLOCKED: wheel handler appears passive — scrollTop delta=${actualDelta} equals deltaY (100) instead of step (${result!.expectedStep.toFixed(1)}). Fix: change on:wheel in slide_list.rs to addEventListener with passive:false.`,
+    `BLOCKED: wheel handler appears passive — scrollTop delta=${actualDelta} equals deltaY (500) instead of being capped at step (${result!.expectedStep.toFixed(1)}). Fix: ensure on:wheel uses addEventListener with passive:false.`,
   ).not.toBe(result!.deltaY);
 
-  // The handler must apply the deterministic step (±2px tolerance for rounding).
+  // The handler must cap the advance at step (±2 px tolerance for rounding).
   expect(actualDelta).toBeGreaterThan(result!.expectedStep - 2);
   expect(actualDelta).toBeLessThan(result!.expectedStep + 2);
+
+  expect(
+    consoleMessages.filter(
+      (m) => !m.includes("favicon") && !m.includes("crbug.com/981419"),
+    ),
+  ).toEqual([]);
+});
+
+test("wheel: small delta passes through proportionally (#301)", async ({
+  page,
+}) => {
+  // PR #301: a small deltaY (smaller than step) advances by exactly that
+  // delta — proportional to the gesture. Without this, trackpad gestures
+  // (which fire 20+ events) blast through the list.
+  const consoleMessages: string[] = [];
+  page.on("console", (msg) => {
+    if (msg.type() === "error" || msg.type() === "warning") {
+      consoleMessages.push(`[${msg.type()}] ${msg.text()}`);
+    }
+  });
+
+  await openPresentation(page, presId15);
+
+  await page.evaluate(() => {
+    const c = document.querySelector(".operator__slides") as HTMLElement | null;
+    if (c) c.scrollTop = 0;
+  });
+  await page.waitForTimeout(50);
+
+  const result = await page.evaluate(() => {
+    const c = document.querySelector(".operator__slides") as HTMLElement | null;
+    if (!c) return null;
+
+    const before = c.scrollTop;
+    c.dispatchEvent(
+      new WheelEvent("wheel", { deltaY: 50, bubbles: true, cancelable: true }),
+    );
+    const after = c.scrollTop;
+    return { before, after, deltaY: 50 };
+  });
+
+  expect(result).not.toBeNull();
+
+  const actualDelta = result!.after - result!.before;
+
+  // For small deltaY (50 px) less than step, the cap is a no-op — the scroll
+  // advances by deltaY directly (±2 px tolerance for rounding).
+  expect(actualDelta).toBeGreaterThan(48);
+  expect(actualDelta).toBeLessThan(52);
 
   expect(
     consoleMessages.filter(
