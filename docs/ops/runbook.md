@@ -154,7 +154,7 @@ scripts/ops/install-ndi-runtime.sh newlevel@<host> --service presenter
 
 The script copies the runtime, runs `ldconfig`, and (when `--service` is given) restarts the service so the library is picked up.
 
-The release (`release.yml`) and main-deploy (`deploy.yml`) workflows now run an **Ensure NDI runtime** step that performs the same idempotent copy from the self-hosted runner to the deploy target. After a clean reinstall, verify with:
+The dev (`pipeline.yml`), main-deploy (`deploy.yml`), and release (`release.yml`) workflows all run an **Ensure NDI SDK and avahi-daemon are installed** step that downloads the SDK from `downloads.ndi.tv` if `/usr/lib/ndi/libndi.so.6` is missing on the target, then verifies presence. The step is idempotent and skips silently when the library is already there. After a clean reinstall, verify with:
 
 ```bash
 curl http://<host>/ndi/status   # → {"available":true}
