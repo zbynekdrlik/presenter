@@ -31,11 +31,7 @@ const TARGETS: &[(&str, &[&str])] = &[
     ("presentations", &["name"]),
     (
         "slides",
-        &[
-            "worship_main",
-            "worship_translate",
-            "worship_stage",
-        ],
+        &["worship_main", "worship_translate", "worship_stage"],
     ),
 ];
 
@@ -75,8 +71,7 @@ async fn normalize_table<C: ConnectionTrait>(
             .collect::<Vec<_>>()
             .join(", ");
         let update_sql = format!("UPDATE {table} SET {set_clause} WHERE id = ?");
-        let mut values: Vec<sea_orm::Value> =
-            updates.into_iter().map(|(_, v)| v.into()).collect();
+        let mut values: Vec<sea_orm::Value> = updates.into_iter().map(|(_, v)| v.into()).collect();
         values.push(id.into());
         db.execute(Statement::from_sql_and_values(
             sea_orm::DatabaseBackend::Sqlite,
@@ -94,9 +89,7 @@ mod tests {
     use sea_orm::{Database, DbBackend, Statement};
 
     async fn setup_db() -> sea_orm::DatabaseConnection {
-        let db = Database::connect("sqlite::memory:")
-            .await
-            .expect("connect");
+        let db = Database::connect("sqlite::memory:").await.expect("connect");
         for ddl in &[
             "CREATE TABLE libraries (id TEXT PRIMARY KEY, name TEXT NOT NULL, search_name TEXT NOT NULL DEFAULT '')",
             "CREATE TABLE presentations (id TEXT PRIMARY KEY, library_id TEXT NOT NULL, name TEXT NOT NULL, search_name TEXT NOT NULL DEFAULT '')",
@@ -156,7 +149,9 @@ mod tests {
         .await;
 
         for (table, columns) in TARGETS {
-            super::normalize_table(&db, table, columns).await.expect("up");
+            super::normalize_table(&db, table, columns)
+                .await
+                .expect("up");
         }
 
         // After: every row's text fields are NFC.
@@ -169,52 +164,34 @@ mod tests {
             "CLEAN"
         );
         assert_eq!(
-            fetch_one_string(
-                &db,
-                "SELECT name FROM presentations WHERE id='p-nfd'"
-            )
-            .await,
+            fetch_one_string(&db, "SELECT name FROM presentations WHERE id='p-nfd'").await,
             "Po Tebe Pane \u{17e}\u{ed}znim"
         );
         assert_eq!(
-            fetch_one_string(
-                &db,
-                "SELECT worship_main FROM slides WHERE id='s-nfd'"
-            )
-            .await,
+            fetch_one_string(&db, "SELECT worship_main FROM slides WHERE id='s-nfd'").await,
             "\u{17e}"
         );
         assert_eq!(
-            fetch_one_string(
-                &db,
-                "SELECT worship_translate FROM slides WHERE id='s-nfd'"
-            )
-            .await,
+            fetch_one_string(&db, "SELECT worship_translate FROM slides WHERE id='s-nfd'").await,
             "CLEAN"
         );
         assert_eq!(
-            fetch_one_string(
-                &db,
-                "SELECT worship_stage FROM slides WHERE id='s-nfd'"
-            )
-            .await,
+            fetch_one_string(&db, "SELECT worship_stage FROM slides WHERE id='s-nfd'").await,
             "\u{ed}"
         );
 
         // Idempotency: rerun is a no-op.
         for (table, columns) in TARGETS {
-            super::normalize_table(&db, table, columns).await.expect("rerun");
+            super::normalize_table(&db, table, columns)
+                .await
+                .expect("rerun");
         }
         assert_eq!(
             fetch_one_string(&db, "SELECT name FROM libraries WHERE id='lib-nfd'").await,
             "TY\u{17e}MY"
         );
         assert_eq!(
-            fetch_one_string(
-                &db,
-                "SELECT worship_main FROM slides WHERE id='s-nfd'"
-            )
-            .await,
+            fetch_one_string(&db, "SELECT worship_main FROM slides WHERE id='s-nfd'").await,
             "\u{17e}"
         );
     }

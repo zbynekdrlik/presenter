@@ -202,15 +202,12 @@ pub fn load_presentation_from_bytes(bytes: &[u8]) -> Result<Presentation> {
 }
 
 fn library_name_from_dir(dir: &Path) -> Result<String> {
-    let raw = dir
-        .file_name()
-        .and_then(|os| os.to_str())
-        .ok_or_else(|| {
-            anyhow!(
-                "library directory must have a valid UTF-8 name: {}",
-                dir.display()
-            )
-        })?;
+    let raw = dir.file_name().and_then(|os| os.to_str()).ok_or_else(|| {
+        anyhow!(
+            "library directory must have a valid UTF-8 name: {}",
+            dir.display()
+        )
+    })?;
     Ok(nfc::to_nfc(raw))
 }
 

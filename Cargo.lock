@@ -2684,6 +2684,7 @@ dependencies = [
  "tempfile",
  "tokio",
  "tracing",
+ "unicode-normalization",
  "walkdir",
  "zip",
 ]
@@ -2697,6 +2698,7 @@ dependencies = [
  "sea-orm-migration",
  "tokio",
  "tracing",
+ "unicode-normalization",
  "uuid",
 ]
 
