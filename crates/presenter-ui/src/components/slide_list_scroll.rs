@@ -160,3 +160,43 @@ pub(super) fn handle_wheel_event(ev: web_sys::WheelEvent) {
     let capped = cap_wheel_delta(delta_y, step);
     container.set_scroll_top((container.scroll_top() as f64 + capped) as i32);
 }
+
+#[cfg(test)]
+mod tests {
+    use super::cap_wheel_delta;
+
+    #[test]
+    fn zero_delta_returns_zero() {
+        assert_eq!(cap_wheel_delta(0.0, 90.0), 0.0);
+    }
+
+    #[test]
+    fn small_positive_delta_passes_through() {
+        assert_eq!(cap_wheel_delta(10.0, 90.0), 10.0);
+    }
+
+    #[test]
+    fn small_negative_delta_passes_through() {
+        assert_eq!(cap_wheel_delta(-10.0, 90.0), -10.0);
+    }
+
+    #[test]
+    fn delta_exactly_at_step_passes_through() {
+        assert_eq!(cap_wheel_delta(90.0, 90.0), 90.0);
+    }
+
+    #[test]
+    fn negative_delta_exactly_at_step_passes_through() {
+        assert_eq!(cap_wheel_delta(-90.0, 90.0), -90.0);
+    }
+
+    #[test]
+    fn large_positive_delta_is_capped_at_step() {
+        assert_eq!(cap_wheel_delta(500.0, 90.0), 90.0);
+    }
+
+    #[test]
+    fn large_negative_delta_is_capped_at_negative_step() {
+        assert_eq!(cap_wheel_delta(-500.0, 90.0), -90.0);
+    }
+}
