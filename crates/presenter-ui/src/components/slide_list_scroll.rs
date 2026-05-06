@@ -122,13 +122,28 @@ fn step_for_wheel(container: &web_sys::HtmlElement) -> f64 {
     card_height + 14.4
 }
 
+/// Cap a wheel event's vertical delta to one row of cards (`step`) per event,
+/// preserving sign. Returns 0 when `delta_y` is 0 (no-op).
+///
+/// Issue #301: previously the wheel handler discarded `delta_y` magnitude and
+/// always advanced one full row per event, so trackpad gestures (which fire
+/// 20+ events per swipe) blasted through dozens of rows.
+fn cap_wheel_delta(delta_y: f64, step: f64) -> f64 {
+    if delta_y == 0.0 {
+        return 0.0;
+    }
+    delta_y.signum() * delta_y.abs().min(step)
+}
+
 /// Wheel handler for `.operator__slides`: intercepts the native (accelerated)
-/// scroll, applies a deterministic per-notch step instead. Issue #271 concern 2:
-/// neutralises macOS scroll acceleration so each notch advances ~1 row.
+/// scroll and applies a magnitude-respecting cap. Issue #271 concern 2:
+/// neutralises macOS scroll acceleration. Issue #301: per-event delta is
+/// capped at one row so high-frequency trackpad/mouse events can't blast
+/// through the list.
 pub(super) fn handle_wheel_event(ev: web_sys::WheelEvent) {
     ev.prevent_default();
-    let direction = ev.delta_y().signum();
-    if direction == 0.0 {
+    let delta_y = ev.delta_y();
+    if delta_y == 0.0 {
         return;
     }
     let Some(target) = ev.target() else { return };
@@ -142,5 +157,6 @@ pub(super) fn handle_wheel_event(ev: web_sys::WheelEvent) {
         return;
     };
     let step = step_for_wheel(&container);
-    container.set_scroll_top((container.scroll_top() as f64 + direction * step) as i32);
+    let capped = cap_wheel_delta(delta_y, step);
+    container.set_scroll_top((container.scroll_top() as f64 + capped) as i32);
 }
