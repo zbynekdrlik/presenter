@@ -20,6 +20,7 @@
 
 pub mod bible;
 mod bible_digest;
+mod nfc;
 mod rtf;
 
 pub use bible_digest::{compute_source_digest, PARSER_VERSION};
@@ -200,20 +201,21 @@ pub fn load_presentation_from_bytes(bytes: &[u8]) -> Result<Presentation> {
         .with_context(|| format!("failed to convert presentation {}", raw.name.trim()))
 }
 
+fn library_name_from_dir(dir: &Path) -> Result<String> {
+    let raw = dir.file_name().and_then(|os| os.to_str()).ok_or_else(|| {
+        anyhow!(
+            "library directory must have a valid UTF-8 name: {}",
+            dir.display()
+        )
+    })?;
+    Ok(nfc::to_nfc(raw))
+}
+
 fn load_library_from_directory(dir: &Path) -> Result<Option<Library>> {
     if !dir.exists() {
         return Ok(None);
     }
-    let name = dir
-        .file_name()
-        .and_then(|os| os.to_str())
-        .ok_or_else(|| {
-            anyhow!(
-                "library directory must have a valid UTF-8 name: {}",
-                dir.display()
-            )
-        })?
-        .to_string();
+    let name = library_name_from_dir(dir)?;
 
     let mut presentations = Vec::new();
     let mut entries = fs::read_dir(dir)
@@ -282,7 +284,7 @@ fn presentation_from_proto(raw: &proto::Presentation) -> Result<Presentation> {
         ));
     }
 
-    Ok(Presentation::new(raw.name.clone(), slides)?)
+    Ok(Presentation::new(nfc::to_nfc(&raw.name), slides)?)
 }
 
 fn slide_content_from_proto(
@@ -876,6 +878,51 @@ mod tests {
 
         let cue_c = &lookup["cue-c"];
         assert!(!cue_c.anchor, "third cue should not be anchor");
+    }
+
+    #[test]
+    fn library_name_from_dir_normalizes_nfd_to_nfc() {
+        use std::path::Path;
+        // NFD-form 'ž' in directory name: 'TYz\u{30c}MY'
+        let path = Path::new("TYz\u{30c}MY");
+        let name = super::library_name_from_dir(path).expect("name");
+        assert_eq!(name, "TY\u{17e}MY");
+    }
+
+    #[test]
+    fn presentation_from_proto_normalizes_name_to_nfc() {
+        // Build a minimal valid proto::Presentation with an NFD name and one
+        // PresentationSlide action so presentation_from_proto succeeds.
+        let slide_type = proto::action::SlideType {
+            slide: Some(proto::action::slide_type::Slide::Presentation(
+                proto::PresentationSlide {
+                    base_slide: Some(proto::Slide::default()),
+                    ..Default::default()
+                },
+            )),
+        };
+        let action = proto::Action {
+            r#type: proto::action::ActionType::PresentationSlide as i32,
+            action_type_data: Some(proto::action::ActionTypeData::Slide(slide_type)),
+            ..Default::default()
+        };
+        let cue = proto::Cue {
+            uuid: Some(proto::Uuid {
+                string: "cue-1".into(),
+            }),
+            actions: vec![action],
+            ..Default::default()
+        };
+        // resolve_cue_sequence falls back to raw.cues when no ordering is
+        // present, so we only need to populate raw.cues.
+        let raw = proto::Presentation {
+            name: String::from("Po Tebe Pane z\u{30c}i\u{301}znim"),
+            cues: vec![cue],
+            ..Default::default()
+        };
+
+        let presentation = presentation_from_proto(&raw).expect("import succeeds");
+        assert_eq!(presentation.name, "Po Tebe Pane \u{17e}\u{ed}znim");
     }
 
     #[test]

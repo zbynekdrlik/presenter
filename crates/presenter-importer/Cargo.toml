@@ -16,6 +16,7 @@ encoding_rs = "0.8"
 sha2 = "0.10"
 tracing.workspace = true
 tokio.workspace = true
+unicode-normalization.workspace = true
 
 
 [build-dependencies]
