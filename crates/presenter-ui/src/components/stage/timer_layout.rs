@@ -14,6 +14,8 @@ pub fn TimerLayout(
     latency_ms: ReadSignal<Option<f64>>,
 ) -> impl IntoView {
     let ctx = use_context::<StageContext>().expect("StageContext not provided");
+    let ndi_active = ctx.ndi_active;
+    let ndi_status = ctx.ndi_status;
 
     let timer_ref = NodeRef::<leptos::html::Div>::new();
 
@@ -43,6 +45,28 @@ pub fn TimerLayout(
 
     view! {
         <div class="stage-container" data-layout="timer">
+            <Show when=move || ndi_active.get()>
+                <img src="/ndi/mjpeg" class="stage-timer__ndi" />
+            </Show>
+
+            <Show when=move || {
+                let status = ndi_status.get();
+                status == "disconnected" || status == "connecting"
+            }>
+                <div class="stage-timer__overlay">
+                    {move || {
+                        let status = ndi_status.get();
+                        if status == "disconnected" {
+                            "Signal Lost — Reconnecting..."
+                        } else if status == "connecting" {
+                            "Connecting..."
+                        } else {
+                            ""
+                        }
+                    }}
+                </div>
+            </Show>
+
             <div class="stage-timer__display">
                 <span class="stage__debug-label">"timer-display"</span>
                 <div node_ref=timer_ref class="stage-timer__text">
