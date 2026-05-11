@@ -1,4 +1,13 @@
 use leptos::prelude::*;
+use std::collections::HashMap;
+
+/// Per-slide save status for the worship slide editor's "Saved" indicator (#313).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SaveStatus {
+    Saving,
+    Saved,
+    Failed,
+}
 
 /// Focus restoration data: (slide_id, field_name, selection_start, selection_end)
 pub type PendingFocus = (String, String, u32, u32);
@@ -50,6 +59,9 @@ pub struct OperatorState {
     pub stage_layout_loading: RwSignal<bool>,
     /// Slide ID currently being triggered (for is-loading class)
     pub triggering_slide_id: RwSignal<Option<String>>,
+    /// Per-slide save status keyed by slide_id, with a monotonic token to
+    /// prevent stale fade timers from clearing a newer save's entry (#313).
+    pub save_status: RwSignal<HashMap<String, (SaveStatus, u64)>>,
 }
 
 impl OperatorState {
@@ -94,6 +106,7 @@ impl OperatorState {
             playlist_edit_initial: RwSignal::new(None),
             stage_layout_loading: RwSignal::new(false),
             triggering_slide_id: RwSignal::new(None),
+            save_status: RwSignal::new(HashMap::new()),
         }
     }
 }
