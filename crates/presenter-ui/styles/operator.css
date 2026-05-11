@@ -2852,3 +2852,24 @@ body.operator[data-mode="live"][data-bible-tab="prepared"]
     pointer-events: none;
     bottom: -2px;
 }
+
+/* ===== Worship slide save indicator (#313) ===== */
+.operator__slide-save-indicator {
+    margin-left: 0.5rem;
+    font-size: 0.85em;
+    font-weight: 500;
+    transition: opacity 200ms ease-out;
+}
+
+.operator__slide-save-indicator[data-status="saved"] {
+    color: #16a34a;
+}
+
+.operator__slide-save-indicator[data-status="saving"] {
+    color: #6b7280;
+}
+
+.operator__slide-save-indicator[data-status="failed"] {
+    color: #dc2626;
+    font-weight: 600;
+}
