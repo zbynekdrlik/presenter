@@ -169,7 +169,8 @@ test("Save failed sticks when server returns 500", async ({ page }) => {
   ]);
 
   await page.route("**/presentations/*/slides/*", (route) => {
-    if (route.request().method() === "PUT") {
+    // The slide-update API uses PATCH (not PUT).
+    if (route.request().method() === "PATCH") {
       route.fulfill({ status: 500, body: "boom" });
     } else {
       route.continue();
