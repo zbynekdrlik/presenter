@@ -1,11 +1,13 @@
 use std::collections::HashMap;
+use std::sync::atomic::{AtomicU64, Ordering};
 
+use gloo_timers::future::TimeoutFuture;
 use leptos::prelude::*;
 use presenter_core::{resolve_sequence, ResolvedSlide};
 use wasm_bindgen::JsCast;
 
 use crate::api;
-use crate::state::operator::OperatorState;
+use crate::state::operator::{OperatorState, SaveStatus};
 use crate::state::AppContext;
 use crate::utils::color::group_pill_style;
 
@@ -14,6 +16,11 @@ use super::slide_list_utils::{
     apply_focused_class, field_has_warning, format_multiline, reorder_slide_ids,
     slide_has_any_warning,
 };
+
+/// Monotonic token used to invalidate stale fade timers (#313).
+/// Each save increments this and stamps the per-slide save_status entry;
+/// the 2s fade timer only removes the entry if the token still matches.
+static SAVE_TOKEN: AtomicU64 = AtomicU64::new(0);
 
 /// Get a textarea/input value from the DOM by slide_id and field name.
 fn get_field_value(doc: &web_sys::Document, slide_id: &str, field: &str) -> String {
@@ -86,11 +93,10 @@ fn save_all_fields_from_dom(
     _sel_start: u32,
     _sel_end: u32,
     selected_pres: RwSignal<Option<presenter_core::Presentation>>,
-    _op: &OperatorState,
+    op: &OperatorState,
 ) {
     let doc = crate::utils::window::document();
 
-    // Get ALL field values from the DOM (not from signals which may be stale)
     let main = get_field_value(&doc, slide_id, "main");
     let translation = get_field_value(&doc, slide_id, "translation");
     let stage = get_field_value(&doc, slide_id, "stage");
@@ -101,7 +107,7 @@ fn save_all_fields_from_dom(
         Some(group_val.trim().to_string())
     };
 
-    // Compare to signal to skip no-op saves
+    // Skip no-op saves.
     let pres = selected_pres.get_untracked();
     if let Some(p) = &pres {
         if let Some(slide) = p.slides.iter().find(|s| s.id.to_string() == slide_id) {
@@ -117,27 +123,67 @@ fn save_all_fields_from_dom(
         }
     }
 
-    let pres_id = pres_id.to_string();
-    let sid = slide_id.to_string();
+    save_with_status(
+        pres_id.to_string(),
+        slide_id.to_string(),
+        main,
+        translation,
+        stage,
+        group,
+        op.save_status,
+    );
+}
 
+/// Wraps the slide-update PUT with save_status updates for the per-slide
+/// "Saved" indicator (#313). Sets `Saving` immediately, then `Saved`
+/// (auto-fades after 2s) on success or `Failed` (sticky) on error. Uses
+/// a monotonic token so an older fade timer can't clear a newer save.
+fn save_with_status(
+    pres_id: String,
+    slide_id: String,
+    main: String,
+    translation: String,
+    stage: String,
+    group: Option<String>,
+    save_status: RwSignal<std::collections::HashMap<String, (SaveStatus, u64)>>,
+) {
+    let token = SAVE_TOKEN.fetch_add(1, Ordering::Relaxed) + 1;
+    let key_saving = slide_id.clone();
+    save_status.update(|map| {
+        map.insert(key_saving, (SaveStatus::Saving, token));
+    });
+
+    let key_done = slide_id.clone();
     leptos::task::spawn_local(async move {
-        // Save all fields atomically. Do NOT update the selected_pres signal
-        // after save — that triggers a Leptos re-render which recreates textarea
-        // elements with prop:value from the signal, destroying any in-progress
-        // DOM edits the user is making in another field. The signal data becomes
-        // stale but is refreshed on presentation switch or page reload.
-        // Do NOT call restore_pending_focus — it refocuses the blurred field,
-        // which then triggers another blur on whatever field Playwright/user
-        // moved to, creating a race condition with concurrent saves.
-        let _ = api::presentations::update_slide_with_group(
+        let result = api::presentations::update_slide_with_group(
             &pres_id,
-            &sid,
+            &slide_id,
             &main,
             &translation,
             &stage,
-            group.clone(),
+            group,
         )
         .await;
+
+        match result {
+            Ok(_) => {
+                let key_for_saved = key_done.clone();
+                save_status.update(|map| {
+                    map.insert(key_for_saved, (SaveStatus::Saved, token));
+                });
+                TimeoutFuture::new(2_000).await;
+                save_status.update(|map| {
+                    if map.get(&key_done).map(|(_, t)| *t) == Some(token) {
+                        map.remove(&key_done);
+                    }
+                });
+            }
+            Err(_) => {
+                save_status.update(|map| {
+                    map.insert(key_done.clone(), (SaveStatus::Failed, token));
+                });
+            }
+        }
     });
 }
 
@@ -866,8 +912,6 @@ pub fn SlideList() -> impl IntoView {
                                                             let selected_pres = ctx.selected_presentation;
                                                             move |ev| {
                                                                 let (sel_start, sel_end) = capture_selection(&ev);
-                                                                // For group changes, we need to refetch full presentation
-                                                                // to update group inheritance across all slides
                                                                 op.pending_focus.set(Some((sid.clone(), "group".to_string(), sel_start, sel_end)));
 
                                                                 let doc = crate::utils::window::document();
@@ -875,21 +919,30 @@ pub fn SlideList() -> impl IntoView {
                                                                 let translation = get_field_value(&doc, &sid, "translation");
                                                                 let stage = get_field_value(&doc, &sid, "stage");
                                                                 let group_val = get_field_value(&doc, &sid, "group");
-                                                                let group = if group_val.trim().is_empty() { None } else { Some(group_val.trim().to_string()) };
+                                                                let group = if group_val.trim().is_empty() {
+                                                                    None
+                                                                } else {
+                                                                    Some(group_val.trim().to_string())
+                                                                };
 
-                                                                let pres_id = pres_id.clone();
-                                                                let sid = sid.clone();
-                                                                let op = op.clone();
+                                                                save_with_status(
+                                                                    pres_id.clone(),
+                                                                    sid.clone(),
+                                                                    main,
+                                                                    translation,
+                                                                    stage,
+                                                                    group,
+                                                                    op.save_status,
+                                                                );
+
+                                                                // Refetch for group inheritance display, then restore focus.
+                                                                let pres_id_for_refetch = pres_id.clone();
+                                                                let op_for_restore = op.clone();
                                                                 leptos::task::spawn_local(async move {
-                                                                    let _ = api::presentations::update_slide_with_group(
-                                                                        &pres_id, &sid,
-                                                                        &main, &translation, &stage, group,
-                                                                    ).await;
-                                                                    // Refetch to update group inheritance display
-                                                                    if let Ok(detail) = api::presentations::get_presentation(&pres_id).await {
+                                                                    if let Ok(detail) = api::presentations::get_presentation(&pres_id_for_refetch).await {
                                                                         selected_pres.set(Some(detail.presentation));
                                                                     }
-                                                                    restore_pending_focus(&op);
+                                                                    restore_pending_focus(&op_for_restore);
                                                                 });
                                                             }
                                                         }
