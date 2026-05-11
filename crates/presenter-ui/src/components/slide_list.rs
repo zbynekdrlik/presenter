@@ -514,6 +514,9 @@ pub fn SlideList() -> impl IntoView {
                         // Clone for class closure (is-loading check)
                         let slide_id_class = slide_id.clone();
 
+                        // Clone for save-status badge in slide header
+                        let slide_id_for_badge = slide_id.clone();
+
                         view! {
                             <article
                                 class=move || {
@@ -650,35 +653,52 @@ pub fn SlideList() -> impl IntoView {
                                             <span class=class style=color_style data-role="slide-group">{g}</span>
                                         }
                                     })}
+                                    {
+                                        let sid_for_when = slide_id_for_badge.clone();
+                                        let sid_for_render = slide_id_for_badge.clone();
+                                        let save_status = op.save_status;
+                                        view! {
+                                            <Show when=move || save_status.get().contains_key(&sid_for_when)>
+                                                {
+                                                    let sid_for_render = sid_for_render.clone();
+                                                    move || {
+                                                        let map = save_status.get();
+                                                        let Some((status, _)) = map.get(&sid_for_render).copied() else {
+                                                            return view! { <span></span> }.into_any();
+                                                        };
+                                                        match status {
+                                                            SaveStatus::Saving => view! {
+                                                                <span
+                                                                    class="operator__slide-save-indicator"
+                                                                    data-role="slide-save-indicator"
+                                                                    data-status="saving"
+                                                                >"Saving…"</span>
+                                                            }.into_any(),
+                                                            SaveStatus::Saved => view! {
+                                                                <span
+                                                                    class="operator__slide-save-indicator"
+                                                                    data-role="slide-save-indicator"
+                                                                    data-status="saved"
+                                                                >"Saved ✓"</span>
+                                                            }.into_any(),
+                                                            SaveStatus::Failed => view! {
+                                                                <span
+                                                                    class="operator__slide-save-indicator"
+                                                                    data-role="slide-save-indicator"
+                                                                    data-status="failed"
+                                                                >"Save failed"</span>
+                                                            }.into_any(),
+                                                        }
+                                                    }
+                                                }
+                                            </Show>
+                                        }
+                                    }
                                     {is_edit.then(|| {
-                                        let pres_id_save = pres_id_edit.clone();
-                                        let slide_id_save = slide_id_edit.clone();
-                                        // Capture signal OUTSIDE async blocks
-                                        let selected_pres_save = ctx.selected_presentation;
                                         let selected_pres_dup = ctx.selected_presentation;
                                         let selected_pres_del = ctx.selected_presentation;
                                         view! {
                                             <div class="operator__slide-controls">
-                                                <button type="button" data-action="save"
-                                                    on:click=move |_| {
-                                                        let pres_id = pres_id_save.clone();
-                                                        let sid = slide_id_save.clone();
-                                                        let selected_pres = selected_pres_save;
-                                                        leptos::task::spawn_local(async move {
-                                                            let p = selected_pres.get_untracked();
-                                                            if let Some(p) = &p {
-                                                                if let Some(s) = p.slides.iter().find(|s| s.id.to_string() == sid) {
-                                                                    let _ = api::presentations::update_slide(
-                                                                        &pres_id, &sid,
-                                                                        s.content.main.value(),
-                                                                        s.content.translation.value(),
-                                                                        s.content.stage.value(),
-                                                                    ).await;
-                                                                }
-                                                            }
-                                                        });
-                                                    }
-                                                >"Save"</button>
                                                 <button type="button" data-action="duplicate"
                                                     on:click=move |_| {
                                                         let pres_id = pres_id_dup.clone();
