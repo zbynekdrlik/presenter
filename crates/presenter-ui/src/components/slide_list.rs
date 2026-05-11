@@ -134,10 +134,46 @@ fn save_all_fields_from_dom(
     );
 }
 
-/// Wraps the slide-update PUT with save_status updates for the per-slide
-/// "Saved" indicator (#313). Sets `Saving` immediately, then `Saved`
-/// (auto-fades after 2s) on success or `Failed` (sticky) on error. Uses
-/// a monotonic token so an older fade timer can't clear a newer save.
+/// Status-map signal alias used by the save-status helpers (#313).
+type SaveStatusMap = RwSignal<std::collections::HashMap<String, (SaveStatus, u64)>>;
+
+/// Mark a slide as `Saving` and return its monotonic token. Callers pass the
+/// token to `finish_save_status_ok` / `finish_save_status_err` to ensure a
+/// stale completion can't overwrite a newer save's entry (#313).
+fn start_save_status(slide_id: &str, save_status: SaveStatusMap) -> u64 {
+    let token = SAVE_TOKEN.fetch_add(1, Ordering::Relaxed) + 1;
+    let key = slide_id.to_string();
+    save_status.update(|map| {
+        map.insert(key, (SaveStatus::Saving, token));
+    });
+    token
+}
+
+/// Mark a slide save as `Saved` and schedule the 2s fade-removal. The fade
+/// only clears the entry when the token still matches — guards against an
+/// older fade timer clearing a newer save's badge.
+async fn finish_save_status_ok(slide_id: String, save_status: SaveStatusMap, token: u64) {
+    let key_for_saved = slide_id.clone();
+    save_status.update(|map| {
+        map.insert(key_for_saved, (SaveStatus::Saved, token));
+    });
+    TimeoutFuture::new(2_000).await;
+    save_status.update(|map| {
+        if map.get(&slide_id).map(|(_, t)| *t) == Some(token) {
+            map.remove(&slide_id);
+        }
+    });
+}
+
+/// Mark a slide save as `Failed` (sticky until the next save attempt).
+fn finish_save_status_err(slide_id: String, save_status: SaveStatusMap, token: u64) {
+    save_status.update(|map| {
+        map.insert(slide_id, (SaveStatus::Failed, token));
+    });
+}
+
+/// Fire-and-forget save with indicator wiring. Used by the three textarea
+/// blur handlers where no refetch is needed.
 fn save_with_status(
     pres_id: String,
     slide_id: String,
@@ -145,15 +181,9 @@ fn save_with_status(
     translation: String,
     stage: String,
     group: Option<String>,
-    save_status: RwSignal<std::collections::HashMap<String, (SaveStatus, u64)>>,
+    save_status: SaveStatusMap,
 ) {
-    let token = SAVE_TOKEN.fetch_add(1, Ordering::Relaxed) + 1;
-    let key_saving = slide_id.clone();
-    save_status.update(|map| {
-        map.insert(key_saving, (SaveStatus::Saving, token));
-    });
-
-    let key_done = slide_id.clone();
+    let token = start_save_status(&slide_id, save_status);
     leptos::task::spawn_local(async move {
         let result = api::presentations::update_slide_with_group(
             &pres_id,
@@ -166,23 +196,8 @@ fn save_with_status(
         .await;
 
         match result {
-            Ok(_) => {
-                let key_for_saved = key_done.clone();
-                save_status.update(|map| {
-                    map.insert(key_for_saved, (SaveStatus::Saved, token));
-                });
-                TimeoutFuture::new(2_000).await;
-                save_status.update(|map| {
-                    if map.get(&key_done).map(|(_, t)| *t) == Some(token) {
-                        map.remove(&key_done);
-                    }
-                });
-            }
-            Err(_) => {
-                save_status.update(|map| {
-                    map.insert(key_done.clone(), (SaveStatus::Failed, token));
-                });
-            }
+            Ok(_) => finish_save_status_ok(slide_id, save_status, token).await,
+            Err(_) => finish_save_status_err(slide_id, save_status, token),
         }
     });
 }
@@ -654,43 +669,46 @@ pub fn SlideList() -> impl IntoView {
                                         }
                                     })}
                                     {
-                                        let sid_for_when = slide_id_for_badge.clone();
-                                        let sid_for_render = slide_id_for_badge.clone();
+                                        // Memo: derives this slide's status from the shared map.
+                                        // The body runs whenever any slide saves, but the Memo
+                                        // only NOTIFIES subscribers when THIS slide's value
+                                        // changes — so `<Show>` and its render closure only
+                                        // re-evaluate when our own status changes.
+                                        let sid_for_memo = slide_id_for_badge.clone();
                                         let save_status = op.save_status;
+                                        let badge_status = Memo::new(move |_| {
+                                            save_status.get().get(&sid_for_memo).map(|(s, _)| *s)
+                                        });
                                         view! {
-                                            <Show when=move || save_status.get().contains_key(&sid_for_when)>
-                                                {
-                                                    let sid_for_render = sid_for_render.clone();
-                                                    move || {
-                                                        let map = save_status.get();
-                                                        let Some((status, _)) = map.get(&sid_for_render).copied() else {
-                                                            return view! { <span></span> }.into_any();
-                                                        };
-                                                        match status {
-                                                            SaveStatus::Saving => view! {
-                                                                <span
-                                                                    class="operator__slide-save-indicator"
-                                                                    data-role="slide-save-indicator"
-                                                                    data-status="saving"
-                                                                >"Saving…"</span>
-                                                            }.into_any(),
-                                                            SaveStatus::Saved => view! {
-                                                                <span
-                                                                    class="operator__slide-save-indicator"
-                                                                    data-role="slide-save-indicator"
-                                                                    data-status="saved"
-                                                                >"Saved ✓"</span>
-                                                            }.into_any(),
-                                                            SaveStatus::Failed => view! {
-                                                                <span
-                                                                    class="operator__slide-save-indicator"
-                                                                    data-role="slide-save-indicator"
-                                                                    data-status="failed"
-                                                                >"Save failed"</span>
-                                                            }.into_any(),
-                                                        }
+                                            <Show when=move || badge_status.get().is_some()>
+                                                {move || {
+                                                    let Some(status) = badge_status.get() else {
+                                                        return view! { <span></span> }.into_any();
+                                                    };
+                                                    match status {
+                                                        SaveStatus::Saving => view! {
+                                                            <span
+                                                                class="operator__slide-save-indicator"
+                                                                data-role="slide-save-indicator"
+                                                                data-status="saving"
+                                                            >"Saving…"</span>
+                                                        }.into_any(),
+                                                        SaveStatus::Saved => view! {
+                                                            <span
+                                                                class="operator__slide-save-indicator"
+                                                                data-role="slide-save-indicator"
+                                                                data-status="saved"
+                                                            >"Saved ✓"</span>
+                                                        }.into_any(),
+                                                        SaveStatus::Failed => view! {
+                                                            <span
+                                                                class="operator__slide-save-indicator"
+                                                                data-role="slide-save-indicator"
+                                                                data-status="failed"
+                                                            >"Save failed"</span>
+                                                        }.into_any(),
                                                     }
-                                                }
+                                                }}
                                             </Show>
                                         }
                                     }
@@ -945,24 +963,37 @@ pub fn SlideList() -> impl IntoView {
                                                                     Some(group_val.trim().to_string())
                                                                 };
 
-                                                                save_with_status(
-                                                                    pres_id.clone(),
-                                                                    sid.clone(),
-                                                                    main,
-                                                                    translation,
-                                                                    stage,
-                                                                    group,
-                                                                    op.save_status,
-                                                                );
-
-                                                                // Refetch for group inheritance display, then restore focus.
-                                                                let pres_id_for_refetch = pres_id.clone();
+                                                                // PATCH first, refetch after save succeeds (avoids the
+                                                                // race where a refetch lands before the save), then mark
+                                                                // the indicator Saved. Indicator state is consistent with
+                                                                // what the operator actually sees on the next snapshot.
+                                                                let save_status = op.save_status;
+                                                                let token = start_save_status(&sid, save_status);
+                                                                let pres_id_for_save = pres_id.clone();
+                                                                let sid_for_save = sid.clone();
                                                                 let op_for_restore = op.clone();
                                                                 leptos::task::spawn_local(async move {
-                                                                    if let Ok(detail) = api::presentations::get_presentation(&pres_id_for_refetch).await {
-                                                                        selected_pres.set(Some(detail.presentation));
+                                                                    let result = api::presentations::update_slide_with_group(
+                                                                        &pres_id_for_save,
+                                                                        &sid_for_save,
+                                                                        &main,
+                                                                        &translation,
+                                                                        &stage,
+                                                                        group,
+                                                                    )
+                                                                    .await;
+                                                                    match result {
+                                                                        Ok(_) => {
+                                                                            if let Ok(detail) = api::presentations::get_presentation(&pres_id_for_save).await {
+                                                                                selected_pres.set(Some(detail.presentation));
+                                                                            }
+                                                                            restore_pending_focus(&op_for_restore);
+                                                                            finish_save_status_ok(sid_for_save, save_status, token).await;
+                                                                        }
+                                                                        Err(_) => {
+                                                                            finish_save_status_err(sid_for_save, save_status, token);
+                                                                        }
                                                                     }
-                                                                    restore_pending_focus(&op_for_restore);
                                                                 });
                                                             }
                                                         }
