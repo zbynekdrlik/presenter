@@ -225,7 +225,13 @@ pub(crate) fn build_stage_snapshot(
             .resolution
             .override_song_name
             .clone()
-            .or_else(|| context.resolution.presentation_name.clone()),
+            .or_else(|| {
+                context
+                    .resolution
+                    .presentation_name
+                    .as_deref()
+                    .map(sanitize_song_title)
+            }),
         context
             .resolution
             .override_song_name
