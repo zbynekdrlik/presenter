@@ -294,6 +294,9 @@ jobs:
         run: cargo test --lib
         working-directory: crates/presenter-ui
 
+      - name: Run CI shell tests
+        run: bash tests/ci/check-dev-libraries.test.sh
+
   # ============================================
   # Mutation Testing
   # ============================================
@@ -930,7 +933,13 @@ jobs:
             echo "::error::Post-deploy data check FAILED — database appears empty or inaccessible"
             exit 1
           fi
-          echo "Data check passed: libraries endpoint returned data"
+          DISK_COUNT=$(find /opt/presenter-dev/libraries -mindepth 1 -maxdepth 1 -type d ! -name 'LibraryData' | wc -l)
+          DB_COUNT=$(printf '%s' "$LIBS" | python3 -c "import json,sys; data=json.load(sys.stdin); print(len([l for l in data if l.get('name','').strip().lower()!='bible']))")
+          if [ "$DISK_COUNT" -ne "$DB_COUNT" ]; then
+            echo "::error::Library count mismatch: disk=$DISK_COUNT db=$DB_COUNT (DB may be seed-only or import failed) — see issue #229"
+            exit 1
+          fi
+          echo "Data check passed: $DB_COUNT libraries on disk match DB"
           REMOTE_SCRIPT
 
       - name: Post-deploy smoke test
