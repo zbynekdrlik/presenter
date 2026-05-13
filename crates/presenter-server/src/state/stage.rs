@@ -221,17 +221,13 @@ pub(crate) fn build_stage_snapshot(
         context.resolution.presentation_id,
         context.resolution.presentation_name.clone(),
         context.resolution.library_name.clone(),
-        context
-            .resolution
-            .override_song_name
-            .clone()
-            .or_else(|| {
-                context
-                    .resolution
-                    .presentation_name
-                    .as_deref()
-                    .map(sanitize_song_title)
-            }),
+        context.resolution.override_song_name.clone().or_else(|| {
+            context
+                .resolution
+                .presentation_name
+                .as_deref()
+                .map(sanitize_song_title)
+        }),
         context
             .resolution
             .override_song_name
@@ -374,7 +370,10 @@ mod tests {
         );
     }
 
-    fn make_context(presentation_name: Option<&str>, override_song_name: Option<&str>) -> StageContext {
+    fn make_context(
+        presentation_name: Option<&str>,
+        override_song_name: Option<&str>,
+    ) -> StageContext {
         StageContext {
             generated_at: Utc::now(),
             overview: TimersOverview::demo(Utc::now()),
@@ -409,7 +408,10 @@ mod tests {
         let snapshot = build_stage_snapshot(layout, &context);
         assert_eq!(snapshot.song_name.as_deref(), Some("Amazing Grace"));
         assert_eq!(snapshot.song_number.as_deref(), Some("042"));
-        assert_eq!(snapshot.presentation_name.as_deref(), Some("042 Amazing Grace"));
+        assert_eq!(
+            snapshot.presentation_name.as_deref(),
+            Some("042 Amazing Grace")
+        );
     }
 
     #[test]
