@@ -292,6 +292,10 @@ test.describe("AI Settings Panel", () => {
 
 test.describe("AI Conversation Management", () => {
   test("Clear button removes messages and errors", async ({ page }) => {
+    // Reset persisted conversation before the page loads so the on-mount
+    // restore in ai.rs cannot resurrect messages from a prior test (#247).
+    await page.request.post(`${baseURL}/ai/clear`, { data: {} });
+
     await navigateToAi(page);
 
     // Send a message (will produce an error in test environment)
@@ -299,10 +303,11 @@ test.describe("AI Conversation Management", () => {
     await textarea.fill("test clear");
     await page.locator('[data-role="ai-send"]').click();
 
-    // Wait for user message to appear
+    // Wait for exactly one user message to appear (sent message above).
     const userMsg = page.locator(
       '[data-role="ai-message"][data-message-role="user"]',
     );
+    await expect(userMsg).toHaveCount(1, { timeout: 5_000 });
     await expect(userMsg).toBeVisible({ timeout: 5_000 });
 
     // Click Clear
