@@ -12,6 +12,7 @@ pub mod search;
 pub mod slide_list;
 mod slide_list_scroll;
 mod slide_list_utils;
+mod slide_save;
 pub mod stage;
 pub mod stage_preview;
 pub mod timer_panel;
