@@ -300,6 +300,7 @@ fn BibleTabNav() -> impl IntoView {
 #[component]
 fn BibleLiveTab() -> impl IntoView {
     let bs = use_ctx!(BibleState);
+    let ctx = use_ctx!(AppContext);
     let bible_tab = bs.bible_tab;
 
     // Shared focus chain for keyboard navigation (#257).
@@ -311,12 +312,24 @@ fn BibleLiveTab() -> impl IntoView {
     };
     provide_context(refs);
 
-    // Auto-focus the book-filter on first mount so the operator can start
-    // typing immediately without clicking. `NodeRef::on_load` runs once when
-    // the element first appears in the DOM.
-    refs.book_filter.on_load(|el| {
-        let _ = el.focus();
-    });
+    // Auto-focus the book-filter whenever the operator switches into the
+    // bible/live view. The Bible panel is rendered behind CSS even when
+    // inactive, so a one-shot `on_load` would fire while the input is
+    // hidden (focus() is a no-op on hidden elements). This effect tracks
+    // the view + tab signals so focus lands every time bible/live becomes
+    // active, including the initial navigation from worship.
+    {
+        let view_signal = ctx.view;
+        Effect::new(move || {
+            let v = view_signal.get();
+            let t = bible_tab.get();
+            if v == "bible" && t == "live" {
+                if let Some(el) = refs.book_filter.get() {
+                    let _ = el.focus();
+                }
+            }
+        });
+    }
 
     view! {
         <div
