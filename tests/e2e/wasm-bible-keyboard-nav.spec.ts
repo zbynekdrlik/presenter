@@ -117,17 +117,26 @@ test.describe("Bible keyboard nav + diacritic search (#257)", () => {
     });
 
     await openBibleLive(page);
+
+    // Step 0 — book-filter auto-focuses on first mount BEFORE any other
+    // interaction. Run this check before changing translation, since
+    // `selectOption` moves focus to the <select> element.
+    await expect
+      .poll(
+        async () =>
+          page.evaluate(
+            () => document.activeElement?.getAttribute("data-role") ?? null,
+          ),
+        { timeout: 5_000 },
+      )
+      .toBe("book-filter");
+
     const haveSlovak = await selectSlovakTranslation(page);
     test.skip(!haveSlovak, "No diacritic-bearing translation available");
 
-    // Step 0 — on mount, book-filter should already be focused.
-    const activeRoleAtMount = await page.evaluate(
-      () => document.activeElement?.getAttribute("data-role") ?? null,
-    );
-    expect(activeRoleAtMount).toBe("book-filter");
-
     // Step 1 — type "lukas" then Enter → focus moves to chapter.
     const bookFilter = page.locator('[data-role="book-filter"]');
+    await bookFilter.click(); // return focus from translation <select>
     await bookFilter.fill("lukas");
     await page.waitForFunction(
       () => document.querySelectorAll('[data-role="book-item"]').length > 0,
