@@ -239,7 +239,7 @@ pub fn TimerPanel() -> impl IntoView {
                     <input
                         type="text"
                         inputmode="numeric"
-                        placeholder="18:00"
+                        placeholder="HH:MM"
                         data-role="countdown-target-input"
                         aria-label="Countdown target time (HH:MM)"
                         on:focus=on_countdown_focus

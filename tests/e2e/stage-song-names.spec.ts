@@ -81,13 +81,15 @@ test("worship-snv shows current song name in amber box", async ({
   });
 
   // Wait for the current song box to show the sanitized song name
+  // (number prefix stripped per #312 — see build_stage_snapshot)
   const currentSongBox = stagePage.locator(
     ".stage__current-song .stage__song-name-text",
   );
   await expect(currentSongBox).toBeVisible({ timeout: 10_000 });
-  await expect(currentSongBox).toContainText("042 Hodny Chvaly", {
+  await expect(currentSongBox).toContainText("Hodny Chvaly", {
     timeout: 10_000,
   });
+  await expect(currentSongBox).not.toContainText("042", { timeout: 5_000 });
 
   // Verify amber color
   const color = await currentSongBox.evaluate(
@@ -179,21 +181,23 @@ test("worship-snv shows next song from playlist", async ({
     }
   });
 
-  // Current song should show "First Song" (number prefix stripped, uppercased by CSS)
+  // Current song should show "First Song" (number prefix stripped per #312, uppercased by CSS)
   const currentSongBox = stagePage.locator(
     ".stage__current-song .stage__song-name-text",
   );
-  await expect(currentSongBox).toContainText("001 First Song", {
+  await expect(currentSongBox).toContainText("First Song", {
     timeout: 10_000,
   });
+  await expect(currentSongBox).not.toContainText("001", { timeout: 5_000 });
 
-  // Next song should show "002 Second Song" (from playlist, with number)
+  // Next song should show "Second Song" (from playlist, prefix stripped per #312)
   const nextSongBox = stagePage.locator(
     ".stage__next-song .stage__song-name-text",
   );
-  await expect(nextSongBox).toContainText("002 Second Song", {
+  await expect(nextSongBox).toContainText("Second Song", {
     timeout: 10_000,
   });
+  await expect(nextSongBox).not.toContainText("002", { timeout: 5_000 });
 
   await stagePage.close();
   expect(consoleMessages).toEqual([]);

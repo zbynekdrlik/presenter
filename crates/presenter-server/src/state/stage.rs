@@ -221,11 +221,13 @@ pub(crate) fn build_stage_snapshot(
         context.resolution.presentation_id,
         context.resolution.presentation_name.clone(),
         context.resolution.library_name.clone(),
-        context
-            .resolution
-            .override_song_name
-            .clone()
-            .or_else(|| context.resolution.presentation_name.clone()),
+        context.resolution.override_song_name.clone().or_else(|| {
+            context
+                .resolution
+                .presentation_name
+                .as_deref()
+                .map(sanitize_song_title)
+        }),
         context
             .resolution
             .override_song_name
@@ -366,5 +368,74 @@ mod tests {
             sanitize_song_title("Song Without Number"),
             "Song Without Number"
         );
+    }
+
+    fn make_context(
+        presentation_name: Option<&str>,
+        override_song_name: Option<&str>,
+    ) -> StageContext {
+        StageContext {
+            generated_at: Utc::now(),
+            overview: TimersOverview::demo(Utc::now()),
+            resolution: StageResolution {
+                presentation_id: None,
+                presentation_name: presentation_name.map(str::to_string),
+                library_name: None,
+                current_slide_id: None,
+                current: None,
+                next_slide_id: None,
+                next: None,
+                override_song_name: override_song_name.map(str::to_string),
+                next_song_name: None,
+                current_index: None,
+                total_slides: None,
+                playlist_id: None,
+                playlist_name: None,
+                playlist_entries: None,
+            },
+            latency_ms: None,
+        }
+    }
+
+    #[test]
+    fn build_stage_snapshot_strips_song_number_from_song_name_when_no_override() {
+        let layout = StageDisplayLayout {
+            code: "timer".to_string(),
+            name: "Timer".to_string(),
+            description: "Countdown".to_string(),
+        };
+        let context = make_context(Some("042 Amazing Grace"), None);
+        let snapshot = build_stage_snapshot(layout, &context);
+        assert_eq!(snapshot.song_name.as_deref(), Some("Amazing Grace"));
+        assert_eq!(snapshot.song_number.as_deref(), Some("042"));
+        assert_eq!(
+            snapshot.presentation_name.as_deref(),
+            Some("042 Amazing Grace")
+        );
+    }
+
+    #[test]
+    fn build_stage_snapshot_keeps_unnumbered_song_name_unchanged() {
+        let layout = StageDisplayLayout {
+            code: "timer".to_string(),
+            name: "Timer".to_string(),
+            description: "Countdown".to_string(),
+        };
+        let context = make_context(Some("Pure Title"), None);
+        let snapshot = build_stage_snapshot(layout, &context);
+        assert_eq!(snapshot.song_name.as_deref(), Some("Pure Title"));
+        assert_eq!(snapshot.song_number, None);
+    }
+
+    #[test]
+    fn build_stage_snapshot_preserves_override_song_name_verbatim() {
+        let layout = StageDisplayLayout {
+            code: "timer".to_string(),
+            name: "Timer".to_string(),
+            description: "Countdown".to_string(),
+        };
+        let context = make_context(Some("042 Amazing Grace"), Some("Custom AbleSet Title"));
+        let snapshot = build_stage_snapshot(layout, &context);
+        assert_eq!(snapshot.song_name.as_deref(), Some("Custom AbleSet Title"));
     }
 }

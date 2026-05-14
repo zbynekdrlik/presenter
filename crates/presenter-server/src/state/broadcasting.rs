@@ -184,14 +184,16 @@ impl AppState {
         if next_entry.entry_type != "presentation" {
             return None;
         }
-        // Look up the raw presentation name (with number prefix)
+        // Look up the presentation name and strip the number prefix so the
+        // stage display / Companion variable matches the sanitized current
+        // song_name (see #312, build_stage_snapshot fallback).
         let next_id = next_entry.presentation_id?;
         if let Ok(Some((_, _, presentation))) =
             self.repository.fetch_presentation_detail(next_id).await
         {
-            Some(presentation.name.clone())
+            Some(sanitize_song_title(&presentation.name))
         } else if !next_entry.name.is_empty() {
-            Some(next_entry.name.clone())
+            Some(sanitize_song_title(&next_entry.name))
         } else {
             None
         }

@@ -294,6 +294,9 @@ jobs:
         run: cargo test --lib
         working-directory: crates/presenter-ui
 
+      - name: Run CI shell tests
+        run: bash tests/ci/check-dev-libraries.test.sh
+
   # ============================================
   # Mutation Testing
   # ============================================
@@ -907,7 +910,6 @@ jobs:
 
       - name: Verify deployment
         run: |
-          sleep 5
           ssh deploy-target << 'REMOTE_SCRIPT'
           set -e
           if ! systemctl is-active --quiet presenter-dev; then
@@ -917,20 +919,39 @@ jobs:
           fi
           echo "Service is running"
 
-          HEALTH=$(curl -sf http://localhost:8080/healthz)
-          if [ $? -ne 0 ]; then
-            echo "::error::Post-deploy health check FAILED"
+          # Poll the health endpoint until the port is bound. systemd reports
+          # the service active before tokio finishes binding, so a fixed sleep
+          # races with cold start (DB migration + Bible/library load). 60s
+          # max — beyond that something is genuinely wrong.
+          HEALTH=""
+          for attempt in $(seq 1 30); do
+            if HEALTH=$(curl -sf http://localhost:8080/healthz 2>/dev/null); then
+              break
+            fi
+            sleep 2
+          done
+          if [ -z "$HEALTH" ]; then
+            echo "::error::Post-deploy health check FAILED — /healthz did not respond within 60s"
             sudo journalctl -u presenter-dev -n 50 --no-pager
             exit 1
           fi
           echo "Health check passed: $HEALTH"
 
-          LIBS=$(curl -sf http://localhost:8080/libraries/summary)
-          if [ $? -ne 0 ] || [ "$LIBS" = "[]" ]; then
-            echo "::error::Post-deploy data check FAILED — database appears empty or inaccessible"
+          if ! LIBS=$(curl -sf http://localhost:8080/libraries/summary); then
+            echo "::error::Post-deploy data check FAILED — /libraries/summary did not respond"
             exit 1
           fi
-          echo "Data check passed: libraries endpoint returned data"
+          if [ "$LIBS" = "[]" ]; then
+            echo "::error::Post-deploy data check FAILED — database appears empty"
+            exit 1
+          fi
+          DISK_COUNT=$(find /opt/presenter-dev/libraries -mindepth 1 -maxdepth 1 -type d ! -name 'LibraryData' | wc -l)
+          DB_COUNT=$(printf '%s' "$LIBS" | python3 -c "import json,sys; data=json.load(sys.stdin); print(len([l for l in data if l.get('name','').strip().lower()!='bible']))")
+          if [ "$DISK_COUNT" -ne "$DB_COUNT" ]; then
+            echo "::error::Library count mismatch: disk=$DISK_COUNT db=$DB_COUNT (DB may be seed-only or import failed) — see issue #229"
+            exit 1
+          fi
+          echo "Data check passed: $DB_COUNT libraries on disk match DB"
           REMOTE_SCRIPT
 
       - name: Post-deploy smoke test
