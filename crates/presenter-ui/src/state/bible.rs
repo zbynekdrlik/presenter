@@ -106,14 +106,19 @@ impl BibleState {
     }
 
     /// Get filtered books based on the book_filter signal.
+    ///
+    /// Matching is case- AND diacritic-insensitive — a filter of "lukas"
+    /// surfaces "Lukáš"; "1moj" surfaces "1. Mojžišova". Uses the same
+    /// normalisation the server applies for canonical-name lookup.
     pub fn filtered_books(&self) -> Vec<BibleBookDto> {
-        let filter = self.book_filter.get().to_lowercase();
+        let filter_raw = self.book_filter.get();
+        let filter = presenter_core::bible::normalise_book_key(&filter_raw);
         let all = self.books.get();
         if filter.is_empty() {
             return all;
         }
         all.into_iter()
-            .filter(|b| b.book.to_lowercase().contains(&filter))
+            .filter(|b| presenter_core::bible::normalise_book_key(&b.book).contains(&filter))
             .collect()
     }
 }
@@ -237,6 +242,16 @@ mod tests {
                 verse_start: 1,
                 verse_end: None,
             }
+        );
+    }
+
+    #[test]
+    fn book_name_normalisation_folds_slovak_diacritics() {
+        let filter = presenter_core::bible::normalise_book_key("lukas");
+        let key = presenter_core::bible::normalise_book_key("Lukáš");
+        assert!(
+            key.contains(&filter),
+            "expected normalised key {key:?} to contain filter {filter:?}"
         );
     }
 }
