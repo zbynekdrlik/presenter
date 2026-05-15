@@ -1,4 +1,7 @@
-use axum::{extract::State, Json};
+use axum::{
+    extract::{Query, State},
+    Json,
+};
 use serde::{Deserialize, Serialize};
 use tracing::instrument;
 
@@ -9,11 +12,23 @@ use presenter_core::{
     PlaylistId, PresentationId, SlideId, StageDisplayLayout, StageDisplaySnapshot,
 };
 
+#[derive(Debug, Default, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub(super) struct StageSnapshotQuery {
+    pub(super) layout: Option<String>,
+}
+
 #[instrument(skip_all)]
 pub(super) async fn stage_display_selected_snapshot_json(
     State(state): State<AppState>,
+    Query(query): Query<StageSnapshotQuery>,
 ) -> Result<Json<StageDisplaySnapshot>, AppError> {
-    match state.selected_stage_display_snapshot().await? {
+    let result = if let Some(code) = query.layout.as_deref() {
+        state.stage_display_snapshot(code).await?
+    } else {
+        state.selected_stage_display_snapshot().await?
+    };
+    match result {
         Some(snapshot) => Ok(Json(snapshot)),
         None => Err(AppError::not_found("Stage display unavailable")),
     }
@@ -145,4 +160,27 @@ pub(super) async fn get_broadcast_live(
     Json(BroadcastLiveResponse {
         enabled: state.broadcast_live(),
     })
+}
+
+#[cfg(test)]
+mod camera_snapshot_query_tests {
+    use super::*;
+    use axum::extract::{Query, State};
+
+    #[tokio::test]
+    async fn snapshot_query_returns_requested_layout_regardless_of_global_selection() {
+        let state = crate::state::AppState::in_memory().await.unwrap();
+        // Seed a presentation so a snapshot can be produced.
+        crate::state::seed_sample_library(&state).await.unwrap();
+        state.set_stage_layout_code("worship-snv").await.unwrap();
+
+        let query = StageSnapshotQuery {
+            layout: Some("camera-crew".to_string()),
+        };
+        let result = stage_display_selected_snapshot_json(State(state), Query(query)).await;
+        let Ok(axum::Json(snapshot)) = result else {
+            panic!("expected Ok with snapshot, got {result:?}");
+        };
+        assert_eq!(snapshot.layout.code, "camera-crew");
+    }
 }
