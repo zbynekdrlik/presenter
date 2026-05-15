@@ -838,6 +838,29 @@ mod tests {
     }
 
     #[test]
+    fn turn_intent_does_not_grant_on_stale_intent_far_back_in_history() {
+        // Reviewer concern: unbounded lookback means a "delete X" from 30
+        // turns ago can be unlocked by an affirmative reply to a totally
+        // unrelated current question. The deferred-intent window must be
+        // bounded — only the most recent few user turns count.
+        let mut convo = vec![user_msg("vymaž tie staré slajdy")];
+        // 5 unrelated turns after the original delete request.
+        for i in 0..5 {
+            convo.push(assistant_msg(&format!("Hotovo {i}")));
+            convo.push(user_msg(&format!("now make a new song presentation {i}")));
+        }
+        // AI now asks "delete the cover slide?" and user replies yes —
+        // the user's CURRENT yes refers to the AI's question, NOT the
+        // long-ago delete. Gate must block.
+        convo.push(assistant_msg("Should I delete the cover slide?"));
+        convo.push(user_msg("ano"));
+        assert!(
+            !delete_intent_for_turn("ano", &convo),
+            "stale delete intent from >3 turns ago must NOT grant on current affirmative"
+        );
+    }
+
+    #[test]
     fn turn_intent_blocks_when_neither_signal_present() {
         let convo = vec![user_msg("make a song presentation about hope")];
         assert!(!delete_intent_for_turn(
