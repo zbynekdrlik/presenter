@@ -5,6 +5,14 @@ use tracing::{info, warn};
 
 const MAX_ITERATIONS: usize = 100;
 
+/// Stub: cross-turn delete-intent gate. Will accept the current user message
+/// AND the conversation history so deferred intent ("delete X" → "confirm?"
+/// → "yes") is still granted. Filled in by the next commit; this is the RED
+/// scaffold so the regression tests compile.
+fn delete_intent_for_turn(_user_message: &str, _conversation: &[ChatMessage]) -> bool {
+    false
+}
+
 /// Returns `true` if the user's message contains an explicit intent to delete.
 /// Used as a gate on all `delete_*` tool calls to prevent model hallucinations
 /// from causing data loss. The model must see a keyword in the user's actual
@@ -702,6 +710,60 @@ mod tests {
         ));
         assert!(delete_intent_allowed(
             "please vymaž everything from yesterday"
+        ));
+    }
+
+    #[test]
+    fn turn_intent_grants_when_prior_user_message_asked_to_delete() {
+        // Regression #310: user said "vymaž to" in turn N, AI asked
+        // "potvrdzujete?" in its text response, user replied "ano" in turn
+        // N+1. Without conversation context the gate sees only "ano" which
+        // has no delete keyword and blocks. The cross-turn gate must walk
+        // back through prior user messages and grant intent when a recent
+        // one contained an explicit delete keyword AND the current message
+        // is affirmative.
+        let convo = vec![
+            user_msg("vymaž tie dve prezentácie"),
+            assistant_msg("Potvrdzujete, že chcete vymazať tie dve prezentácie?"),
+            user_msg("ano"),
+        ];
+        assert!(
+            delete_intent_for_turn("ano", &convo),
+            "deferred delete intent + affirmative reply must grant the gate"
+        );
+    }
+
+    #[test]
+    fn turn_intent_grants_when_current_message_has_keyword() {
+        // Direct path: gate must still grant when the current message itself
+        // contains a delete keyword, regardless of conversation history.
+        let convo = vec![user_msg("delete the slide")];
+        assert!(delete_intent_for_turn("delete the slide", &convo));
+    }
+
+    #[test]
+    fn turn_intent_blocks_when_no_user_message_ever_asked_to_delete() {
+        // No prior message had delete intent — affirmative alone is not
+        // enough. Prevents the AI from inventing a delete then asking
+        // "should I?" then proceeding on "yes" without the user ever
+        // having actually asked.
+        let convo = vec![
+            user_msg("create a new presentation"),
+            assistant_msg("Should I delete the old one first?"),
+            user_msg("yes"),
+        ];
+        assert!(
+            !delete_intent_for_turn("yes", &convo),
+            "affirmative without prior user delete intent must NOT grant the gate"
+        );
+    }
+
+    #[test]
+    fn turn_intent_blocks_when_neither_signal_present() {
+        let convo = vec![user_msg("make a song presentation about hope")];
+        assert!(!delete_intent_for_turn(
+            "make a song presentation about hope",
+            &convo
         ));
     }
 
