@@ -582,3 +582,120 @@ body.stage {
   font-size: 0.5em;
   opacity: 0.6;
 }
+
+/* === Camera-Crew layout ============================================== */
+.stage__camera-crew {
+    display: grid;
+    grid-template-rows: 1fr 0.5fr 0.2fr 0.18fr;
+    gap: 1.5vh;
+    padding: 2vh 2vw;
+    height: 100vh;
+    box-sizing: border-box;
+    background: var(--stage-bg, #050505);
+    color: var(--stage-fg, #f0f0f0);
+    font-family: 'Helvetica Neue', Arial, sans-serif;
+}
+
+.stage__camera-crew__current {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-size: clamp(6rem, 18vw, 22rem);
+    font-weight: 800;
+    line-height: 1;
+    text-transform: uppercase;
+    border-radius: 1.5vh;
+    background-color: var(--stage-group-pill-default-bg, #1a1a1a);
+    color: #fff;
+    padding: 0 4vw;
+    overflow: hidden;
+    white-space: nowrap;
+}
+
+.stage__camera-crew__next {
+    display: flex;
+    align-items: center;
+    gap: 2vw;
+    padding: 0 1vw;
+}
+
+.stage__camera-crew__next-label {
+    font-size: 4vh;
+    font-weight: 500;
+    color: #aaa;
+    letter-spacing: 0.05em;
+}
+
+.stage__camera-crew__next-pill {
+    flex: 1;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-size: clamp(3rem, 9vw, 10rem);
+    font-weight: 700;
+    line-height: 1;
+    text-transform: uppercase;
+    border-radius: 1vh;
+    padding: 1vh 3vw;
+    background-color: var(--stage-group-pill-default-bg, #1a1a1a);
+    color: #fff;
+    min-height: 100%;
+}
+
+.stage__camera-crew__future {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    gap: 1.5vw;
+    flex-wrap: nowrap;
+    overflow: hidden;
+}
+
+.stage__camera-crew__future-pill {
+    font-size: clamp(1.2rem, 3.5vw, 3.5rem);
+    font-weight: 600;
+    text-transform: uppercase;
+    border-radius: 0.6vh;
+    padding: 0.6vh 1.4vw;
+    background-color: var(--stage-group-pill-default-bg, #1a1a1a);
+    color: #ddd;
+    opacity: 0.85;
+}
+
+.stage__camera-crew__footer {
+    display: grid;
+    grid-template-columns: minmax(0, 2fr) auto auto auto auto;
+    align-items: center;
+    gap: 2vw;
+    font-size: 2.2vh;
+    color: #ccc;
+    border-top: 1px solid #222;
+    padding-top: 1vh;
+}
+
+.stage__camera-crew__song {
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.stage__camera-crew__on-air {
+    color: #444;
+    font-weight: 700;
+    letter-spacing: 0.08em;
+    transition: color 120ms ease-out;
+}
+
+.stage__camera-crew__on-air.is-on {
+    color: #ff2a2a;
+    text-shadow: 0 0 1.2vh rgba(255, 42, 42, 0.6);
+}
+
+.stage__camera-crew__conn {
+    font-size: 1.8vh;
+    color: #888;
+}
+
+.stage__camera-crew__conn--bad {
+    color: #ff8c00;
+}
