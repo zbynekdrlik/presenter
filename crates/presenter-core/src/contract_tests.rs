@@ -56,6 +56,7 @@ mod tests {
             playlist_id: None,
             playlist_name: None,
             playlist_entries: None,
+            upcoming_groups: Vec::new(),
         };
         let event = LiveEvent::Stage { snapshot };
         let json = serde_json::to_string(&event).expect("serialize");
@@ -269,6 +270,7 @@ mod tests {
             playlist_id: None,
             playlist_name: None,
             playlist_entries: None,
+            upcoming_groups: Vec::new(),
         };
         let json = serde_json::to_string(&snapshot).expect("serialize");
         let result: StageDisplaySnapshot = serde_json::from_str(&json).expect("deserialize");

@@ -52,6 +52,11 @@ impl StageDisplayLayout {
             ),
             Self::new("bible", "BIBLE", "Full-screen Bible passage display"),
             Self::new("api", "API", "External API-driven stage display"),
+            Self::new(
+                "camera-crew",
+                "CAMERA CREW",
+                "Group-focused director / camera-crew monitor",
+            ),
         ]
     }
 
@@ -62,6 +67,13 @@ impl StageDisplayLayout {
             description: description.to_string(),
         }
     }
+}
+
+/// One upcoming distinct group name for camera-crew layout.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct UpcomingGroup {
+    pub name: String,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -121,6 +133,8 @@ pub struct StageDisplaySnapshot {
     pub playlist_name: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub playlist_entries: Option<Vec<StagePlaylistEntry>>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub upcoming_groups: Vec<UpcomingGroup>,
 }
 
 impl From<&DomainSlide> for StageDisplaySlide {
@@ -203,6 +217,7 @@ impl StageDisplaySnapshot {
         playlist_id: Option<PlaylistId>,
         playlist_name: Option<String>,
         playlist_entries: Option<Vec<StagePlaylistEntry>>,
+        upcoming_groups: Vec<UpcomingGroup>,
     ) -> Self {
         Self {
             layout,
@@ -224,6 +239,7 @@ impl StageDisplaySnapshot {
             playlist_id,
             playlist_name,
             playlist_entries,
+            upcoming_groups,
         }
     }
 }
@@ -235,7 +251,7 @@ mod tests {
     #[test]
     fn built_in_layouts_cover_expected_variants() {
         let layouts = StageDisplayLayout::built_in();
-        assert_eq!(layouts.len(), 7);
+        assert_eq!(layouts.len(), 8);
         let codes: Vec<_> = layouts.iter().map(|layout| layout.code.as_str()).collect();
         assert!(codes.contains(&DEFAULT_STAGE_LAYOUT_CODE));
         assert!(codes.contains(&"worship-pp"));
@@ -244,5 +260,64 @@ mod tests {
         assert!(codes.contains(&"ndi-fullscreen"));
         assert!(codes.contains(&"bible"));
         assert!(codes.contains(&"api"));
+        assert!(codes.contains(&"camera-crew"));
+    }
+}
+
+#[cfg(test)]
+mod camera_crew_tests {
+    use super::*;
+
+    #[test]
+    fn upcoming_group_round_trips_through_json() {
+        let g = UpcomingGroup {
+            name: "Verse 1".to_string(),
+        };
+        let json = serde_json::to_string(&g).unwrap();
+        assert_eq!(json, r#"{"name":"Verse 1"}"#);
+        let back: UpcomingGroup = serde_json::from_str(&json).unwrap();
+        assert_eq!(back, g);
+    }
+
+    #[test]
+    fn built_in_layouts_include_camera_crew() {
+        let codes: Vec<String> = StageDisplayLayout::built_in()
+            .into_iter()
+            .map(|l| l.code)
+            .collect();
+        assert!(codes.iter().any(|c| c == "camera-crew"), "codes={codes:?}");
+    }
+
+    #[test]
+    fn stage_display_snapshot_omits_empty_upcoming_groups_in_json() {
+        let now = chrono::Utc::now();
+        let layout = StageDisplayLayout::built_in().into_iter().next().unwrap();
+        let snap = StageDisplaySnapshot::new(
+            layout,
+            now,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            crate::timer::TimersOverview::demo(now),
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            Vec::new(), // upcoming_groups (NEW positional arg)
+        );
+        let json = serde_json::to_string(&snap).unwrap();
+        assert!(
+            !json.contains("upcomingGroups"),
+            "empty upcoming_groups must not serialize: {json}"
+        );
     }
 }

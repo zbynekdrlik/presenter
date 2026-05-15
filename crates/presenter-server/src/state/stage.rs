@@ -246,6 +246,7 @@ pub(crate) fn build_stage_snapshot(
         context.resolution.playlist_id,
         context.resolution.playlist_name.clone(),
         context.resolution.playlist_entries.clone(),
+        Vec::new(), // upcoming_groups — populated by Task 3
     )
 }
 

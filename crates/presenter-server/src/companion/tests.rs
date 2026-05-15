@@ -103,6 +103,7 @@ fn stage_variables_update_across_layouts() {
         None,
         None,
         None,
+        Vec::new(), // upcoming_groups
     );
 
     assert!(state.apply_stage_snapshot(snapshot));
@@ -140,6 +141,7 @@ fn stage_variables_update_across_layouts() {
         None,
         None,
         None,
+        Vec::new(), // upcoming_groups
     );
 
     assert!(state.apply_stage_snapshot(next_snapshot));
