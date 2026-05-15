@@ -342,6 +342,15 @@ pub async fn execute_tool(
                 .unwrap_or(&main_trans.code)
                 .to_uppercase();
 
+            // Resolve the input book name to its canonical code so the
+            // query matches regardless of which Slovak naming tradition the
+            // AI used. Without this step the Roháček "1. Mojžišova" would
+            // miss SEB rows stored as "Genezis" and return 0 verses (#310).
+            // Falls back to raw book-name filter when the alias map has no
+            // entry — preserves behavior for languages without canonical
+            // coverage.
+            let resolved_code =
+                presenter_core::bible::canonical_book_by_name(&book).map(|m| m.code);
             // Single range query instead of per-verse round trips. The
             // repository returns only the verses that exist, so we walk
             // the requested range and fill gaps with explicit not-found
@@ -352,7 +361,7 @@ pub async fn execute_tool(
                 .bible_passage_range(
                     &main_trans.code,
                     &book,
-                    None,
+                    resolved_code,
                     chapter,
                     verse_start,
                     verse_end,
