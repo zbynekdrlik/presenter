@@ -1252,7 +1252,7 @@ checksum = "439ee305def115ba05938db6eb1644ff94165c5ab5e9420d1c1bcedbba909391"
 
 [[package]]
 name = "presenter-core"
-version = "0.4.75"
+version = "0.4.76"
 dependencies = [
  "anyhow",
  "chrono",

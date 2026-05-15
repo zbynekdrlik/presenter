@@ -9,6 +9,17 @@ use super::bible_controls::SelectionControls;
 use super::bible_prepared::{BiblePreparedTab, BiblePresentationModal, BibleSettingsTab};
 use super::bible_slides::BibleSlidesColumn;
 
+/// Shared `NodeRef` handles for the four inputs that participate in the
+/// keyboard-navigation chain on the Bible live tab. Provided via context so
+/// each input's `on:keydown` handler can step focus to the next input.
+#[derive(Copy, Clone)]
+struct BibleFocusRefs {
+    book_filter: NodeRef<leptos::html::Input>,
+    chapter: NodeRef<leptos::html::Input>,
+    verse_start: NodeRef<leptos::html::Input>,
+    verse_end: NodeRef<leptos::html::Input>,
+}
+
 /// Bible page — 2-column layout matching the legacy Bible UI.
 /// Rendered inside the operator shell's `<section data-view-panel="bible">`.
 #[component]
@@ -289,7 +300,36 @@ fn BibleTabNav() -> impl IntoView {
 #[component]
 fn BibleLiveTab() -> impl IntoView {
     let bs = use_ctx!(BibleState);
+    let ctx = use_ctx!(AppContext);
     let bible_tab = bs.bible_tab;
+
+    // Shared focus chain for keyboard navigation (#257).
+    let refs = BibleFocusRefs {
+        book_filter: NodeRef::<leptos::html::Input>::new(),
+        chapter: NodeRef::<leptos::html::Input>::new(),
+        verse_start: NodeRef::<leptos::html::Input>::new(),
+        verse_end: NodeRef::<leptos::html::Input>::new(),
+    };
+    provide_context(refs);
+
+    // Auto-focus the book-filter whenever the operator switches into the
+    // bible/live view. The Bible panel is rendered behind CSS even when
+    // inactive, so a one-shot `on_load` would fire while the input is
+    // hidden (focus() is a no-op on hidden elements). This effect tracks
+    // the view + tab signals so focus lands every time bible/live becomes
+    // active, including the initial navigation from worship.
+    {
+        let view_signal = ctx.view;
+        Effect::new(move || {
+            let v = view_signal.get();
+            let t = bible_tab.get();
+            if v == "bible" && t == "live" {
+                if let Some(el) = refs.book_filter.get() {
+                    let _ = el.focus();
+                }
+            }
+        });
+    }
 
     view! {
         <div
@@ -386,6 +426,7 @@ fn TranslationSelectors() -> impl IntoView {
 #[component]
 fn BookFilter() -> impl IntoView {
     let bs = use_ctx!(BibleState);
+    let refs = expect_context::<BibleFocusRefs>();
     let book_filter = bs.book_filter;
 
     let on_input = move |ev: web_sys::Event| {
@@ -397,6 +438,53 @@ fn BookFilter() -> impl IntoView {
         }
     };
 
+    let on_keydown = {
+        let bs = bs.clone();
+        move |ev: web_sys::KeyboardEvent| {
+            if ev.key() != "Enter" {
+                return;
+            }
+            ev.prevent_default();
+            // Pick the first filtered book only when the filter is non-empty;
+            // an empty filter is the post-chain return to book-filter, where
+            // pressing Enter should not stomp the currently selected book.
+            let filter_text = book_filter.get_untracked();
+            if !filter_text.trim().is_empty() {
+                let books = bs.filtered_books();
+                if let Some(book) = books.first().cloned() {
+                    let chapter_count = book.chapters.len() as u16;
+                    let verse_counts: Vec<u16> =
+                        book.chapters.iter().map(|c| c.verse_count).collect();
+                    let current_chapter = bs.selected_chapter.get_untracked();
+                    let current_v_start = bs.verse_start.get_untracked();
+                    let current_v_end = bs.verse_end.get_untracked();
+                    let clamped = crate::state::bible::clamp_selection(
+                        chapter_count,
+                        &verse_counts,
+                        current_chapter,
+                        current_v_start,
+                        current_v_end,
+                    );
+                    bs.selected_book.set(Some(SelectedBook {
+                        book: book.book.clone(),
+                        code: book.code.clone(),
+                        number: book.number,
+                        chapter_count,
+                        verse_counts,
+                    }));
+                    bs.selected_chapter.set(clamped.chapter);
+                    bs.verse_start.set(clamped.verse_start);
+                    bs.verse_end.set(clamped.verse_end);
+                    book_filter.set(String::new());
+                }
+            }
+            if let Some(el) = refs.chapter.get() {
+                let _ = el.focus();
+                el.select();
+            }
+        }
+    };
+
     view! {
         <label class="operator__field">
             <span>"Find book"</span>
@@ -404,8 +492,10 @@ fn BookFilter() -> impl IntoView {
                 type="search"
                 data-role="book-filter"
                 placeholder="Start typing\u{2026}"
+                node_ref=refs.book_filter
                 prop:value=move || book_filter.get()
                 on:input=on_input
+                on:keydown=on_keydown
             />
         </label>
     }
@@ -525,6 +615,8 @@ fn BookList() -> impl IntoView {
 #[component]
 fn ReferenceInputs() -> impl IntoView {
     let bs = use_ctx!(BibleState);
+    let refs = expect_context::<BibleFocusRefs>();
+    let book_filter = bs.book_filter;
     let selected_chapter = bs.selected_chapter;
     let verse_start_signal = bs.verse_start;
     let verse_end_signal = bs.verse_end;
@@ -566,6 +658,67 @@ fn ReferenceInputs() -> impl IntoView {
         }
     };
 
+    // Enter on chapter → commit chapter value, jump to verse-start.
+    let on_chapter_keydown = move |ev: web_sys::KeyboardEvent| {
+        if ev.key() != "Enter" {
+            return;
+        }
+        ev.prevent_default();
+        if let Some(input) = refs.chapter.get() {
+            if let Ok(val) = input.value().parse::<u16>() {
+                selected_chapter.set(val.max(1));
+                verse_start_signal.set(1);
+                verse_end_signal.set(None);
+            }
+        }
+        if let Some(el) = refs.verse_start.get() {
+            let _ = el.focus();
+            el.select();
+        }
+    };
+
+    // Enter on verse-start → commit value, jump to verse-end.
+    let on_verse_start_keydown = move |ev: web_sys::KeyboardEvent| {
+        if ev.key() != "Enter" {
+            return;
+        }
+        ev.prevent_default();
+        if let Some(input) = refs.verse_start.get() {
+            if let Ok(val) = input.value().parse::<u16>() {
+                verse_start_signal.set(val.max(1));
+            }
+        }
+        if let Some(el) = refs.verse_end.get() {
+            let _ = el.focus();
+            el.select();
+        }
+    };
+
+    // Enter on verse-end → commit (or clear) value, return to book-filter.
+    // The debounced auto-load effect (`bible.rs` mount-time) already fires
+    // a passage fetch 300ms after the signal updates, so no explicit load
+    // click is needed here. Clearing the filter collapses the book list so
+    // the operator can immediately start typing the next book.
+    let on_verse_end_keydown = move |ev: web_sys::KeyboardEvent| {
+        if ev.key() != "Enter" {
+            return;
+        }
+        ev.prevent_default();
+        if let Some(input) = refs.verse_end.get() {
+            let val_str = input.value();
+            if val_str.is_empty() {
+                verse_end_signal.set(None);
+            } else if let Ok(val) = val_str.parse::<u16>() {
+                verse_end_signal.set(Some(val.max(1)));
+            }
+            let _ = input.blur();
+        }
+        book_filter.set(String::new());
+        if let Some(el) = refs.book_filter.get() {
+            let _ = el.focus();
+        }
+    };
+
     view! {
         <div class="operator__reference-grid">
             <label class="operator__field">
@@ -574,8 +727,10 @@ fn ReferenceInputs() -> impl IntoView {
                     type="number"
                     data-role="chapter-input"
                     min="1"
+                    node_ref=refs.chapter
                     prop:value=move || selected_chapter.get().to_string()
                     on:change=on_chapter
+                    on:keydown=on_chapter_keydown
                 />
             </label>
             <label class="operator__field">
@@ -584,8 +739,10 @@ fn ReferenceInputs() -> impl IntoView {
                     type="number"
                     data-role="verse-start"
                     min="1"
+                    node_ref=refs.verse_start
                     prop:value=move || verse_start_signal.get().to_string()
                     on:change=on_verse_start
+                    on:keydown=on_verse_start_keydown
                 />
             </label>
             <label class="operator__field">
@@ -594,9 +751,11 @@ fn ReferenceInputs() -> impl IntoView {
                     type="number"
                     data-role="verse-end"
                     min="1"
+                    node_ref=refs.verse_end
                     prop:value=move || verse_end_signal.get().map(|v| v.to_string()).unwrap_or_default()
                     placeholder="All"
                     on:change=on_verse_end
+                    on:keydown=on_verse_end_keydown
                 />
             </label>
         </div>

@@ -2868,6 +2868,24 @@ test.describe("Bible workflow fixes (issue #256)", () => {
     });
     await navigateToBible(page);
 
+    // Reset main translation to the English option so the "Ge" filter has a
+    // match. Earlier tests in this spec change Main translation; preferences
+    // persist in the test DB, so navigateToBible alone does not reset it.
+    const mainSelect = page.locator('[data-role="main-translation"]');
+    await expect(mainSelect).toBeVisible({ timeout: 10_000 });
+    const englishValue = await mainSelect.evaluate((el) => {
+      const select = el as HTMLSelectElement;
+      for (const opt of Array.from(select.options)) {
+        if (/eng-|english|KJV|King James/i.test(opt.value + " " + (opt.textContent ?? ""))) {
+          return opt.value;
+        }
+      }
+      return null;
+    });
+    if (englishValue) {
+      await mainSelect.selectOption(englishValue);
+    }
+
     // Wait for books to load first
     await expect(
       page.locator('[data-role="book-item"]').first(),
@@ -3036,12 +3054,12 @@ test.describe("Bible workflow fixes (issue #256)", () => {
     });
     await navigateToBible(page);
 
-    // Select first book
+    // Select first book and capture its canonical CODE (not the localized
+    // label). Cross-translation preservation matches by book code; labels
+    // legitimately change between translations.
     const firstBook = page.locator('[data-role="book-item"]').first();
     await expect(firstBook).toBeVisible({ timeout: 10_000 });
-    const firstBookLabel = await firstBook
-      .locator(".operator__list-label")
-      .textContent();
+    const firstBookCode = await firstBook.getAttribute("data-book-code");
     await firstBook.click();
     await expect(
       page.locator('[data-role="book-item"][data-active="true"]'),
@@ -3060,17 +3078,24 @@ test.describe("Bible workflow fixes (issue #256)", () => {
           break;
         }
       }
-      // Either the book is still selected (preserved) or cleared.
-      // If preserved, the label must match.
-      const stillActive = page.locator(
-        '[data-role="book-item"][data-active="true"]',
-      );
-      if ((await stillActive.count()) > 0) {
-        const label = await stillActive
-          .locator(".operator__list-label")
-          .textContent();
-        expect(label).toBe(firstBookLabel);
-      }
+      // Either the book is preserved (same code, possibly new label) or
+      // cleared. Use poll-with-timeout so the assertion does not race the
+      // translation-switch effect that re-renders the book list.
+      await expect
+        .poll(
+          async () => {
+            const active = page.locator(
+              '[data-role="book-item"][data-active="true"]',
+            );
+            const count = await active.count();
+            if (count === 0) {
+              return "cleared";
+            }
+            return (await active.first().getAttribute("data-book-code")) ?? "";
+          },
+          { timeout: 10_000 },
+        )
+        .toMatch(new RegExp(`^(cleared|${firstBookCode})$`));
     }
 
     expect(consoleMessages).toEqual([]);

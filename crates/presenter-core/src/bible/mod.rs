@@ -1,7 +1,7 @@
 mod canonical;
 mod presentation;
 mod reference;
-mod search;
+pub mod search;
 mod translation;
 
 pub use canonical::{
@@ -9,6 +9,7 @@ pub use canonical::{
 };
 pub use presentation::{BiblePresentation, BiblePresentationSlide, BiblePresentationSummary};
 pub use reference::{BibleReference, BibleReferenceError};
+pub use search::normalise_book_key;
 pub use translation::{
     BibleBookChapterSummary, BibleBroadcast, BibleIngestionBatch, BibleIngestionError,
     BiblePassage, BiblePreferences, BiblePreferencesDraft, BibleSlideOutput, BibleTranslation,
