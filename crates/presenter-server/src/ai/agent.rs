@@ -5,12 +5,87 @@ use tracing::{info, warn};
 
 const MAX_ITERATIONS: usize = 100;
 
-/// Stub: cross-turn delete-intent gate. Will accept the current user message
-/// AND the conversation history so deferred intent ("delete X" → "confirm?"
-/// → "yes") is still granted. Filled in by the next commit; this is the RED
-/// scaffold so the regression tests compile.
-fn delete_intent_for_turn(_user_message: &str, _conversation: &[ChatMessage]) -> bool {
-    false
+/// Affirmative replies recognised by the cross-turn gate. Used when the
+/// user types a short confirmation after the AI proposed a delete in the
+/// preceding text response.
+const AFFIRMATIVE_REPLIES: &[&str] = &[
+    // English
+    "yes",
+    "yeah",
+    "yep",
+    "y",
+    "ok",
+    "okay",
+    "sure",
+    "confirm",
+    "confirmed",
+    "go ahead",
+    "do it",
+    "do it.",
+    "please do",
+    // Slovak with diacritics
+    "áno",
+    "súhlasím",
+    "potvrdzujem",
+    "iste",
+    "určite",
+    // Slovak ASCII-folded variants
+    "ano",
+    "suhlasim",
+    "potvrdzujem.",
+    "iste.",
+    // Czech
+    "souhlasim",
+    "souhlasím",
+    "ano.",
+];
+
+fn is_affirmative(msg: &str) -> bool {
+    let trimmed = msg.trim().to_lowercase();
+    if trimmed.is_empty() {
+        return false;
+    }
+    // Exact match OR starts with an affirmative followed by space/comma/period.
+    AFFIRMATIVE_REPLIES.iter().any(|a| {
+        let a_lower = a.to_lowercase();
+        trimmed == a_lower
+            || trimmed.starts_with(&format!("{a_lower} "))
+            || trimmed.starts_with(&format!("{a_lower},"))
+            || trimmed.starts_with(&format!("{a_lower}."))
+            || trimmed.starts_with(&format!("{a_lower}!"))
+    })
+}
+
+/// Cross-turn delete-intent gate. Grants when:
+/// - the current user message itself contains a delete keyword, OR
+/// - some prior user message in the conversation contained a delete keyword
+///   AND the current message is affirmative (covers the "user asks to
+///   delete, AI defers for confirmation, user replies 'yes'" workflow).
+///
+/// Used in place of the single-message `delete_intent_allowed` check so the
+/// gate survives the conversational pattern where the AI splits a destructive
+/// operation across turns. Without this, deferred deletions never proceed
+/// because the affirmative reply has no keyword and is the only thing the
+/// AI sees on the next turn.
+fn delete_intent_for_turn(user_message: &str, conversation: &[ChatMessage]) -> bool {
+    // Direct: current message has a delete keyword.
+    if delete_intent_allowed(user_message) {
+        return true;
+    }
+
+    // Deferred: walk back through prior user messages. If any contained a
+    // delete keyword AND the current message is affirmative, grant. This
+    // narrow window prevents an unrelated affirmative ("yes" answering a
+    // totally different question) from unlocking a stale intent — both
+    // signals must be present.
+    if !is_affirmative(user_message) {
+        return false;
+    }
+    conversation
+        .iter()
+        .filter(|m| m.role == "user")
+        .filter_map(|m| m.content.as_deref())
+        .any(delete_intent_allowed)
 }
 
 /// Returns `true` if the user's message contains an explicit intent to delete.
@@ -323,12 +398,16 @@ pub async fn run_agent(
 
                 // Execute each tool call
                 for tc in tool_calls {
-                    // Delete-intent gate: block any delete_* tool unless the user's
-                    // original message contained an explicit delete keyword. Prevents
-                    // model hallucinations from causing data loss. See spec
+                    // Delete-intent gate: block any delete_* tool unless either the
+                    // current user message OR a deferred-intent pattern across prior
+                    // user messages signals an explicit delete request. Prevents
+                    // model hallucinations from causing data loss while still
+                    // allowing the "user asks to delete → AI defers for confirmation
+                    // → user replies 'yes'" workflow that the single-message gate
+                    // mistakenly blocked (#310). See spec
                     // docs/superpowers/specs/2026-04-11-ai-mode-cleanup-design.md
                     if tc.function.name.starts_with("delete_")
-                        && !delete_intent_allowed(&original_user_message)
+                        && !delete_intent_for_turn(&original_user_message, &conversation)
                     {
                         warn!(
                             tool = %tc.function.name,
