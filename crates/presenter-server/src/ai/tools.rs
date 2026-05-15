@@ -43,7 +43,23 @@ fn make_slide(i: usize, s: &Value) -> Slide {
 /// The `preview` is short for UI badges; the full error JSON is sent back
 /// to the LLM as the tool result content so it can self-correct on retry.
 fn validation_error_response(err: ValidationError) -> (String, String) {
-    let preview = format!("Validation failed: {}", err.rule.as_str());
+    // Truncate the offending string so the AI conversation preview stays
+    // readable. The full string still goes back to the LLM via the JSON
+    // body and to the server log via tracing::warn!.
+    let truncated_got: String = err.got.chars().take(80).collect();
+    let preview = if err.got.chars().count() > 80 {
+        format!(
+            "Validation failed: {} (got: '{}...')",
+            err.rule.as_str(),
+            truncated_got
+        )
+    } else {
+        format!(
+            "Validation failed: {} (got: '{}')",
+            err.rule.as_str(),
+            truncated_got
+        )
+    };
     tracing::warn!(
         rule = %err.rule.as_str(),
         got = %err.got,
