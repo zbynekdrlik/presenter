@@ -1307,6 +1307,54 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn load_bible_verses_resolves_rohacek_book_name_against_ecumenical_translation() {
+        // Regression #310: AI submitted load_bible_verses("1. Mojžišova", ...)
+        // against the SEB (ecumenical) translation, which stores the book as
+        // "Genezis". The lookup matched book.eq("1. Mojžišova") and returned
+        // 0/N verses. The fix: resolve the input book name to its canonical
+        // code via canonical_book_by_name() and query by book_code instead.
+        use presenter_core::bible::BibleIngestionBatch;
+        use presenter_core::{BiblePassage, BibleReference, BibleTranslation};
+
+        let state = AppState::in_memory().await.unwrap();
+        let translation = BibleTranslation::new("slk-seb", "Slovenský ekumenický", "sk");
+        let reference = BibleReference::new("Genezis", 20, 2, 2).unwrap();
+        let passage = BiblePassage::new(
+            reference,
+            translation.clone(),
+            "Abrahám vtedy o svojej manželke...".to_string(),
+        );
+        let batch = BibleIngestionBatch::new(translation, vec![passage]).unwrap();
+        state
+            .repository()
+            .replace_bible_translation_passages(&batch)
+            .await
+            .unwrap();
+
+        let args = json!({
+            "translation": "slk-seb",
+            "book": "1. Mojžišova",
+            "chapter": 20,
+            "verse_start": 2,
+            "verse_end": 2,
+        });
+        let (body, _preview) = execute_tool("load_bible_verses", &args.to_string(), &state, 320)
+            .await
+            .unwrap();
+        let verses: Vec<Value> =
+            serde_json::from_str(&body).expect("response body must be a verses array");
+        assert_eq!(verses.len(), 1, "expected 1 verse, got body: {body}");
+        assert!(
+            verses[0].get("text").is_some(),
+            "verse should have text (not error), got: {body}"
+        );
+        assert!(
+            !verses[0]["text"].as_str().unwrap_or("").is_empty(),
+            "verse text should be non-empty, got: {body}"
+        );
+    }
+
+    #[tokio::test]
     async fn load_bible_verses_handler_is_registered() {
         // The in-memory state seeds no bible translations, so we expect
         // "translation not found" error. This proves the tool is registered
