@@ -1104,7 +1104,7 @@ async fn stage_displays_endpoint_returns_builtins() {
         .await
         .unwrap();
     let payload: Vec<StageDisplayLayout> = serde_json::from_slice(&bytes).unwrap();
-    assert_eq!(payload.len(), 7);
+    assert_eq!(payload.len(), 8);
     assert!(payload
         .iter()
         .any(|layout| layout.code == DEFAULT_STAGE_LAYOUT_CODE));
