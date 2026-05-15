@@ -1104,13 +1104,19 @@ async fn stage_displays_endpoint_returns_builtins() {
         .await
         .unwrap();
     let payload: Vec<StageDisplayLayout> = serde_json::from_slice(&bytes).unwrap();
-    assert_eq!(payload.len(), 8);
+    // camera-crew is excluded from the operator layout picker (Issue 1 fix).
+    // Count is built_in() minus camera-crew = 7.
+    assert_eq!(payload.len(), 7);
     assert!(payload
         .iter()
         .any(|layout| layout.code == DEFAULT_STAGE_LAYOUT_CODE));
     assert!(payload.iter().any(|layout| layout.code == "ndi-fullscreen"));
     assert!(payload.iter().any(|layout| layout.code == "bible"));
     assert!(payload.iter().any(|layout| layout.code == "api"));
+    assert!(
+        !payload.iter().any(|layout| layout.code == "camera-crew"),
+        "camera-crew must not appear in operator layout picker"
+    );
 
     // /stage now serves the WASM shell (or 503 if dist/ not built).
     // In unit tests without a Trunk build, it returns 503 with a fallback message.

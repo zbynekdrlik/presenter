@@ -596,3 +596,17 @@ async fn publish_stage_context_emits_camera_crew_snapshot_even_when_api_active()
         "camera-crew snapshot must publish even when api layout is selected"
     );
 }
+
+#[tokio::test]
+async fn stage_displays_excludes_camera_crew_from_operator_picker() {
+    let state = AppState::in_memory().await.unwrap();
+    let layouts = state.stage_displays().await.unwrap();
+    let codes: Vec<&str> = layouts.iter().map(|l| l.code.as_str()).collect();
+    assert!(
+        !codes.contains(&"camera-crew"),
+        "camera-crew must not appear in operator picker; got {codes:?}"
+    );
+    // Sanity: regular layouts ARE present.
+    assert!(codes.contains(&"worship-snv"));
+    assert!(codes.contains(&"preach"));
+}

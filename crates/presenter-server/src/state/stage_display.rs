@@ -75,6 +75,12 @@ impl AppState {
     }
 
     pub async fn stage_displays(&self) -> anyhow::Result<Vec<StageDisplayLayout>> {
-        Ok(StageDisplayLayout::built_in())
+        // camera-crew is published always but is not user-selectable from the
+        // operator UI — it's accessed via /ui/camera only. Hide it from the
+        // layout picker.
+        Ok(StageDisplayLayout::built_in()
+            .into_iter()
+            .filter(|l| l.code != "camera-crew")
+            .collect())
     }
 }
