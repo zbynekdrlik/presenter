@@ -412,6 +412,81 @@ const SLOVAK_ECUMENICKY_NAMES: [&str; 66] = [
     "Zjavenie",
 ];
 
+// Roháček (slk-roh) book names — the Protestant Slovak tradition that
+// uses Hebrew-style ordinal naming for the Pentateuch ("1. Mojžišova" =
+// "First Book of Moses" = Genesis). Sourced from the live slk-roh
+// translation in the project DB. Used as alias input for the
+// canonical-book resolver so AI tools accept any common Slovak name
+// regardless of which translation actually stores the row. See #310.
+const SLOVAK_ROHACEK_NAMES: [&str; 66] = [
+    "1. Mojžišova",
+    "2. Mojžišova",
+    "3. Mojžišova",
+    "4. Mojžišova",
+    "5. Mojžišova",
+    "Jozua",
+    "Sudcovia",
+    "Rút",
+    "1. Samuelova",
+    "2. Samuelova",
+    "1. Kráľov",
+    "2. Kráľov",
+    "1. Kronická",
+    "2. Kronická",
+    "Ezdráš",
+    "Nehemiáš",
+    "Ester",
+    "Jób",
+    "Žalmy",
+    "Príslovia",
+    "Kazateľ",
+    "Pieseň",
+    "Izaiáš",
+    "Jeremiáš",
+    "Plač",
+    "Ezechiel",
+    "Daniel",
+    "Hozeáš",
+    "Joel",
+    "Ámos",
+    "Abdiáš",
+    "Jonáš",
+    "Micheáš",
+    "Náhum",
+    "Abakuk",
+    "Sofoniáš",
+    "Haggeus",
+    "Zachariáš",
+    "Malachiáš",
+    "Matúš",
+    "Marek",
+    "Lukáš",
+    "Ján",
+    "Skutky",
+    "Rimanom",
+    "1. Korinťanom",
+    "2. Korinťanom",
+    "Galaťanom",
+    "Efezanom",
+    "Filipanom",
+    "Kolosenským",
+    "1. Tesaloničanom",
+    "2. Tesaloničanom",
+    "1. Timoteovi",
+    "2. Timoteovi",
+    "Títovi",
+    "Filemonovi",
+    "Židom",
+    "Jakobov",
+    "1. Petrov",
+    "2. Petrov",
+    "1. Jánov",
+    "2. Jánov",
+    "3. Jánov",
+    "Júdov",
+    "Zjavenie",
+];
+
 const SLOVAK_OBOHU_NAMES: [&str; 66] = [
     "Genesis",
     "Exodus",
@@ -571,6 +646,14 @@ static BOOK_NAME_ALIASES: LazyLock<HashMap<String, BibleBookCanonical>> = LazyLo
         }
     }
 
+    #[allow(clippy::cast_possible_truncation)]
+    for (index, alias) in SLOVAK_ROHACEK_NAMES.iter().enumerate() {
+        // SAFETY: Array has fixed size < 100 elements, so index fits in u16
+        if let Some(meta) = canonical_book_by_number((index as u16) + 1) {
+            register_alias_variants(&mut map, alias, meta);
+        }
+    }
+
     for &(alias, code) in ENGLISH_EXTRA_ALIASES {
         if let Some(meta) = canonical_book_by_code(code) {
             register_alias_variants(&mut map, alias, meta);
@@ -671,4 +754,37 @@ pub fn canonical_book_by_number(number: u16) -> Option<BibleBookCanonical> {
         .iter()
         .copied()
         .find(|meta| meta.number == number)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn slovak_rohacek_first_mojzisova_resolves_to_genesis() {
+        // Regression #310: AI uses Roháček naming "1. Mojžišova" but the SEB
+        // translation stores it as "Genezis". The alias resolver must accept
+        // ANY Slovak naming and return the canonical code.
+        let meta = canonical_book_by_name("1. Mojžišova").expect("must resolve");
+        assert_eq!(meta.code, "GEN");
+    }
+
+    #[test]
+    fn slovak_rohacek_diacritic_insensitive() {
+        // Roháček name without diacritics still resolves (per normalise_book_key).
+        let meta = canonical_book_by_name("1. Mojzisova").expect("must resolve");
+        assert_eq!(meta.code, "GEN");
+    }
+
+    #[test]
+    fn slovak_rohacek_lukas_resolves() {
+        let meta = canonical_book_by_name("Lukáš").expect("must resolve");
+        assert_eq!(meta.code, "LUK");
+    }
+
+    #[test]
+    fn ecumenical_genezis_still_resolves() {
+        let meta = canonical_book_by_name("Genezis").expect("must resolve");
+        assert_eq!(meta.code, "GEN");
+    }
 }

@@ -5,6 +5,96 @@ use tracing::{info, warn};
 
 const MAX_ITERATIONS: usize = 100;
 
+/// Affirmative replies recognised by the cross-turn gate. Used when the
+/// user types a short confirmation after the AI proposed a delete in the
+/// preceding text response.
+const AFFIRMATIVE_REPLIES: &[&str] = &[
+    // English
+    "yes",
+    "yeah",
+    "yep",
+    "y",
+    "ok",
+    "okay",
+    "sure",
+    "confirm",
+    "confirmed",
+    "go ahead",
+    "do it",
+    "do it.",
+    "please do",
+    // Slovak with diacritics
+    "áno",
+    "súhlasím",
+    "potvrdzujem",
+    "iste",
+    "určite",
+    // Slovak ASCII-folded variants
+    "ano",
+    "suhlasim",
+    "potvrdzujem.",
+    "iste.",
+    // Czech
+    "souhlasim",
+    "souhlasím",
+    "ano.",
+];
+
+fn is_affirmative(msg: &str) -> bool {
+    let trimmed = msg.trim().to_lowercase();
+    if trimmed.is_empty() {
+        return false;
+    }
+    // Exact match OR starts with an affirmative followed by space/comma/period.
+    AFFIRMATIVE_REPLIES.iter().any(|a| {
+        let a_lower = a.to_lowercase();
+        trimmed == a_lower
+            || trimmed.starts_with(&format!("{a_lower} "))
+            || trimmed.starts_with(&format!("{a_lower},"))
+            || trimmed.starts_with(&format!("{a_lower}."))
+            || trimmed.starts_with(&format!("{a_lower}!"))
+    })
+}
+
+/// Cross-turn delete-intent gate. Grants when:
+/// - the current user message itself contains a delete keyword, OR
+/// - the IMMEDIATELY PRECEDING user message contained a delete keyword AND
+///   the current message is affirmative (covers the "user asks to delete,
+///   AI defers for confirmation, user replies 'yes'" workflow).
+///
+/// The deferred path looks back EXACTLY one user turn — the previous one —
+/// so an unrelated affirmative ("yes" to a different question turns later)
+/// cannot unlock stale intent from far back in the conversation. This bounds
+/// the gate window to the only pattern it needs to cover: a single defer.
+fn delete_intent_for_turn(user_message: &str, conversation: &[ChatMessage]) -> bool {
+    // Direct: current message has a delete keyword.
+    if delete_intent_allowed(user_message) {
+        return true;
+    }
+
+    // Deferred: current message must be affirmative AND the previous user
+    // turn must have had explicit delete intent. Both signals required, and
+    // the lookback is bounded to ONE prior user turn — not the whole
+    // conversation — so stale intent decays naturally as the conversation
+    // moves on.
+    if !is_affirmative(user_message) {
+        return false;
+    }
+
+    // The current user message is already at the END of conversation (the
+    // run_agent loop pushes it before calling this gate). Skip that one and
+    // grab the immediately preceding user message; if it had delete intent,
+    // grant.
+    let mut user_msgs = conversation
+        .iter()
+        .rev()
+        .filter(|m| m.role == "user")
+        .filter_map(|m| m.content.as_deref());
+    let _current = user_msgs.next();
+    let previous = user_msgs.next();
+    previous.map(delete_intent_allowed).unwrap_or(false)
+}
+
 /// Returns `true` if the user's message contains an explicit intent to delete.
 /// Used as a gate on all `delete_*` tool calls to prevent model hallucinations
 /// from causing data loss. The model must see a keyword in the user's actual
@@ -315,12 +405,16 @@ pub async fn run_agent(
 
                 // Execute each tool call
                 for tc in tool_calls {
-                    // Delete-intent gate: block any delete_* tool unless the user's
-                    // original message contained an explicit delete keyword. Prevents
-                    // model hallucinations from causing data loss. See spec
+                    // Delete-intent gate: block any delete_* tool unless either the
+                    // current user message OR a deferred-intent pattern across prior
+                    // user messages signals an explicit delete request. Prevents
+                    // model hallucinations from causing data loss while still
+                    // allowing the "user asks to delete → AI defers for confirmation
+                    // → user replies 'yes'" workflow that the single-message gate
+                    // mistakenly blocked (#310). See spec
                     // docs/superpowers/specs/2026-04-11-ai-mode-cleanup-design.md
                     if tc.function.name.starts_with("delete_")
-                        && !delete_intent_allowed(&original_user_message)
+                        && !delete_intent_for_turn(&original_user_message, &conversation)
                     {
                         warn!(
                             tool = %tc.function.name,
@@ -702,6 +796,83 @@ mod tests {
         ));
         assert!(delete_intent_allowed(
             "please vymaž everything from yesterday"
+        ));
+    }
+
+    #[test]
+    fn turn_intent_grants_when_prior_user_message_asked_to_delete() {
+        // Regression #310: user said "vymaž to" in turn N, AI asked
+        // "potvrdzujete?" in its text response, user replied "ano" in turn
+        // N+1. Without conversation context the gate sees only "ano" which
+        // has no delete keyword and blocks. The cross-turn gate must walk
+        // back through prior user messages and grant intent when a recent
+        // one contained an explicit delete keyword AND the current message
+        // is affirmative.
+        let convo = vec![
+            user_msg("vymaž tie dve prezentácie"),
+            assistant_msg("Potvrdzujete, že chcete vymazať tie dve prezentácie?"),
+            user_msg("ano"),
+        ];
+        assert!(
+            delete_intent_for_turn("ano", &convo),
+            "deferred delete intent + affirmative reply must grant the gate"
+        );
+    }
+
+    #[test]
+    fn turn_intent_grants_when_current_message_has_keyword() {
+        // Direct path: gate must still grant when the current message itself
+        // contains a delete keyword, regardless of conversation history.
+        let convo = vec![user_msg("delete the slide")];
+        assert!(delete_intent_for_turn("delete the slide", &convo));
+    }
+
+    #[test]
+    fn turn_intent_blocks_when_no_user_message_ever_asked_to_delete() {
+        // No prior message had delete intent — affirmative alone is not
+        // enough. Prevents the AI from inventing a delete then asking
+        // "should I?" then proceeding on "yes" without the user ever
+        // having actually asked.
+        let convo = vec![
+            user_msg("create a new presentation"),
+            assistant_msg("Should I delete the old one first?"),
+            user_msg("yes"),
+        ];
+        assert!(
+            !delete_intent_for_turn("yes", &convo),
+            "affirmative without prior user delete intent must NOT grant the gate"
+        );
+    }
+
+    #[test]
+    fn turn_intent_does_not_grant_on_stale_intent_far_back_in_history() {
+        // Reviewer concern: unbounded lookback means a "delete X" from 30
+        // turns ago can be unlocked by an affirmative reply to a totally
+        // unrelated current question. The deferred-intent window must be
+        // bounded — only the most recent few user turns count.
+        let mut convo = vec![user_msg("vymaž tie staré slajdy")];
+        // 5 unrelated turns after the original delete request.
+        for i in 0..5 {
+            convo.push(assistant_msg(&format!("Hotovo {i}")));
+            convo.push(user_msg(&format!("now make a new song presentation {i}")));
+        }
+        // AI now asks "delete the cover slide?" and user replies yes —
+        // the user's CURRENT yes refers to the AI's question, NOT the
+        // long-ago delete. Gate must block.
+        convo.push(assistant_msg("Should I delete the cover slide?"));
+        convo.push(user_msg("ano"));
+        assert!(
+            !delete_intent_for_turn("ano", &convo),
+            "stale delete intent from >3 turns ago must NOT grant on current affirmative"
+        );
+    }
+
+    #[test]
+    fn turn_intent_blocks_when_neither_signal_present() {
+        let convo = vec![user_msg("make a song presentation about hope")];
+        assert!(!delete_intent_for_turn(
+            "make a song presentation about hope",
+            &convo
         ));
     }
 
