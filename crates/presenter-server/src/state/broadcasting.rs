@@ -110,11 +110,27 @@ impl AppState {
 
     async fn publish_stage_context(&self, context: &StageContext) -> anyhow::Result<()> {
         let code = self.stage_layout_code().await;
+        let context = self.enrich_stage_context(context).await;
+
+        // Always publish camera-crew snapshot — its clients are pinned to /ui/camera
+        // and must not be flipped by operator-side layout changes (including "api").
+        if code != "camera-crew" {
+            if let Some(camera_layout) = StageDisplayLayout::built_in()
+                .into_iter()
+                .find(|l| l.code == "camera-crew")
+            {
+                let camera_snapshot = build_stage_snapshot(camera_layout, &context);
+                self.publish_stage_update(camera_snapshot);
+            }
+        }
+
         // The "api" layout is driven by PUT /api/stage, not by internal state.
-        // Skip normal broadcasting to avoid overwriting API-pushed data.
+        // Skip normal broadcasting for the operator-selected snapshot to avoid
+        // overwriting API-pushed data.
         if code == "api" {
             return Ok(());
         }
+
         let mut layouts = StageDisplayLayout::built_in()
             .into_iter()
             .map(|layout| (layout.code.clone(), layout))
@@ -126,7 +142,6 @@ impl AppState {
             return Ok(());
         };
 
-        let context = self.enrich_stage_context(context).await;
         let snapshot = build_stage_snapshot(layout, &context);
         self.publish_stage_update(snapshot);
         Ok(())
