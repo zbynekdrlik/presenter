@@ -58,34 +58,41 @@ fn is_affirmative(msg: &str) -> bool {
 
 /// Cross-turn delete-intent gate. Grants when:
 /// - the current user message itself contains a delete keyword, OR
-/// - some prior user message in the conversation contained a delete keyword
-///   AND the current message is affirmative (covers the "user asks to
-///   delete, AI defers for confirmation, user replies 'yes'" workflow).
+/// - the IMMEDIATELY PRECEDING user message contained a delete keyword AND
+///   the current message is affirmative (covers the "user asks to delete,
+///   AI defers for confirmation, user replies 'yes'" workflow).
 ///
-/// Used in place of the single-message `delete_intent_allowed` check so the
-/// gate survives the conversational pattern where the AI splits a destructive
-/// operation across turns. Without this, deferred deletions never proceed
-/// because the affirmative reply has no keyword and is the only thing the
-/// AI sees on the next turn.
+/// The deferred path looks back EXACTLY one user turn — the previous one —
+/// so an unrelated affirmative ("yes" to a different question turns later)
+/// cannot unlock stale intent from far back in the conversation. This bounds
+/// the gate window to the only pattern it needs to cover: a single defer.
 fn delete_intent_for_turn(user_message: &str, conversation: &[ChatMessage]) -> bool {
     // Direct: current message has a delete keyword.
     if delete_intent_allowed(user_message) {
         return true;
     }
 
-    // Deferred: walk back through prior user messages. If any contained a
-    // delete keyword AND the current message is affirmative, grant. This
-    // narrow window prevents an unrelated affirmative ("yes" answering a
-    // totally different question) from unlocking a stale intent — both
-    // signals must be present.
+    // Deferred: current message must be affirmative AND the previous user
+    // turn must have had explicit delete intent. Both signals required, and
+    // the lookback is bounded to ONE prior user turn — not the whole
+    // conversation — so stale intent decays naturally as the conversation
+    // moves on.
     if !is_affirmative(user_message) {
         return false;
     }
-    conversation
+
+    // The current user message is already at the END of conversation (the
+    // run_agent loop pushes it before calling this gate). Skip that one and
+    // grab the immediately preceding user message; if it had delete intent,
+    // grant.
+    let mut user_msgs = conversation
         .iter()
+        .rev()
         .filter(|m| m.role == "user")
-        .filter_map(|m| m.content.as_deref())
-        .any(delete_intent_allowed)
+        .filter_map(|m| m.content.as_deref());
+    let _current = user_msgs.next();
+    let previous = user_msgs.next();
+    previous.map(delete_intent_allowed).unwrap_or(false)
 }
 
 /// Returns `true` if the user's message contains an explicit intent to delete.
