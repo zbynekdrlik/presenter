@@ -672,3 +672,36 @@ pub fn canonical_book_by_number(number: u16) -> Option<BibleBookCanonical> {
         .copied()
         .find(|meta| meta.number == number)
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn slovak_rohacek_first_mojzisova_resolves_to_genesis() {
+        // Regression #310: AI uses Roháček naming "1. Mojžišova" but the SEB
+        // translation stores it as "Genezis". The alias resolver must accept
+        // ANY Slovak naming and return the canonical code.
+        let meta = canonical_book_by_name("1. Mojžišova").expect("must resolve");
+        assert_eq!(meta.code, "GEN");
+    }
+
+    #[test]
+    fn slovak_rohacek_diacritic_insensitive() {
+        // Roháček name without diacritics still resolves (per normalise_book_key).
+        let meta = canonical_book_by_name("1. Mojzisova").expect("must resolve");
+        assert_eq!(meta.code, "GEN");
+    }
+
+    #[test]
+    fn slovak_rohacek_lukas_resolves() {
+        let meta = canonical_book_by_name("Lukáš").expect("must resolve");
+        assert_eq!(meta.code, "LUK");
+    }
+
+    #[test]
+    fn ecumenical_genezis_still_resolves() {
+        let meta = canonical_book_by_name("Genezis").expect("must resolve");
+        assert_eq!(meta.code, "GEN");
+    }
+}
