@@ -37,6 +37,10 @@ pub struct BibleState {
 
     // -- Book / chapter / verse selection --
     pub books: RwSignal<Vec<BibleBookDto>>,
+    /// Normalised key (case + diacritic + punctuation folded) for each book
+    /// in `books`, in the same order. Derived via Memo so the per-keystroke
+    /// filter avoids NFD-decomposing every book name on every render.
+    pub book_keys: Memo<Vec<String>>,
     pub book_filter: RwSignal<String>,
     pub selected_book: RwSignal<Option<SelectedBook>>,
     pub selected_chapter: RwSignal<u16>,
@@ -73,12 +77,21 @@ pub struct BibleState {
 
 impl BibleState {
     pub fn new() -> Self {
+        let books: RwSignal<Vec<BibleBookDto>> = RwSignal::new(Vec::new());
+        let book_keys: Memo<Vec<String>> = Memo::new(move |_| {
+            books
+                .get()
+                .iter()
+                .map(|b| presenter_core::bible::normalise_book_key(&b.book))
+                .collect()
+        });
         Self {
             translations: RwSignal::new(Vec::new()),
             selected_translation: RwSignal::new(None),
             secondary_translation: RwSignal::new(None),
 
-            books: RwSignal::new(Vec::new()),
+            books,
+            book_keys,
             book_filter: RwSignal::new(String::new()),
             selected_book: RwSignal::new(None),
             selected_chapter: RwSignal::new(1),
@@ -109,7 +122,10 @@ impl BibleState {
     ///
     /// Matching is case- AND diacritic-insensitive — a filter of "lukas"
     /// surfaces "Lukáš"; "1moj" surfaces "1. Mojžišova". Uses the same
-    /// normalisation the server applies for canonical-name lookup.
+    /// normalisation the server applies for canonical-name lookup, and
+    /// memoises per-book keys via [`Self::book_keys`] so each filter
+    /// keystroke walks pre-normalised strings instead of re-NFD'ing every
+    /// book name.
     pub fn filtered_books(&self) -> Vec<BibleBookDto> {
         let filter_raw = self.book_filter.get();
         let filter = presenter_core::bible::normalise_book_key(&filter_raw);
@@ -117,8 +133,15 @@ impl BibleState {
         if filter.is_empty() {
             return all;
         }
+        let keys = self.book_keys.get();
         all.into_iter()
-            .filter(|b| presenter_core::bible::normalise_book_key(&b.book).contains(&filter))
+            .enumerate()
+            .filter(|(idx, _)| {
+                keys.get(*idx)
+                    .map(|key| key.contains(&filter))
+                    .unwrap_or(false)
+            })
+            .map(|(_, book)| book)
             .collect()
     }
 }
