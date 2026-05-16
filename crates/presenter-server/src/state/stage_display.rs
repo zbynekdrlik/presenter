@@ -45,6 +45,11 @@ impl AppState {
     }
 
     pub async fn set_stage_layout_code(&self, code: &str) -> anyhow::Result<StageDisplayLayout> {
+        if code == "camera-crew" {
+            return Err(anyhow::anyhow!(
+                "'camera-crew' is not an operator-selectable layout; it is served only at /ui/camera"
+            ));
+        }
         let layout = StageDisplayLayout::built_in()
             .into_iter()
             .find(|layout| layout.code == code)

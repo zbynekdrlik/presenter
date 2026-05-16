@@ -610,3 +610,18 @@ async fn stage_displays_excludes_camera_crew_from_operator_picker() {
     assert!(codes.contains(&"worship-snv"));
     assert!(codes.contains(&"preach"));
 }
+
+#[tokio::test]
+async fn set_stage_layout_code_rejects_camera_crew() {
+    let state = AppState::in_memory().await.unwrap();
+    let result = state.set_stage_layout_code("camera-crew").await;
+    assert!(
+        result.is_err(),
+        "camera-crew must not be settable as operator layout"
+    );
+    let msg = result.unwrap_err().to_string();
+    assert!(
+        msg.contains("camera-crew") && msg.contains("not"),
+        "error message should explain the rejection; got: {msg}"
+    );
+}
