@@ -1,18 +1,13 @@
 use std::collections::HashMap;
 
 use leptos::prelude::*;
-use presenter_core::UpcomingGroup;
 
 use crate::api;
 use crate::components::version_label::VersionLabel;
 use crate::state::stage::StageContext;
-use crate::ws::stage::StageWsState;
 
 #[component]
-pub fn CameraCrew(
-    ws_state: ReadSignal<StageWsState>,
-    latency_ms: ReadSignal<Option<f64>>,
-) -> impl IntoView {
+pub fn CameraCrew() -> impl IntoView {
     let ctx = use_context::<StageContext>().expect("StageContext provided by CameraPage");
 
     let group_colors = RwSignal::new(HashMap::<String, String>::new());
@@ -28,6 +23,7 @@ pub fn CameraCrew(
         group_colors.with(|map| map.get(name).cloned())
     };
 
+    // ── current group ──────────────────────────────────────────────────────────
     let current_group_label = move || {
         ctx.snapshot
             .get()
@@ -45,6 +41,7 @@ pub fn CameraCrew(
             .unwrap_or_default()
     };
 
+    // ── upcoming helper ────────────────────────────────────────────────────────
     let upcoming = move || {
         ctx.snapshot
             .get()
@@ -52,29 +49,79 @@ pub fn CameraCrew(
             .unwrap_or_default()
     };
 
-    let next_group = move || upcoming().into_iter().next();
-    let future_groups = move || -> Vec<UpcomingGroup> {
-        upcoming().into_iter().skip(1).take(3).collect()
+    // ── next 1 ─────────────────────────────────────────────────────────────────
+    let next_1_label = move || {
+        upcoming()
+            .into_iter()
+            .next()
+            .map(|g| g.name)
+            .unwrap_or_default()
     };
-
-    let song_label = move || {
-        let snap = ctx.snapshot.get();
-        let song = snap
-            .as_ref()
-            .and_then(|s| s.song_name.clone())
-            .unwrap_or_default();
-        let library = snap
-            .as_ref()
-            .and_then(|s| s.library_name.clone())
-            .unwrap_or_default();
-        match (song.is_empty(), library.is_empty()) {
-            (false, false) => format!("{song} · {library}"),
-            (false, true) => song,
-            (true, false) => library,
-            _ => String::new(),
+    let next_1_style = move || {
+        let name = next_1_label();
+        if name.is_empty() {
+            return String::new();
         }
+        color_for(&name)
+            .map(|c| format!("background-color: {c};"))
+            .unwrap_or_default()
     };
 
+    // ── next 2 ─────────────────────────────────────────────────────────────────
+    let next_2_label = move || {
+        upcoming()
+            .into_iter()
+            .nth(1)
+            .map(|g| g.name)
+            .unwrap_or_default()
+    };
+    let next_2_style = move || {
+        let name = next_2_label();
+        if name.is_empty() {
+            return String::new();
+        }
+        color_for(&name)
+            .map(|c| format!("background-color: {c};"))
+            .unwrap_or_default()
+    };
+
+    // ── next 3 ─────────────────────────────────────────────────────────────────
+    let next_3_label = move || {
+        upcoming()
+            .into_iter()
+            .nth(2)
+            .map(|g| g.name)
+            .unwrap_or_default()
+    };
+    let next_3_style = move || {
+        let name = next_3_label();
+        if name.is_empty() {
+            return String::new();
+        }
+        color_for(&name)
+            .map(|c| format!("background-color: {c};"))
+            .unwrap_or_default()
+    };
+
+    // ── next 4 ─────────────────────────────────────────────────────────────────
+    let next_4_label = move || {
+        upcoming()
+            .into_iter()
+            .nth(3)
+            .map(|g| g.name)
+            .unwrap_or_default()
+    };
+    let next_4_style = move || {
+        let name = next_4_label();
+        if name.is_empty() {
+            return String::new();
+        }
+        color_for(&name)
+            .map(|c| format!("background-color: {c};"))
+            .unwrap_or_default()
+    };
+
+    // ── timers ─────────────────────────────────────────────────────────────────
     let preach_label = move || {
         ctx.snapshot
             .get()
@@ -91,102 +138,58 @@ pub fn CameraCrew(
             .unwrap_or_else(|| "--:--".to_string())
     };
 
-    let on_air = move || ctx.broadcast_live.get();
-
-    let latency_label = move || {
-        latency_ms
-            .get()
-            .map(|ms| format!("{:.0}ms", ms))
-            .unwrap_or_else(|| "—".to_string())
-    };
-
-    let connection_class = move || match ws_state.get() {
-        StageWsState::Connected => "stage__camera-crew__conn stage__camera-crew__conn--ok",
-        _ => "stage__camera-crew__conn stage__camera-crew__conn--bad",
-    };
-
     view! {
-        <div class="stage__camera-crew">
-            <div class="stage__camera-crew__current stage__group-pill" style=current_group_style>
-                {current_group_label}
+        <div class="stage-container" data-layout="camera-crew">
+            // ── Left column: 5 stacked group boxes ───────────────────────────
+            <div class="stage__camera-crew__column-left">
+                <div class="stage__camera-crew__current-group">
+                    <span class="stage__debug-label">"now"</span>
+                    <div class="stage__group-pill" style=current_group_style>
+                        {current_group_label}
+                    </div>
+                </div>
+                <div class="stage__camera-crew__next-1">
+                    <span class="stage__debug-label">"next 1"</span>
+                    <div class="stage__group-pill" style=next_1_style>
+                        {next_1_label}
+                    </div>
+                </div>
+                <div class="stage__camera-crew__next-2">
+                    <span class="stage__debug-label">"next 2"</span>
+                    <div class="stage__group-pill" style=next_2_style>
+                        {next_2_label}
+                    </div>
+                </div>
+                <div class="stage__camera-crew__next-3">
+                    <span class="stage__debug-label">"next 3"</span>
+                    <div class="stage__group-pill" style=next_3_style>
+                        {next_3_label}
+                    </div>
+                </div>
+                <div class="stage__camera-crew__next-4">
+                    <span class="stage__debug-label">"next 4"</span>
+                    <div class="stage__group-pill" style=next_4_style>
+                        {next_4_label}
+                    </div>
+                </div>
             </div>
 
-            <div class="stage__camera-crew__next">
-                <span class="stage__camera-crew__next-label">"Next:"</span>
-                {move || {
-                    next_group().map(|g| {
-                        let name = g.name.clone();
-                        let style = color_for(&name)
-                            .map(|c| format!("background-color: {c};"))
-                            .unwrap_or_default();
-                        view! {
-                            <span
-                                class="stage__group-pill stage__camera-crew__next-pill"
-                                style=style
-                            >
-                                {name}
-                            </span>
-                        }
-                    })
-                }}
+            // ── Right column: preach timer + countdown ────────────────────────
+            <div class="stage__camera-crew__column-right">
+                <div class="stage__camera-crew__preach">
+                    <span class="stage__debug-label">"preach"</span>
+                    <div class="stage__camera-crew__timer-text">{preach_label}</div>
+                </div>
+                <div class="stage__camera-crew__countdown">
+                    <span class="stage__debug-label">"time"</span>
+                    <div class="stage__camera-crew__timer-text">{countdown_label}</div>
+                </div>
             </div>
 
-            <div class="stage__camera-crew__future">
-                {move || {
-                    future_groups()
-                        .into_iter()
-                        .map(|g| {
-                            let name = g.name.clone();
-                            let style = color_for(&name)
-                                .map(|c| format!("background-color: {c};"))
-                                .unwrap_or_default();
-                            view! {
-                                <span
-                                    class="stage__group-pill stage__camera-crew__future-pill"
-                                    style=style
-                                >
-                                    {name}
-                                </span>
-                            }
-                                .into_any()
-                        })
-                        .collect::<Vec<_>>()
-                }}
-            </div>
-
-            <div class="stage__camera-crew__footer">
-                <span
-                    class="stage__camera-crew__song"
-                    data-testid="camera-crew-song"
-                >
-                    {song_label}
-                </span>
-                <span
-                    class="stage__camera-crew__preach"
-                    data-testid="camera-crew-preach"
-                >
-                    "PREACH "
-                    {preach_label}
-                </span>
-                <span
-                    class="stage__camera-crew__countdown"
-                    data-testid="camera-crew-countdown"
-                >
-                    "COUNTDOWN "
-                    {countdown_label}
-                </span>
-                <span
-                    class="stage__camera-crew__on-air"
-                    class:is-on=on_air
-                    data-testid="camera-crew-on-air"
-                >
-                    "● ON AIR"
-                </span>
-                <span class=connection_class>
-                    <VersionLabel />
-                    " · "
-                    {latency_label}
-                </span>
+            // ── Version corner ────────────────────────────────────────────────
+            <div class="stage__camera-crew__version">
+                <span class="stage__debug-label">"version"</span>
+                <VersionLabel />
             </div>
         </div>
     }

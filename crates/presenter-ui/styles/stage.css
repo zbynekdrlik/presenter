@@ -472,7 +472,15 @@ body.stage {
 .stage-pp__slides-area,
 .stage-pp__playlist-sidebar,
 .stage-timer__display,
-.stage-preach__display {
+.stage-preach__display,
+.stage__camera-crew__current-group,
+.stage__camera-crew__next-1,
+.stage__camera-crew__next-2,
+.stage__camera-crew__next-3,
+.stage__camera-crew__next-4,
+.stage__camera-crew__preach,
+.stage__camera-crew__countdown,
+.stage__camera-crew__version {
     border: 1px solid rgba(255, 255, 255, 0.08);
 }
 
@@ -583,119 +591,112 @@ body.stage {
   opacity: 0.6;
 }
 
-/* === Camera-Crew layout ============================================== */
-.stage__camera-crew {
-    display: grid;
-    grid-template-rows: 1fr 0.5fr 0.2fr 0.18fr;
-    gap: 1.5vh;
-    padding: 2vh 2vw;
-    height: 100vh;
-    box-sizing: border-box;
-    background: var(--stage-bg, #050505);
-    color: var(--stage-fg, #f0f0f0);
+/* ===== camera-crew layout ===== */
+
+.stage-container[data-layout="camera-crew"] {
+    background: #050505;
+    color: #f0f0f0;
     font-family: 'Helvetica Neue', Arial, sans-serif;
 }
 
-.stage__camera-crew__current {
+/* Left column: 5 stacked group boxes (~66% width, full height minus version corner) */
+.stage__camera-crew__column-left {
+    position: absolute;
+    left: 1vw;
+    top: 1vh;
+    width: 64vw;
+    bottom: 1vh;
+    display: grid;
+    grid-template-rows: 2fr 1fr 1fr 1fr 1fr;
+    gap: 1vh;
+}
+
+/* Right column: 2 stacked timer boxes (~33% width) */
+.stage__camera-crew__column-right {
+    position: absolute;
+    right: 1vw;
+    top: 1vh;
+    width: 32vw;
+    bottom: 1vh;
+    display: grid;
+    grid-template-rows: 1fr 1fr;
+    gap: 1vh;
+}
+
+/* Each group box (NOW + NEXT 1-4) is a flex container with the pill stretched */
+.stage__camera-crew__current-group,
+.stage__camera-crew__next-1,
+.stage__camera-crew__next-2,
+.stage__camera-crew__next-3,
+.stage__camera-crew__next-4 {
+    position: relative;
+    display: flex;
+    align-items: stretch;
+    justify-content: center;
+    overflow: hidden;
+}
+
+/* Each timer box */
+.stage__camera-crew__preach,
+.stage__camera-crew__countdown {
+    position: relative;
     display: flex;
     align-items: center;
     justify-content: center;
-    font-size: clamp(6rem, 18vw, 22rem);
+    overflow: hidden;
+}
+
+/* Timer numerals — big and clear */
+.stage__camera-crew__timer-text {
+    font-size: clamp(4rem, 14vw, 18rem);
     font-weight: 800;
     line-height: 1;
-    text-transform: uppercase;
-    border-radius: 1.5vh;
-    background-color: var(--stage-group-pill-default-bg, #1a1a1a);
+    font-variant-numeric: tabular-nums;
+    text-align: center;
     color: #fff;
-    padding: 0 4vw;
-    overflow: hidden;
-    white-space: nowrap;
 }
 
-.stage__camera-crew__next {
-    display: flex;
-    align-items: center;
-    gap: 2vw;
-    padding: 0 1vw;
-}
-
-.stage__camera-crew__next-label {
-    font-size: 4vh;
-    font-weight: 500;
-    color: #aaa;
-    letter-spacing: 0.05em;
-}
-
-.stage__camera-crew__next-pill {
-    flex: 1;
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    font-size: clamp(3rem, 9vw, 10rem);
-    font-weight: 700;
+/* Version corner — small, unobtrusive */
+.stage__camera-crew__version {
+    position: absolute;
+    right: 0.5vw;
+    bottom: 0.5vh;
+    font-size: 1.2vh;
+    color: rgba(255, 255, 255, 0.35);
+    padding: 0.2vh 0.4vw;
     line-height: 1;
-    text-transform: uppercase;
-    border-radius: 1vh;
-    padding: 1vh 3vw;
-    background-color: var(--stage-group-pill-default-bg, #1a1a1a);
-    color: #fff;
-    min-height: 100%;
 }
 
-.stage__camera-crew__future {
+/* Pill base style reuses .stage__group-pill defined elsewhere in the file.
+   Camera-crew tweaks: smaller letter-spacing for narrow phone widths, allow
+   the pill to fill the box. */
+.stage__camera-crew__current-group .stage__group-pill,
+.stage__camera-crew__next-1 .stage__group-pill,
+.stage__camera-crew__next-2 .stage__group-pill,
+.stage__camera-crew__next-3 .stage__group-pill,
+.stage__camera-crew__next-4 .stage__group-pill {
     display: flex;
     align-items: center;
     justify-content: center;
-    gap: 1.5vw;
-    flex-wrap: nowrap;
-    overflow: hidden;
-}
-
-.stage__camera-crew__future-pill {
-    font-size: clamp(1.2rem, 3.5vw, 3.5rem);
-    font-weight: 600;
-    text-transform: uppercase;
-    border-radius: 0.6vh;
-    padding: 0.6vh 1.4vw;
+    width: 100%;
+    height: 100%;
     background-color: var(--stage-group-pill-default-bg, #1a1a1a);
-    color: #ddd;
-    opacity: 0.85;
-}
-
-.stage__camera-crew__footer {
-    display: grid;
-    grid-template-columns: minmax(0, 2fr) auto auto auto auto;
-    align-items: center;
-    gap: 2vw;
-    font-size: 2.2vh;
-    color: #ccc;
-    border-top: 1px solid #222;
-    padding-top: 1vh;
-}
-
-.stage__camera-crew__song {
+    color: #fff;
+    letter-spacing: 0.04em;
+    line-height: 1;
     overflow: hidden;
-    text-overflow: ellipsis;
     white-space: nowrap;
 }
 
-.stage__camera-crew__on-air {
-    color: #444;
-    font-weight: 700;
-    letter-spacing: 0.08em;
-    transition: color 120ms ease-out;
+/* Current group has the biggest font (occupies 2x row height) */
+.stage__camera-crew__current-group .stage__group-pill {
+    font-size: clamp(2rem, 8vw, 9rem);
 }
 
-.stage__camera-crew__on-air.is-on {
-    color: #ff2a2a;
-    text-shadow: 0 0 1.2vh rgba(255, 42, 42, 0.6);
-}
-
-.stage__camera-crew__conn {
-    font-size: 1.8vh;
-    color: #888;
-}
-
-.stage__camera-crew__conn--bad {
-    color: #ff8c00;
+/* Next groups smaller, scaled by box height */
+.stage__camera-crew__next-1 .stage__group-pill,
+.stage__camera-crew__next-2 .stage__group-pill,
+.stage__camera-crew__next-3 .stage__group-pill,
+.stage__camera-crew__next-4 .stage__group-pill {
+    font-size: clamp(1.4rem, 4.5vw, 5rem);
 }
