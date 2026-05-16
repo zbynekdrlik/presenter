@@ -92,7 +92,7 @@ pub fn CameraPage() -> impl IntoView {
         }
     });
 
-    view! { <CameraCrew /> }
+    view! { <CameraCrew ws_state=ws_handle.state latency_ms=ws_handle.latency_ms /> }
 }
 
 fn set_global_string(name: &str, value: &str) {

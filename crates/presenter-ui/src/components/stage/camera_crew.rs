@@ -1,13 +1,18 @@
 use std::collections::HashMap;
 
+use gloo_timers::callback::Interval;
 use leptos::prelude::*;
 
 use crate::api;
 use crate::components::version_label::VersionLabel;
 use crate::state::stage::StageContext;
+use crate::ws::stage::StageWsState;
 
 #[component]
-pub fn CameraCrew() -> impl IntoView {
+pub fn CameraCrew(
+    ws_state: ReadSignal<StageWsState>,
+    latency_ms: ReadSignal<Option<f64>>,
+) -> impl IntoView {
     let ctx = use_context::<StageContext>().expect("StageContext provided by CameraPage");
 
     let group_colors = RwSignal::new(HashMap::<String, String>::new());
@@ -138,6 +143,34 @@ pub fn CameraCrew() -> impl IntoView {
             .unwrap_or_else(|| "--:--".to_string())
     };
 
+    // ── wall clock (updates every second) ─────────────────────────────────────
+    let clock_label = RwSignal::new(String::new());
+    {
+        let update = move || {
+            let date = js_sys::Date::new_0();
+            clock_label.set(format!(
+                "{:02}:{:02}",
+                date.get_hours(),
+                date.get_minutes()
+            ));
+        };
+        update();
+        let interval = Interval::new(1_000, update);
+        interval.forget();
+    }
+
+    // ── on-air + latency ───────────────────────────────────────────────────────
+    let on_air = move || ctx.broadcast_live.get();
+    let latency_text = move || {
+        latency_ms
+            .get()
+            .map(|ms| format!("{:.0}ms", ms))
+            .unwrap_or_else(|| "—".to_string())
+    };
+
+    // Connection state class (colour hint on the on-air strip border).
+    let _ws_state = ws_state; // retained so the prop is used; may drive future styling
+
     view! {
         <div class="stage-container" data-layout="camera-crew">
             // ── Left column: 5 stacked group boxes ───────────────────────────
@@ -174,15 +207,51 @@ pub fn CameraCrew() -> impl IntoView {
                 </div>
             </div>
 
-            // ── Right column: preach timer + countdown ────────────────────────
+            // ── Right column: preach | time | countdown | on-air+latency ─────
             <div class="stage__camera-crew__column-right">
                 <div class="stage__camera-crew__preach">
                     <span class="stage__debug-label">"preach"</span>
-                    <div class="stage__camera-crew__timer-text">{preach_label}</div>
+                    <div
+                        class="stage__camera-crew__timer-text"
+                        data-testid="camera-crew-preach"
+                    >
+                        {preach_label}
+                    </div>
+                </div>
+                <div class="stage__camera-crew__time">
+                    <span class="stage__debug-label">"time"</span>
+                    <div
+                        class="stage__camera-crew__timer-text"
+                        data-testid="camera-crew-time"
+                    >
+                        {move || clock_label.get()}
+                    </div>
                 </div>
                 <div class="stage__camera-crew__countdown">
-                    <span class="stage__debug-label">"time"</span>
-                    <div class="stage__camera-crew__timer-text">{countdown_label}</div>
+                    <span class="stage__debug-label">"countdown"</span>
+                    <div
+                        class="stage__camera-crew__timer-text"
+                        data-testid="camera-crew-countdown"
+                    >
+                        {countdown_label}
+                    </div>
+                </div>
+                <div class="stage__camera-crew__on-air-strip">
+                    <span class="stage__debug-label">"on-air"</span>
+                    <div class="stage__camera-crew__on-air-row">
+                        <span
+                            class="stage__camera-crew__on-air-indicator"
+                            class:is-on=on_air
+                        >
+                            "● ON AIR"
+                        </span>
+                        <span
+                            class="stage__camera-crew__latency"
+                            data-testid="camera-crew-latency"
+                        >
+                            {latency_text}
+                        </span>
+                    </div>
                 </div>
             </div>
 

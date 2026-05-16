@@ -112,6 +112,26 @@ test("pinned layout — operator switch does not flip camera view", async ({
     page.locator(".stage__camera-crew__column-right"),
   ).toBeVisible();
 
+  // Right-column boxes must all be visible.
+  await expect(
+    page.locator('[data-testid="camera-crew-preach"]'),
+  ).toBeVisible({ timeout: 10_000 });
+  await expect(
+    page.locator('[data-testid="camera-crew-time"]'),
+  ).toBeVisible();
+  await expect(
+    page.locator('[data-testid="camera-crew-countdown"]'),
+  ).toBeVisible();
+  await expect(
+    page.locator('[data-testid="camera-crew-latency"]'),
+  ).toBeVisible();
+
+  // Wall clock must match HH:MM format.
+  const clockText = await page
+    .locator('[data-testid="camera-crew-time"]')
+    .textContent();
+  expect(clockText?.trim()).toMatch(/^\d{2}:\d{2}$/);
+
   // Console must be clean (checked last, after all UI interactions).
   expect(consoleMessages).toEqual([]);
 });

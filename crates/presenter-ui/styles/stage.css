@@ -479,7 +479,9 @@ body.stage {
 .stage__camera-crew__next-3,
 .stage__camera-crew__next-4,
 .stage__camera-crew__preach,
+.stage__camera-crew__time,
 .stage__camera-crew__countdown,
+.stage__camera-crew__on-air-strip,
 .stage__camera-crew__version {
     border: 1px solid rgba(255, 255, 255, 0.08);
 }
@@ -611,7 +613,7 @@ body.stage {
     gap: 1vh;
 }
 
-/* Right column: 2 stacked timer boxes (~33% width) */
+/* Right column: 4 stacked boxes — preach (largest), time, countdown, on-air strip */
 .stage__camera-crew__column-right {
     position: absolute;
     right: 1vw;
@@ -619,7 +621,7 @@ body.stage {
     width: 32vw;
     bottom: 1vh;
     display: grid;
-    grid-template-rows: 1fr 1fr;
+    grid-template-rows: 2.2fr 1.6fr 1fr 0.6fr;
     gap: 1vh;
 }
 
@@ -636,9 +638,11 @@ body.stage {
     overflow: hidden;
 }
 
-/* Each timer box */
+/* Each timer/status box in the right column */
 .stage__camera-crew__preach,
-.stage__camera-crew__countdown {
+.stage__camera-crew__time,
+.stage__camera-crew__countdown,
+.stage__camera-crew__on-air-strip {
     position: relative;
     display: flex;
     align-items: center;
@@ -646,14 +650,57 @@ body.stage {
     overflow: hidden;
 }
 
-/* Timer numerals — big and clear */
+/* Timer numerals — big and clear, with per-box font sizes to prevent cropping */
 .stage__camera-crew__timer-text {
-    font-size: clamp(4rem, 14vw, 18rem);
     font-weight: 800;
     line-height: 1;
     font-variant-numeric: tabular-nums;
     text-align: center;
     color: #fff;
+    width: 100%;
+    height: 100%;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    overflow: hidden;
+}
+
+/* Per-box font sizes calibrated to fit content without cropping.
+   Box width ~30vw: "MM:SS" (5 chars) fits at ≤7vw; "HH:MM:SS" (8 chars) needs ≤5.5vw. */
+.stage__camera-crew__preach .stage__camera-crew__timer-text {
+    font-size: clamp(2rem, 6.5vw, 9rem);
+}
+.stage__camera-crew__time .stage__camera-crew__timer-text {
+    font-size: clamp(2rem, 7vw, 10rem);
+}
+.stage__camera-crew__countdown .stage__camera-crew__timer-text {
+    font-size: clamp(1.4rem, 5vw, 6rem);
+}
+
+/* On-air + latency strip */
+.stage__camera-crew__on-air-row {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    width: 100%;
+    padding: 0 1vw;
+    box-sizing: border-box;
+    font-size: clamp(0.9rem, 1.6vw, 1.6rem);
+    font-weight: 700;
+    letter-spacing: 0.06em;
+}
+
+.stage__camera-crew__on-air-indicator {
+    color: #555;
+    transition: color 120ms ease-out;
+}
+.stage__camera-crew__on-air-indicator.is-on {
+    color: #ff2a2a;
+    text-shadow: 0 0 0.8vh rgba(255, 42, 42, 0.6);
+}
+
+.stage__camera-crew__latency {
+    color: rgba(255, 255, 255, 0.6);
 }
 
 /* Version corner — small, unobtrusive */
