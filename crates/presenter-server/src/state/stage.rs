@@ -156,15 +156,20 @@ pub(crate) fn stage_resolution_from_presentation(
 /// Returns up to `max` distinct upcoming group names from an ordered iterator
 /// of per-slide group names (`None` = ungrouped slide). Consecutive duplicates
 /// are collapsed; ungrouped slides are skipped (they do not break a run).
+///
+/// `seed_last` pre-seeds the deduplication state so that any leading run
+/// matching the seed is skipped. Pass `Some(current_group)` to exclude the
+/// current group from the result.
 pub(crate) fn upcoming_distinct_groups<'a, I>(
     groups: I,
     max: usize,
+    seed_last: Option<&str>,
 ) -> Vec<presenter_core::UpcomingGroup>
 where
     I: IntoIterator<Item = Option<&'a str>>,
 {
     let mut out: Vec<presenter_core::UpcomingGroup> = Vec::new();
-    let mut last_pushed: Option<String> = None;
+    let mut last_pushed: Option<String> = seed_last.map(str::to_string);
     for entry in groups {
         let Some(name) = entry else { continue };
         if last_pushed.as_deref() == Some(name) {
@@ -258,7 +263,11 @@ fn resolve_slide_positions<'a>(
         }
         collected
     };
-    let upcoming_groups = upcoming_distinct_groups(upcoming_names, 4);
+    let current_group_name = resolved_current
+        .as_ref()
+        .and_then(|c| c.effective_group.clone());
+    let upcoming_groups =
+        upcoming_distinct_groups(upcoming_names, 4, current_group_name.as_deref());
 
     ResolvedSlides {
         current: resolved_current,
@@ -505,7 +514,7 @@ mod tests {
             Some("Chorus"),
             Some("Verse 2"),
         ];
-        let groups = upcoming_distinct_groups(names, 4);
+        let groups = upcoming_distinct_groups(names, 4, None);
         assert_eq!(
             groups.iter().map(|g| g.name.as_str()).collect::<Vec<_>>(),
             vec!["Verse 1", "Chorus", "Verse 2"]
@@ -516,7 +525,7 @@ mod tests {
     fn upcoming_distinct_groups_skips_ungrouped() {
         let names: Vec<Option<&str>> =
             vec![None, Some("Verse 1"), None, Some("Verse 1"), Some("Chorus")];
-        let groups = upcoming_distinct_groups(names, 4);
+        let groups = upcoming_distinct_groups(names, 4, None);
         assert_eq!(
             groups.iter().map(|g| g.name.as_str()).collect::<Vec<_>>(),
             vec!["Verse 1", "Chorus"]
@@ -533,15 +542,30 @@ mod tests {
             Some("E"),
             Some("F"),
         ];
-        let groups = upcoming_distinct_groups(names, 4);
+        let groups = upcoming_distinct_groups(names, 4, None);
         assert_eq!(groups.len(), 4);
         assert_eq!(groups.last().unwrap().name, "D");
     }
 
     #[test]
     fn upcoming_distinct_groups_empty_when_no_names() {
-        let groups = upcoming_distinct_groups(Vec::<Option<&str>>::new(), 4);
+        let groups = upcoming_distinct_groups(Vec::<Option<&str>>::new(), 4, None);
         assert!(groups.is_empty());
+    }
+
+    #[test]
+    fn upcoming_distinct_groups_skips_when_first_entries_match_seed() {
+        let names: Vec<Option<&str>> = vec![
+            Some("Verse 1"),
+            Some("Verse 1"),
+            Some("Chorus"),
+            Some("Verse 2"),
+        ];
+        let groups = upcoming_distinct_groups(names, 4, Some("Verse 1"));
+        assert_eq!(
+            groups.iter().map(|g| g.name.as_str()).collect::<Vec<_>>(),
+            vec!["Chorus", "Verse 2"]
+        );
     }
 
     #[test]
@@ -577,6 +601,6 @@ mod tests {
             .iter()
             .map(|g| g.name.as_str())
             .collect();
-        assert_eq!(names, vec!["Verse 1", "Chorus", "Verse 2", "Bridge"]);
+        assert_eq!(names, vec!["Chorus", "Verse 2", "Bridge"]);
     }
 }
