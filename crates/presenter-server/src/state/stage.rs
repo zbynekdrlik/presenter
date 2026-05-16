@@ -38,6 +38,8 @@ pub(crate) struct StageResolution {
     pub(crate) playlist_name: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub(crate) playlist_entries: Option<Vec<StagePlaylistEntry>>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub(crate) upcoming_groups: Vec<presenter_core::UpcomingGroup>,
 }
 
 impl StageResolution {
@@ -57,6 +59,7 @@ impl StageResolution {
             playlist_id: None,
             playlist_name: None,
             playlist_entries: None,
+            upcoming_groups: Vec::new(),
         }
     }
 }
@@ -82,6 +85,7 @@ impl<'a> SlideCtx<'a> {
 struct ResolvedSlides<'a> {
     current: Option<SlideCtx<'a>>,
     next: Option<SlideCtx<'a>>,
+    upcoming_groups: Vec<presenter_core::UpcomingGroup>,
 }
 
 pub(crate) fn stage_resolution_from_presentation(
@@ -108,6 +112,7 @@ pub(crate) fn stage_resolution_from_presentation(
             playlist_id: None,
             playlist_name: None,
             playlist_entries: None,
+            upcoming_groups: Vec::new(),
         };
     }
 
@@ -144,7 +149,41 @@ pub(crate) fn stage_resolution_from_presentation(
         playlist_id: None,
         playlist_name: None,
         playlist_entries: None,
+        upcoming_groups: resolved.upcoming_groups,
     }
+}
+
+/// Returns up to `max` distinct upcoming group names from an ordered iterator
+/// of per-slide group names (`None` = ungrouped slide). Consecutive duplicates
+/// are collapsed; ungrouped slides are skipped (they do not break a run).
+///
+/// `seed_last` pre-seeds the deduplication state so that any leading run
+/// matching the seed is skipped. Pass `Some(current_group)` to exclude the
+/// current group from the result.
+pub(crate) fn upcoming_distinct_groups<'a, I>(
+    groups: I,
+    max: usize,
+    seed_last: Option<&str>,
+) -> Vec<presenter_core::UpcomingGroup>
+where
+    I: IntoIterator<Item = Option<&'a str>>,
+{
+    let mut out: Vec<presenter_core::UpcomingGroup> = Vec::new();
+    let mut last_pushed: Option<String> = seed_last.map(str::to_string);
+    for entry in groups {
+        let Some(name) = entry else { continue };
+        if last_pushed.as_deref() == Some(name) {
+            continue;
+        }
+        out.push(presenter_core::UpcomingGroup {
+            name: name.to_string(),
+        });
+        last_pushed = Some(name.to_string());
+        if out.len() >= max {
+            break;
+        }
+    }
+    out
 }
 
 fn resolve_slide_positions<'a>(
@@ -205,9 +244,35 @@ fn resolve_slide_positions<'a>(
         second
     };
 
+    // Build per-slide group names AFTER the current slide for upcoming_groups.
+    // If no current slide is selected (current_order is None), start collecting
+    // from the top so camera crew sees the structural plan.
+    let upcoming_names: Vec<Option<&str>> = {
+        let mut active_group: Option<&str> = None;
+        let mut collected: Vec<Option<&str>> = Vec::new();
+        let mut past_current = current_order.is_none();
+        for slide in &presentation.slides {
+            if let Some(g) = slide.content.group.as_ref() {
+                active_group = Some(g.name());
+            }
+            if past_current {
+                collected.push(active_group);
+            } else if Some(slide.order) == current_order {
+                past_current = true;
+            }
+        }
+        collected
+    };
+    let current_group_name = resolved_current
+        .as_ref()
+        .and_then(|c| c.effective_group.clone());
+    let upcoming_groups =
+        upcoming_distinct_groups(upcoming_names, 4, current_group_name.as_deref());
+
     ResolvedSlides {
         current: resolved_current,
         next: resolved_next,
+        upcoming_groups,
     }
 }
 
@@ -246,6 +311,7 @@ pub(crate) fn build_stage_snapshot(
         context.resolution.playlist_id,
         context.resolution.playlist_name.clone(),
         context.resolution.playlist_entries.clone(),
+        context.resolution.upcoming_groups.clone(),
     )
 }
 
@@ -392,6 +458,7 @@ mod tests {
                 playlist_id: None,
                 playlist_name: None,
                 playlist_entries: None,
+                upcoming_groups: Vec::new(),
             },
             latency_ms: None,
         }
@@ -437,5 +504,103 @@ mod tests {
         let context = make_context(Some("042 Amazing Grace"), Some("Custom AbleSet Title"));
         let snapshot = build_stage_snapshot(layout, &context);
         assert_eq!(snapshot.song_name.as_deref(), Some("Custom AbleSet Title"));
+    }
+
+    #[test]
+    fn upcoming_distinct_groups_collapses_consecutive_duplicates() {
+        let names: Vec<Option<&str>> = vec![
+            Some("Verse 1"),
+            Some("Verse 1"),
+            Some("Chorus"),
+            Some("Verse 2"),
+        ];
+        let groups = upcoming_distinct_groups(names, 4, None);
+        assert_eq!(
+            groups.iter().map(|g| g.name.as_str()).collect::<Vec<_>>(),
+            vec!["Verse 1", "Chorus", "Verse 2"]
+        );
+    }
+
+    #[test]
+    fn upcoming_distinct_groups_skips_ungrouped() {
+        let names: Vec<Option<&str>> =
+            vec![None, Some("Verse 1"), None, Some("Verse 1"), Some("Chorus")];
+        let groups = upcoming_distinct_groups(names, 4, None);
+        assert_eq!(
+            groups.iter().map(|g| g.name.as_str()).collect::<Vec<_>>(),
+            vec!["Verse 1", "Chorus"]
+        );
+    }
+
+    #[test]
+    fn upcoming_distinct_groups_caps_at_max() {
+        let names: Vec<Option<&str>> = vec![
+            Some("A"),
+            Some("B"),
+            Some("C"),
+            Some("D"),
+            Some("E"),
+            Some("F"),
+        ];
+        let groups = upcoming_distinct_groups(names, 4, None);
+        assert_eq!(groups.len(), 4);
+        assert_eq!(groups.last().unwrap().name, "D");
+    }
+
+    #[test]
+    fn upcoming_distinct_groups_empty_when_no_names() {
+        let groups = upcoming_distinct_groups(Vec::<Option<&str>>::new(), 4, None);
+        assert!(groups.is_empty());
+    }
+
+    #[test]
+    fn upcoming_distinct_groups_skips_when_first_entries_match_seed() {
+        let names: Vec<Option<&str>> = vec![
+            Some("Verse 1"),
+            Some("Verse 1"),
+            Some("Chorus"),
+            Some("Verse 2"),
+        ];
+        let groups = upcoming_distinct_groups(names, 4, Some("Verse 1"));
+        assert_eq!(
+            groups.iter().map(|g| g.name.as_str()).collect::<Vec<_>>(),
+            vec!["Chorus", "Verse 2"]
+        );
+    }
+
+    #[test]
+    fn resolve_stage_collects_upcoming_distinct_groups_after_current() {
+        use presenter_core::{Presentation, Slide, SlideContent, SlideGroup, SlideText};
+
+        fn slide(order: u32, group: Option<&str>) -> Slide {
+            Slide::new(
+                order,
+                SlideContent::new(
+                    SlideText::new("").unwrap(),
+                    SlideText::new("").unwrap(),
+                    SlideText::new("").unwrap(),
+                    group.map(SlideGroup::new),
+                ),
+            )
+        }
+
+        let slides = vec![
+            slide(0, Some("Verse 1")),
+            slide(1, None),
+            slide(2, Some("Chorus")),
+            slide(3, None),
+            slide(4, Some("Verse 2")),
+            slide(5, Some("Bridge")),
+        ];
+        let current_id = slides[0].id;
+        let presentation = Presentation::new("Test", slides).unwrap();
+
+        let resolved = resolve_slide_positions(&presentation, Some(current_id), None);
+        let names: Vec<&str> = resolved
+            .upcoming_groups
+            .iter()
+            .map(|g| g.name.as_str())
+            .collect();
+        assert_eq!(names, vec!["Chorus", "Verse 2", "Bridge"]);
     }
 }

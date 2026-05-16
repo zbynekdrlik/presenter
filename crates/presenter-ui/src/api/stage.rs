@@ -6,6 +6,11 @@ pub async fn get_snapshot() -> Result<StageDisplaySnapshot, ApiError> {
     get_json("/stage/snapshot").await
 }
 
+pub async fn get_snapshot_for(layout: &str) -> Result<StageDisplaySnapshot, ApiError> {
+    let path = format!("/stage/snapshot?layout={layout}");
+    get_json(&path).await
+}
+
 pub async fn get_connections() -> Result<Vec<StageClientSnapshot>, ApiError> {
     get_json("/stage/connections").await
 }

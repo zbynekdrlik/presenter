@@ -804,6 +804,7 @@ impl AppState {
             None,           // playlist_id
             None,           // playlist_name
             None,           // playlist_entries
+            Vec::new(),     // upcoming_groups (api layout has no upcoming context)
         )
     }
 

@@ -3,6 +3,7 @@ pub mod bible;
 pub mod bible_controls;
 pub mod bible_prepared;
 pub mod bible_slides;
+pub mod camera;
 pub mod operator;
 pub mod settings;
 pub mod stage;

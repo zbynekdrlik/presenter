@@ -472,7 +472,17 @@ body.stage {
 .stage-pp__slides-area,
 .stage-pp__playlist-sidebar,
 .stage-timer__display,
-.stage-preach__display {
+.stage-preach__display,
+.stage__camera-crew__current-group,
+.stage__camera-crew__next-1,
+.stage__camera-crew__next-2,
+.stage__camera-crew__next-3,
+.stage__camera-crew__next-4,
+.stage__camera-crew__preach,
+.stage__camera-crew__time,
+.stage__camera-crew__countdown,
+.stage__camera-crew__on-air-strip,
+.stage__camera-crew__version {
     border: 1px solid rgba(255, 255, 255, 0.08);
 }
 
@@ -581,4 +591,207 @@ body.stage {
 .stage__version {
   font-size: 0.5em;
   opacity: 0.6;
+}
+
+/* ===== camera-crew layout ===== */
+
+.stage-container[data-layout="camera-crew"] {
+    background: #050505;
+    color: #f0f0f0;
+    font-family: 'Helvetica Neue', Arial, sans-serif;
+}
+
+/* Left column: 5 stacked group boxes (~66% width, full height minus version corner) */
+.stage__camera-crew__column-left {
+    position: absolute;
+    left: 1vw;
+    top: 1vh;
+    width: 64vw;
+    bottom: 1vh;
+    display: grid;
+    /* Reverse-pyramid heights: NOW biggest, each NEXT step smaller. */
+    grid-template-rows: 2.4fr 1.55fr 1.35fr 1.18fr 1fr;
+    gap: 1vh;
+    justify-items: center;
+}
+
+/* Reverse-pyramid widths: each NEXT box slightly narrower than the one above,
+   centered, so the eye reads importance top-to-bottom. */
+.stage__camera-crew__column-left .stage__camera-crew__current-group {
+    width: 100%;
+}
+.stage__camera-crew__column-left .stage__camera-crew__next-1 {
+    width: 94%;
+}
+.stage__camera-crew__column-left .stage__camera-crew__next-2 {
+    width: 88%;
+}
+.stage__camera-crew__column-left .stage__camera-crew__next-3 {
+    width: 82%;
+}
+.stage__camera-crew__column-left .stage__camera-crew__next-4 {
+    width: 76%;
+}
+
+/* Right column: 4 stacked boxes — preach (largest), time, countdown, on-air strip */
+.stage__camera-crew__column-right {
+    position: absolute;
+    right: 1vw;
+    top: 1vh;
+    width: 32vw;
+    bottom: 1vh;
+    display: grid;
+    grid-template-rows: 2.2fr 1.6fr 1fr 0.6fr;
+    gap: 1vh;
+}
+
+/* Each group box (NOW + NEXT 1-4) is a flex container with the pill stretched */
+.stage__camera-crew__current-group,
+.stage__camera-crew__next-1,
+.stage__camera-crew__next-2,
+.stage__camera-crew__next-3,
+.stage__camera-crew__next-4 {
+    position: relative;
+    display: flex;
+    align-items: stretch;
+    justify-content: center;
+    overflow: hidden;
+}
+
+/* Each timer/status box in the right column */
+.stage__camera-crew__preach,
+.stage__camera-crew__time,
+.stage__camera-crew__countdown,
+.stage__camera-crew__on-air-strip {
+    position: relative;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    overflow: hidden;
+}
+
+/* Visible caption inside each right-column timer box, so cameramen can tell
+   PREACH / TIME / COUNTDOWN apart at a glance — debug-label is too dim. */
+.stage__camera-crew__caption {
+    position: absolute;
+    top: 0.6vh;
+    left: 0;
+    right: 0;
+    text-align: center;
+    font-size: clamp(0.8rem, 1.6vh, 2rem);
+    font-weight: 700;
+    letter-spacing: 0.18em;
+    color: rgba(255, 255, 255, 0.55);
+    text-transform: uppercase;
+    pointer-events: none;
+}
+
+/* Timer numerals — big and clear, with per-box font sizes to prevent cropping */
+.stage__camera-crew__timer-text {
+    font-weight: 800;
+    line-height: 1;
+    font-variant-numeric: tabular-nums;
+    text-align: center;
+    color: #fff;
+    width: 100%;
+    height: 100%;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    overflow: hidden;
+}
+
+/* Per-box font sizes calibrated to fit content without cropping.
+   Box width ~30vw: "MM:SS" (5 chars) fits at ≤7vw; "HH:MM:SS" (8 chars) needs ≤5.5vw. */
+.stage__camera-crew__preach .stage__camera-crew__timer-text {
+    font-size: clamp(2rem, 6.5vw, 9rem);
+}
+.stage__camera-crew__time .stage__camera-crew__timer-text {
+    font-size: clamp(2rem, 7vw, 10rem);
+}
+.stage__camera-crew__countdown .stage__camera-crew__timer-text {
+    font-size: clamp(1.4rem, 5vw, 6rem);
+}
+
+/* On-air + latency strip */
+.stage__camera-crew__on-air-row {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    width: 100%;
+    padding: 0 1vw;
+    box-sizing: border-box;
+    font-size: clamp(0.9rem, 1.6vw, 1.6rem);
+    font-weight: 700;
+    letter-spacing: 0.06em;
+}
+
+.stage__camera-crew__on-air-indicator {
+    color: #555;
+    transition: color 120ms ease-out;
+}
+.stage__camera-crew__on-air-indicator.is-on {
+    color: #ff2a2a;
+    text-shadow: 0 0 0.8vh rgba(255, 42, 42, 0.6);
+}
+
+.stage__camera-crew__latency {
+    color: rgba(255, 255, 255, 0.6);
+}
+
+/* WS connection state hint on the on-air strip border. Camera operator can
+   see at a glance if the live feed has lost sync with the server. */
+.stage__camera-crew__on-air-strip.is-connected {
+    border-color: rgba(80, 200, 120, 0.35);
+}
+.stage__camera-crew__on-air-strip.is-reconnecting {
+    border-color: rgba(255, 170, 0, 0.55);
+}
+.stage__camera-crew__on-air-strip.is-disconnected {
+    border-color: rgba(255, 70, 70, 0.7);
+}
+
+/* Version corner — small, unobtrusive */
+.stage__camera-crew__version {
+    position: absolute;
+    right: 0.5vw;
+    bottom: 0.5vh;
+    font-size: 1.2vh;
+    color: rgba(255, 255, 255, 0.35);
+    padding: 0.2vh 0.4vw;
+    line-height: 1;
+}
+
+/* Pill base style reuses .stage__group-pill defined elsewhere in the file.
+   Camera-crew tweaks: smaller letter-spacing for narrow phone widths, allow
+   the pill to fill the box. */
+.stage__camera-crew__current-group .stage__group-pill,
+.stage__camera-crew__next-1 .stage__group-pill,
+.stage__camera-crew__next-2 .stage__group-pill,
+.stage__camera-crew__next-3 .stage__group-pill,
+.stage__camera-crew__next-4 .stage__group-pill {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    width: 100%;
+    height: 100%;
+    background-color: var(--stage-group-pill-default-bg, #1a1a1a);
+    color: #fff;
+    letter-spacing: 0.04em;
+    line-height: 1;
+    overflow: hidden;
+    white-space: nowrap;
+}
+
+/* Current group has the biggest font (occupies 2x row height) */
+.stage__camera-crew__current-group .stage__group-pill {
+    font-size: clamp(2rem, 8vw, 9rem);
+}
+
+/* Next groups smaller, scaled by box height */
+.stage__camera-crew__next-1 .stage__group-pill,
+.stage__camera-crew__next-2 .stage__group-pill,
+.stage__camera-crew__next-3 .stage__group-pill,
+.stage__camera-crew__next-4 .stage__group-pill {
+    font-size: clamp(1.4rem, 4.5vw, 5rem);
 }

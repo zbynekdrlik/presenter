@@ -516,3 +516,112 @@ async fn switching_to_api_publishes_stored_api_state() {
         "expected LiveEvent::Stage with api layout after switch"
     );
 }
+
+#[tokio::test]
+async fn publish_stage_context_emits_camera_crew_snapshot_alongside_operator_layout() {
+    use std::time::Duration;
+    use tokio::time::timeout;
+
+    let state = AppState::in_memory().await.unwrap();
+    state
+        .set_stage_layout_code("worship-snv")
+        .await
+        .expect("set layout");
+    super::seed_sample_library(&state).await.unwrap();
+
+    let mut rx = state.live_hub().subscribe();
+
+    state.broadcast_stage_snapshots().await.expect("broadcast");
+
+    let mut saw_worship = false;
+    let mut saw_camera = false;
+    let collect = async {
+        for _ in 0..20 {
+            match rx.recv().await {
+                Ok(LiveEvent::Stage { snapshot }) => match snapshot.layout.code.as_str() {
+                    "worship-snv" => saw_worship = true,
+                    "camera-crew" => saw_camera = true,
+                    _ => {}
+                },
+                Ok(_) => continue,
+                Err(_) => break,
+            }
+            if saw_worship && saw_camera {
+                return;
+            }
+        }
+    };
+    let _ = timeout(Duration::from_millis(500), collect).await;
+
+    assert!(saw_worship, "expected worship-snv snapshot");
+    assert!(
+        saw_camera,
+        "expected camera-crew snapshot alongside worship-snv"
+    );
+}
+
+#[tokio::test]
+async fn publish_stage_context_emits_camera_crew_snapshot_even_when_api_active() {
+    use std::time::Duration;
+    use tokio::time::timeout;
+
+    let state = AppState::in_memory().await.unwrap();
+    state
+        .set_stage_layout_code("api")
+        .await
+        .expect("set layout");
+    super::seed_sample_library(&state).await.unwrap();
+
+    let mut rx = state.live_hub().subscribe();
+
+    state.broadcast_stage_snapshots().await.expect("broadcast");
+
+    let mut saw_camera = false;
+    let collect = async {
+        for _ in 0..20 {
+            match rx.recv().await {
+                Ok(LiveEvent::Stage { snapshot }) if snapshot.layout.code == "camera-crew" => {
+                    saw_camera = true;
+                    return;
+                }
+                Ok(_) => continue,
+                Err(_) => break,
+            }
+        }
+    };
+    let _ = timeout(Duration::from_millis(500), collect).await;
+
+    assert!(
+        saw_camera,
+        "camera-crew snapshot must publish even when api layout is selected"
+    );
+}
+
+#[tokio::test]
+async fn stage_displays_excludes_camera_crew_from_operator_picker() {
+    let state = AppState::in_memory().await.unwrap();
+    let layouts = state.stage_displays().await.unwrap();
+    let codes: Vec<&str> = layouts.iter().map(|l| l.code.as_str()).collect();
+    assert!(
+        !codes.contains(&"camera-crew"),
+        "camera-crew must not appear in operator picker; got {codes:?}"
+    );
+    // Sanity: regular layouts ARE present.
+    assert!(codes.contains(&"worship-snv"));
+    assert!(codes.contains(&"preach"));
+}
+
+#[tokio::test]
+async fn set_stage_layout_code_rejects_camera_crew() {
+    let state = AppState::in_memory().await.unwrap();
+    let result = state.set_stage_layout_code("camera-crew").await;
+    assert!(
+        result.is_err(),
+        "camera-crew must not be settable as operator layout"
+    );
+    let msg = result.unwrap_err().to_string();
+    assert!(
+        msg.contains("camera-crew") && msg.contains("not"),
+        "error message should explain the rejection; got: {msg}"
+    );
+}

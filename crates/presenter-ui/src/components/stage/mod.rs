@@ -1,5 +1,6 @@
 pub mod api_stage;
 pub mod bible_layout;
+pub mod camera_crew;
 pub mod bible_overlay;
 pub mod ndi_fullscreen;
 pub mod preach_layout;
