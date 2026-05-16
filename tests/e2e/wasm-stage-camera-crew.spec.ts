@@ -213,6 +213,8 @@ test("pinned layout — operator switch does not flip camera view", async ({
 test("ON AIR indicator reacts to BroadcastLive toggle via Companion", async ({
   page,
 }) => {
+  const consoleMessages = collectConsoleErrors(page);
+
   await page.goto(new URL("/ui/camera", baseURL).toString(), {
     waitUntil: "domcontentloaded",
   });
@@ -270,6 +272,9 @@ test("ON AIR indicator reacts to BroadcastLive toggle via Companion", async ({
   );
 
   await expect(onAir).not.toHaveClass(/is-on/);
+
+  // Console must be clean (checked last, after all UI interactions).
+  expect(consoleMessages).toEqual([]);
 
   socket.close();
 });
