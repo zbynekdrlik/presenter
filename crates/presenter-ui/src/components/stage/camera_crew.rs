@@ -217,6 +217,7 @@ pub fn CameraCrew(
             <div class="stage__camera-crew__column-right">
                 <div class="stage__camera-crew__preach">
                     <span class="stage__debug-label">"preach"</span>
+                    <span class="stage__camera-crew__caption">"PREACH"</span>
                     <div
                         class="stage__camera-crew__timer-text"
                         data-testid="camera-crew-preach"
@@ -226,6 +227,7 @@ pub fn CameraCrew(
                 </div>
                 <div class="stage__camera-crew__time">
                     <span class="stage__debug-label">"time"</span>
+                    <span class="stage__camera-crew__caption">"TIME"</span>
                     <div
                         class="stage__camera-crew__timer-text"
                         data-testid="camera-crew-time"
@@ -235,6 +237,7 @@ pub fn CameraCrew(
                 </div>
                 <div class="stage__camera-crew__countdown">
                     <span class="stage__debug-label">"countdown"</span>
+                    <span class="stage__camera-crew__caption">"COUNTDOWN"</span>
                     <div
                         class="stage__camera-crew__timer-text"
                         data-testid="camera-crew-countdown"

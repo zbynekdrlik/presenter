@@ -670,6 +670,22 @@ body.stage {
     overflow: hidden;
 }
 
+/* Visible caption inside each right-column timer box, so cameramen can tell
+   PREACH / TIME / COUNTDOWN apart at a glance — debug-label is too dim. */
+.stage__camera-crew__caption {
+    position: absolute;
+    top: 0.6vh;
+    left: 0;
+    right: 0;
+    text-align: center;
+    font-size: clamp(0.8rem, 1.6vh, 2rem);
+    font-weight: 700;
+    letter-spacing: 0.18em;
+    color: rgba(255, 255, 255, 0.55);
+    text-transform: uppercase;
+    pointer-events: none;
+}
+
 /* Timer numerals — big and clear, with per-box font sizes to prevent cropping */
 .stage__camera-crew__timer-text {
     font-weight: 800;
