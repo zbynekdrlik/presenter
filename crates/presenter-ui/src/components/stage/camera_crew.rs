@@ -135,12 +135,18 @@ pub fn CameraCrew(
     };
 
     let countdown_label = move || {
-        ctx.snapshot
+        let raw = ctx
+            .snapshot
             .get()
             .map(|s| {
                 presenter_core::format_countdown(s.timers.countdown_to_start.seconds_remaining)
             })
-            .unwrap_or_else(|| "--:--".to_string())
+            .unwrap_or_default();
+        if raw.is_empty() {
+            "--:--".to_string()
+        } else {
+            raw
+        }
     };
 
     // ── wall clock (updates every second) ─────────────────────────────────────
