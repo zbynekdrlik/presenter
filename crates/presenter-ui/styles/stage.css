@@ -609,8 +609,28 @@ body.stage {
     width: 64vw;
     bottom: 1vh;
     display: grid;
-    grid-template-rows: 2fr 1fr 1fr 1fr 1fr;
+    /* Reverse-pyramid heights: NOW biggest, each NEXT step smaller. */
+    grid-template-rows: 2.4fr 1.55fr 1.35fr 1.18fr 1fr;
     gap: 1vh;
+    justify-items: center;
+}
+
+/* Reverse-pyramid widths: each NEXT box slightly narrower than the one above,
+   centered, so the eye reads importance top-to-bottom. */
+.stage__camera-crew__column-left .stage__camera-crew__current-group {
+    width: 100%;
+}
+.stage__camera-crew__column-left .stage__camera-crew__next-1 {
+    width: 94%;
+}
+.stage__camera-crew__column-left .stage__camera-crew__next-2 {
+    width: 88%;
+}
+.stage__camera-crew__column-left .stage__camera-crew__next-3 {
+    width: 82%;
+}
+.stage__camera-crew__column-left .stage__camera-crew__next-4 {
+    width: 76%;
 }
 
 /* Right column: 4 stacked boxes — preach (largest), time, countdown, on-air strip */
