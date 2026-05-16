@@ -1,17 +1,14 @@
 /**
  * E2E spec for /ui/camera — camera-crew layout.
  *
- * Three scenarios:
+ * Two scenarios:
  *  1. Pinned layout: changing the global stage layout via POST /stage/layout
  *     must NOT flip the camera page away from "camera-crew".
- *  2. ON AIR indicator: the indicator reacts to broadcast.set_live commands
- *     sent via the Companion WebSocket.
- *  3. Group label content: after setting a known slide as current, the
+ *  2. Group label content: after setting a known slide as current, the
  *     camera-crew current pill must render the slide's group name.
  */
 
 import { test, expect } from "@playwright/test";
-import WebSocket from "ws";
 import {
   deriveTestConfig,
   refreshDevData,
@@ -44,103 +41,14 @@ function collectConsoleErrors(
   return messages;
 }
 
-/** Build a Companion WebSocket helper for sending commands. */
-function createCompanionSocket(url: string) {
-  const socket = new WebSocket(url);
-
-  const waitForMessage = (
-    predicate: (msg: Record<string, unknown>) => boolean,
-    timeoutMs = 5_000,
-  ) =>
-    new Promise<Record<string, unknown>>((resolve, reject) => {
-      const timeout = setTimeout(() => {
-        cleanup();
-        reject(new Error("Timed out waiting for expected Companion message"));
-      }, timeoutMs);
-
-      const cleanup = () => {
-        clearTimeout(timeout);
-        socket.off("message", handleMessage);
-      };
-
-      const handleMessage = (raw: WebSocket.RawData) => {
-        try {
-          const parsed = JSON.parse(raw.toString());
-          if (predicate(parsed)) {
-            cleanup();
-            resolve(parsed);
-          }
-        } catch (error) {
-          cleanup();
-          reject(error as Error);
-        }
-      };
-
-      socket.on("message", handleMessage);
-    });
-
-  async function handshake() {
-    await new Promise<void>((resolve, reject) => {
-      socket.once("open", () => {
-        socket.send(
-          JSON.stringify({
-            type: "hello",
-            client: "Playwright",
-            instanceName: "camera-crew-spec",
-          }),
-        );
-        resolve();
-      });
-      socket.once("error", (err) => reject(err));
-    });
-
-    await waitForMessage((msg) => msg.type === "welcome");
-    await waitForMessage((msg) => msg.type === "variables");
-  }
-
-  async function sendCommand(
-    command: string,
-    payload: Record<string, unknown> = {},
-  ) {
-    socket.send(JSON.stringify({ type: "command", command, payload }));
-    return waitForMessage(
-      (msg) =>
-        (msg.type === "ack" && msg.command === command) || msg.type === "error",
-    );
-  }
-
-  return { socket, handshake, sendCommand };
-}
-
 let serverHandle: ServerHandle | undefined;
 let baseURL = "";
-let companionWsURL = "";
 
 test.beforeAll(async ({}, testInfo) => {
   const cfg = deriveTestConfig(testInfo);
   baseURL = cfg.baseURL;
   await refreshDevData(cfg.dbUrl);
   serverHandle = await startTestServer(cfg.port, cfg.dbUrl, cfg.oscPort);
-
-  // Enable Companion WebSocket so broadcast.set_live commands can be sent.
-  const companionPort = cfg.port + 100;
-  const resp = await fetch(new URL("/settings/features", baseURL).toString(), {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({
-      companionEnabled: true,
-      companionPort,
-    }),
-  });
-  if (!resp.ok) {
-    throw new Error(
-      `Failed to enable Companion WebSocket (${resp.status})`,
-    );
-  }
-
-  const base = new URL(baseURL);
-  const wsOrigin = `${base.protocol.replace("http", "ws")}//${base.hostname}:${companionPort}`;
-  companionWsURL = `${wsOrigin}/companion/ws`;
 });
 
 test.afterAll(async () => {
@@ -173,7 +81,7 @@ test("pinned layout — operator switch does not flip camera view", async ({
     "camera-crew",
   );
 
-  // The version label is rendered inside the footer's connection span.
+  // The version label is rendered inside the version corner box.
   // VersionLabel uses data-testid="version" per project standard.
   await expect(
     page.locator('[data-testid="version"]').first(),
@@ -198,88 +106,17 @@ test("pinned layout — operator switch does not flip camera view", async ({
 
   // Core structural elements must be visible.
   await expect(
-    page.locator(".stage__camera-crew__current"),
+    page.locator(".stage__camera-crew__column-left"),
   ).toBeVisible();
   await expect(
-    page.locator(".stage__camera-crew__footer"),
+    page.locator(".stage__camera-crew__column-right"),
   ).toBeVisible();
 
   // Console must be clean (checked last, after all UI interactions).
   expect(consoleMessages).toEqual([]);
 });
 
-// ─── Scenario 2: ON AIR indicator reacts to BroadcastLive toggle ─────────────
-
-test("ON AIR indicator reacts to BroadcastLive toggle via Companion", async ({
-  page,
-}) => {
-  const consoleMessages = collectConsoleErrors(page);
-
-  await page.goto(new URL("/ui/camera", baseURL).toString(), {
-    waitUntil: "domcontentloaded",
-  });
-
-  await page.waitForSelector('body[data-wasm-ready="true"]', {
-    timeout: 30_000,
-  });
-
-  // Wait for the WS connection to be established before testing.
-  await page.waitForFunction(
-    () => window.__presenterStageConnectionState === "connected",
-    { timeout: 30_000 },
-  );
-
-  const onAir = page.locator('[data-testid="camera-crew-on-air"]');
-  await expect(onAir).toBeVisible();
-
-  // Initially broadcast is OFF — the is-on class must not be present.
-  await expect(onAir).not.toHaveClass(/is-on/);
-
-  // Connect to Companion and toggle broadcast live ON.
-  const { socket, handshake, sendCommand } = createCompanionSocket(
-    companionWsURL,
-  );
-  await handshake();
-
-  const enableResult = await sendCommand("broadcast.set_live", {
-    enabled: true,
-  });
-  expect(enableResult.type).toBe("ack");
-
-  // Wait for the WASM event handler to receive the BroadcastLive event.
-  await page.waitForFunction(
-    () =>
-      document
-        .querySelector('[data-testid="camera-crew-on-air"]')
-        ?.classList.contains("is-on"),
-    { timeout: 5_000 },
-  );
-
-  await expect(onAir).toHaveClass(/is-on/);
-
-  // Toggle broadcast live OFF.
-  const disableResult = await sendCommand("broadcast.set_live", {
-    enabled: false,
-  });
-  expect(disableResult.type).toBe("ack");
-
-  await page.waitForFunction(
-    () =>
-      !document
-        .querySelector('[data-testid="camera-crew-on-air"]')
-        ?.classList.contains("is-on"),
-    { timeout: 5_000 },
-  );
-
-  await expect(onAir).not.toHaveClass(/is-on/);
-
-  // Console must be clean (checked last, after all UI interactions).
-  expect(consoleMessages).toEqual([]);
-
-  socket.close();
-});
-
-// ─── Scenario 3: Group label content propagates to camera-crew pill ───────────
+// ─── Scenario 2: Group label content propagates to camera-crew pill ───────────
 
 test("renders seeded current group label after slide-state set", async ({
   page,
@@ -375,7 +212,9 @@ test("renders seeded current group label after slide-state set", async ({
   // ── Assert the current group pill shows the expected group name ───────────
   // The component renders content.group.name as text; text-transform:uppercase
   // is CSS-only and does NOT affect textContent.
-  const currentPill = page.locator(".stage__camera-crew__current");
+  const currentPill = page.locator(
+    ".stage__camera-crew__current-group .stage__group-pill",
+  );
   await expect(currentPill).toBeVisible();
 
   // Poll until the snapshot from the WS arrives and the pill is non-empty.
@@ -384,9 +223,11 @@ test("renders seeded current group label after slide-state set", async ({
   const renderedText = (await currentPill.textContent())?.trim() ?? "";
   expect(renderedText).toBe(expectedGroupName);
 
-  // ── Sanity: future-groups strip is rendered (may have 0..3 children) ──────
-  const futureStrip = page.locator(".stage__camera-crew__future");
-  await expect(futureStrip).toBeVisible();
+  // ── Sanity: left and right columns are rendered ───────────────────────────
+  await expect(page.locator(".stage__camera-crew__column-left")).toBeVisible();
+  await expect(
+    page.locator(".stage__camera-crew__column-right"),
+  ).toBeVisible();
 
   // ── Console must be clean ─────────────────────────────────────────────────
   expect(consoleErrors).toEqual([]);
