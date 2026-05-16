@@ -174,8 +174,16 @@ pub fn CameraCrew(
             .unwrap_or_else(|| "—".to_string())
     };
 
-    // Connection state class (colour hint on the on-air strip border).
-    let _ws_state = ws_state; // retained so the prop is used; may drive future styling
+    // Connection state class for the on-air strip border — green when
+    // connected, amber while (re)connecting, red when disconnected. Lets the
+    // camera operator see at a glance if the live feed has lost sync.
+    let connection_class = move || match ws_state.get() {
+        StageWsState::Connected => "stage__camera-crew__on-air-strip is-connected",
+        StageWsState::Connecting | StageWsState::Reconnecting => {
+            "stage__camera-crew__on-air-strip is-reconnecting"
+        }
+        StageWsState::Disconnected => "stage__camera-crew__on-air-strip is-disconnected",
+    };
 
     view! {
         <div class="stage-container" data-layout="camera-crew">
@@ -245,7 +253,7 @@ pub fn CameraCrew(
                         {countdown_label}
                     </div>
                 </div>
-                <div class="stage__camera-crew__on-air-strip">
+                <div class=connection_class>
                     <span class="stage__debug-label">"on-air"</span>
                     <div class="stage__camera-crew__on-air-row">
                         <span

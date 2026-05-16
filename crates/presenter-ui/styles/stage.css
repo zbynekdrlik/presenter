@@ -739,6 +739,18 @@ body.stage {
     color: rgba(255, 255, 255, 0.6);
 }
 
+/* WS connection state hint on the on-air strip border. Camera operator can
+   see at a glance if the live feed has lost sync with the server. */
+.stage__camera-crew__on-air-strip.is-connected {
+    border-color: rgba(80, 200, 120, 0.35);
+}
+.stage__camera-crew__on-air-strip.is-reconnecting {
+    border-color: rgba(255, 170, 0, 0.55);
+}
+.stage__camera-crew__on-air-strip.is-disconnected {
+    border-color: rgba(255, 70, 70, 0.7);
+}
+
 /* Version corner — small, unobtrusive */
 .stage__camera-crew__version {
     position: absolute;
