@@ -239,16 +239,23 @@ impl Repository {
         {
             return Ok(osc_model_to_domain(model)?);
         }
-        self.insert_osc_settings(OscSettingsDraft::default()).await
+        self.insert_osc_settings(
+            OscSettingsDraft::default(),
+            SettingsAuditSource::StartupDefault,
+            "system",
+        )
+        .await
     }
 
     #[instrument(skip_all)]
     pub async fn upsert_osc_settings(
         &self,
         draft: &OscSettingsDraft,
+        source: SettingsAuditSource,
+        actor: &str,
     ) -> anyhow::Result<OscSettings> {
         draft.validate().map_err(|err| anyhow!(err))?;
-        self.insert_osc_settings(draft.clone()).await
+        self.insert_osc_settings(draft.clone(), source, actor).await
     }
 
     async fn ensure_ableset_settings_table(&self) -> anyhow::Result<()> {
@@ -263,7 +270,20 @@ impl Repository {
         Ok(())
     }
 
-    async fn insert_osc_settings(&self, draft: OscSettingsDraft) -> anyhow::Result<OscSettings> {
+    async fn insert_osc_settings(
+        &self,
+        draft: OscSettingsDraft,
+        source: SettingsAuditSource,
+        actor: &str,
+    ) -> anyhow::Result<OscSettings> {
+        // Capture previous state for audit (None if row missing).
+        let before = osc_settings::Entity::find_by_id(OSC_SETTINGS_SINGLETON_ID.to_string())
+            .one(&self.db)
+            .await?
+            .map(|m| osc_model_to_domain(m))
+            .transpose()?;
+        let before_json = before.as_ref().map(serde_json::to_value).transpose()?;
+
         let now = Utc::now();
         let address = draft.address_pattern.trim().to_string();
         let mode = velocity_mode_to_string(draft.velocity_mode).to_string();
@@ -296,7 +316,18 @@ impl Repository {
             .one(&self.db)
             .await?
             .ok_or_else(|| anyhow!("osc settings missing after upsert"))?;
-        Ok(osc_model_to_domain(model)?)
+        let domain = osc_model_to_domain(model)?;
+        let after_json = serde_json::to_value(&domain)?;
+        self.record_settings_audit(
+            "osc_settings",
+            OSC_SETTINGS_SINGLETON_ID,
+            source,
+            actor,
+            before_json,
+            after_json,
+        )
+        .await?;
+        Ok(domain)
     }
 
     #[instrument(skip_all)]

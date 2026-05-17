@@ -5,6 +5,7 @@ use tracing::instrument;
 use super::super::AppError;
 use crate::state::AppState;
 use presenter_core::{OscSettings, OscSettingsDraft, VelocityMode};
+use presenter_persistence::SettingsAuditSource;
 
 #[derive(Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -68,8 +69,9 @@ pub(crate) async fn update_osc_settings(
         address_pattern: payload.address_pattern.trim().to_string(),
         velocity_mode: payload.velocity_mode,
     };
+    // HTTP wiring (Task 11) will replace these placeholders with the real actor + source.
     let settings = state
-        .update_osc_settings(draft)
+        .update_osc_settings(draft, SettingsAuditSource::HttpSetter, "http")
         .await
         .map_err(|err| AppError::bad_request_message(err.to_string()))?;
     Ok(Json(OscSettingsResponse::from(settings)))

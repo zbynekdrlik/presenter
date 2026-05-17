@@ -210,7 +210,14 @@ async fn osc_settings_upsert_updates_values() {
         address_pattern: "/presenter/trigger".to_string(),
         velocity_mode: VelocityMode::OneBased,
     };
-    let updated = repo.upsert_osc_settings(&draft).await.unwrap();
+    let updated = repo
+        .upsert_osc_settings(
+            &draft,
+            crate::audit::SettingsAuditSource::HttpSetter,
+            "test",
+        )
+        .await
+        .unwrap();
     assert!(updated.enabled);
     assert_eq!(updated.listen_port, 10023);
     assert_eq!(updated.address_pattern, "/presenter/trigger");

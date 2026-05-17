@@ -468,7 +468,14 @@ impl AppState {
                         address_pattern: osc_settings.address_pattern.clone(),
                         velocity_mode: osc_settings.velocity_mode,
                     };
-                    osc_settings = state.repository.upsert_osc_settings(&draft).await?;
+                    osc_settings = state
+                        .repository
+                        .upsert_osc_settings(
+                            &draft,
+                            presenter_persistence::SettingsAuditSource::StartupDefault,
+                            "system",
+                        )
+                        .await?;
                 }
                 Ok(_) => {}
                 Err(err) => {
@@ -543,8 +550,13 @@ impl AppState {
     pub async fn update_osc_settings(
         &self,
         draft: OscSettingsDraft,
+        source: presenter_persistence::SettingsAuditSource,
+        actor: &str,
     ) -> anyhow::Result<OscSettings> {
-        let settings = self.repository.upsert_osc_settings(&draft).await?;
+        let settings = self
+            .repository
+            .upsert_osc_settings(&draft, source, actor)
+            .await?;
         self.osc_bridge
             .apply_settings(settings.clone(), self.clone())
             .await?;
