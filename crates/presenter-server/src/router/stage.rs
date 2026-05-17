@@ -162,6 +162,21 @@ pub(super) async fn get_broadcast_live(
     })
 }
 
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub(super) struct BroadcastLiveRequest {
+    pub(super) enabled: bool,
+}
+
+#[instrument(skip_all)]
+pub(super) async fn set_broadcast_live(
+    State(state): State<AppState>,
+    Json(payload): Json<BroadcastLiveRequest>,
+) -> StatusCode {
+    state.set_broadcast_live(payload.enabled);
+    StatusCode::NO_CONTENT
+}
+
 #[cfg(test)]
 mod camera_snapshot_query_tests {
     use super::*;
@@ -182,5 +197,33 @@ mod camera_snapshot_query_tests {
             panic!("expected Ok with snapshot, got {result:?}");
         };
         assert_eq!(snapshot.layout.code, "camera-crew");
+    }
+}
+
+#[cfg(test)]
+mod broadcast_live_handler_tests {
+    use super::*;
+    use axum::extract::State;
+
+    #[tokio::test]
+    async fn set_broadcast_live_handler_toggles_state() {
+        let state = crate::state::AppState::in_memory().await.unwrap();
+        assert!(!state.broadcast_live());
+
+        let status = set_broadcast_live(
+            State(state.clone()),
+            Json(BroadcastLiveRequest { enabled: true }),
+        )
+        .await;
+        assert_eq!(status, StatusCode::NO_CONTENT);
+        assert!(state.broadcast_live());
+
+        let status = set_broadcast_live(
+            State(state.clone()),
+            Json(BroadcastLiveRequest { enabled: false }),
+        )
+        .await;
+        assert_eq!(status, StatusCode::NO_CONTENT);
+        assert!(!state.broadcast_live());
     }
 }

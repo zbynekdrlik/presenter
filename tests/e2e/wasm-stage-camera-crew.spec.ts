@@ -252,3 +252,54 @@ test("renders seeded current group label after slide-state set", async ({
   // ── Console must be clean ─────────────────────────────────────────────────
   expect(consoleErrors).toEqual([]);
 });
+
+// ─── Scenario 3: ON-AIR indicator reacts to broadcast_live toggle ────────────
+
+test("on-air indicator toggles is-on class when broadcast_live flips", async ({
+  page,
+}) => {
+  const consoleMessages = collectConsoleErrors(page);
+
+  await page.goto(new URL("/ui/camera", baseURL).toString(), {
+    waitUntil: "domcontentloaded",
+  });
+
+  await page.waitForSelector('body[data-wasm-ready="true"]', {
+    timeout: 30_000,
+  });
+
+  // Wait for the stage WebSocket so BroadcastLive events arrive in the page.
+  await page.waitForFunction(
+    () => window.__presenterStageConnectionState === "connected",
+    { timeout: 30_000 },
+  );
+
+  const indicator = page.locator(".stage__camera-crew__on-air-indicator");
+  await expect(indicator).toBeVisible();
+
+  // Reset baseline: broadcast_live starts false on a fresh test server.
+  // Ensure the indicator does NOT carry is-on.
+  await expect(indicator).not.toHaveClass(/\bis-on\b/, { timeout: 5_000 });
+
+  // ── Toggle broadcast_live ON via the REST endpoint ───────────────────────
+  const onResp = await page.request.patch(
+    new URL("/stage/broadcast-live", baseURL).toString(),
+    { data: { enabled: true } },
+  );
+  expect(onResp.status()).toBe(204);
+
+  // The indicator must pick up is-on via the BroadcastLive WS event.
+  await expect(indicator).toHaveClass(/\bis-on\b/, { timeout: 5_000 });
+
+  // ── Toggle broadcast_live OFF and confirm class is removed ───────────────
+  const offResp = await page.request.patch(
+    new URL("/stage/broadcast-live", baseURL).toString(),
+    { data: { enabled: false } },
+  );
+  expect(offResp.status()).toBe(204);
+
+  await expect(indicator).not.toHaveClass(/\bis-on\b/, { timeout: 5_000 });
+
+  // Console must be clean.
+  expect(consoleMessages).toEqual([]);
+});
