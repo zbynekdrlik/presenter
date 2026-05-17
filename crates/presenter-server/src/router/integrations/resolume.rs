@@ -9,6 +9,7 @@ use super::super::AppError;
 use crate::resolume::ResolumeConnectionSnapshot;
 use crate::state::AppState;
 use presenter_core::{ResolumeHost, ResolumeHostDraft, ResolumeHostId};
+use presenter_persistence::SettingsAuditSource;
 use uuid::Uuid;
 
 #[derive(Debug, Serialize)]
@@ -80,7 +81,10 @@ pub(crate) async fn create_resolume_host(
 ) -> Result<Json<ResolumeHostDto>, AppError> {
     let draft = ResolumeHostDraft::new(payload.label, payload.host, payload.port)
         .with_enabled(payload.is_enabled);
-    let host = state.create_resolume_host(draft).await?;
+    // HTTP wiring (Task 11) replaces these placeholders with the real actor.
+    let host = state
+        .create_resolume_host(draft, SettingsAuditSource::HttpSetter, "http")
+        .await?;
     let status = state.resolume_status_for(host.id).await;
     Ok(Json(ResolumeHostDto::from_host(host, status)))
 }
@@ -94,7 +98,12 @@ pub(crate) async fn update_resolume_host(
     let draft = ResolumeHostDraft::new(payload.label, payload.host, payload.port)
         .with_enabled(payload.is_enabled);
     let host = state
-        .update_resolume_host(ResolumeHostId::from_uuid(id), draft)
+        .update_resolume_host(
+            ResolumeHostId::from_uuid(id),
+            draft,
+            SettingsAuditSource::HttpSetter,
+            "http",
+        )
         .await?;
     let status = state.resolume_status_for(host.id).await;
     Ok(Json(ResolumeHostDto::from_host(host, status)))
@@ -106,7 +115,11 @@ pub(crate) async fn delete_resolume_host(
     Path(id): Path<Uuid>,
 ) -> Result<axum::http::StatusCode, AppError> {
     state
-        .delete_resolume_host(ResolumeHostId::from_uuid(id))
+        .delete_resolume_host(
+            ResolumeHostId::from_uuid(id),
+            SettingsAuditSource::HttpSetter,
+            "http",
+        )
         .await?;
     Ok(axum::http::StatusCode::NO_CONTENT)
 }

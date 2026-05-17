@@ -233,7 +233,14 @@ async fn osc_settings_upsert_updates_values() {
 async fn resolume_host_crud_round_trip() {
     let repo = Repository::connect_in_memory().await.unwrap();
     let draft = ResolumeHostDraft::new("Arena", "resolume.lan", 8090);
-    let created = repo.create_resolume_host(&draft).await.unwrap();
+    let created = repo
+        .create_resolume_host(
+            &draft,
+            crate::audit::SettingsAuditSource::HttpSetter,
+            "test",
+        )
+        .await
+        .unwrap();
     assert_eq!(created.label, "Arena");
     assert_eq!(created.host, "resolume.lan");
     assert_eq!(created.port, 8090);
@@ -245,13 +252,24 @@ async fn resolume_host_crud_round_trip() {
     let updated_draft =
         ResolumeHostDraft::new("Arena North", "resolume.lan", 8090).with_enabled(false);
     let updated = repo
-        .update_resolume_host(created.id, &updated_draft)
+        .update_resolume_host(
+            created.id,
+            &updated_draft,
+            crate::audit::SettingsAuditSource::HttpSetter,
+            "test",
+        )
         .await
         .unwrap();
     assert_eq!(updated.label, "Arena North");
     assert!(!updated.is_enabled);
 
-    repo.delete_resolume_host(created.id).await.unwrap();
+    repo.delete_resolume_host(
+        created.id,
+        crate::audit::SettingsAuditSource::HttpSetter,
+        "test",
+    )
+    .await
+    .unwrap();
     let after_delete = repo.list_resolume_hosts().await.unwrap();
     assert!(after_delete.is_empty());
 }

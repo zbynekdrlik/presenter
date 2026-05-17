@@ -472,6 +472,8 @@ impl Repository {
     pub async fn create_resolume_host(
         &self,
         draft: &ResolumeHostDraft,
+        source: SettingsAuditSource,
+        actor: &str,
     ) -> anyhow::Result<ResolumeHost> {
         draft.validate().map_err(|err| anyhow!(err))?;
         let id = ResolumeHostId::new();
@@ -492,7 +494,18 @@ impl Repository {
             .one(&self.db)
             .await?
             .ok_or_else(|| anyhow!("resolume host missing after insert"))?;
-        resolume_model_to_domain(inserted)
+        let host = resolume_model_to_domain(inserted)?;
+        let after_json = serde_json::to_value(&host)?;
+        self.record_settings_audit(
+            "resolume_host",
+            &id.to_string(),
+            source,
+            actor,
+            None,
+            after_json,
+        )
+        .await?;
+        Ok(host)
     }
 
     pub async fn create_android_stage_display(
@@ -529,12 +542,16 @@ impl Repository {
         &self,
         id: ResolumeHostId,
         draft: &ResolumeHostDraft,
+        source: SettingsAuditSource,
+        actor: &str,
     ) -> anyhow::Result<ResolumeHost> {
         draft.validate().map_err(|err| anyhow!(err))?;
         let existing = resolume_host::Entity::find_by_id(id.to_string())
             .one(&self.db)
             .await?
             .ok_or_else(|| anyhow!("resolume host not found"))?;
+        let before = resolume_model_to_domain(existing.clone())?;
+        let before_json = serde_json::to_value(&before)?;
 
         let mut model = existing.into_active_model();
         model.label = Set(draft.label.trim().to_string());
@@ -544,7 +561,18 @@ impl Repository {
         model.updated_at = Set(Utc::now().into());
 
         let updated = model.update(&self.db).await?;
-        resolume_model_to_domain(updated)
+        let host = resolume_model_to_domain(updated)?;
+        let after_json = serde_json::to_value(&host)?;
+        self.record_settings_audit(
+            "resolume_host",
+            &id.to_string(),
+            source,
+            actor,
+            Some(before_json),
+            after_json,
+        )
+        .await?;
+        Ok(host)
     }
 
     pub async fn update_android_stage_display(
@@ -571,13 +599,37 @@ impl Repository {
     }
 
     #[instrument(skip_all)]
-    pub async fn delete_resolume_host(&self, id: ResolumeHostId) -> anyhow::Result<()> {
+    pub async fn delete_resolume_host(
+        &self,
+        id: ResolumeHostId,
+        source: SettingsAuditSource,
+        actor: &str,
+    ) -> anyhow::Result<()> {
+        let existing = resolume_host::Entity::find_by_id(id.to_string())
+            .one(&self.db)
+            .await?;
+        let before_json = existing
+            .map(|m| {
+                let host = resolume_model_to_domain(m)?;
+                serde_json::to_value(&host).map_err(anyhow::Error::from)
+            })
+            .transpose()?;
+
         let result = resolume_host::Entity::delete_by_id(id.to_string())
             .exec(&self.db)
             .await?;
         if result.rows_affected == 0 {
             return Err(anyhow!("resolume host not found"));
         }
+        self.record_settings_audit(
+            "resolume_host",
+            &id.to_string(),
+            source,
+            actor,
+            before_json,
+            serde_json::json!({"deleted": true, "id": id.to_string()}),
+        )
+        .await?;
         Ok(())
     }
 

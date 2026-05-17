@@ -43,8 +43,13 @@ impl AppState {
     pub async fn create_resolume_host(
         &self,
         draft: ResolumeHostDraft,
+        source: presenter_persistence::SettingsAuditSource,
+        actor: &str,
     ) -> anyhow::Result<ResolumeHost> {
-        let host = self.repository.create_resolume_host(&draft).await?;
+        let host = self
+            .repository
+            .create_resolume_host(&draft, source, actor)
+            .await?;
         self.sync_resolume_hosts().await?;
         Ok(host)
     }
@@ -53,14 +58,26 @@ impl AppState {
         &self,
         id: ResolumeHostId,
         draft: ResolumeHostDraft,
+        source: presenter_persistence::SettingsAuditSource,
+        actor: &str,
     ) -> anyhow::Result<ResolumeHost> {
-        let host = self.repository.update_resolume_host(id, &draft).await?;
+        let host = self
+            .repository
+            .update_resolume_host(id, &draft, source, actor)
+            .await?;
         self.sync_resolume_hosts().await?;
         Ok(host)
     }
 
-    pub async fn delete_resolume_host(&self, id: ResolumeHostId) -> anyhow::Result<()> {
-        self.repository.delete_resolume_host(id).await?;
+    pub async fn delete_resolume_host(
+        &self,
+        id: ResolumeHostId,
+        source: presenter_persistence::SettingsAuditSource,
+        actor: &str,
+    ) -> anyhow::Result<()> {
+        self.repository
+            .delete_resolume_host(id, source, actor)
+            .await?;
         self.sync_resolume_hosts().await
     }
 
