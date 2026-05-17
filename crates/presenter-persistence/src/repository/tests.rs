@@ -877,6 +877,49 @@ async fn get_ableset_settings_does_not_rewrite_legacy_values() {
 }
 
 #[tokio::test]
+async fn second_startup_writes_no_audit_rows() {
+    use crate::audit::SettingsAuditSource;
+
+    // Connect, trigger settings reads (force singleton creation).
+    let repo = Repository::connect_in_memory().await.unwrap();
+    let _ = repo.get_osc_settings().await.unwrap();
+    let _ = repo.get_ableset_settings().await.unwrap();
+
+    let first_count = repo
+        .list_settings_audit(None, None, None, 10_000)
+        .await
+        .unwrap()
+        .len();
+    assert!(
+        first_count >= 2,
+        "expected at least 2 startup default rows, got {first_count}"
+    );
+
+    // Second "startup" — same DB, same reads.
+    let _ = repo.get_osc_settings().await.unwrap();
+    let _ = repo.get_ableset_settings().await.unwrap();
+
+    let second_count = repo
+        .list_settings_audit(None, None, None, 10_000)
+        .await
+        .unwrap()
+        .len();
+    assert_eq!(
+        first_count, second_count,
+        "second startup must not write any audit rows"
+    );
+
+    // Sanity: every existing row's source is StartupDefault.
+    for row in repo
+        .list_settings_audit(None, None, None, 10_000)
+        .await
+        .unwrap()
+    {
+        assert_eq!(row.source, SettingsAuditSource::StartupDefault);
+    }
+}
+
+#[tokio::test]
 async fn record_and_list_settings_audit_roundtrip() {
     let repo = Repository::connect_in_memory().await.unwrap();
     repo.record_settings_audit(
