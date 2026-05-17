@@ -35,6 +35,10 @@ jobs:
     runs-on: self-hosted
     # Only run when manually triggered - guard against accidental triggers
     if: github.event_name == 'workflow_dispatch'
+    # Concurrency stays job-scoped — workflow-scoped concurrency would
+    # evaluate `${{ inputs.environment }}` on every event (including
+    # push events that never run the job), reintroducing template-eval
+    # fragility. Don't lift this back up.
     concurrency:
       group: import-${{ inputs.environment }}
       cancel-in-progress: false
