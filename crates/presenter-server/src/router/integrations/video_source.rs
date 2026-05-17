@@ -1,10 +1,12 @@
 use axum::{
     extract::{Path, State},
+    http::HeaderMap,
     Json,
 };
 use serde::{Deserialize, Serialize};
 use tracing::instrument;
 
+use super::extract_actor;
 use super::super::AppError;
 use crate::state::AppState;
 use presenter_core::{VideoSource, VideoSourceDraft, VideoSourceId};
@@ -57,12 +59,13 @@ pub(crate) async fn list_video_sources(
 #[instrument(skip_all)]
 pub(crate) async fn create_video_source(
     State(state): State<AppState>,
+    headers: HeaderMap,
     Json(payload): Json<VideoSourceRequest>,
 ) -> Result<Json<VideoSourceDto>, AppError> {
     let draft = VideoSourceDraft::new(payload.label, payload.ndi_name);
-    // HTTP wiring (Task 11) replaces these placeholders with the real actor.
+    let actor = extract_actor(&headers, None);
     let source = state
-        .create_video_source(draft, SettingsAuditSource::HttpSetter, "http")
+        .create_video_source(draft, SettingsAuditSource::HttpSetter, &actor)
         .await?;
     Ok(Json(VideoSourceDto::from_source(source)))
 }
@@ -70,16 +73,18 @@ pub(crate) async fn create_video_source(
 #[instrument(skip_all)]
 pub(crate) async fn update_video_source(
     State(state): State<AppState>,
+    headers: HeaderMap,
     Path(id): Path<Uuid>,
     Json(payload): Json<VideoSourceRequest>,
 ) -> Result<Json<VideoSourceDto>, AppError> {
     let draft = VideoSourceDraft::new(payload.label, payload.ndi_name);
+    let actor = extract_actor(&headers, None);
     let source = state
         .update_video_source(
             VideoSourceId::from_uuid(id),
             draft,
             SettingsAuditSource::HttpSetter,
-            "http",
+            &actor,
         )
         .await?;
     Ok(Json(VideoSourceDto::from_source(source)))
@@ -88,13 +93,15 @@ pub(crate) async fn update_video_source(
 #[instrument(skip_all)]
 pub(crate) async fn delete_video_source(
     State(state): State<AppState>,
+    headers: HeaderMap,
     Path(id): Path<Uuid>,
 ) -> Result<axum::http::StatusCode, AppError> {
+    let actor = extract_actor(&headers, None);
     state
         .delete_video_source(
             VideoSourceId::from_uuid(id),
             SettingsAuditSource::HttpSetter,
-            "http",
+            &actor,
         )
         .await?;
     Ok(axum::http::StatusCode::NO_CONTENT)
@@ -103,13 +110,15 @@ pub(crate) async fn delete_video_source(
 #[instrument(skip_all)]
 pub(crate) async fn activate_video_source(
     State(state): State<AppState>,
+    headers: HeaderMap,
     Path(id): Path<Uuid>,
 ) -> Result<Json<VideoSourceDto>, AppError> {
+    let actor = extract_actor(&headers, None);
     let source = state
         .activate_video_source(
             VideoSourceId::from_uuid(id),
             SettingsAuditSource::HttpSetter,
-            "http",
+            &actor,
         )
         .await?;
     Ok(Json(VideoSourceDto::from_source(source)))
@@ -118,9 +127,11 @@ pub(crate) async fn activate_video_source(
 #[instrument(skip_all)]
 pub(crate) async fn deactivate_video_sources(
     State(state): State<AppState>,
+    headers: HeaderMap,
 ) -> Result<axum::http::StatusCode, AppError> {
+    let actor = extract_actor(&headers, None);
     state
-        .deactivate_video_sources(SettingsAuditSource::HttpSetter, "http")
+        .deactivate_video_sources(SettingsAuditSource::HttpSetter, &actor)
         .await?;
     Ok(axum::http::StatusCode::OK)
 }

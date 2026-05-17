@@ -1,7 +1,8 @@
-use axum::{extract::State, Json};
+use axum::{extract::State, http::HeaderMap, Json};
 use serde::{Deserialize, Serialize};
 use tracing::instrument;
 
+use super::extract_actor;
 use super::super::AppError;
 use crate::state::AppState;
 use presenter_core::{OscSettings, OscSettingsDraft, VelocityMode};
@@ -51,6 +52,7 @@ pub(crate) async fn get_osc_settings(
 #[instrument(skip_all)]
 pub(crate) async fn update_osc_settings(
     State(state): State<AppState>,
+    headers: HeaderMap,
     Json(payload): Json<UpdateOscSettingsRequest>,
 ) -> Result<Json<OscSettingsResponse>, AppError> {
     if payload.address_pattern.trim().is_empty() {
@@ -69,9 +71,9 @@ pub(crate) async fn update_osc_settings(
         address_pattern: payload.address_pattern.trim().to_string(),
         velocity_mode: payload.velocity_mode,
     };
-    // HTTP wiring (Task 11) will replace these placeholders with the real actor + source.
+    let actor = extract_actor(&headers, None);
     let settings = state
-        .update_osc_settings(draft, SettingsAuditSource::HttpSetter, "http")
+        .update_osc_settings(draft, SettingsAuditSource::HttpSetter, &actor)
         .await
         .map_err(|err| AppError::bad_request_message(err.to_string()))?;
     Ok(Json(OscSettingsResponse::from(settings)))

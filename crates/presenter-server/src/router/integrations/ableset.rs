@@ -1,7 +1,8 @@
-use axum::{extract::State, Json};
+use axum::{extract::State, http::HeaderMap, Json};
 use serde::Deserialize;
 use tracing::instrument;
 
+use super::extract_actor;
 use super::super::AppError;
 use crate::state::AppState;
 use presenter_core::{AbleSetSettings, AbleSetSettingsDraft};
@@ -24,11 +25,12 @@ pub(crate) async fn get_ableset_settings(
 #[instrument(skip_all)]
 pub(crate) async fn update_ableset_settings(
     State(state): State<AppState>,
+    headers: HeaderMap,
     Json(payload): Json<AbleSetSettingsDraft>,
 ) -> Result<Json<AbleSetSettings>, AppError> {
-    // HTTP wiring (Task 11) will replace these placeholders with the real actor + source.
+    let actor = extract_actor(&headers, None);
     let settings = state
-        .update_ableset_settings(payload, SettingsAuditSource::HttpSetter, "http")
+        .update_ableset_settings(payload, SettingsAuditSource::HttpSetter, &actor)
         .await
         .map_err(|err| AppError::bad_request_message(err.to_string()))?;
     Ok(Json(settings))
