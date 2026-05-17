@@ -780,3 +780,27 @@ async fn seed_migration_is_idempotent_when_rerun() {
         "operator's custom display must survive the rerun",
     );
 }
+
+#[tokio::test]
+async fn record_and_list_settings_audit_roundtrip() {
+    let repo = Repository::connect_in_memory().await.unwrap();
+    repo.record_settings_audit(
+        "ableset_settings",
+        "singleton",
+        crate::audit::SettingsAuditSource::HttpSetter,
+        "10.0.0.5",
+        Some(serde_json::json!({"enabled": false})),
+        serde_json::json!({"enabled": true}),
+    )
+    .await
+    .unwrap();
+
+    let rows = repo
+        .list_settings_audit(Some("ableset_settings"), None, None, 10)
+        .await
+        .unwrap();
+    assert_eq!(rows.len(), 1);
+    assert_eq!(rows[0].actor, "10.0.0.5");
+    assert_eq!(rows[0].source, crate::audit::SettingsAuditSource::HttpSetter);
+    assert_eq!(rows[0].after_json["enabled"], true);
+}
