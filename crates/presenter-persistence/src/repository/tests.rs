@@ -831,6 +831,52 @@ async fn seed_migration_is_idempotent_when_rerun() {
 }
 
 #[tokio::test]
+async fn get_ableset_settings_does_not_rewrite_legacy_values() {
+    use crate::audit::SettingsAuditSource;
+    use presenter_core::AbleSetSettingsDraft;
+    let repo = Repository::connect_in_memory().await.unwrap();
+
+    // Seed a row with legacy values.
+    repo.upsert_ableset_settings(
+        &AbleSetSettingsDraft {
+            enabled: true,
+            host: "fohabl.lan".into(),
+            osc_port: 5950,
+            http_port: 5950,
+            library_name: "NEWLEVEL".into(),
+            song_prefix_length: 3,
+        },
+        SettingsAuditSource::HttpSetter,
+        "test",
+    )
+    .await
+    .unwrap();
+
+    // Capture audit count.
+    let audit_before = repo
+        .list_settings_audit(Some("ableset_settings"), None, None, 100)
+        .await
+        .unwrap()
+        .len();
+
+    // Read should NOT mutate.
+    let settings = repo.get_ableset_settings().await.unwrap();
+    assert_eq!(settings.http_port, 5950);
+    assert_eq!(settings.osc_port, 5950);
+    assert_eq!(settings.library_name, "NEWLEVEL");
+
+    let audit_after = repo
+        .list_settings_audit(Some("ableset_settings"), None, None, 100)
+        .await
+        .unwrap()
+        .len();
+    assert_eq!(
+        audit_before, audit_after,
+        "get_ableset_settings must not write"
+    );
+}
+
+#[tokio::test]
 async fn record_and_list_settings_audit_roundtrip() {
     let repo = Repository::connect_in_memory().await.unwrap();
     repo.record_settings_audit(

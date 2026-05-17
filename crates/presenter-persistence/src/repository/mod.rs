@@ -333,37 +333,11 @@ impl Repository {
     #[instrument(skip_all)]
     pub async fn get_ableset_settings(&self) -> anyhow::Result<AbleSetSettings> {
         self.ensure_ableset_settings_table().await?;
-        if let Some(mut model) =
+        if let Some(model) =
             ableset_settings::Entity::find_by_id(ABLESET_SETTINGS_SINGLETON_ID.to_string())
                 .one(&self.db)
                 .await?
         {
-            let defaults = AbleSetSettingsDraft::default();
-            let mut needs_update = false;
-            if model.http_port == 5950 {
-                model.http_port = defaults.http_port as i32;
-                needs_update = true;
-            }
-            if model.osc_port == 5950 {
-                model.osc_port = defaults.osc_port as i32;
-                needs_update = true;
-            }
-            if model.library_name.trim().eq_ignore_ascii_case("NEWLEVEL") {
-                model.library_name = defaults.library_name.clone();
-                needs_update = true;
-            }
-            if needs_update {
-                let mut active: ableset_settings::ActiveModel = model.clone().into();
-                active.http_port = sea_orm::ActiveValue::set(model.http_port);
-                active.osc_port = sea_orm::ActiveValue::set(model.osc_port);
-                active.updated_at = sea_orm::ActiveValue::set(Utc::now().into());
-                active.update(&self.db).await?;
-                model =
-                    ableset_settings::Entity::find_by_id(ABLESET_SETTINGS_SINGLETON_ID.to_string())
-                        .one(&self.db)
-                        .await?
-                        .ok_or_else(|| anyhow!("ableset settings missing after migration"))?;
-            }
             return Ok(ableset_model_to_domain(model)?);
         }
         self.insert_ableset_settings(
