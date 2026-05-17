@@ -366,24 +366,41 @@ impl Repository {
             }
             return Ok(ableset_model_to_domain(model)?);
         }
-        self.insert_ableset_settings(AbleSetSettingsDraft::default())
-            .await
+        self.insert_ableset_settings(
+            AbleSetSettingsDraft::default(),
+            SettingsAuditSource::StartupDefault,
+            "system",
+        )
+        .await
     }
 
     #[instrument(skip_all)]
     pub async fn upsert_ableset_settings(
         &self,
         draft: &AbleSetSettingsDraft,
+        source: SettingsAuditSource,
+        actor: &str,
     ) -> anyhow::Result<AbleSetSettings> {
         draft.validate().map_err(|err| anyhow!(err))?;
-        self.insert_ableset_settings(draft.clone()).await
+        self.insert_ableset_settings(draft.clone(), source, actor)
+            .await
     }
 
     async fn insert_ableset_settings(
         &self,
         draft: AbleSetSettingsDraft,
+        source: SettingsAuditSource,
+        actor: &str,
     ) -> anyhow::Result<AbleSetSettings> {
         self.ensure_ableset_settings_table().await?;
+        // Capture previous state for audit.
+        let before = ableset_settings::Entity::find_by_id(ABLESET_SETTINGS_SINGLETON_ID.to_string())
+            .one(&self.db)
+            .await?
+            .map(|m| ableset_model_to_domain(m))
+            .transpose()?;
+        let before_json = before.as_ref().map(serde_json::to_value).transpose()?;
+
         let now = Utc::now();
         let active = ableset_settings::ActiveModel {
             id: sea_orm::ActiveValue::set(ABLESET_SETTINGS_SINGLETON_ID.to_string()),
@@ -418,8 +435,18 @@ impl Repository {
             .one(&self.db)
             .await?
             .ok_or_else(|| anyhow!("ableset settings missing after upsert"))?;
-
-        Ok(ableset_model_to_domain(model)?)
+        let domain = ableset_model_to_domain(model)?;
+        let after_json = serde_json::to_value(&domain)?;
+        self.record_settings_audit(
+            "ableset_settings",
+            ABLESET_SETTINGS_SINGLETON_ID,
+            source,
+            actor,
+            before_json,
+            after_json,
+        )
+        .await?;
+        Ok(domain)
     }
 
     pub async fn list_resolume_hosts(&self) -> anyhow::Result<Vec<ResolumeHost>> {

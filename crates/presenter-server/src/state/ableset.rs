@@ -42,8 +42,13 @@ impl AppState {
     pub async fn update_ableset_settings(
         &self,
         draft: AbleSetSettingsDraft,
+        source: presenter_persistence::SettingsAuditSource,
+        actor: &str,
     ) -> anyhow::Result<AbleSetSettings> {
-        let settings = self.repository.upsert_ableset_settings(&draft).await?;
+        let settings = self
+            .repository
+            .upsert_ableset_settings(&draft, source, actor)
+            .await?;
         self.ableset_bridge.apply_settings(settings.clone()).await?;
         {
             let mut cache = self.ableset_cache.write().await;
