@@ -945,3 +945,147 @@ async fn record_and_list_settings_audit_roundtrip() {
     );
     assert_eq!(rows[0].after_json["enabled"], true);
 }
+
+#[tokio::test]
+async fn legacy_ableset_defaults_migration_rewrites_and_audits() {
+    use crate::audit::SettingsAuditSource;
+    use presenter_core::AbleSetSettingsDraft;
+    use presenter_migration::{MigrationTrait, MigratorTrait};
+    use sea_orm::{ConnectionTrait, Statement};
+    use sea_orm_migration::SchemaManager;
+
+    // Fresh DB with all migrations applied — `settings_audit` is empty,
+    // `ableset_settings` does not yet exist (created lazily).
+    let repo = Repository::connect_in_memory().await.unwrap();
+
+    // Force lazy creation of `ableset_settings` by writing a seed row via
+    // the audited setter. That generates exactly one StartupDefault-style
+    // audit row (HttpSetter here, since we provide a source explicitly).
+    repo.upsert_ableset_settings(
+        &AbleSetSettingsDraft {
+            enabled: true,
+            host: "fohabl.lan".into(),
+            osc_port: 5950,
+            http_port: 5950,
+            library_name: "NEWLEVEL".into(),
+            song_prefix_length: 3,
+        },
+        SettingsAuditSource::HttpSetter,
+        "test",
+    )
+    .await
+    .unwrap();
+
+    // Sanity: the seed row really has legacy values, and there is exactly
+    // one audit row for it (from the upsert above).
+    let before = repo.get_ableset_settings().await.unwrap();
+    assert_eq!(before.http_port, 5950);
+    assert_eq!(before.osc_port, 5950);
+    assert_eq!(before.library_name, "NEWLEVEL");
+    let audit_pre = repo
+        .list_settings_audit(Some("ableset_settings"), None, None, 100)
+        .await
+        .unwrap();
+    assert_eq!(
+        audit_pre.len(),
+        1,
+        "seed upsert should produce exactly one audit row"
+    );
+
+    // Run the legacy-defaults migration directly against the live connection.
+    let connection = repo.connection_for_tests();
+    let schema = SchemaManager::new(connection);
+    let migration: Box<dyn MigrationTrait> = presenter_migration::Migrator::migrations()
+        .into_iter()
+        .find(|m| m.name() == "m20260517_000002_fix_legacy_ableset_defaults")
+        .expect("legacy-defaults migration present in registry");
+    migration
+        .up(&schema)
+        .await
+        .expect("rerun legacy-defaults migration");
+
+    // Row was rewritten to new defaults.
+    let after = repo.get_ableset_settings().await.unwrap();
+    assert_eq!(after.http_port, 80);
+    assert_eq!(after.osc_port, 39051);
+    assert_eq!(after.library_name, "NEW LEVEL");
+
+    // One additional audit row exists, source = schema_migration, with
+    // before/after JSON reflecting the rewrite.
+    let audit_post = repo
+        .list_settings_audit(Some("ableset_settings"), None, None, 100)
+        .await
+        .unwrap();
+    assert_eq!(
+        audit_post.len(),
+        audit_pre.len() + 1,
+        "migration must add exactly one audit row"
+    );
+    let migration_rows: Vec<_> = audit_post
+        .iter()
+        .filter(|r| r.source == SettingsAuditSource::SchemaMigration)
+        .collect();
+    assert_eq!(
+        migration_rows.len(),
+        1,
+        "exactly one audit row must have source=schema_migration"
+    );
+    let row = migration_rows[0];
+    assert_eq!(row.setting_table, "ableset_settings");
+    assert_eq!(row.actor, "migration");
+    let before_json = row
+        .before_json
+        .as_ref()
+        .expect("schema_migration audit row must carry before_json");
+    assert_eq!(before_json["httpPort"], 5950);
+    assert_eq!(before_json["oscPort"], 5950);
+    assert_eq!(before_json["libraryName"], "NEWLEVEL");
+    assert_eq!(row.after_json["httpPort"], 80);
+    assert_eq!(row.after_json["oscPort"], 39051);
+    assert_eq!(row.after_json["libraryName"], "NEW LEVEL");
+
+    // Idempotency: rerunning the migration writes no further audit rows.
+    migration
+        .up(&schema)
+        .await
+        .expect("rerun legacy-defaults migration second time");
+    let audit_final = repo
+        .list_settings_audit(Some("ableset_settings"), None, None, 100)
+        .await
+        .unwrap();
+    assert_eq!(
+        audit_final.len(),
+        audit_post.len(),
+        "migration must be idempotent — no new audit rows on rerun"
+    );
+
+    // Also sanity-check: a fresh DB with NO legacy rows produces no audit
+    // rows from this migration. We test this by direct raw insertion below.
+    let repo2 = Repository::connect_in_memory().await.unwrap();
+    // Force table creation.
+    let _ = repo2.get_ableset_settings().await.unwrap();
+    // Wipe the audit log and the single startup-default row so we can
+    // isolate the migration's behaviour on a row that is ALREADY at new
+    // defaults.
+    let conn = repo2.connection_for_tests();
+    conn.execute(Statement::from_string(
+        conn.get_database_backend(),
+        "DELETE FROM settings_audit".to_string(),
+    ))
+    .await
+    .unwrap();
+    // The default row already has http_port=80, osc_port=39051, library="NEW LEVEL".
+    let schema2 = SchemaManager::new(conn);
+    migration
+        .up(&schema2)
+        .await
+        .expect("migration on already-current row");
+    let audit_clean = repo2
+        .list_settings_audit(None, None, None, 100)
+        .await
+        .unwrap();
+    assert!(
+        audit_clean.is_empty(),
+        "migration must write zero audit rows when no legacy values are present, got {audit_clean:?}"
+    );
+}

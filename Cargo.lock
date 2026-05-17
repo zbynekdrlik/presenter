@@ -2694,8 +2694,10 @@ name = "presenter-migration"
 version = "0.4.82"
 dependencies = [
  "async-trait",
+ "chrono",
  "sea-orm",
  "sea-orm-migration",
+ "serde_json",
  "tokio",
  "tracing",
  "unicode-normalization",
