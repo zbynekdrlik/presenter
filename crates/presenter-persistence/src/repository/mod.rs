@@ -127,8 +127,16 @@ impl Repository {
         before: Option<serde_json::Value>,
         after: serde_json::Value,
     ) -> anyhow::Result<()> {
-        Self::record_settings_audit_on(&self.db, setting_table, setting_id, source, actor, before, after)
-            .await
+        Self::record_settings_audit_on(
+            &self.db,
+            setting_table,
+            setting_id,
+            source,
+            actor,
+            before,
+            after,
+        )
+        .await
     }
 
     /// Audit-row insert that runs on any `ConnectionTrait` — used both by the
