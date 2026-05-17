@@ -26,16 +26,18 @@ on:
         type: boolean
         default: false
 
-concurrency:
-  group: import-${{ inputs.environment }}
-  cancel-in-progress: false
-
 jobs:
   import:
     name: Import Data (${{ inputs.environment }})
     runs-on: self-hosted
     # Only run when manually triggered - guard against accidental triggers
     if: github.event_name == 'workflow_dispatch'
+    # Concurrency is scoped to the job, not the workflow, so push events
+    # (which cannot satisfy the `if:` guard above) do not produce phantom
+    # runs from empty `${{ inputs.environment }}` interpolation. See #321.
+    concurrency:
+      group: import-${{ inputs.environment }}
+      cancel-in-progress: false
     steps:
       - uses: actions/checkout@v4
 
