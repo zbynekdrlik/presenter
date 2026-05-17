@@ -31,7 +31,7 @@ use sea_orm::Statement;
 use sea_orm::{
     sea_query::{Expr, OnConflict},
     ActiveModelTrait, ColumnTrait, ConnectionTrait, Database, DatabaseConnection, EntityTrait,
-    IntoActiveModel, QueryFilter, QueryOrder, Schema, Set,
+    IntoActiveModel, QueryFilter, QueryOrder, Schema, Set, TransactionTrait,
 };
 use std::fmt::Debug;
 use tracing::instrument;
@@ -127,6 +127,22 @@ impl Repository {
         before: Option<serde_json::Value>,
         after: serde_json::Value,
     ) -> anyhow::Result<()> {
+        Self::record_settings_audit_on(&self.db, setting_table, setting_id, source, actor, before, after)
+            .await
+    }
+
+    /// Audit-row insert that runs on any `ConnectionTrait` — used both by the
+    /// public helper above (which passes `&self.db`) and by audited setters
+    /// that wrap the settings write + audit insert in a single transaction.
+    async fn record_settings_audit_on<C: ConnectionTrait>(
+        conn: &C,
+        setting_table: &str,
+        setting_id: &str,
+        source: SettingsAuditSource,
+        actor: &str,
+        before: Option<serde_json::Value>,
+        after: serde_json::Value,
+    ) -> anyhow::Result<()> {
         use crate::entities::settings_audit;
         let id = uuid::Uuid::new_v4().to_string();
         let now = Utc::now();
@@ -141,7 +157,7 @@ impl Repository {
             changed_at: sea_orm::ActiveValue::set(now.into()),
         };
         crate::entities::settings_audit::Entity::insert(active)
-            .exec(&self.db)
+            .exec(conn)
             .await?;
         Ok(())
     }
@@ -808,43 +824,78 @@ impl Repository {
         source: SettingsAuditSource,
         actor: &str,
     ) -> anyhow::Result<VideoSource> {
-        // Capture before state of target row.
+        // Activating one row deactivates every other currently-active row.
+        // Each deactivation MUST produce its own audit row so the forensic
+        // log can attribute who turned what off, when. Wrap the whole
+        // sequence (sibling deactivations + target activation + all audit
+        // inserts) in a single transaction so a mid-flight failure can't
+        // leave the DB with deactivated rows whose audit rows are missing.
+        let txn = self.db.begin().await?;
+
+        // Capture before state of the target row.
         let existing = video_source::Entity::find_by_id(id.to_string())
-            .one(&self.db)
+            .one(&txn)
             .await?
             .ok_or_else(|| anyhow!("video source not found"))?;
-        let before = video_source_model_to_domain(existing.clone())?;
-        let before_json = serde_json::to_value(&before)?;
+        let target_before = video_source_model_to_domain(existing.clone())?;
+        let target_before_json = serde_json::to_value(&target_before)?;
 
-        // Deactivate all first
-        video_source::Entity::update_many()
-            .col_expr(video_source::Column::IsActive, Expr::value(false))
-            .col_expr(
-                video_source::Column::UpdatedAt,
-                Expr::value(Into::<sea_orm::prelude::DateTimeWithTimeZone>::into(
-                    Utc::now(),
-                )),
-            )
+        // Collect every CURRENTLY-active sibling (excluding the target).
+        let target_id_str = id.to_string();
+        let siblings: Vec<_> = video_source::Entity::find()
             .filter(video_source::Column::IsActive.eq(true))
-            .exec(&self.db)
+            .filter(video_source::Column::Id.ne(target_id_str.clone()))
+            .all(&txn)
             .await?;
 
+        // Deactivate each sibling individually so we can record per-row
+        // before/after JSON for the audit log. Using `update_many` would
+        // erase the per-row identity we need to log.
+        let now = Utc::now();
+        for sibling in siblings {
+            let sibling_id = sibling.id.clone();
+            let sibling_before = video_source_model_to_domain(sibling.clone())?;
+            let sibling_before_json = serde_json::to_value(&sibling_before)?;
+
+            let mut active_model = sibling.into_active_model();
+            active_model.is_active = Set(false);
+            active_model.updated_at = Set(now.into());
+            let updated_sibling = active_model.update(&txn).await?;
+            let sibling_after = video_source_model_to_domain(updated_sibling)?;
+            let sibling_after_json = serde_json::to_value(&sibling_after)?;
+
+            Self::record_settings_audit_on(
+                &txn,
+                "video_source",
+                &sibling_id,
+                source,
+                actor,
+                Some(sibling_before_json),
+                sibling_after_json,
+            )
+            .await?;
+        }
+
+        // Now activate the target. Audit row reflects the target's own
+        // before/after.
         let mut model = existing.into_active_model();
         model.is_active = Set(true);
-        model.updated_at = Set(Utc::now().into());
-
-        let updated = model.update(&self.db).await?;
+        model.updated_at = Set(now.into());
+        let updated = model.update(&txn).await?;
         let domain = video_source_model_to_domain(updated)?;
         let after_json = serde_json::to_value(&domain)?;
-        self.record_settings_audit(
+        Self::record_settings_audit_on(
+            &txn,
             "video_source",
-            &id.to_string(),
+            &target_id_str,
             source,
             actor,
-            Some(before_json),
+            Some(target_before_json),
             after_json,
         )
         .await?;
+
+        txn.commit().await?;
         Ok(domain)
     }
 

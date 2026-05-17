@@ -5,7 +5,8 @@ use presenter_core::{
     BiblePassage, BibleReference, BibleTranslation, CountdownTimer, Library, LibraryId,
     OscSettingsDraft, PlaylistEntry, PlaylistEntryId, PreachTimer, Presentation, PresentationId,
     ResolumeHostDraft, SearchResultKind, Slide, SlideContent, SlideGroup, SlideId, SlideText,
-    StageState, TimerState, TimersState, VelocityMode, DEFAULT_ADB_PORT, DEFAULT_LAUNCH_COMPONENT,
+    StageState, TimerState, TimersState, VelocityMode, VideoSourceDraft, DEFAULT_ADB_PORT,
+    DEFAULT_LAUNCH_COMPONENT,
 };
 
 fn sample_library() -> Library {
@@ -1088,4 +1089,129 @@ async fn legacy_ableset_defaults_migration_rewrites_and_audits() {
         audit_clean.is_empty(),
         "migration must write zero audit rows when no legacy values are present, got {audit_clean:?}"
     );
+}
+
+#[tokio::test]
+async fn activate_video_source_audits_each_deactivated_sibling() {
+    use crate::audit::SettingsAuditSource;
+    let repo = Repository::connect_in_memory().await.unwrap();
+
+    // Create three video sources.
+    let a = repo
+        .create_video_source(
+            &VideoSourceDraft::new("Cam A", "CAM_A"),
+            SettingsAuditSource::HttpSetter,
+            "test",
+        )
+        .await
+        .unwrap();
+    let b = repo
+        .create_video_source(
+            &VideoSourceDraft::new("Cam B", "CAM_B"),
+            SettingsAuditSource::HttpSetter,
+            "test",
+        )
+        .await
+        .unwrap();
+    let c = repo
+        .create_video_source(
+            &VideoSourceDraft::new("Cam C", "CAM_C"),
+            SettingsAuditSource::HttpSetter,
+            "test",
+        )
+        .await
+        .unwrap();
+
+    // Activate A and B directly (no siblings active yet for A, then B
+    // deactivates A as its sibling — already covered in deeper testing
+    // below).
+    repo.activate_video_source(a.id, SettingsAuditSource::HttpSetter, "test")
+        .await
+        .unwrap();
+    repo.activate_video_source(b.id, SettingsAuditSource::HttpSetter, "test")
+        .await
+        .unwrap();
+    // After the two calls above, only B is active and A is deactivated.
+    // The activation of B should have produced TWO audit rows: one for A's
+    // deactivation and one for B's activation.
+
+    // Reset the audit log to isolate the next call.
+    let conn = repo.connection_for_tests();
+    sea_orm::ConnectionTrait::execute(
+        conn,
+        sea_orm::Statement::from_string(
+            sea_orm::ConnectionTrait::get_database_backend(conn),
+            "DELETE FROM settings_audit".to_string(),
+        ),
+    )
+    .await
+    .unwrap();
+    // Manually activate A too via raw SQL so we have TWO siblings active
+    // when we activate C — exercising the per-row audit path against more
+    // than one sibling.
+    sea_orm::ConnectionTrait::execute(
+        conn,
+        sea_orm::Statement::from_string(
+            sea_orm::ConnectionTrait::get_database_backend(conn),
+            format!(
+                "UPDATE video_sources SET is_active = 1 WHERE id IN ('{}', '{}')",
+                a.id, b.id
+            ),
+        ),
+    )
+    .await
+    .unwrap();
+
+    // Activate C — this must deactivate both A and B and emit one audit
+    // row per deactivation PLUS one for the C activation = 3 audit rows.
+    let activated = repo
+        .activate_video_source(c.id, SettingsAuditSource::HttpSetter, "ip-1.2.3.4")
+        .await
+        .unwrap();
+    assert!(activated.is_active);
+    assert_eq!(activated.id, c.id);
+
+    let rows = repo
+        .list_settings_audit(Some("video_source"), None, None, 100)
+        .await
+        .unwrap();
+    assert_eq!(
+        rows.len(),
+        3,
+        "expected one audit row per deactivated sibling + one for the activation, got {rows:?}"
+    );
+
+    // Each audit row carries the per-row setting_id (not "deactivate_all"
+    // and not a single combined row).
+    let setting_ids: std::collections::HashSet<&str> =
+        rows.iter().map(|r| r.setting_id.as_str()).collect();
+    assert!(setting_ids.contains(a.id.to_string().as_str()));
+    assert!(setting_ids.contains(b.id.to_string().as_str()));
+    assert!(setting_ids.contains(c.id.to_string().as_str()));
+
+    // Sibling rows show the is_active=true → is_active=false transition.
+    for sibling_id in [a.id.to_string(), b.id.to_string()] {
+        let r = rows
+            .iter()
+            .find(|r| r.setting_id == sibling_id)
+            .expect("audit row for deactivated sibling");
+        assert_eq!(r.actor, "ip-1.2.3.4");
+        assert_eq!(r.source, SettingsAuditSource::HttpSetter);
+        let before = r
+            .before_json
+            .as_ref()
+            .expect("deactivation audit needs before_json");
+        assert_eq!(before["isActive"], true, "before should have isActive=true");
+        assert_eq!(
+            r.after_json["isActive"], false,
+            "after should have isActive=false",
+        );
+    }
+
+    // The target row's audit shows the activation.
+    let c_row = rows
+        .iter()
+        .find(|r| r.setting_id == c.id.to_string())
+        .expect("audit row for activated target");
+    assert_eq!(c_row.after_json["isActive"], true);
 }
