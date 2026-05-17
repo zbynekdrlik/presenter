@@ -939,6 +939,9 @@ async fn record_and_list_settings_audit_roundtrip() {
         .unwrap();
     assert_eq!(rows.len(), 1);
     assert_eq!(rows[0].actor, "10.0.0.5");
-    assert_eq!(rows[0].source, crate::audit::SettingsAuditSource::HttpSetter);
+    assert_eq!(
+        rows[0].source,
+        crate::audit::SettingsAuditSource::HttpSetter
+    );
     assert_eq!(rows[0].after_json["enabled"], true);
 }

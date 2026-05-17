@@ -193,9 +193,7 @@ impl AppState {
         source: presenter_persistence::SettingsAuditSource,
         actor: &str,
     ) -> anyhow::Result<()> {
-        self.repository
-            .delete_video_source(id, source, actor)
-            .await
+        self.repository.delete_video_source(id, source, actor).await
     }
 
     pub async fn activate_video_source(

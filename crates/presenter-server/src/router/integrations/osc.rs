@@ -2,8 +2,8 @@ use axum::{extract::State, http::HeaderMap, Json};
 use serde::{Deserialize, Serialize};
 use tracing::instrument;
 
-use super::extract_actor;
 use super::super::AppError;
+use super::extract_actor;
 use crate::state::AppState;
 use presenter_core::{OscSettings, OscSettingsDraft, VelocityMode};
 use presenter_persistence::SettingsAuditSource;

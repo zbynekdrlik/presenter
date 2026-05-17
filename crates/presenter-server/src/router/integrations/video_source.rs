@@ -6,8 +6,8 @@ use axum::{
 use serde::{Deserialize, Serialize};
 use tracing::instrument;
 
-use super::extract_actor;
 use super::super::AppError;
+use super::extract_actor;
 use crate::state::AppState;
 use presenter_core::{VideoSource, VideoSourceDraft, VideoSourceId};
 use presenter_persistence::SettingsAuditSource;

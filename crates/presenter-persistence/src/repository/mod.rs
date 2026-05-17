@@ -368,11 +368,12 @@ impl Repository {
     ) -> anyhow::Result<AbleSetSettings> {
         self.ensure_ableset_settings_table().await?;
         // Capture previous state for audit.
-        let before = ableset_settings::Entity::find_by_id(ABLESET_SETTINGS_SINGLETON_ID.to_string())
-            .one(&self.db)
-            .await?
-            .map(|m| ableset_model_to_domain(m))
-            .transpose()?;
+        let before =
+            ableset_settings::Entity::find_by_id(ABLESET_SETTINGS_SINGLETON_ID.to_string())
+                .one(&self.db)
+                .await?
+                .map(|m| ableset_model_to_domain(m))
+                .transpose()?;
         let before_json = before.as_ref().map(serde_json::to_value).transpose()?;
 
         let now = Utc::now();
