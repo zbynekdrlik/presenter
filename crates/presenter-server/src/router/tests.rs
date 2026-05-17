@@ -83,6 +83,58 @@ async fn home_route_returns_menu() {
 }
 
 #[tokio::test]
+async fn home_route_links_match_live_routes() {
+    let app = build_router(AppState::in_memory().await.unwrap());
+    let response = app
+        .clone()
+        .oneshot(Request::builder().uri("/").body(Body::empty()).unwrap())
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    let bytes = axum::body::to_bytes(response.into_body(), usize::MAX)
+        .await
+        .unwrap();
+    let body = String::from_utf8(bytes.to_vec()).unwrap();
+
+    assert!(
+        body.contains("/ui/camera"),
+        "landing page must link to /ui/camera"
+    );
+
+    assert!(
+        !body.contains("/ui/stage-design"),
+        "landing page must not link to /ui/stage-design (no such route)"
+    );
+
+    let settings_link_count = body.matches("\"/ui/settings\"").count();
+    assert_eq!(
+        settings_link_count, 1,
+        "landing page must link /ui/settings exactly once (was {settings_link_count})"
+    );
+
+    for path in [
+        "/ui/operator",
+        "/ui/tablet",
+        "/ui/camera",
+        "/ui/bible",
+        "/ui/settings",
+        "/stage",
+        "/overlays/timer",
+    ] {
+        let target_response = app
+            .clone()
+            .oneshot(Request::builder().uri(path).body(Body::empty()).unwrap())
+            .await
+            .unwrap();
+        let status = target_response.status();
+        assert!(
+            status.is_success() || status.is_redirection(),
+            "landing-page link {path} returned {status}"
+        );
+    }
+}
+
+#[tokio::test]
 async fn resolume_host_endpoints_crud() {
     let app = build_router(AppState::in_memory().await.unwrap());
 
