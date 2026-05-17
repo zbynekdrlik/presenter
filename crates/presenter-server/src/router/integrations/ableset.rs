@@ -28,7 +28,7 @@ pub(crate) async fn update_ableset_settings(
     headers: HeaderMap,
     Json(payload): Json<AbleSetSettingsDraft>,
 ) -> Result<Json<AbleSetSettings>, AppError> {
-    let actor = extract_actor(&headers, None);
+    let actor = extract_actor(&headers);
     let settings = state
         .update_ableset_settings(payload, SettingsAuditSource::HttpSetter, &actor)
         .await

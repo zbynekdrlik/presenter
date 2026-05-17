@@ -71,7 +71,7 @@ pub(crate) async fn update_osc_settings(
         address_pattern: payload.address_pattern.trim().to_string(),
         velocity_mode: payload.velocity_mode,
     };
-    let actor = extract_actor(&headers, None);
+    let actor = extract_actor(&headers);
     let settings = state
         .update_osc_settings(draft, SettingsAuditSource::HttpSetter, &actor)
         .await

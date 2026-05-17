@@ -63,7 +63,7 @@ pub(crate) async fn create_video_source(
     Json(payload): Json<VideoSourceRequest>,
 ) -> Result<Json<VideoSourceDto>, AppError> {
     let draft = VideoSourceDraft::new(payload.label, payload.ndi_name);
-    let actor = extract_actor(&headers, None);
+    let actor = extract_actor(&headers);
     let source = state
         .create_video_source(draft, SettingsAuditSource::HttpSetter, &actor)
         .await?;
@@ -78,7 +78,7 @@ pub(crate) async fn update_video_source(
     Json(payload): Json<VideoSourceRequest>,
 ) -> Result<Json<VideoSourceDto>, AppError> {
     let draft = VideoSourceDraft::new(payload.label, payload.ndi_name);
-    let actor = extract_actor(&headers, None);
+    let actor = extract_actor(&headers);
     let source = state
         .update_video_source(
             VideoSourceId::from_uuid(id),
@@ -96,7 +96,7 @@ pub(crate) async fn delete_video_source(
     headers: HeaderMap,
     Path(id): Path<Uuid>,
 ) -> Result<axum::http::StatusCode, AppError> {
-    let actor = extract_actor(&headers, None);
+    let actor = extract_actor(&headers);
     state
         .delete_video_source(
             VideoSourceId::from_uuid(id),
@@ -113,7 +113,7 @@ pub(crate) async fn activate_video_source(
     headers: HeaderMap,
     Path(id): Path<Uuid>,
 ) -> Result<Json<VideoSourceDto>, AppError> {
-    let actor = extract_actor(&headers, None);
+    let actor = extract_actor(&headers);
     let source = state
         .activate_video_source(
             VideoSourceId::from_uuid(id),
@@ -129,7 +129,7 @@ pub(crate) async fn deactivate_video_sources(
     State(state): State<AppState>,
     headers: HeaderMap,
 ) -> Result<axum::http::StatusCode, AppError> {
-    let actor = extract_actor(&headers, None);
+    let actor = extract_actor(&headers);
     state
         .deactivate_video_sources(SettingsAuditSource::HttpSetter, &actor)
         .await?;

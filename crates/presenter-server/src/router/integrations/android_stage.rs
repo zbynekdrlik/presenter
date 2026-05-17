@@ -108,7 +108,7 @@ pub(crate) async fn create_android_stage_display(
         .with_port(payload.port)
         .with_launch_component(normalize_launch_component(&payload.launch_component))
         .with_enabled(payload.is_enabled);
-    let actor = extract_actor(&headers, None);
+    let actor = extract_actor(&headers);
     let display = state
         .create_android_stage_display(draft, SettingsAuditSource::HttpSetter, &actor)
         .await?;
@@ -127,7 +127,7 @@ pub(crate) async fn update_android_stage_display(
         .with_port(payload.port)
         .with_launch_component(normalize_launch_component(&payload.launch_component))
         .with_enabled(payload.is_enabled);
-    let actor = extract_actor(&headers, None);
+    let actor = extract_actor(&headers);
     let display = state
         .update_android_stage_display(
             AndroidStageDisplayId::from_uuid(id),
@@ -146,7 +146,7 @@ pub(crate) async fn delete_android_stage_display(
     headers: HeaderMap,
     Path(id): Path<Uuid>,
 ) -> Result<axum::http::StatusCode, AppError> {
-    let actor = extract_actor(&headers, None);
+    let actor = extract_actor(&headers);
     state
         .delete_android_stage_display(
             AndroidStageDisplayId::from_uuid(id),

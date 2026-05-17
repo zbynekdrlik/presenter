@@ -84,7 +84,7 @@ pub(crate) async fn create_resolume_host(
 ) -> Result<Json<ResolumeHostDto>, AppError> {
     let draft = ResolumeHostDraft::new(payload.label, payload.host, payload.port)
         .with_enabled(payload.is_enabled);
-    let actor = extract_actor(&headers, None);
+    let actor = extract_actor(&headers);
     let host = state
         .create_resolume_host(draft, SettingsAuditSource::HttpSetter, &actor)
         .await?;
@@ -101,7 +101,7 @@ pub(crate) async fn update_resolume_host(
 ) -> Result<Json<ResolumeHostDto>, AppError> {
     let draft = ResolumeHostDraft::new(payload.label, payload.host, payload.port)
         .with_enabled(payload.is_enabled);
-    let actor = extract_actor(&headers, None);
+    let actor = extract_actor(&headers);
     let host = state
         .update_resolume_host(
             ResolumeHostId::from_uuid(id),
@@ -120,7 +120,7 @@ pub(crate) async fn delete_resolume_host(
     headers: HeaderMap,
     Path(id): Path<Uuid>,
 ) -> Result<axum::http::StatusCode, AppError> {
-    let actor = extract_actor(&headers, None);
+    let actor = extract_actor(&headers);
     state
         .delete_resolume_host(
             ResolumeHostId::from_uuid(id),
