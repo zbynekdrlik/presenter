@@ -13,6 +13,7 @@ use presenter_core::{
     AndroidStageDisplay, AndroidStageDisplayDraft, AndroidStageDisplayId, DEFAULT_ADB_PORT,
     DEFAULT_LAUNCH_COMPONENT,
 };
+use presenter_persistence::SettingsAuditSource;
 
 #[derive(Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -104,7 +105,10 @@ pub(crate) async fn create_android_stage_display(
         .with_port(payload.port)
         .with_launch_component(normalize_launch_component(&payload.launch_component))
         .with_enabled(payload.is_enabled);
-    let display = state.create_android_stage_display(draft).await?;
+    // HTTP wiring (Task 11) replaces these placeholders with the real actor.
+    let display = state
+        .create_android_stage_display(draft, SettingsAuditSource::HttpSetter, "http")
+        .await?;
     let status = state.android_stage_status_for(display.id).await;
     Ok(Json(AndroidStageDisplayDto::from_display(display, status)))
 }
@@ -120,7 +124,12 @@ pub(crate) async fn update_android_stage_display(
         .with_launch_component(normalize_launch_component(&payload.launch_component))
         .with_enabled(payload.is_enabled);
     let display = state
-        .update_android_stage_display(AndroidStageDisplayId::from_uuid(id), draft)
+        .update_android_stage_display(
+            AndroidStageDisplayId::from_uuid(id),
+            draft,
+            SettingsAuditSource::HttpSetter,
+            "http",
+        )
         .await?;
     let status = state.android_stage_status_for(display.id).await;
     Ok(Json(AndroidStageDisplayDto::from_display(display, status)))
@@ -132,7 +141,11 @@ pub(crate) async fn delete_android_stage_display(
     Path(id): Path<Uuid>,
 ) -> Result<axum::http::StatusCode, AppError> {
     state
-        .delete_android_stage_display(AndroidStageDisplayId::from_uuid(id))
+        .delete_android_stage_display(
+            AndroidStageDisplayId::from_uuid(id),
+            SettingsAuditSource::HttpSetter,
+            "http",
+        )
         .await?;
     Ok(axum::http::StatusCode::NO_CONTENT)
 }

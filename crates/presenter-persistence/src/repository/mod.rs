@@ -511,6 +511,8 @@ impl Repository {
     pub async fn create_android_stage_display(
         &self,
         draft: &AndroidStageDisplayDraft,
+        source: SettingsAuditSource,
+        actor: &str,
     ) -> anyhow::Result<AndroidStageDisplay> {
         draft.validate().map_err(|err| anyhow!(err))?;
         let id = AndroidStageDisplayId::new();
@@ -534,7 +536,18 @@ impl Repository {
             .one(&self.db)
             .await?
             .ok_or_else(|| anyhow!("android stage display missing after insert"))?;
-        android_stage_display_model_to_domain(inserted)
+        let display = android_stage_display_model_to_domain(inserted)?;
+        let after_json = serde_json::to_value(&display)?;
+        self.record_settings_audit(
+            "android_stage_display",
+            &id.to_string(),
+            source,
+            actor,
+            None,
+            after_json,
+        )
+        .await?;
+        Ok(display)
     }
 
     #[instrument(skip_all)]
@@ -579,12 +592,16 @@ impl Repository {
         &self,
         id: AndroidStageDisplayId,
         draft: &AndroidStageDisplayDraft,
+        source: SettingsAuditSource,
+        actor: &str,
     ) -> anyhow::Result<AndroidStageDisplay> {
         draft.validate().map_err(|err| anyhow!(err))?;
         let existing = android_stage_display::Entity::find_by_id(id.to_string())
             .one(&self.db)
             .await?
             .ok_or_else(|| anyhow!("android stage display not found"))?;
+        let before = android_stage_display_model_to_domain(existing.clone())?;
+        let before_json = serde_json::to_value(&before)?;
 
         let mut model = existing.into_active_model();
         model.label = Set(draft.label.trim().to_string());
@@ -595,7 +612,18 @@ impl Repository {
         model.updated_at = Set(Utc::now().into());
 
         let updated = model.update(&self.db).await?;
-        android_stage_display_model_to_domain(updated)
+        let display = android_stage_display_model_to_domain(updated)?;
+        let after_json = serde_json::to_value(&display)?;
+        self.record_settings_audit(
+            "android_stage_display",
+            &id.to_string(),
+            source,
+            actor,
+            Some(before_json),
+            after_json,
+        )
+        .await?;
+        Ok(display)
     }
 
     #[instrument(skip_all)]
@@ -636,13 +664,34 @@ impl Repository {
     pub async fn delete_android_stage_display(
         &self,
         id: AndroidStageDisplayId,
+        source: SettingsAuditSource,
+        actor: &str,
     ) -> anyhow::Result<()> {
+        let existing = android_stage_display::Entity::find_by_id(id.to_string())
+            .one(&self.db)
+            .await?;
+        let before_json = existing
+            .map(|m| {
+                let display = android_stage_display_model_to_domain(m)?;
+                serde_json::to_value(&display).map_err(anyhow::Error::from)
+            })
+            .transpose()?;
+
         let result = android_stage_display::Entity::delete_by_id(id.to_string())
             .exec(&self.db)
             .await?;
         if result.rows_affected == 0 {
             return Err(anyhow!("android stage display not found"));
         }
+        self.record_settings_audit(
+            "android_stage_display",
+            &id.to_string(),
+            source,
+            actor,
+            before_json,
+            serde_json::json!({"deleted": true, "id": id.to_string()}),
+        )
+        .await?;
         Ok(())
     }
 

@@ -282,7 +282,14 @@ async fn android_stage_display_crud_round_trip() {
     let initial_count = initial.len();
 
     let draft = AndroidStageDisplayDraft::new("Stage Left", "test-stage.invalid");
-    let created = repo.create_android_stage_display(&draft).await.unwrap();
+    let created = repo
+        .create_android_stage_display(
+            &draft,
+            crate::audit::SettingsAuditSource::HttpSetter,
+            "test",
+        )
+        .await
+        .unwrap();
     assert_eq!(created.label, "Stage Left");
     assert_eq!(created.host, "test-stage.invalid");
     assert_eq!(created.port, DEFAULT_ADB_PORT);
@@ -301,7 +308,12 @@ async fn android_stage_display_crud_round_trip() {
         .with_launch_component("com.example/.Main")
         .with_enabled(false);
     let updated = repo
-        .update_android_stage_display(created.id, &updated_draft)
+        .update_android_stage_display(
+            created.id,
+            &updated_draft,
+            crate::audit::SettingsAuditSource::HttpSetter,
+            "test",
+        )
         .await
         .unwrap();
     assert_eq!(updated.label, "Stage Right");
@@ -310,7 +322,13 @@ async fn android_stage_display_crud_round_trip() {
     assert_eq!(updated.launch_component, "com.example/.Main");
     assert!(!updated.is_enabled);
 
-    repo.delete_android_stage_display(created.id).await.unwrap();
+    repo.delete_android_stage_display(
+        created.id,
+        crate::audit::SettingsAuditSource::HttpSetter,
+        "test",
+    )
+    .await
+    .unwrap();
     let after_delete = repo.list_android_stage_displays().await.unwrap();
     assert_eq!(after_delete.len(), initial_count);
     assert!(after_delete.iter().all(|d| d.id != created.id));
@@ -781,7 +799,13 @@ async fn seed_migration_is_idempotent_when_rerun() {
 
     // Operator adds a fifth display manually.
     let draft = AndroidStageDisplayDraft::new("Operator Custom", "custom.invalid");
-    repo.create_android_stage_display(&draft).await.unwrap();
+    repo.create_android_stage_display(
+        &draft,
+        crate::audit::SettingsAuditSource::HttpSetter,
+        "test",
+    )
+    .await
+    .unwrap();
     assert_eq!(repo.list_android_stage_displays().await.unwrap().len(), 5);
 
     // Manually invoke the seed migration's `up()` a second time.

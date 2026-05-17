@@ -108,8 +108,13 @@ impl AppState {
     pub async fn create_android_stage_display(
         &self,
         draft: AndroidStageDisplayDraft,
+        source: presenter_persistence::SettingsAuditSource,
+        actor: &str,
     ) -> anyhow::Result<AndroidStageDisplay> {
-        let display = self.repository.create_android_stage_display(&draft).await?;
+        let display = self
+            .repository
+            .create_android_stage_display(&draft, source, actor)
+            .await?;
         self.sync_android_stage_displays().await?;
         Ok(display)
     }
@@ -118,10 +123,12 @@ impl AppState {
         &self,
         id: AndroidStageDisplayId,
         draft: AndroidStageDisplayDraft,
+        source: presenter_persistence::SettingsAuditSource,
+        actor: &str,
     ) -> anyhow::Result<AndroidStageDisplay> {
         let display = self
             .repository
-            .update_android_stage_display(id, &draft)
+            .update_android_stage_display(id, &draft, source, actor)
             .await?;
         self.sync_android_stage_displays().await?;
         Ok(display)
@@ -130,8 +137,12 @@ impl AppState {
     pub async fn delete_android_stage_display(
         &self,
         id: AndroidStageDisplayId,
+        source: presenter_persistence::SettingsAuditSource,
+        actor: &str,
     ) -> anyhow::Result<()> {
-        self.repository.delete_android_stage_display(id).await?;
+        self.repository
+            .delete_android_stage_display(id, source, actor)
+            .await?;
         self.sync_android_stage_displays().await
     }
 
