@@ -22,7 +22,9 @@
     clippy::needless_pass_by_value
 )]
 
+pub mod audit;
 pub mod entities;
 mod repository;
 
+pub use audit::{SettingsAuditEntry, SettingsAuditSource};
 pub use repository::{DatabaseSettings, Repository};
