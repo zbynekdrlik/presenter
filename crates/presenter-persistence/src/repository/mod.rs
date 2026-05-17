@@ -292,9 +292,14 @@ impl Repository {
         source: SettingsAuditSource,
         actor: &str,
     ) -> anyhow::Result<OscSettings> {
+        // Wrap the settings upsert + audit insert in a single transaction so
+        // a mid-flight failure cannot leave the row mutated without an audit
+        // entry (or vice versa).
+        let txn = self.db.begin().await?;
+
         // Capture previous state for audit (None if row missing).
         let before = osc_settings::Entity::find_by_id(OSC_SETTINGS_SINGLETON_ID.to_string())
-            .one(&self.db)
+            .one(&txn)
             .await?
             .map(|m| osc_model_to_domain(m))
             .transpose()?;
@@ -325,16 +330,17 @@ impl Repository {
                     ])
                     .to_owned(),
             )
-            .exec(&self.db)
+            .exec(&txn)
             .await?;
 
         let model = osc_settings::Entity::find_by_id(OSC_SETTINGS_SINGLETON_ID.to_string())
-            .one(&self.db)
+            .one(&txn)
             .await?
             .ok_or_else(|| anyhow!("osc settings missing after upsert"))?;
         let domain = osc_model_to_domain(model)?;
         let after_json = serde_json::to_value(&domain)?;
-        self.record_settings_audit(
+        Self::record_settings_audit_on(
+            &txn,
             "osc_settings",
             OSC_SETTINGS_SINGLETON_ID,
             source,
@@ -343,6 +349,8 @@ impl Repository {
             after_json,
         )
         .await?;
+
+        txn.commit().await?;
         Ok(domain)
     }
 
@@ -382,11 +390,18 @@ impl Repository {
         source: SettingsAuditSource,
         actor: &str,
     ) -> anyhow::Result<AbleSetSettings> {
+        // `ensure_ableset_settings_table` is idempotent DDL — kept outside
+        // the transaction to avoid serializing schema changes with row
+        // writes.
         self.ensure_ableset_settings_table().await?;
+
+        // Row + audit write atomically inside one transaction.
+        let txn = self.db.begin().await?;
+
         // Capture previous state for audit.
         let before =
             ableset_settings::Entity::find_by_id(ABLESET_SETTINGS_SINGLETON_ID.to_string())
-                .one(&self.db)
+                .one(&txn)
                 .await?
                 .map(|m| ableset_model_to_domain(m))
                 .transpose()?;
@@ -419,16 +434,17 @@ impl Repository {
                     ])
                     .to_owned(),
             )
-            .exec(&self.db)
+            .exec(&txn)
             .await?;
 
         let model = ableset_settings::Entity::find_by_id(ABLESET_SETTINGS_SINGLETON_ID.to_string())
-            .one(&self.db)
+            .one(&txn)
             .await?
             .ok_or_else(|| anyhow!("ableset settings missing after upsert"))?;
         let domain = ableset_model_to_domain(model)?;
         let after_json = serde_json::to_value(&domain)?;
-        self.record_settings_audit(
+        Self::record_settings_audit_on(
+            &txn,
             "ableset_settings",
             ABLESET_SETTINGS_SINGLETON_ID,
             source,
@@ -437,6 +453,8 @@ impl Repository {
             after_json,
         )
         .await?;
+
+        txn.commit().await?;
         Ok(domain)
     }
 
@@ -479,15 +497,17 @@ impl Repository {
             updated_at: Set(now.into()),
         };
 
-        resolume_host::Entity::insert(model).exec(&self.db).await?;
+        let txn = self.db.begin().await?;
+        resolume_host::Entity::insert(model).exec(&txn).await?;
 
         let inserted = resolume_host::Entity::find_by_id(id.to_string())
-            .one(&self.db)
+            .one(&txn)
             .await?
             .ok_or_else(|| anyhow!("resolume host missing after insert"))?;
         let host = resolume_model_to_domain(inserted)?;
         let after_json = serde_json::to_value(&host)?;
-        self.record_settings_audit(
+        Self::record_settings_audit_on(
+            &txn,
             "resolume_host",
             &id.to_string(),
             source,
@@ -496,6 +516,7 @@ impl Repository {
             after_json,
         )
         .await?;
+        txn.commit().await?;
         Ok(host)
     }
 
@@ -519,17 +540,19 @@ impl Repository {
             updated_at: Set(now.into()),
         };
 
+        let txn = self.db.begin().await?;
         android_stage_display::Entity::insert(model)
-            .exec(&self.db)
+            .exec(&txn)
             .await?;
 
         let inserted = android_stage_display::Entity::find_by_id(id.to_string())
-            .one(&self.db)
+            .one(&txn)
             .await?
             .ok_or_else(|| anyhow!("android stage display missing after insert"))?;
         let display = android_stage_display_model_to_domain(inserted)?;
         let after_json = serde_json::to_value(&display)?;
-        self.record_settings_audit(
+        Self::record_settings_audit_on(
+            &txn,
             "android_stage_display",
             &id.to_string(),
             source,
@@ -538,6 +561,7 @@ impl Repository {
             after_json,
         )
         .await?;
+        txn.commit().await?;
         Ok(display)
     }
 
@@ -550,8 +574,9 @@ impl Repository {
         actor: &str,
     ) -> anyhow::Result<ResolumeHost> {
         draft.validate().map_err(|err| anyhow!(err))?;
+        let txn = self.db.begin().await?;
         let existing = resolume_host::Entity::find_by_id(id.to_string())
-            .one(&self.db)
+            .one(&txn)
             .await?
             .ok_or_else(|| anyhow!("resolume host not found"))?;
         let before = resolume_model_to_domain(existing.clone())?;
@@ -564,10 +589,11 @@ impl Repository {
         model.is_enabled = Set(draft.is_enabled);
         model.updated_at = Set(Utc::now().into());
 
-        let updated = model.update(&self.db).await?;
+        let updated = model.update(&txn).await?;
         let host = resolume_model_to_domain(updated)?;
         let after_json = serde_json::to_value(&host)?;
-        self.record_settings_audit(
+        Self::record_settings_audit_on(
+            &txn,
             "resolume_host",
             &id.to_string(),
             source,
@@ -576,6 +602,7 @@ impl Repository {
             after_json,
         )
         .await?;
+        txn.commit().await?;
         Ok(host)
     }
 
@@ -587,8 +614,9 @@ impl Repository {
         actor: &str,
     ) -> anyhow::Result<AndroidStageDisplay> {
         draft.validate().map_err(|err| anyhow!(err))?;
+        let txn = self.db.begin().await?;
         let existing = android_stage_display::Entity::find_by_id(id.to_string())
-            .one(&self.db)
+            .one(&txn)
             .await?
             .ok_or_else(|| anyhow!("android stage display not found"))?;
         let before = android_stage_display_model_to_domain(existing.clone())?;
@@ -602,10 +630,11 @@ impl Repository {
         model.is_enabled = Set(draft.is_enabled);
         model.updated_at = Set(Utc::now().into());
 
-        let updated = model.update(&self.db).await?;
+        let updated = model.update(&txn).await?;
         let display = android_stage_display_model_to_domain(updated)?;
         let after_json = serde_json::to_value(&display)?;
-        self.record_settings_audit(
+        Self::record_settings_audit_on(
+            &txn,
             "android_stage_display",
             &id.to_string(),
             source,
@@ -614,6 +643,7 @@ impl Repository {
             after_json,
         )
         .await?;
+        txn.commit().await?;
         Ok(display)
     }
 
@@ -624,8 +654,9 @@ impl Repository {
         source: SettingsAuditSource,
         actor: &str,
     ) -> anyhow::Result<()> {
+        let txn = self.db.begin().await?;
         let existing = resolume_host::Entity::find_by_id(id.to_string())
-            .one(&self.db)
+            .one(&txn)
             .await?;
         let before_json = existing
             .map(|m| {
@@ -635,12 +666,13 @@ impl Repository {
             .transpose()?;
 
         let result = resolume_host::Entity::delete_by_id(id.to_string())
-            .exec(&self.db)
+            .exec(&txn)
             .await?;
         if result.rows_affected == 0 {
             return Err(anyhow!("resolume host not found"));
         }
-        self.record_settings_audit(
+        Self::record_settings_audit_on(
+            &txn,
             "resolume_host",
             &id.to_string(),
             source,
@@ -649,6 +681,7 @@ impl Repository {
             serde_json::json!({"deleted": true, "id": id.to_string()}),
         )
         .await?;
+        txn.commit().await?;
         Ok(())
     }
 
@@ -658,8 +691,9 @@ impl Repository {
         source: SettingsAuditSource,
         actor: &str,
     ) -> anyhow::Result<()> {
+        let txn = self.db.begin().await?;
         let existing = android_stage_display::Entity::find_by_id(id.to_string())
-            .one(&self.db)
+            .one(&txn)
             .await?;
         let before_json = existing
             .map(|m| {
@@ -669,12 +703,13 @@ impl Repository {
             .transpose()?;
 
         let result = android_stage_display::Entity::delete_by_id(id.to_string())
-            .exec(&self.db)
+            .exec(&txn)
             .await?;
         if result.rows_affected == 0 {
             return Err(anyhow!("android stage display not found"));
         }
-        self.record_settings_audit(
+        Self::record_settings_audit_on(
+            &txn,
             "android_stage_display",
             &id.to_string(),
             source,
@@ -683,6 +718,7 @@ impl Repository {
             serde_json::json!({"deleted": true, "id": id.to_string()}),
         )
         .await?;
+        txn.commit().await?;
         Ok(())
     }
 
@@ -726,15 +762,17 @@ impl Repository {
             updated_at: Set(now.into()),
         };
 
-        video_source::Entity::insert(model).exec(&self.db).await?;
+        let txn = self.db.begin().await?;
+        video_source::Entity::insert(model).exec(&txn).await?;
 
         let inserted = video_source::Entity::find_by_id(id.to_string())
-            .one(&self.db)
+            .one(&txn)
             .await?
             .ok_or_else(|| anyhow!("video source missing after insert"))?;
         let domain = video_source_model_to_domain(inserted)?;
         let after_json = serde_json::to_value(&domain)?;
-        self.record_settings_audit(
+        Self::record_settings_audit_on(
+            &txn,
             "video_source",
             &id.to_string(),
             source,
@@ -743,6 +781,7 @@ impl Repository {
             after_json,
         )
         .await?;
+        txn.commit().await?;
         Ok(domain)
     }
 
@@ -755,8 +794,9 @@ impl Repository {
         actor: &str,
     ) -> anyhow::Result<VideoSource> {
         draft.validate().map_err(|err| anyhow!(err))?;
+        let txn = self.db.begin().await?;
         let existing = video_source::Entity::find_by_id(id.to_string())
-            .one(&self.db)
+            .one(&txn)
             .await?
             .ok_or_else(|| anyhow!("video source not found"))?;
         let before = video_source_model_to_domain(existing.clone())?;
@@ -767,10 +807,11 @@ impl Repository {
         model.ndi_name = Set(draft.ndi_name.trim().to_string());
         model.updated_at = Set(Utc::now().into());
 
-        let updated = model.update(&self.db).await?;
+        let updated = model.update(&txn).await?;
         let domain = video_source_model_to_domain(updated)?;
         let after_json = serde_json::to_value(&domain)?;
-        self.record_settings_audit(
+        Self::record_settings_audit_on(
+            &txn,
             "video_source",
             &id.to_string(),
             source,
@@ -779,6 +820,7 @@ impl Repository {
             after_json,
         )
         .await?;
+        txn.commit().await?;
         Ok(domain)
     }
 
@@ -789,8 +831,9 @@ impl Repository {
         source: SettingsAuditSource,
         actor: &str,
     ) -> anyhow::Result<()> {
+        let txn = self.db.begin().await?;
         let existing = video_source::Entity::find_by_id(id.to_string())
-            .one(&self.db)
+            .one(&txn)
             .await?;
         let before_json = existing
             .map(|m| {
@@ -800,12 +843,13 @@ impl Repository {
             .transpose()?;
 
         let result = video_source::Entity::delete_by_id(id.to_string())
-            .exec(&self.db)
+            .exec(&txn)
             .await?;
         if result.rows_affected == 0 {
             return Err(anyhow!("video source not found"));
         }
-        self.record_settings_audit(
+        Self::record_settings_audit_on(
+            &txn,
             "video_source",
             &id.to_string(),
             source,
@@ -814,6 +858,7 @@ impl Repository {
             serde_json::json!({"deleted": true, "id": id.to_string()}),
         )
         .await?;
+        txn.commit().await?;
         Ok(())
     }
 
@@ -904,10 +949,13 @@ impl Repository {
         source: SettingsAuditSource,
         actor: &str,
     ) -> anyhow::Result<()> {
+        // Wrap deactivation + audit insert in one transaction.
+        let txn = self.db.begin().await?;
+
         // Capture before state — list of active sources.
         let active_rows: Vec<_> = video_source::Entity::find()
             .filter(video_source::Column::IsActive.eq(true))
-            .all(&self.db)
+            .all(&txn)
             .await?;
         let before_list: Vec<serde_json::Value> = active_rows
             .iter()
@@ -927,11 +975,12 @@ impl Repository {
                 )),
             )
             .filter(video_source::Column::IsActive.eq(true))
-            .exec(&self.db)
+            .exec(&txn)
             .await?;
 
         if !active_rows.is_empty() {
-            self.record_settings_audit(
+            Self::record_settings_audit_on(
+                &txn,
                 "video_source",
                 "deactivate_all",
                 source,
@@ -941,6 +990,7 @@ impl Repository {
             )
             .await?;
         }
+        txn.commit().await?;
         Ok(())
     }
 
