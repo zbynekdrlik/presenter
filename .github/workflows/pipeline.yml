@@ -1041,15 +1041,23 @@ jobs:
               IdentityFile ~/.ssh/id_snv
           EOF
 
+      - name: Check companion-pp reachability
+        id: pp_check
+        run: |
+          if ssh-keyscan -T 5 companion-pp.lan 2>/dev/null | grep -q '^companion-pp.lan'; then
+            echo "reachable=true" >> "$GITHUB_OUTPUT"
+            echo "companion-pp.lan is reachable"
+          else
+            echo "reachable=false" >> "$GITHUB_OUTPUT"
+            echo "::warning::companion-pp.lan unreachable — skipping PP deploy. SNV deploy continues."
+          fi
+
       - name: Setup SSH for PP (companion-pp.lan)
+        if: steps.pp_check.outputs.reachable == 'true'
         run: |
           echo "${{ secrets.DEPLOY_SSH_KEY_PP }}" > ~/.ssh/id_pp
           chmod 600 ~/.ssh/id_pp
           ssh-keyscan companion-pp.lan >> ~/.ssh/known_hosts 2>/dev/null
-          if [ ! -s ~/.ssh/known_hosts ]; then
-            echo "::error::ssh-keyscan failed — known_hosts is empty. Cannot verify companion-pp.lan host."
-            exit 1
-          fi
           cat >> ~/.ssh/config <<EOF
           Host companion-pp
               HostName companion-pp.lan
@@ -1072,6 +1080,7 @@ jobs:
           echo "Companion plugin deployed to companion-snv.lan"
 
       - name: Deploy to companion-pp.lan
+        if: steps.pp_check.outputs.reachable == 'true'
         run: |
           # companion-pp now runs the CompanionPi (Raspberry-Pi-style) build,
           # not Docker. Modules go in --extra-module-path /opt/companion-module-dev,
@@ -1093,4 +1102,9 @@ jobs:
           VERSION=$(node -e "console.log(require('./ops/companion/presenter/package.json').version)")
           echo "=== Companion Plugin Deployment Complete ==="
           echo "Version: $VERSION"
-          echo "Deployed to: companion-snv.lan, companion-pp.lan"
+          if [ "${{ steps.pp_check.outputs.reachable }}" = "true" ]; then
+            echo "Deployed to: companion-snv.lan, companion-pp.lan"
+          else
+            echo "Deployed to: companion-snv.lan"
+            echo "Skipped: companion-pp.lan (unreachable at job start)"
+          fi

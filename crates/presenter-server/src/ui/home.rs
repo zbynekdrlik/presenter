@@ -19,14 +19,6 @@ fn HomeDocument() -> impl IntoView {
                         <h1>"Presenter Demo Environment"</h1>
                         <p>"Quick links to control surfaces and stage displays for live verification."</p>
                     </header>
-                    <div class="home__cta-row">
-                        <a
-                            class="home__cta-button"
-                            href="/ui/settings"
-                            target="_blank"
-                            rel="noopener"
-                        >"Open Settings"</a>
-                    </div>
                     <section class="home__section">
                         <h2>"Control Surfaces"</h2>
                         <ul class="home__links">
@@ -34,13 +26,13 @@ fn HomeDocument() -> impl IntoView {
                             <li><a href="/ui/tablet">"Tablet UI"</a></li>
                             <li><a href="/ui/bible">"Bible Control"</a></li>
                             <li><a href="/ui/settings" target="_blank" rel="noopener">"Settings"</a></li>
-                            <li><a href="/ui/stage-design" target="_blank" rel="noopener">"Stage Design"</a></li>
                         </ul>
                     </section>
                     <section class="home__section">
                         <h2>"Stage Displays"</h2>
                         <ul class="home__links">
                             <li><a href="/stage">"Stage Output"</a></li>
+                            <li><a href="/ui/camera">"Camera Crew"</a></li>
                             <li><a href="/overlays/timer">"Timer Overlay"</a></li>
                         </ul>
                     </section>
