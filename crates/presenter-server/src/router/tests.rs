@@ -127,15 +127,40 @@ async fn home_route_links_match_live_routes() {
             .await
             .unwrap();
         let status = target_response.status();
-        // Route must exist (anything but 404). WASM-shell paths may return
-        // 503 in tests when the bundle isn't built; that still proves the
-        // route is registered.
-        assert_ne!(
-            status,
-            StatusCode::NOT_FOUND,
-            "landing-page link {path} returned 404 — dead link",
+        // 200..=399 always acceptable. WASM-shell paths return 503 in
+        // tests when the bundle isn't built — still proves the route is
+        // registered. 500/502/404 = bug.
+        let ok = matches!(status.as_u16(), 200..=399) || status == StatusCode::SERVICE_UNAVAILABLE;
+        assert!(
+            ok,
+            "landing-page link {path} returned {status} — broken link",
         );
     }
+}
+
+#[tokio::test]
+async fn settings_page_has_no_dead_links() {
+    let app = build_router(AppState::in_memory().await.unwrap());
+    let response = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .uri("/ui/settings")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    let bytes = axum::body::to_bytes(response.into_body(), usize::MAX)
+        .await
+        .unwrap();
+    let body = String::from_utf8(bytes.to_vec()).unwrap();
+
+    assert!(
+        !body.contains("/ui/stage-design"),
+        "/ui/settings must not link to /ui/stage-design (no such route)"
+    );
 }
 
 #[tokio::test]
