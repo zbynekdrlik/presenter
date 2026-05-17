@@ -720,6 +720,8 @@ impl Repository {
     pub async fn create_video_source(
         &self,
         draft: &VideoSourceDraft,
+        source: SettingsAuditSource,
+        actor: &str,
     ) -> anyhow::Result<VideoSource> {
         draft.validate().map_err(|err| anyhow!(err))?;
         let id = VideoSourceId::new();
@@ -739,7 +741,18 @@ impl Repository {
             .one(&self.db)
             .await?
             .ok_or_else(|| anyhow!("video source missing after insert"))?;
-        video_source_model_to_domain(inserted)
+        let domain = video_source_model_to_domain(inserted)?;
+        let after_json = serde_json::to_value(&domain)?;
+        self.record_settings_audit(
+            "video_source",
+            &id.to_string(),
+            source,
+            actor,
+            None,
+            after_json,
+        )
+        .await?;
+        Ok(domain)
     }
 
     #[instrument(skip_all)]
@@ -747,12 +760,16 @@ impl Repository {
         &self,
         id: VideoSourceId,
         draft: &VideoSourceDraft,
+        source: SettingsAuditSource,
+        actor: &str,
     ) -> anyhow::Result<VideoSource> {
         draft.validate().map_err(|err| anyhow!(err))?;
         let existing = video_source::Entity::find_by_id(id.to_string())
             .one(&self.db)
             .await?
             .ok_or_else(|| anyhow!("video source not found"))?;
+        let before = video_source_model_to_domain(existing.clone())?;
+        let before_json = serde_json::to_value(&before)?;
 
         let mut model = existing.into_active_model();
         model.label = Set(draft.label.trim().to_string());
@@ -760,22 +777,70 @@ impl Repository {
         model.updated_at = Set(Utc::now().into());
 
         let updated = model.update(&self.db).await?;
-        video_source_model_to_domain(updated)
+        let domain = video_source_model_to_domain(updated)?;
+        let after_json = serde_json::to_value(&domain)?;
+        self.record_settings_audit(
+            "video_source",
+            &id.to_string(),
+            source,
+            actor,
+            Some(before_json),
+            after_json,
+        )
+        .await?;
+        Ok(domain)
     }
 
     #[instrument(skip_all)]
-    pub async fn delete_video_source(&self, id: VideoSourceId) -> anyhow::Result<()> {
+    pub async fn delete_video_source(
+        &self,
+        id: VideoSourceId,
+        source: SettingsAuditSource,
+        actor: &str,
+    ) -> anyhow::Result<()> {
+        let existing = video_source::Entity::find_by_id(id.to_string())
+            .one(&self.db)
+            .await?;
+        let before_json = existing
+            .map(|m| {
+                let domain = video_source_model_to_domain(m)?;
+                serde_json::to_value(&domain).map_err(anyhow::Error::from)
+            })
+            .transpose()?;
+
         let result = video_source::Entity::delete_by_id(id.to_string())
             .exec(&self.db)
             .await?;
         if result.rows_affected == 0 {
             return Err(anyhow!("video source not found"));
         }
+        self.record_settings_audit(
+            "video_source",
+            &id.to_string(),
+            source,
+            actor,
+            before_json,
+            serde_json::json!({"deleted": true, "id": id.to_string()}),
+        )
+        .await?;
         Ok(())
     }
 
     #[instrument(skip_all)]
-    pub async fn activate_video_source(&self, id: VideoSourceId) -> anyhow::Result<VideoSource> {
+    pub async fn activate_video_source(
+        &self,
+        id: VideoSourceId,
+        source: SettingsAuditSource,
+        actor: &str,
+    ) -> anyhow::Result<VideoSource> {
+        // Capture before state of target row.
+        let existing = video_source::Entity::find_by_id(id.to_string())
+            .one(&self.db)
+            .await?
+            .ok_or_else(|| anyhow!("video source not found"))?;
+        let before = video_source_model_to_domain(existing.clone())?;
+        let before_json = serde_json::to_value(&before)?;
+
         // Deactivate all first
         video_source::Entity::update_many()
             .col_expr(video_source::Column::IsActive, Expr::value(false))
@@ -789,21 +854,44 @@ impl Repository {
             .exec(&self.db)
             .await?;
 
-        // Activate target
-        let existing = video_source::Entity::find_by_id(id.to_string())
-            .one(&self.db)
-            .await?
-            .ok_or_else(|| anyhow!("video source not found"))?;
-
         let mut model = existing.into_active_model();
         model.is_active = Set(true);
         model.updated_at = Set(Utc::now().into());
 
         let updated = model.update(&self.db).await?;
-        video_source_model_to_domain(updated)
+        let domain = video_source_model_to_domain(updated)?;
+        let after_json = serde_json::to_value(&domain)?;
+        self.record_settings_audit(
+            "video_source",
+            &id.to_string(),
+            source,
+            actor,
+            Some(before_json),
+            after_json,
+        )
+        .await?;
+        Ok(domain)
     }
 
-    pub async fn deactivate_all_video_sources(&self) -> anyhow::Result<()> {
+    pub async fn deactivate_all_video_sources(
+        &self,
+        source: SettingsAuditSource,
+        actor: &str,
+    ) -> anyhow::Result<()> {
+        // Capture before state — list of active sources.
+        let active_rows: Vec<_> = video_source::Entity::find()
+            .filter(video_source::Column::IsActive.eq(true))
+            .all(&self.db)
+            .await?;
+        let before_list: Vec<serde_json::Value> = active_rows
+            .iter()
+            .cloned()
+            .map(|m| {
+                let domain = video_source_model_to_domain(m)?;
+                serde_json::to_value(&domain).map_err(anyhow::Error::from)
+            })
+            .collect::<anyhow::Result<_>>()?;
+
         video_source::Entity::update_many()
             .col_expr(video_source::Column::IsActive, Expr::value(false))
             .col_expr(
@@ -815,6 +903,18 @@ impl Repository {
             .filter(video_source::Column::IsActive.eq(true))
             .exec(&self.db)
             .await?;
+
+        if !active_rows.is_empty() {
+            self.record_settings_audit(
+                "video_source",
+                "deactivate_all",
+                source,
+                actor,
+                Some(serde_json::Value::Array(before_list)),
+                serde_json::json!({"deactivated_all": true}),
+            )
+            .await?;
+        }
         Ok(())
     }
 

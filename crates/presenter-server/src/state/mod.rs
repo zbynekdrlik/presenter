@@ -288,7 +288,14 @@ impl AppState {
                         match ndi_state.repository.get_active_video_source().await {
                             Ok(Some(source)) => {
                                 let ndi_name = source.ndi_name.clone();
-                                if let Err(err) = ndi_state.activate_video_source(source.id).await {
+                                if let Err(err) = ndi_state
+                                    .activate_video_source(
+                                        source.id,
+                                        presenter_persistence::SettingsAuditSource::StartupDefault,
+                                        "system",
+                                    )
+                                    .await
+                                {
                                     tracing::debug!(
                                         ?err,
                                         ndi_name = %ndi_name,
@@ -390,7 +397,14 @@ impl AppState {
             match state.repository.get_active_video_source().await {
                 Ok(Some(source)) => {
                     let ndi_name = source.ndi_name.clone();
-                    if let Err(err) = state.activate_video_source(source.id).await {
+                    if let Err(err) = state
+                        .activate_video_source(
+                            source.id,
+                            presenter_persistence::SettingsAuditSource::StartupDefault,
+                            "system",
+                        )
+                        .await
+                    {
                         tracing::warn!(
                             ?err,
                             ndi_name = %ndi_name,

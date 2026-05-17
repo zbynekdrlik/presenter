@@ -8,6 +8,7 @@ use tracing::instrument;
 use super::super::AppError;
 use crate::state::AppState;
 use presenter_core::{VideoSource, VideoSourceDraft, VideoSourceId};
+use presenter_persistence::SettingsAuditSource;
 use uuid::Uuid;
 
 #[derive(Debug, Serialize)]
@@ -59,7 +60,10 @@ pub(crate) async fn create_video_source(
     Json(payload): Json<VideoSourceRequest>,
 ) -> Result<Json<VideoSourceDto>, AppError> {
     let draft = VideoSourceDraft::new(payload.label, payload.ndi_name);
-    let source = state.create_video_source(draft).await?;
+    // HTTP wiring (Task 11) replaces these placeholders with the real actor.
+    let source = state
+        .create_video_source(draft, SettingsAuditSource::HttpSetter, "http")
+        .await?;
     Ok(Json(VideoSourceDto::from_source(source)))
 }
 
@@ -71,7 +75,12 @@ pub(crate) async fn update_video_source(
 ) -> Result<Json<VideoSourceDto>, AppError> {
     let draft = VideoSourceDraft::new(payload.label, payload.ndi_name);
     let source = state
-        .update_video_source(VideoSourceId::from_uuid(id), draft)
+        .update_video_source(
+            VideoSourceId::from_uuid(id),
+            draft,
+            SettingsAuditSource::HttpSetter,
+            "http",
+        )
         .await?;
     Ok(Json(VideoSourceDto::from_source(source)))
 }
@@ -82,7 +91,11 @@ pub(crate) async fn delete_video_source(
     Path(id): Path<Uuid>,
 ) -> Result<axum::http::StatusCode, AppError> {
     state
-        .delete_video_source(VideoSourceId::from_uuid(id))
+        .delete_video_source(
+            VideoSourceId::from_uuid(id),
+            SettingsAuditSource::HttpSetter,
+            "http",
+        )
         .await?;
     Ok(axum::http::StatusCode::NO_CONTENT)
 }
@@ -93,7 +106,11 @@ pub(crate) async fn activate_video_source(
     Path(id): Path<Uuid>,
 ) -> Result<Json<VideoSourceDto>, AppError> {
     let source = state
-        .activate_video_source(VideoSourceId::from_uuid(id))
+        .activate_video_source(
+            VideoSourceId::from_uuid(id),
+            SettingsAuditSource::HttpSetter,
+            "http",
+        )
         .await?;
     Ok(Json(VideoSourceDto::from_source(source)))
 }
@@ -102,6 +119,8 @@ pub(crate) async fn activate_video_source(
 pub(crate) async fn deactivate_video_sources(
     State(state): State<AppState>,
 ) -> Result<axum::http::StatusCode, AppError> {
-    state.deactivate_video_sources().await?;
+    state
+        .deactivate_video_sources(SettingsAuditSource::HttpSetter, "http")
+        .await?;
     Ok(axum::http::StatusCode::OK)
 }
