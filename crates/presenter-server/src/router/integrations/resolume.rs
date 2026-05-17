@@ -1,14 +1,17 @@
 use axum::{
     extract::{Path, State},
+    http::HeaderMap,
     Json,
 };
 use serde::{Deserialize, Serialize};
 use tracing::instrument;
 
 use super::super::AppError;
+use super::extract_actor;
 use crate::resolume::ResolumeConnectionSnapshot;
 use crate::state::AppState;
 use presenter_core::{ResolumeHost, ResolumeHostDraft, ResolumeHostId};
+use presenter_persistence::SettingsAuditSource;
 use uuid::Uuid;
 
 #[derive(Debug, Serialize)]
@@ -76,11 +79,15 @@ pub(crate) async fn list_resolume_hosts(
 #[instrument(skip_all)]
 pub(crate) async fn create_resolume_host(
     State(state): State<AppState>,
+    headers: HeaderMap,
     Json(payload): Json<ResolumeHostRequest>,
 ) -> Result<Json<ResolumeHostDto>, AppError> {
     let draft = ResolumeHostDraft::new(payload.label, payload.host, payload.port)
         .with_enabled(payload.is_enabled);
-    let host = state.create_resolume_host(draft).await?;
+    let actor = extract_actor(&headers);
+    let host = state
+        .create_resolume_host(draft, SettingsAuditSource::HttpSetter, &actor)
+        .await?;
     let status = state.resolume_status_for(host.id).await;
     Ok(Json(ResolumeHostDto::from_host(host, status)))
 }
@@ -88,13 +95,20 @@ pub(crate) async fn create_resolume_host(
 #[instrument(skip_all)]
 pub(crate) async fn update_resolume_host(
     State(state): State<AppState>,
+    headers: HeaderMap,
     Path(id): Path<Uuid>,
     Json(payload): Json<ResolumeHostRequest>,
 ) -> Result<Json<ResolumeHostDto>, AppError> {
     let draft = ResolumeHostDraft::new(payload.label, payload.host, payload.port)
         .with_enabled(payload.is_enabled);
+    let actor = extract_actor(&headers);
     let host = state
-        .update_resolume_host(ResolumeHostId::from_uuid(id), draft)
+        .update_resolume_host(
+            ResolumeHostId::from_uuid(id),
+            draft,
+            SettingsAuditSource::HttpSetter,
+            &actor,
+        )
         .await?;
     let status = state.resolume_status_for(host.id).await;
     Ok(Json(ResolumeHostDto::from_host(host, status)))
@@ -103,10 +117,16 @@ pub(crate) async fn update_resolume_host(
 #[instrument(skip_all)]
 pub(crate) async fn delete_resolume_host(
     State(state): State<AppState>,
+    headers: HeaderMap,
     Path(id): Path<Uuid>,
 ) -> Result<axum::http::StatusCode, AppError> {
+    let actor = extract_actor(&headers);
     state
-        .delete_resolume_host(ResolumeHostId::from_uuid(id))
+        .delete_resolume_host(
+            ResolumeHostId::from_uuid(id),
+            SettingsAuditSource::HttpSetter,
+            &actor,
+        )
         .await?;
     Ok(axum::http::StatusCode::NO_CONTENT)
 }

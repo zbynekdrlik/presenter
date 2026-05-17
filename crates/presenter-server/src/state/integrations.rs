@@ -43,8 +43,13 @@ impl AppState {
     pub async fn create_resolume_host(
         &self,
         draft: ResolumeHostDraft,
+        source: presenter_persistence::SettingsAuditSource,
+        actor: &str,
     ) -> anyhow::Result<ResolumeHost> {
-        let host = self.repository.create_resolume_host(&draft).await?;
+        let host = self
+            .repository
+            .create_resolume_host(&draft, source, actor)
+            .await?;
         self.sync_resolume_hosts().await?;
         Ok(host)
     }
@@ -53,14 +58,26 @@ impl AppState {
         &self,
         id: ResolumeHostId,
         draft: ResolumeHostDraft,
+        source: presenter_persistence::SettingsAuditSource,
+        actor: &str,
     ) -> anyhow::Result<ResolumeHost> {
-        let host = self.repository.update_resolume_host(id, &draft).await?;
+        let host = self
+            .repository
+            .update_resolume_host(id, &draft, source, actor)
+            .await?;
         self.sync_resolume_hosts().await?;
         Ok(host)
     }
 
-    pub async fn delete_resolume_host(&self, id: ResolumeHostId) -> anyhow::Result<()> {
-        self.repository.delete_resolume_host(id).await?;
+    pub async fn delete_resolume_host(
+        &self,
+        id: ResolumeHostId,
+        source: presenter_persistence::SettingsAuditSource,
+        actor: &str,
+    ) -> anyhow::Result<()> {
+        self.repository
+            .delete_resolume_host(id, source, actor)
+            .await?;
         self.sync_resolume_hosts().await
     }
 
@@ -91,8 +108,13 @@ impl AppState {
     pub async fn create_android_stage_display(
         &self,
         draft: AndroidStageDisplayDraft,
+        source: presenter_persistence::SettingsAuditSource,
+        actor: &str,
     ) -> anyhow::Result<AndroidStageDisplay> {
-        let display = self.repository.create_android_stage_display(&draft).await?;
+        let display = self
+            .repository
+            .create_android_stage_display(&draft, source, actor)
+            .await?;
         self.sync_android_stage_displays().await?;
         Ok(display)
     }
@@ -101,10 +123,12 @@ impl AppState {
         &self,
         id: AndroidStageDisplayId,
         draft: AndroidStageDisplayDraft,
+        source: presenter_persistence::SettingsAuditSource,
+        actor: &str,
     ) -> anyhow::Result<AndroidStageDisplay> {
         let display = self
             .repository
-            .update_android_stage_display(id, &draft)
+            .update_android_stage_display(id, &draft, source, actor)
             .await?;
         self.sync_android_stage_displays().await?;
         Ok(display)
@@ -113,8 +137,12 @@ impl AppState {
     pub async fn delete_android_stage_display(
         &self,
         id: AndroidStageDisplayId,
+        source: presenter_persistence::SettingsAuditSource,
+        actor: &str,
     ) -> anyhow::Result<()> {
-        self.repository.delete_android_stage_display(id).await?;
+        self.repository
+            .delete_android_stage_display(id, source, actor)
+            .await?;
         self.sync_android_stage_displays().await
     }
 
@@ -139,24 +167,45 @@ impl AppState {
     pub async fn create_video_source(
         &self,
         draft: VideoSourceDraft,
+        source: presenter_persistence::SettingsAuditSource,
+        actor: &str,
     ) -> anyhow::Result<VideoSource> {
-        self.repository.create_video_source(&draft).await
+        self.repository
+            .create_video_source(&draft, source, actor)
+            .await
     }
 
     pub async fn update_video_source(
         &self,
         id: VideoSourceId,
         draft: VideoSourceDraft,
+        source: presenter_persistence::SettingsAuditSource,
+        actor: &str,
     ) -> anyhow::Result<VideoSource> {
-        self.repository.update_video_source(id, &draft).await
+        self.repository
+            .update_video_source(id, &draft, source, actor)
+            .await
     }
 
-    pub async fn delete_video_source(&self, id: VideoSourceId) -> anyhow::Result<()> {
-        self.repository.delete_video_source(id).await
+    pub async fn delete_video_source(
+        &self,
+        id: VideoSourceId,
+        source: presenter_persistence::SettingsAuditSource,
+        actor: &str,
+    ) -> anyhow::Result<()> {
+        self.repository.delete_video_source(id, source, actor).await
     }
 
-    pub async fn activate_video_source(&self, id: VideoSourceId) -> anyhow::Result<VideoSource> {
-        let source = self.repository.activate_video_source(id).await?;
+    pub async fn activate_video_source(
+        &self,
+        id: VideoSourceId,
+        audit_source: presenter_persistence::SettingsAuditSource,
+        actor: &str,
+    ) -> anyhow::Result<VideoSource> {
+        let source = self
+            .repository
+            .activate_video_source(id, audit_source, actor)
+            .await?;
         self.live_hub.publish(LiveEvent::NdiSourceActivated {
             ndi_name: source.ndi_name.clone(),
             label: source.label.clone(),
@@ -174,8 +223,14 @@ impl AppState {
         Ok(source)
     }
 
-    pub async fn deactivate_video_sources(&self) -> anyhow::Result<()> {
-        self.repository.deactivate_all_video_sources().await?;
+    pub async fn deactivate_video_sources(
+        &self,
+        source: presenter_persistence::SettingsAuditSource,
+        actor: &str,
+    ) -> anyhow::Result<()> {
+        self.repository
+            .deactivate_all_video_sources(source, actor)
+            .await?;
         self.live_hub.publish(LiveEvent::NdiSourceDeactivated);
         // Stop NDI stream if manager is available
         if let Some(manager) = &self.ndi_manager {

@@ -1,3 +1,4 @@
+mod audit;
 mod bible;
 mod group_color;
 mod library;
@@ -14,6 +15,7 @@ use util::{
     timers_model_to_state, velocity_mode_to_string, video_source_model_to_domain,
 };
 
+use crate::audit::SettingsAuditSource;
 use crate::entities::{
     ableset_settings, android_stage_display, app_settings, osc_settings, resolume_host,
     stage_state, timers, video_source,
@@ -30,7 +32,7 @@ use sea_orm::Statement;
 use sea_orm::{
     sea_query::{Expr, OnConflict},
     ActiveModelTrait, ColumnTrait, ConnectionTrait, Database, DatabaseConnection, EntityTrait,
-    IntoActiveModel, QueryFilter, QueryOrder, Schema, Set,
+    IntoActiveModel, QueryFilter, QueryOrder, Schema, Set, TransactionTrait,
 };
 use std::fmt::Debug;
 use tracing::instrument;
@@ -159,16 +161,23 @@ impl Repository {
         {
             return Ok(osc_model_to_domain(model)?);
         }
-        self.insert_osc_settings(OscSettingsDraft::default()).await
+        self.insert_osc_settings(
+            OscSettingsDraft::default(),
+            SettingsAuditSource::StartupDefault,
+            "system",
+        )
+        .await
     }
 
     #[instrument(skip_all)]
     pub async fn upsert_osc_settings(
         &self,
         draft: &OscSettingsDraft,
+        source: SettingsAuditSource,
+        actor: &str,
     ) -> anyhow::Result<OscSettings> {
         draft.validate().map_err(|err| anyhow!(err))?;
-        self.insert_osc_settings(draft.clone()).await
+        self.insert_osc_settings(draft.clone(), source, actor).await
     }
 
     async fn ensure_ableset_settings_table(&self) -> anyhow::Result<()> {
@@ -183,7 +192,25 @@ impl Repository {
         Ok(())
     }
 
-    async fn insert_osc_settings(&self, draft: OscSettingsDraft) -> anyhow::Result<OscSettings> {
+    async fn insert_osc_settings(
+        &self,
+        draft: OscSettingsDraft,
+        source: SettingsAuditSource,
+        actor: &str,
+    ) -> anyhow::Result<OscSettings> {
+        // Wrap the settings upsert + audit insert in a single transaction so
+        // a mid-flight failure cannot leave the row mutated without an audit
+        // entry (or vice versa).
+        let txn = self.db.begin().await?;
+
+        // Capture previous state for audit (None if row missing).
+        let before = osc_settings::Entity::find_by_id(OSC_SETTINGS_SINGLETON_ID.to_string())
+            .one(&txn)
+            .await?
+            .map(|m| osc_model_to_domain(m))
+            .transpose()?;
+        let before_json = before.as_ref().map(serde_json::to_value).transpose()?;
+
         let now = Utc::now();
         let address = draft.address_pattern.trim().to_string();
         let mode = velocity_mode_to_string(draft.velocity_mode).to_string();
@@ -209,70 +236,83 @@ impl Repository {
                     ])
                     .to_owned(),
             )
-            .exec(&self.db)
+            .exec(&txn)
             .await?;
 
         let model = osc_settings::Entity::find_by_id(OSC_SETTINGS_SINGLETON_ID.to_string())
-            .one(&self.db)
+            .one(&txn)
             .await?
             .ok_or_else(|| anyhow!("osc settings missing after upsert"))?;
-        Ok(osc_model_to_domain(model)?)
+        let domain = osc_model_to_domain(model)?;
+        let after_json = serde_json::to_value(&domain)?;
+        Self::record_settings_audit_on(
+            &txn,
+            "osc_settings",
+            OSC_SETTINGS_SINGLETON_ID,
+            source,
+            actor,
+            before_json,
+            after_json,
+        )
+        .await?;
+
+        txn.commit().await?;
+        Ok(domain)
     }
 
     #[instrument(skip_all)]
     pub async fn get_ableset_settings(&self) -> anyhow::Result<AbleSetSettings> {
         self.ensure_ableset_settings_table().await?;
-        if let Some(mut model) =
+        if let Some(model) =
             ableset_settings::Entity::find_by_id(ABLESET_SETTINGS_SINGLETON_ID.to_string())
                 .one(&self.db)
                 .await?
         {
-            let defaults = AbleSetSettingsDraft::default();
-            let mut needs_update = false;
-            if model.http_port == 5950 {
-                model.http_port = defaults.http_port as i32;
-                needs_update = true;
-            }
-            if model.osc_port == 5950 {
-                model.osc_port = defaults.osc_port as i32;
-                needs_update = true;
-            }
-            if model.library_name.trim().eq_ignore_ascii_case("NEWLEVEL") {
-                model.library_name = defaults.library_name.clone();
-                needs_update = true;
-            }
-            if needs_update {
-                let mut active: ableset_settings::ActiveModel = model.clone().into();
-                active.http_port = sea_orm::ActiveValue::set(model.http_port);
-                active.osc_port = sea_orm::ActiveValue::set(model.osc_port);
-                active.updated_at = sea_orm::ActiveValue::set(Utc::now().into());
-                active.update(&self.db).await?;
-                model =
-                    ableset_settings::Entity::find_by_id(ABLESET_SETTINGS_SINGLETON_ID.to_string())
-                        .one(&self.db)
-                        .await?
-                        .ok_or_else(|| anyhow!("ableset settings missing after migration"))?;
-            }
             return Ok(ableset_model_to_domain(model)?);
         }
-        self.insert_ableset_settings(AbleSetSettingsDraft::default())
-            .await
+        self.insert_ableset_settings(
+            AbleSetSettingsDraft::default(),
+            SettingsAuditSource::StartupDefault,
+            "system",
+        )
+        .await
     }
 
     #[instrument(skip_all)]
     pub async fn upsert_ableset_settings(
         &self,
         draft: &AbleSetSettingsDraft,
+        source: SettingsAuditSource,
+        actor: &str,
     ) -> anyhow::Result<AbleSetSettings> {
         draft.validate().map_err(|err| anyhow!(err))?;
-        self.insert_ableset_settings(draft.clone()).await
+        self.insert_ableset_settings(draft.clone(), source, actor)
+            .await
     }
 
     async fn insert_ableset_settings(
         &self,
         draft: AbleSetSettingsDraft,
+        source: SettingsAuditSource,
+        actor: &str,
     ) -> anyhow::Result<AbleSetSettings> {
+        // `ensure_ableset_settings_table` is idempotent DDL — kept outside
+        // the transaction to avoid serializing schema changes with row
+        // writes.
         self.ensure_ableset_settings_table().await?;
+
+        // Row + audit write atomically inside one transaction.
+        let txn = self.db.begin().await?;
+
+        // Capture previous state for audit.
+        let before =
+            ableset_settings::Entity::find_by_id(ABLESET_SETTINGS_SINGLETON_ID.to_string())
+                .one(&txn)
+                .await?
+                .map(|m| ableset_model_to_domain(m))
+                .transpose()?;
+        let before_json = before.as_ref().map(serde_json::to_value).transpose()?;
+
         let now = Utc::now();
         let active = ableset_settings::ActiveModel {
             id: sea_orm::ActiveValue::set(ABLESET_SETTINGS_SINGLETON_ID.to_string()),
@@ -300,15 +340,28 @@ impl Repository {
                     ])
                     .to_owned(),
             )
-            .exec(&self.db)
+            .exec(&txn)
             .await?;
 
         let model = ableset_settings::Entity::find_by_id(ABLESET_SETTINGS_SINGLETON_ID.to_string())
-            .one(&self.db)
+            .one(&txn)
             .await?
             .ok_or_else(|| anyhow!("ableset settings missing after upsert"))?;
+        let domain = ableset_model_to_domain(model)?;
+        let after_json = serde_json::to_value(&domain)?;
+        Self::record_settings_audit_on(
+            &txn,
+            "ableset_settings",
+            ABLESET_SETTINGS_SINGLETON_ID,
+            source,
+            actor,
+            before_json,
+            after_json,
+        )
+        .await?;
 
-        Ok(ableset_model_to_domain(model)?)
+        txn.commit().await?;
+        Ok(domain)
     }
 
     pub async fn list_resolume_hosts(&self) -> anyhow::Result<Vec<ResolumeHost>> {
@@ -334,6 +387,8 @@ impl Repository {
     pub async fn create_resolume_host(
         &self,
         draft: &ResolumeHostDraft,
+        source: SettingsAuditSource,
+        actor: &str,
     ) -> anyhow::Result<ResolumeHost> {
         draft.validate().map_err(|err| anyhow!(err))?;
         let id = ResolumeHostId::new();
@@ -348,18 +403,34 @@ impl Repository {
             updated_at: Set(now.into()),
         };
 
-        resolume_host::Entity::insert(model).exec(&self.db).await?;
+        let txn = self.db.begin().await?;
+        resolume_host::Entity::insert(model).exec(&txn).await?;
 
         let inserted = resolume_host::Entity::find_by_id(id.to_string())
-            .one(&self.db)
+            .one(&txn)
             .await?
             .ok_or_else(|| anyhow!("resolume host missing after insert"))?;
-        resolume_model_to_domain(inserted)
+        let host = resolume_model_to_domain(inserted)?;
+        let after_json = serde_json::to_value(&host)?;
+        Self::record_settings_audit_on(
+            &txn,
+            "resolume_host",
+            &id.to_string(),
+            source,
+            actor,
+            None,
+            after_json,
+        )
+        .await?;
+        txn.commit().await?;
+        Ok(host)
     }
 
     pub async fn create_android_stage_display(
         &self,
         draft: &AndroidStageDisplayDraft,
+        source: SettingsAuditSource,
+        actor: &str,
     ) -> anyhow::Result<AndroidStageDisplay> {
         draft.validate().map_err(|err| anyhow!(err))?;
         let id = AndroidStageDisplayId::new();
@@ -375,15 +446,29 @@ impl Repository {
             updated_at: Set(now.into()),
         };
 
+        let txn = self.db.begin().await?;
         android_stage_display::Entity::insert(model)
-            .exec(&self.db)
+            .exec(&txn)
             .await?;
 
         let inserted = android_stage_display::Entity::find_by_id(id.to_string())
-            .one(&self.db)
+            .one(&txn)
             .await?
             .ok_or_else(|| anyhow!("android stage display missing after insert"))?;
-        android_stage_display_model_to_domain(inserted)
+        let display = android_stage_display_model_to_domain(inserted)?;
+        let after_json = serde_json::to_value(&display)?;
+        Self::record_settings_audit_on(
+            &txn,
+            "android_stage_display",
+            &id.to_string(),
+            source,
+            actor,
+            None,
+            after_json,
+        )
+        .await?;
+        txn.commit().await?;
+        Ok(display)
     }
 
     #[instrument(skip_all)]
@@ -391,12 +476,17 @@ impl Repository {
         &self,
         id: ResolumeHostId,
         draft: &ResolumeHostDraft,
+        source: SettingsAuditSource,
+        actor: &str,
     ) -> anyhow::Result<ResolumeHost> {
         draft.validate().map_err(|err| anyhow!(err))?;
+        let txn = self.db.begin().await?;
         let existing = resolume_host::Entity::find_by_id(id.to_string())
-            .one(&self.db)
+            .one(&txn)
             .await?
             .ok_or_else(|| anyhow!("resolume host not found"))?;
+        let before = resolume_model_to_domain(existing.clone())?;
+        let before_json = serde_json::to_value(&before)?;
 
         let mut model = existing.into_active_model();
         model.label = Set(draft.label.trim().to_string());
@@ -405,20 +495,38 @@ impl Repository {
         model.is_enabled = Set(draft.is_enabled);
         model.updated_at = Set(Utc::now().into());
 
-        let updated = model.update(&self.db).await?;
-        resolume_model_to_domain(updated)
+        let updated = model.update(&txn).await?;
+        let host = resolume_model_to_domain(updated)?;
+        let after_json = serde_json::to_value(&host)?;
+        Self::record_settings_audit_on(
+            &txn,
+            "resolume_host",
+            &id.to_string(),
+            source,
+            actor,
+            Some(before_json),
+            after_json,
+        )
+        .await?;
+        txn.commit().await?;
+        Ok(host)
     }
 
     pub async fn update_android_stage_display(
         &self,
         id: AndroidStageDisplayId,
         draft: &AndroidStageDisplayDraft,
+        source: SettingsAuditSource,
+        actor: &str,
     ) -> anyhow::Result<AndroidStageDisplay> {
         draft.validate().map_err(|err| anyhow!(err))?;
+        let txn = self.db.begin().await?;
         let existing = android_stage_display::Entity::find_by_id(id.to_string())
-            .one(&self.db)
+            .one(&txn)
             .await?
             .ok_or_else(|| anyhow!("android stage display not found"))?;
+        let before = android_stage_display_model_to_domain(existing.clone())?;
+        let before_json = serde_json::to_value(&before)?;
 
         let mut model = existing.into_active_model();
         model.label = Set(draft.label.trim().to_string());
@@ -428,31 +536,95 @@ impl Repository {
         model.is_enabled = Set(draft.is_enabled);
         model.updated_at = Set(Utc::now().into());
 
-        let updated = model.update(&self.db).await?;
-        android_stage_display_model_to_domain(updated)
+        let updated = model.update(&txn).await?;
+        let display = android_stage_display_model_to_domain(updated)?;
+        let after_json = serde_json::to_value(&display)?;
+        Self::record_settings_audit_on(
+            &txn,
+            "android_stage_display",
+            &id.to_string(),
+            source,
+            actor,
+            Some(before_json),
+            after_json,
+        )
+        .await?;
+        txn.commit().await?;
+        Ok(display)
     }
 
     #[instrument(skip_all)]
-    pub async fn delete_resolume_host(&self, id: ResolumeHostId) -> anyhow::Result<()> {
+    pub async fn delete_resolume_host(
+        &self,
+        id: ResolumeHostId,
+        source: SettingsAuditSource,
+        actor: &str,
+    ) -> anyhow::Result<()> {
+        let txn = self.db.begin().await?;
+        let existing = resolume_host::Entity::find_by_id(id.to_string())
+            .one(&txn)
+            .await?;
+        let before_json = existing
+            .map(|m| {
+                let host = resolume_model_to_domain(m)?;
+                serde_json::to_value(&host).map_err(anyhow::Error::from)
+            })
+            .transpose()?;
+
         let result = resolume_host::Entity::delete_by_id(id.to_string())
-            .exec(&self.db)
+            .exec(&txn)
             .await?;
         if result.rows_affected == 0 {
             return Err(anyhow!("resolume host not found"));
         }
+        Self::record_settings_audit_on(
+            &txn,
+            "resolume_host",
+            &id.to_string(),
+            source,
+            actor,
+            before_json,
+            serde_json::json!({"deleted": true, "id": id.to_string()}),
+        )
+        .await?;
+        txn.commit().await?;
         Ok(())
     }
 
     pub async fn delete_android_stage_display(
         &self,
         id: AndroidStageDisplayId,
+        source: SettingsAuditSource,
+        actor: &str,
     ) -> anyhow::Result<()> {
+        let txn = self.db.begin().await?;
+        let existing = android_stage_display::Entity::find_by_id(id.to_string())
+            .one(&txn)
+            .await?;
+        let before_json = existing
+            .map(|m| {
+                let display = android_stage_display_model_to_domain(m)?;
+                serde_json::to_value(&display).map_err(anyhow::Error::from)
+            })
+            .transpose()?;
+
         let result = android_stage_display::Entity::delete_by_id(id.to_string())
-            .exec(&self.db)
+            .exec(&txn)
             .await?;
         if result.rows_affected == 0 {
             return Err(anyhow!("android stage display not found"));
         }
+        Self::record_settings_audit_on(
+            &txn,
+            "android_stage_display",
+            &id.to_string(),
+            source,
+            actor,
+            before_json,
+            serde_json::json!({"deleted": true, "id": id.to_string()}),
+        )
+        .await?;
+        txn.commit().await?;
         Ok(())
     }
 
@@ -481,6 +653,8 @@ impl Repository {
     pub async fn create_video_source(
         &self,
         draft: &VideoSourceDraft,
+        source: SettingsAuditSource,
+        actor: &str,
     ) -> anyhow::Result<VideoSource> {
         draft.validate().map_err(|err| anyhow!(err))?;
         let id = VideoSourceId::new();
@@ -494,13 +668,27 @@ impl Repository {
             updated_at: Set(now.into()),
         };
 
-        video_source::Entity::insert(model).exec(&self.db).await?;
+        let txn = self.db.begin().await?;
+        video_source::Entity::insert(model).exec(&txn).await?;
 
         let inserted = video_source::Entity::find_by_id(id.to_string())
-            .one(&self.db)
+            .one(&txn)
             .await?
             .ok_or_else(|| anyhow!("video source missing after insert"))?;
-        video_source_model_to_domain(inserted)
+        let domain = video_source_model_to_domain(inserted)?;
+        let after_json = serde_json::to_value(&domain)?;
+        Self::record_settings_audit_on(
+            &txn,
+            "video_source",
+            &id.to_string(),
+            source,
+            actor,
+            None,
+            after_json,
+        )
+        .await?;
+        txn.commit().await?;
+        Ok(domain)
     }
 
     #[instrument(skip_all)]
@@ -508,63 +696,182 @@ impl Repository {
         &self,
         id: VideoSourceId,
         draft: &VideoSourceDraft,
+        source: SettingsAuditSource,
+        actor: &str,
     ) -> anyhow::Result<VideoSource> {
         draft.validate().map_err(|err| anyhow!(err))?;
+        let txn = self.db.begin().await?;
         let existing = video_source::Entity::find_by_id(id.to_string())
-            .one(&self.db)
+            .one(&txn)
             .await?
             .ok_or_else(|| anyhow!("video source not found"))?;
+        let before = video_source_model_to_domain(existing.clone())?;
+        let before_json = serde_json::to_value(&before)?;
 
         let mut model = existing.into_active_model();
         model.label = Set(draft.label.trim().to_string());
         model.ndi_name = Set(draft.ndi_name.trim().to_string());
         model.updated_at = Set(Utc::now().into());
 
-        let updated = model.update(&self.db).await?;
-        video_source_model_to_domain(updated)
+        let updated = model.update(&txn).await?;
+        let domain = video_source_model_to_domain(updated)?;
+        let after_json = serde_json::to_value(&domain)?;
+        Self::record_settings_audit_on(
+            &txn,
+            "video_source",
+            &id.to_string(),
+            source,
+            actor,
+            Some(before_json),
+            after_json,
+        )
+        .await?;
+        txn.commit().await?;
+        Ok(domain)
     }
 
     #[instrument(skip_all)]
-    pub async fn delete_video_source(&self, id: VideoSourceId) -> anyhow::Result<()> {
+    pub async fn delete_video_source(
+        &self,
+        id: VideoSourceId,
+        source: SettingsAuditSource,
+        actor: &str,
+    ) -> anyhow::Result<()> {
+        let txn = self.db.begin().await?;
+        let existing = video_source::Entity::find_by_id(id.to_string())
+            .one(&txn)
+            .await?;
+        let before_json = existing
+            .map(|m| {
+                let domain = video_source_model_to_domain(m)?;
+                serde_json::to_value(&domain).map_err(anyhow::Error::from)
+            })
+            .transpose()?;
+
         let result = video_source::Entity::delete_by_id(id.to_string())
-            .exec(&self.db)
+            .exec(&txn)
             .await?;
         if result.rows_affected == 0 {
             return Err(anyhow!("video source not found"));
         }
+        Self::record_settings_audit_on(
+            &txn,
+            "video_source",
+            &id.to_string(),
+            source,
+            actor,
+            before_json,
+            serde_json::json!({"deleted": true, "id": id.to_string()}),
+        )
+        .await?;
+        txn.commit().await?;
         Ok(())
     }
 
     #[instrument(skip_all)]
-    pub async fn activate_video_source(&self, id: VideoSourceId) -> anyhow::Result<VideoSource> {
-        // Deactivate all first
-        video_source::Entity::update_many()
-            .col_expr(video_source::Column::IsActive, Expr::value(false))
-            .col_expr(
-                video_source::Column::UpdatedAt,
-                Expr::value(Into::<sea_orm::prelude::DateTimeWithTimeZone>::into(
-                    Utc::now(),
-                )),
-            )
-            .filter(video_source::Column::IsActive.eq(true))
-            .exec(&self.db)
-            .await?;
+    pub async fn activate_video_source(
+        &self,
+        id: VideoSourceId,
+        source: SettingsAuditSource,
+        actor: &str,
+    ) -> anyhow::Result<VideoSource> {
+        // Activating one row deactivates every other currently-active row.
+        // Each deactivation MUST produce its own audit row so the forensic
+        // log can attribute who turned what off, when. Wrap the whole
+        // sequence (sibling deactivations + target activation + all audit
+        // inserts) in a single transaction so a mid-flight failure can't
+        // leave the DB with deactivated rows whose audit rows are missing.
+        let txn = self.db.begin().await?;
 
-        // Activate target
+        // Capture before state of the target row.
         let existing = video_source::Entity::find_by_id(id.to_string())
-            .one(&self.db)
+            .one(&txn)
             .await?
             .ok_or_else(|| anyhow!("video source not found"))?;
+        let target_before = video_source_model_to_domain(existing.clone())?;
+        let target_before_json = serde_json::to_value(&target_before)?;
 
+        // Collect every CURRENTLY-active sibling (excluding the target).
+        let target_id_str = id.to_string();
+        let siblings: Vec<_> = video_source::Entity::find()
+            .filter(video_source::Column::IsActive.eq(true))
+            .filter(video_source::Column::Id.ne(target_id_str.clone()))
+            .all(&txn)
+            .await?;
+
+        // Deactivate each sibling individually so we can record per-row
+        // before/after JSON for the audit log. Using `update_many` would
+        // erase the per-row identity we need to log.
+        let now = Utc::now();
+        for sibling in siblings {
+            let sibling_id = sibling.id.clone();
+            let sibling_before = video_source_model_to_domain(sibling.clone())?;
+            let sibling_before_json = serde_json::to_value(&sibling_before)?;
+
+            let mut active_model = sibling.into_active_model();
+            active_model.is_active = Set(false);
+            active_model.updated_at = Set(now.into());
+            let updated_sibling = active_model.update(&txn).await?;
+            let sibling_after = video_source_model_to_domain(updated_sibling)?;
+            let sibling_after_json = serde_json::to_value(&sibling_after)?;
+
+            Self::record_settings_audit_on(
+                &txn,
+                "video_source",
+                &sibling_id,
+                source,
+                actor,
+                Some(sibling_before_json),
+                sibling_after_json,
+            )
+            .await?;
+        }
+
+        // Now activate the target. Audit row reflects the target's own
+        // before/after.
         let mut model = existing.into_active_model();
         model.is_active = Set(true);
-        model.updated_at = Set(Utc::now().into());
+        model.updated_at = Set(now.into());
+        let updated = model.update(&txn).await?;
+        let domain = video_source_model_to_domain(updated)?;
+        let after_json = serde_json::to_value(&domain)?;
+        Self::record_settings_audit_on(
+            &txn,
+            "video_source",
+            &target_id_str,
+            source,
+            actor,
+            Some(target_before_json),
+            after_json,
+        )
+        .await?;
 
-        let updated = model.update(&self.db).await?;
-        video_source_model_to_domain(updated)
+        txn.commit().await?;
+        Ok(domain)
     }
 
-    pub async fn deactivate_all_video_sources(&self) -> anyhow::Result<()> {
+    pub async fn deactivate_all_video_sources(
+        &self,
+        source: SettingsAuditSource,
+        actor: &str,
+    ) -> anyhow::Result<()> {
+        // Wrap deactivation + audit insert in one transaction.
+        let txn = self.db.begin().await?;
+
+        // Capture before state — list of active sources.
+        let active_rows: Vec<_> = video_source::Entity::find()
+            .filter(video_source::Column::IsActive.eq(true))
+            .all(&txn)
+            .await?;
+        let before_list: Vec<serde_json::Value> = active_rows
+            .iter()
+            .cloned()
+            .map(|m| {
+                let domain = video_source_model_to_domain(m)?;
+                serde_json::to_value(&domain).map_err(anyhow::Error::from)
+            })
+            .collect::<anyhow::Result<_>>()?;
+
         video_source::Entity::update_many()
             .col_expr(video_source::Column::IsActive, Expr::value(false))
             .col_expr(
@@ -574,8 +881,22 @@ impl Repository {
                 )),
             )
             .filter(video_source::Column::IsActive.eq(true))
-            .exec(&self.db)
+            .exec(&txn)
             .await?;
+
+        if !active_rows.is_empty() {
+            Self::record_settings_audit_on(
+                &txn,
+                "video_source",
+                "deactivate_all",
+                source,
+                actor,
+                Some(serde_json::Value::Array(before_list)),
+                serde_json::json!({"deactivated_all": true}),
+            )
+            .await?;
+        }
+        txn.commit().await?;
         Ok(())
     }
 

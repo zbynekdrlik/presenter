@@ -229,6 +229,10 @@ pub fn build_router(state: AppState) -> Router {
             "/integrations/video-sources/{id}/activate",
             post(integrations::video_source::activate_video_source),
         )
+        .route(
+            "/integrations/audit",
+            get(integrations::audit::list_settings_audit),
+        )
         .route("/ndi/sources", get(integrations::ndi::discover_ndi_sources))
         .route("/ndi/status", get(integrations::ndi::ndi_status))
         .route("/ndi/stream", get(integrations::ndi::mjpeg_ws))

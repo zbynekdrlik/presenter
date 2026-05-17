@@ -266,6 +266,19 @@ Schema is mutable during pre-release:
 - Imports happen only via the explicit Import Data workflow. Deploys never touch the database.
 - New server installations start with an empty libraries table. Run the Import Data workflow once after first deploy to populate it.
 
+### Settings Audit Log
+
+All settings writes (ableset, osc, resolume hosts, android stage displays, video sources) are recorded in `settings_audit` (append-only). Each entry captures:
+
+- `setting_table`, `setting_id` — which row changed
+- `source` — `http_setter` | `companion_setter` | `startup_default` | `schema_migration`
+- `actor` — caller IP (from `X-Forwarded-For` or `X-Real-IP`) or `"system"` / `"companion"`
+- `before_json`, `after_json` — full row state before and after
+
+Query: `GET /integrations/audit?table=<name>&settingId=<id>&since=<rfc3339>&limit=<n>`.
+
+Startup MUST be read-only against settings tables. The only allowed startup write is creating a singleton row if missing (with `source=startup_default`). A second startup on an unchanged DB produces zero new audit rows — enforced by the regression test in `crates/presenter-persistence/src/repository/tests.rs::second_startup_writes_no_audit_rows`.
+
 ### Manual Import
 
 To re-import source data (ProPresenter libraries, Bibles):

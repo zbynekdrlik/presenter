@@ -10,6 +10,8 @@ mod m20260414_000001_bible_translation_digest;
 mod m20260414_000002_seed_android_stage_displays;
 mod m20260420_000001_create_group_colors;
 mod m20260506_000001_normalize_text_to_nfc;
+mod m20260517_000001_create_settings_audit;
+mod m20260517_000002_fix_legacy_ableset_defaults;
 
 pub struct Migrator;
 
@@ -24,6 +26,8 @@ impl MigratorTrait for Migrator {
             Box::new(m20260414_000002_seed_android_stage_displays::Migration),
             Box::new(m20260420_000001_create_group_colors::Migration),
             Box::new(m20260506_000001_normalize_text_to_nfc::Migration),
+            Box::new(m20260517_000001_create_settings_audit::Migration),
+            Box::new(m20260517_000002_fix_legacy_ableset_defaults::Migration),
         ]
     }
 }

@@ -5,7 +5,8 @@ use presenter_core::{
     BiblePassage, BibleReference, BibleTranslation, CountdownTimer, Library, LibraryId,
     OscSettingsDraft, PlaylistEntry, PlaylistEntryId, PreachTimer, Presentation, PresentationId,
     ResolumeHostDraft, SearchResultKind, Slide, SlideContent, SlideGroup, SlideId, SlideText,
-    StageState, TimerState, TimersState, VelocityMode, DEFAULT_ADB_PORT, DEFAULT_LAUNCH_COMPONENT,
+    StageState, TimerState, TimersState, VelocityMode, VideoSourceDraft, DEFAULT_ADB_PORT,
+    DEFAULT_LAUNCH_COMPONENT,
 };
 
 fn sample_library() -> Library {
@@ -210,7 +211,14 @@ async fn osc_settings_upsert_updates_values() {
         address_pattern: "/presenter/trigger".to_string(),
         velocity_mode: VelocityMode::OneBased,
     };
-    let updated = repo.upsert_osc_settings(&draft).await.unwrap();
+    let updated = repo
+        .upsert_osc_settings(
+            &draft,
+            crate::audit::SettingsAuditSource::HttpSetter,
+            "test",
+        )
+        .await
+        .unwrap();
     assert!(updated.enabled);
     assert_eq!(updated.listen_port, 10023);
     assert_eq!(updated.address_pattern, "/presenter/trigger");
@@ -226,7 +234,14 @@ async fn osc_settings_upsert_updates_values() {
 async fn resolume_host_crud_round_trip() {
     let repo = Repository::connect_in_memory().await.unwrap();
     let draft = ResolumeHostDraft::new("Arena", "resolume.lan", 8090);
-    let created = repo.create_resolume_host(&draft).await.unwrap();
+    let created = repo
+        .create_resolume_host(
+            &draft,
+            crate::audit::SettingsAuditSource::HttpSetter,
+            "test",
+        )
+        .await
+        .unwrap();
     assert_eq!(created.label, "Arena");
     assert_eq!(created.host, "resolume.lan");
     assert_eq!(created.port, 8090);
@@ -238,13 +253,24 @@ async fn resolume_host_crud_round_trip() {
     let updated_draft =
         ResolumeHostDraft::new("Arena North", "resolume.lan", 8090).with_enabled(false);
     let updated = repo
-        .update_resolume_host(created.id, &updated_draft)
+        .update_resolume_host(
+            created.id,
+            &updated_draft,
+            crate::audit::SettingsAuditSource::HttpSetter,
+            "test",
+        )
         .await
         .unwrap();
     assert_eq!(updated.label, "Arena North");
     assert!(!updated.is_enabled);
 
-    repo.delete_resolume_host(created.id).await.unwrap();
+    repo.delete_resolume_host(
+        created.id,
+        crate::audit::SettingsAuditSource::HttpSetter,
+        "test",
+    )
+    .await
+    .unwrap();
     let after_delete = repo.list_resolume_hosts().await.unwrap();
     assert!(after_delete.is_empty());
 }
@@ -257,7 +283,14 @@ async fn android_stage_display_crud_round_trip() {
     let initial_count = initial.len();
 
     let draft = AndroidStageDisplayDraft::new("Stage Left", "test-stage.invalid");
-    let created = repo.create_android_stage_display(&draft).await.unwrap();
+    let created = repo
+        .create_android_stage_display(
+            &draft,
+            crate::audit::SettingsAuditSource::HttpSetter,
+            "test",
+        )
+        .await
+        .unwrap();
     assert_eq!(created.label, "Stage Left");
     assert_eq!(created.host, "test-stage.invalid");
     assert_eq!(created.port, DEFAULT_ADB_PORT);
@@ -276,7 +309,12 @@ async fn android_stage_display_crud_round_trip() {
         .with_launch_component("com.example/.Main")
         .with_enabled(false);
     let updated = repo
-        .update_android_stage_display(created.id, &updated_draft)
+        .update_android_stage_display(
+            created.id,
+            &updated_draft,
+            crate::audit::SettingsAuditSource::HttpSetter,
+            "test",
+        )
         .await
         .unwrap();
     assert_eq!(updated.label, "Stage Right");
@@ -285,7 +323,13 @@ async fn android_stage_display_crud_round_trip() {
     assert_eq!(updated.launch_component, "com.example/.Main");
     assert!(!updated.is_enabled);
 
-    repo.delete_android_stage_display(created.id).await.unwrap();
+    repo.delete_android_stage_display(
+        created.id,
+        crate::audit::SettingsAuditSource::HttpSetter,
+        "test",
+    )
+    .await
+    .unwrap();
     let after_delete = repo.list_android_stage_displays().await.unwrap();
     assert_eq!(after_delete.len(), initial_count);
     assert!(after_delete.iter().all(|d| d.id != created.id));
@@ -756,7 +800,13 @@ async fn seed_migration_is_idempotent_when_rerun() {
 
     // Operator adds a fifth display manually.
     let draft = AndroidStageDisplayDraft::new("Operator Custom", "custom.invalid");
-    repo.create_android_stage_display(&draft).await.unwrap();
+    repo.create_android_stage_display(
+        &draft,
+        crate::audit::SettingsAuditSource::HttpSetter,
+        "test",
+    )
+    .await
+    .unwrap();
     assert_eq!(repo.list_android_stage_displays().await.unwrap().len(), 5);
 
     // Manually invoke the seed migration's `up()` a second time.
@@ -779,4 +829,389 @@ async fn seed_migration_is_idempotent_when_rerun() {
         displays.iter().any(|d| d.host == "custom.invalid"),
         "operator's custom display must survive the rerun",
     );
+}
+
+#[tokio::test]
+async fn get_ableset_settings_does_not_rewrite_legacy_values() {
+    use crate::audit::SettingsAuditSource;
+    use presenter_core::AbleSetSettingsDraft;
+    let repo = Repository::connect_in_memory().await.unwrap();
+
+    // Seed a row with legacy values.
+    repo.upsert_ableset_settings(
+        &AbleSetSettingsDraft {
+            enabled: true,
+            host: "fohabl.lan".into(),
+            osc_port: 5950,
+            http_port: 5950,
+            library_name: "NEWLEVEL".into(),
+            song_prefix_length: 3,
+        },
+        SettingsAuditSource::HttpSetter,
+        "test",
+    )
+    .await
+    .unwrap();
+
+    // Capture audit count.
+    let audit_before = repo
+        .list_settings_audit(Some("ableset_settings"), None, None, 100)
+        .await
+        .unwrap()
+        .len();
+
+    // Read should NOT mutate.
+    let settings = repo.get_ableset_settings().await.unwrap();
+    assert_eq!(settings.http_port, 5950);
+    assert_eq!(settings.osc_port, 5950);
+    assert_eq!(settings.library_name, "NEWLEVEL");
+
+    let audit_after = repo
+        .list_settings_audit(Some("ableset_settings"), None, None, 100)
+        .await
+        .unwrap()
+        .len();
+    assert_eq!(
+        audit_before, audit_after,
+        "get_ableset_settings must not write"
+    );
+}
+
+#[tokio::test]
+async fn second_startup_writes_no_audit_rows() {
+    use crate::audit::SettingsAuditSource;
+
+    // Connect, trigger settings reads (force singleton creation).
+    let repo = Repository::connect_in_memory().await.unwrap();
+    let _ = repo.get_osc_settings().await.unwrap();
+    let _ = repo.get_ableset_settings().await.unwrap();
+
+    let first_count = repo
+        .list_settings_audit(None, None, None, 10_000)
+        .await
+        .unwrap()
+        .len();
+    assert!(
+        first_count >= 2,
+        "expected at least 2 startup default rows, got {first_count}"
+    );
+
+    // Second "startup" — same DB, same reads.
+    let _ = repo.get_osc_settings().await.unwrap();
+    let _ = repo.get_ableset_settings().await.unwrap();
+
+    let second_count = repo
+        .list_settings_audit(None, None, None, 10_000)
+        .await
+        .unwrap()
+        .len();
+    assert_eq!(
+        first_count, second_count,
+        "second startup must not write any audit rows"
+    );
+
+    // Sanity: every existing row's source is StartupDefault.
+    for row in repo
+        .list_settings_audit(None, None, None, 10_000)
+        .await
+        .unwrap()
+    {
+        assert_eq!(row.source, SettingsAuditSource::StartupDefault);
+    }
+}
+
+#[tokio::test]
+async fn record_and_list_settings_audit_roundtrip() {
+    let repo = Repository::connect_in_memory().await.unwrap();
+    repo.record_settings_audit(
+        "ableset_settings",
+        "singleton",
+        crate::audit::SettingsAuditSource::HttpSetter,
+        "10.0.0.5",
+        Some(serde_json::json!({"enabled": false})),
+        serde_json::json!({"enabled": true}),
+    )
+    .await
+    .unwrap();
+
+    let rows = repo
+        .list_settings_audit(Some("ableset_settings"), None, None, 10)
+        .await
+        .unwrap();
+    assert_eq!(rows.len(), 1);
+    assert_eq!(rows[0].actor, "10.0.0.5");
+    assert_eq!(
+        rows[0].source,
+        crate::audit::SettingsAuditSource::HttpSetter
+    );
+    assert_eq!(rows[0].after_json["enabled"], true);
+}
+
+#[tokio::test]
+async fn legacy_ableset_defaults_migration_rewrites_and_audits() {
+    use crate::audit::SettingsAuditSource;
+    use presenter_core::AbleSetSettingsDraft;
+    use presenter_migration::{MigrationTrait, MigratorTrait};
+    use sea_orm::{ConnectionTrait, Statement};
+    use sea_orm_migration::SchemaManager;
+
+    // Fresh DB with all migrations applied — `settings_audit` is empty,
+    // `ableset_settings` does not yet exist (created lazily).
+    let repo = Repository::connect_in_memory().await.unwrap();
+
+    // Force lazy creation of `ableset_settings` by writing a seed row via
+    // the audited setter. That generates exactly one StartupDefault-style
+    // audit row (HttpSetter here, since we provide a source explicitly).
+    repo.upsert_ableset_settings(
+        &AbleSetSettingsDraft {
+            enabled: true,
+            host: "fohabl.lan".into(),
+            osc_port: 5950,
+            http_port: 5950,
+            library_name: "NEWLEVEL".into(),
+            song_prefix_length: 3,
+        },
+        SettingsAuditSource::HttpSetter,
+        "test",
+    )
+    .await
+    .unwrap();
+
+    // Sanity: the seed row really has legacy values, and there is exactly
+    // one audit row for it (from the upsert above).
+    let before = repo.get_ableset_settings().await.unwrap();
+    assert_eq!(before.http_port, 5950);
+    assert_eq!(before.osc_port, 5950);
+    assert_eq!(before.library_name, "NEWLEVEL");
+    let audit_pre = repo
+        .list_settings_audit(Some("ableset_settings"), None, None, 100)
+        .await
+        .unwrap();
+    assert_eq!(
+        audit_pre.len(),
+        1,
+        "seed upsert should produce exactly one audit row"
+    );
+
+    // Run the legacy-defaults migration directly against the live connection.
+    let connection = repo.connection_for_tests();
+    let schema = SchemaManager::new(connection);
+    let migration: Box<dyn MigrationTrait> = presenter_migration::Migrator::migrations()
+        .into_iter()
+        .find(|m| m.name() == "m20260517_000002_fix_legacy_ableset_defaults")
+        .expect("legacy-defaults migration present in registry");
+    migration
+        .up(&schema)
+        .await
+        .expect("rerun legacy-defaults migration");
+
+    // Row was rewritten to new defaults.
+    let after = repo.get_ableset_settings().await.unwrap();
+    assert_eq!(after.http_port, 80);
+    assert_eq!(after.osc_port, 39051);
+    assert_eq!(after.library_name, "NEW LEVEL");
+
+    // One additional audit row exists, source = schema_migration, with
+    // before/after JSON reflecting the rewrite.
+    let audit_post = repo
+        .list_settings_audit(Some("ableset_settings"), None, None, 100)
+        .await
+        .unwrap();
+    assert_eq!(
+        audit_post.len(),
+        audit_pre.len() + 1,
+        "migration must add exactly one audit row"
+    );
+    let migration_rows: Vec<_> = audit_post
+        .iter()
+        .filter(|r| r.source == SettingsAuditSource::SchemaMigration)
+        .collect();
+    assert_eq!(
+        migration_rows.len(),
+        1,
+        "exactly one audit row must have source=schema_migration"
+    );
+    let row = migration_rows[0];
+    assert_eq!(row.setting_table, "ableset_settings");
+    assert_eq!(row.actor, "migration");
+    let before_json = row
+        .before_json
+        .as_ref()
+        .expect("schema_migration audit row must carry before_json");
+    assert_eq!(before_json["httpPort"], 5950);
+    assert_eq!(before_json["oscPort"], 5950);
+    assert_eq!(before_json["libraryName"], "NEWLEVEL");
+    assert_eq!(row.after_json["httpPort"], 80);
+    assert_eq!(row.after_json["oscPort"], 39051);
+    assert_eq!(row.after_json["libraryName"], "NEW LEVEL");
+
+    // Idempotency: rerunning the migration writes no further audit rows.
+    migration
+        .up(&schema)
+        .await
+        .expect("rerun legacy-defaults migration second time");
+    let audit_final = repo
+        .list_settings_audit(Some("ableset_settings"), None, None, 100)
+        .await
+        .unwrap();
+    assert_eq!(
+        audit_final.len(),
+        audit_post.len(),
+        "migration must be idempotent — no new audit rows on rerun"
+    );
+
+    // Also sanity-check: a fresh DB with NO legacy rows produces no audit
+    // rows from this migration. We test this by direct raw insertion below.
+    let repo2 = Repository::connect_in_memory().await.unwrap();
+    // Force table creation.
+    let _ = repo2.get_ableset_settings().await.unwrap();
+    // Wipe the audit log and the single startup-default row so we can
+    // isolate the migration's behaviour on a row that is ALREADY at new
+    // defaults.
+    let conn = repo2.connection_for_tests();
+    conn.execute(Statement::from_string(
+        conn.get_database_backend(),
+        "DELETE FROM settings_audit".to_string(),
+    ))
+    .await
+    .unwrap();
+    // The default row already has http_port=80, osc_port=39051, library="NEW LEVEL".
+    let schema2 = SchemaManager::new(conn);
+    migration
+        .up(&schema2)
+        .await
+        .expect("migration on already-current row");
+    let audit_clean = repo2
+        .list_settings_audit(None, None, None, 100)
+        .await
+        .unwrap();
+    assert!(
+        audit_clean.is_empty(),
+        "migration must write zero audit rows when no legacy values are present, got {audit_clean:?}"
+    );
+}
+
+#[tokio::test]
+async fn activate_video_source_audits_each_deactivated_sibling() {
+    use crate::audit::SettingsAuditSource;
+    let repo = Repository::connect_in_memory().await.unwrap();
+
+    // Create three video sources.
+    let a = repo
+        .create_video_source(
+            &VideoSourceDraft::new("Cam A", "CAM_A"),
+            SettingsAuditSource::HttpSetter,
+            "test",
+        )
+        .await
+        .unwrap();
+    let b = repo
+        .create_video_source(
+            &VideoSourceDraft::new("Cam B", "CAM_B"),
+            SettingsAuditSource::HttpSetter,
+            "test",
+        )
+        .await
+        .unwrap();
+    let c = repo
+        .create_video_source(
+            &VideoSourceDraft::new("Cam C", "CAM_C"),
+            SettingsAuditSource::HttpSetter,
+            "test",
+        )
+        .await
+        .unwrap();
+
+    // Activate A and B directly (no siblings active yet for A, then B
+    // deactivates A as its sibling — already covered in deeper testing
+    // below).
+    repo.activate_video_source(a.id, SettingsAuditSource::HttpSetter, "test")
+        .await
+        .unwrap();
+    repo.activate_video_source(b.id, SettingsAuditSource::HttpSetter, "test")
+        .await
+        .unwrap();
+    // After the two calls above, only B is active and A is deactivated.
+    // The activation of B should have produced TWO audit rows: one for A's
+    // deactivation and one for B's activation.
+
+    // Reset the audit log to isolate the next call.
+    let conn = repo.connection_for_tests();
+    sea_orm::ConnectionTrait::execute(
+        conn,
+        sea_orm::Statement::from_string(
+            sea_orm::ConnectionTrait::get_database_backend(conn),
+            "DELETE FROM settings_audit".to_string(),
+        ),
+    )
+    .await
+    .unwrap();
+    // Manually activate A too via raw SQL so we have TWO siblings active
+    // when we activate C — exercising the per-row audit path against more
+    // than one sibling.
+    sea_orm::ConnectionTrait::execute(
+        conn,
+        sea_orm::Statement::from_string(
+            sea_orm::ConnectionTrait::get_database_backend(conn),
+            format!(
+                "UPDATE video_sources SET is_active = 1 WHERE id IN ('{}', '{}')",
+                a.id, b.id
+            ),
+        ),
+    )
+    .await
+    .unwrap();
+
+    // Activate C — this must deactivate both A and B and emit one audit
+    // row per deactivation PLUS one for the C activation = 3 audit rows.
+    let activated = repo
+        .activate_video_source(c.id, SettingsAuditSource::HttpSetter, "ip-1.2.3.4")
+        .await
+        .unwrap();
+    assert!(activated.is_active);
+    assert_eq!(activated.id, c.id);
+
+    let rows = repo
+        .list_settings_audit(Some("video_source"), None, None, 100)
+        .await
+        .unwrap();
+    assert_eq!(
+        rows.len(),
+        3,
+        "expected one audit row per deactivated sibling + one for the activation, got {rows:?}"
+    );
+
+    // Each audit row carries the per-row setting_id (not "deactivate_all"
+    // and not a single combined row).
+    let setting_ids: std::collections::HashSet<&str> =
+        rows.iter().map(|r| r.setting_id.as_str()).collect();
+    assert!(setting_ids.contains(a.id.to_string().as_str()));
+    assert!(setting_ids.contains(b.id.to_string().as_str()));
+    assert!(setting_ids.contains(c.id.to_string().as_str()));
+
+    // Sibling rows show the is_active=true → is_active=false transition.
+    for sibling_id in [a.id.to_string(), b.id.to_string()] {
+        let r = rows
+            .iter()
+            .find(|r| r.setting_id == sibling_id)
+            .expect("audit row for deactivated sibling");
+        assert_eq!(r.actor, "ip-1.2.3.4");
+        assert_eq!(r.source, SettingsAuditSource::HttpSetter);
+        let before = r
+            .before_json
+            .as_ref()
+            .expect("deactivation audit needs before_json");
+        assert_eq!(before["isActive"], true, "before should have isActive=true");
+        assert_eq!(
+            r.after_json["isActive"], false,
+            "after should have isActive=false",
+        );
+    }
+
+    // The target row's audit shows the activation.
+    let c_row = rows
+        .iter()
+        .find(|r| r.setting_id == c.id.to_string())
+        .expect("audit row for activated target");
+    assert_eq!(c_row.after_json["isActive"], true);
 }
