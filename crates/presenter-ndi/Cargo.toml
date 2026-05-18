@@ -17,6 +17,7 @@ libloading = "0.8"
 turbojpeg = "1.4"
 bytes = "1"
 fast_image_resize = "5"
+futures-util.workspace = true
 gstreamer.workspace = true
 gstreamer-app.workspace = true
 gstreamer-base.workspace = true

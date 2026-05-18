@@ -4,6 +4,7 @@ pub mod discovery;
 pub mod encoder;
 mod manager;
 pub mod ndi_sdk;
+pub mod pipeline;
 pub mod receiver;
 
 pub use discovery::SourceList;
@@ -35,7 +36,6 @@ pub fn init() -> anyhow::Result<()> {
         }
         if let Err(e) = gstndi::plugin_register_static() {
             result = Err(anyhow::anyhow!("ndisrc plugin register failed: {e}"));
-            return;
         }
     });
     result
