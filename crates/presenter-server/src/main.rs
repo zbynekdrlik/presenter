@@ -99,13 +99,17 @@ async fn main() -> anyhow::Result<()> {
     setup_tracing();
 
     // Initialize GStreamer + register Rust plugins (webrtcsink, webrtchttp, ndisrc).
-    // We fail loudly if init fails — the WebRTC NDI feature cannot work without it.
+    // Startup logs loudly on missing pieces but does NOT crash the server —
+    // the hard fail-loudly gate lives at pipeline-build time
+    // (presenter_ndi::pipeline::NdiPipeline::build returns Err when vah264enc
+    // is missing). That way the server still serves non-NDI features even if
+    // VA-API is broken on the host.
     if let Err(e) = presenter_ndi::init() {
         tracing::error!("GStreamer init failed: {e:#}. NDI WebRTC disabled.");
     } else if !presenter_ndi::vah264enc_available() {
         tracing::warn!(
             "vah264enc element not available — VA-API not installed. \
-             NDI WebRTC streaming will fail on activation. \
+             NDI WebRTC pipeline build will fail at activation. \
              Install gstreamer1.0-vaapi + intel-media-va-driver-non-free."
         );
     }

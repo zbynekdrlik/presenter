@@ -44,7 +44,11 @@ pub fn init() -> anyhow::Result<()> {
 /// Check whether the VAAPI H264 encoder element is available.
 ///
 /// Returns true iff `gst::ElementFactory::find("vah264enc")` returns Some.
-/// Use at startup to fail loudly if the host is missing the VA-API driver.
+/// Use at startup to log loudly if the host is missing the VA-API driver, and
+/// at pipeline-build time to fail loudly (refusing software-H264 fallback).
+///
+/// Probes the live element registry on every call — not cached. Cheap (hash
+/// lookup), so callers don't need to memoize.
 pub fn vah264enc_available() -> bool {
     gstreamer::ElementFactory::find("vah264enc").is_some()
 }
