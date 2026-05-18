@@ -6,7 +6,9 @@
 
 **Architecture:** One GStreamer pipeline per active NDI source (`ndisrc ! videoconvert ! vah264enc ! webrtcsink` plus audio branch). Each pipeline exposes one WHEP HTTP endpoint. Browser stage display mounts one `<video>` element per source, connects via WHEP, and HW-decodes natively. Compositing is CSS in the WASM layout components — no server-side compositor.
 
-**Tech Stack:** Rust (`gstreamer-rs` 0.23, `gst-plugin-webrtc` 0.13, `gst-plugin-ndi` 0.13), GStreamer 1.24, VA-API (`vah264enc`), Leptos WASM, `web-sys` WebRTC bindings, Playwright E2E. Target host: Intel N100 with Iris Xe (production), Ryzen + NVIDIA (dev — VA-API via mesa).
+**Tech Stack:** Rust (`gstreamer-rs` 0.24, `gst-plugin-webrtc` 0.14, `gst-plugin-webrtchttp` 0.15, `gst-plugin-ndi` 0.15), GStreamer 1.24+, VA-API (`vah264enc`), Leptos WASM, `web-sys` WebRTC bindings, Playwright E2E. Target host: Intel N100 with Iris Xe (production), Ryzen + NVIDIA (dev — VA-API via mesa).
+
+> **Crate-version note (verified 2026-05-19):** Versions 0.13 in earlier drafts of this plan do NOT exist on crates.io. The real ecosystem state is `gst-plugin-webrtc` at 0.14.4, `gst-plugin-ndi` at 0.15.0, `gst-plugin-webrtchttp` at 0.15.0 (released 2026-02-21). WHIP/WHEP elements live in `gst-plugin-webrtchttp` — a SEPARATE crate from `gst-plugin-webrtc`. The `whipserversink` element name is the leading candidate but Task 6 MUST verify by running `gst-inspect-1.0 | grep -iE 'whip|whep'` on dev2 after Task 3 installs the GStreamer plugins. If the element is named differently (e.g. `whipsink`, `whip-server-sink`), the pipeline string and `pipeline.by_name("sink")` lookup MUST be adjusted accordingly. Do NOT silently substitute `webrtcsink` (which uses a non-WHEP custom signaling protocol) — that breaks the browser's WHEP client.
 
 **Spec:** `docs/superpowers/specs/2026-05-18-ndi-webrtc-transport-design.md` (commit `7af1a73`).
 
@@ -185,12 +187,15 @@ git commit -m "ci(deploy): install GStreamer + VA-API on deploy targets for NDI 
 Append to the `[workspace.dependencies]` block in the root `Cargo.toml`:
 
 ```toml
-gstreamer = "0.23"
-gstreamer-app = "0.23"
-gstreamer-base = "0.23"
-gst-plugin-webrtc = "0.13"
-gst-plugin-ndi = "0.13"
+gstreamer = "0.24"
+gstreamer-app = "0.24"
+gstreamer-base = "0.24"
+gst-plugin-webrtc = "0.14"
+gst-plugin-webrtchttp = "0.15"
+gst-plugin-ndi = "0.15"
 ```
+
+(Versions verified on crates.io 2026-05-19. The `gst-plugin-webrtchttp` crate is the one that registers WHIP/WHEP HTTP-protocol elements — separate from `gst-plugin-webrtc` which only registers the custom-signalling `webrtcsink`.)
 
 - [ ] **Step 2: Wire deps into presenter-ndi crate**
 
@@ -210,7 +215,9 @@ gstreamer.workspace = true
 gstreamer-app.workspace = true
 gstreamer-base.workspace = true
 gst-plugin-webrtc.workspace = true
+gst-plugin-webrtchttp.workspace = true
 gst-plugin-ndi.workspace = true
+reqwest.workspace = true
 ```
 
 (`turbojpeg` and `fast_image_resize` are dropped — those were the MJPEG encoder. `libloading` stays for `discovery.rs`.)
@@ -246,6 +253,10 @@ pub fn init() -> anyhow::Result<()> {
         }
         if let Err(e) = gstrswebrtc::plugin_register_static() {
             result = Err(anyhow::anyhow!("webrtcsink plugin register failed: {e}"));
+            return;
+        }
+        if let Err(e) = gstwebrtchttp::plugin_register_static() {
+            result = Err(anyhow::anyhow!("webrtchttp plugin register failed: {e}"));
             return;
         }
         if let Err(e) = gstndi::plugin_register_static() {
