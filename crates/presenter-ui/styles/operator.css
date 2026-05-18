@@ -69,6 +69,7 @@ body.operator {
   display: flex;
   align-items: baseline;
   gap: 0.5rem;
+  position: relative;
 }
 
 .operator__version-badge {
@@ -2879,14 +2880,19 @@ body.operator[data-mode="live"][data-bible-tab="prepared"]
     font-weight: 600;
 }
 
-/* --- Surface-nav pills inline right of brand+version (#326) ------------ */
+/* --- Surface-nav pills right of brand+version (#326) ------------------- */
+/* Absolute-positioned to avoid widening `.operator__header-left`'s         */
+/* intrinsic width — otherwise the view-nav tabs wrap to 2 rows.            */
 
 .operator__surface-nav {
+    position: absolute;
+    left: calc(100% + 0.75rem);
+    top: 0;
     display: inline-flex;
     align-items: center;
     gap: 0.3rem;
-    margin-left: 0.75rem;
     font-size: 0.8rem;
+    white-space: nowrap;
 }
 
 .operator__surface-nav-link {
