@@ -60,14 +60,15 @@ mod gst_init_tests {
     }
 
     #[test]
-    fn vah264enc_present_when_vaapi_installed() {
+    fn vah264enc_probe_returns_without_panic() {
         init().expect("gst init");
-        // On the dev/prod host we install gstreamer1.0-vaapi.
-        // On CI runners (ubuntu-latest) we also install it via this task.
-        // If this assertion fails locally, install `gstreamer1.0-vaapi` first.
-        assert!(
-            vah264enc_available(),
-            "vah264enc not available — install gstreamer1.0-vaapi + intel-media-va-driver-non-free"
-        );
+        // `vah264enc_available()` is host-hardware-dependent: returns true only when
+        // an Intel VA-API device is present (`/dev/dri/renderD128` plus the
+        // intel-media-va-driver). dev2 has NVIDIA, GH `ubuntu-latest` has no GPU.
+        // The unit test only asserts the probe doesn't panic; the real failure mode
+        // (pipeline build must fail loudly when vah264enc is missing) is exercised
+        // in `pipeline.rs::tests::build_fails_when_vah264enc_missing` and at deploy
+        // verification on the N100 production host.
+        let _ = vah264enc_available();
     }
 }
