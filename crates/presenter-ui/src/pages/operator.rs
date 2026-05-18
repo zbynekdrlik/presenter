@@ -4,6 +4,7 @@ use wasm_bindgen::closure::Closure;
 use wasm_bindgen::JsCast;
 
 use crate::components::header::Header;
+use crate::components::surface_nav::SurfaceNav;
 use crate::components::library_list::LibraryList;
 use crate::components::library_modal::LibraryModals;
 use crate::components::playlist_list::PlaylistList;
@@ -161,6 +162,7 @@ pub fn OperatorPage(#[prop(default = String::new())] initial_view: String) -> im
 
     view! {
         <Header />
+        <SurfaceNav />
         <SearchResults />
         <main class="operator__main">
             <section class="operator__worship" data-view-panel="worship">
