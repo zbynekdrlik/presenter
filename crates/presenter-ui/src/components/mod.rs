@@ -1,5 +1,6 @@
 pub mod header;
 pub mod info_popover;
+pub mod surface_nav;
 pub mod library_list;
 pub mod library_modal;
 pub mod modal;
