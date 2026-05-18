@@ -97,6 +97,19 @@ use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt};
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
     setup_tracing();
+
+    // Initialize GStreamer + register Rust plugins (webrtcsink, webrtchttp, ndisrc).
+    // We fail loudly if init fails — the WebRTC NDI feature cannot work without it.
+    if let Err(e) = presenter_ndi::init() {
+        tracing::error!("GStreamer init failed: {e:#}. NDI WebRTC disabled.");
+    } else if !presenter_ndi::vah264enc_available() {
+        tracing::warn!(
+            "vah264enc element not available — VA-API not installed. \
+             NDI WebRTC streaming will fail on activation. \
+             Install gstreamer1.0-vaapi + intel-media-va-driver-non-free."
+        );
+    }
+
     let config = ServerConfig::load()?;
     let addr: SocketAddr = SocketAddr::from(([0, 0, 0, 0], config.http.port));
     let state = AppState::from_config(config).await?;
