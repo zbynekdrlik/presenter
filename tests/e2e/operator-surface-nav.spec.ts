@@ -34,12 +34,31 @@ test.afterAll(async () => {
   await stopServer(serverHandle);
 });
 
+// Known-benign Chromium warnings to ignore. These are browser-side
+// informational notes about W3C-spec attributes Chromium does not yet act on;
+// they fire on every WASM-loaded page across the codebase and are not project
+// bugs. Filter narrowly so real warnings still surface.
+const BENIGN_WARNING_PATTERNS: RegExp[] = [
+  // crbug.com/981419: Chromium logs this every time it sees `integrity` on a
+  // `<link rel=preload>`. Trunk emits SRI on the WASM preload tag (valid per
+  // the SRI spec) but Chromium ignores it and warns. Not a project bug.
+  /preload destinations that do not support subresource integrity/i,
+];
+
+function isBenignWarning(text: string): boolean {
+  return BENIGN_WARNING_PATTERNS.some((re) => re.test(text));
+}
+
 function collectConsole(page: Page): string[] {
   const messages: string[] = [];
   page.on("console", (msg) => {
     const type = msg.type();
     if (type === "error" || type === "warning") {
-      messages.push(`[${type}] ${msg.text()}`);
+      const text = msg.text();
+      if (type === "warning" && isBenignWarning(text)) {
+        return;
+      }
+      messages.push(`[${type}] ${text}`);
     }
   });
   page.on("pageerror", (err) => {
