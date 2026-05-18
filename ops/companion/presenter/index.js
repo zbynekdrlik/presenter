@@ -6,6 +6,7 @@ const {
 const WebSocket = require("ws");
 const { version: MODULE_VERSION } = require("./package.json");
 const { normaliseCountdownTarget } = require("./lib/time");
+const { computeVariableBatch } = require("./lib/variable-batch");
 
 const VARIABLE_DEFINITIONS = [
   "stage_layout_code",
@@ -248,13 +249,21 @@ class PresenterInstance extends InstanceBase {
       case "welcome":
         this.log("debug", "Received welcome from Presenter");
         break;
-      case "variables":
-        if (Array.isArray(msg.values)) {
-          msg.values.forEach(({ name, value }) => {
-            this._updateVariable(name, value ?? "");
-          });
+      case "variables": {
+        const batch = computeVariableBatch(
+          msg.values,
+          VARIABLE_DEFINITIONS,
+          this.variables,
+        );
+        const names = Object.keys(batch);
+        if (names.length > 0) {
+          for (const name of names) {
+            this.variables.set(name, batch[name]);
+          }
+          this.setVariableValues(batch);
         }
         break;
+      }
       case "ack":
         this.log("debug", `Ack from server: ${msg.command}`);
         break;
