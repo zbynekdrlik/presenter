@@ -147,12 +147,15 @@ pub fn Header() -> impl IntoView {
 
     view! {
         <header class="operator__header">
-            <div class="operator__header-left">
+            <div class="operator__header-top">
                 <div class="operator__header-brand">
                     <h1>"Presenter"</h1>
                     <span class="operator__version-badge">{move || version_text.get()}</span>
-                    <SurfaceNav />
                 </div>
+                <SurfaceNav />
+            </div>
+            <div class="operator__header-main">
+            <div class="operator__header-left">
                 <form class="operator__search" data-role="global-search-form" role="search" autocomplete="off"
                     on:submit=on_search_submit
                 >
@@ -262,6 +265,7 @@ pub fn Header() -> impl IntoView {
                 >
                     "\u{2630}"
                 </button>
+            </div>
             </div>
         </header>
     }
