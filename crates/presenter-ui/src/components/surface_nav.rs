@@ -1,10 +1,11 @@
 use leptos::prelude::*;
 
 /// Surface-nav pills: 4 inline links that open external surfaces in a new
-/// browser tab. Lives in the right side of the operator header's slim top
-/// row (rendered in `components/header.rs`'s `operator__header-top`).
-/// Separate from the main header row so the existing search / view-nav /
-/// stage-output controls keep their full width. See spec
+/// browser tab. Lives inside the operator header's brand row (rendered in
+/// `components/header.rs`'s `operator__header-brand`, immediately after the
+/// version badge). Header uses `align-items: flex-start` so brand+pills sit
+/// flush at the top border; the existing Worship/Bible/Timers/AI/Settings
+/// tabs and stage-output controls keep their original positions. See spec
 /// `docs/superpowers/specs/2026-05-18-operator-surface-nav-design.md`.
 #[component]
 pub fn SurfaceNav() -> impl IntoView {

@@ -40,29 +40,15 @@ body.operator {
 
 .operator__header {
   display: flex;
-  flex-direction: column;
+  align-items: flex-start;
+  gap: 0.75rem;
+  padding: 0.4rem 1rem;
   background: linear-gradient(90deg, #111827, #1f2937);
   color: #ffffff;
   box-shadow: var(--shadow-soft);
   position: sticky;
   top: 0;
   z-index: 10;
-}
-
-.operator__header-top {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 0.75rem;
-  padding: 0.15rem 1rem;
-  border-bottom: 1px solid rgba(255, 255, 255, 0.06);
-}
-
-.operator__header-main {
-  display: flex;
-  align-items: center;
-  gap: 0.75rem;
-  padding: 0.4rem 1rem;
 }
 
 .operator__header h1 {
@@ -98,6 +84,11 @@ body.operator {
   gap: 0.75rem;
   margin-left: auto;
   flex-shrink: 0;
+  align-self: center;
+}
+
+.operator__view-nav {
+  align-self: center;
 }
 
 .operator__hamburger {
@@ -2888,12 +2879,13 @@ body.operator[data-mode="live"][data-bible-tab="prepared"]
     font-weight: 600;
 }
 
-/* --- Surface-nav pills on right of slim top header row (#326) ----------- */
+/* --- Surface-nav pills inline right of brand+version (#326) ------------ */
 
 .operator__surface-nav {
     display: inline-flex;
     align-items: center;
     gap: 0.3rem;
+    margin-left: 0.75rem;
     font-size: 0.8rem;
 }
 
