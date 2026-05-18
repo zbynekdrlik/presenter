@@ -12,7 +12,6 @@ use crate::components::presentation_list::PresentationList;
 use crate::components::presentation_modal::PresentationModals;
 use crate::components::search::SearchResults;
 use crate::components::slide_list::SlideList;
-use crate::components::surface_nav::SurfaceNav;
 use crate::components::timer_panel::TimerPanel;
 use crate::components::toast::Toast;
 use crate::components::version_label::VersionLabel;
@@ -162,7 +161,6 @@ pub fn OperatorPage(#[prop(default = String::new())] initial_view: String) -> im
 
     view! {
         <Header />
-        <SurfaceNav />
         <SearchResults />
         <main class="operator__main">
             <section class="operator__worship" data-view-panel="worship">

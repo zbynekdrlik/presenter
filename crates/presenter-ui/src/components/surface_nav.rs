@@ -1,8 +1,8 @@
 use leptos::prelude::*;
 
-/// Surface-nav strip: 4 pill links that open external surfaces in a new
-/// browser tab. Lives on the operator chrome only (rendered in
-/// `pages/operator.rs`). See spec
+/// Surface-nav pills: 4 inline links that open external surfaces in a new
+/// browser tab. Lives inside the operator header's brand row (rendered in
+/// `components/header.rs`, next to the version badge). See spec
 /// `docs/superpowers/specs/2026-05-18-operator-surface-nav-design.md`.
 #[component]
 pub fn SurfaceNav() -> impl IntoView {
@@ -19,7 +19,6 @@ pub fn SurfaceNav() -> impl IntoView {
             data-role="surface-nav"
             aria-label="Open other surfaces in a new tab"
         >
-            <span class="operator__surface-nav-label">"Open in new tab:"</span>
             {targets.into_iter().map(|(label, href)| view! {
                 <a
                     class="operator__surface-nav-link"
