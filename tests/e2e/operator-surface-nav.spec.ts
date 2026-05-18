@@ -41,8 +41,10 @@ test.afterAll(async () => {
 const BENIGN_WARNING_PATTERNS: RegExp[] = [
   // crbug.com/981419: Chromium logs this every time it sees `integrity` on a
   // `<link rel=preload>`. Trunk emits SRI on the WASM preload tag (valid per
-  // the SRI spec) but Chromium ignores it and warns. Not a project bug.
-  /preload destinations that do not support subresource integrity/i,
+  // the SRI spec) but Chromium ignores it and warns. Anchor on the crbug URL
+  // (more stable than the human-readable wording) to match the filter
+  // pattern already used in `tests/e2e/api-stage.spec.ts`.
+  /crbug\.com\/981419/i,
 ];
 
 function isBenignWarning(text: string): boolean {

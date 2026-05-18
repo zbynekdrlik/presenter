@@ -1,6 +1,5 @@
 pub mod header;
 pub mod info_popover;
-pub mod surface_nav;
 pub mod library_list;
 pub mod library_modal;
 pub mod modal;
@@ -16,6 +15,7 @@ mod slide_list_utils;
 mod slide_save;
 pub mod stage;
 pub mod stage_preview;
+pub mod surface_nav;
 pub mod timer_panel;
 pub mod toast;
 pub mod version_label;

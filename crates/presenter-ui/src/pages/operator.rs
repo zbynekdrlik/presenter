@@ -4,7 +4,6 @@ use wasm_bindgen::closure::Closure;
 use wasm_bindgen::JsCast;
 
 use crate::components::header::Header;
-use crate::components::surface_nav::SurfaceNav;
 use crate::components::library_list::LibraryList;
 use crate::components::library_modal::LibraryModals;
 use crate::components::playlist_list::PlaylistList;
@@ -13,6 +12,7 @@ use crate::components::presentation_list::PresentationList;
 use crate::components::presentation_modal::PresentationModals;
 use crate::components::search::SearchResults;
 use crate::components::slide_list::SlideList;
+use crate::components::surface_nav::SurfaceNav;
 use crate::components::timer_panel::TimerPanel;
 use crate::components::toast::Toast;
 use crate::components::version_label::VersionLabel;

@@ -2903,11 +2903,16 @@ body.operator[data-mode="live"][data-bible-tab="prepared"]
     transition: background 0.15s ease, border-color 0.15s ease;
 }
 
-.operator__surface-nav-link:hover,
+.operator__surface-nav-link:hover {
+    background: var(--bg-hover, #2a2a2a);
+    border-color: var(--border-strong, #444);
+}
+
 .operator__surface-nav-link:focus-visible {
     background: var(--bg-hover, #2a2a2a);
     border-color: var(--border-strong, #444);
-    outline: none;
+    outline: 2px solid rgba(59, 124, 255, 0.6);
+    outline-offset: 2px;
 }
 
 .operator__surface-nav-icon {
