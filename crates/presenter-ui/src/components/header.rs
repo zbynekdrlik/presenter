@@ -4,6 +4,7 @@ use std::rc::Rc;
 
 use crate::api::bible as bible_api;
 use crate::components::stage_preview::StagePreview;
+use crate::components::surface_nav::SurfaceNav;
 use crate::state::operator::OperatorState;
 use crate::state::AppContext;
 
@@ -150,6 +151,7 @@ pub fn Header() -> impl IntoView {
                 <div class="operator__header-brand">
                     <h1>"Presenter"</h1>
                     <span class="operator__version-badge">{move || version_text.get()}</span>
+                    <SurfaceNav />
                 </div>
                 <form class="operator__search" data-role="global-search-form" role="search" autocomplete="off"
                     on:submit=on_search_submit

@@ -40,7 +40,7 @@ body.operator {
 
 .operator__header {
   display: flex;
-  align-items: center;
+  align-items: flex-start;
   gap: 0.75rem;
   padding: 0.4rem 1rem;
   background: linear-gradient(90deg, #111827, #1f2937);
@@ -69,6 +69,7 @@ body.operator {
   display: flex;
   align-items: baseline;
   gap: 0.5rem;
+  position: relative;
 }
 
 .operator__version-badge {
@@ -84,6 +85,11 @@ body.operator {
   gap: 0.75rem;
   margin-left: auto;
   flex-shrink: 0;
+  align-self: center;
+}
+
+.operator__view-nav {
+  align-self: center;
 }
 
 .operator__hamburger {
@@ -2872,4 +2878,56 @@ body.operator[data-mode="live"][data-bible-tab="prepared"]
 .operator__slide-save-indicator[data-status="failed"] {
     color: #dc2626;
     font-weight: 600;
+}
+
+/* --- Surface-nav pills right of brand+version (#326) ------------------- */
+/* Absolute-positioned to avoid widening `.operator__header-left`'s         */
+/* intrinsic width — otherwise the view-nav tabs wrap to 2 rows.            */
+
+.operator__surface-nav {
+    position: absolute;
+    left: calc(100% + 0.75rem);
+    top: 0;
+    display: inline-flex;
+    align-items: center;
+    gap: 0.3rem;
+    font-size: 0.8rem;
+    white-space: nowrap;
+}
+
+.operator__surface-nav-link {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.2rem;
+    padding: 0.15rem 0.5rem;
+    border: 1px solid var(--border-subtle, #2a2a2a);
+    border-radius: 999px;
+    color: var(--text-primary, #e0e0e0);
+    text-decoration: none;
+    transition: background 0.15s ease, border-color 0.15s ease;
+    line-height: 1.2;
+}
+
+.operator__surface-nav-link:hover {
+    background: var(--bg-hover, #2a2a2a);
+    border-color: var(--border-strong, #444);
+}
+
+.operator__surface-nav-link:focus-visible {
+    background: var(--bg-hover, #2a2a2a);
+    border-color: var(--border-strong, #444);
+    outline: 2px solid rgba(59, 124, 255, 0.6);
+    outline-offset: 2px;
+}
+
+.operator__surface-nav-icon {
+    opacity: 0.7;
+    font-size: 0.85em;
+}
+
+@media (max-width: 800px) {
+    .operator__surface-nav {
+        gap: 0.2rem;
+        font-size: 0.75rem;
+    }
 }
