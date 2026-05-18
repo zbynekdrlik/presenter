@@ -48,7 +48,8 @@ impl NdiPipeline {
         if !super::vah264enc_available() {
             return Err(anyhow!(
                 "vah264enc not available; refusing to build pipeline (would fall back to software H264 \
-                 which melts the N100). Install gstreamer1.0-vaapi + intel-media-va-driver-non-free."
+                 which melts the N100). Install with: \
+                 sudo apt install gstreamer1.0-vaapi intel-media-va-driver-non-free"
             ));
         }
 
