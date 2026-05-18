@@ -2873,3 +2873,52 @@ body.operator[data-mode="live"][data-bible-tab="prepared"]
     color: #dc2626;
     font-weight: 600;
 }
+
+/* --- Surface-nav strip (#326) ------------------------------------------- */
+
+.operator__surface-nav {
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+    padding: 0.4rem 1rem;
+    background: var(--bg-secondary, #1a1a1a);
+    border-bottom: 1px solid var(--border-subtle, #2a2a2a);
+    font-size: 0.85rem;
+}
+
+.operator__surface-nav-label {
+    color: var(--text-muted, #888);
+    margin-right: 0.25rem;
+}
+
+.operator__surface-nav-link {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.25rem;
+    padding: 0.25rem 0.6rem;
+    border: 1px solid var(--border-subtle, #2a2a2a);
+    border-radius: 999px;
+    color: var(--text-primary, #e0e0e0);
+    text-decoration: none;
+    transition: background 0.15s ease, border-color 0.15s ease;
+}
+
+.operator__surface-nav-link:hover,
+.operator__surface-nav-link:focus-visible {
+    background: var(--bg-hover, #2a2a2a);
+    border-color: var(--border-strong, #444);
+    outline: none;
+}
+
+.operator__surface-nav-icon {
+    opacity: 0.7;
+    font-size: 0.9em;
+}
+
+@media (max-width: 800px) {
+    .operator__surface-nav {
+        flex-wrap: wrap;
+        padding: 0.3rem 0.5rem;
+        font-size: 0.8rem;
+    }
+}
