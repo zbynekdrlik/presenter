@@ -28,13 +28,17 @@ on:
 
 jobs:
   import:
-    name: Import Data (${{ inputs.environment }})
+    # Static job name — templated names with empty `${{ inputs.* }}`
+    # interpolation on non-dispatch events historically confused GitHub's
+    # workflow scheduler and produced zero-job phantom runs (#321).
+    name: Import Data
     runs-on: self-hosted
     # Only run when manually triggered - guard against accidental triggers
     if: github.event_name == 'workflow_dispatch'
-    # Concurrency is scoped to the job, not the workflow, so push events
-    # (which cannot satisfy the `if:` guard above) do not produce phantom
-    # runs from empty `${{ inputs.environment }}` interpolation. See #321.
+    # Concurrency stays job-scoped — workflow-scoped concurrency would
+    # evaluate `${{ inputs.environment }}` on every event (including
+    # push events that never run the job), reintroducing template-eval
+    # fragility. Don't lift this back up.
     concurrency:
       group: import-${{ inputs.environment }}
       cancel-in-progress: false
@@ -150,13 +154,7 @@ jobs:
             if [ -f "$f" ] && [ ! -f "$ROHACEK_PATH" ]; then
               echo "Found Roháček at $f - creating zip archive..."
               BASENAME=$(basename "$f")
-              python3 -c "
-import zipfile
-import sys
-with zipfile.ZipFile('$ROHACEK_PATH', 'w', zipfile.ZIP_DEFLATED) as zf:
-    zf.write('$f', '$BASENAME')
-print('Created $ROHACEK_PATH')
-"
+              python3 -c "import zipfile, sys; z=zipfile.ZipFile('$ROHACEK_PATH','w',zipfile.ZIP_DEFLATED); z.write('$f','$BASENAME'); z.close(); print('Created $ROHACEK_PATH')"
               sudo chmod 644 "$ROHACEK_PATH"
               break
             fi
@@ -167,13 +165,7 @@ print('Created $ROHACEK_PATH')
             if [ -f "$f" ] && [ ! -f "$MILOST_PATH" ]; then
               echo "Found Milosť at $f - creating zip archive..."
               BASENAME=$(basename "$f")
-              python3 -c "
-import zipfile
-import sys
-with zipfile.ZipFile('$MILOST_PATH', 'w', zipfile.ZIP_DEFLATED) as zf:
-    zf.write('$f', '$BASENAME')
-print('Created $MILOST_PATH')
-"
+              python3 -c "import zipfile, sys; z=zipfile.ZipFile('$MILOST_PATH','w',zipfile.ZIP_DEFLATED); z.write('$f','$BASENAME'); z.close(); print('Created $MILOST_PATH')"
               sudo chmod 644 "$MILOST_PATH"
               break
             fi
