@@ -2,6 +2,7 @@ use leptos::prelude::*;
 use wasm_bindgen::JsCast;
 use web_sys::HtmlElement;
 
+use crate::components::stage::ndi_status_text;
 use crate::components::stage::ndi_video::NdiVideo;
 use crate::state::stage::StageContext;
 use crate::utils::autofit::autofit_text;
@@ -60,19 +61,12 @@ pub fn TimerLayout(
 
             <Show when=move || {
                 let status = ndi_status.get();
-                status == "disconnected" || status == "connecting"
+                status == "disconnected"
+                    || status == "connecting"
+                    || status.starts_with("failed")
             }>
                 <div class="stage-timer__overlay">
-                    {move || {
-                        let status = ndi_status.get();
-                        if status == "disconnected" {
-                            "Signal Lost — Reconnecting..."
-                        } else if status == "connecting" {
-                            "Connecting..."
-                        } else {
-                            ""
-                        }
-                    }}
+                    {move || ndi_status_text(&ndi_status.get())}
                 </div>
             </Show>
 

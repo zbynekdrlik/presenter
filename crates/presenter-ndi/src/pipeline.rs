@@ -44,19 +44,31 @@ impl NdiPipeline {
     /// as a logical key; the element does NOT bind its own HTTP port.
     pub fn build(ndi_name: &str, whep_url: String) -> Result<Self> {
         super::init().context("gstreamer init failed")?;
-        if !super::vah264enc_available() {
-            return Err(anyhow!(
-                "vah264enc not available; refusing to build pipeline (would fall back to software H264 \
-                 which melts the N100). Install with: \
-                 sudo apt install gstreamer1.0-vaapi intel-media-va-driver-non-free"
-            ));
-        }
+        let encoder = super::hw_h264_encoder().ok_or_else(|| {
+            anyhow!(
+                "no hardware H264 encoder registered; refusing to build pipeline \
+                 (software H264 at 720p30 would melt the N100). \
+                 Install Intel VA-API: sudo apt install gstreamer1.0-vaapi intel-media-va-driver-non-free \
+                 OR NVIDIA NVENC: sudo apt install gstreamer1.0-plugins-bad with nvcodec support"
+            )
+        })?;
+        // Per-encoder CBR low-delay config. The properties diverge between
+        // `vah264enc` (key-int-max / rate-control) and `nvh264enc`
+        // (gop-size / rc-mode), so they're branched here. Both target ~2 Mbps
+        // CBR with a 60-frame GOP (2 s at 30 fps) for live latency.
+        let encoder_props = match encoder {
+            "vah264enc" => "bitrate=2000 key-int-max=60 rate-control=cbr",
+            "nvh264enc" => "bitrate=2000 gop-size=60 rc-mode=cbr-ld-hq",
+            // Defensive fallback — shouldn't happen because hw_h264_encoder
+            // returns one of the above. Keep build going with just bitrate.
+            _ => "bitrate=2000",
+        };
 
         let desc = format!(
             "ndisrc ndi-name=\"{ndi_name}\" ! \
              ndisrcdemux name=demux \
              demux.video ! videoconvert ! \
-               vah264enc bitrate=2000 key-int-max=60 rate-control=cbr ! \
+               {encoder} {encoder_props} ! \
                video/x-h264,profile=baseline ! \
                sink.video_0 \
              demux.audio ! audioconvert ! audioresample ! \
@@ -170,27 +182,26 @@ mod tests {
     use super::*;
 
     #[test]
-    fn build_fails_when_vah264enc_missing() {
-        // We can't actually un-install vah264enc, but we can assert the precondition logic:
-        // build() returns Err if vah264enc_available() returns false.
+    fn build_fails_when_no_hw_h264_encoder() {
+        // We can't actually un-install the encoders, but we can assert the precondition logic:
+        // build() returns Err if hw_h264_encoder() returns None.
         super::super::init().unwrap();
-        // Skip the "would fail" case if vah264enc IS available on this host (which it should be).
-        if !super::super::vah264enc_available() {
+        if super::super::hw_h264_encoder().is_none() {
             let result = NdiPipeline::build("SOMENAME", "http://localhost/whep".into());
             assert!(result.is_err());
             assert!(result
                 .err()
                 .unwrap()
                 .to_string()
-                .contains("vah264enc not available"));
+                .contains("no hardware H264 encoder"));
         }
     }
 
     #[test]
     fn build_returns_ok_for_valid_pipeline_when_plugins_present() {
         super::super::init().unwrap();
-        if !super::super::vah264enc_available() {
-            // Skipped — Task 3 step 5 documents how to install VA-API.
+        if super::super::hw_h264_encoder().is_none() {
+            // Skipped — host has neither Intel VA-API nor NVIDIA NVENC.
             return;
         }
         // We can't actually start an NDI receive in a unit test (no live NDI source),
@@ -210,7 +221,7 @@ mod tests {
     #[test]
     fn state_transitions_start_at_stopped() {
         super::super::init().unwrap();
-        if !super::super::vah264enc_available() {
+        if super::super::hw_h264_encoder().is_none() {
             return;
         }
         let p = NdiPipeline::build("no-such-source", "http://127.0.0.1/whep".into()).unwrap();

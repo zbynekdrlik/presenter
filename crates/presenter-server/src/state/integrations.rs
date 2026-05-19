@@ -211,9 +211,25 @@ impl AppState {
             label: source.label.clone(),
         });
         if let Some(manager) = &self.ndi_manager {
-            manager
+            if let Err(e) = manager
                 .start_pipeline(&source.id.to_string(), &source.ndi_name)
-                .await?;
+                .await
+            {
+                // Surface the failure to the stage view so the operator sees
+                // the actual reason instead of an endless "Connecting…"
+                // overlay. The DB row stays `is_active=true` so the operator
+                // can retry by toggling off+on once the issue is fixed.
+                tracing::error!(
+                    error = %e,
+                    source_id = %source.id,
+                    ndi_name = %source.ndi_name,
+                    "NDI pipeline start failed"
+                );
+                self.live_hub.publish(LiveEvent::NdiConnectionStatus {
+                    status: format!("failed: {e}"),
+                });
+                return Err(e);
+            }
         }
         Ok(source)
     }

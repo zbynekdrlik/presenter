@@ -40,16 +40,23 @@ pub fn init() -> anyhow::Result<()> {
     }
 }
 
-/// Check whether the VAAPI H264 encoder element is available.
+/// Detect which hardware H264 encoder is registered with GStreamer.
 ///
-/// Returns true iff `gst::ElementFactory::find("vah264enc")` returns Some.
-/// Use at startup to log loudly if the host is missing the VA-API driver, and
-/// at pipeline-build time to fail loudly (refusing software-H264 fallback).
+/// Returns the element name (`"vah264enc"` Intel iris Xe / N100, or
+/// `"nvh264enc"` NVIDIA NVENC) when one is available, `None` otherwise.
+/// The order is: Intel VA-API first (matches production hardware), NVIDIA
+/// NVENC second (so dev2's GeForce can drive the same pipeline).
 ///
-/// Probes the live element registry on every call — not cached. Cheap (hash
-/// lookup), so callers don't need to memoize.
-pub fn vah264enc_available() -> bool {
-    gstreamer::ElementFactory::find("vah264enc").is_some()
+/// Either path is HARDWARE-accelerated. We deliberately do NOT fall back to
+/// software H264 — `x264enc` at 720p30 would burn ~150% CPU on the N100,
+/// which is the whole reason the original MJPEG fell over.
+///
+/// Probes the live element registry on every call — cheap (hash lookup), no
+/// memoization needed.
+pub fn hw_h264_encoder() -> Option<&'static str> {
+    ["vah264enc", "nvh264enc"]
+        .into_iter()
+        .find(|name| gstreamer::ElementFactory::find(name).is_some())
 }
 
 #[cfg(test)]
@@ -63,15 +70,15 @@ mod gst_init_tests {
     }
 
     #[test]
-    fn vah264enc_probe_returns_without_panic() {
+    fn hw_h264_encoder_probe_returns_without_panic() {
         init().expect("gst init");
-        // `vah264enc_available()` is host-hardware-dependent: returns true only when
-        // an Intel VA-API device is present (`/dev/dri/renderD128` plus the
-        // intel-media-va-driver). dev2 has NVIDIA, GH `ubuntu-latest` has no GPU.
-        // The unit test only asserts the probe doesn't panic; the real failure mode
-        // (pipeline build must fail loudly when vah264enc is missing) is exercised
-        // in `pipeline.rs::tests::build_fails_when_vah264enc_missing` and at deploy
-        // verification on the N100 production host.
-        let _ = vah264enc_available();
+        // Host-hardware-dependent: returns Some("vah264enc") on Intel/iris Xe
+        // (production N100), Some("nvh264enc") on NVIDIA (dev2), or None on
+        // GH `ubuntu-latest` with no GPU. The unit test only asserts the probe
+        // doesn't panic; the real fail-loudly behavior (pipeline build must
+        // refuse when no HW encoder is available) is exercised in
+        // `pipeline.rs::tests::build_fails_when_no_hw_h264_encoder` and at
+        // deploy verification on the production host.
+        let _ = hw_h264_encoder();
     }
 }
