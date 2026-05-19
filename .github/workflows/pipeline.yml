@@ -781,12 +781,14 @@ jobs:
             sudo apt-get update -qq
             sudo apt-get install -y -qq $MISSING
           fi
-          # Probe that VAAPI H264 encoder is available
+          # Probe that VAAPI H264 encoder is available. On dev2 (NVIDIA) the
+          # probe will fail — that's expected. We log a warning and continue.
+          # The N100 production deploy (deploy.yml) keeps the hard exit-1.
           if ! gst-inspect-1.0 vah264enc >/dev/null 2>&1; then
-            echo "::error::vah264enc element not available after install — VA-API driver missing or kernel/firmware mismatch"
-            exit 1
+            echo "::warning::vah264enc not available on dev target — NDI WebRTC pipeline build will fail at activation. Expected on dev2 (NVIDIA, no Intel VA-API)."
+          else
+            echo "vah264enc available: $(gst-inspect-1.0 vah264enc | head -1)"
           fi
-          echo "vah264enc available: $(gst-inspect-1.0 vah264enc | head -1)"
           REMOTE_SCRIPT
 
       - name: Stop service (if running)
