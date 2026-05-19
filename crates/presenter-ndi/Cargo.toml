@@ -22,6 +22,5 @@ gstreamer.workspace = true
 gstreamer-app.workspace = true
 gstreamer-base.workspace = true
 gst-plugin-webrtc.workspace = true
-gst-plugin-webrtchttp.workspace = true
 gst-plugin-ndi.workspace = true
 reqwest.workspace = true

@@ -2,7 +2,7 @@
 
 pub mod discovery;
 pub mod encoder;
-mod manager;
+pub mod manager;
 pub mod ndi_sdk;
 pub mod pipeline;
 pub mod receiver;
@@ -15,7 +15,7 @@ use std::sync::Once;
 
 static GST_INIT: Once = Once::new();
 
-/// Initialize GStreamer + register Rust plugins (webrtcsink, ndisrc, whip/whep).
+/// Initialize GStreamer + register Rust plugins (webrtcsink, ndisrc).
 ///
 /// Safe to call multiple times; subsequent calls are no-ops. Returns an error if
 /// GStreamer cannot initialize OR if a required Rust plugin fails to register.
@@ -28,10 +28,6 @@ pub fn init() -> anyhow::Result<()> {
         }
         if let Err(e) = gstrswebrtc::plugin_register_static() {
             result = Err(anyhow::anyhow!("webrtcsink plugin register failed: {e}"));
-            return;
-        }
-        if let Err(e) = gstwebrtchttp::plugin_register_static() {
-            result = Err(anyhow::anyhow!("webrtchttp plugin register failed: {e}"));
             return;
         }
         if let Err(e) = gstndi::plugin_register_static() {

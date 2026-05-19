@@ -156,17 +156,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "async-recursion"
-version = "1.1.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "3b43422f69d8ff38f95f1b2bb76517c91589a924d1559a0e935d7c8ce0274c11"
-dependencies = [
- "proc-macro2",
- "quote",
- "syn 2.0.117",
-]
-
-[[package]]
 name = "async-stream"
 version = "0.3.6"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1615,25 +1604,6 @@ checksum = "4a65a57d00a57ff98b4f5d51375ee90295865bb76e6a8c5cec8d36aabf396e4b"
 dependencies = [
  "serde",
  "serde_json",
-]
-
-[[package]]
-name = "gst-plugin-webrtchttp"
-version = "0.15.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "9059b4836d2f3a98e34b62b11058e917d1f4743c968623636b755e74a06056e3"
-dependencies = [
- "async-recursion",
- "bytes",
- "futures",
- "gst-plugin-version-helper",
- "gstreamer",
- "gstreamer-sdp",
- "gstreamer-webrtc",
- "parse_link_header",
- "reqwest",
- "rustls",
- "tokio",
 ]
 
 [[package]]
@@ -3471,7 +3441,6 @@ dependencies = [
  "futures-util",
  "gst-plugin-ndi",
  "gst-plugin-webrtc",
- "gst-plugin-webrtchttp",
  "gstreamer",
  "gstreamer-app",
  "gstreamer-base",

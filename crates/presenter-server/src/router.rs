@@ -235,8 +235,16 @@ pub fn build_router(state: AppState) -> Router {
         )
         .route("/ndi/sources", get(integrations::ndi::discover_ndi_sources))
         .route("/ndi/status", get(integrations::ndi::ndi_status))
-        .route("/ndi/stream", get(integrations::ndi::mjpeg_ws))
-        .route("/ndi/mjpeg", get(integrations::ndi::mjpeg_http))
+        .route(
+            "/ndi/whep/{source_id}",
+            post(integrations::ndi_whep::post_whep_endpoint),
+        )
+        .route(
+            "/ndi/whep/{source_id}/{session_id}",
+            post(integrations::ndi_whep::post_whep_session)
+                .patch(integrations::ndi_whep::patch_whep_session)
+                .delete(integrations::ndi_whep::delete_whep_session),
+        )
         .route("/group-colors", get(presentations::get_group_colors))
         .route(
             "/presentations/{id}",

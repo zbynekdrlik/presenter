@@ -1,10 +1,10 @@
-//! Per-source GStreamer pipeline owning ndisrc + vah264enc + webrtcsink.
+//! Per-source GStreamer pipeline owning ndisrc + vah264enc + whepserversink.
 //!
 //! Each `NdiPipeline` instance corresponds to ONE active NDI source. The
 //! pipeline is built lazily on `start`, torn down on `stop`. Subscribers
-//! (browser WHEP connections) are managed internally by webrtcsink — this
-//! module only exposes the WHEP endpoint URL to the manager so the HTTP
-//! shim can forward SDP offers to the right pipeline.
+//! (browser WHEP connections) reach `whepserversink` via the axum WHEP shim
+//! which bridges HTTP signalling into the element's signaller via
+//! `emit_by_name`.
 
 use anyhow::{anyhow, Context, Result};
 use gstreamer as gst;
@@ -40,10 +40,9 @@ pub struct NdiPipeline {
 impl NdiPipeline {
     /// Build but do not yet start the pipeline.
     ///
-    /// `whep_signaller_uri` is the local URL on which webrtcsink's built-in
-    /// signaller listens (e.g. `ws://127.0.0.1:<random>/`). The manager
-    /// allocates this port and proxies HTTP WHEP requests to it.
-    pub fn build(ndi_name: &str, whep_url: String, signaller_uri: &str) -> Result<Self> {
+    /// `whep_url` is the axum route path (e.g. `/ndi/whep/<source_id>`) used
+    /// as a logical key; the element does NOT bind its own HTTP port.
+    pub fn build(ndi_name: &str, whep_url: String) -> Result<Self> {
         super::init().context("gstreamer init failed")?;
         if !super::vah264enc_available() {
             return Err(anyhow!(
@@ -63,7 +62,7 @@ impl NdiPipeline {
              demux.audio ! audioconvert ! audioresample ! \
                opusenc bitrate=64000 ! \
                sink.audio_0 \
-             webrtcsink name=sink signaller::uri={signaller_uri}"
+             whepserversink name=sink"
         );
 
         let pipeline = gst::parse::launch(&desc)
@@ -139,6 +138,12 @@ impl NdiPipeline {
     pub fn state_watcher(&self) -> watch::Receiver<PipelineState> {
         self.state_rx.clone()
     }
+
+    /// Returns a clone of the `whepserversink` element so the WHEP HTTP shim
+    /// can reach its `signaller` child and emit_by_name SDP exchanges.
+    pub fn sink_element(&self) -> Option<gst::Element> {
+        self.pipeline.by_name("sink")
+    }
 }
 
 impl Drop for NdiPipeline {
@@ -161,7 +166,7 @@ mod tests {
         super::super::init().unwrap();
         // Skip the "would fail" case if vah264enc IS available on this host (which it should be).
         if !super::super::vah264enc_available() {
-            let result = NdiPipeline::build("SOMENAME", "http://localhost/whep".into(), "ws://localhost:9999/");
+            let result = NdiPipeline::build("SOMENAME", "http://localhost/whep".into());
             assert!(result.is_err());
             assert!(result.err().unwrap().to_string().contains("vah264enc not available"));
         }
@@ -180,7 +185,6 @@ mod tests {
         let result = NdiPipeline::build(
             "no-such-source",
             "http://127.0.0.1/whep".into(),
-            "ws://127.0.0.1:9999/",
         );
         assert!(
             result.is_ok(),
@@ -201,7 +205,6 @@ mod tests {
         let p = NdiPipeline::build(
             "no-such-source",
             "http://127.0.0.1/whep".into(),
-            "ws://127.0.0.1:9999/",
         )
         .unwrap();
         assert_eq!(p.state(), PipelineState::Stopped);

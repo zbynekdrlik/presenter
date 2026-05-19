@@ -1,5 +1,4 @@
 use std::collections::HashMap;
-use std::sync::Arc;
 
 use presenter_core::{
     AndroidStageDisplay, AndroidStageDisplayDraft, AndroidStageDisplayId, LiveEvent, ResolumeHost,
@@ -207,17 +206,13 @@ impl AppState {
             .activate_video_source(id, audit_source, actor)
             .await?;
         self.live_hub.publish(LiveEvent::NdiSourceActivated {
+            source_id: source.id.to_string(),
             ndi_name: source.ndi_name.clone(),
             label: source.label.clone(),
         });
-        // Start NDI stream with status callback
         if let Some(manager) = &self.ndi_manager {
-            let hub = self.live_hub.clone();
-            let status_cb: presenter_ndi::StatusCallback = Arc::new(move |status: String| {
-                hub.publish(LiveEvent::NdiConnectionStatus { status });
-            });
             manager
-                .start_stream(&source.ndi_name, Some(status_cb))
+                .start_pipeline(&source.id.to_string(), &source.ndi_name)
                 .await?;
         }
         Ok(source)
@@ -232,9 +227,9 @@ impl AppState {
             .deactivate_all_video_sources(source, actor)
             .await?;
         self.live_hub.publish(LiveEvent::NdiSourceDeactivated);
-        // Stop NDI stream if manager is available
+        // Stop all NDI pipelines if manager is available
         if let Some(manager) = &self.ndi_manager {
-            manager.stop_stream().await;
+            manager.stop_all().await;
         }
         Ok(())
     }
