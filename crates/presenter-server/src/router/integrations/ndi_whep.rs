@@ -7,7 +7,7 @@ use axum::{
     http::HeaderMap,
     response::Response,
 };
-use presenter_ndi::manager::{WhepOp, WhepReply};
+use presenter_ndi::manager::{WhepOp, WhepReply, SOURCE_NOT_ACTIVE_ERR};
 use tracing::instrument;
 
 use super::super::AppError;
@@ -30,7 +30,7 @@ fn into_response(reply: WhepReply) -> Response {
 /// signaller emit failures) → 503 so WHEP clients back off and retry.
 fn map_signaller_error(err: anyhow::Error) -> AppError {
     let msg = err.to_string();
-    if msg.contains("source not active") {
+    if msg.contains(SOURCE_NOT_ACTIVE_ERR) {
         AppError::not_found("NDI source not active")
     } else {
         AppError::service_unavailable(format!("WHEP: {msg}"))

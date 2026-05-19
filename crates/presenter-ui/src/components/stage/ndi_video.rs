@@ -4,6 +4,9 @@
 //! `/ndi/whep/<source_id>` via the WHEP protocol. The browser handles
 //! ICE/DTLS/SRTP/jitter-buffer/AV-sync natively. WASM is signaling glue only.
 
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::Arc;
+
 use leptos::prelude::*;
 use leptos::wasm_bindgen::{closure::Closure, JsCast, JsValue};
 use leptos::web_sys::{
@@ -30,14 +33,27 @@ pub fn NdiVideo(
     // browser keeps them open until explicit `close()`. Without this the
     // whepserversink leaks ICE sessions every time the layout switches.
     let pc_holder: StoredValue<Option<RtcPeerConnection>> = StoredValue::new(None);
+    // Cancellation flag covering the race where the component unmounts BEFORE
+    // `connect_whep` resolves. on_cleanup sets `cancelled=true`; the spawned
+    // task, on receiving a pc, checks the flag and closes the pc directly
+    // instead of storing it into an orphaned pc_holder.
+    let cancelled = Arc::new(AtomicBool::new(false));
 
+    let cancelled_for_effect = Arc::clone(&cancelled);
     Effect::new(move |_| {
         let Some(video) = video_ref.get() else { return };
         let source_id = source_id_for_effect.clone();
+        let cancelled = Arc::clone(&cancelled_for_effect);
         spawn_local(async move {
             match connect_whep(&video, &source_id).await {
                 Ok(pc) => {
-                    pc_holder.set_value(Some(pc));
+                    if cancelled.load(Ordering::Acquire) {
+                        // Component unmounted before connect_whep finished —
+                        // close the pc directly so the WHEP session doesn't leak.
+                        pc.close();
+                    } else {
+                        pc_holder.set_value(Some(pc));
+                    }
                 }
                 Err(e) => {
                     leptos::logging::error!("WHEP connect for {source_id} failed: {e:?}");
@@ -46,7 +62,10 @@ pub fn NdiVideo(
         });
     });
 
+    let cancelled_for_cleanup = Arc::clone(&cancelled);
     on_cleanup(move || {
+        // Mark cancelled FIRST so any in-flight connect_whep task sees it.
+        cancelled_for_cleanup.store(true, Ordering::Release);
         if let Some(pc) = pc_holder.try_get_value().flatten() {
             pc.close();
         }

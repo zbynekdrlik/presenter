@@ -22,6 +22,13 @@ use crate::pipeline::{NdiPipeline, PipelineState};
 /// `NdiConnectionStatus` events.
 pub type StatusCallback = Arc<dyn Fn(String) + Send + Sync>;
 
+/// Sentinel error message returned by `whep_signaller_call` when the requested
+/// source has no active pipeline. The WHEP HTTP shim string-matches on this
+/// to translate the error into a 404. Exposed as a `pub const` so the shim
+/// imports the same literal — preventing silent 503-instead-of-404 drift if
+/// the message is ever rewritten.
+pub const SOURCE_NOT_ACTIVE_ERR: &str = "source not active";
+
 /// One operation in the WHEP signaller protocol.
 pub enum WhepOp {
     /// SDP offer (or session-scoped re-offer).
@@ -124,7 +131,7 @@ impl NdiManager {
             let active = self.active.lock().await;
             let src = active
                 .get(source_id)
-                .ok_or_else(|| anyhow!("source not active"))?;
+                .ok_or_else(|| anyhow!(SOURCE_NOT_ACTIVE_ERR))?;
             match src.pipeline.state() {
                 PipelineState::Streaming | PipelineState::Starting => {}
                 PipelineState::Stopped => return Err(anyhow!("pipeline stopped")),
