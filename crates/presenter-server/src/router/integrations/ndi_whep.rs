@@ -185,7 +185,10 @@ mod tests {
     async fn patch_whep_session_returns_unavailable_for_unknown_source() {
         let state = fresh_state().await;
         let mut headers = HeaderMap::new();
-        headers.insert("content-type", "application/trickle-ice-sdpfrag".parse().unwrap());
+        headers.insert(
+            "content-type",
+            "application/trickle-ice-sdpfrag".parse().unwrap(),
+        );
         let result = patch_whep_session(
             Path((
                 "00000000-0000-0000-0000-000000000000".to_string(),
