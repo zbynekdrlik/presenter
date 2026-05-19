@@ -25,10 +25,7 @@ pub type StatusCallback = Arc<dyn Fn(String) + Send + Sync>;
 /// One operation in the WHEP signaller protocol.
 pub enum WhepOp {
     /// SDP offer (or session-scoped re-offer).
-    Post {
-        id: Option<String>,
-        body: Vec<u8>,
-    },
+    Post { id: Option<String>, body: Vec<u8> },
     /// ICE trickle update.
     Patch {
         id: String,
@@ -75,10 +72,7 @@ impl NdiManager {
         true
     }
 
-    pub fn discover_sources(
-        &self,
-        _timeout_ms: u32,
-    ) -> Result<Vec<discovery::NdiSourceInfo>> {
+    pub fn discover_sources(&self, _timeout_ms: u32) -> Result<Vec<discovery::NdiSourceInfo>> {
         Ok(self.source_list.read())
     }
 
@@ -95,10 +89,7 @@ impl NdiManager {
         let whep_url = format!("/ndi/whep/{}", source_id);
         let mut pipeline = NdiPipeline::build(ndi_name, whep_url)?;
         pipeline.start().await?;
-        active.insert(
-            source_id.to_string(),
-            ActiveSource { pipeline },
-        );
+        active.insert(source_id.to_string(), ActiveSource { pipeline });
         Ok(())
     }
 
@@ -126,11 +117,7 @@ impl NdiManager {
     /// Forward a WHEP HTTP exchange into the source's `whepserversink`
     /// signaller via `emit_by_name`. The signaller's Promise resolves with
     /// `{status: u32, headers: gst::Structure, body: glib::Bytes}`.
-    pub async fn whep_signaller_call(
-        &self,
-        source_id: &str,
-        op: WhepOp,
-    ) -> Result<WhepReply> {
+    pub async fn whep_signaller_call(&self, source_id: &str, op: WhepOp) -> Result<WhepReply> {
         let sink = {
             let active = self.active.lock().await;
             let src = active
@@ -167,10 +154,7 @@ impl NdiManager {
                     for (k, v) in &headers {
                         sb = sb.field(k.as_str(), v);
                     }
-                    signaller.emit_by_name::<()>(
-                        "patch",
-                        &[&id, &bytes, &sb.build(), &promise],
-                    );
+                    signaller.emit_by_name::<()>("patch", &[&id, &bytes, &sb.build(), &promise]);
                 }
                 WhepOp::Delete { id } => {
                     signaller.emit_by_name::<()>("delete", &[&id, &promise]);

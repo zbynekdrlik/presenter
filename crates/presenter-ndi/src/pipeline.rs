@@ -90,7 +90,9 @@ impl NdiPipeline {
         let state_tx = self.state_tx.clone();
 
         // Bus watch: drives the state transitions Starting → Streaming → Errored/Stopped.
-        let bus = pipeline.bus().ok_or_else(|| anyhow!("pipeline has no bus"))?;
+        let bus = pipeline
+            .bus()
+            .ok_or_else(|| anyhow!("pipeline has no bus"))?;
         self.bus_watch = Some(tokio::spawn(async move {
             let mut stream = bus.stream();
             use futures_util::StreamExt;
@@ -100,7 +102,11 @@ impl NdiPipeline {
                         let _ = state_tx.send(PipelineState::Streaming);
                     }
                     gst::MessageView::Error(err) => {
-                        let detail = format!("{}: {}", err.error(), err.debug().unwrap_or_default().as_str());
+                        let detail = format!(
+                            "{}: {}",
+                            err.error(),
+                            err.debug().unwrap_or_default().as_str()
+                        );
                         tracing::error!(error = %detail, "pipeline error");
                         let _ = state_tx.send(PipelineState::Errored(detail));
                     }
@@ -168,7 +174,11 @@ mod tests {
         if !super::super::vah264enc_available() {
             let result = NdiPipeline::build("SOMENAME", "http://localhost/whep".into());
             assert!(result.is_err());
-            assert!(result.err().unwrap().to_string().contains("vah264enc not available"));
+            assert!(result
+                .err()
+                .unwrap()
+                .to_string()
+                .contains("vah264enc not available"));
         }
     }
 
@@ -182,10 +192,7 @@ mod tests {
         // We can't actually start an NDI receive in a unit test (no live NDI source),
         // but parse::launch on the pipeline string should succeed when all elements are
         // registered.
-        let result = NdiPipeline::build(
-            "no-such-source",
-            "http://127.0.0.1/whep".into(),
-        );
+        let result = NdiPipeline::build("no-such-source", "http://127.0.0.1/whep".into());
         assert!(
             result.is_ok(),
             "pipeline build failed: {}",
@@ -202,11 +209,7 @@ mod tests {
         if !super::super::vah264enc_available() {
             return;
         }
-        let p = NdiPipeline::build(
-            "no-such-source",
-            "http://127.0.0.1/whep".into(),
-        )
-        .unwrap();
+        let p = NdiPipeline::build("no-such-source", "http://127.0.0.1/whep".into()).unwrap();
         assert_eq!(p.state(), PipelineState::Stopped);
     }
 }
