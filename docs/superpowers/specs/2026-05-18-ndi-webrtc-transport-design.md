@@ -44,7 +44,7 @@ The Rust ecosystem (as of 2026-05) does not have a single pure-Rust crate provid
 | NDI capture | `gst-plugin-ndi` (Rust, `gst-plugins-rs/net/ndi`) | Gives video + audio in one element. Replaces our custom `ndi_sdk.rs` + `receiver.rs`. Uses the same `libndi.so.6` already deployed. |
 | H264 encode | `vah264enc` (GStreamer VA plugin) | Auto-selected via GStreamer feature rank. Uses N100's Intel Iris Xe via `/dev/dri/renderD128`. ~5–8 % of one core for 720p30. |
 | Opus audio encode | `opusenc` (GStreamer good plugins) | Standard, fast, browser-friendly. |
-| WebRTC server | `webrtcsink` (Rust, `gst-plugins-rs/net/webrtc`) | "Batteries-included send-only" element. Handles RTP packetization, DTLS-SRTP, ICE, codec negotiation, and Google Congestion Control. Multiple subscribers natively. Ships a WHIP/WHEP signaller. |
+| WebRTC server | `whepserversink` (Rust, `gst-plugins-rs/net/webrtc`) | Variant of `webrtcsink` whose `signaller` child speaks the WHEP server protocol. Handles RTP packetization, DTLS-SRTP, ICE, codec negotiation, Google Congestion Control. Multiple subscribers natively. **Revision 2026-05-19:** earlier drafts named this `whipserversink` (WHIP server, wrong direction) or sourced it from `gst-plugin-webrtchttp` (only ships `whipsink`/`whepsrc` clients, and is marked deprecated in 0.16 anyway). The correct element is `whepserversink` from `gst-plugin-webrtc 0.15`. The element does NOT bind its own HTTP socket — presenter hosts the public WHEP HTTP endpoint in axum and bridges SDP exchanges into the signaller via `signaller.emit_by_name("post"\|"patch"\|"delete", ...)`. |
 | Rust binding layer | `gstreamer-rs` | Official mature Rust bindings to GStreamer. Compiles into the presenter binary. |
 | Pure-Rust alternatives considered | `str0m`, `webrtc-rs` | Both are protocol-only (no encoder). Combining either with `gstreamer-rs` for HW encode = more glue code than `webrtcsink` already provides. Re-evaluate when one of them ships an integrated encoder. |
 
@@ -68,7 +68,7 @@ demux.audio
   ! audioconvert ! audioresample
   ! opusenc bitrate=64000
   ! sink.audio_0
-webrtcsink name=sink signaller::uri=<internal WHEP URL>
+whepserversink name=sink
 ```
 
 Built in Rust via `gstreamer-rs` `gst::parse::launch` (or programmatically for finer error handling).
@@ -84,13 +84,14 @@ Transitions emit `LiveEvent::NdiConnectionStatus` over WS so the stage display c
 
 ### Subscriber model
 
-`webrtcsink` tracks each browser subscriber internally. From presenter's perspective the only HTTP surface is:
+`whepserversink` tracks each browser subscriber internally; multi-subscriber state and ICE/DTLS/SRTP all live in the gst element. Presenter hosts the public WHEP HTTP surface and bridges each request into the element's signaller child:
 
-- `POST /ndi/whep/{source_id}` — body is the browser's SDP offer; presenter forwards to the source's `webrtcsink` default signaller; answer SDP is returned in the HTTP response body.
-- `GET /ndi/whep/{source_id}` — returns the source's current SDP (used for reconnect by browsers that previously cached one).
-- `DELETE /ndi/whep/{source_id}/{client_id}` — explicit subscriber teardown (optional; ICE timeout handles it otherwise).
+- `POST /ndi/whep/{source_id}` — initial SDP offer. Bridge: `signaller.emit_by_name("post", &[None, &bytes, &promise])`. Response carries 201 + `Location: <session_id>`.
+- `POST /ndi/whep/{source_id}/{session_id}` — session-scoped POST (re-offer). Same `emit_by_name("post", ...)` with the session id set.
+- `PATCH /ndi/whep/{source_id}/{session_id}` — ICE trickle update. Bridge: `signaller.emit_by_name("patch", &[&id, &bytes, &headers_struct, &promise])`.
+- `DELETE /ndi/whep/{source_id}/{session_id}` — explicit teardown. Bridge: `signaller.emit_by_name("delete", &[&id, &promise])`.
 
-Multiple subscribers per source = handled inside `webrtcsink`. Presenter only thinly proxies the signaling HTTP.
+`gst::Promise::new_future()` resolves with a structure containing `status: u32`, `headers: gst::Structure`, `body: glib::Bytes`. The axum handler translates that into an HTTP response. The pattern follows the official `whepserver.rs` example shipped with `gst-plugin-webrtc 0.15.2`.
 
 ### Browser-side layout composition
 

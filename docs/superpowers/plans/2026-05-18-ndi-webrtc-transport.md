@@ -992,11 +992,15 @@ impl NdiManager {
 }
 ```
 
-- [ ] **Step 2: Build the in-process WHEP signaller proxy**
+- [ ] **Step 2: Switch pipeline.rs to `whepserversink` and expose the sink element**
 
-The webrtcsink "default signaller" speaks a custom JSON-over-WebSocket protocol. To accept a plain WHEP HTTP POST from a browser we need a thin proxy. webrtcsink 0.13 ships an alternative `WhipServer` mode that natively accepts WHEP/WHIP HTTP without the WS shim.
+**Plan revision (2026-05-19):** the actual server-side WHEP element in gst-plugins-rs 0.15 is `whepserversink` (registered by `gst-plugin-webrtc`, not `gst-plugin-webrtchttp`). The `whipserversink` name in earlier drafts was wrong. Verified via runtime probe (`gstreamer::ElementFactory::find`) on dev2 with the same plugin set CI uses.
 
-Rewrite `manager.rs::start_pipeline` to use webrtcsink in WhipServer mode by setting the appropriate properties on the `webrtcsink` element. Replace the `desc` formatting in `pipeline.rs` (Task 5) with:
+The other architectural correction: `whepserversink` is NOT a self-hosting HTTP server with a bound `port` property. Reading the official example (`gst-plugin-webrtc-0.15.2/examples/whepserver.rs`), `whepserversink` is a `webrtcsink` with a `whep-server` signaller child. The host program hosts the public HTTP endpoint itself and bridges SDP into the signaller via `signaller.emit_by_name("post"|"patch"|"delete", ...)` with a `gst::Promise` that resolves with `{status, headers, body}`.
+
+This is a single PR change vs. the original two-process reqwest proxy.
+
+Replace the `desc` string in `pipeline.rs` (Task 5) with the corrected sink element:
 
 ```rust
         let desc = format!(
@@ -1009,29 +1013,33 @@ Rewrite `manager.rs::start_pipeline` to use webrtcsink in WhipServer mode by set
              demux.audio ! audioconvert ! audioresample ! \
                opusenc bitrate=64000 ! \
                sink.audio_0 \
-             whipserversink name=sink \
-                 host-addr=127.0.0.1 \
-                 port=0 \
-                 stun-server=null"
+             whepserversink name=sink"
         );
 ```
 
-`whipserversink` is the WHIP/WHEP variant of `webrtcsink` shipped in `gst-plugin-webrtc` 0.13. It exposes a local HTTP server on a chosen (or auto-picked) port that natively speaks WHEP. The manager's job becomes: query the bound port after pipeline starts, then proxy the public-facing `/ndi/whep/:id` POST to `http://127.0.0.1:<bound_port>/whep`.
+(`stun-server` is irrelevant on LAN; no `host-addr`/`port` properties — `whepserversink` doesn't bind an HTTP socket itself.)
 
-After pipeline transitions to `Streaming`, retrieve the bound port from the element:
+Drop the `whip_port()` accessor from `pipeline.rs` (it wasn't yet added; don't add it). Instead add an accessor that returns a clone of the sink element handle so the router can reach the signaller:
 
 ```rust
-        let sink = self.pipeline.by_name("sink").ok_or_else(|| anyhow!("no sink element"))?;
-        let port: i32 = sink.property("port");
+    /// Returns a clone of the `whepserversink` element so the WHEP router
+    /// can access its `signaller` child and emit_by_name SDP exchanges.
+    pub fn sink_element(&self) -> Option<gst::Element> {
+        self.pipeline.by_name("sink")
+    }
 ```
 
-Store this `port` alongside the pipeline. The public WHEP shim uses `reqwest` (already a workspace dep) to POST the offer to `http://127.0.0.1:<port>/whep`.
-
-Replace the `whep_offer` placeholder in manager.rs with:
+Replace the `whep_offer` placeholder in `manager.rs` with a signaller-bridge:
 
 ```rust
-    pub async fn whep_offer(&self, source_id: &str, sdp_offer: &str) -> Result<String> {
-        let (port, _state) = {
+    /// Forward a WHEP SDP offer (or PATCH/DELETE) to the source's webrtcsink
+    /// signaller. Returns (status, headers, body) from the signaller's response.
+    pub async fn whep_signaller_call(
+        &self,
+        source_id: &str,
+        op: WhepOp,
+    ) -> Result<WhepReply> {
+        let sink = {
             let active = self.active.lock().await;
             let src = active.get(source_id).ok_or_else(|| anyhow!("source not active"))?;
             match src.pipeline.state() {
@@ -1040,113 +1048,189 @@ Replace the `whep_offer` placeholder in manager.rs with:
                 PipelineState::Stopped => return Err(anyhow!("pipeline stopped")),
                 PipelineState::Errored(e) => return Err(anyhow!("pipeline errored: {e}")),
             }
-            (src.pipeline.whip_port(), src.pipeline.state())
+            src.pipeline
+                .sink_element()
+                .ok_or_else(|| anyhow!("pipeline has no sink element"))?
         };
-        let url = format!("http://127.0.0.1:{port}/whep");
-        let resp = reqwest::Client::new()
-            .post(&url)
-            .header("Content-Type", "application/sdp")
-            .body(sdp_offer.to_string())
-            .send()
-            .await
-            .context("forward WHEP offer to whipserversink")?;
-        let status = resp.status();
-        let body = resp.text().await.unwrap_or_default();
-        if !status.is_success() {
-            return Err(anyhow!("whipserversink returned {status}: {body}"));
+
+        use gstreamer::prelude::*;
+        let signaller = sink
+            .dynamic_cast_ref::<gstreamer::ChildProxy>()
+            .ok_or_else(|| anyhow!("sink is not a ChildProxy"))?
+            .child_by_name("signaller")
+            .ok_or_else(|| anyhow!("no signaller child on whepserversink"))?;
+
+        let (promise, fut) = gstreamer::Promise::new_future();
+        match op {
+            WhepOp::Post { body, id } => {
+                let bytes = gstreamer::glib::Bytes::from_owned(body);
+                signaller.emit_by_name::<()>("post", &[&id, &bytes, &promise]);
+            }
+            WhepOp::Patch { id, body, headers } => {
+                let bytes = gstreamer::glib::Bytes::from_owned(body);
+                let mut s = gstreamer::Structure::builder("whep-signaller/headers");
+                for (k, v) in headers {
+                    s = s.field(k.as_str(), v);
+                }
+                signaller.emit_by_name::<()>("patch", &[&id, &bytes, &s.build(), &promise]);
+            }
+            WhepOp::Delete { id } => {
+                signaller.emit_by_name::<()>("delete", &[&id, &promise]);
+            }
         }
-        Ok(body)
+
+        let reply = fut.await
+            .map_err(|_| anyhow!("signaller promise dropped"))?
+            .ok_or_else(|| anyhow!("signaller returned no payload"))?;
+        let status = reply.get::<u32>("status").map_err(|e| anyhow!("missing status: {e}"))? as u16;
+        let headers = reply.get::<gstreamer::Structure>("headers").ok();
+        let body = reply.get::<gstreamer::glib::Bytes>("body").ok();
+        Ok(WhepReply { status, headers, body: body.map(|b| b.to_vec()) })
     }
+
+pub enum WhepOp {
+    Post { id: Option<String>, body: Vec<u8> },
+    Patch { id: String, body: Vec<u8>, headers: Vec<(String, String)> },
+    Delete { id: String },
+}
+
+pub struct WhepReply {
+    pub status: u16,
+    pub headers: Option<gstreamer::Structure>,
+    pub body: Option<Vec<u8>>,
+}
 ```
 
-Add `whip_port()` accessor to `NdiPipeline` in `pipeline.rs`:
-
-```rust
-    pub fn whip_port(&self) -> i32 {
-        self.pipeline
-            .by_name("sink")
-            .map(|sink| sink.property::<i32>("port"))
-            .unwrap_or(0)
-    }
-```
+(`gstreamer::Promise::new_future()` requires the `tokio` runtime; gst-plugins-rs internally bridges this. The example shows the same pattern.)
 
 - [ ] **Step 3: Create the WHEP HTTP shim router module**
 
 Create `crates/presenter-server/src/router/integrations/ndi_whep.rs`:
 
 ```rust
-//! WHEP HTTP shim — accepts browser SDP offers and forwards to the
-//! per-source whipserversink element inside the NDI pipeline.
+//! WHEP HTTP shim — bridges browser SDP exchanges into the per-source
+//! `whepserversink` element's signaller via `emit_by_name`.
+//!
+//! Public WHEP surface (per W3C WHEP draft + RFC 9725 framing):
+//!   POST   /ndi/whep/:source_id                  → new session, returns 201 + Location
+//!   POST   /ndi/whep/:source_id/:session_id      → session-scoped POST
+//!   PATCH  /ndi/whep/:source_id/:session_id      → ICE trickle update
+//!   DELETE /ndi/whep/:source_id/:session_id      → terminate session
 
 use axum::{
+    body::Bytes,
     extract::{Path, State},
-    http::{header, StatusCode},
-    response::IntoResponse,
-    Json,
+    http::{HeaderMap, StatusCode},
+    response::{IntoResponse, Response},
 };
 use tracing::instrument;
 
-use super::super::AppError;
+use crate::router::AppError;
 use crate::state::AppState;
+use presenter_ndi::manager::{WhepOp, WhepReply};
+
+fn into_response(reply: WhepReply) -> Response {
+    let mut builder = Response::builder().status(reply.status);
+    if let Some(headers) = reply.headers {
+        for (name, value) in headers.iter() {
+            if let Ok(s) = value.get::<String>() {
+                builder = builder.header(name.to_string(), s);
+            }
+        }
+    }
+    builder
+        .body(axum::body::Body::from(reply.body.unwrap_or_default()))
+        .expect("valid response")
+}
 
 #[instrument(skip_all, fields(source_id = %source_id))]
-pub(crate) async fn post_whep_offer(
+pub(crate) async fn post_whep_endpoint(
     Path(source_id): Path<String>,
     State(state): State<AppState>,
-    body: String,
-) -> Result<impl IntoResponse, AppError> {
-    let manager = state
-        .ndi_manager()
+    body: Bytes,
+) -> Result<Response, AppError> {
+    let manager = state.ndi_manager()
         .ok_or_else(|| AppError::service_unavailable("NDI SDK not available"))?;
-
     if !manager.is_active(&source_id).await {
-        return Err(AppError::not_found("NDI source is not active"));
+        return Err(AppError::not_found("NDI source not active"));
     }
-
-    let answer = manager
-        .whep_offer(&source_id, &body)
+    let reply = manager
+        .whep_signaller_call(&source_id, WhepOp::Post { id: None, body: body.to_vec() })
         .await
-        .map_err(|e| AppError::service_unavailable(&format!("WHEP forward failed: {e}")))?;
-
-    Ok((
-        StatusCode::OK,
-        [
-            (header::CONTENT_TYPE, "application/sdp"),
-            (header::CACHE_CONTROL, "no-cache"),
-        ],
-        answer,
-    ))
+        .map_err(|e| AppError::service_unavailable(&format!("WHEP POST: {e}")))?;
+    Ok(into_response(reply))
 }
 
-#[instrument(skip_all)]
-pub(crate) async fn get_whep_cached(
-    Path(_source_id): Path<String>,
-    State(_state): State<AppState>,
-) -> Result<impl IntoResponse, AppError> {
-    // Browsers MAY reuse a previous SDP via GET. For the initial implementation
-    // we always return 404 — callers should POST a fresh offer. This is safe
-    // (per WHEP spec, GET is optional).
-    Err::<Json<()>, _>(AppError::not_found("WHEP GET cache not implemented; POST a fresh offer"))
+#[instrument(skip_all, fields(source_id = %source_id, session_id = %session_id))]
+pub(crate) async fn post_whep_session(
+    Path((source_id, session_id)): Path<(String, String)>,
+    State(state): State<AppState>,
+    body: Bytes,
+) -> Result<Response, AppError> {
+    let manager = state.ndi_manager()
+        .ok_or_else(|| AppError::service_unavailable("NDI SDK not available"))?;
+    let reply = manager
+        .whep_signaller_call(&source_id, WhepOp::Post { id: Some(session_id), body: body.to_vec() })
+        .await
+        .map_err(|e| AppError::service_unavailable(&format!("WHEP POST session: {e}")))?;
+    Ok(into_response(reply))
 }
 
-#[instrument(skip_all)]
-pub(crate) async fn delete_whep_subscriber(
-    Path((_source_id, _client_id)): Path<(String, String)>,
-    State(_state): State<AppState>,
-) -> Result<impl IntoResponse, AppError> {
-    // whipserversink GC's subscribers on ICE timeout; explicit DELETE is optional.
-    Ok(StatusCode::NO_CONTENT)
+#[instrument(skip_all, fields(source_id = %source_id, session_id = %session_id))]
+pub(crate) async fn patch_whep_session(
+    Path((source_id, session_id)): Path<(String, String)>,
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    body: Bytes,
+) -> Result<Response, AppError> {
+    let manager = state.ndi_manager()
+        .ok_or_else(|| AppError::service_unavailable("NDI SDK not available"))?;
+    let hs: Vec<(String, String)> = headers.iter()
+        .filter_map(|(k, v)| v.to_str().ok().map(|s| (k.as_str().to_string(), s.to_string())))
+        .collect();
+    let reply = manager
+        .whep_signaller_call(&source_id, WhepOp::Patch { id: session_id, body: body.to_vec(), headers: hs })
+        .await
+        .map_err(|e| AppError::service_unavailable(&format!("WHEP PATCH: {e}")))?;
+    Ok(into_response(reply))
+}
+
+#[instrument(skip_all, fields(source_id = %source_id, session_id = %session_id))]
+pub(crate) async fn delete_whep_session(
+    Path((source_id, session_id)): Path<(String, String)>,
+    State(state): State<AppState>,
+) -> Result<Response, AppError> {
+    let manager = state.ndi_manager()
+        .ok_or_else(|| AppError::service_unavailable("NDI SDK not available"))?;
+    let reply = manager
+        .whep_signaller_call(&source_id, WhepOp::Delete { id: session_id })
+        .await
+        .map_err(|e| AppError::service_unavailable(&format!("WHEP DELETE: {e}")))?;
+    Ok(into_response(reply))
 }
 ```
 
 - [ ] **Step 4: Wire routes into `router.rs`**
 
-Modify `crates/presenter-server/src/router.rs`. Replace lines 238–239:
+Modify `crates/presenter-server/src/router.rs`. Replace the MJPEG routes (currently around lines 238–239):
 
 ```rust
         .route("/ndi/stream", get(integrations::ndi::mjpeg_ws))
         .route("/ndi/mjpeg", get(integrations::ndi::mjpeg_http))
 ```
+
+with the WHEP-server quadruple (POST endpoint + POST/PATCH/DELETE session):
+
+```rust
+        .route("/ndi/whep/:source_id",
+            post(integrations::ndi_whep::post_whep_endpoint))
+        .route("/ndi/whep/:source_id/:session_id",
+            post(integrations::ndi_whep::post_whep_session)
+                .patch(integrations::ndi_whep::patch_whep_session)
+                .delete(integrations::ndi_whep::delete_whep_session))
+```
+
+(The pre-revision plan suggested separate `get_whep_cached` + `delete_whep_subscriber` routes; the corrected mapping above matches the WHEP signaller's actual call shape.)
 
 with:
 
