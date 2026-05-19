@@ -535,6 +535,15 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      - name: Install GStreamer runtime libraries
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq \
+            gstreamer1.0-plugins-base gstreamer1.0-plugins-good gstreamer1.0-plugins-bad \
+            gstreamer1.0-vaapi gstreamer1.0-libav \
+            libgstreamer1.0-0 libgstreamer-plugins-base1.0-0 libgstreamer-plugins-bad1.0-0 \
+            libva-drm2 libva2
+
       - name: Download build artifacts
         uses: actions/download-artifact@v4
         with:
