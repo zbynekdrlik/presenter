@@ -38,7 +38,7 @@ test("WHEP endpoint returns SDP answer for active source", async ({ request }) =
 
   const created = await request.post(
     new URL("/integrations/video-sources", baseURL).toString(),
-    { data: { label: "TEST-SNV", ndi_name: "STREAM-SNV (stream)" } },
+    { data: { label: "TEST-SNV", ndiName: "STREAM-SNV (stream)" } },
   );
   expect(created.status()).toBeLessThan(500);
   const src = await created.json();
@@ -85,7 +85,7 @@ test("stage page mounts NdiVideo with correct data attributes when source active
   // Create + activate a source.
   const created = await page.request.post(
     new URL("/integrations/video-sources", baseURL).toString(),
-    { data: { label: "TEST-SNV", ndi_name: "STREAM-SNV (stream)" } },
+    { data: { label: "TEST-SNV", ndiName: "STREAM-SNV (stream)" } },
   );
   expect(created.status()).toBeLessThan(500);
   const src = await created.json();
@@ -127,7 +127,7 @@ test("NdiVideo videoWidth resolves above zero within 5 seconds of mount", async 
 
   const created = await page.request.post(
     new URL("/integrations/video-sources", baseURL).toString(),
-    { data: { label: "TEST-SNV", ndi_name: "STREAM-SNV (stream)" } },
+    { data: { label: "TEST-SNV", ndiName: "STREAM-SNV (stream)" } },
   );
   const src = await created.json();
   await page.request.post(
