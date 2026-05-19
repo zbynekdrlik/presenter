@@ -120,3 +120,126 @@ pub(crate) async fn delete_whep_session(
         .map_err(|e| AppError::service_unavailable(format!("WHEP DELETE: {e}")))?;
     Ok(into_response(reply))
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use axum::http::StatusCode;
+    use axum::response::IntoResponse;
+
+    /// Build a fresh in-memory AppState that may or may not have a real NDI
+    /// manager attached depending on whether libndi is loadable on the host.
+    async fn fresh_state() -> AppState {
+        AppState::in_memory().await.expect("in-memory AppState")
+    }
+
+    fn empty_body() -> Bytes {
+        Bytes::new()
+    }
+
+    #[tokio::test]
+    async fn post_whep_endpoint_returns_not_found_or_unavailable_for_inactive_source() {
+        let state = fresh_state().await;
+        let result = post_whep_endpoint(
+            Path("00000000-0000-0000-0000-000000000000".to_string()),
+            State(state),
+            empty_body(),
+        )
+        .await;
+        let Err(err) = result else {
+            panic!("expected Err for inactive source");
+        };
+        // With libndi: manager exists but the source isn't active → 404.
+        // Without libndi: ndi_manager() is None → 503.
+        let resp = err.into_response();
+        assert!(
+            matches!(
+                resp.status(),
+                StatusCode::NOT_FOUND | StatusCode::SERVICE_UNAVAILABLE
+            ),
+            "expected 404 or 503, got {}",
+            resp.status()
+        );
+    }
+
+    #[tokio::test]
+    async fn post_whep_session_returns_unavailable_for_unknown_source() {
+        let state = fresh_state().await;
+        let result = post_whep_session(
+            Path((
+                "00000000-0000-0000-0000-000000000000".to_string(),
+                "session-id".to_string(),
+            )),
+            State(state),
+            empty_body(),
+        )
+        .await;
+        let Err(err) = result else {
+            panic!("expected Err for unknown source");
+        };
+        let resp = err.into_response();
+        assert_eq!(resp.status(), StatusCode::SERVICE_UNAVAILABLE);
+    }
+
+    #[tokio::test]
+    async fn patch_whep_session_returns_unavailable_for_unknown_source() {
+        let state = fresh_state().await;
+        let mut headers = HeaderMap::new();
+        headers.insert("content-type", "application/trickle-ice-sdpfrag".parse().unwrap());
+        let result = patch_whep_session(
+            Path((
+                "00000000-0000-0000-0000-000000000000".to_string(),
+                "session-id".to_string(),
+            )),
+            State(state),
+            headers,
+            empty_body(),
+        )
+        .await;
+        let Err(err) = result else {
+            panic!("expected Err for unknown source");
+        };
+        let resp = err.into_response();
+        assert_eq!(resp.status(), StatusCode::SERVICE_UNAVAILABLE);
+    }
+
+    #[tokio::test]
+    async fn delete_whep_session_returns_unavailable_for_unknown_source() {
+        let state = fresh_state().await;
+        let result = delete_whep_session(
+            Path((
+                "00000000-0000-0000-0000-000000000000".to_string(),
+                "session-id".to_string(),
+            )),
+            State(state),
+        )
+        .await;
+        let Err(err) = result else {
+            panic!("expected Err for unknown source");
+        };
+        let resp = err.into_response();
+        assert_eq!(resp.status(), StatusCode::SERVICE_UNAVAILABLE);
+    }
+
+    #[test]
+    fn into_response_passes_through_status_and_body_with_no_headers() {
+        let reply = WhepReply {
+            status: 201,
+            headers: None,
+            body: Some(b"v=0\r\ns=-\r\n".to_vec()),
+        };
+        let resp = into_response(reply);
+        assert_eq!(resp.status(), StatusCode::CREATED);
+    }
+
+    #[test]
+    fn into_response_defaults_to_empty_body_when_none() {
+        let reply = WhepReply {
+            status: 204,
+            headers: None,
+            body: None,
+        };
+        let resp = into_response(reply);
+        assert_eq!(resp.status(), StatusCode::NO_CONTENT);
+    }
+}
