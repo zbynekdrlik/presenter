@@ -126,11 +126,18 @@ impl NdiPipeline {
 
     /// Tear down the pipeline. Safe to call multiple times.
     pub async fn stop(&mut self) {
+        self.teardown();
+        let _ = self.state_tx.send(PipelineState::Stopped);
+    }
+
+    /// Synchronous teardown: set state to Null and abort the bus-watch task.
+    /// Shared between `stop()` and `Drop` so the invariant lives in one place.
+    /// Idempotent — GStreamer ignores a duplicate Null transition.
+    fn teardown(&mut self) {
         let _ = self.pipeline.set_state(gst::State::Null);
         if let Some(h) = self.bus_watch.take() {
             h.abort();
         }
-        let _ = self.state_tx.send(PipelineState::Stopped);
     }
 
     pub fn whep_url(&self) -> &str {
@@ -154,10 +161,7 @@ impl NdiPipeline {
 
 impl Drop for NdiPipeline {
     fn drop(&mut self) {
-        let _ = self.pipeline.set_state(gst::State::Null);
-        if let Some(h) = self.bus_watch.take() {
-            h.abort();
-        }
+        self.teardown();
     }
 }
 

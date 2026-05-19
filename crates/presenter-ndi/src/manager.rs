@@ -36,11 +36,13 @@ pub enum WhepOp {
     Delete { id: String },
 }
 
-/// Result returned by `whepserversink`'s signaller as a `gst::Structure`,
-/// flattened into idiomatic Rust.
+/// Result returned by `whepserversink`'s signaller, flattened into plain
+/// Rust types. Header names and values are extracted from the gstreamer
+/// `Structure` inside the manager so consumers (e.g. the axum WHEP router)
+/// don't need to depend on gstreamer.
 pub struct WhepReply {
     pub status: u16,
-    pub headers: Option<gstreamer::Structure>,
+    pub headers: Vec<(String, String)>,
     pub body: Option<Vec<u8>>,
 }
 
@@ -172,7 +174,15 @@ impl NdiManager {
         let status = reply
             .get::<u32>("status")
             .map_err(|e| anyhow!("missing status field: {e}"))? as u16;
-        let headers = reply.get::<gstreamer::Structure>("headers").ok();
+        let headers = match reply.get::<gstreamer::Structure>("headers") {
+            Ok(s) => s
+                .iter()
+                .filter_map(|(name, value)| {
+                    value.get::<String>().ok().map(|v| (name.to_string(), v))
+                })
+                .collect(),
+            Err(_) => Vec::new(),
+        };
         let body = reply
             .get::<glib::Bytes>("body")
             .ok()

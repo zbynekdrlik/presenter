@@ -9,30 +9,35 @@ pub use discovery::SourceList;
 pub use manager::NdiManager;
 pub use manager::StatusCallback;
 
-use std::sync::Once;
+use std::sync::OnceLock;
 
-static GST_INIT: Once = Once::new();
+/// Holds the outcome of the one-shot `gstreamer::init()` + plugin registration.
+/// Subsequent `init()` calls return the SAME outcome — a previously failed
+/// init does not silently succeed on retry.
+static GST_INIT_RESULT: OnceLock<Result<(), String>> = OnceLock::new();
 
 /// Initialize GStreamer + register Rust plugins (webrtcsink, ndisrc).
 ///
-/// Safe to call multiple times; subsequent calls are no-ops. Returns an error if
-/// GStreamer cannot initialize OR if a required Rust plugin fails to register.
+/// Safe and cheap to call repeatedly. The outcome of the first call is cached
+/// and every subsequent call returns the same Ok/Err — so a caller that hits
+/// an init failure cannot be lulled into proceeding by re-calling `init()`.
 pub fn init() -> anyhow::Result<()> {
-    let mut result: anyhow::Result<()> = Ok(());
-    GST_INIT.call_once(|| {
+    let outcome = GST_INIT_RESULT.get_or_init(|| {
         if let Err(e) = gstreamer::init() {
-            result = Err(anyhow::anyhow!("gstreamer init failed: {e}"));
-            return;
+            return Err(format!("gstreamer init failed: {e}"));
         }
         if let Err(e) = gstrswebrtc::plugin_register_static() {
-            result = Err(anyhow::anyhow!("webrtcsink plugin register failed: {e}"));
-            return;
+            return Err(format!("webrtcsink plugin register failed: {e}"));
         }
         if let Err(e) = gstndi::plugin_register_static() {
-            result = Err(anyhow::anyhow!("ndisrc plugin register failed: {e}"));
+            return Err(format!("ndisrc plugin register failed: {e}"));
         }
+        Ok(())
     });
-    result
+    match outcome {
+        Ok(()) => Ok(()),
+        Err(msg) => Err(anyhow::anyhow!("{msg}")),
+    }
 }
 
 /// Check whether the VAAPI H264 encoder element is available.

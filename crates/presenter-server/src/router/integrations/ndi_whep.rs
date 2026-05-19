@@ -15,16 +15,26 @@ use crate::state::AppState;
 
 fn into_response(reply: WhepReply) -> Response {
     let mut builder = Response::builder().status(reply.status);
-    if let Some(headers) = reply.headers {
-        for (name, value) in headers.iter() {
-            if let Ok(s) = value.get::<String>() {
-                builder = builder.header(name.to_string(), s);
-            }
-        }
+    for (name, value) in &reply.headers {
+        builder = builder.header(name, value);
     }
     builder
         .body(axum::body::Body::from(reply.body.unwrap_or_default()))
         .expect("valid response")
+}
+
+/// Map a `whep_signaller_call` error string to the right HTTP status.
+///
+/// "source not active" → 404 (the WHEP spec calls for 404 when the resource
+/// doesn't exist). Anything else (pipeline starting / stopped / errored,
+/// signaller emit failures) → 503 so WHEP clients back off and retry.
+fn map_signaller_error(err: anyhow::Error) -> AppError {
+    let msg = err.to_string();
+    if msg.contains("source not active") {
+        AppError::not_found("NDI source not active")
+    } else {
+        AppError::service_unavailable(format!("WHEP: {msg}"))
+    }
 }
 
 #[instrument(skip_all, fields(source_id = %source_id))]
@@ -36,9 +46,6 @@ pub(crate) async fn post_whep_endpoint(
     let manager = state
         .ndi_manager()
         .ok_or_else(|| AppError::service_unavailable("NDI SDK not available"))?;
-    if !manager.is_active(&source_id).await {
-        return Err(AppError::not_found("NDI source not active"));
-    }
     let reply = manager
         .whep_signaller_call(
             &source_id,
@@ -48,7 +55,7 @@ pub(crate) async fn post_whep_endpoint(
             },
         )
         .await
-        .map_err(|e| AppError::service_unavailable(format!("WHEP POST: {e}")))?;
+        .map_err(map_signaller_error)?;
     Ok(into_response(reply))
 }
 
@@ -70,7 +77,7 @@ pub(crate) async fn post_whep_session(
             },
         )
         .await
-        .map_err(|e| AppError::service_unavailable(format!("WHEP POST session: {e}")))?;
+        .map_err(map_signaller_error)?;
     Ok(into_response(reply))
 }
 
@@ -102,7 +109,7 @@ pub(crate) async fn patch_whep_session(
             },
         )
         .await
-        .map_err(|e| AppError::service_unavailable(format!("WHEP PATCH: {e}")))?;
+        .map_err(map_signaller_error)?;
     Ok(into_response(reply))
 }
 
@@ -117,7 +124,7 @@ pub(crate) async fn delete_whep_session(
     let reply = manager
         .whep_signaller_call(&source_id, WhepOp::Delete { id: session_id })
         .await
-        .map_err(|e| AppError::service_unavailable(format!("WHEP DELETE: {e}")))?;
+        .map_err(map_signaller_error)?;
     Ok(into_response(reply))
 }
 
@@ -162,8 +169,20 @@ mod tests {
         );
     }
 
+    /// Both 404 (manager present, source not active) and 503 (no manager) are
+    /// expected for an unknown source — same logic as post_whep_endpoint.
+    fn assert_not_found_or_unavailable(resp_status: StatusCode) {
+        assert!(
+            matches!(
+                resp_status,
+                StatusCode::NOT_FOUND | StatusCode::SERVICE_UNAVAILABLE
+            ),
+            "expected 404 or 503, got {resp_status}"
+        );
+    }
+
     #[tokio::test]
-    async fn post_whep_session_returns_unavailable_for_unknown_source() {
+    async fn post_whep_session_returns_not_found_or_unavailable_for_unknown_source() {
         let state = fresh_state().await;
         let result = post_whep_session(
             Path((
@@ -177,12 +196,11 @@ mod tests {
         let Err(err) = result else {
             panic!("expected Err for unknown source");
         };
-        let resp = err.into_response();
-        assert_eq!(resp.status(), StatusCode::SERVICE_UNAVAILABLE);
+        assert_not_found_or_unavailable(err.into_response().status());
     }
 
     #[tokio::test]
-    async fn patch_whep_session_returns_unavailable_for_unknown_source() {
+    async fn patch_whep_session_returns_not_found_or_unavailable_for_unknown_source() {
         let state = fresh_state().await;
         let mut headers = HeaderMap::new();
         headers.insert(
@@ -202,12 +220,11 @@ mod tests {
         let Err(err) = result else {
             panic!("expected Err for unknown source");
         };
-        let resp = err.into_response();
-        assert_eq!(resp.status(), StatusCode::SERVICE_UNAVAILABLE);
+        assert_not_found_or_unavailable(err.into_response().status());
     }
 
     #[tokio::test]
-    async fn delete_whep_session_returns_unavailable_for_unknown_source() {
+    async fn delete_whep_session_returns_not_found_or_unavailable_for_unknown_source() {
         let state = fresh_state().await;
         let result = delete_whep_session(
             Path((
@@ -220,26 +237,27 @@ mod tests {
         let Err(err) = result else {
             panic!("expected Err for unknown source");
         };
-        let resp = err.into_response();
-        assert_eq!(resp.status(), StatusCode::SERVICE_UNAVAILABLE);
+        assert_not_found_or_unavailable(err.into_response().status());
     }
 
     #[test]
-    fn into_response_passes_through_status_and_body_with_no_headers() {
+    fn into_response_passes_status_headers_and_body() {
         let reply = WhepReply {
             status: 201,
-            headers: None,
+            headers: vec![("location".to_string(), "/whep/abc".to_string())],
             body: Some(b"v=0\r\ns=-\r\n".to_vec()),
         };
         let resp = into_response(reply);
         assert_eq!(resp.status(), StatusCode::CREATED);
+        let location = resp.headers().get("location").and_then(|v| v.to_str().ok());
+        assert_eq!(location, Some("/whep/abc"));
     }
 
     #[test]
     fn into_response_defaults_to_empty_body_when_none() {
         let reply = WhepReply {
             status: 204,
-            headers: None,
+            headers: Vec::new(),
             body: None,
         };
         let resp = into_response(reply);

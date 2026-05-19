@@ -25,15 +25,31 @@ pub fn NdiVideo(
 ) -> impl IntoView {
     let video_ref = NodeRef::<leptos::html::Video>::new();
     let source_id_for_effect = source_id.clone();
+    // Hold the RtcPeerConnection so we can close it on unmount. WebRTC
+    // peer connections are NOT closed when the JsValue is dropped — the
+    // browser keeps them open until explicit `close()`. Without this the
+    // whepserversink leaks ICE sessions every time the layout switches.
+    let pc_holder: StoredValue<Option<RtcPeerConnection>> = StoredValue::new(None);
 
     Effect::new(move |_| {
         let Some(video) = video_ref.get() else { return };
         let source_id = source_id_for_effect.clone();
         spawn_local(async move {
-            if let Err(e) = connect_whep(&video, &source_id).await {
-                leptos::logging::error!("WHEP connect for {source_id} failed: {e:?}");
+            match connect_whep(&video, &source_id).await {
+                Ok(pc) => {
+                    pc_holder.set_value(Some(pc));
+                }
+                Err(e) => {
+                    leptos::logging::error!("WHEP connect for {source_id} failed: {e:?}");
+                }
             }
         });
+    });
+
+    on_cleanup(move || {
+        if let Some(pc) = pc_holder.try_get_value().flatten() {
+            pc.close();
+        }
     });
 
     let class_attr = class.unwrap_or("");
@@ -51,7 +67,10 @@ pub fn NdiVideo(
     }
 }
 
-async fn connect_whep(video: &HtmlVideoElement, source_id: &str) -> Result<(), JsValue> {
+async fn connect_whep(
+    video: &HtmlVideoElement,
+    source_id: &str,
+) -> Result<RtcPeerConnection, JsValue> {
     let cfg = RtcConfiguration::new();
     let pc = RtcPeerConnection::new_with_configuration(&cfg)?;
 
@@ -104,5 +123,5 @@ async fn connect_whep(video: &HtmlVideoElement, source_id: &str) -> Result<(), J
     let answer = RtcSessionDescriptionInit::new(RtcSdpType::Answer);
     answer.set_sdp(&answer_text);
     JsFuture::from(pc.set_remote_description(&answer)).await?;
-    Ok(())
+    Ok(pc)
 }
