@@ -72,14 +72,27 @@ test("WHEP endpoint returns SDP answer for active source", async ({ request }) =
 });
 
 test("stage page mounts NdiVideo with correct data attributes when source active", async ({ page }) => {
+  // On hosts without a live NDI source (CI runners with no libndi/VA-API)
+  // the WHEP POST returns 503 because the pipeline can't start. Those
+  // errors are expected here — this test only asserts DOM structure.
+  const ALLOWED = [
+    /Failed to load resource.*503/i,
+    /WHEP connect for.*failed/i,
+    /WHEP POST returned 503/i,
+  ];
   const consoleMessages: string[] = [];
   page.on("console", (msg) => {
     if (msg.type() === "error" || msg.type() === "warning") {
-      consoleMessages.push(`[${msg.type()}] ${msg.text()}`);
+      const text = msg.text();
+      if (!ALLOWED.some((re) => re.test(text))) {
+        consoleMessages.push(`[${msg.type()}] ${text}`);
+      }
     }
   });
   page.on("pageerror", (err) => {
-    consoleMessages.push(`[pageerror] ${err.message}`);
+    if (!ALLOWED.some((re) => re.test(err.message))) {
+      consoleMessages.push(`[pageerror] ${err.message}`);
+    }
   });
 
   // Create + activate a source.
