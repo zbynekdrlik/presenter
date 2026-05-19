@@ -76,9 +76,9 @@ test("api layout renders ApiStage wrapper with no NDI source active", async ({ p
   const wrapper = page.locator("div.stage-api");
   await expect(wrapper).toBeAttached();
 
-  // No NDI image when no source is active
-  const img = page.locator("img.stage-api__ndi");
-  await expect(img).toHaveCount(0);
+  // No NDI video when no source is active
+  const video = page.locator('[data-role="ndi-video"]');
+  await expect(video).toHaveCount(0);
 
   // WorshipSnv content is nested inside the wrapper
   const slide = page.locator("div.stage-api .stage__current-slide");
@@ -124,7 +124,7 @@ test("worship-snv layout is not affected by api stage changes", async ({ page })
 
   // No api wrapper
   await expect(page.locator("div.stage-api")).toHaveCount(0);
-  await expect(page.locator("img.stage-api__ndi")).toHaveCount(0);
+  await expect(page.locator('[data-role="ndi-video"]')).toHaveCount(0);
 
   // Worship-snv slide text must NOT have a text-shadow (only api layout gets it)
   const slideShadow = await page
@@ -137,12 +137,12 @@ test("worship-snv layout is not affected by api stage changes", async ({ page })
 
 test("api layout shows connection-status overlay when NDI source activates", async ({ page }) => {
   // We deliberately activate a bogus NDI source so the WS event fires while
-  // the page is open. Once `ndi_active=true`, the browser starts loading
-  // `<img src="/ndi/mjpeg">`, but the server returns 503 because the
-  // bogus name has no real stream — that 503 is expected noise for this
-  // test scenario only.
+  // the page is open. Once `ndi_active=true`, the <NdiVideo> mounts and
+  // tries to fetch the WHEP endpoint, which returns 503 because the bogus
+  // name has no real stream — that 503 is expected noise for this test only.
   const consoleMessages = collectConsoleErrors(page, [
     /Failed to load resource.*503/i,
+    /WHEP connect for.*failed/i,
   ]);
 
   // Start clean
@@ -163,8 +163,8 @@ test("api layout shows connection-status overlay when NDI source activates", asy
     timeout: 10_000,
   });
 
-  // Sanity: img not present yet
-  await expect(page.locator("img.stage-api__ndi")).toHaveCount(0);
+  // Sanity: NdiVideo not present yet
+  await expect(page.locator('[data-role="ndi-video"]')).toHaveCount(0);
 
   // Create a bogus video source
   const createResp = await page.request.post(
@@ -186,8 +186,8 @@ test("api layout shows connection-status overlay when NDI source activates", asy
   );
 
   try {
-    // The overlay should appear (status = "connecting") and the img should mount
-    await expect(page.locator("img.stage-api__ndi")).toHaveCount(1, {
+    // The overlay should appear (status = "connecting") and the <NdiVideo> should mount
+    await expect(page.locator('[data-role="ndi-video"]')).toHaveCount(1, {
       timeout: 10_000,
     });
     await expect(page.locator("div.stage-api__overlay")).toBeVisible({

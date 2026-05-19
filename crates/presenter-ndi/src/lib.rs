@@ -1,11 +1,9 @@
 #![allow(non_camel_case_types)]
 
 pub mod discovery;
-pub mod encoder;
 pub mod manager;
 pub mod ndi_sdk;
 pub mod pipeline;
-pub mod receiver;
 
 pub use discovery::SourceList;
 pub use manager::NdiManager;

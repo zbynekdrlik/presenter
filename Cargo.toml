@@ -48,8 +48,6 @@ reactive_graph = "0.1.8"
 futures-util = "0.3"
 unicode-normalization = "0.1"
 gstreamer = "0.25"
-gstreamer-app = "0.25"
-gstreamer-base = "0.25"
 gst-plugin-webrtc = "0.15"
 gst-plugin-ndi = "0.15"
 
