@@ -2,6 +2,7 @@ use leptos::prelude::*;
 use wasm_bindgen::JsCast;
 use web_sys::HtmlElement;
 
+use crate::components::stage::ndi_video::NdiVideo;
 use crate::state::stage::StageContext;
 use crate::utils::autofit::autofit_text;
 use crate::ws::stage::StageWsState;
@@ -15,6 +16,7 @@ pub fn TimerLayout(
 ) -> impl IntoView {
     let ctx = use_context::<StageContext>().expect("StageContext not provided");
     let ndi_active = ctx.ndi_active;
+    let ndi_active_source_id = ctx.ndi_active_source_id;
     let ndi_status = ctx.ndi_status;
 
     let timer_ref = NodeRef::<leptos::html::Div>::new();
@@ -46,7 +48,14 @@ pub fn TimerLayout(
     view! {
         <div class="stage-container" data-layout="timer">
             <Show when=move || ndi_active.get()>
-                <img src="/ndi/mjpeg" class="stage-timer__ndi" />
+                {move || {
+                    ndi_active_source_id.get().map(|source_id| view! {
+                        <NdiVideo
+                            source_id=source_id
+                            class="stage-timer__ndi"
+                        />
+                    })
+                }}
             </Show>
 
             <Show when=move || {

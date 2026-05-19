@@ -1,15 +1,16 @@
 use leptos::prelude::*;
 
+use crate::components::stage::ndi_video::NdiVideo;
 use crate::components::stage::worship_snv::WorshipSnv;
 use crate::state::stage::StageContext;
 use crate::ws::stage::StageWsState;
 
 /// Stage layout for API-driven slides with an optional live NDI video background.
 ///
-/// Wraps `WorshipSnv` and adds a sibling `<img src="/ndi/mjpeg">` layer that
-/// renders only when a video source is active (driven by
-/// `StageContext::ndi_active`). Also surfaces the NDI connection status
-/// overlay for the "connecting" / "disconnected" states.
+/// Wraps `WorshipSnv` and adds a sibling `<NdiVideo>` layer that renders only
+/// when a video source is active (driven by `StageContext::ndi_active` plus
+/// `ndi_active_source_id`). Also surfaces the NDI connection status overlay
+/// for the "connecting" / "disconnected" states.
 #[component]
 pub fn ApiStage(
     ws_state: ReadSignal<StageWsState>,
@@ -17,12 +18,20 @@ pub fn ApiStage(
 ) -> impl IntoView {
     let ctx = use_context::<StageContext>().expect("StageContext not provided");
     let ndi_active = ctx.ndi_active;
+    let ndi_active_source_id = ctx.ndi_active_source_id;
     let ndi_status = ctx.ndi_status;
 
     view! {
         <div class="stage-api">
             <Show when=move || ndi_active.get()>
-                <img src="/ndi/mjpeg" class="stage-api__ndi" />
+                {move || {
+                    ndi_active_source_id.get().map(|source_id| view! {
+                        <NdiVideo
+                            source_id=source_id
+                            class="stage-api__ndi"
+                        />
+                    })
+                }}
             </Show>
 
             <Show when=move || {
