@@ -173,7 +173,7 @@ jobs:
         run: |
           ssh deploy-target << 'REMOTE_SCRIPT'
           set -e
-          NEEDED="gstreamer1.0-plugins-base gstreamer1.0-plugins-good gstreamer1.0-plugins-bad gstreamer1.0-vaapi gstreamer1.0-libav intel-media-va-driver-non-free libva-drm2 libva2"
+          NEEDED="gstreamer1.0-plugins-base gstreamer1.0-plugins-good gstreamer1.0-plugins-bad gstreamer1.0-vaapi gstreamer1.0-libav gstreamer1.0-nice intel-media-va-driver-non-free libva-drm2 libva2"
           MISSING=""
           for pkg in $NEEDED; do
             dpkg -s "$pkg" >/dev/null 2>&1 || MISSING="$MISSING $pkg"

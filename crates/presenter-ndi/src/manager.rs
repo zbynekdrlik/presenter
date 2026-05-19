@@ -89,6 +89,16 @@ impl NdiManager {
     ///
     /// `source_id` = UUID from the `video_sources` DB row (used as the WHEP URL key).
     /// `ndi_name` = NDI broadcaster name (e.g. "STREAM-SNV (stream)").
+    ///
+    /// Returns only AFTER the pipeline has transitioned to `Streaming` — i.e.
+    /// the ndisrc has connected to the broadcaster, ndisrcdemux has negotiated
+    /// video/audio caps, and webrtcsink's input pads are ready. Without this
+    /// wait, an early WHEP POST hits webrtcsink before input caps are set
+    /// and panics on `in_caps.unwrap()` (gst-plugin-webrtc imp.rs:3548).
+    ///
+    /// A 7-second timeout caps the wait — long enough for ndisrc to find the
+    /// source on a healthy LAN, short enough that a missing/dead broadcaster
+    /// reports back quickly to the operator.
     pub async fn start_pipeline(&self, source_id: &str, ndi_name: &str) -> Result<()> {
         let mut active = self.active.lock().await;
         if active.contains_key(source_id) {
@@ -98,8 +108,63 @@ impl NdiManager {
         let whep_url = format!("/ndi/whep/{}", source_id);
         let mut pipeline = NdiPipeline::build(ndi_name, whep_url)?;
         pipeline.start().await?;
-        active.insert(source_id.to_string(), ActiveSource { pipeline });
-        Ok(())
+
+        // Wait for webrtcsink's video sink-pad to have negotiated caps. Two
+        // states aren't enough on their own:
+        //  - `pipeline.state == Playing` fires almost immediately on a live
+        //    source (NoPreroll) — before ndisrc has actually sent any frame.
+        //  - The `streams` HashMap inside webrtcsink only gets `in_caps` set
+        //    when the input pad receives its first CAPS event, which is when
+        //    ndisrcdemux has identified video/audio formats from real NDI data.
+        //
+        // Polling `sink_element.sink_pad("video_0").current_caps()` is the
+        // most reliable signal that caps are set. Without this, an early WHEP
+        // POST hits webrtcsink while `in_caps == None` and panics at
+        // gst-plugin-webrtc imp.rs:3548 (`in_caps.unwrap()`).
+        //
+        // 8-second budget: ndisrc takes ~2-5s on a healthy LAN to find a
+        // broadcast + receive first frame. Beyond 8s the source likely doesn't
+        // exist and we'd rather fail fast than hang the operator UI.
+        let sink = pipeline
+            .sink_element()
+            .ok_or_else(|| anyhow!("pipeline has no sink element"))?;
+        let video_pad = sink
+            .static_pad("video_0")
+            .ok_or_else(|| anyhow!("whepserversink has no video_0 sink pad"))?;
+        let mut watcher = pipeline.state_watcher();
+        let caps_ready = tokio::time::timeout(std::time::Duration::from_secs(8), async {
+            loop {
+                // Bail out if the pipeline errored (e.g. NDI source not found
+                // and ndisrc emitted ERROR on the bus).
+                if let crate::pipeline::PipelineState::Errored(ref e) = *watcher.borrow_and_update()
+                {
+                    return Err(anyhow!("pipeline errored: {e}"));
+                }
+                if video_pad.current_caps().is_some() {
+                    return Ok(());
+                }
+                tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+            }
+        })
+        .await;
+
+        match caps_ready {
+            Ok(Ok(())) => {
+                active.insert(source_id.to_string(), ActiveSource { pipeline });
+                Ok(())
+            }
+            Ok(Err(e)) => {
+                pipeline.stop().await;
+                Err(e)
+            }
+            Err(_) => {
+                pipeline.stop().await;
+                Err(anyhow!(
+                    "NDI source '{ndi_name}' did not deliver any frame within 8s; \
+                     ndisrc could not connect or the broadcaster is silent"
+                ))
+            }
+        }
     }
 
     /// Stop one pipeline.

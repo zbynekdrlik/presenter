@@ -44,7 +44,13 @@ impl NdiPipeline {
     /// as a logical key; the element does NOT bind its own HTTP port.
     pub fn build(ndi_name: &str, whep_url: String) -> Result<Self> {
         super::init().context("gstreamer init failed")?;
-        let encoder = super::hw_h264_encoder().ok_or_else(|| {
+        // We still probe for an HW encoder up-front so we can refuse-loudly
+        // when neither vah264enc nor nvh264enc is registered. `whepserversink`
+        // instantiates its OWN encoder internally based on GStreamer element
+        // rank, so we don't pre-encode here — but if no HW encoder is
+        // available it would fall back to software (x264enc), and software
+        // 720p30 H264 melts the N100. The check below catches that case.
+        let _ = super::hw_h264_encoder().ok_or_else(|| {
             anyhow!(
                 "no hardware H264 encoder registered; refusing to build pipeline \
                  (software H264 at 720p30 would melt the N100). \
@@ -52,29 +58,59 @@ impl NdiPipeline {
                  OR NVIDIA NVENC: sudo apt install gstreamer1.0-plugins-bad with nvcodec support"
             )
         })?;
-        // Per-encoder CBR low-delay config. The properties diverge between
-        // `vah264enc` (key-int-max / rate-control) and `nvh264enc`
-        // (gop-size / rc-mode), so they're branched here. Both target ~2 Mbps
-        // CBR with a 60-frame GOP (2 s at 30 fps) for live latency.
-        let encoder_props = match encoder {
-            "vah264enc" => "bitrate=2000 key-int-max=60 rate-control=cbr",
-            "nvh264enc" => "bitrate=2000 gop-size=60 rc-mode=cbr-ld-hq",
-            // Defensive fallback — shouldn't happen because hw_h264_encoder
-            // returns one of the above. Keep build going with just bitrate.
-            _ => "bitrate=2000",
-        };
 
+        // CRITICAL: `whepserversink` (which is `webrtcsink` with the WHEP
+        // signaller) takes RAW input. It picks an encoder internally and
+        // manages bitrate, GOP, and codec negotiation with the browser. Do
+        // NOT insert nvh264enc / vah264enc / h264parse upstream of it — the
+        // pre-encoded H264 was being rejected by webrtcsink's internal
+        // h264parse with "broken/invalid nal Type: 1 Slice, Size: 8". See
+        // the official gst-plugin-webrtc-0.15.2/examples/whepserver.rs which
+        // links videotestsrc → whepserversink directly.
+        //
+        // `video-caps=video/x-h264` constrains the codec offer to H264 (over
+        // VP8/VP9) so encoder rank selection lands on nvh264enc/vah264enc
+        // automatically. Browser-side WebRTC clients all support H264.
+        //
+        // Audio handling: ndisrcdemux ALWAYS exposes both a `video` and an
+        // `audio` source pad. If the NDI broadcaster sends no audio (e.g.
+        // Resolume, video-only OBS scenes), the audio pad never delivers a
+        // CAPS event and webrtcsink panics on `in_caps.unwrap()` while
+        // iterating registered streams. The audio branch terminates in a
+        // `fakesink` with `async=false sync=false` so an absent audio stream
+        // doesn't block preroll, and the audio pad is NOT linked into
+        // whepserversink — so the WHEP offer is video-only, which is what
+        // most live cameras need anyway. Re-enable audio per-source via a
+        // settings flag once we have an NDI source that actually carries it.
+        // `host-addr` overrides whepserversink's internal warp server bind.
+        // The default `http://127.0.0.1:9090` collides with prior restart
+        // processes AND with other dev2 services that already use 9090.
+        // We pick a per-pipeline port in the 19090-19999 range derived from
+        // a hash of the WHEP URL — stable across pipeline restarts for the
+        // same source (so a crash-loop doesn't ping-pong ports), unique
+        // across concurrent sources (so multiple NDI pipelines coexist).
+        //
+        // The bound port is NEVER reached externally — presenter's axum WHEP
+        // shim bridges into the signaller via `emit_by_name("post"|"patch"|
+        // "delete", ...)` directly. The warp server runs because the
+        // signaller's lifecycle requires it; this just gets it out of our way.
+        let port: u16 = {
+            use std::collections::hash_map::DefaultHasher;
+            use std::hash::{Hash, Hasher};
+            let mut h = DefaultHasher::new();
+            whep_url.hash(&mut h);
+            19090 + (h.finish() % 900) as u16
+        };
+        // host-addr is set programmatically AFTER parse::launch because
+        // gst-launch syntax can't reliably tokenize URL values containing
+        // `://` and the parser silently keeps the default `http://127.0.0.1:9090`.
         let desc = format!(
             "ndisrc ndi-name=\"{ndi_name}\" ! \
              ndisrcdemux name=demux \
-             demux.video ! videoconvert ! \
-               {encoder} {encoder_props} ! \
-               video/x-h264,profile=baseline ! \
-               sink.video_0 \
-             demux.audio ! audioconvert ! audioresample ! \
-               opusenc bitrate=64000 ! \
-               sink.audio_0 \
-             whepserversink name=sink"
+             demux.video ! videoconvert ! sink.video_0 \
+             demux.audio ! fakesink async=false sync=false \
+             whepserversink name=sink \
+                 video-caps=\"video/x-h264\""
         );
 
         let pipeline = gst::parse::launch(&desc)
@@ -82,6 +118,23 @@ impl NdiPipeline {
         let pipeline = pipeline
             .downcast::<gst::Pipeline>()
             .map_err(|_| anyhow!("parse::launch returned non-Pipeline element"))?;
+
+        // Override the default whepserversink warp HTTP bind port.
+        // The `host-addr` property lives on the `signaller` CHILD of the
+        // sink element. We use `ChildProxyExtManual::set_child_property`
+        // which does the `child::property` lookup itself — `set_property`
+        // directly on the sink/child-proxy doesn't recurse (it strips the
+        // `signaller::` prefix and looks up `host-addr` on the sink, which
+        // doesn't have it).
+        use gstreamer::prelude::ChildProxyExtManual;
+        let sink = pipeline
+            .by_name("sink")
+            .ok_or_else(|| anyhow!("pipeline has no sink element"))?;
+        let child_proxy = sink
+            .dynamic_cast_ref::<gstreamer::ChildProxy>()
+            .ok_or_else(|| anyhow!("sink is not a ChildProxy"))?;
+        child_proxy.set_child_property("signaller::host-addr", format!("http://127.0.0.1:{port}"));
+        tracing::info!(port, %ndi_name, "whepserversink signaller host-addr set");
 
         let (state_tx, state_rx) = watch::channel(PipelineState::Stopped);
 
@@ -95,13 +148,21 @@ impl NdiPipeline {
     }
 
     /// Transition the pipeline to PLAYING. Returns immediately; the state
-    /// watcher will move to `Streaming` once ASYNC_DONE is received.
+    /// watcher moves to `Streaming` once the PIPELINE element posts
+    /// `StateChanged → Playing` on the bus.
     pub async fn start(&mut self) -> Result<()> {
         self.state_tx.send_replace(PipelineState::Starting);
         let pipeline = self.pipeline.clone();
         let state_tx = self.state_tx.clone();
+        let pipeline_obj = pipeline.upcast_ref::<gst::Object>().clone();
 
         // Bus watch: drives the state transitions Starting → Streaming → Errored/Stopped.
+        //
+        // Live sources (ndisrc) skip `AsyncDone` — they go PAUSED → PLAYING
+        // directly via `NoPreroll`. We watch `StateChanged` filtered to the
+        // PIPELINE element itself and trip Streaming when it reaches PLAYING.
+        // Element-level state changes are ignored — they fire earlier and would
+        // race against webrtcsink's codec discovery.
         let bus = pipeline
             .bus()
             .ok_or_else(|| anyhow!("pipeline has no bus"))?;
@@ -110,7 +171,15 @@ impl NdiPipeline {
             use futures_util::StreamExt;
             while let Some(msg) = stream.next().await {
                 match msg.view() {
+                    gst::MessageView::StateChanged(sc) => {
+                        if sc.src() == Some(&pipeline_obj) && sc.current() == gst::State::Playing {
+                            let _ = state_tx.send(PipelineState::Streaming);
+                        }
+                    }
                     gst::MessageView::AsyncDone(_) => {
+                        // Harmless duplicate for live pipelines (the
+                        // StateChanged branch above already fired); load-bearing
+                        // for non-live test cases like videotestsrc.
                         let _ = state_tx.send(PipelineState::Streaming);
                     }
                     gst::MessageView::Error(err) => {

@@ -230,6 +230,13 @@ impl AppState {
                 });
                 return Err(e);
             }
+            // start_pipeline only returns Ok AFTER the webrtcsink video pad
+            // has negotiated caps — at that point frames are flowing through
+            // the pipeline. Flip the stage-view overlay from "Connecting…"
+            // to "" (no overlay) by publishing `connected` status.
+            self.live_hub.publish(LiveEvent::NdiConnectionStatus {
+                status: "connected".to_string(),
+            });
         }
         Ok(source)
     }
