@@ -38,6 +38,40 @@ pub struct NdiPipeline {
 }
 
 impl NdiPipeline {
+    /// Test-only constructor: a minimal pipeline-shaped value in `Stopped`
+    /// state without actually building any GStreamer elements. Lets the
+    /// `manager::start_pipeline` regression test (and any future test
+    /// asserting state-based behaviour) run on every CI host — including
+    /// `ubuntu-latest` runners that have no libndi, no GPU, and no
+    /// gst-plugin-rs registered — without falling back to the silent-skip
+    /// pattern that masks real regressions.
+    ///
+    /// The returned value owns an empty `gst::Pipeline`, an empty
+    /// state-channel pinned at `Stopped`, no whep_url, no bus_watch. Its
+    /// public surface (`state()`, `stop()`, drop) behaves identically to a
+    /// real-but-never-started pipeline.
+    #[cfg(test)]
+    pub fn stopped_for_test() -> Self {
+        // gstreamer::init() is idempotent and runs without plugins.
+        let _ = gstreamer::init();
+        let (state_tx, state_rx) = watch::channel(PipelineState::Stopped);
+        Self {
+            pipeline: gst::Pipeline::new(),
+            whep_url: String::new(),
+            state_tx,
+            state_rx,
+            bus_watch: None,
+        }
+    }
+
+    /// Test-only: force the observed state without going through the bus
+    /// watch. Lets state-machine tests exercise Streaming/Errored branches
+    /// without needing real GStreamer messaging.
+    #[cfg(test)]
+    pub fn set_state_for_test(&mut self, state: PipelineState) {
+        self.state_tx.send_replace(state);
+    }
+
     /// Build but do not yet start the pipeline.
     ///
     /// `whep_url` is the axum route path (e.g. `/ndi/whep/<source_id>`) used

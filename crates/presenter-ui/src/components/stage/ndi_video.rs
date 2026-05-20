@@ -112,14 +112,28 @@ pub fn NdiVideo(source_id: String, #[prop(optional)] class: Option<&'static str>
 /// called from a page-unload context (the microtask queue is destroyed before
 /// the future polls). Calling `window.fetch_with_request` directly enqueues
 /// the request immediately; `keepalive: true` keeps it alive after unload.
+///
+/// Safe to call multiple times for the same URL — the server's WHEP shim
+/// maps "session not found" to a 4xx (`SOURCE_NOT_ACTIVE_ERR` → 404 in
+/// `ndi_whep.rs::map_signaller_error`) and we drop the Promise rather than
+/// inspecting the response, so a double-DELETE produces no console noise.
+/// Both the `on_cleanup` path and the `pagehide` listener may dispatch the
+/// same URL when both fire on normal navigation; this is idempotent.
 fn dispatch_delete(url: &str) {
     let init = leptos::web_sys::RequestInit::new();
     init.set_method("DELETE");
     let _ = js_sys::Reflect::set(&init, &"keepalive".into(), &JsValue::TRUE);
-    if let Ok(request) = leptos::web_sys::Request::new_with_str_and_init(url, &init) {
-        if let Some(window) = leptos::web_sys::window() {
-            // Promise dropped intentionally — keepalive carries it through.
-            let _ = window.fetch_with_request(&request);
+    match leptos::web_sys::Request::new_with_str_and_init(url, &init) {
+        Ok(request) => {
+            if let Some(window) = leptos::web_sys::window() {
+                // Promise dropped intentionally — keepalive carries it through.
+                let _ = window.fetch_with_request(&request);
+            } else {
+                leptos::logging::error!("dispatch_delete: no window object");
+            }
+        }
+        Err(e) => {
+            leptos::logging::error!("dispatch_delete: failed to build Request for {url}: {e:?}");
         }
     }
 }
@@ -128,6 +142,16 @@ fn dispatch_delete(url: &str) {
 /// being unloaded. Some browsers (and Playwright's page.goto navigation)
 /// tear down the JS context before Leptos's `on_cleanup` runs; pagehide
 /// fires earlier in the unload sequence so the DELETE makes it out the door.
+///
+/// The closure is intentionally `forget()`-leaked into JS. Storing the
+/// handle on `WhepSession` would require `Closure<dyn FnMut()>: Send +
+/// Sync` (Leptos `StoredValue` bound) which the wasm-bindgen type doesn't
+/// implement and can't safely be forced via SendWrapper without unsafe
+/// markers. The leak IS bounded: one closure per `WhepSession` lifetime,
+/// each capturing a short `url: String`. Per-page-load magnitude on the
+/// stage display use case is ≪1 KB total — the same as a single icon —
+/// and pagehide fires only at page unload, releasing the leaked state
+/// along with everything else.
 fn install_pagehide_teardown(session: &WhepSession) {
     let Some(window) = leptos::web_sys::window() else {
         return;
@@ -139,9 +163,6 @@ fn install_pagehide_teardown(session: &WhepSession) {
         dispatch_delete(&url);
     });
     let _ = window.add_event_listener_with_callback("pagehide", cb.as_ref().unchecked_ref());
-    // Leak the closure into JS — it must outlive Rust scope to be callable
-    // from the pagehide event. The listener fires at most once per session
-    // (page unloads exactly once), so the leak is bounded.
     cb.forget();
 }
 

@@ -23,11 +23,12 @@ export default defineConfig({
     {
       // Default project: open-source Chromium (headless shell on CI), used
       // for every test EXCEPT the video-playback tests. The video tests
-      // opt into the `chrome-video` project below via `test.use({ project:
-      // ... })`. Forcing every test through branded Chrome made existing
-      // "browser console must be clean" assertions fail because real Chrome
-      // emits stable-channel telemetry/devtools messages that the
-      // open-source Chromium build doesn't.
+      // opt into the `chrome-video` project below by adding `@video-codec`
+      // to the test title — the `grep`/`grepInvert` filters on each project
+      // route tests to one or the other. Forcing every test through branded
+      // Chrome made existing "browser console must be clean" assertions
+      // fail because real Chrome emits stable-channel telemetry/devtools
+      // messages that the open-source Chromium build doesn't.
       name: "chromium",
       use: {
         ...devices["Desktop Chrome"],
@@ -40,8 +41,9 @@ export default defineConfig({
     {
       // Real-Chrome project for tests that depend on proprietary codecs
       // (H.264 -> WebRTC video) AND real Chrome autoplay behaviour.
-      // Opted into per-test via `test.use({ project: "chrome-video" })`
-      // — DO NOT make this the default for every test. See ndi-webrtc.spec
+      // Opted into by adding `@video-codec` to the test title — the
+      // `grep: /@video-codec/` filter below routes only those tests here.
+      // DO NOT make this the default for every test. See ndi-webrtc.spec
       // "NdiVideo actually starts playing (autoplay policy regression)".
       //
       // 1. `channel: "chrome"` — branded Google Chrome binary with H.264.

@@ -57,6 +57,52 @@ struct ActiveSource {
     pipeline: NdiPipeline,
 }
 
+/// Outcome of `check_active_entry` — drives `start_pipeline`'s control flow.
+#[cfg_attr(test, derive(Debug, PartialEq, Eq))]
+enum StateCheckOutcome {
+    /// Active entry exists and the pipeline is healthy (Streaming or
+    /// Starting). Caller should treat the request as a no-op.
+    Idempotent,
+    /// No entry, OR the existing entry's pipeline is dead (Stopped or
+    /// Errored). In the dead case the entry has already been removed.
+    /// Caller should proceed to build a fresh pipeline.
+    Rebuild,
+}
+
+/// Pure state-check for the active-source HashMap. Extracted from
+/// `start_pipeline` so the regression test for the "dead pipeline left
+/// in HashMap" bug can run without libndi/GPU/gst-plugins — see
+/// `start_pipeline_state_check_tests` below.
+///
+/// Idempotency check must inspect the LIVE pipeline state, not just
+/// HashMap presence. A pipeline that transitioned to `Stopped` (NDI
+/// broadcaster EOS) or `Errored` (ndisrc fault) keeps its HashMap entry
+/// alive — without this state check, both the manual re-activate path
+/// and the 30s auto-reconnect loop (state/mod.rs) early-return `Ok` and
+/// leave the dead pipeline sitting in the slot. The next WHEP POST then
+/// sees `PipelineState::Stopped` and 503s the client, with no recovery
+/// path short of an operator-driven `deactivate + activate` cycle.
+/// Treat Streaming/Starting as a true idempotent no-op; treat
+/// Stopped/Errored as dead and rebuild from scratch.
+async fn check_active_entry(
+    active: &mut HashMap<String, ActiveSource>,
+    source_id: &str,
+) -> StateCheckOutcome {
+    if let Some(existing) = active.get(source_id) {
+        match existing.pipeline.state() {
+            PipelineState::Streaming | PipelineState::Starting => {
+                return StateCheckOutcome::Idempotent;
+            }
+            PipelineState::Stopped | PipelineState::Errored(_) => {
+                if let Some(mut dead) = active.remove(source_id) {
+                    dead.pipeline.stop().await;
+                }
+            }
+        }
+    }
+    StateCheckOutcome::Rebuild
+}
+
 pub struct NdiManager {
     _sdk: Arc<NdiLib>,
     source_list: SourceList,
@@ -101,27 +147,8 @@ impl NdiManager {
     /// reports back quickly to the operator.
     pub async fn start_pipeline(&self, source_id: &str, ndi_name: &str) -> Result<()> {
         let mut active = self.active.lock().await;
-        // Idempotency check must inspect the live pipeline state, not just
-        // HashMap presence. A pipeline that transitioned to `Stopped` (NDI
-        // broadcaster EOS) or `Errored` (ndisrc fault) keeps its HashMap
-        // entry alive — without this state check, both the manual re-activate
-        // path and the 30s auto-reconnect loop (state/mod.rs) early-return
-        // `Ok` and leave the dead pipeline sitting in the slot. The next WHEP
-        // POST then sees `PipelineState::Stopped` and 503s the client, with
-        // no recovery path short of an operator-driven `deactivate +
-        // activate` cycle. Treat Streaming/Starting as a true idempotent
-        // no-op; treat Stopped/Errored as dead and rebuild from scratch.
-        if let Some(existing) = active.get(source_id) {
-            match existing.pipeline.state() {
-                PipelineState::Streaming | PipelineState::Starting => {
-                    return Ok(());
-                }
-                PipelineState::Stopped | PipelineState::Errored(_) => {
-                    if let Some(mut dead) = active.remove(source_id) {
-                        dead.pipeline.stop().await;
-                    }
-                }
-            }
+        if let StateCheckOutcome::Idempotent = check_active_entry(&mut active, source_id).await {
+            return Ok(());
         }
 
         let whep_url = format!("/ndi/whep/{}", source_id);
@@ -284,67 +311,89 @@ impl NdiManager {
             body,
         })
     }
-
-    #[cfg(test)]
-    pub async fn has_active_entry(&self, source_id: &str) -> bool {
-        self.active.lock().await.contains_key(source_id)
-    }
-
-    #[cfg(test)]
-    pub async fn inject_for_test(&self, source_id: &str, pipeline: NdiPipeline) {
-        self.active
-            .lock()
-            .await
-            .insert(source_id.to_string(), ActiveSource { pipeline });
-    }
 }
 
 #[cfg(test)]
 mod start_pipeline_state_check_tests {
     use super::*;
 
+    /// Empty HashMap → `Rebuild` outcome. Trivial case.
     #[tokio::test]
-    async fn start_pipeline_replaces_dead_stopped_entry() {
-        if crate::init().is_err() {
-            eprintln!("skipping: gst/plugin init failed");
-            return;
-        }
-        let Some(manager) = NdiManager::try_new() else {
-            eprintln!("skipping: NdiManager construction failed (no libndi)");
-            return;
-        };
+    async fn empty_map_requests_rebuild() {
+        let mut active = HashMap::new();
+        let outcome = check_active_entry(&mut active, "any-id").await;
+        assert_eq!(outcome, StateCheckOutcome::Rebuild);
+        assert!(active.is_empty());
+    }
 
-        let dead_pipeline = match crate::pipeline::NdiPipeline::build(
-            "STREAM-DOES-NOT-EXIST (test)",
-            "/ndi/whep/test-uuid".to_string(),
-        ) {
-            Ok(p) => p,
-            Err(e) => {
-                eprintln!("skipping: pipeline build failed: {e:#}");
-                return;
-            }
-        };
-        assert_eq!(dead_pipeline.state(), PipelineState::Stopped);
+    /// REGRESSION TEST for the production bug surfaced 2026-05-20: an entry
+    /// in the HashMap whose pipeline transitioned to `Stopped` (NDI
+    /// broadcaster EOS) must be REMOVED so the caller rebuilds. The buggy
+    /// version of start_pipeline early-returned Ok on HashMap presence
+    /// alone, leaving the dead entry alive forever — WHEP POSTs then
+    /// 503'd with "pipeline stopped" and recovery required a manual
+    /// deactivate+activate cycle.
+    ///
+    /// Runs on every CI host (no libndi, no GPU, no gst-plugins required) —
+    /// uses `NdiPipeline::stopped_for_test()` which constructs a
+    /// pipeline-shaped value in `Stopped` state without invoking real
+    /// GStreamer element building.
+    #[tokio::test]
+    async fn dead_stopped_entry_is_removed_and_rebuild_requested() {
+        let mut active: HashMap<String, ActiveSource> = HashMap::new();
+        let dead = crate::pipeline::NdiPipeline::stopped_for_test();
+        assert_eq!(
+            dead.state(),
+            PipelineState::Stopped,
+            "precondition: stopped_for_test must yield a Stopped pipeline",
+        );
+        active.insert("test-id".to_string(), ActiveSource { pipeline: dead });
+        assert!(active.contains_key("test-id"));
 
-        let source_id = "test-uuid";
-        manager.inject_for_test(source_id, dead_pipeline).await;
-        assert!(manager.has_active_entry(source_id).await);
+        let outcome = check_active_entry(&mut active, "test-id").await;
 
-        let _ = manager
-            .start_pipeline(source_id, "STREAM-DOES-NOT-EXIST (test)")
-            .await;
+        assert_eq!(
+            outcome,
+            StateCheckOutcome::Rebuild,
+            "REGRESSION: dead Stopped entry must trigger Rebuild, not Idempotent",
+        );
+        assert!(
+            !active.contains_key("test-id"),
+            "REGRESSION: dead Stopped entry must be removed from the active map",
+        );
+    }
 
-        let entry_present = manager.has_active_entry(source_id).await;
-        if entry_present {
-            let active = manager.active.lock().await;
-            let still_stopped = matches!(
-                active.get(source_id).map(|s| s.pipeline.state()),
-                Some(PipelineState::Stopped)
-            );
-            assert!(
-                !still_stopped,
-                "REGRESSION: start_pipeline left a Stopped pipeline in the active map",
-            );
-        }
+    /// `Streaming` entry → true idempotent no-op. Confirms the healthy
+    /// path is preserved (we don't accidentally remove live pipelines).
+    #[tokio::test]
+    async fn streaming_entry_is_left_alone_idempotent() {
+        let mut active: HashMap<String, ActiveSource> = HashMap::new();
+        let mut p = crate::pipeline::NdiPipeline::stopped_for_test();
+        p.set_state_for_test(PipelineState::Streaming);
+        assert_eq!(p.state(), PipelineState::Streaming);
+        active.insert("test-id".to_string(), ActiveSource { pipeline: p });
+
+        let outcome = check_active_entry(&mut active, "test-id").await;
+
+        assert_eq!(outcome, StateCheckOutcome::Idempotent);
+        assert!(
+            active.contains_key("test-id"),
+            "Streaming entry must NOT be removed — that's the idempotent path",
+        );
+    }
+
+    /// `Errored` entry → same outcome as Stopped: remove + rebuild. Catches
+    /// regressions that only handle the Stopped variant.
+    #[tokio::test]
+    async fn errored_entry_is_removed_and_rebuild_requested() {
+        let mut active: HashMap<String, ActiveSource> = HashMap::new();
+        let mut p = crate::pipeline::NdiPipeline::stopped_for_test();
+        p.set_state_for_test(PipelineState::Errored("ndisrc fault".to_string()));
+        active.insert("test-id".to_string(), ActiveSource { pipeline: p });
+
+        let outcome = check_active_entry(&mut active, "test-id").await;
+
+        assert_eq!(outcome, StateCheckOutcome::Rebuild);
+        assert!(!active.contains_key("test-id"));
     }
 }
