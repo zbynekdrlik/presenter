@@ -1,0 +1,33 @@
+# Codecov configuration.
+#
+# Branch protection (in GitHub settings) does NOT require codecov/patch or
+# codecov/project as a passing check — see required_status_checks in
+# `.github/branches/main/protection`. This file formalizes that decision so
+# the PR check itself stops marking the PR `unstable`.
+#
+# Project coverage still has a 1%-drop ceiling per
+# ~/devel/airuleset/modules/ci/coverage-thresholds.md. Patch coverage is
+# informational because parts of the codebase (WASM WebRTC client,
+# hardware-dependent GStreamer pipelines) can't be exercised by
+# `cargo llvm-cov` even when fully tested in Playwright + on hardware.
+
+coverage:
+  status:
+    project:
+      default:
+        target: auto
+        threshold: 1%
+        informational: false
+    patch:
+      default:
+        informational: true
+
+ignore:
+  - "crates/presenter-ui/**"           # WASM crate excluded from workspace; cargo-llvm-cov doesn't see it.
+  - "**/*.html"
+  - "**/*.css"
+  - "**/migrations/**"                  # Declarative schema files.
+
+comment:
+  layout: "reach,diff,flags,files"
+  behavior: default

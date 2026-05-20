@@ -1,5 +1,4 @@
 use std::collections::HashMap;
-use std::sync::Arc;
 
 use presenter_core::{
     AndroidStageDisplay, AndroidStageDisplayDraft, AndroidStageDisplayId, LiveEvent, ResolumeHost,
@@ -207,18 +206,37 @@ impl AppState {
             .activate_video_source(id, audit_source, actor)
             .await?;
         self.live_hub.publish(LiveEvent::NdiSourceActivated {
+            source_id: source.id.to_string(),
             ndi_name: source.ndi_name.clone(),
             label: source.label.clone(),
         });
-        // Start NDI stream with status callback
         if let Some(manager) = &self.ndi_manager {
-            let hub = self.live_hub.clone();
-            let status_cb: presenter_ndi::StatusCallback = Arc::new(move |status: String| {
-                hub.publish(LiveEvent::NdiConnectionStatus { status });
+            if let Err(e) = manager
+                .start_pipeline(&source.id.to_string(), &source.ndi_name)
+                .await
+            {
+                // Surface the failure to the stage view so the operator sees
+                // the actual reason instead of an endless "Connecting…"
+                // overlay. The DB row stays `is_active=true` so the operator
+                // can retry by toggling off+on once the issue is fixed.
+                tracing::error!(
+                    error = %e,
+                    source_id = %source.id,
+                    ndi_name = %source.ndi_name,
+                    "NDI pipeline start failed"
+                );
+                self.live_hub.publish(LiveEvent::NdiConnectionStatus {
+                    status: format!("failed: {e}"),
+                });
+                return Err(e);
+            }
+            // start_pipeline only returns Ok AFTER the webrtcsink video pad
+            // has negotiated caps — at that point frames are flowing through
+            // the pipeline. Flip the stage-view overlay from "Connecting…"
+            // to "" (no overlay) by publishing `connected` status.
+            self.live_hub.publish(LiveEvent::NdiConnectionStatus {
+                status: "connected".to_string(),
             });
-            manager
-                .start_stream(&source.ndi_name, Some(status_cb))
-                .await?;
         }
         Ok(source)
     }
@@ -232,9 +250,9 @@ impl AppState {
             .deactivate_all_video_sources(source, actor)
             .await?;
         self.live_hub.publish(LiveEvent::NdiSourceDeactivated);
-        // Stop NDI stream if manager is available
+        // Stop all NDI pipelines if manager is available
         if let Some(manager) = &self.ndi_manager {
-            manager.stop_stream().await;
+            manager.stop_all().await;
         }
         Ok(())
     }

@@ -1,7 +1,6 @@
 use anyhow::{Context, Result};
 use libloading::{Library, Symbol};
 use std::ffi::{c_char, CStr};
-use std::os::raw::c_int;
 use std::path::PathBuf;
 use tracing::{debug, info, warn};
 
@@ -23,43 +22,6 @@ pub(crate) struct NDIlib_source_t {
     pub p_url_address: *const c_char,
 }
 
-#[repr(C)]
-pub(crate) struct NDIlib_recv_create_v3_t {
-    pub source_to_connect_to: NDIlib_source_t,
-    pub color_format: c_int,
-    pub bandwidth: c_int,
-    pub allow_video_fields: bool,
-    pub p_ndi_recv_name: *const c_char,
-}
-
-#[repr(C)]
-pub(crate) struct NDIlib_video_frame_v2_recv_t {
-    pub xres: c_int,
-    pub yres: c_int,
-    pub fourcc: u32,
-    pub frame_rate_n: c_int,
-    pub frame_rate_d: c_int,
-    pub picture_aspect_ratio: f32,
-    pub frame_format_type: c_int,
-    pub timecode: i64,
-    pub p_data: *mut u8,
-    pub line_stride_in_bytes: c_int,
-    pub p_metadata: *const c_char,
-    pub timestamp: i64,
-}
-
-// ---------------------------------------------------------------------------
-// Constants
-// ---------------------------------------------------------------------------
-
-pub(crate) const NDILIB_FRAME_TYPE_NONE: c_int = 0;
-pub(crate) const NDILIB_FRAME_TYPE_VIDEO: c_int = 1;
-#[allow(dead_code)]
-pub(crate) const NDILIB_FRAME_TYPE_AUDIO: c_int = 2;
-
-pub(crate) const NDILIB_RECV_COLOR_FORMAT_UYVY_BGRA: c_int = 0;
-pub(crate) const NDILIB_RECV_BANDWIDTH_HIGHEST: c_int = 100;
-
 // ---------------------------------------------------------------------------
 // Function pointer types
 // ---------------------------------------------------------------------------
@@ -75,21 +37,6 @@ type NDIlib_find_get_current_sources_fn = unsafe extern "C" fn(
     p_instance: *mut std::ffi::c_void,
     p_no_sources: *mut u32,
 ) -> *const NDIlib_source_t;
-type NDIlib_recv_create_v3_fn = unsafe extern "C" fn(
-    p_create_settings: *const NDIlib_recv_create_v3_t,
-) -> *mut std::ffi::c_void;
-type NDIlib_recv_destroy_fn = unsafe extern "C" fn(p_instance: *mut std::ffi::c_void);
-type NDIlib_recv_capture_v3_fn = unsafe extern "C" fn(
-    p_instance: *mut std::ffi::c_void,
-    p_video_data: *mut NDIlib_video_frame_v2_recv_t,
-    p_audio_data: *mut std::ffi::c_void,
-    p_metadata: *mut std::ffi::c_void,
-    timeout_in_ms: u32,
-) -> c_int;
-type NDIlib_recv_free_video_v2_fn = unsafe extern "C" fn(
-    p_instance: *mut std::ffi::c_void,
-    p_video_data: *const NDIlib_video_frame_v2_recv_t,
-);
 // ---------------------------------------------------------------------------
 // NdiLib — loaded NDI runtime
 // ---------------------------------------------------------------------------
@@ -102,10 +49,6 @@ pub struct NdiLib {
     pub(crate) find_destroy: NDIlib_find_destroy_fn,
     pub(crate) find_wait_for_sources: NDIlib_find_wait_for_sources_fn,
     pub(crate) find_get_current_sources: NDIlib_find_get_current_sources_fn,
-    pub(crate) recv_create_v3: NDIlib_recv_create_v3_fn,
-    pub(crate) recv_destroy: NDIlib_recv_destroy_fn,
-    pub(crate) recv_capture_v3: NDIlib_recv_capture_v3_fn,
-    pub(crate) recv_free_video_v2: NDIlib_recv_free_video_v2_fn,
 }
 
 // NDI library handle is thread-safe — the SDK itself is designed for
@@ -202,18 +145,6 @@ impl NdiLib {
             let find_get_current_sources: Symbol<NDIlib_find_get_current_sources_fn> = lib
                 .get(b"NDIlib_find_get_current_sources\0")
                 .context("symbol NDIlib_find_get_current_sources")?;
-            let recv_create_v3: Symbol<NDIlib_recv_create_v3_fn> = lib
-                .get(b"NDIlib_recv_create_v3\0")
-                .context("symbol NDIlib_recv_create_v3")?;
-            let recv_destroy: Symbol<NDIlib_recv_destroy_fn> = lib
-                .get(b"NDIlib_recv_destroy\0")
-                .context("symbol NDIlib_recv_destroy")?;
-            let recv_capture_v3: Symbol<NDIlib_recv_capture_v3_fn> = lib
-                .get(b"NDIlib_recv_capture_v3\0")
-                .context("symbol NDIlib_recv_capture_v3")?;
-            let recv_free_video_v2: Symbol<NDIlib_recv_free_video_v2_fn> = lib
-                .get(b"NDIlib_recv_free_video_v2\0")
-                .context("symbol NDIlib_recv_free_video_v2")?;
 
             let ndi = Self {
                 initialize: *initialize,
@@ -222,10 +153,6 @@ impl NdiLib {
                 find_destroy: *find_destroy,
                 find_wait_for_sources: *find_wait_for_sources,
                 find_get_current_sources: *find_get_current_sources,
-                recv_create_v3: *recv_create_v3,
-                recv_destroy: *recv_destroy,
-                recv_capture_v3: *recv_capture_v3,
-                recv_free_video_v2: *recv_free_video_v2,
                 _library: lib,
             };
 

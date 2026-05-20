@@ -281,10 +281,7 @@ impl AppState {
                 ticker.set_missed_tick_behavior(MissedTickBehavior::Delay);
                 loop {
                     ticker.tick().await;
-                    if let Some(manager) = ndi_state.ndi_manager() {
-                        if manager.is_streaming().await {
-                            continue;
-                        }
+                    if ndi_state.ndi_manager().is_some() {
                         match ndi_state.repository.get_active_video_source().await {
                             Ok(Some(source)) => {
                                 let ndi_name = source.ndi_name.clone();
