@@ -188,9 +188,11 @@ test("stage clears Connecting overlay when activate succeeds (requires live NDI)
   const sourcesResp = await page.request.get(
     new URL("/ndi/sources", baseURL).toString(),
   );
-  const sources = await sourcesResp.json();
+  // On CI runners the NDI SDK isn't loaded and /ndi/sources returns 503 with
+  // an error-shaped JSON body, not an array — guard on shape, not just length.
+  const sources = sourcesResp.ok() ? await sourcesResp.json() : [];
   test.skip(
-    sources.length === 0,
+    !Array.isArray(sources) || sources.length === 0,
     "No NDI sources on network — overlay-clear path can't be exercised",
   );
 
@@ -275,9 +277,9 @@ test("video flows on fresh /stage navigation after activate (requires live NDI)"
   const sourcesResp = await request.get(
     new URL("/ndi/sources", baseURL).toString(),
   );
-  const sources = await sourcesResp.json();
+  const sources = sourcesResp.ok() ? await sourcesResp.json() : [];
   test.skip(
-    sources.length === 0,
+    !Array.isArray(sources) || sources.length === 0,
     "No NDI sources on network — first-navigation video flow can't be tested",
   );
   const ndiName = sources[0].name;
@@ -351,9 +353,9 @@ test("video keeps flowing across multiple fresh navigations (requires live NDI)"
   const sourcesResp = await request.get(
     new URL("/ndi/sources", baseURL).toString(),
   );
-  const sources = await sourcesResp.json();
+  const sources = sourcesResp.ok() ? await sourcesResp.json() : [];
   test.skip(
-    sources.length === 0,
+    !Array.isArray(sources) || sources.length === 0,
     "No NDI sources on network — multi-nav video flow can't be exercised",
   );
   const ndiName = sources[0].name;
