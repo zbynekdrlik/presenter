@@ -571,7 +571,14 @@ jobs:
         run: npm ci
 
       - name: Install Playwright browsers
-        run: npx playwright install --with-deps chromium
+        # `chrome` is the branded Google Chrome binary — required for video
+        # codec coverage. Default Chromium lacks H.264 due to licensing, so
+        # WebRTC video tracks never actually decode in tests and we can't
+        # tell "video plays" from "video silently fails to decode but
+        # ontrack fires". `--with-deps` also pulls system libraries the
+        # branded Chrome needs (libnss, libasound, etc.). Default Chromium
+        # is kept so non-video tests can still use the headless shell.
+        run: npx playwright install --with-deps chromium chrome
 
       - name: Run Playwright tests
         run: npx playwright test --shard=${{ matrix.shard }} --reporter=blob

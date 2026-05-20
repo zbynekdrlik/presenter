@@ -24,15 +24,35 @@ export default defineConfig({
       name: "chromium",
       use: {
         ...devices["Desktop Chrome"],
-        // Match real-Chrome behavior: autoplay requires user gesture.
-        // Default Playwright launches with autoplay restrictions DISABLED,
-        // which silently masked a real production bug — `<video>` element
-        // mounted via DOM mutation with `srcObject` set programmatically
-        // ended up paused in real Chrome, but Playwright auto-played it.
-        // Without this override, no Playwright E2E can catch broken
-        // autoplay behavior — the test would always pass while real users
-        // saw a black, paused video. See:
-        // https://chromium.googlesource.com/chromium/src/+/refs/heads/main/docs/website/site/audio-video/autoplay/index.md
+        // Two non-default settings — BOTH are required to catch real-world
+        // video playback bugs in CI. Neither was in place before, and both
+        // were proven necessary on 2026-05-20 when a user reported a fully
+        // black `<video>` element that Playwright's default config had
+        // silently passed for weeks.
+        //
+        // 1. `channel: "chrome"` — use the branded Google Chrome binary
+        //    (with proprietary codecs including H.264) rather than the
+        //    default open-source Chromium. Default Chromium lacks H.264
+        //    by license; WebRTC video tracks with H.264 RTP payloads will
+        //    have their `ontrack` callback fire and even set `srcObject`,
+        //    but the actual frame decode silently fails — `videoWidth`
+        //    stays 0, `currentTime` never advances, and a `paused=true`
+        //    assertion looks no different from "the bug we're trying to
+        //    catch". This is the difference Eyevinn and other WebRTC
+        //    teams documented years ago but it's not on the Playwright
+        //    quickstart page, so it's still a routine trap.
+        //    Requires `npx playwright install chrome` in CI setup (see
+        //    .github/workflows/*.yml).
+        //
+        // 2. `--autoplay-policy=user-gesture-required` — match real Chrome
+        //    behaviour for autoplay. Default Playwright launches with the
+        //    policy DISABLED, which means programmatic `srcObject` +
+        //    `autoplay muted playsinline` element silently auto-played in
+        //    every CI test while the same code paused in real Chrome on
+        //    every user's machine. With the policy enforced, the test
+        //    will FAIL if `video.play()` is not called explicitly after
+        //    setting `srcObject`.
+        channel: "chrome",
         launchOptions: {
           args: ["--autoplay-policy=user-gesture-required"],
         },
