@@ -255,3 +255,177 @@ test("stage clears Connecting overlay when activate succeeds (requires live NDI)
 // before the start_pipeline timeout fires). The pure-function unit test runs
 // fast on any host, has no GStreamer/libnice/libndi dependency, and covers
 // the exact bug surface: status="failed: …" must render "NDI pipeline failed: …".
+
+// ─────────────────────────────────────────────────────────────────────────
+// Hardening: end-to-end "I just opened the URL and video is flowing" tests.
+//
+// These exist because earlier I claimed the pipeline worked on dev but
+// re-navigating to /stage 10 minutes later gave a black screen — pipeline
+// drift between consumer sessions. The tests below force the same flow a
+// church operator would do: activate a source, open the URL fresh, expect
+// video. Then open the URL again, expect video again. Then open it a third
+// time. If ANY of those navigations fails to render frames, the test fails.
+// ─────────────────────────────────────────────────────────────────────────
+
+test("video flows on fresh /stage navigation after activate (requires live NDI)", async ({
+  page,
+  request,
+}) => {
+  // Capability gate.
+  const sourcesResp = await request.get(
+    new URL("/ndi/sources", baseURL).toString(),
+  );
+  const sources = await sourcesResp.json();
+  test.skip(
+    sources.length === 0,
+    "No NDI sources on network — first-navigation video flow can't be tested",
+  );
+  const ndiName = sources[0].name;
+
+  // Clean slate every run.
+  await request.post(
+    new URL("/integrations/video-sources/deactivate", baseURL).toString(),
+  );
+
+  const created = await request.post(
+    new URL("/integrations/video-sources", baseURL).toString(),
+    { data: { label: "First-Nav-Video-Flow", ndiName } },
+  );
+  expect(created.status()).toBeLessThan(500);
+  const src = await created.json();
+
+  const activate = await request.post(
+    new URL(`/integrations/video-sources/${src.id}/activate`, baseURL).toString(),
+    { data: {} },
+  );
+  expect(activate.status()).toBe(200);
+
+  await request.post(new URL("/stage/layout", baseURL).toString(), {
+    data: { code: "ndi-fullscreen" },
+  });
+
+  // Single fresh navigation — operator hitting /stage in a browser.
+  await page.goto(new URL("/stage", baseURL).toString());
+  await page.waitForSelector('body[data-wasm-ready="true"]', { timeout: 30_000 });
+  await page.waitForSelector('body[data-layout-code="ndi-fullscreen"]', {
+    timeout: 10_000,
+  });
+
+  // The <video> element should mount AND its videoWidth should resolve > 0
+  // within 10s of mount (WHEP signalling, ICE handshake, first frame).
+  const flowing = await page.locator('[data-role="ndi-video"]').evaluate(
+    async (el: HTMLVideoElement) => {
+      for (let i = 0; i < 100; i++) {
+        if (el.videoWidth > 0 && el.readyState >= 2) {
+          return { videoWidth: el.videoWidth, videoHeight: el.videoHeight, readyState: el.readyState };
+        }
+        await new Promise((r) => setTimeout(r, 100));
+      }
+      return { videoWidth: el.videoWidth, videoHeight: el.videoHeight, readyState: el.readyState };
+    },
+  );
+  expect(flowing.videoWidth, "videoWidth must be > 0 on fresh navigation").toBeGreaterThan(0);
+  expect(flowing.readyState, "readyState must be HAVE_CURRENT_DATA or better").toBeGreaterThanOrEqual(2);
+
+  // Cleanup.
+  await request.post(
+    new URL("/integrations/video-sources/deactivate", baseURL).toString(),
+  );
+  await request.delete(
+    new URL(`/integrations/video-sources/${src.id}`, baseURL).toString(),
+  );
+});
+
+test("WHEP answer always offers H264 (rtpmap), never inactive (requires live NDI)", async ({
+  request,
+}) => {
+  // This test catches the bug where webrtcsink's discovery picked VP8 + then
+  // marked media inactive because no VP8 encoder is registered. The SDP answer
+  // must contain `a=rtpmap:\d+ H264/` AND must NOT contain `a=inactive` on the
+  // m=video media line.
+
+  const sourcesResp = await request.get(
+    new URL("/ndi/sources", baseURL).toString(),
+  );
+  const sources = await sourcesResp.json();
+  test.skip(
+    sources.length === 0,
+    "No NDI sources on network — SDP codec assertion needs a live source",
+  );
+
+  // Clean slate.
+  await request.post(
+    new URL("/integrations/video-sources/deactivate", baseURL).toString(),
+  );
+
+  const created = await request.post(
+    new URL("/integrations/video-sources", baseURL).toString(),
+    { data: { label: "SDP-H264-Assertion", ndiName: sources[0].name } },
+  );
+  const src = await created.json();
+  await request.post(
+    new URL(`/integrations/video-sources/${src.id}/activate`, baseURL).toString(),
+    { data: {} },
+  );
+
+  // Realistic SDP offer mimicking what a Chromium browser sends — includes
+  // recvonly H264 + opus transceivers. Without this, webrtcsink might pick a
+  // codec the browser can't decode.
+  const offerSdp = [
+    "v=0",
+    "o=- 0 0 IN IP4 0.0.0.0",
+    "s=-",
+    "t=0 0",
+    "a=group:BUNDLE 0 1",
+    "m=video 9 UDP/TLS/RTP/SAVPF 96 97",
+    "c=IN IP4 0.0.0.0",
+    "a=mid:0",
+    "a=rtcp-mux",
+    "a=rtpmap:96 H264/90000",
+    "a=fmtp:96 profile-level-id=42e01f;packetization-mode=1",
+    "a=rtpmap:97 VP8/90000",
+    "a=recvonly",
+    "m=audio 9 UDP/TLS/RTP/SAVPF 111",
+    "c=IN IP4 0.0.0.0",
+    "a=mid:1",
+    "a=rtcp-mux",
+    "a=rtpmap:111 opus/48000/2",
+    "a=recvonly",
+    "",
+  ].join("\r\n");
+
+  const whepResp = await request.post(
+    new URL(`/ndi/whep/${src.id}`, baseURL).toString(),
+    {
+      data: offerSdp,
+      headers: { "Content-Type": "application/sdp" },
+      timeout: 20_000,
+    },
+  );
+  // 201 Created is the WHEP success response.
+  expect(whepResp.status()).toBe(201);
+  const answer = await whepResp.text();
+
+  // Codec must be H264 — VP8 means webrtcsink fell back, which on the N100
+  // and dev2 stack will then go a=inactive because no VP8 encoder exists.
+  expect(answer, "WHEP SDP answer should advertise H264 rtpmap").toMatch(
+    /a=rtpmap:\d+ H264\//,
+  );
+
+  // Media direction must NOT be inactive — that's the black-screen smoking
+  // gun. The answer should be sendonly (server → browser) or sendrecv.
+  expect(answer, "m=video must not be a=inactive").not.toMatch(
+    /a=inactive[\s\S]*m=audio/,
+  );
+  // Also reject inactive on the audio line in case audio fakesink leaks
+  // through.
+  expect(answer.match(/a=inactive/g) ?? [], "no a=inactive lines anywhere").toHaveLength(0);
+
+  // Cleanup.
+  await request.post(
+    new URL("/integrations/video-sources/deactivate", baseURL).toString(),
+  );
+  await request.delete(
+    new URL(`/integrations/video-sources/${src.id}`, baseURL).toString(),
+  );
+});
