@@ -168,3 +168,90 @@ test("NdiVideo videoWidth resolves above zero within 5 seconds of mount", async 
     );
   expect(ok).toBe(true);
 });
+
+// ─────────────────────────────────────────────────────────────────────────
+// Regression tests for the "Connecting…" overlay state machine.
+//
+// The bug they catch (manually surfaced 2026-05-19): the WS event
+// NdiConnectionStatus sets ctx.ndi_status="connecting" when the source is
+// activated, and the stage overlay renders "Connecting…" while that status
+// holds. The overlay is supposed to clear once the pipeline reaches Streaming
+// AND show the actual error if pipeline build fails. Without these tests,
+// either failure mode (video plays under a stuck "Connecting…" overlay, OR
+// activate errors with no operator-visible feedback) goes unnoticed.
+// ─────────────────────────────────────────────────────────────────────────
+
+test("stage clears Connecting overlay when activate succeeds (requires live NDI)", async ({ page }) => {
+  // Capability gate — needs a real NDI broadcaster reachable on the LAN.
+  // On CI the network is empty; skip there so this remains green on cold runners
+  // but exercises the success path when a developer runs against dev.
+  const sourcesResp = await page.request.get(
+    new URL("/ndi/sources", baseURL).toString(),
+  );
+  const sources = await sourcesResp.json();
+  test.skip(
+    sources.length === 0,
+    "No NDI sources on network — overlay-clear path can't be exercised",
+  );
+
+  // Pick the first discovered source as the broadcaster.
+  const ndiName = sources[0].name;
+  const created = await page.request.post(
+    new URL("/integrations/video-sources", baseURL).toString(),
+    { data: { label: "Overlay-Clear-Test", ndiName } },
+  );
+  expect(created.status()).toBeLessThan(500);
+  const src = await created.json();
+
+  // activate is allowed to take a few seconds — start_pipeline blocks until
+  // webrtcsink's video pad has negotiated caps, then publishes
+  // NdiConnectionStatus="connected" via the live hub.
+  const activate = await page.request.post(
+    new URL(`/integrations/video-sources/${src.id}/activate`, baseURL).toString(),
+    { data: {} },
+  );
+  expect(activate.status()).toBe(200);
+
+  await page.request.post(
+    new URL("/stage/layout", baseURL).toString(),
+    { data: { code: "ndi-fullscreen" } },
+  );
+  await page.goto(new URL("/stage", baseURL).toString());
+  await page.waitForSelector('body[data-wasm-ready="true"]', { timeout: 30_000 });
+  await page.waitForSelector('body[data-layout-code="ndi-fullscreen"]', { timeout: 10_000 });
+
+  // The WS event NdiConnectionStatus="connected" should arrive shortly after
+  // the page opens. Once it does, the <Show> guard hides .stage-ndi__overlay.
+  // We wait up to 10s — well above the typical end-to-end overlay-clear time
+  // (~1s on dev2) but far below what a hang would take.
+  await page.waitForFunction(
+    () => !document.querySelector(".stage-ndi__overlay"),
+    null,
+    { timeout: 10_000 },
+  );
+
+  // Sanity: the <NdiVideo> mounted with the right source id, AND no MJPEG
+  // leftover. (Catches a regression where the overlay vanishes for the wrong
+  // reason — e.g. the layout broke entirely.)
+  const video = page.locator('[data-role="ndi-video"]');
+  await expect(video).toHaveCount(1);
+  await expect(video).toHaveAttribute("data-source-id", src.id);
+  await expect(page.locator('.stage-ndi__overlay')).toHaveCount(0);
+
+  // Cleanup.
+  await page.request.post(
+    new URL("/integrations/video-sources/deactivate", baseURL).toString(),
+  );
+  await page.request.delete(
+    new URL(`/integrations/video-sources/${src.id}`, baseURL).toString(),
+  );
+});
+
+// The failure-path overlay coverage is a Rust unit test in
+// `crates/presenter-ui/src/components/stage/mod.rs::tests` — exercising the
+// `ndi_status_text` mapping directly catches a regression to the
+// status→overlay-text logic without needing a live server + bogus NDI source
+// (which crashed the spawned test server in CI because ndisrc retries forever
+// before the start_pipeline timeout fires). The pure-function unit test runs
+// fast on any host, has no GStreamer/libnice/libndi dependency, and covers
+// the exact bug surface: status="failed: …" must render "NDI pipeline failed: …".
