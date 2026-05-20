@@ -161,24 +161,29 @@ async fn connect_whep(video: &HtmlVideoElement, source_id: &str) -> Result<WhepS
     let ontrack = Closure::<dyn FnMut(RtcTrackEvent)>::new(move |ev: RtcTrackEvent| {
         let streams = ev.streams();
         if let Ok(s) = streams.get(0).dyn_into::<MediaStream>() {
-            video_clone.set_src_object(Some(&s));
-            // `autoplay muted playsinline` HTML attributes alone are NOT
-            // enough — Chrome's autoplay policy still blocks playback when
-            // the <video> element is mounted via DOM mutation (Leptos
-            // creates it reactively) on a domain the user has never
-            // interacted with. The element ends up in `paused=true` state
-            // after `srcObject` is set, and the user has to right-click ->
-            // "Show all controls" -> Play to actually see video. (Playwright
-            // disables the autoplay policy by default, which is why the
-            // server-side TDD never caught this.)
+            // CRITICAL: explicitly set `muted = true` at the PROPERTY level
+            // BEFORE assigning srcObject. The HTML attribute `muted=""` only
+            // initializes `defaultMuted=true` — once `srcObject` is assigned
+            // with a MediaStream that has audio tracks, the LIVE `muted`
+            // property is reset based on the stream's audio state (typically
+            // `muted=false`). Chrome's autoplay policy ONLY permits
+            // programmatic `.play()` without a user gesture on muted media;
+            // an unmuted video.play() throws
+            //   NotAllowedError: play() can only be initiated by a user gesture
+            // exactly matching what the user reported on Windows Chrome
+            // (Playwright with default-disabled autoplay-policy hid this).
             //
-            // Calling `.play()` explicitly after setting srcObject is the
-            // documented workaround — Chrome allows programmatic play() on
-            // muted + playsinline video without user interaction. The
-            // returned Promise rejects only if the policy STILL blocks
-            // (e.g. user has explicitly disabled autoplay site-wide); we
-            // log and continue rather than panic since there's no
-            // automatic recovery from that state anyway.
+            // Setting `el.muted = true` programmatically after srcObject is
+            // the documented fix:
+            // https://developer.chrome.com/blog/autoplay/
+            // "Muted autoplay for video is supported by Chrome [...]"
+            video_clone.set_muted(true);
+            video_clone.set_src_object(Some(&s));
+            // Re-assert in case the srcObject assignment racing flipped it.
+            video_clone.set_muted(true);
+
+            // Programmatic `.play()` is then permitted on muted + playsinline
+            // video without user interaction.
             let play_promise = video_clone.play();
             match play_promise {
                 Ok(promise) => {

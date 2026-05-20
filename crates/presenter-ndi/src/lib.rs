@@ -37,6 +37,34 @@ pub fn init() -> anyhow::Result<()> {
         if let Err(e) = gstrsrtp::plugin_register_static() {
             return Err(format!("rsrtp plugin register failed: {e}"));
         }
+        // Optionally demote nvh264enc so `webrtcsink` falls through to
+        // x264enc (software). NVENC on consumer GeForce cards (incl. RTX
+        // 5050) enforces a 2-3 concurrent-session driver-level cap;
+        // `webrtcsink` creates ONE encoder PER CONSUMER, so the 3rd+
+        // browser tab fails with `CUDA_ERROR_NO_DEVICE` and never
+        // delivers a track. The N100 production target uses VAAPI
+        // (`vah264enc`) which doesn't have this cap, so this demotion
+        // is dev-only: production keeps NVENC paths untouched (no
+        // nvh264enc registered there anyway).
+        //
+        // Toggle via `PRESENTER_DEMOTE_NVENC=1` env var. When set,
+        // we lower `nvh264enc` registry rank to NONE, which removes it
+        // from `webrtcsink`'s codec selection — webrtcsink then picks
+        // `x264enc` (software H.264) which has no consumer-session cap.
+        // CPU cost on dev2 is fine; on production N100 we never enable
+        // this because VAAPI is available.
+        if std::env::var("PRESENTER_DEMOTE_NVENC").is_ok() {
+            use gstreamer::prelude::PluginFeatureExtManual;
+            for name in &["nvh264enc", "nvcudah264enc", "nvautogpuh264enc"] {
+                if let Some(factory) = gstreamer::ElementFactory::find(name) {
+                    factory.set_rank(gstreamer::Rank::NONE);
+                    tracing::info!(
+                        encoder = name,
+                        "demoted to Rank::NONE so webrtcsink falls through to x264enc"
+                    );
+                }
+            }
+        }
         Ok(())
     });
     match outcome {
@@ -45,21 +73,27 @@ pub fn init() -> anyhow::Result<()> {
     }
 }
 
-/// Detect which hardware H264 encoder is registered with GStreamer.
+/// Detect which H264 encoder webrtcsink will end up picking.
 ///
 /// Returns the element name (`"vah264enc"` Intel iris Xe / N100, or
-/// `"nvh264enc"` NVIDIA NVENC) when one is available, `None` otherwise.
-/// The order is: Intel VA-API first (matches production hardware), NVIDIA
-/// NVENC second (so dev2's GeForce can drive the same pipeline).
+/// `"nvh264enc"` NVIDIA NVENC, or `"x264enc"` software fallback) when one
+/// is available, `None` otherwise. The order is: Intel VA-API first (matches
+/// production hardware, no consumer-session cap), NVIDIA NVENC second
+/// (dev2's GeForce, has a 2-3 concurrent-session driver cap on consumer
+/// cards so we'd rather not use it for multi-consumer streaming), software
+/// `x264enc` last (no concurrent-session cap, CPU cost only).
 ///
-/// Either path is HARDWARE-accelerated. We deliberately do NOT fall back to
-/// software H264 — `x264enc` at 720p30 would burn ~150% CPU on the N100,
-/// which is the whole reason the original MJPEG fell over.
+/// On dev2 with `PRESENTER_DEMOTE_NVENC=1`, `nvh264enc` is demoted to
+/// `Rank::NONE` and `ElementFactory::find` still returns it (the demotion
+/// just hides it from `webrtcsink`'s codec selection, not from this probe).
+/// Production N100 has VAAPI registered so the first branch wins; dev2
+/// with the demotion env var falls through to x264enc which is what
+/// webrtcsink will actually use.
 ///
 /// Probes the live element registry on every call — cheap (hash lookup), no
 /// memoization needed.
 pub fn hw_h264_encoder() -> Option<&'static str> {
-    ["vah264enc", "nvh264enc"]
+    ["vah264enc", "nvh264enc", "x264enc"]
         .into_iter()
         .find(|name| gstreamer::ElementFactory::find(name).is_some())
 }
