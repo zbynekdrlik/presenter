@@ -101,8 +101,27 @@ impl NdiManager {
     /// reports back quickly to the operator.
     pub async fn start_pipeline(&self, source_id: &str, ndi_name: &str) -> Result<()> {
         let mut active = self.active.lock().await;
-        if active.contains_key(source_id) {
-            return Ok(()); // Idempotent.
+        // Idempotency check must inspect the live pipeline state, not just
+        // HashMap presence. A pipeline that transitioned to `Stopped` (NDI
+        // broadcaster EOS) or `Errored` (ndisrc fault) keeps its HashMap
+        // entry alive — without this state check, both the manual re-activate
+        // path and the 30s auto-reconnect loop (state/mod.rs) early-return
+        // `Ok` and leave the dead pipeline sitting in the slot. The next WHEP
+        // POST then sees `PipelineState::Stopped` and 503s the client, with
+        // no recovery path short of an operator-driven `deactivate +
+        // activate` cycle. Treat Streaming/Starting as a true idempotent
+        // no-op; treat Stopped/Errored as dead and rebuild from scratch.
+        if let Some(existing) = active.get(source_id) {
+            match existing.pipeline.state() {
+                PipelineState::Streaming | PipelineState::Starting => {
+                    return Ok(());
+                }
+                PipelineState::Stopped | PipelineState::Errored(_) => {
+                    if let Some(mut dead) = active.remove(source_id) {
+                        dead.pipeline.stop().await;
+                    }
+                }
+            }
         }
 
         let whep_url = format!("/ndi/whep/{}", source_id);
@@ -264,5 +283,68 @@ impl NdiManager {
             headers,
             body,
         })
+    }
+
+    #[cfg(test)]
+    pub async fn has_active_entry(&self, source_id: &str) -> bool {
+        self.active.lock().await.contains_key(source_id)
+    }
+
+    #[cfg(test)]
+    pub async fn inject_for_test(&self, source_id: &str, pipeline: NdiPipeline) {
+        self.active
+            .lock()
+            .await
+            .insert(source_id.to_string(), ActiveSource { pipeline });
+    }
+}
+
+#[cfg(test)]
+mod start_pipeline_state_check_tests {
+    use super::*;
+
+    #[tokio::test]
+    async fn start_pipeline_replaces_dead_stopped_entry() {
+        if crate::init().is_err() {
+            eprintln!("skipping: gst/plugin init failed");
+            return;
+        }
+        let Some(manager) = NdiManager::try_new() else {
+            eprintln!("skipping: NdiManager construction failed (no libndi)");
+            return;
+        };
+
+        let dead_pipeline = match crate::pipeline::NdiPipeline::build(
+            "STREAM-DOES-NOT-EXIST (test)",
+            "/ndi/whep/test-uuid".to_string(),
+        ) {
+            Ok(p) => p,
+            Err(e) => {
+                eprintln!("skipping: pipeline build failed: {e:#}");
+                return;
+            }
+        };
+        assert_eq!(dead_pipeline.state(), PipelineState::Stopped);
+
+        let source_id = "test-uuid";
+        manager.inject_for_test(source_id, dead_pipeline).await;
+        assert!(manager.has_active_entry(source_id).await);
+
+        let _ = manager
+            .start_pipeline(source_id, "STREAM-DOES-NOT-EXIST (test)")
+            .await;
+
+        let entry_present = manager.has_active_entry(source_id).await;
+        if entry_present {
+            let active = manager.active.lock().await;
+            let still_stopped = matches!(
+                active.get(source_id).map(|s| s.pipeline.state()),
+                Some(PipelineState::Stopped)
+            );
+            assert!(
+                !still_stopped,
+                "REGRESSION: start_pipeline left a Stopped pipeline in the active map",
+            );
+        }
     }
 }
