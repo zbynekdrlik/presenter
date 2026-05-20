@@ -101,16 +101,16 @@ impl NdiPipeline {
             whep_url.hash(&mut h);
             19090 + (h.finish() % 900) as u16
         };
-        // host-addr is set programmatically AFTER parse::launch because
-        // gst-launch syntax can't reliably tokenize URL values containing
-        // `://` and the parser silently keeps the default `http://127.0.0.1:9090`.
+        // host-addr AND video-caps are both set programmatically below
+        // because parse::launch syntax can't reliably tokenize URL values
+        // (`://`) and Caps values; the parser silently keeps the defaults
+        // (warp on 9090, all codecs offered).
         let desc = format!(
             "ndisrc ndi-name=\"{ndi_name}\" ! \
              ndisrcdemux name=demux \
              demux.video ! videoconvert ! sink.video_0 \
              demux.audio ! fakesink async=false sync=false \
-             whepserversink name=sink \
-                 video-caps=\"video/x-h264\""
+             whepserversink name=sink"
         );
 
         let pipeline = gst::parse::launch(&desc)
@@ -118,6 +118,23 @@ impl NdiPipeline {
         let pipeline = pipeline
             .downcast::<gst::Pipeline>()
             .map_err(|_| anyhow!("parse::launch returned non-Pipeline element"))?;
+
+        // Constrain the codec offer to H264 only.
+        //
+        // Without this, webrtcsink defaults to offering ALL codecs (VP8,
+        // VP9, H264 — see imp.rs:540 `video_caps: Codecs::video_codecs()`).
+        // webrtcbin's first-choice in the SDP answer is VP8; webrtcsink then
+        // tries to instantiate `vp8enc` (or `nvvp8enc`), neither of which
+        // is registered on the N100/dev2 stack, so the m=video line goes
+        // `a=inactive` and the browser <video> sits at videoWidth=0 forever
+        // (black screen). Forcing `video/x-h264` makes the SDP answer offer
+        // only H264 → encoder selection lands on nvh264enc/vah264enc which
+        // we already have.
+        let h264_caps = gstreamer::Caps::builder("video/x-h264").build();
+        let sink = pipeline
+            .by_name("sink")
+            .ok_or_else(|| anyhow!("pipeline has no sink element"))?;
+        sink.set_property("video-caps", &h264_caps);
 
         // Override the default whepserversink warp HTTP bind port.
         // The `host-addr` property lives on the `signaller` CHILD of the
@@ -127,14 +144,11 @@ impl NdiPipeline {
         // `signaller::` prefix and looks up `host-addr` on the sink, which
         // doesn't have it).
         use gstreamer::prelude::ChildProxyExtManual;
-        let sink = pipeline
-            .by_name("sink")
-            .ok_or_else(|| anyhow!("pipeline has no sink element"))?;
         let child_proxy = sink
             .dynamic_cast_ref::<gstreamer::ChildProxy>()
             .ok_or_else(|| anyhow!("sink is not a ChildProxy"))?;
         child_proxy.set_child_property("signaller::host-addr", format!("http://127.0.0.1:{port}"));
-        tracing::info!(port, %ndi_name, "whepserversink signaller host-addr set");
+        tracing::info!(port, %ndi_name, "whepserversink video-caps=H264 + host-addr set");
 
         let (state_tx, state_rx) = watch::channel(PipelineState::Stopped);
 
@@ -171,10 +185,11 @@ impl NdiPipeline {
             use futures_util::StreamExt;
             while let Some(msg) = stream.next().await {
                 match msg.view() {
-                    gst::MessageView::StateChanged(sc) => {
-                        if sc.src() == Some(&pipeline_obj) && sc.current() == gst::State::Playing {
-                            let _ = state_tx.send(PipelineState::Streaming);
-                        }
+                    gst::MessageView::StateChanged(sc)
+                        if sc.src() == Some(&pipeline_obj)
+                            && sc.current() == gst::State::Playing =>
+                    {
+                        let _ = state_tx.send(PipelineState::Streaming);
                     }
                     gst::MessageView::AsyncDone(_) => {
                         // Harmless duplicate for live pipelines (the
@@ -295,5 +310,43 @@ mod tests {
         }
         let p = NdiPipeline::build("no-such-source", "http://127.0.0.1/whep".into()).unwrap();
         assert_eq!(p.state(), PipelineState::Stopped);
+    }
+
+    /// Regression test for the bug surfaced 2026-05-20: the WHEP SDP answer
+    /// was offering `a=rtpmap:96 VP8/90000 ... a=inactive` because the
+    /// `whepserversink` `video-caps` property wasn't being applied (passed
+    /// as a quoted string via parse::launch syntax). webrtcsink defaulted
+    /// to offering all codecs, browser picked VP8, and the encoder couldn't
+    /// instantiate `vp8enc` (we only have HW H264 encoders installed) — so
+    /// the m=video line went `a=inactive` and the browser <video> sat at
+    /// `videoWidth=0 readyState=0` forever (black screen).
+    ///
+    /// Asserts the `video-caps` GObject property is the gst::Caps we set
+    /// programmatically after parse::launch, not the unconstrained default.
+    #[test]
+    fn video_caps_property_restricts_offered_codec_to_h264() {
+        super::super::init().unwrap();
+        if super::super::hw_h264_encoder().is_none() {
+            // Pipeline can't even build without an HW encoder; nothing to
+            // assert here.
+            return;
+        }
+        let pipeline =
+            NdiPipeline::build("no-such-source", "http://127.0.0.1/whep".into()).unwrap();
+        let sink = pipeline.sink_element().expect("sink element present");
+        let actual_caps: gst::Caps = sink.property("video-caps");
+        // The default whepserversink video-caps is the union of all video
+        // codecs — its caps string contains "video/x-vp8" (or similar).
+        // After our explicit override it must be exactly H264.
+        let actual_str = actual_caps.to_string();
+        assert!(
+            actual_str.contains("video/x-h264"),
+            "video-caps should contain video/x-h264; got: {actual_str}"
+        );
+        assert!(
+            !actual_str.contains("video/x-vp8") && !actual_str.contains("video/x-vp9"),
+            "video-caps should NOT contain VP8/VP9 (HW VP encoders absent → \
+             would force 'a=inactive' in the WHEP SDP answer); got: {actual_str}"
+        );
     }
 }
