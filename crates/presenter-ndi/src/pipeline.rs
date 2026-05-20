@@ -217,7 +217,84 @@ impl NdiPipeline {
             .dynamic_cast_ref::<gstreamer::ChildProxy>()
             .ok_or_else(|| anyhow!("sink is not a ChildProxy"))?;
         child_proxy.set_child_property("signaller::host-addr", format!("http://127.0.0.1:{port}"));
-        tracing::info!(port, %ndi_name, "whepserversink video-caps=H264 + host-addr set");
+
+        // Tune encoders for LOW-LATENCY live streaming via the
+        // `encoder-setup` signal. webrtcsink instantiates one encoder per
+        // consumer (no shared encoder in gst-plugin-rs 0.15); we hook the
+        // signal so every encoder webrtcsink creates gets the same
+        // live-streaming knobs applied — without these, the default
+        // configuration is VOD-tuned (high quality, multi-second
+        // buffering, B-frames, lookahead) and surfaces as visible stutter
+        // even on a loopback connection.
+        //
+        // Settings per encoder:
+        //
+        // - `x264enc` (software, dev fallback when NVENC demoted):
+        //   `tune=zerolatency` is THE knob — disables B-frames and removes
+        //   the threaded look-ahead pipeline that adds ~500ms of latency
+        //   to the default `tune=stillimage`. Combine with
+        //   `speed-preset=superfast` to keep CPU sane, `key-int-max=30`
+        //   for 1s keyframe interval (recovery from packet loss), and
+        //   `bitrate=2500` (kbit/s, reasonable for 1080p).
+        //
+        // - `nvh264enc` / `vah264enc` (NVENC / VAAPI in prod): same
+        //   intent — short GOP for fast recovery. `gop-size=30` on
+        //   nvh264enc, `key-int-max=30` on vah264enc (different property
+        //   names for the same concept).
+        //
+        // Signal handler returns `Some(true.to_value())` — `encoder-setup`
+        // is `gboolean`-returning (we override the default).
+        let _ = sink.connect("encoder-setup", false, move |args| {
+            let encoder = args
+                .get(3)
+                .and_then(|v| v.get::<gstreamer::Element>().ok());
+            if let Some(encoder) = encoder {
+                let name = encoder
+                    .factory()
+                    .map(|f| f.name().to_string())
+                    .unwrap_or_default();
+                match name.as_str() {
+                    "x264enc" => {
+                        let tune_field = encoder.find_property("tune");
+                        if tune_field.is_some() {
+                            encoder.set_property_from_str("tune", "zerolatency");
+                        }
+                        if encoder.find_property("speed-preset").is_some() {
+                            encoder.set_property_from_str("speed-preset", "superfast");
+                        }
+                        if encoder.find_property("key-int-max").is_some() {
+                            encoder.set_property("key-int-max", 30u32);
+                        }
+                        if encoder.find_property("bitrate").is_some() {
+                            encoder.set_property("bitrate", 2500u32);
+                        }
+                        tracing::info!(
+                            "x264enc tuned: tune=zerolatency speed-preset=superfast key-int-max=30 bitrate=2500"
+                        );
+                    }
+                    "nvh264enc" | "nvcudah264enc" | "nvautogpuh264enc" => {
+                        if encoder.find_property("gop-size").is_some() {
+                            encoder.set_property("gop-size", 30i32);
+                        }
+                        if encoder.find_property("zerolatency").is_some() {
+                            encoder.set_property("zerolatency", true);
+                        }
+                        tracing::info!(encoder = %name, "nvh264 tuned: gop-size=30 zerolatency=true");
+                    }
+                    "vah264enc" => {
+                        if encoder.find_property("key-int-max").is_some() {
+                            encoder.set_property("key-int-max", 30u32);
+                        }
+                        tracing::info!("vah264enc tuned: key-int-max=30");
+                    }
+                    _ => {}
+                }
+            }
+            // encoder-setup returns gboolean
+            Some(true.to_value())
+        });
+
+        tracing::info!(port, %ndi_name, "whepserversink video-caps=H264 + host-addr set + encoder-setup hook");
 
         let (state_tx, state_rx) = watch::channel(PipelineState::Stopped);
 
