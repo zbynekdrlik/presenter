@@ -131,7 +131,7 @@ impl NdiPipeline {
             .name("sink")
             .property(
                 "video-caps",
-                &gstreamer::Caps::builder("video/x-h264").build(),
+                gstreamer::Caps::builder("video/x-h264").build(),
             )
             .build()
             .context("build whepserversink")?;

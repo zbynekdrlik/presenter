@@ -10,11 +10,23 @@ use std::sync::Arc;
 use leptos::prelude::*;
 use leptos::wasm_bindgen::{closure::Closure, JsCast, JsValue};
 use leptos::web_sys::{
-    HtmlVideoElement, MediaStream, RtcConfiguration, RtcPeerConnection,
-    RtcRtpTransceiverDirection, RtcRtpTransceiverInit, RtcSdpType,
-    RtcSessionDescriptionInit, RtcTrackEvent,
+    HtmlVideoElement, MediaStream, RtcConfiguration, RtcPeerConnection, RtcRtpTransceiverDirection,
+    RtcRtpTransceiverInit, RtcSdpType, RtcSessionDescriptionInit, RtcTrackEvent,
 };
 use wasm_bindgen_futures::{spawn_local, JsFuture};
+
+/// Holds an active WHEP session: the peer connection AND the WHEP resource URL
+/// returned in the `Location` header on POST. The resource URL is used to
+/// DELETE the session when the component unmounts — without this, sessions
+/// accumulate inside webrtcsink (one per browser navigation), each one
+/// occupying an encoder + ICE state, and after enough accumulation new
+/// consumer connections start returning broken SDP answers (the consumer-
+/// drift bug surfaced via 13 accumulated sessions producing transient
+/// `rtph264pay: failed to set sps/pps` errors during discovery retries).
+struct WhepSession {
+    pc: RtcPeerConnection,
+    resource_url: Option<String>,
+}
 
 /// Build the WHEP endpoint URL for a given source.
 pub fn whep_url(source_id: &str) -> String {
@@ -22,21 +34,16 @@ pub fn whep_url(source_id: &str) -> String {
 }
 
 #[component]
-pub fn NdiVideo(
-    source_id: String,
-    #[prop(optional)] class: Option<&'static str>,
-) -> impl IntoView {
+pub fn NdiVideo(source_id: String, #[prop(optional)] class: Option<&'static str>) -> impl IntoView {
     let video_ref = NodeRef::<leptos::html::Video>::new();
     let source_id_for_effect = source_id.clone();
-    // Hold the RtcPeerConnection so we can close it on unmount. WebRTC
-    // peer connections are NOT closed when the JsValue is dropped — the
-    // browser keeps them open until explicit `close()`. Without this the
-    // whepserversink leaks ICE sessions every time the layout switches.
-    let pc_holder: StoredValue<Option<RtcPeerConnection>> = StoredValue::new(None);
+    // Holds the full WHEP session (pc + resource URL) so we can DELETE the
+    // session on the server when the component unmounts. Without DELETE the
+    // server-side webrtcsink accumulates sessions forever (every browser
+    // navigation = one session) and breaks after enough buildup.
+    let session_holder: StoredValue<Option<WhepSession>> = StoredValue::new(None);
     // Cancellation flag covering the race where the component unmounts BEFORE
-    // `connect_whep` resolves. on_cleanup sets `cancelled=true`; the spawned
-    // task, on receiving a pc, checks the flag and closes the pc directly
-    // instead of storing it into an orphaned pc_holder.
+    // `connect_whep` resolves.
     let cancelled = Arc::new(AtomicBool::new(false));
 
     let cancelled_for_effect = Arc::clone(&cancelled);
@@ -46,13 +53,24 @@ pub fn NdiVideo(
         let cancelled = Arc::clone(&cancelled_for_effect);
         spawn_local(async move {
             match connect_whep(&video, &source_id).await {
-                Ok(pc) => {
+                Ok(session) => {
                     if cancelled.load(Ordering::Acquire) {
                         // Component unmounted before connect_whep finished —
-                        // close the pc directly so the WHEP session doesn't leak.
-                        pc.close();
+                        // synchronously fire DELETE and close pc. Same
+                        // mechanism as on_cleanup below.
+                        if let Some(url) = &session.resource_url {
+                            dispatch_delete(url);
+                        }
+                        session.pc.close();
                     } else {
-                        pc_holder.set_value(Some(pc));
+                        // Also wire a window pagehide listener: some browsers
+                        // (and Playwright's page.goto()) tear down the JS
+                        // context before Leptos's on_cleanup runs. pagehide
+                        // fires earlier in the unload sequence and gives us a
+                        // chance to dispatch the DELETE while the window is
+                        // still alive.
+                        install_pagehide_teardown(&session);
+                        session_holder.set_value(Some(session));
                     }
                 }
                 Err(e) => {
@@ -64,10 +82,13 @@ pub fn NdiVideo(
 
     let cancelled_for_cleanup = Arc::clone(&cancelled);
     on_cleanup(move || {
-        // Mark cancelled FIRST so any in-flight connect_whep task sees it.
         cancelled_for_cleanup.store(true, Ordering::Release);
-        if let Some(pc) = pc_holder.try_get_value().flatten() {
-            pc.close();
+        let session = session_holder.try_update_value(|opt| opt.take()).flatten();
+        if let Some(session) = session {
+            if let Some(url) = &session.resource_url {
+                dispatch_delete(url);
+            }
+            session.pc.close();
         }
     });
 
@@ -86,10 +107,45 @@ pub fn NdiVideo(
     }
 }
 
-async fn connect_whep(
-    video: &HtmlVideoElement,
-    source_id: &str,
-) -> Result<RtcPeerConnection, JsValue> {
+/// Fire-and-forget DELETE to the WHEP session resource. SYNCHRONOUS dispatch —
+/// we do NOT await the future. spawn_local-wrapped fetches do not start when
+/// called from a page-unload context (the microtask queue is destroyed before
+/// the future polls). Calling `window.fetch_with_request` directly enqueues
+/// the request immediately; `keepalive: true` keeps it alive after unload.
+fn dispatch_delete(url: &str) {
+    let init = leptos::web_sys::RequestInit::new();
+    init.set_method("DELETE");
+    let _ = js_sys::Reflect::set(&init, &"keepalive".into(), &JsValue::TRUE);
+    if let Ok(request) = leptos::web_sys::Request::new_with_str_and_init(url, &init) {
+        if let Some(window) = leptos::web_sys::window() {
+            // Promise dropped intentionally — keepalive carries it through.
+            let _ = window.fetch_with_request(&request);
+        }
+    }
+}
+
+/// Install a `pagehide` window listener that fires DELETE if the page is
+/// being unloaded. Some browsers (and Playwright's page.goto navigation)
+/// tear down the JS context before Leptos's `on_cleanup` runs; pagehide
+/// fires earlier in the unload sequence so the DELETE makes it out the door.
+fn install_pagehide_teardown(session: &WhepSession) {
+    let Some(window) = leptos::web_sys::window() else {
+        return;
+    };
+    let Some(url) = session.resource_url.clone() else {
+        return;
+    };
+    let cb = Closure::<dyn FnMut()>::new(move || {
+        dispatch_delete(&url);
+    });
+    let _ = window.add_event_listener_with_callback("pagehide", cb.as_ref().unchecked_ref());
+    // Leak the closure into JS — it must outlive Rust scope to be callable
+    // from the pagehide event. The listener fires at most once per session
+    // (page unloads exactly once), so the leak is bounded.
+    cb.forget();
+}
+
+async fn connect_whep(video: &HtmlVideoElement, source_id: &str) -> Result<WhepSession, JsValue> {
     let cfg = RtcConfiguration::new();
     let pc = RtcPeerConnection::new_with_configuration(&cfg)?;
 
@@ -135,6 +191,28 @@ async fn connect_whep(
             resp.status()
         )));
     }
+    // WHEP RFC 9725: server returns 201 Created with a `Location` header
+    // pointing at the session resource. We MUST store this URL and DELETE
+    // it on cleanup; otherwise the server-side session leaks and after
+    // ~10 leaked sessions webrtcsink's discovery starts failing for new
+    // consumers (transient `failed to set sps/pps` errors that don't
+    // recover).
+    let location_header = resp
+        .headers()
+        .get("Location")
+        .ok()
+        .flatten()
+        .or_else(|| resp.headers().get("location").ok().flatten());
+    let resource_url = location_header.map(|loc| {
+        // Location can be relative (e.g. "/whep/resource/<id>") — resolve
+        // against the page origin.
+        if loc.starts_with("http://") || loc.starts_with("https://") {
+            loc
+        } else {
+            let origin = window.location().origin().unwrap_or_default();
+            format!("{origin}{loc}")
+        }
+    });
     let answer_text = JsFuture::from(resp.text()?)
         .await?
         .as_string()
@@ -142,5 +220,5 @@ async fn connect_whep(
     let answer = RtcSessionDescriptionInit::new(RtcSdpType::Answer);
     answer.set_sdp(&answer_text);
     JsFuture::from(pc.set_remote_description(&answer)).await?;
-    Ok(pc)
+    Ok(WhepSession { pc, resource_url })
 }

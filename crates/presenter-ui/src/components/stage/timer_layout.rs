@@ -25,7 +25,9 @@ pub fn TimerLayout(
     let timer_text = move || {
         ctx.snapshot
             .get()
-            .map(|s| presenter_core::format_countdown(s.timers.countdown_to_start.seconds_remaining))
+            .map(|s| {
+                presenter_core::format_countdown(s.timers.countdown_to_start.seconds_remaining)
+            })
             .unwrap_or_else(|| "00:00".to_string())
     };
 
@@ -46,11 +48,14 @@ pub fn TimerLayout(
         });
     }
 
+    // De-duplicate via Memo: see ndi_fullscreen.rs for the full rationale.
+    let active_source = Memo::new(move |_| ndi_active_source_id.get());
+
     view! {
         <div class="stage-container" data-layout="timer">
             <Show when=move || ndi_active.get()>
                 {move || {
-                    ndi_active_source_id.get().map(|source_id| view! {
+                    active_source.get().map(|source_id| view! {
                         <NdiVideo
                             source_id=source_id
                             class="stage-timer__ndi"

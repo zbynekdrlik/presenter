@@ -22,11 +22,16 @@ pub fn ApiStage(
     let ndi_active_source_id = ctx.ndi_active_source_id;
     let ndi_status = ctx.ndi_status;
 
+    // De-duplicate via Memo: see ndi_fullscreen.rs for the full rationale.
+    // Without this, WS replays + initial fetch each remount <NdiVideo>,
+    // leaking NVENC encoder sessions per page load.
+    let active_source = Memo::new(move |_| ndi_active_source_id.get());
+
     view! {
         <div class="stage-api">
             <Show when=move || ndi_active.get()>
                 {move || {
-                    ndi_active_source_id.get().map(|source_id| view! {
+                    active_source.get().map(|source_id| view! {
                         <NdiVideo
                             source_id=source_id
                             class="stage-api__ndi"
