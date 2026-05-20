@@ -77,12 +77,14 @@ pub fn StagePage() -> impl IntoView {
                         }
                     });
                 }
-                LiveEvent::NdiSourceActivated { .. } => {
+                LiveEvent::NdiSourceActivated { source_id, .. } => {
                     ctx.ndi_active.set(true);
+                    ctx.ndi_active_source_id.set(Some(source_id));
                     ctx.ndi_status.set("connecting".to_string());
                 }
                 LiveEvent::NdiSourceDeactivated => {
                     ctx.ndi_active.set(false);
+                    ctx.ndi_active_source_id.set(None);
                     ctx.ndi_status.set(String::new());
                 }
                 LiveEvent::NdiConnectionStatus { status } => {
@@ -112,8 +114,9 @@ pub fn StagePage() -> impl IntoView {
             }
             // Check if an NDI source is already active
             if let Ok(sources) = api::ndi::list_video_sources().await {
-                if sources.iter().any(|s| s.is_active) {
+                if let Some(active) = sources.iter().find(|s| s.is_active) {
                     ctx.ndi_active.set(true);
+                    ctx.ndi_active_source_id.set(Some(active.id.clone()));
                 }
             }
         });

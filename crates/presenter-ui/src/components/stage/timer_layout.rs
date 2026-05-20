@@ -2,6 +2,8 @@ use leptos::prelude::*;
 use wasm_bindgen::JsCast;
 use web_sys::HtmlElement;
 
+use crate::components::stage::ndi_status_text;
+use crate::components::stage::ndi_video::NdiVideo;
 use crate::state::stage::StageContext;
 use crate::utils::autofit::autofit_text;
 use crate::ws::stage::StageWsState;
@@ -15,6 +17,7 @@ pub fn TimerLayout(
 ) -> impl IntoView {
     let ctx = use_context::<StageContext>().expect("StageContext not provided");
     let ndi_active = ctx.ndi_active;
+    let ndi_active_source_id = ctx.ndi_active_source_id;
     let ndi_status = ctx.ndi_status;
 
     let timer_ref = NodeRef::<leptos::html::Div>::new();
@@ -22,7 +25,9 @@ pub fn TimerLayout(
     let timer_text = move || {
         ctx.snapshot
             .get()
-            .map(|s| presenter_core::format_countdown(s.timers.countdown_to_start.seconds_remaining))
+            .map(|s| {
+                presenter_core::format_countdown(s.timers.countdown_to_start.seconds_remaining)
+            })
             .unwrap_or_else(|| "00:00".to_string())
     };
 
@@ -43,27 +48,30 @@ pub fn TimerLayout(
         });
     }
 
+    // De-duplicate via Memo: see ndi_fullscreen.rs for the full rationale.
+    let active_source = Memo::new(move |_| ndi_active_source_id.get());
+
     view! {
         <div class="stage-container" data-layout="timer">
             <Show when=move || ndi_active.get()>
-                <img src="/ndi/mjpeg" class="stage-timer__ndi" />
+                {move || {
+                    active_source.get().map(|source_id| view! {
+                        <NdiVideo
+                            source_id=source_id
+                            class="stage-timer__ndi"
+                        />
+                    })
+                }}
             </Show>
 
             <Show when=move || {
                 let status = ndi_status.get();
-                status == "disconnected" || status == "connecting"
+                status == "disconnected"
+                    || status == "connecting"
+                    || status.starts_with("failed")
             }>
                 <div class="stage-timer__overlay">
-                    {move || {
-                        let status = ndi_status.get();
-                        if status == "disconnected" {
-                            "Signal Lost — Reconnecting..."
-                        } else if status == "connecting" {
-                            "Connecting..."
-                        } else {
-                            ""
-                        }
-                    }}
+                    {move || ndi_status_text(&ndi_status.get())}
                 </div>
             </Show>
 

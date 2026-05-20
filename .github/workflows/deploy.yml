@@ -169,6 +169,28 @@ jobs:
           ls -la /usr/lib/ndi/libndi.so.6
           REMOTE_SCRIPT
 
+      - name: Ensure GStreamer + VA-API are installed
+        run: |
+          ssh deploy-target << 'REMOTE_SCRIPT'
+          set -e
+          NEEDED="gstreamer1.0-plugins-base gstreamer1.0-plugins-good gstreamer1.0-plugins-bad gstreamer1.0-vaapi gstreamer1.0-libav gstreamer1.0-nice intel-media-va-driver-non-free libva-drm2 libva2"
+          MISSING=""
+          for pkg in $NEEDED; do
+            dpkg -s "$pkg" >/dev/null 2>&1 || MISSING="$MISSING $pkg"
+          done
+          if [ -n "$MISSING" ]; then
+            echo "Installing missing packages:$MISSING"
+            sudo apt-get update -qq
+            sudo apt-get install -y -qq $MISSING
+          fi
+          # Probe that VAAPI H264 encoder is available
+          if ! gst-inspect-1.0 vah264enc >/dev/null 2>&1; then
+            echo "::error::vah264enc element not available after install — VA-API driver missing or kernel/firmware mismatch"
+            exit 1
+          fi
+          echo "vah264enc available: $(gst-inspect-1.0 vah264enc | head -1)"
+          REMOTE_SCRIPT
+
       - name: Stop service (if running)
         run: |
           ssh deploy-target "if systemctl is-active --quiet ${{ env.SERVICE_NAME }}; then sudo systemctl stop ${{ env.SERVICE_NAME }}; echo 'Service stopped'; else echo 'Service not running'; fi"

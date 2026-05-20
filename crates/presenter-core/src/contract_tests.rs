@@ -140,6 +140,7 @@ mod tests {
     #[test]
     fn live_event_ndi_source_activated_roundtrip() {
         let event = LiveEvent::NdiSourceActivated {
+            source_id: "test-source-id".to_string(),
             ndi_name: "CAM1 (usb)".to_string(),
             label: "Main Camera".to_string(),
         };

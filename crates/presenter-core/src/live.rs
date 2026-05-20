@@ -45,6 +45,7 @@ pub enum LiveEvent {
         presentation_id: String,
     },
     NdiSourceActivated {
+        source_id: String,
         ndi_name: String,
         label: String,
     },

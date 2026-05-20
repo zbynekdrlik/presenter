@@ -76,7 +76,7 @@ test("timer layout renders without NDI image when no source is active", async ({
   await expect(wrapper.locator(".stage-timer__display")).toBeAttached();
   await expect(wrapper.locator(".stage-timer__text")).toBeVisible();
 
-  await expect(wrapper.locator("img.stage-timer__ndi")).toHaveCount(0);
+  await expect(wrapper.locator('[data-role="ndi-video"]')).toHaveCount(0);
 
   const textShadow = await wrapper
     .locator(".stage-timer__text")
@@ -87,9 +87,10 @@ test("timer layout renders without NDI image when no source is active", async ({
   expect(consoleMessages).toEqual([]);
 });
 
-test("timer layout renders NDI image when an NDI source is active", async ({ page }) => {
+test("timer layout mounts NdiVideo when an NDI source is active", async ({ page }) => {
   const consoleMessages = collectConsoleErrors(page, [
     /Failed to load resource.*503/i,
+    /WHEP connect for.*failed/i,
   ]);
 
   await page.request.post(
@@ -125,7 +126,7 @@ test("timer layout renders NDI image when an NDI source is active", async ({ pag
     );
 
     const wrapper = page.locator('div.stage-container[data-layout="timer"]');
-    await expect(wrapper.locator("img.stage-timer__ndi")).toBeVisible({
+    await expect(wrapper.locator('[data-role="ndi-video"]')).toBeVisible({
       timeout: 10_000,
     });
 
