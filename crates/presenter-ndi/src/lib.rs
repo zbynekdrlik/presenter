@@ -32,6 +32,11 @@ pub fn init() -> anyhow::Result<()> {
         if let Err(e) = gstndi::plugin_register_static() {
             return Err(format!("ndisrc plugin register failed: {e}"));
         }
+        // rtpgccbwe is required by webrtcsink for congestion control;
+        // without it codec discovery drifts after the first consumer.
+        if let Err(e) = gstrsrtp::plugin_register_static() {
+            return Err(format!("rsrtp plugin register failed: {e}"));
+        }
         Ok(())
     });
     match outcome {

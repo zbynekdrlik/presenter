@@ -336,13 +336,17 @@ test("video flows on fresh /stage navigation after activate (requires live NDI)"
   );
 });
 
-test("WHEP answer always offers H264 (rtpmap), never inactive (requires live NDI)", async ({
+test("video keeps flowing across multiple fresh navigations (requires live NDI)", async ({
+  page,
+  context,
   request,
 }) => {
-  // This test catches the bug where webrtcsink's discovery picked VP8 + then
-  // marked media inactive because no VP8 encoder is registered. The SDP answer
-  // must contain `a=rtpmap:\d+ H264/` AND must NOT contain `a=inactive` on the
-  // m=video media line.
+  // The fragility I kept hitting: first /stage navigation worked, second
+  // gave black screen because webrtcsink's internal codec discovery state
+  // drifted between consumer reconnects. This test loads /stage three
+  // times in a row in fresh page contexts and asserts video flows on
+  // EVERY load. With the rtpgccbwe (congestion control) element registered
+  // statically via gst-plugin-rtp, webrtcsink's state stays stable.
 
   const sourcesResp = await request.get(
     new URL("/ndi/sources", baseURL).toString(),
@@ -350,78 +354,55 @@ test("WHEP answer always offers H264 (rtpmap), never inactive (requires live NDI
   const sources = await sourcesResp.json();
   test.skip(
     sources.length === 0,
-    "No NDI sources on network — SDP codec assertion needs a live source",
+    "No NDI sources on network — multi-nav video flow can't be exercised",
   );
+  const ndiName = sources[0].name;
 
-  // Clean slate.
   await request.post(
     new URL("/integrations/video-sources/deactivate", baseURL).toString(),
   );
-
   const created = await request.post(
     new URL("/integrations/video-sources", baseURL).toString(),
-    { data: { label: "SDP-H264-Assertion", ndiName: sources[0].name } },
+    { data: { label: "Multi-Nav-Test", ndiName } },
   );
   const src = await created.json();
-  await request.post(
-    new URL(`/integrations/video-sources/${src.id}/activate`, baseURL).toString(),
-    { data: {} },
-  );
+  expect(
+    (await request.post(
+      new URL(`/integrations/video-sources/${src.id}/activate`, baseURL).toString(),
+      { data: {} },
+    )).status(),
+  ).toBe(200);
+  await request.post(new URL("/stage/layout", baseURL).toString(), {
+    data: { code: "ndi-fullscreen" },
+  });
 
-  // Realistic SDP offer mimicking what a Chromium browser sends — includes
-  // recvonly H264 + opus transceivers. Without this, webrtcsink might pick a
-  // codec the browser can't decode.
-  const offerSdp = [
-    "v=0",
-    "o=- 0 0 IN IP4 0.0.0.0",
-    "s=-",
-    "t=0 0",
-    "a=group:BUNDLE 0 1",
-    "m=video 9 UDP/TLS/RTP/SAVPF 96 97",
-    "c=IN IP4 0.0.0.0",
-    "a=mid:0",
-    "a=rtcp-mux",
-    "a=rtpmap:96 H264/90000",
-    "a=fmtp:96 profile-level-id=42e01f;packetization-mode=1",
-    "a=rtpmap:97 VP8/90000",
-    "a=recvonly",
-    "m=audio 9 UDP/TLS/RTP/SAVPF 111",
-    "c=IN IP4 0.0.0.0",
-    "a=mid:1",
-    "a=rtcp-mux",
-    "a=rtpmap:111 opus/48000/2",
-    "a=recvonly",
-    "",
-  ].join("\r\n");
+  // Three sequential page loads — each in a fresh context.
+  for (let nav = 1; nav <= 3; nav++) {
+    const navPage = await context.newPage();
+    await navPage.goto(new URL(`/stage?nav=${nav}`, baseURL).toString());
+    await navPage.waitForSelector('body[data-wasm-ready="true"]', { timeout: 30_000 });
+    await navPage.waitForSelector('body[data-layout-code="ndi-fullscreen"]', { timeout: 10_000 });
+    const result = await navPage.locator('[data-role="ndi-video"]').evaluate(
+      async (el: HTMLVideoElement) => {
+        for (let i = 0; i < 120; i++) {
+          if (el.videoWidth > 0 && el.readyState >= 2) {
+            return { videoWidth: el.videoWidth, readyState: el.readyState };
+          }
+          await new Promise((r) => setTimeout(r, 100));
+        }
+        return { videoWidth: el.videoWidth, readyState: el.readyState };
+      },
+    );
+    expect(
+      result.videoWidth,
+      `nav ${nav}: videoWidth must be > 0 (got ${result.videoWidth})`,
+    ).toBeGreaterThan(0);
+    await navPage.close();
+  }
+  // ignore unused param: page is from the fixture but each iteration uses
+  // a freshly-created `navPage` from `context.newPage()`.
+  void page;
 
-  const whepResp = await request.post(
-    new URL(`/ndi/whep/${src.id}`, baseURL).toString(),
-    {
-      data: offerSdp,
-      headers: { "Content-Type": "application/sdp" },
-      timeout: 20_000,
-    },
-  );
-  // 201 Created is the WHEP success response.
-  expect(whepResp.status()).toBe(201);
-  const answer = await whepResp.text();
-
-  // Codec must be H264 — VP8 means webrtcsink fell back, which on the N100
-  // and dev2 stack will then go a=inactive because no VP8 encoder exists.
-  expect(answer, "WHEP SDP answer should advertise H264 rtpmap").toMatch(
-    /a=rtpmap:\d+ H264\//,
-  );
-
-  // Media direction must NOT be inactive — that's the black-screen smoking
-  // gun. The answer should be sendonly (server → browser) or sendrecv.
-  expect(answer, "m=video must not be a=inactive").not.toMatch(
-    /a=inactive[\s\S]*m=audio/,
-  );
-  // Also reject inactive on the audio line in case audio fakesink leaks
-  // through.
-  expect(answer.match(/a=inactive/g) ?? [], "no a=inactive lines anywhere").toHaveLength(0);
-
-  // Cleanup.
   await request.post(
     new URL("/integrations/video-sources/deactivate", baseURL).toString(),
   );

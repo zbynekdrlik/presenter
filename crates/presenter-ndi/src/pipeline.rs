@@ -101,40 +101,75 @@ impl NdiPipeline {
             whep_url.hash(&mut h);
             19090 + (h.finish() % 900) as u16
         };
-        // host-addr AND video-caps are both set programmatically below
-        // because parse::launch syntax can't reliably tokenize URL values
-        // (`://`) and Caps values; the parser silently keeps the defaults
-        // (warp on 9090, all codecs offered).
-        let desc = format!(
-            "ndisrc ndi-name=\"{ndi_name}\" ! \
-             ndisrcdemux name=demux \
-             demux.video ! videoconvert ! sink.video_0 \
-             demux.audio ! fakesink async=false sync=false \
-             whepserversink name=sink"
-        );
+        // Build the pipeline fully programmatically. Earlier I used
+        // `gst::parse::launch` then set `video-caps` afterwards — but that
+        // ran AFTER webrtcsink's first internal codec discovery had already
+        // cached the unconstrained codec list (Codecs::video_codecs() incl.
+        // VP8/VP9). Second consumer connections then got `a=rtpmap VP8` +
+        // `a=inactive` (no VP8 encoder → black screen). Constructing
+        // `whepserversink` directly and setting `video-caps` BEFORE adding
+        // it to the bin guarantees discovery sees the H264-only constraint.
+        let pipeline = gst::Pipeline::new();
 
-        let pipeline = gst::parse::launch(&desc)
-            .with_context(|| format!("failed to build pipeline for '{ndi_name}'"))?;
-        let pipeline = pipeline
-            .downcast::<gst::Pipeline>()
-            .map_err(|_| anyhow!("parse::launch returned non-Pipeline element"))?;
+        let ndisrc = gst::ElementFactory::make("ndisrc")
+            .property("ndi-name", ndi_name)
+            .build()
+            .context("build ndisrc")?;
+        let ndisrcdemux = gst::ElementFactory::make("ndisrcdemux")
+            .name("demux")
+            .build()
+            .context("build ndisrcdemux")?;
+        let videoconvert = gst::ElementFactory::make("videoconvert")
+            .build()
+            .context("build videoconvert")?;
+        let audio_fakesink = gst::ElementFactory::make("fakesink")
+            .property("async", false)
+            .property("sync", false)
+            .build()
+            .context("build fakesink (audio)")?;
+        let sink = gst::ElementFactory::make("whepserversink")
+            .name("sink")
+            .property(
+                "video-caps",
+                &gstreamer::Caps::builder("video/x-h264").build(),
+            )
+            .build()
+            .context("build whepserversink")?;
 
-        // Constrain the codec offer to H264 only.
-        //
-        // Without this, webrtcsink defaults to offering ALL codecs (VP8,
-        // VP9, H264 — see imp.rs:540 `video_caps: Codecs::video_codecs()`).
-        // webrtcbin's first-choice in the SDP answer is VP8; webrtcsink then
-        // tries to instantiate `vp8enc` (or `nvvp8enc`), neither of which
-        // is registered on the N100/dev2 stack, so the m=video line goes
-        // `a=inactive` and the browser <video> sits at videoWidth=0 forever
-        // (black screen). Forcing `video/x-h264` makes the SDP answer offer
-        // only H264 → encoder selection lands on nvh264enc/vah264enc which
-        // we already have.
-        let h264_caps = gstreamer::Caps::builder("video/x-h264").build();
-        let sink = pipeline
-            .by_name("sink")
-            .ok_or_else(|| anyhow!("pipeline has no sink element"))?;
-        sink.set_property("video-caps", &h264_caps);
+        pipeline
+            .add_many([&ndisrc, &ndisrcdemux, &videoconvert, &audio_fakesink, &sink])
+            .context("add elements to pipeline")?;
+        ndisrc.link(&ndisrcdemux).context("link ndisrc->demux")?;
+        // ndisrcdemux is sometimes-pad — its video/audio pads come up when
+        // the source delivers data. Wire up sometimes-pad handlers:
+        let videoconvert_clone = videoconvert.clone();
+        let audio_fakesink_clone = audio_fakesink.clone();
+        ndisrcdemux.connect_pad_added(move |_, pad| {
+            let name = pad.name();
+            if name == "video" {
+                let sink_pad = match videoconvert_clone.static_pad("sink") {
+                    Some(p) => p,
+                    None => return,
+                };
+                let _ = pad.link(&sink_pad);
+            } else if name == "audio" {
+                let sink_pad = match audio_fakesink_clone.static_pad("sink") {
+                    Some(p) => p,
+                    None => return,
+                };
+                let _ = pad.link(&sink_pad);
+            }
+        });
+        // videoconvert → whepserversink.video_0 (request pad).
+        let whep_video_pad = sink
+            .request_pad_simple("video_0")
+            .ok_or_else(|| anyhow!("whepserversink has no video_0 request pad"))?;
+        let vc_src = videoconvert
+            .static_pad("src")
+            .ok_or_else(|| anyhow!("videoconvert has no src pad"))?;
+        vc_src
+            .link(&whep_video_pad)
+            .context("link videoconvert -> whepserversink.video_0")?;
 
         // Override the default whepserversink warp HTTP bind port.
         // The `host-addr` property lives on the `signaller` CHILD of the

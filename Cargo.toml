@@ -50,5 +50,6 @@ unicode-normalization = "0.1"
 gstreamer = "0.25"
 gst-plugin-webrtc = "0.15"
 gst-plugin-ndi = "0.15"
+gst-plugin-rtp = "0.15"
 
 # Lints configured at crate level for now

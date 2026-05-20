@@ -18,3 +18,4 @@ futures-util.workspace = true
 gstreamer.workspace = true
 gst-plugin-webrtc.workspace = true
 gst-plugin-ndi.workspace = true
+gst-plugin-rtp.workspace = true
