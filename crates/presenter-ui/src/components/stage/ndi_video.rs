@@ -162,6 +162,38 @@ async fn connect_whep(video: &HtmlVideoElement, source_id: &str) -> Result<WhepS
         let streams = ev.streams();
         if let Ok(s) = streams.get(0).dyn_into::<MediaStream>() {
             video_clone.set_src_object(Some(&s));
+            // `autoplay muted playsinline` HTML attributes alone are NOT
+            // enough — Chrome's autoplay policy still blocks playback when
+            // the <video> element is mounted via DOM mutation (Leptos
+            // creates it reactively) on a domain the user has never
+            // interacted with. The element ends up in `paused=true` state
+            // after `srcObject` is set, and the user has to right-click ->
+            // "Show all controls" -> Play to actually see video. (Playwright
+            // disables the autoplay policy by default, which is why the
+            // server-side TDD never caught this.)
+            //
+            // Calling `.play()` explicitly after setting srcObject is the
+            // documented workaround — Chrome allows programmatic play() on
+            // muted + playsinline video without user interaction. The
+            // returned Promise rejects only if the policy STILL blocks
+            // (e.g. user has explicitly disabled autoplay site-wide); we
+            // log and continue rather than panic since there's no
+            // automatic recovery from that state anyway.
+            let play_promise = video_clone.play();
+            match play_promise {
+                Ok(promise) => {
+                    spawn_local(async move {
+                        if let Err(e) = JsFuture::from(promise).await {
+                            leptos::logging::warn!(
+                                "video.play() rejected by browser autoplay policy: {e:?}"
+                            );
+                        }
+                    });
+                }
+                Err(e) => {
+                    leptos::logging::warn!("video.play() threw: {e:?}");
+                }
+            }
         }
     });
     pc.set_ontrack(Some(ontrack.as_ref().unchecked_ref()));

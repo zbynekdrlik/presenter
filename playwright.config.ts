@@ -22,7 +22,21 @@ export default defineConfig({
   projects: [
     {
       name: "chromium",
-      use: { ...devices["Desktop Chrome"] },
+      use: {
+        ...devices["Desktop Chrome"],
+        // Match real-Chrome behavior: autoplay requires user gesture.
+        // Default Playwright launches with autoplay restrictions DISABLED,
+        // which silently masked a real production bug — `<video>` element
+        // mounted via DOM mutation with `srcObject` set programmatically
+        // ended up paused in real Chrome, but Playwright auto-played it.
+        // Without this override, no Playwright E2E can catch broken
+        // autoplay behavior — the test would always pass while real users
+        // saw a black, paused video. See:
+        // https://chromium.googlesource.com/chromium/src/+/refs/heads/main/docs/website/site/audio-video/autoplay/index.md
+        launchOptions: {
+          args: ["--autoplay-policy=user-gesture-required"],
+        },
+      },
     },
   ],
 });

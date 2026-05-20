@@ -170,6 +170,87 @@ test("NdiVideo videoWidth resolves above zero within 5 seconds of mount", async 
 });
 
 // ─────────────────────────────────────────────────────────────────────────
+// Regression test for the production autoplay-policy bug surfaced by the
+// user on 2026-05-20: <video> mounted via DOM mutation with srcObject set
+// programmatically ended up `paused=true` in real Chrome on Windows, even
+// with `autoplay muted playsinline` attributes. The user saw a fully black
+// screen until they right-clicked the (hidden) video element, enabled
+// controls, and pressed Play manually.
+//
+// This bug was INVISIBLE to E2E because Playwright launches Chromium with
+// autoplay restrictions DISABLED by default. The Playwright config has been
+// updated to launch with `--autoplay-policy=user-gesture-required` so this
+// test (and any future test asserting playback) reproduces real Chrome
+// behaviour. Without the `video.play()` call in `ndi_video.rs` that
+// follows the `set_src_object()` call, this test fails: the video element
+// stays `paused=true`, `currentTime=0` indefinitely.
+// ─────────────────────────────────────────────────────────────────────────
+test("NdiVideo actually starts playing (autoplay policy regression)", async ({ page }) => {
+  const status = await page.request.get(new URL("/ndi/status", baseURL).toString());
+  const { available } = await status.json();
+  test.skip(!available, "NDI SDK not available on this host");
+
+  const sourcesResp = await page.request.get(
+    new URL("/ndi/sources", baseURL).toString(),
+  );
+  const sources = sourcesResp.ok() ? await sourcesResp.json() : [];
+  test.skip(
+    !Array.isArray(sources) || sources.length === 0,
+    "No NDI sources on network — autoplay regression test can't be exercised",
+  );
+  const ndiName = sources[0].name;
+
+  await page.request.post(
+    new URL("/integrations/video-sources/deactivate", baseURL).toString(),
+  );
+  const created = await page.request.post(
+    new URL("/integrations/video-sources", baseURL).toString(),
+    { data: { label: "Autoplay-Regression", ndiName } },
+  );
+  const src = await created.json();
+  await page.request.post(
+    new URL(`/integrations/video-sources/${src.id}/activate`, baseURL).toString(),
+    { data: {} },
+  );
+  await page.request.post(
+    new URL("/stage/layout", baseURL).toString(),
+    { data: { code: "ndi-fullscreen" } },
+  );
+  await page.goto(new URL("/stage", baseURL).toString());
+  await page.waitForSelector('body[data-wasm-ready="true"]', { timeout: 30_000 });
+
+  // Poll for actual playback. videoWidth > 0 alone isn't enough — a paused
+  // video can have videoWidth set after metadata loads. The autoplay bug
+  // surfaces as `paused=true` AND `currentTime=0` (never advances). Assert
+  // BOTH have changed within a generous timeout.
+  const playback = await page
+    .locator('[data-role="ndi-video"]')
+    .evaluate(async (el: HTMLVideoElement) => {
+      for (let i = 0; i < 100; i++) {
+        if (!el.paused && el.currentTime > 0.1) {
+          return {
+            ok: true,
+            paused: el.paused,
+            currentTime: el.currentTime,
+            videoWidth: el.videoWidth,
+          };
+        }
+        await new Promise((r) => setTimeout(r, 100));
+      }
+      return {
+        ok: false,
+        paused: el.paused,
+        currentTime: el.currentTime,
+        videoWidth: el.videoWidth,
+      };
+    });
+  expect(
+    playback.ok,
+    `video failed to start playing — paused=${playback.paused}, currentTime=${playback.currentTime}, videoWidth=${playback.videoWidth}`,
+  ).toBe(true);
+});
+
+// ─────────────────────────────────────────────────────────────────────────
 // Regression tests for the "Connecting…" overlay state machine.
 //
 // The bug they catch (manually surfaced 2026-05-19): the WS event
