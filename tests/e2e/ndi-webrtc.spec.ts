@@ -185,7 +185,12 @@ test("NdiVideo videoWidth resolves above zero within 5 seconds of mount", async 
 // follows the `set_src_object()` call, this test fails: the video element
 // stays `paused=true`, `currentTime=0` indefinitely.
 // ─────────────────────────────────────────────────────────────────────────
-test("NdiVideo actually starts playing (autoplay policy regression)", async ({ page }) => {
+// `@video-codec` tag routes this test into the `chrome-video` Playwright
+// project (real Chrome with H.264 + autoplay policy enforced) per
+// playwright.config.ts. Without the tag the test runs against default
+// Chromium which can't decode H.264 — the assertion would fail for the
+// wrong reason and the autoplay regression would still slip past CI.
+test("NdiVideo actually starts playing (autoplay policy regression) @video-codec", async ({ page }) => {
   const status = await page.request.get(new URL("/ndi/status", baseURL).toString());
   const { available } = await status.json();
   test.skip(!available, "NDI SDK not available on this host");

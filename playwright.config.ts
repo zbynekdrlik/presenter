@@ -21,42 +21,55 @@ export default defineConfig({
   },
   projects: [
     {
+      // Default project: open-source Chromium (headless shell on CI), used
+      // for every test EXCEPT the video-playback tests. The video tests
+      // opt into the `chrome-video` project below via `test.use({ project:
+      // ... })`. Forcing every test through branded Chrome made existing
+      // "browser console must be clean" assertions fail because real Chrome
+      // emits stable-channel telemetry/devtools messages that the
+      // open-source Chromium build doesn't.
       name: "chromium",
       use: {
         ...devices["Desktop Chrome"],
-        // Two non-default settings — BOTH are required to catch real-world
-        // video playback bugs in CI. Neither was in place before, and both
-        // were proven necessary on 2026-05-20 when a user reported a fully
-        // black `<video>` element that Playwright's default config had
-        // silently passed for weeks.
-        //
-        // 1. `channel: "chrome"` — use the branded Google Chrome binary
-        //    (with proprietary codecs including H.264) rather than the
-        //    default open-source Chromium. Default Chromium lacks H.264
-        //    by license; WebRTC video tracks with H.264 RTP payloads will
-        //    have their `ontrack` callback fire and even set `srcObject`,
-        //    but the actual frame decode silently fails — `videoWidth`
-        //    stays 0, `currentTime` never advances, and a `paused=true`
-        //    assertion looks no different from "the bug we're trying to
-        //    catch". This is the difference Eyevinn and other WebRTC
-        //    teams documented years ago but it's not on the Playwright
-        //    quickstart page, so it's still a routine trap.
-        //    Requires `npx playwright install chrome` in CI setup (see
-        //    .github/workflows/*.yml).
-        //
-        // 2. `--autoplay-policy=user-gesture-required` — match real Chrome
-        //    behaviour for autoplay. Default Playwright launches with the
-        //    policy DISABLED, which means programmatic `srcObject` +
-        //    `autoplay muted playsinline` element silently auto-played in
-        //    every CI test while the same code paused in real Chrome on
-        //    every user's machine. With the policy enforced, the test
-        //    will FAIL if `video.play()` is not called explicitly after
-        //    setting `srcObject`.
+      },
+      // Exclude tests tagged @video-codec — those need real Chrome (next
+      // project below). Tagging is done in the test title:
+      //   test("foo @video-codec", ...)
+      grepInvert: /@video-codec/,
+    },
+    {
+      // Real-Chrome project for tests that depend on proprietary codecs
+      // (H.264 -> WebRTC video) AND real Chrome autoplay behaviour.
+      // Opted into per-test via `test.use({ project: "chrome-video" })`
+      // — DO NOT make this the default for every test. See ndi-webrtc.spec
+      // "NdiVideo actually starts playing (autoplay policy regression)".
+      //
+      // 1. `channel: "chrome"` — branded Google Chrome binary with H.264.
+      //    Default Chromium lacks H.264 by license; WebRTC tracks with
+      //    H.264 payloads silently fail to decode in open-source Chromium
+      //    (ontrack fires, srcObject set, but videoWidth stays 0). The
+      //    open-source Chromium can't be told apart from "real autoplay
+      //    bug" using the same assertions, so the test would be useless.
+      //    Requires `npx playwright install chrome` in CI setup.
+      //
+      // 2. `--autoplay-policy=user-gesture-required` — match real Chrome
+      //    behaviour. Default Playwright disables the policy entirely,
+      //    which means programmatic playback of <video> mounted via DOM
+      //    mutation silently auto-played in every CI test while the same
+      //    code paused in every real user's Chrome. With the policy on,
+      //    the test now FAILS if `video.play()` is missing — which is
+      //    the bug surfaced by a user on 2026-05-20 and fixed in 90b30ee.
+      name: "chrome-video",
+      use: {
+        ...devices["Desktop Chrome"],
         channel: "chrome",
         launchOptions: {
           args: ["--autoplay-policy=user-gesture-required"],
         },
       },
+      // Only run tests tagged @video-codec — the rest stay in the default
+      // chromium project for speed + console-clean assertions.
+      grep: /@video-codec/,
     },
   ],
 });
