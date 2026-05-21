@@ -39,6 +39,7 @@ regex = "1"
 [features]
 default = []
 mock-integrations = []
+test-helpers = []
 
 [dev-dependencies]
 axum.workspace = true

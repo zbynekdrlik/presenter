@@ -128,6 +128,31 @@ pub(crate) async fn delete_whep_session(
     Ok(into_response(reply))
 }
 
+/// Test-only: force the per-source GStreamer pipeline to stop, simulating
+/// an `ndisrc` crash. The PipelineSupervisor's recovery path should then
+/// rebuild it autonomously. Exposed ONLY when compiled with the
+/// `test-helpers` cargo feature; production binaries (built without the
+/// feature) do not contain this route. The Playwright recovery test calls
+/// it to make the recovery assertion deterministic.
+#[cfg(feature = "test-helpers")]
+#[instrument(skip_all, fields(source_id = %source_id))]
+pub(crate) async fn kill_pipeline_for_test(
+    Path(source_id): Path<String>,
+    State(state): State<AppState>,
+) -> Result<Response, AppError> {
+    let manager = state
+        .ndi_manager()
+        .ok_or_else(|| AppError::service_unavailable("NDI SDK not available"))?;
+    if !manager.is_active(&source_id).await {
+        return Err(AppError::not_found("NDI source not active"));
+    }
+    manager.stop_pipeline(&source_id).await;
+    Ok(Response::builder()
+        .status(204)
+        .body(axum::body::Body::empty())
+        .expect("valid response"))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -262,5 +287,22 @@ mod tests {
         };
         let resp = into_response(reply);
         assert_eq!(resp.status(), StatusCode::NO_CONTENT);
+    }
+
+    #[cfg(feature = "test-helpers")]
+    #[tokio::test]
+    async fn kill_pipeline_for_test_returns_404_for_unknown_source() {
+        let state = fresh_state().await;
+        let result = kill_pipeline_for_test(
+            axum::extract::Path("unknown".to_string()),
+            axum::extract::State(state),
+        )
+        .await;
+        assert!(result.is_err(), "expected error for unknown source");
+        let err = result.unwrap_err();
+        assert_eq!(
+            err.into_response().status(),
+            axum::http::StatusCode::NOT_FOUND
+        );
     }
 }

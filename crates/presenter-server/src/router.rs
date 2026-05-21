@@ -245,6 +245,13 @@ pub fn build_router(state: AppState) -> Router {
                 .patch(integrations::ndi_whep::patch_whep_session)
                 .delete(integrations::ndi_whep::delete_whep_session),
         )
+        .route(
+            "/test/ndi/kill-pipeline/{source_id}",
+            #[cfg(feature = "test-helpers")]
+            post(integrations::ndi_whep::kill_pipeline_for_test),
+            #[cfg(not(feature = "test-helpers"))]
+            post(|| async { axum::http::StatusCode::NOT_FOUND }),
+        )
         .route("/group-colors", get(presentations::get_group_colors))
         .route(
             "/presentations/{id}",
