@@ -39,7 +39,7 @@ regex = "1"
 [features]
 default = []
 mock-integrations = []
-test-helpers = []
+test-helpers = ["presenter-ndi/test-helpers"]
 
 [dev-dependencies]
 axum.workspace = true

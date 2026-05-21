@@ -128,17 +128,23 @@ pub(crate) async fn delete_whep_session(
     Ok(into_response(reply))
 }
 
-/// Test-only: force the per-source GStreamer pipeline to stop, simulating
-/// an `ndisrc` crash. The PipelineSupervisor's recovery path should then
-/// rebuild it autonomously. Exposed ONLY when compiled with the
-/// `test-helpers` cargo feature; production binaries (built without the
-/// feature) do not contain this route. The Playwright recovery test calls
-/// it to make the recovery assertion deterministic.
+/// Test-only: simulate an `ndisrc` "Internal data stream error" by
+/// forcing the source's pipeline into `Errored` state. The supervisor
+/// task (still alive, still watching the state channel) reacts as it
+/// would for a real fault: rebuilds the pipeline via
+/// `NdiManager::rebuild_pipeline`. The browser-side `Watchdog` sees the
+/// resulting WebRTC stall, dispatches a fresh WHEP POST, and the new
+/// pipeline accepts it — end-to-end recovery in 3-5s.
 ///
-/// Note: the `is_active` → `stop_pipeline` sequence is two separate mutex
-/// acquisitions, so a concurrent stop could race the `is_active` check.
-/// Harmless in the test context (the worst case is returning 204 for an
-/// already-stopped pipeline, and `stop_pipeline` is a no-op on missing keys).
+/// Exposed ONLY when compiled with the `test-helpers` cargo feature;
+/// production binaries (built without the feature) do not contain this
+/// route. The Playwright recovery test calls it to make the recovery
+/// assertion deterministic.
+///
+/// Note: `simulate_pipeline_error` acquires the active mutex once. There
+/// is no two-acquire TOCTOU like the previous `stop_pipeline`
+/// implementation, and the source remains active — what we're injecting
+/// is a fault that the supervisor recovers from, not a deactivation.
 #[cfg(feature = "test-helpers")]
 #[instrument(skip_all, fields(source_id = %source_id))]
 pub(crate) async fn kill_pipeline_for_test(
@@ -148,10 +154,12 @@ pub(crate) async fn kill_pipeline_for_test(
     let manager = state
         .ndi_manager()
         .ok_or_else(|| AppError::service_unavailable("NDI SDK not available"))?;
-    if !manager.is_active(&source_id).await {
+    if !manager
+        .simulate_pipeline_error(&source_id, "simulated ndisrc crash")
+        .await
+    {
         return Err(AppError::not_found("NDI source not active"));
     }
-    manager.stop_pipeline(&source_id).await;
     Ok(Response::builder()
         .status(204)
         .body(axum::body::Body::empty())

@@ -517,6 +517,22 @@ impl NdiManager {
         self.active.lock().await.contains_key(source_id)
     }
 
+    /// Test-only: trigger an Errored state on the source's pipeline so
+    /// the PipelineSupervisor reacts as it would for a real ndisrc fault.
+    /// Returns `true` if the source was active (state injection succeeded),
+    /// `false` if not (caller should map to 404).
+    #[cfg(feature = "test-helpers")]
+    pub async fn simulate_pipeline_error(&self, source_id: &str, msg: &str) -> bool {
+        let active = self.active.lock().await;
+        match active.get(source_id) {
+            Some(src) => {
+                src.pipeline.simulate_error_for_test(msg);
+                true
+            }
+            None => false,
+        }
+    }
+
     /// Forward a WHEP HTTP exchange into the source's `whepserversink`
     /// signaller via `emit_by_name`. The signaller's Promise resolves with
     /// `{status: u32, headers: gst::Structure, body: glib::Bytes}`.

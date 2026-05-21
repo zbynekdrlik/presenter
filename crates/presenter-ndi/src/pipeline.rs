@@ -395,6 +395,21 @@ impl NdiPipeline {
         self.state_rx.clone()
     }
 
+    /// Test-only: force an `Errored` state transition without actually
+    /// disturbing the underlying GStreamer pipeline. Used by the WHEP
+    /// kill-pipeline test route to simulate an `ndisrc` "Internal data
+    /// stream error" — the realistic failure mode that the production
+    /// `PipelineSupervisor` is designed to recover from.
+    ///
+    /// The supervisor (still alive, still subscribed to this state
+    /// channel) reacts to the Errored transition exactly as it would
+    /// for a real ndisrc fault: rebuild the pipeline via
+    /// `NdiManager::rebuild_pipeline`.
+    #[cfg(feature = "test-helpers")]
+    pub fn simulate_error_for_test(&self, msg: &str) {
+        let _ = self.state_tx.send(PipelineState::Errored(msg.to_string()));
+    }
+
     /// Returns a clone of the `whepserversink` element so the WHEP HTTP shim
     /// can reach its `signaller` child and emit_by_name SDP exchanges.
     pub fn sink_element(&self) -> Option<gst::Element> {
