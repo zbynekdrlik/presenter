@@ -337,6 +337,13 @@ impl NdiManager {
                 use crate::pipeline::PipelineState::*;
                 match current {
                     Streaming | Starting => {
+                        // Healthy transition: reset the consecutive-failure
+                        // counter so prior errors don't carry over into the
+                        // next backoff cycle if a future fault occurs. The
+                        // spec pseudocode shows Starting as a no-op; we treat
+                        // it as success here because reaching Starting means
+                        // recovery is underway and any prior failure streak
+                        // is irrelevant once the new pipeline begins running.
                         state.mark_rebuild_succeeded();
                     }
                     Errored(_) | Stopped => {
@@ -370,10 +377,20 @@ impl NdiManager {
                                         // window between active.insert and the
                                         // state_watcher_for clone, changed() would
                                         // block waiting for a further transition
-                                        // that never comes. Peek the state now and
-                                        // continue the loop if it's already dead so
-                                        // the outer match re-enters the rebuild
-                                        // branch immediately.
+                                        // that never comes. Peek the state now: if
+                                        // it's already dead, mark the rebuild as a
+                                        // failure and `continue` — that returns to
+                                        // the outer loop's changed().await, which
+                                        // then blocks until either (a) the dead
+                                        // pipeline emits another transition
+                                        // (unlikely) or (b) the 30s DB-ticker
+                                        // backstop removes the entry and drops the
+                                        // state_tx, which makes changed() return
+                                        // Err and exits this supervisor cleanly.
+                                        // A fresh supervisor is then spawned by
+                                        // the ticker's start_pipeline. Worst-case
+                                        // recovery window is ~30s, which is the
+                                        // intended backstop behavior.
                                         let already_dead = matches!(
                                             *watcher.borrow_and_update(),
                                             Errored(_) | Stopped

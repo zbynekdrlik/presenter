@@ -70,13 +70,13 @@ jobs:
         env:
           PRESENTER_BUILD_CHANNEL: release
 
-      - name: Verify prod artifact has no mock integrations
+      - name: Verify prod artifact has no test-only features
         run: |
-          if strings target/release/presenter-server | grep -E "mock_integrations|MOCK_RESOLUME_ADDR|MOCK_ABLESET_ADDR|mock-resolume|mock-ableset" >/dev/null; then
-            echo "::error::Prod build contains mock-integrations symbols. Rebuild without --features mock-integrations."
+          if strings target/release/presenter-server | grep -E "mock_integrations|MOCK_RESOLUME_ADDR|MOCK_ABLESET_ADDR|mock-resolume|mock-ableset|kill_pipeline_for_test|simulate_error_for_test|simulate_pipeline_error" >/dev/null; then
+            echo "::error::Prod build contains test-only symbols (mock-integrations or test-helpers). Rebuild without --features mock-integrations,test-helpers."
             exit 1
           fi
-          echo "Prod artifact verified: no mock integration symbols"
+          echo "Prod artifact verified: no test-only symbols"
 
       - name: Create release archive
         run: |

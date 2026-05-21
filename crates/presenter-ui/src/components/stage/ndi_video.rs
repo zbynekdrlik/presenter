@@ -288,6 +288,13 @@ pub fn NdiVideo(source_id: String, #[prop(optional)] class: Option<&'static str>
 /// reset implicitly when `connect_whep` succeeds and the supervising loop
 /// breaks out (the static doesn't reset — but the cap at 5s makes the
 /// occasional "long delay after a long failure run" harmless).
+///
+/// Note: `STEP` is process-global and shared across all `<NdiVideo>`
+/// instances on the page. This is harmless for the current ndi-fullscreen
+/// layout (single video element). If a future multi-tile layout mounts
+/// multiple `<NdiVideo>` components, instance A's failure streak will
+/// inflate instance B's first retry delay (still capped at 5s). When that
+/// layout ships, move STEP into a per-component Rc<Cell<usize>>.
 async fn sleep_for_backoff() {
     use std::sync::atomic::{AtomicUsize, Ordering as AtomicOrdering};
     static STEP: AtomicUsize = AtomicUsize::new(0);
