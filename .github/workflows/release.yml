@@ -18,7 +18,18 @@ jobs:
       - uses: actions/checkout@v4
 
       - name: Install system dependencies
-        run: sudo apt-get update -qq && sudo apt-get install -y -qq protobuf-compiler cmake nasm
+        # libglib2.0-dev + libgstreamer1.0-dev are required to compile
+        # `glib-sys` / `gstreamer-sys` (pulled in via gst-plugins-rs by the
+        # NDI WebRTC pipeline). Without them the build fails with
+        #   "Package 'glib-2.0', required by 'virtual:world', not found"
+        # at the glib-sys build script.
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq \
+            protobuf-compiler cmake nasm \
+            libglib2.0-dev \
+            libgstreamer1.0-dev libgstreamer-plugins-base1.0-dev \
+            libgstreamer-plugins-bad1.0-dev
 
       - name: Install Rust toolchain
         uses: dtolnay/rust-toolchain@stable
