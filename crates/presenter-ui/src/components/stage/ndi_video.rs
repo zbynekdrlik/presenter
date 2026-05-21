@@ -10,8 +10,9 @@ use std::sync::Arc;
 use leptos::prelude::*;
 use leptos::wasm_bindgen::{closure::Closure, JsCast, JsValue};
 use leptos::web_sys::{
-    HtmlVideoElement, MediaStream, RtcConfiguration, RtcPeerConnection, RtcRtpTransceiverDirection,
-    RtcRtpTransceiverInit, RtcSdpType, RtcSessionDescriptionInit, RtcTrackEvent,
+    HtmlVideoElement, MediaStream, RtcConfiguration, RtcIceConnectionState, RtcPeerConnection,
+    RtcRtpTransceiverDirection, RtcRtpTransceiverInit, RtcSdpType, RtcSessionDescriptionInit,
+    RtcTrackEvent,
 };
 use wasm_bindgen_futures::{spawn_local, JsFuture};
 
@@ -28,6 +29,124 @@ struct WhepSession {
     resource_url: Option<String>,
 }
 
+/// Watchdog that fires `on_failure` when EITHER:
+/// - the RTCPeerConnection's iceConnectionState becomes "failed", "disconnected",
+///   or "closed", OR
+/// - the <video> element's currentTime has not advanced for STALL_THRESHOLD seconds.
+///
+/// The closure handles are leaked via `forget()` because wasm-bindgen `Closure`
+/// types are not `Send` and removing them on drop would require keeping the
+/// original handles around in a `Send`-bounded `StoredValue` — which doesn't
+/// fit. Instead we use an `active: Rc<Cell<bool>>` flag: closures check it
+/// first and become no-ops once cleared. `Watchdog::stop()` flips the flag.
+/// The closures themselves outlive the `Watchdog` instance but consume only a
+/// tiny amount of memory (a few `Rc` clones).
+struct Watchdog {
+    active: std::rc::Rc<std::cell::Cell<bool>>,
+}
+
+impl Watchdog {
+    /// Stall threshold: <video>.currentTime advance with this many seconds of
+    /// no change triggers a reconnect.
+    const STALL_THRESHOLD_SECS: f64 = 3.0;
+    /// How often the stall timer ticks (ms).
+    const TICK_INTERVAL_MS: i32 = 1000;
+
+    /// Install ICE-state listener + stall timer. `on_failure` is called at
+    /// most ONCE per Watchdog instance — after firing, both observers become
+    /// no-ops (gated by the `active` flag).
+    fn install<F: Fn() + 'static>(
+        video: &HtmlVideoElement,
+        pc: &RtcPeerConnection,
+        on_failure: F,
+    ) -> Self {
+        use std::cell::Cell;
+        use std::rc::Rc;
+
+        let active: Rc<Cell<bool>> = Rc::new(Cell::new(true));
+        let on_failure = Rc::new(on_failure);
+
+        // ICE state listener: fire on Failed / Disconnected / Closed.
+        {
+            let active = Rc::clone(&active);
+            let on_failure = Rc::clone(&on_failure);
+            let pc_clone = pc.clone();
+            let cb = Closure::<dyn FnMut(JsValue)>::new(move |_ev: JsValue| {
+                if !active.get() {
+                    return;
+                }
+                let s = pc_clone.ice_connection_state();
+                if matches!(
+                    s,
+                    RtcIceConnectionState::Failed
+                        | RtcIceConnectionState::Disconnected
+                        | RtcIceConnectionState::Closed
+                ) {
+                    leptos::logging::warn!(
+                        "watchdog: ICE state={s:?}, triggering reconnect"
+                    );
+                    active.set(false);
+                    (on_failure)();
+                }
+            });
+            pc.set_oniceconnectionstatechange(Some(cb.as_ref().unchecked_ref()));
+            cb.forget();
+        }
+
+        // Stall timer: every TICK_INTERVAL_MS check if currentTime advanced.
+        {
+            let active = Rc::clone(&active);
+            let on_failure = Rc::clone(&on_failure);
+            let video_clone = video.clone();
+            let last_time: std::rc::Rc<std::cell::Cell<f64>> =
+                std::rc::Rc::new(std::cell::Cell::new(-1.0));
+            let last_change_at: std::rc::Rc<std::cell::Cell<f64>> =
+                std::rc::Rc::new(std::cell::Cell::new(0.0));
+            let cb = Closure::<dyn FnMut()>::new(move || {
+                if !active.get() {
+                    return;
+                }
+                let now_secs = leptos::web_sys::js_sys::Date::now() / 1000.0;
+                let t = video_clone.current_time();
+                if (t - last_time.get()).abs() > 0.001 {
+                    // Time advanced — reset stall window.
+                    last_time.set(t);
+                    last_change_at.set(now_secs);
+                    return;
+                }
+                if last_change_at.get() == 0.0 {
+                    // First tick after install — establish baseline.
+                    last_change_at.set(now_secs);
+                    return;
+                }
+                if now_secs - last_change_at.get() >= Self::STALL_THRESHOLD_SECS {
+                    leptos::logging::warn!(
+                        "watchdog: <video> stalled for >{}s (currentTime={t}), triggering reconnect",
+                        Self::STALL_THRESHOLD_SECS
+                    );
+                    active.set(false);
+                    (on_failure)();
+                }
+            });
+            if let Some(window) = leptos::web_sys::window() {
+                let _ = window.set_interval_with_callback_and_timeout_and_arguments_0(
+                    cb.as_ref().unchecked_ref(),
+                    Self::TICK_INTERVAL_MS,
+                );
+            }
+            cb.forget();
+        }
+
+        Self { active }
+    }
+
+    /// Disable both observers. Idempotent. Calling `stop` after `on_failure`
+    /// has already fired is a safe no-op.
+    fn stop(&self) {
+        self.active.set(false);
+    }
+}
+
 /// Build the WHEP endpoint URL for a given source.
 pub fn whep_url(source_id: &str) -> String {
     format!("/ndi/whep/{source_id}")
@@ -37,11 +156,19 @@ pub fn whep_url(source_id: &str) -> String {
 pub fn NdiVideo(source_id: String, #[prop(optional)] class: Option<&'static str>) -> impl IntoView {
     let video_ref = NodeRef::<leptos::html::Video>::new();
     let source_id_for_effect = source_id.clone();
-    // Holds the full WHEP session (pc + resource URL) so we can DELETE the
-    // session on the server when the component unmounts. Without DELETE the
-    // server-side webrtcsink accumulates sessions forever (every browser
-    // navigation = one session) and breaks after enough buildup.
-    let session_holder: StoredValue<Option<WhepSession>> = StoredValue::new(None);
+
+    // Holds the active connection: the WHEP session + the watchdog observing
+    // its health. Cleanup must close both — see on_cleanup below.
+    struct ActiveConnection {
+        session: WhepSession,
+        watchdog: Watchdog,
+    }
+    // Use new_local() instead of new() because Watchdog holds Rc<Cell<bool>>
+    // which is !Send + !Sync. LocalStorage drops the Send+Sync requirement;
+    // safe here because we're single-threaded WASM.
+    let session_holder: StoredValue<Option<ActiveConnection>, LocalStorage> =
+        StoredValue::new_local(None);
+
     // Cancellation flag covering the race where the component unmounts BEFORE
     // `connect_whep` resolves.
     let cancelled = Arc::new(AtomicBool::new(false));
@@ -52,29 +179,77 @@ pub fn NdiVideo(source_id: String, #[prop(optional)] class: Option<&'static str>
         let source_id = source_id_for_effect.clone();
         let cancelled = Arc::clone(&cancelled_for_effect);
         spawn_local(async move {
-            match connect_whep(&video, &source_id).await {
-                Ok(session) => {
-                    if cancelled.load(Ordering::Acquire) {
-                        // Component unmounted before connect_whep finished —
-                        // synchronously fire DELETE and close pc. Same
-                        // mechanism as on_cleanup below.
-                        if let Some(url) = &session.resource_url {
-                            dispatch_delete(url);
-                        }
-                        session.pc.close();
-                    } else {
-                        // Also wire a window pagehide listener: some browsers
-                        // (and Playwright's page.goto()) tear down the JS
-                        // context before Leptos's on_cleanup runs. pagehide
-                        // fires earlier in the unload sequence and gives us a
-                        // chance to dispatch the DELETE while the window is
-                        // still alive.
-                        install_pagehide_teardown(&session);
-                        session_holder.set_value(Some(session));
-                    }
+            // The reconnect-trigger flag: when a watchdog fires, it sets this
+            // flag; the loop drains it and reconnects.
+            let reconnect_flag = std::rc::Rc::new(std::cell::Cell::new(false));
+
+            loop {
+                if cancelled.load(Ordering::Acquire) {
+                    return;
                 }
-                Err(e) => {
-                    leptos::logging::error!("WHEP connect for {source_id} failed: {e:?}");
+                match connect_whep(&video, &source_id).await {
+                    Ok(session) => {
+                        if cancelled.load(Ordering::Acquire) {
+                            // Unmounted between POST and now — clean up server
+                            // session and bail.
+                            if let Some(url) = &session.resource_url {
+                                dispatch_delete(url);
+                            }
+                            session.pc.close();
+                            return;
+                        }
+                        // Install watchdog: on failure, set the reconnect flag.
+                        let flag = std::rc::Rc::clone(&reconnect_flag);
+                        let watchdog =
+                            Watchdog::install(&video, &session.pc, move || flag.set(true));
+
+                        install_pagehide_teardown(&session);
+                        session_holder.set_value(Some(ActiveConnection {
+                            session,
+                            watchdog,
+                        }));
+
+                        // Wait until either cancellation OR a watchdog fire.
+                        loop {
+                            if cancelled.load(Ordering::Acquire) {
+                                return;
+                            }
+                            if reconnect_flag.get() {
+                                reconnect_flag.set(false);
+                                break;
+                            }
+                            // Poll every 100ms.
+                            let promise =
+                                leptos::web_sys::js_sys::Promise::new(&mut |resolve, _| {
+                                    if let Some(w) = leptos::web_sys::window() {
+                                        let _ = w
+                                            .set_timeout_with_callback_and_timeout_and_arguments_0(
+                                                &resolve, 100,
+                                            );
+                                    }
+                                });
+                            let _ = wasm_bindgen_futures::JsFuture::from(promise).await;
+                        }
+
+                        // Tear down old session before reconnecting.
+                        if let Some(active) =
+                            session_holder.try_update_value(|v| v.take()).flatten()
+                        {
+                            active.watchdog.stop();
+                            if let Some(url) = &active.session.resource_url {
+                                dispatch_delete(url);
+                            }
+                            active.session.pc.close();
+                        }
+                        // Loop falls through to connect_whep again with no
+                        // additional backoff (first retry is immediate).
+                    }
+                    Err(e) => {
+                        leptos::logging::warn!(
+                            "reconnect_loop: connect_whep failed: {e:?}, backing off"
+                        );
+                        sleep_for_backoff().await;
+                    }
                 }
             }
         });
@@ -83,12 +258,13 @@ pub fn NdiVideo(source_id: String, #[prop(optional)] class: Option<&'static str>
     let cancelled_for_cleanup = Arc::clone(&cancelled);
     on_cleanup(move || {
         cancelled_for_cleanup.store(true, Ordering::Release);
-        let session = session_holder.try_update_value(|opt| opt.take()).flatten();
-        if let Some(session) = session {
-            if let Some(url) = &session.resource_url {
+        let active = session_holder.try_update_value(|opt| opt.take()).flatten();
+        if let Some(active) = active {
+            active.watchdog.stop();
+            if let Some(url) = &active.session.resource_url {
                 dispatch_delete(url);
             }
-            session.pc.close();
+            active.session.pc.close();
         }
     });
 
@@ -105,6 +281,35 @@ pub fn NdiVideo(source_id: String, #[prop(optional)] class: Option<&'static str>
             playsinline
         />
     }
+}
+
+/// Sleep for an exponentially increasing duration, capped at 5s. Uses a
+/// static atomic to track the current step across calls. The schedule is
+/// reset implicitly when `connect_whep` succeeds and the supervising loop
+/// breaks out (the static doesn't reset — but the cap at 5s makes the
+/// occasional "long delay after a long failure run" harmless).
+///
+/// Note: `STEP` is process-global and shared across all `<NdiVideo>`
+/// instances on the page. This is harmless for the current ndi-fullscreen
+/// layout (single video element). If a future multi-tile layout mounts
+/// multiple `<NdiVideo>` components, instance A's failure streak will
+/// inflate instance B's first retry delay (still capped at 5s). When that
+/// layout ships, move STEP into a per-component Rc<Cell<usize>>.
+async fn sleep_for_backoff() {
+    use std::sync::atomic::{AtomicUsize, Ordering as AtomicOrdering};
+    static STEP: AtomicUsize = AtomicUsize::new(0);
+    let schedule_ms: [i32; 7] = [500, 1000, 2000, 4000, 5000, 5000, 5000];
+    let i = STEP
+        .fetch_add(1, AtomicOrdering::Relaxed)
+        .min(schedule_ms.len() - 1);
+    let ms = schedule_ms[i];
+    let promise = leptos::web_sys::js_sys::Promise::new(&mut |resolve, _| {
+        if let Some(window) = leptos::web_sys::window() {
+            let _ = window
+                .set_timeout_with_callback_and_timeout_and_arguments_0(&resolve, ms);
+        }
+    });
+    let _ = wasm_bindgen_futures::JsFuture::from(promise).await;
 }
 
 /// Fire-and-forget DELETE to the WHEP session resource. SYNCHRONOUS dispatch —

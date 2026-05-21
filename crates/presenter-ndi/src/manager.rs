@@ -55,6 +55,11 @@ pub struct WhepReply {
 
 struct ActiveSource {
     pipeline: NdiPipeline,
+    /// Supervisor task handle. Aborted on `stop_pipeline` / drop to prevent
+    /// leaks. `None` only inside the regression-test constructors (which
+    /// don't spawn a real supervisor) AND in the `rebuild_pipeline` re-insert
+    /// path (the existing supervisor task is reused — see `spawn_supervisor`).
+    supervisor: Option<tokio::task::JoinHandle<()>>,
 }
 
 /// Outcome of `check_active_entry` — drives `start_pipeline`'s control flow.
@@ -67,6 +72,74 @@ enum StateCheckOutcome {
     /// Errored). In the dead case the entry has already been removed.
     /// Caller should proceed to build a fresh pipeline.
     Rebuild,
+}
+
+/// Per-source supervisor bookkeeping: when the last rebuild was attempted,
+/// and how many consecutive failures we've seen.
+///
+/// Pure data — no async, no I/O — so unit-testable on every CI host.
+#[derive(Debug)]
+struct SupervisorState {
+    last_rebuild_at: std::time::Instant,
+    /// 0 while the pipeline is healthy. Incremented by `mark_rebuild_failed`,
+    /// reset to 0 by `mark_rebuild_succeeded`.
+    consecutive_failures: u32,
+}
+
+/// Outcome of `SupervisorState::should_rebuild_now` — drives the supervisor's
+/// next sleep duration.
+#[derive(Debug)]
+enum RebuildDecision {
+    /// Wait this long, then attempt a rebuild. Zero duration means rebuild now.
+    ProceedAfter(std::time::Duration),
+}
+
+impl SupervisorState {
+    fn new() -> Self {
+        Self {
+            // Start with last_rebuild far enough in the past that the FIRST
+            // rebuild attempt has zero wait.
+            last_rebuild_at: std::time::Instant::now() - std::time::Duration::from_secs(3600),
+            consecutive_failures: 0,
+        }
+    }
+
+    fn consecutive_failures(&self) -> u32 {
+        self.consecutive_failures
+    }
+
+    /// Rate-limit window: minimum 2 seconds between rebuild attempts.
+    fn should_rebuild_now(&self, now: std::time::Instant) -> RebuildDecision {
+        const RATE_LIMIT: std::time::Duration = std::time::Duration::from_secs(2);
+        let since_last = now.duration_since(self.last_rebuild_at);
+        if since_last >= RATE_LIMIT {
+            RebuildDecision::ProceedAfter(std::time::Duration::ZERO)
+        } else {
+            RebuildDecision::ProceedAfter(RATE_LIMIT - since_last)
+        }
+    }
+
+    /// Exponential backoff once failures reach 5: 2s, 4s, 8s, 16s, 30s cap.
+    fn backoff_for_failure_count(&self) -> std::time::Duration {
+        if self.consecutive_failures < 5 {
+            return std::time::Duration::ZERO;
+        }
+        let exp = (self.consecutive_failures - 5).min(4); // 0..=4 → 1,2,4,8,16
+        let secs: u64 = 1u64 << exp; // 1, 2, 4, 8, 16
+        std::time::Duration::from_secs(secs.saturating_mul(2).min(30))
+    }
+
+    fn mark_rebuild_started(&mut self) {
+        self.last_rebuild_at = std::time::Instant::now();
+    }
+
+    fn mark_rebuild_succeeded(&mut self) {
+        self.consecutive_failures = 0;
+    }
+
+    fn mark_rebuild_failed(&mut self) {
+        self.consecutive_failures = self.consecutive_failures.saturating_add(1);
+    }
 }
 
 /// Pure state-check for the active-source HashMap. Extracted from
@@ -95,6 +168,24 @@ async fn check_active_entry(
             }
             PipelineState::Stopped | PipelineState::Errored(_) => {
                 if let Some(mut dead) = active.remove(source_id) {
+                    // CRITICAL: do NOT abort `dead.supervisor` here. The
+                    // supervisor task is what CALLS `rebuild_pipeline ->
+                    // check_active_entry` in the recovery path, so aborting
+                    // its own JoinHandle would self-cancel at the next
+                    // `.await` (pipeline.start / caps_ready) — orphaning the
+                    // new pipeline we're about to build and leaving the
+                    // active map empty. The supervisor's lifecycle is owned
+                    // by `stop_pipeline` / `stop_all` (explicit deactivation
+                    // paths only) — never by the rebuild path.
+                    //
+                    // After this Drops, `dead.supervisor: Option<JoinHandle>`
+                    // is dropped too. Dropping a JoinHandle does NOT cancel
+                    // its task in tokio (unlike abort), so the task keeps
+                    // running — which is exactly what we need for the
+                    // self-rebuild path. `rebuild_pipeline` then re-inserts
+                    // a fresh ActiveSource with `supervisor: None`, and the
+                    // still-running supervisor re-subscribes to the new
+                    // pipeline's state_watcher via `state_watcher_for`.
                     dead.pipeline.stop().await;
                 }
             }
@@ -145,7 +236,11 @@ impl NdiManager {
     /// A 7-second timeout caps the wait — long enough for ndisrc to find the
     /// source on a healthy LAN, short enough that a missing/dead broadcaster
     /// reports back quickly to the operator.
-    pub async fn start_pipeline(&self, source_id: &str, ndi_name: &str) -> Result<()> {
+    pub async fn start_pipeline(
+        self: &std::sync::Arc<Self>,
+        source_id: &str,
+        ndi_name: &str,
+    ) -> Result<()> {
         let mut active = self.active.lock().await;
         if let StateCheckOutcome::Idempotent = check_active_entry(&mut active, source_id).await {
             return Ok(());
@@ -196,7 +291,19 @@ impl NdiManager {
 
         match caps_ready {
             Ok(Ok(())) => {
-                active.insert(source_id.to_string(), ActiveSource { pipeline });
+                // pipeline.state_watcher() and self.spawn_supervisor must
+                // run before pipeline is moved into ActiveSource on the
+                // active.insert line below.
+                let watcher = pipeline.state_watcher();
+                let supervisor =
+                    self.spawn_supervisor(source_id.to_string(), ndi_name.to_string(), watcher);
+                active.insert(
+                    source_id.to_string(),
+                    ActiveSource {
+                        pipeline,
+                        supervisor: Some(supervisor),
+                    },
+                );
                 Ok(())
             }
             Ok(Err(e)) => {
@@ -213,10 +320,215 @@ impl NdiManager {
         }
     }
 
+    /// Spawn the supervisor task for one source. Returns the JoinHandle so
+    /// callers can store it in `ActiveSource.supervisor` and abort on stop.
+    ///
+    /// The supervisor:
+    /// - Subscribes to the pipeline's state watcher
+    /// - On Errored/Stopped, requests a rebuild via `rebuild_pipeline`
+    /// - Rate-limits to 1 rebuild / 2s; exponentially backs off after 5
+    ///   consecutive failures
+    /// - Re-subscribes to the FRESH state watcher after each successful
+    ///   rebuild (the old watcher's pipeline was dropped)
+    /// - Exits when the watcher closes (pipeline dropped) OR the task is
+    ///   externally aborted via `stop_pipeline`
+    fn spawn_supervisor(
+        self: &std::sync::Arc<Self>,
+        source_id: String,
+        ndi_name: String,
+        mut watcher: tokio::sync::watch::Receiver<crate::pipeline::PipelineState>,
+    ) -> tokio::task::JoinHandle<()> {
+        let manager = std::sync::Arc::clone(self);
+        tokio::spawn(async move {
+            let mut state = SupervisorState::new();
+            loop {
+                // Wait for the next state change.
+                if watcher.changed().await.is_err() {
+                    // Pipeline dropped — exit cleanly.
+                    tracing::debug!(source_id = %source_id, "supervisor: watcher closed, exiting");
+                    return;
+                }
+                let current = watcher.borrow_and_update().clone();
+                use crate::pipeline::PipelineState::*;
+                match current {
+                    Streaming | Starting => {
+                        // Healthy transition: reset the consecutive-failure
+                        // counter so prior errors don't carry over into the
+                        // next backoff cycle if a future fault occurs. The
+                        // spec pseudocode shows Starting as a no-op; we treat
+                        // it as success here because reaching Starting means
+                        // recovery is underway and any prior failure streak
+                        // is irrelevant once the new pipeline begins running.
+                        state.mark_rebuild_succeeded();
+                    }
+                    Errored(_) | Stopped => {
+                        // Apply rate-limit + backoff.
+                        let RebuildDecision::ProceedAfter(wait) =
+                            state.should_rebuild_now(std::time::Instant::now());
+                        let backoff = state.backoff_for_failure_count();
+                        let total = wait.max(backoff);
+                        if !total.is_zero() {
+                            tracing::warn!(
+                                source_id = %source_id,
+                                wait_ms = total.as_millis() as u64,
+                                consecutive_failures = state.consecutive_failures(),
+                                "supervisor: backing off before rebuild"
+                            );
+                            tokio::time::sleep(total).await;
+                        }
+                        state.mark_rebuild_started();
+                        match manager.rebuild_pipeline(&source_id, &ndi_name).await {
+                            Ok(()) => {
+                                tracing::info!(source_id = %source_id, "supervisor: rebuild succeeded");
+                                state.mark_rebuild_succeeded();
+                                // The fresh pipeline has a NEW state watcher; swap ours
+                                // so we see ITS transitions, not the dead pipeline's.
+                                match manager.state_watcher_for(&source_id).await {
+                                    Some(w) => {
+                                        watcher = w;
+                                        // After re-subscribing, the new watcher's
+                                        // "seen" mark is the current value. If the
+                                        // fresh pipeline has ALREADY errored in the
+                                        // window between active.insert and the
+                                        // state_watcher_for clone, changed() would
+                                        // block waiting for a further transition
+                                        // that never comes. Peek the state now: if
+                                        // it's already dead, mark the rebuild as a
+                                        // failure and `continue` — that returns to
+                                        // the outer loop's changed().await, which
+                                        // then blocks until either (a) the dead
+                                        // pipeline emits another transition
+                                        // (unlikely) or (b) the 30s DB-ticker
+                                        // backstop removes the entry and drops the
+                                        // state_tx, which makes changed() return
+                                        // Err and exits this supervisor cleanly.
+                                        // A fresh supervisor is then spawned by
+                                        // the ticker's start_pipeline. Worst-case
+                                        // recovery window is ~30s, which is the
+                                        // intended backstop behavior.
+                                        let already_dead = matches!(
+                                            *watcher.borrow_and_update(),
+                                            Errored(_) | Stopped
+                                        );
+                                        if already_dead {
+                                            // Mark as a failure for backoff bookkeeping —
+                                            // the rebuild "succeeded" briefly but the
+                                            // pipeline collapsed immediately, which is
+                                            // a real failure of recovery.
+                                            state.mark_rebuild_failed();
+                                            continue;
+                                        }
+                                    }
+                                    None => {
+                                        // Source no longer active (operator deactivated
+                                        // between rebuild start and now). Exit.
+                                        tracing::debug!(
+                                            source_id = %source_id,
+                                            "supervisor: source no longer active after rebuild, exiting"
+                                        );
+                                        return;
+                                    }
+                                }
+                            }
+                            Err(e) => {
+                                state.mark_rebuild_failed();
+                                tracing::warn!(
+                                    source_id = %source_id,
+                                    error = %e,
+                                    consecutive_failures = state.consecutive_failures(),
+                                    "supervisor: rebuild failed"
+                                );
+                            }
+                        }
+                    }
+                }
+            }
+        })
+    }
+
+    /// Fetch the live `state_watcher` for an active source. Used by the
+    /// supervisor to re-subscribe after a successful rebuild (the old
+    /// watcher's pipeline is dropped after rebuild).
+    async fn state_watcher_for(
+        &self,
+        source_id: &str,
+    ) -> Option<tokio::sync::watch::Receiver<crate::pipeline::PipelineState>> {
+        let active = self.active.lock().await;
+        active.get(source_id).map(|s| s.pipeline.state_watcher())
+    }
+
+    /// Rebuild the pipeline for a source whose existing entry is dead
+    /// (Errored or Stopped). Reuses `check_active_entry` to clear the
+    /// dead entry, then builds + starts a fresh pipeline. Does NOT
+    /// spawn a new supervisor (the supervisor task that called us is
+    /// still alive and will re-subscribe to the new state watcher via
+    /// `state_watcher_for`).
+    async fn rebuild_pipeline(&self, source_id: &str, ndi_name: &str) -> Result<()> {
+        let mut active = self.active.lock().await;
+        // Force-remove the dead entry. If somehow it has become healthy in
+        // the meantime, leave it alone (idempotent).
+        if let StateCheckOutcome::Idempotent = check_active_entry(&mut active, source_id).await {
+            return Ok(());
+        }
+
+        let whep_url = format!("/ndi/whep/{}", source_id);
+        let mut pipeline = NdiPipeline::build(ndi_name, whep_url)?;
+        pipeline.start().await?;
+
+        let sink = pipeline
+            .sink_element()
+            .ok_or_else(|| anyhow!("pipeline has no sink element"))?;
+        let video_pad = sink
+            .static_pad("video_0")
+            .ok_or_else(|| anyhow!("whepserversink has no video_0 sink pad"))?;
+        let mut watcher = pipeline.state_watcher();
+        let caps_ready = tokio::time::timeout(std::time::Duration::from_secs(8), async {
+            loop {
+                if let crate::pipeline::PipelineState::Errored(ref e) = *watcher.borrow_and_update()
+                {
+                    return Err(anyhow!("pipeline errored: {e}"));
+                }
+                if video_pad.current_caps().is_some() {
+                    return Ok(());
+                }
+                tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+            }
+        })
+        .await;
+
+        match caps_ready {
+            Ok(Ok(())) => {
+                active.insert(
+                    source_id.to_string(),
+                    ActiveSource {
+                        pipeline,
+                        // Supervisor task is reused — it'll fetch the new watcher
+                        // from us via `state_watcher_for`.
+                        supervisor: None,
+                    },
+                );
+                Ok(())
+            }
+            Ok(Err(e)) => {
+                pipeline.stop().await;
+                Err(e)
+            }
+            Err(_) => {
+                pipeline.stop().await;
+                Err(anyhow!(
+                    "NDI source '{ndi_name}' did not deliver any frame within 8s on rebuild"
+                ))
+            }
+        }
+    }
+
     /// Stop one pipeline.
     pub async fn stop_pipeline(&self, source_id: &str) {
         let mut active = self.active.lock().await;
         if let Some(mut src) = active.remove(source_id) {
+            if let Some(handle) = src.supervisor.take() {
+                handle.abort();
+            }
             src.pipeline.stop().await;
         }
     }
@@ -225,6 +537,9 @@ impl NdiManager {
     pub async fn stop_all(&self) {
         let mut active = self.active.lock().await;
         for (_, mut src) in active.drain() {
+            if let Some(handle) = src.supervisor.take() {
+                handle.abort();
+            }
             src.pipeline.stop().await;
         }
     }
@@ -232,6 +547,22 @@ impl NdiManager {
     /// Is the given source's pipeline currently active?
     pub async fn is_active(&self, source_id: &str) -> bool {
         self.active.lock().await.contains_key(source_id)
+    }
+
+    /// Test-only: trigger an Errored state on the source's pipeline so
+    /// the PipelineSupervisor reacts as it would for a real ndisrc fault.
+    /// Returns `true` if the source was active (state injection succeeded),
+    /// `false` if not (caller should map to 404).
+    #[cfg(feature = "test-helpers")]
+    pub async fn simulate_pipeline_error(&self, source_id: &str, msg: &str) -> bool {
+        let active = self.active.lock().await;
+        match active.get(source_id) {
+            Some(src) => {
+                src.pipeline.simulate_error_for_test(msg);
+                true
+            }
+            None => false,
+        }
     }
 
     /// Forward a WHEP HTTP exchange into the source's `whepserversink`
@@ -347,7 +678,13 @@ mod start_pipeline_state_check_tests {
             PipelineState::Stopped,
             "precondition: stopped_for_test must yield a Stopped pipeline",
         );
-        active.insert("test-id".to_string(), ActiveSource { pipeline: dead });
+        active.insert(
+            "test-id".to_string(),
+            ActiveSource {
+                pipeline: dead,
+                supervisor: None,
+            },
+        );
         assert!(active.contains_key("test-id"));
 
         let outcome = check_active_entry(&mut active, "test-id").await;
@@ -371,7 +708,13 @@ mod start_pipeline_state_check_tests {
         let mut p = crate::pipeline::NdiPipeline::stopped_for_test();
         p.set_state_for_test(PipelineState::Streaming);
         assert_eq!(p.state(), PipelineState::Streaming);
-        active.insert("test-id".to_string(), ActiveSource { pipeline: p });
+        active.insert(
+            "test-id".to_string(),
+            ActiveSource {
+                pipeline: p,
+                supervisor: None,
+            },
+        );
 
         let outcome = check_active_entry(&mut active, "test-id").await;
 
@@ -389,11 +732,98 @@ mod start_pipeline_state_check_tests {
         let mut active: HashMap<String, ActiveSource> = HashMap::new();
         let mut p = crate::pipeline::NdiPipeline::stopped_for_test();
         p.set_state_for_test(PipelineState::Errored("ndisrc fault".to_string()));
-        active.insert("test-id".to_string(), ActiveSource { pipeline: p });
+        active.insert(
+            "test-id".to_string(),
+            ActiveSource {
+                pipeline: p,
+                supervisor: None,
+            },
+        );
 
         let outcome = check_active_entry(&mut active, "test-id").await;
 
         assert_eq!(outcome, StateCheckOutcome::Rebuild);
         assert!(!active.contains_key("test-id"));
+    }
+
+    /// Rate-limiter: two Errored transitions within 2s must produce
+    /// exactly ONE rebuild attempt.
+    #[tokio::test]
+    async fn supervisor_rate_limits_rapid_errors() {
+        let mut state = SupervisorState::new();
+        let outcome1 = state.should_rebuild_now(std::time::Instant::now());
+        assert!(matches!(outcome1, RebuildDecision::ProceedAfter(d) if d.is_zero()));
+        state.mark_rebuild_started();
+
+        // 100ms later — well within the 2s rate limit.
+        let outcome2 = state
+            .should_rebuild_now(std::time::Instant::now() + std::time::Duration::from_millis(100));
+        // Decision must defer to "after the rate-limit window".
+        // Allow a small tolerance (50ms) for the real time elapsed between
+        // mark_rebuild_started() and the should_rebuild_now() call.
+        match outcome2 {
+            RebuildDecision::ProceedAfter(d) => {
+                assert!(
+                    d >= std::time::Duration::from_millis(1850),
+                    "expected ~2s wait, got {d:?}"
+                );
+            }
+        }
+    }
+
+    /// After 5 consecutive failures, backoff progression is 2s, 4s, 8s, 16s, 30s (cap).
+    #[tokio::test]
+    async fn supervisor_backs_off_exponentially_after_5_failures() {
+        let mut state = SupervisorState::new();
+        for _ in 0..5 {
+            state.mark_rebuild_failed();
+        }
+        // 6th attempt — backoff = 2s
+        assert_eq!(
+            state.backoff_for_failure_count(),
+            std::time::Duration::from_secs(2)
+        );
+        state.mark_rebuild_failed();
+        // 7th — 4s
+        assert_eq!(
+            state.backoff_for_failure_count(),
+            std::time::Duration::from_secs(4)
+        );
+        state.mark_rebuild_failed();
+        // 8th — 8s
+        assert_eq!(
+            state.backoff_for_failure_count(),
+            std::time::Duration::from_secs(8)
+        );
+        state.mark_rebuild_failed();
+        // 9th — 16s
+        assert_eq!(
+            state.backoff_for_failure_count(),
+            std::time::Duration::from_secs(16)
+        );
+        state.mark_rebuild_failed();
+        // 10th — 30s cap
+        assert_eq!(
+            state.backoff_for_failure_count(),
+            std::time::Duration::from_secs(30)
+        );
+        for _ in 0..5 {
+            state.mark_rebuild_failed();
+            assert_eq!(
+                state.backoff_for_failure_count(),
+                std::time::Duration::from_secs(30)
+            );
+        }
+    }
+
+    /// mark_rebuild_succeeded resets the failure counter.
+    #[tokio::test]
+    async fn supervisor_resets_on_success() {
+        let mut state = SupervisorState::new();
+        for _ in 0..3 {
+            state.mark_rebuild_failed();
+        }
+        state.mark_rebuild_succeeded();
+        assert_eq!(state.consecutive_failures(), 0);
     }
 }
