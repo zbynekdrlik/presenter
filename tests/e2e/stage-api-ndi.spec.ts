@@ -140,9 +140,12 @@ test("api layout shows connection-status overlay when NDI source activates", asy
   // the page is open. Once `ndi_active=true`, the <NdiVideo> mounts and
   // tries to fetch the WHEP endpoint, which returns 503 because the bogus
   // name has no real stream — that 503 is expected noise for this test only.
+  // The new reconnect_loop (per ndi-stage-auto-recovery spec) retries with
+  // backoff and emits a WARN on each failed attempt; allow that too.
   const consoleMessages = collectConsoleErrors(page, [
     /Failed to load resource.*503/i,
     /WHEP connect for.*failed/i,
+    /reconnect_loop.*connect_whep failed/i,
   ]);
 
   // Start clean

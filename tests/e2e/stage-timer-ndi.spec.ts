@@ -88,9 +88,12 @@ test("timer layout renders without NDI image when no source is active", async ({
 });
 
 test("timer layout mounts NdiVideo when an NDI source is active", async ({ page }) => {
+  // The reconnect_loop retries with backoff on WHEP failures (no real NDI
+  // source on CI) — allow the per-attempt WARN it emits.
   const consoleMessages = collectConsoleErrors(page, [
     /Failed to load resource.*503/i,
     /WHEP connect for.*failed/i,
+    /reconnect_loop.*connect_whep failed/i,
   ]);
 
   await page.request.post(
