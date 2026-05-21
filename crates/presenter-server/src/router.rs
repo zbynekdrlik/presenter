@@ -250,7 +250,8 @@ pub fn build_router(state: AppState) -> Router {
         "/test/ndi/kill-pipeline/{source_id}",
         post(integrations::ndi_whep::kill_pipeline_for_test),
     );
-    router.route("/group-colors", get(presentations::get_group_colors))
+    router
+        .route("/group-colors", get(presentations::get_group_colors))
         .route(
             "/presentations/{id}",
             get(presentations::get_presentation_detail)

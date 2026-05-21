@@ -99,8 +99,7 @@ impl SupervisorState {
         Self {
             // Start with last_rebuild far enough in the past that the FIRST
             // rebuild attempt has zero wait.
-            last_rebuild_at: std::time::Instant::now()
-                - std::time::Duration::from_secs(3600),
+            last_rebuild_at: std::time::Instant::now() - std::time::Duration::from_secs(3600),
             consecutive_failures: 0,
         }
     }
@@ -222,7 +221,11 @@ impl NdiManager {
     /// A 7-second timeout caps the wait — long enough for ndisrc to find the
     /// source on a healthy LAN, short enough that a missing/dead broadcaster
     /// reports back quickly to the operator.
-    pub async fn start_pipeline(self: &std::sync::Arc<Self>, source_id: &str, ndi_name: &str) -> Result<()> {
+    pub async fn start_pipeline(
+        self: &std::sync::Arc<Self>,
+        source_id: &str,
+        ndi_name: &str,
+    ) -> Result<()> {
         let mut active = self.active.lock().await;
         if let StateCheckOutcome::Idempotent = check_active_entry(&mut active, source_id).await {
             return Ok(());
@@ -277,11 +280,8 @@ impl NdiManager {
                 // run before pipeline is moved into ActiveSource on the
                 // active.insert line below.
                 let watcher = pipeline.state_watcher();
-                let supervisor = self.spawn_supervisor(
-                    source_id.to_string(),
-                    ndi_name.to_string(),
-                    watcher,
-                );
+                let supervisor =
+                    self.spawn_supervisor(source_id.to_string(), ndi_name.to_string(), watcher);
                 active.insert(
                     source_id.to_string(),
                     ActiveSource {
@@ -452,8 +452,7 @@ impl NdiManager {
         let mut watcher = pipeline.state_watcher();
         let caps_ready = tokio::time::timeout(std::time::Duration::from_secs(8), async {
             loop {
-                if let crate::pipeline::PipelineState::Errored(ref e) =
-                    *watcher.borrow_and_update()
+                if let crate::pipeline::PipelineState::Errored(ref e) = *watcher.borrow_and_update()
                 {
                     return Err(anyhow!("pipeline errored: {e}"));
                 }
@@ -631,7 +630,13 @@ mod start_pipeline_state_check_tests {
             PipelineState::Stopped,
             "precondition: stopped_for_test must yield a Stopped pipeline",
         );
-        active.insert("test-id".to_string(), ActiveSource { pipeline: dead, supervisor: None });
+        active.insert(
+            "test-id".to_string(),
+            ActiveSource {
+                pipeline: dead,
+                supervisor: None,
+            },
+        );
         assert!(active.contains_key("test-id"));
 
         let outcome = check_active_entry(&mut active, "test-id").await;
@@ -655,7 +660,13 @@ mod start_pipeline_state_check_tests {
         let mut p = crate::pipeline::NdiPipeline::stopped_for_test();
         p.set_state_for_test(PipelineState::Streaming);
         assert_eq!(p.state(), PipelineState::Streaming);
-        active.insert("test-id".to_string(), ActiveSource { pipeline: p, supervisor: None });
+        active.insert(
+            "test-id".to_string(),
+            ActiveSource {
+                pipeline: p,
+                supervisor: None,
+            },
+        );
 
         let outcome = check_active_entry(&mut active, "test-id").await;
 
@@ -673,7 +684,13 @@ mod start_pipeline_state_check_tests {
         let mut active: HashMap<String, ActiveSource> = HashMap::new();
         let mut p = crate::pipeline::NdiPipeline::stopped_for_test();
         p.set_state_for_test(PipelineState::Errored("ndisrc fault".to_string()));
-        active.insert("test-id".to_string(), ActiveSource { pipeline: p, supervisor: None });
+        active.insert(
+            "test-id".to_string(),
+            ActiveSource {
+                pipeline: p,
+                supervisor: None,
+            },
+        );
 
         let outcome = check_active_entry(&mut active, "test-id").await;
 
@@ -691,15 +708,17 @@ mod start_pipeline_state_check_tests {
         state.mark_rebuild_started();
 
         // 100ms later — well within the 2s rate limit.
-        let outcome2 = state.should_rebuild_now(
-            std::time::Instant::now() + std::time::Duration::from_millis(100),
-        );
+        let outcome2 = state
+            .should_rebuild_now(std::time::Instant::now() + std::time::Duration::from_millis(100));
         // Decision must defer to "after the rate-limit window".
         // Allow a small tolerance (50ms) for the real time elapsed between
         // mark_rebuild_started() and the should_rebuild_now() call.
         match outcome2 {
             RebuildDecision::ProceedAfter(d) => {
-                assert!(d >= std::time::Duration::from_millis(1850), "expected ~2s wait, got {d:?}");
+                assert!(
+                    d >= std::time::Duration::from_millis(1850),
+                    "expected ~2s wait, got {d:?}"
+                );
             }
         }
     }
@@ -712,22 +731,40 @@ mod start_pipeline_state_check_tests {
             state.mark_rebuild_failed();
         }
         // 6th attempt — backoff = 2s
-        assert_eq!(state.backoff_for_failure_count(), std::time::Duration::from_secs(2));
+        assert_eq!(
+            state.backoff_for_failure_count(),
+            std::time::Duration::from_secs(2)
+        );
         state.mark_rebuild_failed();
         // 7th — 4s
-        assert_eq!(state.backoff_for_failure_count(), std::time::Duration::from_secs(4));
+        assert_eq!(
+            state.backoff_for_failure_count(),
+            std::time::Duration::from_secs(4)
+        );
         state.mark_rebuild_failed();
         // 8th — 8s
-        assert_eq!(state.backoff_for_failure_count(), std::time::Duration::from_secs(8));
+        assert_eq!(
+            state.backoff_for_failure_count(),
+            std::time::Duration::from_secs(8)
+        );
         state.mark_rebuild_failed();
         // 9th — 16s
-        assert_eq!(state.backoff_for_failure_count(), std::time::Duration::from_secs(16));
+        assert_eq!(
+            state.backoff_for_failure_count(),
+            std::time::Duration::from_secs(16)
+        );
         state.mark_rebuild_failed();
         // 10th — 30s cap
-        assert_eq!(state.backoff_for_failure_count(), std::time::Duration::from_secs(30));
+        assert_eq!(
+            state.backoff_for_failure_count(),
+            std::time::Duration::from_secs(30)
+        );
         for _ in 0..5 {
             state.mark_rebuild_failed();
-            assert_eq!(state.backoff_for_failure_count(), std::time::Duration::from_secs(30));
+            assert_eq!(
+                state.backoff_for_failure_count(),
+                std::time::Duration::from_secs(30)
+            );
         }
     }
 
