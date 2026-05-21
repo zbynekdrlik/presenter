@@ -353,6 +353,7 @@ impl NdiPipeline {
                         let _ = state_tx.send(PipelineState::Errored(detail));
                     }
                     gst::MessageView::Eos(_) => {
+                        tracing::warn!("pipeline EOS received → state=Stopped");
                         let _ = state_tx.send(PipelineState::Stopped);
                     }
                     _ => {}
