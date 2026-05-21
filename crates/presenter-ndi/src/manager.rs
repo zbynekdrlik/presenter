@@ -169,6 +169,9 @@ async fn check_active_entry(
             }
             PipelineState::Stopped | PipelineState::Errored(_) => {
                 if let Some(mut dead) = active.remove(source_id) {
+                    if let Some(handle) = dead.supervisor.take() {
+                        handle.abort();
+                    }
                     dead.pipeline.stop().await;
                 }
             }
@@ -270,8 +273,9 @@ impl NdiManager {
 
         match caps_ready {
             Ok(Ok(())) => {
-                // Spawn the supervisor BEFORE inserting so the handle is ready when we
-                // hand ownership to ActiveSource.
+                // pipeline.state_watcher() and self.spawn_supervisor must
+                // run before pipeline is moved into ActiveSource on the
+                // active.insert line below.
                 let watcher = pipeline.state_watcher();
                 let supervisor = self.spawn_supervisor(
                     source_id.to_string(),
@@ -360,6 +364,28 @@ impl NdiManager {
                                 match manager.state_watcher_for(&source_id).await {
                                     Some(w) => {
                                         watcher = w;
+                                        // After re-subscribing, the new watcher's
+                                        // "seen" mark is the current value. If the
+                                        // fresh pipeline has ALREADY errored in the
+                                        // window between active.insert and the
+                                        // state_watcher_for clone, changed() would
+                                        // block waiting for a further transition
+                                        // that never comes. Peek the state now and
+                                        // continue the loop if it's already dead so
+                                        // the outer match re-enters the rebuild
+                                        // branch immediately.
+                                        let already_dead = matches!(
+                                            *watcher.borrow_and_update(),
+                                            Errored(_) | Stopped
+                                        );
+                                        if already_dead {
+                                            // Mark as a failure for backoff bookkeeping —
+                                            // the rebuild "succeeded" briefly but the
+                                            // pipeline collapsed immediately, which is
+                                            // a real failure of recovery.
+                                            state.mark_rebuild_failed();
+                                            continue;
+                                        }
                                     }
                                     None => {
                                         // Source no longer active (operator deactivated
@@ -373,13 +399,13 @@ impl NdiManager {
                                 }
                             }
                             Err(e) => {
+                                state.mark_rebuild_failed();
                                 tracing::warn!(
                                     source_id = %source_id,
                                     error = %e,
-                                    consecutive_failures = state.consecutive_failures() + 1,
+                                    consecutive_failures = state.consecutive_failures(),
                                     "supervisor: rebuild failed"
                                 );
-                                state.mark_rebuild_failed();
                             }
                         }
                     }
