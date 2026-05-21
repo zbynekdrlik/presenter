@@ -168,9 +168,24 @@ async fn check_active_entry(
             }
             PipelineState::Stopped | PipelineState::Errored(_) => {
                 if let Some(mut dead) = active.remove(source_id) {
-                    if let Some(handle) = dead.supervisor.take() {
-                        handle.abort();
-                    }
+                    // CRITICAL: do NOT abort `dead.supervisor` here. The
+                    // supervisor task is what CALLS `rebuild_pipeline ->
+                    // check_active_entry` in the recovery path, so aborting
+                    // its own JoinHandle would self-cancel at the next
+                    // `.await` (pipeline.start / caps_ready) — orphaning the
+                    // new pipeline we're about to build and leaving the
+                    // active map empty. The supervisor's lifecycle is owned
+                    // by `stop_pipeline` / `stop_all` (explicit deactivation
+                    // paths only) — never by the rebuild path.
+                    //
+                    // After this Drops, `dead.supervisor: Option<JoinHandle>`
+                    // is dropped too. Dropping a JoinHandle does NOT cancel
+                    // its task in tokio (unlike abort), so the task keeps
+                    // running — which is exactly what we need for the
+                    // self-rebuild path. `rebuild_pipeline` then re-inserts
+                    // a fresh ActiveSource with `supervisor: None`, and the
+                    // still-running supervisor re-subscribes to the new
+                    // pipeline's state_watcher via `state_watcher_for`.
                     dead.pipeline.stop().await;
                 }
             }
