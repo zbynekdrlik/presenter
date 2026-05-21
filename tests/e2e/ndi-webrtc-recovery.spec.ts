@@ -132,35 +132,33 @@ test("NDI WebRTC recovery @video-codec — video resumes within 10s after server
   }
   expect(killResp.status(), "kill endpoint must return 204").toBe(204);
 
-  // Phase 3: within 10s, the browser must reconnect and resume playback.
-  // currentTime must have advanced past beforeKill.currentTime — proves new
-  // frames are being decoded, not just that the <video> element exists.
+  // Phase 3: within 10s, the browser must reconnect AND new frames must be
+  // decoded. The poll predicate combines BOTH conditions so a partial recovery
+  // (videoWidth flickers but currentTime stuck) keeps polling rather than
+  // exiting falsely-green.
   await expect
     .poll(
       async () =>
-        await video.evaluate((v: HTMLVideoElement) => ({
-          width: v.videoWidth,
-          currentTime: v.currentTime,
-        })),
+        await video.evaluate(
+          ({ beforeKillTime }: { beforeKillTime: number }) =>
+            (() => {
+              const v = document.querySelector(
+                'video[data-role="ndi-video"]',
+              ) as HTMLVideoElement | null;
+              if (!v) return false;
+              return v.videoWidth > 0 && v.currentTime > beforeKillTime + 0.1;
+            })(),
+          { beforeKillTime: beforeKill.currentTime },
+        ),
       {
         timeout: 10_000,
         intervals: [500, 500, 1000, 1000, 2000, 2000],
-        message: "video did not recover within 10s after server pipeline kill",
+        message:
+          "video did not recover within 10s after server pipeline kill " +
+          "(videoWidth > 0 AND currentTime advanced past beforeKill)",
       },
     )
-    .toMatchObject({
-      width: expect.any(Number),
-    });
-
-  const afterRecovery = await video.evaluate((v: HTMLVideoElement) => ({
-    width: v.videoWidth,
-    currentTime: v.currentTime,
-  }));
-  expect(afterRecovery.width).toBeGreaterThan(0);
-  expect(
-    afterRecovery.currentTime,
-    "currentTime must advance after recovery (proving new frames are decoded)",
-  ).toBeGreaterThan(beforeKill.currentTime + 0.1);
+    .toBe(true);
 
   // No console errors during the whole recovery cycle.
   expect(consoleErrors).toEqual([]);
