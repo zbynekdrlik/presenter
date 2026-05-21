@@ -89,9 +89,17 @@ test("NDI WebRTC recovery @video-codec — video resumes within 10s after server
     return;
   }
 
-  // Open the stage display. WASM hydration gate first.
-  await page.goto(new URL("/stage/ndi-fullscreen", baseURL).toString());
+  // Switch the stage layout to ndi-fullscreen, then open the stage display.
+  // WASM hydration gate first, then wait for the layout to be applied.
+  const layoutResp = await request.post(
+    new URL("/stage/layout", baseURL).toString(),
+    { data: { code: "ndi-fullscreen" } },
+  );
+  expect(layoutResp.ok(), "switching stage layout to ndi-fullscreen must succeed").toBe(true);
+
+  await page.goto(new URL("/stage", baseURL).toString());
   await page.waitForSelector('body[data-wasm-ready="true"]', { timeout: 30_000 });
+  await page.waitForSelector('body[data-layout-code="ndi-fullscreen"]', { timeout: 10_000 });
 
   const video = page.locator('video[data-role="ndi-video"]').first();
   await expect(video).toBeVisible();
