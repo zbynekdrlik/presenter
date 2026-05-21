@@ -27,7 +27,7 @@ use uuid::Uuid;
 // Feature modules host their own request/DTO types
 
 pub fn build_router(state: AppState) -> Router {
-    Router::new()
+    let router = Router::new()
         .route("/healthz", get(health))
         .route("/", get(ui_routes::home))
         .route("/search", get(search::search_presenter_endpoint))
@@ -244,15 +244,13 @@ pub fn build_router(state: AppState) -> Router {
             post(integrations::ndi_whep::post_whep_session)
                 .patch(integrations::ndi_whep::patch_whep_session)
                 .delete(integrations::ndi_whep::delete_whep_session),
-        )
-        .route(
-            "/test/ndi/kill-pipeline/{source_id}",
-            #[cfg(feature = "test-helpers")]
-            post(integrations::ndi_whep::kill_pipeline_for_test),
-            #[cfg(not(feature = "test-helpers"))]
-            post(|| async { axum::http::StatusCode::NOT_FOUND }),
-        )
-        .route("/group-colors", get(presentations::get_group_colors))
+        );
+    #[cfg(feature = "test-helpers")]
+    let router = router.route(
+        "/test/ndi/kill-pipeline/{source_id}",
+        post(integrations::ndi_whep::kill_pipeline_for_test),
+    );
+    router.route("/group-colors", get(presentations::get_group_colors))
         .route(
             "/presentations/{id}",
             get(presentations::get_presentation_detail)

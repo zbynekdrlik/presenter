@@ -134,6 +134,11 @@ pub(crate) async fn delete_whep_session(
 /// `test-helpers` cargo feature; production binaries (built without the
 /// feature) do not contain this route. The Playwright recovery test calls
 /// it to make the recovery assertion deterministic.
+///
+/// Note: the `is_active` → `stop_pipeline` sequence is two separate mutex
+/// acquisitions, so a concurrent stop could race the `is_active` check.
+/// Harmless in the test context (the worst case is returning 204 for an
+/// already-stopped pipeline, and `stop_pipeline` is a no-op on missing keys).
 #[cfg(feature = "test-helpers")]
 #[instrument(skip_all, fields(source_id = %source_id))]
 pub(crate) async fn kill_pipeline_for_test(
@@ -291,7 +296,7 @@ mod tests {
 
     #[cfg(feature = "test-helpers")]
     #[tokio::test]
-    async fn kill_pipeline_for_test_returns_404_for_unknown_source() {
+    async fn kill_pipeline_for_test_returns_404_or_503_for_unknown_source() {
         let state = fresh_state().await;
         let result = kill_pipeline_for_test(
             axum::extract::Path("unknown".to_string()),
@@ -300,9 +305,8 @@ mod tests {
         .await;
         assert!(result.is_err(), "expected error for unknown source");
         let err = result.unwrap_err();
-        assert_eq!(
-            err.into_response().status(),
-            axum::http::StatusCode::NOT_FOUND
-        );
+        // With libndi: manager exists but the source isn't active → 404.
+        // Without libndi: ndi_manager() is None → 503.
+        assert_not_found_or_unavailable(err.into_response().status());
     }
 }
