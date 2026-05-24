@@ -1,6 +1,12 @@
 [Unit]
 Description=Presenter - Church Worship Display System
-After=network.target
+# #333 item 2: wait for the DRI render node before starting. Without this
+# fence the GStreamer plugin scan can land before /dev/dri/renderD128 is
+# exposed by i915 or before udev ACLs are applied — the `va` plugin then
+# probes empty and the cached registry lists vah264enc as missing, taking
+# down NDI streaming until manual restart (see incident 2026-05-24).
+After=network.target dev-dri-renderD128.device
+Wants=dev-dri-renderD128.device
 
 [Service]
 Type=simple
