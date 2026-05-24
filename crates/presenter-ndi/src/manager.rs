@@ -555,13 +555,31 @@ impl NdiManager {
     /// `(source_id, PipelineState)`. Used by `/healthz` (#333 item 7) so
     /// dashboards can detect activation failures within seconds instead of
     /// inferring from operator-reported 'red error' status.
+    ///
+    /// Bounded by a 200 ms lock-acquisition timeout (deep-review 🟡 #1):
+    /// `start_pipeline` and `rebuild_pipeline` hold the same `active` mutex
+    /// for up to 8 s during the caps-wait. Without the timeout, a `/healthz`
+    /// request that races a pipeline start would block long enough to
+    /// trip a 5 s LB health-check timeout — exactly the failure mode
+    /// item 7 was supposed to expose. On timeout we return an empty vec
+    /// and log a warning; the caller (LB / dashboard) sees "no pipelines"
+    /// for one poll cycle, which is preferable to a hung probe.
     pub async fn pipeline_snapshots(&self) -> Vec<(String, PipelineState)> {
-        self.active
-            .lock()
-            .await
-            .iter()
-            .map(|(id, src)| (id.clone(), src.pipeline.state()))
-            .collect()
+        match tokio::time::timeout(std::time::Duration::from_millis(200), self.active.lock()).await
+        {
+            Ok(guard) => guard
+                .iter()
+                .map(|(id, src)| (id.clone(), src.pipeline.state()))
+                .collect(),
+            Err(_) => {
+                tracing::warn!(
+                    "pipeline_snapshots lock acquisition timed out after 200 ms — \
+                     likely contended with a long-running pipeline start/rebuild; \
+                     returning empty snapshot so /healthz does not stall (#333 item 7)"
+                );
+                Vec::new()
+            }
+        }
     }
 
     /// Test-only: trigger an Errored state on the source's pipeline so

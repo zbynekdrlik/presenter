@@ -199,7 +199,7 @@ dev (development)          ← daily work, CI validates each push
 
 The application version is available at runtime:
 
-- `/healthz` endpoint includes `version` and `channel` fields
+- `/healthz` endpoint includes `version`, `channel`, and `ndi_pipelines: [{source_id, state, last_error?}]` fields. `state` is one of `starting | streaming | stopped | errored`; `last_error` is present only when `state == "errored"`. The `ndi_pipelines` field is always an array (empty when no NDI manager is loaded or no sources are active).
 - UI footer displays version with channel suffix for non-release builds
 - Logs include version on startup
 

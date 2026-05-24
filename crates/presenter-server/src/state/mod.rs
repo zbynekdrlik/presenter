@@ -287,6 +287,14 @@ impl AppState {
         // NDI auto-reconnect: if a source is marked active in DB but no stream
         // is running, retry activation every 30 seconds. Handles the case where
         // the NDI source comes online after server startup.
+        //
+        // #333 item 6 (deep-review): the per-tick encoder gate. The one-shot
+        // startup auto-restore is gated by should_auto_restore_ndi() above,
+        // but this 30s loop was NOT gated and would re-trigger the wedge
+        // state every 30 seconds on an encoder-missing host. We probe
+        // hw_h264_encoder() PER TICK (cheap registry hash lookup) so a host
+        // whose plugin registry self-heals can resume reconnect without a
+        // process restart.
         if self.ndi_manager().is_some() {
             let ndi_state = self.clone();
             tokio::spawn(async move {
@@ -294,7 +302,10 @@ impl AppState {
                 ticker.set_missed_tick_behavior(MissedTickBehavior::Delay);
                 loop {
                     ticker.tick().await;
-                    if ndi_state.ndi_manager().is_some() {
+                    let manager_loaded = ndi_state.ndi_manager().is_some();
+                    let encoder_available =
+                        manager_loaded && presenter_ndi::hw_h264_encoder().is_some();
+                    if should_auto_restore_ndi(manager_loaded, encoder_available) {
                         match ndi_state.repository.get_active_video_source().await {
                             Ok(Some(source)) => {
                                 let ndi_name = source.ndi_name.clone();

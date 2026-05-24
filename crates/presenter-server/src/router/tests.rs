@@ -94,6 +94,42 @@ async fn health_endpoint_reports_ndi_pipelines_field() {
     );
 }
 
+/// Schema regression for #333 item 7 (deep-review 🟡 #3): the snapshot
+/// renderer must produce stable JSON for every PipelineState variant and
+/// MUST include `last_error` only on the `errored` variant. Previously
+/// the test only asserted the field name; this test pins the per-variant
+/// shape so mutations to state labels or last_error inclusion are caught.
+#[test]
+fn render_ndi_pipeline_entry_emits_correct_shape_per_variant() {
+    use presenter_ndi::pipeline::PipelineState;
+
+    let starting = super::render_ndi_pipeline_entry("src-1", &PipelineState::Starting);
+    assert_eq!(starting["source_id"], "src-1");
+    assert_eq!(starting["state"], "starting");
+    assert!(
+        starting.get("last_error").is_none(),
+        "Starting must NOT include last_error: {starting:?}"
+    );
+
+    let streaming = super::render_ndi_pipeline_entry("src-2", &PipelineState::Streaming);
+    assert_eq!(streaming["state"], "streaming");
+    assert!(streaming.get("last_error").is_none());
+
+    let stopped = super::render_ndi_pipeline_entry("src-3", &PipelineState::Stopped);
+    assert_eq!(stopped["state"], "stopped");
+    assert!(stopped.get("last_error").is_none());
+
+    let errored = super::render_ndi_pipeline_entry(
+        "src-4",
+        &PipelineState::Errored("pipeline died: ndisrc EOS".to_string()),
+    );
+    assert_eq!(errored["state"], "errored");
+    assert_eq!(
+        errored["last_error"], "pipeline died: ndisrc EOS",
+        "Errored MUST carry last_error verbatim so dashboards surface the cause"
+    );
+}
+
 #[tokio::test]
 async fn home_route_returns_menu() {
     let app = build_router(AppState::in_memory().await.unwrap());

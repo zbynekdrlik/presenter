@@ -24,6 +24,30 @@ fn should_auto_restore_ndi_requires_manager_and_encoder() {
     assert!(!super::should_auto_restore_ndi(false, false));
 }
 
+/// Structural regression (deep-review 🔵 #7): the predicate is correct in
+/// isolation, but item 6's safety depends on EVERY auto-restore site
+/// consulting it. There are two sites in `mod.rs`: the one-shot startup
+/// restore and the 30s background reconnect loop. A refactor that drops
+/// one of the call sites would silently re-introduce the 2026-05-24 wedge
+/// failure mode without breaking any other test. This test pins the call
+/// sites lexically — if you legitimately refactor (e.g. extract to a
+/// shared helper), update the expected count and the comment.
+#[test]
+fn auto_restore_sites_invoke_encoder_gate_predicate() {
+    let src = include_str!("mod.rs");
+    let occurrences = src
+        .matches("should_auto_restore_ndi(manager_loaded, encoder_available)")
+        .count();
+    assert_eq!(
+        occurrences, 2,
+        "expected exactly 2 call sites to should_auto_restore_ndi(manager_loaded, encoder_available) \
+         in state/mod.rs (one-shot startup restore + 30s reconnect loop); found {occurrences}. \
+         If a call site was intentionally removed or refactored, update this test \
+         AND the supporting comments to match. Otherwise #333 item 6's protection \
+         has a hole — restore the gate before merging."
+    );
+}
+
 #[tokio::test]
 async fn empty_state_does_not_auto_seed_library() {
     // Regression guard for issue #228: server startup must NOT auto-import any

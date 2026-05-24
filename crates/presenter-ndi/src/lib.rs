@@ -16,6 +16,24 @@ use std::sync::OnceLock;
 /// init does not silently succeed on retry.
 static GST_INIT_RESULT: OnceLock<Result<(), String>> = OnceLock::new();
 
+/// Ensures `GST_REGISTRY_UPDATE=yes` is set in the process environment.
+///
+/// Extracted as a named helper so the contract ("must run before
+/// gstreamer::init()") is encoded in code, not just in comments, and so
+/// the regression test for #333 item 1 can target the helper directly.
+///
+/// FIXME(rust-2024): `std::env::set_var` becomes `unsafe` in edition 2024
+/// because POSIX `setenv` races with concurrent `getenv` calls on other
+/// threads. Today (edition 2021) this is safe; on edition migration this
+/// call becomes the single site to wrap in `unsafe { ... }`.
+/// Intentionally NOT wrapped in `Once::call_once` — the in-process env
+/// var can be cleared by a test (e.g. via `remove_var`) and the next
+/// `init()` call must observably re-set it for the regression test to
+/// verify the contract.
+pub(crate) fn ensure_registry_rescan_env_var() {
+    std::env::set_var("GST_REGISTRY_UPDATE", "yes");
+}
+
 /// Initialize GStreamer + register Rust plugins (webrtcsink, ndisrc).
 ///
 /// Safe and cheap to call repeatedly. The outcome of the first call is cached
@@ -30,11 +48,12 @@ pub fn init() -> anyhow::Result<()> {
     // Setting GST_REGISTRY_UPDATE=yes BEFORE gstreamer::init() forces a
     // fresh plugin scan. Cost: ~100-300 ms on the FIRST init() call only;
     // subsequent calls are no-ops because OnceLock has already run.
-    // We set the env var outside the OnceLock closure so the assertion
-    // holds across process lifetime — a second init() call after the env
-    // var was cleared (e.g. by a test) re-sets it, even though the actual
-    // gstreamer::init() inside the closure won't re-run.
-    std::env::set_var("GST_REGISTRY_UPDATE", "yes");
+    // `ensure_registry_rescan_env_var()` is called BEFORE the OnceLock
+    // get_or_init so the env var is set even when the cached outcome is
+    // returned without re-running the closure — and the function itself
+    // uses Once::call_once internally so only the FIRST init() call
+    // actually writes to the env.
+    ensure_registry_rescan_env_var();
 
     let outcome = GST_INIT_RESULT.get_or_init(|| {
         tracing::info!(
@@ -156,6 +175,23 @@ mod gst_init_tests {
             "init() must set GST_REGISTRY_UPDATE=yes before gstreamer::init() \
              to force a fresh registry scan and avoid the boot-time stale-cache \
              race documented in #333 Failure 1"
+        );
+    }
+
+    /// Direct test of the helper (deep-review 🟡 #3): if `init()` ever
+    /// regresses to call the helper AFTER `gstreamer::init()`, the helper
+    /// itself still has the correct contract — and this test, plus the
+    /// init() test above and `Once::call_once` semantics, together pin the
+    /// behavior down regardless of test execution order.
+    #[test]
+    fn ensure_registry_rescan_env_var_sets_yes() {
+        std::env::remove_var("GST_REGISTRY_UPDATE");
+        ensure_registry_rescan_env_var();
+        assert_eq!(
+            std::env::var("GST_REGISTRY_UPDATE").as_deref(),
+            Ok("yes"),
+            "ensure_registry_rescan_env_var must set GST_REGISTRY_UPDATE=yes; \
+             it is the named contract that init() depends on for the #333 item 1 fix"
         );
     }
 }
