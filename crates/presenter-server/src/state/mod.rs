@@ -134,15 +134,13 @@ pub use presenter_core::FeatureFlags;
 ///
 /// Auto-restore must be skipped when either the NDI manager failed to load
 /// (SDK missing) OR no hardware H264 encoder is registered. The latter
-/// directly prevents the 2026-05-24 prod incident from recurring: a stale
-/// registry could be silently re-populated by the rescan landing in the
-/// same release; without this gate, the supervisor would immediately
-/// re-activate the saved source and the pipeline would melt the host.
-///
-/// RED stub: only checks manager — will be corrected in the GREEN commit
-/// for #333 item 6 to also require encoder availability.
-pub(crate) fn should_auto_restore_ndi(manager_loaded: bool, _encoder_available: bool) -> bool {
-    manager_loaded
+/// directly prevents the 2026-05-24 prod incident from recurring: even
+/// with the registry rescan from item 1, encoder availability still has
+/// to be confirmed before re-activating a source — otherwise the
+/// supervisor would build a pipeline that immediately errors and the
+/// browser Watchdog (PR #332) would retry-loop until the host wedges.
+pub(crate) fn should_auto_restore_ndi(manager_loaded: bool, encoder_available: bool) -> bool {
+    manager_loaded && encoder_available
 }
 
 impl AppState {
@@ -404,8 +402,17 @@ impl AppState {
         state.sync_resolume_hosts().await?;
         state.sync_android_stage_displays().await?;
 
-        // Restore active NDI video source from database
-        if state.ndi_manager().is_some() {
+        // Restore active NDI video source from database — gated on BOTH the
+        // NDI manager being available AND a hardware H264 encoder being
+        // registered. The encoder gate is #333 item 6: without it, a host
+        // that booted with a stale GStreamer registry would silently
+        // re-trigger the wedge state from 2026-05-24 the moment auto-restore
+        // ran. With this gate, auto-restore is skipped on encoder-missing
+        // hosts and a structured warning is logged so dashboards and
+        // operators see the issue immediately.
+        let manager_loaded = state.ndi_manager().is_some();
+        let encoder_available = presenter_ndi::hw_h264_encoder().is_some();
+        if should_auto_restore_ndi(manager_loaded, encoder_available) {
             match state.repository.get_active_video_source().await {
                 Ok(Some(source)) => {
                     let ndi_name = source.ndi_name.clone();
@@ -431,6 +438,14 @@ impl AppState {
                     tracing::warn!(?err, "failed to query active video source on startup");
                 }
             }
+        } else if manager_loaded && !encoder_available {
+            tracing::warn!(
+                "NDI auto-restore skipped: no hardware H264 encoder registered. \
+                 Saved active source will NOT be re-activated on startup. \
+                 Operator must investigate (likely stale GStreamer registry or \
+                 missing VAAPI/NVENC packages) and explicitly re-activate via UI. \
+                 See #333 item 6."
+            );
         }
 
         // Auto-detect public IP for LAN/WAN classification via Cloudflare Tunnel.
