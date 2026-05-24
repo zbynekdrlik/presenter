@@ -445,7 +445,17 @@ impl NdiManager {
                                             // the rebuild "succeeded" briefly but the
                                             // pipeline collapsed immediately, which is
                                             // a real failure of recovery.
+                                            let was_cooling_off = state.is_cooling_off();
                                             state.mark_rebuild_failed();
+                                            if !was_cooling_off && state.is_cooling_off() {
+                                                tracing::warn!(
+                                                    source_id = %source_id,
+                                                    consecutive_failures = state.consecutive_failures(),
+                                                    cool_off_minutes = 5,
+                                                    "supervisor: NDI source entered cool-off — pausing retries (#337); \
+                                                     manual reactivate via operator UI resumes immediately"
+                                                );
+                                            }
                                             continue;
                                         }
                                     }
@@ -461,6 +471,7 @@ impl NdiManager {
                                 }
                             }
                             Err(e) => {
+                                let was_cooling_off = state.is_cooling_off();
                                 state.mark_rebuild_failed();
                                 tracing::warn!(
                                     source_id = %source_id,
@@ -468,6 +479,15 @@ impl NdiManager {
                                     consecutive_failures = state.consecutive_failures(),
                                     "supervisor: rebuild failed"
                                 );
+                                if !was_cooling_off && state.is_cooling_off() {
+                                    tracing::warn!(
+                                        source_id = %source_id,
+                                        consecutive_failures = state.consecutive_failures(),
+                                        cool_off_minutes = 5,
+                                        "supervisor: NDI source entered cool-off — pausing retries (#337); \
+                                         manual reactivate via operator UI resumes immediately"
+                                    );
+                                }
                             }
                         }
                     }
