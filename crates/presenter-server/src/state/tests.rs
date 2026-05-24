@@ -6,6 +6,24 @@ use presenter_core::{
     SlideContent, SlideText, TimerCommand, TimerState,
 };
 
+/// Regression for #333 item 6: the startup auto-restore branch must skip when
+/// no hardware H264 encoder is registered. Otherwise the host can immediately
+/// re-enter the wedge state that took prod down on 2026-05-24 (encoder probe
+/// succeeded after registry rescan → supervisor activated source → pipeline
+/// melted the N100). The predicate is the single decision point and is
+/// dependency-injected for testability.
+#[test]
+fn should_auto_restore_ndi_requires_manager_and_encoder() {
+    assert!(super::should_auto_restore_ndi(true, true));
+    assert!(
+        !super::should_auto_restore_ndi(true, false),
+        "must skip restore when NDI manager exists but no encoder is registered \
+         (#333 item 6 — prevent immediate re-melt after registry rescan)"
+    );
+    assert!(!super::should_auto_restore_ndi(false, true));
+    assert!(!super::should_auto_restore_ndi(false, false));
+}
+
 #[tokio::test]
 async fn empty_state_does_not_auto_seed_library() {
     // Regression guard for issue #228: server startup must NOT auto-import any

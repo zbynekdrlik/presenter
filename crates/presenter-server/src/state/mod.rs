@@ -130,6 +130,21 @@ pub struct AppState {
 
 pub use presenter_core::FeatureFlags;
 
+/// Gate predicate for the startup NDI auto-restore branch.
+///
+/// Auto-restore must be skipped when either the NDI manager failed to load
+/// (SDK missing) OR no hardware H264 encoder is registered. The latter
+/// directly prevents the 2026-05-24 prod incident from recurring: a stale
+/// registry could be silently re-populated by the rescan landing in the
+/// same release; without this gate, the supervisor would immediately
+/// re-activate the saved source and the pipeline would melt the host.
+///
+/// RED stub: only checks manager — will be corrected in the GREEN commit
+/// for #333 item 6 to also require encoder availability.
+pub(crate) fn should_auto_restore_ndi(manager_loaded: bool, _encoder_available: bool) -> bool {
+    manager_loaded
+}
+
 impl AppState {
     #[cfg_attr(not(test), allow(dead_code))]
     pub fn new(

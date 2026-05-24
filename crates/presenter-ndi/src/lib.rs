@@ -120,4 +120,24 @@ mod gst_init_tests {
         // deploy verification on the production host.
         let _ = hw_h264_encoder();
     }
+
+    /// Regression for #333 item 1: a boot-time race could leave the cached
+    /// plugin registry with `va` plugin showing zero features (vah264enc
+    /// missing). Setting `GST_REGISTRY_UPDATE=yes` BEFORE `gstreamer::init()`
+    /// forces a registry rescan on every startup, eliminating that class of
+    /// stale-cache bug at the cost of ~100-300 ms boot time.
+    #[test]
+    fn init_sets_gst_registry_update_env_var() {
+        // Important: clear the env var first so we can assert init() sets it,
+        // not some external test runner inheriting it.
+        std::env::remove_var("GST_REGISTRY_UPDATE");
+        init().expect("gst init");
+        assert_eq!(
+            std::env::var("GST_REGISTRY_UPDATE").as_deref(),
+            Ok("yes"),
+            "init() must set GST_REGISTRY_UPDATE=yes before gstreamer::init() \
+             to force a fresh registry scan and avoid the boot-time stale-cache \
+             race documented in #333 Failure 1"
+        );
+    }
 }

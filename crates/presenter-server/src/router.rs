@@ -307,12 +307,16 @@ pub const BUILD_CHANNEL: &str = match option_env!("PRESENTER_BUILD_CHANNEL") {
 };
 
 async fn health() -> impl IntoResponse {
+    // RED stub: #333 item 7 will populate ndi_pipelines as an array of
+    // {source_id, state, last_error?} entries by querying NdiManager.
+    // Field is currently null so the regression test fails on is_array.
     (
         StatusCode::OK,
         Json(serde_json::json!({
             "status": "ok",
             "version": VERSION,
-            "channel": BUILD_CHANNEL
+            "channel": BUILD_CHANNEL,
+            "ndi_pipelines": serde_json::Value::Null
         })),
     )
 }

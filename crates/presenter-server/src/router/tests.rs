@@ -63,6 +63,37 @@ async fn health_endpoint_returns_ok() {
     assert_eq!(response.status(), StatusCode::OK);
 }
 
+/// Regression for #333 item 7: `/healthz` must report NDI pipeline state so
+/// dashboards can detect activation failures within seconds instead of
+/// inferring from "operator sees red error". Field shape:
+/// `ndi_pipelines: [{source_id, state, last_error?}]`. Always present (empty
+/// array when no NDI manager is loaded).
+#[tokio::test]
+async fn health_endpoint_reports_ndi_pipelines_field() {
+    let app = build_router(AppState::in_memory().await.unwrap());
+    let response = app
+        .oneshot(
+            Request::builder()
+                .uri("/healthz")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    let bytes = axum::body::to_bytes(response.into_body(), usize::MAX)
+        .await
+        .unwrap();
+    let body: serde_json::Value = serde_json::from_slice(&bytes).expect("/healthz returns JSON");
+    let pipelines = body
+        .get("ndi_pipelines")
+        .expect("/healthz must include ndi_pipelines field for #333 item 7");
+    assert!(
+        pipelines.is_array(),
+        "ndi_pipelines must be an array, got: {pipelines:?}"
+    );
+}
+
 #[tokio::test]
 async fn home_route_returns_menu() {
     let app = build_router(AppState::in_memory().await.unwrap());
