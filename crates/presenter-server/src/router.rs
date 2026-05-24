@@ -306,17 +306,44 @@ pub const BUILD_CHANNEL: &str = match option_env!("PRESENTER_BUILD_CHANNEL") {
     None => "dev",
 };
 
-async fn health() -> impl IntoResponse {
-    // RED stub: #333 item 7 will populate ndi_pipelines as an array of
-    // {source_id, state, last_error?} entries by querying NdiManager.
-    // Field is currently null so the regression test fails on is_array.
+async fn health(State(state): State<AppState>) -> impl IntoResponse {
+    // #333 item 7: include NDI pipeline state per source so dashboards
+    // detect activation failures within seconds (instead of inferring from
+    // operator-reported 'red error' status). Field is always an array —
+    // empty when no NDI manager is loaded OR no sources are active.
+    let ndi_pipelines = match state.ndi_manager() {
+        Some(manager) => manager
+            .pipeline_snapshots()
+            .await
+            .into_iter()
+            .map(|(source_id, pipeline_state)| {
+                use presenter_ndi::pipeline::PipelineState;
+                let (state_label, last_error) = match pipeline_state {
+                    PipelineState::Starting => ("starting", None),
+                    PipelineState::Streaming => ("streaming", None),
+                    PipelineState::Stopped => ("stopped", None),
+                    PipelineState::Errored(detail) => ("errored", Some(detail)),
+                };
+                let mut entry = serde_json::json!({
+                    "source_id": source_id,
+                    "state": state_label,
+                });
+                if let Some(err) = last_error {
+                    entry["last_error"] = serde_json::Value::String(err);
+                }
+                entry
+            })
+            .collect::<Vec<_>>(),
+        None => Vec::new(),
+    };
+
     (
         StatusCode::OK,
         Json(serde_json::json!({
             "status": "ok",
             "version": VERSION,
             "channel": BUILD_CHANNEL,
-            "ndi_pipelines": serde_json::Value::Null
+            "ndi_pipelines": ndi_pipelines,
         })),
     )
 }

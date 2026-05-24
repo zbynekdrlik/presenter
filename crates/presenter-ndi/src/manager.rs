@@ -549,6 +549,21 @@ impl NdiManager {
         self.active.lock().await.contains_key(source_id)
     }
 
+    /// Snapshot of every active pipeline's current state.
+    ///
+    /// Returns one entry per source currently in the active map, as
+    /// `(source_id, PipelineState)`. Used by `/healthz` (#333 item 7) so
+    /// dashboards can detect activation failures within seconds instead of
+    /// inferring from operator-reported 'red error' status.
+    pub async fn pipeline_snapshots(&self) -> Vec<(String, PipelineState)> {
+        self.active
+            .lock()
+            .await
+            .iter()
+            .map(|(id, src)| (id.clone(), src.pipeline.state()))
+            .collect()
+    }
+
     /// Test-only: trigger an Errored state on the source's pipeline so
     /// the PipelineSupervisor reacts as it would for a real ndisrc fault.
     /// Returns `true` if the source was active (state injection succeeded),
