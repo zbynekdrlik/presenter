@@ -22,7 +22,25 @@ static GST_INIT_RESULT: OnceLock<Result<(), String>> = OnceLock::new();
 /// and every subsequent call returns the same Ok/Err — so a caller that hits
 /// an init failure cannot be lulled into proceeding by re-calling `init()`.
 pub fn init() -> anyhow::Result<()> {
+    // #333 item 1: force registry rescan at every startup. Without this,
+    // a boot-time race where /dev/dri/renderD128 wasn't yet available can
+    // pin a cached plugin registry that lists the `va` plugin with ZERO
+    // features — vah264enc is missing and stays missing across process
+    // restarts because the cached registry is read in priority.
+    // Setting GST_REGISTRY_UPDATE=yes BEFORE gstreamer::init() forces a
+    // fresh plugin scan. Cost: ~100-300 ms on the FIRST init() call only;
+    // subsequent calls are no-ops because OnceLock has already run.
+    // We set the env var outside the OnceLock closure so the assertion
+    // holds across process lifetime — a second init() call after the env
+    // var was cleared (e.g. by a test) re-sets it, even though the actual
+    // gstreamer::init() inside the closure won't re-run.
+    std::env::set_var("GST_REGISTRY_UPDATE", "yes");
+
     let outcome = GST_INIT_RESULT.get_or_init(|| {
+        tracing::info!(
+            "GStreamer registry rescan forced via GST_REGISTRY_UPDATE=yes (#333 hardening)"
+        );
+
         if let Err(e) = gstreamer::init() {
             return Err(format!("gstreamer init failed: {e}"));
         }
