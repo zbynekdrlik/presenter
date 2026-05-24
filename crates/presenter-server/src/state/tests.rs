@@ -48,6 +48,109 @@ fn auto_restore_sites_invoke_encoder_gate_predicate() {
     );
 }
 
+/// Regression for #339: cold-reboot verification of PR #334 on prod
+/// (2026-05-24 17:07 CEST) reproduced the boot-time race. Item 1's forced
+/// registry rescan executed (log line emitted) but the resulting registry
+/// still showed the `va` plugin with zero features — `vah264enc` remained
+/// unregistered for ~50s after boot. Item 6's encoder gate correctly
+/// skipped the auto-restore (host stayed administrable), but the user
+/// still had to manually restart presenter to get streaming back.
+///
+/// Fix: add `ExecStartPre` that polls `gst-inspect-1.0 vah264enc` until
+/// the encoder is probeable (capped at 30s by `timeout`). systemd will
+/// not exec the presenter binary until the encoder is visible, closing
+/// the boot race without code-side polling.
+///
+/// This test pins the ExecStartPre line in BOTH unit files (prod +
+/// dev). Without both files, a partial revert would re-open the race
+/// on one environment.
+#[test]
+fn presenter_service_blocks_start_until_h264_encoder_probeable() {
+    let prod = include_str!("../../../../scripts/deploy/presenter.service");
+    let dev = include_str!("../../../../scripts/deploy/presenter-dev.service");
+    for (name, src) in [("presenter.service", prod), ("presenter-dev.service", dev)] {
+        // Tighten substring-only checks (deep-review 🔵 #4) by pinning all
+        // required tokens on the SAME line. A refactor that leaves comments
+        // mentioning the encoders but removes the actual probe would still
+        // have satisfied substring assertions across the whole file.
+        let exec_pre = src
+            .lines()
+            .find(|l| l.trim_start().starts_with("ExecStartPre="))
+            .unwrap_or_else(|| {
+                panic!(
+                    "{name}: missing ExecStartPre directive — the binary can exec \
+                 before /dev/dri/renderD128 is fully usable for VA-API (see #339 \
+                 prod cold-reboot reproduction 2026-05-24 17:07 CEST)"
+                )
+            });
+        let exec_pre_trimmed = exec_pre.trim_start();
+        assert!(
+            exec_pre_trimmed.starts_with("ExecStartPre=-"),
+            "{name}: ExecStartPre must use leading `-` (best-effort prefix). \
+             Without `-`, a 30s timeout (no GPU at all) makes systemd fail the \
+             whole unit — blocking non-NDI features (lyrics, Bible, timers) \
+             from starting. Item 6's encoder gate must be allowed to take \
+             over instead (#339). Line: {exec_pre}"
+        );
+        assert!(
+            exec_pre.contains("gst-inspect-1.0"),
+            "{name}: ExecStartPre must use `gst-inspect-1.0` — canonical \
+             GStreamer feature query that matches what `presenter_ndi::\
+             hw_h264_encoder()` sees at startup (#339). Line: {exec_pre}"
+        );
+        assert!(
+            exec_pre.contains("vah264enc"),
+            "{name}: ExecStartPre must probe `vah264enc` (Intel/AMD VA-API — \
+             prod N100). The `va` plugin can register without features so a \
+             generic plugin check is insufficient (#339). Line: {exec_pre}"
+        );
+        assert!(
+            exec_pre.contains("nvh264enc"),
+            "{name}: ExecStartPre must ALSO probe `nvh264enc` (Nvidia NVENC — \
+             dev2 RTX). Without this branch the dev deploy unit-loops on a \
+             machine with Nvidia GPU because vah264enc never registers there \
+             (caught 2026-05-24 in CI run 26367361768 — #339 hotfix). \
+             Line: {exec_pre}"
+        );
+    }
+}
+
+/// Regression for #335: cap presenter.service resource usage so a runaway
+/// NDI pipeline cannot wedge the entire host. The 2026-05-24 prod incident
+/// showed that once `whepserversink` spawned multiple per-consumer
+/// encoders, the N100 saturated all 4 cores within 3 minutes — sshd and
+/// presenter both stopped responding to TCP handshakes; recovery required
+/// power-cycling. CPUQuota leaves at least one core for sshd. MemoryMax
+/// bounds growth so the kernel's per-service OOM kicks in before the
+/// host-wide OOM killer. TasksMax caps thread/process explosion if a
+/// pipeline rebuild leaks (e.g. a leaked tokio task per failed retry).
+///
+/// Without this test, a future deploy-script refactor could silently
+/// drop these directives — re-opening the wedge failure mode that took
+/// prod offline. Both unit files (prod + dev) are pinned.
+#[test]
+fn presenter_service_has_resource_limits() {
+    let prod = include_str!("../../../../scripts/deploy/presenter.service");
+    let dev = include_str!("../../../../scripts/deploy/presenter-dev.service");
+    for (name, src) in [("presenter.service", prod), ("presenter-dev.service", dev)] {
+        assert!(
+            src.contains("CPUQuota="),
+            "{name}: missing CPUQuota directive — runaway pipeline can saturate \
+             all cores and lock out sshd (see #335 + 2026-05-24 prod incident)"
+        );
+        assert!(
+            src.contains("MemoryMax="),
+            "{name}: missing MemoryMax directive — runaway pipeline can grow \
+             until host-wide OOM killer fires unpredictable victims (#335)"
+        );
+        assert!(
+            src.contains("TasksMax="),
+            "{name}: missing TasksMax directive — pipeline rebuilds that leak \
+             tasks can exhaust the kernel PID space (#335)"
+        );
+    }
+}
+
 #[tokio::test]
 async fn empty_state_does_not_auto_seed_library() {
     // Regression guard for issue #228: server startup must NOT auto-import any

@@ -108,6 +108,33 @@ impl SupervisorState {
         self.consecutive_failures
     }
 
+    /// #337: after `COOL_OFF_THRESHOLD` consecutive failures the supervisor
+    /// is "cooling off" — it sleeps `COOL_OFF_WINDOW` before each rebuild
+    /// attempt instead of the prior 30s exp-backoff cap. Manual reactivation
+    /// via the operator UI calls `start_pipeline`, which removes the dead
+    /// active-map entry, builds a fresh pipeline, and spawns a NEW
+    /// supervisor with a zero counter — so the old supervisor's cool-off
+    /// is implicitly cleared. mark_rebuild_succeeded also clears it (a
+    /// rebuild that succeeded inside the cool-off window means the fault
+    /// self-resolved).
+    fn is_cooling_off(&self) -> bool {
+        self.consecutive_failures >= Self::COOL_OFF_THRESHOLD
+    }
+
+    /// #337: number of consecutive failures before entering cool-off. Picked
+    /// from the issue body — small enough that an unrecoverable fault
+    /// stops thrashing within seconds, large enough that a flaky NDI
+    /// source (5-second LAN dropout) doesn't immediately cool off.
+    const COOL_OFF_THRESHOLD: u32 = 5;
+
+    /// #337: how long the supervisor waits between rebuild attempts once
+    /// the threshold is crossed. 5 minutes is the operator-comfortable
+    /// retry interval — long enough to stop log spam + CPU churn for
+    /// unrecoverable faults; short enough that a self-healing transient
+    /// fault (intermittent NDI broadcaster, GPU contention from another
+    /// process) recovers without operator intervention.
+    const COOL_OFF_WINDOW: std::time::Duration = std::time::Duration::from_secs(5 * 60);
+
     /// Rate-limit window: minimum 2 seconds between rebuild attempts.
     fn should_rebuild_now(&self, now: std::time::Instant) -> RebuildDecision {
         const RATE_LIMIT: std::time::Duration = std::time::Duration::from_secs(2);
@@ -119,14 +146,17 @@ impl SupervisorState {
         }
     }
 
-    /// Exponential backoff once failures reach 5: 2s, 4s, 8s, 16s, 30s cap.
+    /// #337: once `COOL_OFF_THRESHOLD` consecutive failures hit, the
+    /// supervisor sleeps `COOL_OFF_WINDOW` (5 min) between attempts
+    /// instead of the prior 30s exp-backoff cap. This stops log-spam +
+    /// CPU churn for unrecoverable faults (encoder vanished, NDI source
+    /// removed). Manual reactivation via `start_pipeline` spawns a fresh
+    /// supervisor with a zero counter, which is the operator escape hatch.
     fn backoff_for_failure_count(&self) -> std::time::Duration {
-        if self.consecutive_failures < 5 {
+        if self.consecutive_failures < Self::COOL_OFF_THRESHOLD {
             return std::time::Duration::ZERO;
         }
-        let exp = (self.consecutive_failures - 5).min(4); // 0..=4 → 1,2,4,8,16
-        let secs: u64 = 1u64 << exp; // 1, 2, 4, 8, 16
-        std::time::Duration::from_secs(secs.saturating_mul(2).min(30))
+        Self::COOL_OFF_WINDOW
     }
 
     fn mark_rebuild_started(&mut self) {
@@ -242,8 +272,39 @@ impl NdiManager {
         ndi_name: &str,
     ) -> Result<()> {
         let mut active = self.active.lock().await;
+
+        // Operator-reactivation path: if the existing entry is dead, snapshot
+        // its supervisor handle BEFORE `check_active_entry` removes the entry,
+        // so we can abort the prior supervisor below. Without this, a
+        // cool-off-bound supervisor that's mid-5-min-sleep keeps running and
+        // ends up double-watching the new pipeline alongside the fresh
+        // supervisor we spawn below (deep-review 🔵 #3, 2026-05-24 PR #340).
+        // Safe to `.take()` here because we hold the lock: state observed by
+        // `check_active_entry` below cannot change between these two reads.
+        let prior_supervisor: Option<tokio::task::JoinHandle<()>> = active
+            .get_mut(source_id)
+            .filter(|entry| {
+                matches!(
+                    entry.pipeline.state(),
+                    PipelineState::Stopped | PipelineState::Errored(_)
+                )
+            })
+            .and_then(|entry| entry.supervisor.take());
+
         if let StateCheckOutcome::Idempotent = check_active_entry(&mut active, source_id).await {
+            // Pipeline turned out healthy — the dead-state filter above didn't
+            // match, so prior_supervisor is None. If somehow it leaked, drop
+            // the handle (does NOT cancel the task in tokio; the supervisor
+            // is still owned by its `ActiveSource.supervisor` slot if we
+            // didn't `.take()`).
+            debug_assert!(prior_supervisor.is_none());
             return Ok(());
+        }
+        // The entry was dead → check_active_entry removed it. Abort the prior
+        // supervisor (if any) so it doesn't double-watch the new pipeline we
+        // build below.
+        if let Some(handle) = prior_supervisor {
+            handle.abort();
         }
 
         let whep_url = format!("/ndi/whep/{}", source_id);
@@ -326,12 +387,15 @@ impl NdiManager {
     /// The supervisor:
     /// - Subscribes to the pipeline's state watcher
     /// - On Errored/Stopped, requests a rebuild via `rebuild_pipeline`
-    /// - Rate-limits to 1 rebuild / 2s; exponentially backs off after 5
-    ///   consecutive failures
+    /// - Rate-limits to 1 rebuild / 2s; enters a 5-minute cool-off after
+    ///   `COOL_OFF_THRESHOLD` (5) consecutive failures (#337). During
+    ///   cool-off the supervisor sleeps between rebuild attempts but does
+    ///   not exit — manual reactivation via `start_pipeline` aborts this
+    ///   supervisor and spawns a fresh one with a zero counter.
     /// - Re-subscribes to the FRESH state watcher after each successful
     ///   rebuild (the old watcher's pipeline was dropped)
     /// - Exits when the watcher closes (pipeline dropped) OR the task is
-    ///   externally aborted via `stop_pipeline`
+    ///   externally aborted via `stop_pipeline` / operator reactivate
     fn spawn_supervisor(
         self: &std::sync::Arc<Self>,
         source_id: String,
@@ -380,7 +444,15 @@ impl NdiManager {
                         match manager.rebuild_pipeline(&source_id, &ndi_name).await {
                             Ok(()) => {
                                 tracing::info!(source_id = %source_id, "supervisor: rebuild succeeded");
-                                state.mark_rebuild_succeeded();
+                                // NOTE: do NOT mark_rebuild_succeeded() yet. We only
+                                // know the pipeline build returned Ok — we don't yet
+                                // know it survived the immediate state-watcher peek
+                                // below. If we reset the counter here, the
+                                // already_dead branch below would mark_failed and
+                                // the counter would oscillate 0 → 1 → 0 → 1 forever,
+                                // never crossing the cool-off threshold (deep-review
+                                // 🟡 #1, 2026-05-24 PR #340). Reset only AFTER the
+                                // peek confirms the new pipeline is alive.
                                 // The fresh pipeline has a NEW state watcher; swap ours
                                 // so we see ITS transitions, not the dead pipeline's.
                                 match manager.state_watcher_for(&source_id).await {
@@ -415,9 +487,23 @@ impl NdiManager {
                                             // the rebuild "succeeded" briefly but the
                                             // pipeline collapsed immediately, which is
                                             // a real failure of recovery.
+                                            let was_cooling_off = state.is_cooling_off();
                                             state.mark_rebuild_failed();
+                                            if !was_cooling_off && state.is_cooling_off() {
+                                                tracing::warn!(
+                                                    source_id = %source_id,
+                                                    consecutive_failures = state.consecutive_failures(),
+                                                    cool_off_minutes = 5,
+                                                    "supervisor: NDI source entered cool-off — pausing retries (#337); \
+                                                     manual reactivate via operator UI resumes immediately"
+                                                );
+                                            }
                                             continue;
                                         }
+                                        // Pipeline confirmed alive on the new watcher
+                                        // → reset the failure streak now (deferred
+                                        // from above per deep-review 🟡 #1).
+                                        state.mark_rebuild_succeeded();
                                     }
                                     None => {
                                         // Source no longer active (operator deactivated
@@ -431,6 +517,7 @@ impl NdiManager {
                                 }
                             }
                             Err(e) => {
+                                let was_cooling_off = state.is_cooling_off();
                                 state.mark_rebuild_failed();
                                 tracing::warn!(
                                     source_id = %source_id,
@@ -438,6 +525,15 @@ impl NdiManager {
                                     consecutive_failures = state.consecutive_failures(),
                                     "supervisor: rebuild failed"
                                 );
+                                if !was_cooling_off && state.is_cooling_off() {
+                                    tracing::warn!(
+                                        source_id = %source_id,
+                                        consecutive_failures = state.consecutive_failures(),
+                                        cool_off_minutes = 5,
+                                        "supervisor: NDI source entered cool-off — pausing retries (#337); \
+                                         manual reactivate via operator UI resumes immediately"
+                                    );
+                                }
                             }
                         }
                     }
@@ -804,47 +900,28 @@ mod start_pipeline_state_check_tests {
         }
     }
 
-    /// After 5 consecutive failures, backoff progression is 2s, 4s, 8s, 16s, 30s (cap).
+    /// #337: prior exp-backoff (2s/4s/8s/16s/30s cap) is replaced with a
+    /// flat 5-minute cool-off window once `COOL_OFF_THRESHOLD` failures
+    /// hit. The window stays at 5 min regardless of how many further
+    /// failures accumulate — no further growth, no risk of an
+    /// integer-overflow timer pathology.
     #[tokio::test]
-    async fn supervisor_backs_off_exponentially_after_5_failures() {
+    async fn supervisor_cool_off_window_stays_flat_after_threshold() {
         let mut state = SupervisorState::new();
         for _ in 0..5 {
             state.mark_rebuild_failed();
         }
-        // 6th attempt — backoff = 2s
         assert_eq!(
             state.backoff_for_failure_count(),
-            std::time::Duration::from_secs(2)
+            std::time::Duration::from_secs(5 * 60),
+            "at threshold (5 failures): cool-off = 5 min"
         );
-        state.mark_rebuild_failed();
-        // 7th — 4s
-        assert_eq!(
-            state.backoff_for_failure_count(),
-            std::time::Duration::from_secs(4)
-        );
-        state.mark_rebuild_failed();
-        // 8th — 8s
-        assert_eq!(
-            state.backoff_for_failure_count(),
-            std::time::Duration::from_secs(8)
-        );
-        state.mark_rebuild_failed();
-        // 9th — 16s
-        assert_eq!(
-            state.backoff_for_failure_count(),
-            std::time::Duration::from_secs(16)
-        );
-        state.mark_rebuild_failed();
-        // 10th — 30s cap
-        assert_eq!(
-            state.backoff_for_failure_count(),
-            std::time::Duration::from_secs(30)
-        );
-        for _ in 0..5 {
+        for _ in 0..50 {
             state.mark_rebuild_failed();
             assert_eq!(
                 state.backoff_for_failure_count(),
-                std::time::Duration::from_secs(30)
+                std::time::Duration::from_secs(5 * 60),
+                "many failures: cool-off STAYS at 5 min, doesn't grow further"
             );
         }
     }
@@ -857,6 +934,67 @@ mod start_pipeline_state_check_tests {
             state.mark_rebuild_failed();
         }
         state.mark_rebuild_succeeded();
+        assert_eq!(state.consecutive_failures(), 0);
+    }
+
+    /// #337 RED: after 5 consecutive failures, supervisor enters
+    /// CoolingOff state. Without an explicit cool-off ceiling, the
+    /// 30s-capped exponential backoff retries forever and produces
+    /// continuous log spam + repeated encoder-rebuild CPU churn for an
+    /// unrecoverable fault (e.g. encoder vanished). With cool-off, the
+    /// supervisor pauses for 5 min and lets the operator manually
+    /// reactivate to retry sooner.
+    ///
+    /// FAILS before the GREEN fix in the next commit (is_cooling_off
+    /// stub always returns false).
+    #[tokio::test]
+    async fn supervisor_enters_cool_off_at_5_consecutive_failures() {
+        let mut state = SupervisorState::new();
+        for _ in 0..4 {
+            state.mark_rebuild_failed();
+        }
+        assert!(
+            !state.is_cooling_off(),
+            "4 failures must NOT trigger cool-off (threshold is 5)"
+        );
+        state.mark_rebuild_failed();
+        assert!(
+            state.is_cooling_off(),
+            "5 consecutive failures must trigger cool-off (#337)"
+        );
+    }
+
+    /// #337 RED: while cooling off, the supervisor must wait 5 minutes
+    /// before its next rebuild attempt — NOT the 30s exp-backoff cap.
+    #[tokio::test]
+    async fn supervisor_cool_off_window_is_five_minutes() {
+        let mut state = SupervisorState::new();
+        for _ in 0..5 {
+            state.mark_rebuild_failed();
+        }
+        assert_eq!(
+            state.backoff_for_failure_count(),
+            std::time::Duration::from_secs(5 * 60),
+            "cool-off window must be 5 minutes (#337) — not the prior 2s exp-backoff entry"
+        );
+    }
+
+    /// #337 RED: mark_rebuild_succeeded clears cool-off. Without this,
+    /// a manual reactivation that succeeds once would still leave the
+    /// counter pinned, sending the next failure straight back into
+    /// cool-off.
+    #[tokio::test]
+    async fn supervisor_cool_off_clears_on_success() {
+        let mut state = SupervisorState::new();
+        for _ in 0..5 {
+            state.mark_rebuild_failed();
+        }
+        assert!(state.is_cooling_off());
+        state.mark_rebuild_succeeded();
+        assert!(
+            !state.is_cooling_off(),
+            "successful rebuild must clear the cool-off flag (#337)"
+        );
         assert_eq!(state.consecutive_failures(), 0);
     }
 }

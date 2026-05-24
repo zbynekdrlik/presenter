@@ -10,6 +10,13 @@ Type=simple
 User=newlevel
 Group=newlevel
 WorkingDirectory=/opt/presenter-dev
+# #339: gate start on hardware H264 encoder being probeable. Mirrors
+# prod presenter.service; see that file for the full incident
+# context. Probes EITHER vah264enc (prod N100 Intel) OR nvh264enc
+# (dev2 RTX Nvidia). Leading `-` makes the gate non-fatal — if no
+# GPU is available at all, presenter still starts for non-NDI
+# features and item 6 skips NDI auto-restore.
+ExecStartPre=-/usr/bin/timeout 30 sh -c 'until gst-inspect-1.0 --exists vah264enc || gst-inspect-1.0 --exists nvh264enc; do sleep 1; done'
 ExecStart=/opt/presenter-dev/presenter-server
 Restart=always
 RestartSec=5
@@ -30,7 +37,10 @@ ProtectHome=read-only
 ReadWritePaths=/opt/presenter-dev
 PrivateTmp=true
 
-# Resource limits
+# Resource limits — #335 (mirror of prod; see presenter.service for context).
+CPUQuota=300%
+MemoryMax=4G
+TasksMax=512
 LimitNOFILE=65536
 
 [Install]

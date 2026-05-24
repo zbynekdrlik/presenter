@@ -798,9 +798,19 @@ jobs:
           fi
           REMOTE_SCRIPT
 
-      - name: Stop service (if running)
+      - name: Stop service (and clear any failed state)
         run: |
-          ssh deploy-target "if systemctl is-active --quiet ${{ env.SERVICE_NAME }}; then sudo systemctl stop ${{ env.SERVICE_NAME }}; echo 'Service stopped'; else echo 'Service not running'; fi"
+          # is-active returns true ONLY for `active`/`reloading`. A unit
+          # caught mid-restart-loop reports `activating` (start-pre) or
+          # `failed`, both of which used to skip the stop step. The stale
+          # restart cycle then raced our `systemctl start` below — caught
+          # in dev deploy 2026-05-24 after the #339 ExecStartPre rolled
+          # out with a vah264enc probe that never resolved on dev2's
+          # Nvidia GPU. Always stop + reset-failed so the next start runs
+          # against a clean unit slate, regardless of prior state.
+          ssh deploy-target "sudo systemctl stop ${{ env.SERVICE_NAME }} 2>/dev/null || true; \
+                             sudo systemctl reset-failed ${{ env.SERVICE_NAME }} 2>/dev/null || true; \
+                             echo 'Service stopped + failed state cleared'"
 
       - name: Deploy binaries
         run: |
