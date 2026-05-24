@@ -48,6 +48,49 @@ fn auto_restore_sites_invoke_encoder_gate_predicate() {
     );
 }
 
+/// Regression for #339: cold-reboot verification of PR #334 on prod
+/// (2026-05-24 17:07 CEST) reproduced the boot-time race. Item 1's forced
+/// registry rescan executed (log line emitted) but the resulting registry
+/// still showed the `va` plugin with zero features — `vah264enc` remained
+/// unregistered for ~50s after boot. Item 6's encoder gate correctly
+/// skipped the auto-restore (host stayed administrable), but the user
+/// still had to manually restart presenter to get streaming back.
+///
+/// Fix: add `ExecStartPre` that polls `gst-inspect-1.0 vah264enc` until
+/// the encoder is probeable (capped at 30s by `timeout`). systemd will
+/// not exec the presenter binary until the encoder is visible, closing
+/// the boot race without code-side polling.
+///
+/// This test pins the ExecStartPre line in BOTH unit files (prod +
+/// dev). Without both files, a partial revert would re-open the race
+/// on one environment.
+#[test]
+fn presenter_service_blocks_start_until_vah264enc_probeable() {
+    let prod = include_str!("../../../../scripts/deploy/presenter.service");
+    let dev = include_str!("../../../../scripts/deploy/presenter-dev.service");
+    for (name, src) in [("presenter.service", prod), ("presenter-dev.service", dev)] {
+        assert!(
+            src.contains("ExecStartPre="),
+            "{name}: missing ExecStartPre directive — without it the binary can \
+             exec before /dev/dri/renderD128 is fully usable for VA-API (see #339 \
+             prod cold-reboot reproduction 2026-05-24 17:07 CEST)"
+        );
+        assert!(
+            src.contains("vah264enc"),
+            "{name}: ExecStartPre must probe `vah264enc` specifically — that's \
+             the encoder the WHEP pipeline depends on. A generic `gst-inspect-1.0` \
+             call is insufficient because the `va` plugin can register without \
+             features (#339)"
+        );
+        assert!(
+            src.contains("gst-inspect-1.0"),
+            "{name}: ExecStartPre must use `gst-inspect-1.0` for the probe — that's \
+             the canonical GStreamer feature query and matches what `presenter_ndi::\
+             hw_h264_encoder()` will see at startup (#339)"
+        );
+    }
+}
+
 #[tokio::test]
 async fn empty_state_does_not_auto_seed_library() {
     // Regression guard for issue #228: server startup must NOT auto-import any
