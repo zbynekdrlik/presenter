@@ -10,6 +10,12 @@ Type=simple
 User=newlevel
 Group=newlevel
 WorkingDirectory=/opt/presenter-dev
+# #339: block start until vah264enc is probeable. Mirrors prod
+# presenter.service; see that file for the full incident context.
+# `timeout 30` caps the wait — if VA-API never registers, the
+# binary still starts (presenter_ndi item 6 then skips auto-restore
+# rather than melting the host).
+ExecStartPre=/usr/bin/timeout 30 sh -c 'until gst-inspect-1.0 vah264enc >/dev/null 2>&1; do sleep 1; done'
 ExecStart=/opt/presenter-dev/presenter-server
 Restart=always
 RestartSec=5

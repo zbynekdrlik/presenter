@@ -17,6 +17,21 @@ Type=simple
 User=newlevel
 Group=newlevel
 WorkingDirectory=/opt/presenter
+# #339: block start until vah264enc is probeable. The race that took
+# prod down on 2026-05-24 and reproduced on cold-reboot of PR #334
+# (17:07 CEST) is: After=dev-dri-renderD128.device fires as soon as
+# udev creates the node, but i915/VA-API features can take 30-50s
+# longer to register. Without this gate, item 1's registry rescan
+# runs against an empty va plugin and item 6's encoder gate then
+# skips auto-restore (correct safety behaviour, but operator still
+# has to manually restart 50s later). Polling gst-inspect-1.0 in a
+# 1s loop capped at 30s by `timeout` closes the race: systemd will
+# not exec the presenter binary until the encoder is visible to the
+# same probe presenter_ndi::hw_h264_encoder() uses at startup. If
+# the probe never succeeds (no GPU at all), `timeout` exits non-zero,
+# systemd marks the start failed, Restart=always retries with the
+# same gate — eventually item 6 takes over once we time out.
+ExecStartPre=/usr/bin/timeout 30 sh -c 'until gst-inspect-1.0 vah264enc >/dev/null 2>&1; do sleep 1; done'
 ExecStart=/opt/presenter/presenter-server
 Restart=always
 RestartSec=5
