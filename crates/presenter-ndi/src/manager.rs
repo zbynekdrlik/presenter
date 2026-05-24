@@ -109,15 +109,31 @@ impl SupervisorState {
     }
 
     /// #337: after `COOL_OFF_THRESHOLD` consecutive failures the supervisor
-    /// is "cooling off" — it should stop rebuilding and let an operator
-    /// re-activate manually (or auto-retry once per cool-off window).
-    ///
-    /// RED stub: always returns false. The GREEN fix in the next commit
-    /// makes this return `true` once consecutive_failures reaches the
-    /// threshold.
+    /// is "cooling off" — it sleeps `COOL_OFF_WINDOW` before each rebuild
+    /// attempt instead of the prior 30s exp-backoff cap. Manual reactivation
+    /// via the operator UI calls `start_pipeline`, which removes the dead
+    /// active-map entry, builds a fresh pipeline, and spawns a NEW
+    /// supervisor with a zero counter — so the old supervisor's cool-off
+    /// is implicitly cleared. mark_rebuild_succeeded also clears it (a
+    /// rebuild that succeeded inside the cool-off window means the fault
+    /// self-resolved).
     fn is_cooling_off(&self) -> bool {
-        false
+        self.consecutive_failures >= Self::COOL_OFF_THRESHOLD
     }
+
+    /// #337: number of consecutive failures before entering cool-off. Picked
+    /// from the issue body — small enough that an unrecoverable fault
+    /// stops thrashing within seconds, large enough that a flaky NDI
+    /// source (5-second LAN dropout) doesn't immediately cool off.
+    const COOL_OFF_THRESHOLD: u32 = 5;
+
+    /// #337: how long the supervisor waits between rebuild attempts once
+    /// the threshold is crossed. 5 minutes is the operator-comfortable
+    /// retry interval — long enough to stop log spam + CPU churn for
+    /// unrecoverable faults; short enough that a self-healing transient
+    /// fault (intermittent NDI broadcaster, GPU contention from another
+    /// process) recovers without operator intervention.
+    const COOL_OFF_WINDOW: std::time::Duration = std::time::Duration::from_secs(5 * 60);
 
     /// Rate-limit window: minimum 2 seconds between rebuild attempts.
     fn should_rebuild_now(&self, now: std::time::Instant) -> RebuildDecision {
@@ -130,14 +146,17 @@ impl SupervisorState {
         }
     }
 
-    /// Exponential backoff once failures reach 5: 2s, 4s, 8s, 16s, 30s cap.
+    /// #337: once `COOL_OFF_THRESHOLD` consecutive failures hit, the
+    /// supervisor sleeps `COOL_OFF_WINDOW` (5 min) between attempts
+    /// instead of the prior 30s exp-backoff cap. This stops log-spam +
+    /// CPU churn for unrecoverable faults (encoder vanished, NDI source
+    /// removed). Manual reactivation via `start_pipeline` spawns a fresh
+    /// supervisor with a zero counter, which is the operator escape hatch.
     fn backoff_for_failure_count(&self) -> std::time::Duration {
-        if self.consecutive_failures < 5 {
+        if self.consecutive_failures < Self::COOL_OFF_THRESHOLD {
             return std::time::Duration::ZERO;
         }
-        let exp = (self.consecutive_failures - 5).min(4); // 0..=4 → 1,2,4,8,16
-        let secs: u64 = 1u64 << exp; // 1, 2, 4, 8, 16
-        std::time::Duration::from_secs(secs.saturating_mul(2).min(30))
+        Self::COOL_OFF_WINDOW
     }
 
     fn mark_rebuild_started(&mut self) {
@@ -815,47 +834,28 @@ mod start_pipeline_state_check_tests {
         }
     }
 
-    /// After 5 consecutive failures, backoff progression is 2s, 4s, 8s, 16s, 30s (cap).
+    /// #337: prior exp-backoff (2s/4s/8s/16s/30s cap) is replaced with a
+    /// flat 5-minute cool-off window once `COOL_OFF_THRESHOLD` failures
+    /// hit. The window stays at 5 min regardless of how many further
+    /// failures accumulate — no further growth, no risk of an
+    /// integer-overflow timer pathology.
     #[tokio::test]
-    async fn supervisor_backs_off_exponentially_after_5_failures() {
+    async fn supervisor_cool_off_window_stays_flat_after_threshold() {
         let mut state = SupervisorState::new();
         for _ in 0..5 {
             state.mark_rebuild_failed();
         }
-        // 6th attempt — backoff = 2s
         assert_eq!(
             state.backoff_for_failure_count(),
-            std::time::Duration::from_secs(2)
+            std::time::Duration::from_secs(5 * 60),
+            "at threshold (5 failures): cool-off = 5 min"
         );
-        state.mark_rebuild_failed();
-        // 7th — 4s
-        assert_eq!(
-            state.backoff_for_failure_count(),
-            std::time::Duration::from_secs(4)
-        );
-        state.mark_rebuild_failed();
-        // 8th — 8s
-        assert_eq!(
-            state.backoff_for_failure_count(),
-            std::time::Duration::from_secs(8)
-        );
-        state.mark_rebuild_failed();
-        // 9th — 16s
-        assert_eq!(
-            state.backoff_for_failure_count(),
-            std::time::Duration::from_secs(16)
-        );
-        state.mark_rebuild_failed();
-        // 10th — 30s cap
-        assert_eq!(
-            state.backoff_for_failure_count(),
-            std::time::Duration::from_secs(30)
-        );
-        for _ in 0..5 {
+        for _ in 0..50 {
             state.mark_rebuild_failed();
             assert_eq!(
                 state.backoff_for_failure_count(),
-                std::time::Duration::from_secs(30)
+                std::time::Duration::from_secs(5 * 60),
+                "many failures: cool-off STAYS at 5 min, doesn't grow further"
             );
         }
     }
