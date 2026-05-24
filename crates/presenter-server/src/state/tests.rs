@@ -91,6 +91,42 @@ fn presenter_service_blocks_start_until_vah264enc_probeable() {
     }
 }
 
+/// Regression for #335: cap presenter.service resource usage so a runaway
+/// NDI pipeline cannot wedge the entire host. The 2026-05-24 prod incident
+/// showed that once `whepserversink` spawned multiple per-consumer
+/// encoders, the N100 saturated all 4 cores within 3 minutes — sshd and
+/// presenter both stopped responding to TCP handshakes; recovery required
+/// power-cycling. CPUQuota leaves at least one core for sshd. MemoryMax
+/// bounds growth so the kernel's per-service OOM kicks in before the
+/// host-wide OOM killer. TasksMax caps thread/process explosion if a
+/// pipeline rebuild leaks (e.g. a leaked tokio task per failed retry).
+///
+/// Without this test, a future deploy-script refactor could silently
+/// drop these directives — re-opening the wedge failure mode that took
+/// prod offline. Both unit files (prod + dev) are pinned.
+#[test]
+fn presenter_service_has_resource_limits() {
+    let prod = include_str!("../../../../scripts/deploy/presenter.service");
+    let dev = include_str!("../../../../scripts/deploy/presenter-dev.service");
+    for (name, src) in [("presenter.service", prod), ("presenter-dev.service", dev)] {
+        assert!(
+            src.contains("CPUQuota="),
+            "{name}: missing CPUQuota directive — runaway pipeline can saturate \
+             all cores and lock out sshd (see #335 + 2026-05-24 prod incident)"
+        );
+        assert!(
+            src.contains("MemoryMax="),
+            "{name}: missing MemoryMax directive — runaway pipeline can grow \
+             until host-wide OOM killer fires unpredictable victims (#335)"
+        );
+        assert!(
+            src.contains("TasksMax="),
+            "{name}: missing TasksMax directive — pipeline rebuilds that leak \
+             tasks can exhaust the kernel PID space (#335)"
+        );
+    }
+}
+
 #[tokio::test]
 async fn empty_state_does_not_auto_seed_library() {
     // Regression guard for issue #228: server startup must NOT auto-import any
