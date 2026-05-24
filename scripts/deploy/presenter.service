@@ -17,21 +17,28 @@ Type=simple
 User=newlevel
 Group=newlevel
 WorkingDirectory=/opt/presenter
-# #339: block start until vah264enc is probeable. The race that took
-# prod down on 2026-05-24 and reproduced on cold-reboot of PR #334
-# (17:07 CEST) is: After=dev-dri-renderD128.device fires as soon as
-# udev creates the node, but i915/VA-API features can take 30-50s
-# longer to register. Without this gate, item 1's registry rescan
-# runs against an empty va plugin and item 6's encoder gate then
+# #339: gate start on hardware H264 encoder being probeable. The race
+# that took prod down on 2026-05-24 (and reproduced on cold-reboot of
+# PR #334, 17:07 CEST) is: After=dev-dri-renderD128.device fires as
+# soon as udev creates the node, but the i915/VA-API features can
+# take 30-50s longer to register. Without this gate, item 1's
+# registry rescan runs against an empty va plugin and item 6's gate
 # skips auto-restore (correct safety behaviour, but operator still
 # has to manually restart 50s later). Polling gst-inspect-1.0 in a
 # 1s loop capped at 30s by `timeout` closes the race: systemd will
 # not exec the presenter binary until the encoder is visible to the
-# same probe presenter_ndi::hw_h264_encoder() uses at startup. If
-# the probe never succeeds (no GPU at all), `timeout` exits non-zero,
-# systemd marks the start failed, Restart=always retries with the
-# same gate — eventually item 6 takes over once we time out.
-ExecStartPre=/usr/bin/timeout 30 sh -c 'until gst-inspect-1.0 vah264enc >/dev/null 2>&1; do sleep 1; done'
+# same probe presenter_ndi::hw_h264_encoder() uses at startup.
+#
+# Probe BOTH vah264enc (Intel/AMD VA-API — prod N100) AND nvh264enc
+# (Nvidia NVENC — dev2 RTX). The encoder probe inside presenter
+# returns the first one it finds; the gate matches that semantic.
+#
+# The leading `-` makes failures non-fatal: if the 30s timeout
+# expires (no GPU at all, BIOS disabled, kernel issue), systemd
+# still starts presenter so non-NDI features (lyrics, Bible,
+# timers, stage display) remain available. Item 6's encoder gate
+# then skips NDI auto-restore.
+ExecStartPre=-/usr/bin/timeout 30 sh -c 'until gst-inspect-1.0 vah264enc >/dev/null 2>&1 || gst-inspect-1.0 nvh264enc >/dev/null 2>&1; do sleep 1; done'
 ExecStart=/opt/presenter/presenter-server
 Restart=always
 RestartSec=5
