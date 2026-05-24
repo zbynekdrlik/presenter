@@ -411,7 +411,16 @@ impl AppState {
         // hosts and a structured warning is logged so dashboards and
         // operators see the issue immediately.
         let manager_loaded = state.ndi_manager().is_some();
-        let encoder_available = presenter_ndi::hw_h264_encoder().is_some();
+        // Encoder probe requires gstreamer::init() to have run.
+        // In production main.rs calls presenter_ndi::init() before AppState
+        // is built; in tests (AppState::in_memory) that doesn't happen, so
+        // gst::ElementFactory::find would panic. We re-call init() here —
+        // idempotent via OnceLock — to ensure the probe is safe regardless
+        // of caller. If init fails the encoder is treated as unavailable
+        // and the auto-restore branch is skipped (the safer default).
+        let encoder_available = manager_loaded
+            && presenter_ndi::init().is_ok()
+            && presenter_ndi::hw_h264_encoder().is_some();
         if should_auto_restore_ndi(manager_loaded, encoder_available) {
             match state.repository.get_active_video_source().await {
                 Ok(Some(source)) => {
