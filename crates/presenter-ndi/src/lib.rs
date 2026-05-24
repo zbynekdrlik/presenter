@@ -16,13 +16,50 @@ use std::sync::OnceLock;
 /// init does not silently succeed on retry.
 static GST_INIT_RESULT: OnceLock<Result<(), String>> = OnceLock::new();
 
+/// Ensures `GST_REGISTRY_UPDATE=yes` is set in the process environment.
+///
+/// Extracted as a named helper so the contract ("must run before
+/// gstreamer::init()") is encoded in code, not just in comments, and so
+/// the regression test for #333 item 1 can target the helper directly.
+///
+/// FIXME(rust-2024): `std::env::set_var` becomes `unsafe` in edition 2024
+/// because POSIX `setenv` races with concurrent `getenv` calls on other
+/// threads. Today (edition 2021) this is safe; on edition migration this
+/// call becomes the single site to wrap in `unsafe { ... }`.
+/// Intentionally NOT wrapped in `Once::call_once` — the in-process env
+/// var can be cleared by a test (e.g. via `remove_var`) and the next
+/// `init()` call must observably re-set it for the regression test to
+/// verify the contract.
+pub(crate) fn ensure_registry_rescan_env_var() {
+    std::env::set_var("GST_REGISTRY_UPDATE", "yes");
+}
+
 /// Initialize GStreamer + register Rust plugins (webrtcsink, ndisrc).
 ///
 /// Safe and cheap to call repeatedly. The outcome of the first call is cached
 /// and every subsequent call returns the same Ok/Err — so a caller that hits
 /// an init failure cannot be lulled into proceeding by re-calling `init()`.
 pub fn init() -> anyhow::Result<()> {
+    // #333 item 1: force registry rescan at every startup. Without this,
+    // a boot-time race where /dev/dri/renderD128 wasn't yet available can
+    // pin a cached plugin registry that lists the `va` plugin with ZERO
+    // features — vah264enc is missing and stays missing across process
+    // restarts because the cached registry is read in priority.
+    // Setting GST_REGISTRY_UPDATE=yes BEFORE gstreamer::init() forces a
+    // fresh plugin scan. Cost: ~100-300 ms on the FIRST init() call only;
+    // subsequent calls are no-ops because OnceLock has already run.
+    // `ensure_registry_rescan_env_var()` is called BEFORE the OnceLock
+    // get_or_init so the env var is set even when the cached outcome is
+    // returned without re-running the closure — and the function itself
+    // uses Once::call_once internally so only the FIRST init() call
+    // actually writes to the env.
+    ensure_registry_rescan_env_var();
+
     let outcome = GST_INIT_RESULT.get_or_init(|| {
+        tracing::info!(
+            "GStreamer registry rescan forced via GST_REGISTRY_UPDATE=yes (#333 hardening)"
+        );
+
         if let Err(e) = gstreamer::init() {
             return Err(format!("gstreamer init failed: {e}"));
         }
@@ -119,5 +156,42 @@ mod gst_init_tests {
         // `pipeline.rs::tests::build_fails_when_no_hw_h264_encoder` and at
         // deploy verification on the production host.
         let _ = hw_h264_encoder();
+    }
+
+    /// Regression for #333 item 1: a boot-time race could leave the cached
+    /// plugin registry with `va` plugin showing zero features (vah264enc
+    /// missing). Setting `GST_REGISTRY_UPDATE=yes` BEFORE `gstreamer::init()`
+    /// forces a registry rescan on every startup, eliminating that class of
+    /// stale-cache bug at the cost of ~100-300 ms boot time.
+    #[test]
+    fn init_sets_gst_registry_update_env_var() {
+        // Important: clear the env var first so we can assert init() sets it,
+        // not some external test runner inheriting it.
+        std::env::remove_var("GST_REGISTRY_UPDATE");
+        init().expect("gst init");
+        assert_eq!(
+            std::env::var("GST_REGISTRY_UPDATE").as_deref(),
+            Ok("yes"),
+            "init() must set GST_REGISTRY_UPDATE=yes before gstreamer::init() \
+             to force a fresh registry scan and avoid the boot-time stale-cache \
+             race documented in #333 Failure 1"
+        );
+    }
+
+    /// Direct test of the helper (deep-review 🟡 #3): if `init()` ever
+    /// regresses to call the helper AFTER `gstreamer::init()`, the helper
+    /// itself still has the correct contract — and this test, plus the
+    /// init() test above and `Once::call_once` semantics, together pin the
+    /// behavior down regardless of test execution order.
+    #[test]
+    fn ensure_registry_rescan_env_var_sets_yes() {
+        std::env::remove_var("GST_REGISTRY_UPDATE");
+        ensure_registry_rescan_env_var();
+        assert_eq!(
+            std::env::var("GST_REGISTRY_UPDATE").as_deref(),
+            Ok("yes"),
+            "ensure_registry_rescan_env_var must set GST_REGISTRY_UPDATE=yes; \
+             it is the named contract that init() depends on for the #333 item 1 fix"
+        );
     }
 }

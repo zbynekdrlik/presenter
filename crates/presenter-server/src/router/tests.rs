@@ -63,6 +63,73 @@ async fn health_endpoint_returns_ok() {
     assert_eq!(response.status(), StatusCode::OK);
 }
 
+/// Regression for #333 item 7: `/healthz` must report NDI pipeline state so
+/// dashboards can detect activation failures within seconds instead of
+/// inferring from "operator sees red error". Field shape:
+/// `ndi_pipelines: [{source_id, state, last_error?}]`. Always present (empty
+/// array when no NDI manager is loaded).
+#[tokio::test]
+async fn health_endpoint_reports_ndi_pipelines_field() {
+    let app = build_router(AppState::in_memory().await.unwrap());
+    let response = app
+        .oneshot(
+            Request::builder()
+                .uri("/healthz")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    let bytes = axum::body::to_bytes(response.into_body(), usize::MAX)
+        .await
+        .unwrap();
+    let body: serde_json::Value = serde_json::from_slice(&bytes).expect("/healthz returns JSON");
+    let pipelines = body
+        .get("ndi_pipelines")
+        .expect("/healthz must include ndi_pipelines field for #333 item 7");
+    assert!(
+        pipelines.is_array(),
+        "ndi_pipelines must be an array, got: {pipelines:?}"
+    );
+}
+
+/// Schema regression for #333 item 7 (deep-review 🟡 #3): the snapshot
+/// renderer must produce stable JSON for every PipelineState variant and
+/// MUST include `last_error` only on the `errored` variant. Previously
+/// the test only asserted the field name; this test pins the per-variant
+/// shape so mutations to state labels or last_error inclusion are caught.
+#[test]
+fn render_ndi_pipeline_entry_emits_correct_shape_per_variant() {
+    use presenter_ndi::pipeline::PipelineState;
+
+    let starting = super::render_ndi_pipeline_entry("src-1", &PipelineState::Starting);
+    assert_eq!(starting["source_id"], "src-1");
+    assert_eq!(starting["state"], "starting");
+    assert!(
+        starting.get("last_error").is_none(),
+        "Starting must NOT include last_error: {starting:?}"
+    );
+
+    let streaming = super::render_ndi_pipeline_entry("src-2", &PipelineState::Streaming);
+    assert_eq!(streaming["state"], "streaming");
+    assert!(streaming.get("last_error").is_none());
+
+    let stopped = super::render_ndi_pipeline_entry("src-3", &PipelineState::Stopped);
+    assert_eq!(stopped["state"], "stopped");
+    assert!(stopped.get("last_error").is_none());
+
+    let errored = super::render_ndi_pipeline_entry(
+        "src-4",
+        &PipelineState::Errored("pipeline died: ndisrc EOS".to_string()),
+    );
+    assert_eq!(errored["state"], "errored");
+    assert_eq!(
+        errored["last_error"], "pipeline died: ndisrc EOS",
+        "Errored MUST carry last_error verbatim so dashboards surface the cause"
+    );
+}
+
 #[tokio::test]
 async fn home_route_returns_menu() {
     let app = build_router(AppState::in_memory().await.unwrap());

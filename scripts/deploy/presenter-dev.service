@@ -1,6 +1,9 @@
 [Unit]
 Description=Presenter Dev - Church Worship Display System (Development)
-After=network.target
+# #333 item 2: order start after the DRI render node so the GStreamer
+# `va` plugin can probe the device cleanly. After= is ordering-only,
+# does not pull the device in. See presenter.service for full notes.
+After=network.target dev-dri-renderD128.device
 
 [Service]
 Type=simple

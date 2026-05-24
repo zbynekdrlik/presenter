@@ -1,6 +1,16 @@
 [Unit]
 Description=Presenter - Church Worship Display System
-After=network.target
+# #333 item 2: order start after the DRI render node so the GStreamer
+# plugin scan finds /dev/dri/renderD128 exposed and udev ACLs applied —
+# without this, the `va` plugin probes empty and the cached registry
+# lists vah264enc as missing, taking down NDI streaming until manual
+# restart (see incident 2026-05-24). After= is ordering-only: if the
+# device never appears (headless / GPU disabled in BIOS), presenter
+# still starts after the unit settles to "inactive" — item 1's
+# registry rescan + item 6's encoder gate handle the no-device case.
+# Wants= would NOT pull a .device unit in (devices come from udev,
+# not systemd activation), so we omit it.
+After=network.target dev-dri-renderD128.device
 
 [Service]
 Type=simple

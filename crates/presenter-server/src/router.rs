@@ -306,13 +306,59 @@ pub const BUILD_CHANNEL: &str = match option_env!("PRESENTER_BUILD_CHANNEL") {
     None => "dev",
 };
 
-async fn health() -> impl IntoResponse {
+/// Render one NDI pipeline snapshot as a JSON object for the `/healthz`
+/// response. Stable schema:
+/// - `source_id`: UUID string identifying the video source
+/// - `state`: one of `starting | streaming | stopped | errored`
+/// - `last_error`: present ONLY when `state == "errored"`; never null
+///
+/// Extracted as a free function so the schema can be unit-tested without
+/// constructing a full NdiManager (which requires libndi-loadable runtime).
+pub(crate) fn render_ndi_pipeline_entry(
+    source_id: &str,
+    pipeline_state: &presenter_ndi::pipeline::PipelineState,
+) -> serde_json::Value {
+    use presenter_ndi::pipeline::PipelineState;
+    let (state_label, last_error) = match pipeline_state {
+        PipelineState::Starting => ("starting", None),
+        PipelineState::Streaming => ("streaming", None),
+        PipelineState::Stopped => ("stopped", None),
+        PipelineState::Errored(detail) => ("errored", Some(detail.as_str())),
+    };
+    let mut entry = serde_json::json!({
+        "source_id": source_id,
+        "state": state_label,
+    });
+    if let Some(err) = last_error {
+        entry["last_error"] = serde_json::Value::String(err.to_string());
+    }
+    entry
+}
+
+async fn health(State(state): State<AppState>) -> impl IntoResponse {
+    // #333 item 7: include NDI pipeline state per source so dashboards
+    // detect activation failures within seconds (instead of inferring from
+    // operator-reported 'red error' status). Field is always an array —
+    // empty when no NDI manager is loaded OR no sources are active.
+    let ndi_pipelines = match state.ndi_manager() {
+        Some(manager) => manager
+            .pipeline_snapshots()
+            .await
+            .into_iter()
+            .map(|(source_id, pipeline_state)| {
+                render_ndi_pipeline_entry(&source_id, &pipeline_state)
+            })
+            .collect::<Vec<_>>(),
+        None => Vec::new(),
+    };
+
     (
         StatusCode::OK,
         Json(serde_json::json!({
             "status": "ok",
             "version": VERSION,
-            "channel": BUILD_CHANNEL
+            "channel": BUILD_CHANNEL,
+            "ndi_pipelines": ndi_pipelines,
         })),
     )
 }
