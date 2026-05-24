@@ -108,6 +108,17 @@ impl SupervisorState {
         self.consecutive_failures
     }
 
+    /// #337: after `COOL_OFF_THRESHOLD` consecutive failures the supervisor
+    /// is "cooling off" — it should stop rebuilding and let an operator
+    /// re-activate manually (or auto-retry once per cool-off window).
+    ///
+    /// RED stub: always returns false. The GREEN fix in the next commit
+    /// makes this return `true` once consecutive_failures reaches the
+    /// threshold.
+    fn is_cooling_off(&self) -> bool {
+        false
+    }
+
     /// Rate-limit window: minimum 2 seconds between rebuild attempts.
     fn should_rebuild_now(&self, now: std::time::Instant) -> RebuildDecision {
         const RATE_LIMIT: std::time::Duration = std::time::Duration::from_secs(2);
@@ -857,6 +868,67 @@ mod start_pipeline_state_check_tests {
             state.mark_rebuild_failed();
         }
         state.mark_rebuild_succeeded();
+        assert_eq!(state.consecutive_failures(), 0);
+    }
+
+    /// #337 RED: after 5 consecutive failures, supervisor enters
+    /// CoolingOff state. Without an explicit cool-off ceiling, the
+    /// 30s-capped exponential backoff retries forever and produces
+    /// continuous log spam + repeated encoder-rebuild CPU churn for an
+    /// unrecoverable fault (e.g. encoder vanished). With cool-off, the
+    /// supervisor pauses for 5 min and lets the operator manually
+    /// reactivate to retry sooner.
+    ///
+    /// FAILS before the GREEN fix in the next commit (is_cooling_off
+    /// stub always returns false).
+    #[tokio::test]
+    async fn supervisor_enters_cool_off_at_5_consecutive_failures() {
+        let mut state = SupervisorState::new();
+        for _ in 0..4 {
+            state.mark_rebuild_failed();
+        }
+        assert!(
+            !state.is_cooling_off(),
+            "4 failures must NOT trigger cool-off (threshold is 5)"
+        );
+        state.mark_rebuild_failed();
+        assert!(
+            state.is_cooling_off(),
+            "5 consecutive failures must trigger cool-off (#337)"
+        );
+    }
+
+    /// #337 RED: while cooling off, the supervisor must wait 5 minutes
+    /// before its next rebuild attempt — NOT the 30s exp-backoff cap.
+    #[tokio::test]
+    async fn supervisor_cool_off_window_is_five_minutes() {
+        let mut state = SupervisorState::new();
+        for _ in 0..5 {
+            state.mark_rebuild_failed();
+        }
+        assert_eq!(
+            state.backoff_for_failure_count(),
+            std::time::Duration::from_secs(5 * 60),
+            "cool-off window must be 5 minutes (#337) — not the prior 2s exp-backoff entry"
+        );
+    }
+
+    /// #337 RED: mark_rebuild_succeeded clears cool-off. Without this,
+    /// a manual reactivation that succeeds once would still leave the
+    /// counter pinned, sending the next failure straight back into
+    /// cool-off.
+    #[tokio::test]
+    async fn supervisor_cool_off_clears_on_success() {
+        let mut state = SupervisorState::new();
+        for _ in 0..5 {
+            state.mark_rebuild_failed();
+        }
+        assert!(state.is_cooling_off());
+        state.mark_rebuild_succeeded();
+        assert!(
+            !state.is_cooling_off(),
+            "successful rebuild must clear the cool-off flag (#337)"
+        );
         assert_eq!(state.consecutive_failures(), 0);
     }
 }
