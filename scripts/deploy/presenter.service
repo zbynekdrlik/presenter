@@ -51,6 +51,19 @@ ReadWritePaths=/opt/presenter
 PrivateTmp=true
 
 # Resource limits
+# #335: cap presenter.service so a runaway NDI pipeline cannot wedge the
+# host. 2026-05-24 incident: whepserversink spawned a per-consumer encoder
+# per WHEP client, all 4 N100 cores saturated within 3 minutes, sshd
+# stopped responding, recovery required power-cycling. CPUQuota=300% leaves
+# one core for sshd + critical services. MemoryMax=4G triggers the
+# per-service OOM (presenter restarts via Restart=always) before the
+# host-wide OOM picks an unpredictable victim. TasksMax=512 caps
+# thread/process explosion if a pipeline rebuild leaks tasks. The 30-day
+# observation window after rollout will tell us whether these caps are
+# tight enough (see #335 acceptance criteria) — adjust then.
+CPUQuota=300%
+MemoryMax=4G
+TasksMax=512
 LimitNOFILE=65536
 
 [Install]

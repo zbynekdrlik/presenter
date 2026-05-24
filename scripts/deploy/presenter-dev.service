@@ -36,7 +36,10 @@ ProtectHome=read-only
 ReadWritePaths=/opt/presenter-dev
 PrivateTmp=true
 
-# Resource limits
+# Resource limits — #335 (mirror of prod; see presenter.service for context).
+CPUQuota=300%
+MemoryMax=4G
+TasksMax=512
 LimitNOFILE=65536
 
 [Install]
