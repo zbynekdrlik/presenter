@@ -16,7 +16,7 @@ WorkingDirectory=/opt/presenter-dev
 # (dev2 RTX Nvidia). Leading `-` makes the gate non-fatal — if no
 # GPU is available at all, presenter still starts for non-NDI
 # features and item 6 skips NDI auto-restore.
-ExecStartPre=-/usr/bin/timeout 30 sh -c 'until gst-inspect-1.0 vah264enc >/dev/null 2>&1 || gst-inspect-1.0 nvh264enc >/dev/null 2>&1; do sleep 1; done'
+ExecStartPre=-/usr/bin/timeout 30 sh -c 'until gst-inspect-1.0 --exists vah264enc || gst-inspect-1.0 --exists nvh264enc; do sleep 1; done'
 ExecStart=/opt/presenter-dev/presenter-server
 Restart=always
 RestartSec=5

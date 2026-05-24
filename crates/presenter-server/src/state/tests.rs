@@ -69,32 +69,48 @@ fn presenter_service_blocks_start_until_h264_encoder_probeable() {
     let prod = include_str!("../../../../scripts/deploy/presenter.service");
     let dev = include_str!("../../../../scripts/deploy/presenter-dev.service");
     for (name, src) in [("presenter.service", prod), ("presenter-dev.service", dev)] {
+        // Tighten substring-only checks (deep-review 🔵 #4) by pinning all
+        // required tokens on the SAME line. A refactor that leaves comments
+        // mentioning the encoders but removes the actual probe would still
+        // have satisfied substring assertions across the whole file.
+        let exec_pre = src
+            .lines()
+            .find(|l| l.trim_start().starts_with("ExecStartPre="))
+            .unwrap_or_else(|| {
+                panic!(
+                    "{name}: missing ExecStartPre directive — the binary can exec \
+                 before /dev/dri/renderD128 is fully usable for VA-API (see #339 \
+                 prod cold-reboot reproduction 2026-05-24 17:07 CEST)"
+                )
+            });
+        let exec_pre_trimmed = exec_pre.trim_start();
         assert!(
-            src.contains("ExecStartPre=-"),
-            "{name}: missing ExecStartPre with leading `-` (best-effort prefix). \
+            exec_pre_trimmed.starts_with("ExecStartPre=-"),
+            "{name}: ExecStartPre must use leading `-` (best-effort prefix). \
              Without `-`, a 30s timeout (no GPU at all) makes systemd fail the \
-             unit — blocking non-NDI features (lyrics, Bible, timers) from \
-             starting. The gate must be non-fatal so item 6's encoder gate can \
-             take over (#339)"
+             whole unit — blocking non-NDI features (lyrics, Bible, timers) \
+             from starting. Item 6's encoder gate must be allowed to take \
+             over instead (#339). Line: {exec_pre}"
         );
         assert!(
-            src.contains("vah264enc"),
+            exec_pre.contains("gst-inspect-1.0"),
+            "{name}: ExecStartPre must use `gst-inspect-1.0` — canonical \
+             GStreamer feature query that matches what `presenter_ndi::\
+             hw_h264_encoder()` sees at startup (#339). Line: {exec_pre}"
+        );
+        assert!(
+            exec_pre.contains("vah264enc"),
             "{name}: ExecStartPre must probe `vah264enc` (Intel/AMD VA-API — \
-             prod N100). The `va` plugin can register without features, so a \
-             generic plugin check is insufficient (#339)"
+             prod N100). The `va` plugin can register without features so a \
+             generic plugin check is insufficient (#339). Line: {exec_pre}"
         );
         assert!(
-            src.contains("nvh264enc"),
+            exec_pre.contains("nvh264enc"),
             "{name}: ExecStartPre must ALSO probe `nvh264enc` (Nvidia NVENC — \
              dev2 RTX). Without this branch the dev deploy unit-loops on a \
              machine with Nvidia GPU because vah264enc never registers there \
-             (caught 2026-05-24 in CI run 26367361768 — #339 hotfix)"
-        );
-        assert!(
-            src.contains("gst-inspect-1.0"),
-            "{name}: ExecStartPre must use `gst-inspect-1.0` — that's the \
-             canonical GStreamer feature query and matches what \
-             `presenter_ndi::hw_h264_encoder()` will see at startup (#339)"
+             (caught 2026-05-24 in CI run 26367361768 — #339 hotfix). \
+             Line: {exec_pre}"
         );
     }
 }

@@ -38,7 +38,7 @@ WorkingDirectory=/opt/presenter
 # still starts presenter so non-NDI features (lyrics, Bible,
 # timers, stage display) remain available. Item 6's encoder gate
 # then skips NDI auto-restore.
-ExecStartPre=-/usr/bin/timeout 30 sh -c 'until gst-inspect-1.0 vah264enc >/dev/null 2>&1 || gst-inspect-1.0 nvh264enc >/dev/null 2>&1; do sleep 1; done'
+ExecStartPre=-/usr/bin/timeout 30 sh -c 'until gst-inspect-1.0 --exists vah264enc || gst-inspect-1.0 --exists nvh264enc; do sleep 1; done'
 ExecStart=/opt/presenter/presenter-server
 Restart=always
 RestartSec=5

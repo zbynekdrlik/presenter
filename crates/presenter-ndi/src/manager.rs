@@ -272,8 +272,39 @@ impl NdiManager {
         ndi_name: &str,
     ) -> Result<()> {
         let mut active = self.active.lock().await;
+
+        // Operator-reactivation path: if the existing entry is dead, snapshot
+        // its supervisor handle BEFORE `check_active_entry` removes the entry,
+        // so we can abort the prior supervisor below. Without this, a
+        // cool-off-bound supervisor that's mid-5-min-sleep keeps running and
+        // ends up double-watching the new pipeline alongside the fresh
+        // supervisor we spawn below (deep-review 🔵 #3, 2026-05-24 PR #340).
+        // Safe to `.take()` here because we hold the lock: state observed by
+        // `check_active_entry` below cannot change between these two reads.
+        let prior_supervisor: Option<tokio::task::JoinHandle<()>> = active
+            .get_mut(source_id)
+            .filter(|entry| {
+                matches!(
+                    entry.pipeline.state(),
+                    PipelineState::Stopped | PipelineState::Errored(_)
+                )
+            })
+            .and_then(|entry| entry.supervisor.take());
+
         if let StateCheckOutcome::Idempotent = check_active_entry(&mut active, source_id).await {
+            // Pipeline turned out healthy — the dead-state filter above didn't
+            // match, so prior_supervisor is None. If somehow it leaked, drop
+            // the handle (does NOT cancel the task in tokio; the supervisor
+            // is still owned by its `ActiveSource.supervisor` slot if we
+            // didn't `.take()`).
+            debug_assert!(prior_supervisor.is_none());
             return Ok(());
+        }
+        // The entry was dead → check_active_entry removed it. Abort the prior
+        // supervisor (if any) so it doesn't double-watch the new pipeline we
+        // build below.
+        if let Some(handle) = prior_supervisor {
+            handle.abort();
         }
 
         let whep_url = format!("/ndi/whep/{}", source_id);
@@ -356,12 +387,15 @@ impl NdiManager {
     /// The supervisor:
     /// - Subscribes to the pipeline's state watcher
     /// - On Errored/Stopped, requests a rebuild via `rebuild_pipeline`
-    /// - Rate-limits to 1 rebuild / 2s; exponentially backs off after 5
-    ///   consecutive failures
+    /// - Rate-limits to 1 rebuild / 2s; enters a 5-minute cool-off after
+    ///   `COOL_OFF_THRESHOLD` (5) consecutive failures (#337). During
+    ///   cool-off the supervisor sleeps between rebuild attempts but does
+    ///   not exit — manual reactivation via `start_pipeline` aborts this
+    ///   supervisor and spawns a fresh one with a zero counter.
     /// - Re-subscribes to the FRESH state watcher after each successful
     ///   rebuild (the old watcher's pipeline was dropped)
     /// - Exits when the watcher closes (pipeline dropped) OR the task is
-    ///   externally aborted via `stop_pipeline`
+    ///   externally aborted via `stop_pipeline` / operator reactivate
     fn spawn_supervisor(
         self: &std::sync::Arc<Self>,
         source_id: String,
@@ -410,7 +444,15 @@ impl NdiManager {
                         match manager.rebuild_pipeline(&source_id, &ndi_name).await {
                             Ok(()) => {
                                 tracing::info!(source_id = %source_id, "supervisor: rebuild succeeded");
-                                state.mark_rebuild_succeeded();
+                                // NOTE: do NOT mark_rebuild_succeeded() yet. We only
+                                // know the pipeline build returned Ok — we don't yet
+                                // know it survived the immediate state-watcher peek
+                                // below. If we reset the counter here, the
+                                // already_dead branch below would mark_failed and
+                                // the counter would oscillate 0 → 1 → 0 → 1 forever,
+                                // never crossing the cool-off threshold (deep-review
+                                // 🟡 #1, 2026-05-24 PR #340). Reset only AFTER the
+                                // peek confirms the new pipeline is alive.
                                 // The fresh pipeline has a NEW state watcher; swap ours
                                 // so we see ITS transitions, not the dead pipeline's.
                                 match manager.state_watcher_for(&source_id).await {
@@ -458,6 +500,10 @@ impl NdiManager {
                                             }
                                             continue;
                                         }
+                                        // Pipeline confirmed alive on the new watcher
+                                        // → reset the failure streak now (deferred
+                                        // from above per deep-review 🟡 #1).
+                                        state.mark_rebuild_succeeded();
                                     }
                                     None => {
                                         // Source no longer active (operator deactivated
