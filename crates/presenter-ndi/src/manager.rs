@@ -691,12 +691,9 @@ impl NdiManager {
         &self,
         source_id: &str,
     ) -> Option<crate::pipeline::PipelineSnapshot> {
-        let guard = tokio::time::timeout(
-            std::time::Duration::from_millis(200),
-            self.active.lock(),
-        )
-        .await
-        .ok()?;
+        let guard = tokio::time::timeout(std::time::Duration::from_millis(200), self.active.lock())
+            .await
+            .ok()?;
         let pipeline = std::sync::Arc::clone(&guard.get(source_id)?.pipeline);
         drop(guard);
         let mut snap = pipeline.snapshot().await;
@@ -758,7 +755,10 @@ impl NdiManager {
                     body: Some(answer.sdp_answer.into_bytes()),
                 })
             }
-            WhepOp::Post { id: Some(_), body: _ } => {
+            WhepOp::Post {
+                id: Some(_),
+                body: _,
+            } => {
                 // Session-scoped re-offer — out of scope for #336.
                 // Validate that the source is known first (preserves 404
                 // semantics for unknown sources — the HTTP shim tests assert
@@ -778,7 +778,11 @@ impl NdiManager {
                     body: Some(b"WHEP re-offer not implemented".to_vec()),
                 })
             }
-            WhepOp::Patch { id, body, headers: _ } => {
+            WhepOp::Patch {
+                id,
+                body,
+                headers: _,
+            } => {
                 // Clone the pipeline reference out of the map guard before
                 // any blocking await. The per-candidate loop re-uses this
                 // single clone rather than re-locking per iteration.
@@ -794,8 +798,8 @@ impl NdiManager {
                 // Parse `application/trickle-ice-sdpfrag` body: extract
                 // `a=mid:` (for mline index) and `a=candidate:` lines,
                 // forwarding each candidate to pipeline.add_ice_candidate.
-                let body_str = std::str::from_utf8(&body)
-                    .map_err(|e| anyhow!("PATCH body not utf8: {e}"))?;
+                let body_str =
+                    std::str::from_utf8(&body).map_err(|e| anyhow!("PATCH body not utf8: {e}"))?;
                 let mut count = 0;
                 let mut mline_idx: u32 = 0;
                 for raw_line in body_str.lines() {
@@ -811,7 +815,9 @@ impl NdiManager {
                         // webrtcbin's add-ice-candidate signal accepts the
                         // candidate string without the leading "a=" prefix.
                         let cand_value = &line[2..];
-                        pipeline.add_ice_candidate(&id, mline_idx, cand_value).await?;
+                        pipeline
+                            .add_ice_candidate(&id, mline_idx, cand_value)
+                            .await?;
                         count += 1;
                     }
                 }
@@ -821,7 +827,11 @@ impl NdiManager {
                     candidate_count = count,
                     "WHEP PATCH dispatched"
                 );
-                Ok(WhepReply { status: 204, headers: vec![], body: None })
+                Ok(WhepReply {
+                    status: 204,
+                    headers: vec![],
+                    body: None,
+                })
             }
             WhepOp::Delete { id } => {
                 // Clone the pipeline reference before the blocking await.
@@ -842,7 +852,11 @@ impl NdiManager {
                     session_id = %id,
                     "WHEP DELETE → consumer removed"
                 );
-                Ok(WhepReply { status: 204, headers: vec![], body: None })
+                Ok(WhepReply {
+                    status: 204,
+                    headers: vec![],
+                    body: None,
+                })
             }
         }
     }

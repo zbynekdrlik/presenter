@@ -296,9 +296,7 @@ mod tests {
 
     #[test]
     fn map_signaller_error_consumer_cap_emits_503_with_retry_after() {
-        let err = anyhow::anyhow!(
-            "WHEP consumer cap reached (8 per source) — try again later"
-        );
+        let err = anyhow::anyhow!("WHEP consumer cap reached (8 per source) — try again later");
         let app_err = map_signaller_error(err);
         let resp = app_err.into_response();
         assert_eq!(

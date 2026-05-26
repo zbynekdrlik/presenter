@@ -178,24 +178,63 @@ mod tests {
 
     #[test]
     fn connection_state_maps_gst_values_correctly() {
-        assert_eq!(WhepConnectionState::from_gst_value(0), WhepConnectionState::New);
-        assert_eq!(WhepConnectionState::from_gst_value(1), WhepConnectionState::Connecting);
-        assert_eq!(WhepConnectionState::from_gst_value(2), WhepConnectionState::Connected);
-        assert_eq!(WhepConnectionState::from_gst_value(3), WhepConnectionState::Disconnected);
-        assert_eq!(WhepConnectionState::from_gst_value(4), WhepConnectionState::Failed);
-        assert_eq!(WhepConnectionState::from_gst_value(5), WhepConnectionState::Closed);
-        assert_eq!(WhepConnectionState::from_gst_value(99), WhepConnectionState::New);
+        assert_eq!(
+            WhepConnectionState::from_gst_value(0),
+            WhepConnectionState::New
+        );
+        assert_eq!(
+            WhepConnectionState::from_gst_value(1),
+            WhepConnectionState::Connecting
+        );
+        assert_eq!(
+            WhepConnectionState::from_gst_value(2),
+            WhepConnectionState::Connected
+        );
+        assert_eq!(
+            WhepConnectionState::from_gst_value(3),
+            WhepConnectionState::Disconnected
+        );
+        assert_eq!(
+            WhepConnectionState::from_gst_value(4),
+            WhepConnectionState::Failed
+        );
+        assert_eq!(
+            WhepConnectionState::from_gst_value(5),
+            WhepConnectionState::Closed
+        );
+        assert_eq!(
+            WhepConnectionState::from_gst_value(99),
+            WhepConnectionState::New
+        );
     }
 
     #[test]
     fn from_gst_typed_enum_maps_correctly() {
         use gstreamer_webrtc::WebRTCPeerConnectionState as GstState;
-        assert_eq!(WhepConnectionState::from(GstState::New), WhepConnectionState::New);
-        assert_eq!(WhepConnectionState::from(GstState::Connecting), WhepConnectionState::Connecting);
-        assert_eq!(WhepConnectionState::from(GstState::Connected), WhepConnectionState::Connected);
-        assert_eq!(WhepConnectionState::from(GstState::Disconnected), WhepConnectionState::Disconnected);
-        assert_eq!(WhepConnectionState::from(GstState::Failed), WhepConnectionState::Failed);
-        assert_eq!(WhepConnectionState::from(GstState::Closed), WhepConnectionState::Closed);
+        assert_eq!(
+            WhepConnectionState::from(GstState::New),
+            WhepConnectionState::New
+        );
+        assert_eq!(
+            WhepConnectionState::from(GstState::Connecting),
+            WhepConnectionState::Connecting
+        );
+        assert_eq!(
+            WhepConnectionState::from(GstState::Connected),
+            WhepConnectionState::Connected
+        );
+        assert_eq!(
+            WhepConnectionState::from(GstState::Disconnected),
+            WhepConnectionState::Disconnected
+        );
+        assert_eq!(
+            WhepConnectionState::from(GstState::Failed),
+            WhepConnectionState::Failed
+        );
+        assert_eq!(
+            WhepConnectionState::from(GstState::Closed),
+            WhepConnectionState::Closed
+        );
     }
 
     #[test]

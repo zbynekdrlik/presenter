@@ -258,7 +258,9 @@ impl NdiPipeline {
         videoconvert
             .link(&encoder)
             .context("link videoconvert -> encoder")?;
-        encoder.link(&rtph264pay).context("link encoder -> rtph264pay")?;
+        encoder
+            .link(&rtph264pay)
+            .context("link encoder -> rtph264pay")?;
         rtph264pay.link(&tee).context("link rtph264pay -> tee")?;
 
         // ndisrcdemux is a sometimes-pad element. Wire up dynamic pads:
@@ -469,18 +471,18 @@ impl NdiPipeline {
 
         // Channel to receive the SDP answer from within spawn_blocking.
         // Returns (webrtcbin, queue, tee_pad, sdp_text) on success.
-        let (answer_tx, answer_rx) =
-            tokio::sync::oneshot::channel::<Result<(gst::Element, gst::Element, gst::Pad, String)>>();
+        let (answer_tx, answer_rx) = tokio::sync::oneshot::channel::<
+            Result<(gst::Element, gst::Element, gst::Pad, String)>,
+        >();
 
         let sdp_offer_bytes_clone = sdp_offer_bytes.clone();
         let session_id_for_blocking = session_id.clone();
 
         tokio::task::spawn_blocking(move || {
             // Parse the SDP offer.
-            let sdp_msg = gstreamer_webrtc::gst_sdp::SDPMessage::parse_buffer(
-                &sdp_offer_bytes_clone,
-            )
-            .map_err(|e| anyhow!("SDP parse failed: {e}"))?;
+            let sdp_msg =
+                gstreamer_webrtc::gst_sdp::SDPMessage::parse_buffer(&sdp_offer_bytes_clone)
+                    .map_err(|e| anyhow!("SDP parse failed: {e}"))?;
 
             let offer_desc = gst_webrtc::WebRTCSessionDescription::new(
                 gst_webrtc::WebRTCSDPType::Offer,
@@ -506,7 +508,9 @@ impl NdiPipeline {
                     .build()
                     .context("build webrtcbin")?;
 
-                pipeline.add_many([&queue, &webrtcbin]).context("add queue+webrtcbin")?;
+                pipeline
+                    .add_many([&queue, &webrtcbin])
+                    .context("add queue+webrtcbin")?;
 
                 // From here, on any error we must remove queue + webrtcbin from the
                 // pipeline before returning. Use a nested closure for this.
@@ -515,7 +519,9 @@ impl NdiPipeline {
                     let queue_sink = queue
                         .static_pad("sink")
                         .ok_or_else(|| anyhow!("queue has no sink pad"))?;
-                    tee_pad.link(&queue_sink).context("link tee_pad -> queue.sink")?;
+                    tee_pad
+                        .link(&queue_sink)
+                        .context("link tee_pad -> queue.sink")?;
                     queue.link(&webrtcbin).context("link queue -> webrtcbin")?;
 
                     // Connect on-ice-candidate signal.
@@ -525,10 +531,8 @@ impl NdiPipeline {
                     {
                         let ice_tx = ice_tx_clone.clone();
                         webrtcbin.connect("on-ice-candidate", false, move |args| {
-                            let sdp_mline_index = args
-                                .get(1)
-                                .and_then(|v| v.get::<u32>().ok())
-                                .unwrap_or(0);
+                            let sdp_mline_index =
+                                args.get(1).and_then(|v| v.get::<u32>().ok()).unwrap_or(0);
                             let candidate = args
                                 .get(2)
                                 .and_then(|v| v.get::<String>().ok())
@@ -547,27 +551,26 @@ impl NdiPipeline {
                     // std::sync::Mutex::lock() directly; no async dance or block_on needed.
                     // The critical section is nanoseconds (a simple enum write), so
                     // contention is negligible.
-                    webrtcbin.connect_notify(
-                        Some("connection-state"),
-                        {
-                            let connection_state_for_signal = connection_state_for_signal.clone();
-                            let session_id_for_signal = session_id_for_signal.clone();
-                            move |webrtcbin, _pspec| {
-                                let gst_state = webrtcbin
-                                    .property::<gst_webrtc::WebRTCPeerConnectionState>("connection-state");
-                                let our_state = WhepConnectionState::from(gst_state);
-                                // std::sync::Mutex — safe to lock from any thread, no async runtime
-                                // required. Panic on poison is acceptable; the signal thread holds
-                                // the lock for a trivial enum write.
-                                *connection_state_for_signal.lock().unwrap() = our_state;
-                                tracing::debug!(
-                                    session_id = %session_id_for_signal,
-                                    state = ?our_state,
-                                    "WHEP consumer connection-state changed"
+                    webrtcbin.connect_notify(Some("connection-state"), {
+                        let connection_state_for_signal = connection_state_for_signal.clone();
+                        let session_id_for_signal = session_id_for_signal.clone();
+                        move |webrtcbin, _pspec| {
+                            let gst_state = webrtcbin
+                                .property::<gst_webrtc::WebRTCPeerConnectionState>(
+                                    "connection-state",
                                 );
-                            }
-                        },
-                    );
+                            let our_state = WhepConnectionState::from(gst_state);
+                            // std::sync::Mutex — safe to lock from any thread, no async runtime
+                            // required. Panic on poison is acceptable; the signal thread holds
+                            // the lock for a trivial enum write.
+                            *connection_state_for_signal.lock().unwrap() = our_state;
+                            tracing::debug!(
+                                session_id = %session_id_for_signal,
+                                state = ?our_state,
+                                "WHEP consumer connection-state changed"
+                            );
+                        }
+                    });
 
                     // Set webrtcbin to PLAYING so it can do ICE + DTLS.
                     webrtcbin
@@ -575,12 +578,12 @@ impl NdiPipeline {
                         .context("set webrtcbin to Playing")?;
 
                     // Set the remote description (the browser's offer).
-                    let (remote_desc_tx, remote_desc_rx) =
-                        std::sync::mpsc::sync_channel::<()>(1);
+                    let (remote_desc_tx, remote_desc_rx) = std::sync::mpsc::sync_channel::<()>(1);
                     let promise = gst::Promise::with_change_func(move |_reply| {
                         let _ = remote_desc_tx.send(());
                     });
-                    webrtcbin.emit_by_name::<()>("set-remote-description", &[&offer_desc, &promise]);
+                    webrtcbin
+                        .emit_by_name::<()>("set-remote-description", &[&offer_desc, &promise]);
                     // Wait for the set-remote-description promise to resolve.
                     // Propagate timeout as an error — proceeding to create-answer on a
                     // webrtcbin that hasn't processed the offer produces an invalid SDP.
@@ -589,8 +592,9 @@ impl NdiPipeline {
                         .context("set-remote-description promise timed out or sender dropped")?;
 
                     // Create the SDP answer.
-                    let (answer_sdp_tx, answer_sdp_rx) =
-                        std::sync::mpsc::sync_channel::<Option<gst_webrtc::WebRTCSessionDescription>>(1);
+                    let (answer_sdp_tx, answer_sdp_rx) = std::sync::mpsc::sync_channel::<
+                        Option<gst_webrtc::WebRTCSessionDescription>,
+                    >(1);
                     let promise = gst::Promise::with_change_func(move |reply| {
                         let answer = reply
                             .ok()
@@ -599,7 +603,8 @@ impl NdiPipeline {
                             .and_then(|v| v.get::<gst_webrtc::WebRTCSessionDescription>().ok());
                         let _ = answer_sdp_tx.send(answer);
                     });
-                    webrtcbin.emit_by_name::<()>("create-answer", &[&None::<gst::Structure>, &promise]);
+                    webrtcbin
+                        .emit_by_name::<()>("create-answer", &[&None::<gst::Structure>, &promise]);
 
                     let answer_desc = answer_sdp_rx
                         .recv_timeout(std::time::Duration::from_secs(5))
@@ -656,8 +661,7 @@ impl NdiPipeline {
         // in the WHEP answer body). Allow up to 50 ms for additional
         // candidates to trickle in.
         let mut initial_candidates = Vec::new();
-        let drain_deadline =
-            tokio::time::Instant::now() + std::time::Duration::from_millis(50);
+        let drain_deadline = tokio::time::Instant::now() + std::time::Duration::from_millis(50);
         while let Ok(Some(c)) = tokio::time::timeout_at(drain_deadline, ice_rx.recv()).await {
             initial_candidates.push(c);
         }
@@ -704,8 +708,7 @@ impl NdiPipeline {
         let candidate = candidate.to_string();
         drop(sessions);
         tokio::task::spawn_blocking(move || {
-            webrtcbin
-                .emit_by_name::<()>("add-ice-candidate", &[&sdp_mline_index, &candidate]);
+            webrtcbin.emit_by_name::<()>("add-ice-candidate", &[&sdp_mline_index, &candidate]);
         })
         .await
         .context("spawn_blocking join")?;
@@ -743,9 +746,7 @@ impl NdiPipeline {
             let _ = webrtcbin.set_state(gst::State::Null);
             let _ = queue.set_state(gst::State::Null);
             // Remove queue first (it is upstream of webrtcbin in the branch).
-            pipeline
-                .remove(&queue)
-                .context("pipeline.remove queue")?;
+            pipeline.remove(&queue).context("pipeline.remove queue")?;
             pipeline
                 .remove(&webrtcbin)
                 .context("pipeline.remove webrtcbin")?;
@@ -937,7 +938,9 @@ impl NdiPipeline {
         tee_pad
             .link(&queue_sink)
             .context("link tee_pad -> queue.sink (test)")?;
-        queue.link(&webrtcbin).context("link queue -> webrtcbin (test)")?;
+        queue
+            .link(&webrtcbin)
+            .context("link queue -> webrtcbin (test)")?;
         let (ice_tx, _ice_rx) = tokio::sync::mpsc::unbounded_channel();
         let session = WhepSession {
             session_id: session_id.to_string(),
@@ -1073,8 +1076,8 @@ mod tests {
     #[tokio::test]
     async fn add_consumer_returns_cap_reached_after_eight() {
         super::super::init().expect("gst init");
-        let mut pipeline = NdiPipeline::stopped_for_test_with_topology("x264enc")
-            .expect("topology builder");
+        let mut pipeline =
+            NdiPipeline::stopped_for_test_with_topology("x264enc").expect("topology builder");
 
         // Fill the cap.
         for i in 0..MAX_CONSUMERS_PER_SOURCE {
@@ -1113,8 +1116,8 @@ mod tests {
     #[tokio::test]
     async fn add_then_remove_leaves_clean_state() {
         super::super::init().expect("gst init");
-        let mut pipeline = NdiPipeline::stopped_for_test_with_topology("x264enc")
-            .expect("topology builder");
+        let mut pipeline =
+            NdiPipeline::stopped_for_test_with_topology("x264enc").expect("topology builder");
 
         // Add 5 consumers.
         for i in 0..5 {
