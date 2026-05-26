@@ -9,6 +9,9 @@ repository.workspace = true
 [features]
 default = []
 test-helpers = []
+# Gates the #336 RED regression test until Task 4 lands the real topology.
+# Removed in Task 4 — the test must run unconditionally on every CI host.
+fanout-redgreen = []
 
 [dependencies]
 anyhow.workspace = true

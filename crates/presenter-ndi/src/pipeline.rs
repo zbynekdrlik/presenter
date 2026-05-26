@@ -511,4 +511,55 @@ mod tests {
              would force 'a=inactive' in the WHEP SDP answer); got: {actual_str}"
         );
     }
+
+    /// Regression test for #336: shared-encoder fanout.
+    ///
+    /// The pre-fix pipeline ended in `whepserversink`, which (by gst-plugin-rs
+    /// 0.15 design) spawns one independent encoder per WHEP consumer. With
+    /// multiple stage-display browsers connecting to the same NDI source,
+    /// 3-4 encoders saturated the N100's iGPU VAAPI scheduler — the
+    /// 2026-05-24 production incident.
+    ///
+    /// The fix builds the pipeline with `ndisrc → demux → videoconvert →
+    /// vah264enc → rtph264pay → tee` (one encoder), then `add_consumer`
+    /// dynamically requests a tee src pad + spawns one `webrtcbin` per
+    /// consumer that reads from the shared encoded stream. This test asserts
+    /// the load-bearing invariant: regardless of how many consumers are
+    /// added, the pipeline iterator yields EXACTLY ONE encoder element.
+    ///
+    /// Runs on every CI host (no GPU/libndi required) — uses
+    /// `stopped_for_test_with_topology()` which builds the encoder + tee
+    /// + per-consumer webrtcbin elements with `x264enc` (always available)
+    /// in lieu of real HW encoders.
+    #[cfg(feature = "fanout-redgreen")]
+    #[tokio::test]
+    async fn pipeline_has_single_encoder_for_n_consumers() {
+        super::super::init().expect("gst init");
+        // Build a pipeline-shaped value with the fanout topology, force
+        // `x264enc` as the encoder so this runs on every CI host.
+        let mut pipeline = NdiPipeline::stopped_for_test_with_topology("x264enc")
+            .expect("test-only topology builder must succeed when x264enc registered");
+
+        // Simulate N WHEP POSTs.
+        for i in 0..4 {
+            pipeline
+                .add_consumer_stub(&format!("test-session-{i}"))
+                .expect("add_consumer must succeed up to the soft cap");
+        }
+
+        // Count elements whose factory name is one of the encoder factories.
+        let encoder_factories = ["vah264enc", "nvh264enc", "x264enc"];
+        let encoder_count = pipeline.iterate_encoders().count();
+        let webrtcbin_count = pipeline.iterate_webrtcbins().count();
+
+        assert_eq!(
+            encoder_count, 1,
+            "REGRESSION (#336): pipeline must have EXACTLY ONE encoder for N consumers; \
+             got {encoder_count} encoders for 4 consumers. Encoder factories considered: {encoder_factories:?}"
+        );
+        assert_eq!(
+            webrtcbin_count, 4,
+            "pipeline must have one webrtcbin per consumer; got {webrtcbin_count} for 4 consumers"
+        );
+    }
 }
