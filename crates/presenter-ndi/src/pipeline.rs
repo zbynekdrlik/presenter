@@ -47,6 +47,26 @@ pub struct WhepAnswer {
     pub initial_candidates: Vec<IceCandidate>,
 }
 
+/// Soft consumer cap per NDI source. 9th consumer's POST returns 503 with
+/// Retry-After: 60. Picked because realistic church setups have ≤6 stage
+/// displays per source (choir, drums, vocals, side-screen, OBS browser
+/// source, plus headroom). Prevents a buggy kiosk in a reconnect loop from
+/// DoSing the encoder's pad fanout.
+pub const MAX_CONSUMERS_PER_SOURCE: usize = 8;
+
+/// Error returned by `add_consumer` and `add_consumer_stub`.
+///
+/// The HTTP shim maps `CapReached` to 503 + Retry-After: 60.
+#[derive(Debug, thiserror::Error)]
+pub enum AddConsumerError {
+    /// The per-source soft cap was hit. The HTTP shim emits 503 + Retry-After.
+    #[error("WHEP consumer cap reached ({max} per source) — try again later")]
+    CapReached { max: usize },
+    /// Any other pipeline or signalling error.
+    #[error("{0}")]
+    Other(#[from] anyhow::Error),
+}
+
 /// Snapshot of the pipeline state for the diagnostic route (Task 8 fills
 /// `source_id`).
 #[derive(Debug, Clone, serde::Serialize)]
@@ -406,9 +426,30 @@ impl NdiPipeline {
     /// and return a `WhepAnswer` containing the SDP answer + initial ICE
     /// candidates.
     ///
+    /// Returns `Err(AddConsumerError::CapReached)` before allocating any
+    /// GStreamer resources when the session count is at `MAX_CONSUMERS_PER_SOURCE`.
+    ///
     /// Non-Send glib work (element creation, linking, signal connections)
     /// runs inside `tokio::task::spawn_blocking`.
-    pub async fn add_consumer(&self, sdp_offer_bytes: Vec<u8>) -> Result<WhepAnswer> {
+    pub async fn add_consumer(
+        &self,
+        sdp_offer_bytes: Vec<u8>,
+    ) -> Result<WhepAnswer, AddConsumerError> {
+        // Enforce soft consumer cap BEFORE allocating any GStreamer resources.
+        {
+            let sessions = self.sessions.lock().await;
+            if sessions.len() >= MAX_CONSUMERS_PER_SOURCE {
+                tracing::warn!(
+                    current_count = sessions.len(),
+                    max = MAX_CONSUMERS_PER_SOURCE,
+                    "WHEP consumer cap reached — rejecting new POST"
+                );
+                return Err(AddConsumerError::CapReached {
+                    max: MAX_CONSUMERS_PER_SOURCE,
+                });
+            }
+        }
+
         let session_id = WhepSession::new_session_id();
         let pipeline = self.pipeline.clone();
         let tee = (*self.tee).clone();
@@ -861,18 +902,17 @@ impl NdiPipeline {
     }
 
     /// Sync stub: add a consumer WITHOUT SDP exchange (tests only).
-    /// Enforces the same 8-consumer cap as production (cap enforcement
-    /// is in Task 6; here we just mirror it via anyhow).
-    pub fn add_consumer_stub(&mut self, session_id: &str) -> Result<()> {
+    /// Enforces the same cap as production via `MAX_CONSUMERS_PER_SOURCE`.
+    pub fn add_consumer_stub(&mut self, session_id: &str) -> Result<(), AddConsumerError> {
         {
             let sessions = self
                 .sessions
                 .try_lock()
-                .context("sessions mutex contention in test")?;
-            if sessions.len() >= 8 {
-                return Err(anyhow!(
-                    "consumer cap reached (8 per source) — test stub mirror"
-                ));
+                .expect("sessions mutex poisoned in test");
+            if sessions.len() >= MAX_CONSUMERS_PER_SOURCE {
+                return Err(AddConsumerError::CapReached {
+                    max: MAX_CONSUMERS_PER_SOURCE,
+                });
             }
         }
         let tee_pad = (*self.tee)
@@ -1026,5 +1066,38 @@ mod tests {
             webrtcbin_count, 4,
             "pipeline must have one webrtcbin per consumer; got {webrtcbin_count} for 4 consumers"
         );
+    }
+
+    /// Spec #336 / Task 6: soft consumer cap. 9th add_consumer call must
+    /// return CapReached so the HTTP layer 503s the browser.
+    #[tokio::test]
+    async fn add_consumer_returns_cap_reached_after_eight() {
+        super::super::init().expect("gst init");
+        let mut pipeline = NdiPipeline::stopped_for_test_with_topology("x264enc")
+            .expect("topology builder");
+
+        // Fill the cap.
+        for i in 0..MAX_CONSUMERS_PER_SOURCE {
+            pipeline
+                .add_consumer_stub(&format!("test-session-{i}"))
+                .expect("consumer up to cap must succeed");
+        }
+
+        // Overflow: the (cap+1)th consumer must be rejected.
+        let err = pipeline
+            .add_consumer_stub("test-session-overflow")
+            .expect_err("consumer cap+1 must fail");
+
+        match err {
+            AddConsumerError::CapReached { max } => {
+                assert_eq!(
+                    max, MAX_CONSUMERS_PER_SOURCE,
+                    "cap value must match the const",
+                );
+            }
+            AddConsumerError::Other(other) => {
+                panic!("expected CapReached, got Other: {other}");
+            }
+        }
     }
 }

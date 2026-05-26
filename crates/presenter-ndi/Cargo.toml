@@ -13,6 +13,7 @@ test-helpers = []
 [dependencies]
 anyhow.workspace = true
 axum.workspace = true
+thiserror.workspace = true
 tokio.workspace = true
 tracing.workspace = true
 serde.workspace = true

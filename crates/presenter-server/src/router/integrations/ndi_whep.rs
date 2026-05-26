@@ -26,12 +26,15 @@ fn into_response(reply: WhepReply) -> Response {
 /// Map a `whep_signaller_call` error string to the right HTTP status.
 ///
 /// "source not active" → 404 (the WHEP spec calls for 404 when the resource
-/// doesn't exist). Anything else (pipeline starting / stopped / errored,
-/// signaller emit failures) → 503 so WHEP clients back off and retry.
+/// doesn't exist). "consumer cap reached" → 503 + Retry-After: 60 (browser
+/// should back off, not hammer). Anything else (pipeline starting / stopped /
+/// errored, signaller emit failures) → 503 so WHEP clients back off and retry.
 fn map_signaller_error(err: anyhow::Error) -> AppError {
     let msg = err.to_string();
     if msg.contains(SOURCE_NOT_ACTIVE_ERR) {
         AppError::not_found("NDI source not active")
+    } else if msg.contains("consumer cap reached") {
+        AppError::service_unavailable_with_retry(format!("WHEP: {msg}"), 60)
     } else {
         AppError::service_unavailable(format!("WHEP: {msg}"))
     }
@@ -289,6 +292,29 @@ mod tests {
         assert_eq!(resp.status(), StatusCode::CREATED);
         let location = resp.headers().get("location").and_then(|v| v.to_str().ok());
         assert_eq!(location, Some("/whep/abc"));
+    }
+
+    #[test]
+    fn map_signaller_error_consumer_cap_emits_503_with_retry_after() {
+        let err = anyhow::anyhow!(
+            "WHEP consumer cap reached (8 per source) — try again later"
+        );
+        let app_err = map_signaller_error(err);
+        let resp = app_err.into_response();
+        assert_eq!(
+            resp.status(),
+            StatusCode::SERVICE_UNAVAILABLE,
+            "consumer cap must map to 503"
+        );
+        let retry_after = resp
+            .headers()
+            .get("retry-after")
+            .and_then(|v| v.to_str().ok());
+        assert_eq!(
+            retry_after,
+            Some("60"),
+            "Retry-After header must be 60 seconds"
+        );
     }
 
     #[test]
