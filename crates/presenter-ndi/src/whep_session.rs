@@ -24,8 +24,8 @@
 
 use gstreamer as gst;
 use gstreamer::prelude::*;
-use std::sync::Arc;
-use tokio::sync::{mpsc, Mutex};
+use std::sync::{Arc, Mutex};
+use tokio::sync::mpsc;
 use uuid::Uuid;
 
 /// ICE candidate delivered to the browser via WHEP PATCH or WHEP
@@ -104,11 +104,20 @@ pub struct WhepSession {
     pub session_id: String,
     /// The webrtcbin element for this consumer.
     pub webrtcbin: gst::Element,
+    /// The queue element buffering the tee branch for this consumer.
+    /// Added to the pipeline alongside webrtcbin; removed in remove_consumer.
+    pub queue: gst::Element,
     /// The src pad on `tee` feeding this consumer's webrtcbin (via a
     /// queue). Released back to the tee on Drop.
     pub tee_src_pad: gst::Pad,
     /// Holds the latest reported connection state, updated by the
     /// `connection-state-change` signal subscriber.
+    ///
+    /// Uses `std::sync::Mutex` (not `tokio::sync::Mutex`) because the
+    /// `notify::connection-state` signal fires from GStreamer streaming
+    /// threads (raw `std::thread`, spawned by GLib) — NOT from within a
+    /// tokio async context. Holding a tokio Mutex across a blocking
+    /// GStreamer callback risks deadlock.
     pub connection_state: Arc<Mutex<WhepConnectionState>>,
     /// ICE candidates flowing server→browser (sender). The receiver
     /// half lives in the pipeline's add_consumer path and is drained
@@ -131,13 +140,15 @@ impl Drop for WhepSession {
         // remove_consumer method is the canonical path; Drop is the
         // backstop for unexpected drops (pipeline Drop, panic unwind).
         let _ = self.webrtcbin.set_state(gst::State::Null);
+        let _ = self.queue.set_state(gst::State::Null);
         // tee_src_pad release is the parent tee's responsibility — we
         // can't release a request-pad without holding the tee. The
-        // pipeline-level Drop iterates sessions and calls
-        // tee.release_request_pad(&session.tee_src_pad) before dropping.
+        // pipeline-level teardown() iterates sessions and calls
+        // tee.release_request_pad(&session.tee_src_pad) after removing
+        // both queue and webrtcbin from the pipeline.
         tracing::debug!(
             session_id = %self.session_id,
-            "WhepSession dropped (webrtcbin set to Null; pad release handled by pipeline)"
+            "WhepSession dropped (webrtcbin + queue set to Null; pad release handled by pipeline)"
         );
     }
 }
