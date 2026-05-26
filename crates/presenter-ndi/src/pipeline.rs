@@ -1,15 +1,31 @@
-//! Per-source GStreamer pipeline owning ndisrc + vah264enc + whepserversink.
+//! Per-source GStreamer pipeline owning ndisrc + shared encoder + fanout tee.
 //!
 //! Each `NdiPipeline` instance corresponds to ONE active NDI source. The
-//! pipeline is built lazily on `start`, torn down on `stop`. Subscribers
-//! (browser WHEP connections) reach `whepserversink` via the axum WHEP shim
-//! which bridges HTTP signalling into the element's signaller via
-//! `emit_by_name`.
+//! pipeline builds a shared-encoder topology:
+//!
+//! ```text
+//! ndisrc → ndisrcdemux → videoconvert → vah264enc → rtph264pay → tee
+//!                audio ↘ fakesink     (one encoder)              |
+//!                                                    ┌───────────┘
+//!                                                    ├─ src_0 → queue → webrtcbin (consumer #1)
+//!                                                    ├─ src_1 → queue → webrtcbin (consumer #2)
+//!                                                    └─ src_N → queue → webrtcbin (consumer #N)
+//! ```
+//!
+//! Per-consumer state lives in `WhepSession` (`whep_session.rs`). The pipeline
+//! owns the shared encoder + tee and a `tokio::sync::Mutex<HashMap<String,
+//! WhepSession>>` of active sessions.
+
+use std::collections::HashMap;
+use std::sync::Arc;
 
 use anyhow::{anyhow, Context, Result};
 use gstreamer as gst;
 use gstreamer::prelude::*;
+use gstreamer_webrtc as gst_webrtc;
 use tokio::sync::watch;
+
+use crate::whep_session::{IceCandidate, WhepConnectionState, WhepSession};
 
 /// Pipeline lifecycle state.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -24,6 +40,34 @@ pub enum PipelineState {
     Errored(String),
 }
 
+/// Answer returned by `add_consumer` to the HTTP WHEP shim.
+pub struct WhepAnswer {
+    pub session_id: String,
+    pub sdp_answer: String,
+    pub initial_candidates: Vec<IceCandidate>,
+}
+
+/// Snapshot of the pipeline state for the diagnostic route (Task 8 fills
+/// `source_id`).
+#[derive(Debug, Clone, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PipelineSnapshot {
+    pub source_id: String,
+    pub state: String,
+    pub encoder_factory: Option<String>,
+    pub encoder_count: usize,
+    pub consumer_count: usize,
+    pub sessions: Vec<SessionSnapshot>,
+}
+
+/// Per-consumer snapshot entry.
+#[derive(Debug, Clone, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SessionSnapshot {
+    pub id: String,
+    pub connection_state: WhepConnectionState,
+}
+
 /// Owns one GStreamer pipeline for one NDI source.
 pub struct NdiPipeline {
     /// Underlying GStreamer pipeline.
@@ -35,6 +79,10 @@ pub struct NdiPipeline {
     state_rx: watch::Receiver<PipelineState>,
     /// Bus watch task handle so we can cancel on Drop.
     bus_watch: Option<tokio::task::JoinHandle<()>>,
+    /// Active per-consumer sessions.
+    sessions: Arc<tokio::sync::Mutex<HashMap<String, WhepSession>>>,
+    /// Tee element — `add_consumer` / `remove_consumer` request/release pads.
+    tee: Arc<gst::Element>,
 }
 
 impl NdiPipeline {
@@ -55,12 +103,27 @@ impl NdiPipeline {
         // gstreamer::init() is idempotent and runs without plugins.
         let _ = gstreamer::init();
         let (state_tx, state_rx) = watch::channel(PipelineState::Stopped);
+        // A minimal placeholder tee for the stopped_for_test variant.
+        // We can't call gst::ElementFactory::make here safely without
+        // gst init — but init() above ensures it. Use fakesink as the
+        // tee placeholder; stopped_for_test is only used for state tests,
+        // not fanout topology tests.
+        let placeholder = gst::ElementFactory::make("fakesink")
+            .build()
+            .unwrap_or_else(|_| {
+                // If even fakesink isn't available (stripped env), synthesise
+                // a pipeline object as a stand-in — this path only needs
+                // enough to avoid a panic on Drop.
+                panic!("stopped_for_test: gstreamer init succeeded but fakesink unavailable — environment is too stripped");
+            });
         Self {
             pipeline: gst::Pipeline::new(),
             whep_url: String::new(),
             state_tx,
             state_rx,
             bus_watch: None,
+            sessions: Arc::new(tokio::sync::Mutex::new(HashMap::new())),
+            tee: Arc::new(placeholder),
         }
     }
 
@@ -78,13 +141,7 @@ impl NdiPipeline {
     /// as a logical key; the element does NOT bind its own HTTP port.
     pub fn build(ndi_name: &str, whep_url: String) -> Result<Self> {
         super::init().context("gstreamer init failed")?;
-        // We still probe for an HW encoder up-front so we can refuse-loudly
-        // when neither vah264enc nor nvh264enc is registered. `whepserversink`
-        // instantiates its OWN encoder internally based on GStreamer element
-        // rank, so we don't pre-encode here — but if no HW encoder is
-        // available it would fall back to software (x264enc), and software
-        // 720p30 H264 melts the N100. The check below catches that case.
-        let _ = super::hw_h264_encoder().ok_or_else(|| {
+        let encoder_name = super::hw_h264_encoder().ok_or_else(|| {
             anyhow!(
                 "no hardware H264 encoder registered; refusing to build pipeline \
                  (software H264 at 720p30 would melt the N100). \
@@ -93,56 +150,6 @@ impl NdiPipeline {
             )
         })?;
 
-        // CRITICAL: `whepserversink` (which is `webrtcsink` with the WHEP
-        // signaller) takes RAW input. It picks an encoder internally and
-        // manages bitrate, GOP, and codec negotiation with the browser. Do
-        // NOT insert nvh264enc / vah264enc / h264parse upstream of it — the
-        // pre-encoded H264 was being rejected by webrtcsink's internal
-        // h264parse with "broken/invalid nal Type: 1 Slice, Size: 8". See
-        // the official gst-plugin-webrtc-0.15.2/examples/whepserver.rs which
-        // links videotestsrc → whepserversink directly.
-        //
-        // `video-caps=video/x-h264` constrains the codec offer to H264 (over
-        // VP8/VP9) so encoder rank selection lands on nvh264enc/vah264enc
-        // automatically. Browser-side WebRTC clients all support H264.
-        //
-        // Audio handling: ndisrcdemux ALWAYS exposes both a `video` and an
-        // `audio` source pad. If the NDI broadcaster sends no audio (e.g.
-        // Resolume, video-only OBS scenes), the audio pad never delivers a
-        // CAPS event and webrtcsink panics on `in_caps.unwrap()` while
-        // iterating registered streams. The audio branch terminates in a
-        // `fakesink` with `async=false sync=false` so an absent audio stream
-        // doesn't block preroll, and the audio pad is NOT linked into
-        // whepserversink — so the WHEP offer is video-only, which is what
-        // most live cameras need anyway. Re-enable audio per-source via a
-        // settings flag once we have an NDI source that actually carries it.
-        // `host-addr` overrides whepserversink's internal warp server bind.
-        // The default `http://127.0.0.1:9090` collides with prior restart
-        // processes AND with other dev2 services that already use 9090.
-        // We pick a per-pipeline port in the 19090-19999 range derived from
-        // a hash of the WHEP URL — stable across pipeline restarts for the
-        // same source (so a crash-loop doesn't ping-pong ports), unique
-        // across concurrent sources (so multiple NDI pipelines coexist).
-        //
-        // The bound port is NEVER reached externally — presenter's axum WHEP
-        // shim bridges into the signaller via `emit_by_name("post"|"patch"|
-        // "delete", ...)` directly. The warp server runs because the
-        // signaller's lifecycle requires it; this just gets it out of our way.
-        let port: u16 = {
-            use std::collections::hash_map::DefaultHasher;
-            use std::hash::{Hash, Hasher};
-            let mut h = DefaultHasher::new();
-            whep_url.hash(&mut h);
-            19090 + (h.finish() % 900) as u16
-        };
-        // Build the pipeline fully programmatically. Earlier I used
-        // `gst::parse::launch` then set `video-caps` afterwards — but that
-        // ran AFTER webrtcsink's first internal codec discovery had already
-        // cached the unconstrained codec list (Codecs::video_codecs() incl.
-        // VP8/VP9). Second consumer connections then got `a=rtpmap VP8` +
-        // `a=inactive` (no VP8 encoder → black screen). Constructing
-        // `whepserversink` directly and setting `video-caps` BEFORE adding
-        // it to the bin guarantees discovery sees the H264-only constraint.
         let pipeline = gst::Pipeline::new();
 
         let ndisrc = gst::ElementFactory::make("ndisrc")
@@ -161,140 +168,91 @@ impl NdiPipeline {
             .property("sync", false)
             .build()
             .context("build fakesink (audio)")?;
-        let sink = gst::ElementFactory::make("whepserversink")
-            .name("sink")
-            .property(
-                "video-caps",
-                gstreamer::Caps::builder("video/x-h264").build(),
-            )
+
+        // Build the encoder with tuning applied at construction time.
+        // (No encoder-setup signal — that was a webrtcsink concept. Here
+        // we own the encoder element directly so we set properties now.)
+        let mut encoder_builder = gst::ElementFactory::make(encoder_name).name("encoder");
+        match encoder_name {
+            "vah264enc" => {
+                encoder_builder = encoder_builder
+                    .property("key-int-max", 30u32)
+                    .property("bitrate", 2500u32);
+            }
+            "nvh264enc" | "nvcudah264enc" | "nvautogpuh264enc" => {
+                encoder_builder = encoder_builder
+                    .property("gop-size", 30i32)
+                    .property("zerolatency", true)
+                    .property("bitrate", 2500u32);
+            }
+            "x264enc" => {
+                encoder_builder = encoder_builder
+                    .property_from_str("tune", "zerolatency")
+                    .property_from_str("speed-preset", "superfast")
+                    .property("key-int-max", 30u32)
+                    .property("bitrate", 2500u32);
+            }
+            _ => {
+                // hw_h264_encoder only returns the three above; defensive fallthrough.
+            }
+        }
+        let encoder = encoder_builder.build().context("build encoder")?;
+
+        let rtph264pay = gst::ElementFactory::make("rtph264pay")
+            .name("rtpay")
+            // Resend SPS/PPS with every IDR for fast browser recovery.
+            .property("config-interval", -1i32)
+            // H264 dynamic payload type 96.
+            .property("pt", 96u32)
             .build()
-            .context("build whepserversink")?;
+            .context("build rtph264pay")?;
+        let tee = gst::ElementFactory::make("tee")
+            .name("tee")
+            // Tee starts without any linked src pads; first consumer adds a branch.
+            .property("allow-not-linked", true)
+            .build()
+            .context("build tee")?;
 
         pipeline
-            .add_many([&ndisrc, &ndisrcdemux, &videoconvert, &audio_fakesink, &sink])
-            .context("add elements to pipeline")?;
-        ndisrc.link(&ndisrcdemux).context("link ndisrc->demux")?;
-        // ndisrcdemux is sometimes-pad — its video/audio pads come up when
-        // the source delivers data. Wire up sometimes-pad handlers:
+            .add_many([
+                &ndisrc,
+                &ndisrcdemux,
+                &videoconvert,
+                &audio_fakesink,
+                &encoder,
+                &rtph264pay,
+                &tee,
+            ])
+            .context("add elements")?;
+
+        ndisrc.link(&ndisrcdemux).context("link ndisrc -> demux")?;
+        videoconvert
+            .link(&encoder)
+            .context("link videoconvert -> encoder")?;
+        encoder.link(&rtph264pay).context("link encoder -> rtph264pay")?;
+        rtph264pay.link(&tee).context("link rtph264pay -> tee")?;
+
+        // ndisrcdemux is a sometimes-pad element. Wire up dynamic pads:
         let videoconvert_clone = videoconvert.clone();
         let audio_fakesink_clone = audio_fakesink.clone();
         ndisrcdemux.connect_pad_added(move |_, pad| {
             let name = pad.name();
             if name == "video" {
-                let sink_pad = match videoconvert_clone.static_pad("sink") {
-                    Some(p) => p,
-                    None => return,
-                };
-                let _ = pad.link(&sink_pad);
+                if let Some(sink_pad) = videoconvert_clone.static_pad("sink") {
+                    let _ = pad.link(&sink_pad);
+                }
             } else if name == "audio" {
-                let sink_pad = match audio_fakesink_clone.static_pad("sink") {
-                    Some(p) => p,
-                    None => return,
-                };
-                let _ = pad.link(&sink_pad);
-            }
-        });
-        // videoconvert → whepserversink.video_0 (request pad).
-        let whep_video_pad = sink
-            .request_pad_simple("video_0")
-            .ok_or_else(|| anyhow!("whepserversink has no video_0 request pad"))?;
-        let vc_src = videoconvert
-            .static_pad("src")
-            .ok_or_else(|| anyhow!("videoconvert has no src pad"))?;
-        vc_src
-            .link(&whep_video_pad)
-            .context("link videoconvert -> whepserversink.video_0")?;
-
-        // Override the default whepserversink warp HTTP bind port.
-        // The `host-addr` property lives on the `signaller` CHILD of the
-        // sink element. We use `ChildProxyExtManual::set_child_property`
-        // which does the `child::property` lookup itself — `set_property`
-        // directly on the sink/child-proxy doesn't recurse (it strips the
-        // `signaller::` prefix and looks up `host-addr` on the sink, which
-        // doesn't have it).
-        use gstreamer::prelude::ChildProxyExtManual;
-        let child_proxy = sink
-            .dynamic_cast_ref::<gstreamer::ChildProxy>()
-            .ok_or_else(|| anyhow!("sink is not a ChildProxy"))?;
-        child_proxy.set_child_property("signaller::host-addr", format!("http://127.0.0.1:{port}"));
-
-        // Tune encoders for LOW-LATENCY live streaming via the
-        // `encoder-setup` signal. webrtcsink instantiates one encoder per
-        // consumer (no shared encoder in gst-plugin-rs 0.15); we hook the
-        // signal so every encoder webrtcsink creates gets the same
-        // live-streaming knobs applied — without these, the default
-        // configuration is VOD-tuned (high quality, multi-second
-        // buffering, B-frames, lookahead) and surfaces as visible stutter
-        // even on a loopback connection.
-        //
-        // Settings per encoder:
-        //
-        // - `x264enc` (software, dev fallback when NVENC demoted):
-        //   `tune=zerolatency` is THE knob — disables B-frames and removes
-        //   the threaded look-ahead pipeline that adds ~500ms of latency
-        //   to the default `tune=stillimage`. Combine with
-        //   `speed-preset=superfast` to keep CPU sane, `key-int-max=30`
-        //   for 1s keyframe interval (recovery from packet loss), and
-        //   `bitrate=2500` (kbit/s, reasonable for 1080p).
-        //
-        // - `nvh264enc` / `vah264enc` (NVENC / VAAPI in prod): same
-        //   intent — short GOP for fast recovery. `gop-size=30` on
-        //   nvh264enc, `key-int-max=30` on vah264enc (different property
-        //   names for the same concept).
-        //
-        // Signal handler returns `Some(true.to_value())` — `encoder-setup`
-        // is `gboolean`-returning (we override the default).
-        let _ = sink.connect("encoder-setup", false, move |args| {
-            let encoder = args
-                .get(3)
-                .and_then(|v| v.get::<gstreamer::Element>().ok());
-            if let Some(encoder) = encoder {
-                let name = encoder
-                    .factory()
-                    .map(|f| f.name().to_string())
-                    .unwrap_or_default();
-                match name.as_str() {
-                    "x264enc" => {
-                        let tune_field = encoder.find_property("tune");
-                        if tune_field.is_some() {
-                            encoder.set_property_from_str("tune", "zerolatency");
-                        }
-                        if encoder.find_property("speed-preset").is_some() {
-                            encoder.set_property_from_str("speed-preset", "superfast");
-                        }
-                        if encoder.find_property("key-int-max").is_some() {
-                            encoder.set_property("key-int-max", 30u32);
-                        }
-                        if encoder.find_property("bitrate").is_some() {
-                            encoder.set_property("bitrate", 2500u32);
-                        }
-                        tracing::info!(
-                            "x264enc tuned: tune=zerolatency speed-preset=superfast key-int-max=30 bitrate=2500"
-                        );
-                    }
-                    "nvh264enc" | "nvcudah264enc" | "nvautogpuh264enc" => {
-                        if encoder.find_property("gop-size").is_some() {
-                            encoder.set_property("gop-size", 30i32);
-                        }
-                        if encoder.find_property("zerolatency").is_some() {
-                            encoder.set_property("zerolatency", true);
-                        }
-                        tracing::info!(encoder = %name, "nvh264 tuned: gop-size=30 zerolatency=true");
-                    }
-                    "vah264enc" => {
-                        if encoder.find_property("key-int-max").is_some() {
-                            encoder.set_property("key-int-max", 30u32);
-                        }
-                        tracing::info!("vah264enc tuned: key-int-max=30");
-                    }
-                    _ => {}
+                if let Some(sink_pad) = audio_fakesink_clone.static_pad("sink") {
+                    let _ = pad.link(&sink_pad);
                 }
             }
-            // encoder-setup returns gboolean
-            Some(true.to_value())
         });
 
-        tracing::info!(port, %ndi_name, "whepserversink video-caps=H264 + host-addr set + encoder-setup hook");
+        tracing::info!(
+            encoder = encoder_name,
+            %ndi_name,
+            "pipeline built (shared-encoder fanout topology)"
+        );
 
         let (state_tx, state_rx) = watch::channel(PipelineState::Stopped);
 
@@ -304,6 +262,8 @@ impl NdiPipeline {
             state_tx,
             state_rx,
             bus_watch: None,
+            sessions: Arc::new(tokio::sync::Mutex::new(HashMap::new())),
+            tee: Arc::new(tee),
         })
     }
 
@@ -322,7 +282,7 @@ impl NdiPipeline {
         // directly via `NoPreroll`. We watch `StateChanged` filtered to the
         // PIPELINE element itself and trip Streaming when it reaches PLAYING.
         // Element-level state changes are ignored — they fire earlier and would
-        // race against webrtcsink's codec discovery.
+        // race against encoder/tee setup.
         let bus = pipeline
             .bus()
             .ok_or_else(|| anyhow!("pipeline has no bus"))?;
@@ -410,16 +370,492 @@ impl NdiPipeline {
         let _ = self.state_tx.send(PipelineState::Errored(msg.to_string()));
     }
 
-    /// Returns a clone of the `whepserversink` element so the WHEP HTTP shim
-    /// can reach its `signaller` child and emit_by_name SDP exchanges.
+    /// Compat shim for manager.rs (removed in Task 5).
+    ///
+    /// Returns `None` because we no longer have a `whepserversink` element.
+    /// `manager.rs`'s `whep_signaller_call` (which still calls
+    /// `emit_by_name` on `whepserversink`'s signaller) will `?` out on this
+    /// `None` and surface a 503 to the HTTP shim — acceptable until Task 5
+    /// routes `WhepOp` to the new `add_consumer` / `add_ice_candidate` /
+    /// `remove_consumer` methods.
+    ///
+    /// The caps-wait in `manager.rs::rebuild_pipeline` also reads this; it
+    /// will time out immediately with "pipeline has no sink element", which
+    /// prevents the pipeline from reaching Streaming. Task 5 replaces the
+    /// caps-wait with a tee-pad-based caps check.
     pub fn sink_element(&self) -> Option<gst::Element> {
-        self.pipeline.by_name("sink")
+        None
+    }
+
+    /// Add a WHEP consumer: request a tee src pad, create a webrtcbin
+    /// element, link them via a queue, perform SDP offer/answer exchange,
+    /// and return a `WhepAnswer` containing the SDP answer + initial ICE
+    /// candidates.
+    ///
+    /// Non-Send glib work (element creation, linking, signal connections)
+    /// runs inside `tokio::task::spawn_blocking`.
+    pub async fn add_consumer(&self, sdp_offer_bytes: Vec<u8>) -> Result<WhepAnswer> {
+        let session_id = WhepSession::new_session_id();
+        let pipeline = self.pipeline.clone();
+        let tee = (*self.tee).clone();
+
+        // Channel for ICE candidates emitted by webrtcbin.
+        let (ice_tx, mut ice_rx) = tokio::sync::mpsc::unbounded_channel::<IceCandidate>();
+        let ice_tx_clone = ice_tx.clone();
+
+        // Shared connection state updated by the notify::connection-state handler.
+        let connection_state = Arc::new(tokio::sync::Mutex::new(WhepConnectionState::New));
+        let connection_state_for_signal = connection_state.clone();
+
+        let session_id_for_signal = session_id.clone();
+
+        // Channel to receive the SDP answer from within spawn_blocking.
+        let (answer_tx, answer_rx) =
+            tokio::sync::oneshot::channel::<Result<(gst::Element, gst::Pad, String)>>();
+
+        let sdp_offer_bytes_clone = sdp_offer_bytes.clone();
+        let session_id_for_blocking = session_id.clone();
+
+        tokio::task::spawn_blocking(move || {
+            // Parse the SDP offer.
+            let sdp_msg = gstreamer_webrtc::gst_sdp::SDPMessage::parse_buffer(
+                &sdp_offer_bytes_clone,
+            )
+            .map_err(|e| anyhow!("SDP parse failed: {e}"))?;
+
+            let offer_desc = gst_webrtc::WebRTCSessionDescription::new(
+                gst_webrtc::WebRTCSDPType::Offer,
+                sdp_msg,
+            );
+
+            // Request a new tee src pad.
+            let tee_pad = tee
+                .request_pad_simple("src_%u")
+                .ok_or_else(|| anyhow!("tee has no src_%u request pad template"))?;
+
+            // Create a queue and webrtcbin for this consumer.
+            let queue = gst::ElementFactory::make("queue")
+                .build()
+                .context("build queue")?;
+            let webrtcbin = gst::ElementFactory::make("webrtcbin")
+                .name(session_id_for_blocking.as_str())
+                .build()
+                .context("build webrtcbin")?;
+
+            pipeline.add_many([&queue, &webrtcbin]).context("add queue+webrtcbin")?;
+
+            // Link: tee_src → queue → webrtcbin
+            let queue_sink = queue
+                .static_pad("sink")
+                .ok_or_else(|| anyhow!("queue has no sink pad"))?;
+            tee_pad.link(&queue_sink).context("link tee_pad -> queue.sink")?;
+            queue.link(&webrtcbin).context("link queue -> webrtcbin")?;
+
+            // Connect on-ice-candidate signal.
+            // Signal signature: void(webrtcbin, sdp_mline_index: u32, candidate: &str)
+            // Confirmed from gst-inspect-1.0 webrtcbin and gst-plugin-webrtc-0.15.2/imp.rs:3211
+            // Args array: [webrtcbin_value, mline_index_value, candidate_value]
+            {
+                let ice_tx = ice_tx_clone.clone();
+                webrtcbin.connect("on-ice-candidate", false, move |args| {
+                    let sdp_mline_index = args
+                        .get(1)
+                        .and_then(|v| v.get::<u32>().ok())
+                        .unwrap_or(0);
+                    let candidate = args
+                        .get(2)
+                        .and_then(|v| v.get::<String>().ok())
+                        .unwrap_or_default();
+                    let _ = ice_tx.send(IceCandidate {
+                        sdp_mline_index,
+                        candidate,
+                    });
+                    None
+                });
+            }
+
+            // Connect notify::connection-state to update shared state.
+            // Pattern confirmed from gst-plugin-webrtc-0.15.2/src/webrtcsink/imp.rs:3226
+            webrtcbin.connect_notify(
+                Some("connection-state"),
+                {
+                    let connection_state_for_signal = connection_state_for_signal.clone();
+                    let session_id_for_signal = session_id_for_signal.clone();
+                    move |webrtcbin, _pspec| {
+                        let gst_state = webrtcbin
+                            .property::<gst_webrtc::WebRTCPeerConnectionState>("connection-state");
+                        let our_state = WhepConnectionState::from(gst_state);
+                        // block_on is safe here because this runs inside spawn_blocking
+                        // context (not inside a tokio async task directly).
+                        let rt = tokio::runtime::Handle::try_current();
+                        if let Ok(handle) = rt {
+                            handle.block_on(async {
+                                *connection_state_for_signal.lock().await = our_state;
+                            });
+                        } else {
+                            // Fallback: use try_lock (non-blocking) if no handle available
+                            if let Ok(mut guard) = connection_state_for_signal.try_lock() {
+                                *guard = our_state;
+                            }
+                        }
+                        tracing::debug!(
+                            session_id = %session_id_for_signal,
+                            state = ?our_state,
+                            "WHEP consumer connection-state changed"
+                        );
+                    }
+                },
+            );
+
+            // Set webrtcbin to PLAYING so it can do ICE + DTLS.
+            webrtcbin
+                .set_state(gst::State::Playing)
+                .context("set webrtcbin to Playing")?;
+
+            // Set the remote description (the browser's offer).
+            let (remote_desc_tx, remote_desc_rx) =
+                std::sync::mpsc::sync_channel::<()>(1);
+            let promise = gst::Promise::with_change_func(move |_reply| {
+                let _ = remote_desc_tx.send(());
+            });
+            webrtcbin.emit_by_name::<()>("set-remote-description", &[&offer_desc, &promise]);
+            // Wait for the set-remote-description promise to resolve.
+            let _ = remote_desc_rx.recv_timeout(std::time::Duration::from_secs(5));
+
+            // Create the SDP answer.
+            let (answer_sdp_tx, answer_sdp_rx) =
+                std::sync::mpsc::sync_channel::<Option<gst_webrtc::WebRTCSessionDescription>>(1);
+            let promise = gst::Promise::with_change_func(move |reply| {
+                let answer = reply
+                    .ok()
+                    .and_then(|r| r)
+                    .and_then(|r| r.value("answer").ok())
+                    .and_then(|v| v.get::<gst_webrtc::WebRTCSessionDescription>().ok());
+                let _ = answer_sdp_tx.send(answer);
+            });
+            webrtcbin.emit_by_name::<()>("create-answer", &[&None::<gst::Structure>, &promise]);
+
+            let answer_desc = answer_sdp_rx
+                .recv_timeout(std::time::Duration::from_secs(5))
+                .context("create-answer promise timed out")?
+                .ok_or_else(|| anyhow!("create-answer returned no answer"))?;
+
+            // Set the local description (our answer).
+            webrtcbin.emit_by_name::<()>(
+                "set-local-description",
+                &[&answer_desc, &None::<gst::Promise>],
+            );
+
+            let sdp_text = answer_desc
+                .sdp()
+                .as_text()
+                .map_err(|e| anyhow!("answer SDP as_text failed: {e}"))?;
+
+            answer_tx
+                .send(Ok((webrtcbin, tee_pad, sdp_text)))
+                .ok();
+            Ok::<(), anyhow::Error>(())
+        });
+
+        // Await the answer from the blocking task.
+        let (webrtcbin, tee_pad, sdp_answer) = answer_rx
+            .await
+            .context("spawn_blocking answer channel dropped")??;
+
+        // Drain any ICE candidates already buffered (half-trickle: include
+        // in the WHEP answer body). Allow up to 50 ms for additional
+        // candidates to trickle in.
+        let mut initial_candidates = Vec::new();
+        let drain_deadline =
+            tokio::time::Instant::now() + std::time::Duration::from_millis(50);
+        while let Ok(Some(c)) = tokio::time::timeout_at(drain_deadline, ice_rx.recv()).await {
+            initial_candidates.push(c);
+        }
+
+        // Store the session.
+        let session = WhepSession {
+            session_id: session_id.clone(),
+            webrtcbin,
+            tee_src_pad: tee_pad,
+            connection_state,
+            ice_tx,
+        };
+        {
+            let mut sessions = self.sessions.lock().await;
+            sessions.insert(session_id.clone(), session);
+        }
+
+        tracing::info!(
+            session_id = %session_id,
+            initial_candidates = initial_candidates.len(),
+            "WHEP consumer added"
+        );
+
+        Ok(WhepAnswer {
+            session_id,
+            sdp_answer,
+            initial_candidates,
+        })
+    }
+
+    /// Forward a trickle ICE candidate from the browser to the webrtcbin.
+    pub async fn add_ice_candidate(
+        &self,
+        session_id: &str,
+        sdp_mline_index: u32,
+        candidate: &str,
+    ) -> Result<()> {
+        let sessions = self.sessions.lock().await;
+        let session = sessions
+            .get(session_id)
+            .ok_or_else(|| anyhow!("session not found: {session_id}"))?;
+        let webrtcbin = session.webrtcbin.clone();
+        let candidate = candidate.to_string();
+        drop(sessions);
+        tokio::task::spawn_blocking(move || {
+            webrtcbin
+                .emit_by_name::<()>("add-ice-candidate", &[&sdp_mline_index, &candidate]);
+        })
+        .await
+        .context("spawn_blocking join")?;
+        tracing::debug!(
+            session_id,
+            sdp_mline_index,
+            "WHEP ICE candidate forwarded to webrtcbin"
+        );
+        Ok(())
+    }
+
+    /// Remove a WHEP consumer: tear down webrtcbin and release the tee pad.
+    /// Idempotent — safe to call on an unknown session_id.
+    pub async fn remove_consumer(&self, session_id: &str) -> Result<()> {
+        let mut sessions = self.sessions.lock().await;
+        let Some(session) = sessions.remove(session_id) else {
+            tracing::debug!(
+                session_id,
+                "remove_consumer called on unknown session — idempotent no-op"
+            );
+            return Ok(());
+        };
+        let pipeline = self.pipeline.clone();
+        let tee = (*self.tee).clone();
+        let webrtcbin = session.webrtcbin.clone();
+        let tee_pad = session.tee_src_pad.clone();
+        let remaining_count = sessions.len();
+        // Drop the WhepSession so its Drop impl sets webrtcbin to Null
+        // BEFORE we remove it from the pipeline.
+        drop(session);
+        drop(sessions);
+        tokio::task::spawn_blocking(move || -> Result<()> {
+            // Already Null via WhepSession::Drop, but idempotent.
+            let _ = webrtcbin.set_state(gst::State::Null);
+            pipeline
+                .remove(&webrtcbin)
+                .context("pipeline.remove webrtcbin")?;
+            tee.release_request_pad(&tee_pad);
+            Ok(())
+        })
+        .await
+        .context("spawn_blocking join")??;
+        tracing::info!(
+            session_id,
+            remaining = remaining_count,
+            "WHEP consumer removed"
+        );
+        Ok(())
+    }
+
+    /// Snapshot the pipeline state for the diagnostic route.
+    /// `source_id` is left empty — the manager fills it in (Task 8).
+    pub async fn snapshot(&self) -> PipelineSnapshot {
+        let sessions = self.sessions.lock().await;
+        let mut session_snaps = Vec::with_capacity(sessions.len());
+        for (id, session) in sessions.iter() {
+            let connection_state = *session.connection_state.lock().await;
+            session_snaps.push(SessionSnapshot {
+                id: id.clone(),
+                connection_state,
+            });
+        }
+        let encoder_count = self.iterate_encoders().count();
+        let encoder_factory = self
+            .iterate_encoders()
+            .next()
+            .and_then(|el| el.factory().map(|f| f.name().to_string()));
+        PipelineSnapshot {
+            source_id: String::new(), // manager fills this in (Task 8)
+            state: format!("{:?}", *self.state_rx.borrow()),
+            encoder_factory,
+            encoder_count,
+            consumer_count: sessions.len(),
+            sessions: session_snaps,
+        }
+    }
+
+    /// Iterate encoder elements in the pipeline. Returns a collected Vec
+    /// iterator so callers don't need to hold the pipeline lock.
+    pub fn iterate_encoders(&self) -> impl Iterator<Item = gst::Element> + '_ {
+        let mut found: Vec<gst::Element> = Vec::new();
+        for el in self.pipeline.iterate_elements().into_iter().flatten() {
+            if let Some(factory) = el.factory() {
+                let name = factory.name();
+                if name == "vah264enc"
+                    || name == "nvh264enc"
+                    || name == "x264enc"
+                    || name == "nvcudah264enc"
+                    || name == "nvautogpuh264enc"
+                {
+                    found.push(el);
+                }
+            }
+        }
+        found.into_iter()
+    }
+
+    /// Iterate webrtcbin elements in the pipeline.
+    pub fn iterate_webrtcbins(&self) -> impl Iterator<Item = gst::Element> + '_ {
+        let mut found: Vec<gst::Element> = Vec::new();
+        for el in self.pipeline.iterate_elements().into_iter().flatten() {
+            if let Some(factory) = el.factory() {
+                if factory.name() == "webrtcbin" {
+                    found.push(el);
+                }
+            }
+        }
+        found.into_iter()
     }
 }
 
 impl Drop for NdiPipeline {
     fn drop(&mut self) {
         self.teardown();
+    }
+}
+
+#[cfg(test)]
+impl NdiPipeline {
+    /// Build a pipeline with the shared-encoder fanout topology using
+    /// `videotestsrc` in place of `ndisrc`/`ndisrcdemux`, so the test runs on
+    /// hosts without gst-plugin-ndi registered.
+    ///
+    /// Fails with an error if `encoder_name` is not registered.
+    pub fn stopped_for_test_with_topology(encoder_name: &str) -> Result<Self> {
+        super::init()?;
+        if gst::ElementFactory::find(encoder_name).is_none() {
+            return Err(anyhow!(
+                "encoder {encoder_name} not registered on this host"
+            ));
+        }
+        let pipeline = gst::Pipeline::new();
+        let src = gst::ElementFactory::make("videotestsrc")
+            .build()
+            .context("videotestsrc")?;
+        let convert = gst::ElementFactory::make("videoconvert")
+            .build()
+            .context("videoconvert")?;
+        let mut encoder_builder = gst::ElementFactory::make(encoder_name).name("encoder");
+        match encoder_name {
+            "vah264enc" => {
+                encoder_builder = encoder_builder
+                    .property("key-int-max", 30u32)
+                    .property("bitrate", 2500u32);
+            }
+            "nvh264enc" | "nvcudah264enc" | "nvautogpuh264enc" => {
+                encoder_builder = encoder_builder
+                    .property("gop-size", 30i32)
+                    .property("zerolatency", true)
+                    .property("bitrate", 2500u32);
+            }
+            "x264enc" => {
+                encoder_builder = encoder_builder
+                    .property_from_str("tune", "zerolatency")
+                    .property_from_str("speed-preset", "superfast")
+                    .property("key-int-max", 30u32)
+                    .property("bitrate", 2500u32);
+            }
+            _ => {}
+        }
+        let encoder = encoder_builder.build().context("encoder")?;
+        let payer = gst::ElementFactory::make("rtph264pay")
+            .name("rtpay")
+            .build()
+            .context("rtph264pay")?;
+        let tee = gst::ElementFactory::make("tee")
+            .name("tee")
+            .property("allow-not-linked", true)
+            .build()
+            .context("tee")?;
+        pipeline
+            .add_many([&src, &convert, &encoder, &payer, &tee])
+            .context("add")?;
+        gst::Element::link_many([&src, &convert, &encoder, &payer, &tee]).context("link")?;
+        let (state_tx, state_rx) = watch::channel(PipelineState::Stopped);
+        Ok(Self {
+            pipeline,
+            whep_url: String::new(),
+            state_tx,
+            state_rx,
+            bus_watch: None,
+            sessions: Arc::new(tokio::sync::Mutex::new(HashMap::new())),
+            tee: Arc::new(tee),
+        })
+    }
+
+    /// Sync stub: add a consumer WITHOUT SDP exchange (tests only).
+    /// Enforces the same 8-consumer cap as production (cap enforcement
+    /// is in Task 6; here we just mirror it via anyhow).
+    pub fn add_consumer_stub(&mut self, session_id: &str) -> Result<()> {
+        {
+            let sessions = self
+                .sessions
+                .try_lock()
+                .context("sessions mutex contention in test")?;
+            if sessions.len() >= 8 {
+                return Err(anyhow!(
+                    "consumer cap reached (8 per source) — test stub mirror"
+                ));
+            }
+        }
+        let tee_pad = (*self.tee)
+            .request_pad_simple("src_%u")
+            .ok_or_else(|| anyhow!("tee has no src request pad"))?;
+        let webrtcbin = gst::ElementFactory::make("webrtcbin")
+            .name(session_id)
+            .build()
+            .context("webrtcbin (test)")?;
+        self.pipeline
+            .add(&webrtcbin)
+            .context("pipeline.add webrtcbin")?;
+        // Link tee → webrtcbin directly (no queue — keeps the test fast).
+        if let Some(sink_pad) = webrtcbin.static_pad("sink") {
+            tee_pad
+                .link(&sink_pad)
+                .context("link tee_pad -> webrtcbin sink")?;
+        }
+        let (ice_tx, _ice_rx) = tokio::sync::mpsc::unbounded_channel();
+        let session = WhepSession {
+            session_id: session_id.to_string(),
+            webrtcbin,
+            tee_src_pad: tee_pad,
+            connection_state: Arc::new(tokio::sync::Mutex::new(WhepConnectionState::New)),
+            ice_tx,
+        };
+        self.sessions
+            .try_lock()
+            .unwrap()
+            .insert(session_id.to_string(), session);
+        Ok(())
+    }
+
+    /// Sync stub: remove a consumer (tests only). Idempotent.
+    pub fn remove_consumer_stub(&mut self, session_id: &str) -> Result<()> {
+        let Some(session) = self.sessions.try_lock().unwrap().remove(session_id) else {
+            return Ok(());
+        };
+        let _ = session.webrtcbin.set_state(gst::State::Null);
+        self.pipeline.remove(&session.webrtcbin).ok();
+        (*self.tee).release_request_pad(&session.tee_src_pad);
+        Ok(())
     }
 }
 
@@ -447,12 +883,11 @@ mod tests {
     fn build_returns_ok_for_valid_pipeline_when_plugins_present() {
         super::super::init().unwrap();
         if super::super::hw_h264_encoder().is_none() {
-            // Skipped — host has neither Intel VA-API nor NVIDIA NVENC.
+            // Skipped — host has neither Intel VA-API nor NVIDIA NVENC nor x264enc.
             return;
         }
         // We can't actually start an NDI receive in a unit test (no live NDI source),
-        // but parse::launch on the pipeline string should succeed when all elements are
-        // registered.
+        // but building the pipeline should succeed when all elements are registered.
         let result = NdiPipeline::build("no-such-source", "http://127.0.0.1/whep".into());
         assert!(
             result.is_ok(),
@@ -474,44 +909,6 @@ mod tests {
         assert_eq!(p.state(), PipelineState::Stopped);
     }
 
-    /// Regression test for the bug surfaced 2026-05-20: the WHEP SDP answer
-    /// was offering `a=rtpmap:96 VP8/90000 ... a=inactive` because the
-    /// `whepserversink` `video-caps` property wasn't being applied (passed
-    /// as a quoted string via parse::launch syntax). webrtcsink defaulted
-    /// to offering all codecs, browser picked VP8, and the encoder couldn't
-    /// instantiate `vp8enc` (we only have HW H264 encoders installed) — so
-    /// the m=video line went `a=inactive` and the browser <video> sat at
-    /// `videoWidth=0 readyState=0` forever (black screen).
-    ///
-    /// Asserts the `video-caps` GObject property is the gst::Caps we set
-    /// programmatically after parse::launch, not the unconstrained default.
-    #[test]
-    fn video_caps_property_restricts_offered_codec_to_h264() {
-        super::super::init().unwrap();
-        if super::super::hw_h264_encoder().is_none() {
-            // Pipeline can't even build without an HW encoder; nothing to
-            // assert here.
-            return;
-        }
-        let pipeline =
-            NdiPipeline::build("no-such-source", "http://127.0.0.1/whep".into()).unwrap();
-        let sink = pipeline.sink_element().expect("sink element present");
-        let actual_caps: gst::Caps = sink.property("video-caps");
-        // The default whepserversink video-caps is the union of all video
-        // codecs — its caps string contains "video/x-vp8" (or similar).
-        // After our explicit override it must be exactly H264.
-        let actual_str = actual_caps.to_string();
-        assert!(
-            actual_str.contains("video/x-h264"),
-            "video-caps should contain video/x-h264; got: {actual_str}"
-        );
-        assert!(
-            !actual_str.contains("video/x-vp8") && !actual_str.contains("video/x-vp9"),
-            "video-caps should NOT contain VP8/VP9 (HW VP encoders absent → \
-             would force 'a=inactive' in the WHEP SDP answer); got: {actual_str}"
-        );
-    }
-
     /// Regression test for #336: shared-encoder fanout.
     ///
     /// The pre-fix pipeline ended in `whepserversink`, which (by gst-plugin-rs
@@ -531,7 +928,6 @@ mod tests {
     /// `stopped_for_test_with_topology()` which builds the encoder + tee
     /// + per-consumer webrtcbin elements with `x264enc` (always available)
     /// in lieu of real HW encoders.
-    #[cfg(feature = "fanout-redgreen")]
     #[tokio::test]
     async fn pipeline_has_single_encoder_for_n_consumers() {
         super::super::init().expect("gst init");
