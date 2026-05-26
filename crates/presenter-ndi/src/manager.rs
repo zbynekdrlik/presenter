@@ -680,6 +680,30 @@ impl NdiManager {
         }
     }
 
+    /// Single-source snapshot for `GET /ndi/snapshot/:source_id`. Returns
+    /// `None` if the source isn't active in the manager's active map.
+    ///
+    /// Uses the same 200 ms lock-acquisition timeout pattern as
+    /// `pipeline_snapshots` so a `/ndi/snapshot/:id` probe doesn't stall
+    /// behind a concurrent pipeline start/rebuild. On timeout returns `None`
+    /// (caller maps to 503).
+    pub async fn pipeline_snapshot(
+        &self,
+        source_id: &str,
+    ) -> Option<crate::pipeline::PipelineSnapshot> {
+        let guard = tokio::time::timeout(
+            std::time::Duration::from_millis(200),
+            self.active.lock(),
+        )
+        .await
+        .ok()?;
+        let pipeline = std::sync::Arc::clone(&guard.get(source_id)?.pipeline);
+        drop(guard);
+        let mut snap = pipeline.snapshot().await;
+        snap.source_id = source_id.to_string();
+        Some(snap)
+    }
+
     /// Test-only: trigger an Errored state on the source's pipeline so
     /// the PipelineSupervisor reacts as it would for a real ndisrc fault.
     /// Returns `true` if the source was active (state injection succeeded),

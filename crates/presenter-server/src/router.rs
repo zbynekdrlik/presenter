@@ -236,6 +236,10 @@ pub fn build_router(state: AppState) -> Router {
         .route("/ndi/sources", get(integrations::ndi::discover_ndi_sources))
         .route("/ndi/status", get(integrations::ndi::ndi_status))
         .route(
+            "/ndi/snapshot/{source_id}",
+            get(integrations::ndi::ndi_snapshot),
+        )
+        .route(
             "/ndi/whep/{source_id}",
             post(integrations::ndi_whep::post_whep_endpoint),
         )
