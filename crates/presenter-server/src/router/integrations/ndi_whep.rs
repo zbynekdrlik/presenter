@@ -1,5 +1,7 @@
-//! WHEP HTTP shim — bridges browser SDP exchanges into the per-source
-//! `whepserversink` element's signaller via `emit_by_name`.
+//! WHEP HTTP shim — bridges browser WHEP HTTP operations
+//! (POST/PATCH/DELETE) into the active source's `NdiPipeline` methods
+//! (add_consumer / add_ice_candidate / remove_consumer) via
+//! `NdiManager::whep_signaller_call`.
 
 use axum::{
     body::Bytes,

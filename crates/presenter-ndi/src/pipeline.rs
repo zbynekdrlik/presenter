@@ -208,7 +208,7 @@ impl NdiPipeline {
                     .property("key-int-max", 30u32)
                     .property("bitrate", 2500u32);
             }
-            "nvh264enc" | "nvcudah264enc" | "nvautogpuh264enc" => {
+            "nvh264enc" => {
                 encoder_builder = encoder_builder
                     .property("gop-size", 30i32)
                     .property("zerolatency", true)
@@ -438,6 +438,11 @@ impl NdiPipeline {
         sdp_offer_bytes: Vec<u8>,
     ) -> Result<WhepAnswer, AddConsumerError> {
         // Enforce soft consumer cap BEFORE allocating any GStreamer resources.
+        //
+        // Soft cap: this check + the session insert below are NOT atomic.
+        // Two concurrent add_consumer calls at count=MAX-1 can both pass and
+        // momentarily reach count=MAX+1. Acceptable per spec ("soft cap, not a
+        // hard atomic invariant") — N100 saturation is gradual, not a cliff.
         {
             let sessions = self.sessions.lock().await;
             if sessions.len() >= MAX_CONSUMERS_PER_SOURCE {
@@ -475,14 +480,12 @@ impl NdiPipeline {
             Result<(gst::Element, gst::Element, gst::Pad, String)>,
         >();
 
-        let sdp_offer_bytes_clone = sdp_offer_bytes.clone();
         let session_id_for_blocking = session_id.clone();
 
         tokio::task::spawn_blocking(move || {
             // Parse the SDP offer.
-            let sdp_msg =
-                gstreamer_webrtc::gst_sdp::SDPMessage::parse_buffer(&sdp_offer_bytes_clone)
-                    .map_err(|e| anyhow!("SDP parse failed: {e}"))?;
+            let sdp_msg = gstreamer_webrtc::gst_sdp::SDPMessage::parse_buffer(&sdp_offer_bytes)
+                .map_err(|e| anyhow!("SDP parse failed: {e}"))?;
 
             let offer_desc = gst_webrtc::WebRTCSessionDescription::new(
                 gst_webrtc::WebRTCSDPType::Offer,
@@ -766,35 +769,47 @@ impl NdiPipeline {
     /// Snapshot the pipeline state for the diagnostic route.
     /// `source_id` is left empty — the manager fills it in (Task 8).
     pub async fn snapshot(&self) -> PipelineSnapshot {
-        let sessions = self.sessions.lock().await;
-        let mut session_snaps = Vec::with_capacity(sessions.len());
-        for (id, session) in sessions.iter() {
-            let connection_state = *session.connection_state.lock().unwrap();
-            session_snaps.push(SessionSnapshot {
-                id: id.clone(),
-                connection_state,
-            });
-        }
-        // Collect once — iterate_encoders() walks the pipeline; calling it
-        // twice would walk it twice for no benefit.
+        // Collect session state under the lock, then drop the lock before
+        // walking pipeline elements (iterate_encoders does not need the
+        // sessions mutex and may take time for large pipelines).
+        let session_snaps: Vec<SessionSnapshot> = {
+            let sessions = self.sessions.lock().await;
+            sessions
+                .iter()
+                .map(|(id, session)| {
+                    let connection_state = *session.connection_state.lock().unwrap();
+                    SessionSnapshot {
+                        id: id.clone(),
+                        connection_state,
+                    }
+                })
+                .collect()
+        };
+        // Walk pipeline elements (no session-lock needed).
         let encoders: Vec<gst::Element> = self.iterate_encoders().collect();
         let encoder_count = encoders.len();
         let encoder_factory = encoders
             .into_iter()
             .next()
             .and_then(|el| el.factory().map(|f| f.name().to_string()));
+        let consumer_count = session_snaps.len();
         PipelineSnapshot {
             source_id: String::new(), // manager fills this in (Task 8)
             state: format!("{:?}", *self.state_rx.borrow()),
             encoder_factory,
             encoder_count,
-            consumer_count: sessions.len(),
+            consumer_count,
             sessions: session_snaps,
         }
     }
 
     /// Iterate encoder elements in the pipeline. Returns a collected Vec
     /// iterator so callers don't need to hold the pipeline lock.
+    ///
+    /// Note: `nvcudah264enc` and `nvautogpuh264enc` are included here as a
+    /// defensive measure — `hw_h264_encoder()` never returns them, but an
+    /// external path (e.g. a future plugin or test fixture) could instantiate
+    /// one inside the pipeline and we want to count it correctly.
     pub fn iterate_encoders(&self) -> impl Iterator<Item = gst::Element> + '_ {
         let mut found: Vec<gst::Element> = Vec::new();
         for el in self.pipeline.iterate_elements().into_iter().flatten() {
@@ -861,7 +876,7 @@ impl NdiPipeline {
                     .property("key-int-max", 30u32)
                     .property("bitrate", 2500u32);
             }
-            "nvh264enc" | "nvcudah264enc" | "nvautogpuh264enc" => {
+            "nvh264enc" => {
                 encoder_builder = encoder_builder
                     .property("gop-size", 30i32)
                     .property("zerolatency", true)
