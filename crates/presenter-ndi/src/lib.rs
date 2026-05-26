@@ -4,10 +4,12 @@ pub mod discovery;
 pub mod manager;
 pub mod ndi_sdk;
 pub mod pipeline;
+pub mod whep_session;
 
 pub use discovery::SourceList;
 pub use manager::NdiManager;
 pub use manager::StatusCallback;
+pub use whep_session::{IceCandidate, WhepConnectionState, WhepSession};
 
 use std::sync::OnceLock;
 

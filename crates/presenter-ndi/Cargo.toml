@@ -27,3 +27,4 @@ gstreamer-webrtc.workspace = true
 gst-plugin-webrtc.workspace = true
 gst-plugin-ndi.workspace = true
 gst-plugin-rtp.workspace = true
+uuid.workspace = true
