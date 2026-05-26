@@ -5,8 +5,7 @@
 //!   - one `webrtcbin` GStreamer element (the WebRTC peer)
 //!   - the `tee` request-pad src that feeds it from the shared encoder
 //!   - an async channel of pending ICE candidates flowing server→browser
-//!   - a one-shot for the SDP answer (resolved once webrtcbin's
-//!     create-answer signal returns)
+//!   - the last-seen connection state (updated by the signal subscriber)
 //!   - the session UUID used as the WHEP HTTP Location path segment
 //!
 //! Lifetime ends when:
@@ -63,7 +62,38 @@ impl WhepConnectionState {
             3 => Self::Disconnected,
             4 => Self::Failed,
             5 => Self::Closed,
-            _ => Self::New,
+            _ => {
+                tracing::warn!(
+                    value,
+                    "Unknown GstWebRTCPeerConnectionState integer — treating as New"
+                );
+                Self::New
+            }
+        }
+    }
+}
+
+impl From<gstreamer_webrtc::WebRTCPeerConnectionState> for WhepConnectionState {
+    fn from(value: gstreamer_webrtc::WebRTCPeerConnectionState) -> Self {
+        use gstreamer_webrtc::WebRTCPeerConnectionState as GstState;
+        match value {
+            GstState::New => Self::New,
+            GstState::Connecting => Self::Connecting,
+            GstState::Connected => Self::Connected,
+            GstState::Disconnected => Self::Disconnected,
+            GstState::Failed => Self::Failed,
+            GstState::Closed => Self::Closed,
+            // gstreamer-webrtc 0.25 enums are `#[non_exhaustive]` so future
+            // GStreamer additions (or the `__Unknown(i32)` variant) must be
+            // handled. Treat unknown as `New` and warn so the production log
+            // surfaces if it ever fires — same pattern as from_gst_value.
+            other => {
+                tracing::warn!(
+                    state = ?other,
+                    "Unknown GstWebRTCPeerConnectionState variant — treating as New"
+                );
+                Self::New
+            }
         }
     }
 }
@@ -144,6 +174,17 @@ mod tests {
         assert_eq!(WhepConnectionState::from_gst_value(4), WhepConnectionState::Failed);
         assert_eq!(WhepConnectionState::from_gst_value(5), WhepConnectionState::Closed);
         assert_eq!(WhepConnectionState::from_gst_value(99), WhepConnectionState::New);
+    }
+
+    #[test]
+    fn from_gst_typed_enum_maps_correctly() {
+        use gstreamer_webrtc::WebRTCPeerConnectionState as GstState;
+        assert_eq!(WhepConnectionState::from(GstState::New), WhepConnectionState::New);
+        assert_eq!(WhepConnectionState::from(GstState::Connecting), WhepConnectionState::Connecting);
+        assert_eq!(WhepConnectionState::from(GstState::Connected), WhepConnectionState::Connected);
+        assert_eq!(WhepConnectionState::from(GstState::Disconnected), WhepConnectionState::Disconnected);
+        assert_eq!(WhepConnectionState::from(GstState::Failed), WhepConnectionState::Failed);
+        assert_eq!(WhepConnectionState::from(GstState::Closed), WhepConnectionState::Closed);
     }
 
     #[test]
