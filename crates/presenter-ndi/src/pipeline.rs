@@ -392,23 +392,6 @@ impl NdiPipeline {
         let _ = self.state_tx.send(PipelineState::Errored(msg.to_string()));
     }
 
-    /// Compat shim for manager.rs (removed in Task 5).
-    ///
-    /// Returns `None` because we no longer have a `whepserversink` element.
-    /// `manager.rs`'s `whep_signaller_call` (which still calls
-    /// `emit_by_name` on `whepserversink`'s signaller) will `?` out on this
-    /// `None` and surface a 503 to the HTTP shim — acceptable until Task 5
-    /// routes `WhepOp` to the new `add_consumer` / `add_ice_candidate` /
-    /// `remove_consumer` methods.
-    ///
-    /// The caps-wait in `manager.rs::rebuild_pipeline` also reads this; it
-    /// will time out immediately with "pipeline has no sink element", which
-    /// prevents the pipeline from reaching Streaming. Task 5 replaces the
-    /// caps-wait with a tee-pad-based caps check.
-    pub fn sink_element(&self) -> Option<gst::Element> {
-        None
-    }
-
     /// Add a WHEP consumer: request a tee src pad, create a webrtcbin
     /// element, link them via a queue, perform SDP offer/answer exchange,
     /// and return a `WhepAnswer` containing the SDP answer + initial ICE

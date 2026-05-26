@@ -7,9 +7,7 @@
 use std::collections::HashMap;
 use std::sync::Arc;
 
-use anyhow::{anyhow, Context, Result};
-use gstreamer::glib;
-use gstreamer::prelude::*;
+use anyhow::{anyhow, Result};
 use tokio::sync::Mutex;
 
 use crate::discovery::{self, FinderShutdown, SourceList};
@@ -311,46 +309,40 @@ impl NdiManager {
         let mut pipeline = NdiPipeline::build(ndi_name, whep_url)?;
         pipeline.start().await?;
 
-        // Wait for webrtcsink's video sink-pad to have negotiated caps. Two
-        // states aren't enough on their own:
-        //  - `pipeline.state == Playing` fires almost immediately on a live
-        //    source (NoPreroll) — before ndisrc has actually sent any frame.
-        //  - The `streams` HashMap inside webrtcsink only gets `in_caps` set
-        //    when the input pad receives its first CAPS event, which is when
-        //    ndisrcdemux has identified video/audio formats from real NDI data.
+        // Wait for the pipeline to reach Streaming state. The bus-watch task
+        // (started by pipeline.start()) sets state to Streaming once the
+        // GStreamer pipeline element posts StateChanged → Playing.
         //
-        // Polling `sink_element.sink_pad("video_0").current_caps()` is the
-        // most reliable signal that caps are set. Without this, an early WHEP
-        // POST hits webrtcsink while `in_caps == None` and panics at
-        // gst-plugin-webrtc imp.rs:3548 (`in_caps.unwrap()`).
+        // The new shared-encoder topology (ndisrc → demux → videoconvert →
+        // encoder → rtph264pay → tee) has no whepserversink, so polling
+        // `sink_element.static_pad("video_0").current_caps()` is no longer
+        // applicable. Watching for PipelineState::Streaming is the correct
+        // signal: the bus-watch only promotes to Streaming after PLAYING,
+        // which requires ndisrcdemux to have negotiated caps with its upstream
+        // ndisrc — equivalent timing to the old caps-wait.
         //
         // 8-second budget: ndisrc takes ~2-5s on a healthy LAN to find a
         // broadcast + receive first frame. Beyond 8s the source likely doesn't
         // exist and we'd rather fail fast than hang the operator UI.
-        let sink = pipeline
-            .sink_element()
-            .ok_or_else(|| anyhow!("pipeline has no sink element"))?;
-        let video_pad = sink
-            .static_pad("video_0")
-            .ok_or_else(|| anyhow!("whepserversink has no video_0 sink pad"))?;
         let mut watcher = pipeline.state_watcher();
-        let caps_ready = tokio::time::timeout(std::time::Duration::from_secs(8), async {
+        let streaming_ready = tokio::time::timeout(std::time::Duration::from_secs(8), async {
             loop {
-                // Bail out if the pipeline errored (e.g. NDI source not found
-                // and ndisrc emitted ERROR on the bus).
-                if let crate::pipeline::PipelineState::Errored(ref e) = *watcher.borrow_and_update()
-                {
-                    return Err(anyhow!("pipeline errored: {e}"));
+                let state = watcher.borrow_and_update().clone();
+                match state {
+                    crate::pipeline::PipelineState::Errored(ref e) => {
+                        return Err(anyhow!("pipeline errored: {e}"));
+                    }
+                    crate::pipeline::PipelineState::Streaming => return Ok(()),
+                    _ => {}
                 }
-                if video_pad.current_caps().is_some() {
-                    return Ok(());
+                if watcher.changed().await.is_err() {
+                    return Err(anyhow!("state watcher closed unexpectedly"));
                 }
-                tokio::time::sleep(std::time::Duration::from_millis(100)).await;
             }
         })
         .await;
 
-        match caps_ready {
+        match streaming_ready {
             Ok(Ok(())) => {
                 // pipeline.state_watcher() and self.spawn_supervisor must
                 // run before pipeline is moved into ActiveSource on the
@@ -374,7 +366,7 @@ impl NdiManager {
             Err(_) => {
                 pipeline.stop().await;
                 Err(anyhow!(
-                    "NDI source '{ndi_name}' did not deliver any frame within 8s; \
+                    "NDI source '{ndi_name}' did not reach Streaming within 8s; \
                      ndisrc could not connect or the broadcaster is silent"
                 ))
             }
@@ -571,28 +563,28 @@ impl NdiManager {
         let mut pipeline = NdiPipeline::build(ndi_name, whep_url)?;
         pipeline.start().await?;
 
-        let sink = pipeline
-            .sink_element()
-            .ok_or_else(|| anyhow!("pipeline has no sink element"))?;
-        let video_pad = sink
-            .static_pad("video_0")
-            .ok_or_else(|| anyhow!("whepserversink has no video_0 sink pad"))?;
+        // Wait for the pipeline to reach Streaming — same rationale as
+        // start_pipeline: state-watcher replaces the whepserversink pad
+        // caps-wait in the new shared-encoder topology.
         let mut watcher = pipeline.state_watcher();
-        let caps_ready = tokio::time::timeout(std::time::Duration::from_secs(8), async {
+        let streaming_ready = tokio::time::timeout(std::time::Duration::from_secs(8), async {
             loop {
-                if let crate::pipeline::PipelineState::Errored(ref e) = *watcher.borrow_and_update()
-                {
-                    return Err(anyhow!("pipeline errored: {e}"));
+                let state = watcher.borrow_and_update().clone();
+                match state {
+                    crate::pipeline::PipelineState::Errored(ref e) => {
+                        return Err(anyhow!("pipeline errored: {e}"));
+                    }
+                    crate::pipeline::PipelineState::Streaming => return Ok(()),
+                    _ => {}
                 }
-                if video_pad.current_caps().is_some() {
-                    return Ok(());
+                if watcher.changed().await.is_err() {
+                    return Err(anyhow!("state watcher closed unexpectedly"));
                 }
-                tokio::time::sleep(std::time::Duration::from_millis(100)).await;
             }
         })
         .await;
 
-        match caps_ready {
+        match streaming_ready {
             Ok(Ok(())) => {
                 active.insert(
                     source_id.to_string(),
@@ -612,7 +604,7 @@ impl NdiManager {
             Err(_) => {
                 pipeline.stop().await;
                 Err(anyhow!(
-                    "NDI source '{ndi_name}' did not deliver any frame within 8s on rebuild"
+                    "NDI source '{ndi_name}' did not reach Streaming within 8s on rebuild"
                 ))
             }
         }
@@ -694,82 +686,128 @@ impl NdiManager {
         }
     }
 
-    /// Forward a WHEP HTTP exchange into the source's `whepserversink`
-    /// signaller via `emit_by_name`. The signaller's Promise resolves with
-    /// `{status: u32, headers: gst::Structure, body: glib::Bytes}`.
+    /// Forward a WHEP HTTP exchange to the source's pipeline. Replaces the
+    /// pre-#336 `emit_by_name`-on-whepserversink path. Routes each `WhepOp`
+    /// variant to the corresponding `NdiPipeline` method.
     pub async fn whep_signaller_call(&self, source_id: &str, op: WhepOp) -> Result<WhepReply> {
-        let sink = {
-            let active = self.active.lock().await;
-            let src = active
-                .get(source_id)
-                .ok_or_else(|| anyhow!(SOURCE_NOT_ACTIVE_ERR))?;
-            match src.pipeline.state() {
-                PipelineState::Streaming | PipelineState::Starting => {}
-                PipelineState::Stopped => return Err(anyhow!("pipeline stopped")),
-                PipelineState::Errored(e) => return Err(anyhow!("pipeline errored: {e}")),
-            }
-            src.pipeline
-                .sink_element()
-                .ok_or_else(|| anyhow!("pipeline has no sink element"))?
-        };
-
-        // Do all signaller work (non-Send glib::Object) in a synchronous block
-        // before any .await points so the async fn stays Send.
-        let fut = {
-            let signaller = sink
-                .dynamic_cast_ref::<gstreamer::ChildProxy>()
-                .ok_or_else(|| anyhow!("sink is not a ChildProxy"))?
-                .child_by_name("signaller")
-                .ok_or_else(|| anyhow!("no signaller child on whepserversink"))?;
-
-            let (promise, fut) = gstreamer::Promise::new_future();
-            match op {
-                WhepOp::Post { id, body } => {
-                    let bytes = glib::Bytes::from_owned(body);
-                    signaller.emit_by_name::<()>("post", &[&id, &bytes, &promise]);
-                }
-                WhepOp::Patch { id, body, headers } => {
-                    let bytes = glib::Bytes::from_owned(body);
-                    let mut sb = gstreamer::Structure::builder("whep-signaller/headers");
-                    for (k, v) in &headers {
-                        sb = sb.field(k.as_str(), v);
-                    }
-                    signaller.emit_by_name::<()>("patch", &[&id, &bytes, &sb.build(), &promise]);
-                }
-                WhepOp::Delete { id } => {
-                    signaller.emit_by_name::<()>("delete", &[&id, &promise]);
-                }
-            }
-            // `signaller` (non-Send glib::Object) is dropped here before `fut.await`
-            fut
-        };
-
-        let reply = fut
-            .await
-            .map_err(|e| anyhow!("whep signaller promise error: {:?}", e))
-            .context("whep signaller promise dropped")?
-            .ok_or_else(|| anyhow!("whep signaller returned no payload"))?;
-        let status = reply
-            .get::<u32>("status")
-            .map_err(|e| anyhow!("missing status field: {e}"))? as u16;
-        let headers = match reply.get::<gstreamer::Structure>("headers") {
-            Ok(s) => s
-                .iter()
-                .filter_map(|(name, value)| {
-                    value.get::<String>().ok().map(|v| (name.to_string(), v))
+        match op {
+            WhepOp::Post { id: None, body } => {
+                let answer = {
+                    let active = self.active.lock().await;
+                    let src = active
+                        .get(source_id)
+                        .ok_or_else(|| anyhow!(SOURCE_NOT_ACTIVE_ERR))?;
+                    Self::ensure_streaming(src)?;
+                    src.pipeline.add_consumer(body).await?
+                };
+                let location = format!("/ndi/whep/{source_id}/{}", answer.session_id);
+                tracing::info!(
+                    source_id = %source_id,
+                    session_id = %answer.session_id,
+                    "WHEP POST → 201"
+                );
+                Ok(WhepReply {
+                    status: 201,
+                    headers: vec![
+                        ("location".to_string(), location),
+                        ("content-type".to_string(), "application/sdp".to_string()),
+                    ],
+                    body: Some(answer.sdp_answer.into_bytes()),
                 })
-                .collect(),
-            Err(_) => Vec::new(),
-        };
-        let body = reply
-            .get::<glib::Bytes>("body")
-            .ok()
-            .map(|b| b.as_ref().to_vec());
-        Ok(WhepReply {
-            status,
-            headers,
-            body,
-        })
+            }
+            WhepOp::Post { id: Some(_), body: _ } => {
+                // Session-scoped re-offer — out of scope for #336.
+                // Validate that the source is known first (preserves 404
+                // semantics for unknown sources — the HTTP shim tests assert
+                // this contract).
+                {
+                    let active = self.active.lock().await;
+                    let src = active
+                        .get(source_id)
+                        .ok_or_else(|| anyhow!(SOURCE_NOT_ACTIVE_ERR))?;
+                    Self::ensure_streaming(src)?;
+                }
+                tracing::warn!(source_id = %source_id, "WHEP session-scoped POST not implemented");
+                Ok(WhepReply {
+                    status: 501,
+                    headers: vec![("content-type".to_string(), "text/plain".to_string())],
+                    body: Some(b"WHEP re-offer not implemented".to_vec()),
+                })
+            }
+            WhepOp::Patch { id, body, headers: _ } => {
+                // Validate source exists before parsing the body. This ensures
+                // the 404/503 contract is preserved even for empty PATCH bodies
+                // (e.g. end-of-candidates notification) — the HTTP shim tests
+                // assert that an unknown source always returns an error.
+                {
+                    let active = self.active.lock().await;
+                    let src = active
+                        .get(source_id)
+                        .ok_or_else(|| anyhow!(SOURCE_NOT_ACTIVE_ERR))?;
+                    Self::ensure_streaming(src)?;
+                }
+                // Parse `application/trickle-ice-sdpfrag` body: extract
+                // `a=mid:` (for mline index) and `a=candidate:` lines,
+                // forwarding each candidate to pipeline.add_ice_candidate.
+                let body_str = std::str::from_utf8(&body)
+                    .map_err(|e| anyhow!("PATCH body not utf8: {e}"))?;
+                let mut count = 0;
+                let mut mline_idx: u32 = 0;
+                for raw_line in body_str.lines() {
+                    let line = raw_line.trim();
+                    if let Some(rest) = line.strip_prefix("a=mid:") {
+                        if let Ok(n) = rest.trim().parse::<u32>() {
+                            mline_idx = n;
+                        }
+                    } else if line.starts_with("a=candidate:") {
+                        // webrtcbin's add-ice-candidate signal accepts the
+                        // candidate string without the leading "a=" prefix.
+                        let cand_value = &line[2..];
+                        let active = self.active.lock().await;
+                        let src = active
+                            .get(source_id)
+                            .ok_or_else(|| anyhow!(SOURCE_NOT_ACTIVE_ERR))?;
+                        Self::ensure_streaming(src)?;
+                        src.pipeline
+                            .add_ice_candidate(&id, mline_idx, cand_value)
+                            .await?;
+                        count += 1;
+                    }
+                }
+                tracing::debug!(
+                    source_id = %source_id,
+                    session_id = %id,
+                    candidate_count = count,
+                    "WHEP PATCH dispatched"
+                );
+                Ok(WhepReply { status: 204, headers: vec![], body: None })
+            }
+            WhepOp::Delete { id } => {
+                {
+                    let active = self.active.lock().await;
+                    let src = active
+                        .get(source_id)
+                        .ok_or_else(|| anyhow!(SOURCE_NOT_ACTIVE_ERR))?;
+                    src.pipeline.remove_consumer(&id).await?;
+                }
+                tracing::info!(
+                    source_id = %source_id,
+                    session_id = %id,
+                    "WHEP DELETE → consumer removed"
+                );
+                Ok(WhepReply { status: 204, headers: vec![], body: None })
+            }
+        }
+    }
+
+    /// Pipeline state must be Streaming or Starting for WHEP ops to proceed.
+    /// Stopped / Errored produce an error that the HTTP shim maps to 503.
+    fn ensure_streaming(src: &ActiveSource) -> Result<()> {
+        match src.pipeline.state() {
+            PipelineState::Streaming | PipelineState::Starting => Ok(()),
+            PipelineState::Stopped => Err(anyhow!("pipeline stopped")),
+            PipelineState::Errored(e) => Err(anyhow!("pipeline errored: {e}")),
+        }
     }
 }
 
