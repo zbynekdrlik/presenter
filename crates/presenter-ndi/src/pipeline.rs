@@ -1100,4 +1100,76 @@ mod tests {
             }
         }
     }
+
+    /// Spec #336 / Task 7: cleanup invariant. After N add_consumer +
+    /// M remove_consumer calls, the pipeline must have exactly N-M
+    /// webrtcbin elements, the encoder count must stay at exactly 1,
+    /// and remove_consumer on an unknown session must be idempotent.
+    ///
+    /// Catches the regression class where a forgotten
+    /// tee.release_request_pad or a leaked webrtcbin/queue element
+    /// accumulates on every disconnect — would exhaust the iGPU's pad
+    /// budget after a busy service.
+    #[tokio::test]
+    async fn add_then_remove_leaves_clean_state() {
+        super::super::init().expect("gst init");
+        let mut pipeline = NdiPipeline::stopped_for_test_with_topology("x264enc")
+            .expect("topology builder");
+
+        // Add 5 consumers.
+        for i in 0..5 {
+            pipeline
+                .add_consumer_stub(&format!("session-{i}"))
+                .expect("add must succeed");
+        }
+        assert_eq!(
+            pipeline.iterate_webrtcbins().count(),
+            5,
+            "5 add_consumer calls must yield 5 webrtcbins",
+        );
+        assert_eq!(
+            pipeline.iterate_encoders().count(),
+            1,
+            "encoder count must stay at 1 regardless of consumer churn",
+        );
+
+        // Remove 3.
+        for i in 0..3 {
+            pipeline
+                .remove_consumer_stub(&format!("session-{i}"))
+                .expect("remove must succeed");
+        }
+        assert_eq!(
+            pipeline.iterate_webrtcbins().count(),
+            2,
+            "5 add - 3 remove must leave exactly 2 webrtcbin elements",
+        );
+        assert_eq!(
+            pipeline.iterate_encoders().count(),
+            1,
+            "encoder count must stay at 1 across removes",
+        );
+
+        // Remove the rest.
+        for i in 3..5 {
+            pipeline
+                .remove_consumer_stub(&format!("session-{i}"))
+                .expect("remove must succeed");
+        }
+        assert_eq!(
+            pipeline.iterate_webrtcbins().count(),
+            0,
+            "5 add - 5 remove must leave 0 webrtcbin elements",
+        );
+        assert_eq!(
+            pipeline.iterate_encoders().count(),
+            1,
+            "encoder must still be present (it's part of the pipeline topology)",
+        );
+
+        // Remove non-existent session must be idempotent.
+        pipeline
+            .remove_consumer_stub("session-does-not-exist")
+            .expect("remove_consumer_stub must be idempotent on unknown session");
+    }
 }
