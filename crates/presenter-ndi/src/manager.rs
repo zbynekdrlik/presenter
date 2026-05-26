@@ -1,8 +1,10 @@
 //! NdiManager — owns discovery + per-source GStreamer pipelines.
 //!
 //! Pre-WebRTC the module hosted a custom JPEG receiver/encoder. After the
-//! WebRTC migration it manages one `NdiPipeline` per active NDI source and
-//! exposes a WHEP signaller bridge for the HTTP shim.
+//! #336 shared-encoder migration it manages one `NdiPipeline` per active NDI
+//! source and bridges WHEP HTTP operations into direct
+//! `pipeline.add_consumer` / `add_ice_candidate` / `remove_consumer` calls
+//! (no `whepserversink` `emit_by_name`).
 
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -41,10 +43,9 @@ pub enum WhepOp {
     Delete { id: String },
 }
 
-/// Result returned by `whepserversink`'s signaller, flattened into plain
-/// Rust types. Header names and values are extracted from the gstreamer
-/// `Structure` inside the manager so consumers (e.g. the axum WHEP router)
-/// don't need to depend on gstreamer.
+/// Reply built by `whep_signaller_call` from a pipeline operation result.
+/// Status, headers, and body are mapped 1:1 by the axum HTTP shim into
+/// the actual HTTP response.
 pub struct WhepReply {
     pub status: u16,
     pub headers: Vec<(String, String)>,
@@ -52,7 +53,14 @@ pub struct WhepReply {
 }
 
 struct ActiveSource {
-    pipeline: NdiPipeline,
+    /// Wrapped in `Arc` so WHEP HTTP handlers can clone the pipeline
+    /// reference out of the active-map mutex guard before calling potentially
+    /// blocking pipeline methods (`add_consumer` spawn_blocks for ~10s,
+    /// `add_ice_candidate` / `remove_consumer` also spawn_block). Without
+    /// this, holding the active-map lock across those awaits serializes ALL
+    /// WHEP operations on the manager, stalls `pipeline_snapshots()` (used
+    /// by `/healthz`) and blocks the supervisor's `rebuild_pipeline`.
+    pipeline: std::sync::Arc<NdiPipeline>,
     /// Supervisor task handle. Aborted on `stop_pipeline` / drop to prevent
     /// leaks. `None` only inside the regression-test constructors (which
     /// don't spawn a real supervisor) AND in the `rebuild_pipeline` re-insert
@@ -195,7 +203,7 @@ async fn check_active_entry(
                 return StateCheckOutcome::Idempotent;
             }
             PipelineState::Stopped | PipelineState::Errored(_) => {
-                if let Some(mut dead) = active.remove(source_id) {
+                if let Some(dead) = active.remove(source_id) {
                     // CRITICAL: do NOT abort `dead.supervisor` here. The
                     // supervisor task is what CALLS `rebuild_pipeline ->
                     // check_active_entry` in the recovery path, so aborting
@@ -256,12 +264,14 @@ impl NdiManager {
     /// `ndi_name` = NDI broadcaster name (e.g. "STREAM-SNV (stream)").
     ///
     /// Returns only AFTER the pipeline has transitioned to `Streaming` — i.e.
-    /// the ndisrc has connected to the broadcaster, ndisrcdemux has negotiated
-    /// video/audio caps, and webrtcsink's input pads are ready. Without this
-    /// wait, an early WHEP POST hits webrtcsink before input caps are set
-    /// and panics on `in_caps.unwrap()` (gst-plugin-webrtc imp.rs:3548).
+    /// the GStreamer bus has emitted `StateChanged → Playing` for the pipeline
+    /// element. For the shared-encoder topology (#336), this means ndisrc is
+    /// alive and ndisrcdemux has begun delivering frames; the encoder + tee
+    /// will start producing H264 buffers shortly after. Downstream webrtcbin
+    /// consumers attach lazily via `add_consumer`; they do not require encoder
+    /// caps at attach time (SDP exchange happens independently).
     ///
-    /// A 7-second timeout caps the wait — long enough for ndisrc to find the
+    /// An 8-second timeout caps the wait — long enough for ndisrc to find the
     /// source on a healthy LAN, short enough that a missing/dead broadcaster
     /// reports back quickly to the operator.
     pub async fn start_pipeline(
@@ -306,7 +316,7 @@ impl NdiManager {
         }
 
         let whep_url = format!("/ndi/whep/{}", source_id);
-        let mut pipeline = NdiPipeline::build(ndi_name, whep_url)?;
+        let pipeline = NdiPipeline::build(ndi_name, whep_url)?;
         pipeline.start().await?;
 
         // Wait for the pipeline to reach Streaming state. The bus-watch task
@@ -345,15 +355,15 @@ impl NdiManager {
         match streaming_ready {
             Ok(Ok(())) => {
                 // pipeline.state_watcher() and self.spawn_supervisor must
-                // run before pipeline is moved into ActiveSource on the
-                // active.insert line below.
+                // run before pipeline is wrapped into Arc and moved into
+                // ActiveSource on the active.insert line below.
                 let watcher = pipeline.state_watcher();
                 let supervisor =
                     self.spawn_supervisor(source_id.to_string(), ndi_name.to_string(), watcher);
                 active.insert(
                     source_id.to_string(),
                     ActiveSource {
-                        pipeline,
+                        pipeline: std::sync::Arc::new(pipeline),
                         supervisor: Some(supervisor),
                     },
                 );
@@ -560,7 +570,7 @@ impl NdiManager {
         }
 
         let whep_url = format!("/ndi/whep/{}", source_id);
-        let mut pipeline = NdiPipeline::build(ndi_name, whep_url)?;
+        let pipeline = NdiPipeline::build(ndi_name, whep_url)?;
         pipeline.start().await?;
 
         // Wait for the pipeline to reach Streaming — same rationale as
@@ -589,7 +599,7 @@ impl NdiManager {
                 active.insert(
                     source_id.to_string(),
                     ActiveSource {
-                        pipeline,
+                        pipeline: std::sync::Arc::new(pipeline),
                         // Supervisor task is reused — it'll fetch the new watcher
                         // from us via `state_watcher_for`.
                         supervisor: None,
@@ -624,8 +634,8 @@ impl NdiManager {
     /// Stop ALL pipelines.
     pub async fn stop_all(&self) {
         let mut active = self.active.lock().await;
-        for (_, mut src) in active.drain() {
-            if let Some(handle) = src.supervisor.take() {
+        for (_, src) in active.drain() {
+            if let Some(handle) = src.supervisor {
                 handle.abort();
             }
             src.pipeline.stop().await;
@@ -689,17 +699,26 @@ impl NdiManager {
     /// Forward a WHEP HTTP exchange to the source's pipeline. Replaces the
     /// pre-#336 `emit_by_name`-on-whepserversink path. Routes each `WhepOp`
     /// variant to the corresponding `NdiPipeline` method.
+    ///
+    /// The active-map mutex guard is always DROPPED before calling any
+    /// potentially-blocking pipeline method (`add_consumer` spawn_blocks for
+    /// ~10s, `add_ice_candidate` and `remove_consumer` also spawn_block).
+    /// To achieve this without copying the pipeline, `ActiveSource.pipeline`
+    /// is an `Arc<NdiPipeline>` — we clone the `Arc` (cheap refcount bump)
+    /// inside the lock, drop the guard, then call the pipeline method outside.
     pub async fn whep_signaller_call(&self, source_id: &str, op: WhepOp) -> Result<WhepReply> {
         match op {
             WhepOp::Post { id: None, body } => {
-                let answer = {
+                let pipeline = {
                     let active = self.active.lock().await;
                     let src = active
                         .get(source_id)
                         .ok_or_else(|| anyhow!(SOURCE_NOT_ACTIVE_ERR))?;
                     Self::ensure_streaming(src)?;
-                    src.pipeline.add_consumer(body).await?
+                    std::sync::Arc::clone(&src.pipeline)
+                    // active lock dropped here
                 };
+                let answer = pipeline.add_consumer(body).await?;
                 let location = format!("/ndi/whep/{source_id}/{}", answer.session_id);
                 tracing::info!(
                     source_id = %source_id,
@@ -719,7 +738,8 @@ impl NdiManager {
                 // Session-scoped re-offer — out of scope for #336.
                 // Validate that the source is known first (preserves 404
                 // semantics for unknown sources — the HTTP shim tests assert
-                // this contract).
+                // this contract). Lock is acquired and dropped immediately;
+                // no blocking await follows.
                 {
                     let active = self.active.lock().await;
                     let src = active
@@ -735,17 +755,18 @@ impl NdiManager {
                 })
             }
             WhepOp::Patch { id, body, headers: _ } => {
-                // Validate source exists before parsing the body. This ensures
-                // the 404/503 contract is preserved even for empty PATCH bodies
-                // (e.g. end-of-candidates notification) — the HTTP shim tests
-                // assert that an unknown source always returns an error.
-                {
+                // Clone the pipeline reference out of the map guard before
+                // any blocking await. The per-candidate loop re-uses this
+                // single clone rather than re-locking per iteration.
+                let pipeline = {
                     let active = self.active.lock().await;
                     let src = active
                         .get(source_id)
                         .ok_or_else(|| anyhow!(SOURCE_NOT_ACTIVE_ERR))?;
                     Self::ensure_streaming(src)?;
-                }
+                    std::sync::Arc::clone(&src.pipeline)
+                    // active lock dropped here
+                };
                 // Parse `application/trickle-ice-sdpfrag` body: extract
                 // `a=mid:` (for mline index) and `a=candidate:` lines,
                 // forwarding each candidate to pipeline.add_ice_candidate.
@@ -759,18 +780,14 @@ impl NdiManager {
                         if let Ok(n) = rest.trim().parse::<u32>() {
                             mline_idx = n;
                         }
+                        // Non-integer mid (RFC 8839 allows e.g. "audio") falls
+                        // through; mline_idx stays at the last valid integer (or 0).
+                        // Browsers use integer mids in WHEP practice.
                     } else if line.starts_with("a=candidate:") {
                         // webrtcbin's add-ice-candidate signal accepts the
                         // candidate string without the leading "a=" prefix.
                         let cand_value = &line[2..];
-                        let active = self.active.lock().await;
-                        let src = active
-                            .get(source_id)
-                            .ok_or_else(|| anyhow!(SOURCE_NOT_ACTIVE_ERR))?;
-                        Self::ensure_streaming(src)?;
-                        src.pipeline
-                            .add_ice_candidate(&id, mline_idx, cand_value)
-                            .await?;
+                        pipeline.add_ice_candidate(&id, mline_idx, cand_value).await?;
                         count += 1;
                     }
                 }
@@ -783,13 +800,19 @@ impl NdiManager {
                 Ok(WhepReply { status: 204, headers: vec![], body: None })
             }
             WhepOp::Delete { id } => {
-                {
+                // Clone the pipeline reference before the blocking await.
+                // DELETE proceeds regardless of pipeline state — teardown must
+                // succeed even when the pipeline is erroring, so
+                // ensure_streaming is intentionally skipped here.
+                let pipeline = {
                     let active = self.active.lock().await;
                     let src = active
                         .get(source_id)
                         .ok_or_else(|| anyhow!(SOURCE_NOT_ACTIVE_ERR))?;
-                    src.pipeline.remove_consumer(&id).await?;
-                }
+                    std::sync::Arc::clone(&src.pipeline)
+                    // active lock dropped here
+                };
+                pipeline.remove_consumer(&id).await?;
                 tracing::info!(
                     source_id = %source_id,
                     session_id = %id,
@@ -848,7 +871,7 @@ mod start_pipeline_state_check_tests {
         active.insert(
             "test-id".to_string(),
             ActiveSource {
-                pipeline: dead,
+                pipeline: std::sync::Arc::new(dead),
                 supervisor: None,
             },
         );
@@ -878,7 +901,7 @@ mod start_pipeline_state_check_tests {
         active.insert(
             "test-id".to_string(),
             ActiveSource {
-                pipeline: p,
+                pipeline: std::sync::Arc::new(p),
                 supervisor: None,
             },
         );
@@ -902,7 +925,7 @@ mod start_pipeline_state_check_tests {
         active.insert(
             "test-id".to_string(),
             ActiveSource {
-                pipeline: p,
+                pipeline: std::sync::Arc::new(p),
                 supervisor: None,
             },
         );

@@ -77,8 +77,17 @@ pub struct NdiPipeline {
     /// State observer for the manager / WS event emitter.
     state_tx: watch::Sender<PipelineState>,
     state_rx: watch::Receiver<PipelineState>,
-    /// Bus watch task handle so we can cancel on Drop.
-    bus_watch: Option<tokio::task::JoinHandle<()>>,
+    /// Bus watch task handle so we can cancel on stop/drop.
+    ///
+    /// Wrapped in `std::sync::Mutex` to allow interior-mutability access from
+    /// `&self` methods (`start`, `stop`, `teardown`). This is necessary because
+    /// `NdiPipeline` is stored inside `Arc<NdiPipeline>` in `ActiveSource`
+    /// (the Arc lets WHEP HTTP handlers clone a pipeline reference out of the
+    /// active-map mutex guard before calling blocking pipeline methods — the
+    /// critical fix for the lock-held-across-await bug). `Arc` requires `&self`
+    /// for shared access, so `&mut self` methods are incompatible. The Mutex
+    /// critical section is trivially short (take/set a JoinHandle).
+    bus_watch: std::sync::Mutex<Option<tokio::task::JoinHandle<()>>>,
     /// Active per-consumer sessions.
     sessions: Arc<tokio::sync::Mutex<HashMap<String, WhepSession>>>,
     /// Tee element — `add_consumer` / `remove_consumer` request/release pads.
@@ -121,7 +130,7 @@ impl NdiPipeline {
             whep_url: String::new(),
             state_tx,
             state_rx,
-            bus_watch: None,
+            bus_watch: std::sync::Mutex::new(None),
             sessions: Arc::new(tokio::sync::Mutex::new(HashMap::new())),
             tee: Arc::new(placeholder),
         }
@@ -261,7 +270,7 @@ impl NdiPipeline {
             whep_url,
             state_tx,
             state_rx,
-            bus_watch: None,
+            bus_watch: std::sync::Mutex::new(None),
             sessions: Arc::new(tokio::sync::Mutex::new(HashMap::new())),
             tee: Arc::new(tee),
         })
@@ -270,7 +279,7 @@ impl NdiPipeline {
     /// Transition the pipeline to PLAYING. Returns immediately; the state
     /// watcher moves to `Streaming` once the PIPELINE element posts
     /// `StateChanged → Playing` on the bus.
-    pub async fn start(&mut self) -> Result<()> {
+    pub async fn start(&self) -> Result<()> {
         self.state_tx.send_replace(PipelineState::Starting);
         let pipeline = self.pipeline.clone();
         let state_tx = self.state_tx.clone();
@@ -286,7 +295,7 @@ impl NdiPipeline {
         let bus = pipeline
             .bus()
             .ok_or_else(|| anyhow!("pipeline has no bus"))?;
-        self.bus_watch = Some(tokio::spawn(async move {
+        *self.bus_watch.lock().unwrap() = Some(tokio::spawn(async move {
             let mut stream = bus.stream();
             use futures_util::StreamExt;
             while let Some(msg) = stream.next().await {
@@ -328,7 +337,7 @@ impl NdiPipeline {
     }
 
     /// Tear down the pipeline. Safe to call multiple times.
-    pub async fn stop(&mut self) {
+    pub async fn stop(&self) {
         self.teardown();
         let _ = self.state_tx.send(PipelineState::Stopped);
     }
@@ -337,7 +346,7 @@ impl NdiPipeline {
     /// Null, and abort the bus-watch task.
     /// Shared between `stop()` and `Drop` so the invariant lives in one place.
     /// Idempotent — GStreamer ignores a duplicate Null transition.
-    fn teardown(&mut self) {
+    fn teardown(&self) {
         // Release per-consumer resources before tearing down the pipeline.
         // Match the order used by remove_consumer: set elements to Null,
         // remove from pipeline, then release the tee request-pad.
@@ -360,7 +369,7 @@ impl NdiPipeline {
             );
         }
         let _ = self.pipeline.set_state(gst::State::Null);
-        if let Some(h) = self.bus_watch.take() {
+        if let Some(h) = self.bus_watch.lock().unwrap().take() {
             h.abort();
         }
     }
@@ -845,7 +854,7 @@ impl NdiPipeline {
             whep_url: String::new(),
             state_tx,
             state_rx,
-            bus_watch: None,
+            bus_watch: std::sync::Mutex::new(None),
             sessions: Arc::new(tokio::sync::Mutex::new(HashMap::new())),
             tee: Arc::new(tee),
         })
