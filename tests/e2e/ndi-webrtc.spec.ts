@@ -59,12 +59,13 @@ test("WHEP endpoint returns SDP answer for active source", async ({ request }) =
       headers: { "Content-Type": "application/sdp" },
     },
   );
-  // Two acceptable shapes:
-  //   200 — pipeline ready, returned SDP answer
+  // Three acceptable shapes:
+  //   201 — WHEP spec: pipeline ready, returned SDP answer (Location header set)
+  //   200 — legacy fallback (kept for defensive compatibility)
   //   503 — pipeline starting / source not connected (real NDI absent in CI)
   // 500 / 404 / 4xx-other are bugs.
-  expect([200, 503]).toContain(whep.status());
-  if (whep.status() === 200) {
+  expect([200, 201, 503]).toContain(whep.status());
+  if (whep.status() === 200 || whep.status() === 201) {
     const answer = await whep.text();
     expect(answer).toMatch(/^v=0/);
     expect(answer).toMatch(/m=video /);
