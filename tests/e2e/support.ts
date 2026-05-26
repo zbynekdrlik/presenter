@@ -6,6 +6,110 @@ import type { AddressInfo } from "net";
 import type { TestInfo } from "@playwright/test";
 import { expect, type Locator, type Page } from "@playwright/test";
 
+/**
+ * Subscribe to console events on `page` and append error/warning messages to
+ * `errors`. Pass the array to `expect(errors).toEqual([])` at the end of the
+ * test to assert a clean browser console.
+ *
+ * Mirrors the inline pattern used across NDI specs (e.g. ndi-webrtc.spec.ts)
+ * but extracted here so concurrent-context tests (ndi-webrtc-fanout.spec.ts)
+ * don't have to duplicate the setup.
+ */
+export function attachConsoleErrorCollector(page: Page, errors: string[]): void {
+  page.on("console", (msg) => {
+    if (msg.type() === "error" || msg.type() === "warning") {
+      errors.push(`[${msg.type()}] ${msg.text()}`);
+    }
+  });
+  page.on("pageerror", (err) => {
+    errors.push(`[pageerror] ${err.message}`);
+  });
+}
+
+/**
+ * Poll `<video data-role="ndi-video">` (or another `selector`) until
+ * `videoWidth > 0` AND `readyState >= HAVE_CURRENT_DATA (2)`. Polls every
+ * 100 ms for up to 12 s (120 iterations) — chosen to match the existing
+ * "NdiVideo videoWidth resolves above zero" test in ndi-webrtc.spec.ts but
+ * with extra headroom for a second concurrent consumer.
+ *
+ * Throws if the element is not found or the video never reaches a playable
+ * state within the timeout.
+ */
+export async function waitForVideoReady(
+  page: Page,
+  selector: string,
+): Promise<void> {
+  const ok = await page.locator(selector).evaluate(
+    async (el: HTMLVideoElement) => {
+      for (let i = 0; i < 120; i++) {
+        if (el.videoWidth > 0 && el.readyState >= 2) return true;
+        await new Promise((r) => setTimeout(r, 100));
+      }
+      return el.videoWidth > 0 && el.readyState >= 2;
+    },
+  );
+  expect(
+    ok,
+    `${selector}: videoWidth never exceeded 0 within 12s (readyState < HAVE_CURRENT_DATA)`,
+  ).toBe(true);
+}
+
+/**
+ * Discover available NDI sources via `/ndi/sources`, pick the first one, and
+ * activate it as a video source row so it has a UUID that the WHEP endpoint
+ * accepts. Returns the activated video-source UUID, or `null` if no NDI
+ * source is discoverable on this runner (caller should `test.skip()`).
+ *
+ * Mirrors the inline pattern used by ndi-webrtc.spec.ts and
+ * ndi-webrtc-recovery.spec.ts — extracted here so the fanout test can reuse
+ * it without duplication.
+ *
+ * NOTE: callers that need a full `activate` (pipeline ready) should call
+ * `POST /integrations/video-sources/:id/activate` themselves after this
+ * returns. This helper only creates the DB row (POST /integrations/video-sources)
+ * without activating, because the fanout test activates as part of its own
+ * flow to avoid races between deactivate/create/activate.
+ */
+export async function activateFirstNdiSource(server: {
+  baseUrl: string;
+}): Promise<string | null> {
+  // Discover sources from the live NDI manager.
+  let discovered: Array<{ name: string }>;
+  try {
+    const resp = await fetch(`${server.baseUrl}/ndi/sources`);
+    if (!resp.ok) return null;
+    const body = await resp.json();
+    if (!Array.isArray(body) || body.length === 0) return null;
+    discovered = body as Array<{ name: string }>;
+  } catch {
+    return null;
+  }
+
+  const ndiName = discovered[0].name;
+
+  // Create a video_source row for this NDI broadcaster.
+  const createResp = await fetch(
+    `${server.baseUrl}/integrations/video-sources`,
+    {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ label: "fanout-test", ndiName }),
+    },
+  );
+  if (!createResp.ok) return null;
+  const src = (await createResp.json()) as { id: string };
+
+  // Activate so the pipeline starts.
+  const activateResp = await fetch(
+    `${server.baseUrl}/integrations/video-sources/${src.id}/activate`,
+    { method: "POST", headers: { "Content-Type": "application/json" }, body: "{}" },
+  );
+  if (!activateResp.ok) return null;
+
+  return src.id;
+}
+
 export const REPO_ROOT = process.cwd();
 
 /**

@@ -236,6 +236,10 @@ pub fn build_router(state: AppState) -> Router {
         .route("/ndi/sources", get(integrations::ndi::discover_ndi_sources))
         .route("/ndi/status", get(integrations::ndi::ndi_status))
         .route(
+            "/ndi/snapshot/{source_id}",
+            get(integrations::ndi::ndi_snapshot),
+        )
+        .route(
             "/ndi/whep/{source_id}",
             post(integrations::ndi_whep::post_whep_endpoint),
         )
@@ -394,11 +398,18 @@ async fn live_websocket(ws: WebSocketUpgrade, State(state): State<AppState>) -> 
 struct AppError {
     status: StatusCode,
     error: anyhow::Error,
+    /// When set, a `Retry-After: <N>` header is added to the response.
+    /// Used for 503 consumer-cap rejections (Task 6 / #336).
+    retry_after: Option<u64>,
 }
 
 impl AppError {
     fn new(status: StatusCode, error: anyhow::Error) -> Self {
-        Self { status, error }
+        Self {
+            status,
+            error,
+            retry_after: None,
+        }
     }
 
     fn bad_request<E>(error: E) -> Self
@@ -429,6 +440,18 @@ impl AppError {
             anyhow::anyhow!(message.into()),
         )
     }
+
+    /// 503 with `Retry-After: <retry_after_secs>` header.
+    ///
+    /// Used by the WHEP shim when the per-source consumer cap is hit so
+    /// browsers back off and retry instead of hammering the pipeline.
+    fn service_unavailable_with_retry(message: impl Into<String>, retry_after_secs: u64) -> Self {
+        Self {
+            status: StatusCode::SERVICE_UNAVAILABLE,
+            error: anyhow::anyhow!(message.into()),
+            retry_after: Some(retry_after_secs),
+        }
+    }
 }
 
 impl From<anyhow::Error> for AppError {
@@ -447,7 +470,13 @@ impl IntoResponse for AppError {
         let body = Json(ErrorBody {
             message: self.error.to_string(),
         });
-        (self.status, body).into_response()
+        let mut resp = (self.status, body).into_response();
+        if let Some(secs) = self.retry_after {
+            let value = axum::http::HeaderValue::from(secs);
+            resp.headers_mut()
+                .insert(axum::http::header::RETRY_AFTER, value);
+        }
+        resp
     }
 }
 

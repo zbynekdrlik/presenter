@@ -13,6 +13,7 @@ test-helpers = []
 [dependencies]
 anyhow.workspace = true
 axum.workspace = true
+thiserror.workspace = true
 tokio.workspace = true
 tracing.workspace = true
 serde.workspace = true
@@ -20,6 +21,8 @@ serde_json.workspace = true
 libloading = "0.8"
 futures-util.workspace = true
 gstreamer.workspace = true
+gstreamer-webrtc.workspace = true
 gst-plugin-webrtc.workspace = true
 gst-plugin-ndi.workspace = true
 gst-plugin-rtp.workspace = true
+uuid.workspace = true

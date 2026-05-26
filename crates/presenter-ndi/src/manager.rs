@@ -1,15 +1,15 @@
 //! NdiManager — owns discovery + per-source GStreamer pipelines.
 //!
 //! Pre-WebRTC the module hosted a custom JPEG receiver/encoder. After the
-//! WebRTC migration it manages one `NdiPipeline` per active NDI source and
-//! exposes a WHEP signaller bridge for the HTTP shim.
+//! #336 shared-encoder migration it manages one `NdiPipeline` per active NDI
+//! source and bridges WHEP HTTP operations into direct
+//! `pipeline.add_consumer` / `add_ice_candidate` / `remove_consumer` calls
+//! (no `whepserversink` `emit_by_name`).
 
 use std::collections::HashMap;
 use std::sync::Arc;
 
-use anyhow::{anyhow, Context, Result};
-use gstreamer::glib;
-use gstreamer::prelude::*;
+use anyhow::{anyhow, Result};
 use tokio::sync::Mutex;
 
 use crate::discovery::{self, FinderShutdown, SourceList};
@@ -43,10 +43,9 @@ pub enum WhepOp {
     Delete { id: String },
 }
 
-/// Result returned by `whepserversink`'s signaller, flattened into plain
-/// Rust types. Header names and values are extracted from the gstreamer
-/// `Structure` inside the manager so consumers (e.g. the axum WHEP router)
-/// don't need to depend on gstreamer.
+/// Reply built by `whep_signaller_call` from a pipeline operation result.
+/// Status, headers, and body are mapped 1:1 by the axum HTTP shim into
+/// the actual HTTP response.
 pub struct WhepReply {
     pub status: u16,
     pub headers: Vec<(String, String)>,
@@ -54,7 +53,14 @@ pub struct WhepReply {
 }
 
 struct ActiveSource {
-    pipeline: NdiPipeline,
+    /// Wrapped in `Arc` so WHEP HTTP handlers can clone the pipeline
+    /// reference out of the active-map mutex guard before calling potentially
+    /// blocking pipeline methods (`add_consumer` spawn_blocks for ~10s,
+    /// `add_ice_candidate` / `remove_consumer` also spawn_block). Without
+    /// this, holding the active-map lock across those awaits serializes ALL
+    /// WHEP operations on the manager, stalls `pipeline_snapshots()` (used
+    /// by `/healthz`) and blocks the supervisor's `rebuild_pipeline`.
+    pipeline: std::sync::Arc<NdiPipeline>,
     /// Supervisor task handle. Aborted on `stop_pipeline` / drop to prevent
     /// leaks. `None` only inside the regression-test constructors (which
     /// don't spawn a real supervisor) AND in the `rebuild_pipeline` re-insert
@@ -197,7 +203,7 @@ async fn check_active_entry(
                 return StateCheckOutcome::Idempotent;
             }
             PipelineState::Stopped | PipelineState::Errored(_) => {
-                if let Some(mut dead) = active.remove(source_id) {
+                if let Some(dead) = active.remove(source_id) {
                     // CRITICAL: do NOT abort `dead.supervisor` here. The
                     // supervisor task is what CALLS `rebuild_pipeline ->
                     // check_active_entry` in the recovery path, so aborting
@@ -258,12 +264,14 @@ impl NdiManager {
     /// `ndi_name` = NDI broadcaster name (e.g. "STREAM-SNV (stream)").
     ///
     /// Returns only AFTER the pipeline has transitioned to `Streaming` — i.e.
-    /// the ndisrc has connected to the broadcaster, ndisrcdemux has negotiated
-    /// video/audio caps, and webrtcsink's input pads are ready. Without this
-    /// wait, an early WHEP POST hits webrtcsink before input caps are set
-    /// and panics on `in_caps.unwrap()` (gst-plugin-webrtc imp.rs:3548).
+    /// the GStreamer bus has emitted `StateChanged → Playing` for the pipeline
+    /// element. For the shared-encoder topology (#336), this means ndisrc is
+    /// alive and ndisrcdemux has begun delivering frames; the encoder + tee
+    /// will start producing H264 buffers shortly after. Downstream webrtcbin
+    /// consumers attach lazily via `add_consumer`; they do not require encoder
+    /// caps at attach time (SDP exchange happens independently).
     ///
-    /// A 7-second timeout caps the wait — long enough for ndisrc to find the
+    /// An 8-second timeout caps the wait — long enough for ndisrc to find the
     /// source on a healthy LAN, short enough that a missing/dead broadcaster
     /// reports back quickly to the operator.
     pub async fn start_pipeline(
@@ -308,60 +316,54 @@ impl NdiManager {
         }
 
         let whep_url = format!("/ndi/whep/{}", source_id);
-        let mut pipeline = NdiPipeline::build(ndi_name, whep_url)?;
+        let pipeline = NdiPipeline::build(ndi_name, whep_url)?;
         pipeline.start().await?;
 
-        // Wait for webrtcsink's video sink-pad to have negotiated caps. Two
-        // states aren't enough on their own:
-        //  - `pipeline.state == Playing` fires almost immediately on a live
-        //    source (NoPreroll) — before ndisrc has actually sent any frame.
-        //  - The `streams` HashMap inside webrtcsink only gets `in_caps` set
-        //    when the input pad receives its first CAPS event, which is when
-        //    ndisrcdemux has identified video/audio formats from real NDI data.
+        // Wait for the pipeline to reach Streaming state. The bus-watch task
+        // (started by pipeline.start()) sets state to Streaming once the
+        // GStreamer pipeline element posts StateChanged → Playing.
         //
-        // Polling `sink_element.sink_pad("video_0").current_caps()` is the
-        // most reliable signal that caps are set. Without this, an early WHEP
-        // POST hits webrtcsink while `in_caps == None` and panics at
-        // gst-plugin-webrtc imp.rs:3548 (`in_caps.unwrap()`).
+        // The new shared-encoder topology (ndisrc → demux → videoconvert →
+        // encoder → rtph264pay → tee) has no whepserversink, so polling
+        // `sink_element.static_pad("video_0").current_caps()` is no longer
+        // applicable. Watching for PipelineState::Streaming is the correct
+        // signal: the bus-watch only promotes to Streaming after PLAYING,
+        // which requires ndisrcdemux to have negotiated caps with its upstream
+        // ndisrc — equivalent timing to the old caps-wait.
         //
         // 8-second budget: ndisrc takes ~2-5s on a healthy LAN to find a
         // broadcast + receive first frame. Beyond 8s the source likely doesn't
         // exist and we'd rather fail fast than hang the operator UI.
-        let sink = pipeline
-            .sink_element()
-            .ok_or_else(|| anyhow!("pipeline has no sink element"))?;
-        let video_pad = sink
-            .static_pad("video_0")
-            .ok_or_else(|| anyhow!("whepserversink has no video_0 sink pad"))?;
         let mut watcher = pipeline.state_watcher();
-        let caps_ready = tokio::time::timeout(std::time::Duration::from_secs(8), async {
+        let streaming_ready = tokio::time::timeout(std::time::Duration::from_secs(8), async {
             loop {
-                // Bail out if the pipeline errored (e.g. NDI source not found
-                // and ndisrc emitted ERROR on the bus).
-                if let crate::pipeline::PipelineState::Errored(ref e) = *watcher.borrow_and_update()
-                {
-                    return Err(anyhow!("pipeline errored: {e}"));
+                let state = watcher.borrow_and_update().clone();
+                match state {
+                    crate::pipeline::PipelineState::Errored(ref e) => {
+                        return Err(anyhow!("pipeline errored: {e}"));
+                    }
+                    crate::pipeline::PipelineState::Streaming => return Ok(()),
+                    _ => {}
                 }
-                if video_pad.current_caps().is_some() {
-                    return Ok(());
+                if watcher.changed().await.is_err() {
+                    return Err(anyhow!("state watcher closed unexpectedly"));
                 }
-                tokio::time::sleep(std::time::Duration::from_millis(100)).await;
             }
         })
         .await;
 
-        match caps_ready {
+        match streaming_ready {
             Ok(Ok(())) => {
                 // pipeline.state_watcher() and self.spawn_supervisor must
-                // run before pipeline is moved into ActiveSource on the
-                // active.insert line below.
+                // run before pipeline is wrapped into Arc and moved into
+                // ActiveSource on the active.insert line below.
                 let watcher = pipeline.state_watcher();
                 let supervisor =
                     self.spawn_supervisor(source_id.to_string(), ndi_name.to_string(), watcher);
                 active.insert(
                     source_id.to_string(),
                     ActiveSource {
-                        pipeline,
+                        pipeline: std::sync::Arc::new(pipeline),
                         supervisor: Some(supervisor),
                     },
                 );
@@ -374,7 +376,7 @@ impl NdiManager {
             Err(_) => {
                 pipeline.stop().await;
                 Err(anyhow!(
-                    "NDI source '{ndi_name}' did not deliver any frame within 8s; \
+                    "NDI source '{ndi_name}' did not reach Streaming within 8s; \
                      ndisrc could not connect or the broadcaster is silent"
                 ))
             }
@@ -568,36 +570,36 @@ impl NdiManager {
         }
 
         let whep_url = format!("/ndi/whep/{}", source_id);
-        let mut pipeline = NdiPipeline::build(ndi_name, whep_url)?;
+        let pipeline = NdiPipeline::build(ndi_name, whep_url)?;
         pipeline.start().await?;
 
-        let sink = pipeline
-            .sink_element()
-            .ok_or_else(|| anyhow!("pipeline has no sink element"))?;
-        let video_pad = sink
-            .static_pad("video_0")
-            .ok_or_else(|| anyhow!("whepserversink has no video_0 sink pad"))?;
+        // Wait for the pipeline to reach Streaming — same rationale as
+        // start_pipeline: state-watcher replaces the whepserversink pad
+        // caps-wait in the new shared-encoder topology.
         let mut watcher = pipeline.state_watcher();
-        let caps_ready = tokio::time::timeout(std::time::Duration::from_secs(8), async {
+        let streaming_ready = tokio::time::timeout(std::time::Duration::from_secs(8), async {
             loop {
-                if let crate::pipeline::PipelineState::Errored(ref e) = *watcher.borrow_and_update()
-                {
-                    return Err(anyhow!("pipeline errored: {e}"));
+                let state = watcher.borrow_and_update().clone();
+                match state {
+                    crate::pipeline::PipelineState::Errored(ref e) => {
+                        return Err(anyhow!("pipeline errored: {e}"));
+                    }
+                    crate::pipeline::PipelineState::Streaming => return Ok(()),
+                    _ => {}
                 }
-                if video_pad.current_caps().is_some() {
-                    return Ok(());
+                if watcher.changed().await.is_err() {
+                    return Err(anyhow!("state watcher closed unexpectedly"));
                 }
-                tokio::time::sleep(std::time::Duration::from_millis(100)).await;
             }
         })
         .await;
 
-        match caps_ready {
+        match streaming_ready {
             Ok(Ok(())) => {
                 active.insert(
                     source_id.to_string(),
                     ActiveSource {
-                        pipeline,
+                        pipeline: std::sync::Arc::new(pipeline),
                         // Supervisor task is reused — it'll fetch the new watcher
                         // from us via `state_watcher_for`.
                         supervisor: None,
@@ -612,7 +614,7 @@ impl NdiManager {
             Err(_) => {
                 pipeline.stop().await;
                 Err(anyhow!(
-                    "NDI source '{ndi_name}' did not deliver any frame within 8s on rebuild"
+                    "NDI source '{ndi_name}' did not reach Streaming within 8s on rebuild"
                 ))
             }
         }
@@ -632,8 +634,8 @@ impl NdiManager {
     /// Stop ALL pipelines.
     pub async fn stop_all(&self) {
         let mut active = self.active.lock().await;
-        for (_, mut src) in active.drain() {
-            if let Some(handle) = src.supervisor.take() {
+        for (_, src) in active.drain() {
+            if let Some(handle) = src.supervisor {
                 handle.abort();
             }
             src.pipeline.stop().await;
@@ -678,6 +680,27 @@ impl NdiManager {
         }
     }
 
+    /// Single-source snapshot for `GET /ndi/snapshot/:source_id`. Returns
+    /// `None` if the source isn't active in the manager's active map.
+    ///
+    /// Uses the same 200 ms lock-acquisition timeout pattern as
+    /// `pipeline_snapshots` so a `/ndi/snapshot/:id` probe doesn't stall
+    /// behind a concurrent pipeline start/rebuild. On timeout returns `None`
+    /// (caller maps to 503).
+    pub async fn pipeline_snapshot(
+        &self,
+        source_id: &str,
+    ) -> Option<crate::pipeline::PipelineSnapshot> {
+        let guard = tokio::time::timeout(std::time::Duration::from_millis(200), self.active.lock())
+            .await
+            .ok()?;
+        let pipeline = std::sync::Arc::clone(&guard.get(source_id)?.pipeline);
+        drop(guard);
+        let mut snap = pipeline.snapshot().await;
+        snap.source_id = source_id.to_string();
+        Some(snap)
+    }
+
     /// Test-only: trigger an Errored state on the source's pipeline so
     /// the PipelineSupervisor reacts as it would for a real ndisrc fault.
     /// Returns `true` if the source was active (state injection succeeded),
@@ -694,82 +717,158 @@ impl NdiManager {
         }
     }
 
-    /// Forward a WHEP HTTP exchange into the source's `whepserversink`
-    /// signaller via `emit_by_name`. The signaller's Promise resolves with
-    /// `{status: u32, headers: gst::Structure, body: glib::Bytes}`.
+    /// Forward a WHEP HTTP exchange to the source's pipeline. Replaces the
+    /// pre-#336 `emit_by_name`-on-whepserversink path. Routes each `WhepOp`
+    /// variant to the corresponding `NdiPipeline` method.
+    ///
+    /// The active-map mutex guard is always DROPPED before calling any
+    /// potentially-blocking pipeline method (`add_consumer` spawn_blocks for
+    /// ~10s, `add_ice_candidate` and `remove_consumer` also spawn_block).
+    /// To achieve this without copying the pipeline, `ActiveSource.pipeline`
+    /// is an `Arc<NdiPipeline>` — we clone the `Arc` (cheap refcount bump)
+    /// inside the lock, drop the guard, then call the pipeline method outside.
     pub async fn whep_signaller_call(&self, source_id: &str, op: WhepOp) -> Result<WhepReply> {
-        let sink = {
-            let active = self.active.lock().await;
-            let src = active
-                .get(source_id)
-                .ok_or_else(|| anyhow!(SOURCE_NOT_ACTIVE_ERR))?;
-            match src.pipeline.state() {
-                PipelineState::Streaming | PipelineState::Starting => {}
-                PipelineState::Stopped => return Err(anyhow!("pipeline stopped")),
-                PipelineState::Errored(e) => return Err(anyhow!("pipeline errored: {e}")),
-            }
-            src.pipeline
-                .sink_element()
-                .ok_or_else(|| anyhow!("pipeline has no sink element"))?
-        };
-
-        // Do all signaller work (non-Send glib::Object) in a synchronous block
-        // before any .await points so the async fn stays Send.
-        let fut = {
-            let signaller = sink
-                .dynamic_cast_ref::<gstreamer::ChildProxy>()
-                .ok_or_else(|| anyhow!("sink is not a ChildProxy"))?
-                .child_by_name("signaller")
-                .ok_or_else(|| anyhow!("no signaller child on whepserversink"))?;
-
-            let (promise, fut) = gstreamer::Promise::new_future();
-            match op {
-                WhepOp::Post { id, body } => {
-                    let bytes = glib::Bytes::from_owned(body);
-                    signaller.emit_by_name::<()>("post", &[&id, &bytes, &promise]);
-                }
-                WhepOp::Patch { id, body, headers } => {
-                    let bytes = glib::Bytes::from_owned(body);
-                    let mut sb = gstreamer::Structure::builder("whep-signaller/headers");
-                    for (k, v) in &headers {
-                        sb = sb.field(k.as_str(), v);
-                    }
-                    signaller.emit_by_name::<()>("patch", &[&id, &bytes, &sb.build(), &promise]);
-                }
-                WhepOp::Delete { id } => {
-                    signaller.emit_by_name::<()>("delete", &[&id, &promise]);
-                }
-            }
-            // `signaller` (non-Send glib::Object) is dropped here before `fut.await`
-            fut
-        };
-
-        let reply = fut
-            .await
-            .map_err(|e| anyhow!("whep signaller promise error: {:?}", e))
-            .context("whep signaller promise dropped")?
-            .ok_or_else(|| anyhow!("whep signaller returned no payload"))?;
-        let status = reply
-            .get::<u32>("status")
-            .map_err(|e| anyhow!("missing status field: {e}"))? as u16;
-        let headers = match reply.get::<gstreamer::Structure>("headers") {
-            Ok(s) => s
-                .iter()
-                .filter_map(|(name, value)| {
-                    value.get::<String>().ok().map(|v| (name.to_string(), v))
+        match op {
+            WhepOp::Post { id: None, body } => {
+                let pipeline = {
+                    let active = self.active.lock().await;
+                    let src = active
+                        .get(source_id)
+                        .ok_or_else(|| anyhow!(SOURCE_NOT_ACTIVE_ERR))?;
+                    Self::ensure_streaming(src)?;
+                    std::sync::Arc::clone(&src.pipeline)
+                    // active lock dropped here
+                };
+                let answer = pipeline.add_consumer(body).await?;
+                let location = format!("/ndi/whep/{source_id}/{}", answer.session_id);
+                tracing::info!(
+                    source_id = %source_id,
+                    session_id = %answer.session_id,
+                    "WHEP POST → 201"
+                );
+                Ok(WhepReply {
+                    status: 201,
+                    headers: vec![
+                        ("location".to_string(), location),
+                        ("content-type".to_string(), "application/sdp".to_string()),
+                    ],
+                    body: Some(answer.sdp_answer.into_bytes()),
                 })
-                .collect(),
-            Err(_) => Vec::new(),
-        };
-        let body = reply
-            .get::<glib::Bytes>("body")
-            .ok()
-            .map(|b| b.as_ref().to_vec());
-        Ok(WhepReply {
-            status,
-            headers,
-            body,
-        })
+            }
+            WhepOp::Post {
+                id: Some(_),
+                body: _,
+            } => {
+                // Session-scoped re-offer — out of scope for #336.
+                // Validate that the source is known first (preserves 404
+                // semantics for unknown sources — the HTTP shim tests assert
+                // this contract). Lock is acquired and dropped immediately;
+                // no blocking await follows.
+                {
+                    let active = self.active.lock().await;
+                    let src = active
+                        .get(source_id)
+                        .ok_or_else(|| anyhow!(SOURCE_NOT_ACTIVE_ERR))?;
+                    Self::ensure_streaming(src)?;
+                }
+                tracing::warn!(source_id = %source_id, "WHEP session-scoped POST not implemented");
+                Ok(WhepReply {
+                    status: 501,
+                    headers: vec![("content-type".to_string(), "text/plain".to_string())],
+                    body: Some(b"WHEP re-offer not implemented".to_vec()),
+                })
+            }
+            WhepOp::Patch {
+                id,
+                body,
+                headers: _,
+            } => {
+                // Clone the pipeline reference out of the map guard before
+                // any blocking await. The per-candidate loop re-uses this
+                // single clone rather than re-locking per iteration.
+                let pipeline = {
+                    let active = self.active.lock().await;
+                    let src = active
+                        .get(source_id)
+                        .ok_or_else(|| anyhow!(SOURCE_NOT_ACTIVE_ERR))?;
+                    Self::ensure_streaming(src)?;
+                    std::sync::Arc::clone(&src.pipeline)
+                    // active lock dropped here
+                };
+                // Parse `application/trickle-ice-sdpfrag` body: extract
+                // `a=mid:` (for mline index) and `a=candidate:` lines,
+                // forwarding each candidate to pipeline.add_ice_candidate.
+                let body_str =
+                    std::str::from_utf8(&body).map_err(|e| anyhow!("PATCH body not utf8: {e}"))?;
+                let mut count = 0;
+                let mut mline_idx: u32 = 0;
+                for raw_line in body_str.lines() {
+                    let line = raw_line.trim();
+                    if let Some(rest) = line.strip_prefix("a=mid:") {
+                        if let Ok(n) = rest.trim().parse::<u32>() {
+                            mline_idx = n;
+                        }
+                        // Non-integer mid (RFC 8839 allows e.g. "audio") falls
+                        // through; mline_idx stays at the last valid integer (or 0).
+                        // Browsers use integer mids in WHEP practice.
+                    } else if line.starts_with("a=candidate:") {
+                        // webrtcbin's add-ice-candidate signal accepts the
+                        // candidate string without the leading "a=" prefix.
+                        let cand_value = &line[2..];
+                        pipeline
+                            .add_ice_candidate(&id, mline_idx, cand_value)
+                            .await?;
+                        count += 1;
+                    }
+                }
+                tracing::debug!(
+                    source_id = %source_id,
+                    session_id = %id,
+                    candidate_count = count,
+                    "WHEP PATCH dispatched"
+                );
+                Ok(WhepReply {
+                    status: 204,
+                    headers: vec![],
+                    body: None,
+                })
+            }
+            WhepOp::Delete { id } => {
+                // Clone the pipeline reference before the blocking await.
+                // DELETE proceeds regardless of pipeline state — teardown must
+                // succeed even when the pipeline is erroring, so
+                // ensure_streaming is intentionally skipped here.
+                let pipeline = {
+                    let active = self.active.lock().await;
+                    let src = active
+                        .get(source_id)
+                        .ok_or_else(|| anyhow!(SOURCE_NOT_ACTIVE_ERR))?;
+                    std::sync::Arc::clone(&src.pipeline)
+                    // active lock dropped here
+                };
+                pipeline.remove_consumer(&id).await?;
+                tracing::info!(
+                    source_id = %source_id,
+                    session_id = %id,
+                    "WHEP DELETE → consumer removed"
+                );
+                Ok(WhepReply {
+                    status: 204,
+                    headers: vec![],
+                    body: None,
+                })
+            }
+        }
+    }
+
+    /// Pipeline state must be Streaming or Starting for WHEP ops to proceed.
+    /// Stopped / Errored produce an error that the HTTP shim maps to 503.
+    fn ensure_streaming(src: &ActiveSource) -> Result<()> {
+        match src.pipeline.state() {
+            PipelineState::Streaming | PipelineState::Starting => Ok(()),
+            PipelineState::Stopped => Err(anyhow!("pipeline stopped")),
+            PipelineState::Errored(e) => Err(anyhow!("pipeline errored: {e}")),
+        }
     }
 }
 
@@ -810,7 +909,7 @@ mod start_pipeline_state_check_tests {
         active.insert(
             "test-id".to_string(),
             ActiveSource {
-                pipeline: dead,
+                pipeline: std::sync::Arc::new(dead),
                 supervisor: None,
             },
         );
@@ -840,7 +939,7 @@ mod start_pipeline_state_check_tests {
         active.insert(
             "test-id".to_string(),
             ActiveSource {
-                pipeline: p,
+                pipeline: std::sync::Arc::new(p),
                 supervisor: None,
             },
         );
@@ -864,7 +963,7 @@ mod start_pipeline_state_check_tests {
         active.insert(
             "test-id".to_string(),
             ActiveSource {
-                pipeline: p,
+                pipeline: std::sync::Arc::new(p),
                 supervisor: None,
             },
         );

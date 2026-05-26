@@ -3371,7 +3371,7 @@ dependencies = [
 
 [[package]]
 name = "presenter-bible"
-version = "0.4.96"
+version = "0.4.97"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -3387,7 +3387,7 @@ dependencies = [
 
 [[package]]
 name = "presenter-core"
-version = "0.4.96"
+version = "0.4.97"
 dependencies = [
  "anyhow",
  "chrono",
@@ -3405,7 +3405,7 @@ dependencies = [
 
 [[package]]
 name = "presenter-importer"
-version = "0.4.96"
+version = "0.4.97"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -3427,7 +3427,7 @@ dependencies = [
 
 [[package]]
 name = "presenter-migration"
-version = "0.4.96"
+version = "0.4.97"
 dependencies = [
  "async-trait",
  "chrono",
@@ -3442,7 +3442,7 @@ dependencies = [
 
 [[package]]
 name = "presenter-ndi"
-version = "0.4.96"
+version = "0.4.97"
 dependencies = [
  "anyhow",
  "axum",
@@ -3451,16 +3451,19 @@ dependencies = [
  "gst-plugin-rtp",
  "gst-plugin-webrtc",
  "gstreamer",
+ "gstreamer-webrtc",
  "libloading 0.8.9",
  "serde",
  "serde_json",
+ "thiserror 1.0.69",
  "tokio",
  "tracing",
+ "uuid",
 ]
 
 [[package]]
 name = "presenter-persistence"
-version = "0.4.96"
+version = "0.4.97"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -3481,7 +3484,7 @@ dependencies = [
 
 [[package]]
 name = "presenter-server"
-version = "0.4.96"
+version = "0.4.97"
 dependencies = [
  "anyhow",
  "async-stream",
