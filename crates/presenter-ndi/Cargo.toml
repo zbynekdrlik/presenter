@@ -23,6 +23,7 @@ serde_json.workspace = true
 libloading = "0.8"
 futures-util.workspace = true
 gstreamer.workspace = true
+gstreamer-webrtc.workspace = true
 gst-plugin-webrtc.workspace = true
 gst-plugin-ndi.workspace = true
 gst-plugin-rtp.workspace = true

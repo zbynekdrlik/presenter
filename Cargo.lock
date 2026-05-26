@@ -3451,6 +3451,7 @@ dependencies = [
  "gst-plugin-rtp",
  "gst-plugin-webrtc",
  "gstreamer",
+ "gstreamer-webrtc",
  "libloading 0.8.9",
  "serde",
  "serde_json",
