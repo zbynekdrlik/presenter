@@ -468,10 +468,9 @@ impl IntoResponse for AppError {
         });
         let mut resp = (self.status, body).into_response();
         if let Some(secs) = self.retry_after {
-            if let Ok(value) = axum::http::HeaderValue::from_str(&secs.to_string()) {
-                resp.headers_mut()
-                    .insert(axum::http::header::RETRY_AFTER, value);
-            }
+            let value = axum::http::HeaderValue::from(secs);
+            resp.headers_mut()
+                .insert(axum::http::header::RETRY_AFTER, value);
         }
         resp
     }
