@@ -141,19 +141,16 @@ impl ValidationError {
 // - `( \([A-Z]+\))?` — optional translation code in parens.
 // - `$` — anchored.
 //
-// The `expect()` below can only trigger at first use of the static if
-// this literal regex is malformed — that is a programmer bug which the
-// unit tests in this module catch immediately. It is unreachable in
-// production because the pattern is a compile-time constant.
-static REFERENCE_RE: LazyLock<Regex> = LazyLock::new(|| {
-    Regex::new(r"^[\p{L}0-9\. ]+ \d+:\d+[a-z]?(-\d+[a-z]?)?( \([A-Z]+\))?$")
-        .expect("REFERENCE_RE literal must compile")
-});
+// `Regex::new(...).ok()` yields `None` only if this literal regex is
+// malformed — a programmer bug which the unit tests in this module catch
+// immediately (callers fail closed on `None`). It is effectively
+// unreachable in production because the pattern is a compile-time constant.
+static REFERENCE_RE: LazyLock<Option<Regex>> =
+    LazyLock::new(|| Regex::new(r"^[\p{L}0-9\. ]+ \d+:\d+[a-z]?(-\d+[a-z]?)?( \([A-Z]+\))?$").ok());
 
 // Rule 2 regex: multi-line mode, match any line starting with "N. ".
-// Same `expect()` rationale as `REFERENCE_RE` above.
-static VERSE_PREFIX_RE: LazyLock<Regex> =
-    LazyLock::new(|| Regex::new(r"(?m)^\d+\. ").expect("VERSE_PREFIX_RE literal must compile"));
+// Same fallible-init rationale as `REFERENCE_RE` above.
+static VERSE_PREFIX_RE: LazyLock<Option<Regex>> = LazyLock::new(|| Regex::new(r"(?m)^\d+\. ").ok());
 
 /// Validate a single bible slide's `main` and `main_reference` strings.
 ///
@@ -209,16 +206,20 @@ pub fn validate_bible_slide(
         return Ok(());
     }
 
-    // Verse slide — rule 1 (reference format).
-    if !REFERENCE_RE.is_match(main_reference) {
+    // Verse slide — rule 1 (reference format). If the regex literal failed to
+    // compile (programmer bug, caught by this module's tests), fail closed.
+    if !REFERENCE_RE
+        .as_ref()
+        .is_some_and(|re| re.is_match(main_reference))
+    {
         return Err(ValidationError::new(
             ValidationRule::ReferenceFormatRequiresParens,
             main_reference.to_string(),
         ));
     }
 
-    // Rule 2 (verse number prefix).
-    if !VERSE_PREFIX_RE.is_match(main) {
+    // Rule 2 (verse number prefix). Fail closed if the regex is unavailable.
+    if !VERSE_PREFIX_RE.as_ref().is_some_and(|re| re.is_match(main)) {
         return Err(ValidationError::new(
             ValidationRule::MissingVerseNumberPrefix,
             main.to_string(),

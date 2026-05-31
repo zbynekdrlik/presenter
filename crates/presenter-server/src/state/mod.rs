@@ -827,10 +827,7 @@ impl AppState {
     }
 
     async fn build_api_stage_snapshot(&self, state: &ApiStageState) -> StageDisplaySnapshot {
-        let layout = StageDisplayLayout::built_in()
-            .into_iter()
-            .find(|l| l.code == "api")
-            .expect("api layout must exist in built_in");
+        let layout = StageDisplayLayout::api();
 
         let current = self
             .build_api_slide(&state.current_text, &state.current_group)

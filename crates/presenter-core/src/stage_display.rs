@@ -51,13 +51,20 @@ impl StageDisplayLayout {
                 "Full viewport NDI video stream",
             ),
             Self::new("bible", "BIBLE", "Full-screen Bible passage display"),
-            Self::new("api", "API", "External API-driven stage display"),
+            Self::api(),
             Self::new(
                 "camera-crew",
                 "CAMERA CREW",
                 "Group-focused director / camera-crew monitor",
             ),
         ]
+    }
+
+    /// The API-driven stage layout (`API_STAGE_LAYOUT_CODE`). Infallible
+    /// accessor so callers don't search `built_in()` and risk panicking on a
+    /// missing entry.
+    pub fn api() -> Self {
+        Self::new("api", "API", "External API-driven stage display")
     }
 
     fn new(code: &str, name: &str, description: &str) -> Self {
