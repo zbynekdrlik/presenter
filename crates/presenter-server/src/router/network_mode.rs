@@ -15,7 +15,7 @@ use crate::state::AppState;
 ///   so client is on the church LAN just using the tunnel URL → `local`.
 /// - Otherwise, if `local_public_ip` is set → `remote`.
 /// - Otherwise (no configured IP) → fall back to `is_private_ip` on the client IP.
-pub fn detect_network_mode(headers: &HeaderMap, local_public_ip: Option<&str>) -> &'static str {
+fn detect_network_mode(headers: &HeaderMap, local_public_ip: Option<&str>) -> &'static str {
     let client_ip = headers
         .get("cf-connecting-ip")
         .or_else(|| headers.get("x-forwarded-for"))
@@ -33,7 +33,7 @@ pub fn detect_network_mode(headers: &HeaderMap, local_public_ip: Option<&str>) -
 }
 
 /// Return true for IPs in private/loopback/link-local ranges.
-pub fn is_private_ip(ip: &str) -> bool {
+fn is_private_ip(ip: &str) -> bool {
     ip.parse::<std::net::IpAddr>().is_ok_and(|addr| match addr {
         std::net::IpAddr::V4(v4) => v4.is_private() || v4.is_loopback() || v4.is_link_local(),
         std::net::IpAddr::V6(v6) => v6.is_loopback(),
