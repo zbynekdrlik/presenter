@@ -570,8 +570,8 @@ impl NdiPipeline {
                                 );
                             let our_state = WhepConnectionState::from(gst_state);
                             // std::sync::Mutex — safe to lock from any thread, no async runtime
-                            // required. Panic on poison is acceptable; the signal thread holds
-                            // the lock for a trivial enum write.
+                            // required. On poison we recover the guard via into_inner() rather
+                            // than panic; the signal thread only does a trivial enum write.
                             *connection_state_for_signal
                                 .lock()
                                 .unwrap_or_else(|p| p.into_inner()) = our_state;

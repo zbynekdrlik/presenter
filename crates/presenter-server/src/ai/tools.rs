@@ -334,8 +334,8 @@ pub async fn execute_tool(
         "load_bible_verses" => {
             let translation = str_field(&args, "translation")?;
             let book = str_field(&args, "book")?;
-            let chapter = args["chapter"].as_u64().unwrap_or(1) as u16;
-            let verse_start = args["verse_start"].as_u64().unwrap_or(1) as u16;
+            let chapter = u64_field(&args, "chapter")? as u16;
+            let verse_start = u64_field(&args, "verse_start")? as u16;
             let verse_end = args["verse_end"].as_u64().unwrap_or(verse_start as u64) as u16;
 
             // Resolve the translation to get its short code for reference labels.
@@ -438,8 +438,8 @@ pub async fn execute_tool(
         "resolve_bible_slides" => {
             let translation = str_field(&args, "translation")?;
             let book = str_field(&args, "book")?;
-            let chapter = args["chapter"].as_u64().unwrap_or(1) as u16;
-            let verse_start = args["verse_start"].as_u64().unwrap_or(1) as u16;
+            let chapter = u64_field(&args, "chapter")? as u16;
+            let verse_start = u64_field(&args, "verse_start")? as u16;
             let verse_end = args["verse_end"].as_u64().unwrap_or(verse_start as u64) as u16;
             let char_limit = args["character_limit"]
                 .as_u64()
@@ -501,8 +501,8 @@ pub async fn execute_tool(
         "trigger_bible_verse" => {
             let translation = str_field(&args, "translation")?;
             let book = str_field(&args, "book")?;
-            let chapter = args["chapter"].as_u64().unwrap_or(1) as u16;
-            let verse_start = args["verse_start"].as_u64().unwrap_or(1) as u16;
+            let chapter = u64_field(&args, "chapter")? as u16;
+            let verse_start = u64_field(&args, "verse_start")? as u16;
             let verse_end = args["verse_end"]
                 .as_u64()
                 .map(|v| v as u16)
