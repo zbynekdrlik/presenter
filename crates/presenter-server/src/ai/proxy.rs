@@ -84,7 +84,7 @@ impl ProxyManager {
         }
     }
 
-    fn binary_path(&self) -> Option<PathBuf> {
+    async fn binary_path(&self) -> Option<PathBuf> {
         let deploy_path = self.deploy_dir.join(PROXY_BINARY_NAME);
         if deploy_path.exists() {
             return Some(deploy_path);
@@ -95,10 +95,9 @@ impl ProxyManager {
             return Some(cwd_path);
         }
 
-        if let Ok(output) = std::process::Command::new("which")
-            .arg(PROXY_BINARY_NAME)
-            .output()
-        {
+        // `Command` is `tokio::process::Command` (see imports); `.output().await`
+        // offloads the `which` lookup instead of blocking the runtime thread.
+        if let Ok(output) = Command::new("which").arg(PROXY_BINARY_NAME).output().await {
             if output.status.success() {
                 let path = String::from_utf8_lossy(&output.stdout).trim().to_string();
                 if !path.is_empty() {
@@ -119,21 +118,22 @@ impl ProxyManager {
     }
 
     /// Check if Claude credentials exist (either OAuth tokens or API key in config).
-    pub fn is_claude_authenticated(&self) -> bool {
-        if let Ok(content) = std::fs::read_to_string(self.config_path()) {
+    pub async fn is_claude_authenticated(&self) -> bool {
+        if let Ok(content) = tokio::fs::read_to_string(self.config_path()).await {
             if content.contains("claude-api-key:") {
                 return true;
             }
         }
         let auth_dir = self.auth_dir();
-        auth_dir.exists()
-            && std::fs::read_dir(&auth_dir)
-                .map(|entries| {
-                    entries
-                        .filter_map(|e| e.ok())
-                        .any(|e| e.file_name().to_string_lossy().contains("claude"))
-                })
-                .unwrap_or(false)
+        let Ok(mut entries) = tokio::fs::read_dir(&auth_dir).await else {
+            return false;
+        };
+        while let Ok(Some(entry)) = entries.next_entry().await {
+            if entry.file_name().to_string_lossy().contains("claude") {
+                return true;
+            }
+        }
+        false
     }
 
     /// Write the config YAML file for CLIProxyAPI.
@@ -181,6 +181,7 @@ request-retry: 2
 
         let binary = self
             .binary_path()
+            .await
             .ok_or_else(|| anyhow::anyhow!("CLIProxyAPI binary not found"))?;
 
         let existing_key = self.read_existing_api_key().await;
@@ -247,8 +248,8 @@ request-retry: 2
             running: self.is_running().await,
             port,
             api_url: format!("http://127.0.0.1:{port}/v1"),
-            binary_found: self.binary_path().is_some(),
-            claude_authenticated: self.is_claude_authenticated(),
+            binary_found: self.binary_path().await.is_some(),
+            claude_authenticated: self.is_claude_authenticated().await,
         }
     }
 
@@ -289,6 +290,7 @@ request-retry: 2
 
         let binary = self
             .binary_path()
+            .await
             .ok_or_else(|| anyhow::anyhow!("CLIProxyAPI binary not found"))?;
 
         let existing_key = self.read_existing_api_key().await;
@@ -439,7 +441,7 @@ request-retry: 2
         let should_start = config.auto_start;
         drop(config);
 
-        if should_start && self.binary_path().is_some() {
+        if should_start && self.binary_path().await.is_some() {
             if let Err(e) = self.start().await {
                 warn!(?e, "failed to auto-start CLIProxyAPI");
             }
