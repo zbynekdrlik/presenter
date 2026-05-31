@@ -1,7 +1,6 @@
 mod parsers;
 
 use anyhow::{anyhow, Context, Result};
-use async_trait::async_trait;
 use presenter_core::bible::BibleIngestionBatch;
 use presenter_core::BibleTranslation;
 use std::collections::HashMap;
@@ -10,9 +9,8 @@ use std::path::PathBuf;
 use std::time::Duration;
 use tracing::warn;
 
-#[async_trait]
 pub trait BibleContentProvider: Send + Sync {
-    async fn fetch_bytes(&self, url: &str) -> Result<Vec<u8>>;
+    fn fetch_bytes(&self, url: &str) -> impl std::future::Future<Output = Result<Vec<u8>>> + Send;
 }
 
 #[derive(Clone, Debug)]
@@ -62,7 +60,6 @@ impl HttpBibleContentProvider {
     }
 }
 
-#[async_trait]
 impl BibleContentProvider for HttpBibleContentProvider {
     async fn fetch_bytes(&self, url: &str) -> Result<Vec<u8>> {
         let cache_path = resolve_cache_path(url);
@@ -594,7 +591,6 @@ const SLOVAK_MILOST_BOOKS: [&str; 66] = [
 #[cfg(test)]
 mod tests {
     use super::*;
-    use async_trait::async_trait;
     use rusqlite::Connection;
     use tempfile::NamedTempFile;
     use zip::write::FileOptions;
@@ -606,7 +602,6 @@ mod tests {
         payload: Vec<u8>,
     }
 
-    #[async_trait]
     impl BibleContentProvider for StubProvider {
         async fn fetch_bytes(&self, _url: &str) -> Result<Vec<u8>> {
             Ok(self.payload.clone())
