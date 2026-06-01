@@ -138,6 +138,8 @@ pub fn build_router(state: AppState) -> Router {
             get(tablet_pwa::apple_touch_icon),
         )
         .route("/ui/tablet/sw.js", get(tablet_pwa::service_worker))
+        // App-wide favicon — browsers auto-request /favicon.ico on every route
+        .route("/favicon.ico", get(tablet_pwa::favicon))
         .route(
             "/ui/bible",
             get(|| async { axum::response::Redirect::permanent("/ui/operator/bible") }),

@@ -46,3 +46,19 @@ pub async fn service_worker() -> impl IntoResponse {
         SERVICE_WORKER,
     )
 }
+
+/// Serve `/favicon.ico` for every route.
+///
+/// Browsers automatically request `/favicon.ico` regardless of any `<link rel="icon">`,
+/// so without this handler every page (operator, tablet, stage, bible…) logged a 404
+/// console error. We reuse the embedded 192px app icon (served as PNG, which all modern
+/// browsers accept for a favicon) rather than shipping a separate `.ico` binary.
+pub async fn favicon() -> impl IntoResponse {
+    (
+        [
+            (header::CONTENT_TYPE, "image/png"),
+            (header::CACHE_CONTROL, "public, max-age=86400"),
+        ],
+        ICON_192,
+    )
+}
