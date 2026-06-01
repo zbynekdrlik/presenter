@@ -186,11 +186,13 @@ pub async fn execute_tool(
 
         "add_slide" => {
             let pres_id = PresentationId::from_uuid(uuid_field(&args, "presentation_id")?);
+            // Validate the required `main` field before mutating the
+            // presentation, so a malformed call doesn't leave a blank slide.
+            let main = str_field(&args, "main")?;
             let position = args["position"].as_u64().map(|p| p as u32);
             let slides = state.insert_blank_slide(pres_id, position).await?;
             // Update the last inserted slide with content
             if let Some(slide) = slides.last() {
-                let main = args["main"].as_str().unwrap_or("").to_string();
                 let translation = args["translation"].as_str().unwrap_or("").to_string();
                 let stage = args["stage"].as_str().unwrap_or("").to_string();
                 let group = args["group"].as_str().map(String::from);
@@ -208,7 +210,7 @@ pub async fn execute_tool(
         "update_slide" => {
             let pres_id = PresentationId::from_uuid(uuid_field(&args, "presentation_id")?);
             let slide_id = SlideId::from_uuid(uuid_field(&args, "slide_id")?);
-            let main = args["main"].as_str().unwrap_or("").to_string();
+            let main = str_field(&args, "main")?;
             let translation = args["translation"].as_str().unwrap_or("").to_string();
             let stage = args["stage"].as_str().unwrap_or("").to_string();
             let group = args["group"].as_str().map(String::from);
@@ -271,8 +273,8 @@ pub async fn execute_tool(
         "get_bible_passage" => {
             let translation = str_field(&args, "translation")?;
             let book = str_field(&args, "book")?;
-            let chapter = args["chapter"].as_u64().unwrap_or(1) as u16;
-            let verse_start = args["verse_start"].as_u64().unwrap_or(1) as u16;
+            let chapter = u64_field(&args, "chapter")? as u16;
+            let verse_start = u64_field(&args, "verse_start")? as u16;
             let verse_end = args["verse_end"]
                 .as_u64()
                 .map(|v| v as u16)
@@ -332,8 +334,8 @@ pub async fn execute_tool(
         "load_bible_verses" => {
             let translation = str_field(&args, "translation")?;
             let book = str_field(&args, "book")?;
-            let chapter = args["chapter"].as_u64().unwrap_or(1) as u16;
-            let verse_start = args["verse_start"].as_u64().unwrap_or(1) as u16;
+            let chapter = u64_field(&args, "chapter")? as u16;
+            let verse_start = u64_field(&args, "verse_start")? as u16;
             let verse_end = args["verse_end"].as_u64().unwrap_or(verse_start as u64) as u16;
 
             // Resolve the translation to get its short code for reference labels.
@@ -436,8 +438,8 @@ pub async fn execute_tool(
         "resolve_bible_slides" => {
             let translation = str_field(&args, "translation")?;
             let book = str_field(&args, "book")?;
-            let chapter = args["chapter"].as_u64().unwrap_or(1) as u16;
-            let verse_start = args["verse_start"].as_u64().unwrap_or(1) as u16;
+            let chapter = u64_field(&args, "chapter")? as u16;
+            let verse_start = u64_field(&args, "verse_start")? as u16;
             let verse_end = args["verse_end"].as_u64().unwrap_or(verse_start as u64) as u16;
             let char_limit = args["character_limit"]
                 .as_u64()
@@ -499,8 +501,8 @@ pub async fn execute_tool(
         "trigger_bible_verse" => {
             let translation = str_field(&args, "translation")?;
             let book = str_field(&args, "book")?;
-            let chapter = args["chapter"].as_u64().unwrap_or(1) as u16;
-            let verse_start = args["verse_start"].as_u64().unwrap_or(1) as u16;
+            let chapter = u64_field(&args, "chapter")? as u16;
+            let verse_start = u64_field(&args, "verse_start")? as u16;
             let verse_end = args["verse_end"]
                 .as_u64()
                 .map(|v| v as u16)
@@ -777,10 +779,41 @@ fn uuid_field(args: &Value, field: &str) -> anyhow::Result<Uuid> {
     Uuid::parse_str(&s).map_err(|_| anyhow::anyhow!("{field} must be a valid UUID"))
 }
 
+/// Extract a required integer field. Errors (rather than silently defaulting)
+/// when the field is absent or not an unsigned integer, so the model gets
+/// explicit feedback and can self-correct on retry.
+fn u64_field(args: &Value, field: &str) -> anyhow::Result<u64> {
+    args[field]
+        .as_u64()
+        .ok_or_else(|| anyhow::anyhow!("missing or invalid required integer field: {field}"))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::state::AppState;
+
+    #[tokio::test]
+    async fn add_slide_rejects_missing_required_main() {
+        let state = AppState::in_memory().await.unwrap();
+        let args = json!({ "presentation_id": Uuid::new_v4().to_string() }).to_string();
+        let result = execute_tool("add_slide", &args, &state, 320).await;
+        assert!(
+            result.is_err(),
+            "add_slide without required 'main' must error, not silently default"
+        );
+    }
+
+    #[tokio::test]
+    async fn get_bible_passage_rejects_missing_required_chapter() {
+        let state = AppState::in_memory().await.unwrap();
+        let args = json!({ "translation": "slk-seb", "book": "Ján", "verse_start": 1 }).to_string();
+        let result = execute_tool("get_bible_passage", &args, &state, 320).await;
+        assert!(
+            result.is_err(),
+            "get_bible_passage without required 'chapter' must error, not default to 1"
+        );
+    }
 
     #[tokio::test]
     async fn create_presentation_in_non_bible_library_has_no_metadata() {

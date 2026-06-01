@@ -8,7 +8,6 @@ repository.workspace = true
 
 [dependencies]
 anyhow.workspace = true
-async-trait.workspace = true
 presenter-core = { path = "../presenter-core" }
 reqwest.workspace = true
 tokio.workspace = true

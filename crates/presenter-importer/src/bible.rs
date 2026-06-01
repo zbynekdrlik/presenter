@@ -68,7 +68,6 @@ where
 #[cfg(test)]
 mod tests {
     use super::*;
-    use async_trait::async_trait;
     use presenter_bible::{BibleSource, BibleSourceFormat};
     use presenter_core::{BibleReference, BibleTranslation};
     use presenter_persistence::Repository;
@@ -84,7 +83,6 @@ mod tests {
         url: String,
     }
 
-    #[async_trait]
     impl BibleContentProvider for SinglePayloadProvider {
         async fn fetch_bytes(&self, url: &str) -> Result<Vec<u8>> {
             assert_eq!(url, self.url);
@@ -96,7 +94,6 @@ mod tests {
         payloads: HashMap<String, Vec<u8>>,
     }
 
-    #[async_trait]
     impl BibleContentProvider for MapProvider {
         async fn fetch_bytes(&self, url: &str) -> Result<Vec<u8>> {
             self.payloads

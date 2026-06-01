@@ -317,40 +317,41 @@ impl NdiPipeline {
         let bus = pipeline
             .bus()
             .ok_or_else(|| anyhow!("pipeline has no bus"))?;
-        *self.bus_watch.lock().unwrap() = Some(tokio::spawn(async move {
-            let mut stream = bus.stream();
-            use futures_util::StreamExt;
-            while let Some(msg) = stream.next().await {
-                match msg.view() {
-                    gst::MessageView::StateChanged(sc)
-                        if sc.src() == Some(&pipeline_obj)
-                            && sc.current() == gst::State::Playing =>
-                    {
-                        let _ = state_tx.send(PipelineState::Streaming);
+        *self.bus_watch.lock().unwrap_or_else(|p| p.into_inner()) =
+            Some(tokio::spawn(async move {
+                let mut stream = bus.stream();
+                use futures_util::StreamExt;
+                while let Some(msg) = stream.next().await {
+                    match msg.view() {
+                        gst::MessageView::StateChanged(sc)
+                            if sc.src() == Some(&pipeline_obj)
+                                && sc.current() == gst::State::Playing =>
+                        {
+                            let _ = state_tx.send(PipelineState::Streaming);
+                        }
+                        gst::MessageView::AsyncDone(_) => {
+                            // Harmless duplicate for live pipelines (the
+                            // StateChanged branch above already fired); load-bearing
+                            // for non-live test cases like videotestsrc.
+                            let _ = state_tx.send(PipelineState::Streaming);
+                        }
+                        gst::MessageView::Error(err) => {
+                            let detail = format!(
+                                "{}: {}",
+                                err.error(),
+                                err.debug().unwrap_or_default().as_str()
+                            );
+                            tracing::error!(error = %detail, "pipeline error");
+                            let _ = state_tx.send(PipelineState::Errored(detail));
+                        }
+                        gst::MessageView::Eos(_) => {
+                            tracing::warn!("pipeline EOS received → state=Stopped");
+                            let _ = state_tx.send(PipelineState::Stopped);
+                        }
+                        _ => {}
                     }
-                    gst::MessageView::AsyncDone(_) => {
-                        // Harmless duplicate for live pipelines (the
-                        // StateChanged branch above already fired); load-bearing
-                        // for non-live test cases like videotestsrc.
-                        let _ = state_tx.send(PipelineState::Streaming);
-                    }
-                    gst::MessageView::Error(err) => {
-                        let detail = format!(
-                            "{}: {}",
-                            err.error(),
-                            err.debug().unwrap_or_default().as_str()
-                        );
-                        tracing::error!(error = %detail, "pipeline error");
-                        let _ = state_tx.send(PipelineState::Errored(detail));
-                    }
-                    gst::MessageView::Eos(_) => {
-                        tracing::warn!("pipeline EOS received → state=Stopped");
-                        let _ = state_tx.send(PipelineState::Stopped);
-                    }
-                    _ => {}
                 }
-            }
-        }));
+            }));
 
         pipeline
             .set_state(gst::State::Playing)
@@ -391,7 +392,12 @@ impl NdiPipeline {
             );
         }
         let _ = self.pipeline.set_state(gst::State::Null);
-        if let Some(h) = self.bus_watch.lock().unwrap().take() {
+        if let Some(h) = self
+            .bus_watch
+            .lock()
+            .unwrap_or_else(|p| p.into_inner())
+            .take()
+        {
             h.abort();
         }
     }
@@ -564,9 +570,11 @@ impl NdiPipeline {
                                 );
                             let our_state = WhepConnectionState::from(gst_state);
                             // std::sync::Mutex — safe to lock from any thread, no async runtime
-                            // required. Panic on poison is acceptable; the signal thread holds
-                            // the lock for a trivial enum write.
-                            *connection_state_for_signal.lock().unwrap() = our_state;
+                            // required. On poison we recover the guard via into_inner() rather
+                            // than panic; the signal thread only does a trivial enum write.
+                            *connection_state_for_signal
+                                .lock()
+                                .unwrap_or_else(|p| p.into_inner()) = our_state;
                             tracing::debug!(
                                 session_id = %session_id_for_signal,
                                 state = ?our_state,
@@ -777,7 +785,10 @@ impl NdiPipeline {
             sessions
                 .iter()
                 .map(|(id, session)| {
-                    let connection_state = *session.connection_state.lock().unwrap();
+                    let connection_state = *session
+                        .connection_state
+                        .lock()
+                        .unwrap_or_else(|p| p.into_inner());
                     SessionSnapshot {
                         id: id.clone(),
                         connection_state,
