@@ -206,6 +206,46 @@ async fn home_route_links_match_live_routes() {
 }
 
 #[tokio::test]
+async fn favicon_is_served_so_no_404_console_error() {
+    // Regression for #361: browsers auto-request /favicon.ico on every route.
+    // Without a handler this returned 404, logging a console error on every page
+    // and masking real console errors. Assert a real image is served instead.
+    let app = build_router(AppState::in_memory().await.unwrap());
+    let response = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .uri("/favicon.ico")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(
+        response.status(),
+        StatusCode::OK,
+        "/favicon.ico must return 200 (was {}) — a 404 logs a browser console error on every route",
+        response.status()
+    );
+    let content_type = response
+        .headers()
+        .get(axum::http::header::CONTENT_TYPE)
+        .and_then(|v| v.to_str().ok())
+        .unwrap_or("");
+    assert!(
+        content_type.starts_with("image/"),
+        "/favicon.ico must be served as an image (was {content_type:?})"
+    );
+    let bytes = axum::body::to_bytes(response.into_body(), usize::MAX)
+        .await
+        .unwrap();
+    assert!(
+        !bytes.is_empty(),
+        "/favicon.ico must return a non-empty icon body"
+    );
+}
+
+#[tokio::test]
 async fn settings_page_has_no_dead_links() {
     let app = build_router(AppState::in_memory().await.unwrap());
     let response = app
