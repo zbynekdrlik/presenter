@@ -2,7 +2,7 @@
 //! `query`, `import`, and `presentations` submodules of `bible`. These imports
 //! reproduce the names the test modules below pull in via `use super::*;`,
 //! exactly as they were resolved when all of this lived in `bible.rs`.
-pub(super) use presenter_core::{BiblePresentationSlide, BibleSlideId};
+use presenter_core::{BiblePresentationSlide, BibleSlideId};
 
 #[cfg(test)]
 mod presentation_tests {
