@@ -88,8 +88,10 @@ impl NdiPipeline {
         if let Ok(mut sessions) = self.sessions.try_lock() {
             for (_id, session) in sessions.drain() {
                 let _ = session.webrtcbin.set_state(gst::State::Null);
+                let _ = session.payloader.set_state(gst::State::Null);
                 let _ = session.queue.set_state(gst::State::Null);
                 let _ = self.pipeline.remove(&session.webrtcbin);
+                let _ = self.pipeline.remove(&session.payloader);
                 let _ = self.pipeline.remove(&session.queue);
                 (*self.tee).release_request_pad(&session.tee_src_pad);
             }

@@ -380,6 +380,13 @@ async fn wait_for_ice_gathering_complete(pc: &RtcPeerConnection) {
     if pc.ice_gathering_state() == RtcIceGatheringState::Complete {
         return;
     }
+    // Keep the state-change Closure in this function's scope (NOT `forget()`-ed)
+    // so it is freed when we return. connect_whep is re-invoked by the watchdog
+    // reconnect loop, so a forgotten closure here would leak unbounded over a
+    // persistent stall; binding it to a holder drops it once per call.
+    let cb_holder: std::rc::Rc<std::cell::RefCell<Option<Closure<dyn FnMut()>>>> =
+        std::rc::Rc::new(std::cell::RefCell::new(None));
+    let cb_holder_for_promise = std::rc::Rc::clone(&cb_holder);
     let pc_for_promise = pc.clone();
     let promise = leptos::web_sys::js_sys::Promise::new(&mut |resolve, _reject| {
         // Resolve when gathering reaches Complete.
@@ -391,7 +398,7 @@ async fn wait_for_ice_gathering_complete(pc: &RtcPeerConnection) {
             }
         });
         pc_for_promise.set_onicegatheringstatechange(Some(cb.as_ref().unchecked_ref()));
-        cb.forget();
+        *cb_holder_for_promise.borrow_mut() = Some(cb);
         // Timeout fallback so a stuck gather can't hang the connect.
         if let Some(window) = leptos::web_sys::window() {
             let _ = window
@@ -399,8 +406,10 @@ async fn wait_for_ice_gathering_complete(pc: &RtcPeerConnection) {
         }
     });
     let _ = JsFuture::from(promise).await;
-    // Detach the handler so it doesn't fire for later state changes.
+    // Detach the handler so it doesn't fire for later state changes, then drop
+    // the closure (cb_holder goes out of scope at function end).
     pc.set_onicegatheringstatechange(None);
+    drop(cb_holder);
 }
 
 async fn connect_whep(video: &HtmlVideoElement, source_id: &str) -> Result<WhepSession, JsValue> {

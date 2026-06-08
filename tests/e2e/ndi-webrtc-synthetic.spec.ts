@@ -82,7 +82,9 @@ test("NDI video decodes real frames end-to-end (synthetic source) @video-codec @
     new URL("/integrations/video-sources", baseURL).toString(),
     { data: { label: "Synthetic-E2E", ndiName: synthetic!.name } },
   );
-  expect(created.status()).toBeLessThan(500);
+  // Require a real success — a 4xx would pass `<500` but yield src.id===undefined
+  // and a confusing downstream 404 instead of failing at the real cause.
+  expect(created.status(), "creating the video source must succeed").toBe(200);
   const src = await created.json();
   expect(
     (
@@ -110,6 +112,32 @@ test("NDI video decodes real frames end-to-end (synthetic source) @video-codec @
     timeout: 10_000,
   });
   await expect(page.locator('[data-role="ndi-video"]')).toHaveCount(1);
+
+  // Verify the REAL WASM client (<NdiVideo> / connect_whep gather-first) path,
+  // not just that it mounted: poll the server's per-session connection state
+  // (/ndi/snapshot) until the client's own WHEP session reaches "connected".
+  // This exercises the browser-side gather-first half of the fix without
+  // depending on the <video> element rendering (unreliable headless — see
+  // below). Pre-fix the client session never left "new"/"connecting".
+  await expect
+    .poll(
+      async () => {
+        const snap = await (
+          await request.get(
+            new URL(`/ndi/snapshot/${src.id}`, baseURL).toString(),
+          )
+        ).json();
+        return (snap.sessions ?? []).some(
+          (s: { connectionState: string }) => s.connectionState === "connected",
+        );
+      },
+      {
+        timeout: 30_000,
+        message:
+          "the WASM stage client's WHEP session must reach connectionState=connected",
+      },
+    )
+    .toBe(true);
 
   // The core regression guard: real H264 frames must DECODE over WebRTC in a
   // real browser. We assert via RTCPeerConnection getStats (framesDecoded /

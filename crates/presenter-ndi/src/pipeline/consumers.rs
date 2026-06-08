@@ -255,7 +255,20 @@ impl NdiPipeline {
                             "set-local-description",
                             &[&answer_desc, &sld_promise],
                         );
-                        let _ = sld_rx.recv_timeout(std::time::Duration::from_secs(2));
+                        if sld_rx
+                            .recv_timeout(std::time::Duration::from_secs(2))
+                            .is_err()
+                        {
+                            // Surface a slow apply: the payload-type read below
+                            // depends on the local-description being in place. The
+                            // final WHEP answer is re-read after the ICE-gather
+                            // wait, so this is observability, not a hard failure.
+                            tracing::warn!(
+                                session_id = %session_id_for_blocking,
+                                "set-local-description did not confirm within 2s; \
+                                 payload-type alignment may read a stale SDP"
+                            );
+                        }
 
                         // Align the payloader's RTP payload type with the one
                         // webrtcbin negotiated in the answer. The browser assigns a
@@ -353,9 +366,10 @@ impl NdiPipeline {
 
                         // Branch is PLAYING — NOW splice it into the live tee. The
                         // tee starts pushing H264 to this consumer's queue at the
-                        // next buffer; the encoder's periodic IDR (key-int-max=30)
-                        // plus h264parse config-interval=-1 means the browser gets a
-                        // decodable keyframe within ~1s.
+                        // next buffer; the encoder's ~1s keyframe interval (GOP 30
+                        // — nvh264enc gop-size / vah264enc|x264enc key-int-max)
+                        // plus h264parse config-interval=-1 means the browser gets
+                        // a decodable keyframe within ~1s.
                         let queue_sink = queue
                             .static_pad("sink")
                             .ok_or_else(|| anyhow!("queue has no sink pad"))?;
@@ -501,14 +515,18 @@ impl NdiPipeline {
             let _ = payloader.set_state(gst::State::Null);
             let _ = queue.set_state(gst::State::Null);
             // Remove in upstream→downstream order: queue → rtph264pay → webrtcbin.
-            pipeline.remove(&queue).context("pipeline.remove queue")?;
-            pipeline
-                .remove(&payloader)
-                .context("pipeline.remove rtph264pay")?;
-            pipeline
-                .remove(&webrtcbin)
-                .context("pipeline.remove webrtcbin")?;
+            // Capture results WITHOUT `?` and release the tee request-pad
+            // UNCONDITIONALLY afterwards: the session is already gone from the
+            // map, so an early `?` return would orphan the tee src pad forever
+            // (teardown() only walks live sessions). Release first, report the
+            // first error second.
+            let r_queue = pipeline.remove(&queue);
+            let r_pay = pipeline.remove(&payloader);
+            let r_webrtc = pipeline.remove(&webrtcbin);
             tee.release_request_pad(&tee_pad);
+            r_queue.context("pipeline.remove queue")?;
+            r_pay.context("pipeline.remove rtph264pay")?;
+            r_webrtc.context("pipeline.remove webrtcbin")?;
             Ok(())
         })
         .await
