@@ -98,59 +98,33 @@ test("NDI video decodes real frames end-to-end (synthetic source) @video-codec @
     ).status(),
   ).toBe(200);
 
-  await request.post(new URL("/stage/layout", baseURL).toString(), {
-    data: { code: "ndi-fullscreen" },
-  });
-
-  // First confirm the real client path renders: the stage page mounts the
-  // <NdiVideo> component for the active source.
-  await page.goto(new URL("/stage", baseURL).toString());
-  await page.waitForSelector('body[data-wasm-ready="true"]', {
-    timeout: 30_000,
-  });
-  await page.waitForSelector('body[data-layout-code="ndi-fullscreen"]', {
-    timeout: 10_000,
-  });
-  await expect(page.locator('[data-role="ndi-video"]')).toHaveCount(1);
-
-  // Verify the REAL WASM client (<NdiVideo> / connect_whep gather-first) path,
-  // not just that it mounted: poll the server's per-session connection state
-  // (/ndi/snapshot) until the client's own WHEP session reaches "connected".
-  // This exercises the browser-side gather-first half of the fix without
-  // depending on the <video> element rendering (unreliable headless — see
-  // below). Pre-fix the client session never left "new"/"connecting".
-  await expect
-    .poll(
-      async () => {
-        const snap = await (
-          await request.get(
-            new URL(`/ndi/snapshot/${src.id}`, baseURL).toString(),
-          )
-        ).json();
-        return (snap.sessions ?? []).some(
-          (s: { connectionState: string }) => s.connectionState === "connected",
-        );
-      },
-      {
-        timeout: 30_000,
-        message:
-          "the WASM stage client's WHEP session must reach connectionState=connected",
-      },
-    )
-    .toBe(true);
-
-  // The core regression guard: real H264 frames must DECODE over WebRTC in a
-  // real browser. We assert via RTCPeerConnection getStats (framesDecoded /
-  // bytesReceived) from a controlled WHEP exchange rather than the <video>
-  // element's videoWidth — headless Chrome decodes WebRTC media but does NOT
-  // surface dimensions on a <video> bound to a MediaStream, so videoWidth is
-  // unreliable in CI. getStats reflects the actual decoder and is the precise
-  // measure of the bug: the #336 regression left the connection stuck (ICE
-  // never connected / DTLS bundle hung / payload-type mismatch) so
-  // framesDecoded stayed 0 forever.
+  // ── Check 1 — the core regression guard: real H264 frames must DECODE over
+  // WebRTC in a real browser, with a VIDEO + AUDIO offer (what the real client
+  // sends). Run as the SOLE consumer: we are on a non-NDI page so no <NdiVideo>
+  // is mounted competing for the pipeline. (Two WebRTC consumers from the SAME
+  // host confuse ICE candidate pairing — same IP, only the port differs — and
+  // the 2nd gets no media; that is a test-host artifact, not a product bug, so
+  // the guard must use a single consumer.)
+  //
+  // We assert via RTCPeerConnection getStats (framesDecoded / bytesReceived)
+  // rather than the <video> element's videoWidth — headless Chrome decodes
+  // WebRTC media but does NOT reliably surface dimensions on a <video> bound to
+  // a MediaStream, so videoWidth is unreliable in CI. getStats reflects the
+  // actual decoder and is the precise measure of the bug.
+  //
+  // The VIDEO + AUDIO offer is load-bearing, not incidental: the regression
+  // that shipped "connected but black" delivered ZERO video frames ONLY when an
+  // audio m-line was also negotiated (the per-consumer branch was spliced into
+  // the live tee AFTER it was PLAYING, so it never forwarded a buffer). A
+  // video-ONLY offer happened to decode frames even on the broken build — which
+  // is exactly why the PREVIOUS version of this test was GREEN while every real
+  // browser (video + audio) showed black. Verified: broken build → video-only
+  // fd=14 (false pass) but video+audio fd=0; fixed build → video+audio fd>0.
+  await page.goto(new URL("/", baseURL).toString());
   const result = await page.evaluate(async (sourceId) => {
     const pc = new RTCPeerConnection();
     pc.addTransceiver("video", { direction: "recvonly" });
+    pc.addTransceiver("audio", { direction: "recvonly" });
     const offer = await pc.createOffer();
     await pc.setLocalDescription(offer);
     await new Promise<void>((res) => {
@@ -169,6 +143,7 @@ test("NDI video decodes real frames end-to-end (synthetic source) @video-codec @
       pc.close();
       return { ok: false, reason: `WHEP POST ${resp.status}`, conn: pc.connectionState };
     }
+    const location = resp.headers.get("Location") || resp.headers.get("location");
     await pc.setRemoteDescription({ type: "answer", sdp: await resp.text() });
     // Poll up to ~25s for decoded frames.
     let inbound: { bytes: number; framesReceived: number; framesDecoded: number } | null =
@@ -188,17 +163,63 @@ test("NDI video decodes real frames end-to-end (synthetic source) @video-codec @
     }
     const conn = pc.connectionState;
     pc.close();
+    // Release the server-side session so check 2's WASM client is the sole
+    // consumer (and we don't leak a session on the shared synthetic pipeline).
+    if (location) {
+      const url = location.startsWith("http") ? location : new URL(location, document.baseURI).toString();
+      try {
+        await fetch(url, { method: "DELETE" });
+      } catch {
+        /* idempotent best-effort */
+      }
+    }
     return { ok: !!inbound && inbound.framesDecoded > 0, conn, inbound };
   }, src.id);
 
   expect(
     result.ok,
-    `NDI WebRTC must deliver decodable frames — connectionState=${result.conn}, ` +
+    `NDI WebRTC must deliver decodable frames (video+audio) — connectionState=${result.conn}, ` +
       `inbound=${JSON.stringify(result.inbound ?? result.reason)}`,
   ).toBe(true);
   expect(result.conn).toBe("connected");
   expect(result.inbound!.framesDecoded).toBeGreaterThan(0);
   expect(result.inbound!.bytes).toBeGreaterThan(0);
+
+  // ── Check 2 — the REAL stage client path: mount the ndi-fullscreen layout so
+  // the WASM <NdiVideo> component does its own connect_whep, and confirm its
+  // session reaches connectionState=connected. Now the SOLE consumer (check 1's
+  // session was DELETEd above). Pre-fix the client session never left
+  // "new"/"connecting".
+  await request.post(new URL("/stage/layout", baseURL).toString(), {
+    data: { code: "ndi-fullscreen" },
+  });
+  await page.goto(new URL("/stage", baseURL).toString());
+  await page.waitForSelector('body[data-wasm-ready="true"]', {
+    timeout: 30_000,
+  });
+  await page.waitForSelector('body[data-layout-code="ndi-fullscreen"]', {
+    timeout: 10_000,
+  });
+  await expect(page.locator('[data-role="ndi-video"]')).toHaveCount(1);
+  await expect
+    .poll(
+      async () => {
+        const snap = await (
+          await request.get(
+            new URL(`/ndi/snapshot/${src.id}`, baseURL).toString(),
+          )
+        ).json();
+        return (snap.sessions ?? []).some(
+          (s: { connectionState: string }) => s.connectionState === "connected",
+        );
+      },
+      {
+        timeout: 30_000,
+        message:
+          "the WASM stage client's WHEP session must reach connectionState=connected",
+      },
+    )
+    .toBe(true);
 
   // Cleanup.
   await request.post(
