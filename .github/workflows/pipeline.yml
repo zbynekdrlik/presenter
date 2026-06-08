@@ -648,12 +648,18 @@ jobs:
           name: build-artifacts
           path: _artifacts
 
-      - name: Place server binary
+      - name: Place binaries
+        # ALL three prebuilt binaries are required: the spec's beforeAll runs
+        # refresh-dev-data.sh, which invokes import_propresenter + ingest_bibles.
+        # If they're missing it falls back to `cargo run` (cold compile) and the
+        # 180s beforeAll hook times out before any test runs.
         run: |
           mkdir -p target/release
           cp _artifacts/presenter-server target/release/
-          chmod +x target/release/presenter-server
-          ls -la target/release/presenter-server
+          cp _artifacts/import_propresenter target/release/
+          cp _artifacts/ingest_bibles target/release/
+          chmod +x target/release/presenter-server target/release/import_propresenter target/release/ingest_bibles
+          ls -la target/release/presenter-server target/release/import_propresenter target/release/ingest_bibles
 
       - name: Build synthetic NDI sender (test-helpers)
         run: cargo build -p presenter-ndi --features test-helpers --bin ndi_test_sender

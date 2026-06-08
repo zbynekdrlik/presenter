@@ -51,21 +51,22 @@ test("NDI video decodes real frames end-to-end (synthetic source) @video-codec @
 }) => {
   // Discover the synthetic NDI source the lane published. The machine-name
   // prefix varies per host, so match on the "(PRESENTER-TEST)" suffix.
-  const sourcesResp = await request.get(
-    new URL("/ndi/sources", baseURL).toString(),
-  );
-  expect(
-    sourcesResp.ok(),
-    "/ndi/sources must succeed on the NDI-capable lane",
-  ).toBeTruthy();
-  const sources = await sourcesResp.json();
-  expect(
-    Array.isArray(sources),
-    "/ndi/sources must return an array on the NDI-capable lane",
-  ).toBeTruthy();
-  const synthetic = sources.find((s: { name: string }) =>
-    s.name.includes("(PRESENTER-TEST)"),
-  );
+  // NDI discovery on a freshly-started server takes a few seconds, so poll
+  // (up to ~30s) rather than querying once.
+  let synthetic: { name: string } | undefined;
+  for (let i = 0; i < 30; i++) {
+    const resp = await request.get(new URL("/ndi/sources", baseURL).toString());
+    if (resp.ok()) {
+      const list = await resp.json();
+      if (Array.isArray(list)) {
+        synthetic = list.find((s: { name: string }) =>
+          s.name.includes("(PRESENTER-TEST)"),
+        );
+        if (synthetic) break;
+      }
+    }
+    await new Promise((r) => setTimeout(r, 1000));
+  }
   // NOT a skip: on the e2e-ndi lane the synthetic sender MUST be running. If
   // it isn't, that is a real failure (broken lane), per test-strictness.
   expect(
@@ -79,7 +80,7 @@ test("NDI video decodes real frames end-to-end (synthetic source) @video-codec @
   );
   const created = await request.post(
     new URL("/integrations/video-sources", baseURL).toString(),
-    { data: { label: "Synthetic-E2E", ndiName: synthetic.name } },
+    { data: { label: "Synthetic-E2E", ndiName: synthetic!.name } },
   );
   expect(created.status()).toBeLessThan(500);
   const src = await created.json();
