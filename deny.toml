@@ -16,6 +16,12 @@ ignore = [
     # paste is unmaintained but required by leptos; no safe upgrade path
     # https://rustsec.org/advisories/RUSTSEC-2024-0436
     "RUSTSEC-2024-0436",
+    # proc-macro-error2 is unmaintained but pulled in transitively by both
+    # leptos (leptos_macro / reactive_stores_macro / syn_derive) and sea-orm
+    # (sea-bae). Build-time proc-macro dep only, not a runtime vulnerability;
+    # no upgrade path until those frameworks migrate (dependency-refresh #343).
+    # https://rustsec.org/advisories/RUSTSEC-2026-0173
+    "RUSTSEC-2026-0173",
 ]
 
 [licenses]

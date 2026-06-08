@@ -202,7 +202,10 @@ jobs:
         # logger that recursively calls rand::rng() — we use tracing_subscriber
         # which does not. Affects rand 0.8.5 (via sqlx) which has no patched
         # 0.8.x release; rand 0.9.3+ is patched and we use 0.9.3.
-        run: cargo audit --deny warnings --ignore RUSTSEC-2026-0097
+        # RUSTSEC-2026-0173: proc-macro-error2 unmaintained — transitive
+        # build-time proc-macro dep of leptos & sea-orm; no upgrade path
+        # until those frameworks migrate (dependency-refresh #343).
+        run: cargo audit --deny warnings --ignore RUSTSEC-2026-0097 --ignore RUSTSEC-2026-0173
 
   # ============================================
   # Dependency Policy (cargo-deny)

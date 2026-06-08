@@ -1,0 +1,237 @@
+//! WHEP HTTP bridge + pipeline state snapshots. Translates the WHEP
+//! signaller protocol (`WhepOp` → `WhepReply`) into direct `NdiPipeline`
+//! `add_consumer` / `add_ice_candidate` / `remove_consumer` calls, and
+//! exposes the `/healthz` + `/ndi/snapshot/:id` snapshot helpers. Split out
+//! of the manager god-file (#357).
+
+use anyhow::{anyhow, Result};
+
+use crate::pipeline::PipelineState;
+
+use super::{ActiveSource, NdiManager, WhepOp, WhepReply, SOURCE_NOT_ACTIVE_ERR};
+
+impl NdiManager {
+    /// Snapshot of every active pipeline's current state.
+    ///
+    /// Returns one entry per source currently in the active map, as
+    /// `(source_id, PipelineState)`. Used by `/healthz` (#333 item 7) so
+    /// dashboards can detect activation failures within seconds instead of
+    /// inferring from operator-reported 'red error' status.
+    ///
+    /// Bounded by a 200 ms lock-acquisition timeout (deep-review 🟡 #1):
+    /// `start_pipeline` and `rebuild_pipeline` hold the same `active` mutex
+    /// for up to 8 s during the caps-wait. Without the timeout, a `/healthz`
+    /// request that races a pipeline start would block long enough to
+    /// trip a 5 s LB health-check timeout — exactly the failure mode
+    /// item 7 was supposed to expose. On timeout we return an empty vec
+    /// and log a warning; the caller (LB / dashboard) sees "no pipelines"
+    /// for one poll cycle, which is preferable to a hung probe.
+    pub async fn pipeline_snapshots(&self) -> Vec<(String, PipelineState)> {
+        match tokio::time::timeout(std::time::Duration::from_millis(200), self.active.lock()).await
+        {
+            Ok(guard) => guard
+                .iter()
+                .map(|(id, src)| (id.clone(), src.pipeline.state()))
+                .collect(),
+            Err(_) => {
+                tracing::warn!(
+                    "pipeline_snapshots lock acquisition timed out after 200 ms — \
+                     likely contended with a long-running pipeline start/rebuild; \
+                     returning empty snapshot so /healthz does not stall (#333 item 7)"
+                );
+                Vec::new()
+            }
+        }
+    }
+
+    /// Single-source snapshot for `GET /ndi/snapshot/:source_id`. Returns
+    /// `None` if the source isn't active in the manager's active map.
+    ///
+    /// Uses the same 200 ms lock-acquisition timeout pattern as
+    /// `pipeline_snapshots` so a `/ndi/snapshot/:id` probe doesn't stall
+    /// behind a concurrent pipeline start/rebuild. On timeout returns `None`
+    /// (caller maps to 503).
+    pub async fn pipeline_snapshot(
+        &self,
+        source_id: &str,
+    ) -> Option<crate::pipeline::PipelineSnapshot> {
+        let guard = tokio::time::timeout(std::time::Duration::from_millis(200), self.active.lock())
+            .await
+            .ok()?;
+        let pipeline = std::sync::Arc::clone(&guard.get(source_id)?.pipeline);
+        drop(guard);
+        let mut snap = pipeline.snapshot().await;
+        snap.source_id = source_id.to_string();
+        Some(snap)
+    }
+
+    /// Test-only: trigger an Errored state on the source's pipeline so
+    /// the PipelineSupervisor reacts as it would for a real ndisrc fault.
+    /// Returns `true` if the source was active (state injection succeeded),
+    /// `false` if not (caller should map to 404).
+    #[cfg(feature = "test-helpers")]
+    pub async fn simulate_pipeline_error(&self, source_id: &str, msg: &str) -> bool {
+        let active = self.active.lock().await;
+        match active.get(source_id) {
+            Some(src) => {
+                src.pipeline.simulate_error_for_test(msg);
+                true
+            }
+            None => false,
+        }
+    }
+
+    /// Forward a WHEP HTTP exchange to the source's pipeline. Replaces the
+    /// pre-#336 `emit_by_name`-on-whepserversink path. Routes each `WhepOp`
+    /// variant to the corresponding `NdiPipeline` method.
+    ///
+    /// The active-map mutex guard is always DROPPED before calling any
+    /// potentially-blocking pipeline method (`add_consumer` spawn_blocks for
+    /// ~10s, `add_ice_candidate` and `remove_consumer` also spawn_block).
+    /// To achieve this without copying the pipeline, `ActiveSource.pipeline`
+    /// is an `Arc<NdiPipeline>` — we clone the `Arc` (cheap refcount bump)
+    /// inside the lock, drop the guard, then call the pipeline method outside.
+    pub async fn whep_signaller_call(&self, source_id: &str, op: WhepOp) -> Result<WhepReply> {
+        match op {
+            WhepOp::Post { id: None, body } => {
+                let pipeline = {
+                    let active = self.active.lock().await;
+                    let src = active
+                        .get(source_id)
+                        .ok_or_else(|| anyhow!(SOURCE_NOT_ACTIVE_ERR))?;
+                    Self::ensure_streaming(src)?;
+                    std::sync::Arc::clone(&src.pipeline)
+                    // active lock dropped here
+                };
+                let answer = pipeline.add_consumer(body).await?;
+                let location = format!("/ndi/whep/{source_id}/{}", answer.session_id);
+                tracing::info!(
+                    source_id = %source_id,
+                    session_id = %answer.session_id,
+                    "WHEP POST → 201"
+                );
+                Ok(WhepReply {
+                    status: 201,
+                    headers: vec![
+                        ("location".to_string(), location),
+                        ("content-type".to_string(), "application/sdp".to_string()),
+                    ],
+                    body: Some(answer.sdp_answer.into_bytes()),
+                })
+            }
+            WhepOp::Post {
+                id: Some(_),
+                body: _,
+            } => {
+                // Session-scoped re-offer — out of scope for #336.
+                // Validate that the source is known first (preserves 404
+                // semantics for unknown sources — the HTTP shim tests assert
+                // this contract). Lock is acquired and dropped immediately;
+                // no blocking await follows.
+                {
+                    let active = self.active.lock().await;
+                    let src = active
+                        .get(source_id)
+                        .ok_or_else(|| anyhow!(SOURCE_NOT_ACTIVE_ERR))?;
+                    Self::ensure_streaming(src)?;
+                }
+                tracing::warn!(source_id = %source_id, "WHEP session-scoped POST not implemented");
+                Ok(WhepReply {
+                    status: 501,
+                    headers: vec![("content-type".to_string(), "text/plain".to_string())],
+                    body: Some(b"WHEP re-offer not implemented".to_vec()),
+                })
+            }
+            WhepOp::Patch {
+                id,
+                body,
+                headers: _,
+            } => {
+                // Clone the pipeline reference out of the map guard before
+                // any blocking await. The per-candidate loop re-uses this
+                // single clone rather than re-locking per iteration.
+                let pipeline = {
+                    let active = self.active.lock().await;
+                    let src = active
+                        .get(source_id)
+                        .ok_or_else(|| anyhow!(SOURCE_NOT_ACTIVE_ERR))?;
+                    Self::ensure_streaming(src)?;
+                    std::sync::Arc::clone(&src.pipeline)
+                    // active lock dropped here
+                };
+                // Parse `application/trickle-ice-sdpfrag` body: extract
+                // `a=mid:` (for mline index) and `a=candidate:` lines,
+                // forwarding each candidate to pipeline.add_ice_candidate.
+                let body_str =
+                    std::str::from_utf8(&body).map_err(|e| anyhow!("PATCH body not utf8: {e}"))?;
+                let mut count = 0;
+                let mut mline_idx: u32 = 0;
+                for raw_line in body_str.lines() {
+                    let line = raw_line.trim();
+                    if let Some(rest) = line.strip_prefix("a=mid:") {
+                        if let Ok(n) = rest.trim().parse::<u32>() {
+                            mline_idx = n;
+                        }
+                        // Non-integer mid (RFC 8839 allows e.g. "audio") falls
+                        // through; mline_idx stays at the last valid integer (or 0).
+                        // Browsers use integer mids in WHEP practice.
+                    } else if line.starts_with("a=candidate:") {
+                        // webrtcbin's add-ice-candidate signal accepts the
+                        // candidate string without the leading "a=" prefix.
+                        let cand_value = &line[2..];
+                        pipeline
+                            .add_ice_candidate(&id, mline_idx, cand_value)
+                            .await?;
+                        count += 1;
+                    }
+                }
+                tracing::debug!(
+                    source_id = %source_id,
+                    session_id = %id,
+                    candidate_count = count,
+                    "WHEP PATCH dispatched"
+                );
+                Ok(WhepReply {
+                    status: 204,
+                    headers: vec![],
+                    body: None,
+                })
+            }
+            WhepOp::Delete { id } => {
+                // Clone the pipeline reference before the blocking await.
+                // DELETE proceeds regardless of pipeline state — teardown must
+                // succeed even when the pipeline is erroring, so
+                // ensure_streaming is intentionally skipped here.
+                let pipeline = {
+                    let active = self.active.lock().await;
+                    let src = active
+                        .get(source_id)
+                        .ok_or_else(|| anyhow!(SOURCE_NOT_ACTIVE_ERR))?;
+                    std::sync::Arc::clone(&src.pipeline)
+                    // active lock dropped here
+                };
+                pipeline.remove_consumer(&id).await?;
+                tracing::info!(
+                    source_id = %source_id,
+                    session_id = %id,
+                    "WHEP DELETE → consumer removed"
+                );
+                Ok(WhepReply {
+                    status: 204,
+                    headers: vec![],
+                    body: None,
+                })
+            }
+        }
+    }
+
+    /// Pipeline state must be Streaming or Starting for WHEP ops to proceed.
+    /// Stopped / Errored produce an error that the HTTP shim maps to 503.
+    fn ensure_streaming(src: &ActiveSource) -> Result<()> {
+        match src.pipeline.state() {
+            PipelineState::Streaming | PipelineState::Starting => Ok(()),
+            PipelineState::Stopped => Err(anyhow!("pipeline stopped")),
+            PipelineState::Errored(e) => Err(anyhow!("pipeline errored: {e}")),
+        }
+    }
+}
