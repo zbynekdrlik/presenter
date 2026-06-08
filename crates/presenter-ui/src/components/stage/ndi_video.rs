@@ -10,9 +10,9 @@ use std::sync::Arc;
 use leptos::prelude::*;
 use leptos::wasm_bindgen::{closure::Closure, JsCast, JsValue};
 use leptos::web_sys::{
-    HtmlVideoElement, MediaStream, RtcConfiguration, RtcIceConnectionState, RtcPeerConnection,
-    RtcRtpTransceiverDirection, RtcRtpTransceiverInit, RtcSdpType, RtcSessionDescriptionInit,
-    RtcTrackEvent,
+    HtmlVideoElement, MediaStream, RtcConfiguration, RtcIceConnectionState, RtcIceGatheringState,
+    RtcPeerConnection, RtcRtpTransceiverDirection, RtcRtpTransceiverInit, RtcSdpType,
+    RtcSessionDescriptionInit, RtcTrackEvent,
 };
 use wasm_bindgen_futures::{spawn_local, JsFuture};
 
@@ -371,6 +371,38 @@ fn install_pagehide_teardown(session: &WhepSession) {
     cb.forget();
 }
 
+/// Await ICE gathering completion (state == `Complete`) so the local
+/// description carries our candidates before we POST the WHEP offer. Returns
+/// immediately if already complete. Bounded by a 3 s timeout: a gather that
+/// never completes (rare on LAN) resolves the wait anyway, falling back to a
+/// partially-gathered offer that still connects via peer-reflexive.
+async fn wait_for_ice_gathering_complete(pc: &RtcPeerConnection) {
+    if pc.ice_gathering_state() == RtcIceGatheringState::Complete {
+        return;
+    }
+    let pc_for_promise = pc.clone();
+    let promise = leptos::web_sys::js_sys::Promise::new(&mut |resolve, _reject| {
+        // Resolve when gathering reaches Complete.
+        let pc_inner = pc_for_promise.clone();
+        let resolve_state = resolve.clone();
+        let cb = Closure::<dyn FnMut()>::new(move || {
+            if pc_inner.ice_gathering_state() == RtcIceGatheringState::Complete {
+                let _ = resolve_state.call0(&JsValue::NULL);
+            }
+        });
+        pc_for_promise.set_onicegatheringstatechange(Some(cb.as_ref().unchecked_ref()));
+        cb.forget();
+        // Timeout fallback so a stuck gather can't hang the connect.
+        if let Some(window) = leptos::web_sys::window() {
+            let _ = window
+                .set_timeout_with_callback_and_timeout_and_arguments_0(&resolve, 3000);
+        }
+    });
+    let _ = JsFuture::from(promise).await;
+    // Detach the handler so it doesn't fire for later state changes.
+    pc.set_onicegatheringstatechange(None);
+}
+
 async fn connect_whep(video: &HtmlVideoElement, source_id: &str) -> Result<WhepSession, JsValue> {
     let cfg = RtcConfiguration::new();
     let pc = RtcPeerConnection::new_with_configuration(&cfg)?;
@@ -433,8 +465,26 @@ async fn connect_whep(video: &HtmlVideoElement, source_id: &str) -> Result<WhepS
     let offer = JsFuture::from(pc.create_offer()).await?;
     let offer_init: RtcSessionDescriptionInit = offer.unchecked_into();
     JsFuture::from(pc.set_local_description(&offer_init)).await?;
-    let offer_sdp = js_sys::Reflect::get(&offer_init, &"sdp".into())?
-        .as_string()
+
+    // Wait for ICE gathering to complete so the offer SDP we POST carries our
+    // host candidates (LAN: no STUN/TURN, gathers in <1s). This makes the
+    // server's webrtcbin receive our candidates directly in the offer instead
+    // of relying solely on peer-reflexive discovery — more robust ICE. Bounded
+    // by a timeout inside the helper so a stuck gather can't hang the connect;
+    // on timeout we fall back to whatever was gathered (still works).
+    wait_for_ice_gathering_complete(&pc).await;
+
+    // Prefer the post-gather local description (includes a=candidate lines);
+    // fall back to the pre-gather offer if local_description is unavailable.
+    let offer_sdp = pc
+        .local_description()
+        .map(|d| d.sdp())
+        .filter(|s| !s.is_empty())
+        .or_else(|| {
+            js_sys::Reflect::get(&offer_init, &"sdp".into())
+                .ok()
+                .and_then(|v| v.as_string())
+        })
         .unwrap_or_default();
 
     let url = whep_url(source_id);

@@ -107,6 +107,11 @@ pub struct WhepSession {
     /// The queue element buffering the tee branch for this consumer.
     /// Added to the pipeline alongside webrtcbin; removed in remove_consumer.
     pub queue: gst::Element,
+    /// The per-consumer `rtph264pay` that payloads the shared encoder's H264
+    /// into RTP for THIS consumer's webrtcbin. Per-consumer (not shared) so it
+    /// adopts the dynamic payload type webrtcbin negotiates with the browser.
+    /// Added to the pipeline alongside webrtcbin; removed in remove_consumer.
+    pub payloader: gst::Element,
     /// The src pad on `tee` feeding this consumer's webrtcbin (via a
     /// queue). Released back to the tee on Drop.
     pub tee_src_pad: gst::Pad,
@@ -140,6 +145,7 @@ impl Drop for WhepSession {
         // remove_consumer method is the canonical path; Drop is the
         // backstop for unexpected drops (pipeline Drop, panic unwind).
         let _ = self.webrtcbin.set_state(gst::State::Null);
+        let _ = self.payloader.set_state(gst::State::Null);
         let _ = self.queue.set_state(gst::State::Null);
         // tee_src_pad release is the parent tee's responsibility — we
         // can't release a request-pad without holding the tee. The

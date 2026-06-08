@@ -67,9 +67,9 @@ impl NdiPipeline {
         let session_id_for_signal = session_id.clone();
 
         // Channel to receive the SDP answer from within spawn_blocking.
-        // Returns (webrtcbin, queue, tee_pad, sdp_text) on success.
+        // Returns (webrtcbin, queue, payloader, tee_pad, sdp_text) on success.
         let (answer_tx, answer_rx) = tokio::sync::oneshot::channel::<
-            Result<(gst::Element, gst::Element, gst::Pad, String)>,
+            Result<(gst::Element, gst::Element, gst::Element, gst::Pad, String)>,
         >();
 
         let session_id_for_blocking = session_id.clone();
@@ -92,152 +92,307 @@ impl NdiPipeline {
 
             // Step 2: do all remaining work in an inner closure so that a single
             // match on the result can unconditionally release tee_pad on Err.
-            // The closure returns (webrtcbin, queue, sdp_text) on success.
-            let inner_result = (|| -> Result<(gst::Element, gst::Element, String)> {
-                // Build queue + webrtcbin.
-                let queue = gst::ElementFactory::make("queue")
-                    .build()
-                    .context("build queue")?;
-                let webrtcbin = gst::ElementFactory::make("webrtcbin")
-                    .name(session_id_for_blocking.as_str())
-                    .build()
-                    .context("build webrtcbin")?;
+            // The closure returns (queue, payloader, webrtcbin, sdp_text) on success.
+            let inner_result =
+                (|| -> Result<(gst::Element, gst::Element, gst::Element, String)> {
+                    // Build queue + per-consumer rtph264pay + webrtcbin.
+                    //
+                    // The payloader is PER-CONSUMER (downstream of the shared tee)
+                    // so each rtph264pay adopts the dynamic H264 payload type its
+                    // browser negotiated with webrtcbin (propagated upstream via
+                    // caps). A single shared payloader emits one fixed pt and
+                    // produces a caps mismatch on the queue→webrtcbin link for any
+                    // browser that picks a different pt (Chrome uses e.g. 103) →
+                    // zero RTP forwarded → connected but black screen.
+                    let queue = gst::ElementFactory::make("queue")
+                        .build()
+                        .context("build queue")?;
+                    let payloader = gst::ElementFactory::make("rtph264pay")
+                        .name(format!("pay_{session_id_for_blocking}"))
+                        // Resend SPS/PPS with every IDR for fast browser recovery.
+                        .property("config-interval", -1i32)
+                        .build()
+                        .context("build rtph264pay")?;
+                    let webrtcbin = gst::ElementFactory::make("webrtcbin")
+                        .name(session_id_for_blocking.as_str())
+                        // max-bundle: put audio + video on ONE ICE/DTLS transport,
+                        // matching the browser's `a=group:BUNDLE` offer. With the
+                        // default `none` policy webrtcbin negotiates a SEPARATE
+                        // transport per m-line; the browser (bundled) only services
+                        // one, so the second DTLS handshake retransmits ClientHello
+                        // forever and the RTCPeerConnection never leaves
+                        // `connectionState: "connecting"` — no SRTP, no frames,
+                        // black screen. Confirmed via dtlsconnection logs: video
+                        // DTLS completed, audio DTLS hung, until bundling.
+                        .property_from_str("bundle-policy", "max-bundle")
+                        .build()
+                        .context("build webrtcbin")?;
 
-                pipeline
-                    .add_many([&queue, &webrtcbin])
-                    .context("add queue+webrtcbin")?;
+                    pipeline
+                        .add_many([&queue, &payloader, &webrtcbin])
+                        .context("add queue+payloader+webrtcbin")?;
 
-                // From here, on any error we must remove queue + webrtcbin from the
-                // pipeline before returning. Use a nested closure for this.
-                let pipeline_result: Result<String> = (|| -> Result<String> {
-                    // Link: tee_src → queue → webrtcbin
-                    let queue_sink = queue
-                        .static_pad("sink")
-                        .ok_or_else(|| anyhow!("queue has no sink pad"))?;
-                    tee_pad
-                        .link(&queue_sink)
-                        .context("link tee_pad -> queue.sink")?;
-                    queue.link(&webrtcbin).context("link queue -> webrtcbin")?;
+                    // From here, on any error we must remove the elements we added
+                    // from the pipeline before returning. Use a nested closure.
+                    let pipeline_result: Result<String> = (|| -> Result<String> {
+                        // Link the consumer branch downstream-first: queue → rtph264pay
+                        // → webrtcbin. The tee_src → queue link is deferred until
+                        // AFTER the branch is PLAYING (post-negotiation) — linking a
+                        // live tee into a not-yet-running branch leaves the new tee
+                        // src pad in a state where it never pushes, so the payloader
+                        // gets zero buffers (connected, but black screen).
+                        queue.link(&payloader).context("link queue -> rtph264pay")?;
+                        payloader
+                            .link(&webrtcbin)
+                            .context("link rtph264pay -> webrtcbin")?;
 
-                    // Connect on-ice-candidate signal.
-                    // Signal signature: void(webrtcbin, sdp_mline_index: u32, candidate: &str)
-                    // Confirmed from gst-inspect-1.0 webrtcbin and gst-plugin-webrtc-0.15.2/imp.rs:3211
-                    // Args array: [webrtcbin_value, mline_index_value, candidate_value]
-                    {
-                        let ice_tx = ice_tx_clone.clone();
-                        webrtcbin.connect("on-ice-candidate", false, move |args| {
-                            let sdp_mline_index =
-                                args.get(1).and_then(|v| v.get::<u32>().ok()).unwrap_or(0);
-                            let candidate = args
-                                .get(2)
-                                .and_then(|v| v.get::<String>().ok())
-                                .unwrap_or_default();
-                            let _ = ice_tx.send(IceCandidate {
-                                sdp_mline_index,
-                                candidate,
+                        // Connect on-ice-candidate signal.
+                        // Signal signature: void(webrtcbin, sdp_mline_index: u32, candidate: &str)
+                        // Confirmed from gst-inspect-1.0 webrtcbin and gst-plugin-webrtc-0.15.2/imp.rs:3211
+                        // Args array: [webrtcbin_value, mline_index_value, candidate_value]
+                        {
+                            let ice_tx = ice_tx_clone.clone();
+                            webrtcbin.connect("on-ice-candidate", false, move |args| {
+                                let sdp_mline_index =
+                                    args.get(1).and_then(|v| v.get::<u32>().ok()).unwrap_or(0);
+                                let candidate = args
+                                    .get(2)
+                                    .and_then(|v| v.get::<String>().ok())
+                                    .unwrap_or_default();
+                                let _ = ice_tx.send(IceCandidate {
+                                    sdp_mline_index,
+                                    candidate,
+                                });
+                                None
                             });
-                            None
-                        });
-                    }
-
-                    // Connect notify::connection-state to update shared state.
-                    // This signal fires from a GStreamer streaming thread (raw std::thread
-                    // spawned by GLib) — NOT from within a tokio context. We therefore use
-                    // std::sync::Mutex::lock() directly; no async dance or block_on needed.
-                    // The critical section is nanoseconds (a simple enum write), so
-                    // contention is negligible.
-                    webrtcbin.connect_notify(Some("connection-state"), {
-                        let connection_state_for_signal = connection_state_for_signal.clone();
-                        let session_id_for_signal = session_id_for_signal.clone();
-                        move |webrtcbin, _pspec| {
-                            let gst_state = webrtcbin
-                                .property::<gst_webrtc::WebRTCPeerConnectionState>(
-                                    "connection-state",
-                                );
-                            let our_state = WhepConnectionState::from(gst_state);
-                            // std::sync::Mutex — safe to lock from any thread, no async runtime
-                            // required. On poison we recover the guard via into_inner() rather
-                            // than panic; the signal thread only does a trivial enum write.
-                            *connection_state_for_signal
-                                .lock()
-                                .unwrap_or_else(|p| p.into_inner()) = our_state;
-                            tracing::debug!(
-                                session_id = %session_id_for_signal,
-                                state = ?our_state,
-                                "WHEP consumer connection-state changed"
-                            );
                         }
-                    });
 
-                    // Set webrtcbin to PLAYING so it can do ICE + DTLS.
-                    webrtcbin
-                        .set_state(gst::State::Playing)
-                        .context("set webrtcbin to Playing")?;
+                        // Connect notify::connection-state to update shared state.
+                        // This signal fires from a GStreamer streaming thread (raw std::thread
+                        // spawned by GLib) — NOT from within a tokio context. We therefore use
+                        // std::sync::Mutex::lock() directly; no async dance or block_on needed.
+                        // The critical section is nanoseconds (a simple enum write), so
+                        // contention is negligible.
+                        webrtcbin.connect_notify(Some("connection-state"), {
+                            let connection_state_for_signal = connection_state_for_signal.clone();
+                            let session_id_for_signal = session_id_for_signal.clone();
+                            move |webrtcbin, _pspec| {
+                                let gst_state = webrtcbin
+                                    .property::<gst_webrtc::WebRTCPeerConnectionState>(
+                                        "connection-state",
+                                    );
+                                let our_state = WhepConnectionState::from(gst_state);
+                                // std::sync::Mutex — safe to lock from any thread, no async runtime
+                                // required. On poison we recover the guard via into_inner() rather
+                                // than panic; the signal thread only does a trivial enum write.
+                                *connection_state_for_signal
+                                    .lock()
+                                    .unwrap_or_else(|p| p.into_inner()) = our_state;
+                                tracing::debug!(
+                                    session_id = %session_id_for_signal,
+                                    state = ?our_state,
+                                    "WHEP consumer connection-state changed"
+                                );
+                            }
+                        });
 
-                    // Set the remote description (the browser's offer).
-                    let (remote_desc_tx, remote_desc_rx) = std::sync::mpsc::sync_channel::<()>(1);
-                    let promise = gst::Promise::with_change_func(move |_reply| {
-                        let _ = remote_desc_tx.send(());
-                    });
-                    webrtcbin
-                        .emit_by_name::<()>("set-remote-description", &[&offer_desc, &promise]);
-                    // Wait for the set-remote-description promise to resolve.
-                    // Propagate timeout as an error — proceeding to create-answer on a
-                    // webrtcbin that hasn't processed the offer produces an invalid SDP.
-                    remote_desc_rx
-                        .recv_timeout(std::time::Duration::from_secs(5))
-                        .context("set-remote-description promise timed out or sender dropped")?;
+                        // Set webrtcbin to PLAYING so it can do ICE + DTLS.
+                        // NOTE: the upstream branch (queue + rtph264pay) is started
+                        // LATER, AFTER set-local-description — see below. Pushing RTP
+                        // into webrtcbin before the remote offer is applied corrupts
+                        // negotiation (webrtcbin builds a transceiver from the early
+                        // media caps) and DTLS then never completes.
+                        webrtcbin
+                            .set_state(gst::State::Playing)
+                            .context("set webrtcbin to Playing")?;
 
-                    // Create the SDP answer.
-                    let (answer_sdp_tx, answer_sdp_rx) = std::sync::mpsc::sync_channel::<
-                        Option<gst_webrtc::WebRTCSessionDescription>,
-                    >(1);
-                    let promise = gst::Promise::with_change_func(move |reply| {
-                        let answer = reply
-                            .ok()
-                            .and_then(|r| r)
-                            .and_then(|r| r.value("answer").ok())
-                            .and_then(|v| v.get::<gst_webrtc::WebRTCSessionDescription>().ok());
-                        let _ = answer_sdp_tx.send(answer);
-                    });
-                    webrtcbin
-                        .emit_by_name::<()>("create-answer", &[&None::<gst::Structure>, &promise]);
+                        // Set the remote description (the browser's offer).
+                        let (remote_desc_tx, remote_desc_rx) =
+                            std::sync::mpsc::sync_channel::<()>(1);
+                        let promise = gst::Promise::with_change_func(move |_reply| {
+                            let _ = remote_desc_tx.send(());
+                        });
+                        webrtcbin
+                            .emit_by_name::<()>("set-remote-description", &[&offer_desc, &promise]);
+                        // Wait for the set-remote-description promise to resolve.
+                        // Propagate timeout as an error — proceeding to create-answer on a
+                        // webrtcbin that hasn't processed the offer produces an invalid SDP.
+                        remote_desc_rx
+                            .recv_timeout(std::time::Duration::from_secs(5))
+                            .context(
+                                "set-remote-description promise timed out or sender dropped",
+                            )?;
 
-                    let answer_desc = answer_sdp_rx
-                        .recv_timeout(std::time::Duration::from_secs(5))
-                        .context("create-answer promise timed out")?
-                        .ok_or_else(|| anyhow!("create-answer returned no answer"))?;
+                        // Create the SDP answer.
+                        let (answer_sdp_tx, answer_sdp_rx) = std::sync::mpsc::sync_channel::<
+                            Option<gst_webrtc::WebRTCSessionDescription>,
+                        >(1);
+                        let promise = gst::Promise::with_change_func(move |reply| {
+                            let answer = reply
+                                .ok()
+                                .and_then(|r| r)
+                                .and_then(|r| r.value("answer").ok())
+                                .and_then(|v| v.get::<gst_webrtc::WebRTCSessionDescription>().ok());
+                            let _ = answer_sdp_tx.send(answer);
+                        });
+                        webrtcbin.emit_by_name::<()>(
+                            "create-answer",
+                            &[&None::<gst::Structure>, &promise],
+                        );
 
-                    // Set the local description (our answer).
-                    webrtcbin.emit_by_name::<()>(
-                        "set-local-description",
-                        &[&answer_desc, &None::<gst::Promise>],
-                    );
+                        let answer_desc = answer_sdp_rx
+                            .recv_timeout(std::time::Duration::from_secs(5))
+                            .context("create-answer promise timed out")?
+                            .ok_or_else(|| anyhow!("create-answer returned no answer"))?;
 
-                    answer_desc
-                        .sdp()
-                        .as_text()
-                        .map_err(|e| anyhow!("answer SDP as_text failed: {e}"))
+                        // Set the local description (our answer). Use a promise so we
+                        // know it has been applied before we wait on ICE gathering.
+                        let (sld_tx, sld_rx) = std::sync::mpsc::sync_channel::<()>(1);
+                        let sld_promise = gst::Promise::with_change_func(move |_reply| {
+                            let _ = sld_tx.try_send(());
+                        });
+                        webrtcbin.emit_by_name::<()>(
+                            "set-local-description",
+                            &[&answer_desc, &sld_promise],
+                        );
+                        let _ = sld_rx.recv_timeout(std::time::Duration::from_secs(2));
+
+                        // Align the payloader's RTP payload type with the one
+                        // webrtcbin negotiated in the answer. The browser assigns a
+                        // dynamic PT to H264 (Chrome uses e.g. 103) and webrtcbin
+                        // answers with THAT pt — but rtph264pay defaults to pt=96, so
+                        // its caps don't match webrtcbin's negotiated sink and ZERO
+                        // RTP flows (connected, but black screen). Read the answer's
+                        // H264 pt and set it on the payloader before media starts.
+                        {
+                            let local_sdp = webrtcbin
+                                .property::<gst_webrtc::WebRTCSessionDescription>(
+                                    "local-description",
+                                )
+                                .sdp()
+                                .as_text()
+                                .unwrap_or_default();
+                            if let Some(pt) = parse_h264_payload_type(&local_sdp) {
+                                payloader.set_property("pt", pt);
+                                tracing::debug!(
+                                    session_id = %session_id_for_blocking,
+                                    pt,
+                                    "aligned rtph264pay pt to negotiated H264 payload type"
+                                );
+                            } else {
+                                tracing::warn!(
+                                    session_id = %session_id_for_blocking,
+                                    "could not find negotiated H264 payload type in answer SDP; \
+                                     leaving rtph264pay at default pt (media may not flow)"
+                                );
+                            }
+                        }
+
+                        // Non-trickle ICE: wait for candidate gathering to COMPLETE so
+                        // the returned local-description SDP carries `a=candidate`
+                        // lines. The deployment is LAN-only (host candidates, no
+                        // STUN/TURN), so gathering completes in well under a second.
+                        //
+                        // Without this the WHEP answer contained ZERO candidates and
+                        // the browser's ICE agent stayed in "new" forever -> no DTLS
+                        // -> no SRTP -> no decoded frames -> black/white stage screen.
+                        // This is the load-bearing half of the #336 regression fix
+                        // (the browser half waits for its own gathering before POST).
+                        {
+                            let (gather_tx, gather_rx) = std::sync::mpsc::sync_channel::<()>(1);
+                            let gather_tx_signal = gather_tx.clone();
+                            // SignalHandlerId is intentionally not stored: dropping it
+                            // does not disconnect, and webrtcbin is torn down whole on
+                            // remove_consumer. Once we stop reading gather_rx the
+                            // closure's try_send becomes a harmless no-op.
+                            let _ = webrtcbin.connect_notify(
+                                Some("ice-gathering-state"),
+                                move |wb, _| {
+                                    let st = wb.property::<gst_webrtc::WebRTCICEGatheringState>(
+                                        "ice-gathering-state",
+                                    );
+                                    if st == gst_webrtc::WebRTCICEGatheringState::Complete {
+                                        let _ = gather_tx_signal.try_send(());
+                                    }
+                                },
+                            );
+                            // Cover the race where gathering already completed before
+                            // the notify handler was connected.
+                            if webrtcbin.property::<gst_webrtc::WebRTCICEGatheringState>(
+                                "ice-gathering-state",
+                            ) == gst_webrtc::WebRTCICEGatheringState::Complete
+                            {
+                                let _ = gather_tx.try_send(());
+                            }
+                            if gather_rx
+                                .recv_timeout(std::time::Duration::from_secs(5))
+                                .is_err()
+                            {
+                                tracing::warn!(
+                                    session_id = %session_id_for_blocking,
+                                    "ICE gathering did not reach Complete within 5s; \
+                                     returning answer with whatever candidates were gathered"
+                                );
+                            }
+                        }
+
+                        // Negotiation is complete. NOW start the upstream branch so
+                        // H264 buffers flow tee → queue → rtph264pay → webrtcbin.
+                        // Elements added to an already-PLAYING pipeline stay in NULL
+                        // until synced; webrtcbin started itself above, but queue +
+                        // rtph264pay must be synced or the send path never runs
+                        // (connected, but zero RTP → black screen). Starting them
+                        // here (post-negotiation) avoids the early-media corruption
+                        // that breaks DTLS when started before set-remote-description.
+                        queue
+                            .sync_state_with_parent()
+                            .context("sync queue state with pipeline")?;
+                        payloader
+                            .sync_state_with_parent()
+                            .context("sync rtph264pay state with pipeline")?;
+
+                        // Branch is PLAYING — NOW splice it into the live tee. The
+                        // tee starts pushing H264 to this consumer's queue at the
+                        // next buffer; the encoder's periodic IDR (key-int-max=30)
+                        // plus h264parse config-interval=-1 means the browser gets a
+                        // decodable keyframe within ~1s.
+                        let queue_sink = queue
+                            .static_pad("sink")
+                            .ok_or_else(|| anyhow!("queue has no sink pad"))?;
+                        tee_pad
+                            .link(&queue_sink)
+                            .context("link tee_pad -> queue.sink")?;
+
+                        // Return the FINAL local description — now populated with the
+                        // gathered ICE candidates — as the WHEP answer body.
+                        let local_desc = webrtcbin
+                            .property::<gst_webrtc::WebRTCSessionDescription>("local-description");
+                        local_desc
+                            .sdp()
+                            .as_text()
+                            .map_err(|e| anyhow!("local-description SDP as_text failed: {e}"))
+                    })();
+
+                    match pipeline_result {
+                        Ok(sdp_text) => Ok((queue, payloader, webrtcbin, sdp_text)),
+                        Err(e) => {
+                            // Remove partially-allocated pipeline elements before releasing
+                            // tee_pad (the outer match handles tee_pad release on Err).
+                            let _ = webrtcbin.set_state(gst::State::Null);
+                            let _ = payloader.set_state(gst::State::Null);
+                            let _ = queue.set_state(gst::State::Null);
+                            let _ = pipeline.remove(&webrtcbin);
+                            let _ = pipeline.remove(&payloader);
+                            let _ = pipeline.remove(&queue);
+                            Err(e)
+                        }
+                    }
                 })();
 
-                match pipeline_result {
-                    Ok(sdp_text) => Ok((queue, webrtcbin, sdp_text)),
-                    Err(e) => {
-                        // Remove partially-allocated pipeline elements before releasing
-                        // tee_pad (the outer match handles tee_pad release on Err).
-                        let _ = webrtcbin.set_state(gst::State::Null);
-                        let _ = queue.set_state(gst::State::Null);
-                        let _ = pipeline.remove(&webrtcbin);
-                        let _ = pipeline.remove(&queue);
-                        Err(e)
-                    }
-                }
-            })();
-
             match inner_result {
-                Ok((queue, webrtcbin, sdp_text)) => {
+                Ok((queue, payloader, webrtcbin, sdp_text)) => {
                     answer_tx
-                        .send(Ok((webrtcbin, queue, tee_pad, sdp_text)))
+                        .send(Ok((webrtcbin, queue, payloader, tee_pad, sdp_text)))
                         .ok();
                 }
                 Err(e) => {
@@ -250,7 +405,7 @@ impl NdiPipeline {
         });
 
         // Await the answer from the blocking task.
-        let (webrtcbin, queue, tee_pad, sdp_answer) = answer_rx
+        let (webrtcbin, queue, payloader, tee_pad, sdp_answer) = answer_rx
             .await
             .context("spawn_blocking answer channel dropped")??;
 
@@ -268,6 +423,7 @@ impl NdiPipeline {
             session_id: session_id.clone(),
             webrtcbin,
             queue,
+            payloader,
             tee_src_pad: tee_pad,
             connection_state,
             ice_tx,
@@ -332,18 +488,23 @@ impl NdiPipeline {
         let tee = (*self.tee).clone();
         let webrtcbin = session.webrtcbin.clone();
         let queue = session.queue.clone();
+        let payloader = session.payloader.clone();
         let tee_pad = session.tee_src_pad.clone();
         let remaining_count = sessions.len();
-        // Drop the WhepSession so its Drop impl sets webrtcbin + queue to Null
-        // BEFORE we remove them from the pipeline.
+        // Drop the WhepSession so its Drop impl sets the branch elements to
+        // Null BEFORE we remove them from the pipeline.
         drop(session);
         drop(sessions);
         tokio::task::spawn_blocking(move || -> Result<()> {
             // Already Null via WhepSession::Drop, but idempotent.
             let _ = webrtcbin.set_state(gst::State::Null);
+            let _ = payloader.set_state(gst::State::Null);
             let _ = queue.set_state(gst::State::Null);
-            // Remove queue first (it is upstream of webrtcbin in the branch).
+            // Remove in upstream→downstream order: queue → rtph264pay → webrtcbin.
             pipeline.remove(&queue).context("pipeline.remove queue")?;
+            pipeline
+                .remove(&payloader)
+                .context("pipeline.remove rtph264pay")?;
             pipeline
                 .remove(&webrtcbin)
                 .context("pipeline.remove webrtcbin")?;
@@ -436,5 +597,58 @@ impl NdiPipeline {
             }
         }
         found.into_iter()
+    }
+}
+
+/// Extract the H264 RTP payload type negotiated in an SDP answer.
+///
+/// Scans for the first `a=rtpmap:<pt> H264/90000` line and returns `<pt>`.
+/// WebRTC assigns H264 a *dynamic* payload type (96–127) that varies per
+/// browser (Chrome commonly picks 102/103/108…), so the per-consumer
+/// `rtph264pay` must be told this value or its RTP caps won't match
+/// webrtcbin's negotiated sink and no media flows.
+pub(crate) fn parse_h264_payload_type(sdp: &str) -> Option<u32> {
+    for line in sdp.lines() {
+        let line = line.trim();
+        // a=rtpmap:103 H264/90000
+        if let Some(rest) = line.strip_prefix("a=rtpmap:") {
+            let mut parts = rest.splitn(2, ' ');
+            let pt = parts.next()?;
+            let codec = parts.next().unwrap_or("");
+            if codec.to_ascii_uppercase().starts_with("H264/") {
+                if let Ok(pt) = pt.trim().parse::<u32>() {
+                    return Some(pt);
+                }
+            }
+        }
+    }
+    None
+}
+
+#[cfg(test)]
+mod pt_parse_tests {
+    use super::parse_h264_payload_type;
+
+    #[test]
+    fn finds_dynamic_h264_payload_type() {
+        let sdp = "v=0\r\n\
+                   m=video 9 UDP/TLS/RTP/SAVPF 103 104\r\n\
+                   a=rtpmap:103 H264/90000\r\n\
+                   a=fmtp:103 packetization-mode=1\r\n\
+                   a=rtpmap:104 rtx/90000\r\n";
+        assert_eq!(parse_h264_payload_type(sdp), Some(103));
+    }
+
+    #[test]
+    fn handles_alternate_pt_value() {
+        // Different browsers pick different dynamic PTs.
+        let sdp = "m=video 9 UDP/TLS/RTP/SAVPF 96\r\na=rtpmap:96 H264/90000\r\n";
+        assert_eq!(parse_h264_payload_type(sdp), Some(96));
+    }
+
+    #[test]
+    fn returns_none_without_h264() {
+        let sdp = "m=video 9 UDP/TLS/RTP/SAVPF 100\r\na=rtpmap:100 VP8/90000\r\n";
+        assert_eq!(parse_h264_payload_type(sdp), None);
     }
 }

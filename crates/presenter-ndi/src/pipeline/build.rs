@@ -1,5 +1,7 @@
 //! Pipeline construction: build the shared-encoder fanout topology
-//! (`ndisrc → ndisrcdemux → videoconvert → vah264enc → rtph264pay → tee`).
+//! (`ndisrc → ndisrcdemux → videoconvert → vah264enc → h264parse → tee`).
+//! The per-consumer `rtph264pay → webrtcbin` branches are added off the tee
+//! in `add_consumer` (see `consumers.rs`).
 
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -75,14 +77,23 @@ impl NdiPipeline {
         }
         let encoder = encoder_builder.build().context("build encoder")?;
 
-        let rtph264pay = gst::ElementFactory::make("rtph264pay")
-            .name("rtpay")
-            // Resend SPS/PPS with every IDR for fast browser recovery.
+        // Parse the encoder's H264 elementary stream into AU-aligned frames so
+        // every PER-CONSUMER rtph264pay (added in add_consumer) receives a
+        // clean, properly-capped stream. `config-interval=-1` re-inserts
+        // SPS/PPS before every IDR so a consumer that joins mid-stream decodes
+        // at the next keyframe.
+        //
+        // The PAYLOADER is intentionally NOT here — it is per-consumer,
+        // downstream of the tee, so each webrtcbin negotiates its own dynamic
+        // RTP payload type with its browser. A single shared payloader can only
+        // emit ONE pt and silently fails (connected, no frames) for any browser
+        // that negotiates a different one — the #336 regression. The ENCODER
+        // stays shared (one nvh264enc), preserving the fanout goal.
+        let h264parse = gst::ElementFactory::make("h264parse")
+            .name("h264parse")
             .property("config-interval", -1i32)
-            // H264 dynamic payload type 96.
-            .property("pt", 96u32)
             .build()
-            .context("build rtph264pay")?;
+            .context("build h264parse")?;
         let tee = gst::ElementFactory::make("tee")
             .name("tee")
             // Tee starts without any linked src pads; first consumer adds a branch.
@@ -97,7 +108,7 @@ impl NdiPipeline {
                 &videoconvert,
                 &audio_fakesink,
                 &encoder,
-                &rtph264pay,
+                &h264parse,
                 &tee,
             ])
             .context("add elements")?;
@@ -107,9 +118,9 @@ impl NdiPipeline {
             .link(&encoder)
             .context("link videoconvert -> encoder")?;
         encoder
-            .link(&rtph264pay)
-            .context("link encoder -> rtph264pay")?;
-        rtph264pay.link(&tee).context("link rtph264pay -> tee")?;
+            .link(&h264parse)
+            .context("link encoder -> h264parse")?;
+        h264parse.link(&tee).context("link h264parse -> tee")?;
 
         // ndisrcdemux is a sometimes-pad element. Wire up dynamic pads:
         let videoconvert_clone = videoconvert.clone();

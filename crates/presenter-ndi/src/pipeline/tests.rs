@@ -107,19 +107,23 @@ impl NdiPipeline {
             _ => {}
         }
         let encoder = encoder_builder.build().context("encoder")?;
-        let payer = gst::ElementFactory::make("rtph264pay")
-            .name("rtpay")
+        // Tee carries elementary H264 (production topology): the per-consumer
+        // rtph264pay lives downstream of the tee (added in add_consumer_stub),
+        // so the tee feeds h264parse output, NOT pre-payloaded RTP.
+        let h264parse = gst::ElementFactory::make("h264parse")
+            .name("h264parse")
+            .property("config-interval", -1i32)
             .build()
-            .context("rtph264pay")?;
+            .context("h264parse")?;
         let tee = gst::ElementFactory::make("tee")
             .name("tee")
             .property("allow-not-linked", true)
             .build()
             .context("tee")?;
         pipeline
-            .add_many([&src, &convert, &encoder, &payer, &tee])
+            .add_many([&src, &convert, &encoder, &h264parse, &tee])
             .context("add")?;
-        gst::Element::link_many([&src, &convert, &encoder, &payer, &tee]).context("link")?;
+        gst::Element::link_many([&src, &convert, &encoder, &h264parse, &tee]).context("link")?;
         let (state_tx, state_rx) = watch::channel(PipelineState::Stopped);
         Ok(Self {
             pipeline,
@@ -154,14 +158,20 @@ impl NdiPipeline {
         let queue = gst::ElementFactory::make("queue")
             .build()
             .context("queue (test)")?;
+        // Per-consumer rtph264pay (matches production topology:
+        // tee → queue → rtph264pay → webrtcbin).
+        let payloader = gst::ElementFactory::make("rtph264pay")
+            .property("config-interval", -1i32)
+            .build()
+            .context("rtph264pay (test)")?;
         let webrtcbin = gst::ElementFactory::make("webrtcbin")
             .name(session_id)
             .build()
             .context("webrtcbin (test)")?;
         self.pipeline
-            .add_many([&queue, &webrtcbin])
-            .context("pipeline.add queue+webrtcbin")?;
-        // Link: tee → queue → webrtcbin
+            .add_many([&queue, &payloader, &webrtcbin])
+            .context("pipeline.add queue+payloader+webrtcbin")?;
+        // Link: tee → queue → rtph264pay → webrtcbin
         let queue_sink = queue
             .static_pad("sink")
             .ok_or_else(|| anyhow!("queue has no sink pad (test)"))?;
@@ -169,13 +179,17 @@ impl NdiPipeline {
             .link(&queue_sink)
             .context("link tee_pad -> queue.sink (test)")?;
         queue
+            .link(&payloader)
+            .context("link queue -> rtph264pay (test)")?;
+        payloader
             .link(&webrtcbin)
-            .context("link queue -> webrtcbin (test)")?;
+            .context("link rtph264pay -> webrtcbin (test)")?;
         let (ice_tx, _ice_rx) = tokio::sync::mpsc::unbounded_channel();
         let session = WhepSession {
             session_id: session_id.to_string(),
             webrtcbin,
             queue,
+            payloader,
             tee_src_pad: tee_pad,
             connection_state: Arc::new(std::sync::Mutex::new(WhepConnectionState::New)),
             ice_tx,
@@ -193,8 +207,10 @@ impl NdiPipeline {
             return Ok(());
         };
         let _ = session.webrtcbin.set_state(gst::State::Null);
+        let _ = session.payloader.set_state(gst::State::Null);
         let _ = session.queue.set_state(gst::State::Null);
         self.pipeline.remove(&session.queue).ok();
+        self.pipeline.remove(&session.payloader).ok();
         self.pipeline.remove(&session.webrtcbin).ok();
         (*self.tee).release_request_pad(&session.tee_src_pad);
         Ok(())

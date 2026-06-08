@@ -1279,7 +1279,7 @@ checksum = "439ee305def115ba05938db6eb1644ff94165c5ab5e9420d1c1bcedbba909391"
 
 [[package]]
 name = "presenter-core"
-version = "0.4.97"
+version = "0.4.102"
 dependencies = [
  "anyhow",
  "chrono",
@@ -1294,7 +1294,7 @@ dependencies = [
 
 [[package]]
 name = "presenter-ui"
-version = "0.1.39"
+version = "0.1.40"
 dependencies = [
  "chrono",
  "console_error_panic_hook",
