@@ -131,8 +131,19 @@ async fn main() -> anyhow::Result<()> {
         .await
         .with_context(|| format!("failed to bind to {addr}"))?;
     tracing::info!(%addr, "presenter server listening");
+    // Mock integrations (OSC/AbleSet/Resolume) bind FIXED localhost ports
+    // (e.g. 127.0.0.1:8091). When a test server is spawned on a host that
+    // already runs another mock-integrations build (e.g. the deployed
+    // presenter-dev service on the self-hosted CI runner), those ports
+    // collide and the second server fails to start. Tests that don't need the
+    // mocks (the NDI WebRTC E2E lane) set PRESENTER_SKIP_MOCK_INTEGRATIONS=1
+    // to skip them and avoid the conflict.
     #[cfg(feature = "mock-integrations")]
-    mock_integrations::start_all().await?;
+    if std::env::var_os("PRESENTER_SKIP_MOCK_INTEGRATIONS").is_none() {
+        mock_integrations::start_all().await?;
+    } else {
+        tracing::info!("PRESENTER_SKIP_MOCK_INTEGRATIONS set — skipping mock integrations");
+    }
     axum::serve(listener, app).await.context("server failure")
 }
 

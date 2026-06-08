@@ -691,6 +691,11 @@ jobs:
         run: npx playwright test --grep "@synthetic-ndi" --project chrome-video --reporter=line
         env:
           CI: true
+          # Skip mock integrations (OSC/AbleSet/Resolume) in the spawned test
+          # server — their FIXED localhost ports collide with the deployed
+          # presenter-dev service already running on this self-hosted runner.
+          # The NDI test doesn't use those mocks.
+          PRESENTER_SKIP_MOCK_INTEGRATIONS: "1"
           PRESENTER_LIBRARY_ROOT: ${{ github.workspace }}/data/libraries
           PRESENTER_BIBLE_KJV: ${{ github.workspace }}/data/bibles/kjv.usfm.zip
           PRESENTER_BIBLE_SEB: ${{ github.workspace }}/data/bibles/seb.bbl.mybible.zip
