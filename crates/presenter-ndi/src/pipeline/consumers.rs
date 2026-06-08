@@ -84,6 +84,16 @@ impl NdiPipeline {
                 sdp_msg,
             );
 
+            // The browser's offer lists the dynamic H264 payload type it will
+            // accept (Chrome commonly 102/103/108…). Pre-seat the per-consumer
+            // rtph264pay + the rtph264pay→webrtcbin link caps to THAT pt, so the
+            // RTP that flows during the early-media window already matches what
+            // webrtcbin will answer — no transceiver built from a wrong/default
+            // pt. Re-confirmed against the answer after create-answer.
+            let offer_h264_pt = std::str::from_utf8(&sdp_offer_bytes)
+                .ok()
+                .and_then(parse_h264_payload_type);
+
             // Step 1: request a tee src pad. On any subsequent failure we MUST
             // release this pad before returning — otherwise it leaks forever.
             let tee_pad = tee
@@ -104,13 +114,25 @@ impl NdiPipeline {
                     // produces a caps mismatch on the queue→webrtcbin link for any
                     // browser that picks a different pt (Chrome uses e.g. 103) →
                     // zero RTP forwarded → connected but black screen.
+                    // LEAKY queue: a stalled or dead consumer branch (browser
+                    // closed without DELETE, frozen tab, network drop) must NOT
+                    // back-pressure the shared tee and starve the OTHER consumers.
+                    // `leaky=downstream` drops the oldest buffered frame instead of
+                    // blocking; bounded to ~1s so a dead branch caps quickly. A live
+                    // consumer keeps its queue near-empty, so this never drops for it.
                     let queue = gst::ElementFactory::make("queue")
+                        .property_from_str("leaky", "downstream")
+                        .property("max-size-time", 1_000_000_000u64)
+                        .property("max-size-bytes", 0u32)
+                        .property("max-size-buffers", 0u32)
                         .build()
                         .context("build queue")?;
                     let payloader = gst::ElementFactory::make("rtph264pay")
                         .name(format!("pay_{session_id_for_blocking}"))
                         // Resend SPS/PPS with every IDR for fast browser recovery.
                         .property("config-interval", -1i32)
+                        // Pre-seat pt to the browser's offered H264 pt (see above).
+                        .property("pt", offer_h264_pt.unwrap_or(96))
                         .build()
                         .context("build rtph264pay")?;
                     let webrtcbin = gst::ElementFactory::make("webrtcbin")
@@ -136,15 +158,39 @@ impl NdiPipeline {
                     // from the pipeline before returning. Use a nested closure.
                     let pipeline_result: Result<String> = (|| -> Result<String> {
                         // Link the consumer branch downstream-first: queue → rtph264pay
-                        // → webrtcbin. The tee_src → queue link is deferred until
-                        // AFTER the branch is PLAYING (post-negotiation) — linking a
-                        // live tee into a not-yet-running branch leaves the new tee
-                        // src pad in a state where it never pushes, so the payloader
-                        // gets zero buffers (connected, but black screen).
+                        // → webrtcbin. The rtph264pay→webrtcbin link is FILTERED with
+                        // explicit application/x-rtp H264 caps so webrtcbin builds its
+                        // send transceiver from fixed H264/<offer-pt> caps — not from
+                        // whatever early media happens to arrive first (which, with a
+                        // plain link, builds the transceiver wrong and yields zero RTP).
                         queue.link(&payloader).context("link queue -> rtph264pay")?;
+                        let rtp_caps = gst::Caps::builder("application/x-rtp")
+                            .field("media", "video")
+                            .field("encoding-name", "H264")
+                            .field("clock-rate", 90_000i32)
+                            .field("payload", offer_h264_pt.unwrap_or(96) as i32)
+                            .build();
                         payloader
-                            .link(&webrtcbin)
-                            .context("link rtph264pay -> webrtcbin")?;
+                            .link_filtered(&webrtcbin, &rtp_caps)
+                            .context("link rtph264pay -> webrtcbin (H264 caps)")?;
+
+                        // Splice the branch into the live tee NOW, while everything is
+                        // still in NULL, so the tee's sticky events (stream-start /
+                        // caps / segment) propagate down the whole branch as it
+                        // transitions to PLAYING below. Linking the tee only AFTER the
+                        // branch is already PLAYING (the previous "defer the tee link"
+                        // approach) leaves it without those events and it never forwards
+                        // a buffer — connected, but BLACK. That was the actual NDI→stage
+                        // regression: the WebRTC connection established and the answer
+                        // was correct H264 sendonly, but ZERO RTP ever flowed to the
+                        // browser. Linking before the PLAYING transition fixes it; the
+                        // tee then fans out correctly to every consumer.
+                        let queue_sink = queue
+                            .static_pad("sink")
+                            .ok_or_else(|| anyhow!("queue has no sink pad"))?;
+                        tee_pad
+                            .link(&queue_sink)
+                            .context("link tee_pad -> queue.sink")?;
 
                         // Connect on-ice-candidate signal.
                         // Signal signature: void(webrtcbin, sdp_mline_index: u32, candidate: &str)
@@ -196,15 +242,22 @@ impl NdiPipeline {
                             }
                         });
 
-                        // Set webrtcbin to PLAYING so it can do ICE + DTLS.
-                        // NOTE: the upstream branch (queue + rtph264pay) is started
-                        // LATER, AFTER set-local-description — see below. Pushing RTP
-                        // into webrtcbin before the remote offer is applied corrupts
-                        // negotiation (webrtcbin builds a transceiver from the early
-                        // media caps) and DTLS then never completes.
+                        // Bring the whole branch to PLAYING together. webrtcbin needs
+                        // PLAYING for ICE + DTLS; the tee-linked queue + rtph264pay are
+                        // synced here so the tee's sticky events propagate through them
+                        // during this transition (see the tee-splice comment above).
+                        // Early H264 buffers flowing into webrtcbin before the offer is
+                        // applied do NOT corrupt DTLS — webrtcbin buffers them until the
+                        // transceiver is negotiated; the send path then drains normally.
                         webrtcbin
                             .set_state(gst::State::Playing)
                             .context("set webrtcbin to Playing")?;
+                        queue
+                            .sync_state_with_parent()
+                            .context("sync queue state with pipeline")?;
+                        payloader
+                            .sync_state_with_parent()
+                            .context("sync rtph264pay state with pipeline")?;
 
                         // Set the remote description (the browser's offer).
                         let (remote_desc_tx, remote_desc_rx) =
@@ -349,33 +402,11 @@ impl NdiPipeline {
                             }
                         }
 
-                        // Negotiation is complete. NOW start the upstream branch so
-                        // H264 buffers flow tee → queue → rtph264pay → webrtcbin.
-                        // Elements added to an already-PLAYING pipeline stay in NULL
-                        // until synced; webrtcbin started itself above, but queue +
-                        // rtph264pay must be synced or the send path never runs
-                        // (connected, but zero RTP → black screen). Starting them
-                        // here (post-negotiation) avoids the early-media corruption
-                        // that breaks DTLS when started before set-remote-description.
-                        queue
-                            .sync_state_with_parent()
-                            .context("sync queue state with pipeline")?;
-                        payloader
-                            .sync_state_with_parent()
-                            .context("sync rtph264pay state with pipeline")?;
-
-                        // Branch is PLAYING — NOW splice it into the live tee. The
-                        // tee starts pushing H264 to this consumer's queue at the
-                        // next buffer; the encoder's ~1s keyframe interval (GOP 30
-                        // — nvh264enc gop-size / vah264enc|x264enc key-int-max)
-                        // plus h264parse config-interval=-1 means the browser gets
-                        // a decodable keyframe within ~1s.
-                        let queue_sink = queue
-                            .static_pad("sink")
-                            .ok_or_else(|| anyhow!("queue has no sink pad"))?;
-                        tee_pad
-                            .link(&queue_sink)
-                            .context("link tee_pad -> queue.sink")?;
+                        // The branch was spliced into the tee and brought to PLAYING
+                        // before negotiation (see above), so H264 buffers are already
+                        // flowing tee → queue → rtph264pay → webrtcbin. The browser's
+                        // RTCP PLI pulls a keyframe (webrtcbin forwards it upstream as
+                        // force-key-unit) so decode starts within ~1 RTT of DTLS.
 
                         // Return the FINAL local description — now populated with the
                         // gathered ICE candidates — as the WHEP answer body.

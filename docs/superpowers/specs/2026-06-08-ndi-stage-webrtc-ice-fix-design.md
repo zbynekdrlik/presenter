@@ -5,6 +5,36 @@
 **Severity:** 🔴 production regression — NDI video on stage displays does not work at all
 **Related:** regression from #336 (shared-encoder fanout rewrite, `615b4d7`)
 
+---
+
+## ⚠️ Implementation correction — ACTUAL root cause (found via TDD on live dev, real Google Chrome)
+
+The ICE/DTLS/payload-type hypotheses below were **not** the real break. Verified
+against a real Google Chrome (the bundled Playwright Chromium has no H.264, so it
+never exercised the H.264 path — a major source of confusion):
+
+- ICE **connected**, DTLS **completed** (`connectionState: connected`), and the
+  SDP answer was correct **H.264 sendonly**. The connection was fine.
+- The break was **media flow**: `add_consumer` linked the per-consumer branch
+  into the shared `tee` **after** the branch was already PLAYING (the "defer the
+  tee link" approach). The new tee src pad then never received the tee's sticky
+  events, so it forwarded **zero RTP** → connected but black.
+- The break manifested **only when an audio m-line was also negotiated**
+  (video + audio, what the real client sends). A **video-only** offer happened to
+  decode frames even on the broken build — which is why the `e2e-ndi` guard was
+  GREEN while every real browser was black. **The test used video-only.**
+
+**Fix:** link the tee → branch while the branch is still NULL and bring the whole
+branch to PLAYING *afterwards*, so sticky events propagate during the transition
+(`consumers.rs`). Plus: per-consumer `leaky=downstream` queue (a dead consumer
+can't back-pressure the shared tee); the watchdog no longer reconnects before the
+first frame renders (`ndi_video.rs`); and the regression test now offers
+**video + audio** as the real client does (`ndi-webrtc-synthetic.spec.ts`).
+
+**Verified:** single stage display renders real video; two **different-IP**
+consumers (TV + laptop) both render simultaneously (the shared-encoder fanout
+works). Regression test RED on the broken build, GREEN on the fix.
+
 ## Problem
 
 After the #336 shared-encoder fanout work merged (CI green), the NDI-video-to-stage
