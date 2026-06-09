@@ -92,9 +92,7 @@ impl Watchdog {
                         | RtcIceConnectionState::Disconnected
                         | RtcIceConnectionState::Closed
                 ) {
-                    leptos::logging::warn!(
-                        "watchdog: ICE state={s:?}, triggering reconnect"
-                    );
+                    leptos::logging::warn!("watchdog: ICE state={s:?}, triggering reconnect");
                     active.set(false);
                     (on_failure)();
                 }
@@ -230,10 +228,7 @@ pub fn NdiVideo(source_id: String, #[prop(optional)] class: Option<&'static str>
                             Watchdog::install(&video, &session.pc, move || flag.set(true));
 
                         install_pagehide_teardown(&session);
-                        session_holder.set_value(Some(ActiveConnection {
-                            session,
-                            watchdog,
-                        }));
+                        session_holder.set_value(Some(ActiveConnection { session, watchdog }));
 
                         // Wait until either cancellation OR a watchdog fire.
                         loop {
@@ -331,8 +326,7 @@ async fn sleep_for_backoff() {
     let ms = schedule_ms[i];
     let promise = leptos::web_sys::js_sys::Promise::new(&mut |resolve, _| {
         if let Some(window) = leptos::web_sys::window() {
-            let _ = window
-                .set_timeout_with_callback_and_timeout_and_arguments_0(&resolve, ms);
+            let _ = window.set_timeout_with_callback_and_timeout_and_arguments_0(&resolve, ms);
         }
     });
     let _ = wasm_bindgen_futures::JsFuture::from(promise).await;
@@ -427,8 +421,7 @@ async fn wait_for_ice_gathering_complete(pc: &RtcPeerConnection) {
         *cb_holder_for_promise.borrow_mut() = Some(cb);
         // Timeout fallback so a stuck gather can't hang the connect.
         if let Some(window) = leptos::web_sys::window() {
-            let _ = window
-                .set_timeout_with_callback_and_timeout_and_arguments_0(&resolve, 3000);
+            let _ = window.set_timeout_with_callback_and_timeout_and_arguments_0(&resolve, 3000);
         }
     });
     let _ = JsFuture::from(promise).await;
@@ -440,6 +433,23 @@ async fn wait_for_ice_gathering_complete(pc: &RtcPeerConnection) {
 
 async fn connect_whep(video: &HtmlVideoElement, source_id: &str) -> Result<WhepSession, JsValue> {
     let cfg = RtcConfiguration::new();
+    // max-bundle: put video + audio on ONE ICE/DTLS transport, MATCHING the
+    // server's webrtcbin (`bundle-policy=max-bundle`). With the default
+    // ("balanced") policy the browser gathers a separate transport per m-line
+    // while the server bundles everything onto the first — the transports don't
+    // line up, the RTCPeerConnection reaches `connected` but NO RTP is ever
+    // delivered to the receivers (ICE/DTLS up, zero `framesDecoded` → black
+    // stage). Confirmed by probe: default policy = black, max-bundle = video.
+    // The single most important line for the stage actually showing video.
+    //
+    // Set via reflection because the `RtcBundlePolicy` web-sys feature is not
+    // enabled in this build; `cfg.bundlePolicy = "max-bundle"` is the same thing
+    // the typed setter would do.
+    let _ = js_sys::Reflect::set(
+        &cfg,
+        &JsValue::from_str("bundlePolicy"),
+        &JsValue::from_str("max-bundle"),
+    );
     let pc = RtcPeerConnection::new_with_configuration(&cfg)?;
 
     let video_init = RtcRtpTransceiverInit::new();
