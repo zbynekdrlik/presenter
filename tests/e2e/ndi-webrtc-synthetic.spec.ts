@@ -117,6 +117,15 @@ test("NDI video decodes real frames for MULTIPLE simultaneous consumers (synthet
   // Assert via getStats (framesDecoded / bytesReceived) not <video>.videoWidth:
   // headless Chrome decodes WebRTC media but does not reliably surface <video>
   // dimensions, so getStats is the precise measure.
+  // Collect console errors/warnings (browser-console-zero-errors rule): a
+  // WASM panic or page error must fail the test, not slip by silently.
+  const consoleErrors: string[] = [];
+  page.on("console", (msg) => {
+    if (msg.type() === "error" || msg.type() === "warning") {
+      consoleErrors.push(`[${msg.type()}] ${msg.text()}`);
+    }
+  });
+
   await page.goto(new URL("/", baseURL).toString());
   const results = await page.evaluate(async (sourceId) => {
     async function connectOne() {
@@ -210,6 +219,12 @@ test("NDI video decodes real frames for MULTIPLE simultaneous consumers (synthet
       `consumer ${i} decoded frame must be downscaled ≤1280 wide, got ${s.frameWidth}`,
     ).toBeLessThanOrEqual(1280);
   });
+
+  // The browser console must be clean throughout (no WASM panic / page error).
+  expect(
+    consoleErrors,
+    `browser console must have zero errors/warnings, got: ${consoleErrors.join("; ")}`,
+  ).toEqual([]);
 
   // Cleanup.
   await request.post(

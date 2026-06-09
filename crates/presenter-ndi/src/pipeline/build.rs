@@ -47,74 +47,8 @@ impl NdiPipeline {
             .name("demux")
             .build()
             .context("build ndisrcdemux")?;
-        let videoconvert = gst::ElementFactory::make("videoconvert")
-            .build()
-            .context("build videoconvert")?;
-        // Downscale to a stage-display-safe resolution BEFORE encoding. NDI
-        // sources are commonly 1080p, 1440p, even 4K (Resolume SP-live here is
-        // 2560×1440). Encoding at the source resolution (a) exceeds the H264
-        // level the browser negotiates → the browser decodes ZERO frames →
-        // black stage, and (b) is unplayable on the low-cost TVs used as stage
-        // displays. Cap at 720p (16:9, universally decodable, matches the 2.5
-        // Mbps target). `add-borders` letterboxes non-16:9 sources instead of
-        // stretching; downstream of a smaller source it upscales harmlessly.
-        let videoscale = gst::ElementFactory::make("videoscale")
-            .property("add-borders", true)
-            .build()
-            .context("build videoscale")?;
-        let scale_caps = gst::ElementFactory::make("capsfilter")
-            .property(
-                "caps",
-                gst::Caps::builder("video/x-raw")
-                    // format=NV12 (4:2:0) is REQUIRED, not cosmetic: NDI sources
-                    // are often 4:2:2 (UYVY, like Resolume here) or 4:4:4, and if
-                    // the encoder input keeps that chroma, nvh264enc emits a
-                    // High-4:2:2 / High-4:4:4 H264 profile that NO browser can
-                    // decode (ontrack fires, framesDecoded stays 0 → black). Web
-                    // browsers only decode 4:2:0. Forcing NV12 here makes the
-                    // encoder emit a Main/High 4:2:0 stream every browser decodes.
-                    .field("format", "NV12")
-                    .field("width", MAX_VIDEO_WIDTH)
-                    .field("height", MAX_VIDEO_HEIGHT)
-                    .field("pixel-aspect-ratio", gst::Fraction::new(1, 1))
-                    .build(),
-            )
-            .build()
-            .context("build scale capsfilter")?;
-        let audio_fakesink = gst::ElementFactory::make("fakesink")
-            .property("async", false)
-            .property("sync", false)
-            .build()
-            .context("build fakesink (audio)")?;
-
-        // Build the encoder with tuning applied at construction time.
-        // (No encoder-setup signal — that was a webrtcsink concept. Here
-        // we own the encoder element directly so we set properties now.)
-        let mut encoder_builder = gst::ElementFactory::make(encoder_name).name("encoder");
-        match encoder_name {
-            "vah264enc" => {
-                encoder_builder = encoder_builder
-                    .property("key-int-max", 30u32)
-                    .property("bitrate", 2500u32);
-            }
-            "nvh264enc" => {
-                encoder_builder = encoder_builder
-                    .property("gop-size", 30i32)
-                    .property("zerolatency", true)
-                    .property("bitrate", 2500u32);
-            }
-            "x264enc" => {
-                encoder_builder = encoder_builder
-                    .property_from_str("tune", "zerolatency")
-                    .property_from_str("speed-preset", "superfast")
-                    .property("key-int-max", 30u32)
-                    .property("bitrate", 2500u32);
-            }
-            _ => {
-                // hw_h264_encoder only returns the three above; defensive fallthrough.
-            }
-        }
-        let encoder = encoder_builder.build().context("build encoder")?;
+        let (videoconvert, videoscale, scale_caps, audio_fakesink) = build_video_chain()?;
+        let encoder = build_encoder(encoder_name)?;
 
         // Parse the encoder's H264 elementary stream into AU-aligned frames so
         // every PER-CONSUMER rtph264pay (added in add_consumer) receives a
@@ -197,4 +131,81 @@ impl NdiPipeline {
             tee: Arc::new(tee),
         })
     }
+}
+
+/// Build the raw-video conditioning chain placed between the demux and the
+/// encoder: `videoconvert → videoscale → capsfilter(NV12, ≤720p)` plus the
+/// audio `fakesink`. Returns `(videoconvert, videoscale, scale_caps, audio_fakesink)`.
+fn build_video_chain() -> Result<(gst::Element, gst::Element, gst::Element, gst::Element)> {
+    let videoconvert = gst::ElementFactory::make("videoconvert")
+        .build()
+        .context("build videoconvert")?;
+    // Downscale to a stage-display-safe resolution BEFORE encoding. NDI sources
+    // are commonly 1080p, 1440p, even 4K (Resolume SP-live here is 2560×1440).
+    // Encoding at the source resolution (a) exceeds the H264 level the browser
+    // negotiates → the browser decodes ZERO frames → black stage, and (b) is
+    // unplayable on the low-cost TVs used as stage displays. Cap at 720p (16:9,
+    // universally decodable, matches the 2.5 Mbps target). `add-borders`
+    // letterboxes non-16:9 sources instead of stretching; downstream of a
+    // smaller source it upscales harmlessly.
+    let videoscale = gst::ElementFactory::make("videoscale")
+        .property("add-borders", true)
+        .build()
+        .context("build videoscale")?;
+    let scale_caps = gst::ElementFactory::make("capsfilter")
+        .property(
+            "caps",
+            gst::Caps::builder("video/x-raw")
+                // format=NV12 (4:2:0) is REQUIRED, not cosmetic: NDI sources are
+                // often 4:2:2 (UYVY, like Resolume here) or 4:4:4, and if the
+                // encoder input keeps that chroma, nvh264enc emits a High-4:2:2 /
+                // High-4:4:4 H264 profile that NO browser can decode (ontrack
+                // fires, framesDecoded stays 0 → black). Web browsers only decode
+                // 4:2:0. Forcing NV12 here makes the encoder emit a Main/High
+                // 4:2:0 stream every browser decodes.
+                .field("format", "NV12")
+                .field("width", MAX_VIDEO_WIDTH)
+                .field("height", MAX_VIDEO_HEIGHT)
+                .field("pixel-aspect-ratio", gst::Fraction::new(1, 1))
+                .build(),
+        )
+        .build()
+        .context("build scale capsfilter")?;
+    let audio_fakesink = gst::ElementFactory::make("fakesink")
+        .property("async", false)
+        .property("sync", false)
+        .build()
+        .context("build fakesink (audio)")?;
+    Ok((videoconvert, videoscale, scale_caps, audio_fakesink))
+}
+
+/// Build the H264 encoder with tuning applied at construction time. `encoder_name`
+/// is one of the three returned by `hw_h264_encoder()` (vah264enc / nvh264enc /
+/// x264enc); the element is named "encoder" for later lookup.
+fn build_encoder(encoder_name: &str) -> Result<gst::Element> {
+    let mut encoder_builder = gst::ElementFactory::make(encoder_name).name("encoder");
+    match encoder_name {
+        "vah264enc" => {
+            encoder_builder = encoder_builder
+                .property("key-int-max", 30u32)
+                .property("bitrate", 2500u32);
+        }
+        "nvh264enc" => {
+            encoder_builder = encoder_builder
+                .property("gop-size", 30i32)
+                .property("zerolatency", true)
+                .property("bitrate", 2500u32);
+        }
+        "x264enc" => {
+            encoder_builder = encoder_builder
+                .property_from_str("tune", "zerolatency")
+                .property_from_str("speed-preset", "superfast")
+                .property("key-int-max", 30u32)
+                .property("bitrate", 2500u32);
+        }
+        _ => {
+            // hw_h264_encoder only returns the three above; defensive fallthrough.
+        }
+    }
+    encoder_builder.build().context("build encoder")
 }

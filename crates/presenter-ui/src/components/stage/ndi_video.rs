@@ -447,6 +447,43 @@ async fn connect_whep(video: &HtmlVideoElement, source_id: &str) -> Result<WhepS
     audio_init.set_direction(RtcRtpTransceiverDirection::Recvonly);
     pc.add_transceiver_with_str_and_init("audio", &audio_init);
 
+    attach_ontrack(&pc, video);
+
+    let offer = JsFuture::from(pc.create_offer()).await?;
+    let offer_init: RtcSessionDescriptionInit = offer.unchecked_into();
+    JsFuture::from(pc.set_local_description(&offer_init)).await?;
+
+    // Wait for ICE gathering to complete so the offer SDP we POST carries our
+    // host candidates (LAN: no STUN/TURN, gathers in <1s). This makes the
+    // server's webrtcbin receive our candidates directly in the offer instead
+    // of relying solely on peer-reflexive discovery — more robust ICE. Bounded
+    // by a timeout inside the helper so a stuck gather can't hang the connect;
+    // on timeout we fall back to whatever was gathered (still works).
+    wait_for_ice_gathering_complete(&pc).await;
+
+    // Prefer the post-gather local description (includes a=candidate lines);
+    // fall back to the pre-gather offer if local_description is unavailable.
+    let offer_sdp = pc
+        .local_description()
+        .map(|d| d.sdp())
+        .filter(|s| !s.is_empty())
+        .or_else(|| {
+            js_sys::Reflect::get(&offer_init, &"sdp".into())
+                .ok()
+                .and_then(|v| v.as_string())
+        })
+        .unwrap_or_default();
+
+    let (answer_text, resource_url) = post_whep_offer(source_id, &offer_sdp).await?;
+    let answer = RtcSessionDescriptionInit::new(RtcSdpType::Answer);
+    answer.set_sdp(&answer_text);
+    JsFuture::from(pc.set_remote_description(&answer)).await?;
+    Ok(WhepSession { pc, resource_url })
+}
+
+/// Attach the `ontrack` handler: on the first inbound MediaStream, set it as the
+/// `<video>` srcObject (muted, to satisfy Chrome's autoplay policy) and play.
+fn attach_ontrack(pc: &RtcPeerConnection, video: &HtmlVideoElement) {
     let video_clone = video.clone();
     let ontrack = Closure::<dyn FnMut(RtcTrackEvent)>::new(move |ev: RtcTrackEvent| {
         let streams = ev.streams();
@@ -493,36 +530,21 @@ async fn connect_whep(video: &HtmlVideoElement, source_id: &str) -> Result<WhepS
     });
     pc.set_ontrack(Some(ontrack.as_ref().unchecked_ref()));
     ontrack.forget();
+}
 
-    let offer = JsFuture::from(pc.create_offer()).await?;
-    let offer_init: RtcSessionDescriptionInit = offer.unchecked_into();
-    JsFuture::from(pc.set_local_description(&offer_init)).await?;
-
-    // Wait for ICE gathering to complete so the offer SDP we POST carries our
-    // host candidates (LAN: no STUN/TURN, gathers in <1s). This makes the
-    // server's webrtcbin receive our candidates directly in the offer instead
-    // of relying solely on peer-reflexive discovery — more robust ICE. Bounded
-    // by a timeout inside the helper so a stuck gather can't hang the connect;
-    // on timeout we fall back to whatever was gathered (still works).
-    wait_for_ice_gathering_complete(&pc).await;
-
-    // Prefer the post-gather local description (includes a=candidate lines);
-    // fall back to the pre-gather offer if local_description is unavailable.
-    let offer_sdp = pc
-        .local_description()
-        .map(|d| d.sdp())
-        .filter(|s| !s.is_empty())
-        .or_else(|| {
-            js_sys::Reflect::get(&offer_init, &"sdp".into())
-                .ok()
-                .and_then(|v| v.as_string())
-        })
-        .unwrap_or_default();
-
+/// POST the WHEP offer SDP and return `(answer_sdp, resource_url)`. The resource
+/// URL comes from the `Location` header (resolved against the page origin) and
+/// is DELETEd on cleanup so server-side sessions don't leak — after ~10 leaked
+/// sessions webrtcsink's discovery starts failing for new consumers (transient
+/// `failed to set sps/pps` errors that don't recover).
+async fn post_whep_offer(
+    source_id: &str,
+    offer_sdp: &str,
+) -> Result<(String, Option<String>), JsValue> {
     let url = whep_url(source_id);
     let init = leptos::web_sys::RequestInit::new();
     init.set_method("POST");
-    init.set_body(&JsValue::from_str(&offer_sdp));
+    init.set_body(&JsValue::from_str(offer_sdp));
     let headers = leptos::web_sys::Headers::new()?;
     headers.set("Content-Type", "application/sdp")?;
     init.set_headers(&headers);
@@ -537,11 +559,7 @@ async fn connect_whep(video: &HtmlVideoElement, source_id: &str) -> Result<WhepS
         )));
     }
     // WHEP RFC 9725: server returns 201 Created with a `Location` header
-    // pointing at the session resource. We MUST store this URL and DELETE
-    // it on cleanup; otherwise the server-side session leaks and after
-    // ~10 leaked sessions webrtcsink's discovery starts failing for new
-    // consumers (transient `failed to set sps/pps` errors that don't
-    // recover).
+    // pointing at the session resource.
     let location_header = resp
         .headers()
         .get("Location")
@@ -562,8 +580,5 @@ async fn connect_whep(video: &HtmlVideoElement, source_id: &str) -> Result<WhepS
         .await?
         .as_string()
         .unwrap_or_default();
-    let answer = RtcSessionDescriptionInit::new(RtcSdpType::Answer);
-    answer.set_sdp(&answer_text);
-    JsFuture::from(pc.set_remote_description(&answer)).await?;
-    Ok(WhepSession { pc, resource_url })
+    Ok((answer_text, resource_url))
 }
