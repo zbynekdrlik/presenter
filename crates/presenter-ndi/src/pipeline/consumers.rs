@@ -157,6 +157,16 @@ impl NdiPipeline {
                         // black screen. Confirmed via dtlsconnection logs: video
                         // DTLS completed, audio DTLS hung, until bundling.
                         .property_from_str("bundle-policy", "max-bundle")
+                        // Explicit, fixed latency so this webrtcbin's internal
+                        // rtpsession ALWAYS has a configured latency and can compute
+                        // running time for outgoing RTP — independent of pipeline
+                        // latency recalculation, which is unreliable for a webrtcbin
+                        // added to an already-running live pipeline (or re-added after
+                        // another consumer was removed). Without a configured latency
+                        // the rtpsession logs "Can't determine running time" and
+                        // forwards ZERO RTP (#372 black stage for 2nd+/reconnecting
+                        // consumers). 200 ms is webrtcbin's own default.
+                        .property("latency", 200u32)
                         .build()
                         .context("build webrtcbin")?;
 
@@ -288,6 +298,30 @@ impl NdiPipeline {
                         payloader
                             .sync_state_with_parent()
                             .context("sync rtph264pay state with pipeline")?;
+
+                        // Recalculate pipeline latency so the newly-added
+                        // webrtcbin's internal rtpsession learns the LIVE pipeline's
+                        // configured latency. This is the #372 fix.
+                        //
+                        // Without it, a webrtcbin added to an already-running live
+                        // pipeline has an rtpsession with no configured latency, so
+                        // it logs "Can't determine running time for this packet
+                        // without knowing configured latency" and forwards ZERO RTP
+                        // — connected, but a black stage. The FIRST consumer worked
+                        // only because the pipeline auto-recalculated latency the one
+                        // time it transitioned to PLAYING; every consumer added
+                        // afterwards (a 2nd display, or any display once the pipeline
+                        // is already streaming) never got a latency config. Forcing a
+                        // recalc here configures the new rtpsession AND refreshes the
+                        // existing ones, so EVERY consumer receives media.
+                        if let Err(e) = pipeline.recalculate_latency() {
+                            tracing::warn!(
+                                session_id = %session_id_for_blocking,
+                                error = %e,
+                                "pipeline.recalculate_latency() failed after adding \
+                                 consumer; rtpsession may not forward RTP"
+                            );
+                        }
 
                         // Set the remote description (the browser's offer).
                         let (remote_desc_tx, remote_desc_rx) =
@@ -585,6 +619,13 @@ impl NdiPipeline {
             let r_pay = pipeline.remove(&payloader);
             let r_webrtc = pipeline.remove(&webrtcbin);
             tee.release_request_pad(&tee_pad);
+            // Refresh the pipeline latency now that a consumer (and its
+            // rtpsession) is gone. Without this, the configured latency left
+            // over from the removed consumer is stale, and the NEXT consumer
+            // added afterwards inherits a broken latency → its rtpsession logs
+            // "Can't determine running time" and forwards ZERO RTP (#372: a
+            // display reconnecting after another disconnected stayed black).
+            let _ = pipeline.recalculate_latency();
             r_queue.context("pipeline.remove queue")?;
             r_pay.context("pipeline.remove rtph264pay")?;
             r_webrtc.context("pipeline.remove webrtcbin")?;
