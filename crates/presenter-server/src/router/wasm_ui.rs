@@ -29,9 +29,14 @@ pub(super) async fn wasm_ui_asset(Path(path): Path<String>) -> Response {
     match WASM_UI_DIR.get_file(&path) {
         Some(file) => {
             let content_type = mime_from_path(&path);
+            // Trunk fingerprints asset filenames (presenter-ui-<hash>.js/.wasm),
+            // so a given URL's bytes never change — cache them aggressively.
             (
                 StatusCode::OK,
-                [(header::CONTENT_TYPE, content_type)],
+                [
+                    (header::CONTENT_TYPE, content_type),
+                    (header::CACHE_CONTROL, "public, max-age=31536000, immutable"),
+                ],
                 file.contents(),
             )
                 .into_response()
@@ -41,11 +46,22 @@ pub(super) async fn wasm_ui_asset(Path(path): Path<String>) -> Response {
 }
 
 /// Serve the `index.html` from the embedded WASM build.
+///
+/// `Cache-Control: no-store` is deliberate: index.html references the
+/// content-hashed WASM/JS bundle by filename, so it MUST always be re-fetched —
+/// otherwise a browser (especially an always-on stage-display TV) keeps a
+/// cached index pointing at the OLD bundle hash and never picks up a deploy,
+/// even though the new bundle is sitting right there. Without this, every
+/// deploy required a manual hard-refresh on every display to take effect.
 fn serve_index_html() -> Response {
     match WASM_UI_DIR.get_file("index.html") {
         Some(file) => {
             let html = String::from_utf8_lossy(file.contents());
-            Html(html.into_owned()).into_response()
+            (
+                [(header::CACHE_CONTROL, "no-store")],
+                Html(html.into_owned()),
+            )
+                .into_response()
         }
         None => (
             StatusCode::SERVICE_UNAVAILABLE,
