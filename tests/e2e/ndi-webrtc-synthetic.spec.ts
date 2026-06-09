@@ -141,9 +141,14 @@ test("NDI video decodes real frames end-to-end (synthetic source) @video-codec @
     });
     if (!resp.ok) {
       pc.close();
-      return { ok: false, reason: `WHEP POST ${resp.status}`, conn: pc.connectionState };
+      return {
+        ok: false,
+        reason: `WHEP POST ${resp.status}`,
+        conn: pc.connectionState,
+      };
     }
-    const location = resp.headers.get("Location") || resp.headers.get("location");
+    const location =
+      resp.headers.get("Location") || resp.headers.get("location");
     await pc.setRemoteDescription({ type: "answer", sdp: await resp.text() });
     // Poll up to ~25s for decoded frames.
     let inbound: {
@@ -173,7 +178,9 @@ test("NDI video decodes real frames end-to-end (synthetic source) @video-codec @
     // Release the server-side session so check 2's WASM client is the sole
     // consumer (and we don't leak a session on the shared synthetic pipeline).
     if (location) {
-      const url = location.startsWith("http") ? location : new URL(location, document.baseURI).toString();
+      const url = location.startsWith("http")
+        ? location
+        : new URL(location, document.baseURI).toString();
       try {
         await fetch(url, { method: "DELETE" });
       } catch {
@@ -226,9 +233,30 @@ test("NDI video decodes real frames end-to-end (synthetic source) @video-codec @
 
   // ── Check 2 — the REAL stage client path: mount the ndi-fullscreen layout so
   // the WASM <NdiVideo> component does its own connect_whep, and confirm its
-  // session reaches connectionState=connected. Now the SOLE consumer (check 1's
-  // session was DELETEd above). Pre-fix the client session never left
-  // "new"/"connecting".
+  // <video> actually DECODES frames. Now the SOLE consumer (check 1's session
+  // was DELETEd above).
+  //
+  // This MUST assert framesDecoded > 0, not merely connectionState=connected:
+  // the #372 bug was that the WASM client used the default ("balanced") bundle
+  // policy while the server's webrtcbin is max-bundle, so the transports never
+  // lined up — every stage display reached `connected` but received ZERO RTP
+  // (black). The OLD version of this check only asserted "connected", so it was
+  // GREEN while every real stage display was black. We hook RTCPeerConnection
+  // before loading /stage so we can read the WASM client's own getStats.
+  await page.addInitScript(() => {
+    // @ts-expect-error test-only global
+    window.__pcs = [];
+    const Orig = window.RTCPeerConnection;
+    // @ts-expect-error wrap constructor to capture every PC the WASM creates
+    window.RTCPeerConnection = function (...args: unknown[]) {
+      // @ts-expect-error spread into native ctor
+      const pc = new Orig(...args);
+      // @ts-expect-error test-only global
+      window.__pcs.push(pc);
+      return pc;
+    };
+    window.RTCPeerConnection.prototype = Orig.prototype;
+  });
   await request.post(new URL("/stage/layout", baseURL).toString(), {
     data: { code: "ndi-fullscreen" },
   });
@@ -240,6 +268,7 @@ test("NDI video decodes real frames end-to-end (synthetic source) @video-codec @
     timeout: 10_000,
   });
   await expect(page.locator('[data-role="ndi-video"]')).toHaveCount(1);
+  // The WASM client's WHEP session must reach connectionState=connected …
   await expect
     .poll(
       async () => {
@@ -259,6 +288,32 @@ test("NDI video decodes real frames end-to-end (synthetic source) @video-codec @
       },
     )
     .toBe(true);
+  // … AND the WASM client's <video> must actually DECODE frames (the #372 guard).
+  await expect
+    .poll(
+      async () =>
+        page.evaluate(async () => {
+          // @ts-expect-error test-only global
+          const pcs: RTCPeerConnection[] = window.__pcs || [];
+          let best = 0;
+          for (const pc of pcs) {
+            const stats = await pc.getStats();
+            stats.forEach((s) => {
+              if (s.type === "inbound-rtp" && s.kind === "video") {
+                best = Math.max(best, s.framesDecoded || 0);
+              }
+            });
+          }
+          return best;
+        }),
+      {
+        timeout: 30_000,
+        message:
+          "the WASM stage client must DECODE video frames (framesDecoded > 0); " +
+          "connected-but-zero-frames is the #372 max-bundle regression (black stage)",
+      },
+    )
+    .toBeGreaterThan(0);
 
   // Cleanup.
   await request.post(
