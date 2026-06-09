@@ -261,16 +261,27 @@ impl NdiPipeline {
                             }
                         });
 
-                        // Bring the whole branch to PLAYING together. webrtcbin needs
-                        // PLAYING for ICE + DTLS; the tee-linked queue + rtph264pay are
-                        // synced here so the tee's sticky events propagate through them
-                        // during this transition (see the tee-splice comment above).
-                        // Early H264 buffers flowing into webrtcbin before the offer is
-                        // applied do NOT corrupt DTLS — webrtcbin buffers them until the
-                        // transceiver is negotiated; the send path then drains normally.
+                        // Bring the whole branch to PLAYING together, via
+                        // sync_state_with_parent so each element inherits the
+                        // pipeline's BASE TIME — this is the #372 fix.
+                        //
+                        // webrtcbin MUST use sync_state_with_parent(), NOT
+                        // set_state(PLAYING): set_state gives the element a base time
+                        // of 0, but a consumer added while the pipeline has already
+                        // been running for N seconds needs the pipeline's (non-zero)
+                        // base time so its internal rtpsession can compute running
+                        // time for outgoing RTP. With set_state, the FIRST consumer
+                        // worked (pipeline base time ≈ 0 at startup) but every LATER
+                        // consumer's rtpsession logged "Can't determine running time
+                        // for this packet without knowing configured latency" and
+                        // forwarded ZERO RTP — connected, but a black stage. This is
+                        // exactly the multi-display / reconnect failure: only the
+                        // first display to connect got video. queue + rtph264pay were
+                        // already synced (correct); webrtcbin was the one element
+                        // brought up with the wrong base time.
                         webrtcbin
-                            .set_state(gst::State::Playing)
-                            .context("set webrtcbin to Playing")?;
+                            .sync_state_with_parent()
+                            .context("sync webrtcbin state with pipeline")?;
                         queue
                             .sync_state_with_parent()
                             .context("sync queue state with pipeline")?;
