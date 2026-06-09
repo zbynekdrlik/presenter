@@ -185,6 +185,27 @@ test("NDI video decodes real frames end-to-end (synthetic source) @video-codec @
   expect(result.inbound!.framesDecoded).toBeGreaterThan(0);
   expect(result.inbound!.bytes).toBeGreaterThan(0);
 
+  // Confirm check 1's session is fully released before check 2, so the WASM
+  // client is genuinely the SOLE consumer (two consumers from this one test
+  // host hit the same-host ICE-pairing artifact). The DELETE above is
+  // best-effort + not awaited inside the page, so poll the server snapshot.
+  await expect
+    .poll(
+      async () => {
+        const snap = await (
+          await request.get(
+            new URL(`/ndi/snapshot/${src.id}`, baseURL).toString(),
+          )
+        ).json();
+        return (snap.sessions ?? []).length;
+      },
+      {
+        timeout: 15_000,
+        message: "check 1's WHEP session must be released before check 2",
+      },
+    )
+    .toBe(0);
+
   // ── Check 2 — the REAL stage client path: mount the ndi-fullscreen layout so
   // the WASM <NdiVideo> component does its own connect_whep, and confirm its
   // session reaches connectionState=connected. Now the SOLE consumer (check 1's

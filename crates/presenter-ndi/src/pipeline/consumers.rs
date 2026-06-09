@@ -93,6 +93,14 @@ impl NdiPipeline {
             let offer_h264_pt = std::str::from_utf8(&sdp_offer_bytes)
                 .ok()
                 .and_then(parse_h264_payload_type);
+            if offer_h264_pt.is_none() {
+                tracing::warn!(
+                    session_id = %session_id_for_blocking,
+                    "WHEP offer carries no H264 payload type — rtph264pay left at \
+                     default pt 96; the browser cannot decode unless it offered H264 \
+                     (open-source Chromium has no H264; real Chrome/Safari/Edge do)"
+                );
+            }
 
             // Step 1: request a tee src pad. On any subsequent failure we MUST
             // release this pad before returning — otherwise it leaks forever.
@@ -120,6 +128,8 @@ impl NdiPipeline {
                     // `leaky=downstream` drops the oldest buffered frame instead of
                     // blocking; bounded to ~1s so a dead branch caps quickly. A live
                     // consumer keeps its queue near-empty, so this never drops for it.
+                    // (If a dropped frame is a keyframe, the browser's RTCP PLI pulls a
+                    // fresh IDR via webrtcbin's force-key-unit — recovery in ~1 GOP.)
                     let queue = gst::ElementFactory::make("queue")
                         .property_from_str("leaky", "downstream")
                         .property("max-size-time", 1_000_000_000u64)
@@ -160,15 +170,24 @@ impl NdiPipeline {
                         // Link the consumer branch downstream-first: queue → rtph264pay
                         // → webrtcbin. The rtph264pay→webrtcbin link is FILTERED with
                         // explicit application/x-rtp H264 caps so webrtcbin builds its
-                        // send transceiver from fixed H264/<offer-pt> caps — not from
+                        // send transceiver from a fixed H264 codec hint — not from
                         // whatever early media happens to arrive first (which, with a
                         // plain link, builds the transceiver wrong and yields zero RTP).
+                        //
+                        // The filter deliberately OMITS `payload`: the RTP payload type
+                        // is the one thing that gets re-aligned to the NEGOTIATED pt
+                        // after create-answer (see the pt-alignment block below, which
+                        // sets `rtph264pay.pt`). Pinning a `payload` in this fixed-caps
+                        // filter would FIGHT that re-alignment whenever our pre-seat
+                        // guess differs from webrtcbin's chosen pt (e.g. an offer with
+                        // multiple H264 pts), re-introducing a caps mismatch → zero RTP.
+                        // Leaving payload unconstrained lets the payloader's own `pt`
+                        // property be the single source of truth.
                         queue.link(&payloader).context("link queue -> rtph264pay")?;
                         let rtp_caps = gst::Caps::builder("application/x-rtp")
                             .field("media", "video")
                             .field("encoding-name", "H264")
                             .field("clock-rate", 90_000i32)
-                            .field("payload", offer_h264_pt.unwrap_or(96) as i32)
                             .build();
                         payloader
                             .link_filtered(&webrtcbin, &rtp_caps)
