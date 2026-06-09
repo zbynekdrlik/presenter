@@ -146,8 +146,13 @@ test("NDI video decodes real frames end-to-end (synthetic source) @video-codec @
     const location = resp.headers.get("Location") || resp.headers.get("location");
     await pc.setRemoteDescription({ type: "answer", sdp: await resp.text() });
     // Poll up to ~25s for decoded frames.
-    let inbound: { bytes: number; framesReceived: number; framesDecoded: number } | null =
-      null;
+    let inbound: {
+      bytes: number;
+      framesReceived: number;
+      framesDecoded: number;
+      frameWidth: number;
+      frameHeight: number;
+    } | null = null;
     for (let i = 0; i < 50; i++) {
       await new Promise((r) => setTimeout(r, 500));
       (await pc.getStats()).forEach((s) => {
@@ -156,6 +161,8 @@ test("NDI video decodes real frames end-to-end (synthetic source) @video-codec @
             bytes: s.bytesReceived,
             framesReceived: s.framesReceived,
             framesDecoded: s.framesDecoded,
+            frameWidth: s.frameWidth,
+            frameHeight: s.frameHeight,
           };
         }
       });
@@ -184,6 +191,17 @@ test("NDI video decodes real frames end-to-end (synthetic source) @video-codec @
   expect(result.conn).toBe("connected");
   expect(result.inbound!.framesDecoded).toBeGreaterThan(0);
   expect(result.inbound!.bytes).toBeGreaterThan(0);
+
+  // The synthetic source publishes 2560×1440 (1440p) — the pipeline MUST
+  // downscale it to a stage-display-safe resolution before encoding. If it
+  // doesn't, the browser can't decode the high-level stream (the bug above
+  // would re-trigger: framesDecoded stays 0). Assert the decoded frame is
+  // actually downscaled (≤1280 wide) so a regression that drops the
+  // videoscale step is caught even if some browser tolerates the high level.
+  expect(
+    result.inbound!.frameWidth,
+    `decoded frame must be downscaled ≤1280 wide, got ${result.inbound!.frameWidth}×${result.inbound!.frameHeight}`,
+  ).toBeLessThanOrEqual(1280);
 
   // Confirm check 1's session is fully released before check 2, so the WASM
   // client is genuinely the SOLE consumer (two consumers from this one test

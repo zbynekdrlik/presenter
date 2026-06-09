@@ -27,7 +27,15 @@ fn main() -> Result<()> {
     let ndi_name =
         std::env::var("PRESENTER_NDI_TEST_NAME").unwrap_or_else(|_| "PRESENTER-TEST".to_string());
 
-    // videotestsrc (live) → UYVY 1280x720@30 → ndisinkcombiner → ndisink
+    // videotestsrc (live) → UYVY 2560x1440@30 → ndisinkcombiner → ndisink
+    //
+    // 2560×1440 (1440p) deliberately matches the real Resolume stage source.
+    // It exceeds the H264 level a browser negotiates, so without the pipeline's
+    // downscale-to-720p step the browser decodes ZERO frames (black stage) —
+    // exactly the regression a real 1080p/1440p NDI source hit while the old
+    // 720p synthetic source masked it. The e2e regression test asserts frames
+    // decode (and that they are downscaled ≤720p), so this resolution keeps the
+    // downscale honest.
     let src = gst::ElementFactory::make("videotestsrc")
         .property("is-live", true)
         .property_from_str("pattern", "smpte")
@@ -41,8 +49,8 @@ fn main() -> Result<()> {
             "caps",
             gst::Caps::builder("video/x-raw")
                 .field("format", "UYVY")
-                .field("width", 1280i32)
-                .field("height", 720i32)
+                .field("width", 2560i32)
+                .field("height", 1440i32)
                 .field("framerate", gst::Fraction::new(30, 1))
                 .build(),
         )
