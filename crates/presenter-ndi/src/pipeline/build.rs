@@ -13,6 +13,14 @@ use tokio::sync::watch;
 
 use super::{NdiPipeline, PipelineState};
 
+/// Stage-display-safe encode resolution. NDI sources can be 1080p/1440p/4K, but
+/// stage displays are low-cost TVs and browsers negotiate a bounded H264 level —
+/// encoding above this yields an undecodable stream (black). 720p 16:9 is
+/// universally decodable and matches the 2.5 Mbps target. Sources are downscaled
+/// (and letterboxed if not 16:9) to this before the encoder; see `build`.
+const MAX_VIDEO_WIDTH: i32 = 1280;
+const MAX_VIDEO_HEIGHT: i32 = 720;
+
 impl NdiPipeline {
     /// Build but do not yet start the pipeline.
     ///
@@ -42,6 +50,37 @@ impl NdiPipeline {
         let videoconvert = gst::ElementFactory::make("videoconvert")
             .build()
             .context("build videoconvert")?;
+        // Downscale to a stage-display-safe resolution BEFORE encoding. NDI
+        // sources are commonly 1080p, 1440p, even 4K (Resolume SP-live here is
+        // 2560×1440). Encoding at the source resolution (a) exceeds the H264
+        // level the browser negotiates → the browser decodes ZERO frames →
+        // black stage, and (b) is unplayable on the low-cost TVs used as stage
+        // displays. Cap at 720p (16:9, universally decodable, matches the 2.5
+        // Mbps target). `add-borders` letterboxes non-16:9 sources instead of
+        // stretching; downstream of a smaller source it upscales harmlessly.
+        let videoscale = gst::ElementFactory::make("videoscale")
+            .property("add-borders", true)
+            .build()
+            .context("build videoscale")?;
+        let scale_caps = gst::ElementFactory::make("capsfilter")
+            .property(
+                "caps",
+                gst::Caps::builder("video/x-raw")
+                    // format=NV12 (4:2:0) is REQUIRED, not cosmetic: NDI sources
+                    // are often 4:2:2 (UYVY, like Resolume here) or 4:4:4, and if
+                    // the encoder input keeps that chroma, nvh264enc emits a
+                    // High-4:2:2 / High-4:4:4 H264 profile that NO browser can
+                    // decode (ontrack fires, framesDecoded stays 0 → black). Web
+                    // browsers only decode 4:2:0. Forcing NV12 here makes the
+                    // encoder emit a Main/High 4:2:0 stream every browser decodes.
+                    .field("format", "NV12")
+                    .field("width", MAX_VIDEO_WIDTH)
+                    .field("height", MAX_VIDEO_HEIGHT)
+                    .field("pixel-aspect-ratio", gst::Fraction::new(1, 1))
+                    .build(),
+            )
+            .build()
+            .context("build scale capsfilter")?;
         let audio_fakesink = gst::ElementFactory::make("fakesink")
             .property("async", false)
             .property("sync", false)
@@ -106,6 +145,8 @@ impl NdiPipeline {
                 &ndisrc,
                 &ndisrcdemux,
                 &videoconvert,
+                &videoscale,
+                &scale_caps,
                 &audio_fakesink,
                 &encoder,
                 &h264parse,
@@ -114,9 +155,9 @@ impl NdiPipeline {
             .context("add elements")?;
 
         ndisrc.link(&ndisrcdemux).context("link ndisrc -> demux")?;
-        videoconvert
-            .link(&encoder)
-            .context("link videoconvert -> encoder")?;
+        // videoconvert → videoscale → capsfilter(≤720p) → encoder
+        gst::Element::link_many([&videoconvert, &videoscale, &scale_caps, &encoder])
+            .context("link videoconvert -> videoscale -> caps -> encoder")?;
         encoder
             .link(&h264parse)
             .context("link encoder -> h264parse")?;
