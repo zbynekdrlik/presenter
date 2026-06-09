@@ -8,8 +8,8 @@ import {
 } from "./support";
 
 // ─────────────────────────────────────────────────────────────────────────
-// REQUIRED real-frame NDI→WebRTC test (the regression guard for the #336
-// "connected but black screen" bug).
+// REQUIRED real-frame NDI→WebRTC test (the regression guard for the "connected
+// but black screen" bugs: #336, #372).
 //
 // Unlike the capability-gated tests in ndi-webrtc.spec.ts, this test does NOT
 // skip — it asserts that actual H264 frames decode in a real browser. It is
@@ -45,7 +45,7 @@ test.afterAll(async () => {
   server = undefined;
 });
 
-test("NDI video decodes real frames end-to-end (synthetic source) @video-codec @synthetic-ndi", async ({
+test("NDI video decodes real frames for MULTIPLE simultaneous consumers (synthetic source) @video-codec @synthetic-ndi", async ({
   page,
   request,
 }) => {
@@ -82,8 +82,6 @@ test("NDI video decodes real frames end-to-end (synthetic source) @video-codec @
     new URL("/integrations/video-sources", baseURL).toString(),
     { data: { label: "Synthetic-E2E", ndiName: synthetic!.name } },
   );
-  // Require a real success — a 4xx would pass `<500` but yield src.id===undefined
-  // and a confusing downstream 404 instead of failing at the real cause.
   expect(created.status(), "creating the video source must succeed").toBe(200);
   const src = await created.json();
   expect(
@@ -98,252 +96,120 @@ test("NDI video decodes real frames end-to-end (synthetic source) @video-codec @
     ).status(),
   ).toBe(200);
 
-  // ── Check 1 — the core regression guard: real H264 frames must DECODE over
-  // WebRTC in a real browser, with a VIDEO + AUDIO offer (what the real client
-  // sends). Run as the SOLE consumer: we are on a non-NDI page so no <NdiVideo>
-  // is mounted competing for the pipeline. (Two WebRTC consumers from the SAME
-  // host confuse ICE candidate pairing — same IP, only the port differs — and
-  // the 2nd gets no media; that is a test-host artifact, not a product bug, so
-  // the guard must use a single consumer.)
+  // ── The core regression guard: real H264 frames must DECODE over WebRTC in a
+  // real browser, for MULTIPLE consumers that connect at once — the actual
+  // stage-display scenario (every TV/laptop mounts <NdiVideo> when the source
+  // is triggered).
   //
-  // We assert via RTCPeerConnection getStats (framesDecoded / bytesReceived)
-  // rather than the <video> element's videoWidth — headless Chrome decodes
-  // WebRTC media but does NOT reliably surface dimensions on a <video> bound to
-  // a MediaStream, so videoWidth is unreliable in CI. getStats reflects the
-  // actual decoder and is the precise measure of the bug.
+  // This is THREE consumers, not one, on purpose (#372): the shipped bug
+  // delivered video to the FIRST consumer only — every additional one reached
+  // connectionState=connected but received ZERO RTP ("connected, black"),
+  // because a per-consumer webrtcbin added to the live pipeline had its
+  // rtpsession's latency unconfigured and dropped every outgoing packet. A
+  // single-consumer test passed while every real multi-display setup was black.
+  // We connect all three nearly-simultaneously (a from-zero burst, the way
+  // displays come up together) and require EVERY one to decode.
   //
-  // The VIDEO + AUDIO offer is load-bearing, not incidental: the regression
-  // that shipped "connected but black" delivered ZERO video frames ONLY when an
-  // audio m-line was also negotiated (the per-consumer branch was spliced into
-  // the live tee AFTER it was PLAYING, so it never forwarded a buffer). A
-  // video-ONLY offer happened to decode frames even on the broken build — which
-  // is exactly why the PREVIOUS version of this test was GREEN while every real
-  // browser (video + audio) showed black. Verified: broken build → video-only
-  // fd=14 (false pass) but video+audio fd=0; fixed build → video+audio fd>0.
+  // Each offers VIDEO + AUDIO (#336): the original "connected but black" only
+  // dropped video when an audio m-line was also negotiated, so a video-only
+  // offer was a false pass.
+  //
+  // Assert via getStats (framesDecoded / bytesReceived) not <video>.videoWidth:
+  // headless Chrome decodes WebRTC media but does not reliably surface <video>
+  // dimensions, so getStats is the precise measure.
   await page.goto(new URL("/", baseURL).toString());
-  const result = await page.evaluate(async (sourceId) => {
-    const pc = new RTCPeerConnection();
-    pc.addTransceiver("video", { direction: "recvonly" });
-    pc.addTransceiver("audio", { direction: "recvonly" });
-    const offer = await pc.createOffer();
-    await pc.setLocalDescription(offer);
-    await new Promise<void>((res) => {
-      if (pc.iceGatheringState === "complete") return res();
-      pc.addEventListener("icegatheringstatechange", () => {
-        if (pc.iceGatheringState === "complete") res();
+  const results = await page.evaluate(async (sourceId) => {
+    async function connectOne() {
+      const pc = new RTCPeerConnection();
+      pc.addTransceiver("video", { direction: "recvonly" });
+      pc.addTransceiver("audio", { direction: "recvonly" });
+      const offer = await pc.createOffer();
+      await pc.setLocalDescription(offer);
+      await new Promise<void>((res) => {
+        if (pc.iceGatheringState === "complete") return res();
+        pc.addEventListener("icegatheringstatechange", () => {
+          if (pc.iceGatheringState === "complete") res();
+        });
+        setTimeout(res, 4000);
       });
-      setTimeout(res, 3000);
-    });
-    const resp = await fetch(`/ndi/whep/${sourceId}`, {
-      method: "POST",
-      headers: { "Content-Type": "application/sdp" },
-      body: pc.localDescription!.sdp,
-    });
-    if (!resp.ok) {
-      pc.close();
-      return {
-        ok: false,
-        reason: `WHEP POST ${resp.status}`,
-        conn: pc.connectionState,
-      };
+      const resp = await fetch(`/ndi/whep/${sourceId}`, {
+        method: "POST",
+        headers: { "Content-Type": "application/sdp" },
+        body: pc.localDescription!.sdp,
+      });
+      if (!resp.ok) {
+        pc.close();
+        return { ok: false, reason: `WHEP POST ${resp.status}` };
+      }
+      await pc.setRemoteDescription({ type: "answer", sdp: await resp.text() });
+      return { ok: true, pc };
     }
-    const location =
-      resp.headers.get("Location") || resp.headers.get("location");
-    await pc.setRemoteDescription({ type: "answer", sdp: await resp.text() });
-    // Poll up to ~25s for decoded frames.
-    let inbound: {
-      bytes: number;
-      framesReceived: number;
+
+    // Connect all three at once (from-zero burst).
+    const conns = await Promise.all([connectOne(), connectOne(), connectOne()]);
+    const bad = conns.find((c) => !c.ok);
+    if (bad) return { error: (bad as { reason: string }).reason };
+
+    const pcs = conns.map((c) => (c as { pc: RTCPeerConnection }).pc);
+
+    // Poll up to ~25s for every consumer to decode at least one frame.
+    type Inb = {
       framesDecoded: number;
+      bytesReceived: number;
       frameWidth: number;
-      frameHeight: number;
-    } | null = null;
+      conn: string;
+    };
+    const read = async (): Promise<Inb[]> =>
+      Promise.all(
+        pcs.map(async (pc) => {
+          const out: Inb = {
+            framesDecoded: 0,
+            bytesReceived: 0,
+            frameWidth: 0,
+            conn: pc.connectionState,
+          };
+          (await pc.getStats()).forEach((s) => {
+            if (s.type === "inbound-rtp" && s.kind === "video") {
+              out.framesDecoded = s.framesDecoded || 0;
+              out.bytesReceived = s.bytesReceived || 0;
+              out.frameWidth = s.frameWidth || 0;
+            }
+          });
+          return out;
+        }),
+      );
+    let stats = await read();
     for (let i = 0; i < 50; i++) {
       await new Promise((r) => setTimeout(r, 500));
-      (await pc.getStats()).forEach((s) => {
-        if (s.type === "inbound-rtp" && s.kind === "video") {
-          inbound = {
-            bytes: s.bytesReceived,
-            framesReceived: s.framesReceived,
-            framesDecoded: s.framesDecoded,
-            frameWidth: s.frameWidth,
-            frameHeight: s.frameHeight,
-          };
-        }
-      });
-      if (inbound && inbound.framesDecoded > 0) break;
+      stats = await read();
+      if (stats.every((s) => s.framesDecoded > 0)) break;
     }
-    const conn = pc.connectionState;
-    pc.close();
-    // Release the server-side session so check 2's WASM client is the sole
-    // consumer (and we don't leak a session on the shared synthetic pipeline).
-    if (location) {
-      const url = location.startsWith("http")
-        ? location
-        : new URL(location, document.baseURI).toString();
-      try {
-        await fetch(url, { method: "DELETE" });
-      } catch {
-        /* idempotent best-effort */
-      }
-    }
-    return { ok: !!inbound && inbound.framesDecoded > 0, conn, inbound };
+    pcs.forEach((pc) => pc.close());
+    return { stats };
   }, src.id);
 
   expect(
-    result.ok,
-    `NDI WebRTC must deliver decodable frames (video+audio) — connectionState=${result.conn}, ` +
-      `inbound=${JSON.stringify(result.inbound ?? result.reason)}`,
-  ).toBe(true);
-  expect(result.conn).toBe("connected");
-  expect(result.inbound!.framesDecoded).toBeGreaterThan(0);
-  expect(result.inbound!.bytes).toBeGreaterThan(0);
-
-  // The synthetic source publishes 2560×1440 (1440p) — the pipeline MUST
-  // downscale it to a stage-display-safe resolution before encoding. If it
-  // doesn't, the browser can't decode the high-level stream (the bug above
-  // would re-trigger: framesDecoded stays 0). Assert the decoded frame is
-  // actually downscaled (≤1280 wide) so a regression that drops the
-  // videoscale step is caught even if some browser tolerates the high level.
-  expect(
-    result.inbound!.frameWidth,
-    `decoded frame must be downscaled ≤1280 wide, got ${result.inbound!.frameWidth}×${result.inbound!.frameHeight}`,
-  ).toBeLessThanOrEqual(1280);
-
-  // Confirm check 1's session is fully released before check 2, so the WASM
-  // client is genuinely the SOLE consumer (two consumers from this one test
-  // host hit the same-host ICE-pairing artifact). The DELETE above is
-  // best-effort + not awaited inside the page, so poll the server snapshot.
-  await expect
-    .poll(
-      async () => {
-        const snap = await (
-          await request.get(
-            new URL(`/ndi/snapshot/${src.id}`, baseURL).toString(),
-          )
-        ).json();
-        return (snap.sessions ?? []).length;
-      },
-      {
-        timeout: 15_000,
-        message: "check 1's WHEP session must be released before check 2",
-      },
-    )
-    .toBe(0);
-
-  // ── Check 2 — the REAL stage client path: mount the ndi-fullscreen layout so
-  // the WASM <NdiVideo> component does its own connect_whep, and confirm its
-  // <video> actually DECODES frames. Now the SOLE consumer (check 1's session
-  // was DELETEd above).
-  //
-  // This MUST assert framesDecoded > 0, not merely connectionState=connected:
-  // the #372 bug was that the WASM client used the default ("balanced") bundle
-  // policy while the server's webrtcbin is max-bundle, so the transports never
-  // lined up — every stage display reached `connected` but received ZERO RTP
-  // (black). The OLD version of this check only asserted "connected", so it was
-  // GREEN while every real stage display was black. We hook RTCPeerConnection
-  // before loading /stage so we can read the WASM client's own getStats.
-  await page.addInitScript(() => {
-    // @ts-expect-error test-only global
-    window.__pcs = [];
-    const Orig = window.RTCPeerConnection;
-    // @ts-expect-error wrap constructor to capture every PC the WASM creates
-    window.RTCPeerConnection = function (...args: unknown[]) {
-      // @ts-expect-error spread into native ctor
-      const pc = new Orig(...args);
-      // @ts-expect-error test-only global
-      window.__pcs.push(pc);
-      return pc;
-    };
-    window.RTCPeerConnection.prototype = Orig.prototype;
+    results.error,
+    `all WHEP POSTs must succeed — ${results.error}`,
+  ).toBeFalsy();
+  const stats = results.stats!;
+  // EVERY consumer must decode frames — the #372 multi-consumer guard.
+  stats.forEach((s, i) => {
+    expect(
+      s.framesDecoded,
+      `consumer ${i} must DECODE video frames (framesDecoded > 0); ` +
+        `connected-but-zero-frames is the black-stage bug. Got: ${JSON.stringify(s)}`,
+    ).toBeGreaterThan(0);
   });
-  await request.post(new URL("/stage/layout", baseURL).toString(), {
-    data: { code: "ndi-fullscreen" },
+  // The synthetic source is 2560×1440; the pipeline MUST downscale ≤1280 before
+  // encoding or the browser cannot decode the high H264 level (the bug above
+  // re-triggers). Assert the decoded frame is actually downscaled.
+  stats.forEach((s, i) => {
+    expect(
+      s.frameWidth,
+      `consumer ${i} decoded frame must be downscaled ≤1280 wide, got ${s.frameWidth}`,
+    ).toBeLessThanOrEqual(1280);
   });
-  await page.goto(new URL("/stage", baseURL).toString());
-  await page.waitForSelector('body[data-wasm-ready="true"]', {
-    timeout: 30_000,
-  });
-  await page.waitForSelector('body[data-layout-code="ndi-fullscreen"]', {
-    timeout: 10_000,
-  });
-  await expect(page.locator('[data-role="ndi-video"]')).toHaveCount(1);
-  // The WASM client's WHEP session must reach connectionState=connected …
-  await expect
-    .poll(
-      async () => {
-        const snap = await (
-          await request.get(
-            new URL(`/ndi/snapshot/${src.id}`, baseURL).toString(),
-          )
-        ).json();
-        return (snap.sessions ?? []).some(
-          (s: { connectionState: string }) => s.connectionState === "connected",
-        );
-      },
-      {
-        timeout: 30_000,
-        message:
-          "the WASM stage client's WHEP session must reach connectionState=connected",
-      },
-    )
-    .toBe(true);
-  // … AND the WASM client's <video> must actually DECODE frames (the #372 guard).
-  // Poll the WASM client's own getStats, capturing RICH diagnostics so a failure
-  // tells us WHICH layer broke: bytesReceived=0 ⇒ no media reaches the client
-  // (negotiation/transport), bytes>0 & framesDecoded=0 ⇒ decode failure (codec),
-  // framesDecoded>0 ⇒ working.
-  const collectWasmStats = async () =>
-    page.evaluate(async () => {
-      // @ts-expect-error test-only global
-      const pcs: RTCPeerConnection[] = window.__pcs || [];
-      const out = {
-        pcCount: pcs.length,
-        framesDecoded: 0,
-        framesReceived: 0,
-        bytesReceived: 0,
-        packetsReceived: 0,
-        conn: "",
-        ice: "",
-      };
-      for (const pc of pcs) {
-        out.conn = pc.connectionState;
-        out.ice = pc.iceConnectionState;
-        const stats = await pc.getStats();
-        stats.forEach((s) => {
-          if (s.type === "inbound-rtp" && s.kind === "video") {
-            out.framesDecoded = Math.max(
-              out.framesDecoded,
-              s.framesDecoded || 0,
-            );
-            out.framesReceived = Math.max(
-              out.framesReceived,
-              s.framesReceived || 0,
-            );
-            out.bytesReceived = Math.max(
-              out.bytesReceived,
-              s.bytesReceived || 0,
-            );
-            out.packetsReceived = Math.max(
-              out.packetsReceived,
-              s.packetsReceived || 0,
-            );
-          }
-        });
-      }
-      return out;
-    });
-  const deadline = Date.now() + 30_000;
-  let wasmStats = await collectWasmStats();
-  while (Date.now() < deadline && wasmStats.framesDecoded === 0) {
-    await page.waitForTimeout(500);
-    wasmStats = await collectWasmStats();
-  }
-  expect(
-    wasmStats.framesDecoded,
-    `the WASM stage client must DECODE video frames (framesDecoded > 0) — ` +
-      `connected-but-zero-frames is the #372 black-stage bug. Diagnostics: ${JSON.stringify(wasmStats)}`,
-  ).toBeGreaterThan(0);
 
   // Cleanup.
   await request.post(
