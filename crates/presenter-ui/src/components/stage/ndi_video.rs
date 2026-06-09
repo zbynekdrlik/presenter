@@ -29,18 +29,17 @@ struct WhepSession {
     resource_url: Option<String>,
 }
 
-/// Watchdog that fires `on_failure` when ANY of:
+/// Watchdog that fires `on_failure` when EITHER:
 /// - the RTCPeerConnection's iceConnectionState becomes "failed", "disconnected",
-///   or "closed", OR
-/// - no first frame ever renders within INITIAL_CONNECT_TIMEOUT (total-connect
-///   failure), OR
+///   or "closed" (genuine connection loss), OR
 /// - after playback has started, the <video> element's currentTime stops
 ///   advancing for STALL_THRESHOLD seconds (mid-stream freeze).
 ///
-/// The before-first-frame vs after-playback split is deliberate: the initial
-/// WebRTC connect (ICE + DTLS + first keyframe) takes a few seconds, and
-/// treating that as a stall caused a reconnect spiral that prevented any frame
-/// from ever rendering.
+/// It deliberately does NOT reconnect on "connected but no first frame yet":
+/// the server reliably delivers media to a stable consumer, so a frameless
+/// healthy connection just waits. Reconnecting in that window drove a
+/// multi-consumer churn spiral (every reconnect's tee add/remove disrupted the
+/// other displays, so they stalled and reconnected too — all black forever).
 ///
 /// The closure handles are leaked via `forget()` because wasm-bindgen `Closure`
 /// types are not `Send` and removing them on drop would require keeping the
@@ -56,13 +55,10 @@ struct Watchdog {
 impl Watchdog {
     /// Stall threshold: once playback has started, <video>.currentTime not
     /// advancing for this many seconds triggers a reconnect (mid-stream freeze).
+    /// Before the first frame there is NO timeout reconnect — a connected client
+    /// waits for media (see the stall-timer comment for why a no-first-frame
+    /// reconnect drove a multi-consumer churn spiral).
     const STALL_THRESHOLD_SECS: f64 = 3.0;
-    /// Initial-connect budget: BEFORE the first frame renders, allow this long
-    /// for ICE + DTLS + the first keyframe before giving up and reconnecting.
-    /// Much longer than STALL_THRESHOLD so normal connect latency (a few
-    /// seconds) is never mistaken for a stall — that mistake caused a reconnect
-    /// spiral that prevented any frame from ever rendering.
-    const INITIAL_CONNECT_TIMEOUT_SECS: f64 = 12.0;
     /// How often the stall timer ticks (ms).
     const TICK_INTERVAL_MS: i32 = 1000;
 
@@ -109,18 +105,19 @@ impl Watchdog {
 
         // Stall timer: every TICK_INTERVAL_MS check if currentTime advanced.
         //
-        // Two distinct windows, because "no frames yet" and "frames stopped"
-        // need different timeouts:
-        //   - BEFORE the first frame renders, the initial WebRTC connect (ICE
-        //     gather + DTLS + waiting for the encoder's next keyframe) legitimately
-        //     takes a few seconds. Treating that as a 3s stall caused a reconnect
-        //     SPIRAL — the watchdog tore the session down right as the first
-        //     keyframe was arriving, every cycle, so the <video> never rendered
-        //     a single frame (the regression symptom: connected, track live, but
-        //     videoWidth=0 forever). So before playback starts we only reconnect
-        //     after a much longer INITIAL_CONNECT_TIMEOUT (total-failure recovery).
-        //   - AFTER playback has started (currentTime advanced at least once), a
-        //     3s freeze is a real stall worth reconnecting on.
+        // CRITICAL — only the AFTER-PLAYBACK freeze triggers a reconnect here.
+        // Before the first frame we DO NOT reconnect at all, no matter how long
+        // it takes, as long as the connection is otherwise healthy (ICE failures
+        // are handled by the separate listener above). Reason: a "connected but
+        // no first frame yet" reconnect drives a multi-consumer CHURN SPIRAL —
+        // when several stage displays connect at once, each fresh consumer that
+        // hasn't rendered yet tears its session down and reconnects, and every
+        // reconnect's tee add/remove disrupts the OTHER consumers' streams, so
+        // they stall and reconnect too → all displays churn black forever. The
+        // server reliably delivers media to a STABLE consumer (verified), so the
+        // right behaviour for a frameless-but-connected client is to WAIT and let
+        // the fan-out settle, not to reconnect. Genuine connect failures surface
+        // as ICE failed/disconnected/closed and are handled above.
         {
             let active = Rc::clone(&active);
             let on_failure = Rc::clone(&on_failure);
@@ -129,8 +126,6 @@ impl Watchdog {
                 std::rc::Rc::new(std::cell::Cell::new(0.0));
             let last_change_at: std::rc::Rc<std::cell::Cell<f64>> =
                 std::rc::Rc::new(std::cell::Cell::new(0.0));
-            let installed_at: std::rc::Rc<std::cell::Cell<f64>> =
-                std::rc::Rc::new(std::cell::Cell::new(0.0));
             let playback_started: std::rc::Rc<std::cell::Cell<bool>> =
                 std::rc::Rc::new(std::cell::Cell::new(false));
             let cb = Closure::<dyn FnMut()>::new(move || {
@@ -138,9 +133,6 @@ impl Watchdog {
                     return;
                 }
                 let now_secs = leptos::web_sys::js_sys::Date::now() / 1000.0;
-                if installed_at.get() == 0.0 {
-                    installed_at.set(now_secs);
-                }
                 let t = video_clone.current_time();
                 if t > 0.0 && (t - last_time.get()).abs() > 0.001 {
                     // A frame rendered — playback is live. Reset the stall window.
@@ -150,17 +142,7 @@ impl Watchdog {
                     return;
                 }
                 if !playback_started.get() {
-                    // Still waiting for the FIRST frame. Do NOT treat the connect
-                    // latency as a stall. Only reconnect if no frame EVER arrives
-                    // within the generous initial-connect budget.
-                    if now_secs - installed_at.get() >= Self::INITIAL_CONNECT_TIMEOUT_SECS {
-                        leptos::logging::warn!(
-                            "watchdog: no first frame within {}s, triggering reconnect",
-                            Self::INITIAL_CONNECT_TIMEOUT_SECS
-                        );
-                        active.set(false);
-                        (on_failure)();
-                    }
+                    // No first frame yet — WAIT (do not reconnect). See above.
                     return;
                 }
                 if now_secs - last_change_at.get() >= Self::STALL_THRESHOLD_SECS {
