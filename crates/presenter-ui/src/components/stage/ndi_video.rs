@@ -432,24 +432,11 @@ async fn wait_for_ice_gathering_complete(pc: &RtcPeerConnection) {
 }
 
 async fn connect_whep(video: &HtmlVideoElement, source_id: &str) -> Result<WhepSession, JsValue> {
+    // Default RTCPeerConnection config (no explicit bundle-policy). A plain
+    // default-bundle client is proven to decode this server's stream in CI
+    // (e2e check 1). Forcing max-bundle here was a REGRESSION — CI showed the
+    // max-bundle client received ZERO frames (#372). Keep the browser default.
     let cfg = RtcConfiguration::new();
-    // max-bundle: put video + audio on ONE ICE/DTLS transport, MATCHING the
-    // server's webrtcbin (`bundle-policy=max-bundle`). With the default
-    // ("balanced") policy the browser gathers a separate transport per m-line
-    // while the server bundles everything onto the first — the transports don't
-    // line up, the RTCPeerConnection reaches `connected` but NO RTP is ever
-    // delivered to the receivers (ICE/DTLS up, zero `framesDecoded` → black
-    // stage). Confirmed by probe: default policy = black, max-bundle = video.
-    // The single most important line for the stage actually showing video.
-    //
-    // Set via reflection because the `RtcBundlePolicy` web-sys feature is not
-    // enabled in this build; `cfg.bundlePolicy = "max-bundle"` is the same thing
-    // the typed setter would do.
-    let _ = js_sys::Reflect::set(
-        &cfg,
-        &JsValue::from_str("bundlePolicy"),
-        &JsValue::from_str("max-bundle"),
-    );
     let pc = RtcPeerConnection::new_with_configuration(&cfg)?;
 
     let video_init = RtcRtpTransceiverInit::new();

@@ -289,31 +289,61 @@ test("NDI video decodes real frames end-to-end (synthetic source) @video-codec @
     )
     .toBe(true);
   // … AND the WASM client's <video> must actually DECODE frames (the #372 guard).
-  await expect
-    .poll(
-      async () =>
-        page.evaluate(async () => {
-          // @ts-expect-error test-only global
-          const pcs: RTCPeerConnection[] = window.__pcs || [];
-          let best = 0;
-          for (const pc of pcs) {
-            const stats = await pc.getStats();
-            stats.forEach((s) => {
-              if (s.type === "inbound-rtp" && s.kind === "video") {
-                best = Math.max(best, s.framesDecoded || 0);
-              }
-            });
+  // Poll the WASM client's own getStats, capturing RICH diagnostics so a failure
+  // tells us WHICH layer broke: bytesReceived=0 ⇒ no media reaches the client
+  // (negotiation/transport), bytes>0 & framesDecoded=0 ⇒ decode failure (codec),
+  // framesDecoded>0 ⇒ working.
+  const collectWasmStats = async () =>
+    page.evaluate(async () => {
+      // @ts-expect-error test-only global
+      const pcs: RTCPeerConnection[] = window.__pcs || [];
+      const out = {
+        pcCount: pcs.length,
+        framesDecoded: 0,
+        framesReceived: 0,
+        bytesReceived: 0,
+        packetsReceived: 0,
+        conn: "",
+        ice: "",
+      };
+      for (const pc of pcs) {
+        out.conn = pc.connectionState;
+        out.ice = pc.iceConnectionState;
+        const stats = await pc.getStats();
+        stats.forEach((s) => {
+          if (s.type === "inbound-rtp" && s.kind === "video") {
+            out.framesDecoded = Math.max(
+              out.framesDecoded,
+              s.framesDecoded || 0,
+            );
+            out.framesReceived = Math.max(
+              out.framesReceived,
+              s.framesReceived || 0,
+            );
+            out.bytesReceived = Math.max(
+              out.bytesReceived,
+              s.bytesReceived || 0,
+            );
+            out.packetsReceived = Math.max(
+              out.packetsReceived,
+              s.packetsReceived || 0,
+            );
           }
-          return best;
-        }),
-      {
-        timeout: 30_000,
-        message:
-          "the WASM stage client must DECODE video frames (framesDecoded > 0); " +
-          "connected-but-zero-frames is the #372 max-bundle regression (black stage)",
-      },
-    )
-    .toBeGreaterThan(0);
+        });
+      }
+      return out;
+    });
+  const deadline = Date.now() + 30_000;
+  let wasmStats = await collectWasmStats();
+  while (Date.now() < deadline && wasmStats.framesDecoded === 0) {
+    await page.waitForTimeout(500);
+    wasmStats = await collectWasmStats();
+  }
+  expect(
+    wasmStats.framesDecoded,
+    `the WASM stage client must DECODE video frames (framesDecoded > 0) — ` +
+      `connected-but-zero-frames is the #372 black-stage bug. Diagnostics: ${JSON.stringify(wasmStats)}`,
+  ).toBeGreaterThan(0);
 
   // Cleanup.
   await request.post(
