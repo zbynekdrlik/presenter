@@ -173,7 +173,14 @@ async function connectAndMeasure(
         Array.from({ length: n }, () => connectOne()),
       );
       const bad = conns.find((c) => !c.ok);
-      if (bad) return { error: (bad as { reason: string }).reason };
+      if (bad) {
+        // Close the connections that DID succeed so partial failures don't
+        // leave dangling peer connections (and server-side consumers) behind.
+        for (const c of conns) {
+          if (c.ok) (c as { pc: RTCPeerConnection }).pc.close();
+        }
+        return { error: (bad as { reason: string }).reason };
+      }
       const pcs = conns.map((c) => (c as { pc: RTCPeerConnection }).pc);
 
       const read = async () =>

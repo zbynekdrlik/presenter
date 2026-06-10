@@ -1,7 +1,9 @@
-//! Pipeline construction: build the shared-encoder fanout topology
-//! (`ndisrc → ndisrcdemux → videoconvert → vah264enc → h264parse → tee`).
-//! The per-consumer `rtph264pay → webrtcbin` branches are added off the tee
-//! in `add_consumer` (see `consumers.rs`).
+//! Pipeline construction: build the shared-encoder ENCODER pipeline
+//! (`ndisrc → ndisrcdemux → videoconvert → videoscale → caps → encoder →
+//! h264parse → appsink`). The appsink is wrapped by a
+//! `gstreamer_utils::StreamProducer` which fans encoded H264 out to the
+//! per-consumer `appsrc → rtph264pay → webrtcbin` pipelines built in
+//! `add_consumer` (see `consumers.rs`).
 
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -9,6 +11,8 @@ use std::sync::Arc;
 use anyhow::{anyhow, Context, Result};
 use gstreamer as gst;
 use gstreamer::prelude::*;
+use gstreamer_app as gst_app;
+use gstreamer_utils::StreamProducer;
 use tokio::sync::watch;
 
 use super::{NdiPipeline, PipelineState};
@@ -51,28 +55,34 @@ impl NdiPipeline {
         let encoder = build_encoder(encoder_name)?;
 
         // Parse the encoder's H264 elementary stream into AU-aligned frames so
-        // every PER-CONSUMER rtph264pay (added in add_consumer) receives a
-        // clean, properly-capped stream. `config-interval=-1` re-inserts
-        // SPS/PPS before every IDR so a consumer that joins mid-stream decodes
-        // at the next keyframe.
+        // every PER-CONSUMER rtph264pay (in its own pipeline) receives a clean,
+        // properly-capped stream. `config-interval=-1` re-inserts SPS/PPS before
+        // every IDR so a consumer that joins mid-stream decodes at the next
+        // keyframe (≈1s at gop-size 30) without an explicit force-key-unit.
         //
-        // The PAYLOADER is intentionally NOT here — it is per-consumer,
-        // downstream of the tee, so each webrtcbin negotiates its own dynamic
-        // RTP payload type with its browser. A single shared payloader can only
-        // emit ONE pt and silently fails (connected, no frames) for any browser
-        // that negotiates a different one — the #336 regression. The ENCODER
-        // stays shared (one nvh264enc), preserving the fanout goal.
+        // The PAYLOADER is intentionally NOT here — it is per-consumer, in the
+        // consumer's own pipeline downstream of an appsrc, so each webrtcbin
+        // negotiates its own dynamic RTP payload type with its browser. A single
+        // shared payloader emits ONE pt and silently fails (connected, no frames)
+        // for any browser that negotiates a different one — the #336 regression.
+        // The ENCODER stays shared (one nvh264enc), preserving the fanout goal.
         let h264parse = gst::ElementFactory::make("h264parse")
             .name("h264parse")
             .property("config-interval", -1i32)
             .build()
             .context("build h264parse")?;
-        let tee = gst::ElementFactory::make("tee")
-            .name("tee")
-            // Tee starts without any linked src pads; first consumer adds a branch.
-            .property("allow-not-linked", true)
-            .build()
-            .context("build tee")?;
+        // The encoder pipeline ends in an appsink wrapped by StreamProducer
+        // (the same fanout webrtcsink uses). The caps filter pins the bridge
+        // format to byte-stream/AU H264 so every consumer appsrc is created
+        // with caps that ALWAYS match what the producer forwards.
+        // `max-buffers`+`drop` bound the appsink so a momentarily-slow fanout
+        // can never back-pressure (and stall) the shared encoder.
+        let appsink = gst_app::AppSink::builder()
+            .name("enc_appsink")
+            .caps(&consumer_h264_caps())
+            .max_buffers(30)
+            .drop(true)
+            .build();
 
         pipeline
             .add_many([
@@ -84,7 +94,7 @@ impl NdiPipeline {
                 &audio_fakesink,
                 &encoder,
                 &h264parse,
-                &tee,
+                appsink.upcast_ref::<gst::Element>(),
             ])
             .context("add elements")?;
 
@@ -95,28 +105,25 @@ impl NdiPipeline {
         encoder
             .link(&h264parse)
             .context("link encoder -> h264parse")?;
-        h264parse.link(&tee).context("link h264parse -> tee")?;
+        h264parse
+            .link(appsink.upcast_ref::<gst::Element>())
+            .context("link h264parse -> appsink")?;
 
-        // ndisrcdemux is a sometimes-pad element. Wire up dynamic pads:
-        let videoconvert_clone = videoconvert.clone();
-        let audio_fakesink_clone = audio_fakesink.clone();
-        ndisrcdemux.connect_pad_added(move |_, pad| {
-            let name = pad.name();
-            if name == "video" {
-                if let Some(sink_pad) = videoconvert_clone.static_pad("sink") {
-                    let _ = pad.link(&sink_pad);
-                }
-            } else if name == "audio" {
-                if let Some(sink_pad) = audio_fakesink_clone.static_pad("sink") {
-                    let _ = pad.link(&sink_pad);
-                }
-            }
-        });
+        // Wrap the appsink in a StreamProducer — the battle-tested fanout from
+        // gstreamer-utils that webrtcsink itself uses for exactly this job. It
+        // forwards full SAMPLES (caps + segment + PTS preserved; each consumer
+        // pipeline shares this pipeline's clock + base-time, see
+        // `consumers.rs`), propagates the producer's latency to every consumer
+        // appsrc, gates each new consumer on a keyframe, and forwards the
+        // browser's force-keyunit (PLI) requests upstream to the encoder.
+        let producer = StreamProducer::from(&appsink);
+
+        connect_demux_pads(&ndisrcdemux, &videoconvert, &audio_fakesink);
 
         tracing::info!(
             encoder = encoder_name,
             %ndi_name,
-            "pipeline built (shared-encoder fanout topology)"
+            "pipeline built (shared-encoder + per-consumer-pipeline fanout topology)"
         );
 
         let (state_tx, state_rx) = watch::channel(PipelineState::Stopped);
@@ -128,9 +135,43 @@ impl NdiPipeline {
             state_rx,
             bus_watch: std::sync::Mutex::new(None),
             sessions: Arc::new(tokio::sync::Mutex::new(HashMap::new())),
-            tee: Arc::new(tee),
+            producer,
         })
     }
+}
+
+/// Wire ndisrcdemux's sometimes-pads: video → videoconvert, audio → fakesink.
+fn connect_demux_pads(
+    ndisrcdemux: &gst::Element,
+    videoconvert: &gst::Element,
+    audio_fakesink: &gst::Element,
+) {
+    let videoconvert = videoconvert.clone();
+    let audio_fakesink = audio_fakesink.clone();
+    ndisrcdemux.connect_pad_added(move |_, pad| {
+        let name = pad.name();
+        if name == "video" {
+            if let Some(sink_pad) = videoconvert.static_pad("sink") {
+                let _ = pad.link(&sink_pad);
+            }
+        } else if name == "audio" {
+            if let Some(sink_pad) = audio_fakesink.static_pad("sink") {
+                let _ = pad.link(&sink_pad);
+            }
+        }
+    });
+}
+
+/// The H264 caps used on BOTH sides of the StreamProducer bridge: the encoder
+/// appsink's caps filter AND every consumer appsrc's initial caps. Pinning
+/// byte-stream/AU on both sides guarantees they always match (h264parse
+/// converts as needed; with config-interval=-1 the stream carries inline
+/// SPS/PPS, so a consumer can start parsing at any IDR).
+pub(super) fn consumer_h264_caps() -> gst::Caps {
+    gst::Caps::builder("video/x-h264")
+        .field("stream-format", "byte-stream")
+        .field("alignment", "au")
+        .build()
 }
 
 /// Build the raw-video conditioning chain placed between the demux and the

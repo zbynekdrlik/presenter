@@ -2,8 +2,11 @@
 //!
 //! One `WhepSession` is created when a browser POSTs a WHEP offer to
 //! `/ndi/whep/:source_id`. It owns:
-//!   - one `webrtcbin` GStreamer element (the WebRTC peer)
-//!   - the `tee` request-pad src that feeds it from the shared encoder
+//!   - the consumer's OWN `gst::Pipeline` (`appsrc → rtph264pay → webrtcbin`)
+//!   - the `webrtcbin` element inside it (for trickle ICE forwarding)
+//!   - the `ConsumptionLink` connecting its appsrc to the encoder's
+//!     `StreamProducer` (drop = disconnect; carries delivery counters)
+//!   - the per-pipeline bus-watch task (Latency → recalculate_latency)
 //!   - an async channel of pending ICE candidates flowing server→browser
 //!   - the last-seen connection state (updated by the signal subscriber)
 //!   - the session UUID used as the WHEP HTTP Location path segment
@@ -11,16 +14,8 @@
 //! Lifetime ends when:
 //!   - The HTTP DELETE `/ndi/whep/:source_id/:session_id` route fires
 //!     `remove_consumer(session_id)` on the pipeline.
-//!   - webrtcbin emits `connection-state-change` to `Failed` or
-//!     `Disconnected` (handled by a signal subscriber that calls
-//!     `remove_consumer`).
-//!   - The owning pipeline is torn down (Drop on the pipeline cascades
-//!     through `tee.remove_pad` + `pipeline.remove(webrtcbin)`).
-//!
-//! Non-Send constraint: `webrtcbin` and `gst::Pad` are non-Send glib
-//! types. All signal connections and pad linking happen on the GStreamer
-//! main loop thread; tokio code talks to the session via Send channels
-//! and Send-able UUIDs.
+//!   - The owning pipeline is torn down (teardown drains the session map;
+//!     each session's Drop tears down its own consumer pipeline).
 
 use gstreamer as gst;
 use gstreamer::prelude::*;
@@ -99,22 +94,28 @@ impl From<gstreamer_webrtc::WebRTCPeerConnectionState> for WhepConnectionState {
 }
 
 /// One WHEP consumer. Owned by the pipeline's session map.
+///
+/// Each consumer runs in its OWN fresh `gst::Pipeline`
+/// (`appsrc → rtph264pay → webrtcbin`), fed by the encoder pipeline's appsink
+/// via the shared software fanout. Running each webrtcbin from-zero in its own
+/// pipeline is the #373 straggler fix: a webrtcbin added to a long-running
+/// pipeline never gets its rtpsession latency configured and drops all RTP.
 pub struct WhepSession {
     /// UUID used as the WHEP HTTP Location path segment.
     pub session_id: String,
-    /// The webrtcbin element for this consumer.
+    /// This consumer's OWN pipeline: `appsrc → rtph264pay → webrtcbin`.
+    /// Set to Null on remove/teardown/Drop.
+    pub consumer_pipeline: gst::Pipeline,
+    /// The webrtcbin element inside `consumer_pipeline` (kept for
+    /// `add_ice_candidate`).
     pub webrtcbin: gst::Element,
-    /// The queue element buffering the tee branch for this consumer.
-    /// Added to the pipeline alongside webrtcbin; removed in remove_consumer.
-    pub queue: gst::Element,
-    /// The per-consumer `rtph264pay` that payloads the shared encoder's H264
-    /// into RTP for THIS consumer's webrtcbin. Per-consumer (not shared) so it
-    /// adopts the dynamic payload type webrtcbin negotiates with the browser.
-    /// Added to the pipeline alongside webrtcbin; removed in remove_consumer.
-    pub payloader: gst::Element,
-    /// The src pad on `tee` feeding this consumer's webrtcbin (via a
-    /// queue). Released back to the tee on Drop.
-    pub tee_src_pad: gst::Pad,
+    /// The StreamProducer link feeding this consumer's appsrc from the encoder
+    /// appsink. Dropping it disconnects the consumer from the producer; it also
+    /// carries pushed/dropped delivery counters for diagnostics.
+    pub link: gstreamer_utils::ConsumptionLink,
+    /// The per-pipeline bus watch (services `Latency` messages with
+    /// `recalculate_latency()`, logs errors). Aborted on Drop.
+    pub bus_task: tokio::task::JoinHandle<()>,
     /// Holds the latest reported connection state, updated by the
     /// `connection-state-change` signal subscriber.
     ///
@@ -141,20 +142,19 @@ impl WhepSession {
 
 impl Drop for WhepSession {
     fn drop(&mut self) {
-        // Best-effort teardown of the per-consumer state. The pipeline's
-        // remove_consumer method is the canonical path; Drop is the
-        // backstop for unexpected drops (pipeline Drop, panic unwind).
-        let _ = self.webrtcbin.set_state(gst::State::Null);
-        let _ = self.payloader.set_state(gst::State::Null);
-        let _ = self.queue.set_state(gst::State::Null);
-        // tee_src_pad release is the parent tee's responsibility — we
-        // can't release a request-pad without holding the tee. The
-        // pipeline-level teardown() iterates sessions and calls
-        // tee.release_request_pad(&session.tee_src_pad) after removing
-        // both queue and webrtcbin from the pipeline.
+        // Full per-consumer teardown — this IS the canonical cleanup path
+        // (remove_consumer just drops the session off the async thread):
+        //   1. the ConsumptionLink field's own Drop disconnects this consumer's
+        //      appsrc from the encoder's StreamProducer (no more samples in);
+        //   2. abort the bus-watch task;
+        //   3. set the whole consumer pipeline to Null (tears down appsrc +
+        //      rtph264pay + webrtcbin together).
+        self.bus_task.abort();
+        let _ = self.consumer_pipeline.set_state(gst::State::Null);
         tracing::debug!(
             session_id = %self.session_id,
-            "WhepSession dropped (webrtcbin + queue set to Null; pad release handled by pipeline)"
+            "WhepSession dropped (producer link disconnected, bus task aborted, \
+             consumer pipeline set to Null)"
         );
     }
 }

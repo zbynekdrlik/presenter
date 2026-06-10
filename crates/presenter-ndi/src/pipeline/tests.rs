@@ -12,8 +12,11 @@ use std::sync::Arc;
 use anyhow::{anyhow, Context, Result};
 use gstreamer as gst;
 use gstreamer::prelude::*;
+use gstreamer_app as gst_app;
+use gstreamer_utils::StreamProducer;
 use tokio::sync::watch;
 
+use super::build::consumer_h264_caps;
 use super::*;
 use crate::whep_session::{WhepConnectionState, WhepSession};
 
@@ -27,26 +30,15 @@ impl NdiPipeline {
     /// pattern that masks real regressions.
     ///
     /// The returned value owns an empty `gst::Pipeline`, an empty
-    /// state-channel pinned at `Stopped`, no whep_url, no bus_watch. Its
-    /// public surface (`state()`, `stop()`, drop) behaves identically to a
-    /// real-but-never-started pipeline.
+    /// state-channel pinned at `Stopped`, no whep_url, no bus_watch, and a
+    /// StreamProducer over a detached appsink. Its public surface (`state()`,
+    /// `stop()`, drop) behaves identically to a real-but-never-started
+    /// pipeline.
     pub fn stopped_for_test() -> Self {
         // gstreamer::init() is idempotent and runs without plugins.
         let _ = gstreamer::init();
         let (state_tx, state_rx) = watch::channel(PipelineState::Stopped);
-        // A minimal placeholder tee for the stopped_for_test variant.
-        // We can't call gst::ElementFactory::make here safely without
-        // gst init — but init() above ensures it. Use fakesink as the
-        // tee placeholder; stopped_for_test is only used for state tests,
-        // not fanout topology tests.
-        let placeholder = gst::ElementFactory::make("fakesink")
-            .build()
-            .unwrap_or_else(|_| {
-                // If even fakesink isn't available (stripped env), synthesise
-                // a pipeline object as a stand-in — this path only needs
-                // enough to avoid a panic on Drop.
-                panic!("stopped_for_test: gstreamer init succeeded but fakesink unavailable — environment is too stripped");
-            });
+        let appsink = gst_app::AppSink::builder().build();
         Self {
             pipeline: gst::Pipeline::new(),
             whep_url: String::new(),
@@ -54,7 +46,7 @@ impl NdiPipeline {
             state_rx,
             bus_watch: std::sync::Mutex::new(None),
             sessions: Arc::new(tokio::sync::Mutex::new(HashMap::new())),
-            tee: Arc::new(placeholder),
+            producer: StreamProducer::from(&appsink),
         }
     }
 
@@ -65,9 +57,11 @@ impl NdiPipeline {
         self.state_tx.send_replace(state);
     }
 
-    /// Build a pipeline with the shared-encoder fanout topology using
-    /// `videotestsrc` in place of `ndisrc`/`ndisrcdemux`, so the test runs on
-    /// hosts without gst-plugin-ndi registered.
+    /// Build a pipeline with the shared-encoder topology using `videotestsrc`
+    /// in place of `ndisrc`/`ndisrcdemux`, so the test runs on hosts without
+    /// gst-plugin-ndi registered. Mirrors production: the encoder pipeline
+    /// ends in an appsink wrapped by a StreamProducer; consumers run in their
+    /// OWN pipelines (see `add_consumer_stub`).
     ///
     /// Fails with an error if `encoder_name` is not registered.
     pub fn stopped_for_test_with_topology(encoder_name: &str) -> Result<Self> {
@@ -107,23 +101,31 @@ impl NdiPipeline {
             _ => {}
         }
         let encoder = encoder_builder.build().context("encoder")?;
-        // Tee carries elementary H264 (production topology): the per-consumer
-        // rtph264pay lives downstream of the tee (added in add_consumer_stub),
-        // so the tee feeds h264parse output, NOT pre-payloaded RTP.
         let h264parse = gst::ElementFactory::make("h264parse")
             .name("h264parse")
             .property("config-interval", -1i32)
             .build()
             .context("h264parse")?;
-        let tee = gst::ElementFactory::make("tee")
-            .name("tee")
-            .property("allow-not-linked", true)
-            .build()
-            .context("tee")?;
+        let appsink = gst_app::AppSink::builder()
+            .name("enc_appsink")
+            .caps(&consumer_h264_caps())
+            .max_buffers(30u32)
+            .drop(true)
+            .build();
         pipeline
-            .add_many([&src, &convert, &encoder, &h264parse, &tee])
+            .add_many([
+                &src,
+                &convert,
+                &encoder,
+                &h264parse,
+                appsink.upcast_ref::<gst::Element>(),
+            ])
             .context("add")?;
-        gst::Element::link_many([&src, &convert, &encoder, &h264parse, &tee]).context("link")?;
+        gst::Element::link_many([&src, &convert, &encoder, &h264parse]).context("link")?;
+        h264parse
+            .link(appsink.upcast_ref::<gst::Element>())
+            .context("link h264parse -> appsink")?;
+        let producer = StreamProducer::from(&appsink);
         let (state_tx, state_rx) = watch::channel(PipelineState::Stopped);
         Ok(Self {
             pipeline,
@@ -132,12 +134,18 @@ impl NdiPipeline {
             state_rx,
             bus_watch: std::sync::Mutex::new(None),
             sessions: Arc::new(tokio::sync::Mutex::new(HashMap::new())),
-            tee: Arc::new(tee),
+            producer,
         })
     }
 
-    /// Sync stub: add a consumer WITHOUT SDP exchange (tests only).
-    /// Enforces the same cap as production via `MAX_CONSUMERS_PER_SOURCE`.
+    /// Sync stub: add a consumer WITHOUT SDP exchange (tests only). Builds the
+    /// production consumer topology — a SEPARATE pipeline with
+    /// `appsrc → rtph264pay → webrtcbin` — connects its appsrc to the
+    /// StreamProducer, and stores the session. Enforces the same cap as
+    /// production via `MAX_CONSUMERS_PER_SOURCE`.
+    ///
+    /// Must be called from within a tokio runtime (the per-pipeline bus-watch
+    /// stand-in task is spawned on the current runtime).
     pub fn add_consumer_stub(&mut self, session_id: &str) -> Result<(), AddConsumerError> {
         {
             let sessions = self
@@ -150,17 +158,12 @@ impl NdiPipeline {
                 });
             }
         }
-        let tee_pad = (*self.tee)
-            .request_pad_simple("src_%u")
-            .ok_or_else(|| anyhow!("tee has no src request pad"))?;
-        // Use a real queue element so the WhepSession.queue field is valid.
-        // This also keeps the test topology consistent with production (tee → queue → webrtcbin).
-        let queue = gst::ElementFactory::make("queue")
-            .build()
-            .context("queue (test)")?;
-        // Per-consumer rtph264pay (matches production topology:
-        // tee → queue → rtph264pay → webrtcbin).
+        let appsrc = gst_app::AppSrc::builder()
+            .name(format!("src_{session_id}"))
+            .caps(&consumer_h264_caps())
+            .build();
         let payloader = gst::ElementFactory::make("rtph264pay")
+            .name(format!("pay_{session_id}"))
             .property("config-interval", -1i32)
             .build()
             .context("rtph264pay (test)")?;
@@ -168,51 +171,53 @@ impl NdiPipeline {
             .name(session_id)
             .build()
             .context("webrtcbin (test)")?;
-        self.pipeline
-            .add_many([&queue, &payloader, &webrtcbin])
-            .context("pipeline.add queue+payloader+webrtcbin")?;
-        // Link: tee → queue → rtph264pay → webrtcbin
-        let queue_sink = queue
-            .static_pad("sink")
-            .ok_or_else(|| anyhow!("queue has no sink pad (test)"))?;
-        tee_pad
-            .link(&queue_sink)
-            .context("link tee_pad -> queue.sink (test)")?;
-        queue
+        let consumer_pipeline = gst::Pipeline::with_name(&format!("consumer_{session_id}"));
+        consumer_pipeline
+            .add_many([appsrc.upcast_ref::<gst::Element>(), &payloader, &webrtcbin])
+            .context("consumer pipeline add (test)")?;
+        appsrc
+            .upcast_ref::<gst::Element>()
             .link(&payloader)
-            .context("link queue -> rtph264pay (test)")?;
+            .context("link appsrc -> rtph264pay (test)")?;
         payloader
             .link(&webrtcbin)
             .context("link rtph264pay -> webrtcbin (test)")?;
+        let link = self
+            .producer
+            .add_consumer(&appsrc)
+            .map_err(|e| anyhow!("StreamProducer::add_consumer (test): {e}"))?;
         let (ice_tx, _ice_rx) = tokio::sync::mpsc::unbounded_channel();
         let session = WhepSession {
             session_id: session_id.to_string(),
+            consumer_pipeline,
             webrtcbin,
-            queue,
-            payloader,
-            tee_src_pad: tee_pad,
+            link,
+            // Stand-in for the production bus watch; aborted on Drop.
+            bus_task: tokio::spawn(async {}),
             connection_state: Arc::new(std::sync::Mutex::new(WhepConnectionState::New)),
             ice_tx,
         };
         self.sessions
             .try_lock()
-            .unwrap()
+            .expect("sessions mutex poisoned in test")
             .insert(session_id.to_string(), session);
         Ok(())
     }
 
-    /// Sync stub: remove a consumer (tests only). Idempotent.
+    /// Sync stub: remove a consumer (tests only). Idempotent. Dropping the
+    /// session disconnects the producer link, aborts the bus task, and nulls
+    /// the consumer pipeline — the same path production `remove_consumer`
+    /// takes.
     pub fn remove_consumer_stub(&mut self, session_id: &str) -> Result<()> {
-        let Some(session) = self.sessions.try_lock().unwrap().remove(session_id) else {
+        let Some(session) = self
+            .sessions
+            .try_lock()
+            .expect("sessions mutex poisoned in test")
+            .remove(session_id)
+        else {
             return Ok(());
         };
-        let _ = session.webrtcbin.set_state(gst::State::Null);
-        let _ = session.payloader.set_state(gst::State::Null);
-        let _ = session.queue.set_state(gst::State::Null);
-        self.pipeline.remove(&session.queue).ok();
-        self.pipeline.remove(&session.payloader).ok();
-        self.pipeline.remove(&session.webrtcbin).ok();
-        (*self.tee).release_request_pad(&session.tee_src_pad);
+        drop(session);
         Ok(())
     }
 }
@@ -271,22 +276,19 @@ fn state_transitions_start_at_stopped() {
 /// 3-4 encoders saturated the N100's iGPU VAAPI scheduler — the
 /// 2026-05-24 production incident.
 ///
-/// The fix builds the pipeline with `ndisrc → demux → videoconvert →
-/// vah264enc → rtph264pay → tee` (one encoder), then `add_consumer`
-/// dynamically requests a tee src pad + spawns one `webrtcbin` per
-/// consumer that reads from the shared encoded stream. This test asserts
-/// the load-bearing invariant: regardless of how many consumers are
-/// added, the pipeline iterator yields EXACTLY ONE encoder element.
+/// The fix keeps ONE shared encoder in the encoder pipeline; consumers run in
+/// their OWN pipelines (appsrc → rtph264pay → webrtcbin) fed via
+/// StreamProducer, which contain NO encoder. This test asserts the
+/// load-bearing invariant: regardless of how many consumers are added, the
+/// ENCODER pipeline yields EXACTLY ONE encoder element and the consumer
+/// pipelines yield one webrtcbin each.
 ///
 /// Runs on every CI host (no GPU/libndi required) — uses
-/// `stopped_for_test_with_topology()` which builds the encoder + tee
-/// + per-consumer webrtcbin elements with `x264enc` (always available)
+/// `stopped_for_test_with_topology()` with `x264enc` (always available)
 /// in lieu of real HW encoders.
 #[tokio::test]
 async fn pipeline_has_single_encoder_for_n_consumers() {
     super::super::init().expect("gst init");
-    // Build a pipeline-shaped value with the fanout topology, force
-    // `x264enc` as the encoder so this runs on every CI host.
     let mut pipeline = NdiPipeline::stopped_for_test_with_topology("x264enc")
         .expect("test-only topology builder must succeed when x264enc registered");
 
@@ -297,19 +299,19 @@ async fn pipeline_has_single_encoder_for_n_consumers() {
             .expect("add_consumer must succeed up to the soft cap");
     }
 
-    // Count elements whose factory name is one of the encoder factories.
     let encoder_factories = ["vah264enc", "nvh264enc", "x264enc"];
     let encoder_count = pipeline.iterate_encoders().count();
-    let webrtcbin_count = pipeline.iterate_webrtcbins().count();
+    let webrtcbin_count = pipeline.iterate_webrtcbins().len();
 
     assert_eq!(
         encoder_count, 1,
-        "REGRESSION (#336): pipeline must have EXACTLY ONE encoder for N consumers; \
-         got {encoder_count} encoders for 4 consumers. Encoder factories considered: {encoder_factories:?}"
+        "REGRESSION (#336): the ENCODER pipeline must have EXACTLY ONE encoder \
+         for N consumers; got {encoder_count} encoders for 4 consumers. \
+         Encoder factories considered: {encoder_factories:?}"
     );
     assert_eq!(
         webrtcbin_count, 4,
-        "pipeline must have one webrtcbin per consumer; got {webrtcbin_count} for 4 consumers"
+        "one webrtcbin per consumer pipeline; got {webrtcbin_count} for 4 consumers"
     );
 }
 
@@ -347,14 +349,13 @@ async fn add_consumer_returns_cap_reached_after_eight() {
 }
 
 /// Spec #336 / Task 7: cleanup invariant. After N add_consumer +
-/// M remove_consumer calls, the pipeline must have exactly N-M
-/// webrtcbin elements, the encoder count must stay at exactly 1,
-/// and remove_consumer on an unknown session must be idempotent.
+/// M remove_consumer calls, exactly N-M consumer pipelines (one webrtcbin
+/// each) remain, the encoder count stays at exactly 1, and remove_consumer
+/// on an unknown session is idempotent.
 ///
-/// Catches the regression class where a forgotten
-/// tee.release_request_pad or a leaked webrtcbin/queue element
-/// accumulates on every disconnect — would exhaust the iGPU's pad
-/// budget after a busy service.
+/// Catches the regression class where a leaked consumer pipeline or a
+/// dangling StreamProducer link accumulates on every disconnect — would
+/// exhaust GPU/socket budgets after a busy service.
 #[tokio::test]
 async fn add_then_remove_leaves_clean_state() {
     super::super::init().expect("gst init");
@@ -368,9 +369,9 @@ async fn add_then_remove_leaves_clean_state() {
             .expect("add must succeed");
     }
     assert_eq!(
-        pipeline.iterate_webrtcbins().count(),
+        pipeline.iterate_webrtcbins().len(),
         5,
-        "5 add_consumer calls must yield 5 webrtcbins",
+        "5 add_consumer calls must yield 5 consumer pipelines",
     );
     assert_eq!(
         pipeline.iterate_encoders().count(),
@@ -385,9 +386,9 @@ async fn add_then_remove_leaves_clean_state() {
             .expect("remove must succeed");
     }
     assert_eq!(
-        pipeline.iterate_webrtcbins().count(),
+        pipeline.iterate_webrtcbins().len(),
         2,
-        "5 add - 3 remove must leave exactly 2 webrtcbin elements",
+        "5 add - 3 remove must leave exactly 2 consumer pipelines",
     );
     assert_eq!(
         pipeline.iterate_encoders().count(),
@@ -402,14 +403,14 @@ async fn add_then_remove_leaves_clean_state() {
             .expect("remove must succeed");
     }
     assert_eq!(
-        pipeline.iterate_webrtcbins().count(),
+        pipeline.iterate_webrtcbins().len(),
         0,
-        "5 add - 5 remove must leave 0 webrtcbin elements",
+        "5 add - 5 remove must leave 0 consumer pipelines",
     );
     assert_eq!(
         pipeline.iterate_encoders().count(),
         1,
-        "encoder must still be present (it's part of the pipeline topology)",
+        "encoder must still be present (it's part of the encoder pipeline topology)",
     );
 
     // Remove non-existent session must be idempotent.

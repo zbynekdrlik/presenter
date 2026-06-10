@@ -192,6 +192,13 @@ impl AppState {
         source: presenter_persistence::SettingsAuditSource,
         actor: &str,
     ) -> anyhow::Result<()> {
+        // Stop the source's pipeline BEFORE deleting the row. Without this,
+        // deleting an ACTIVE source leaked its encoder pipeline (it kept
+        // streaming forever — observed as N zombie `ndi_pipelines` in
+        // /healthz after repeated create→delete cycles).
+        if let Some(manager) = &self.ndi_manager {
+            manager.stop_pipeline(&id.to_string()).await;
+        }
         self.repository.delete_video_source(id, source, actor).await
     }
 
