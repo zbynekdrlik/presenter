@@ -174,6 +174,7 @@ fn_start = re.compile(r"^\s*(?:pub(?:\([^)]*\))?\s+)?(?:async\s+)?fn\s+([A-Za-z0
 # - Migration up() functions (declarative schema)
 # - render_*_ui functions (Leptos HTML-like DSL)
 # - build_router functions (route declarations)
+# - Leptos #[component] functions (UI renders — the view! DSL is HTML-like)
 EXEMPT_FN_NAMES = {'up', 'down', 'build_router'}
 EXEMPT_FN_PREFIXES = ('render_', )
 
@@ -190,6 +191,25 @@ def is_exempt_function(fn_name, filepath):
             return True
     return False
 
+def preceded_by_component(lines, idx):
+    # A Leptos #[component] function is a UI render (per CLAUDE.md). The
+    # attribute sits directly above the fn, possibly with other attributes or
+    # doc comments interleaved. Walk upward over blank/comment/attribute lines;
+    # if we reach #[component] it's exempt, any other code line stops the scan.
+    j = idx - 1
+    while j >= 0:
+        s = lines[j].strip()
+        if not s:
+            j -= 1; continue
+        if s.startswith('#['):
+            if 'component' in s:
+                return True
+            j -= 1; continue
+        if s.startswith('//') or s.startswith('/*') or s.startswith('*'):
+            j -= 1; continue
+        return False
+    return False
+
 violations = []  # > 120 lines (hard fail)
 warnings = []    # > 80 lines (warning)
 targets_env = os.environ.get('QC_TARGETS', '')
@@ -198,7 +218,11 @@ for dirpath, _, filenames in os.walk(os.path.join(root, 'crates')):
     for name in filenames:
         if not name.endswith('.rs'): continue
         path = os.path.join(dirpath, name)
-        if targets and path not in targets:
+        # `targets` come from `git diff --name-only` as RELATIVE paths, but
+        # os.walk yields ABSOLUTE paths — compare on the relative form or the
+        # scope filter silently skips EVERY file (the gate becomes a no-op).
+        rel = os.path.relpath(path, root)
+        if targets and rel not in targets:
             continue
         with open(path, 'r', encoding='utf-8') as f:
             lines = f.readlines()
@@ -218,8 +242,8 @@ for dirpath, _, filenames in os.walk(os.path.join(root, 'crates')):
                         started = True
                     if started and brace == 0:
                         length = j - i + 1
-                        if not is_exempt_function(fn_name, path):
-                            entry = {'file': path, 'start': i+1, 'length': length, 'fn': fn_name}
+                        if not is_exempt_function(fn_name, path) and not preceded_by_component(lines, i):
+                            entry = {'file': rel, 'start': i+1, 'length': length, 'fn': fn_name}
                             if length > 120:
                                 violations.append(entry)
                             elif length > 80:

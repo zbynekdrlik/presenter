@@ -1,20 +1,37 @@
-//! Per-source GStreamer pipeline owning ndisrc + shared encoder + fanout tee.
+//! Per-source GStreamer pipeline: one shared-encoder ENCODER pipeline plus one
+//! FRESH pipeline per WHEP consumer, bridged by `gstreamer_utils::StreamProducer`.
 //!
 //! Each `NdiPipeline` instance corresponds to ONE active NDI source. The
-//! pipeline builds a shared-encoder topology:
+//! ENCODER pipeline is built once and NEVER modified afterwards:
 //!
 //! ```text
-//! ndisrc → ndisrcdemux → videoconvert → vah264enc → rtph264pay → tee
-//!                audio ↘ fakesink     (one encoder)              |
-//!                                                    ┌───────────┘
-//!                                                    ├─ src_0 → queue → webrtcbin (consumer #1)
-//!                                                    ├─ src_1 → queue → webrtcbin (consumer #2)
-//!                                                    └─ src_N → queue → webrtcbin (consumer #N)
+//! ndisrc → ndisrcdemux → videoconvert → videoscale → caps(NV12,720p)
+//!                audio ↘ fakesink              → encoder → h264parse → appsink
+//!                                              (one encoder)            │
+//!                                                          StreamProducer fanout
+//!                                                                       ▼
+//!   per consumer (its OWN gst::Pipeline):  appsrc → rtph264pay → webrtcbin
 //! ```
 //!
+//! Why per-consumer pipelines: a `webrtcbin` added to an already-running LIVE
+//! pipeline never gets its rtpsession's running-time/latency configured, so
+//! every straggler/reconnect connected but received ZERO RTP — the #373
+//! black-stage bug. Running each consumer in its OWN pipeline (sharing the
+//! encoder pipeline's clock + base-time, with a per-pipeline `Latency` bus
+//! handler) makes the latency configuration deterministic. This is EXACTLY the
+//! architecture of gst-plugin-rs `webrtcsink` (one session pipeline per peer,
+//! `StreamProducer` bridge, `Latency` message → `recalculate_latency()`), which
+//! is the reference implementation this design follows.
+//!
+//! The appsink→appsrc bridge is `gstreamer_utils::StreamProducer` — the same
+//! battle-tested fanout `webrtcsink` uses. It forwards samples (caps, segment
+//! and PTS preserved), propagates the producer's latency to every consumer
+//! appsrc, gates each new consumer on a keyframe, and forwards the browser's
+//! force-keyunit (PLI) requests upstream to the shared encoder.
+//!
 //! Per-consumer state lives in `WhepSession` (`whep_session.rs`). The pipeline
-//! owns the shared encoder + tee and a `tokio::sync::Mutex<HashMap<String,
-//! WhepSession>>` of active sessions.
+//! owns the shared encoder + the producer and a `tokio::sync::Mutex<HashMap<
+//! String, WhepSession>>` of active sessions.
 //!
 //! Structure: the type definitions live here in the module root; the
 //! `impl NdiPipeline` methods are split across focused submodules
@@ -26,6 +43,7 @@ use std::collections::HashMap;
 use std::sync::Arc;
 
 use gstreamer as gst;
+use gstreamer_utils::StreamProducer;
 use tokio::sync::watch;
 
 use crate::whep_session::{IceCandidate, WhepConnectionState, WhepSession};
@@ -33,6 +51,7 @@ use crate::whep_session::{IceCandidate, WhepConnectionState, WhepSession};
 mod build;
 mod consumers;
 mod lifecycle;
+mod negotiation;
 
 /// Pipeline lifecycle state.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -97,7 +116,8 @@ pub struct SessionSnapshot {
 
 /// Owns one GStreamer pipeline for one NDI source.
 pub struct NdiPipeline {
-    /// Underlying GStreamer pipeline.
+    /// The ENCODER pipeline (ndisrc → … → encoder → h264parse → appsink).
+    /// Built once and never modified when consumers come and go.
     pipeline: gst::Pipeline,
     /// WHEP URL that subscribers (browsers) POST to.
     whep_url: String,
@@ -115,10 +135,11 @@ pub struct NdiPipeline {
     /// for shared access, so `&mut self` methods are incompatible. The Mutex
     /// critical section is trivially short (take/set a JoinHandle).
     bus_watch: std::sync::Mutex<Option<tokio::task::JoinHandle<()>>>,
-    /// Active per-consumer sessions.
+    /// Active per-consumer sessions (each owns its OWN consumer pipeline).
     sessions: Arc<tokio::sync::Mutex<HashMap<String, WhepSession>>>,
-    /// Tee element — `add_consumer` / `remove_consumer` request/release pads.
-    tee: Arc<gst::Element>,
+    /// StreamProducer wrapping the encoder appsink — the fanout that feeds
+    /// every consumer pipeline's appsrc. Clone-cheap (internally Arc'd).
+    producer: StreamProducer,
 }
 
 impl Drop for NdiPipeline {

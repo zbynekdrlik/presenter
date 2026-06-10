@@ -10,6 +10,12 @@ repository.workspace = true
 default = []
 test-helpers = []
 
+# Synthetic NDI sender for deterministic E2E (self-hosted e2e-ndi lane).
+# Gated behind test-helpers so it never builds into production binaries.
+[[bin]]
+name = "ndi_test_sender"
+required-features = ["test-helpers"]
+
 [dependencies]
 anyhow.workspace = true
 axum.workspace = true
@@ -21,6 +27,8 @@ serde_json.workspace = true
 libloading = "0.8"
 futures-util.workspace = true
 gstreamer.workspace = true
+gstreamer-app.workspace = true
+gstreamer-utils.workspace = true
 gstreamer-webrtc.workspace = true
 gst-plugin-webrtc.workspace = true
 gst-plugin-ndi.workspace = true

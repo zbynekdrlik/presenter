@@ -584,7 +584,11 @@ jobs:
         run: npx playwright install --with-deps chromium chrome
 
       - name: Run Playwright tests
-        run: npx playwright test --shard=${{ matrix.shard }} --reporter=blob
+        # Exclude @synthetic-ndi — those need a live NDI source + GPU encoder
+        # and run on the self-hosted `e2e-ndi` lane instead (this runner has
+        # no NDI SDK). Without this, the required real-frame NDI test would
+        # fail here for lack of a source.
+        run: npx playwright test --shard=${{ matrix.shard }} --grep-invert "@synthetic-ndi" --reporter=blob
         env:
           CI: true
           PRESENTER_LIBRARY_ROOT: ${{ github.workspace }}/data/libraries
@@ -607,6 +611,111 @@ jobs:
         if: failure()
         with:
           name: playwright-traces-shard-${{ strategy.job-index }}-${{ github.run_id }}
+          path: test-results/
+          retention-days: 7
+
+  # ============================================
+  # NDI WebRTC E2E (self-hosted dev2: NDI SDK + NVENC + branded Chrome)
+  #
+  # The ubuntu `e2e` job cannot exercise the NDI→WebRTC video path (no NDI
+  # SDK, no GPU encoder, no NDI source on its network), so its real-frame
+  # tests skip. This REQUIRED lane closes that gap: it publishes a synthetic
+  # NDI source on the LAN and asserts that actual H264 frames decode in a real
+  # browser. It is the regression guard for the #336 "connected but black
+  # screen" bug (broken ICE / DTLS bundle / payload-type / branch lifecycle).
+  # ============================================
+  e2e-ndi:
+    name: NDI WebRTC E2E (synthetic, self-hosted)
+    runs-on: self-hosted
+    needs:
+      - build
+      - companion-tests
+      - version-check
+      - security-audit
+      - security-deny
+      - npm-audit
+    timeout-minutes: 20
+    env:
+      # gst-plugin-ndi locates libndi via this var; /usr/lib/ndi is the SDK
+      # install on the dev2 runner (not on the default linker path).
+      NDI_RUNTIME_DIR_V6: /usr/lib/ndi
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Download build artifacts
+        uses: actions/download-artifact@v4
+        with:
+          name: build-artifacts
+          path: _artifacts
+
+      - name: Place binaries
+        # ALL three prebuilt binaries are required: the spec's beforeAll runs
+        # refresh-dev-data.sh, which invokes import_propresenter + ingest_bibles.
+        # If they're missing it falls back to `cargo run` (cold compile) and the
+        # 180s beforeAll hook times out before any test runs.
+        run: |
+          mkdir -p target/release
+          cp _artifacts/presenter-server target/release/
+          cp _artifacts/import_propresenter target/release/
+          cp _artifacts/ingest_bibles target/release/
+          chmod +x target/release/presenter-server target/release/import_propresenter target/release/ingest_bibles
+          ls -la target/release/presenter-server target/release/import_propresenter target/release/ingest_bibles
+
+      - name: Build synthetic NDI sender (test-helpers)
+        run: cargo build -p presenter-ndi --features test-helpers --bin ndi_test_sender
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: "npm"
+
+      - name: Install npm dependencies
+        run: npm ci
+
+      - name: Install Playwright (branded Chrome for H.264)
+        run: npx playwright install --with-deps chromium chrome
+
+      - name: Start synthetic NDI sender
+        # Publishes "<host> (PRESENTER-TEST)" on the LAN so the test (and the
+        # presenter test-server it spawns) can discover + consume it. Runs in
+        # the background; stopped in the cleanup step below.
+        run: |
+          PRESENTER_NDI_TEST_NAME="PRESENTER-TEST" nohup ./target/debug/ndi_test_sender > /tmp/ndi_test_sender.log 2>&1 &
+          echo $! > /tmp/ndi_test_sender.pid
+          # Give NDI discovery a moment to advertise the source.
+          sleep 5
+          cat /tmp/ndi_test_sender.log || true
+
+      - name: Run NDI WebRTC E2E (real frames)
+        run: npx playwright test --grep "@synthetic-ndi" --project chrome-video --reporter=line
+        env:
+          CI: true
+          # Skip mock integrations (OSC/AbleSet/Resolume) in the spawned test
+          # server — their FIXED localhost ports collide with the deployed
+          # presenter-dev service already running on this self-hosted runner.
+          # The NDI test doesn't use those mocks.
+          PRESENTER_SKIP_MOCK_INTEGRATIONS: "1"
+          PRESENTER_LIBRARY_ROOT: ${{ github.workspace }}/data/libraries
+          PRESENTER_BIBLE_KJV: ${{ github.workspace }}/data/bibles/kjv.usfm.zip
+          PRESENTER_BIBLE_SEB: ${{ github.workspace }}/data/bibles/seb.bbl.mybible.zip
+          PRESENTER_BIBLE_ROHACEK: ${{ github.workspace }}/data/bibles/rohacek.bbl.mybible.zip
+          PRESENTER_BIBLE_SEVP: ${{ github.workspace }}/data/bibles/sevp.obohu.mybible.zip
+          PRESENTER_BIBLE_MILOST: ${{ github.workspace }}/data/bibles/milost.bbl.mybible.zip
+
+      - name: Stop synthetic NDI sender
+        if: always()
+        run: |
+          if [ -f /tmp/ndi_test_sender.pid ]; then
+            kill "$(cat /tmp/ndi_test_sender.pid)" 2>/dev/null || true
+            rm -f /tmp/ndi_test_sender.pid
+          fi
+
+      - name: Upload test traces
+        uses: actions/upload-artifact@v4
+        if: failure()
+        with:
+          name: playwright-traces-ndi-${{ github.run_id }}
           path: test-results/
           retention-days: 7
 
@@ -649,7 +758,7 @@ jobs:
   deploy-dev:
     name: Deploy to Dev
     runs-on: self-hosted
-    needs: e2e
+    needs: [e2e, e2e-ndi]
     concurrency:
       group: deploy-dev
       cancel-in-progress: false

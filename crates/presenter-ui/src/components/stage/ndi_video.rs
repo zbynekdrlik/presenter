@@ -10,9 +10,9 @@ use std::sync::Arc;
 use leptos::prelude::*;
 use leptos::wasm_bindgen::{closure::Closure, JsCast, JsValue};
 use leptos::web_sys::{
-    HtmlVideoElement, MediaStream, RtcConfiguration, RtcIceConnectionState, RtcPeerConnection,
-    RtcRtpTransceiverDirection, RtcRtpTransceiverInit, RtcSdpType, RtcSessionDescriptionInit,
-    RtcTrackEvent,
+    HtmlVideoElement, MediaStream, RtcConfiguration, RtcIceConnectionState, RtcIceGatheringState,
+    RtcPeerConnection, RtcRtpTransceiverDirection, RtcRtpTransceiverInit, RtcSdpType,
+    RtcSessionDescriptionInit, RtcTrackEvent,
 };
 use wasm_bindgen_futures::{spawn_local, JsFuture};
 
@@ -31,8 +31,15 @@ struct WhepSession {
 
 /// Watchdog that fires `on_failure` when EITHER:
 /// - the RTCPeerConnection's iceConnectionState becomes "failed", "disconnected",
-///   or "closed", OR
-/// - the <video> element's currentTime has not advanced for STALL_THRESHOLD seconds.
+///   or "closed" (genuine connection loss), OR
+/// - after playback has started, the <video> element's currentTime stops
+///   advancing for STALL_THRESHOLD seconds (mid-stream freeze).
+///
+/// It deliberately does NOT reconnect on "connected but no first frame yet":
+/// the server reliably delivers media to a stable consumer, so a frameless
+/// healthy connection just waits. Reconnecting in that window drove a
+/// multi-consumer churn spiral (every reconnect's tee add/remove disrupted the
+/// other displays, so they stalled and reconnected too — all black forever).
 ///
 /// The closure handles are leaked via `forget()` because wasm-bindgen `Closure`
 /// types are not `Send` and removing them on drop would require keeping the
@@ -46,8 +53,11 @@ struct Watchdog {
 }
 
 impl Watchdog {
-    /// Stall threshold: <video>.currentTime advance with this many seconds of
-    /// no change triggers a reconnect.
+    /// Stall threshold: once playback has started, <video>.currentTime not
+    /// advancing for this many seconds triggers a reconnect (mid-stream freeze).
+    /// Before the first frame there is NO timeout reconnect — a connected client
+    /// waits for media (see the stall-timer comment for why a no-first-frame
+    /// reconnect drove a multi-consumer churn spiral).
     const STALL_THRESHOLD_SECS: f64 = 3.0;
     /// How often the stall timer ticks (ms).
     const TICK_INTERVAL_MS: i32 = 1000;
@@ -82,9 +92,7 @@ impl Watchdog {
                         | RtcIceConnectionState::Disconnected
                         | RtcIceConnectionState::Closed
                 ) {
-                    leptos::logging::warn!(
-                        "watchdog: ICE state={s:?}, triggering reconnect"
-                    );
+                    leptos::logging::warn!("watchdog: ICE state={s:?}, triggering reconnect");
                     active.set(false);
                     (on_failure)();
                 }
@@ -94,34 +102,50 @@ impl Watchdog {
         }
 
         // Stall timer: every TICK_INTERVAL_MS check if currentTime advanced.
+        //
+        // CRITICAL — only the AFTER-PLAYBACK freeze triggers a reconnect here.
+        // Before the first frame we DO NOT reconnect at all, no matter how long
+        // it takes, as long as the connection is otherwise healthy (ICE failures
+        // are handled by the separate listener above). Reason: a "connected but
+        // no first frame yet" reconnect drives a multi-consumer CHURN SPIRAL —
+        // when several stage displays connect at once, each fresh consumer that
+        // hasn't rendered yet tears its session down and reconnects, and every
+        // reconnect's tee add/remove disrupts the OTHER consumers' streams, so
+        // they stall and reconnect too → all displays churn black forever. The
+        // server reliably delivers media to a STABLE consumer (verified), so the
+        // right behaviour for a frameless-but-connected client is to WAIT and let
+        // the fan-out settle, not to reconnect. Genuine connect failures surface
+        // as ICE failed/disconnected/closed and are handled above.
         {
             let active = Rc::clone(&active);
             let on_failure = Rc::clone(&on_failure);
             let video_clone = video.clone();
             let last_time: std::rc::Rc<std::cell::Cell<f64>> =
-                std::rc::Rc::new(std::cell::Cell::new(-1.0));
+                std::rc::Rc::new(std::cell::Cell::new(0.0));
             let last_change_at: std::rc::Rc<std::cell::Cell<f64>> =
                 std::rc::Rc::new(std::cell::Cell::new(0.0));
+            let playback_started: std::rc::Rc<std::cell::Cell<bool>> =
+                std::rc::Rc::new(std::cell::Cell::new(false));
             let cb = Closure::<dyn FnMut()>::new(move || {
                 if !active.get() {
                     return;
                 }
                 let now_secs = leptos::web_sys::js_sys::Date::now() / 1000.0;
                 let t = video_clone.current_time();
-                if (t - last_time.get()).abs() > 0.001 {
-                    // Time advanced — reset stall window.
+                if t > 0.0 && (t - last_time.get()).abs() > 0.001 {
+                    // A frame rendered — playback is live. Reset the stall window.
                     last_time.set(t);
                     last_change_at.set(now_secs);
+                    playback_started.set(true);
                     return;
                 }
-                if last_change_at.get() == 0.0 {
-                    // First tick after install — establish baseline.
-                    last_change_at.set(now_secs);
+                if !playback_started.get() {
+                    // No first frame yet — WAIT (do not reconnect). See above.
                     return;
                 }
                 if now_secs - last_change_at.get() >= Self::STALL_THRESHOLD_SECS {
                     leptos::logging::warn!(
-                        "watchdog: <video> stalled for >{}s (currentTime={t}), triggering reconnect",
+                        "watchdog: <video> stalled for >{}s after playback (currentTime={t}), triggering reconnect",
                         Self::STALL_THRESHOLD_SECS
                     );
                     active.set(false);
@@ -204,10 +228,7 @@ pub fn NdiVideo(source_id: String, #[prop(optional)] class: Option<&'static str>
                             Watchdog::install(&video, &session.pc, move || flag.set(true));
 
                         install_pagehide_teardown(&session);
-                        session_holder.set_value(Some(ActiveConnection {
-                            session,
-                            watchdog,
-                        }));
+                        session_holder.set_value(Some(ActiveConnection { session, watchdog }));
 
                         // Wait until either cancellation OR a watchdog fire.
                         loop {
@@ -305,8 +326,7 @@ async fn sleep_for_backoff() {
     let ms = schedule_ms[i];
     let promise = leptos::web_sys::js_sys::Promise::new(&mut |resolve, _| {
         if let Some(window) = leptos::web_sys::window() {
-            let _ = window
-                .set_timeout_with_callback_and_timeout_and_arguments_0(&resolve, ms);
+            let _ = window.set_timeout_with_callback_and_timeout_and_arguments_0(&resolve, ms);
         }
     });
     let _ = wasm_bindgen_futures::JsFuture::from(promise).await;
@@ -371,7 +391,51 @@ fn install_pagehide_teardown(session: &WhepSession) {
     cb.forget();
 }
 
+/// Await ICE gathering completion (state == `Complete`) so the local
+/// description carries our candidates before we POST the WHEP offer. Returns
+/// immediately if already complete. Bounded by a 3 s timeout: a gather that
+/// never completes (rare on LAN) resolves the wait anyway, falling back to a
+/// partially-gathered offer that still connects via peer-reflexive.
+async fn wait_for_ice_gathering_complete(pc: &RtcPeerConnection) {
+    if pc.ice_gathering_state() == RtcIceGatheringState::Complete {
+        return;
+    }
+    // Keep the state-change Closure in this function's scope (NOT `forget()`-ed)
+    // so it is freed when we return. connect_whep is re-invoked by the watchdog
+    // reconnect loop, so a forgotten closure here would leak unbounded over a
+    // persistent stall; binding it to a holder drops it once per call.
+    let cb_holder: std::rc::Rc<std::cell::RefCell<Option<Closure<dyn FnMut()>>>> =
+        std::rc::Rc::new(std::cell::RefCell::new(None));
+    let cb_holder_for_promise = std::rc::Rc::clone(&cb_holder);
+    let pc_for_promise = pc.clone();
+    let promise = leptos::web_sys::js_sys::Promise::new(&mut |resolve, _reject| {
+        // Resolve when gathering reaches Complete.
+        let pc_inner = pc_for_promise.clone();
+        let resolve_state = resolve.clone();
+        let cb = Closure::<dyn FnMut()>::new(move || {
+            if pc_inner.ice_gathering_state() == RtcIceGatheringState::Complete {
+                let _ = resolve_state.call0(&JsValue::NULL);
+            }
+        });
+        pc_for_promise.set_onicegatheringstatechange(Some(cb.as_ref().unchecked_ref()));
+        *cb_holder_for_promise.borrow_mut() = Some(cb);
+        // Timeout fallback so a stuck gather can't hang the connect.
+        if let Some(window) = leptos::web_sys::window() {
+            let _ = window.set_timeout_with_callback_and_timeout_and_arguments_0(&resolve, 3000);
+        }
+    });
+    let _ = JsFuture::from(promise).await;
+    // Detach the handler so it doesn't fire for later state changes, then drop
+    // the closure (cb_holder goes out of scope at function end).
+    pc.set_onicegatheringstatechange(None);
+    drop(cb_holder);
+}
+
 async fn connect_whep(video: &HtmlVideoElement, source_id: &str) -> Result<WhepSession, JsValue> {
+    // Default RTCPeerConnection config (no explicit bundle-policy). A plain
+    // default-bundle client is proven to decode this server's stream in CI
+    // (e2e check 1). Forcing max-bundle here was a REGRESSION — CI showed the
+    // max-bundle client received ZERO frames (#372). Keep the browser default.
     let cfg = RtcConfiguration::new();
     let pc = RtcPeerConnection::new_with_configuration(&cfg)?;
 
@@ -383,6 +447,43 @@ async fn connect_whep(video: &HtmlVideoElement, source_id: &str) -> Result<WhepS
     audio_init.set_direction(RtcRtpTransceiverDirection::Recvonly);
     pc.add_transceiver_with_str_and_init("audio", &audio_init);
 
+    attach_ontrack(&pc, video);
+
+    let offer = JsFuture::from(pc.create_offer()).await?;
+    let offer_init: RtcSessionDescriptionInit = offer.unchecked_into();
+    JsFuture::from(pc.set_local_description(&offer_init)).await?;
+
+    // Wait for ICE gathering to complete so the offer SDP we POST carries our
+    // host candidates (LAN: no STUN/TURN, gathers in <1s). This makes the
+    // server's webrtcbin receive our candidates directly in the offer instead
+    // of relying solely on peer-reflexive discovery — more robust ICE. Bounded
+    // by a timeout inside the helper so a stuck gather can't hang the connect;
+    // on timeout we fall back to whatever was gathered (still works).
+    wait_for_ice_gathering_complete(&pc).await;
+
+    // Prefer the post-gather local description (includes a=candidate lines);
+    // fall back to the pre-gather offer if local_description is unavailable.
+    let offer_sdp = pc
+        .local_description()
+        .map(|d| d.sdp())
+        .filter(|s| !s.is_empty())
+        .or_else(|| {
+            js_sys::Reflect::get(&offer_init, &"sdp".into())
+                .ok()
+                .and_then(|v| v.as_string())
+        })
+        .unwrap_or_default();
+
+    let (answer_text, resource_url) = post_whep_offer(source_id, &offer_sdp).await?;
+    let answer = RtcSessionDescriptionInit::new(RtcSdpType::Answer);
+    answer.set_sdp(&answer_text);
+    JsFuture::from(pc.set_remote_description(&answer)).await?;
+    Ok(WhepSession { pc, resource_url })
+}
+
+/// Attach the `ontrack` handler: on the first inbound MediaStream, set it as the
+/// `<video>` srcObject (muted, to satisfy Chrome's autoplay policy) and play.
+fn attach_ontrack(pc: &RtcPeerConnection, video: &HtmlVideoElement) {
     let video_clone = video.clone();
     let ontrack = Closure::<dyn FnMut(RtcTrackEvent)>::new(move |ev: RtcTrackEvent| {
         let streams = ev.streams();
@@ -429,18 +530,21 @@ async fn connect_whep(video: &HtmlVideoElement, source_id: &str) -> Result<WhepS
     });
     pc.set_ontrack(Some(ontrack.as_ref().unchecked_ref()));
     ontrack.forget();
+}
 
-    let offer = JsFuture::from(pc.create_offer()).await?;
-    let offer_init: RtcSessionDescriptionInit = offer.unchecked_into();
-    JsFuture::from(pc.set_local_description(&offer_init)).await?;
-    let offer_sdp = js_sys::Reflect::get(&offer_init, &"sdp".into())?
-        .as_string()
-        .unwrap_or_default();
-
+/// POST the WHEP offer SDP and return `(answer_sdp, resource_url)`. The resource
+/// URL comes from the `Location` header (resolved against the page origin) and
+/// is DELETEd on cleanup so server-side sessions don't leak — after ~10 leaked
+/// sessions webrtcsink's discovery starts failing for new consumers (transient
+/// `failed to set sps/pps` errors that don't recover).
+async fn post_whep_offer(
+    source_id: &str,
+    offer_sdp: &str,
+) -> Result<(String, Option<String>), JsValue> {
     let url = whep_url(source_id);
     let init = leptos::web_sys::RequestInit::new();
     init.set_method("POST");
-    init.set_body(&JsValue::from_str(&offer_sdp));
+    init.set_body(&JsValue::from_str(offer_sdp));
     let headers = leptos::web_sys::Headers::new()?;
     headers.set("Content-Type", "application/sdp")?;
     init.set_headers(&headers);
@@ -455,11 +559,7 @@ async fn connect_whep(video: &HtmlVideoElement, source_id: &str) -> Result<WhepS
         )));
     }
     // WHEP RFC 9725: server returns 201 Created with a `Location` header
-    // pointing at the session resource. We MUST store this URL and DELETE
-    // it on cleanup; otherwise the server-side session leaks and after
-    // ~10 leaked sessions webrtcsink's discovery starts failing for new
-    // consumers (transient `failed to set sps/pps` errors that don't
-    // recover).
+    // pointing at the session resource.
     let location_header = resp
         .headers()
         .get("Location")
@@ -480,8 +580,5 @@ async fn connect_whep(video: &HtmlVideoElement, source_id: &str) -> Result<WhepS
         .await?
         .as_string()
         .unwrap_or_default();
-    let answer = RtcSessionDescriptionInit::new(RtcSdpType::Answer);
-    answer.set_sdp(&answer_text);
-    JsFuture::from(pc.set_remote_description(&answer)).await?;
-    Ok(WhepSession { pc, resource_url })
+    Ok((answer_text, resource_url))
 }

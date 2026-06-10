@@ -28,6 +28,7 @@ impl NdiPipeline {
         let bus = pipeline
             .bus()
             .ok_or_else(|| anyhow!("pipeline has no bus"))?;
+        let pipeline_weak = pipeline.downgrade();
         *self.bus_watch.lock().unwrap_or_else(|p| p.into_inner()) =
             Some(tokio::spawn(async move {
                 let mut stream = bus.stream();
@@ -39,6 +40,16 @@ impl NdiPipeline {
                                 && sc.current() == gst::State::Playing =>
                         {
                             let _ = state_tx.send(PipelineState::Streaming);
+                        }
+                        gst::MessageView::Latency(_) => {
+                            // GStreamer requires the APPLICATION to service
+                            // Latency messages by redistributing latency
+                            // (gst-launch and webrtcsink both do this).
+                            if let Some(p) = pipeline_weak.upgrade() {
+                                p.call_async(|p| {
+                                    let _ = p.recalculate_latency();
+                                });
+                            }
                         }
                         gst::MessageView::AsyncDone(_) => {
                             // Harmless duplicate for live pipelines (the
@@ -81,21 +92,17 @@ impl NdiPipeline {
     /// Shared between `stop()` and `Drop` so the invariant lives in one place.
     /// Idempotent — GStreamer ignores a duplicate Null transition.
     pub(super) fn teardown(&self) {
-        // Release per-consumer resources before tearing down the pipeline.
-        // Match the order used by remove_consumer: set elements to Null,
-        // remove from pipeline, then release the tee request-pad.
+        // Tear down each consumer's OWN pipeline and unregister its appsrc from
+        // the fanout so the encoder appsink callback stops pushing into it.
         // sessions is a tokio::sync::Mutex; try_lock in Drop avoids blocking.
         if let Ok(mut sessions) = self.sessions.try_lock() {
-            for (_id, session) in sessions.drain() {
-                let _ = session.webrtcbin.set_state(gst::State::Null);
-                let _ = session.queue.set_state(gst::State::Null);
-                let _ = self.pipeline.remove(&session.webrtcbin);
-                let _ = self.pipeline.remove(&session.queue);
-                (*self.tee).release_request_pad(&session.tee_src_pad);
-            }
+            // WhepSession::drop performs the full per-consumer teardown:
+            // StreamProducer link disconnect, bus-task abort, consumer
+            // pipeline → Null.
+            sessions.clear();
         } else {
             // Lock contention during Drop is unusual. GStreamer will free the
-            // elements when the bin drops anyway; leave a debug log rather than
+            // elements when the bins drop anyway; leave a debug log rather than
             // spinning.
             tracing::debug!(
                 "NdiPipeline teardown: sessions mutex contended; \

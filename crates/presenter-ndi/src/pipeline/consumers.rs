@@ -1,40 +1,144 @@
-//! WHEP consumer management: add/remove a per-consumer `webrtcbin` branch off
-//! the shared encoder's tee, forward trickle ICE, and diagnostic snapshots.
+//! WHEP consumer management: build/tear down a FRESH per-consumer pipeline
+//! (`appsrc → rtph264pay → webrtcbin`) fed by the encoder pipeline's
+//! `StreamProducer`, forward trickle ICE, and diagnostic snapshots.
+//!
+//! This follows the gst-plugin-rs `webrtcsink` reference recipe exactly:
+//!
+//! 1. one FRESH `gst::Pipeline` per consumer (a webrtcbin spliced into an
+//!    already-running pipeline never gets its rtpsession latency configured —
+//!    the #373 "connected but black" straggler bug);
+//! 2. the consumer pipeline SHARES the encoder pipeline's clock + base-time
+//!    (`use_clock` / `set_start_time(NONE)` / `set_base_time`), so forwarded
+//!    buffer timestamps stay valid on the consumer's timeline;
+//! 3. a per-pipeline BUS WATCH services every `Latency` message with
+//!    `recalculate_latency()` — webrtcbin adds its transport elements DURING
+//!    negotiation, and without this handler the new elements' latency is never
+//!    distributed (the root cause of the nondeterministic zero-RTP failures);
+//! 4. the appsink→appsrc bridge is `gstreamer_utils::StreamProducer`, which
+//!    forwards samples (caps, segment and PTS preserved), propagates producer
+//!    latency to the consumer appsrcs, gates new consumers on a keyframe, and
+//!    forwards force-keyunit (browser PLI) requests upstream to the encoder;
+//! 5. create-answer WAITS for media caps (with the send `ssrc`) to reach the
+//!    webrtcbin sink pad, so the answer always announces the SSRC the browser
+//!    needs to demux the stream (see `negotiation::await_media_caps`).
+//!
+//! Construction runs inside `tokio::task::spawn_blocking` (non-Send glib
+//! work); every partially-built consumer is owned by the [`ConsumerBranch`]
+//! RAII guard, so EVERY exit path — error, async cancellation of the awaiting
+//! HTTP handler, or a value stranded in the oneshot channel — tears the
+//! pipeline down instead of leaking it.
 
 use std::sync::Arc;
 
 use anyhow::{anyhow, Context, Result};
 use gstreamer as gst;
 use gstreamer::prelude::*;
+use gstreamer_app as gst_app;
+use gstreamer_utils::{ConsumptionLink, StreamProducer};
 use gstreamer_webrtc as gst_webrtc;
+use tokio::sync::mpsc::UnboundedSender;
 
+use super::negotiation::{
+    align_payload_type, await_ice_gathering, await_media_caps, negotiate_sdp,
+    parse_h264_payload_type,
+};
 use super::{
-    AddConsumerError, NdiPipeline, PipelineSnapshot, SessionSnapshot, WhepAnswer,
-    MAX_CONSUMERS_PER_SOURCE,
+    build::consumer_h264_caps, AddConsumerError, NdiPipeline, PipelineSnapshot, SessionSnapshot,
+    WhepAnswer, MAX_CONSUMERS_PER_SOURCE,
 };
 use crate::whep_session::{IceCandidate, WhepConnectionState, WhepSession};
 
+/// RAII owner of a consumer pipeline from the moment it is assembled until it
+/// is either promoted into a stored [`WhepSession`] (via [`Self::defuse`]) or
+/// dropped — in which case Drop aborts the bus-watch task, disconnects the
+/// StreamProducer link, and sets the pipeline to Null. This single guard
+/// covers every leak window: `?` error paths in the blocking builder, the
+/// oneshot value stranded when the receiver is cancelled, and cancellation of
+/// `add_consumer` between receiving the value and storing the session.
+pub(super) struct ConsumerBranch {
+    pipeline: gst::Pipeline,
+    webrtcbin: gst::Element,
+    bus_task: Option<tokio::task::JoinHandle<()>>,
+    link: Option<ConsumptionLink>,
+    sdp_answer: String,
+    session_id: String,
+    armed: bool,
+}
+
+impl ConsumerBranch {
+    fn new(pipeline: gst::Pipeline, webrtcbin: gst::Element, session_id: &str) -> Self {
+        Self {
+            pipeline,
+            webrtcbin,
+            bus_task: None,
+            link: None,
+            sdp_answer: String::new(),
+            session_id: session_id.to_string(),
+            armed: true,
+        }
+    }
+
+    /// Take ownership of the parts for a stored `WhepSession`, disarming the
+    /// guard. Returns None if the branch never completed negotiation (no link
+    /// or bus task) — callers treat that as an internal error.
+    #[allow(clippy::type_complexity)]
+    fn defuse(
+        mut self,
+    ) -> Option<(
+        gst::Pipeline,
+        gst::Element,
+        String,
+        ConsumptionLink,
+        tokio::task::JoinHandle<()>,
+    )> {
+        let link = self.link.take()?;
+        let bus_task = self.bus_task.take()?;
+        self.armed = false;
+        Some((
+            self.pipeline.clone(),
+            self.webrtcbin.clone(),
+            std::mem::take(&mut self.sdp_answer),
+            link,
+            bus_task,
+        ))
+    }
+}
+
+impl Drop for ConsumerBranch {
+    fn drop(&mut self) {
+        if !self.armed {
+            return;
+        }
+        if let Some(task) = self.bus_task.take() {
+            task.abort();
+        }
+        // Dropping the link disconnects this consumer from the StreamProducer.
+        drop(self.link.take());
+        let _ = self.pipeline.set_state(gst::State::Null);
+        tracing::debug!(
+            session_id = %self.session_id,
+            "ConsumerBranch dropped before becoming a session — torn down"
+        );
+    }
+}
+
 impl NdiPipeline {
-    /// Add a WHEP consumer: request a tee src pad, create a webrtcbin
-    /// element, link them via a queue, perform SDP offer/answer exchange,
-    /// and return a `WhepAnswer` containing the SDP answer + initial ICE
-    /// candidates.
+    /// Add a WHEP consumer: build a fresh `appsrc → rtph264pay → webrtcbin`
+    /// pipeline on the encoder's clock, perform the SDP offer/answer exchange,
+    /// connect its appsrc to the encoder's `StreamProducer`, and return a
+    /// `WhepAnswer` (SDP answer + initial ICE candidates).
     ///
     /// Returns `Err(AddConsumerError::CapReached)` before allocating any
     /// GStreamer resources when the session count is at `MAX_CONSUMERS_PER_SOURCE`.
-    ///
-    /// Non-Send glib work (element creation, linking, signal connections)
-    /// runs inside `tokio::task::spawn_blocking`.
     pub async fn add_consumer(
         &self,
         sdp_offer_bytes: Vec<u8>,
     ) -> Result<WhepAnswer, AddConsumerError> {
         // Enforce soft consumer cap BEFORE allocating any GStreamer resources.
         //
-        // Soft cap: this check + the session insert below are NOT atomic.
-        // Two concurrent add_consumer calls at count=MAX-1 can both pass and
-        // momentarily reach count=MAX+1. Acceptable per spec ("soft cap, not a
-        // hard atomic invariant") — N100 saturation is gradual, not a cliff.
+        // Soft cap: this check + the session insert below are NOT atomic. Two
+        // concurrent add_consumer calls at count=MAX-1 can both pass and
+        // momentarily reach count=MAX+1. Acceptable per spec ("soft cap").
         {
             let sessions = self.sessions.lock().await;
             if sessions.len() >= MAX_CONSUMERS_PER_SOURCE {
@@ -50,228 +154,79 @@ impl NdiPipeline {
         }
 
         let session_id = WhepSession::new_session_id();
-        let pipeline = self.pipeline.clone();
-        let tee = (*self.tee).clone();
+        let producer = self.producer.clone();
+        // Share the ENCODER pipeline's clock + base-time with the consumer
+        // pipeline (webrtcsink does exactly this for its session pipelines).
+        // The encoder pipeline is guaranteed Streaming before WHEP POSTs are
+        // routed (manager's ensure_streaming gate), so these are valid.
+        let enc_clock = self.pipeline.clock();
+        let enc_base_time = self.pipeline.base_time();
+        // Tokio runtime handle so the blocking builder can spawn the
+        // per-pipeline bus-watch task.
+        let rt = tokio::runtime::Handle::current();
 
-        // Channel for ICE candidates emitted by webrtcbin.
+        // Channel for ICE candidates emitted by webrtcbin. `ice_tx` is kept for
+        // the stored WhepSession; a clone is moved into the signal closure.
         let (ice_tx, mut ice_rx) = tokio::sync::mpsc::unbounded_channel::<IceCandidate>();
-        let ice_tx_clone = ice_tx.clone();
+        let ice_tx_for_signal = ice_tx.clone();
 
-        // Shared connection state updated by the notify::connection-state handler.
-        // Uses std::sync::Mutex because the GStreamer signal fires from raw
-        // std::thread (GLib streaming thread) — tokio::sync::Mutex would risk
-        // deadlock in that context.
+        // Shared connection state updated by the notify::connection-state handler
+        // (fires from a GStreamer streaming thread → std::sync::Mutex).
         let connection_state = Arc::new(std::sync::Mutex::new(WhepConnectionState::New));
         let connection_state_for_signal = connection_state.clone();
 
-        let session_id_for_signal = session_id.clone();
-
-        // Channel to receive the SDP answer from within spawn_blocking.
-        // Returns (webrtcbin, queue, tee_pad, sdp_text) on success.
-        let (answer_tx, answer_rx) = tokio::sync::oneshot::channel::<
-            Result<(gst::Element, gst::Element, gst::Pad, String)>,
-        >();
+        // Channel to receive the negotiation result from within spawn_blocking.
+        // The value is a ConsumerBranch GUARD: if this future is cancelled
+        // while the branch sits buffered in the channel, the channel's drop
+        // tears the pipeline down instead of leaking it.
+        let (answer_tx, answer_rx) = tokio::sync::oneshot::channel::<Result<ConsumerBranch>>();
 
         let session_id_for_blocking = session_id.clone();
 
         tokio::task::spawn_blocking(move || {
-            // Parse the SDP offer.
-            let sdp_msg = gstreamer_webrtc::gst_sdp::SDPMessage::parse_buffer(&sdp_offer_bytes)
-                .map_err(|e| anyhow!("SDP parse failed: {e}"))?;
-
-            let offer_desc = gst_webrtc::WebRTCSessionDescription::new(
-                gst_webrtc::WebRTCSDPType::Offer,
-                sdp_msg,
+            let result = build_consumer_pipeline_blocking(
+                &producer,
+                &sdp_offer_bytes,
+                &session_id_for_blocking,
+                ice_tx_for_signal,
+                connection_state_for_signal,
+                enc_clock,
+                enc_base_time,
+                rt,
             );
-
-            // Step 1: request a tee src pad. On any subsequent failure we MUST
-            // release this pad before returning — otherwise it leaks forever.
-            let tee_pad = tee
-                .request_pad_simple("src_%u")
-                .ok_or_else(|| anyhow!("tee has no src_%u request pad template"))?;
-
-            // Step 2: do all remaining work in an inner closure so that a single
-            // match on the result can unconditionally release tee_pad on Err.
-            // The closure returns (webrtcbin, queue, sdp_text) on success.
-            let inner_result = (|| -> Result<(gst::Element, gst::Element, String)> {
-                // Build queue + webrtcbin.
-                let queue = gst::ElementFactory::make("queue")
-                    .build()
-                    .context("build queue")?;
-                let webrtcbin = gst::ElementFactory::make("webrtcbin")
-                    .name(session_id_for_blocking.as_str())
-                    .build()
-                    .context("build webrtcbin")?;
-
-                pipeline
-                    .add_many([&queue, &webrtcbin])
-                    .context("add queue+webrtcbin")?;
-
-                // From here, on any error we must remove queue + webrtcbin from the
-                // pipeline before returning. Use a nested closure for this.
-                let pipeline_result: Result<String> = (|| -> Result<String> {
-                    // Link: tee_src → queue → webrtcbin
-                    let queue_sink = queue
-                        .static_pad("sink")
-                        .ok_or_else(|| anyhow!("queue has no sink pad"))?;
-                    tee_pad
-                        .link(&queue_sink)
-                        .context("link tee_pad -> queue.sink")?;
-                    queue.link(&webrtcbin).context("link queue -> webrtcbin")?;
-
-                    // Connect on-ice-candidate signal.
-                    // Signal signature: void(webrtcbin, sdp_mline_index: u32, candidate: &str)
-                    // Confirmed from gst-inspect-1.0 webrtcbin and gst-plugin-webrtc-0.15.2/imp.rs:3211
-                    // Args array: [webrtcbin_value, mline_index_value, candidate_value]
-                    {
-                        let ice_tx = ice_tx_clone.clone();
-                        webrtcbin.connect("on-ice-candidate", false, move |args| {
-                            let sdp_mline_index =
-                                args.get(1).and_then(|v| v.get::<u32>().ok()).unwrap_or(0);
-                            let candidate = args
-                                .get(2)
-                                .and_then(|v| v.get::<String>().ok())
-                                .unwrap_or_default();
-                            let _ = ice_tx.send(IceCandidate {
-                                sdp_mline_index,
-                                candidate,
-                            });
-                            None
-                        });
-                    }
-
-                    // Connect notify::connection-state to update shared state.
-                    // This signal fires from a GStreamer streaming thread (raw std::thread
-                    // spawned by GLib) — NOT from within a tokio context. We therefore use
-                    // std::sync::Mutex::lock() directly; no async dance or block_on needed.
-                    // The critical section is nanoseconds (a simple enum write), so
-                    // contention is negligible.
-                    webrtcbin.connect_notify(Some("connection-state"), {
-                        let connection_state_for_signal = connection_state_for_signal.clone();
-                        let session_id_for_signal = session_id_for_signal.clone();
-                        move |webrtcbin, _pspec| {
-                            let gst_state = webrtcbin
-                                .property::<gst_webrtc::WebRTCPeerConnectionState>(
-                                    "connection-state",
-                                );
-                            let our_state = WhepConnectionState::from(gst_state);
-                            // std::sync::Mutex — safe to lock from any thread, no async runtime
-                            // required. On poison we recover the guard via into_inner() rather
-                            // than panic; the signal thread only does a trivial enum write.
-                            *connection_state_for_signal
-                                .lock()
-                                .unwrap_or_else(|p| p.into_inner()) = our_state;
-                            tracing::debug!(
-                                session_id = %session_id_for_signal,
-                                state = ?our_state,
-                                "WHEP consumer connection-state changed"
-                            );
-                        }
-                    });
-
-                    // Set webrtcbin to PLAYING so it can do ICE + DTLS.
-                    webrtcbin
-                        .set_state(gst::State::Playing)
-                        .context("set webrtcbin to Playing")?;
-
-                    // Set the remote description (the browser's offer).
-                    let (remote_desc_tx, remote_desc_rx) = std::sync::mpsc::sync_channel::<()>(1);
-                    let promise = gst::Promise::with_change_func(move |_reply| {
-                        let _ = remote_desc_tx.send(());
-                    });
-                    webrtcbin
-                        .emit_by_name::<()>("set-remote-description", &[&offer_desc, &promise]);
-                    // Wait for the set-remote-description promise to resolve.
-                    // Propagate timeout as an error — proceeding to create-answer on a
-                    // webrtcbin that hasn't processed the offer produces an invalid SDP.
-                    remote_desc_rx
-                        .recv_timeout(std::time::Duration::from_secs(5))
-                        .context("set-remote-description promise timed out or sender dropped")?;
-
-                    // Create the SDP answer.
-                    let (answer_sdp_tx, answer_sdp_rx) = std::sync::mpsc::sync_channel::<
-                        Option<gst_webrtc::WebRTCSessionDescription>,
-                    >(1);
-                    let promise = gst::Promise::with_change_func(move |reply| {
-                        let answer = reply
-                            .ok()
-                            .and_then(|r| r)
-                            .and_then(|r| r.value("answer").ok())
-                            .and_then(|v| v.get::<gst_webrtc::WebRTCSessionDescription>().ok());
-                        let _ = answer_sdp_tx.send(answer);
-                    });
-                    webrtcbin
-                        .emit_by_name::<()>("create-answer", &[&None::<gst::Structure>, &promise]);
-
-                    let answer_desc = answer_sdp_rx
-                        .recv_timeout(std::time::Duration::from_secs(5))
-                        .context("create-answer promise timed out")?
-                        .ok_or_else(|| anyhow!("create-answer returned no answer"))?;
-
-                    // Set the local description (our answer).
-                    webrtcbin.emit_by_name::<()>(
-                        "set-local-description",
-                        &[&answer_desc, &None::<gst::Promise>],
-                    );
-
-                    answer_desc
-                        .sdp()
-                        .as_text()
-                        .map_err(|e| anyhow!("answer SDP as_text failed: {e}"))
-                })();
-
-                match pipeline_result {
-                    Ok(sdp_text) => Ok((queue, webrtcbin, sdp_text)),
-                    Err(e) => {
-                        // Remove partially-allocated pipeline elements before releasing
-                        // tee_pad (the outer match handles tee_pad release on Err).
-                        let _ = webrtcbin.set_state(gst::State::Null);
-                        let _ = queue.set_state(gst::State::Null);
-                        let _ = pipeline.remove(&webrtcbin);
-                        let _ = pipeline.remove(&queue);
-                        Err(e)
-                    }
-                }
-            })();
-
-            match inner_result {
-                Ok((queue, webrtcbin, sdp_text)) => {
-                    answer_tx
-                        .send(Ok((webrtcbin, queue, tee_pad, sdp_text)))
-                        .ok();
-                }
-                Err(e) => {
-                    // Release the tee pad we reserved at Step 1.
-                    tee.release_request_pad(&tee_pad);
-                    answer_tx.send(Err(e)).ok();
-                }
-            }
-            Ok::<(), anyhow::Error>(())
+            // If the receiver is already gone, the returned branch guard drops
+            // here and tears itself down.
+            let _ = answer_tx.send(result);
         });
 
-        // Await the answer from the blocking task.
-        let (webrtcbin, queue, tee_pad, sdp_answer) = answer_rx
+        // Await the negotiation result, then IMMEDIATELY promote the branch
+        // into a WhepSession: from this point any cancellation of this future
+        // (client disconnect) drops the session, whose Drop performs the full
+        // teardown — no awaits happen while the parts are unguarded.
+        let branch = answer_rx
             .await
             .context("spawn_blocking answer channel dropped")??;
+        let (consumer_pipeline, webrtcbin, sdp_answer, link, bus_task) = branch
+            .defuse()
+            .ok_or_else(|| anyhow!("negotiated consumer branch missing link or bus task"))?;
+        let session = WhepSession {
+            session_id: session_id.clone(),
+            consumer_pipeline,
+            webrtcbin,
+            link,
+            bus_task,
+            connection_state,
+            ice_tx,
+        };
 
         // Drain any ICE candidates already buffered (half-trickle: include
-        // in the WHEP answer body). Allow up to 50 ms for additional
-        // candidates to trickle in.
+        // in the WHEP answer body). Allow up to 50 ms for more to trickle.
         let mut initial_candidates = Vec::new();
         let drain_deadline = tokio::time::Instant::now() + std::time::Duration::from_millis(50);
         while let Ok(Some(c)) = tokio::time::timeout_at(drain_deadline, ice_rx.recv()).await {
             initial_candidates.push(c);
         }
 
-        // Store the session.
-        let session = WhepSession {
-            session_id: session_id.clone(),
-            webrtcbin,
-            queue,
-            tee_src_pad: tee_pad,
-            connection_state,
-            ice_tx,
-        };
         {
             let mut sessions = self.sessions.lock().await;
             sessions.insert(session_id.clone(), session);
@@ -280,7 +235,7 @@ impl NdiPipeline {
         tracing::info!(
             session_id = %session_id,
             initial_candidates = initial_candidates.len(),
-            "WHEP consumer added"
+            "WHEP consumer added (own pipeline on shared clock)"
         );
 
         Ok(WhepAnswer {
@@ -291,6 +246,13 @@ impl NdiPipeline {
     }
 
     /// Forward a trickle ICE candidate from the browser to the webrtcbin.
+    ///
+    /// NOTE: the deployed WHEP flow is NON-TRICKLE — the browser waits for its
+    /// own ICE gathering to complete before POSTing the offer, and the server
+    /// returns a full answer with all candidates (see `await_ice_gathering`). A
+    /// late trickle candidate arriving before the session is inserted into the
+    /// map returns "session not found"; acceptable because the answer already
+    /// carried the full candidate set.
     pub async fn add_ice_candidate(
         &self,
         session_id: &str,
@@ -317,8 +279,8 @@ impl NdiPipeline {
         Ok(())
     }
 
-    /// Remove a WHEP consumer: tear down webrtcbin and release the tee pad.
-    /// Idempotent — safe to call on an unknown session_id.
+    /// Remove a WHEP consumer: disconnect it from the StreamProducer and tear
+    /// down its pipeline. Idempotent — safe to call on an unknown session_id.
     pub async fn remove_consumer(&self, session_id: &str) -> Result<()> {
         let mut sessions = self.sessions.lock().await;
         let Some(session) = sessions.remove(session_id) else {
@@ -328,34 +290,24 @@ impl NdiPipeline {
             );
             return Ok(());
         };
-        let pipeline = self.pipeline.clone();
-        let tee = (*self.tee).clone();
-        let webrtcbin = session.webrtcbin.clone();
-        let queue = session.queue.clone();
-        let tee_pad = session.tee_src_pad.clone();
         let remaining_count = sessions.len();
-        // Drop the WhepSession so its Drop impl sets webrtcbin + queue to Null
-        // BEFORE we remove them from the pipeline.
-        drop(session);
         drop(sessions);
-        tokio::task::spawn_blocking(move || -> Result<()> {
-            // Already Null via WhepSession::Drop, but idempotent.
-            let _ = webrtcbin.set_state(gst::State::Null);
-            let _ = queue.set_state(gst::State::Null);
-            // Remove queue first (it is upstream of webrtcbin in the branch).
-            pipeline.remove(&queue).context("pipeline.remove queue")?;
-            pipeline
-                .remove(&webrtcbin)
-                .context("pipeline.remove webrtcbin")?;
-            tee.release_request_pad(&tee_pad);
-            Ok(())
-        })
-        .await
-        .context("spawn_blocking join")??;
+        // Fanout-delivery stats: how many encoded buffers this consumer was
+        // actually fed vs dropped (e.g. while waiting for its first keyframe).
+        let pushed = session.link.pushed();
+        let dropped = session.link.dropped();
+        // Dropping the WhepSession: ConsumptionLink::drop disconnects from the
+        // producer, Drop aborts the bus task and nulls the pipeline. Run the
+        // (blocking) pipeline teardown off the async thread.
+        tokio::task::spawn_blocking(move || drop(session))
+            .await
+            .context("spawn_blocking join")?;
         tracing::info!(
             session_id,
             remaining = remaining_count,
-            "WHEP consumer removed"
+            buffers_pushed = pushed,
+            buffers_dropped = dropped,
+            "WHEP consumer removed (pipeline torn down)"
         );
         Ok(())
     }
@@ -363,9 +315,6 @@ impl NdiPipeline {
     /// Snapshot the pipeline state for the diagnostic route.
     /// `source_id` is left empty — the manager fills it in (Task 8).
     pub async fn snapshot(&self) -> PipelineSnapshot {
-        // Collect session state under the lock, then drop the lock before
-        // walking pipeline elements (iterate_encoders does not need the
-        // sessions mutex and may take time for large pipelines).
         let session_snaps: Vec<SessionSnapshot> = {
             let sessions = self.sessions.lock().await;
             sessions
@@ -382,7 +331,6 @@ impl NdiPipeline {
                 })
                 .collect()
         };
-        // Walk pipeline elements (no session-lock needed).
         let encoders: Vec<gst::Element> = self.iterate_encoders().collect();
         let encoder_count = encoders.len();
         let encoder_factory = encoders
@@ -391,7 +339,7 @@ impl NdiPipeline {
             .and_then(|el| el.factory().map(|f| f.name().to_string()));
         let consumer_count = session_snaps.len();
         PipelineSnapshot {
-            source_id: String::new(), // manager fills this in (Task 8)
+            source_id: String::new(),
             state: format!("{:?}", *self.state_rx.borrow()),
             encoder_factory,
             encoder_count,
@@ -400,13 +348,11 @@ impl NdiPipeline {
         }
     }
 
-    /// Iterate encoder elements in the pipeline. Returns a collected Vec
+    /// Iterate encoder elements in the ENCODER pipeline. Returns a collected Vec
     /// iterator so callers don't need to hold the pipeline lock.
     ///
-    /// Note: `nvcudah264enc` and `nvautogpuh264enc` are included here as a
-    /// defensive measure — `hw_h264_encoder()` never returns them, but an
-    /// external path (e.g. a future plugin or test fixture) could instantiate
-    /// one inside the pipeline and we want to count it correctly.
+    /// Consumer pipelines contain NO encoder (only appsrc/rtph264pay/webrtcbin),
+    /// so this is the single shared encoder — the #336 invariant.
     pub fn iterate_encoders(&self) -> impl Iterator<Item = gst::Element> + '_ {
         let mut found: Vec<gst::Element> = Vec::new();
         for el in self.pipeline.iterate_elements().into_iter().flatten() {
@@ -425,16 +371,290 @@ impl NdiPipeline {
         found.into_iter()
     }
 
-    /// Iterate webrtcbin elements in the pipeline.
-    pub fn iterate_webrtcbins(&self) -> impl Iterator<Item = gst::Element> + '_ {
+    /// Collect the webrtcbin elements across ALL consumer pipelines (one per
+    /// active consumer). Used by tests to assert per-consumer fanout counts.
+    /// Uses `try_lock` so it never blocks; in production it is diagnostic only.
+    pub fn iterate_webrtcbins(&self) -> Vec<gst::Element> {
         let mut found: Vec<gst::Element> = Vec::new();
-        for el in self.pipeline.iterate_elements().into_iter().flatten() {
-            if let Some(factory) = el.factory() {
-                if factory.name() == "webrtcbin" {
-                    found.push(el);
+        if let Ok(sessions) = self.sessions.try_lock() {
+            for session in sessions.values() {
+                for el in session
+                    .consumer_pipeline
+                    .iterate_elements()
+                    .into_iter()
+                    .flatten()
+                {
+                    if let Some(factory) = el.factory() {
+                        if factory.name() == "webrtcbin" {
+                            found.push(el);
+                        }
+                    }
                 }
             }
         }
-        found.into_iter()
+        found
     }
+}
+
+/// Build a fresh `appsrc → rtph264pay → webrtcbin` pipeline for one consumer,
+/// negotiate SDP, connect its appsrc to the encoder's StreamProducer, and
+/// return the [`ConsumerBranch`] guard owning all of it.
+///
+/// ORDER (load-bearing): build elements (appsrc configured LIVE before any
+/// state change) → new pipeline on the ENCODER's clock/base-time → link →
+/// guard → signals → bus watch → PLAYING (and wait) → connect appsrc to the
+/// producer → wait for media caps (ssrc) on the webrtcbin sink pad → SDP
+/// offer/answer/SLD → align payload type → await ICE gathering → read the
+/// final local SDP. Any `?` exit drops the guard, which tears everything down.
+#[allow(clippy::too_many_arguments)]
+fn build_consumer_pipeline_blocking(
+    producer: &StreamProducer,
+    sdp_offer_bytes: &[u8],
+    session_id: &str,
+    ice_tx: UnboundedSender<IceCandidate>,
+    connection_state: Arc<std::sync::Mutex<WhepConnectionState>>,
+    enc_clock: Option<gst::Clock>,
+    enc_base_time: Option<gst::ClockTime>,
+    rt: tokio::runtime::Handle,
+) -> Result<ConsumerBranch> {
+    let sdp_msg = gstreamer_webrtc::gst_sdp::SDPMessage::parse_buffer(sdp_offer_bytes)
+        .map_err(|e| anyhow!("SDP parse failed: {e}"))?;
+    let offer_desc =
+        gst_webrtc::WebRTCSessionDescription::new(gst_webrtc::WebRTCSDPType::Offer, sdp_msg);
+    let offer_h264_pt = std::str::from_utf8(sdp_offer_bytes)
+        .ok()
+        .and_then(parse_h264_payload_type);
+
+    let (appsrc, payloader, webrtcbin) = build_consumer_elements(session_id, offer_h264_pt)?;
+
+    let consumer_pipeline = gst::Pipeline::with_name(&format!("consumer_{session_id}"));
+    // Run this consumer pipeline on the ENCODER pipeline's clock + base-time so
+    // the producer's forwarded buffer timestamps (PTS + segment, preserved by
+    // StreamProducer's push_sample) are valid on this pipeline's timeline.
+    // set_start_time(NONE) stops the PLAYING transition from re-selecting a
+    // base-time. This mirrors webrtcsink's session-pipeline setup verbatim.
+    if let Some(clock) = &enc_clock {
+        consumer_pipeline.use_clock(Some(clock));
+    }
+    consumer_pipeline.set_start_time(gst::ClockTime::NONE);
+    match enc_base_time {
+        Some(base) => consumer_pipeline.set_base_time(base),
+        None => {
+            // Defensive: should not happen (WHEP POSTs are gated on the encoder
+            // pipeline being Streaming). Surface it loudly — timestamps would
+            // be on the wrong timeline.
+            tracing::warn!(
+                session_id = %session_id,
+                "encoder pipeline has no base-time; consumer timeline may be wrong"
+            );
+        }
+    }
+    consumer_pipeline
+        .add_many([appsrc.upcast_ref::<gst::Element>(), &payloader, &webrtcbin])
+        .context("add appsrc+rtph264pay+webrtcbin to consumer pipeline")?;
+
+    // From here every resource is owned by the guard: any `?` below drops it,
+    // aborting the bus task (if spawned), disconnecting the producer link (if
+    // connected) and setting the pipeline to Null.
+    let mut branch = ConsumerBranch::new(consumer_pipeline.clone(), webrtcbin.clone(), session_id);
+
+    // appsrc → rtph264pay → webrtcbin. The pay→webrtc link is filtered to
+    // application/x-rtp H264 caps (payload OMITTED — it is re-aligned to the
+    // negotiated pt in align_payload_type; pinning it here would fight that).
+    appsrc
+        .upcast_ref::<gst::Element>()
+        .link(&payloader)
+        .context("link appsrc -> rtph264pay")?;
+    let rtp_caps = gst::Caps::builder("application/x-rtp")
+        .field("media", "video")
+        .field("encoding-name", "H264")
+        .field("clock-rate", 90_000i32)
+        .build();
+    payloader
+        .link_filtered(&webrtcbin, &rtp_caps)
+        .context("link rtph264pay -> webrtcbin (H264 caps)")?;
+
+    connect_branch_signals(&webrtcbin, ice_tx, connection_state, session_id.to_string());
+
+    // Install the bus watch BEFORE going PLAYING. THE load-bearing part:
+    // webrtcbin constructs its transport elements (nicesink, dtls, rtpbin
+    // internals) DURING SDP negotiation — i.e. AFTER the pipeline's initial
+    // latency distribution. GStreamer signals this by posting a `Latency`
+    // message which the APPLICATION must service with recalculate_latency()
+    // (gst-launch and webrtcsink both do). Without it, the rtpsession's send
+    // latency stays unconfigured → "Can't determine running time for this
+    // packet without knowing configured latency" → ZERO RTP forwarded.
+    branch.bus_task = Some(spawn_consumer_bus_watch(
+        &consumer_pipeline,
+        session_id,
+        &rt,
+    )?);
+
+    // Bring the pipeline to PLAYING and WAIT for it, so clock/base-time and
+    // the initial latency configuration are in place before media flows.
+    consumer_pipeline
+        .set_state(gst::State::Playing)
+        .context("set consumer pipeline PLAYING")?;
+    let (sret, _cur, _pending) = consumer_pipeline.state(Some(gst::ClockTime::from_seconds(5)));
+    sret.context("consumer pipeline did not reach PLAYING within 5s")?;
+
+    // Connect this consumer's appsrc to the encoder's StreamProducer. The
+    // producer starts forwarding samples at the next keyframe (requesting one
+    // upstream via force-key-unit).
+    branch.link = Some(
+        producer
+            .add_consumer(&appsrc)
+            .map_err(|e| anyhow!("StreamProducer::add_consumer failed: {e}"))?,
+    );
+
+    // The answer must announce the send SSRC — wait for media caps first.
+    await_media_caps(&webrtcbin, session_id);
+    negotiate_sdp(&webrtcbin, &offer_desc)?;
+    align_payload_type(&webrtcbin, &payloader, session_id);
+    await_ice_gathering(&webrtcbin, session_id);
+
+    let local_desc =
+        webrtcbin.property::<gst_webrtc::WebRTCSessionDescription>("local-description");
+    branch.sdp_answer = local_desc
+        .sdp()
+        .as_text()
+        .map_err(|e| anyhow!("local-description SDP as_text failed: {e}"))?;
+    Ok(branch)
+}
+
+/// Spawn the per-consumer-pipeline bus watch: services `Latency` messages with
+/// `recalculate_latency()` (via `call_async`, exactly like webrtcsink) and
+/// logs pipeline errors. The task never ends on its own (it holds the bus
+/// alive); the explicit abort — by `ConsumerBranch`/`WhepSession` Drop — is
+/// its ONLY exit.
+fn spawn_consumer_bus_watch(
+    consumer_pipeline: &gst::Pipeline,
+    session_id: &str,
+    rt: &tokio::runtime::Handle,
+) -> Result<tokio::task::JoinHandle<()>> {
+    let bus = consumer_pipeline
+        .bus()
+        .ok_or_else(|| anyhow!("consumer pipeline has no bus"))?;
+    let pipeline_weak = consumer_pipeline.downgrade();
+    let sid = session_id.to_string();
+    Ok(rt.spawn(async move {
+        use futures_util::StreamExt;
+        let mut stream = bus.stream();
+        while let Some(msg) = stream.next().await {
+            match msg.view() {
+                gst::MessageView::Latency(_) => {
+                    if let Some(pipeline) = pipeline_weak.upgrade() {
+                        // call_async: run on a GStreamer worker thread, never
+                        // blocking this task or risking a state-lock deadlock.
+                        pipeline.call_async(|p| {
+                            let _ = p.recalculate_latency();
+                        });
+                    }
+                }
+                gst::MessageView::Error(err) => {
+                    tracing::warn!(
+                        session_id = %sid,
+                        error = %err.error(),
+                        debug = ?err.debug(),
+                        "consumer pipeline error (client watchdog will reconnect)"
+                    );
+                }
+                _ => {}
+            }
+        }
+    }))
+}
+
+/// Build the per-consumer elements: an `appsrc`, a per-consumer `rtph264pay`,
+/// and a `webrtcbin`.
+fn build_consumer_elements(
+    session_id: &str,
+    offer_h264_pt: Option<u32>,
+) -> Result<(gst_app::AppSrc, gst::Element, gst::Element)> {
+    // Initial caps match the producer appsink's caps filter so the very first
+    // forwarded sample agrees.
+    let appsrc = gst_app::AppSrc::builder()
+        .name(format!("src_{session_id}"))
+        .caps(&consumer_h264_caps())
+        .build();
+    // CRITICAL ORDER: apply the consumer configuration (is-live=true,
+    // format=time, leaky downstream, 500ms queue bound) NOW — BEFORE the
+    // pipeline transitions to PLAYING. basesrc latches `live_running` only at
+    // the PAUSED→PLAYING transition and ONLY if the source is already live;
+    // if `is_live` flips to true afterwards (which is what happened when
+    // StreamProducer::add_consumer — which calls this internally — ran after
+    // PLAYING), the appsrc's task blocks in "live source waiting for running
+    // state" FOREVER and not a single buffer is ever pushed downstream —
+    // connected, but black. add_consumer re-applies the same configuration
+    // later, which is a harmless no-op.
+    StreamProducer::configure_consumer(&appsrc);
+
+    // Per-consumer rtph264pay so each webrtcbin negotiates its own dynamic H264
+    // payload type with its browser (#336). config-interval=-1 resends SPS/PPS
+    // before every IDR; pre-seat pt to the browser's offered H264 pt.
+    let payloader = gst::ElementFactory::make("rtph264pay")
+        .name(format!("pay_{session_id}"))
+        .property("config-interval", -1i32)
+        .property("pt", offer_h264_pt.unwrap_or(96))
+        .build()
+        .context("build rtph264pay")?;
+
+    let webrtcbin = gst::ElementFactory::make("webrtcbin")
+        .name(session_id)
+        // max-bundle: audio + video on ONE ICE/DTLS transport, matching the
+        // browser's `a=group:BUNDLE` offer (default `none` hangs the 2nd DTLS
+        // handshake → connecting forever → black).
+        .property_from_str("bundle-policy", "max-bundle")
+        // Explicit jitterbuffer/session latency (200 ms is webrtcbin's own
+        // default; set explicitly so the value is visible and stable).
+        .property("latency", 200u32)
+        .build()
+        .context("build webrtcbin")?;
+
+    if offer_h264_pt.is_none() {
+        tracing::warn!(
+            session_id = %session_id,
+            "WHEP offer carries no H264 payload type — rtph264pay left at default \
+             pt 96; the browser cannot decode unless it offered H264"
+        );
+    }
+    Ok((appsrc, payloader, webrtcbin))
+}
+
+/// Connect the per-consumer webrtcbin signals: on-ice-candidate (forwards
+/// candidates to `ice_tx`) and notify::connection-state (updates the shared
+/// `connection_state`). Both fire from a GStreamer streaming thread.
+fn connect_branch_signals(
+    webrtcbin: &gst::Element,
+    ice_tx: UnboundedSender<IceCandidate>,
+    connection_state: Arc<std::sync::Mutex<WhepConnectionState>>,
+    session_id: String,
+) {
+    // on-ice-candidate signature: void(webrtcbin, sdp_mline_index: u32, candidate: &str)
+    webrtcbin.connect("on-ice-candidate", false, move |args| {
+        let sdp_mline_index = args.get(1).and_then(|v| v.get::<u32>().ok()).unwrap_or(0);
+        let candidate = args
+            .get(2)
+            .and_then(|v| v.get::<String>().ok())
+            .unwrap_or_default();
+        let _ = ice_tx.send(IceCandidate {
+            sdp_mline_index,
+            candidate,
+        });
+        None
+    });
+
+    // notify::connection-state fires from a GStreamer streaming thread (raw
+    // std::thread) — use std::sync::Mutex directly. On poison recover the guard.
+    webrtcbin.connect_notify(Some("connection-state"), move |webrtcbin, _pspec| {
+        let gst_state =
+            webrtcbin.property::<gst_webrtc::WebRTCPeerConnectionState>("connection-state");
+        let our_state = WhepConnectionState::from(gst_state);
+        *connection_state.lock().unwrap_or_else(|p| p.into_inner()) = our_state;
+        tracing::debug!(
+            session_id = %session_id,
+            state = ?our_state,
+            "WHEP consumer connection-state changed"
+        );
+    });
 }

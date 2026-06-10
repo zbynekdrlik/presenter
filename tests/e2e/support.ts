@@ -314,15 +314,30 @@ export async function startTestServer(
     "presenter-server",
   );
 
+  // When BOTH binaries exist (local dev), pick the NEWER one by mtime — a
+  // stale target/release/ binary silently shadowing a fresh target/debug/
+  // build makes e2e runs exercise OLD code and report false verdicts. On CI
+  // only the freshly-built release binary exists, so behavior is unchanged.
+  const fs = require("fs");
+  const mtimeOf = (p: string): number => {
+    try {
+      return fs.statSync(p).mtimeMs;
+    } catch {
+      return -1;
+    }
+  };
+  const releaseMtime = mtimeOf(releaseBinary);
+  const debugMtime = mtimeOf(debugBinary);
   let command: string;
-  if (require("fs").existsSync(releaseBinary)) {
+  if (releaseMtime >= 0 && releaseMtime >= debugMtime) {
     command = releaseBinary;
-  } else if (require("fs").existsSync(debugBinary)) {
+  } else if (debugMtime >= 0) {
     command = debugBinary;
   } else {
     // Fall back to cargo run if no pre-built binary exists
     command = `cargo run -p presenter-server`;
   }
+  console.log(`[e2e] test server binary: ${command}`);
 
   const processHandle = spawn(
     "bash",
