@@ -6,7 +6,7 @@
 
 use anyhow::{anyhow, Result};
 
-use crate::pipeline::PipelineState;
+use crate::pipeline::{NdiPipeline, PipelineState};
 
 use super::{ActiveSource, NdiManager, WhepOp, WhepReply, SOURCE_NOT_ACTIVE_ERR};
 
@@ -93,136 +93,126 @@ impl NdiManager {
     /// inside the lock, drop the guard, then call the pipeline method outside.
     pub async fn whep_signaller_call(&self, source_id: &str, op: WhepOp) -> Result<WhepReply> {
         match op {
-            WhepOp::Post { id: None, body } => {
-                let pipeline = {
-                    let active = self.active.lock().await;
-                    let src = active
-                        .get(source_id)
-                        .ok_or_else(|| anyhow!(SOURCE_NOT_ACTIVE_ERR))?;
-                    Self::ensure_streaming(src)?;
-                    std::sync::Arc::clone(&src.pipeline)
-                    // active lock dropped here
-                };
-                let answer = pipeline.add_consumer(body).await?;
-                let location = format!("/ndi/whep/{source_id}/{}", answer.session_id);
-                tracing::info!(
-                    source_id = %source_id,
-                    session_id = %answer.session_id,
-                    "WHEP POST → 201"
-                );
-                Ok(WhepReply {
-                    status: 201,
-                    headers: vec![
-                        ("location".to_string(), location),
-                        ("content-type".to_string(), "application/sdp".to_string()),
-                    ],
-                    body: Some(answer.sdp_answer.into_bytes()),
-                })
-            }
-            WhepOp::Post {
-                id: Some(_),
-                body: _,
-            } => {
-                // Session-scoped re-offer — out of scope for #336.
-                // Validate that the source is known first (preserves 404
-                // semantics for unknown sources — the HTTP shim tests assert
-                // this contract). Lock is acquired and dropped immediately;
-                // no blocking await follows.
-                {
-                    let active = self.active.lock().await;
-                    let src = active
-                        .get(source_id)
-                        .ok_or_else(|| anyhow!(SOURCE_NOT_ACTIVE_ERR))?;
-                    Self::ensure_streaming(src)?;
-                }
-                tracing::warn!(source_id = %source_id, "WHEP session-scoped POST (re-offer) is unsupported");
-                Ok(WhepReply {
-                    status: 501,
-                    headers: vec![("content-type".to_string(), "text/plain".to_string())],
-                    body: Some(b"WHEP re-offer unsupported".to_vec()),
-                })
-            }
+            WhepOp::Post { id: None, body } => self.whep_post(source_id, body).await,
+            WhepOp::Post { id: Some(_), .. } => self.whep_reoffer(source_id).await,
             WhepOp::Patch {
                 id,
                 body,
                 headers: _,
-            } => {
-                // Clone the pipeline reference out of the map guard before
-                // any blocking await. The per-candidate loop re-uses this
-                // single clone rather than re-locking per iteration.
-                let pipeline = {
-                    let active = self.active.lock().await;
-                    let src = active
-                        .get(source_id)
-                        .ok_or_else(|| anyhow!(SOURCE_NOT_ACTIVE_ERR))?;
-                    Self::ensure_streaming(src)?;
-                    std::sync::Arc::clone(&src.pipeline)
-                    // active lock dropped here
-                };
-                // Parse `application/trickle-ice-sdpfrag` body: extract
-                // `a=mid:` (for mline index) and `a=candidate:` lines,
-                // forwarding each candidate to pipeline.add_ice_candidate.
-                let body_str =
-                    std::str::from_utf8(&body).map_err(|e| anyhow!("PATCH body not utf8: {e}"))?;
-                let mut count = 0;
-                let mut mline_idx: u32 = 0;
-                for raw_line in body_str.lines() {
-                    let line = raw_line.trim();
-                    if let Some(rest) = line.strip_prefix("a=mid:") {
-                        if let Ok(n) = rest.trim().parse::<u32>() {
-                            mline_idx = n;
-                        }
-                        // Non-integer mid (RFC 8839 allows e.g. "audio") falls
-                        // through; mline_idx stays at the last valid integer (or 0).
-                        // Browsers use integer mids in WHEP practice.
-                    } else if line.starts_with("a=candidate:") {
-                        // webrtcbin's add-ice-candidate signal accepts the
-                        // candidate string without the leading "a=" prefix.
-                        let cand_value = &line[2..];
-                        pipeline
-                            .add_ice_candidate(&id, mline_idx, cand_value)
-                            .await?;
-                        count += 1;
-                    }
+            } => self.whep_patch(source_id, &id, &body).await,
+            WhepOp::Delete { id } => self.whep_delete(source_id, &id).await,
+        }
+    }
+
+    /// Lock the active map, validate the source is streaming, and clone its
+    /// pipeline Arc out of the guard (cheap refcount bump) so blocking
+    /// pipeline methods are called WITHOUT the map lock held.
+    async fn streaming_pipeline(&self, source_id: &str) -> Result<std::sync::Arc<NdiPipeline>> {
+        let active = self.active.lock().await;
+        let src = active
+            .get(source_id)
+            .ok_or_else(|| anyhow!(SOURCE_NOT_ACTIVE_ERR))?;
+        Self::ensure_streaming(src)?;
+        Ok(std::sync::Arc::clone(&src.pipeline))
+    }
+
+    /// WHEP POST (new consumer): SDP offer in, 201 + SDP answer + Location out.
+    async fn whep_post(&self, source_id: &str, body: Vec<u8>) -> Result<WhepReply> {
+        let pipeline = self.streaming_pipeline(source_id).await?;
+        let answer = pipeline.add_consumer(body).await?;
+        let location = format!("/ndi/whep/{source_id}/{}", answer.session_id);
+        tracing::info!(
+            source_id = %source_id,
+            session_id = %answer.session_id,
+            "WHEP POST → 201"
+        );
+        Ok(WhepReply {
+            status: 201,
+            headers: vec![
+                ("location".to_string(), location),
+                ("content-type".to_string(), "application/sdp".to_string()),
+            ],
+            body: Some(answer.sdp_answer.into_bytes()),
+        })
+    }
+
+    /// Session-scoped re-offer — out of scope for #336; 501. Validates the
+    /// source first to preserve 404 semantics for unknown sources (the HTTP
+    /// shim tests assert this contract).
+    async fn whep_reoffer(&self, source_id: &str) -> Result<WhepReply> {
+        let _ = self.streaming_pipeline(source_id).await?;
+        tracing::warn!(source_id = %source_id, "WHEP session-scoped POST (re-offer) is unsupported");
+        Ok(WhepReply {
+            status: 501,
+            headers: vec![("content-type".to_string(), "text/plain".to_string())],
+            body: Some(b"WHEP re-offer unsupported".to_vec()),
+        })
+    }
+
+    /// WHEP PATCH: parse an `application/trickle-ice-sdpfrag` body — extract
+    /// `a=mid:` (mline index) and `a=candidate:` lines — and forward each
+    /// candidate to the pipeline.
+    async fn whep_patch(&self, source_id: &str, id: &str, body: &[u8]) -> Result<WhepReply> {
+        let pipeline = self.streaming_pipeline(source_id).await?;
+        let body_str =
+            std::str::from_utf8(body).map_err(|e| anyhow!("PATCH body not utf8: {e}"))?;
+        let mut count = 0;
+        let mut mline_idx: u32 = 0;
+        for raw_line in body_str.lines() {
+            let line = raw_line.trim();
+            if let Some(rest) = line.strip_prefix("a=mid:") {
+                if let Ok(n) = rest.trim().parse::<u32>() {
+                    mline_idx = n;
                 }
-                tracing::debug!(
-                    source_id = %source_id,
-                    session_id = %id,
-                    candidate_count = count,
-                    "WHEP PATCH dispatched"
-                );
-                Ok(WhepReply {
-                    status: 204,
-                    headers: vec![],
-                    body: None,
-                })
-            }
-            WhepOp::Delete { id } => {
-                // Clone the pipeline reference before the blocking await.
-                // DELETE proceeds regardless of pipeline state — teardown must
-                // succeed even when the pipeline is erroring, so
-                // ensure_streaming is intentionally skipped here.
-                let pipeline = {
-                    let active = self.active.lock().await;
-                    let src = active
-                        .get(source_id)
-                        .ok_or_else(|| anyhow!(SOURCE_NOT_ACTIVE_ERR))?;
-                    std::sync::Arc::clone(&src.pipeline)
-                    // active lock dropped here
-                };
-                pipeline.remove_consumer(&id).await?;
-                tracing::info!(
-                    source_id = %source_id,
-                    session_id = %id,
-                    "WHEP DELETE → consumer removed"
-                );
-                Ok(WhepReply {
-                    status: 204,
-                    headers: vec![],
-                    body: None,
-                })
+                // Non-integer mid (RFC 8839 allows e.g. "audio") falls
+                // through; mline_idx stays at the last valid integer (or 0).
+                // Browsers use integer mids in WHEP practice.
+            } else if line.starts_with("a=candidate:") {
+                // webrtcbin's add-ice-candidate signal accepts the
+                // candidate string without the leading "a=" prefix.
+                let cand_value = &line[2..];
+                pipeline
+                    .add_ice_candidate(id, mline_idx, cand_value)
+                    .await?;
+                count += 1;
             }
         }
+        tracing::debug!(
+            source_id = %source_id,
+            session_id = %id,
+            candidate_count = count,
+            "WHEP PATCH dispatched"
+        );
+        Ok(WhepReply {
+            status: 204,
+            headers: vec![],
+            body: None,
+        })
+    }
+
+    /// WHEP DELETE: tear down the consumer. Proceeds regardless of pipeline
+    /// state — teardown must succeed even while the pipeline is erroring, so
+    /// `ensure_streaming` is intentionally skipped here.
+    async fn whep_delete(&self, source_id: &str, id: &str) -> Result<WhepReply> {
+        let pipeline = {
+            let active = self.active.lock().await;
+            let src = active
+                .get(source_id)
+                .ok_or_else(|| anyhow!(SOURCE_NOT_ACTIVE_ERR))?;
+            std::sync::Arc::clone(&src.pipeline)
+            // active lock dropped here
+        };
+        pipeline.remove_consumer(id).await?;
+        tracing::info!(
+            source_id = %source_id,
+            session_id = %id,
+            "WHEP DELETE → consumer removed"
+        );
+        Ok(WhepReply {
+            status: 204,
+            headers: vec![],
+            body: None,
+        })
     }
 
     /// Pipeline state must be Streaming or Starting for WHEP ops to proceed.
