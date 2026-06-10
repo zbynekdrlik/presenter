@@ -111,7 +111,10 @@ if (( ${#target_files[@]} == 0 )); then
     mapfile -t target_files < <(find crates -type f -name '*.rs')
   fi
   warn "No diff against $BASE_REF; checking all Rust files in advisory mode"
+  QC_FN_ADVISORY=1
 fi
+QC_FN_ADVISORY="${QC_FN_ADVISORY:-0}"
+export QC_FN_ADVISORY
 
 # Helper: check if file matches any exempt pattern
 is_exempt_file() {
@@ -244,7 +247,14 @@ for dirpath, _, filenames in os.walk(os.path.join(root, 'crates')):
                         length = j - i + 1
                         if not is_exempt_function(fn_name, path) and not preceded_by_component(lines, i):
                             entry = {'file': rel, 'start': i+1, 'length': length, 'fn': fn_name}
-                            if length > 120:
+                            # Advisory mode = no diff vs base (e.g. a version-bump-only
+                            # commit) -> ALL repo files are scanned. Pre-existing long
+                            # functions in unchanged files must not hard-fail such a
+                            # commit (mirrors the file-size check's is_changed logic);
+                            # they are reported as warnings instead. With a real diff,
+                            # targets are exactly the changed files and >120 hard-fails.
+                            advisory = os.environ.get('QC_FN_ADVISORY', '0') == '1'
+                            if length > 120 and not advisory:
                                 violations.append(entry)
                             elif length > 80:
                                 warnings.append(entry)

@@ -135,11 +135,11 @@ impl NdiManager {
                         .ok_or_else(|| anyhow!(SOURCE_NOT_ACTIVE_ERR))?;
                     Self::ensure_streaming(src)?;
                 }
-                tracing::warn!(source_id = %source_id, "WHEP session-scoped POST not implemented");
+                tracing::warn!(source_id = %source_id, "WHEP session-scoped POST (re-offer) is unsupported");
                 Ok(WhepReply {
                     status: 501,
                     headers: vec![("content-type".to_string(), "text/plain".to_string())],
-                    body: Some(b"WHEP re-offer not implemented".to_vec()),
+                    body: Some(b"WHEP re-offer unsupported".to_vec()),
                 })
             }
             WhepOp::Patch {
