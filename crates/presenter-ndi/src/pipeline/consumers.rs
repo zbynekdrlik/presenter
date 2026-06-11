@@ -567,7 +567,7 @@ fn spawn_consumer_bus_watch(
 
 /// Build the per-consumer elements: an `appsrc`, a per-consumer `rtph264pay`,
 /// and a `webrtcbin`.
-fn build_consumer_elements(
+pub(super) fn build_consumer_elements(
     session_id: &str,
     offer_h264_pt: Option<u32>,
 ) -> Result<(gst_app::AppSrc, gst::Element, gst::Element)> {

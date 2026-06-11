@@ -471,3 +471,17 @@ async fn add_then_remove_leaves_clean_state() {
         .remove_consumer_stub("session-does-not-exist")
         .expect("remove_consumer_stub must be idempotent on unknown session");
 }
+
+/// webrtcsink parity: rtph264pay must aggregate in zero-latency mode
+/// (default "none" can hold NALs; webrtcsink sets this on every payloader).
+#[test]
+fn consumer_payloader_uses_zero_latency_aggregation() {
+    super::super::init().expect("gst init");
+    let (_appsrc, payloader, _webrtcbin) =
+        super::consumers::build_consumer_elements("test-agg", Some(102))
+            .expect("consumer elements build");
+    let value = payloader.property_value("aggregate-mode");
+    let (_, enum_value) =
+        gst::glib::EnumValue::from_value(&value).expect("aggregate-mode is an enum");
+    assert_eq!(enum_value.nick(), "zero-latency");
+}
