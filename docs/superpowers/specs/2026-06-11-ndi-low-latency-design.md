@@ -43,6 +43,19 @@ a CI latency guard.
    low-end TVs. → `jitterBufferTarget = 0` (+ legacy `playoutDelayHint = 0`).
 5. **Payloader aggregation.** `rtph264pay` default `aggregate-mode=none`;
    `webrtcsink` (reference implementation) sets `zero-latency`. → Parity.
+6. **H264 High profile breaks strict TV decoders (found live 2026-06-11).**
+   The encoder emits High profile (SPS profile_idc=100 read from the live prod
+   stream). Desktop Chrome and sd1's lenient decoder play it, but the
+   sd2/sd3/sd4 Vestel TVs (1 GB RAM, WebView 148, HW-only H264 for WebRTC)
+   reject it — logcat shows `NullVideoDecoder doesn't support decoding`, the
+   stage shows black/one frame while the server pushes RTP fine
+   (`buffers_pushed` 300–4000 per churned session), and the client watchdog
+   reconnects every 10–30 s forever. WebRTC's mandatory baseline is
+   Constrained Baseline; strict HW decoders accept only what they offered.
+   → Pin the encoder output to `constrained-baseline` via a capsfilter
+   between encoder and h264parse (all three encoder paths). ~10-15 % bitrate
+   efficiency loss at 2.5 Mbps 720p30 — visually irrelevant, compatibility
+   mandatory.
 
 ## Changes
 
