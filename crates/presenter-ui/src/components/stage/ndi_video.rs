@@ -64,10 +64,12 @@ impl Watchdog {
 
     /// Install ICE-state listener + stall timer. `on_failure` is called at
     /// most ONCE per Watchdog instance — after firing, both observers become
-    /// no-ops (gated by the `active` flag).
+    /// no-ops (gated by the `active` flag). The stall timer also posts a
+    /// stats beacon for `source_id` every 15th tick (see `maybe_post_beacon`).
     fn install<F: Fn() + 'static>(
         video: &HtmlVideoElement,
         pc: &RtcPeerConnection,
+        source_id: &str,
         on_failure: F,
     ) -> Self {
         use std::cell::Cell;
@@ -126,10 +128,21 @@ impl Watchdog {
                 std::rc::Rc::new(std::cell::Cell::new(0.0));
             let playback_started: std::rc::Rc<std::cell::Cell<bool>> =
                 std::rc::Rc::new(std::cell::Cell::new(false));
+            let tick_count: std::rc::Rc<std::cell::Cell<u32>> =
+                std::rc::Rc::new(std::cell::Cell::new(0));
+            let pc_for_stats = pc.clone();
+            let source_id_for_stats = source_id.to_string();
             let cb = Closure::<dyn FnMut()>::new(move || {
                 if !active.get() {
                     return;
                 }
+                // Every 15th tick: post a stats beacon so server logs capture
+                // this display's real view (fps, jitter buffer, freezes) —
+                // "stage is laggy" reports become diagnosable from data.
+                // Runs BEFORE the stall checks below: their early returns on
+                // the healthy path (frame advanced / no first frame yet)
+                // would otherwise starve the beacon during normal playback.
+                maybe_post_beacon(&tick_count, &pc_for_stats, &source_id_for_stats);
                 let now_secs = leptos::web_sys::js_sys::Date::now() / 1000.0;
                 let t = video_clone.current_time();
                 if t > 0.0 && (t - last_time.get()).abs() > 0.001 {
@@ -168,6 +181,87 @@ impl Watchdog {
     /// has already fired is a safe no-op.
     fn stop(&self) {
         self.active.set(false);
+    }
+}
+
+/// Every 15th watchdog tick (~15s at 1s ticks), sample `pc.getStats()` and
+/// POST a compact summary to `/ndi/client-stats`. Fire-and-forget; the
+/// beacon must never disturb playback.
+fn maybe_post_beacon(tick_count: &std::cell::Cell<u32>, pc: &RtcPeerConnection, source_id: &str) {
+    tick_count.set(tick_count.get().wrapping_add(1));
+    if tick_count.get() % 15 != 0 {
+        return;
+    }
+    let pc = pc.clone();
+    let source_id = source_id.to_string();
+    spawn_local(async move {
+        if let Ok(report) = JsFuture::from(pc.get_stats()).await {
+            post_client_stats(&source_id, &report).await;
+        }
+    });
+}
+
+/// Extract inbound-video stats from an RtcStatsReport (a JS Map) and POST a
+/// compact summary to /ndi/client-stats. Fire-and-forget; errors ignored —
+/// the beacon must never disturb playback.
+async fn post_client_stats(source_id: &str, report: &JsValue) {
+    let mut frames_decoded = JsValue::NULL;
+    let mut fps = JsValue::NULL;
+    let mut jb_delay = JsValue::NULL;
+    let mut jb_emitted = JsValue::NULL;
+    let mut freeze_count = JsValue::NULL;
+    let mut frames_dropped = JsValue::NULL;
+
+    let map: &js_sys::Map = report.unchecked_ref();
+    let entries = js_sys::try_iter(&map.values()).ok().flatten();
+    if let Some(entries) = entries {
+        for entry in entries.flatten() {
+            let get = |k: &str| {
+                js_sys::Reflect::get(&entry, &JsValue::from_str(k)).unwrap_or(JsValue::NULL)
+            };
+            if get("type").as_string().as_deref() == Some("inbound-rtp")
+                && get("kind").as_string().as_deref() == Some("video")
+            {
+                frames_decoded = get("framesDecoded");
+                fps = get("framesPerSecond");
+                jb_delay = get("jitterBufferDelay");
+                jb_emitted = get("jitterBufferEmittedCount");
+                freeze_count = get("freezeCount");
+                frames_dropped = get("framesDropped");
+            }
+        }
+    }
+
+    // jitterBufferDelay is a cumulative sum of seconds each emitted frame
+    // spent in the buffer; divide by the emitted count for the average, in ms.
+    let jitter_buffer_ms = match (jb_delay.as_f64(), jb_emitted.as_f64()) {
+        (Some(d), Some(n)) if n > 0.0 => Some(d / n * 1000.0),
+        _ => None,
+    };
+    let body = serde_json::json!({
+        "sourceId": source_id,
+        "framesDecoded": frames_decoded.as_f64(),
+        "fps": fps.as_f64(),
+        "jitterBufferMs": jitter_buffer_ms,
+        "freezeCount": freeze_count.as_f64(),
+        "framesDropped": frames_dropped.as_f64(),
+    })
+    .to_string();
+
+    let init = leptos::web_sys::RequestInit::new();
+    init.set_method("POST");
+    init.set_body(&JsValue::from_str(&body));
+    let Ok(headers) = leptos::web_sys::Headers::new() else {
+        return;
+    };
+    let _ = headers.set("Content-Type", "application/json");
+    init.set_headers(&headers);
+    let Ok(request) = leptos::web_sys::Request::new_with_str_and_init("/ndi/client-stats", &init)
+    else {
+        return;
+    };
+    if let Some(window) = leptos::web_sys::window() {
+        let _ = JsFuture::from(window.fetch_with_request(&request)).await;
     }
 }
 
@@ -225,7 +319,9 @@ pub fn NdiVideo(source_id: String, #[prop(optional)] class: Option<&'static str>
                         // Install watchdog: on failure, set the reconnect flag.
                         let flag = std::rc::Rc::clone(&reconnect_flag);
                         let watchdog =
-                            Watchdog::install(&video, &session.pc, move || flag.set(true));
+                            Watchdog::install(&video, &session.pc, &source_id, move || {
+                                flag.set(true)
+                            });
 
                         install_pagehide_teardown(&session);
                         session_holder.set_value(Some(ActiveConnection { session, watchdog }));
@@ -391,6 +487,11 @@ fn install_pagehide_teardown(session: &WhepSession) {
     cb.forget();
 }
 
+/// Shared holder for an event-listener `Closure` that a `Promise` constructor
+/// closure populates and the awaiting function later drops (clippy
+/// `type_complexity` alias).
+type SharedClosureHolder = std::rc::Rc<std::cell::RefCell<Option<Closure<dyn FnMut()>>>>;
+
 /// Await ICE gathering completion (state == `Complete`) so the local
 /// description carries our candidates before we POST the WHEP offer. Returns
 /// immediately if already complete. Bounded by a 3 s timeout: a gather that
@@ -404,8 +505,7 @@ async fn wait_for_ice_gathering_complete(pc: &RtcPeerConnection) {
     // so it is freed when we return. connect_whep is re-invoked by the watchdog
     // reconnect loop, so a forgotten closure here would leak unbounded over a
     // persistent stall; binding it to a holder drops it once per call.
-    let cb_holder: std::rc::Rc<std::cell::RefCell<Option<Closure<dyn FnMut()>>>> =
-        std::rc::Rc::new(std::cell::RefCell::new(None));
+    let cb_holder: SharedClosureHolder = std::rc::Rc::new(std::cell::RefCell::new(None));
     let cb_holder_for_promise = std::rc::Rc::clone(&cb_holder);
     let pc_for_promise = pc.clone();
     let promise = leptos::web_sys::js_sys::Promise::new(&mut |resolve, _reject| {
@@ -488,6 +588,24 @@ fn attach_ontrack(pc: &RtcPeerConnection, video: &HtmlVideoElement) {
     let ontrack = Closure::<dyn FnMut(RtcTrackEvent)>::new(move |ev: RtcTrackEvent| {
         let streams = ev.streams();
         if let Ok(s) = streams.get(0).dyn_into::<MediaStream>() {
+            // Pin the receiver's jitter buffer to its minimum and let it
+            // shrink back after spikes. On low-end TV WebViews the adaptive
+            // buffer otherwise only ratchets UP ("delayed + choppy" stage).
+            // jitterBufferTarget (ms) is the standard knob (Chrome/WebView
+            // 122+); playoutDelayHint (s) is the legacy fallback. Both set
+            // via Reflect (no web_sys bindings); unsupported = silent no-op.
+            let receiver = ev.receiver();
+            let _ = js_sys::Reflect::set(
+                receiver.as_ref(),
+                &JsValue::from_str("jitterBufferTarget"),
+                &JsValue::from_f64(0.0),
+            );
+            let _ = js_sys::Reflect::set(
+                receiver.as_ref(),
+                &JsValue::from_str("playoutDelayHint"),
+                &JsValue::from_f64(0.0),
+            );
+
             // CRITICAL: explicitly set `muted = true` at the PROPERTY level
             // BEFORE assigning srcObject. The HTML attribute `muted=""` only
             // initializes `defaultMuted=true` — once `srcObject` is assigned
