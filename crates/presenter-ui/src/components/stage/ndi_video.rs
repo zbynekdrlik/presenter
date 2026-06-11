@@ -11,10 +11,99 @@ use leptos::prelude::*;
 use leptos::wasm_bindgen::{closure::Closure, JsCast, JsValue};
 use leptos::web_sys::{
     HtmlVideoElement, MediaStream, RtcConfiguration, RtcIceConnectionState, RtcIceGatheringState,
-    RtcPeerConnection, RtcRtpTransceiverDirection, RtcRtpTransceiverInit, RtcSdpType,
-    RtcSessionDescriptionInit, RtcTrackEvent,
+    RtcPeerConnection, RtcRtpReceiver, RtcRtpTransceiver, RtcRtpTransceiverDirection,
+    RtcRtpTransceiverInit, RtcSdpType, RtcSessionDescriptionInit, RtcTrackEvent,
 };
 use wasm_bindgen_futures::{spawn_local, JsFuture};
+
+/// localStorage key for the codec fallback mode. Absent or `"h264"` = default
+/// behavior (offer includes H264 → server serves H264). `"vp8"` = fallback
+/// (the offer's video section is restricted to VP8+rtx via
+/// `setCodecPreferences`, so the server's codec-selection rule picks the VP8
+/// branch — spec addendum 2: broken Vestel H264 OMX decoders).
+const CODEC_MODE_KEY: &str = "ndiCodecMode";
+
+/// localStorage key for the persistent per-display identity used in stats
+/// beacons (per-TV health attribution server-side).
+const DISPLAY_ID_KEY: &str = "ndiDisplayId";
+
+/// Access the window's localStorage (None when unavailable, e.g. sandboxed).
+fn local_storage() -> Option<leptos::web_sys::Storage> {
+    leptos::web_sys::window().and_then(|w| w.local_storage().ok().flatten())
+}
+
+/// True when the codec fallback mode is "vp8". Any other value (including
+/// absent) means the default H264-capable offer.
+fn codec_mode_is_vp8() -> bool {
+    local_storage()
+        .and_then(|s| s.get_item(CODEC_MODE_KEY).ok().flatten())
+        .as_deref()
+        == Some("vp8")
+}
+
+/// Flip the codec mode (h264 → vp8 or vp8 → h264), persist it, and return the
+/// new mode. The toggle (rather than a one-way switch) prevents lock-in: a
+/// display where VP8 ALSO fails the decode check goes back to trying H264 on
+/// the next attempt, alternating until one works.
+fn toggle_codec_mode() -> &'static str {
+    let new_mode = if codec_mode_is_vp8() { "h264" } else { "vp8" };
+    if let Some(storage) = local_storage() {
+        let _ = storage.set_item(CODEC_MODE_KEY, new_mode);
+    }
+    new_mode
+}
+
+/// Persistent random display id (16 hex chars) for beacon attribution.
+/// Generated once and stored in localStorage; None when storage is
+/// unavailable (beacon then sends null — still better than dropping it).
+fn display_id() -> Option<String> {
+    let storage = local_storage()?;
+    if let Ok(Some(id)) = storage.get_item(DISPLAY_ID_KEY) {
+        if !id.is_empty() {
+            return Some(id);
+        }
+    }
+    let mut id = String::with_capacity(16);
+    for _ in 0..16 {
+        let digit = (js_sys::Math::random() * 16.0) as u32 % 16;
+        id.push(char::from_digit(digit, 16)?);
+    }
+    let _ = storage.set_item(DISPLAY_ID_KEY, &id);
+    Some(id)
+}
+
+/// Restrict the video transceiver's codec preferences to VP8 (+rtx) so the
+/// offer carries NO H264. The server prefers H264 whenever the offer contains
+/// it; an offer without H264 is exactly what selects the VP8 branch. Silent
+/// no-op (with a warn) when the capabilities API is missing or lists no VP8 —
+/// the offer is then left unchanged and the server serves H264 as before.
+fn apply_vp8_codec_preferences(transceiver: &RtcRtpTransceiver) {
+    let Some(caps) = RtcRtpReceiver::get_capabilities("video") else {
+        leptos::logging::warn!(
+            "codec fallback: RTCRtpReceiver.getCapabilities unavailable — offer left unchanged"
+        );
+        return;
+    };
+    let vp8_and_rtx = js_sys::Array::new();
+    for codec in caps.get_codecs().iter() {
+        let mime = js_sys::Reflect::get(&codec, &JsValue::from_str("mimeType"))
+            .ok()
+            .and_then(|v| v.as_string())
+            .unwrap_or_default()
+            .to_ascii_lowercase();
+        if mime == "video/vp8" || mime == "video/rtx" {
+            vp8_and_rtx.push(&codec);
+        }
+    }
+    if vp8_and_rtx.length() == 0 {
+        leptos::logging::warn!(
+            "codec fallback: no VP8 in receiver capabilities — offer left unchanged"
+        );
+        return;
+    }
+    transceiver.set_codec_preferences(vp8_and_rtx.as_ref());
+    leptos::logging::log!("codec fallback: offering VP8-only (ndiCodecMode=vp8)");
+}
 
 /// Holds an active WHEP session: the peer connection AND the WHEP resource URL
 /// returned in the `Location` header on POST. The resource URL is used to
@@ -41,6 +130,15 @@ struct WhepSession {
 /// multi-consumer churn spiral (every reconnect's tee add/remove disrupted the
 /// other displays, so they stalled and reconnected too — all black forever).
 ///
+/// ONE bounded exception to that rule: the codec-fallback decode check. Once
+/// per Watchdog instance, at tick `FALLBACK_CHECK_TICK` (~12s), a single
+/// getStats sample is taken; if the connection is CONNECTED but
+/// `framesDecoded` is still below `FALLBACK_MIN_FRAMES`, the decoder is
+/// considered dead (broken Vestel H264 OMX decodes ~1 frame per 8s GOP),
+/// `ndiCodecMode` is toggled and `on_failure` fires so the reconnect rebuilds
+/// the session with the other codec. Firing at most once per ~12s session
+/// cannot drive the 3s-interval churn spiral above.
+///
 /// The closure handles are leaked via `forget()` because wasm-bindgen `Closure`
 /// types are not `Send` and removing them on drop would require keeping the
 /// original handles around in a `Send`-bounded `StoredValue` — which doesn't
@@ -61,6 +159,13 @@ impl Watchdog {
     const STALL_THRESHOLD_SECS: f64 = 3.0;
     /// How often the stall timer ticks (ms).
     const TICK_INTERVAL_MS: i32 = 1000;
+    /// Tick at which the once-per-session codec-fallback decode check samples
+    /// getStats (~12s after install at 1s ticks).
+    const FALLBACK_CHECK_TICK: u32 = 12;
+    /// Minimum framesDecoded expected by FALLBACK_CHECK_TICK on a healthy
+    /// connection (a 30fps source yields hundreds; the broken Vestel OMX
+    /// yields ~1 per 8s GOP). Below this, the current codec is declared dead.
+    const FALLBACK_MIN_FRAMES: f64 = 30.0;
 
     /// Install ICE-state listener + stall timer. `on_failure` is called at
     /// most ONCE per Watchdog instance — after firing, both observers become
@@ -130,6 +235,8 @@ impl Watchdog {
                 std::rc::Rc::new(std::cell::Cell::new(false));
             let tick_count: std::rc::Rc<std::cell::Cell<u32>> =
                 std::rc::Rc::new(std::cell::Cell::new(0));
+            let fallback_checked: std::rc::Rc<std::cell::Cell<bool>> =
+                std::rc::Rc::new(std::cell::Cell::new(false));
             let pc_for_stats = pc.clone();
             let source_id_for_stats = source_id.to_string();
             let cb = Closure::<dyn FnMut()>::new(move || {
@@ -143,6 +250,15 @@ impl Watchdog {
                 // the healthy path (frame advanced / no first frame yet)
                 // would otherwise starve the beacon during normal playback.
                 maybe_post_beacon(&tick_count, &pc_for_stats, &source_id_for_stats);
+                // Once per session at ~12s: codec-fallback decode check (see
+                // struct doc). Also placed before the stall early-returns.
+                maybe_check_codec_fallback(
+                    &tick_count,
+                    &fallback_checked,
+                    &pc_for_stats,
+                    &active,
+                    &on_failure,
+                );
                 let now_secs = leptos::web_sys::js_sys::Date::now() / 1000.0;
                 let t = video_clone.current_time();
                 if t > 0.0 && (t - last_time.get()).abs() > 0.001 {
@@ -201,6 +317,74 @@ fn maybe_post_beacon(tick_count: &std::cell::Cell<u32>, pc: &RtcPeerConnection, 
     });
 }
 
+/// Once per Watchdog instance, at tick `Watchdog::FALLBACK_CHECK_TICK`,
+/// sample getStats and check whether the decoder is actually producing
+/// frames. A session that has been CONNECTED for ~12s with framesDecoded
+/// below `Watchdog::FALLBACK_MIN_FRAMES` has a dead decoder (the broken
+/// Vestel H264 OMX symptom: connected, ~1 frame per 8s GOP): toggle
+/// `ndiCodecMode` and fire `on_failure` so the reconnect loop rebuilds the
+/// connection offering the other codec.
+fn maybe_check_codec_fallback<F: Fn() + 'static>(
+    tick_count: &std::cell::Cell<u32>,
+    checked: &std::cell::Cell<bool>,
+    pc: &RtcPeerConnection,
+    active: &std::rc::Rc<std::cell::Cell<bool>>,
+    on_failure: &std::rc::Rc<F>,
+) {
+    if checked.get() || tick_count.get() < Watchdog::FALLBACK_CHECK_TICK {
+        return;
+    }
+    checked.set(true);
+    let pc = pc.clone();
+    let active = std::rc::Rc::clone(active);
+    let on_failure = std::rc::Rc::clone(on_failure);
+    spawn_local(async move {
+        let Ok(report) = JsFuture::from(pc.get_stats()).await else {
+            return;
+        };
+        if !active.get() {
+            return;
+        }
+        // Only a CONNECTED session gets a codec verdict: pre-connect states
+        // mean media never had a chance (ICE problems are the ICE listener's
+        // job, not the codec's fault).
+        if !matches!(
+            pc.ice_connection_state(),
+            RtcIceConnectionState::Connected | RtcIceConnectionState::Completed
+        ) {
+            return;
+        }
+        let frames = inbound_video_frames_decoded(&report).unwrap_or(0.0);
+        if frames >= Watchdog::FALLBACK_MIN_FRAMES {
+            return;
+        }
+        let new_mode = toggle_codec_mode();
+        leptos::logging::warn!(
+            "codec fallback: switching to {new_mode} (framesDecoded={frames} after {}s)",
+            Watchdog::FALLBACK_CHECK_TICK
+        );
+        active.set(false);
+        (on_failure)();
+    });
+}
+
+/// Extract `framesDecoded` from the inbound-rtp video entry of an
+/// RtcStatsReport (a JS Map). None when no such entry exists yet.
+fn inbound_video_frames_decoded(report: &JsValue) -> Option<f64> {
+    let map: &js_sys::Map = report.unchecked_ref();
+    let entries = js_sys::try_iter(&map.values()).ok().flatten()?;
+    for entry in entries.flatten() {
+        let get =
+            |k: &str| js_sys::Reflect::get(&entry, &JsValue::from_str(k)).unwrap_or(JsValue::NULL);
+        if get("type").as_string().as_deref() == Some("inbound-rtp")
+            && get("kind").as_string().as_deref() == Some("video")
+        {
+            return get("framesDecoded").as_f64();
+        }
+    }
+    None
+}
+
 /// Extract inbound-video stats from an RtcStatsReport (a JS Map) and POST a
 /// compact summary to /ndi/client-stats. Fire-and-forget; errors ignored —
 /// the beacon must never disturb playback.
@@ -211,6 +395,7 @@ async fn post_client_stats(source_id: &str, report: &JsValue) {
     let mut jb_emitted = JsValue::NULL;
     let mut freeze_count = JsValue::NULL;
     let mut frames_dropped = JsValue::NULL;
+    let mut codec_id = JsValue::NULL;
 
     let map: &js_sys::Map = report.unchecked_ref();
     let entries = js_sys::try_iter(&map.values()).ok().flatten();
@@ -228,9 +413,26 @@ async fn post_client_stats(source_id: &str, report: &JsValue) {
                 jb_emitted = get("jitterBufferEmittedCount");
                 freeze_count = get("freezeCount");
                 frames_dropped = get("framesDropped");
+                codec_id = get("codecId");
             }
         }
     }
+
+    // The negotiated codec: inbound-rtp's codecId is the report-map KEY of
+    // the matching "codec" entry — look it up directly and read mimeType.
+    let codec = codec_id
+        .as_string()
+        .map(|id| map.get(&JsValue::from_str(&id)))
+        .and_then(|entry| js_sys::Reflect::get(&entry, &JsValue::from_str("mimeType")).ok())
+        .and_then(|v| v.as_string());
+
+    // Physical screen size, for telling TV models apart in the logs.
+    let screen = leptos::web_sys::window()
+        .and_then(|w| w.screen().ok())
+        .and_then(|s| match (s.width(), s.height()) {
+            (Ok(w), Ok(h)) => Some(format!("{w}x{h}")),
+            _ => None,
+        });
 
     // jitterBufferDelay is a cumulative sum of seconds each emitted frame
     // spent in the buffer; divide by the emitted count for the average, in ms.
@@ -240,6 +442,9 @@ async fn post_client_stats(source_id: &str, report: &JsValue) {
     };
     let body = serde_json::json!({
         "sourceId": source_id,
+        "displayId": display_id(),
+        "codec": codec,
+        "screen": screen,
         "framesDecoded": frames_decoded.as_f64(),
         "fps": fps.as_f64(),
         "jitterBufferMs": jitter_buffer_ms,
@@ -541,7 +746,14 @@ async fn connect_whep(video: &HtmlVideoElement, source_id: &str) -> Result<WhepS
 
     let video_init = RtcRtpTransceiverInit::new();
     video_init.set_direction(RtcRtpTransceiverDirection::Recvonly);
-    pc.add_transceiver_with_str_and_init("video", &video_init);
+    let video_transceiver = pc.add_transceiver_with_str_and_init("video", &video_init);
+
+    // Codec fallback (spec addendum 2): in "vp8" mode, strip H264 from the
+    // offer so the server's offer-driven codec selection serves the VP8
+    // branch. Default mode leaves the offer unchanged (H264 served).
+    if codec_mode_is_vp8() {
+        apply_vp8_codec_preferences(&video_transceiver);
+    }
 
     let audio_init = RtcRtpTransceiverInit::new();
     audio_init.set_direction(RtcRtpTransceiverDirection::Recvonly);
