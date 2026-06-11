@@ -306,6 +306,111 @@ test("NDI video decodes real frames for MULTIPLE simultaneous consumers (synthet
   await cleanupSource(request, src.id);
 });
 
+type Vp8Stats = {
+  framesDecoded: number;
+  frameWidth: number;
+  mimeType: string;
+  conn: string;
+};
+
+/** Connect ONE WHEP consumer that strips H264 from its video offer via
+ * setCodecPreferences (keeping only VP8 + rtx) — exactly what the stage
+ * client does on Vestel TVs whose vendor OMX H264 decoder is broken. The
+ * server must answer with (and actually SEND) VP8 for that consumer. Waits
+ * ~8s for steady decode, then keeps polling getStats (up to ~25s total) so
+ * a loaded runner doesn't flake the decode assertion. Returns the inbound
+ * codec mimeType (inbound-rtp codecId → codec report) so the test can
+ * assert the negotiation really landed on VP8, not H264. Releases the
+ * server-side consumer via WHEP DELETE on the Location before returning. */
+async function connectVp8OnlyAndMeasure(
+  page: Page,
+  origin: string,
+  sourceId: string,
+): Promise<{ error?: string; stats?: Vp8Stats }> {
+  return page.evaluate(
+    async ({ origin, sourceId }) => {
+      const pc = new RTCPeerConnection();
+      try {
+        pc.addTransceiver("video", { direction: "recvonly" });
+        // Strip H264 from the offer: keep only VP8 (+ rtx retransmission).
+        const tr =
+          pc
+            .getTransceivers()
+            .find((t) => t.receiver?.track?.kind === "video") ??
+          pc.getTransceivers()[0];
+        const caps = RTCRtpReceiver.getCapabilities("video");
+        tr.setCodecPreferences(
+          caps!.codecs.filter((c) => /\/(VP8|rtx)$/i.test(c.mimeType)),
+        );
+        pc.addTransceiver("audio", { direction: "recvonly" });
+
+        // WHEP dance — same as the other tests in this file.
+        const offer = await pc.createOffer();
+        await pc.setLocalDescription(offer);
+        await new Promise<void>((res) => {
+          if (pc.iceGatheringState === "complete") return res();
+          pc.addEventListener("icegatheringstatechange", () => {
+            if (pc.iceGatheringState === "complete") res();
+          });
+          setTimeout(res, 4000);
+        });
+        const resp = await fetch(`/ndi/whep/${sourceId}`, {
+          method: "POST",
+          headers: { "Content-Type": "application/sdp" },
+          body: pc.localDescription!.sdp,
+        });
+        if (!resp.ok) return { error: `WHEP POST ${resp.status}` };
+        const location =
+          resp.headers.get("Location") ?? resp.headers.get("location");
+        await pc.setRemoteDescription({
+          type: "answer",
+          sdp: await resp.text(),
+        });
+
+        const read = async () => {
+          const out = {
+            framesDecoded: 0,
+            frameWidth: 0,
+            mimeType: "",
+            conn: pc.connectionState,
+          };
+          const report = await pc.getStats();
+          report.forEach((s) => {
+            if (s.type === "inbound-rtp" && s.kind === "video") {
+              out.framesDecoded = s.framesDecoded || 0;
+              out.frameWidth = s.frameWidth || 0;
+              const codec = s.codecId ? report.get(s.codecId) : undefined;
+              out.mimeType = (codec && codec.mimeType) || "";
+            }
+          });
+          return out;
+        };
+        // Sample after ~8s, then poll up to ~25s total for decode + width.
+        await new Promise((r) => setTimeout(r, 8000));
+        let stats = await read();
+        for (let i = 0; i < 34; i++) {
+          if (stats.framesDecoded > 0 && stats.frameWidth > 0) break;
+          await new Promise((r) => setTimeout(r, 500));
+          stats = await read();
+        }
+
+        // Release the server-side consumer (WHEP DELETE on the Location).
+        if (location) {
+          await fetch(new URL(location, origin).toString(), {
+            method: "DELETE",
+          }).catch(() => {});
+        }
+        return { stats };
+      } catch (e) {
+        return { error: String(e) };
+      } finally {
+        pc.close();
+      }
+    },
+    { origin, sourceId },
+  );
+}
+
 // ── Test 2: the #373 guard — STRAGGLER consumers joining an ALREADY-STREAMING
 // pipeline. This is the dominant real-world scenario: a stage display loads
 // /stage after the operator already activated the source, or a display's
@@ -354,4 +459,62 @@ test("NDI video decodes for STRAGGLER consumers joining an already-streaming pip
   ).toEqual([]);
 
   await cleanupSource(request, src.id);
+});
+
+// ── Test 3: the Vestel-OMX fallback guard (spec addendum 2 in
+// docs/superpowers/specs/2026-06-11-ndi-low-latency-design.md). Some stage
+// TVs (Vestel) ship a vendor OMX H264 decoder that silently fails, so the
+// stage client strips H264 from its WHEP offer via setCodecPreferences and
+// the server must fall back to encoding VP8 for THAT consumer. Two guards
+// in one: (a) the decode guard — an H264-less offer still gets decodable,
+// downscaled frames; (b) the negotiation guard — the inbound codec really
+// is VP8, so the server didn't sneak H264 past the preference filter.
+test("NDI stream decodes via VP8 for consumers that exclude H264 (Vestel OMX fallback path) @video-codec @synthetic-ndi", async ({
+  page,
+  request,
+}) => {
+  const synthetic = await discoverSyntheticSource(request);
+  // NOT a skip: on the e2e-ndi lane the synthetic sender MUST be running. If
+  // it isn't, that is a real failure (broken lane), per test-strictness.
+  expect(
+    synthetic,
+    "synthetic NDI source '(PRESENTER-TEST)' must be on the network — start ndi_test_sender",
+  ).toBeTruthy();
+
+  const src = await createAndActivateSource(request, synthetic!.name, "vp8");
+  try {
+    const consoleErrors = collectConsoleErrors(page);
+    await page.goto(new URL("/", baseURL).toString());
+
+    const result = await connectVp8OnlyAndMeasure(page, baseURL, src.id);
+    expect(
+      result.error,
+      `WHEP connect must succeed — ${result.error}`,
+    ).toBeFalsy();
+    const s = result.stats!;
+    expect(
+      s.framesDecoded,
+      `VP8-only consumer must DECODE video frames (framesDecoded > 0); ` +
+        `connected-but-zero-frames is the black-stage bug. Got: ${JSON.stringify(s)}`,
+    ).toBeGreaterThan(0);
+    expect(
+      s.frameWidth,
+      `decoded frame must have a real width (>0), got ${JSON.stringify(s)}`,
+    ).toBeGreaterThan(0);
+    expect(
+      s.frameWidth,
+      `decoded frame must be downscaled ≤1280 wide, got ${s.frameWidth}`,
+    ).toBeLessThanOrEqual(1280);
+    expect(
+      s.mimeType,
+      `server must actually serve VP8 to an H264-less offer, got: ${JSON.stringify(s)}`,
+    ).toBe("video/VP8");
+
+    expect(
+      consoleErrors,
+      `browser console must have zero errors/warnings, got: ${consoleErrors.join("; ")}`,
+    ).toEqual([]);
+  } finally {
+    await cleanupSource(request, src.id);
+  }
 });
