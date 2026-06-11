@@ -64,6 +64,11 @@ impl NdiPipeline {
     /// OWN pipelines (see `add_consumer_stub`).
     ///
     /// Fails with an error if `encoder_name` is not registered.
+    ///
+    /// NOTE: this stub uses FIXED legacy tuning values (GOP 30, backlog 30,
+    /// sync=true) for STRUCTURAL tests only — it does not track production
+    /// tuning. The real values are locked by
+    /// `pipeline_tuning_properties_are_low_latency` against `NdiPipeline::build`.
     pub fn stopped_for_test_with_topology(encoder_name: &str) -> Result<Self> {
         crate::init()?;
         if gst::ElementFactory::find(encoder_name).is_none() {
