@@ -183,30 +183,7 @@ impl Watchdog {
         let active: Rc<Cell<bool>> = Rc::new(Cell::new(true));
         let on_failure = Rc::new(on_failure);
 
-        // ICE state listener: fire on Failed / Disconnected / Closed.
-        {
-            let active = Rc::clone(&active);
-            let on_failure = Rc::clone(&on_failure);
-            let pc_clone = pc.clone();
-            let cb = Closure::<dyn FnMut(JsValue)>::new(move |_ev: JsValue| {
-                if !active.get() {
-                    return;
-                }
-                let s = pc_clone.ice_connection_state();
-                if matches!(
-                    s,
-                    RtcIceConnectionState::Failed
-                        | RtcIceConnectionState::Disconnected
-                        | RtcIceConnectionState::Closed
-                ) {
-                    leptos::logging::warn!("watchdog: ICE state={s:?}, triggering reconnect");
-                    active.set(false);
-                    (on_failure)();
-                }
-            });
-            pc.set_oniceconnectionstatechange(Some(cb.as_ref().unchecked_ref()));
-            cb.forget();
-        }
+        install_ice_failure_listener(pc, Rc::clone(&active), Rc::clone(&on_failure));
 
         // Stall timer: every TICK_INTERVAL_MS check if currentTime advanced.
         //
@@ -662,6 +639,34 @@ fn dispatch_delete(url: &str) {
             leptos::logging::error!("dispatch_delete: failed to build Request for {url}: {e:?}");
         }
     }
+}
+
+/// ICE state listener for the Watchdog: fires `on_failure` once on
+/// Failed / Disconnected / Closed (gated by the shared `active` flag).
+fn install_ice_failure_listener<F: Fn() + 'static>(
+    pc: &RtcPeerConnection,
+    active: std::rc::Rc<std::cell::Cell<bool>>,
+    on_failure: std::rc::Rc<F>,
+) {
+    let pc_clone = pc.clone();
+    let cb = Closure::<dyn FnMut(JsValue)>::new(move |_ev: JsValue| {
+        if !active.get() {
+            return;
+        }
+        let s = pc_clone.ice_connection_state();
+        if matches!(
+            s,
+            RtcIceConnectionState::Failed
+                | RtcIceConnectionState::Disconnected
+                | RtcIceConnectionState::Closed
+        ) {
+            leptos::logging::warn!("watchdog: ICE state={s:?}, triggering reconnect");
+            active.set(false);
+            (on_failure)();
+        }
+    });
+    pc.set_oniceconnectionstatechange(Some(cb.as_ref().unchecked_ref()));
+    cb.forget();
 }
 
 /// Install a `pagehide` window listener that fires DELETE if the page is
