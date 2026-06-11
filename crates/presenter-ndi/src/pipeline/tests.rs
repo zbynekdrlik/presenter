@@ -268,6 +268,54 @@ fn state_transitions_start_at_stopped() {
     assert_eq!(p.state(), PipelineState::Stopped);
 }
 
+/// Low-latency regression locks (2026-06-11 design): every knob below was a
+/// measured latency/stability mechanism — see
+/// docs/superpowers/specs/2026-06-11-ndi-low-latency-design.md.
+#[test]
+fn pipeline_tuning_properties_are_low_latency() {
+    super::super::init().unwrap();
+    if super::super::hw_h264_encoder().is_none() {
+        return;
+    }
+    let p = NdiPipeline::build("no-such-source", "http://127.0.0.1/whep".into()).unwrap();
+
+    // 1. PTS from server receive time — zero sender-clock coupling, no drift
+    //    DISCONT jumps ("lag builds, then jumps").
+    let ndisrc = p
+        .pipeline
+        .by_name("ndisrc")
+        .expect("ndisrc element must be named 'ndisrc'");
+    assert_eq!(
+        ndisrc.property::<gstndi::TimestampMode>("timestamp-mode"),
+        gstndi::TimestampMode::ReceiveTime,
+        "ndisrc must use pure receive-time timestamps"
+    );
+
+    // 2. Relay forwards frames immediately (sync=false saves ~40ms measured);
+    //    small bounded backlog (5 frames, drop=true).
+    let appsink = p
+        .pipeline
+        .by_name("enc_appsink")
+        .expect("appsink named enc_appsink")
+        .downcast::<gst_app::AppSink>()
+        .expect("enc_appsink is an AppSink");
+    assert!(
+        !appsink.property::<bool>("sync"),
+        "producer appsink must be sync=false (StreamProducer::with ProducerSettings)"
+    );
+    assert_eq!(appsink.max_buffers(), 5, "appsink backlog must be 5 frames");
+
+    // 3. GOP 240 (8s): no 1s IDR pulses; joins use force-keyunit instead.
+    let encoder = p.pipeline.by_name("encoder").expect("encoder named");
+    let factory = encoder.factory().expect("factory").name().to_string();
+    let gop: i64 = match factory.as_str() {
+        "nvh264enc" => encoder.property::<i32>("gop-size") as i64,
+        "vah264enc" | "x264enc" => encoder.property::<u32>("key-int-max") as i64,
+        other => panic!("unexpected encoder factory {other}"),
+    };
+    assert_eq!(gop, 240, "GOP must be 240 frames");
+}
+
 /// Regression test for #336: shared-encoder fanout.
 ///
 /// The pre-fix pipeline ended in `whepserversink`, which (by gst-plugin-rs
