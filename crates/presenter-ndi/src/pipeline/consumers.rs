@@ -35,6 +35,7 @@ use gstreamer as gst;
 use gstreamer::prelude::*;
 use gstreamer_app as gst_app;
 use gstreamer_utils::{ConsumptionLink, StreamProducer};
+use gstreamer_video as gst_video;
 use gstreamer_webrtc as gst_webrtc;
 use tokio::sync::mpsc::UnboundedSender;
 
@@ -507,6 +508,10 @@ fn build_consumer_pipeline_blocking(
             .map_err(|e| anyhow!("StreamProducer::add_consumer failed: {e}"))?,
     );
 
+    // GOP is 240 frames — explicitly request an IDR so this consumer starts
+    // decoding immediately instead of waiting for the GOP boundary.
+    request_keyframe(producer);
+
     // The answer must announce the send SSRC — wait for media caps first.
     await_media_caps(&webrtcbin, session_id);
     negotiate_sdp(&webrtcbin, &offer_desc)?;
@@ -660,4 +665,20 @@ fn connect_branch_signals(
             "WHEP consumer connection-state changed"
         );
     });
+}
+
+/// Ask the shared encoder for an immediate IDR (all-headers=true so SPS/PPS
+/// precede it). Pushed upstream from the producer appsink's sink pad — the
+/// same path StreamProducer uses to forward browser PLIs. REQUIRED for
+/// consumer join with GOP=240: without it a new consumer waits up to 8s for
+/// the next scheduled keyframe.
+pub(super) fn request_keyframe(producer: &StreamProducer) {
+    let event = gst_video::UpstreamForceKeyUnitEvent::builder()
+        .all_headers(true)
+        .build();
+    if let Some(pad) = producer.appsink().static_pad("sink") {
+        if !pad.push_event(event) {
+            tracing::warn!("force-keyunit event was not handled upstream");
+        }
+    }
 }
