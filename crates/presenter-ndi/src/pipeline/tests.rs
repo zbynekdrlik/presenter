@@ -14,6 +14,7 @@ use gstreamer as gst;
 use gstreamer::prelude::*;
 use gstreamer_app as gst_app;
 use gstreamer_utils::StreamProducer;
+use gstreamer_video as gst_video;
 use tokio::sync::watch;
 
 use super::build::consumer_h264_caps;
@@ -64,6 +65,11 @@ impl NdiPipeline {
     /// OWN pipelines (see `add_consumer_stub`).
     ///
     /// Fails with an error if `encoder_name` is not registered.
+    ///
+    /// NOTE: this stub uses FIXED legacy tuning values (GOP 30, backlog 30,
+    /// sync=true) for STRUCTURAL tests only — it does not track production
+    /// tuning. The real values are locked by
+    /// `pipeline_tuning_properties_are_low_latency` against `NdiPipeline::build`.
     pub fn stopped_for_test_with_topology(encoder_name: &str) -> Result<Self> {
         crate::init()?;
         if gst::ElementFactory::find(encoder_name).is_none() {
@@ -268,6 +274,54 @@ fn state_transitions_start_at_stopped() {
     assert_eq!(p.state(), PipelineState::Stopped);
 }
 
+/// Low-latency regression locks (2026-06-11 design): every knob below was a
+/// measured latency/stability mechanism — see
+/// docs/superpowers/specs/2026-06-11-ndi-low-latency-design.md.
+#[test]
+fn pipeline_tuning_properties_are_low_latency() {
+    super::super::init().unwrap();
+    if super::super::hw_h264_encoder().is_none() {
+        return;
+    }
+    let p = NdiPipeline::build("no-such-source", "http://127.0.0.1/whep".into()).unwrap();
+
+    // 1. PTS from server receive time — zero sender-clock coupling, no drift
+    //    DISCONT jumps ("lag builds, then jumps").
+    let ndisrc = p
+        .pipeline
+        .by_name("ndisrc")
+        .expect("ndisrc element must be named 'ndisrc'");
+    assert_eq!(
+        ndisrc.property::<gstndi::TimestampMode>("timestamp-mode"),
+        gstndi::TimestampMode::ReceiveTime,
+        "ndisrc must use pure receive-time timestamps"
+    );
+
+    // 2. Relay forwards frames immediately (sync=false saves ~40ms measured);
+    //    small bounded backlog (5 frames, drop=true).
+    let appsink = p
+        .pipeline
+        .by_name("enc_appsink")
+        .expect("appsink named enc_appsink")
+        .downcast::<gst_app::AppSink>()
+        .expect("enc_appsink is an AppSink");
+    assert!(
+        !appsink.property::<bool>("sync"),
+        "producer appsink must be sync=false (StreamProducer::with ProducerSettings)"
+    );
+    assert_eq!(appsink.max_buffers(), 5, "appsink backlog must be 5 frames");
+
+    // 3. GOP 240 (8s): no 1s IDR pulses; joins use force-keyunit instead.
+    let encoder = p.pipeline.by_name("encoder").expect("encoder named");
+    let factory = encoder.factory().expect("factory").name().to_string();
+    let gop: i64 = match factory.as_str() {
+        "nvh264enc" => encoder.property::<i32>("gop-size") as i64,
+        "vah264enc" | "x264enc" => encoder.property::<u32>("key-int-max") as i64,
+        other => panic!("unexpected encoder factory {other}"),
+    };
+    assert_eq!(gop, 240, "GOP must be 240 frames");
+}
+
 /// Regression test for #336: shared-encoder fanout.
 ///
 /// The pre-fix pipeline ended in `whepserversink`, which (by gst-plugin-rs
@@ -417,4 +471,104 @@ async fn add_then_remove_leaves_clean_state() {
     pipeline
         .remove_consumer_stub("session-does-not-exist")
         .expect("remove_consumer_stub must be idempotent on unknown session");
+}
+
+/// The encoder MUST emit constrained-baseline H264. High profile (what the
+/// encoders default to) is rejected by strict TV HW decoders (Vestel stage
+/// displays): Chromium falls back to NullVideoDecoder and the stage shows
+/// black while RTP flows — found live on prod 2026-06-11.
+#[test]
+fn encoder_output_is_pinned_to_constrained_baseline() {
+    super::super::init().unwrap();
+    if super::super::hw_h264_encoder().is_none() {
+        return;
+    }
+    let p = NdiPipeline::build("no-such-source", "http://127.0.0.1/whep".into()).unwrap();
+    let profile_caps = p
+        .pipeline
+        .by_name("profile_caps")
+        .expect("capsfilter named profile_caps between encoder and h264parse");
+    let caps = profile_caps.property::<gst::Caps>("caps");
+    let s = caps.structure(0).expect("caps structure");
+    assert_eq!(s.name(), "video/x-h264");
+    assert_eq!(
+        s.get::<&str>("profile").expect("profile field"),
+        "constrained-baseline"
+    );
+}
+
+/// webrtcsink parity: rtph264pay must aggregate in zero-latency mode
+/// (default "none" can hold NALs; webrtcsink sets this on every payloader).
+#[test]
+fn consumer_payloader_uses_zero_latency_aggregation() {
+    super::super::init().expect("gst init");
+    let (_appsrc, payloader, _webrtcbin) =
+        super::consumers::build_consumer_elements("test-agg", Some(102))
+            .expect("consumer elements build");
+    let value = payloader.property_value("aggregate-mode");
+    let (_, enum_value) =
+        gst::glib::EnumValue::from_value(&value).expect("aggregate-mode is an enum");
+    assert_eq!(enum_value.nick(), "zero-latency");
+}
+
+/// With GOP=240 a joining consumer MUST trigger an immediate IDR — otherwise
+/// it would wait up to 8s for the next scheduled keyframe (black join).
+#[test]
+fn request_keyframe_sends_force_key_unit_upstream() {
+    use std::sync::atomic::{AtomicBool, Ordering};
+    super::super::init().unwrap();
+    if super::super::hw_h264_encoder().is_none() {
+        return;
+    }
+    let p = NdiPipeline::build("no-such-source", "http://127.0.0.1/whep".into()).unwrap();
+    let appsink = p.pipeline.by_name("enc_appsink").unwrap();
+    // Pads are flushing in NULL state — gst_pad_push_event refuses upstream
+    // events on a flushing pad BEFORE any probe runs. The full pipeline can't
+    // reach PAUSED on a unit-test host (ndisrc fails its state change with no
+    // live NDI source), so activate just the producer appsink: READY→PAUSED
+    // activates its pads — exactly their state when a consumer joins the
+    // PLAYING pipeline in production. Drop → teardown() returns it to NULL.
+    appsink
+        .set_state(gst::State::Paused)
+        .expect("appsink must accept PAUSED (ASYNC pre-preroll)");
+    let appsink_pad = appsink.static_pad("sink").unwrap();
+    let seen = std::sync::Arc::new(AtomicBool::new(false));
+    let seen_probe = std::sync::Arc::clone(&seen);
+    appsink_pad.add_probe(gst::PadProbeType::EVENT_UPSTREAM, move |_, info| {
+        if let Some(gst::PadProbeData::Event(ev)) = &info.data {
+            if gst_video::UpstreamForceKeyUnitEvent::parse(ev).is_ok() {
+                seen_probe.store(true, Ordering::SeqCst);
+            }
+        }
+        gst::PadProbeReturn::Ok
+    });
+    super::consumers::request_keyframe(&p.producer);
+    assert!(
+        seen.load(Ordering::SeqCst),
+        "ForceKeyUnit must be pushed upstream from the producer appsink"
+    );
+}
+
+/// /ndi/snapshot must expose per-consumer fanout counters and (when the
+/// browser has sent RTCP RRs) round-trip/jitter/loss — the stage display's
+/// own view of the link, readable server-side.
+#[tokio::test]
+async fn snapshot_includes_fanout_counters_and_rtcp_fields() {
+    super::super::init().expect("gst init");
+    let mut pipeline =
+        NdiPipeline::stopped_for_test_with_topology("x264enc").expect("test topology");
+    pipeline.add_consumer_stub("snap-1").expect("stub consumer");
+    let snap = pipeline.snapshot().await;
+    assert_eq!(snap.sessions.len(), 1);
+    let s = &snap.sessions[0];
+    // Stub session pushed nothing — counters exist and are zero.
+    assert_eq!(s.buffers_pushed, 0);
+    assert_eq!(s.buffers_dropped, 0);
+    // No RTCP from a stub webrtcbin — fields present as None (omitted in JSON).
+    assert!(s.rtcp_round_trip_ms.is_none());
+    let json = serde_json::to_string(&snap).unwrap();
+    assert!(
+        json.contains("buffersPushed"),
+        "camelCase serialization: {json}"
+    );
 }

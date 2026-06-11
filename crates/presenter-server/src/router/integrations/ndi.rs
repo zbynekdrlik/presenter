@@ -1,5 +1,6 @@
+use axum::http::StatusCode;
 use axum::{extract::State, Json};
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use tracing::instrument;
 
 use super::super::AppError;
@@ -58,6 +59,34 @@ pub(crate) async fn ndi_snapshot(
     Ok(Json(
         serde_json::to_value(snap).expect("PipelineSnapshot serializes"),
     ))
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct NdiClientStatsBeacon {
+    pub source_id: String,
+    pub frames_decoded: Option<f64>,
+    pub fps: Option<f64>,
+    pub jitter_buffer_ms: Option<f64>,
+    pub freeze_count: Option<f64>,
+    pub frames_dropped: Option<f64>,
+}
+
+/// Stage displays POST a compact getStats summary every 15s. Log-only (MVP):
+/// journald keeps the history, so "the stage was laggy at 19:40" is
+/// answerable from data (fps, jitter buffer, freezes per display).
+#[instrument(skip_all)]
+pub(crate) async fn ndi_client_stats(Json(beacon): Json<NdiClientStatsBeacon>) -> StatusCode {
+    tracing::info!(
+        source_id = %beacon.source_id,
+        frames_decoded = beacon.frames_decoded,
+        fps = beacon.fps,
+        jitter_buffer_ms = beacon.jitter_buffer_ms,
+        freeze_count = beacon.freeze_count,
+        frames_dropped = beacon.frames_dropped,
+        "NDI stage-display client stats beacon"
+    );
+    StatusCode::NO_CONTENT
 }
 
 #[cfg(test)]

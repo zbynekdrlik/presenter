@@ -27,59 +27,7 @@ fn main() -> Result<()> {
     let ndi_name =
         std::env::var("PRESENTER_NDI_TEST_NAME").unwrap_or_else(|_| "PRESENTER-TEST".to_string());
 
-    // videotestsrc (live) → UYVY 2560x1440@30 → ndisinkcombiner → ndisink
-    //
-    // 2560×1440 (1440p) deliberately matches the real Resolume stage source.
-    // It exceeds the H264 level a browser negotiates, so without the pipeline's
-    // downscale-to-720p step the browser decodes ZERO frames (black stage) —
-    // exactly the regression a real 1080p/1440p NDI source hit while the old
-    // 720p synthetic source masked it. The e2e regression test asserts frames
-    // decode (and that they are downscaled ≤720p), so this resolution keeps the
-    // downscale honest.
-    let src = gst::ElementFactory::make("videotestsrc")
-        .property("is-live", true)
-        .property_from_str("pattern", "smpte")
-        .build()
-        .context("build videotestsrc")?;
-    let convert = gst::ElementFactory::make("videoconvert")
-        .build()
-        .context("build videoconvert")?;
-    let capsfilter = gst::ElementFactory::make("capsfilter")
-        .property(
-            "caps",
-            gst::Caps::builder("video/x-raw")
-                .field("format", "UYVY")
-                .field("width", 2560i32)
-                .field("height", 1440i32)
-                .field("framerate", gst::Fraction::new(30, 1))
-                .build(),
-        )
-        .build()
-        .context("build capsfilter")?;
-    let combiner = gst::ElementFactory::make("ndisinkcombiner")
-        .build()
-        .context("build ndisinkcombiner")?;
-    let sink = gst::ElementFactory::make("ndisink")
-        .property("ndi-name", &ndi_name)
-        .build()
-        .context("build ndisink")?;
-
-    let pipeline = gst::Pipeline::new();
-    pipeline
-        .add_many([&src, &convert, &capsfilter, &combiner, &sink])
-        .context("add elements")?;
-    gst::Element::link_many([&src, &convert, &capsfilter]).context("link src→convert→caps")?;
-    // ndisinkcombiner has an always "video" sink pad.
-    let combiner_video = combiner
-        .static_pad("video")
-        .ok_or_else(|| anyhow!("ndisinkcombiner has no 'video' pad"))?;
-    let caps_src = capsfilter
-        .static_pad("src")
-        .ok_or_else(|| anyhow!("capsfilter has no src pad"))?;
-    caps_src
-        .link(&combiner_video)
-        .map_err(|e| anyhow!("link capsfilter→ndisinkcombiner.video: {e:?}"))?;
-    combiner.link(&sink).context("link combiner→ndisink")?;
+    let pipeline = build_sender_pipeline(&ndi_name)?;
 
     let bus = pipeline
         .bus()
@@ -123,5 +71,87 @@ fn main() -> Result<()> {
     pipeline
         .set_state(gst::State::Null)
         .context("set pipeline Null")?;
+    Ok(())
+}
+
+/// Build the sender pipeline:
+/// `videotestsrc (live) → UYVY 2560x1440@30 → ndisinkcombiner → ndisink`.
+///
+/// 2560×1440 (1440p) deliberately matches the real Resolume stage source.
+/// It exceeds the H264 level a browser negotiates, so without the pipeline's
+/// downscale-to-720p step the browser decodes ZERO frames (black stage) —
+/// exactly the regression a real 1080p/1440p NDI source hit while the old
+/// 720p synthetic source masked it. The e2e regression test asserts frames
+/// decode (and that they are downscaled ≤720p), so this resolution keeps the
+/// downscale honest.
+fn build_sender_pipeline(ndi_name: &str) -> Result<gst::Pipeline> {
+    let src = gst::ElementFactory::make("videotestsrc")
+        .property("is-live", true)
+        .property_from_str("pattern", "smpte")
+        .build()
+        .context("build videotestsrc")?;
+    let convert = gst::ElementFactory::make("videoconvert")
+        .build()
+        .context("build videoconvert")?;
+    let capsfilter = gst::ElementFactory::make("capsfilter")
+        .property(
+            "caps",
+            gst::Caps::builder("video/x-raw")
+                .field("format", "UYVY")
+                .field("width", 2560i32)
+                .field("height", 1440i32)
+                .field("framerate", gst::Fraction::new(30, 1))
+                .build(),
+        )
+        .build()
+        .context("build capsfilter")?;
+    let combiner = gst::ElementFactory::make("ndisinkcombiner")
+        .build()
+        .context("build ndisinkcombiner")?;
+    let sink = gst::ElementFactory::make("ndisink")
+        .property("ndi-name", ndi_name)
+        .build()
+        .context("build ndisink")?;
+
+    let pipeline = gst::Pipeline::new();
+    pipeline
+        .add_many([&src, &convert, &capsfilter, &combiner, &sink])
+        .context("add elements")?;
+    gst::Element::link_many([&src, &convert, &capsfilter]).context("link src→convert→caps")?;
+    // ndisinkcombiner has an always "video" sink pad.
+    let combiner_video = combiner
+        .static_pad("video")
+        .ok_or_else(|| anyhow!("ndisinkcombiner has no 'video' pad"))?;
+    let caps_src = capsfilter
+        .static_pad("src")
+        .ok_or_else(|| anyhow!("capsfilter has no src pad"))?;
+    caps_src
+        .link(&combiner_video)
+        .map_err(|e| anyhow!("link capsfilter→ndisinkcombiner.video: {e:?}"))?;
+    combiner.link(&sink).context("link combiner→ndisink")?;
+
+    attach_strip_probe(&capsfilter)?;
+    Ok(pipeline)
+}
+
+/// Paint the clock strip into every outgoing frame so the latency e2e can
+/// measure true glass-to-glass latency (see presenter_ndi::test_strip).
+fn attach_strip_probe(capsfilter: &gst::Element) -> Result<()> {
+    let probe_pad = capsfilter
+        .static_pad("src")
+        .ok_or_else(|| anyhow!("capsfilter has no src pad (probe)"))?;
+    probe_pad.add_probe(gst::PadProbeType::BUFFER, move |_, info| {
+        if let Some(gst::PadProbeData::Buffer(ref mut buffer)) = info.data {
+            let buffer = buffer.make_mut();
+            if let Ok(mut map) = buffer.map_writable() {
+                let now_ms = std::time::SystemTime::now()
+                    .duration_since(std::time::UNIX_EPOCH)
+                    .map(|d| d.as_millis() as u64)
+                    .unwrap_or(0);
+                presenter_ndi::test_strip::paint_strip(map.as_mut_slice(), 2560 * 2, now_ms);
+            }
+        }
+        gst::PadProbeReturn::Ok
+    });
     Ok(())
 }

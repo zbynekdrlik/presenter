@@ -4,6 +4,8 @@ pub mod discovery;
 pub mod manager;
 pub mod ndi_sdk;
 pub mod pipeline;
+#[cfg(feature = "test-helpers")]
+pub mod test_strip;
 pub mod whep_session;
 
 pub use discovery::SourceList;
