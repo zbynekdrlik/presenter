@@ -2418,3 +2418,30 @@ async fn search_slide_stage_match_returns_parent_presentation() {
         "match_field should indicate StageText caused the match"
     );
 }
+
+#[tokio::test]
+async fn ndi_client_stats_beacon_returns_no_content() {
+    let app = build_router(AppState::in_memory().await.unwrap());
+    let response = app
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/ndi/client-stats")
+                .header("content-type", "application/json")
+                .body(Body::from(
+                    serde_json::to_vec(&json!({
+                        "sourceId": "test-src",
+                        "framesDecoded": 100,
+                        "fps": 30.0,
+                        "jitterBufferMs": 12.5,
+                        "freezeCount": 0,
+                        "framesDropped": 1
+                    }))
+                    .unwrap(),
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::NO_CONTENT);
+}
