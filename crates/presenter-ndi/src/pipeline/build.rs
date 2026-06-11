@@ -43,57 +43,10 @@ impl NdiPipeline {
 
         let pipeline = gst::Pipeline::new();
 
-        // timestamp-mode=receive-time: PTS purely from this server's clock at
-        // frame arrival. The default ("auto") follows the NDI sender's
-        // (Resolume's) timecode with windowed drift correction — accumulated
-        // sender-clock drift is then corrected via DISCONT, which the browser
-        // sees as "latency builds up, then the picture jumps". Receive-time
-        // has ZERO sender-clock coupling; arrival jitter (10-60ms measured)
-        // is absorbed by the browser's jitter buffer.
-        let ndisrc = gst::ElementFactory::make("ndisrc")
-            .name("ndisrc")
-            .property("ndi-name", ndi_name)
-            .property_from_str("timestamp-mode", "receive-time")
-            .build()
-            .context("build ndisrc")?;
-        let ndisrcdemux = gst::ElementFactory::make("ndisrcdemux")
-            .name("demux")
-            .build()
-            .context("build ndisrcdemux")?;
+        let (ndisrc, ndisrcdemux) = build_ndi_source(ndi_name)?;
         let (videoconvert, videoscale, scale_caps, audio_fakesink) = build_video_chain()?;
         let encoder = build_encoder(encoder_name)?;
-
-        // Parse the encoder's H264 elementary stream into AU-aligned frames so
-        // every PER-CONSUMER rtph264pay (in its own pipeline) receives a clean,
-        // properly-capped stream. `config-interval=-1` re-inserts SPS/PPS before
-        // every IDR so a consumer that joins mid-stream gets an IDR immediately
-        // via `consumers::request_keyframe` (GOP itself is 240 frames).
-        //
-        // The PAYLOADER is intentionally NOT here — it is per-consumer, in the
-        // consumer's own pipeline downstream of an appsrc, so each webrtcbin
-        // negotiates its own dynamic RTP payload type with its browser. A single
-        // shared payloader emits ONE pt and silently fails (connected, no frames)
-        // for any browser that negotiates a different one — the #336 regression.
-        // The ENCODER stays shared (one nvh264enc), preserving the fanout goal.
-        let h264parse = gst::ElementFactory::make("h264parse")
-            .name("h264parse")
-            .property("config-interval", -1i32)
-            .build()
-            .context("build h264parse")?;
-        // The encoder pipeline ends in an appsink wrapped by StreamProducer
-        // (the same fanout webrtcsink uses). The caps filter pins the bridge
-        // format to byte-stream/AU H264 so every consumer appsrc is created
-        // with caps that ALWAYS match what the producer forwards.
-        // `max-buffers`+`drop` bound the appsink so a momentarily-slow fanout
-        // can never back-pressure (and stall) the shared encoder. 5 frames
-        // (~170ms) — a bigger backlog would replay stale frames late after a
-        // transient stall (latency spike); drop(true) keeps the newest.
-        let appsink = gst_app::AppSink::builder()
-            .name("enc_appsink")
-            .caps(&consumer_h264_caps())
-            .max_buffers(5)
-            .drop(true)
-            .build();
+        let (h264parse, appsink) = build_parse_and_sink()?;
 
         pipeline
             .add_many([
@@ -178,6 +131,69 @@ fn connect_demux_pads(
             }
         }
     });
+}
+
+/// Build the NDI ingest pair: `ndisrc` (named "ndisrc") and `ndisrcdemux`
+/// (named "demux").
+///
+/// timestamp-mode=receive-time: PTS purely from this server's clock at
+/// frame arrival. The default ("auto") follows the NDI sender's
+/// (Resolume's) timecode with windowed drift correction — accumulated
+/// sender-clock drift is then corrected via DISCONT, which the browser
+/// sees as "latency builds up, then the picture jumps". Receive-time
+/// has ZERO sender-clock coupling; arrival jitter (10-60ms measured)
+/// is absorbed by the browser's jitter buffer.
+fn build_ndi_source(ndi_name: &str) -> Result<(gst::Element, gst::Element)> {
+    let ndisrc = gst::ElementFactory::make("ndisrc")
+        .name("ndisrc")
+        .property("ndi-name", ndi_name)
+        .property_from_str("timestamp-mode", "receive-time")
+        .build()
+        .context("build ndisrc")?;
+    let ndisrcdemux = gst::ElementFactory::make("ndisrcdemux")
+        .name("demux")
+        .build()
+        .context("build ndisrcdemux")?;
+    Ok((ndisrc, ndisrcdemux))
+}
+
+/// Build the encoder pipeline's tail: `h264parse` (named "h264parse") and the
+/// bounded appsink (named "enc_appsink") that the StreamProducer wraps.
+///
+/// h264parse: parses the encoder's H264 elementary stream into AU-aligned
+/// frames so every PER-CONSUMER rtph264pay (in its own pipeline) receives a
+/// clean, properly-capped stream. `config-interval=-1` re-inserts SPS/PPS
+/// before every IDR so a consumer that joins mid-stream gets an IDR
+/// immediately via `consumers::request_keyframe` (GOP itself is 240 frames).
+///
+/// The PAYLOADER is intentionally NOT here — it is per-consumer, in the
+/// consumer's own pipeline downstream of an appsrc, so each webrtcbin
+/// negotiates its own dynamic RTP payload type with its browser. A single
+/// shared payloader emits ONE pt and silently fails (connected, no frames)
+/// for any browser that negotiates a different one — the #336 regression.
+/// The ENCODER stays shared (one nvh264enc), preserving the fanout goal.
+///
+/// appsink: the encoder pipeline ends in an appsink wrapped by StreamProducer
+/// (the same fanout webrtcsink uses). The caps filter pins the bridge
+/// format to byte-stream/AU H264 so every consumer appsrc is created
+/// with caps that ALWAYS match what the producer forwards.
+/// `max-buffers`+`drop` bound the appsink so a momentarily-slow fanout
+/// can never back-pressure (and stall) the shared encoder. 5 frames
+/// (~170ms) — a bigger backlog would replay stale frames late after a
+/// transient stall (latency spike); drop(true) keeps the newest.
+fn build_parse_and_sink() -> Result<(gst::Element, gst_app::AppSink)> {
+    let h264parse = gst::ElementFactory::make("h264parse")
+        .name("h264parse")
+        .property("config-interval", -1i32)
+        .build()
+        .context("build h264parse")?;
+    let appsink = gst_app::AppSink::builder()
+        .name("enc_appsink")
+        .caps(&consumer_h264_caps())
+        .max_buffers(5)
+        .drop(true)
+        .build();
+    Ok((h264parse, appsink))
 }
 
 /// The H264 caps used on BOTH sides of the StreamProducer bridge: the encoder
