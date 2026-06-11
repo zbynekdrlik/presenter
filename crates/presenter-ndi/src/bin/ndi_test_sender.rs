@@ -81,6 +81,25 @@ fn main() -> Result<()> {
         .map_err(|e| anyhow!("link capsfilter→ndisinkcombiner.video: {e:?}"))?;
     combiner.link(&sink).context("link combiner→ndisink")?;
 
+    // Paint the clock strip into every outgoing frame so the latency e2e can
+    // measure true glass-to-glass latency (see presenter_ndi::test_strip).
+    let probe_pad = capsfilter
+        .static_pad("src")
+        .ok_or_else(|| anyhow!("capsfilter has no src pad (probe)"))?;
+    probe_pad.add_probe(gst::PadProbeType::BUFFER, move |_, info| {
+        if let Some(gst::PadProbeData::Buffer(ref mut buffer)) = info.data {
+            let buffer = buffer.make_mut();
+            if let Ok(mut map) = buffer.map_writable() {
+                let now_ms = std::time::SystemTime::now()
+                    .duration_since(std::time::UNIX_EPOCH)
+                    .map(|d| d.as_millis() as u64)
+                    .unwrap_or(0);
+                presenter_ndi::test_strip::paint_strip(map.as_mut_slice(), 2560 * 2, now_ms);
+            }
+        }
+        gst::PadProbeReturn::Ok
+    });
+
     let bus = pipeline
         .bus()
         .ok_or_else(|| anyhow!("pipeline has no bus"))?;
