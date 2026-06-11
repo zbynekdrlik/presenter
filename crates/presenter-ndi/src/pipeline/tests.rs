@@ -40,6 +40,9 @@ impl NdiPipeline {
         let _ = gstreamer::init();
         let (state_tx, state_rx) = watch::channel(PipelineState::Stopped);
         let appsink = gst_app::AppSink::builder().build();
+        // producer_vp8 mirrors production's parallel VP8 branch with another
+        // detached appsink (no VP8 fanout is exercised by these tests).
+        let appsink_vp8 = gst_app::AppSink::builder().build();
         Self {
             pipeline: gst::Pipeline::new(),
             whep_url: String::new(),
@@ -48,6 +51,7 @@ impl NdiPipeline {
             bus_watch: std::sync::Mutex::new(None),
             sessions: Arc::new(tokio::sync::Mutex::new(HashMap::new())),
             producer: StreamProducer::from(&appsink),
+            producer_vp8: StreamProducer::from(&appsink_vp8),
         }
     }
 
@@ -132,6 +136,13 @@ impl NdiPipeline {
             .link(appsink.upcast_ref::<gst::Element>())
             .context("link h264parse -> appsink")?;
         let producer = StreamProducer::from(&appsink);
+        // The topology stub keeps the H264-only structure (its tests assert
+        // encoder-count/webrtcbin-count invariants, not the VP8 branch — that
+        // branch is locked against the REAL `NdiPipeline::build` by
+        // `pipeline_has_parallel_vp8_branch_with_low_latency_props`). The
+        // struct field is filled from a detached appsink, like
+        // `stopped_for_test`.
+        let appsink_vp8 = gst_app::AppSink::builder().build();
         let (state_tx, state_rx) = watch::channel(PipelineState::Stopped);
         Ok(Self {
             pipeline,
@@ -141,6 +152,7 @@ impl NdiPipeline {
             bus_watch: std::sync::Mutex::new(None),
             sessions: Arc::new(tokio::sync::Mutex::new(HashMap::new())),
             producer,
+            producer_vp8: StreamProducer::from(&appsink_vp8),
         })
     }
 
@@ -502,9 +514,11 @@ fn encoder_output_is_pinned_to_constrained_baseline() {
 #[test]
 fn consumer_payloader_uses_zero_latency_aggregation() {
     super::super::init().expect("gst init");
-    let (_appsrc, payloader, _webrtcbin) =
-        super::consumers::build_consumer_elements("test-agg", Some(102))
-            .expect("consumer elements build");
+    let (_appsrc, payloader, _webrtcbin) = super::consumers::build_consumer_elements(
+        "test-agg",
+        super::consumers::ConsumerCodec::H264 { pt: 102 },
+    )
+    .expect("consumer elements build");
     let value = payloader.property_value("aggregate-mode");
     let (_, enum_value) =
         gst::glib::EnumValue::from_value(&value).expect("aggregate-mode is an enum");

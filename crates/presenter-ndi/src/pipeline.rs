@@ -5,13 +5,19 @@
 //! ENCODER pipeline is built once and NEVER modified afterwards:
 //!
 //! ```text
-//! ndisrc → ndisrcdemux → videoconvert → videoscale → caps(NV12,720p)
-//!                audio ↘ fakesink              → encoder → h264parse → appsink
-//!                                              (one encoder)            │
-//!                                                          StreamProducer fanout
-//!                                                                       ▼
-//!   per consumer (its OWN gst::Pipeline):  appsrc → rtph264pay → webrtcbin
+//! ndisrc → ndisrcdemux → videoconvert → videoscale → caps(NV12,720p) → raw_tee
+//!                audio ↘ fakesink
+//!   (H264) raw_tee → q_h264 → encoder → profile_caps → h264parse → enc_appsink
+//!   (VP8)  raw_tee → q_vp8 → videoconvert → vp8enc → enc_appsink_vp8
+//!                            (one encoder per codec)        │
+//!                                      StreamProducer fanout (one per codec)
+//!                                                            ▼
+//!   per consumer (its OWN gst::Pipeline): appsrc → rtph264pay|rtpvp8pay → webrtcbin
 //! ```
+//!
+//! Codec rule (spec addendum 2): a consumer is served H264 whenever its offer
+//! contains H264 (every healthy client); VP8 ONLY when the offer has no H264 —
+//! the fallback offer of TVs whose H264 OMX decoder is vendor-broken.
 //!
 //! Why per-consumer pipelines: a `webrtcbin` added to an already-running LIVE
 //! pipeline never gets its rtpsession's running-time/latency configured, so
@@ -150,9 +156,14 @@ pub struct NdiPipeline {
     bus_watch: std::sync::Mutex<Option<tokio::task::JoinHandle<()>>>,
     /// Active per-consumer sessions (each owns its OWN consumer pipeline).
     sessions: Arc<tokio::sync::Mutex<HashMap<String, WhepSession>>>,
-    /// StreamProducer wrapping the encoder appsink — the fanout that feeds
-    /// every consumer pipeline's appsrc. Clone-cheap (internally Arc'd).
+    /// StreamProducer wrapping the H264 encoder appsink — the fanout that
+    /// feeds every H264 consumer pipeline's appsrc. Clone-cheap (internally
+    /// Arc'd).
     producer: StreamProducer,
+    /// StreamProducer wrapping the parallel VP8 encoder appsink
+    /// (`enc_appsink_vp8`) — feeds consumers whose offer carries NO H264
+    /// (the VP8 fallback of TVs with vendor-broken H264 OMX, spec addendum 2).
+    producer_vp8: StreamProducer,
 }
 
 impl Drop for NdiPipeline {

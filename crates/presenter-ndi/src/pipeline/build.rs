@@ -1,9 +1,14 @@
 //! Pipeline construction: build the shared-encoder ENCODER pipeline
-//! (`ndisrc → ndisrcdemux → videoconvert → videoscale → caps → encoder →
-//! profile_caps → h264parse → appsink`). The appsink is wrapped by a
-//! `gstreamer_utils::StreamProducer` which fans encoded H264 out to the
-//! per-consumer `appsrc → rtph264pay → webrtcbin` pipelines built in
-//! `add_consumer` (see `consumers.rs`).
+//! (`ndisrc → ndisrcdemux → videoconvert → videoscale → caps → raw_tee`,
+//! fanning into TWO parallel encode branches:
+//! H264 `→ q_h264 → encoder → profile_caps → h264parse → enc_appsink` and
+//! VP8 `→ q_vp8 → videoconvert → vp8enc → enc_appsink_vp8`). Each appsink is
+//! wrapped by a `gstreamer_utils::StreamProducer` which fans the encoded
+//! stream out to the per-consumer `appsrc → rtph264pay|rtpvp8pay → webrtcbin`
+//! pipelines built in `add_consumer` (see `consumers.rs`). The VP8 branch
+//! exists because the weak stage TVs' H264 OMX decoder is vendor-broken
+//! (spec addendum 2) — those clients re-offer VP8-only and are served from
+//! the parallel VP8 producer.
 
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -45,9 +50,11 @@ impl NdiPipeline {
 
         let (ndisrc, ndisrcdemux) = build_ndi_source(ndi_name)?;
         let (videoconvert, videoscale, scale_caps, audio_fakesink) = build_video_chain()?;
+        let (raw_tee, q_h264, q_vp8) = build_raw_tee_and_queues()?;
         let encoder = build_encoder(encoder_name)?;
         let profile_caps = build_profile_caps()?;
         let (h264parse, appsink) = build_parse_and_sink()?;
+        let (vp8_convert, vp8enc, vp8_appsink) = build_vp8_branch()?;
 
         pipeline
             .add_many([
@@ -57,46 +64,57 @@ impl NdiPipeline {
                 &videoscale,
                 &scale_caps,
                 &audio_fakesink,
+                &raw_tee,
+                &q_h264,
                 &encoder,
                 &profile_caps,
                 &h264parse,
                 appsink.upcast_ref::<gst::Element>(),
+                &q_vp8,
+                &vp8_convert,
+                &vp8enc,
+                vp8_appsink.upcast_ref::<gst::Element>(),
             ])
             .context("add elements")?;
 
         ndisrc.link(&ndisrcdemux).context("link ndisrc -> demux")?;
-        // videoconvert → videoscale → capsfilter(≤720p) → encoder
-        gst::Element::link_many([&videoconvert, &videoscale, &scale_caps, &encoder])
-            .context("link videoconvert -> videoscale -> caps -> encoder")?;
-        // encoder → capsfilter(constrained-baseline) → h264parse
-        gst::Element::link_many([&encoder, &profile_caps, &h264parse])
-            .context("link encoder -> profile_caps -> h264parse")?;
+        // videoconvert → videoscale → capsfilter(NV12, ≤720p) → tee. Both
+        // encode branches are linked HERE, before any state change — a tee
+        // branch linked after PLAYING never forwards a buffer (sticky events).
+        gst::Element::link_many([&videoconvert, &videoscale, &scale_caps, &raw_tee])
+            .context("link videoconvert -> videoscale -> caps -> tee")?;
+        // Branch A (H264, elements unchanged from the pre-tee topology):
+        gst::Element::link_many([&raw_tee, &q_h264, &encoder, &profile_caps, &h264parse])
+            .context("link tee -> q_h264 -> encoder -> profile_caps -> h264parse")?;
         h264parse
             .link(appsink.upcast_ref::<gst::Element>())
             .context("link h264parse -> appsink")?;
+        // Branch B (VP8 fallback): NV12→I420 convert feeds vp8enc (I420-only).
+        gst::Element::link_many([&raw_tee, &q_vp8, &vp8_convert, &vp8enc])
+            .context("link tee -> q_vp8 -> videoconvert -> vp8enc")?;
+        vp8enc
+            .link(vp8_appsink.upcast_ref::<gst::Element>())
+            .context("link vp8enc -> vp8 appsink")?;
 
-        // Wrap the appsink in a StreamProducer — the battle-tested fanout from
-        // gstreamer-utils that webrtcsink itself uses for exactly this job. It
-        // forwards full SAMPLES (caps + segment + PTS preserved; each consumer
-        // pipeline shares this pipeline's clock + base-time, see
-        // `consumers.rs`), propagates the producer's latency to every consumer
-        // appsrc, gates each new consumer on a keyframe, and forwards the
-        // browser's force-keyunit (PLI) requests upstream to the encoder.
-        // sync=false: forward every encoded frame to consumers IMMEDIATELY.
-        // The StreamProducer default (sync=true) holds each frame on the
-        // appsink until its clock deadline (full pipeline latency budget,
-        // ~40ms measured) — correct for a rendering sink, wrong for a relay.
-        let producer = StreamProducer::with(
-            &appsink,
-            gstreamer_utils::streamproducer::ProducerSettings { sync: false },
-        );
+        // Wrap each appsink in a StreamProducer — the battle-tested fanout
+        // from gstreamer-utils that webrtcsink itself uses: forwards full
+        // SAMPLES (caps + segment + PTS preserved on the shared clock/base-
+        // time), propagates producer latency to consumer appsrcs, gates new
+        // consumers on a keyframe, and forwards browser PLIs upstream to the
+        // branch's encoder. sync=false: forward every encoded frame
+        // IMMEDIATELY — the default (sync=true) holds each frame to its clock
+        // deadline (~40ms measured), correct for a rendering sink, wrong for
+        // a relay.
+        let settings = gstreamer_utils::streamproducer::ProducerSettings { sync: false };
+        let producer = StreamProducer::with(&appsink, settings.clone());
+        let producer_vp8 = StreamProducer::with(&vp8_appsink, settings);
 
         connect_demux_pads(&ndisrcdemux, &videoconvert, &audio_fakesink);
 
         tracing::info!(
             encoder = encoder_name,
             %ndi_name,
-            "pipeline built (shared-encoder + per-consumer-pipeline fanout topology)"
+            "pipeline built (shared-encoder H264 + parallel VP8 fallback, per-consumer-pipeline fanout)"
         );
 
         let (state_tx, state_rx) = watch::channel(PipelineState::Stopped);
@@ -109,6 +127,7 @@ impl NdiPipeline {
             bus_watch: std::sync::Mutex::new(None),
             sessions: Arc::new(tokio::sync::Mutex::new(HashMap::new())),
             producer,
+            producer_vp8,
         })
     }
 }
@@ -208,6 +227,87 @@ pub(super) fn consumer_h264_caps() -> gst::Caps {
         .field("stream-format", "byte-stream")
         .field("alignment", "au")
         .build()
+}
+
+/// The VP8 caps used on BOTH sides of the VP8 StreamProducer bridge: the VP8
+/// encoder appsink's caps filter AND every VP8 consumer appsrc's initial
+/// caps — the same always-match guarantee `consumer_h264_caps` gives the
+/// H264 bridge.
+pub(super) fn consumer_vp8_caps() -> gst::Caps {
+    gst::Caps::builder("video/x-vp8").build()
+}
+
+/// Build the raw fanout point placed after `scale_caps`: a `tee` named
+/// "raw_tee" plus one branch-isolation queue per encode branch. A tee blocks
+/// ALL branches whenever ANY branch's downstream blocks, so each branch gets
+/// a small LEAKY queue: a transient stall in one encoder can then never
+/// stall the other encoder (or back-pressure the live NDI source) — it just
+/// drops that branch's oldest raw frame, the correct realtime behavior.
+fn build_raw_tee_and_queues() -> Result<(gst::Element, gst::Element, gst::Element)> {
+    let raw_tee = gst::ElementFactory::make("tee")
+        .name("raw_tee")
+        .build()
+        .context("build raw_tee")?;
+    Ok((
+        raw_tee,
+        build_branch_queue("q_h264")?,
+        build_branch_queue("q_vp8")?,
+    ))
+}
+
+/// One branch-isolation queue (see `build_raw_tee_and_queues`): bounded to 5
+/// raw frames (~165ms @30fps), byte/time limits disabled, leaky=downstream
+/// (drop OLDEST on overflow — a realtime branch must never replay a backlog).
+fn build_branch_queue(name: &str) -> Result<gst::Element> {
+    gst::ElementFactory::make("queue")
+        .name(name)
+        .property("max-size-buffers", 5u32)
+        .property("max-size-bytes", 0u32)
+        .property("max-size-time", 0u64)
+        .property_from_str("leaky", "downstream")
+        .build()
+        .with_context(|| format!("build queue {name}"))
+}
+
+/// Build the parallel VP8 fallback branch tail: `videoconvert → vp8enc →
+/// appsink("enc_appsink_vp8")`. Exists because the weak stage TVs' H264 OMX
+/// decoder is vendor-broken (`OMX.MS.AVC.Decoder` port-reconfig failure →
+/// ~1 displayed frame per GOP, spec addendum 2); those clients re-offer
+/// VP8-only and decode it in software (libvpx), bypassing the broken OMX.
+///
+/// The `videoconvert` is REQUIRED: vp8enc's sink template accepts ONLY
+/// `video/x-raw,format=I420` (verified via gst-inspect-1.0 1.24), while
+/// `scale_caps` pins NV12 for the H264 hardware encoders — the convert is a
+/// cheap NV12→I420 repack (both 4:2:0, chroma reshuffle only).
+///
+/// vp8enc tuning (types verified via gst-inspect-1.0): `deadline=1` µs/frame
+/// = libvpx realtime mode; `cpu-used=8` trades quality for encode speed
+/// (prod N100 runs this config realtime, gst-launch verified); `keyframe-
+/// max-dist=240` matches the H264 GOP (8s) — joins are served by
+/// `request_keyframe`, not scheduled keyframe pulses; `target-bitrate` is in
+/// bits/sec (2 Mbps, slightly under the 2.5 Mbps H264 budget since this
+/// branch encodes in software).
+fn build_vp8_branch() -> Result<(gst::Element, gst::Element, gst_app::AppSink)> {
+    let vp8_convert = gst::ElementFactory::make("videoconvert")
+        .build()
+        .context("build vp8 videoconvert")?;
+    let vp8enc = gst::ElementFactory::make("vp8enc")
+        .name("encoder_vp8")
+        .property("deadline", 1i64)
+        .property("cpu-used", 8i32)
+        .property("keyframe-max-dist", 240i32)
+        .property("target-bitrate", 2_000_000i32)
+        .build()
+        .context("build vp8enc")?;
+    // Same bounded relay appsink as the H264 branch: 5-frame backlog,
+    // drop(true) keeps the newest; StreamProducer wraps it with sync=false.
+    let vp8_appsink = gst_app::AppSink::builder()
+        .name("enc_appsink_vp8")
+        .caps(&consumer_vp8_caps())
+        .max_buffers(5)
+        .drop(true)
+        .build();
+    Ok((vp8_convert, vp8enc, vp8_appsink))
 }
 
 /// Build the raw-video conditioning chain placed between the demux and the

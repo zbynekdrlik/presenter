@@ -115,13 +115,16 @@ pub(super) fn negotiate_sdp(
 }
 
 /// Align the payloader's RTP payload type with the one webrtcbin negotiated in
-/// the answer. The browser assigns a dynamic PT to H264 (Chrome uses e.g. 103)
-/// and webrtcbin answers with THAT pt — but rtph264pay defaults to pt=96, so
-/// its caps wouldn't match webrtcbin's negotiated sink and ZERO RTP would flow
-/// (connected, but black).
+/// the answer. The browser assigns a dynamic PT to the codec (Chrome uses e.g.
+/// 103 for H264) and webrtcbin answers with THAT pt — but the payloaders
+/// default to pt=96, so their caps wouldn't match webrtcbin's negotiated sink
+/// and ZERO RTP would flow (connected, but black). Codec-aware:
+/// `encoding_name` is the RTP encoding-name of the codec this consumer was
+/// built for ("H264" or "VP8").
 pub(super) fn align_payload_type(
     webrtcbin: &gst::Element,
     payloader: &gst::Element,
+    encoding_name: &str,
     session_id: &str,
 ) {
     let local_sdp = webrtcbin
@@ -129,20 +132,24 @@ pub(super) fn align_payload_type(
         .sdp()
         .as_text()
         .unwrap_or_default();
-    // parse_h264_payload_type returns the FIRST `a=rtpmap:<pt> H264/...`. The
-    // pay→webrtc caps filter omits `payload`, so a multi-pt mismatch can't stall.
-    if let Some(pt) = parse_h264_payload_type(&local_sdp) {
+    // parse_rtpmap_payload_type returns the FIRST `a=rtpmap:<pt> <codec>/...`.
+    // The pay→webrtc caps filter omits `payload`, so a multi-pt mismatch can't
+    // stall.
+    let prefix = format!("{}/", encoding_name.to_ascii_uppercase());
+    if let Some(pt) = parse_rtpmap_payload_type(&local_sdp, &prefix) {
         payloader.set_property("pt", pt);
         tracing::debug!(
             session_id = %session_id,
             pt,
-            "aligned rtph264pay pt to negotiated H264 payload type"
+            codec = encoding_name,
+            "aligned payloader pt to negotiated payload type"
         );
     } else {
         tracing::warn!(
             session_id = %session_id,
-            "could not find negotiated H264 payload type in answer SDP; \
-             leaving rtph264pay at default pt (media may not flow)"
+            codec = encoding_name,
+            "could not find negotiated payload type in answer SDP; \
+             leaving payloader at default pt (media may not flow)"
         );
     }
 }
@@ -185,13 +192,30 @@ pub(super) fn await_ice_gathering(webrtcbin: &gst::Element, session_id: &str) {
 /// `rtph264pay` must be told this value or its RTP caps won't match
 /// webrtcbin's negotiated sink and no media flows.
 pub(crate) fn parse_h264_payload_type(sdp: &str) -> Option<u32> {
+    parse_rtpmap_payload_type(sdp, "H264/")
+}
+
+/// VP8 mirror of [`parse_h264_payload_type`]: the payload type of the first
+/// `a=rtpmap:<pt> VP8/90000` line. Used by the VP8 fallback path (spec
+/// addendum 2): a fallback client offers VP8(+rtx) ONLY via
+/// `setCodecPreferences`, and the per-consumer `rtpvp8pay` must be seated on
+/// the browser's dynamic pt for media to flow.
+pub(crate) fn parse_vp8_payload_type(sdp: &str) -> Option<u32> {
+    parse_rtpmap_payload_type(sdp, "VP8/")
+}
+
+/// Shared rtpmap scanner: payload type of the first `a=rtpmap:<pt>
+/// <codec_prefix>…` line (codec match is case-insensitive). `codec_prefix`
+/// MUST include the trailing `/` (e.g. `"H264/"`, `"VP8/"`) so `VP8` can
+/// never match a `VP9/90000` rtpmap.
+fn parse_rtpmap_payload_type(sdp: &str, codec_prefix: &str) -> Option<u32> {
     for line in sdp.lines() {
         let line = line.trim();
         if let Some(rest) = line.strip_prefix("a=rtpmap:") {
             let mut parts = rest.splitn(2, ' ');
             let pt = parts.next()?;
             let codec = parts.next().unwrap_or("");
-            if codec.to_ascii_uppercase().starts_with("H264/") {
+            if codec.to_ascii_uppercase().starts_with(codec_prefix) {
                 if let Ok(pt) = pt.trim().parse::<u32>() {
                     return Some(pt);
                 }
