@@ -203,7 +203,35 @@ pub(crate) fn parse_h264_payload_type(sdp: &str) -> Option<u32> {
 
 #[cfg(test)]
 mod pt_parse_tests {
-    use super::parse_h264_payload_type;
+    use super::{parse_h264_payload_type, parse_vp8_payload_type};
+
+    #[test]
+    fn finds_vp8_payload_type_in_vp8_only_offer() {
+        // What the fallback client's setCodecPreferences(VP8+rtx) offer looks like.
+        let sdp = "v=0\r\n\
+                   m=video 9 UDP/TLS/RTP/SAVPF 100 101\r\n\
+                   a=rtpmap:100 VP8/90000\r\n\
+                   a=rtpmap:101 rtx/90000\r\n";
+        assert_eq!(parse_vp8_payload_type(sdp), Some(100));
+    }
+
+    #[test]
+    fn finds_vp8_payload_type_when_h264_also_offered() {
+        let sdp = "m=video 9 UDP/TLS/RTP/SAVPF 103 100\r\n\
+                   a=rtpmap:103 H264/90000\r\n\
+                   a=rtpmap:100 VP8/90000\r\n";
+        assert_eq!(parse_vp8_payload_type(sdp), Some(100));
+        assert_eq!(parse_h264_payload_type(sdp), Some(103));
+    }
+
+    #[test]
+    fn vp8_parse_returns_none_without_vp8() {
+        // VP9 must NOT match the VP8 prefix; H264-only offers yield None.
+        let sdp = "m=video 9 UDP/TLS/RTP/SAVPF 98 103\r\n\
+                   a=rtpmap:98 VP9/90000\r\n\
+                   a=rtpmap:103 H264/90000\r\n";
+        assert_eq!(parse_vp8_payload_type(sdp), None);
+    }
 
     #[test]
     fn finds_dynamic_h264_payload_type() {

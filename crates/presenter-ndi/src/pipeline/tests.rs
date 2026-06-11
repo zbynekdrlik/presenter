@@ -549,6 +549,73 @@ fn request_keyframe_sends_force_key_unit_upstream() {
     );
 }
 
+/// VP8 fallback branch (spec addendum 2): the weak TVs' H264 OMX decoder is
+/// broken at the vendor-firmware level (`OMX.MS.AVC.Decoder` port reconfig
+/// fails → ~1 displayed frame per GOP), so the encoder pipeline must produce a
+/// parallel VP8 stream that fallback clients (offers with NO H264) consume.
+#[test]
+fn pipeline_has_parallel_vp8_branch_with_low_latency_props() {
+    super::super::init().unwrap();
+    if super::super::hw_h264_encoder().is_none() {
+        return;
+    }
+    let p = NdiPipeline::build("no-such-source", "http://127.0.0.1/whep".into()).unwrap();
+    let vp8 = p
+        .pipeline
+        .by_name("encoder_vp8")
+        .expect("vp8enc named encoder_vp8");
+    assert_eq!(vp8.property::<i64>("deadline"), 1, "realtime deadline");
+    let appsink = p
+        .pipeline
+        .by_name("enc_appsink_vp8")
+        .expect("vp8 appsink")
+        .downcast::<gst_app::AppSink>()
+        .expect("AppSink");
+    assert!(!appsink.property::<bool>("sync"), "vp8 producer sync=false");
+    assert_eq!(appsink.max_buffers(), 5);
+}
+
+/// Codec selection rule (spec addendum 2, deterministic): H264 whenever the
+/// offer contains it — today's behavior, zero change for healthy clients
+/// (Chrome's default offer lists VP8 first but ALWAYS includes H264).
+#[test]
+fn select_codec_prefers_h264_when_offer_has_both() {
+    let offer = "v=0\r\n\
+                 m=video 9 UDP/TLS/RTP/SAVPF 100 103\r\n\
+                 a=rtpmap:100 VP8/90000\r\n\
+                 a=rtpmap:103 H264/90000\r\n";
+    assert_eq!(
+        super::consumers::select_codec(offer),
+        Some(super::consumers::ConsumerCodec::H264 { pt: 103 }),
+        "H264 must win whenever the offer carries it, even when VP8 is listed first"
+    );
+}
+
+/// VP8 is served ONLY when the offer carries NO H264 — exactly what the
+/// fallback client produces via setCodecPreferences (VP8+rtx only).
+#[test]
+fn select_codec_falls_back_to_vp8_when_no_h264() {
+    let offer = "v=0\r\n\
+                 m=video 9 UDP/TLS/RTP/SAVPF 100 101\r\n\
+                 a=rtpmap:100 VP8/90000\r\n\
+                 a=rtpmap:101 rtx/90000\r\n";
+    assert_eq!(
+        super::consumers::select_codec(offer),
+        Some(super::consumers::ConsumerCodec::Vp8 { pt: 100 }),
+    );
+}
+
+/// Neither H264 nor VP8 in the offer → no codec to serve; add_consumer must
+/// take the error path instead of building a pipeline the browser can never
+/// decode (the old behavior preset rtph264pay pt=96 and NEVER worked).
+#[test]
+fn select_codec_returns_none_when_neither_codec_offered() {
+    let offer = "v=0\r\n\
+                 m=video 9 UDP/TLS/RTP/SAVPF 98\r\n\
+                 a=rtpmap:98 VP9/90000\r\n";
+    assert_eq!(super::consumers::select_codec(offer), None);
+}
+
 /// /ndi/snapshot must expose per-consumer fanout counters and (when the
 /// browser has sent RTCP RRs) round-trip/jitter/loss — the stage display's
 /// own view of the link, readable server-side.
