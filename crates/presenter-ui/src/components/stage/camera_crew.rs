@@ -24,9 +24,8 @@ pub fn CameraCrew(
         });
     }
 
-    let color_for = move |name: &str| -> Option<String> {
-        group_colors.with(|map| map.get(name).cloned())
-    };
+    let color_for =
+        move |name: &str| -> Option<String> { group_colors.with(|map| map.get(name).cloned()) };
 
     // ── current group ──────────────────────────────────────────────────────────
     let current_group_label = move || {
@@ -154,11 +153,7 @@ pub fn CameraCrew(
     {
         let update = move || {
             let date = js_sys::Date::new_0();
-            clock_label.set(format!(
-                "{:02}:{:02}",
-                date.get_hours(),
-                date.get_minutes()
-            ));
+            clock_label.set(format!("{:02}:{:02}", date.get_hours(), date.get_minutes()));
         };
         update();
         let interval = Interval::new(1_000, update);

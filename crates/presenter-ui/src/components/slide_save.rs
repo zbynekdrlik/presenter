@@ -80,7 +80,12 @@ pub(super) fn save_with_status(
     let token = start_save_status(&slide_id, save_status);
     leptos::task::spawn_local(async move {
         let result = api::presentations::update_slide_with_group(
-            &pres_id, &slide_id, &main, &translation, &stage, group,
+            &pres_id,
+            &slide_id,
+            &main,
+            &translation,
+            &stage,
+            group,
         )
         .await;
 
