@@ -596,6 +596,9 @@ pub(super) fn build_consumer_elements(
         .name(format!("pay_{session_id}"))
         .property("config-interval", -1i32)
         .property("pt", offer_h264_pt.unwrap_or(96))
+        // webrtcsink parity: aggregate NALs only until a VCL unit is complete —
+        // never hold a frame's data back for packing efficiency.
+        .property_from_str("aggregate-mode", "zero-latency")
         .build()
         .context("build rtph264pay")?;
 
