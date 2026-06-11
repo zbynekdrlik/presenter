@@ -48,6 +48,62 @@ struct TestAndroidDisplayDto {
     is_enabled: bool,
 }
 
+/// GET `uri` and deserialize the 200 JSON body.
+async fn get_json<T: serde::de::DeserializeOwned>(app: &Router, uri: &str) -> T {
+    let response = app
+        .clone()
+        .oneshot(Request::builder().uri(uri).body(Body::empty()).unwrap())
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK, "GET {uri}");
+    let bytes = axum::body::to_bytes(response.into_body(), usize::MAX)
+        .await
+        .unwrap();
+    serde_json::from_slice(&bytes).unwrap()
+}
+
+/// Send a JSON `body` to `uri` with `method`; assert 200 and deserialize the reply.
+async fn send_json<T: serde::de::DeserializeOwned>(
+    app: &Router,
+    method: axum::http::Method,
+    uri: &str,
+    body: serde_json::Value,
+) -> T {
+    let response = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method(method.clone())
+                .uri(uri)
+                .header(axum::http::header::CONTENT_TYPE, "application/json")
+                .body(Body::from(body.to_string()))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK, "{method} {uri}");
+    let bytes = axum::body::to_bytes(response.into_body(), usize::MAX)
+        .await
+        .unwrap();
+    serde_json::from_slice(&bytes).unwrap()
+}
+
+/// DELETE `uri`; assert 204 No Content.
+async fn delete_no_content(app: &Router, uri: &str) {
+    let response = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method(axum::http::Method::DELETE)
+                .uri(uri)
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::NO_CONTENT, "DELETE {uri}");
+}
+
 #[tokio::test]
 async fn health_endpoint_returns_ok() {
     let app = build_router(AppState::in_memory().await.unwrap());
@@ -273,127 +329,43 @@ async fn settings_page_has_no_dead_links() {
 #[tokio::test]
 async fn resolume_host_endpoints_crud() {
     let app = build_router(AppState::in_memory().await.unwrap());
+    let base = "/integrations/resolume/hosts";
 
-    let list_empty = app
-        .clone()
-        .oneshot(
-            Request::builder()
-                .uri("/integrations/resolume/hosts")
-                .body(Body::empty())
-                .unwrap(),
-        )
-        .await
-        .unwrap();
-    assert_eq!(list_empty.status(), StatusCode::OK);
-    let empty_bytes = axum::body::to_bytes(list_empty.into_body(), usize::MAX)
-        .await
-        .unwrap();
-    let empty_hosts: Vec<TestResolumeHostDto> = serde_json::from_slice(&empty_bytes).unwrap();
+    let empty_hosts: Vec<TestResolumeHostDto> = get_json(&app, base).await;
     assert!(empty_hosts.is_empty());
 
-    let create_body = json!({
-        "label": "Arena",
-        "host": "resolume.lan",
-        "port": 8090,
-        "isEnabled": true
-    })
-    .to_string();
-    let created_response = app
-        .clone()
-        .oneshot(
-            Request::builder()
-                .method(axum::http::Method::POST)
-                .uri("/integrations/resolume/hosts")
-                .header(axum::http::header::CONTENT_TYPE, "application/json")
-                .body(Body::from(create_body))
-                .unwrap(),
-        )
-        .await
-        .unwrap();
-    assert_eq!(created_response.status(), StatusCode::OK);
-    let created_bytes = axum::body::to_bytes(created_response.into_body(), usize::MAX)
-        .await
-        .unwrap();
-    let created: TestResolumeHostDto = serde_json::from_slice(&created_bytes).unwrap();
+    let created: TestResolumeHostDto = send_json(
+        &app,
+        axum::http::Method::POST,
+        base,
+        json!({ "label": "Arena", "host": "resolume.lan", "port": 8090, "isEnabled": true }),
+    )
+    .await;
     assert_eq!(created.label, "Arena");
     assert_eq!(created.host, "resolume.lan");
     assert_eq!(created.port, 8090);
     assert!(created.is_enabled);
     assert!(!created.status.state.is_empty());
 
-    let list_after_create = app
-        .clone()
-        .oneshot(
-            Request::builder()
-                .uri("/integrations/resolume/hosts")
-                .body(Body::empty())
-                .unwrap(),
-        )
-        .await
-        .unwrap();
-    let list_bytes = axum::body::to_bytes(list_after_create.into_body(), usize::MAX)
-        .await
-        .unwrap();
-    let hosts: Vec<TestResolumeHostDto> = serde_json::from_slice(&list_bytes).unwrap();
+    let hosts: Vec<TestResolumeHostDto> = get_json(&app, base).await;
     assert_eq!(hosts.len(), 1);
     assert!(!hosts[0].status.state.is_empty());
 
-    let update_body = json!({
-        "label": "Arena North",
-        "host": "resolume.lan",
-        "port": 8090,
-        "isEnabled": false
-    })
-    .to_string();
-    let update_response = app
-        .clone()
-        .oneshot(
-            Request::builder()
-                .method(axum::http::Method::PUT)
-                .uri(format!("/integrations/resolume/hosts/{}", created.id))
-                .header(axum::http::header::CONTENT_TYPE, "application/json")
-                .body(Body::from(update_body))
-                .unwrap(),
-        )
-        .await
-        .unwrap();
-    assert_eq!(update_response.status(), StatusCode::OK);
-    let updated_bytes = axum::body::to_bytes(update_response.into_body(), usize::MAX)
-        .await
-        .unwrap();
-    let updated: TestResolumeHostDto = serde_json::from_slice(&updated_bytes).unwrap();
+    let updated: TestResolumeHostDto = send_json(
+        &app,
+        axum::http::Method::PUT,
+        &format!("{base}/{}", created.id),
+        json!({ "label": "Arena North", "host": "resolume.lan", "port": 8090, "isEnabled": false }),
+    )
+    .await;
     assert_eq!(updated.label, "Arena North");
     assert!(!updated.is_enabled);
     assert_eq!(updated.host, "resolume.lan");
     assert!(!updated.status.state.is_empty());
 
-    let delete_response = app
-        .clone()
-        .oneshot(
-            Request::builder()
-                .method(axum::http::Method::DELETE)
-                .uri(format!("/integrations/resolume/hosts/{}", updated.id))
-                .body(Body::empty())
-                .unwrap(),
-        )
-        .await
-        .unwrap();
-    assert_eq!(delete_response.status(), StatusCode::NO_CONTENT);
+    delete_no_content(&app, &format!("{base}/{}", updated.id)).await;
 
-    let list_after_delete = app
-        .oneshot(
-            Request::builder()
-                .uri("/integrations/resolume/hosts")
-                .body(Body::empty())
-                .unwrap(),
-        )
-        .await
-        .unwrap();
-    let list_after_delete_bytes = axum::body::to_bytes(list_after_delete.into_body(), usize::MAX)
-        .await
-        .unwrap();
-    let after_delete_hosts: Vec<TestResolumeHostDto> =
-        serde_json::from_slice(&list_after_delete_bytes).unwrap();
+    let after_delete_hosts: Vec<TestResolumeHostDto> = get_json(&app, base).await;
     assert!(after_delete_hosts.is_empty());
 }
 
@@ -401,50 +373,24 @@ async fn resolume_host_endpoints_crud() {
 async fn android_stage_display_endpoints_crud() {
     std::env::set_var("PRESENTER_ANDROID_ADB_BIN", "true");
     let app = build_router(AppState::in_memory().await.unwrap());
+    let base = "/integrations/android-stage/displays";
 
-    let list_initial = app
-        .clone()
-        .oneshot(
-            Request::builder()
-                .uri("/integrations/android-stage/displays")
-                .body(Body::empty())
-                .unwrap(),
-        )
-        .await
-        .unwrap();
-    assert_eq!(list_initial.status(), StatusCode::OK);
-    let initial_bytes = axum::body::to_bytes(list_initial.into_body(), usize::MAX)
-        .await
-        .unwrap();
-    let initial_displays: Vec<TestAndroidDisplayDto> =
-        serde_json::from_slice(&initial_bytes).unwrap();
+    let initial_displays: Vec<TestAndroidDisplayDto> = get_json(&app, base).await;
     let initial_count = initial_displays.len();
 
-    let create_body = json!({
-        "label": "Stage Left",
-        "host": "test-stage.invalid",
-        "port": 5555,
-        "launchComponent": "com.fullykiosk.videokiosk/de.ozerov.fully.MainActivity",
-        "isEnabled": true
-    })
-    .to_string();
-    let created_response = app
-        .clone()
-        .oneshot(
-            Request::builder()
-                .method(axum::http::Method::POST)
-                .uri("/integrations/android-stage/displays")
-                .header(axum::http::header::CONTENT_TYPE, "application/json")
-                .body(Body::from(create_body))
-                .unwrap(),
-        )
-        .await
-        .unwrap();
-    assert_eq!(created_response.status(), StatusCode::OK);
-    let created_bytes = axum::body::to_bytes(created_response.into_body(), usize::MAX)
-        .await
-        .unwrap();
-    let created: TestAndroidDisplayDto = serde_json::from_slice(&created_bytes).unwrap();
+    let created: TestAndroidDisplayDto = send_json(
+        &app,
+        axum::http::Method::POST,
+        base,
+        json!({
+            "label": "Stage Left",
+            "host": "test-stage.invalid",
+            "port": 5555,
+            "launchComponent": "com.fullykiosk.videokiosk/de.ozerov.fully.MainActivity",
+            "isEnabled": true
+        }),
+    )
+    .await;
     assert_eq!(created.label, "Stage Left");
     assert_eq!(created.host, "test-stage.invalid");
     assert_eq!(created.port, 5555);
@@ -453,87 +399,32 @@ async fn android_stage_display_endpoints_crud() {
         "com.fullykiosk.videokiosk/de.ozerov.fully.MainActivity"
     );
 
-    let list_after_create = app
-        .clone()
-        .oneshot(
-            Request::builder()
-                .uri("/integrations/android-stage/displays")
-                .body(Body::empty())
-                .unwrap(),
-        )
-        .await
-        .unwrap();
-    let list_bytes = axum::body::to_bytes(list_after_create.into_body(), usize::MAX)
-        .await
-        .unwrap();
-    let displays: Vec<TestAndroidDisplayDto> = serde_json::from_slice(&list_bytes).unwrap();
+    let displays: Vec<TestAndroidDisplayDto> = get_json(&app, base).await;
     assert_eq!(displays.len(), initial_count + 1);
     assert!(displays.iter().any(|d| d.id == created.id));
 
-    let update_body = json!({
-        "label": "Stage Right",
-        "host": "other-stage.invalid",
-        "port": 5566,
-        "launchComponent": "com.example/.Main",
-        "isEnabled": false
-    })
-    .to_string();
-    let update_response = app
-        .clone()
-        .oneshot(
-            Request::builder()
-                .method(axum::http::Method::PUT)
-                .uri(format!(
-                    "/integrations/android-stage/displays/{}",
-                    created.id
-                ))
-                .header(axum::http::header::CONTENT_TYPE, "application/json")
-                .body(Body::from(update_body))
-                .unwrap(),
-        )
-        .await
-        .unwrap();
-    assert_eq!(update_response.status(), StatusCode::OK);
-    let updated_bytes = axum::body::to_bytes(update_response.into_body(), usize::MAX)
-        .await
-        .unwrap();
-    let updated: TestAndroidDisplayDto = serde_json::from_slice(&updated_bytes).unwrap();
+    let updated: TestAndroidDisplayDto = send_json(
+        &app,
+        axum::http::Method::PUT,
+        &format!("{base}/{}", created.id),
+        json!({
+            "label": "Stage Right",
+            "host": "other-stage.invalid",
+            "port": 5566,
+            "launchComponent": "com.example/.Main",
+            "isEnabled": false
+        }),
+    )
+    .await;
     assert_eq!(updated.label, "Stage Right");
     assert_eq!(updated.host, "other-stage.invalid");
     assert_eq!(updated.port, 5566);
     assert_eq!(updated.launch_component, "com.example/.Main");
     assert!(!updated.is_enabled);
 
-    let delete_response = app
-        .clone()
-        .oneshot(
-            Request::builder()
-                .method(axum::http::Method::DELETE)
-                .uri(format!(
-                    "/integrations/android-stage/displays/{}",
-                    updated.id
-                ))
-                .body(Body::empty())
-                .unwrap(),
-        )
-        .await
-        .unwrap();
-    assert_eq!(delete_response.status(), StatusCode::NO_CONTENT);
+    delete_no_content(&app, &format!("{base}/{}", updated.id)).await;
 
-    let list_after_delete = app
-        .oneshot(
-            Request::builder()
-                .uri("/integrations/android-stage/displays")
-                .body(Body::empty())
-                .unwrap(),
-        )
-        .await
-        .unwrap();
-    let list_after_delete_bytes = axum::body::to_bytes(list_after_delete.into_body(), usize::MAX)
-        .await
-        .unwrap();
-    let after_delete_displays: Vec<TestAndroidDisplayDto> =
-        serde_json::from_slice(&list_after_delete_bytes).unwrap();
+    let after_delete_displays: Vec<TestAndroidDisplayDto> = get_json(&app, base).await;
     assert_eq!(after_delete_displays.len(), initial_count);
     assert!(after_delete_displays.iter().all(|d| d.id != created.id));
 }
