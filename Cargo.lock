@@ -3452,6 +3452,7 @@ dependencies = [
  "gstreamer",
  "gstreamer-app",
  "gstreamer-utils",
+ "gstreamer-video",
  "gstreamer-webrtc",
  "libloading 0.8.9",
  "serde",

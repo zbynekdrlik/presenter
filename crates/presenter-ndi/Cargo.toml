@@ -28,6 +28,7 @@ libloading = "0.8"
 futures-util.workspace = true
 gstreamer.workspace = true
 gstreamer-app.workspace = true
+gstreamer-video.workspace = true
 gstreamer-utils.workspace = true
 gstreamer-webrtc.workspace = true
 gst-plugin-webrtc.workspace = true

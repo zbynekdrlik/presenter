@@ -14,6 +14,7 @@ use gstreamer as gst;
 use gstreamer::prelude::*;
 use gstreamer_app as gst_app;
 use gstreamer_utils::StreamProducer;
+use gstreamer_video as gst_video;
 use tokio::sync::watch;
 
 use super::build::consumer_h264_caps;
@@ -484,4 +485,42 @@ fn consumer_payloader_uses_zero_latency_aggregation() {
     let (_, enum_value) =
         gst::glib::EnumValue::from_value(&value).expect("aggregate-mode is an enum");
     assert_eq!(enum_value.nick(), "zero-latency");
+}
+
+/// With GOP=240 a joining consumer MUST trigger an immediate IDR — otherwise
+/// it would wait up to 8s for the next scheduled keyframe (black join).
+#[test]
+fn request_keyframe_sends_force_key_unit_upstream() {
+    use std::sync::atomic::{AtomicBool, Ordering};
+    super::super::init().unwrap();
+    if super::super::hw_h264_encoder().is_none() {
+        return;
+    }
+    let p = NdiPipeline::build("no-such-source", "http://127.0.0.1/whep".into()).unwrap();
+    let appsink = p.pipeline.by_name("enc_appsink").unwrap();
+    // Pads are flushing in NULL state — gst_pad_push_event refuses upstream
+    // events on a flushing pad BEFORE any probe runs. The full pipeline can't
+    // reach PAUSED on a unit-test host (ndisrc fails its state change with no
+    // live NDI source), so activate just the producer appsink: READY→PAUSED
+    // activates its pads — exactly their state when a consumer joins the
+    // PLAYING pipeline in production. Drop → teardown() returns it to NULL.
+    appsink
+        .set_state(gst::State::Paused)
+        .expect("appsink must accept PAUSED (ASYNC pre-preroll)");
+    let appsink_pad = appsink.static_pad("sink").unwrap();
+    let seen = std::sync::Arc::new(AtomicBool::new(false));
+    let seen_probe = std::sync::Arc::clone(&seen);
+    appsink_pad.add_probe(gst::PadProbeType::EVENT_UPSTREAM, move |_, info| {
+        if let Some(gst::PadProbeData::Event(ev)) = &info.data {
+            if gst_video::UpstreamForceKeyUnitEvent::parse(ev).is_ok() {
+                seen_probe.store(true, Ordering::SeqCst);
+            }
+        }
+        gst::PadProbeReturn::Ok
+    });
+    super::consumers::request_keyframe(&p.producer);
+    assert!(
+        seen.load(Ordering::SeqCst),
+        "ForceKeyUnit must be pushed upstream from the producer appsink"
+    );
 }
