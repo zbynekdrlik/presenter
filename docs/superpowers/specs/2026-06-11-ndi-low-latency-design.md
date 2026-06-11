@@ -96,11 +96,12 @@ a CI latency guard.
 
 ### 4. Observability
 
-- **Server:** new `GET /ndi/whep-stats` endpoint: per pipeline (source_id), per
-  session: `session_id`, `connection_state`, `pushed`/`dropped` (from
-  `ConsumptionLink` counters), and RTCP receiver-report stats from
-  `webrtcbin` `get-stats` (round-trip-time, jitter, packets-lost) — the stage
-  display's own view of the link, readable server-side.
+- **Server:** the existing `GET /ndi/snapshot/{source_id}` endpoint is
+  extended (no new route): per session it now also reports
+  `buffersPushed`/`buffersDropped` (from `ConsumptionLink` counters) and RTCP
+  receiver-report stats from `webrtcbin` `get-stats` (round-trip-time,
+  jitter, packets-lost) — the stage display's own view of the link, readable
+  server-side.
 - **Client beacon:** stage UI samples `getStats` every 15 s and POSTs
   `{sourceId, framesDecoded, fps, jitterBufferMs, freezeCount, framesDropped}` to
   `POST /ndi/client-stats`; server logs it via `tracing::info!` (journald persists;
