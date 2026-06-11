@@ -473,6 +473,30 @@ async fn add_then_remove_leaves_clean_state() {
         .expect("remove_consumer_stub must be idempotent on unknown session");
 }
 
+/// The encoder MUST emit constrained-baseline H264. High profile (what the
+/// encoders default to) is rejected by strict TV HW decoders (Vestel stage
+/// displays): Chromium falls back to NullVideoDecoder and the stage shows
+/// black while RTP flows — found live on prod 2026-06-11.
+#[test]
+fn encoder_output_is_pinned_to_constrained_baseline() {
+    super::super::init().unwrap();
+    if super::super::hw_h264_encoder().is_none() {
+        return;
+    }
+    let p = NdiPipeline::build("no-such-source", "http://127.0.0.1/whep".into()).unwrap();
+    let profile_caps = p
+        .pipeline
+        .by_name("profile_caps")
+        .expect("capsfilter named profile_caps between encoder and h264parse");
+    let caps = profile_caps.property::<gst::Caps>("caps");
+    let s = caps.structure(0).expect("caps structure");
+    assert_eq!(s.name(), "video/x-h264");
+    assert_eq!(
+        s.get::<&str>("profile").expect("profile field"),
+        "constrained-baseline"
+    );
+}
+
 /// webrtcsink parity: rtph264pay must aggregate in zero-latency mode
 /// (default "none" can hold NALs; webrtcsink sets this on every payloader).
 #[test]
