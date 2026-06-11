@@ -548,3 +548,27 @@ fn request_keyframe_sends_force_key_unit_upstream() {
         "ForceKeyUnit must be pushed upstream from the producer appsink"
     );
 }
+
+/// /ndi/snapshot must expose per-consumer fanout counters and (when the
+/// browser has sent RTCP RRs) round-trip/jitter/loss — the stage display's
+/// own view of the link, readable server-side.
+#[tokio::test]
+async fn snapshot_includes_fanout_counters_and_rtcp_fields() {
+    super::super::init().expect("gst init");
+    let mut pipeline =
+        NdiPipeline::stopped_for_test_with_topology("x264enc").expect("test topology");
+    pipeline.add_consumer_stub("snap-1").expect("stub consumer");
+    let snap = pipeline.snapshot().await;
+    assert_eq!(snap.sessions.len(), 1);
+    let s = &snap.sessions[0];
+    // Stub session pushed nothing — counters exist and are zero.
+    assert_eq!(s.buffers_pushed, 0);
+    assert_eq!(s.buffers_dropped, 0);
+    // No RTCP from a stub webrtcbin — fields present as None (omitted in JSON).
+    assert!(s.rtcp_round_trip_ms.is_none());
+    let json = serde_json::to_string(&snap).unwrap();
+    assert!(
+        json.contains("buffersPushed"),
+        "camelCase serialization: {json}"
+    );
+}
