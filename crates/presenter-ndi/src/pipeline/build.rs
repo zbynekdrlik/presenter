@@ -1,6 +1,6 @@
 //! Pipeline construction: build the shared-encoder ENCODER pipeline
 //! (`ndisrc → ndisrcdemux → videoconvert → videoscale → caps → encoder →
-//! h264parse → appsink`). The appsink is wrapped by a
+//! profile_caps → h264parse → appsink`). The appsink is wrapped by a
 //! `gstreamer_utils::StreamProducer` which fans encoded H264 out to the
 //! per-consumer `appsrc → rtph264pay → webrtcbin` pipelines built in
 //! `add_consumer` (see `consumers.rs`).
@@ -46,6 +46,7 @@ impl NdiPipeline {
         let (ndisrc, ndisrcdemux) = build_ndi_source(ndi_name)?;
         let (videoconvert, videoscale, scale_caps, audio_fakesink) = build_video_chain()?;
         let encoder = build_encoder(encoder_name)?;
+        let profile_caps = build_profile_caps()?;
         let (h264parse, appsink) = build_parse_and_sink()?;
 
         pipeline
@@ -57,6 +58,7 @@ impl NdiPipeline {
                 &scale_caps,
                 &audio_fakesink,
                 &encoder,
+                &profile_caps,
                 &h264parse,
                 appsink.upcast_ref::<gst::Element>(),
             ])
@@ -66,9 +68,9 @@ impl NdiPipeline {
         // videoconvert → videoscale → capsfilter(≤720p) → encoder
         gst::Element::link_many([&videoconvert, &videoscale, &scale_caps, &encoder])
             .context("link videoconvert -> videoscale -> caps -> encoder")?;
-        encoder
-            .link(&h264parse)
-            .context("link encoder -> h264parse")?;
+        // encoder → capsfilter(constrained-baseline) → h264parse
+        gst::Element::link_many([&encoder, &profile_caps, &h264parse])
+            .context("link encoder -> profile_caps -> h264parse")?;
         h264parse
             .link(appsink.upcast_ref::<gst::Element>())
             .context("link h264parse -> appsink")?;
@@ -289,4 +291,24 @@ fn build_encoder(encoder_name: &str) -> Result<gst::Element> {
         }
     }
     encoder_builder.build().context("build encoder")
+}
+
+/// Pin the encoder's H264 output to constrained-baseline. The encoders
+/// default to High profile, which strict TV HW decoders (the Vestel stage
+/// displays) reject for WebRTC — Chromium then swaps in NullVideoDecoder and
+/// the stage shows black while RTP keeps flowing (live prod finding,
+/// 2026-06-11). Constrained-baseline is WebRTC's universally-decodable
+/// profile; the ~10-15% bitrate-efficiency loss at 2.5 Mbps 720p30 is
+/// invisible, the compatibility is mandatory.
+fn build_profile_caps() -> Result<gst::Element> {
+    gst::ElementFactory::make("capsfilter")
+        .name("profile_caps")
+        .property(
+            "caps",
+            gst::Caps::builder("video/x-h264")
+                .field("profile", "constrained-baseline")
+                .build(),
+        )
+        .build()
+        .context("build profile capsfilter")
 }
