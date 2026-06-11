@@ -158,3 +158,51 @@ a CI latency guard.
   Reflect is a no-op where unsupported; sd1–sd4 run WebView 148 (supported).
 - **Latency e2e flakiness on loaded runner** → generous bounds (350/600 ms vs
   ~150 ms real), median/p95 statistics over ≥300 frames, no single-frame asserts.
+
+## Addendum 2 (2026-06-11 late evening): VP8 fallback for broken TV H264 OMX
+
+**Measured root cause on the Vestel displays (live logcat, sd2, valid adb):** the
+MStar HW decoder (`OMX.MS.AVC.Decoder`) decodes the first frame of each GOP,
+then the OMX port reconfiguration (640×480 default → 1280×720) fails —
+`setParameter(ParamPortDefinition) ERROR: BadParameter`, ACodec cannot set
+`nBufferCountActual` (7→6→5 all rejected), `MS_OMX_OutputBufferProcess` errors,
+codec torn down and recreated every ~8 s (= our GOP). Result: ~1 displayed
+frame per GOP — "a frame every few tens of seconds". This is a vendor OMX
+firmware bug; H264 WebRTC cannot work on this platform. VDO.Ninja worked on
+the same TVs because it negotiates VP8 by default — WebView decodes VP8 in
+software (libvpx), bypassing the broken vendor OMX entirely.
+
+**Fix: dual-codec fanout + client-side codec fallback.**
+
+- **Server:** `tee` after the scale capsfilter; branch A unchanged (H264);
+  branch B `queue → vp8enc (deadline=1, cpu-used=8, keyframe-max-dist=240,
+  target-bitrate=2_000_000) → appsink(enc_appsink_vp8, sync=false, 5 buffers)`
+  wrapped in a second `StreamProducer`. Verified: prod N100 runs this VP8
+  realtime config (gst-launch exit 0); vp8enc/rtpvp8pay present on both hosts.
+- **Codec selection rule (deterministic, zero change for healthy clients):**
+  the server prefers H264 whenever the offer contains it (today's behavior —
+  Chrome's default offer lists VP8 first but always includes H264, verified
+  live). VP8 is served ONLY when the offer carries NO H264 — which is exactly
+  what the fallback client produces via `setCodecPreferences` (VP8+rtx only).
+  The existing "offer carries no H264" warn-path becomes the VP8 path.
+- **Consumer pipeline (VP8):** `appsrc(video/x-vp8) → rtpvp8pay → webrtcbin`
+  on the encoder clock/base-time; same three load-bearing invariants; payload
+  type aligned from the offer's VP8 rtpmap; force-keyunit goes upstream from
+  the producer the consumer is attached to.
+- **Client fallback (stage UI):** default behavior unchanged (offer includes
+  H264 → server picks H264). A decode watchdog arms after connect: if
+  `framesDecoded < 30` after 12 s connected, set `ndiCodecMode=vp8` in
+  localStorage and reconnect with `setCodecPreferences` limited to VP8(+rtx).
+  If a VP8 session also fails the same check, clear the flag (alternate back)
+  — no permanent lock-in on either codec.
+- **Beacon identity:** beacons gain `displayId` (persistent random id in
+  localStorage), `codec` (from getStats codec mimeType) and screen size, so
+  per-TV health is attributable server-side (tonight's diagnosis was slowed
+  by anonymous beacons).
+- **CI guard:** e2e (e2e-ndi lane): a consumer with VP8-only codec
+  preferences must decode >0 frames from the synthetic source (locks the VP8
+  path); existing H264 latency guard unchanged.
+
+**Acceptance:** Vestel TVs (sd2-4) report sustained `fps≈30` in their beacons
+with `codec=video/VP8` on the live stage, while sd1/laptops keep
+`codec=video/H264`.
