@@ -112,6 +112,19 @@ pub struct PipelineSnapshot {
 pub struct SessionSnapshot {
     pub id: String,
     pub connection_state: WhepConnectionState,
+    /// Buffers forwarded to this consumer by the StreamProducer link.
+    pub buffers_pushed: u64,
+    /// Buffers dropped because the consumer appsrc queue was full.
+    pub buffers_dropped: u64,
+    /// RTCP receiver-report round-trip time (ms) — the display's link RTT.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub rtcp_round_trip_ms: Option<f64>,
+    /// RTCP receiver-report interarrival jitter (ms).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub rtcp_jitter_ms: Option<f64>,
+    /// RTCP receiver-report cumulative packets lost.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub rtcp_packets_lost: Option<i64>,
 }
 
 /// Owns one GStreamer pipeline for one NDI source.

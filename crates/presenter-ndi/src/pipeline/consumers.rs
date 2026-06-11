@@ -316,7 +316,8 @@ impl NdiPipeline {
     /// Snapshot the pipeline state for the diagnostic route.
     /// `source_id` is left empty — the manager fills it in (Task 8).
     pub async fn snapshot(&self) -> PipelineSnapshot {
-        let session_snaps: Vec<SessionSnapshot> = {
+        // Phase 1 (cheap, under the lock): identity + counters + webrtcbin handle.
+        let partial: Vec<(String, WhepConnectionState, u64, u64, gst::Element)> = {
             let sessions = self.sessions.lock().await;
             sessions
                 .iter()
@@ -325,13 +326,37 @@ impl NdiPipeline {
                         .connection_state
                         .lock()
                         .unwrap_or_else(|p| p.into_inner());
-                    SessionSnapshot {
-                        id: id.clone(),
+                    (
+                        id.clone(),
                         connection_state,
-                    }
+                        session.link.pushed(),
+                        session.link.dropped(),
+                        session.webrtcbin.clone(),
+                    )
                 })
                 .collect()
         };
+        // Phase 2 (blocking): RTCP receiver-report stats per webrtcbin — the
+        // get-stats promise wait must NOT block the async thread.
+        let session_snaps: Vec<SessionSnapshot> = tokio::task::spawn_blocking(move || {
+            partial
+                .into_iter()
+                .map(|(id, connection_state, pushed, dropped, webrtcbin)| {
+                    let (rtt, jitter, lost) = rtcp_remote_inbound(&webrtcbin);
+                    SessionSnapshot {
+                        id,
+                        connection_state,
+                        buffers_pushed: pushed,
+                        buffers_dropped: dropped,
+                        rtcp_round_trip_ms: rtt,
+                        rtcp_jitter_ms: jitter,
+                        rtcp_packets_lost: lost,
+                    }
+                })
+                .collect()
+        })
+        .await
+        .unwrap_or_default();
         let encoders: Vec<gst::Element> = self.iterate_encoders().collect();
         let encoder_count = encoders.len();
         let encoder_factory = encoders
@@ -681,4 +706,40 @@ pub(super) fn request_keyframe(producer: &StreamProducer) {
             tracing::warn!("force-keyunit event was not handled upstream");
         }
     }
+}
+
+/// Pull RTCP receiver-report stats (the browser's view of the link) from a
+/// webrtcbin via its `get-stats` signal. Returns (rtt_ms, jitter_ms,
+/// packets_lost); all None when no RTCP has arrived yet (e.g. pre-connect)
+/// or the promise times out (500ms bound).
+fn rtcp_remote_inbound(webrtcbin: &gst::Element) -> (Option<f64>, Option<f64>, Option<i64>) {
+    let (tx, rx) = std::sync::mpsc::channel();
+    let promise = gst::Promise::with_change_func(move |reply| {
+        if let Ok(Some(stats)) = reply {
+            let _ = tx.send(stats.to_owned());
+        }
+    });
+    webrtcbin.emit_by_name::<()>("get-stats", &[&None::<gst::Pad>, &promise]);
+    let Ok(stats) = rx.recv_timeout(std::time::Duration::from_millis(500)) else {
+        return (None, None, None);
+    };
+    for (_field, value) in stats.iter() {
+        let Ok(s) = value.get::<gst::Structure>() else {
+            continue;
+        };
+        // The remote-inbound (RTCP RR) stats structure is the one carrying
+        // round-trip-time; reading by field presence keeps this robust across
+        // GStreamer versions.
+        if s.has_field("round-trip-time") {
+            let rtt = s.get::<f64>("round-trip-time").ok().map(|v| v * 1000.0);
+            let jitter = s.get::<f64>("jitter").ok().map(|v| v * 1000.0);
+            let lost = s
+                .get::<i64>("packets-lost")
+                .ok()
+                .or_else(|| s.get::<u64>("packets-lost").ok().map(|v| v as i64))
+                .or_else(|| s.get::<i32>("packets-lost").ok().map(i64::from));
+            return (rtt, jitter, lost);
+        }
+    }
+    (None, None, None)
 }
