@@ -43,8 +43,17 @@ impl NdiPipeline {
 
         let pipeline = gst::Pipeline::new();
 
+        // timestamp-mode=receive-time: PTS purely from this server's clock at
+        // frame arrival. The default ("auto") follows the NDI sender's
+        // (Resolume's) timecode with windowed drift correction — accumulated
+        // sender-clock drift is then corrected via DISCONT, which the browser
+        // sees as "latency builds up, then the picture jumps". Receive-time
+        // has ZERO sender-clock coupling; arrival jitter (10-60ms measured)
+        // is absorbed by the browser's jitter buffer.
         let ndisrc = gst::ElementFactory::make("ndisrc")
+            .name("ndisrc")
             .property("ndi-name", ndi_name)
+            .property_from_str("timestamp-mode", "receive-time")
             .build()
             .context("build ndisrc")?;
         let ndisrcdemux = gst::ElementFactory::make("ndisrcdemux")
@@ -57,8 +66,8 @@ impl NdiPipeline {
         // Parse the encoder's H264 elementary stream into AU-aligned frames so
         // every PER-CONSUMER rtph264pay (in its own pipeline) receives a clean,
         // properly-capped stream. `config-interval=-1` re-inserts SPS/PPS before
-        // every IDR so a consumer that joins mid-stream decodes at the next
-        // keyframe (≈1s at gop-size 30) without an explicit force-key-unit.
+        // every IDR so a consumer that joins mid-stream gets an IDR immediately
+        // via `consumers::request_keyframe` (GOP itself is 240 frames).
         //
         // The PAYLOADER is intentionally NOT here — it is per-consumer, in the
         // consumer's own pipeline downstream of an appsrc, so each webrtcbin
@@ -76,11 +85,13 @@ impl NdiPipeline {
         // format to byte-stream/AU H264 so every consumer appsrc is created
         // with caps that ALWAYS match what the producer forwards.
         // `max-buffers`+`drop` bound the appsink so a momentarily-slow fanout
-        // can never back-pressure (and stall) the shared encoder.
+        // can never back-pressure (and stall) the shared encoder. 5 frames
+        // (~170ms) — a bigger backlog would replay stale frames late after a
+        // transient stall (latency spike); drop(true) keeps the newest.
         let appsink = gst_app::AppSink::builder()
             .name("enc_appsink")
             .caps(&consumer_h264_caps())
-            .max_buffers(30)
+            .max_buffers(5)
             .drop(true)
             .build();
 
@@ -116,7 +127,14 @@ impl NdiPipeline {
         // `consumers.rs`), propagates the producer's latency to every consumer
         // appsrc, gates each new consumer on a keyframe, and forwards the
         // browser's force-keyunit (PLI) requests upstream to the encoder.
-        let producer = StreamProducer::from(&appsink);
+        // sync=false: forward every encoded frame to consumers IMMEDIATELY.
+        // The StreamProducer default (sync=true) holds each frame on the
+        // appsink until its clock deadline (full pipeline latency budget,
+        // ~40ms measured) — correct for a rendering sink, wrong for a relay.
+        let producer = StreamProducer::with(
+            &appsink,
+            gstreamer_utils::streamproducer::ProducerSettings { sync: false },
+        );
 
         connect_demux_pads(&ndisrcdemux, &videoconvert, &audio_fakesink);
 
@@ -227,13 +245,19 @@ fn build_encoder(encoder_name: &str) -> Result<gst::Element> {
     let mut encoder_builder = gst::ElementFactory::make(encoder_name).name("encoder");
     match encoder_name {
         "vah264enc" => {
+            // key-int-max=240 (8s GOP): no 1s IDR pulses — large keyframes
+            // made low-end TVs choppy and inflated their jitter buffers.
+            // Consumer joins get an immediate IDR via force-keyunit (see
+            // consumers::request_keyframe); loss recovery stays PLI-driven.
+            // target-usage=6: faster encode on the prod N100 (default 4).
             encoder_builder = encoder_builder
-                .property("key-int-max", 30u32)
+                .property("key-int-max", 240u32)
+                .property("target-usage", 6u32)
                 .property("bitrate", 2500u32);
         }
         "nvh264enc" => {
             encoder_builder = encoder_builder
-                .property("gop-size", 30i32)
+                .property("gop-size", 240i32)
                 .property("zerolatency", true)
                 .property("bitrate", 2500u32);
         }
@@ -241,7 +265,7 @@ fn build_encoder(encoder_name: &str) -> Result<gst::Element> {
             encoder_builder = encoder_builder
                 .property_from_str("tune", "zerolatency")
                 .property_from_str("speed-preset", "superfast")
-                .property("key-int-max", 30u32)
+                .property("key-int-max", 240u32)
                 .property("bitrate", 2500u32);
         }
         _ => {
