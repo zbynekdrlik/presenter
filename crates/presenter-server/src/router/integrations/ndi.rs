@@ -65,6 +65,14 @@ pub(crate) async fn ndi_snapshot(
 #[serde(rename_all = "camelCase")]
 pub(crate) struct NdiClientStatsBeacon {
     pub source_id: String,
+    /// Persistent random per-display id (localStorage `ndiDisplayId`) — the
+    /// attribution key that makes per-TV health traceable across sessions.
+    pub display_id: Option<String>,
+    /// Negotiated video codec mimeType from getStats (e.g. "video/H264",
+    /// "video/VP8") — confirms which branch the codec fallback selected.
+    pub codec: Option<String>,
+    /// Physical screen size as "WxH" — tells TV models apart in the logs.
+    pub screen: Option<String>,
     pub frames_decoded: Option<f64>,
     pub fps: Option<f64>,
     pub jitter_buffer_ms: Option<f64>,
@@ -78,7 +86,10 @@ pub(crate) struct NdiClientStatsBeacon {
 #[instrument(skip_all)]
 pub(crate) async fn ndi_client_stats(Json(beacon): Json<NdiClientStatsBeacon>) -> StatusCode {
     tracing::info!(
+        display_id = beacon.display_id.as_deref(),
         source_id = %beacon.source_id,
+        codec = beacon.codec.as_deref(),
+        screen = beacon.screen.as_deref(),
         frames_decoded = beacon.frames_decoded,
         fps = beacon.fps,
         jitter_buffer_ms = beacon.jitter_buffer_ms,
