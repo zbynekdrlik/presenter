@@ -126,10 +126,29 @@ pub(crate) async fn delete_whep_session(
     let manager = state
         .ndi_manager()
         .ok_or_else(|| AppError::service_unavailable("NDI SDK not available"))?;
-    let reply = manager
+    let reply = match manager
         .whep_signaller_call(&source_id, WhepOp::Delete { id: session_id })
         .await
-        .map_err(map_signaller_error)?;
+    {
+        Ok(reply) => reply,
+        // Idempotent DELETE: a session (or its whole source) that is already
+        // gone means the client's desired state holds — answer 204, not 404.
+        // The stage UI dispatches teardown DELETEs from both on_cleanup and
+        // pagehide, and after a server-side deactivate the session is gone
+        // before the DELETE arrives; a 404 logged a browser console error
+        // ("Failed to load resource") on every deactivate/navigation cycle.
+        Err(err)
+            if err.to_string().contains(SOURCE_NOT_ACTIVE_ERR)
+                || err.to_string().contains("session not found") =>
+        {
+            WhepReply {
+                status: 204,
+                headers: Vec::new(),
+                body: None,
+            }
+        }
+        Err(err) => return Err(map_signaller_error(err)),
+    };
     Ok(into_response(reply))
 }
 
