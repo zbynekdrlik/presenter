@@ -320,9 +320,10 @@ async fn connect_whep(video: &HtmlVideoElement, source_id: &str) -> Result<WhepS
     // profile is requested via the WHEP URL query instead — see whep_url.
     pc.add_transceiver_with_str_and_init("video", &video_init);
 
-    let audio_init = RtcRtpTransceiverInit::new();
-    audio_init.set_direction(RtcRtpTransceiverDirection::Recvonly);
-    pc.add_transceiver_with_str_and_init("audio", &audio_init);
+    // VIDEO-ONLY offer — deliberately NO audio m-line. The server never
+    // sends audio; a dead audio track in the SDP makes weak TV WebViews
+    // stall video presentation on unsatisfiable A/V sync (see
+    // stage_lite.html for the 2026-06-12 VDO.Ninja A/B measurement).
 
     attach_ontrack(&pc, video);
 

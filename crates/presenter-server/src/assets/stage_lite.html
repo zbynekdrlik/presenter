@@ -75,7 +75,13 @@
 
   async function whepNegotiate(pc, sourceId) {
     pc.addTransceiver("video", { direction: "recvonly" });
-    pc.addTransceiver("audio", { direction: "recvonly" });
+    // VIDEO-ONLY offer — deliberately NO audio m-line. The server never
+    // sends audio (NDI audio is discarded), and an SDP audio track that
+    // exists but never produces makes weak TV WebViews hold video
+    // presentation hostage to A/V sync that can never be satisfied
+    // (measured 2026-06-12: VDO.Ninja with noaudio played 640x360@20 on the
+    // same Vestel where our stream with a dead audio m-line presented
+    // ~0.5fps with frames decoding fine).
     pc.ontrack = function (ev) {
       if (!ev.streams || !ev.streams[0]) return;
       try {
