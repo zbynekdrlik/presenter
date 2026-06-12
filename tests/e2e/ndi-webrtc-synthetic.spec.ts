@@ -308,45 +308,38 @@ test("NDI video decodes real frames for MULTIPLE simultaneous consumers (synthet
   await cleanupSource(request, src.id);
 });
 
-type Vp8Stats = {
+type CompatStats = {
   framesDecoded: number;
   frameWidth: number;
   mimeType: string;
   conn: string;
 };
 
-/** Connect ONE WHEP consumer that strips H264 from its video offer via
- * setCodecPreferences (keeping only VP8 + rtx) — exactly what the stage
- * client does on Vestel TVs whose vendor OMX H264 decoder is broken. The
- * server must answer with (and actually SEND) VP8 for that consumer. Waits
- * ~8s for steady decode, then keeps polling getStats (up to ~25s total) so
- * a loaded runner doesn't flake the decode assertion. Returns the inbound
- * codec mimeType (inbound-rtp codecId → codec report) so the test can
- * assert the negotiation really landed on VP8, not H264. Releases the
+/** Connect ONE WHEP consumer with a PLAIN offer (no codec games) to the
+ * `?profile=compat` WHEP URL — exactly what the stage client does on weak
+ * TVs whose MStar OMX H264 decoder dies on the port reconfiguration a
+ * non-640×480 stream forces. The server must feed that consumer the
+ * 640×480 H264 compat branch. Waits ~8s for steady decode, then keeps
+ * polling getStats (up to ~25s total) so a loaded runner doesn't flake the
+ * decode assertion. Returns the inbound codec mimeType (inbound-rtp
+ * codecId → codec report) and frameWidth so the test can assert the compat
+ * branch (not the 720p default) actually fed the consumer. Releases the
  * server-side consumer via WHEP DELETE on the Location before returning. */
-async function connectVp8OnlyAndMeasure(
+async function connectCompatAndMeasure(
   page: Page,
   origin: string,
   sourceId: string,
-): Promise<{ error?: string; stats?: Vp8Stats }> {
+): Promise<{ error?: string; stats?: CompatStats }> {
   return page.evaluate(
     async ({ origin, sourceId }) => {
       const pc = new RTCPeerConnection();
       try {
         pc.addTransceiver("video", { direction: "recvonly" });
-        // Strip H264 from the offer: keep only VP8 (+ rtx retransmission).
-        const tr =
-          pc
-            .getTransceivers()
-            .find((t) => t.receiver?.track?.kind === "video") ??
-          pc.getTransceivers()[0];
-        const caps = RTCRtpReceiver.getCapabilities("video");
-        tr.setCodecPreferences(
-          caps!.codecs.filter((c) => /\/(VP8|rtx)$/i.test(c.mimeType)),
-        );
         pc.addTransceiver("audio", { direction: "recvonly" });
 
-        // WHEP dance — same as the other tests in this file.
+        // WHEP dance — same as the other tests in this file, except the
+        // URL carries ?profile=compat (the profile selector replaced the
+        // VP8 setCodecPreferences fallback).
         const offer = await pc.createOffer();
         await pc.setLocalDescription(offer);
         await new Promise<void>((res) => {
@@ -356,7 +349,7 @@ async function connectVp8OnlyAndMeasure(
           });
           setTimeout(res, 4000);
         });
-        const resp = await fetch(`/ndi/whep/${sourceId}`, {
+        const resp = await fetch(`/ndi/whep/${sourceId}?profile=compat`, {
           method: "POST",
           headers: { "Content-Type": "application/sdp" },
           body: pc.localDescription!.sdp,
@@ -463,15 +456,18 @@ test("NDI video decodes for STRAGGLER consumers joining an already-streaming pip
   await cleanupSource(request, src.id);
 });
 
-// ── Test 3: the Vestel-OMX fallback guard (spec addendum 2 in
-// docs/superpowers/specs/2026-06-11-ndi-low-latency-design.md). Some stage
-// TVs (Vestel) ship a vendor OMX H264 decoder that silently fails, so the
-// stage client strips H264 from its WHEP offer via setCodecPreferences and
-// the server must fall back to encoding VP8 for THAT consumer. Two guards
-// in one: (a) the decode guard — an H264-less offer still gets decodable,
-// downscaled frames; (b) the negotiation guard — the inbound codec really
-// is VP8, so the server didn't sneak H264 past the preference filter.
-test("NDI stream decodes via VP8 for consumers that exclude H264 (Vestel OMX fallback path) @video-codec @synthetic-ndi", async ({
+// ── Test 3: the compat-profile guard (spec addendum 2 pivot in
+// docs/superpowers/specs/2026-06-11-ndi-low-latency-design.md). The weak
+// stage TVs' MStar OMX H264 decoder default-inits at 640×480 and dies ONLY
+// on the output-port reconfiguration any other stream size forces
+// (logcat-proven), so the stage client's fallback re-POSTs its WHEP offer
+// with ?profile=compat and the server must feed THAT consumer the 640×480
+// H264 branch. Two guards in one: (a) the decode guard — a compat-profile
+// consumer gets decodable frames; (b) the profile guard — the decoded
+// stream is EXACTLY 640 wide H264, so the query really selected the compat
+// branch (a 1280-wide frame means the profile was ignored, the silent
+// regression that would put the TVs back on the reconfig-killing stream).
+test("compat profile consumers get the 640x480 H264 stream @video-codec @synthetic-ndi", async ({
   page,
   request,
 }) => {
@@ -483,39 +479,34 @@ test("NDI stream decodes via VP8 for consumers that exclude H264 (Vestel OMX fal
     "synthetic NDI source '(PRESENTER-TEST)' must be on the network — start ndi_test_sender",
   ).toBeTruthy();
 
-  const src = await createAndActivateSource(request, synthetic!.name, "vp8");
+  const src = await createAndActivateSource(request, synthetic!.name, "compat");
   try {
     const consoleErrors = collectConsoleErrors(page);
     await page.goto(new URL("/", baseURL).toString());
 
-    const result = await connectVp8OnlyAndMeasure(page, baseURL, src.id);
+    const result = await connectCompatAndMeasure(page, baseURL, src.id);
     expect(
       result.error,
       `WHEP connect must succeed — ${result.error}`,
     ).toBeFalsy();
     const s = result.stats!;
-    console.log(`[e2e-evidence] VP8 stats: ${JSON.stringify(s)}`);
+    console.log(`[e2e-evidence] compat-profile stats: ${JSON.stringify(s)}`);
     expect(
       s.framesDecoded,
-      `VP8-only consumer must DECODE video frames (framesDecoded > 0); ` +
+      `compat-profile consumer must DECODE video frames (framesDecoded > 0); ` +
         `connected-but-zero-frames is the black-stage bug. Got: ${JSON.stringify(s)}`,
     ).toBeGreaterThan(0);
+    // EXACTLY 640 — the MStar OMX default-init width. 1280 here means the
+    // ?profile=compat query was ignored and the default branch leaked in.
     expect(
       s.frameWidth,
-      `decoded frame must have a real width (>0), got ${JSON.stringify(s)}`,
-    ).toBeGreaterThan(0);
-    // The VP8 branch is the COMPAT profile for weak devices (software encode
-    // on the N100 + software decode on the Vestel TVs): it must be downscaled
-    // to 854×480, NOT the H264 branch's 720p (prod 2026-06-12: 720p VP8 put
-    // the N100 at load 11.4 and the TVs at 0.3-1.7 fps).
-    expect(
-      s.frameWidth,
-      `VP8 compat-profile frame must be downscaled ≤854 wide, got ${s.frameWidth}`,
-    ).toBeLessThanOrEqual(854);
+      `compat-profile frame must be EXACTLY 640 wide, got ${s.frameWidth}`,
+    ).toBe(640);
     expect(
       s.mimeType,
-      `server must actually serve VP8 to an H264-less offer, got: ${JSON.stringify(s)}`,
-    ).toBe("video/VP8");
+      `compat profile must stay H264 (HW decode on the TVs — the whole point ` +
+        `of the pivot away from VP8), got: ${JSON.stringify(s)}`,
+    ).toBe("video/H264");
 
     expect(
       consoleErrors,
