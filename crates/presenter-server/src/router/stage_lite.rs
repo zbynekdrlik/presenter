@@ -46,12 +46,7 @@ pub(super) async fn stage_lite_page() -> Response {
 #[instrument(skip_all)]
 pub(super) async fn stage_shell(State(state): State<AppState>) -> Response {
     if state.stage_layout_code().await == NDI_FULLSCREEN_LAYOUT_CODE {
-        // TEMPORARY A/B EXPERIMENT (2026-06-12, revert immediately after):
-        // route the stage displays to a VDO.Ninja viewer of a test publisher
-        // to measure whether TODAY's Vestel WebView sustains VDO.Ninja's own
-        // delivery (the user's reference benchmark). Stats overlay is DOM, so
-        // TV screencaps can read fps from the panel.
-        return Redirect::to("https://vdo.ninja/?view=nlvAB4821&autoplay&noaudio&stats").into_response();
+        return Redirect::to("/stage/lite").into_response();
     }
     super::wasm_ui::wasm_ui_shell().await
 }
