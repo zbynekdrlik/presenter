@@ -2,7 +2,8 @@
 //! (`ndisrc → ndisrcdemux → videoconvert → videoscale → caps → raw_tee`,
 //! fanning into TWO parallel encode branches:
 //! H264 `→ q_h264 → encoder → profile_caps → h264parse → enc_appsink` and
-//! VP8 `→ q_vp8 → videoconvert → vp8enc → enc_appsink_vp8`). Each appsink is
+//! VP8 `→ q_vp8 → videoconvert → videoscale → caps(854×480) → vp8enc →
+//! enc_appsink_vp8`). Each appsink is
 //! wrapped by a `gstreamer_utils::StreamProducer` which fans the encoded
 //! stream out to the per-consumer `appsrc → rtph264pay|rtpvp8pay → webrtcbin`
 //! pipelines built in `add_consumer` (see `consumers.rs`). The VP8 branch
@@ -54,7 +55,7 @@ impl NdiPipeline {
         let encoder = build_encoder(encoder_name)?;
         let profile_caps = build_profile_caps()?;
         let (h264parse, appsink) = build_parse_and_sink()?;
-        let (vp8_convert, vp8enc, vp8_appsink) = build_vp8_branch()?;
+        let (vp8_convert, vp8_scale, vp8_scale_caps, vp8enc, vp8_appsink) = build_vp8_branch()?;
 
         pipeline
             .add_many([
@@ -72,6 +73,8 @@ impl NdiPipeline {
                 appsink.upcast_ref::<gst::Element>(),
                 &q_vp8,
                 &vp8_convert,
+                &vp8_scale,
+                &vp8_scale_caps,
                 &vp8enc,
                 vp8_appsink.upcast_ref::<gst::Element>(),
             ])
@@ -89,9 +92,17 @@ impl NdiPipeline {
         h264parse
             .link(appsink.upcast_ref::<gst::Element>())
             .context("link h264parse -> appsink")?;
-        // Branch B (VP8 fallback): NV12→I420 convert feeds vp8enc (I420-only).
-        gst::Element::link_many([&raw_tee, &q_vp8, &vp8_convert, &vp8enc])
-            .context("link tee -> q_vp8 -> videoconvert -> vp8enc")?;
+        // Branch B (VP8 compat profile): NV12→I420 convert feeds the 480p
+        // downscale (854×480, weak-device budget) and then vp8enc (I420-only).
+        gst::Element::link_many([
+            &raw_tee,
+            &q_vp8,
+            &vp8_convert,
+            &vp8_scale,
+            &vp8_scale_caps,
+            &vp8enc,
+        ])
+        .context("link tee -> q_vp8 -> videoconvert -> videoscale -> vp8_scale_caps -> vp8enc")?;
         vp8enc
             .link(vp8_appsink.upcast_ref::<gst::Element>())
             .context("link vp8enc -> vp8 appsink")?;
@@ -269,34 +280,76 @@ fn build_branch_queue(name: &str) -> Result<gst::Element> {
         .with_context(|| format!("build queue {name}"))
 }
 
-/// Build the parallel VP8 fallback branch tail: `videoconvert → vp8enc →
-/// appsink("enc_appsink_vp8")`. Exists because the weak stage TVs' H264 OMX
-/// decoder is vendor-broken (`OMX.MS.AVC.Decoder` port-reconfig failure →
-/// ~1 displayed frame per GOP, spec addendum 2); those clients re-offer
-/// VP8-only and decode it in software (libvpx), bypassing the broken OMX.
+/// VP8 compat-profile resolution. The VP8 branch serves WEAK devices that
+/// both (a) force this server to encode in SOFTWARE (vp8enc) and (b) decode
+/// in software themselves (libvpx on broken-OMX Vestel TVs). Measured on
+/// prod 2026-06-12 at 720p30: presenter-server hit 175% CPU / load 11.4 on
+/// the 4-core N100 (periodic hiccups for ALL consumers, healthy H264 ones
+/// included), while the Vestel TVs decoded real motion content at 0.3-1.7
+/// fps with freezes. 854×480 (16:9 480p) is cheap on both ends; healthy
+/// clients stay on the unchanged H264 720p branch. 854 is not mod-16, but
+/// libvpx only requires even dimensions — verified end-to-end by the local
+/// synthetic e2e (VP8 consumer decodes with frameWidth=854).
+const VP8_VIDEO_WIDTH: i32 = 854;
+const VP8_VIDEO_HEIGHT: i32 = 480;
+
+/// Build the parallel VP8 fallback branch tail: `videoconvert → videoscale →
+/// capsfilter("vp8_scale_caps") → vp8enc → appsink("enc_appsink_vp8")`.
+/// Exists because the weak stage TVs' H264 OMX decoder is vendor-broken
+/// (`OMX.MS.AVC.Decoder` port-reconfig failure → ~1 displayed frame per GOP,
+/// spec addendum 2); those clients re-offer VP8-only and decode it in
+/// software (libvpx), bypassing the broken OMX.
 ///
 /// The `videoconvert` is REQUIRED: vp8enc's sink template accepts ONLY
 /// `video/x-raw,format=I420` (verified via gst-inspect-1.0 1.24), while
 /// `scale_caps` pins NV12 for the H264 hardware encoders — the convert is a
 /// cheap NV12→I420 repack (both 4:2:0, chroma reshuffle only).
 ///
+/// The `videoscale → vp8_scale_caps` pair downscales 720p → 854×480: this
+/// branch is the COMPAT profile for weak devices, so it must be cheap to
+/// encode (software, on the N100) AND cheap to decode (software, on the
+/// TVs) — see `VP8_VIDEO_WIDTH`. `add-borders` letterboxes like the main
+/// chain's videoscale.
+///
 /// vp8enc tuning (types verified via gst-inspect-1.0): `deadline=1` µs/frame
-/// = libvpx realtime mode; `cpu-used=8` trades quality for encode speed
-/// (prod N100 runs this config realtime, gst-launch verified); `keyframe-
-/// max-dist=240` matches the H264 GOP (8s) — joins are served by
+/// = libvpx realtime mode; `cpu-used=8` trades quality for encode speed;
+/// `keyframe-max-dist=240` matches the H264 GOP (8s) — joins are served by
 /// `request_keyframe`, not scheduled keyframe pulses; `target-bitrate` is in
-/// bits/sec (2 Mbps, slightly under the 2.5 Mbps H264 budget since this
-/// branch encodes in software).
-fn build_vp8_branch() -> Result<(gst::Element, gst::Element, gst_app::AppSink)> {
+/// bits/sec (1 Mbps — the 480p compat budget; 2 Mbps belonged to the
+/// abandoned 720p VP8 profile).
+fn build_vp8_branch() -> Result<(
+    gst::Element,
+    gst::Element,
+    gst::Element,
+    gst::Element,
+    gst_app::AppSink,
+)> {
     let vp8_convert = gst::ElementFactory::make("videoconvert")
         .build()
         .context("build vp8 videoconvert")?;
+    let vp8_scale = gst::ElementFactory::make("videoscale")
+        .property("add-borders", true)
+        .build()
+        .context("build vp8 videoscale")?;
+    let vp8_scale_caps = gst::ElementFactory::make("capsfilter")
+        .name("vp8_scale_caps")
+        .property(
+            "caps",
+            gst::Caps::builder("video/x-raw")
+                .field("format", "I420")
+                .field("width", VP8_VIDEO_WIDTH)
+                .field("height", VP8_VIDEO_HEIGHT)
+                .field("pixel-aspect-ratio", gst::Fraction::new(1, 1))
+                .build(),
+        )
+        .build()
+        .context("build vp8 scale capsfilter")?;
     let vp8enc = gst::ElementFactory::make("vp8enc")
         .name("encoder_vp8")
         .property("deadline", 1i64)
         .property("cpu-used", 8i32)
         .property("keyframe-max-dist", 240i32)
-        .property("target-bitrate", 2_000_000i32)
+        .property("target-bitrate", 1_000_000i32)
         .build()
         .context("build vp8enc")?;
     // Same bounded relay appsink as the H264 branch: 5-frame backlog,
@@ -307,7 +360,7 @@ fn build_vp8_branch() -> Result<(gst::Element, gst::Element, gst_app::AppSink)> 
         .max_buffers(5)
         .drop(true)
         .build();
-    Ok((vp8_convert, vp8enc, vp8_appsink))
+    Ok((vp8_convert, vp8_scale, vp8_scale_caps, vp8enc, vp8_appsink))
 }
 
 /// Build the raw-video conditioning chain placed between the demux and the

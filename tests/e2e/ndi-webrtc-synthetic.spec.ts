@@ -503,10 +503,14 @@ test("NDI stream decodes via VP8 for consumers that exclude H264 (Vestel OMX fal
       s.frameWidth,
       `decoded frame must have a real width (>0), got ${JSON.stringify(s)}`,
     ).toBeGreaterThan(0);
+    // The VP8 branch is the COMPAT profile for weak devices (software encode
+    // on the N100 + software decode on the Vestel TVs): it must be downscaled
+    // to 854×480, NOT the H264 branch's 720p (prod 2026-06-12: 720p VP8 put
+    // the N100 at load 11.4 and the TVs at 0.3-1.7 fps).
     expect(
       s.frameWidth,
-      `decoded frame must be downscaled ≤1280 wide, got ${s.frameWidth}`,
-    ).toBeLessThanOrEqual(1280);
+      `VP8 compat-profile frame must be downscaled ≤854 wide, got ${s.frameWidth}`,
+    ).toBeLessThanOrEqual(854);
     expect(
       s.mimeType,
       `server must actually serve VP8 to an H264-less offer, got: ${JSON.stringify(s)}`,
