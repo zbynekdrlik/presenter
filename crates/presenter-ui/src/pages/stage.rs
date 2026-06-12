@@ -112,12 +112,24 @@ pub fn StagePage() -> impl IntoView {
             if let Ok(Some(output)) = api::bible::get_active_slide_output().await {
                 ctx.bible_overlay.set(Some(output));
             }
-            // Check if an NDI source is already active
-            if let Ok(sources) = api::ndi::list_video_sources().await {
-                if let Some(active) = sources.iter().find(|s| s.is_active) {
-                    ctx.ndi_active.set(true);
-                    ctx.ndi_active_source_id.set(Some(active.id.clone()));
-                }
+        });
+    }
+
+    // Sync NDI source state on page load AND on every WS (re)connect. The
+    // live hub does not replay events, so an `ndi_source_activated`
+    // published while this client's socket was down or zombie is LOST —
+    // without the reconnect resync the stage stays white (no <NdiVideo>,
+    // zero WHEP attempts) until a manual page reload (prod TV incident).
+    {
+        let ctx = ctx.clone();
+        let ws_state = ws_handle.state;
+        // Memo dedups the per-heartbeat Connected re-sets so the fetch only
+        // runs on actual state TRANSITIONS (first connect + reconnects).
+        let connected = Memo::new(move |_| ws_state.get() == StageWsState::Connected);
+        sync_ndi_source_state(ctx.clone());
+        Effect::new(move |_| {
+            if connected.get() {
+                sync_ndi_source_state(ctx.clone());
             }
         });
     }
@@ -177,6 +189,38 @@ pub fn StagePage() -> impl IntoView {
             }
         }}
     }
+}
+
+/// Fetch the currently-active video source and sync the NDI signals to it.
+///
+/// Safe to call repeatedly: `NdiFullscreen`'s `Memo` + `Show` dedup
+/// identical values, so a no-change resync never remounts `<NdiVideo>`
+/// (no reconnect churn). Only an actual server-side change (deactivate,
+/// reactivate, different source) propagates.
+fn sync_ndi_source_state(ctx: StageContext) {
+    leptos::task::spawn_local(async move {
+        let Ok(sources) = api::ndi::list_video_sources().await else {
+            return;
+        };
+        match sources.iter().find(|s| s.is_active) {
+            Some(active) => {
+                let id = Some(active.id.clone());
+                if ctx.ndi_active_source_id.get_untracked() != id {
+                    // New/changed source: clear any stale status overlay
+                    // ("disconnected"/"failed" from before the gap) so it
+                    // doesn't stick over the freshly mounted video.
+                    ctx.ndi_status.set(String::new());
+                }
+                ctx.ndi_active.set(true);
+                ctx.ndi_active_source_id.set(id);
+            }
+            None => {
+                ctx.ndi_active.set(false);
+                ctx.ndi_active_source_id.set(None);
+                ctx.ndi_status.set(String::new());
+            }
+        }
+    });
 }
 
 fn set_global_string(name: &str, value: &str) {

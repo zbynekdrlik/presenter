@@ -1,4 +1,9 @@
-import { test, expect, type Page, type APIRequestContext } from "@playwright/test";
+import {
+  test,
+  expect,
+  type Page,
+  type APIRequestContext,
+} from "@playwright/test";
 import {
   deriveTestConfig,
   refreshDevData,
@@ -218,10 +223,7 @@ async function connectAndMeasure(
 /** Assert every consumer decoded frames AND the stream was downscaled.
  * The synthetic source is 2560×1440; the pipeline MUST downscale ≤1280 before
  * encoding or the browser cannot decode the high H264 level. */
-function assertAllDecoded(
-  stats: InboundStats[],
-  scenario: string,
-): void {
+function assertAllDecoded(stats: InboundStats[], scenario: string): void {
   stats.forEach((s, i) => {
     expect(
       s.framesDecoded,
@@ -513,6 +515,110 @@ test("NDI stream decodes via VP8 for consumers that exclude H264 (Vestel OMX fal
     expect(
       consoleErrors,
       `browser console must have zero errors/warnings, got: ${consoleErrors.join("; ")}`,
+    ).toEqual([]);
+  } finally {
+    await cleanupSource(request, src.id);
+  }
+});
+
+// ── Test 4: the deactivate→reactivate guard (prod TV white-screen incident,
+// 2026-06). After the operator deactivates the active source and activates
+// it again, the REAL stage page (WASM UI at /stage) must unmount the video,
+// then REMOUNT it and resume decoding — without a page reload. The shipped
+// bug: a TV that missed the ndi_source_activated live event (zombie WS /
+// broadcast lag) showed a white stage with ZERO WHEP attempts until someone
+// reloaded the page. This drives the same user-visible flow end-to-end
+// through the stage UI's reactive chain (WS event → signals → <NdiVideo>).
+test("stage remounts NDI video and resumes decoding after deactivate→reactivate (synthetic source) @video-codec @synthetic-ndi", async ({
+  page,
+  request,
+}) => {
+  const synthetic = await discoverSyntheticSource(request);
+  expect(
+    synthetic,
+    "synthetic NDI source '(PRESENTER-TEST)' must be on the network — start ndi_test_sender",
+  ).toBeTruthy();
+
+  const src = await createAndActivateSource(
+    request,
+    synthetic!.name,
+    "Synthetic-E2E-Reactivate",
+  );
+  try {
+    await waitForPipelineStreaming(request, src.id);
+
+    // Real stage page on the ndi-fullscreen layout.
+    const layoutResp = await request.post(
+      new URL("/stage/layout", baseURL).toString(),
+      { data: { code: "ndi-fullscreen" } },
+    );
+    expect(
+      layoutResp.ok(),
+      "switching stage layout to ndi-fullscreen must succeed",
+    ).toBe(true);
+
+    // Errors only: the deactivate phase legitimately emits watchdog/reconnect
+    // console WARNINGS by design (same convention as ndi-webrtc-recovery).
+    const consoleErrors: string[] = [];
+    page.on("console", (msg) => {
+      if (msg.type() === "error") consoleErrors.push(msg.text());
+    });
+
+    await page.goto(new URL("/stage", baseURL).toString());
+    await page.waitForSelector('body[data-wasm-ready="true"]', {
+      timeout: 30_000,
+    });
+    await page.waitForSelector('body[data-layout-code="ndi-fullscreen"]', {
+      timeout: 10_000,
+    });
+
+    const video = page.locator('video[data-role="ndi-video"]');
+    await expect(video).toBeVisible({ timeout: 15_000 });
+
+    // Frames PRESENTED by the (current) video element — the same signal the
+    // frame-based watchdog uses. Resets when the element is remounted.
+    const framesPresented = () =>
+      video.evaluate(
+        (v: HTMLVideoElement) => v.getVideoPlaybackQuality().totalVideoFrames,
+      );
+
+    // Phase 1: initial playback presents frames.
+    await expect
+      .poll(framesPresented, {
+        timeout: 25_000,
+        message: "initial NDI playback never presented a frame",
+      })
+      .toBeGreaterThan(0);
+
+    // Phase 2: deactivate server-side → the stage must unmount the video.
+    await request.post(
+      new URL("/integrations/video-sources/deactivate", baseURL).toString(),
+    );
+    await expect(video).toHaveCount(0, { timeout: 10_000 });
+
+    // Phase 3: reactivate → the stage must remount <NdiVideo> and decode
+    // again WITHOUT a reload (white screen + zero WHEP attempts = the bug).
+    const reactivate = await request.post(
+      new URL(
+        `/integrations/video-sources/${src.id}/activate`,
+        baseURL,
+      ).toString(),
+      { data: {} },
+    );
+    expect(reactivate.ok(), "reactivating the source must succeed").toBe(true);
+
+    await expect(video).toBeVisible({ timeout: 15_000 });
+    await expect
+      .poll(framesPresented, {
+        timeout: 30_000,
+        message:
+          "stage never resumed presenting frames after deactivate→reactivate (bug-A regression)",
+      })
+      .toBeGreaterThan(0);
+
+    expect(
+      consoleErrors,
+      `browser console must have zero errors, got: ${consoleErrors.join("; ")}`,
     ).toEqual([]);
   } finally {
     await cleanupSource(request, src.id);

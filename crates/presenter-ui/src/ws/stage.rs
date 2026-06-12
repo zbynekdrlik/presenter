@@ -102,7 +102,35 @@ fn spawn_stage_ws(
 
                 let write = Rc::new(RefCell::new(Some(write)));
 
-                while let Some(msg) = read.next().await {
+                loop {
+                    // Race the next message against a short timeout so a
+                    // ZOMBIE socket — TCP open but the server's forward task
+                    // dead, or the link silently gone — is actively torn
+                    // down. Without this, `read.next().await` pends forever:
+                    // the heartbeat checker flips the UI to "Disconnected"
+                    // but nothing ever reconnects, so every live event
+                    // (including ndi_source_activated) is lost until a
+                    // manual page reload (stage white-screen incident).
+                    let msg = {
+                        let next_msg = read.next();
+                        let timeout =
+                            gloo_timers::future::TimeoutFuture::new(HEARTBEAT_CHECK_INTERVAL_MS);
+                        futures_util::pin_mut!(next_msg, timeout);
+                        match futures_util::future::select(next_msg, timeout).await {
+                            futures_util::future::Either::Left((msg, _)) => msg,
+                            futures_util::future::Either::Right(((), _)) => {
+                                let elapsed = js_sys::Date::now() - *last_hb.borrow();
+                                if elapsed >= DEFAULT_DISCONNECT_MS {
+                                    leptos::logging::warn!(
+                                        "stage ws: no heartbeat for {elapsed:.0}ms — dropping zombie socket and reconnecting"
+                                    );
+                                    break;
+                                }
+                                continue;
+                            }
+                        }
+                    };
+                    let Some(msg) = msg else { break };
                     match msg {
                         Ok(Message::Text(text)) => {
                             match serde_json::from_str::<LiveEvent>(&text) {
