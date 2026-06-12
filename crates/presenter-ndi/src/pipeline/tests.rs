@@ -688,6 +688,50 @@ fn pipeline_has_parallel_vp8_branch_with_low_latency_props() {
     assert_eq!(appsink.max_buffers(), 5);
 }
 
+/// VP8 compat profile (prod measurement 2026-06-12): the VP8 branch must be
+/// CHEAP ON BOTH ENDS. At 720p30 the software vp8enc put the prod N100 at
+/// 175% CPU / load 11.4 (hiccups for ALL consumers, healthy H264 ones
+/// included), and the weak Vestel TVs that USE this branch decode VP8 in
+/// software too — on real motion content they managed 0.3-1.7 fps with
+/// freezes. The branch is the COMPATIBILITY profile for weak devices:
+/// 854×480 @ 30fps, 1 Mbps. Healthy clients stay on the H264 720p branch.
+#[test]
+fn vp8_branch_is_480p_compat_profile() {
+    super::super::init().unwrap();
+    if super::super::hw_h264_encoder().is_none() {
+        return;
+    }
+    let p = NdiPipeline::build("no-such-source", "http://127.0.0.1/whep".into()).unwrap();
+
+    let scale_caps = p
+        .pipeline
+        .by_name("vp8_scale_caps")
+        .expect("capsfilter named vp8_scale_caps between the VP8 videoconvert and vp8enc");
+    let caps = scale_caps.property::<gst::Caps>("caps");
+    let s = caps.structure(0).expect("caps structure");
+    assert_eq!(s.name(), "video/x-raw");
+    assert_eq!(
+        s.get::<i32>("width").expect("width field"),
+        854,
+        "VP8 compat profile must downscale to 854 wide (480p)"
+    );
+    assert_eq!(
+        s.get::<i32>("height").expect("height field"),
+        480,
+        "VP8 compat profile must downscale to 480 tall"
+    );
+
+    let vp8 = p
+        .pipeline
+        .by_name("encoder_vp8")
+        .expect("vp8enc named encoder_vp8");
+    assert_eq!(
+        vp8.property::<i32>("target-bitrate"),
+        1_000_000,
+        "VP8 compat profile bitrate must be 1 Mbps (was 2 Mbps at 720p)"
+    );
+}
+
 /// Codec selection rule (spec addendum 2, deterministic): H264 whenever the
 /// offer contains it — today's behavior, zero change for healthy clients
 /// (Chrome's default offer lists VP8 first but ALWAYS includes H264).
