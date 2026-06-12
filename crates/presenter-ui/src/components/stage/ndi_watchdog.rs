@@ -65,7 +65,8 @@ pub(crate) fn codec_mode_is_vp8() -> bool {
 /// new mode name — at most ONCE per page load. Returns `None` when the
 /// one-shot switch was already spent (no further toggling until reload).
 /// Deliberately does NOT touch localStorage: only a mode that goes on to
-/// present `PROVEN_MODE_FRAMES` frames gets persisted.
+/// present `PROVEN_MODE_FRAMES` frames within `PROVEN_MODE_WINDOW_MS` of
+/// the first frame gets persisted (see `record_presented_frame`).
 fn switch_codec_mode_once() -> Option<&'static str> {
     if CODEC_SWITCHED.with(|c| c.replace(true)) {
         return None;
@@ -76,8 +77,16 @@ fn switch_codec_mode_once() -> Option<&'static str> {
 }
 
 /// Persist the CURRENT codec mode to localStorage. Called once a session
-/// presents `PROVEN_MODE_FRAMES` frames — the mode demonstrably decodes on
-/// this display, so it is safe to make sticky across reloads.
+/// presents `PROVEN_MODE_FRAMES` frames WITHIN `PROVEN_MODE_WINDOW_MS` of
+/// the first presented frame — the mode demonstrably decodes AT A USABLE
+/// RATE on this display, so it is safe to make sticky across reloads.
+///
+/// The rate gate is load-bearing: 100 frames at <10fps must NOT prove a
+/// mode. A Vestel TV limping along at 0.3-1.7 fps on VP8 still reaches 100
+/// presented frames eventually (~100s at 1fps), and persisting then locked
+/// the broken mode in forever. Callers (`record_presented_frame`) enforce
+/// the window; an unproven mode is simply left unpersisted — the existing
+/// stored value is never cleared — so the next page load retries.
 fn persist_proven_codec_mode() {
     let mode = if codec_mode_is_vp8() { "vp8" } else { "h264" };
     if let Some(storage) = local_storage() {
@@ -143,6 +152,9 @@ struct FrameStats {
     /// Frames PRESENTED to the compositor this session (rVFC count, or the
     /// coarse currentTime proxy on rVFC-less browsers).
     frames_presented: Cell<u32>,
+    /// Timestamp of the FIRST presented frame (0.0 until one arrives) —
+    /// anchors the proven-mode rate gate (`PROVEN_MODE_WINDOW_MS`).
+    first_frame_at: Cell<f64>,
     /// Timestamp of the most recently presented frame.
     last_frame_at: Cell<f64>,
     /// When this session's watchdog was installed (≈ connect time).
@@ -195,8 +207,16 @@ impl Watchdog {
     /// throttled TVs — acceptable, the thresholds are 10-15s.
     const TICK_INTERVAL_MS: i32 = 1000;
     /// Presented-frame count at which the current codec mode is PROVEN to
-    /// decode on this display and persisted to localStorage.
+    /// decode on this display and persisted to localStorage — but ONLY when
+    /// those frames arrived within `PROVEN_MODE_WINDOW_MS` of the first one.
     const PROVEN_MODE_FRAMES: u32 = 100;
+    /// Proven-mode RATE gate: the `PROVEN_MODE_FRAMES`th frame must land
+    /// within this window after the FIRST presented frame (100 frames in
+    /// ≤10s ≈ ≥10fps sustained). Without it, 100 frames at 1fps over 100s
+    /// "proved" a broken mode (the prod Vestel-VP8 freeze-crawl) and made
+    /// it sticky. A session that misses the window persists nothing — the
+    /// next page load retries codec selection from the prior stored state.
+    const PROVEN_MODE_WINDOW_MS: f64 = 10_000.0;
     /// rVFC-path beacon period (~15s at 30fps) — the reliable beacon channel
     /// on displays whose setInterval is throttled to near-silence (rVFC is
     /// compositor-driven and not throttled while video plays).
@@ -219,6 +239,7 @@ impl Watchdog {
         let now = now_ms();
         let stats = Rc::new(FrameStats {
             frames_presented: Cell::new(0),
+            first_frame_at: Cell::new(0.0),
             last_frame_at: Cell::new(now),
             started_at: Cell::new(now),
         });
@@ -257,6 +278,35 @@ fn now_ms() -> f64 {
         .unwrap_or_else(js_sys::Date::now)
 }
 
+/// Record ONE presented frame into `stats` and run the proven-mode check.
+/// Shared by the rVFC observer and the currentTime proxy so both enforce
+/// the SAME rate gate: when the `PROVEN_MODE_FRAMES`th frame lands, the
+/// current codec mode is persisted ONLY if that frame arrived within
+/// `PROVEN_MODE_WINDOW_MS` of the FIRST presented frame (≥~10fps
+/// sustained). 100 frames dribbling in at 1fps over 100s must NOT prove a
+/// mode — that's a broken decode, not a working one. Missing the window
+/// persists nothing (the stored mode, if any, is left untouched).
+///
+/// Returns the new presented-frame count. Note the proxy path counts at
+/// most one frame per 1s tick, so it can never reach 100 frames in 10s —
+/// rVFC-less browsers therefore never persist a proven mode, which is the
+/// honest outcome of a measurement too coarse to prove a frame RATE.
+fn record_presented_frame(stats: &FrameStats) -> u32 {
+    let n = stats.frames_presented.get().saturating_add(1);
+    stats.frames_presented.set(n);
+    let now = now_ms();
+    stats.last_frame_at.set(now);
+    if n == 1 {
+        stats.first_frame_at.set(now);
+    }
+    if n == Watchdog::PROVEN_MODE_FRAMES
+        && now - stats.first_frame_at.get() <= Watchdog::PROVEN_MODE_WINDOW_MS
+    {
+        persist_proven_codec_mode();
+    }
+    n
+}
+
 /// Shared holder for the self-rescheduling rVFC closure (the closure needs a
 /// handle to itself to re-register for the next presented frame).
 type SharedRvfcClosure = Rc<RefCell<Option<Closure<dyn FnMut(JsValue, JsValue)>>>>;
@@ -267,9 +317,11 @@ type SharedRvfcClosure = Rc<RefCell<Option<Closure<dyn FnMut(JsValue, JsValue)>>
 /// NOT throttled by TV power-saving timer policies, so the counters stay
 /// truthful exactly where the wall-clock heuristics lied.
 ///
-/// Side effects driven from the frame path:
-/// - at `Watchdog::PROVEN_MODE_FRAMES` presented frames, the current codec
-///   mode is persisted to localStorage (proven-mode stickiness);
+/// Side effects driven from the frame path (see `record_presented_frame`):
+/// - at `Watchdog::PROVEN_MODE_FRAMES` presented frames — IF they arrived
+///   within `Watchdog::PROVEN_MODE_WINDOW_MS` of the first frame — the
+///   current codec mode is persisted to localStorage (proven-mode
+///   stickiness, rate-gated);
 /// - every `Watchdog::RVFC_BEACON_FRAME_PERIOD` frames (~15s at 30fps) a
 ///   stats beacon posts — reliable on throttled displays where the 1s-tick
 ///   beacons can become sparse.
@@ -309,12 +361,7 @@ fn start_rvfc_frame_observer(
             if !active.get() {
                 return;
             }
-            let n = stats.frames_presented.get().saturating_add(1);
-            stats.frames_presented.set(n);
-            stats.last_frame_at.set(now_ms());
-            if n == Watchdog::PROVEN_MODE_FRAMES {
-                persist_proven_codec_mode();
-            }
+            let n = record_presented_frame(&stats);
             if n % Watchdog::RVFC_BEACON_FRAME_PERIOD == 0 {
                 post_stats_beacon(&pc, &source_id);
             }
@@ -453,12 +500,7 @@ fn approximate_frame_from_current_time(
     let t = video.current_time();
     if t > 0.0 && (t - last_current_time.get()).abs() > 0.001 {
         last_current_time.set(t);
-        let n = stats.frames_presented.get().saturating_add(1);
-        stats.frames_presented.set(n);
-        stats.last_frame_at.set(now_ms());
-        if n == Watchdog::PROVEN_MODE_FRAMES {
-            persist_proven_codec_mode();
-        }
+        record_presented_frame(stats);
     }
 }
 
