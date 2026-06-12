@@ -404,7 +404,7 @@ fn build_compat_vp8_encoder() -> Result<gst::Element> {
         .property("cpu-used", 8i32)
         .property_from_str("end-usage", "cbr")
         .property("target-bitrate", COMPAT_TARGET_BITRATE_BPS)
-        .property("keyframe-max-dist", 900i32)
+        .property("keyframe-max-dist", 240i32)
         .property_from_str("token-partitions", "4")
         .property("threads", 4i32)
         .property_from_str("error-resilient", "default")

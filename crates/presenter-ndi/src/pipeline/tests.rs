@@ -807,8 +807,8 @@ fn request_keyframe_sends_force_key_unit_upstream() {
 ///
 /// Locks the full compat branch shape against the REAL `NdiPipeline::build`:
 /// vp8enc "encoder_compat" with the VDO.Ninja-style realtime tuning
-/// (deadline=1, cpu-used=8, cbr 500kbps, token-partitions=4, threads=4,
-/// error-resilient=default, lag-in-frames=0, kf-max-dist=900), 640×360 16:9
+/// (deadline=1, cpu-used=8, cbr 900kbps, token-partitions=4, threads=4,
+/// error-resilient=default, lag-in-frames=0, kf-max-dist=240), 640×360 16:9
 /// I420 @20fps conditioning caps (no 4:3 letterbox), and the same bounded
 /// relay appsink contract as the primary branch (sync=false, 5 buffers,
 /// video/x-vp8 bridge caps).
@@ -856,7 +856,7 @@ fn compat_branch_is_realtime_vp8() {
     assert_eq!(
         compat.property::<i32>("target-bitrate"),
         500_000,
-        "500 kbps floor-finding budget (vp8enc takes bits/sec)"
+        "900 kbps weak-device budget (vp8enc takes bits/sec)"
     );
     assert_eq!(
         compat.property::<i64>("deadline"),
@@ -870,9 +870,8 @@ fn compat_branch_is_realtime_vp8() {
     );
     assert_eq!(
         compat.property::<i32>("keyframe-max-dist"),
-        900,
-        "60s GOP at 15fps — IDR bitrate spikes every 16s froze marginal TV \
-         decoders; joins get force-keyunit, loss recovery is PLI-driven"
+        240,
+        "GOP parity with the H264 branch (joins served by force-keyunit)"
     );
     let value = compat.property_value("end-usage");
     let (_, enum_value) = gst::glib::EnumValue::from_value(&value).expect("end-usage is an enum");
