@@ -48,8 +48,8 @@ test.afterAll(async () => {
 // The shared-encoder architecture must route both consumers through the
 // SHARED per-profile encoders rather than spawning a second encoder per
 // consumer. The encoder pipeline holds EXACTLY TWO encoders BY DESIGN —
-// one per PROFILE (720p default + 640×480 compat) — regardless of how many
-// consumers attach. The /ndi/snapshot/:source_id diagnostic route exposes
+// one per PROFILE (720p H264 default + 854×480 realtime-VP8 compat) —
+// regardless of how many consumers attach. The /ndi/snapshot/:source_id diagnostic route exposes
 // this invariant so the test can assert it.
 //
 // Fanout invariant: encoderCount=2 (per profile, NOT per consumer),
@@ -152,8 +152,8 @@ test(
     expect(
       snap.encoderCount,
       "shared-encoder invariant: exactly TWO encoders (one per profile: " +
-        "720p default + 640x480 compat) for multiple consumers — never " +
-        "one per consumer",
+        "720p H264 default + 854x480 VP8 compat) for multiple consumers — " +
+        "never one per consumer",
     ).toBe(2);
     expect(
       snap.consumerCount,
