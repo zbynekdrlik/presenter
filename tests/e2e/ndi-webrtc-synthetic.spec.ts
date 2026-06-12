@@ -317,14 +317,15 @@ type CompatStats = {
 
 /** Connect ONE WHEP consumer with a PLAIN offer (no codec games) to the
  * `?profile=compat` WHEP URL — exactly what the stage client does on weak
- * TVs whose MStar OMX H264 decoder dies on the port reconfiguration a
- * non-640×480 stream forces. The server must feed that consumer the
- * 640×480 H264 compat branch. Waits ~8s for steady decode, then keeps
- * polling getStats (up to ~25s total) so a loaded runner doesn't flake the
- * decode assertion. Returns the inbound codec mimeType (inbound-rtp
- * codecId → codec report) and frameWidth so the test can assert the compat
- * branch (not the 720p default) actually fed the consumer. Releases the
- * server-side consumer via WHEP DELETE on the Location before returning. */
+ * TVs whose MStar OMX H264 decoder is vendor-broken. The server must feed
+ * that consumer the realtime-VP8 854×480@20 compat branch (every browser
+ * offer carries VP8, so the plain offer needs no setCodecPreferences).
+ * Waits ~8s for steady decode, then keeps polling getStats (up to ~25s
+ * total) so a loaded runner doesn't flake the decode assertion. Returns the
+ * inbound codec mimeType (inbound-rtp codecId → codec report) and
+ * frameWidth so the test can assert the compat branch (not the 720p H264
+ * default) actually fed the consumer. Releases the server-side consumer via
+ * WHEP DELETE on the Location before returning. */
 async function connectCompatAndMeasure(
   page: Page,
   origin: string,
@@ -338,8 +339,8 @@ async function connectCompatAndMeasure(
         pc.addTransceiver("audio", { direction: "recvonly" });
 
         // WHEP dance — same as the other tests in this file, except the
-        // URL carries ?profile=compat (the profile selector replaced the
-        // VP8 setCodecPreferences fallback).
+        // URL carries ?profile=compat (the profile selector; the answer
+        // dictates the codec — realtime VP8 for compat).
         const offer = await pc.createOffer();
         await pc.setLocalDescription(offer);
         await new Promise<void>((res) => {
@@ -456,18 +457,21 @@ test("NDI video decodes for STRAGGLER consumers joining an already-streaming pip
   await cleanupSource(request, src.id);
 });
 
-// ── Test 3: the compat-profile guard (spec addendum 2 pivot in
+// ── Test 3: the compat-profile guard (realtime-VP8 pivot in
 // docs/superpowers/specs/2026-06-11-ndi-low-latency-design.md). The weak
-// stage TVs' MStar OMX H264 decoder default-inits at 640×480 and dies ONLY
-// on the output-port reconfiguration any other stream size forces
-// (logcat-proven), so the stage client's fallback re-POSTs its WHEP offer
-// with ?profile=compat and the server must feed THAT consumer the 640×480
-// H264 branch. Two guards in one: (a) the decode guard — a compat-profile
-// consumer gets decodable frames; (b) the profile guard — the decoded
-// stream is EXACTLY 640 wide H264, so the query really selected the compat
-// branch (a 1280-wide frame means the profile was ignored, the silent
-// regression that would put the TVs back on the reconfig-killing stream).
-test("compat profile consumers get the 640x480 H264 stream @video-codec @synthetic-ndi", async ({
+// stage TVs' MStar OMX H264 decoder is vendor-broken (even the exactly-
+// 640×480 H264 attempt died after ~5s, and 4:3 letterboxed the picture).
+// VDO.Ninja's libwebrtc VP8 has played smoothly on the SAME TVs for years —
+// the compat branch now mirrors it: realtime VP8 854×480@20, token-
+// partitions=4 so the TV decodes on all 4 cores. The stage client's
+// fallback re-POSTs its WHEP offer with ?profile=compat and the server must
+// feed THAT consumer the VP8 branch. Two guards in one: (a) the decode
+// guard — a compat-profile consumer gets decodable frames; (b) the profile
+// guard — the decoded stream is EXACTLY 854 wide VP8, so the query really
+// selected the compat branch (a 1280-wide H264 frame means the profile was
+// ignored, the silent regression that would put the TVs back on the
+// OMX-killing stream).
+test("compat profile consumers get the realtime VP8 854x480 stream @video-codec @synthetic-ndi", async ({
   page,
   request,
 }) => {
@@ -496,17 +500,18 @@ test("compat profile consumers get the 640x480 H264 stream @video-codec @synthet
       `compat-profile consumer must DECODE video frames (framesDecoded > 0); ` +
         `connected-but-zero-frames is the black-stage bug. Got: ${JSON.stringify(s)}`,
     ).toBeGreaterThan(0);
-    // EXACTLY 640 — the MStar OMX default-init width. 1280 here means the
+    // EXACTLY 854 — the 16:9 480p compat width. 1280 here means the
     // ?profile=compat query was ignored and the default branch leaked in.
     expect(
       s.frameWidth,
-      `compat-profile frame must be EXACTLY 640 wide, got ${s.frameWidth}`,
-    ).toBe(640);
+      `compat-profile frame must be EXACTLY 854 wide, got ${s.frameWidth}`,
+    ).toBe(854);
     expect(
       s.mimeType,
-      `compat profile must stay H264 (HW decode on the TVs — the whole point ` +
-        `of the pivot away from VP8), got: ${JSON.stringify(s)}`,
-    ).toBe("video/H264");
+      `compat profile must be VP8 (VDO.Ninja-style realtime stream — ` +
+        `multithreaded SW decode on the TVs; their H264 OMX is vendor-broken), ` +
+        `got: ${JSON.stringify(s)}`,
+    ).toBe("video/VP8");
 
     expect(
       consoleErrors,
