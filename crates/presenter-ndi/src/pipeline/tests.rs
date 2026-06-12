@@ -345,7 +345,33 @@ fn pipeline_tuning_properties_are_low_latency() {
     assert_eq!(gop, 240, "GOP must be 240 frames");
 }
 
-/// Regression test for #336: shared-encoder fanout.
+/// The H264 encoder factories `iterate_encoders` counts — mirrored here so
+/// the #336 tests can ALSO prove consumer pipelines hold zero of them.
+const H264_ENCODER_FACTORIES: [&str; 5] = [
+    "vah264enc",
+    "nvh264enc",
+    "x264enc",
+    "nvcudah264enc",
+    "nvautogpuh264enc",
+];
+
+/// Count H264 encoder elements across every CONSUMER pipeline (the #336
+/// invariant demands this is ZERO — encoders live ONLY in the encoder
+/// pipeline, one per PROFILE, never per consumer).
+async fn consumer_pipeline_encoder_count(pipeline: &NdiPipeline) -> usize {
+    let sessions = pipeline.sessions.lock().await;
+    sessions
+        .values()
+        .flat_map(|s| s.consumer_pipeline.iterate_elements().into_iter().flatten())
+        .filter(|el| {
+            el.factory()
+                .is_some_and(|f| H264_ENCODER_FACTORIES.contains(&f.name().as_str()))
+        })
+        .count()
+}
+
+/// Regression test for #336: shared-encoder fanout — updated for the
+/// two-profile pivot (2026-06-12).
 ///
 /// The pre-fix pipeline ended in `whepserversink`, which (by gst-plugin-rs
 /// 0.15 design) spawns one independent encoder per WHEP consumer. With
@@ -353,18 +379,20 @@ fn pipeline_tuning_properties_are_low_latency() {
 /// 3-4 encoders saturated the N100's iGPU VAAPI scheduler — the
 /// 2026-05-24 production incident.
 ///
-/// The fix keeps ONE shared encoder in the encoder pipeline; consumers run in
-/// their OWN pipelines (appsrc → rtph264pay → webrtcbin) fed via
-/// StreamProducer, which contain NO encoder. This test asserts the
-/// load-bearing invariant: regardless of how many consumers are added, the
-/// ENCODER pipeline yields EXACTLY ONE encoder element and the consumer
-/// pipelines yield one webrtcbin each.
+/// The ACTUAL #336 invariant is that encoders never multiply PER CONSUMER.
+/// Since the compat-profile pivot the ENCODER pipeline holds EXACTLY TWO
+/// H264 encoder elements BY DESIGN — "encoder" (720p default profile) and
+/// "encoder_compat" (640×480 compat profile): one per PROFILE. Consumer
+/// pipelines (appsrc → rtph264pay → webrtcbin, fed via StreamProducer)
+/// contain ZERO encoders. This test asserts both: regardless of how many
+/// consumers are added, the encoder pipeline yields exactly TWO encoder
+/// elements, the consumer pipelines yield one webrtcbin each and NO encoder.
 ///
 /// Runs on every CI host (no GPU/libndi required) — uses
 /// `stopped_for_test_with_topology()` with `x264enc` (always available)
 /// in lieu of real HW encoders.
 #[tokio::test]
-async fn pipeline_has_single_encoder_for_n_consumers() {
+async fn pipeline_has_exactly_two_profile_encoders_for_n_consumers() {
     super::super::init().expect("gst init");
     let mut pipeline = NdiPipeline::stopped_for_test_with_topology("x264enc")
         .expect("test-only topology builder must succeed when x264enc registered");
@@ -377,15 +405,21 @@ async fn pipeline_has_single_encoder_for_n_consumers() {
             .expect("add_consumer must succeed up to the soft cap");
     }
 
-    let encoder_factories = ["vah264enc", "nvh264enc", "x264enc"];
     let encoder_count = pipeline.iterate_encoders().count();
     let webrtcbin_count = pipeline.iterate_webrtcbins().len();
+    let consumer_encoders = consumer_pipeline_encoder_count(&pipeline).await;
 
     assert_eq!(
-        encoder_count, 1,
-        "REGRESSION (#336): the ENCODER pipeline must have EXACTLY ONE encoder \
-         for N consumers; got {encoder_count} encoders for 4 consumers. \
-         Encoder factories considered: {encoder_factories:?}"
+        encoder_count, 2,
+        "REGRESSION (#336, two-profile pivot): the ENCODER pipeline must have \
+         EXACTLY TWO encoders — one per PROFILE (encoder + encoder_compat), \
+         NEVER one per consumer; got {encoder_count} encoders for 4 consumers. \
+         Encoder factories considered: {H264_ENCODER_FACTORIES:?}"
+    );
+    assert_eq!(
+        consumer_encoders, 0,
+        "REGRESSION (#336): consumer pipelines must contain ZERO encoders \
+         (appsrc → rtph264pay → webrtcbin only); got {consumer_encoders}"
     );
     assert_eq!(
         webrtcbin_count, 4,
@@ -514,7 +548,8 @@ async fn zombie_sessions_free_the_cap_for_a_new_join() {
 
 /// Spec #336 / Task 7: cleanup invariant. After N add_consumer +
 /// M remove_consumer calls, exactly N-M consumer pipelines (one webrtcbin
-/// each) remain, the encoder count stays at exactly 1, and remove_consumer
+/// each) remain, the encoder count stays at exactly 2 (one per PROFILE —
+/// encoder + encoder_compat, never per consumer), and remove_consumer
 /// on an unknown session is idempotent.
 ///
 /// Catches the regression class where a leaked consumer pipeline or a
@@ -540,8 +575,8 @@ async fn add_then_remove_leaves_clean_state() {
     );
     assert_eq!(
         pipeline.iterate_encoders().count(),
-        1,
-        "encoder count must stay at 1 regardless of consumer churn",
+        2,
+        "encoder count must stay at 2 (one per profile) regardless of consumer churn",
     );
 
     // Remove 3.
@@ -557,8 +592,8 @@ async fn add_then_remove_leaves_clean_state() {
     );
     assert_eq!(
         pipeline.iterate_encoders().count(),
-        1,
-        "encoder count must stay at 1 across removes",
+        2,
+        "encoder count must stay at 2 (one per profile) across removes",
     );
 
     // Remove the rest.
@@ -574,8 +609,8 @@ async fn add_then_remove_leaves_clean_state() {
     );
     assert_eq!(
         pipeline.iterate_encoders().count(),
-        1,
-        "encoder must still be present (it's part of the encoder pipeline topology)",
+        2,
+        "both profile encoders must still be present (they're part of the encoder pipeline topology)",
     );
 
     // Remove non-existent session must be idempotent.
@@ -662,41 +697,25 @@ fn request_keyframe_sends_force_key_unit_upstream() {
     );
 }
 
-/// VP8 fallback branch (spec addendum 2): the weak TVs' H264 OMX decoder is
-/// broken at the vendor-firmware level (`OMX.MS.AVC.Decoder` port reconfig
-/// fails → ~1 displayed frame per GOP), so the encoder pipeline must produce a
-/// parallel VP8 stream that fallback clients (offers with NO H264) consume.
+/// Compat branch (spec addendum 2 pivot, 2026-06-12): the weak Vestel TVs'
+/// MStar H264 OMX decoder (`OMX.MS.AVC.Decoder`) dies ONLY on output-port
+/// reconfiguration — it default-inits at 640×480 and a 1280×720 stream
+/// forces a reconfig that fails (`setParameter(ParamPortDefinition)
+/// BadParameter`, codec torn down every GOP; logcat-proven). The abandoned
+/// VP8 answer cost ~26fps WITH 37 freezes on the TVs (software decode) and
+/// load ~10 on the prod N100 (software vp8enc). A stream that IS EXACTLY
+/// 640×480 H264 avoids the port reconfig entirely → HW decode on the TV
+/// (zero TV CPU) + GPU encode on the server (near-zero N100 CPU).
+///
+/// Locks the full compat branch shape against the REAL `NdiPipeline::build`:
+/// 640×480 NV12 scale caps (NO videoconvert — the tee already carries NV12,
+/// which every H264 encoder here accepts), a SECOND H264 encoder
+/// ("encoder_compat", SAME factory as the primary so both stay hardware),
+/// constrained-baseline pinning, a dedicated h264parse, and the same bounded
+/// relay appsink contract as the primary branch (sync=false, 5 buffers,
+/// byte-stream/AU H264 bridge caps).
 #[test]
-fn pipeline_has_parallel_vp8_branch_with_low_latency_props() {
-    super::super::init().unwrap();
-    if super::super::hw_h264_encoder().is_none() {
-        return;
-    }
-    let p = NdiPipeline::build("no-such-source", "http://127.0.0.1/whep".into()).unwrap();
-    let vp8 = p
-        .pipeline
-        .by_name("encoder_vp8")
-        .expect("vp8enc named encoder_vp8");
-    assert_eq!(vp8.property::<i64>("deadline"), 1, "realtime deadline");
-    let appsink = p
-        .pipeline
-        .by_name("enc_appsink_vp8")
-        .expect("vp8 appsink")
-        .downcast::<gst_app::AppSink>()
-        .expect("AppSink");
-    assert!(!appsink.property::<bool>("sync"), "vp8 producer sync=false");
-    assert_eq!(appsink.max_buffers(), 5);
-}
-
-/// VP8 compat profile (prod measurement 2026-06-12): the VP8 branch must be
-/// CHEAP ON BOTH ENDS. At 720p30 the software vp8enc put the prod N100 at
-/// 175% CPU / load 11.4 (hiccups for ALL consumers, healthy H264 ones
-/// included), and the weak Vestel TVs that USE this branch decode VP8 in
-/// software too — on real motion content they managed 0.3-1.7 fps with
-/// freezes. The branch is the COMPATIBILITY profile for weak devices:
-/// 854×480 @ 30fps, 1 Mbps. Healthy clients stay on the H264 720p branch.
-#[test]
-fn vp8_branch_is_480p_compat_profile() {
+fn compat_branch_is_h264_640x480_with_relay_props() {
     super::super::init().unwrap();
     if super::super::hw_h264_encoder().is_none() {
         return;
@@ -705,30 +724,83 @@ fn vp8_branch_is_480p_compat_profile() {
 
     let scale_caps = p
         .pipeline
-        .by_name("vp8_scale_caps")
-        .expect("capsfilter named vp8_scale_caps between the VP8 videoconvert and vp8enc");
+        .by_name("compat_scale_caps")
+        .expect("capsfilter named compat_scale_caps in the compat branch");
     let caps = scale_caps.property::<gst::Caps>("caps");
     let s = caps.structure(0).expect("caps structure");
     assert_eq!(s.name(), "video/x-raw");
     assert_eq!(
+        s.get::<&str>("format").expect("format field"),
+        "NV12",
+        "compat branch must stay NV12 — the tee output is already NV12 (no videoconvert)"
+    );
+    assert_eq!(
         s.get::<i32>("width").expect("width field"),
-        854,
-        "VP8 compat profile must downscale to 854 wide (480p)"
+        640,
+        "EXACTLY 640 — the MStar OMX default-init width; any other width forces the fatal port reconfig"
     );
     assert_eq!(
         s.get::<i32>("height").expect("height field"),
         480,
-        "VP8 compat profile must downscale to 480 tall"
+        "EXACTLY 480 — the MStar OMX default-init height"
     );
 
-    let vp8 = p
+    let encoder = p.pipeline.by_name("encoder").expect("primary encoder");
+    let compat = p
         .pipeline
-        .by_name("encoder_vp8")
-        .expect("vp8enc named encoder_vp8");
+        .by_name("encoder_compat")
+        .expect("H264 encoder named encoder_compat in the compat branch");
     assert_eq!(
-        vp8.property::<i32>("target-bitrate"),
-        1_000_000,
-        "VP8 compat profile bitrate must be 1 Mbps (was 2 Mbps at 720p)"
+        compat.factory().map(|f| f.name()),
+        encoder.factory().map(|f| f.name()),
+        "compat encoder must use the SAME factory as the primary (hardware encode on both branches)"
+    );
+
+    let profile_caps = p
+        .pipeline
+        .by_name("compat_profile_caps")
+        .expect("capsfilter named compat_profile_caps between encoder_compat and h264parse_compat");
+    let caps = profile_caps.property::<gst::Caps>("caps");
+    let s = caps.structure(0).expect("caps structure");
+    assert_eq!(s.name(), "video/x-h264");
+    assert_eq!(
+        s.get::<&str>("profile").expect("profile field"),
+        "constrained-baseline",
+        "compat branch must pin constrained-baseline like the primary (strict TV decoders)"
+    );
+
+    let parse = p
+        .pipeline
+        .by_name("h264parse_compat")
+        .expect("h264parse named h264parse_compat in the compat branch");
+    assert_eq!(
+        parse.property::<i32>("config-interval"),
+        -1,
+        "SPS/PPS before every IDR so compat joiners start decoding immediately"
+    );
+
+    let appsink = p
+        .pipeline
+        .by_name("enc_appsink_compat")
+        .expect("appsink named enc_appsink_compat")
+        .downcast::<gst_app::AppSink>()
+        .expect("enc_appsink_compat is an AppSink");
+    assert!(
+        !appsink.property::<bool>("sync"),
+        "compat producer appsink must be sync=false (relay, not renderer)"
+    );
+    assert_eq!(appsink.max_buffers(), 5, "compat backlog must be 5 frames");
+    let sink_caps = appsink.caps().expect("enc_appsink_compat caps");
+    assert_eq!(
+        sink_caps.structure(0).expect("caps structure").name(),
+        "video/x-h264",
+        "compat bridge caps must be H264 (consumers parse it with the same rtph264pay path)"
+    );
+
+    assert_eq!(
+        p.iterate_encoders().count(),
+        2,
+        "EXACTLY TWO H264 encoders by design — one per profile (encoder + encoder_compat)"
     );
 }
 
