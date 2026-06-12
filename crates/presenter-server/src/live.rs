@@ -35,6 +35,15 @@ impl LiveHub {
 
 /// Forward live events from a broadcast stream to a WebSocket sink until the
 /// stream ends (hub dropped) or the sink errors (socket closed).
+///
+/// A `Lagged` broadcast error (this subscriber fell more than the channel
+/// capacity behind — e.g. a TV whose TCP send buffer stalled) SKIPS the
+/// missed events and KEEPS forwarding: `BroadcastStream` resumes at the
+/// oldest retained event. Breaking on lag — the previous behavior — left a
+/// ZOMBIE socket: the read side stayed open so the client believed it was
+/// connected, but no event (including `ndi_source_activated`) ever arrived
+/// again until a manual page reload. Matches the Lagged handling in
+/// `companion/mod.rs` and `state/mod.rs`.
 async fn forward_live_events<S>(stream: &mut BroadcastStream<LiveEvent>, sender: &mut S)
 where
     S: futures_util::Sink<Message> + Unpin,
@@ -51,8 +60,7 @@ where
                 Err(err) => warn!(?err, "failed to serialise live event"),
             },
             Err(err) => {
-                warn!(?err, "live broadcast stream closed unexpectedly");
-                break;
+                warn!(?err, "live subscriber lagged; skipping missed events");
             }
         }
     }
