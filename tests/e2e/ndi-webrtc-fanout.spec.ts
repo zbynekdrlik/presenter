@@ -45,12 +45,15 @@ test.afterAll(async () => {
 // The load-bearing end-to-end proof for #336:
 //
 // Two concurrent browser contexts connect to the same NDI source via WHEP.
-// The shared-encoder architecture must route both consumers through ONE
-// GStreamer encoder + tee combination rather than spawning a second encoder
-// per consumer. The /ndi/snapshot/:source_id diagnostic route exposes this
-// invariant so the test can assert it.
+// The shared-encoder architecture must route both consumers through the
+// SHARED per-profile encoders rather than spawning a second encoder per
+// consumer. The encoder pipeline holds EXACTLY TWO encoders BY DESIGN —
+// one per PROFILE (720p default + 640×480 compat) — regardless of how many
+// consumers attach. The /ndi/snapshot/:source_id diagnostic route exposes
+// this invariant so the test can assert it.
 //
-// Fanout invariant: encoderCount=1, consumerCount=2.
+// Fanout invariant: encoderCount=2 (per profile, NOT per consumer),
+// consumerCount=2.
 // ─────────────────────────────────────────────────────────────────────────
 test(
   "#336 shared-encoder fanout: two browser tabs → one encoder + two webrtcbins @video-codec",
@@ -148,8 +151,10 @@ test(
     };
     expect(
       snap.encoderCount,
-      "shared-encoder invariant: exactly ONE encoder for multiple consumers",
-    ).toBe(1);
+      "shared-encoder invariant: exactly TWO encoders (one per profile: " +
+        "720p default + 640x480 compat) for multiple consumers — never " +
+        "one per consumer",
+    ).toBe(2);
     expect(
       snap.consumerCount,
       "fanout invariant: two consumers attached to the shared pipeline",

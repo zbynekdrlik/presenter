@@ -6,7 +6,7 @@
 
 use anyhow::{anyhow, Result};
 
-use crate::pipeline::{NdiPipeline, PipelineState};
+use crate::pipeline::{NdiPipeline, PipelineState, StreamProfile};
 
 use super::{ActiveSource, NdiManager, WhepOp, WhepReply, SOURCE_NOT_ACTIVE_ERR};
 
@@ -93,7 +93,11 @@ impl NdiManager {
     /// inside the lock, drop the guard, then call the pipeline method outside.
     pub async fn whep_signaller_call(&self, source_id: &str, op: WhepOp) -> Result<WhepReply> {
         match op {
-            WhepOp::Post { id: None, body } => self.whep_post(source_id, body).await,
+            WhepOp::Post {
+                id: None,
+                body,
+                profile,
+            } => self.whep_post(source_id, body, profile).await,
             WhepOp::Post { id: Some(_), .. } => self.whep_reoffer(source_id).await,
             WhepOp::Patch {
                 id,
@@ -116,14 +120,22 @@ impl NdiManager {
         Ok(std::sync::Arc::clone(&src.pipeline))
     }
 
-    /// WHEP POST (new consumer): SDP offer in, 201 + SDP answer + Location out.
-    async fn whep_post(&self, source_id: &str, body: Vec<u8>) -> Result<WhepReply> {
+    /// WHEP POST (new consumer): SDP offer in, 201 + SDP answer + Location
+    /// out. `profile` selects the encode branch (default 720p / compat
+    /// 640×480) that feeds the new consumer.
+    async fn whep_post(
+        &self,
+        source_id: &str,
+        body: Vec<u8>,
+        profile: StreamProfile,
+    ) -> Result<WhepReply> {
         let pipeline = self.streaming_pipeline(source_id).await?;
-        let answer = pipeline.add_consumer(body).await?;
+        let answer = pipeline.add_consumer(body, profile).await?;
         let location = format!("/ndi/whep/{source_id}/{}", answer.session_id);
         tracing::info!(
             source_id = %source_id,
             session_id = %answer.session_id,
+            profile = ?profile,
             "WHEP POST → 201"
         );
         Ok(WhepReply {

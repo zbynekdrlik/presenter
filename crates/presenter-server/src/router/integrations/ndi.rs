@@ -38,9 +38,11 @@ pub(crate) async fn ndi_status(State(state): State<AppState>) -> Json<serde_json
 ///
 /// Returns JSON (camelCase) with `encoderCount`, `consumerCount`, and a
 /// per-session `sessions` array. Used by the Playwright fanout E2E test
-/// to assert `encoderCount=1` + `consumerCount=2` when two browser tabs
-/// are connected to the same NDI source, and as an operator/incident-
-/// debugging tool for checking pipeline health without tailing logs.
+/// to assert `encoderCount=2` (one encoder per PROFILE — 720p default +
+/// 640×480 compat — never per consumer) + `consumerCount=2` when two
+/// browser tabs are connected to the same NDI source, and as an operator/
+/// incident-debugging tool for checking pipeline health without tailing
+/// logs.
 ///
 /// 404 — source is not currently active (no pipeline exists for this id).
 /// 503 — NDI SDK not available on this host.

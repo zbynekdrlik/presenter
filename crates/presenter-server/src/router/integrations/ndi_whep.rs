@@ -5,15 +5,25 @@
 
 use axum::{
     body::Bytes,
-    extract::{Path, State},
+    extract::{Path, Query, State},
     http::HeaderMap,
     response::Response,
 };
 use presenter_ndi::manager::{WhepOp, WhepReply, SOURCE_NOT_ACTIVE_ERR};
+use presenter_ndi::StreamProfile;
 use tracing::instrument;
 
 use super::super::AppError;
 use crate::state::AppState;
+
+/// Query parameters on the WHEP POST. `?profile=compat` selects the 640×480
+/// compat encode branch (weak TVs whose OMX decoder dies on the port
+/// reconfig a non-640×480 stream forces); absent or any other value selects
+/// the default 720p branch — see `StreamProfile::from_query`.
+#[derive(Debug, Default, serde::Deserialize)]
+pub(crate) struct WhepPostQuery {
+    profile: Option<String>,
+}
 
 fn into_response(reply: WhepReply) -> Response {
     let mut builder = Response::builder().status(reply.status);
@@ -45,6 +55,7 @@ fn map_signaller_error(err: anyhow::Error) -> AppError {
 #[instrument(skip_all, fields(source_id = %source_id))]
 pub(crate) async fn post_whep_endpoint(
     Path(source_id): Path<String>,
+    Query(query): Query<WhepPostQuery>,
     State(state): State<AppState>,
     body: Bytes,
 ) -> Result<Response, AppError> {
@@ -57,6 +68,7 @@ pub(crate) async fn post_whep_endpoint(
             WhepOp::Post {
                 id: None,
                 body: body.to_vec(),
+                profile: StreamProfile::from_query(query.profile.as_deref()),
             },
         )
         .await
@@ -79,6 +91,9 @@ pub(crate) async fn post_whep_session(
             WhepOp::Post {
                 id: Some(session_id),
                 body: body.to_vec(),
+                // Session-scoped re-offer is unsupported (501) — the profile
+                // is irrelevant on this path.
+                profile: StreamProfile::Default,
             },
         )
         .await
@@ -211,6 +226,7 @@ mod tests {
         let state = fresh_state().await;
         let result = post_whep_endpoint(
             Path("00000000-0000-0000-0000-000000000000".to_string()),
+            Query(WhepPostQuery::default()),
             State(state),
             empty_body(),
         )
@@ -229,6 +245,28 @@ mod tests {
             "expected 404 or 503, got {}",
             resp.status()
         );
+    }
+
+    /// `?profile=compat` must not change the error contract for an inactive
+    /// source: the query is parsed (compat selects the 640×480 branch once
+    /// the source streams) but an inactive source still yields the same
+    /// 404/503 path as a default-profile POST.
+    #[tokio::test]
+    async fn post_whep_endpoint_with_compat_profile_keeps_inactive_source_contract() {
+        let state = fresh_state().await;
+        let result = post_whep_endpoint(
+            Path("00000000-0000-0000-0000-000000000000".to_string()),
+            Query(WhepPostQuery {
+                profile: Some("compat".to_string()),
+            }),
+            State(state),
+            empty_body(),
+        )
+        .await;
+        let Err(err) = result else {
+            panic!("expected Err for inactive source");
+        };
+        assert_not_found_or_unavailable(err.into_response().status());
     }
 
     /// Both 404 (manager present, source not active) and 503 (no manager) are

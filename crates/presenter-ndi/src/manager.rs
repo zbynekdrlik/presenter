@@ -23,7 +23,7 @@ use tokio::sync::Mutex;
 
 use crate::discovery::{FinderShutdown, SourceList};
 use crate::ndi_sdk::NdiLib;
-use crate::pipeline::{NdiPipeline, PipelineState};
+use crate::pipeline::{NdiPipeline, PipelineState, StreamProfile};
 
 mod lifecycle;
 mod supervisor;
@@ -44,8 +44,15 @@ pub const SOURCE_NOT_ACTIVE_ERR: &str = "source not active";
 
 /// One operation in the WHEP signaller protocol.
 pub enum WhepOp {
-    /// SDP offer (or session-scoped re-offer).
-    Post { id: Option<String>, body: Vec<u8> },
+    /// SDP offer (or session-scoped re-offer). `profile` is the stream
+    /// profile the client requested via the `?profile=compat` query on its
+    /// POST (parsed at the HTTP layer); it selects which encode branch
+    /// feeds the new consumer.
+    Post {
+        id: Option<String>,
+        body: Vec<u8>,
+        profile: StreamProfile,
+    },
     /// ICE trickle update.
     Patch {
         id: String,

@@ -40,9 +40,9 @@ impl NdiPipeline {
         let _ = gstreamer::init();
         let (state_tx, state_rx) = watch::channel(PipelineState::Stopped);
         let appsink = gst_app::AppSink::builder().build();
-        // producer_vp8 mirrors production's parallel VP8 branch with another
-        // detached appsink (no VP8 fanout is exercised by these tests).
-        let appsink_vp8 = gst_app::AppSink::builder().build();
+        // producer_compat mirrors production's parallel compat branch with
+        // another detached appsink (no compat fanout is exercised here).
+        let appsink_compat = gst_app::AppSink::builder().build();
         Self {
             pipeline: gst::Pipeline::new(),
             whep_url: String::new(),
@@ -51,7 +51,7 @@ impl NdiPipeline {
             bus_watch: std::sync::Mutex::new(None),
             sessions: Arc::new(tokio::sync::Mutex::new(HashMap::new())),
             producer: StreamProducer::from(&appsink),
-            producer_vp8: StreamProducer::from(&appsink_vp8),
+            producer_compat: StreamProducer::from(&appsink_compat),
         }
     }
 
@@ -64,16 +64,21 @@ impl NdiPipeline {
 
     /// Build a pipeline with the shared-encoder topology using `videotestsrc`
     /// in place of `ndisrc`/`ndisrcdemux`, so the test runs on hosts without
-    /// gst-plugin-ndi registered. Mirrors production: the encoder pipeline
-    /// ends in an appsink wrapped by a StreamProducer; consumers run in their
-    /// OWN pipelines (see `add_consumer_stub`).
+    /// gst-plugin-ndi registered. Mirrors production's TWO-PROFILE shape:
+    /// `src → convert → tee` fanning into a default branch (encoder →
+    /// h264parse → enc_appsink) and a compat branch (encoder_compat →
+    /// h264parse_compat → enc_appsink_compat), each wrapped by its own
+    /// StreamProducer; consumers run in their OWN pipelines (see
+    /// `add_consumer_stub`).
     ///
     /// Fails with an error if `encoder_name` is not registered.
     ///
     /// NOTE: this stub uses FIXED legacy tuning values (GOP 30, backlog 30,
     /// sync=true) for STRUCTURAL tests only — it does not track production
-    /// tuning. The real values are locked by
-    /// `pipeline_tuning_properties_are_low_latency` against `NdiPipeline::build`.
+    /// tuning or the compat downscale. The real values are locked by
+    /// `pipeline_tuning_properties_are_low_latency` and
+    /// `compat_branch_is_h264_640x480_with_relay_props` against
+    /// `NdiPipeline::build`.
     pub fn stopped_for_test_with_topology(encoder_name: &str) -> Result<Self> {
         crate::init()?;
         if gst::ElementFactory::find(encoder_name).is_none() {
@@ -88,7 +93,60 @@ impl NdiPipeline {
         let convert = gst::ElementFactory::make("videoconvert")
             .build()
             .context("videoconvert")?;
-        let mut encoder_builder = gst::ElementFactory::make(encoder_name).name("encoder");
+        let tee = gst::ElementFactory::make("tee")
+            .name("raw_tee")
+            .build()
+            .context("tee")?;
+        pipeline
+            .add_many([&src, &convert, &tee])
+            .context("add head")?;
+        gst::Element::link_many([&src, &convert, &tee]).context("link head")?;
+        let producer = Self::add_stub_encode_branch(
+            &pipeline,
+            &tee,
+            encoder_name,
+            "encoder",
+            "h264parse",
+            "enc_appsink",
+        )?;
+        let producer_compat = Self::add_stub_encode_branch(
+            &pipeline,
+            &tee,
+            encoder_name,
+            "encoder_compat",
+            "h264parse_compat",
+            "enc_appsink_compat",
+        )?;
+        let (state_tx, state_rx) = watch::channel(PipelineState::Stopped);
+        Ok(Self {
+            pipeline,
+            whep_url: String::new(),
+            state_tx,
+            state_rx,
+            bus_watch: std::sync::Mutex::new(None),
+            sessions: Arc::new(tokio::sync::Mutex::new(HashMap::new())),
+            producer,
+            producer_compat,
+        })
+    }
+
+    /// Test-only helper for `stopped_for_test_with_topology`: append one
+    /// encode branch (`queue → encoder → h264parse → appsink`) to the stub
+    /// tee and wrap its appsink in a StreamProducer. Legacy fixed tuning —
+    /// structural tests only.
+    fn add_stub_encode_branch(
+        pipeline: &gst::Pipeline,
+        tee: &gst::Element,
+        encoder_name: &str,
+        encoder_element_name: &str,
+        parse_name: &str,
+        sink_name: &str,
+    ) -> Result<StreamProducer> {
+        let queue = gst::ElementFactory::make("queue")
+            .build()
+            .context("queue")?;
+        let mut encoder_builder =
+            gst::ElementFactory::make(encoder_name).name(encoder_element_name);
         match encoder_name {
             "vah264enc" => {
                 encoder_builder = encoder_builder
@@ -112,48 +170,29 @@ impl NdiPipeline {
         }
         let encoder = encoder_builder.build().context("encoder")?;
         let h264parse = gst::ElementFactory::make("h264parse")
-            .name("h264parse")
+            .name(parse_name)
             .property("config-interval", -1i32)
             .build()
             .context("h264parse")?;
         let appsink = gst_app::AppSink::builder()
-            .name("enc_appsink")
+            .name(sink_name)
             .caps(&consumer_h264_caps())
             .max_buffers(30u32)
             .drop(true)
             .build();
         pipeline
             .add_many([
-                &src,
-                &convert,
+                &queue,
                 &encoder,
                 &h264parse,
                 appsink.upcast_ref::<gst::Element>(),
             ])
-            .context("add")?;
-        gst::Element::link_many([&src, &convert, &encoder, &h264parse]).context("link")?;
+            .context("add branch")?;
+        gst::Element::link_many([tee, &queue, &encoder, &h264parse]).context("link branch")?;
         h264parse
             .link(appsink.upcast_ref::<gst::Element>())
             .context("link h264parse -> appsink")?;
-        let producer = StreamProducer::from(&appsink);
-        // The topology stub keeps the H264-only structure (its tests assert
-        // encoder-count/webrtcbin-count invariants, not the VP8 branch — that
-        // branch is locked against the REAL `NdiPipeline::build` by
-        // `pipeline_has_parallel_vp8_branch_with_low_latency_props`). The
-        // struct field is filled from a detached appsink, like
-        // `stopped_for_test`.
-        let appsink_vp8 = gst_app::AppSink::builder().build();
-        let (state_tx, state_rx) = watch::channel(PipelineState::Stopped);
-        Ok(Self {
-            pipeline,
-            whep_url: String::new(),
-            state_tx,
-            state_rx,
-            bus_watch: std::sync::Mutex::new(None),
-            sessions: Arc::new(tokio::sync::Mutex::new(HashMap::new())),
-            producer,
-            producer_vp8: StreamProducer::from(&appsink_vp8),
-        })
+        Ok(StreamProducer::from(&appsink))
     }
 
     /// Stub: add a consumer WITHOUT SDP exchange (tests only). Builds the
@@ -648,11 +687,9 @@ fn encoder_output_is_pinned_to_constrained_baseline() {
 #[test]
 fn consumer_payloader_uses_zero_latency_aggregation() {
     super::super::init().expect("gst init");
-    let (_appsrc, payloader, _webrtcbin) = super::consumers::build_consumer_elements(
-        "test-agg",
-        super::consumers::ConsumerCodec::H264 { pt: 102 },
-    )
-    .expect("consumer elements build");
+    let (_appsrc, payloader, _webrtcbin) =
+        super::consumers::build_consumer_elements("test-agg", 102)
+            .expect("consumer elements build");
     let value = payloader.property_value("aggregate-mode");
     let (_, enum_value) =
         gst::glib::EnumValue::from_value(&value).expect("aggregate-mode is an enum");
@@ -804,45 +841,93 @@ fn compat_branch_is_h264_640x480_with_relay_props() {
     );
 }
 
-/// Codec selection rule (spec addendum 2, deterministic): H264 whenever the
-/// offer contains it — today's behavior, zero change for healthy clients
-/// (Chrome's default offer lists VP8 first but ALWAYS includes H264).
+/// WHEP `?profile=` query parsing: ONLY the exact string "compat" selects
+/// the compat branch. Absent or unknown values (including the retired "vp8"
+/// some TVs may still send, and any case variant) must degrade to Default —
+/// an unrecognized profile must never break a display's join.
 #[test]
-fn select_codec_prefers_h264_when_offer_has_both() {
-    let offer = "v=0\r\n\
-                 m=video 9 UDP/TLS/RTP/SAVPF 100 103\r\n\
-                 a=rtpmap:100 VP8/90000\r\n\
-                 a=rtpmap:103 H264/90000\r\n";
+fn stream_profile_from_query_parses_compat_only() {
     assert_eq!(
-        super::consumers::select_codec(offer),
-        Some(super::consumers::ConsumerCodec::H264 { pt: 103 }),
-        "H264 must win whenever the offer carries it, even when VP8 is listed first"
+        StreamProfile::from_query(Some("compat")),
+        StreamProfile::Compat
+    );
+    assert_eq!(StreamProfile::from_query(None), StreamProfile::Default);
+    assert_eq!(StreamProfile::from_query(Some("")), StreamProfile::Default);
+    assert_eq!(
+        StreamProfile::from_query(Some("vp8")),
+        StreamProfile::Default,
+        "the retired vp8 mode string must fall back to Default"
+    );
+    assert_eq!(
+        StreamProfile::from_query(Some("Compat")),
+        StreamProfile::Default,
+        "exact match only — unknown casing degrades to Default, never errors"
     );
 }
 
-/// VP8 is served ONLY when the offer carries NO H264 — exactly what the
-/// fallback client produces via setCodecPreferences (VP8+rtx only).
+/// Profile→producer threading: `?profile=compat` must feed the consumer
+/// from the COMPAT branch's producer (the 640×480 stream) and the default
+/// profile from the primary producer. Identified by each producer's
+/// appsink name — the same handle `request_keyframe` pushes its IDR
+/// request through, so this also locks keyframe targeting to the branch
+/// the consumer is actually fed from.
 #[test]
-fn select_codec_falls_back_to_vp8_when_no_h264() {
-    let offer = "v=0\r\n\
-                 m=video 9 UDP/TLS/RTP/SAVPF 100 101\r\n\
-                 a=rtpmap:100 VP8/90000\r\n\
-                 a=rtpmap:101 rtx/90000\r\n";
+fn producer_for_profile_selects_matching_branch() {
+    super::super::init().unwrap();
+    if super::super::hw_h264_encoder().is_none() {
+        return;
+    }
+    let p = NdiPipeline::build("no-such-source", "http://127.0.0.1/whep".into()).unwrap();
     assert_eq!(
-        super::consumers::select_codec(offer),
-        Some(super::consumers::ConsumerCodec::Vp8 { pt: 100 }),
+        p.producer_for_profile(StreamProfile::Default)
+            .appsink()
+            .name(),
+        "enc_appsink",
+        "Default profile must be fed from the primary 720p branch"
+    );
+    assert_eq!(
+        p.producer_for_profile(StreamProfile::Compat)
+            .appsink()
+            .name(),
+        "enc_appsink_compat",
+        "Compat profile must be fed from the 640x480 compat branch"
     );
 }
 
-/// Neither H264 nor VP8 in the offer → no codec to serve; add_consumer must
-/// take the error path instead of building a pipeline the browser can never
-/// decode (the old behavior preset rtph264pay pt=96 and NEVER worked).
+/// A compat consumer's join-time IDR request must reach the COMPAT branch
+/// (upstream from enc_appsink_compat) — not the default encoder. Mirrors
+/// `request_keyframe_sends_force_key_unit_upstream` on the compat producer.
 #[test]
-fn select_codec_returns_none_when_neither_codec_offered() {
-    let offer = "v=0\r\n\
-                 m=video 9 UDP/TLS/RTP/SAVPF 98\r\n\
-                 a=rtpmap:98 VP9/90000\r\n";
-    assert_eq!(super::consumers::select_codec(offer), None);
+fn request_keyframe_targets_the_compat_producer_for_compat_consumers() {
+    use std::sync::atomic::{AtomicBool, Ordering};
+    super::super::init().unwrap();
+    if super::super::hw_h264_encoder().is_none() {
+        return;
+    }
+    let p = NdiPipeline::build("no-such-source", "http://127.0.0.1/whep".into()).unwrap();
+    let appsink = p.pipeline.by_name("enc_appsink_compat").unwrap();
+    // Activate just the compat appsink's pads (READY→PAUSED) so the upstream
+    // event isn't refused on a flushing pad — same setup as the default-
+    // branch keyframe test above.
+    appsink
+        .set_state(gst::State::Paused)
+        .expect("compat appsink must accept PAUSED (ASYNC pre-preroll)");
+    let appsink_pad = appsink.static_pad("sink").unwrap();
+    let seen = std::sync::Arc::new(AtomicBool::new(false));
+    let seen_probe = std::sync::Arc::clone(&seen);
+    appsink_pad.add_probe(gst::PadProbeType::EVENT_UPSTREAM, move |_, info| {
+        if let Some(gst::PadProbeData::Event(ev)) = &info.data {
+            if gst_video::UpstreamForceKeyUnitEvent::parse(ev).is_ok() {
+                seen_probe.store(true, Ordering::SeqCst);
+            }
+        }
+        gst::PadProbeReturn::Ok
+    });
+    super::consumers::request_keyframe(p.producer_for_profile(StreamProfile::Compat));
+    assert!(
+        seen.load(Ordering::SeqCst),
+        "ForceKeyUnit must be pushed upstream from the COMPAT producer appsink"
+    );
 }
 
 /// /ndi/snapshot must expose per-consumer fanout counters and (when the
