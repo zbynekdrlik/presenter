@@ -17,7 +17,7 @@ use gstreamer_utils::StreamProducer;
 use gstreamer_video as gst_video;
 use tokio::sync::watch;
 
-use super::build::consumer_h264_caps;
+use super::build::{consumer_h264_caps, consumer_vp8_caps};
 use super::*;
 use crate::whep_session::{WhepConnectionState, WhepSession};
 
@@ -206,7 +206,7 @@ impl NdiPipeline {
             .context("vp8enc (stub)")?;
         let appsink = gst_app::AppSink::builder()
             .name("enc_appsink_compat")
-            .caps(&gst::Caps::builder("video/x-vp8").build())
+            .caps(&consumer_vp8_caps())
             .max_buffers(30u32)
             .drop(true)
             .build();
@@ -409,9 +409,9 @@ fn pipeline_tuning_properties_are_low_latency() {
     assert_eq!(gop, 240, "GOP must be 240 frames");
 }
 
-/// The video encoder factories `iterate_encoders` counts (H264 default branch
-/// + vp8enc compat branch) — mirrored here so the #336 tests can ALSO prove
-/// consumer pipelines hold zero of them.
+/// The video encoder factories `iterate_encoders` counts (the H264 default
+/// branch and the vp8enc compat branch) — mirrored here so the #336 tests
+/// can ALSO prove consumer pipelines hold zero of them.
 const ENCODER_FACTORIES: [&str; 6] = [
     "vah264enc",
     "nvh264enc",
@@ -717,12 +717,42 @@ fn encoder_output_is_pinned_to_constrained_baseline() {
 fn consumer_payloader_uses_zero_latency_aggregation() {
     super::super::init().expect("gst init");
     let (_appsrc, payloader, _webrtcbin) =
-        super::consumers::build_consumer_elements("test-agg", 102)
+        super::consumers::build_consumer_elements("test-agg", StreamProfile::Default, 102)
             .expect("consumer elements build");
     let value = payloader.property_value("aggregate-mode");
     let (_, enum_value) =
         gst::glib::EnumValue::from_value(&value).expect("aggregate-mode is an enum");
     assert_eq!(enum_value.nick(), "zero-latency");
+}
+
+/// The profile implies the codec (realtime-VP8 compat pivot): a compat
+/// consumer's elements must payload VP8 — `rtpvp8pay` pre-seated on the
+/// offer's VP8 pt, with the appsrc created on the VP8 bridge caps so the
+/// very first sample forwarded from `enc_appsink_compat` agrees. (A
+/// rtph264pay here would silently discard every VP8 buffer — connected, but
+/// black.)
+#[test]
+fn compat_consumer_elements_payload_vp8() {
+    super::super::init().expect("gst init");
+    let (appsrc, payloader, _webrtcbin) =
+        super::consumers::build_consumer_elements("test-vp8", StreamProfile::Compat, 96)
+            .expect("consumer elements build");
+    assert_eq!(
+        payloader.factory().map(|f| f.name().to_string()).as_deref(),
+        Some("rtpvp8pay"),
+        "compat consumers must payload VP8"
+    );
+    assert_eq!(
+        payloader.property::<u32>("pt"),
+        96,
+        "rtpvp8pay must be pre-seated on the offer's VP8 pt"
+    );
+    let caps = appsrc.caps().expect("compat appsrc has initial caps");
+    assert_eq!(
+        caps.structure(0).expect("caps structure").name(),
+        "video/x-vp8",
+        "compat appsrc bridge caps must match the VP8 producer appsink"
+    );
 }
 
 /// With GOP=240 a joining consumer MUST trigger an immediate IDR — otherwise

@@ -121,8 +121,8 @@ impl NdiManager {
     }
 
     /// WHEP POST (new consumer): SDP offer in, 201 + SDP answer + Location
-    /// out. `profile` selects the encode branch (default 720p / compat
-    /// 640×480) that feeds the new consumer.
+    /// out. `profile` selects the encode branch (default 720p H264 / compat
+    /// 854×480 realtime VP8) that feeds the new consumer.
     async fn whep_post(
         &self,
         source_id: &str,
