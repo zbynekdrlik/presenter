@@ -494,6 +494,7 @@ test("NDI stream decodes via VP8 for consumers that exclude H264 (Vestel OMX fal
       `WHEP connect must succeed — ${result.error}`,
     ).toBeFalsy();
     const s = result.stats!;
+    console.log(`[e2e-evidence] VP8 stats: ${JSON.stringify(s)}`);
     expect(
       s.framesDecoded,
       `VP8-only consumer must DECODE video frames (framesDecoded > 0); ` +
