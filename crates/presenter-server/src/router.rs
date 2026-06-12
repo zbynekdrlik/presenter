@@ -9,6 +9,7 @@ mod playlists;
 mod presentations;
 mod search;
 pub(crate) mod stage;
+mod stage_lite;
 mod tablet_pwa;
 mod timers;
 mod ui_routes;
@@ -152,7 +153,8 @@ pub fn build_router(state: AppState) -> Router {
             get(stage::get_stage_layout).post(stage::set_stage_layout),
         )
         .route("/stage/connections", get(stage::list_stage_connections))
-        .route("/stage", get(wasm_ui::wasm_ui_shell))
+        .route("/stage", get(stage_lite::stage_shell))
+        .route("/stage/lite", get(stage_lite::stage_lite_page))
         .route(
             "/stage/snapshot",
             get(stage::stage_display_selected_snapshot_json),

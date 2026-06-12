@@ -4,6 +4,7 @@ import {
   refreshDevData,
   startTestServer,
   stopServer,
+  waitForNdiLitePage,
   type ServerHandle,
 } from "./support";
 
@@ -39,7 +40,12 @@ test("ndi-fullscreen appears in stage displays list", async ({ request }) => {
   expect(ndi.name).toBe("NDI FULLSCREEN");
 });
 
-test("stage page renders ndi-fullscreen layout", async ({ page }) => {
+test("stage redirects to the lite NDI player for ndi-fullscreen layout", async ({
+  page,
+}) => {
+  // EXPERIMENT (#379): the ndi-fullscreen layout serves the lite plain-JS
+  // player at /stage/lite instead of the WASM stage page (weak Vestel TVs
+  // stall on the WASM page). /stage must 303 there.
   const consoleMessages: string[] = [];
   page.on("console", (msg) => {
     if (msg.type() === "error" || msg.type() === "warning") {
@@ -54,22 +60,22 @@ test("stage page renders ndi-fullscreen layout", async ({ page }) => {
   );
 
   await page.goto(new URL("/stage", baseURL).toString());
-  await page.waitForSelector('body[data-wasm-ready="true"]', {
-    timeout: 30_000,
-  });
-  await page.waitForSelector('body[data-layout-code="ndi-fullscreen"]', {
-    timeout: 10_000,
-  });
+  await expect(page).toHaveURL(/\/stage\/lite$/);
+  await waitForNdiLitePage(page);
 
-  // Verify placeholder is shown (no active source in test env)
-  const placeholder = page.locator(".stage-ndi__placeholder");
-  await expect(placeholder).toBeVisible();
-  await expect(placeholder).toContainText("No video source");
+  // The lite page mounts exactly one fullscreen video element. With no
+  // active source in the test env it idles in the 5s source-poll loop:
+  // no data-source-id, no WHEP attempts, and a clean console.
+  const video = page.locator('video[data-role="ndi-video"]');
+  await expect(video).toHaveCount(1);
+  await expect(video).not.toHaveAttribute("data-source-id", /.+/);
 
   expect(consoleMessages).toEqual([]);
 });
 
-test("mounts NdiVideo with WebRTC when source is active", async ({ page }) => {
+test("lite player binds the active source id to its video element", async ({
+  page,
+}) => {
   const consoleMessages: string[] = [];
   page.on("console", (msg) => {
     if (msg.type() === "error" || msg.type() === "warning") {
@@ -109,17 +115,17 @@ test("mounts NdiVideo with WebRTC when source is active", async ({ page }) => {
   });
 
   await page.goto(new URL("/stage", baseURL).toString());
-  await page.waitForSelector('body[data-wasm-ready="true"]', {
-    timeout: 30_000,
-  });
-  await page.waitForSelector('body[data-layout-code="ndi-fullscreen"]', {
-    timeout: 10_000,
-  });
+  // EXPERIMENT (#379): ndi-fullscreen layout → lite plain-JS player.
+  await expect(page).toHaveURL(/\/stage\/lite$/);
+  await waitForNdiLitePage(page);
 
-  // Verify <video data-role="ndi-video"> mounts with correct source_id.
+  // The lite player fetches the active source and binds its id to the
+  // (static) <video data-role="ndi-video"> before connecting via WHEP.
   const video = page.locator('[data-role="ndi-video"]');
   await expect(video).toHaveCount(1, { timeout: 10_000 });
-  await expect(video).toHaveAttribute("data-source-id", source.id);
+  await expect(video).toHaveAttribute("data-source-id", source.id, {
+    timeout: 10_000,
+  });
 
   // Legacy MJPEG element must NOT be present.
   await expect(page.locator('img[src*="/ndi/mjpeg"]')).toHaveCount(0);

@@ -2330,7 +2330,8 @@ async fn ndi_client_stats_beacon_returns_no_content() {
                         "fps": 30.0,
                         "jitterBufferMs": 12.5,
                         "freezeCount": 0,
-                        "framesDropped": 1
+                        "framesDropped": 1,
+                        "lite": true
                     }))
                     .unwrap(),
                 ))

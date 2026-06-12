@@ -4,6 +4,7 @@ import {
   refreshDevData,
   startTestServer,
   stopServer,
+  waitForNdiLitePage,
   type ServerHandle,
 } from "./support";
 
@@ -115,14 +116,16 @@ test("stage page mounts NdiVideo with correct data attributes when source active
   );
 
   await page.goto(new URL("/stage", baseURL).toString());
-  await page.waitForSelector('body[data-wasm-ready="true"]', { timeout: 30_000 });
-  await page.waitForSelector('body[data-layout-code="ndi-fullscreen"]', { timeout: 10_000 });
+  // EXPERIMENT (#379): ndi-fullscreen layout → lite plain-JS player.
+  await waitForNdiLitePage(page);
 
-  // The new component MUST render exactly one <video data-role="ndi-video"> with
-  // data-source-id matching the active source. No <img src="/ndi/mjpeg"> anywhere.
+  // The lite player MUST render exactly one <video data-role="ndi-video"> and
+  // bind data-source-id to the active source. No <img src="/ndi/mjpeg"> anywhere.
   const videoEl = page.locator('[data-role="ndi-video"]');
   await expect(videoEl).toHaveCount(1);
-  await expect(videoEl).toHaveAttribute("data-source-id", src.id);
+  await expect(videoEl).toHaveAttribute("data-source-id", src.id, {
+    timeout: 10_000,
+  });
 
   // No legacy MJPEG image element should exist anywhere.
   await expect(page.locator('img[src*="/ndi/mjpeg"]')).toHaveCount(0);
@@ -153,7 +156,8 @@ test("NdiVideo videoWidth resolves above zero within 5 seconds of mount", async 
     { data: { code: "ndi-fullscreen" } },
   );
   await page.goto(new URL("/stage", baseURL).toString());
-  await page.waitForSelector('body[data-wasm-ready="true"]', { timeout: 30_000 });
+  // EXPERIMENT (#379): ndi-fullscreen layout → lite plain-JS player.
+  await waitForNdiLitePage(page);
 
   // Poll videoWidth until > 0 or 5 s timeout.
   const ok = await page
@@ -223,7 +227,11 @@ test("NdiVideo actually starts playing (autoplay policy regression) @video-codec
     { data: { code: "ndi-fullscreen" } },
   );
   await page.goto(new URL("/stage", baseURL).toString());
-  await page.waitForSelector('body[data-wasm-ready="true"]', { timeout: 30_000 });
+  // EXPERIMENT (#379): ndi-fullscreen layout → lite plain-JS player. The
+  // autoplay regression surface is identical: the lite page assigns
+  // srcObject programmatically and must call video.play() with the muted
+  // PROPERTY set, or real Chrome blocks playback.
+  await waitForNdiLitePage(page);
 
   // Poll for actual playback. videoWidth > 0 alone isn't enough — a paused
   // video can have videoWidth set after metadata loads. The autoplay bug
@@ -306,25 +314,23 @@ test("stage clears Connecting overlay when activate succeeds (requires live NDI)
     { data: { code: "ndi-fullscreen" } },
   );
   await page.goto(new URL("/stage", baseURL).toString());
-  await page.waitForSelector('body[data-wasm-ready="true"]', { timeout: 30_000 });
-  await page.waitForSelector('body[data-layout-code="ndi-fullscreen"]', { timeout: 10_000 });
-
-  // The WS event NdiConnectionStatus="connected" should arrive shortly after
-  // the page opens. Once it does, the <Show> guard hides .stage-ndi__overlay.
-  // We wait up to 10s — well above the typical end-to-end overlay-clear time
-  // (~1s on dev2) but far below what a hang would take.
+  // EXPERIMENT (#379): ndi-fullscreen layout → lite plain-JS player. The
+  // lite page has NO "Connecting…" overlay at all (no WS, no status UI) —
+  // the assertion below now guards that no stray overlay element appears.
+  await waitForNdiLitePage(page);
   await page.waitForFunction(
     () => !document.querySelector(".stage-ndi__overlay"),
     null,
     { timeout: 10_000 },
   );
 
-  // Sanity: the <NdiVideo> mounted with the right source id, AND no MJPEG
-  // leftover. (Catches a regression where the overlay vanishes for the wrong
-  // reason — e.g. the layout broke entirely.)
+  // Sanity: the lite video element bound the right source id, AND no MJPEG
+  // leftover.
   const video = page.locator('[data-role="ndi-video"]');
   await expect(video).toHaveCount(1);
-  await expect(video).toHaveAttribute("data-source-id", src.id);
+  await expect(video).toHaveAttribute("data-source-id", src.id, {
+    timeout: 10_000,
+  });
   await expect(page.locator('.stage-ndi__overlay')).toHaveCount(0);
 
   // Cleanup.
@@ -395,10 +401,8 @@ test("video flows on fresh /stage navigation after activate (requires live NDI)"
 
   // Single fresh navigation — operator hitting /stage in a browser.
   await page.goto(new URL("/stage", baseURL).toString());
-  await page.waitForSelector('body[data-wasm-ready="true"]', { timeout: 30_000 });
-  await page.waitForSelector('body[data-layout-code="ndi-fullscreen"]', {
-    timeout: 10_000,
-  });
+  // EXPERIMENT (#379): ndi-fullscreen layout → lite plain-JS player.
+  await waitForNdiLitePage(page);
 
   // The <video> element should mount AND its videoWidth should resolve > 0
   // within 10s of mount (WHEP signalling, ICE handshake, first frame).
@@ -469,8 +473,8 @@ test("video keeps flowing across multiple fresh navigations (requires live NDI)"
   for (let nav = 1; nav <= 3; nav++) {
     const navPage = await context.newPage();
     await navPage.goto(new URL(`/stage?nav=${nav}`, baseURL).toString());
-    await navPage.waitForSelector('body[data-wasm-ready="true"]', { timeout: 30_000 });
-    await navPage.waitForSelector('body[data-layout-code="ndi-fullscreen"]', { timeout: 10_000 });
+    // EXPERIMENT (#379): ndi-fullscreen layout → lite plain-JS player.
+    await waitForNdiLitePage(navPage);
     const result = await navPage.locator('[data-role="ndi-video"]').evaluate(
       async (el: HTMLVideoElement) => {
         for (let i = 0; i < 120; i++) {

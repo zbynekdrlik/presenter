@@ -84,6 +84,10 @@ pub(crate) struct NdiClientStatsBeacon {
     pub jitter_buffer_ms: Option<f64>,
     pub freeze_count: Option<f64>,
     pub frames_dropped: Option<f64>,
+    /// `true` when the beacon comes from the lite plain-JS stage page
+    /// (`/stage/lite`, weak-TV experiment #379) instead of the WASM stage —
+    /// lets the logs attribute decode health to the page variant.
+    pub lite: Option<bool>,
 }
 
 /// Stage displays POST a compact getStats summary every 15s. Log-only (MVP):
@@ -102,6 +106,7 @@ pub(crate) async fn ndi_client_stats(Json(beacon): Json<NdiClientStatsBeacon>) -
         jitter_buffer_ms = beacon.jitter_buffer_ms,
         freeze_count = beacon.freeze_count,
         frames_dropped = beacon.frames_dropped,
+        lite = beacon.lite,
         "NDI stage-display client stats beacon"
     );
     StatusCode::NO_CONTENT
@@ -117,6 +122,18 @@ mod tests {
     /// manager attached depending on whether libndi is loadable on the host.
     async fn fresh_state() -> AppState {
         AppState::in_memory().await.expect("in-memory AppState")
+    }
+
+    #[test]
+    fn client_stats_beacon_parses_lite_field() {
+        let beacon: NdiClientStatsBeacon =
+            serde_json::from_str(r#"{"sourceId":"src-1","profile":"compat","lite":true}"#)
+                .expect("beacon JSON with lite field parses");
+        assert_eq!(beacon.lite, Some(true));
+        // WASM-stage beacons don't send the field — it must stay optional.
+        let wasm_beacon: NdiClientStatsBeacon =
+            serde_json::from_str(r#"{"sourceId":"src-1"}"#).expect("beacon without lite parses");
+        assert_eq!(wasm_beacon.lite, None);
     }
 
     #[tokio::test]

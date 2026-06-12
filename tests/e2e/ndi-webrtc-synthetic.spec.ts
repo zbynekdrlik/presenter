@@ -523,14 +523,15 @@ test("compat profile consumers get the realtime VP8 854x480 stream @video-codec 
 });
 
 // ── Test 4: the deactivate→reactivate guard (prod TV white-screen incident,
-// 2026-06). After the operator deactivates the active source and activates
-// it again, the REAL stage page (WASM UI at /stage) must unmount the video,
-// then REMOUNT it and resume decoding — without a page reload. The shipped
-// bug: a TV that missed the ndi_source_activated live event (zombie WS /
-// broadcast lag) showed a white stage with ZERO WHEP attempts until someone
-// reloaded the page. This drives the same user-visible flow end-to-end
-// through the stage UI's reactive chain (WS event → signals → <NdiVideo>).
-test("stage remounts NDI video and resumes decoding after deactivate→reactivate (synthetic source) @video-codec @synthetic-ndi", async ({
+// 2026-06), adapted to the lite stage page (EXPERIMENT #379): with the
+// ndi-fullscreen layout active, /stage 303-redirects every stage display to
+// the plain-JS player at /stage/lite. After the operator deactivates the
+// active source and activates it again, the lite player must tear down its
+// session (its <video> stays mounted — static page — but loses
+// data-source-id/srcObject) and then RESUME decoding via its own 5s
+// source-poll loop — without a page reload. Same user-visible contract the
+// WASM remount guard protected: frames resume after reactivate, no reload.
+test("stage lands on the lite player and resumes decoding after deactivate→reactivate (synthetic source) @video-codec @synthetic-ndi", async ({
   page,
   request,
 }) => {
@@ -548,7 +549,7 @@ test("stage remounts NDI video and resumes decoding after deactivate→reactivat
   try {
     await waitForPipelineStreaming(request, src.id);
 
-    // Real stage page on the ndi-fullscreen layout.
+    // Real stage entry point on the ndi-fullscreen layout.
     const layoutResp = await request.post(
       new URL("/stage/layout", baseURL).toString(),
       { data: { code: "ndi-fullscreen" } },
@@ -560,24 +561,32 @@ test("stage remounts NDI video and resumes decoding after deactivate→reactivat
 
     // Errors only: the deactivate phase legitimately emits watchdog/reconnect
     // console WARNINGS by design (same convention as ndi-webrtc-recovery).
+    // ALLOWED errors: activate flips the DB row active BEFORE the pipeline
+    // finishes starting, so the lite player's 5s source poll can race one
+    // WHEP POST into a 503 — Chrome's network layer logs that as a console
+    // error the page can't suppress. The player retries with backoff; the
+    // frame-resume assertion below proves recovery. Same convention as the
+    // ALLOWED list in ndi-webrtc.spec.ts.
+    const ALLOWED = [/Failed to load resource.*50[34]/i];
     const consoleErrors: string[] = [];
     page.on("console", (msg) => {
-      if (msg.type() === "error") consoleErrors.push(msg.text());
+      if (msg.type() === "error" && !ALLOWED.some((re) => re.test(msg.text())))
+        consoleErrors.push(msg.text());
     });
 
     await page.goto(new URL("/stage", baseURL).toString());
-    await page.waitForSelector('body[data-wasm-ready="true"]', {
-      timeout: 30_000,
-    });
-    await page.waitForSelector('body[data-layout-code="ndi-fullscreen"]', {
+    // EXPERIMENT (#379): the ndi layout must land the display on /stage/lite.
+    await expect(page).toHaveURL(/\/stage\/lite$/);
+    await page.waitForSelector('body[data-ndi-lite="true"]', {
       timeout: 10_000,
     });
 
     const video = page.locator('video[data-role="ndi-video"]');
     await expect(video).toBeVisible({ timeout: 15_000 });
 
-    // Frames PRESENTED by the (current) video element — the same signal the
-    // frame-based watchdog uses. Resets when the element is remounted.
+    // Frames PRESENTED by the video element — the same signal the lite
+    // watchdog uses. The element is static on the lite page, so the counter
+    // is monotonic across reconnects; resumption = counter grows again.
     const framesPresented = () =>
       video.evaluate(
         (v: HTMLVideoElement) => v.getVideoPlaybackQuality().totalVideoFrames,
@@ -591,14 +600,24 @@ test("stage remounts NDI video and resumes decoding after deactivate→reactivat
       })
       .toBeGreaterThan(0);
 
-    // Phase 2: deactivate server-side → the stage must unmount the video.
+    // Phase 2: deactivate server-side → the lite player's watchdog (ICE loss
+    // or 10s frame stall) must tear the session down and fall back to source
+    // polling: data-source-id is removed from the video element.
     await request.post(
       new URL("/integrations/video-sources/deactivate", baseURL).toString(),
     );
-    await expect(video).toHaveCount(0, { timeout: 10_000 });
+    await expect
+      .poll(() => video.getAttribute("data-source-id"), {
+        timeout: 25_000,
+        message:
+          "lite player never tore down its session after deactivate (data-source-id still set)",
+      })
+      .toBeNull();
+    const frameBaseline = await framesPresented();
 
-    // Phase 3: reactivate → the stage must remount <NdiVideo> and decode
-    // again WITHOUT a reload (white screen + zero WHEP attempts = the bug).
+    // Phase 3: reactivate → the lite player's 5s source poll must reconnect
+    // and decode again WITHOUT a reload (white screen + zero WHEP attempts =
+    // the original bug).
     const reactivate = await request.post(
       new URL(
         `/integrations/video-sources/${src.id}/activate`,
@@ -608,14 +627,13 @@ test("stage remounts NDI video and resumes decoding after deactivate→reactivat
     );
     expect(reactivate.ok(), "reactivating the source must succeed").toBe(true);
 
-    await expect(video).toBeVisible({ timeout: 15_000 });
     await expect
       .poll(framesPresented, {
         timeout: 30_000,
         message:
-          "stage never resumed presenting frames after deactivate→reactivate (bug-A regression)",
+          "lite player never resumed presenting frames after deactivate→reactivate",
       })
-      .toBeGreaterThan(0);
+      .toBeGreaterThan(frameBaseline);
 
     expect(
       consoleErrors,
