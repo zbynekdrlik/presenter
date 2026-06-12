@@ -4,6 +4,8 @@
 //! `/ndi/whep/<source_id>` via the WHEP protocol. The browser handles
 //! ICE/DTLS/SRTP/jitter-buffer/AV-sync natively. WASM is signaling glue only.
 
+use std::cell::{Cell, RefCell};
+use std::rc::Rc;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 
@@ -32,25 +34,58 @@ fn local_storage() -> Option<leptos::web_sys::Storage> {
     leptos::web_sys::window().and_then(|w| w.local_storage().ok().flatten())
 }
 
+thread_local! {
+    /// In-memory codec mode for THIS page load, seeded from localStorage on
+    /// first use. `None` = not yet seeded. Connect attempts read this, NOT
+    /// localStorage directly: a fallback switch flips it in memory only —
+    /// the sticky localStorage value is written exclusively by
+    /// `persist_proven_codec_mode` once a mode actually decodes (so the
+    /// persisted value is always a PROVEN one, never a guess mid-ping-pong).
+    static CODEC_MODE_VP8: std::cell::Cell<Option<bool>> = const { std::cell::Cell::new(None) };
+    /// At most ONE codec switch per page load. One Vestel TV alternated
+    /// H264↔VP8 repeatedly when its wall-clock-based decode check misfired;
+    /// bounding the switch to once-per-pageload kills the ping-pong.
+    static CODEC_SWITCHED: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+}
+
 /// True when the codec fallback mode is "vp8". Any other value (including
 /// absent) means the default H264-capable offer.
 fn codec_mode_is_vp8() -> bool {
-    local_storage()
-        .and_then(|s| s.get_item(CODEC_MODE_KEY).ok().flatten())
-        .as_deref()
-        == Some("vp8")
+    CODEC_MODE_VP8.with(|cell| {
+        if let Some(v) = cell.get() {
+            return v;
+        }
+        let stored = local_storage()
+            .and_then(|s| s.get_item(CODEC_MODE_KEY).ok().flatten())
+            .as_deref()
+            == Some("vp8");
+        cell.set(Some(stored));
+        stored
+    })
 }
 
-/// Flip the codec mode (h264 → vp8 or vp8 → h264), persist it, and return the
-/// new mode. The toggle (rather than a one-way switch) prevents lock-in: a
-/// display where VP8 ALSO fails the decode check goes back to trying H264 on
-/// the next attempt, alternating until one works.
-fn toggle_codec_mode() -> &'static str {
-    let new_mode = if codec_mode_is_vp8() { "h264" } else { "vp8" };
-    if let Some(storage) = local_storage() {
-        let _ = storage.set_item(CODEC_MODE_KEY, new_mode);
+/// Flip the in-memory codec mode (h264 → vp8 or vp8 → h264) and return the
+/// new mode name — at most ONCE per page load. Returns `None` when the
+/// one-shot switch was already spent (no further toggling until reload).
+/// Deliberately does NOT touch localStorage: only a mode that goes on to
+/// present `PROVEN_MODE_FRAMES` frames gets persisted.
+fn switch_codec_mode_once() -> Option<&'static str> {
+    if CODEC_SWITCHED.with(|c| c.replace(true)) {
+        return None;
     }
-    new_mode
+    let new_vp8 = !codec_mode_is_vp8();
+    CODEC_MODE_VP8.with(|c| c.set(Some(new_vp8)));
+    Some(if new_vp8 { "vp8" } else { "h264" })
+}
+
+/// Persist the CURRENT codec mode to localStorage. Called once a session
+/// presents `PROVEN_MODE_FRAMES` frames — the mode demonstrably decodes on
+/// this display, so it is safe to make sticky across reloads.
+fn persist_proven_codec_mode() {
+    let mode = if codec_mode_is_vp8() { "vp8" } else { "h264" };
+    if let Some(storage) = local_storage() {
+        let _ = storage.set_item(CODEC_MODE_KEY, mode);
+    }
 }
 
 /// Persistent random display id (16 hex chars) for beacon attribution.
@@ -118,173 +153,334 @@ struct WhepSession {
     resource_url: Option<String>,
 }
 
+/// Frame-presentation counters shared between the rVFC observer (writer)
+/// and the health ticker (reader). All timestamps are `now_ms()` values.
+struct FrameStats {
+    /// Frames PRESENTED to the compositor this session (rVFC count, or the
+    /// coarse currentTime proxy on rVFC-less browsers).
+    frames_presented: Cell<u32>,
+    /// Timestamp of the most recently presented frame.
+    last_frame_at: Cell<f64>,
+    /// When this session's watchdog was installed (≈ connect time).
+    started_at: Cell<f64>,
+}
+
 /// Watchdog that fires `on_failure` when EITHER:
-/// - the RTCPeerConnection's iceConnectionState becomes "failed", "disconnected",
-///   or "closed" (genuine connection loss), OR
-/// - after playback has started, the <video> element's currentTime stops
-///   advancing for STALL_THRESHOLD seconds (mid-stream freeze).
+/// - the RTCPeerConnection's iceConnectionState becomes "failed",
+///   "disconnected", or "closed" (genuine connection loss), OR
+/// - a FRAME-BASED health rule trips (see `start_health_ticker`).
 ///
-/// It deliberately does NOT reconnect on "connected but no first frame yet":
-/// the server reliably delivers media to a stable consumer, so a frameless
-/// healthy connection just waits. Reconnecting in that window drove a
-/// multi-consumer churn spiral (every reconnect's tee add/remove disrupted the
-/// other displays, so they stalled and reconnected too — all black forever).
+/// Frame observation is driven by `requestVideoFrameCallback` (fires once
+/// per frame actually PRESENTED to the compositor) — NOT by wall-clock
+/// currentTime sampling. The previous wall-clock heuristics misfired on
+/// prod TVs whose JS timers throttle (Vestel WebViews): the 3s
+/// currentTime-stall check fired during render hiccups although frames
+/// decoded at 30fps, and the tick-12 codec check ping-ponged H264↔VP8 —
+/// measured as 94 WHEP add/removes in 3 minutes across 4 TVs.
 ///
-/// ONE bounded exception to that rule: the codec-fallback decode check. Once
-/// per Watchdog instance, at tick `FALLBACK_CHECK_TICK` (~12s), a single
-/// getStats sample is taken; if the connection is CONNECTED but
-/// `framesDecoded` is still below `FALLBACK_MIN_FRAMES`, the decoder is
-/// considered dead (broken Vestel H264 OMX decodes ~1 frame per 8s GOP),
-/// `ndiCodecMode` is toggled and `on_failure` fires so the reconnect rebuilds
-/// the session with the other codec. Firing at most once per ~12s session
-/// cannot drive the 3s-interval churn spiral above.
+/// It deliberately does NOT reconnect on "connected but no first frame yet"
+/// (except the bounded once-per-pageload codec fallback): the server
+/// reliably delivers media to a stable consumer, so a frameless healthy
+/// connection waits. Reconnecting in that window drove a multi-consumer
+/// churn spiral (every reconnect's tee add/remove disrupted the other
+/// displays, so they stalled and reconnected too — all black forever).
 ///
-/// The closure handles are leaked via `forget()` because wasm-bindgen `Closure`
-/// types are not `Send` and removing them on drop would require keeping the
-/// original handles around in a `Send`-bounded `StoredValue` — which doesn't
-/// fit. Instead we use an `active: Rc<Cell<bool>>` flag: closures check it
-/// first and become no-ops once cleared. `Watchdog::stop()` flips the flag.
-/// The closures themselves outlive the `Watchdog` instance but consume only a
-/// tiny amount of memory (a few `Rc` clones).
+/// The closure handles are leaked via `forget()` because wasm-bindgen
+/// `Closure` types are not `Send` and removing them on drop would require
+/// keeping the original handles around in a `Send`-bounded `StoredValue` —
+/// which doesn't fit. Instead we use an `active: Rc<Cell<bool>>` flag:
+/// closures check it first and become no-ops once cleared (the rVFC chain
+/// additionally stops rescheduling itself). `Watchdog::stop()` flips the
+/// flag. The leaked closures consume only a few `Rc` clones each.
 struct Watchdog {
-    active: std::rc::Rc<std::cell::Cell<bool>>,
+    active: Rc<Cell<bool>>,
 }
 
 impl Watchdog {
-    /// Stall threshold: once playback has started, <video>.currentTime not
-    /// advancing for this many seconds triggers a reconnect (mid-stream freeze).
-    /// Before the first frame there is NO timeout reconnect — a connected client
-    /// waits for media (see the stall-timer comment for why a no-first-frame
-    /// reconnect drove a multi-consumer churn spiral).
-    const STALL_THRESHOLD_SECS: f64 = 3.0;
-    /// How often the stall timer ticks (ms).
+    /// Real-freeze threshold: after playback has started, this long without
+    /// a single PRESENTED frame triggers a reconnect. 10s tolerates render
+    /// hiccups and heavy main-thread throttling — an actual freeze (zero
+    /// frames at all) is unambiguous at this horizon.
+    const STALL_NO_FRAME_MS: f64 = 10_000.0;
+    /// True-no-decode horizon: ICE-connected with ZERO presented frames for
+    /// this long after connect → the decoder is dead → codec fallback
+    /// (bounded to once per page load).
+    const NO_DECODE_FALLBACK_MS: f64 = 15_000.0;
+    /// Beacon cadence driver tick (ms). Health decisions are frame-based;
+    /// the tick only EVALUATES them and paces beacons. May fire late on
+    /// throttled TVs — acceptable, the thresholds are 10-15s.
     const TICK_INTERVAL_MS: i32 = 1000;
-    /// Tick at which the once-per-session codec-fallback decode check samples
-    /// getStats (~12s after install at 1s ticks).
-    const FALLBACK_CHECK_TICK: u32 = 12;
-    /// Minimum framesDecoded expected by FALLBACK_CHECK_TICK on a healthy
-    /// connection (a 30fps source yields hundreds; the broken Vestel OMX
-    /// yields ~1 per 8s GOP). Below this, the current codec is declared dead.
-    const FALLBACK_MIN_FRAMES: f64 = 30.0;
+    /// Presented-frame count at which the current codec mode is PROVEN to
+    /// decode on this display and persisted to localStorage.
+    const PROVEN_MODE_FRAMES: u32 = 100;
+    /// rVFC-path beacon period (~15s at 30fps) — the reliable beacon channel
+    /// on displays whose setInterval is throttled to near-silence (rVFC is
+    /// compositor-driven and not throttled while video plays).
+    const RVFC_BEACON_FRAME_PERIOD: u32 = 450;
 
-    /// Install ICE-state listener + stall timer. `on_failure` is called at
-    /// most ONCE per Watchdog instance — after firing, both observers become
-    /// no-ops (gated by the `active` flag). The stall timer also posts a
-    /// stats beacon for `source_id` every 15th tick (see `maybe_post_beacon`).
+    /// Install ICE-state listener + rVFC frame observer + health ticker.
+    /// `on_failure` is called at most ONCE per Watchdog instance — after
+    /// firing, all observers become no-ops (gated by the `active` flag).
     fn install<F: Fn() + 'static>(
         video: &HtmlVideoElement,
         pc: &RtcPeerConnection,
         source_id: &str,
         on_failure: F,
     ) -> Self {
-        use std::cell::Cell;
-        use std::rc::Rc;
-
         let active: Rc<Cell<bool>> = Rc::new(Cell::new(true));
         let on_failure = Rc::new(on_failure);
 
         install_ice_failure_listener(pc, Rc::clone(&active), Rc::clone(&on_failure));
 
-        // Stall timer: every TICK_INTERVAL_MS check if currentTime advanced.
-        //
-        // CRITICAL — only the AFTER-PLAYBACK freeze triggers a reconnect here.
-        // Before the first frame we DO NOT reconnect at all, no matter how long
-        // it takes, as long as the connection is otherwise healthy (ICE failures
-        // are handled by the separate listener above). Reason: a "connected but
-        // no first frame yet" reconnect drives a multi-consumer CHURN SPIRAL —
-        // when several stage displays connect at once, each fresh consumer that
-        // hasn't rendered yet tears its session down and reconnects, and every
-        // reconnect's tee add/remove disrupts the OTHER consumers' streams, so
-        // they stall and reconnect too → all displays churn black forever. The
-        // server reliably delivers media to a STABLE consumer (verified), so the
-        // right behaviour for a frameless-but-connected client is to WAIT and let
-        // the fan-out settle, not to reconnect. Genuine connect failures surface
-        // as ICE failed/disconnected/closed and are handled above.
-        {
-            let active = Rc::clone(&active);
-            let on_failure = Rc::clone(&on_failure);
-            let video_clone = video.clone();
-            let last_time: std::rc::Rc<std::cell::Cell<f64>> =
-                std::rc::Rc::new(std::cell::Cell::new(0.0));
-            let last_change_at: std::rc::Rc<std::cell::Cell<f64>> =
-                std::rc::Rc::new(std::cell::Cell::new(0.0));
-            let playback_started: std::rc::Rc<std::cell::Cell<bool>> =
-                std::rc::Rc::new(std::cell::Cell::new(false));
-            let tick_count: std::rc::Rc<std::cell::Cell<u32>> =
-                std::rc::Rc::new(std::cell::Cell::new(0));
-            let fallback_checked: std::rc::Rc<std::cell::Cell<bool>> =
-                std::rc::Rc::new(std::cell::Cell::new(false));
-            let pc_for_stats = pc.clone();
-            let source_id_for_stats = source_id.to_string();
-            let cb = Closure::<dyn FnMut()>::new(move || {
-                if !active.get() {
-                    return;
-                }
-                // Every 15th tick: post a stats beacon so server logs capture
-                // this display's real view (fps, jitter buffer, freezes) —
-                // "stage is laggy" reports become diagnosable from data.
-                // Runs BEFORE the stall checks below: their early returns on
-                // the healthy path (frame advanced / no first frame yet)
-                // would otherwise starve the beacon during normal playback.
-                maybe_post_beacon(&tick_count, &pc_for_stats, &source_id_for_stats);
-                // Once per session at ~12s: codec-fallback decode check (see
-                // struct doc). Also placed before the stall early-returns.
-                maybe_check_codec_fallback(
-                    &tick_count,
-                    &fallback_checked,
-                    &pc_for_stats,
-                    &active,
-                    &on_failure,
-                );
-                let now_secs = leptos::web_sys::js_sys::Date::now() / 1000.0;
-                let t = video_clone.current_time();
-                if t > 0.0 && (t - last_time.get()).abs() > 0.001 {
-                    // A frame rendered — playback is live. Reset the stall window.
-                    last_time.set(t);
-                    last_change_at.set(now_secs);
-                    playback_started.set(true);
-                    return;
-                }
-                if !playback_started.get() {
-                    // No first frame yet — WAIT (do not reconnect). See above.
-                    return;
-                }
-                if now_secs - last_change_at.get() >= Self::STALL_THRESHOLD_SECS {
-                    leptos::logging::warn!(
-                        "watchdog: <video> stalled for >{}s after playback (currentTime={t}), triggering reconnect",
-                        Self::STALL_THRESHOLD_SECS
-                    );
-                    active.set(false);
-                    (on_failure)();
-                }
-            });
-            if let Some(window) = leptos::web_sys::window() {
-                let _ = window.set_interval_with_callback_and_timeout_and_arguments_0(
-                    cb.as_ref().unchecked_ref(),
-                    Self::TICK_INTERVAL_MS,
-                );
-            }
-            cb.forget();
+        let now = now_ms();
+        let stats = Rc::new(FrameStats {
+            frames_presented: Cell::new(0),
+            last_frame_at: Cell::new(now),
+            started_at: Cell::new(now),
+        });
+        let rvfc_supported = start_rvfc_frame_observer(video, pc, source_id, &active, &stats);
+        if !rvfc_supported {
+            leptos::logging::warn!(
+                "watchdog: requestVideoFrameCallback unsupported — using currentTime frame proxy"
+            );
         }
+        start_health_ticker(
+            video,
+            pc,
+            source_id,
+            &active,
+            &stats,
+            rvfc_supported,
+            on_failure,
+        );
 
         Self { active }
     }
 
-    /// Disable both observers. Idempotent. Calling `stop` after `on_failure`
+    /// Disable all observers. Idempotent. Calling `stop` after `on_failure`
     /// has already fired is a safe no-op.
     fn stop(&self) {
         self.active.set(false);
     }
 }
 
-/// Every 15th watchdog tick (~15s at 1s ticks), sample `pc.getStats()` and
-/// POST a compact summary to `/ndi/client-stats`. Fire-and-forget; the
-/// beacon must never disturb playback.
-fn maybe_post_beacon(tick_count: &std::cell::Cell<u32>, pc: &RtcPeerConnection, source_id: &str) {
-    tick_count.set(tick_count.get().wrapping_add(1));
-    if tick_count.get() % 15 != 0 {
+/// Monotonic now in milliseconds: `performance.now()`, with a `Date.now()`
+/// fallback when the Performance API is unavailable.
+fn now_ms() -> f64 {
+    leptos::web_sys::window()
+        .and_then(|w| w.performance())
+        .map(|p| p.now())
+        .unwrap_or_else(js_sys::Date::now)
+}
+
+/// Shared holder for the self-rescheduling rVFC closure (the closure needs a
+/// handle to itself to re-register for the next presented frame).
+type SharedRvfcClosure = Rc<RefCell<Option<Closure<dyn FnMut(JsValue, JsValue)>>>>;
+
+/// Start a self-rescheduling `requestVideoFrameCallback` loop on `video`,
+/// maintaining `stats.frames_presented` / `stats.last_frame_at`. rVFC fires
+/// once per frame PRESENTED to the compositor and — unlike setInterval — is
+/// NOT throttled by TV power-saving timer policies, so the counters stay
+/// truthful exactly where the wall-clock heuristics lied.
+///
+/// Side effects driven from the frame path:
+/// - at `Watchdog::PROVEN_MODE_FRAMES` presented frames, the current codec
+///   mode is persisted to localStorage (proven-mode stickiness);
+/// - every `Watchdog::RVFC_BEACON_FRAME_PERIOD` frames (~15s at 30fps) a
+///   stats beacon posts — reliable on throttled displays where the 1s-tick
+///   beacons can become sparse.
+///
+/// Returns false when the browser lacks rVFC (non-Chromium): the health
+/// ticker then approximates frames from currentTime advance instead.
+///
+/// The closure is gated by `active`: once cleared it returns WITHOUT
+/// rescheduling, ending the chain (the leaked holder cycle goes inert —
+/// same bounded-leak idiom as the rest of this file).
+fn start_rvfc_frame_observer(
+    video: &HtmlVideoElement,
+    pc: &RtcPeerConnection,
+    source_id: &str,
+    active: &Rc<Cell<bool>>,
+    stats: &Rc<FrameStats>,
+) -> bool {
+    let supported = js_sys::Reflect::get(
+        video.as_ref(),
+        &JsValue::from_str("requestVideoFrameCallback"),
+    )
+    .map(|f| f.is_function())
+    .unwrap_or(false);
+    if !supported {
+        return false;
+    }
+
+    let holder: SharedRvfcClosure = Rc::new(RefCell::new(None));
+    let cb = {
+        let active = Rc::clone(active);
+        let stats = Rc::clone(stats);
+        let video = video.clone();
+        let pc = pc.clone();
+        let source_id = source_id.to_string();
+        let holder = Rc::clone(&holder);
+        Closure::<dyn FnMut(JsValue, JsValue)>::new(move |_now: JsValue, _meta: JsValue| {
+            if !active.get() {
+                return;
+            }
+            let n = stats.frames_presented.get().saturating_add(1);
+            stats.frames_presented.set(n);
+            stats.last_frame_at.set(now_ms());
+            if n == Watchdog::PROVEN_MODE_FRAMES {
+                persist_proven_codec_mode();
+            }
+            if n % Watchdog::RVFC_BEACON_FRAME_PERIOD == 0 {
+                post_stats_beacon(&pc, &source_id);
+            }
+            schedule_video_frame_callback(&video, &holder);
+        })
+    };
+    *holder.borrow_mut() = Some(cb);
+    schedule_video_frame_callback(video, &holder);
+    true
+}
+
+/// Invoke `video.requestVideoFrameCallback(cb)` via Reflect (web_sys has no
+/// stable binding for rVFC). Silent no-op if the method is missing.
+fn schedule_video_frame_callback(video: &HtmlVideoElement, holder: &SharedRvfcClosure) {
+    let Ok(f) = js_sys::Reflect::get(
+        video.as_ref(),
+        &JsValue::from_str("requestVideoFrameCallback"),
+    ) else {
+        return;
+    };
+    let Some(f) = f.dyn_ref::<js_sys::Function>() else {
+        return;
+    };
+    if let Some(cb) = holder.borrow().as_ref() {
+        let _ = f.call1(video.as_ref(), cb.as_ref().unchecked_ref());
+    }
+}
+
+/// 1s interval driving (a) the beacon cadence and (b) evaluation of the
+/// FRAME-BASED health rules:
+///
+/// - STALL: playback started (`frames_presented > 0`) AND no frame presented
+///   for `STALL_NO_FRAME_MS` → a real freeze (render hiccups never span
+///   10s) → reconnect.
+/// - CODEC FALLBACK: ICE connected AND zero frames presented for
+///   `NO_DECODE_FALLBACK_MS` after connect (true no-decode) → switch the
+///   codec mode (at most once per page load) and reconnect.
+/// - No first frame yet otherwise: WAIT — a connected frameless consumer
+///   must not reconnect (multi-consumer churn spiral, see Watchdog doc).
+#[allow(clippy::too_many_arguments)]
+fn start_health_ticker<F: Fn() + 'static>(
+    video: &HtmlVideoElement,
+    pc: &RtcPeerConnection,
+    source_id: &str,
+    active: &Rc<Cell<bool>>,
+    stats: &Rc<FrameStats>,
+    rvfc_supported: bool,
+    on_failure: Rc<F>,
+) {
+    let active = Rc::clone(active);
+    let stats = Rc::clone(stats);
+    let video = video.clone();
+    let pc = pc.clone();
+    let source_id = source_id.to_string();
+    let tick_count = Cell::new(0u32);
+    let last_current_time = Cell::new(0.0f64);
+    let cb = Closure::<dyn FnMut()>::new(move || {
+        if !active.get() {
+            return;
+        }
+        // Beacon first: the healthy-path early returns below must not
+        // starve it during normal playback.
+        maybe_post_beacon(&tick_count, &pc, &source_id);
+        if !rvfc_supported {
+            approximate_frame_from_current_time(&video, &stats, &last_current_time);
+        }
+        let now = now_ms();
+        let frames = stats.frames_presented.get();
+        if frames == 0 {
+            // Pre-first-frame: only the bounded codec fallback may act.
+            maybe_codec_fallback(now, &stats, &pc, &active, &on_failure);
+            return;
+        }
+        let since_last_frame = now - stats.last_frame_at.get();
+        if since_last_frame > Watchdog::STALL_NO_FRAME_MS {
+            leptos::logging::warn!(
+                "watchdog: no frame presented for {since_last_frame:.0}ms (frames_presented={frames}) — real freeze, reconnecting"
+            );
+            active.set(false);
+            (on_failure)();
+        }
+    });
+    if let Some(window) = leptos::web_sys::window() {
+        let _ = window.set_interval_with_callback_and_timeout_and_arguments_0(
+            cb.as_ref().unchecked_ref(),
+            Watchdog::TICK_INTERVAL_MS,
+        );
+    }
+    cb.forget();
+}
+
+/// Codec-fallback check (frame-based): a session that is ICE-connected with
+/// ZERO presented frames `NO_DECODE_FALLBACK_MS` after connect has a dead
+/// decoder (the broken Vestel H264 OMX symptom: connected, RTP flowing,
+/// nothing presented). Switch the codec mode — bounded to ONCE per page
+/// load, killing the H264↔VP8 ping-pong — and fire `on_failure` so the
+/// reconnect offers the other codec.
+fn maybe_codec_fallback<F: Fn() + 'static>(
+    now: f64,
+    stats: &FrameStats,
+    pc: &RtcPeerConnection,
+    active: &Rc<Cell<bool>>,
+    on_failure: &Rc<F>,
+) {
+    if now - stats.started_at.get() < Watchdog::NO_DECODE_FALLBACK_MS {
         return;
     }
+    // Only a CONNECTED session gets a codec verdict: pre-connect states mean
+    // media never had a chance (ICE problems are the ICE listener's job).
+    if !matches!(
+        pc.ice_connection_state(),
+        RtcIceConnectionState::Connected | RtcIceConnectionState::Completed
+    ) {
+        return;
+    }
+    let Some(new_mode) = switch_codec_mode_once() else {
+        // One-shot spent this page load — keep waiting, never ping-pong.
+        return;
+    };
+    leptos::logging::warn!(
+        "codec fallback: 0 frames presented {}s after connect — switching to {new_mode} (once per page load)",
+        Watchdog::NO_DECODE_FALLBACK_MS / 1000.0
+    );
+    active.set(false);
+    (on_failure)();
+}
+
+/// rVFC-less fallback (non-Chromium browsers): treat currentTime advancing
+/// between ticks as one presented frame. Coarse (≤1 "frame" per tick) but
+/// keeps the stall and no-decode rules functional with identical semantics.
+fn approximate_frame_from_current_time(
+    video: &HtmlVideoElement,
+    stats: &FrameStats,
+    last_current_time: &Cell<f64>,
+) {
+    let t = video.current_time();
+    if t > 0.0 && (t - last_current_time.get()).abs() > 0.001 {
+        last_current_time.set(t);
+        let n = stats.frames_presented.get().saturating_add(1);
+        stats.frames_presented.set(n);
+        stats.last_frame_at.set(now_ms());
+        if n == Watchdog::PROVEN_MODE_FRAMES {
+            persist_proven_codec_mode();
+        }
+    }
+}
+
+/// Sample `pc.getStats()` and POST a beacon. Fire-and-forget; the beacon
+/// must never disturb playback.
+fn post_stats_beacon(pc: &RtcPeerConnection, source_id: &str) {
     let pc = pc.clone();
     let source_id = source_id.to_string();
     spawn_local(async move {
@@ -294,72 +490,15 @@ fn maybe_post_beacon(tick_count: &std::cell::Cell<u32>, pc: &RtcPeerConnection, 
     });
 }
 
-/// Once per Watchdog instance, at tick `Watchdog::FALLBACK_CHECK_TICK`,
-/// sample getStats and check whether the decoder is actually producing
-/// frames. A session that has been CONNECTED for ~12s with framesDecoded
-/// below `Watchdog::FALLBACK_MIN_FRAMES` has a dead decoder (the broken
-/// Vestel H264 OMX symptom: connected, ~1 frame per 8s GOP): toggle
-/// `ndiCodecMode` and fire `on_failure` so the reconnect loop rebuilds the
-/// connection offering the other codec.
-fn maybe_check_codec_fallback<F: Fn() + 'static>(
-    tick_count: &std::cell::Cell<u32>,
-    checked: &std::cell::Cell<bool>,
-    pc: &RtcPeerConnection,
-    active: &std::rc::Rc<std::cell::Cell<bool>>,
-    on_failure: &std::rc::Rc<F>,
-) {
-    if checked.get() || tick_count.get() < Watchdog::FALLBACK_CHECK_TICK {
+/// Every 15th watchdog tick (~15s at 1s ticks — slower on throttled TVs,
+/// where the rVFC frame-count beacon is the reliable channel instead),
+/// post a stats beacon for `source_id`.
+fn maybe_post_beacon(tick_count: &Cell<u32>, pc: &RtcPeerConnection, source_id: &str) {
+    tick_count.set(tick_count.get().wrapping_add(1));
+    if tick_count.get() % 15 != 0 {
         return;
     }
-    checked.set(true);
-    let pc = pc.clone();
-    let active = std::rc::Rc::clone(active);
-    let on_failure = std::rc::Rc::clone(on_failure);
-    spawn_local(async move {
-        let Ok(report) = JsFuture::from(pc.get_stats()).await else {
-            return;
-        };
-        if !active.get() {
-            return;
-        }
-        // Only a CONNECTED session gets a codec verdict: pre-connect states
-        // mean media never had a chance (ICE problems are the ICE listener's
-        // job, not the codec's fault).
-        if !matches!(
-            pc.ice_connection_state(),
-            RtcIceConnectionState::Connected | RtcIceConnectionState::Completed
-        ) {
-            return;
-        }
-        let frames = inbound_video_frames_decoded(&report).unwrap_or(0.0);
-        if frames >= Watchdog::FALLBACK_MIN_FRAMES {
-            return;
-        }
-        let new_mode = toggle_codec_mode();
-        leptos::logging::warn!(
-            "codec fallback: switching to {new_mode} (framesDecoded={frames} after {}s)",
-            Watchdog::FALLBACK_CHECK_TICK
-        );
-        active.set(false);
-        (on_failure)();
-    });
-}
-
-/// Extract `framesDecoded` from the inbound-rtp video entry of an
-/// RtcStatsReport (a JS Map). None when no such entry exists yet.
-fn inbound_video_frames_decoded(report: &JsValue) -> Option<f64> {
-    let map: &js_sys::Map = report.unchecked_ref();
-    let entries = js_sys::try_iter(&map.values()).ok().flatten()?;
-    for entry in entries.flatten() {
-        let get =
-            |k: &str| js_sys::Reflect::get(&entry, &JsValue::from_str(k)).unwrap_or(JsValue::NULL);
-        if get("type").as_string().as_deref() == Some("inbound-rtp")
-            && get("kind").as_string().as_deref() == Some("video")
-        {
-            return get("framesDecoded").as_f64();
-        }
-    }
-    None
+    post_stats_beacon(pc, source_id);
 }
 
 /// Extract inbound-video stats from an RtcStatsReport (a JS Map) and POST a
