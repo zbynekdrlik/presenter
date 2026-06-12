@@ -222,6 +222,25 @@ impl NdiPipeline {
         Ok(())
     }
 
+    /// Test-only: overwrite a stored session's last-seen connection state,
+    /// exactly as the `notify::connection-state` subscriber does when
+    /// webrtcbin reports a transition (a vanished client reaches
+    /// Disconnected/Failed via ICE timeout). Lets the zombie-reaper tests
+    /// simulate dead sessions without real ICE.
+    pub fn set_connection_state_for_test(&self, session_id: &str, state: WhepConnectionState) {
+        let sessions = self
+            .sessions
+            .try_lock()
+            .expect("sessions mutex busy in test");
+        let session = sessions
+            .get(session_id)
+            .unwrap_or_else(|| panic!("no session {session_id} in test"));
+        *session
+            .connection_state
+            .lock()
+            .expect("connection_state poisoned in test") = state;
+    }
+
     /// Sync stub: remove a consumer (tests only). Idempotent. Dropping the
     /// session disconnects the producer link, aborts the bus task, and nulls
     /// the consumer pipeline — the same path production `remove_consumer`
@@ -412,6 +431,90 @@ async fn add_consumer_returns_cap_reached_after_eight() {
             panic!("expected CapReached, got Other: {other}");
         }
     }
+}
+
+/// Zombie reaper (2026-06-12 production incident): stage-display TVs
+/// power-cycle overnight WITHOUT sending WHEP DELETE, so their server-side
+/// sessions sit in the map forever — webrtcbin's connection-state eventually
+/// reports Disconnected/Failed, but nothing removed the session.
+/// `reap_dead_sessions` must remove EXACTLY the sessions whose last-seen
+/// state is Disconnected, Failed or Closed — and must NOT touch
+/// New/Connecting (a TV mid-join is not a zombie) or Connected (alive).
+#[tokio::test]
+async fn reap_dead_sessions_removes_only_dead_states() {
+    super::super::init().expect("gst init");
+    let mut pipeline =
+        NdiPipeline::stopped_for_test_with_topology("x264enc").expect("topology builder");
+    for id in [
+        "dead-disconnected",
+        "dead-failed",
+        "dead-closed",
+        "alive-new",
+        "alive-connected",
+    ] {
+        pipeline.add_consumer_stub(id).await.expect("add stub");
+    }
+    pipeline.set_connection_state_for_test("dead-disconnected", WhepConnectionState::Disconnected);
+    pipeline.set_connection_state_for_test("dead-failed", WhepConnectionState::Failed);
+    pipeline.set_connection_state_for_test("dead-closed", WhepConnectionState::Closed);
+    // "alive-new" keeps the stub's default New (mid-negotiation grace).
+    pipeline.set_connection_state_for_test("alive-connected", WhepConnectionState::Connected);
+
+    let reaped = pipeline.reap_dead_sessions().await;
+
+    assert_eq!(
+        reaped, 3,
+        "exactly the Disconnected/Failed/Closed sessions must be reaped"
+    );
+    let sessions = pipeline.sessions.lock().await;
+    assert_eq!(sessions.len(), 2, "the two alive sessions must survive");
+    assert!(
+        sessions.contains_key("alive-new"),
+        "a New (mid-join) session must NOT be reaped"
+    );
+    assert!(
+        sessions.contains_key("alive-connected"),
+        "a Connected session must NOT be reaped"
+    );
+}
+
+/// THE morning-incident regression (2026-06-12): 8 zombie sessions (TVs gone
+/// overnight without DELETE, ~730k buffers pushed to nobody) filled
+/// `MAX_CONSUMERS_PER_SOURCE`, so EVERY new consumer got CapReached → 503 →
+/// all displays stuck on "Connecting…" forever. The join path must
+/// self-heal: reap dead sessions BEFORE the cap check, so a rebooted TV's
+/// join succeeds deterministically on a map full of zombies.
+#[tokio::test]
+async fn zombie_sessions_free_the_cap_for_a_new_join() {
+    super::super::init().expect("gst init");
+    let mut pipeline =
+        NdiPipeline::stopped_for_test_with_topology("x264enc").expect("topology builder");
+    for i in 0..MAX_CONSUMERS_PER_SOURCE {
+        pipeline
+            .add_consumer_stub(&format!("zombie-{i}"))
+            .await
+            .expect("fill to cap");
+    }
+    for i in 0..MAX_CONSUMERS_PER_SOURCE {
+        pipeline.set_connection_state_for_test(
+            &format!("zombie-{i}"),
+            WhepConnectionState::Disconnected,
+        );
+    }
+
+    // Pre-fix this returned CapReached — the 503 every TV saw all morning.
+    pipeline
+        .add_consumer_stub("rebooted-tv")
+        .await
+        .expect("join with a map full of zombies MUST succeed via the reap-then-cap gate");
+
+    let sessions = pipeline.sessions.lock().await;
+    assert_eq!(
+        sessions.len(),
+        1,
+        "all zombies reaped; only the new session remains"
+    );
+    assert!(sessions.contains_key("rebooted-tv"));
 }
 
 /// Spec #336 / Task 7: cleanup invariant. After N add_consumer +
