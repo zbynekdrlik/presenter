@@ -266,8 +266,17 @@ mod tests {
         assert_not_found_or_unavailable(err.into_response().status());
     }
 
+    /// DELETE on a WHEP session must be IDEMPOTENT: a session (or its whole
+    /// source) that is already gone means the client's desired state holds,
+    /// so the reply is 204 — NOT 404. A 404 here made every stage-display
+    /// teardown after a server-side deactivate log a browser console error
+    /// ("Failed to load resource: 404") from both the on_cleanup and the
+    /// pagehide DELETE dispatches.
+    ///
+    /// With libndi: manager exists, source not active → 204 (idempotent).
+    /// Without libndi: ndi_manager() is None → Err 503 (different failure).
     #[tokio::test]
-    async fn delete_whep_session_returns_not_found_or_unavailable_for_unknown_source() {
+    async fn delete_whep_session_is_idempotent_for_unknown_source() {
         let state = fresh_state().await;
         let result = delete_whep_session(
             Path((
@@ -277,10 +286,18 @@ mod tests {
             State(state),
         )
         .await;
-        let Err(err) = result else {
-            panic!("expected Err for unknown source");
-        };
-        assert_not_found_or_unavailable(err.into_response().status());
+        match result {
+            Ok(resp) => assert_eq!(
+                resp.status(),
+                StatusCode::NO_CONTENT,
+                "DELETE on an already-gone session must be 204 (idempotent)"
+            ),
+            Err(err) => assert_eq!(
+                err.into_response().status(),
+                StatusCode::SERVICE_UNAVAILABLE,
+                "only the no-libndi (manager missing) branch may error"
+            ),
+        }
     }
 
     #[test]
