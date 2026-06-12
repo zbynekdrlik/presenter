@@ -4,6 +4,7 @@ pub mod bible_overlay;
 pub mod camera_crew;
 pub mod ndi_fullscreen;
 pub mod ndi_video;
+mod ndi_watchdog;
 pub mod preach_layout;
 pub mod status_bar;
 pub mod timer_layout;
