@@ -200,10 +200,10 @@ async fn sleep_for_backoff() {
 /// the future polls). Calling `window.fetch_with_request` directly enqueues
 /// the request immediately; `keepalive: true` keeps it alive after unload.
 ///
-/// Safe to call multiple times for the same URL — the server's WHEP shim
-/// maps "session not found" to a 4xx (`SOURCE_NOT_ACTIVE_ERR` → 404 in
-/// `ndi_whep.rs::map_signaller_error`) and we drop the Promise rather than
-/// inspecting the response, so a double-DELETE produces no console noise.
+/// Safe to call multiple times for the same URL — WHEP DELETE is idempotent
+/// server-side (an already-gone session or inactive source returns 204, the
+/// desired end state) and we drop the Promise rather than inspecting the
+/// response, so a double-DELETE produces no console noise.
 /// Both the `on_cleanup` path and the `pagehide` listener may dispatch the
 /// same URL when both fire on normal navigation; this is idempotent.
 fn dispatch_delete(url: &str) {
