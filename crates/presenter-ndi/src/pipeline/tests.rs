@@ -156,26 +156,18 @@ impl NdiPipeline {
         })
     }
 
-    /// Sync stub: add a consumer WITHOUT SDP exchange (tests only). Builds the
+    /// Stub: add a consumer WITHOUT SDP exchange (tests only). Builds the
     /// production consumer topology — a SEPARATE pipeline with
     /// `appsrc → rtph264pay → webrtcbin` — connects its appsrc to the
-    /// StreamProducer, and stores the session. Enforces the same cap as
-    /// production via `MAX_CONSUMERS_PER_SOURCE`.
+    /// StreamProducer, and stores the session. Runs the SAME join gate as
+    /// production `add_consumer` (`reap_and_check_cap`: reap zombies, then
+    /// enforce `MAX_CONSUMERS_PER_SOURCE`), so the cap/reaper tests exercise
+    /// the real logic instead of a duplicated check.
     ///
     /// Must be called from within a tokio runtime (the per-pipeline bus-watch
     /// stand-in task is spawned on the current runtime).
-    pub fn add_consumer_stub(&mut self, session_id: &str) -> Result<(), AddConsumerError> {
-        {
-            let sessions = self
-                .sessions
-                .try_lock()
-                .expect("sessions mutex poisoned in test");
-            if sessions.len() >= MAX_CONSUMERS_PER_SOURCE {
-                return Err(AddConsumerError::CapReached {
-                    max: MAX_CONSUMERS_PER_SOURCE,
-                });
-            }
-        }
+    pub async fn add_consumer_stub(&mut self, session_id: &str) -> Result<(), AddConsumerError> {
+        self.reap_and_check_cap().await?;
         let appsrc = gst_app::AppSrc::builder()
             .name(format!("src_{session_id}"))
             .caps(&consumer_h264_caps())
@@ -216,8 +208,8 @@ impl NdiPipeline {
             ice_tx,
         };
         self.sessions
-            .try_lock()
-            .expect("sessions mutex poisoned in test")
+            .lock()
+            .await
             .insert(session_id.to_string(), session);
         Ok(())
     }
@@ -381,6 +373,7 @@ async fn pipeline_has_single_encoder_for_n_consumers() {
     for i in 0..4 {
         pipeline
             .add_consumer_stub(&format!("test-session-{i}"))
+            .await
             .expect("add_consumer must succeed up to the soft cap");
     }
 
@@ -412,12 +405,14 @@ async fn add_consumer_returns_cap_reached_after_eight() {
     for i in 0..MAX_CONSUMERS_PER_SOURCE {
         pipeline
             .add_consumer_stub(&format!("test-session-{i}"))
+            .await
             .expect("consumer up to cap must succeed");
     }
 
     // Overflow: the (cap+1)th consumer must be rejected.
     let err = pipeline
         .add_consumer_stub("test-session-overflow")
+        .await
         .expect_err("consumer cap+1 must fail");
 
     match err {
@@ -535,6 +530,7 @@ async fn add_then_remove_leaves_clean_state() {
     for i in 0..5 {
         pipeline
             .add_consumer_stub(&format!("session-{i}"))
+            .await
             .expect("add must succeed");
     }
     assert_eq!(
@@ -741,7 +737,10 @@ async fn snapshot_includes_fanout_counters_and_rtcp_fields() {
     super::super::init().expect("gst init");
     let mut pipeline =
         NdiPipeline::stopped_for_test_with_topology("x264enc").expect("test topology");
-    pipeline.add_consumer_stub("snap-1").expect("stub consumer");
+    pipeline
+        .add_consumer_stub("snap-1")
+        .await
+        .expect("stub consumer");
     let snap = pipeline.snapshot().await;
     assert_eq!(snap.sessions.len(), 1);
     let s = &snap.sessions[0];
