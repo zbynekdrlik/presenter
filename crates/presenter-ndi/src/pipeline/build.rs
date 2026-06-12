@@ -40,19 +40,22 @@ const MAX_VIDEO_HEIGHT: i32 = 720;
 /// the full width (the abandoned 640×480 H264 attempt letterboxed 16:9 into
 /// 4:3 AND still killed the TVs' vendor-broken MStar OMX decoder after ~5s).
 /// VP8 has no decoder port-reconfig trap — libvpx software-decodes any size;
-/// 480p@20 is the proven budget the weak TVs sustain (VDO.Ninja parity).
-const COMPAT_VIDEO_WIDTH: i32 = 854;
-const COMPAT_VIDEO_HEIGHT: i32 = 480;
+/// FLOOR-FINDING (2026-06-12): 480p@20 still stalled the Vestels (>10s
+/// presentation gaps, watchdog resets) even on the lite plain-JS page, so
+/// this probes the platform's actual ceiling from BELOW — 360p@15@500kbps
+/// is the lane VDO.Ninja-era adaptive delivery would have degraded into.
+const COMPAT_VIDEO_WIDTH: i32 = 640;
+const COMPAT_VIDEO_HEIGHT: i32 = 360;
 /// Compat-profile framerate: 20fps. The TVs decode VP8 in software — fewer,
 /// cheaper frames beat 30fps with drops. `videorate(drop-only)` thins the
 /// 30fps tee output down to this.
-const COMPAT_FRAMERATE: i32 = 20;
+const COMPAT_FRAMERATE: i32 = 15;
 
 /// Primary (720p) encoder bitrate in kbit/s.
 const DEFAULT_BITRATE_KBPS: u32 = 2500;
 /// Compat (480p VP8) encoder bitrate in bits/s — the weak-device budget
 /// (vp8enc's `target-bitrate` is bits/sec, unlike the H264 encoders' kbps).
-const COMPAT_TARGET_BITRATE_BPS: i32 = 900_000;
+const COMPAT_TARGET_BITRATE_BPS: i32 = 500_000;
 
 impl NdiPipeline {
     /// Build but do not yet start the pipeline.
