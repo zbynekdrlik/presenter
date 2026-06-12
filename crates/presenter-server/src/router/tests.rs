@@ -2323,7 +2323,8 @@ async fn ndi_client_stats_beacon_returns_no_content() {
                     serde_json::to_vec(&json!({
                         "sourceId": "test-src",
                         "displayId": "a1b2c3d4e5f60718",
-                        "codec": "video/VP8",
+                        "codec": "video/H264",
+                        "profile": "compat",
                         "screen": "1280x720",
                         "framesDecoded": 100,
                         "fps": 30.0,

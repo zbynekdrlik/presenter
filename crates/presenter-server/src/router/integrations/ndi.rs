@@ -70,9 +70,13 @@ pub(crate) struct NdiClientStatsBeacon {
     /// Persistent random per-display id (localStorage `ndiDisplayId`) — the
     /// attribution key that makes per-TV health traceable across sessions.
     pub display_id: Option<String>,
-    /// Negotiated video codec mimeType from getStats (e.g. "video/H264",
-    /// "video/VP8") — confirms which branch the codec fallback selected.
+    /// Negotiated video codec mimeType from getStats (now "video/H264" for
+    /// every consumer — both stream profiles are H264).
     pub codec: Option<String>,
+    /// Stream profile the display requested ("default"/"compat") — the
+    /// field that attributes weak-TV health to the 640×480 compat branch,
+    /// since `codec` no longer distinguishes the branches.
+    pub profile: Option<String>,
     /// Physical screen size as "WxH" — tells TV models apart in the logs.
     pub screen: Option<String>,
     pub frames_decoded: Option<f64>,
@@ -91,6 +95,7 @@ pub(crate) async fn ndi_client_stats(Json(beacon): Json<NdiClientStatsBeacon>) -
         display_id = beacon.display_id.as_deref(),
         source_id = %beacon.source_id,
         codec = beacon.codec.as_deref(),
+        profile = beacon.profile.as_deref(),
         screen = beacon.screen.as_deref(),
         frames_decoded = beacon.frames_decoded,
         fps = beacon.fps,

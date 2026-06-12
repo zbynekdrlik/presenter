@@ -16,7 +16,7 @@ use leptos::web_sys::{
 };
 use wasm_bindgen_futures::{spawn_local, JsFuture};
 
-use super::ndi_watchdog::{apply_vp8_codec_preferences, codec_mode_is_vp8, Watchdog};
+use super::ndi_watchdog::{profile_mode_is_compat, Watchdog};
 
 /// Holds an active WHEP session: the peer connection AND the WHEP resource URL
 /// returned in the `Location` header on POST. The resource URL is used to
@@ -31,9 +31,17 @@ struct WhepSession {
     resource_url: Option<String>,
 }
 
-/// Build the WHEP endpoint URL for a given source.
-pub fn whep_url(source_id: &str) -> String {
-    format!("/ndi/whep/{source_id}")
+/// Build the WHEP endpoint URL for a given source. In compat mode the URL
+/// carries `?profile=compat`, asking the server for its 640×480 H264 branch
+/// (the stream the weak TVs' OMX decoder can play without the fatal port
+/// reconfig — spec addendum 2 pivot); default mode posts the bare URL and
+/// gets the 720p stream.
+pub fn whep_url(source_id: &str, compat: bool) -> String {
+    if compat {
+        format!("/ndi/whep/{source_id}?profile=compat")
+    } else {
+        format!("/ndi/whep/{source_id}")
+    }
 }
 
 #[component]
@@ -307,14 +315,10 @@ async fn connect_whep(video: &HtmlVideoElement, source_id: &str) -> Result<WhepS
 
     let video_init = RtcRtpTransceiverInit::new();
     video_init.set_direction(RtcRtpTransceiverDirection::Recvonly);
-    let video_transceiver = pc.add_transceiver_with_str_and_init("video", &video_init);
-
-    // Codec fallback (spec addendum 2): in "vp8" mode, strip H264 from the
-    // offer so the server's offer-driven codec selection serves the VP8
-    // branch. Default mode leaves the offer unchanged (H264 served).
-    if codec_mode_is_vp8() {
-        apply_vp8_codec_preferences(&video_transceiver);
-    }
+    // NO codec games on the offer (the retired VP8 fallback stripped H264
+    // via setCodecPreferences): both server profiles are H264 now, and the
+    // profile is requested via the WHEP URL query instead — see whep_url.
+    pc.add_transceiver_with_str_and_init("video", &video_init);
 
     let audio_init = RtcRtpTransceiverInit::new();
     audio_init.set_direction(RtcRtpTransceiverDirection::Recvonly);
@@ -432,7 +436,9 @@ async fn post_whep_offer(
     source_id: &str,
     offer_sdp: &str,
 ) -> Result<(String, Option<String>), JsValue> {
-    let url = whep_url(source_id);
+    // Profile fallback (spec addendum 2 pivot): compat mode requests the
+    // server's 640×480 H264 branch via the URL query.
+    let url = whep_url(source_id, profile_mode_is_compat());
     let init = leptos::web_sys::RequestInit::new();
     init.set_method("POST");
     init.set_body(&JsValue::from_str(offer_sdp));

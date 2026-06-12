@@ -1,26 +1,31 @@
-//! Frame-based health watchdog + codec-mode state for `NdiVideo`.
+//! Frame-based health watchdog + profile-mode state for `NdiVideo`.
 //!
 //! Frame observation is driven by `requestVideoFrameCallback` (fires once
 //! per frame actually PRESENTED to the compositor, NOT throttled like
 //! setInterval on TV WebViews); a 1s ticker evaluates the stall and
-//! codec-fallback rules against those counters and paces the stats beacons.
-//! Split out of `ndi_video.rs` to keep both files under the size cap.
+//! profile-fallback rules against those counters and paces the stats
+//! beacons. Split out of `ndi_video.rs` to keep both files under the size
+//! cap.
 
 use std::cell::{Cell, RefCell};
 use std::rc::Rc;
 
 use leptos::wasm_bindgen::{closure::Closure, JsCast, JsValue};
-use leptos::web_sys::{
-    HtmlVideoElement, RtcIceConnectionState, RtcPeerConnection, RtcRtpReceiver, RtcRtpTransceiver,
-};
+use leptos::web_sys::{HtmlVideoElement, RtcIceConnectionState, RtcPeerConnection};
 use wasm_bindgen_futures::{spawn_local, JsFuture};
 
-/// localStorage key for the codec fallback mode. Absent or `"h264"` = default
-/// behavior (offer includes H264 → server serves H264). `"vp8"` = fallback
-/// (the offer's video section is restricted to VP8+rtx via
-/// `setCodecPreferences`, so the server's codec-selection rule picks the VP8
-/// branch — spec addendum 2: broken Vestel H264 OMX decoders).
-const CODEC_MODE_KEY: &str = "ndiCodecMode";
+/// localStorage key for the stream-profile fallback mode. Absent or
+/// `"default"` = default behavior (WHEP POST without a profile query → the
+/// server serves the 720p stream). `"compat"` = fallback (the WHEP POST URL
+/// carries `?profile=compat`, selecting the server's 640×480 H264 branch —
+/// spec addendum 2 pivot: the Vestel TVs' OMX decoder default-inits at
+/// 640×480 and dies on the port reconfig any other size forces).
+///
+/// The KEY deliberately keeps its historical name ("ndiCodecMode") so
+/// deployed TVs don't grow a second orphaned entry; the retired "vp8" value
+/// some of them still store parses as default mode and self-heals through
+/// the normal fallback → proven-mode flow.
+const PROFILE_MODE_KEY: &str = "ndiCodecMode";
 
 /// localStorage key for the persistent per-display identity used in stats
 /// beacons (per-TV health attribution server-side).
@@ -32,65 +37,78 @@ fn local_storage() -> Option<leptos::web_sys::Storage> {
 }
 
 thread_local! {
-    /// In-memory codec mode for THIS page load, seeded from localStorage on
+    /// In-memory profile mode for THIS page load, seeded from localStorage on
     /// first use. `None` = not yet seeded. Connect attempts read this, NOT
     /// localStorage directly: a fallback switch flips it in memory only —
     /// the sticky localStorage value is written exclusively by
-    /// `persist_proven_codec_mode` once a mode actually decodes (so the
+    /// `persist_proven_profile_mode` once a mode actually decodes (so the
     /// persisted value is always a PROVEN one, never a guess mid-ping-pong).
-    static CODEC_MODE_VP8: std::cell::Cell<Option<bool>> = const { std::cell::Cell::new(None) };
-    /// At most ONE codec switch per page load. One Vestel TV alternated
-    /// H264↔VP8 repeatedly when its wall-clock-based decode check misfired;
+    static PROFILE_MODE_COMPAT: std::cell::Cell<Option<bool>> = const { std::cell::Cell::new(None) };
+    /// At most ONE profile switch per page load. One Vestel TV alternated
+    /// modes repeatedly when its wall-clock-based decode check misfired;
     /// bounding the switch to once-per-pageload kills the ping-pong.
-    static CODEC_SWITCHED: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+    static PROFILE_SWITCHED: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
 }
 
-/// True when the codec fallback mode is "vp8". Any other value (including
-/// absent) means the default H264-capable offer.
-pub(crate) fn codec_mode_is_vp8() -> bool {
-    CODEC_MODE_VP8.with(|cell| {
+/// True when the stream-profile fallback mode is "compat". Any other value
+/// (including absent and the retired "vp8") means the default 720p stream.
+pub(crate) fn profile_mode_is_compat() -> bool {
+    PROFILE_MODE_COMPAT.with(|cell| {
         if let Some(v) = cell.get() {
             return v;
         }
         let stored = local_storage()
-            .and_then(|s| s.get_item(CODEC_MODE_KEY).ok().flatten())
+            .and_then(|s| s.get_item(PROFILE_MODE_KEY).ok().flatten())
             .as_deref()
-            == Some("vp8");
+            == Some("compat");
         cell.set(Some(stored));
         stored
     })
 }
 
-/// Flip the in-memory codec mode (h264 → vp8 or vp8 → h264) and return the
-/// new mode name — at most ONCE per page load. Returns `None` when the
-/// one-shot switch was already spent (no further toggling until reload).
-/// Deliberately does NOT touch localStorage: only a mode that goes on to
-/// present `PROVEN_MODE_FRAMES` frames within `PROVEN_MODE_WINDOW_MS` of
-/// the first frame gets persisted (see `record_presented_frame`).
-fn switch_codec_mode_once() -> Option<&'static str> {
-    if CODEC_SWITCHED.with(|c| c.replace(true)) {
+/// Flip the in-memory profile mode (default → compat or compat → default)
+/// and return the new mode name — at most ONCE per page load. Returns
+/// `None` when the one-shot switch was already spent (no further toggling
+/// until reload). Deliberately does NOT touch localStorage: only a mode
+/// that goes on to present `PROVEN_MODE_FRAMES` frames within
+/// `PROVEN_MODE_WINDOW_MS` of the first frame gets persisted (see
+/// `record_presented_frame`).
+fn switch_profile_mode_once() -> Option<&'static str> {
+    if PROFILE_SWITCHED.with(|c| c.replace(true)) {
         return None;
     }
-    let new_vp8 = !codec_mode_is_vp8();
-    CODEC_MODE_VP8.with(|c| c.set(Some(new_vp8)));
-    Some(if new_vp8 { "vp8" } else { "h264" })
+    let new_compat = !profile_mode_is_compat();
+    PROFILE_MODE_COMPAT.with(|c| c.set(Some(new_compat)));
+    Some(profile_mode_name(new_compat))
 }
 
-/// Persist the CURRENT codec mode to localStorage. Called once a session
+/// The wire/storage name of a profile mode: "compat" or "default".
+fn profile_mode_name(compat: bool) -> &'static str {
+    if compat {
+        "compat"
+    } else {
+        "default"
+    }
+}
+
+/// Persist the CURRENT profile mode to localStorage. Called once a session
 /// presents `PROVEN_MODE_FRAMES` frames WITHIN `PROVEN_MODE_WINDOW_MS` of
 /// the first presented frame — the mode demonstrably decodes AT A USABLE
 /// RATE on this display, so it is safe to make sticky across reloads.
 ///
 /// The rate gate is load-bearing: 100 frames at <10fps must NOT prove a
-/// mode. A Vestel TV limping along at 0.3-1.7 fps on VP8 still reaches 100
-/// presented frames eventually (~100s at 1fps), and persisting then locked
-/// the broken mode in forever. Callers (`record_presented_frame`) enforce
-/// the window; an unproven mode is simply left unpersisted — the existing
-/// stored value is never cleared — so the next page load retries.
-fn persist_proven_codec_mode() {
-    let mode = if codec_mode_is_vp8() { "vp8" } else { "h264" };
+/// mode. A Vestel TV limping along at 0.3-1.7 fps (the VP8-era crawl)
+/// still reaches 100 presented frames eventually (~100s at 1fps), and
+/// persisting then locked the broken mode in forever. Callers
+/// (`record_presented_frame`) enforce the window; an unproven mode is
+/// simply left unpersisted — the existing stored value is never cleared —
+/// so the next page load retries.
+fn persist_proven_profile_mode() {
     if let Some(storage) = local_storage() {
-        let _ = storage.set_item(CODEC_MODE_KEY, mode);
+        let _ = storage.set_item(
+            PROFILE_MODE_KEY,
+            profile_mode_name(profile_mode_is_compat()),
+        );
     }
 }
 
@@ -111,39 +129,6 @@ fn display_id() -> Option<String> {
     }
     let _ = storage.set_item(DISPLAY_ID_KEY, &id);
     Some(id)
-}
-
-/// Restrict the video transceiver's codec preferences to VP8 (+rtx) so the
-/// offer carries NO H264. The server prefers H264 whenever the offer contains
-/// it; an offer without H264 is exactly what selects the VP8 branch. Silent
-/// no-op (with a warn) when the capabilities API is missing or lists no VP8 —
-/// the offer is then left unchanged and the server serves H264 as before.
-pub(crate) fn apply_vp8_codec_preferences(transceiver: &RtcRtpTransceiver) {
-    let Some(caps) = RtcRtpReceiver::get_capabilities("video") else {
-        leptos::logging::warn!(
-            "codec fallback: RTCRtpReceiver.getCapabilities unavailable — offer left unchanged"
-        );
-        return;
-    };
-    let vp8_and_rtx = js_sys::Array::new();
-    for codec in caps.get_codecs().iter() {
-        let mime = js_sys::Reflect::get(&codec, &JsValue::from_str("mimeType"))
-            .ok()
-            .and_then(|v| v.as_string())
-            .unwrap_or_default()
-            .to_ascii_lowercase();
-        if mime == "video/vp8" || mime == "video/rtx" {
-            vp8_and_rtx.push(&codec);
-        }
-    }
-    if vp8_and_rtx.length() == 0 {
-        leptos::logging::warn!(
-            "codec fallback: no VP8 in receiver capabilities — offer left unchanged"
-        );
-        return;
-    }
-    transceiver.set_codec_preferences(vp8_and_rtx.as_ref());
-    leptos::logging::log!("codec fallback: offering VP8-only (ndiCodecMode=vp8)");
 }
 
 /// Frame-presentation counters shared between the rVFC observer (writer)
@@ -171,11 +156,11 @@ struct FrameStats {
 /// currentTime sampling. The previous wall-clock heuristics misfired on
 /// prod TVs whose JS timers throttle (Vestel WebViews): the 3s
 /// currentTime-stall check fired during render hiccups although frames
-/// decoded at 30fps, and the tick-12 codec check ping-ponged H264↔VP8 —
+/// decoded at 30fps, and the tick-12 fallback check ping-ponged modes —
 /// measured as 94 WHEP add/removes in 3 minutes across 4 TVs.
 ///
 /// It deliberately does NOT reconnect on "connected but no first frame yet"
-/// (except the bounded once-per-pageload codec fallback): the server
+/// (except the bounded once-per-pageload profile fallback): the server
 /// reliably delivers media to a stable consumer, so a frameless healthy
 /// connection waits. Reconnecting in that window drove a multi-consumer
 /// churn spiral (every reconnect's tee add/remove disrupted the other
@@ -199,14 +184,14 @@ impl Watchdog {
     /// frames at all) is unambiguous at this horizon.
     const STALL_NO_FRAME_MS: f64 = 10_000.0;
     /// True-no-decode horizon: ICE-connected with ZERO presented frames for
-    /// this long after connect → the decoder is dead → codec fallback
+    /// this long after connect → the decoder is dead → profile fallback
     /// (bounded to once per page load).
     const NO_DECODE_FALLBACK_MS: f64 = 15_000.0;
     /// Beacon cadence driver tick (ms). Health decisions are frame-based;
     /// the tick only EVALUATES them and paces beacons. May fire late on
     /// throttled TVs — acceptable, the thresholds are 10-15s.
     const TICK_INTERVAL_MS: i32 = 1000;
-    /// Presented-frame count at which the current codec mode is PROVEN to
+    /// Presented-frame count at which the current profile mode is PROVEN to
     /// decode on this display and persisted to localStorage — but ONLY when
     /// those frames arrived within `PROVEN_MODE_WINDOW_MS` of the first one.
     const PROVEN_MODE_FRAMES: u32 = 100;
@@ -215,7 +200,7 @@ impl Watchdog {
     /// ≤10s ≈ ≥10fps sustained). Without it, 100 frames at 1fps over 100s
     /// "proved" a broken mode (the prod Vestel-VP8 freeze-crawl) and made
     /// it sticky. A session that misses the window persists nothing — the
-    /// next page load retries codec selection from the prior stored state.
+    /// next page load retries profile selection from the prior stored state.
     const PROVEN_MODE_WINDOW_MS: f64 = 10_000.0;
     /// rVFC-path beacon period (~15s at 30fps) — the reliable beacon channel
     /// on displays whose setInterval is throttled to near-silence (rVFC is
@@ -281,7 +266,7 @@ fn now_ms() -> f64 {
 /// Record ONE presented frame into `stats` and run the proven-mode check.
 /// Shared by the rVFC observer and the currentTime proxy so both enforce
 /// the SAME rate gate: when the `PROVEN_MODE_FRAMES`th frame lands, the
-/// current codec mode is persisted ONLY if that frame arrived within
+/// current profile mode is persisted ONLY if that frame arrived within
 /// `PROVEN_MODE_WINDOW_MS` of the FIRST presented frame (≥~10fps
 /// sustained). 100 frames dribbling in at 1fps over 100s must NOT prove a
 /// mode — that's a broken decode, not a working one. Missing the window
@@ -302,7 +287,7 @@ fn record_presented_frame(stats: &FrameStats) -> u32 {
     if n == Watchdog::PROVEN_MODE_FRAMES
         && now - stats.first_frame_at.get() <= Watchdog::PROVEN_MODE_WINDOW_MS
     {
-        persist_proven_codec_mode();
+        persist_proven_profile_mode();
     }
     n
 }
@@ -320,7 +305,7 @@ type SharedRvfcClosure = Rc<RefCell<Option<Closure<dyn FnMut(JsValue, JsValue)>>
 /// Side effects driven from the frame path (see `record_presented_frame`):
 /// - at `Watchdog::PROVEN_MODE_FRAMES` presented frames — IF they arrived
 ///   within `Watchdog::PROVEN_MODE_WINDOW_MS` of the first frame — the
-///   current codec mode is persisted to localStorage (proven-mode
+///   current profile mode is persisted to localStorage (proven-mode
 ///   stickiness, rate-gated);
 /// - every `Watchdog::RVFC_BEACON_FRAME_PERIOD` frames (~15s at 30fps) a
 ///   stats beacon posts — reliable on throttled displays where the 1s-tick
@@ -396,9 +381,9 @@ fn schedule_video_frame_callback(video: &HtmlVideoElement, holder: &SharedRvfcCl
 /// - STALL: playback started (`frames_presented > 0`) AND no frame presented
 ///   for `STALL_NO_FRAME_MS` → a real freeze (render hiccups never span
 ///   10s) → reconnect.
-/// - CODEC FALLBACK: ICE connected AND zero frames presented for
+/// - PROFILE FALLBACK: ICE connected AND zero frames presented for
 ///   `NO_DECODE_FALLBACK_MS` after connect (true no-decode) → switch the
-///   codec mode (at most once per page load) and reconnect.
+///   profile mode (at most once per page load) and reconnect.
 /// - No first frame yet otherwise: WAIT — a connected frameless consumer
 ///   must not reconnect (multi-consumer churn spiral, see Watchdog doc).
 #[allow(clippy::too_many_arguments)]
@@ -431,8 +416,8 @@ fn start_health_ticker<F: Fn() + 'static>(
         let now = now_ms();
         let frames = stats.frames_presented.get();
         if frames == 0 {
-            // Pre-first-frame: only the bounded codec fallback may act.
-            maybe_codec_fallback(now, &stats, &pc, &active, &on_failure);
+            // Pre-first-frame: only the bounded profile fallback may act.
+            maybe_profile_fallback(now, &stats, &pc, &active, &on_failure);
             return;
         }
         let since_last_frame = now - stats.last_frame_at.get();
@@ -453,13 +438,14 @@ fn start_health_ticker<F: Fn() + 'static>(
     cb.forget();
 }
 
-/// Codec-fallback check (frame-based): a session that is ICE-connected with
+/// Profile-fallback check (frame-based): a session that is ICE-connected with
 /// ZERO presented frames `NO_DECODE_FALLBACK_MS` after connect has a dead
 /// decoder (the broken Vestel H264 OMX symptom: connected, RTP flowing,
-/// nothing presented). Switch the codec mode — bounded to ONCE per page
-/// load, killing the H264↔VP8 ping-pong — and fire `on_failure` so the
-/// reconnect offers the other codec.
-fn maybe_codec_fallback<F: Fn() + 'static>(
+/// nothing presented). Switch the profile mode — bounded to ONCE per page
+/// load, killing the mode ping-pong — and fire `on_failure` so the
+/// reconnect requests the other profile (compat mode adds
+/// `?profile=compat` to the WHEP POST URL — see `ndi_video::whep_url`).
+fn maybe_profile_fallback<F: Fn() + 'static>(
     now: f64,
     stats: &FrameStats,
     pc: &RtcPeerConnection,
@@ -469,7 +455,7 @@ fn maybe_codec_fallback<F: Fn() + 'static>(
     if now - stats.started_at.get() < Watchdog::NO_DECODE_FALLBACK_MS {
         return;
     }
-    // Only a CONNECTED session gets a codec verdict: pre-connect states mean
+    // Only a CONNECTED session gets a profile verdict: pre-connect states mean
     // media never had a chance (ICE problems are the ICE listener's job).
     if !matches!(
         pc.ice_connection_state(),
@@ -477,12 +463,12 @@ fn maybe_codec_fallback<F: Fn() + 'static>(
     ) {
         return;
     }
-    let Some(new_mode) = switch_codec_mode_once() else {
+    let Some(new_mode) = switch_profile_mode_once() else {
         // One-shot spent this page load — keep waiting, never ping-pong.
         return;
     };
     leptos::logging::warn!(
-        "codec fallback: 0 frames presented {}s after connect — switching to {new_mode} (once per page load)",
+        "profile fallback: 0 frames presented {}s after connect — switching to profile mode {new_mode} (once per page load)",
         Watchdog::NO_DECODE_FALLBACK_MS / 1000.0
     );
     active.set(false);
@@ -586,6 +572,10 @@ async fn post_client_stats(source_id: &str, report: &JsValue) {
         "sourceId": source_id,
         "displayId": display_id(),
         "codec": codec,
+        // Which stream profile this display requested ("default"/"compat").
+        // codec now reads video/H264 everywhere, so this is the field that
+        // attributes weak-TV health to the 640×480 compat branch.
+        "profile": profile_mode_name(profile_mode_is_compat()),
         "screen": screen,
         "framesDecoded": frames_decoded.as_f64(),
         "fps": fps.as_f64(),
