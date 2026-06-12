@@ -366,23 +366,28 @@ fn attach_ontrack(pc: &RtcPeerConnection, video: &HtmlVideoElement) {
     let ontrack = Closure::<dyn FnMut(RtcTrackEvent)>::new(move |ev: RtcTrackEvent| {
         let streams = ev.streams();
         if let Ok(s) = streams.get(0).dyn_into::<MediaStream>() {
-            // Pin the receiver's jitter buffer to its minimum and let it
-            // shrink back after spikes. On low-end TV WebViews the adaptive
-            // buffer otherwise only ratchets UP ("delayed + choppy" stage).
-            // jitterBufferTarget (ms) is the standard knob (Chrome/WebView
-            // 122+); playoutDelayHint (s) is the legacy fallback. Both set
-            // via Reflect (no web_sys bindings); unsupported = silent no-op.
-            let receiver = ev.receiver();
-            let _ = js_sys::Reflect::set(
-                receiver.as_ref(),
-                &JsValue::from_str("jitterBufferTarget"),
-                &JsValue::from_f64(0.0),
-            );
-            let _ = js_sys::Reflect::set(
-                receiver.as_ref(),
-                &JsValue::from_str("playoutDelayHint"),
-                &JsValue::from_f64(0.0),
-            );
+            // Jitter-buffer policy is PROFILE-DEPENDENT (VDO.Ninja source
+            // study, #387): a minimal buffer is a latency win on strong
+            // decoders, but on a marginal decoder every late frame becomes a
+            // dropped frame -> PLI storm -> IDR flood -> collapse spiral.
+            // VDO.Ninja never forces 0 - the browser's adaptive buffer is the
+            // weak device's only shock absorber. So: default profile (strong
+            // HW path) pins the buffer low for lip-sync latency; compat
+            // profile (weak device) leaves the browser default untouched.
+            // Set via Reflect (no web_sys bindings); unsupported = no-op.
+            if !profile_mode_is_compat() {
+                let receiver = ev.receiver();
+                let _ = js_sys::Reflect::set(
+                    receiver.as_ref(),
+                    &JsValue::from_str("jitterBufferTarget"),
+                    &JsValue::from_f64(0.0),
+                );
+                let _ = js_sys::Reflect::set(
+                    receiver.as_ref(),
+                    &JsValue::from_str("playoutDelayHint"),
+                    &JsValue::from_f64(0.0),
+                );
+            }
 
             // CRITICAL: explicitly set `muted = true` at the PROPERTY level
             // BEFORE assigning srcObject. The HTML attribute `muted=""` only

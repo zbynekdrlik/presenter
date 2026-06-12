@@ -85,7 +85,10 @@
     pc.ontrack = function (ev) {
       if (!ev.streams || !ev.streams[0]) return;
       try {
-        ev.receiver.jitterBufferTarget = 0.0;
+        // Profile-dependent buffering (#387): only strong/default-profile
+        // clients pin the jitter buffer; compat (weak device) keeps the
+        // browser's adaptive buffer - its only shock absorber.
+        if (!compat) ev.receiver.jitterBufferTarget = 0.0;
         ev.receiver.playoutDelayHint = 0.0;
       } catch (e) { /* optional knobs */ }
       // muted PROPERTY before srcObject, or Chrome's autoplay policy blocks play().
