@@ -1,27 +1,20 @@
-//! Lite NDI stage page — plain-JS WHEP player for weak displays.
+//! Lite NDI stage page — plain-JS WHEP player, manual diagnostic only.
 //!
-//! The 1GB Vestel stage TVs stall repeatedly on the full WASM stage page
-//! regardless of codec, while VDO.Ninja (a small plain-JS page) has played
-//! on the SAME TVs for years. This module serves a single self-contained
-//! HTML page (no WASM, no frameworks) that mirrors the WASM client's WHEP
-//! connect + watchdog semantics, to test whether dropping the WASM app
-//! frees enough RAM/CPU for sustained decode.
+//! Born as the #379 experiment (do the 1GB Vestel TVs stall because of the
+//! WASM app?). The 2026-06-12 A/B answered NO — the lite page stalled the
+//! same — so the page is kept ONLY as a manual diagnostic player at
+//! `/stage/lite`. It mirrors the WASM client's WHEP connect + watchdog
+//! semantics in a single self-contained HTML page (no WASM, no frameworks).
 
 use axum::{
-    extract::State,
     http::header,
-    response::{Html, IntoResponse, Redirect, Response},
+    response::{Html, IntoResponse, Response},
 };
 use tracing::instrument;
-
-use crate::state::AppState;
 
 /// The self-contained lite player page, embedded at compile time (same
 /// convention as `settings_script.js` / the tablet service worker).
 const STAGE_LITE_HTML: &str = include_str!("../assets/stage_lite.html");
-
-/// Stage layout code that routes `/stage` to the lite player.
-const NDI_FULLSCREEN_LAYOUT_CODE: &str = "ndi-fullscreen";
 
 /// `GET /stage/lite` — serve the embedded plain-JS WHEP player.
 ///
@@ -33,20 +26,15 @@ pub(super) async fn stage_lite_page() -> Response {
     ([(header::CACHE_CONTROL, "no-store")], Html(STAGE_LITE_HTML)).into_response()
 }
 
-/// `GET /stage` — the stage display entry point.
+/// `GET /stage` — the stage display entry point: ALWAYS the full WASM page.
 ///
-/// EXPERIMENT (see issue #379): while the `ndi-fullscreen` layout is active,
-/// EVERY stage display is 303-redirected to the lite plain-JS player at
-/// `/stage/lite` instead of the WASM app, so the weak TVs get the
-/// minimal-RAM page whenever the NDI layout is live. Any other layout
-/// (worship, timer, …) serves the normal WASM shell unchanged.
-// TODO(#379): decide the permanent UX — overlays on the lite page vs
-// per-device routing — then either fold the lite page into the layout
-// system or remove this redirect.
+/// The #379 lite-player auto-redirect for the `ndi-fullscreen` layout is
+/// RETIRED: the 2026-06-12 A/B proved the WASM page was NOT the weak-TV
+/// bottleneck (identical ledger results on both pages), and the redirect
+/// silently removed the stage overlay blocks (clock, song number, status) —
+/// a UX regression the user never approved. Every layout serves the WASM
+/// shell; `/stage/lite` stays available as a manual diagnostic player only.
 #[instrument(skip_all)]
-pub(super) async fn stage_shell(State(state): State<AppState>) -> Response {
-    if state.stage_layout_code().await == NDI_FULLSCREEN_LAYOUT_CODE {
-        return Redirect::to("/stage/lite").into_response();
-    }
+pub(super) async fn stage_shell() -> Response {
     super::wasm_ui::wasm_ui_shell().await
 }

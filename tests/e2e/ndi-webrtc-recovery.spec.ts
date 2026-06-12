@@ -20,7 +20,6 @@ import {
   refreshDevData,
   startTestServer,
   stopServer,
-  waitForNdiLitePage,
   type ServerHandle,
 } from "./support";
 
@@ -91,9 +90,7 @@ test("NDI WebRTC recovery @video-codec — video resumes within 10s after server
   }
 
   // Switch the stage layout to ndi-fullscreen, then open the stage display.
-  // EXPERIMENT (#379): the ndi layout serves the lite plain-JS player at
-  // /stage/lite; its watchdog (ICE-loss + 10s frame-stall) must recover the
-  // stream without a reload, same contract as the WASM client before it.
+  // WASM hydration gate first, then wait for the layout to be applied.
   const layoutResp = await request.post(
     new URL("/stage/layout", baseURL).toString(),
     { data: { code: "ndi-fullscreen" } },
@@ -101,7 +98,8 @@ test("NDI WebRTC recovery @video-codec — video resumes within 10s after server
   expect(layoutResp.ok(), "switching stage layout to ndi-fullscreen must succeed").toBe(true);
 
   await page.goto(new URL("/stage", baseURL).toString());
-  await waitForNdiLitePage(page);
+  await page.waitForSelector('body[data-wasm-ready="true"]', { timeout: 30_000 });
+  await page.waitForSelector('body[data-layout-code="ndi-fullscreen"]', { timeout: 10_000 });
 
   const video = page.locator('video[data-role="ndi-video"]').first();
   await expect(video).toBeVisible();

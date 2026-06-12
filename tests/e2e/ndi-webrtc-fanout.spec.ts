@@ -16,7 +16,6 @@ import {
   startTestServer,
   stopServer,
   attachConsoleErrorCollector,
-  waitForNdiLitePage,
   waitForVideoReady,
   type ServerHandle,
 } from "./support";
@@ -114,11 +113,22 @@ test(
     const stageUrl = new URL("/stage", baseURL).toString();
     await Promise.all([page1.goto(stageUrl), page2.goto(stageUrl)]);
 
-    // EXPERIMENT (#379): ndi-fullscreen layout → both tabs land on the lite
-    // plain-JS player; the shared-encoder invariant is identical.
+    // Wait for WASM mount on both pages.
     await Promise.all([
-      waitForNdiLitePage(page1),
-      waitForNdiLitePage(page2),
+      page1.waitForSelector('body[data-wasm-ready="true"]', {
+        timeout: 30_000,
+      }),
+      page2.waitForSelector('body[data-wasm-ready="true"]', {
+        timeout: 30_000,
+      }),
+    ]);
+    await Promise.all([
+      page1.waitForSelector('body[data-layout-code="ndi-fullscreen"]', {
+        timeout: 10_000,
+      }),
+      page2.waitForSelector('body[data-layout-code="ndi-fullscreen"]', {
+        timeout: 10_000,
+      }),
     ]);
 
     // Both tabs must reach videoWidth > 0 on their ndi-video element.

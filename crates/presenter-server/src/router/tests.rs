@@ -2378,7 +2378,11 @@ async fn stage_lite_serves_embedded_player_html() {
 }
 
 #[tokio::test]
-async fn stage_redirects_to_lite_when_ndi_fullscreen_layout_active() {
+async fn stage_serves_full_page_even_with_ndi_fullscreen_layout() {
+    // REGRESSION GUARD (2026-06-12): the retired lite auto-redirect silently
+    // removed the stage overlay blocks (clock, song number, status) — a UX
+    // regression shipped without approval. The NDI layout MUST keep serving
+    // the full WASM stage page; /stage/lite is a manual diagnostic tool only.
     let state = AppState::in_memory().await.unwrap();
     state.set_stage_layout_code("ndi-fullscreen").await.unwrap();
     let app = build_router(state);
@@ -2391,17 +2395,20 @@ async fn stage_redirects_to_lite_when_ndi_fullscreen_layout_active() {
         )
         .await
         .unwrap();
-    assert_eq!(
-        response.status(),
-        StatusCode::SEE_OTHER,
-        "ndi-fullscreen layout must 303 stage displays to the lite player"
+    assert!(
+        matches!(
+            response.status(),
+            StatusCode::OK | StatusCode::SERVICE_UNAVAILABLE
+        ),
+        "ndi layout must serve the normal stage page (overlays!), got {}",
+        response.status()
     );
-    assert_eq!(
+    assert!(
         response
             .headers()
             .get(axum::http::header::LOCATION)
-            .and_then(|v| v.to_str().ok()),
-        Some("/stage/lite")
+            .is_none(),
+        "ndi layout must not redirect away from the full stage page"
     );
 }
 

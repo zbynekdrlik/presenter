@@ -18,12 +18,13 @@ import { expect, type Locator, type Page } from "@playwright/test";
 /**
  * Wait for the lite NDI stage page to be the loaded document.
  *
- * EXPERIMENT (#379): while the ndi-fullscreen layout is active, GET /stage
- * 303-redirects to /stage/lite — a plain-JS WHEP player with no WASM app
- * (the 1GB Vestel TVs stall on the WASM page; VDO.Ninja-style plain JS has
- * played on the same TVs for years). Specs that previously waited for the
- * WASM shell (`body[data-wasm-ready="true"]` + layout-code) on the NDI
- * layout wait for the lite marker instead.
+ * /stage/lite is a MANUAL diagnostic player (plain-JS WHEP, no WASM app).
+ * The 2026-06-12 experiment that 303-redirected /stage here for the
+ * ndi-fullscreen layout is RETIRED — the A/B proved the WASM page was not
+ * the weak-TV bottleneck, and the redirect dropped the stage overlay
+ * blocks. /stage flows wait for the WASM shell
+ * (`body[data-wasm-ready="true"]` + layout-code); only specs that navigate
+ * to /stage/lite DIRECTLY use this marker wait.
  */
 export async function waitForNdiLitePage(page: Page): Promise<void> {
   await page.waitForSelector('body[data-ndi-lite="true"]', {
