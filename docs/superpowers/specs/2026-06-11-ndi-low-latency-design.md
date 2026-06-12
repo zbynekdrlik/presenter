@@ -206,3 +206,48 @@ software (libvpx), bypassing the broken vendor OMX entirely.
 **Acceptance:** Vestel TVs (sd2-4) report sustained `fps≈30` in their beacons
 with `codec=video/VP8` on the live stage, while sd1/laptops keep
 `codec=video/H264`.
+
+## Addendum 3 (2026-06-12): pivot — compat profile = 640×480 H264, VP8 removed
+
+**Measured on prod with the Addendum-2 VP8-480p branch live:** the weak
+Vestel TVs decoded VP8 in software at only ~26 fps WITH 37 freezes, and the
+software `vp8enc` drove the prod N100 to load ~10 (hiccups for every
+consumer). VP8 avoided the broken OMX decoder but traded it for two CPU
+walls.
+
+**Refined root cause (logcat, sd2):** the MStar OMX H264 decoder
+(`OMX.MS.AVC.Decoder`) dies ONLY on output-port reconfiguration — it
+default-inits its port at 640×480, and the 1280×720 stream forces a
+reconfig that fails (`setParameter(ParamPortDefinition) BadParameter`,
+codec torn down every GOP). Hypothesis now shipped: a stream that IS
+EXACTLY 640×480 H264 needs no reconfig → HW decode on the TV (zero TV CPU)
++ GPU encode on the server (`vah264enc` at 900 kbps; near-zero N100 CPU vs
+`vp8enc`).
+
+**Changes (replace Addendum 2's mechanism, keep its goal):**
+
+- Server: the VP8 branch is replaced by a second H264 branch —
+  `raw_tee → q_compat(leaky) → videoscale → caps(NV12 640×480 PAR 1/1,
+  "compat_scale_caps") → encoder_compat (same factory as primary, 900 kbps,
+  GOP 240) → constrained-baseline caps → h264parse_compat →
+  enc_appsink_compat (StreamProducer sync=false)`. No videoconvert (tee is
+  already NV12). Exactly TWO encoders per source by design — one per
+  PROFILE, never per consumer (#336 invariant updated).
+- Selection: offer-based codec sniffing is gone (`ConsumerCodec`,
+  `select_codec`, `rtpvp8pay` deleted). The WHEP POST query
+  `?profile=compat` (parsed into `StreamProfile` at the HTTP layer) selects
+  the producer; `request_keyframe` targets the selected branch.
+- Client: the no-decode fallback no longer strips H264 via
+  `setCodecPreferences` — it reconnects with `?profile=compat`. localStorage
+  key `ndiCodecMode` is kept, values are now `default`/`compat` (legacy
+  `vp8` parses as default and self-heals); same once-per-pageload switch and
+  ≥10 fps proven-mode persistence. Beacons gain a `profile` field (codec now
+  reads video/H264 everywhere).
+- CI guard: the synthetic-lane VP8 e2e is replaced by "compat profile
+  consumers get the 640x480 H264 stream" (frameWidth === 640, mimeType ===
+  "video/H264").
+
+**Acceptance:** Vestel TVs (sd2-4) report sustained `fps≈30` with
+`profile=compat`, `codec=video/H264` in their beacons on the live stage —
+hardware decode, no freezes — while sd1/laptops keep the default 720p
+profile.
