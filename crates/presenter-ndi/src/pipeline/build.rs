@@ -1,20 +1,23 @@
-//! Pipeline construction: build the shared-encoder ENCODER pipeline
+//! Pipeline construction: build the ENCODER pipeline
 //! (`ndisrc → ndisrcdemux → videoconvert → videoscale → caps → raw_tee`,
-//! fanning into TWO parallel encode branches — one per stream profile:
+//! fanning into TWO parallel branches — one per stream profile:
 //! default `→ q_default → encoder → profile_caps → h264parse → enc_appsink`
-//! (1280×720 H264) and compat `→ q_compat → videorate → videoconvert →
-//! videoscale → compat_scale_caps → encoder_compat(vp8enc) →
-//! enc_appsink_compat` (854×480@20 realtime VP8). Each appsink is wrapped by
-//! a `gstreamer_utils::StreamProducer` which fans the encoded stream out to
-//! the per-consumer `appsrc → rtph264pay|rtpvp8pay → webrtcbin` pipelines
-//! built in `add_consumer` (see `consumers.rs`); a consumer selects its
-//! producer via the WHEP `?profile=compat` query (see `StreamProfile`). The
-//! compat branch exists because the weak stage TVs' MStar H264 OMX decoder
-//! is vendor-broken (even an exactly-640×480 H264 stream dies after ~5s) —
-//! but VDO.Ninja's libwebrtc VP8 has played smoothly on the SAME TVs for
-//! years, so compat mirrors its realtime stream properties, above all
-//! token-partitioned VP8 for multithreaded TV decode (see
-//! `build_compat_vp8_encoder`).
+//! (1280×720 H264, a SHARED hardware encoder) and compat `→ q_compat →
+//! videorate → videoconvert → videoscale → compat_scale_caps →
+//! enc_appsink_compat_raw` (854×480@20 RAW I420 — NO encoder here). Each
+//! appsink is wrapped by a `gstreamer_utils::StreamProducer` that fans its
+//! stream out to the per-consumer `appsrc → … → webrtcbin` pipelines built in
+//! `add_consumer` (see `consumers.rs`); a consumer selects its producer via
+//! the WHEP `?profile=compat` query (see `StreamProfile`).
+//!
+//! The DEFAULT branch shares ONE H264 encoder across all healthy consumers —
+//! per-consumer H264 720p encoders melt the N100 (#336). The COMPAT branch
+//! fans RAW because the weak stage TVs' MStar H264 OMX decoder is
+//! vendor-broken; VDO.Ninja's libwebrtc VP8 plays smoothly on the SAME TVs,
+//! and #387 drives EACH weak TV's VP8 bitrate independently from its own RTCP
+//! loss/RTT — so the compat `vp8enc` is now PER CONSUMER (in `consumers.rs`),
+//! not shared. Per-consumer VP8 480p is affordable on the N100 for the bounded
+//! compat tier (≤3 weak TVs); per-consumer H264 720p is not.
 
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -56,9 +59,6 @@ const COMPAT_FRAMERATE: i32 = 20;
 
 /// Primary (720p) encoder bitrate in kbit/s.
 const DEFAULT_BITRATE_KBPS: u32 = 2500;
-/// Compat (480p VP8) encoder bitrate in bits/s — the weak-device budget
-/// (vp8enc's `target-bitrate` is bits/sec, unlike the H264 encoders' kbps).
-const COMPAT_TARGET_BITRATE_BPS: i32 = 900_000;
 
 impl NdiPipeline {
     /// Build but do not yet start the pipeline.
@@ -136,7 +136,8 @@ impl NdiPipeline {
         tracing::info!(
             encoder = encoder_name,
             %ndi_name,
-            "pipeline built (720p H264 default + 854x480@20 realtime-VP8 compat, per-consumer-pipeline fanout)"
+            "pipeline built (720p H264 shared default + 854x480@20 RAW compat fanout; \
+             per-consumer VP8 encoders for compat — #387)"
         );
 
         let (state_tx, state_rx) = watch::channel(PipelineState::Stopped);
@@ -252,12 +253,19 @@ pub(super) fn consumer_h264_caps() -> gst::Caps {
         .build()
 }
 
-/// The VP8 caps used on BOTH sides of the compat StreamProducer bridge: the
-/// vp8enc appsink's caps filter AND every compat consumer appsrc's initial
-/// caps — the same always-match guarantee `consumer_h264_caps` gives the
-/// H264 bridge (vp8enc output needs no parser; rtpvp8pay takes it directly).
-pub(super) fn consumer_vp8_caps() -> gst::Caps {
-    gst::Caps::builder("video/x-vp8").build()
+/// The RAW caps used on BOTH sides of the compat StreamProducer bridge (#387):
+/// the compat appsink's caps filter AND every compat consumer appsrc's initial
+/// caps — the same always-match guarantee `consumer_h264_caps` gives the H264
+/// bridge. Since #387 the compat path fans RAW I420 854×480 (each consumer
+/// owns its vp8enc so its bitrate adapts per-TV); pinning the exact raw format
+/// on both sides keeps the first forwarded sample agreeing with the
+/// per-consumer appsrc → vp8enc input.
+pub(super) fn compat_raw_caps() -> gst::Caps {
+    gst::Caps::builder("video/x-raw")
+        .field("format", "I420")
+        .field("width", COMPAT_VIDEO_WIDTH)
+        .field("height", COMPAT_VIDEO_HEIGHT)
+        .build()
 }
 
 /// Build the raw fanout point placed after `scale_caps`: a `tee` named
@@ -292,24 +300,33 @@ fn build_branch_queue(name: &str) -> Result<gst::Element> {
         .with_context(|| format!("build queue {name}"))
 }
 
-/// Append the compat encode branch (realtime VP8, VDO.Ninja-style) to the
+/// Append the compat encode branch (#387: RAW fanout, per-consumer VP8) to the
 /// encoder pipeline and link it off `raw_tee`:
 ///
 /// `raw_tee → q_compat → videorate(drop-only) → videoconvert(NV12→I420) →
 /// videoscale(add-borders) → compat_scale_caps(I420 854×480 PAR 1/1 @20/1)
-/// → vp8enc("encoder_compat") → enc_appsink_compat(video/x-vp8)`.
+/// → enc_appsink_compat_raw(video/x-raw I420 854×480)`.
+///
+/// Since #387 there is NO shared `vp8enc` here — the compat path fans RAW I420
+/// frames so each compat CONSUMER owns its own `vp8enc` whose `target-bitrate`
+/// is driven independently by that consumer's `CompatBitrateController` (a
+/// SHARED encoder could only ever serve the worst TV's bitrate to all of them).
+/// `StreamProducer` is zero-copy (refcounted samples), so fanning RAW to ≤3
+/// weak TVs is cheap.
 ///
 /// - videorate `drop-only=true`: thins the 30fps tee output to the 20fps the
 ///   caps pin by DROPPING frames — never duplicates to upconvert a slower
 ///   source (a realtime branch must not pad with copies).
-/// - videoconvert: REQUIRED — vp8enc's sink accepts ONLY I420 (gst-inspect
-///   verified) while the tee carries NV12 for the H264 hw encoder; this is a
-///   cheap 4:2:0→4:2:0 chroma repack.
+/// - videoconvert: REQUIRED — the per-consumer vp8enc's sink accepts ONLY I420
+///   (gst-inspect verified) while the tee carries NV12 for the H264 hw
+///   encoder; this is a cheap 4:2:0→4:2:0 chroma repack done ONCE here, not
+///   per consumer.
 /// - videoscale `add-borders=true`: 720p 16:9 → 854×480 is aspect-preserving
 ///   (no borders in practice); non-16:9 sources letterbox instead of stretch.
 /// - appsink: same bounded relay contract as the default branch — 5-frame
-///   backlog, drop(true) keeps the newest, VP8 bridge caps
-///   (`consumer_vp8_caps`) so every compat consumer appsrc always matches.
+///   backlog, drop(true) keeps the newest, RAW I420 bridge caps
+///   (`compat_raw_caps`) so every compat consumer appsrc → vp8enc always
+///   matches.
 ///
 /// Returns the branch's appsink for its StreamProducer wrap. Linked at build
 /// time, before any state change (a tee branch linked after PLAYING never
@@ -344,10 +361,9 @@ fn add_compat_branch(
         )
         .build()
         .context("build compat scale capsfilter")?;
-    let encoder_compat = build_compat_vp8_encoder()?;
     let appsink = gst_app::AppSink::builder()
-        .name("enc_appsink_compat")
-        .caps(&consumer_vp8_caps())
+        .name("enc_appsink_compat_raw")
+        .caps(&compat_raw_caps())
         .max_buffers(5)
         .drop(true)
         .build();
@@ -358,7 +374,6 @@ fn add_compat_branch(
             &videoconvert,
             &videoscale,
             &scale_caps,
-            &encoder_compat,
             appsink.upcast_ref::<gst::Element>(),
         ])
         .context("add compat branch elements")?;
@@ -369,51 +384,10 @@ fn add_compat_branch(
         &videoconvert,
         &videoscale,
         &scale_caps,
-        &encoder_compat,
+        appsink.upcast_ref::<gst::Element>(),
     ])
-    .context("link tee -> q_compat -> rate -> convert -> scale -> caps -> vp8enc")?;
-    encoder_compat
-        .link(appsink.upcast_ref::<gst::Element>())
-        .context("link vp8enc -> compat appsink")?;
+    .context("link tee -> q_compat -> rate -> convert -> scale -> caps -> raw appsink")?;
     Ok(appsink)
-}
-
-/// Build the compat branch's `vp8enc` ("encoder_compat") with libwebrtc-
-/// parity realtime tuning. VDO.Ninja (browser-to-browser libwebrtc VP8) has
-/// played smoothly for YEARS on the same weak Vestel TVs that freeze on a
-/// default-tuned vp8enc stream — the previous VP8 attempt (deadline=1
-/// cpu-used=8 alone) hit ~26fps with freezes because gst vp8enc's default
-/// emits a SINGLE token partition, forcing the TV to decode tokens on ONE of
-/// its 4 cores. Property types verified via gst-inspect-1.0 and locked by
-/// `compat_branch_is_realtime_vp8`:
-///
-/// - `deadline=1` (µs/frame, Integer64): libvpx realtime mode.
-/// - `cpu-used=8`: fastest realtime encode preset (quality ↓, speed ↑).
-/// - `end-usage=cbr` + `target-bitrate=900_000` (bits/sec): constant-bitrate
-///   like libwebrtc's rate controller — no VBR bursts to choke the TV.
-/// - `keyframe-max-dist=240`: GOP parity with the H264 branch; joins are
-///   served by `request_keyframe`, not scheduled keyframe pulses.
-/// - `token-partitions="4"` (enum nick for FOUR partitions): THE key delta —
-///   partitioned token coding lets the TV's libvpx decoder spread entropy
-///   decode across its 4 cores, exactly what libwebrtc emits.
-/// - `threads=4`: one encode thread per partition on the server.
-/// - `error-resilient=default` (flags): frames stay decodable after loss,
-///   libwebrtc parity for realtime streams.
-/// - `lag-in-frames=0`: zero lookahead — no encoder-side frame delay.
-fn build_compat_vp8_encoder() -> Result<gst::Element> {
-    gst::ElementFactory::make("vp8enc")
-        .name("encoder_compat")
-        .property("deadline", 1i64)
-        .property("cpu-used", 8i32)
-        .property_from_str("end-usage", "cbr")
-        .property("target-bitrate", COMPAT_TARGET_BITRATE_BPS)
-        .property("keyframe-max-dist", 240i32)
-        .property_from_str("token-partitions", "4")
-        .property("threads", 4i32)
-        .property_from_str("error-resilient", "default")
-        .property("lag-in-frames", 0i32)
-        .build()
-        .context("build vp8enc encoder_compat")
 }
 
 /// Build the raw-video conditioning chain placed between the demux and the

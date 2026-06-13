@@ -36,18 +36,22 @@ use std::sync::Arc;
 use anyhow::{anyhow, Context, Result};
 use gstreamer as gst;
 use gstreamer::prelude::*;
-use gstreamer_app as gst_app;
 use gstreamer_utils::{ConsumptionLink, StreamProducer};
 use gstreamer_video as gst_video;
 use gstreamer_webrtc as gst_webrtc;
 use tokio::sync::mpsc::UnboundedSender;
 
+use super::adaptive::START_BPS;
+use super::compat_controller::spawn_compat_bitrate_controller;
+use super::consumer_build::{
+    add_consumer_elements, adopt_encoder_timeline, build_consumer_elements, connect_branch_signals,
+    link_consumer_elements, spawn_consumer_bus_watch,
+};
 use super::negotiation::{
     align_payload_type, await_ice_gathering, await_media_caps, negotiate_sdp,
     parse_h264_payload_type, parse_vp8_payload_type,
 };
 use super::{
-    build::{consumer_h264_caps, consumer_vp8_caps},
     AddConsumerError, NdiPipeline, PipelineSnapshot, SessionSnapshot, StreamProfile, WhepAnswer,
 };
 use crate::whep_session::{IceCandidate, LivenessState, WhepConnectionState, WhepSession};
@@ -63,10 +67,27 @@ pub(super) struct ConsumerBranch {
     pipeline: gst::Pipeline,
     webrtcbin: gst::Element,
     bus_task: Option<tokio::task::JoinHandle<()>>,
+    /// Per-consumer adaptive-bitrate task (#387) — only set for COMPAT
+    /// consumers (which own a vp8enc). Aborted on Drop alongside `bus_task`.
+    controller_task: Option<tokio::task::JoinHandle<()>>,
+    /// Latest controller-applied target-bitrate (bits/s), shared with the
+    /// controller task. `Some` for COMPAT, `None` for DEFAULT. Read by snapshot.
+    compat_target_bitrate: Option<Arc<std::sync::atomic::AtomicI32>>,
     link: Option<ConsumptionLink>,
     sdp_answer: String,
     session_id: String,
     armed: bool,
+}
+
+/// Everything `defuse` hands to a stored `WhepSession`.
+pub(super) struct DefusedBranch {
+    pub pipeline: gst::Pipeline,
+    pub webrtcbin: gst::Element,
+    pub sdp_answer: String,
+    pub link: ConsumptionLink,
+    pub bus_task: tokio::task::JoinHandle<()>,
+    pub controller_task: Option<tokio::task::JoinHandle<()>>,
+    pub compat_target_bitrate: Option<Arc<std::sync::atomic::AtomicI32>>,
 }
 
 impl ConsumerBranch {
@@ -75,6 +96,8 @@ impl ConsumerBranch {
             pipeline,
             webrtcbin,
             bus_task: None,
+            controller_task: None,
+            compat_target_bitrate: None,
             link: None,
             sdp_answer: String::new(),
             session_id: session_id.to_string(),
@@ -84,27 +107,21 @@ impl ConsumerBranch {
 
     /// Take ownership of the parts for a stored `WhepSession`, disarming the
     /// guard. Returns None if the branch never completed negotiation (no link
-    /// or bus task) — callers treat that as an internal error.
-    #[allow(clippy::type_complexity)]
-    fn defuse(
-        mut self,
-    ) -> Option<(
-        gst::Pipeline,
-        gst::Element,
-        String,
-        ConsumptionLink,
-        tokio::task::JoinHandle<()>,
-    )> {
+    /// or bus task) — callers treat that as an internal error. The
+    /// controller task + bitrate handle are COMPAT-only (`None` for DEFAULT).
+    fn defuse(mut self) -> Option<DefusedBranch> {
         let link = self.link.take()?;
         let bus_task = self.bus_task.take()?;
         self.armed = false;
-        Some((
-            self.pipeline.clone(),
-            self.webrtcbin.clone(),
-            std::mem::take(&mut self.sdp_answer),
+        Some(DefusedBranch {
+            pipeline: self.pipeline.clone(),
+            webrtcbin: self.webrtcbin.clone(),
+            sdp_answer: std::mem::take(&mut self.sdp_answer),
             link,
             bus_task,
-        ))
+            controller_task: self.controller_task.take(),
+            compat_target_bitrate: self.compat_target_bitrate.take(),
+        })
     }
 }
 
@@ -114,6 +131,9 @@ impl Drop for ConsumerBranch {
             return;
         }
         if let Some(task) = self.bus_task.take() {
+            task.abort();
+        }
+        if let Some(task) = self.controller_task.take() {
             task.abort();
         }
         // Dropping the link disconnects this consumer from the StreamProducer.
@@ -215,20 +235,23 @@ impl NdiPipeline {
         let branch = answer_rx
             .await
             .context("spawn_blocking answer channel dropped")??;
-        let (consumer_pipeline, webrtcbin, sdp_answer, link, bus_task) = branch
+        let defused = branch
             .defuse()
             .ok_or_else(|| anyhow!("negotiated consumer branch missing link or bus task"))?;
         let session = WhepSession {
             session_id: session_id.clone(),
-            consumer_pipeline,
-            webrtcbin,
-            link,
-            bus_task,
+            consumer_pipeline: defused.pipeline,
+            webrtcbin: defused.webrtcbin,
+            link: defused.link,
+            bus_task: defused.bus_task,
             connection_state,
             // Fresh RTCP-liveness tracker: full stale-window grace from now.
             liveness: Arc::new(std::sync::Mutex::new(LivenessState::new())),
             ice_tx,
+            compat_controller_task: defused.controller_task,
+            compat_target_bitrate: defused.compat_target_bitrate,
         };
+        let sdp_answer = defused.sdp_answer;
 
         // Drain any ICE candidates already buffered (half-trickle: include
         // in the WHEP answer body). Allow up to 50 ms for more to trickle.
@@ -327,8 +350,18 @@ impl NdiPipeline {
     /// Snapshot the pipeline state for the diagnostic route.
     /// `source_id` is left empty — the manager fills it in (Task 8).
     pub async fn snapshot(&self) -> PipelineSnapshot {
-        // Phase 1 (cheap, under the lock): identity + counters + webrtcbin handle.
-        let partial: Vec<(String, WhepConnectionState, u64, u64, gst::Element)> = {
+        // Phase 1 (cheap, under the lock): identity + counters + webrtcbin
+        // handle + the per-consumer compat target-bitrate (an atomic load —
+        // `None` for DEFAULT, `Some(bps)` for COMPAT — #387).
+        type SnapPartial = (
+            String,
+            WhepConnectionState,
+            u64,
+            u64,
+            gst::Element,
+            Option<i32>,
+        );
+        let partial: Vec<SnapPartial> = {
             let sessions = self.sessions.lock().await;
             sessions
                 .iter()
@@ -337,12 +370,17 @@ impl NdiPipeline {
                         .connection_state
                         .lock()
                         .unwrap_or_else(|p| p.into_inner());
+                    let compat_bitrate = session
+                        .compat_target_bitrate
+                        .as_ref()
+                        .map(|b| b.load(std::sync::atomic::Ordering::Relaxed));
                     (
                         id.clone(),
                         connection_state,
                         session.link.pushed(),
                         session.link.dropped(),
                         session.webrtcbin.clone(),
+                        compat_bitrate,
                     )
                 })
                 .collect()
@@ -352,18 +390,21 @@ impl NdiPipeline {
         let session_snaps: Vec<SessionSnapshot> = tokio::task::spawn_blocking(move || {
             partial
                 .into_iter()
-                .map(|(id, connection_state, pushed, dropped, webrtcbin)| {
-                    let (rtt, jitter, lost) = rtcp_remote_inbound(&webrtcbin);
-                    SessionSnapshot {
-                        id,
-                        connection_state,
-                        buffers_pushed: pushed,
-                        buffers_dropped: dropped,
-                        rtcp_round_trip_ms: rtt,
-                        rtcp_jitter_ms: jitter,
-                        rtcp_packets_lost: lost,
-                    }
-                })
+                .map(
+                    |(id, connection_state, pushed, dropped, webrtcbin, compat_bitrate)| {
+                        let (rtt, jitter, lost) = rtcp_remote_inbound(&webrtcbin);
+                        SessionSnapshot {
+                            id,
+                            connection_state,
+                            buffers_pushed: pushed,
+                            buffers_dropped: dropped,
+                            rtcp_round_trip_ms: rtt,
+                            rtcp_jitter_ms: jitter,
+                            rtcp_packets_lost: lost,
+                            compat_target_bitrate_bps: compat_bitrate,
+                        }
+                    },
+                )
                 .collect()
         })
         .await
@@ -388,11 +429,14 @@ impl NdiPipeline {
     /// Iterate encoder elements in the ENCODER pipeline. Returns a collected Vec
     /// iterator so callers don't need to hold the pipeline lock.
     ///
-    /// The ENCODER pipeline holds EXACTLY TWO encoder elements BY DESIGN —
-    /// "encoder" (H264, 720p default profile) and "encoder_compat" (vp8enc,
-    /// 854×480 realtime-VP8 compat profile): one per PROFILE, never per
-    /// consumer. Consumer pipelines contain NO encoder (only
-    /// appsrc/rtph264pay|rtpvp8pay/webrtcbin) — the #336 invariant.
+    /// Since #387 the ENCODER pipeline holds EXACTLY ONE encoder — the SHARED
+    /// H264 "encoder" (720p default profile). The compat path fans RAW (the
+    /// shared vp8enc is gone), and each COMPAT consumer owns its `vp8enc`
+    /// (`venc_<session>`) in its OWN pipeline so its bitrate adapts per-TV.
+    /// The #336 invariant — the EXPENSIVE H264 720p encoder never multiplies
+    /// per consumer — is intact; the bounded per-consumer VP8 480p exception is
+    /// affordable on the N100 (≤3 weak TVs). DEFAULT consumer pipelines contain
+    /// NO encoder; COMPAT consumer pipelines contain exactly one vp8enc.
     pub fn iterate_encoders(&self) -> impl Iterator<Item = gst::Element> + '_ {
         let mut found: Vec<gst::Element> = Vec::new();
         for el in self.pipeline.iterate_elements().into_iter().flatten() {
@@ -490,35 +534,37 @@ fn build_consumer_pipeline_blocking(
         ));
     };
 
-    let (appsrc, payloader, webrtcbin) = build_consumer_elements(session_id, profile, pt)?;
+    // For COMPAT, `encoder` is the per-consumer vp8enc (#387) that sits
+    // between appsrc(RAW) and the payloader; for DEFAULT it is None (the
+    // shared H264 producer already fans encoded frames).
+    let (appsrc, encoder, payloader, webrtcbin) = build_consumer_elements(session_id, profile, pt)?;
 
     let consumer_pipeline = gst::Pipeline::with_name(&format!("consumer_{session_id}"));
     adopt_encoder_timeline(&consumer_pipeline, enc_clock, enc_base_time, session_id);
-    consumer_pipeline
-        .add_many([appsrc.upcast_ref::<gst::Element>(), &payloader, &webrtcbin])
-        .context("add appsrc+payloader+webrtcbin to consumer pipeline")?;
+    add_consumer_elements(
+        &consumer_pipeline,
+        &appsrc,
+        encoder.as_ref(),
+        &payloader,
+        &webrtcbin,
+    )?;
 
     // From here every resource is owned by the guard: any `?` below drops it,
-    // aborting the bus task (if spawned), disconnecting the producer link (if
-    // connected) and setting the pipeline to Null.
+    // aborting the bus + controller tasks (if spawned), disconnecting the
+    // producer link (if connected) and setting the pipeline to Null.
     let mut branch = ConsumerBranch::new(consumer_pipeline.clone(), webrtcbin.clone(), session_id);
 
-    // appsrc → payloader → webrtcbin. The pay→webrtc link is filtered to the
-    // profile codec's application/x-rtp caps (payload OMITTED — it is
+    // appsrc → [vp8enc →] payloader → webrtcbin. The pay→webrtc link is
+    // filtered to the profile codec's application/x-rtp caps (payload OMITTED —
     // re-aligned to the negotiated pt in align_payload_type; pinning it here
     // would fight that).
-    appsrc
-        .upcast_ref::<gst::Element>()
-        .link(&payloader)
-        .context("link appsrc -> payloader")?;
-    let rtp_caps = gst::Caps::builder("application/x-rtp")
-        .field("media", "video")
-        .field("encoding-name", encoding_name)
-        .field("clock-rate", 90_000i32)
-        .build();
-    payloader
-        .link_filtered(&webrtcbin, &rtp_caps)
-        .context("link payloader -> webrtcbin (codec caps)")?;
+    link_consumer_elements(
+        &appsrc,
+        encoder.as_ref(),
+        &payloader,
+        &webrtcbin,
+        encoding_name,
+    )?;
 
     connect_branch_signals(&webrtcbin, ice_tx, connection_state, session_id.to_string());
 
@@ -557,220 +603,75 @@ fn build_consumer_pipeline_blocking(
     // decoding immediately instead of waiting for the GOP boundary.
     request_keyframe(producer);
 
-    // The answer must announce the send SSRC — wait for media caps first.
-    // (await_media_caps keys on the `ssrc` caps field, codec-agnostic.)
-    await_media_caps(&webrtcbin, session_id);
-    negotiate_sdp(&webrtcbin, &offer_desc)?;
-    align_payload_type(&webrtcbin, &payloader, encoding_name, session_id);
-    await_ice_gathering(&webrtcbin, session_id);
+    // COMPAT only (#387): spawn the per-consumer AIMD bitrate loop (no-op for
+    // DEFAULT, whose `encoder` is None).
+    spawn_controller_if_compat(&mut branch, encoder, &webrtcbin, session_id, &rt);
 
-    let local_desc =
-        webrtcbin.property::<gst_webrtc::WebRTCSessionDescription>("local-description");
-    branch.sdp_answer = local_desc
-        .sdp()
-        .as_text()
-        .map_err(|e| anyhow!("local-description SDP as_text failed: {e}"))?;
+    branch.sdp_answer = negotiate_and_read_answer(
+        &webrtcbin,
+        &payloader,
+        &offer_desc,
+        encoding_name,
+        session_id,
+    )?;
     Ok(branch)
 }
 
-/// Put a consumer pipeline on the ENCODER pipeline's clock + base-time so the
-/// producer's forwarded buffer timestamps (PTS + segment, preserved by
-/// StreamProducer's push_sample) are valid on this pipeline's timeline.
-/// set_start_time(NONE) stops the PLAYING transition from re-selecting a
-/// base-time. This mirrors webrtcsink's session-pipeline setup verbatim.
-fn adopt_encoder_timeline(
-    consumer_pipeline: &gst::Pipeline,
-    enc_clock: Option<gst::Clock>,
-    enc_base_time: Option<gst::ClockTime>,
-    session_id: &str,
-) {
-    if let Some(clock) = &enc_clock {
-        consumer_pipeline.use_clock(Some(clock));
-    }
-    consumer_pipeline.set_start_time(gst::ClockTime::NONE);
-    match enc_base_time {
-        Some(base) => consumer_pipeline.set_base_time(base),
-        None => {
-            // Defensive: should not happen (WHEP POSTs are gated on the encoder
-            // pipeline being Streaming). Surface it loudly — timestamps would
-            // be on the wrong timeline.
-            tracing::warn!(
-                session_id = %session_id,
-                "encoder pipeline has no base-time; consumer timeline may be wrong"
-            );
-        }
-    }
-}
-
-/// Spawn the per-consumer-pipeline bus watch: services `Latency` messages with
-/// `recalculate_latency()` (via `call_async`, exactly like webrtcsink) and
-/// logs pipeline errors. The task never ends on its own (it holds the bus
-/// alive); the explicit abort — by `ConsumerBranch`/`WhepSession` Drop — is
-/// its ONLY exit.
-fn spawn_consumer_bus_watch(
-    consumer_pipeline: &gst::Pipeline,
+/// COMPAT (#387): spawn the per-consumer AIMD bitrate loop driving THIS
+/// consumer's vp8enc target-bitrate from its OWN RTCP loss/RTT, and record its
+/// task + live-bitrate handle on the branch. DEFAULT consumers (shared H264
+/// encoder) pass `encoder = None` and this is a no-op.
+fn spawn_controller_if_compat(
+    branch: &mut ConsumerBranch,
+    encoder: Option<gst::Element>,
+    webrtcbin: &gst::Element,
     session_id: &str,
     rt: &tokio::runtime::Handle,
-) -> Result<tokio::task::JoinHandle<()>> {
-    let bus = consumer_pipeline
-        .bus()
-        .ok_or_else(|| anyhow!("consumer pipeline has no bus"))?;
-    let pipeline_weak = consumer_pipeline.downgrade();
-    let sid = session_id.to_string();
-    Ok(rt.spawn(async move {
-        use futures_util::StreamExt;
-        let mut stream = bus.stream();
-        while let Some(msg) = stream.next().await {
-            match msg.view() {
-                gst::MessageView::Latency(_) => {
-                    if let Some(pipeline) = pipeline_weak.upgrade() {
-                        // call_async: run on a GStreamer worker thread, never
-                        // blocking this task or risking a state-lock deadlock.
-                        pipeline.call_async(|p| {
-                            let _ = p.recalculate_latency();
-                        });
-                    }
-                }
-                gst::MessageView::Error(err) => {
-                    tracing::warn!(
-                        session_id = %sid,
-                        error = %err.error(),
-                        debug = ?err.debug(),
-                        "consumer pipeline error (client watchdog will reconnect)"
-                    );
-                }
-                _ => {}
-            }
-        }
-    }))
-}
-
-/// Build the per-consumer elements: an `appsrc` (caps matching the requested
-/// profile branch's producer appsink — byte-stream/AU H264 for Default,
-/// video/x-vp8 for Compat), a per-consumer payloader (`rtph264pay` /
-/// `rtpvp8pay`) pre-seated on the offer's dynamic payload type `pt` for the
-/// profile's codec, and a `webrtcbin`.
-pub(super) fn build_consumer_elements(
-    session_id: &str,
-    profile: StreamProfile,
-    pt: u32,
-) -> Result<(gst_app::AppSrc, gst::Element, gst::Element)> {
-    // Initial caps match the profile branch's producer appsink caps filter
-    // so the very first forwarded sample agrees (`consumer_h264_caps` /
-    // `consumer_vp8_caps` pin BOTH sides of each bridge).
-    let bridge_caps = match profile {
-        StreamProfile::Default => consumer_h264_caps(),
-        StreamProfile::Compat => consumer_vp8_caps(),
-    };
-    let appsrc = gst_app::AppSrc::builder()
-        .name(format!("src_{session_id}"))
-        .caps(&bridge_caps)
-        .build();
-    // CRITICAL ORDER: apply the consumer configuration (is-live=true,
-    // format=time, leaky downstream, 500ms queue bound) NOW — BEFORE the
-    // pipeline transitions to PLAYING. basesrc latches `live_running` only at
-    // the PAUSED→PLAYING transition and ONLY if the source is already live;
-    // if `is_live` flips to true afterwards (which is what happened when
-    // StreamProducer::add_consumer — which calls this internally — ran after
-    // PLAYING), the appsrc's task blocks in "live source waiting for running
-    // state" FOREVER and not a single buffer is ever pushed downstream —
-    // connected, but black. add_consumer re-applies the same configuration
-    // later, which is a harmless no-op.
-    StreamProducer::configure_consumer(&appsrc);
-
-    // Per-consumer payloader so each webrtcbin negotiates its own dynamic
-    // payload type with its browser (#336); pre-seated on the browser's
-    // offered pt for the profile's codec.
-    let payloader = match profile {
-        StreamProfile::Default => build_h264_payloader(session_id, pt)?,
-        StreamProfile::Compat => build_vp8_payloader(session_id, pt)?,
-    };
-
-    let webrtcbin = gst::ElementFactory::make("webrtcbin")
-        .name(session_id)
-        // max-bundle: audio + video on ONE ICE/DTLS transport, matching the
-        // browser's `a=group:BUNDLE` offer (default `none` hangs the 2nd DTLS
-        // handshake → connecting forever → black).
-        .property_from_str("bundle-policy", "max-bundle")
-        // Explicit jitterbuffer/session latency (200 ms is webrtcbin's own
-        // default; set explicitly so the value is visible and stable).
-        .property("latency", 200u32)
-        .build()
-        .context("build webrtcbin")?;
-
-    Ok((appsrc, payloader, webrtcbin))
-}
-
-/// Per-consumer `rtph264pay`. config-interval=-1 resends SPS/PPS before every
-/// IDR; aggregate-mode=zero-latency is webrtcsink parity (aggregate NALs only
-/// until a VCL unit is complete — never hold a frame's data back for packing
-/// efficiency).
-fn build_h264_payloader(session_id: &str, pt: u32) -> Result<gst::Element> {
-    gst::ElementFactory::make("rtph264pay")
-        .name(format!("pay_{session_id}"))
-        .property("config-interval", -1i32)
-        .property("pt", pt)
-        .property_from_str("aggregate-mode", "zero-latency")
-        .build()
-        .context("build rtph264pay")
-}
-
-/// Per-consumer `rtpvp8pay` for compat consumers. Only the pt needs seating
-/// — VP8 has no SPS/PPS-style config to re-insert and the payloader
-/// fragments each frame (including its token partitions) per RFC 7741 as-is.
-fn build_vp8_payloader(session_id: &str, pt: u32) -> Result<gst::Element> {
-    gst::ElementFactory::make("rtpvp8pay")
-        .name(format!("pay_{session_id}"))
-        .property("pt", pt)
-        .build()
-        .context("build rtpvp8pay")
-}
-
-/// Connect the per-consumer webrtcbin signals: on-ice-candidate (forwards
-/// candidates to `ice_tx`) and notify::connection-state (updates the shared
-/// `connection_state`). Both fire from a GStreamer streaming thread.
-fn connect_branch_signals(
-    webrtcbin: &gst::Element,
-    ice_tx: UnboundedSender<IceCandidate>,
-    connection_state: Arc<std::sync::Mutex<WhepConnectionState>>,
-    session_id: String,
 ) {
-    // on-ice-candidate signature: void(webrtcbin, sdp_mline_index: u32, candidate: &str)
-    webrtcbin.connect("on-ice-candidate", false, move |args| {
-        let sdp_mline_index = args.get(1).and_then(|v| v.get::<u32>().ok()).unwrap_or(0);
-        let candidate = args
-            .get(2)
-            .and_then(|v| v.get::<String>().ok())
-            .unwrap_or_default();
-        let _ = ice_tx.send(IceCandidate {
-            sdp_mline_index,
-            candidate,
-        });
-        None
-    });
-
-    // notify::connection-state fires from a GStreamer streaming thread (raw
-    // std::thread) — use std::sync::Mutex directly. On poison recover the guard.
-    webrtcbin.connect_notify(Some("connection-state"), move |webrtcbin, _pspec| {
-        let gst_state =
-            webrtcbin.property::<gst_webrtc::WebRTCPeerConnectionState>("connection-state");
-        let our_state = WhepConnectionState::from(gst_state);
-        *connection_state.lock().unwrap_or_else(|p| p.into_inner()) = our_state;
-        tracing::debug!(
-            session_id = %session_id,
-            state = ?our_state,
-            "WHEP consumer connection-state changed"
-        );
-    });
+    let Some(encoder) = encoder else { return };
+    let bitrate = Arc::new(std::sync::atomic::AtomicI32::new(START_BPS));
+    branch.controller_task = Some(spawn_compat_bitrate_controller(
+        webrtcbin.clone(),
+        encoder,
+        bitrate.clone(),
+        session_id.to_string(),
+        rt,
+    ));
+    branch.compat_target_bitrate = Some(bitrate);
 }
 
-/// Ask the producer's branch encoder for an immediate keyframe — an IDR with
-/// SPS/PPS on the H264 branch (all-headers=true), a VP8 keyframe on the
-/// compat branch. Pushed upstream from THAT producer's appsink sink pad —
-/// the same path StreamProducer uses to forward browser PLIs — so a compat
-/// consumer's request reaches encoder_compat, not the default encoder.
-/// REQUIRED for consumer join with GOP=240: without it a new consumer waits
-/// up to 8s/12s for the next scheduled keyframe.
+/// Final negotiation step shared by both profiles: wait for the send SSRC media
+/// caps (codec-agnostic — keys on the `ssrc` caps field), create+set the
+/// answer, align the payloader's pt to the negotiated one, await ICE gathering,
+/// and return the local-description SDP text (the WHEP answer body).
+fn negotiate_and_read_answer(
+    webrtcbin: &gst::Element,
+    payloader: &gst::Element,
+    offer_desc: &gst_webrtc::WebRTCSessionDescription,
+    encoding_name: &str,
+    session_id: &str,
+) -> Result<String> {
+    await_media_caps(webrtcbin, session_id);
+    negotiate_sdp(webrtcbin, offer_desc)?;
+    align_payload_type(webrtcbin, payloader, encoding_name, session_id);
+    await_ice_gathering(webrtcbin, session_id);
+
+    let local_desc =
+        webrtcbin.property::<gst_webrtc::WebRTCSessionDescription>("local-description");
+    local_desc
+        .sdp()
+        .as_text()
+        .map_err(|e| anyhow!("local-description SDP as_text failed: {e}"))
+}
+
+/// Ask the producer's branch for an immediate keyframe — an IDR with SPS/PPS
+/// on the H264 (default) branch (all-headers=true). Pushed upstream from THAT
+/// producer's appsink sink pad — the same path StreamProducer uses to forward
+/// browser PLIs — so a compat consumer's request reaches the compat RAW
+/// producer (whose upstream is the raw conditioning chain). On the compat path
+/// the per-consumer vp8enc also re-emits a keyframe when its consumer joins
+/// (kf-max-dist=240). REQUIRED for consumer join with GOP=240: without it a
+/// new consumer waits up to 8s/12s for the next scheduled keyframe.
 pub(super) fn request_keyframe(producer: &StreamProducer) {
     let event = gst_video::UpstreamForceKeyUnitEvent::builder()
         .all_headers(true)
