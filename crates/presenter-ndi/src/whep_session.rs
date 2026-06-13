@@ -99,25 +99,35 @@ impl From<gstreamer_webrtc::WebRTCPeerConnectionState> for WhepConnectionState {
 /// gst webrtcbin NEVER flips `connection-state` for a peer that vanished
 /// without closing the connection (a stage TV that rebooted/reloaded without a
 /// WHEP DELETE) — so the state-based zombie reaper is INERT in production. The
-/// only reliable server-side liveness signal is the webrtcbin TRANSPORT's
-/// `bytes-received` counter: a live WHEP consumer continuously sends RTCP
-/// receiver reports, so bytes keep arriving FROM the peer; a vanished peer's
-/// counter goes flat. The stale reaper samples this counter and tears a session
-/// down when it has not advanced for longer than the stale window.
+/// only reliable server-side liveness signal is the peer's RTCP RECEIVER
+/// REPORTS: a live WHEP consumer sends them continuously, so webrtcbin's
+/// per-session RR fingerprint keeps CHANGING; a vanished peer stops, so the
+/// fingerprint freezes (and webrtcbin drops the `remote-inbound-rtp` stats
+/// entirely). The stale reaper samples that fingerprint and tears a session
+/// down when it has not changed for longer than the stale window.
+///
+/// (Why a "fingerprint" and not a byte counter: on gst 1.24 the `transport`
+/// stats struct carries no received counter, and the only nested counters that
+/// advance — `octets-received`/`packets-received` on the internal SENDER source
+/// — track what WE send, so they advance for a zombie too. The RR-derived
+/// fields, by contrast, only change while the peer is actually reporting. See
+/// `peer_rr_fingerprint` in `consumers.rs`. Verified live on dev2 gst 1.24.2.)
 #[derive(Debug, Clone, Copy)]
 pub struct LivenessState {
-    /// Last transport `bytes-received` value observed for this session.
+    /// Last RTCP receiver-report fingerprint observed for this session — a hash
+    /// of the peer's RR-volatile stats (round-trip-time, jitter, the RR block).
+    /// `0` means "no RR seen this sample" (pre-connect, or peer vanished).
     pub last_bytes: u64,
-    /// When `last_bytes` last INCREASED (i.e. the peer was last seen sending
-    /// RTCP/RTP back to us). A session whose bytes have not advanced since
+    /// When the fingerprint last CHANGED (i.e. the peer was last seen sending an
+    /// RTCP RR). A session whose fingerprint has not changed since
     /// `now - stale_after` is a vanished-peer zombie.
     pub last_progress: Instant,
 }
 
 impl LivenessState {
-    /// Fresh tracker at consumer-add time: no bytes seen yet, progress clock
+    /// Fresh tracker at consumer-add time: no RR seen yet, progress clock
     /// started NOW so a brand-new consumer gets a full `stale_after` grace
-    /// window before it can ever be considered stale.
+    /// window (RR exchange + ICE establishment) before it can be reaped.
     pub fn new() -> Self {
         Self {
             last_bytes: 0,

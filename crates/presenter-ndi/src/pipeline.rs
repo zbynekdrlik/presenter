@@ -67,6 +67,7 @@ mod build;
 mod consumers;
 mod lifecycle;
 mod negotiation;
+mod reaper;
 
 /// Pipeline lifecycle state.
 #[derive(Debug, Clone, PartialEq, Eq)]
