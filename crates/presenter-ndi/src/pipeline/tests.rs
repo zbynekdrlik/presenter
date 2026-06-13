@@ -644,16 +644,16 @@ async fn zombie_sessions_free_the_cap_for_a_new_join() {
 /// gst webrtcbin NEVER flips connection-state for a vanished peer, so the
 /// state-based `reap_dead_sessions` is INERT in production — the state stays
 /// `Connected` forever. A LIVE WHEP consumer continuously sends RTCP receiver
-/// reports, so the server's webrtcbin transport keeps RECEIVING bytes from the
-/// peer; a vanished peer's received-byte counter goes flat. `reap_stale_sessions`
-/// uses that as the liveness signal: a session whose transport bytes have NOT
-/// advanced for longer than `stale_after` is reaped; one whose bytes are still
-/// advancing is kept.
+/// reports, so the peer-RR fingerprint (a hash of the peer's RR fields, chiefly
+/// `rb-exthighestseq` which advances on every received RTP packet) keeps
+/// changing; a vanished peer's fingerprint freezes. `reap_stale_sessions`
+/// uses that as the liveness signal: a session whose fingerprint has NOT
+/// changed for longer than `stale_after` is reaped; one still changing is kept.
 ///
 /// Tested via an injectable liveness seam (`set_liveness_for_test`) because real
-/// `get-stats` transport counters need a live peer (unavailable in unit tests).
-/// The reaper LOGIC is what we lock here; the thin `transport_bytes_received`
-/// get-stats accessor is exercised only by the live functional check.
+/// `get-stats` RR fields need a live peer (unavailable in unit tests).
+/// The reaper LOGIC is what we lock here; the thin get-stats fingerprint
+/// accessor is exercised only by the live functional check.
 #[tokio::test]
 async fn reap_stale_sessions_removes_flat_keeps_advancing() {
     super::super::init().expect("gst init");

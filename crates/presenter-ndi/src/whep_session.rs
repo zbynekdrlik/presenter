@@ -174,10 +174,12 @@ pub struct WhepSession {
     /// tokio async context. Holding a tokio Mutex across a blocking
     /// GStreamer callback risks deadlock.
     pub connection_state: Arc<Mutex<WhepConnectionState>>,
-    /// RTCP-liveness tracker (#388): the last transport `bytes-received`
-    /// value and when it last advanced. Sampled by `reap_stale_sessions` to
-    /// detect peers that vanished WITHOUT a connection-state transition — the
-    /// only zombies the state-based reaper cannot see.
+    /// RTCP-liveness tracker (#388): the last peer-RR fingerprint (a hash of
+    /// the peer's RTCP receiver-report fields, chiefly `rb-exthighestseq`
+    /// which advances on every received RTP packet) and when it last changed.
+    /// Sampled by `reap_stale_sessions` to detect peers that vanished WITHOUT
+    /// a connection-state transition — the only zombies the state-based
+    /// reaper cannot see (gst webrtcbin never flips state for a gone peer).
     ///
     /// `std::sync::Mutex` (not tokio) for parity with `connection_state`: the
     /// reaper updates it from a `spawn_blocking` get-stats read, and the
