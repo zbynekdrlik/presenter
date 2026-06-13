@@ -560,7 +560,7 @@ fn build_consumer_pipeline_blocking(
     // The answer must announce the send SSRC — wait for media caps first.
     // (await_media_caps keys on the `ssrc` caps field, codec-agnostic.)
     await_media_caps(&webrtcbin, session_id);
-    negotiate_sdp(&webrtcbin, &offer_desc)?;
+    negotiate_sdp(&webrtcbin, &offer_desc, session_id)?;
     align_payload_type(&webrtcbin, &payloader, encoding_name, session_id);
     await_ice_gathering(&webrtcbin, session_id);
 

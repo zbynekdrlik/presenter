@@ -64,13 +64,81 @@ pub(super) fn await_media_caps(webrtcbin: &gst::Element, session_id: &str) {
     }
 }
 
+/// Enable send-side RTP retransmission (RTX) + generic NACK on every video
+/// transceiver of `webrtcbin`, so the WHEP answer negotiates `rtx/90000` +
+/// `apt=<pt>` and `a=rtcp-fb:<pt> nack` (generic, not just `nack pli`).
+///
+/// EXPERIMENT (RTX/NACK): weak Vestel stage TVs intermittently decode at
+/// 0.3–12 fps while an identical TV does 20 fps clean; server RTCP shows the
+/// struggling sessions losing 67–70 RTP packets, the clean one losing 0. Our
+/// answer currently offers only `nack pli` + transport-cc, so a lost packet
+/// can be recovered ONLY by requesting a whole new keyframe (PLI) — which
+/// spikes bitrate and worsens loss. Chrome (the WHEP client) DOES offer RTX +
+/// nack; webrtcbin just was not answering with it, because the webrtcbin
+/// transceiver's `do-nack` property defaults to FALSE. Setting it true makes
+/// webrtcbin (a) add `rtcp-fb-nack` to the media caps → generic `a=rtcp-fb
+/// nack`, and (b) pick an RTX payload type and add `rtx/90000` + `apt` to the
+/// answered media (`_pick_rtx_payload_types`/`add_rtx_to_media` in
+/// gstwebrtcbin.c). A retransmitted packet then recovers the loss instead of
+/// forcing a keyframe — VDO.Ninja-style robustness.
+///
+/// This is the same mechanism the gst-plugin-rs `webrtcsink`/`webrtcsrc`
+/// reference uses (`transceiver.set_property("do-nack", do_retransmission)`).
+/// We do NOT enable FEC (`fec-type`) — that is a separate, bandwidth-heavier
+/// knob outside this experiment's scope.
+///
+/// Called AFTER set-remote-description (which associates a transceiver with
+/// the sink pad from the browser's offer) and BEFORE create-answer (which
+/// reads `trans->do_nack` when building the answered media). `do-nack` is a
+/// CONSTRUCT|READWRITE property, so this post-construction set is honored.
+/// The WHEP consumer pipelines are strictly video-only — `appsrc →
+/// rtph264pay|rtpvp8pay → webrtcbin`, ONE sink pad per consumer — so every
+/// transceiver here is the video one; this covers both the H264 default and
+/// the VP8 compat consumer pipelines.
+fn enable_rtx_nack(webrtcbin: &gst::Element, session_id: &str) {
+    let mut enabled = 0u32;
+    for pad in webrtcbin.sink_pads() {
+        // The sink pad created by the payloader→webrtcbin link exposes the
+        // transceiver associated with its m-line as a readable `transceiver`
+        // property (GstWebRTCBinSinkPad). Absent before set-remote-description;
+        // present after.
+        let transceiver = pad.property::<Option<gst_webrtc::WebRTCRTPTransceiver>>("transceiver");
+        let Some(transceiver) = transceiver else {
+            continue;
+        };
+        // Generic setter: `do-nack` is added by webrtcbin's transceiver
+        // subclass, not the public GstWebRTCRTPTransceiver base, so there is no
+        // typed gstreamer-rs accessor — set it the same way webrtcsink does.
+        transceiver.set_property("do-nack", true);
+        enabled += 1;
+    }
+    if enabled == 0 {
+        tracing::warn!(
+            session_id = %session_id,
+            "no video transceiver found to enable RTX/NACK on; the answer will \
+             fall back to nack-pli only (loss recovery via keyframe)"
+        );
+    } else {
+        tracing::info!(
+            session_id = %session_id,
+            transceivers = enabled,
+            "RTX + generic NACK enabled on video transceiver(s) (do-nack=true)"
+        );
+    }
+}
+
 /// Perform the SDP handshake on `webrtcbin`: set-remote-description (the
 /// browser's offer), create-answer, set-local-description (our answer). Each
 /// step waits on its GStreamer promise; a timeout is propagated as an error
 /// (set-local is observability-only — the final answer is re-read later).
+///
+/// Between set-remote-description and create-answer it enables send-side RTX +
+/// generic NACK on the video transceiver (see `enable_rtx_nack`) so the answer
+/// can retransmit lost packets instead of forcing keyframes.
 pub(super) fn negotiate_sdp(
     webrtcbin: &gst::Element,
     offer_desc: &gst_webrtc::WebRTCSessionDescription,
+    session_id: &str,
 ) -> Result<()> {
     let (remote_desc_tx, remote_desc_rx) = std::sync::mpsc::sync_channel::<()>(1);
     let promise = gst::Promise::with_change_func(move |_reply| {
@@ -80,6 +148,10 @@ pub(super) fn negotiate_sdp(
     remote_desc_rx
         .recv_timeout(std::time::Duration::from_secs(5))
         .context("set-remote-description promise timed out or sender dropped")?;
+
+    // RTX/NACK: remote description is applied (transceiver now associated with
+    // the sink pad) → flip do-nack before the answer is built.
+    enable_rtx_nack(webrtcbin, session_id);
 
     let (answer_sdp_tx, answer_sdp_rx) =
         std::sync::mpsc::sync_channel::<Option<gst_webrtc::WebRTCSessionDescription>>(1);
