@@ -11,13 +11,13 @@
 //!                        → enc_appsink                  (1280×720 H264)
 //!  (compat)  raw_tee → q_compat → videorate → videoconvert → videoscale
 //!                        → compat_scale_caps(I420 854×480 @20)
-//!                        → encoder_compat(vp8enc)
-//!                        → enc_appsink_compat   (854×480@20 realtime VP8)
-//!                       (one encoder per PROFILE — never per consumer)
+//!                        → enc_appsink_compat_raw   (854×480@20 RAW I420)
+//!                       (NO shared encoder — the compat vp8enc is PER CONSUMER)
 //!                                      StreamProducer fanout (one per profile)
 //!                                                            ▼
-//!   per consumer (its OWN gst::Pipeline): appsrc → rtph264pay|rtpvp8pay
-//!                                                            → webrtcbin
+//!   default consumer (its OWN gst::Pipeline): appsrc → rtph264pay → webrtcbin
+//!   compat  consumer (its OWN gst::Pipeline): appsrc(RAW) → vp8enc(per-consumer)
+//!                                                  → rtpvp8pay → webrtcbin
 //! ```
 //!
 //! Profile rule (realtime-VP8 pivot): a consumer is served the profile its
@@ -99,12 +99,14 @@ pub enum StreamProfile {
     /// 1280×720 H264 @ 2.5 Mbps — the primary stream every healthy client uses.
     #[default]
     Default,
-    /// 854×480@20 realtime VP8 @ 900 kbps — the compat stream for weak TVs
-    /// whose MStar H264 OMX decoder is vendor-broken (even an exactly-
-    /// 640×480 H264 stream dies after ~5s). VDO.Ninja's libwebrtc VP8 plays
-    /// smoothly on the SAME TVs, so this branch mirrors its realtime stream
-    /// properties — above all token-partitions=4 for multithreaded software
-    /// decode across the TV's 4 cores (see `build::build_compat_vp8_encoder`).
+    /// 854×480@20 realtime VP8 — the compat stream for weak TVs whose MStar
+    /// H264 OMX decoder is vendor-broken (even an exactly-640×480 H264 stream
+    /// dies after ~5s). VDO.Ninja's libwebrtc VP8 plays smoothly on the SAME
+    /// TVs, so each compat consumer mirrors its realtime stream properties
+    /// (token-partitions=4 for multithreaded software decode) AND, since #387,
+    /// owns its `vp8enc` whose `target-bitrate` adapts to that TV's own RTCP
+    /// loss/RTT (start 900 kbps, range 200k–900k; see
+    /// `consumers::build_consumer_elements` + `adaptive::CompatBitrateController`).
     Compat,
 }
 
@@ -186,6 +188,13 @@ pub struct SessionSnapshot {
     /// RTCP receiver-report cumulative packets lost.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub rtcp_packets_lost: Option<i64>,
+    /// Per-consumer compat VP8 encoder `target-bitrate` (bits/s), the live
+    /// output of this consumer's `CompatBitrateController` AIMD loop (#387).
+    /// `None` for DEFAULT (H264, shared encoder) consumers; `Some` for COMPAT
+    /// consumers — so the adaptive loop is visible in the `/ndi/snapshot`
+    /// ledgers (down on measured loss, recovering when the link clears).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub compat_target_bitrate_bps: Option<i32>,
 }
 
 /// Owns one GStreamer pipeline for one NDI source.
@@ -215,10 +224,12 @@ pub struct NdiPipeline {
     /// appsink — the fanout that feeds every default consumer pipeline's
     /// appsrc. Clone-cheap (internally Arc'd).
     producer: StreamProducer,
-    /// StreamProducer wrapping the compat-profile (854×480@20 realtime VP8)
-    /// vp8enc appsink (`enc_appsink_compat`) — feeds consumers that POSTed
-    /// with `?profile=compat` (weak TVs whose H264 OMX decoder is vendor-
-    /// broken; they software-decode token-partitioned VP8 across 4 cores).
+    /// StreamProducer wrapping the compat-profile RAW I420 854×480@20 appsink
+    /// (`enc_appsink_compat_raw`) — feeds consumers that POSTed with
+    /// `?profile=compat` (weak TVs whose H264 OMX decoder is vendor-broken).
+    /// Since #387 it fans RAW (zero-copy refcounted samples), and each compat
+    /// consumer encodes VP8 itself with a `target-bitrate` driven by its own
+    /// `CompatBitrateController` — per-TV adaptation a shared encoder can't do.
     producer_compat: StreamProducer,
 }
 

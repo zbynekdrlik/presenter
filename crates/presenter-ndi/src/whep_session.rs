@@ -191,6 +191,18 @@ pub struct WhepSession {
     /// while building the WHEP answer body OR delivered via subsequent
     /// PATCH responses (trickle).
     pub ice_tx: mpsc::UnboundedSender<IceCandidate>,
+    /// The per-consumer adaptive-bitrate task (#387) — a 1.5 s tokio interval
+    /// that reads this consumer's webrtcbin RTCP loss/RTT, runs the
+    /// `CompatBitrateController` AIMD step, and sets its own `vp8enc`
+    /// `target-bitrate` live. `Some` only for COMPAT consumers (each has its
+    /// OWN vp8enc); `None` for DEFAULT (shared H264 encoder, no per-consumer
+    /// adaptation). Aborted on Drop alongside `bus_task`.
+    pub compat_controller_task: Option<tokio::task::JoinHandle<()>>,
+    /// The latest `target-bitrate` (bits/s) the controller task applied to this
+    /// consumer's compat `vp8enc` (#387). `Some(Arc)` shared with the controller
+    /// task for COMPAT consumers; `None` for DEFAULT. Read by `snapshot` to
+    /// surface the AIMD trajectory on `/ndi/snapshot` (`compatTargetBitrateBps`).
+    pub compat_target_bitrate: Option<Arc<std::sync::atomic::AtomicI32>>,
 }
 
 impl WhepSession {
@@ -208,9 +220,13 @@ impl Drop for WhepSession {
         //   1. the ConsumptionLink field's own Drop disconnects this consumer's
         //      appsrc from the encoder's StreamProducer (no more samples in);
         //   2. abort the bus-watch task;
-        //   3. set the whole consumer pipeline to Null (tears down appsrc +
-        //      rtph264pay + webrtcbin together).
+        //   3. abort the per-consumer adaptive-bitrate task (#387), if any;
+        //   4. set the whole consumer pipeline to Null (tears down appsrc +
+        //      (vp8enc) + payloader + webrtcbin together).
         self.bus_task.abort();
+        if let Some(task) = self.compat_controller_task.take() {
+            task.abort();
+        }
         let _ = self.consumer_pipeline.set_state(gst::State::Null);
         tracing::debug!(
             session_id = %self.session_id,

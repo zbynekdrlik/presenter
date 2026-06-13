@@ -1,11 +1,12 @@
 //! Pure AIMD bitrate controller for the compat (weak-TV) VP8 stream.
 //!
 //! This module is the deterministic, side-effect-free "brain" of the #387
-//! adaptive compat controller. A later wiring task feeds it `webrtcbin`
-//! `get-stats` (remote-inbound-rtp loss/RTT) and applies its decisions to the
-//! per-consumer `vp8enc` `target-bitrate`. Keeping it pure (no GStreamer types,
-//! no I/O, no async) makes the AIMD logic exhaustively unit-testable without
-//! the GStreamer/TV environment — which is the whole point of splitting it out.
+//! adaptive compat controller. The wiring in `consumers.rs`
+//! (`spawn_compat_bitrate_controller`) feeds it `webrtcbin` `get-stats`
+//! (remote-inbound-rtp loss/RTT) and applies its decisions to the per-consumer
+//! `vp8enc` `target-bitrate`. Keeping it pure (no GStreamer types, no I/O, no
+//! async) makes the AIMD logic exhaustively unit-testable without the
+//! GStreamer/TV environment — which is the whole point of splitting it out.
 //!
 //! Algorithm: additive-increase / multiplicative-decrease (AIMD) over an EWMA
 //! of the packet-loss fraction — the homegrown equivalent of libwebrtc GCC
@@ -23,14 +24,6 @@
 //! caps and triggers the decoder port-reconfig that kills the Vestel OMX
 //! (addendum 2). RTT is recorded for a future RTT-trend refinement but does
 //! NOT drive v1 decisions — loss is the primary congestion signal.
-
-// The controller is intentionally not yet wired to any consumer — the follow-up
-// task connects `webrtcbin` get-stats → `update` → `vp8enc target-bitrate` (see
-// #387). Until then the public API and its constants are exercised only by the
-// unit tests, so the lib target (compiled without `#[cfg(test)]`) sees them as
-// unused. This is a pure, self-contained module by design; the allow is removed
-// when the wiring lands.
-#![allow(dead_code)]
 
 /// Minimum encoder target bitrate (bits/s) — safety floor, never the resting
 /// state under the quality policy.
