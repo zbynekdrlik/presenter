@@ -41,6 +41,44 @@
   var profileSwitched = false; // at most ONE compat toggle per page load
   var backoffMs = 0;
 
+  // PRESENTATION-GAP accumulators for the CURRENT beacon interval (mirrors the
+  // WASM client's FrameStats present-gap fields). These measure RENDER-side
+  // cadence — how evenly presented frames reach the screen — which the
+  // decode-side getStats fields are blind to: a frame can decode on time yet
+  // be presented late (WebView compositor / main-thread hitch). Reset on each
+  // beacon (snapshotPresentGaps) so every beacon reports only the last interval.
+  var PRESENT_GAP_HITCH_MS = 100; // >100ms gap = perceptible hitch (>=3 frames @30fps)
+  var maxPresentGapMs = 0;        // largest inter-present gap this interval
+  var presentGapsOver100 = 0;     // count of >100ms gaps this interval
+  var presentedInInterval = 0;    // frames presented this interval (rVFC count)
+  var intervalStartedAt = performance.now(); // when this interval began (last reset)
+
+  // Fold one inter-present gap (ms) into the interval accumulators.
+  function recordPresentGap(gapMs) {
+    if (gapMs > maxPresentGapMs) maxPresentGapMs = gapMs;
+    if (gapMs > PRESENT_GAP_HITCH_MS) presentGapsOver100++;
+  }
+
+  // Snapshot the present-gap accumulators for a beacon and RESET them, so the
+  // NEXT beacon reports only its own interval (last-interval, not cumulative).
+  // Returns { maxPresentGapMs, presentGapsOver100, presentedFps } where
+  // presentedFps is render-side fps (frames presented / interval-seconds),
+  // distinct from the decode-side getStats fps; null when no time elapsed yet.
+  function snapshotPresentGaps() {
+    var now = performance.now();
+    var elapsedMs = now - intervalStartedAt;
+    var snap = {
+      maxPresentGapMs: maxPresentGapMs,
+      presentGapsOver100: presentGapsOver100,
+      presentedFps: elapsedMs > 0 ? presentedInInterval / (elapsedMs / 1000) : null,
+    };
+    maxPresentGapMs = 0;
+    presentGapsOver100 = 0;
+    presentedInInterval = 0;
+    intervalStartedAt = now;
+    return snap;
+  }
+
   function sleep(ms) { return new Promise(function (r) { setTimeout(r, ms); }); }
 
   function displayId() {
@@ -141,6 +179,9 @@
       if (inbound && inbound.jitterBufferEmittedCount > 0) {
         jb = (inbound.jitterBufferDelay / inbound.jitterBufferEmittedCount) * 1000;
       }
+      // Snapshot-and-reset BEFORE the await above already happened (getStats),
+      // but the reset is what matters for interval semantics — do it now.
+      var gaps = snapshotPresentGaps();
       await fetch("/ndi/client-stats", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
@@ -155,6 +196,10 @@
           jitterBufferMs: jb,
           freezeCount: inbound ? inbound.freezeCount : null,
           framesDropped: inbound ? inbound.framesDropped : null,
+          // Render-side presentation-cadence metrics for this beacon interval.
+          maxPresentGapMs: gaps.maxPresentGapMs,
+          presentGapsOver100: gaps.presentGapsOver100,
+          presentedFps: gaps.presentedFps,
           lite: true,
         }),
       });
@@ -174,6 +219,13 @@
       var startedAt = performance.now();
       var lastCurrentTime = 0;
       var hasRvfc = typeof video.requestVideoFrameCallback === "function";
+      // Fresh present-gap interval for this session (accumulators are
+      // module-scoped and persist across reconnects — clear them so the first
+      // beacon of a new session never reports a previous session's hitches).
+      maxPresentGapMs = 0;
+      presentGapsOver100 = 0;
+      presentedInInterval = 0;
+      intervalStartedAt = startedAt;
 
       function finish(reason) {
         if (done) return;
@@ -185,6 +237,11 @@
       function onFrame() {
         frames++;
         var now = performance.now();
+        // Inter-present gap = wall-clock since the PREVIOUS presented frame;
+        // skip the first frame (no predecessor) so a long pre-roll wait is not
+        // charged as a hitch. Fold BEFORE overwriting lastFrameAt.
+        if (frames > 1) recordPresentGap(now - lastFrameAt);
+        presentedInInterval++;
         lastFrameAt = now;
         if (frames === 1) { firstFrameAt = now; backoffMs = 0; }
         // Persist the CURRENT mode only once PROVEN at a usable rate
