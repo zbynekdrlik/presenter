@@ -1,4 +1,9 @@
-import { test, expect, type Page, type APIRequestContext } from "@playwright/test";
+import {
+  test,
+  expect,
+  type Page,
+  type APIRequestContext,
+} from "@playwright/test";
 import {
   deriveTestConfig,
   refreshDevData,
@@ -218,10 +223,7 @@ async function connectAndMeasure(
 /** Assert every consumer decoded frames AND the stream was downscaled.
  * The synthetic source is 2560×1440; the pipeline MUST downscale ≤1280 before
  * encoding or the browser cannot decode the high H264 level. */
-function assertAllDecoded(
-  stats: InboundStats[],
-  scenario: string,
-): void {
+function assertAllDecoded(stats: InboundStats[], scenario: string): void {
   stats.forEach((s, i) => {
     expect(
       s.framesDecoded,
@@ -306,6 +308,105 @@ test("NDI video decodes real frames for MULTIPLE simultaneous consumers (synthet
   await cleanupSource(request, src.id);
 });
 
+type CompatStats = {
+  framesDecoded: number;
+  frameWidth: number;
+  mimeType: string;
+  conn: string;
+};
+
+/** Connect ONE WHEP consumer with a PLAIN offer (no codec games) to the
+ * `?profile=compat` WHEP URL — exactly what the stage client does on weak
+ * TVs whose MStar OMX H264 decoder is vendor-broken. The server must feed
+ * that consumer the realtime-VP8 854×480@20 compat branch (every browser
+ * offer carries VP8, so the plain offer needs no setCodecPreferences).
+ * Waits ~8s for steady decode, then keeps polling getStats (up to ~25s
+ * total) so a loaded runner doesn't flake the decode assertion. Returns the
+ * inbound codec mimeType (inbound-rtp codecId → codec report) and
+ * frameWidth so the test can assert the compat branch (not the 720p H264
+ * default) actually fed the consumer. Releases the server-side consumer via
+ * WHEP DELETE on the Location before returning. */
+async function connectCompatAndMeasure(
+  page: Page,
+  origin: string,
+  sourceId: string,
+): Promise<{ error?: string; stats?: CompatStats }> {
+  return page.evaluate(
+    async ({ origin, sourceId }) => {
+      const pc = new RTCPeerConnection();
+      try {
+        pc.addTransceiver("video", { direction: "recvonly" });
+        pc.addTransceiver("audio", { direction: "recvonly" });
+
+        // WHEP dance — same as the other tests in this file, except the
+        // URL carries ?profile=compat (the profile selector; the answer
+        // dictates the codec — realtime VP8 for compat).
+        const offer = await pc.createOffer();
+        await pc.setLocalDescription(offer);
+        await new Promise<void>((res) => {
+          if (pc.iceGatheringState === "complete") return res();
+          pc.addEventListener("icegatheringstatechange", () => {
+            if (pc.iceGatheringState === "complete") res();
+          });
+          setTimeout(res, 4000);
+        });
+        const resp = await fetch(`/ndi/whep/${sourceId}?profile=compat`, {
+          method: "POST",
+          headers: { "Content-Type": "application/sdp" },
+          body: pc.localDescription!.sdp,
+        });
+        if (!resp.ok) return { error: `WHEP POST ${resp.status}` };
+        const location =
+          resp.headers.get("Location") ?? resp.headers.get("location");
+        await pc.setRemoteDescription({
+          type: "answer",
+          sdp: await resp.text(),
+        });
+
+        const read = async () => {
+          const out = {
+            framesDecoded: 0,
+            frameWidth: 0,
+            mimeType: "",
+            conn: pc.connectionState,
+          };
+          const report = await pc.getStats();
+          report.forEach((s) => {
+            if (s.type === "inbound-rtp" && s.kind === "video") {
+              out.framesDecoded = s.framesDecoded || 0;
+              out.frameWidth = s.frameWidth || 0;
+              const codec = s.codecId ? report.get(s.codecId) : undefined;
+              out.mimeType = (codec && codec.mimeType) || "";
+            }
+          });
+          return out;
+        };
+        // Sample after ~8s, then poll up to ~25s total for decode + width.
+        await new Promise((r) => setTimeout(r, 8000));
+        let stats = await read();
+        for (let i = 0; i < 34; i++) {
+          if (stats.framesDecoded > 0 && stats.frameWidth > 0) break;
+          await new Promise((r) => setTimeout(r, 500));
+          stats = await read();
+        }
+
+        // Release the server-side consumer (WHEP DELETE on the Location).
+        if (location) {
+          await fetch(new URL(location, origin).toString(), {
+            method: "DELETE",
+          }).catch(() => {});
+        }
+        return { stats };
+      } catch (e) {
+        return { error: String(e) };
+      } finally {
+        pc.close();
+      }
+    },
+    { origin, sourceId },
+  );
+}
+
 // ── Test 2: the #373 guard — STRAGGLER consumers joining an ALREADY-STREAMING
 // pipeline. This is the dominant real-world scenario: a stage display loads
 // /stage after the operator already activated the source, or a display's
@@ -354,4 +455,173 @@ test("NDI video decodes for STRAGGLER consumers joining an already-streaming pip
   ).toEqual([]);
 
   await cleanupSource(request, src.id);
+});
+
+// ── Test 3: the compat-profile guard (realtime-VP8 pivot in
+// docs/superpowers/specs/2026-06-11-ndi-low-latency-design.md). The weak
+// stage TVs' MStar OMX H264 decoder is vendor-broken (even the exactly-
+// 640×480 H264 attempt died after ~5s, and 4:3 letterboxed the picture).
+// VDO.Ninja's libwebrtc VP8 has played smoothly on the SAME TVs for years —
+// the compat branch now mirrors it: realtime VP8 854×480@20, token-
+// partitions=4 so the TV decodes on all 4 cores. The stage client's
+// fallback re-POSTs its WHEP offer with ?profile=compat and the server must
+// feed THAT consumer the VP8 branch. Two guards in one: (a) the decode
+// guard — a compat-profile consumer gets decodable frames; (b) the profile
+// guard — the decoded stream is EXACTLY 854 wide VP8, so the query really
+// selected the compat branch (a 1280-wide H264 frame means the profile was
+// ignored, the silent regression that would put the TVs back on the
+// OMX-killing stream).
+test("compat profile consumers get the realtime VP8 854x480 stream @video-codec @synthetic-ndi", async ({
+  page,
+  request,
+}) => {
+  const synthetic = await discoverSyntheticSource(request);
+  // NOT a skip: on the e2e-ndi lane the synthetic sender MUST be running. If
+  // it isn't, that is a real failure (broken lane), per test-strictness.
+  expect(
+    synthetic,
+    "synthetic NDI source '(PRESENTER-TEST)' must be on the network — start ndi_test_sender",
+  ).toBeTruthy();
+
+  const src = await createAndActivateSource(request, synthetic!.name, "compat");
+  try {
+    const consoleErrors = collectConsoleErrors(page);
+    await page.goto(new URL("/", baseURL).toString());
+
+    const result = await connectCompatAndMeasure(page, baseURL, src.id);
+    expect(
+      result.error,
+      `WHEP connect must succeed — ${result.error}`,
+    ).toBeFalsy();
+    const s = result.stats!;
+    console.log(`[e2e-evidence] compat-profile stats: ${JSON.stringify(s)}`);
+    expect(
+      s.framesDecoded,
+      `compat-profile consumer must DECODE video frames (framesDecoded > 0); ` +
+        `connected-but-zero-frames is the black-stage bug. Got: ${JSON.stringify(s)}`,
+    ).toBeGreaterThan(0);
+    // EXACTLY 854 — the 16:9 480p compat width. 1280 here means the
+    // ?profile=compat query was ignored and the default branch leaked in.
+    expect(
+      s.frameWidth,
+      `compat-profile frame must be EXACTLY 854 wide, got ${s.frameWidth}`,
+    ).toBe(854);
+    expect(
+      s.mimeType,
+      `compat profile must be VP8 (VDO.Ninja-style realtime stream — ` +
+        `multithreaded SW decode on the TVs; their H264 OMX is vendor-broken), ` +
+        `got: ${JSON.stringify(s)}`,
+    ).toBe("video/VP8");
+
+    expect(
+      consoleErrors,
+      `browser console must have zero errors/warnings, got: ${consoleErrors.join("; ")}`,
+    ).toEqual([]);
+  } finally {
+    await cleanupSource(request, src.id);
+  }
+});
+
+// ── Test 4: the deactivate→reactivate guard (prod TV white-screen incident,
+// 2026-06). After the operator deactivates the active source and activates
+// it again, the REAL stage page (WASM UI at /stage) must unmount the video,
+// then REMOUNT it and resume decoding — without a page reload. The shipped
+// bug: a TV that missed the ndi_source_activated live event (zombie WS /
+// broadcast lag) showed a white stage with ZERO WHEP attempts until someone
+// reloaded the page. This drives the same user-visible flow end-to-end
+// through the stage UI's reactive chain (WS event → signals → <NdiVideo>).
+test("stage remounts NDI video and resumes decoding after deactivate→reactivate (synthetic source) @video-codec @synthetic-ndi", async ({
+  page,
+  request,
+}) => {
+  const synthetic = await discoverSyntheticSource(request);
+  expect(
+    synthetic,
+    "synthetic NDI source '(PRESENTER-TEST)' must be on the network — start ndi_test_sender",
+  ).toBeTruthy();
+
+  const src = await createAndActivateSource(
+    request,
+    synthetic!.name,
+    "Synthetic-E2E-Reactivate",
+  );
+  try {
+    await waitForPipelineStreaming(request, src.id);
+
+    // Real stage page on the ndi-fullscreen layout.
+    const layoutResp = await request.post(
+      new URL("/stage/layout", baseURL).toString(),
+      { data: { code: "ndi-fullscreen" } },
+    );
+    expect(
+      layoutResp.ok(),
+      "switching stage layout to ndi-fullscreen must succeed",
+    ).toBe(true);
+
+    // Errors only: the deactivate phase legitimately emits watchdog/reconnect
+    // console WARNINGS by design (same convention as ndi-webrtc-recovery).
+    const consoleErrors: string[] = [];
+    page.on("console", (msg) => {
+      if (msg.type() === "error") consoleErrors.push(msg.text());
+    });
+
+    await page.goto(new URL("/stage", baseURL).toString());
+    await page.waitForSelector('body[data-wasm-ready="true"]', {
+      timeout: 30_000,
+    });
+    await page.waitForSelector('body[data-layout-code="ndi-fullscreen"]', {
+      timeout: 10_000,
+    });
+
+    const video = page.locator('video[data-role="ndi-video"]');
+    await expect(video).toBeVisible({ timeout: 15_000 });
+
+    // Frames PRESENTED by the (current) video element — the same signal the
+    // frame-based watchdog uses. Resets when the element is remounted.
+    const framesPresented = () =>
+      video.evaluate(
+        (v: HTMLVideoElement) => v.getVideoPlaybackQuality().totalVideoFrames,
+      );
+
+    // Phase 1: initial playback presents frames.
+    await expect
+      .poll(framesPresented, {
+        timeout: 25_000,
+        message: "initial NDI playback never presented a frame",
+      })
+      .toBeGreaterThan(0);
+
+    // Phase 2: deactivate server-side → the stage must unmount the video.
+    await request.post(
+      new URL("/integrations/video-sources/deactivate", baseURL).toString(),
+    );
+    await expect(video).toHaveCount(0, { timeout: 10_000 });
+
+    // Phase 3: reactivate → the stage must remount <NdiVideo> and decode
+    // again WITHOUT a reload (white screen + zero WHEP attempts = the bug).
+    const reactivate = await request.post(
+      new URL(
+        `/integrations/video-sources/${src.id}/activate`,
+        baseURL,
+      ).toString(),
+      { data: {} },
+    );
+    expect(reactivate.ok(), "reactivating the source must succeed").toBe(true);
+
+    await expect(video).toBeVisible({ timeout: 15_000 });
+    await expect
+      .poll(framesPresented, {
+        timeout: 30_000,
+        message:
+          "stage never resumed presenting frames after deactivate→reactivate (bug-A regression)",
+      })
+      .toBeGreaterThan(0);
+
+    expect(
+      consoleErrors,
+      `browser console must have zero errors, got: ${consoleErrors.join("; ")}`,
+    ).toEqual([]);
+  } finally {
+    await cleanupSource(request, src.id);
+  }
 });

@@ -64,6 +64,10 @@ pub fn use_stage_websocket(client_id: String, layout_code: RwSignal<String>) -> 
     }
 }
 
+/// Shared holder for the write half of the socket (taken/restored around
+/// each async send).
+type SharedWrite = Rc<RefCell<Option<futures_util::stream::SplitSink<WebSocket, Message>>>>;
+
 #[allow(clippy::too_many_arguments)]
 fn spawn_stage_ws(
     client_id: String,
@@ -85,7 +89,7 @@ fn spawn_stage_ws(
 
         match WebSocket::open(&url) {
             Ok(ws) => {
-                let (mut write, mut read) = ws.split();
+                let (mut write, read) = ws.split();
 
                 // Send StagePresence
                 let presence = InboundMessage::StagePresence {
@@ -100,50 +104,17 @@ fn spawn_stage_ws(
                 *reconnect_delay_clone.borrow_mut() = INITIAL_RECONNECT_MS;
                 *last_hb.borrow_mut() = js_sys::Date::now();
 
-                let write = Rc::new(RefCell::new(Some(write)));
-
-                while let Some(msg) = read.next().await {
-                    match msg {
-                        Ok(Message::Text(text)) => {
-                            match serde_json::from_str::<LiveEvent>(&text) {
-                                Ok(LiveEvent::Heartbeat { id, timestamp: _ }) => {
-                                    let now = js_sys::Date::now();
-                                    *last_hb.borrow_mut() = now;
-                                    set_state.set(StageWsState::Connected);
-
-                                    // Send heartbeat ACK (latency is measured server-side)
-                                    let ack = InboundMessage::StageHeartbeatAck {
-                                        client_id: client_id_for_task.clone(),
-                                        heartbeat_id: Some(id.to_string()),
-                                    };
-                                    if let Ok(json) = serde_json::to_string(&ack) {
-                                        let mut writer = write.borrow_mut().take();
-                                        if let Some(ref mut w) = writer {
-                                            let _ = w.send(Message::Text(json)).await;
-                                        }
-                                        *write.borrow_mut() = writer;
-                                    }
-                                }
-                                Ok(LiveEvent::StageConnection { snapshot }) => {
-                                    // Use server-measured round-trip latency for our client
-                                    if let Ok(our_id) = uuid::Uuid::parse_str(&client_id_for_task) {
-                                        if snapshot.id == our_id {
-                                            set_latency_ms
-                                                .set(snapshot.latency_ms.map(|ms| ms as f64));
-                                        }
-                                    }
-                                }
-                                Ok(event) => {
-                                    *last_hb.borrow_mut() = js_sys::Date::now();
-                                    set_last_event.set(Some(event));
-                                }
-                                Err(_) => {}
-                            }
-                        }
-                        Ok(Message::Bytes(_)) => {}
-                        Err(_) => break,
-                    }
-                }
+                let write: SharedWrite = Rc::new(RefCell::new(Some(write)));
+                run_stage_read_loop(
+                    read,
+                    &write,
+                    &client_id_for_task,
+                    set_state,
+                    set_last_event,
+                    set_latency_ms,
+                    &last_hb,
+                )
+                .await;
 
                 set_state.set(StageWsState::Reconnecting);
             }
@@ -174,6 +145,111 @@ fn spawn_stage_ws(
         })
         .forget();
     });
+}
+
+/// Read messages until the socket closes, errors, or the ZOMBIE deadline
+/// trips. Each `read.next()` is raced against a short timeout: a socket
+/// that is TCP-open but silent (server's forward task dead, link silently
+/// gone) would otherwise pend forever — the heartbeat checker flips the UI
+/// to "Disconnected" but nothing ever reconnects, so every live event
+/// (including ndi_source_activated) is lost until a manual page reload
+/// (stage white-screen incident). Returning lets the caller drop BOTH
+/// socket halves (closing it) and schedule the backoff reconnect.
+#[allow(clippy::too_many_arguments)]
+async fn run_stage_read_loop(
+    mut read: futures_util::stream::SplitStream<WebSocket>,
+    write: &SharedWrite,
+    client_id: &str,
+    set_state: WriteSignal<StageWsState>,
+    set_last_event: WriteSignal<Option<LiveEvent>>,
+    set_latency_ms: WriteSignal<Option<f64>>,
+    last_hb: &Rc<RefCell<f64>>,
+) {
+    use futures_util::StreamExt;
+
+    loop {
+        let msg = {
+            let next_msg = read.next();
+            let timeout = gloo_timers::future::TimeoutFuture::new(HEARTBEAT_CHECK_INTERVAL_MS);
+            futures_util::pin_mut!(next_msg, timeout);
+            match futures_util::future::select(next_msg, timeout).await {
+                futures_util::future::Either::Left((msg, _)) => msg,
+                futures_util::future::Either::Right(((), _)) => {
+                    let elapsed = js_sys::Date::now() - *last_hb.borrow();
+                    if elapsed >= DEFAULT_DISCONNECT_MS {
+                        leptos::logging::warn!(
+                            "stage ws: no heartbeat for {elapsed:.0}ms — dropping zombie socket and reconnecting"
+                        );
+                        return;
+                    }
+                    continue;
+                }
+            }
+        };
+        let Some(msg) = msg else { return };
+        match msg {
+            Ok(Message::Text(text)) => {
+                handle_stage_text(
+                    &text,
+                    write,
+                    client_id,
+                    set_state,
+                    set_last_event,
+                    set_latency_ms,
+                    last_hb,
+                )
+                .await;
+            }
+            Ok(Message::Bytes(_)) => {}
+            Err(_) => return,
+        }
+    }
+}
+
+/// Dispatch one inbound live-event text frame.
+async fn handle_stage_text(
+    text: &str,
+    write: &SharedWrite,
+    client_id: &str,
+    set_state: WriteSignal<StageWsState>,
+    set_last_event: WriteSignal<Option<LiveEvent>>,
+    set_latency_ms: WriteSignal<Option<f64>>,
+    last_hb: &Rc<RefCell<f64>>,
+) {
+    use futures_util::SinkExt;
+
+    match serde_json::from_str::<LiveEvent>(text) {
+        Ok(LiveEvent::Heartbeat { id, timestamp: _ }) => {
+            *last_hb.borrow_mut() = js_sys::Date::now();
+            set_state.set(StageWsState::Connected);
+
+            // Send heartbeat ACK (latency is measured server-side)
+            let ack = InboundMessage::StageHeartbeatAck {
+                client_id: client_id.to_string(),
+                heartbeat_id: Some(id.to_string()),
+            };
+            if let Ok(json) = serde_json::to_string(&ack) {
+                let mut writer = write.borrow_mut().take();
+                if let Some(ref mut w) = writer {
+                    let _ = w.send(Message::Text(json)).await;
+                }
+                *write.borrow_mut() = writer;
+            }
+        }
+        Ok(LiveEvent::StageConnection { snapshot }) => {
+            // Use server-measured round-trip latency for our client
+            if let Ok(our_id) = uuid::Uuid::parse_str(client_id) {
+                if snapshot.id == our_id {
+                    set_latency_ms.set(snapshot.latency_ms.map(|ms| ms as f64));
+                }
+            }
+        }
+        Ok(event) => {
+            *last_hb.borrow_mut() = js_sys::Date::now();
+            set_last_event.set(Some(event));
+        }
+        Err(_) => {}
+    }
 }
 
 fn ws_url() -> String {

@@ -38,9 +38,11 @@ pub(crate) async fn ndi_status(State(state): State<AppState>) -> Json<serde_json
 ///
 /// Returns JSON (camelCase) with `encoderCount`, `consumerCount`, and a
 /// per-session `sessions` array. Used by the Playwright fanout E2E test
-/// to assert `encoderCount=1` + `consumerCount=2` when two browser tabs
-/// are connected to the same NDI source, and as an operator/incident-
-/// debugging tool for checking pipeline health without tailing logs.
+/// to assert `encoderCount=2` (one encoder per PROFILE — 720p default +
+/// 640×480 compat — never per consumer) + `consumerCount=2` when two
+/// browser tabs are connected to the same NDI source, and as an operator/
+/// incident-debugging tool for checking pipeline health without tailing
+/// logs.
 ///
 /// 404 — source is not currently active (no pipeline exists for this id).
 /// 503 — NDI SDK not available on this host.
@@ -65,11 +67,27 @@ pub(crate) async fn ndi_snapshot(
 #[serde(rename_all = "camelCase")]
 pub(crate) struct NdiClientStatsBeacon {
     pub source_id: String,
+    /// Persistent random per-display id (localStorage `ndiDisplayId`) — the
+    /// attribution key that makes per-TV health traceable across sessions.
+    pub display_id: Option<String>,
+    /// Negotiated video codec mimeType from getStats (now "video/H264" for
+    /// every consumer — both stream profiles are H264).
+    pub codec: Option<String>,
+    /// Stream profile the display requested ("default"/"compat") — the
+    /// field that attributes weak-TV health to the 640×480 compat branch,
+    /// since `codec` no longer distinguishes the branches.
+    pub profile: Option<String>,
+    /// Physical screen size as "WxH" — tells TV models apart in the logs.
+    pub screen: Option<String>,
     pub frames_decoded: Option<f64>,
     pub fps: Option<f64>,
     pub jitter_buffer_ms: Option<f64>,
     pub freeze_count: Option<f64>,
     pub frames_dropped: Option<f64>,
+    /// `true` when the beacon comes from the lite plain-JS stage page
+    /// (`/stage/lite`, weak-TV experiment #379) instead of the WASM stage —
+    /// lets the logs attribute decode health to the page variant.
+    pub lite: Option<bool>,
 }
 
 /// Stage displays POST a compact getStats summary every 15s. Log-only (MVP):
@@ -78,12 +96,17 @@ pub(crate) struct NdiClientStatsBeacon {
 #[instrument(skip_all)]
 pub(crate) async fn ndi_client_stats(Json(beacon): Json<NdiClientStatsBeacon>) -> StatusCode {
     tracing::info!(
+        display_id = beacon.display_id.as_deref(),
         source_id = %beacon.source_id,
+        codec = beacon.codec.as_deref(),
+        profile = beacon.profile.as_deref(),
+        screen = beacon.screen.as_deref(),
         frames_decoded = beacon.frames_decoded,
         fps = beacon.fps,
         jitter_buffer_ms = beacon.jitter_buffer_ms,
         freeze_count = beacon.freeze_count,
         frames_dropped = beacon.frames_dropped,
+        lite = beacon.lite,
         "NDI stage-display client stats beacon"
     );
     StatusCode::NO_CONTENT
@@ -99,6 +122,18 @@ mod tests {
     /// manager attached depending on whether libndi is loadable on the host.
     async fn fresh_state() -> AppState {
         AppState::in_memory().await.expect("in-memory AppState")
+    }
+
+    #[test]
+    fn client_stats_beacon_parses_lite_field() {
+        let beacon: NdiClientStatsBeacon =
+            serde_json::from_str(r#"{"sourceId":"src-1","profile":"compat","lite":true}"#)
+                .expect("beacon JSON with lite field parses");
+        assert_eq!(beacon.lite, Some(true));
+        // WASM-stage beacons don't send the field — it must stay optional.
+        let wasm_beacon: NdiClientStatsBeacon =
+            serde_json::from_str(r#"{"sourceId":"src-1"}"#).expect("beacon without lite parses");
+        assert_eq!(wasm_beacon.lite, None);
     }
 
     #[tokio::test]

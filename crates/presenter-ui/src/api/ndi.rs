@@ -70,12 +70,3 @@ pub async fn deactivate_video_sources() -> Result<(), ApiError> {
 pub async fn delete_video_source(id: &str) -> Result<(), ApiError> {
     delete(&format!("/integrations/video-sources/{id}")).await
 }
-
-/// WHEP endpoint URL for a given source ID.
-///
-/// Browsers POST an SDP offer to this URL; presenter bridges the exchange
-/// into `whepserversink`'s signaller. The MJPEG URL builder it replaces is
-/// gone — `<NdiVideo>` is the only client.
-pub fn whep_url(source_id: &str) -> String {
-    format!("/ndi/whep/{source_id}")
-}

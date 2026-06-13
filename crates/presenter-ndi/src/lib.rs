@@ -11,7 +11,7 @@ pub mod whep_session;
 pub use discovery::SourceList;
 pub use manager::NdiManager;
 pub use manager::StatusCallback;
-pub use pipeline::{PipelineSnapshot, SessionSnapshot};
+pub use pipeline::{PipelineSnapshot, SessionSnapshot, StreamProfile};
 pub use whep_session::{IceCandidate, WhepConnectionState, WhepSession};
 
 use std::sync::OnceLock;

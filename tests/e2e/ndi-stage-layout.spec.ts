@@ -4,6 +4,7 @@ import {
   refreshDevData,
   startTestServer,
   stopServer,
+  waitForNdiLitePage,
   type ServerHandle,
 } from "./support";
 
@@ -40,6 +41,10 @@ test("ndi-fullscreen appears in stage displays list", async ({ request }) => {
 });
 
 test("stage page renders ndi-fullscreen layout", async ({ page }) => {
+  // REGRESSION GUARD (2026-06-12): the retired lite auto-redirect sent
+  // /stage to /stage/lite for this layout, silently dropping the stage
+  // overlay blocks (clock, song number, status). The NDI layout MUST keep
+  // serving the full WASM stage page.
   const consoleMessages: string[] = [];
   page.on("console", (msg) => {
     if (msg.type() === "error" || msg.type() === "warning") {
@@ -54,6 +59,7 @@ test("stage page renders ndi-fullscreen layout", async ({ page }) => {
   );
 
   await page.goto(new URL("/stage", baseURL).toString());
+  await expect(page).toHaveURL(/\/stage$/);
   await page.waitForSelector('body[data-wasm-ready="true"]', {
     timeout: 30_000,
   });
@@ -65,6 +71,32 @@ test("stage page renders ndi-fullscreen layout", async ({ page }) => {
   const placeholder = page.locator(".stage-ndi__placeholder");
   await expect(placeholder).toBeVisible();
   await expect(placeholder).toContainText("No video source");
+
+  expect(consoleMessages).toEqual([]);
+});
+
+test("lite diagnostic player serves its video element at /stage/lite", async ({
+  page,
+}) => {
+  // /stage/lite is a MANUAL diagnostic player (plain-JS WHEP, no WASM app).
+  // The 2026-06-12 auto-redirect from /stage was retired, so this test
+  // navigates to the page DIRECTLY — nothing redirects here anymore.
+  const consoleMessages: string[] = [];
+  page.on("console", (msg) => {
+    if (msg.type() === "error" || msg.type() === "warning") {
+      consoleMessages.push(`[${msg.type()}] ${msg.text()}`);
+    }
+  });
+
+  await page.goto(new URL("/stage/lite", baseURL).toString());
+  await waitForNdiLitePage(page);
+
+  // The lite page mounts exactly one fullscreen video element. With no
+  // active source in the test env it idles in the 5s source-poll loop:
+  // no data-source-id, no WHEP attempts, and a clean console.
+  const video = page.locator('video[data-role="ndi-video"]');
+  await expect(video).toHaveCount(1);
+  await expect(video).not.toHaveAttribute("data-source-id", /.+/);
 
   expect(consoleMessages).toEqual([]);
 });

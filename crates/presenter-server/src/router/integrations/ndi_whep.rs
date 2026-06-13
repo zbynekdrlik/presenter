@@ -5,15 +5,26 @@
 
 use axum::{
     body::Bytes,
-    extract::{Path, State},
+    extract::{Path, Query, State},
     http::HeaderMap,
     response::Response,
 };
 use presenter_ndi::manager::{WhepOp, WhepReply, SOURCE_NOT_ACTIVE_ERR};
+use presenter_ndi::StreamProfile;
 use tracing::instrument;
 
 use super::super::AppError;
 use crate::state::AppState;
+
+/// Query parameters on the WHEP POST. `?profile=compat` selects the 854×480
+/// realtime-VP8 compat encode branch (weak TVs whose H264 OMX decoder is
+/// vendor-broken; they software-decode token-partitioned VP8); absent or any
+/// other value selects the default 720p H264 branch — see
+/// `StreamProfile::from_query`.
+#[derive(Debug, Default, serde::Deserialize)]
+pub(crate) struct WhepPostQuery {
+    profile: Option<String>,
+}
 
 fn into_response(reply: WhepReply) -> Response {
     let mut builder = Response::builder().status(reply.status);
@@ -45,6 +56,7 @@ fn map_signaller_error(err: anyhow::Error) -> AppError {
 #[instrument(skip_all, fields(source_id = %source_id))]
 pub(crate) async fn post_whep_endpoint(
     Path(source_id): Path<String>,
+    Query(query): Query<WhepPostQuery>,
     State(state): State<AppState>,
     body: Bytes,
 ) -> Result<Response, AppError> {
@@ -57,6 +69,7 @@ pub(crate) async fn post_whep_endpoint(
             WhepOp::Post {
                 id: None,
                 body: body.to_vec(),
+                profile: StreamProfile::from_query(query.profile.as_deref()),
             },
         )
         .await
@@ -79,6 +92,9 @@ pub(crate) async fn post_whep_session(
             WhepOp::Post {
                 id: Some(session_id),
                 body: body.to_vec(),
+                // Session-scoped re-offer is unsupported (501) — the profile
+                // is irrelevant on this path.
+                profile: StreamProfile::Default,
             },
         )
         .await
@@ -126,10 +142,29 @@ pub(crate) async fn delete_whep_session(
     let manager = state
         .ndi_manager()
         .ok_or_else(|| AppError::service_unavailable("NDI SDK not available"))?;
-    let reply = manager
+    let reply = match manager
         .whep_signaller_call(&source_id, WhepOp::Delete { id: session_id })
         .await
-        .map_err(map_signaller_error)?;
+    {
+        Ok(reply) => reply,
+        // Idempotent DELETE: a session (or its whole source) that is already
+        // gone means the client's desired state holds — answer 204, not 404.
+        // The stage UI dispatches teardown DELETEs from both on_cleanup and
+        // pagehide, and after a server-side deactivate the session is gone
+        // before the DELETE arrives; a 404 logged a browser console error
+        // ("Failed to load resource") on every deactivate/navigation cycle.
+        Err(err)
+            if err.to_string().contains(SOURCE_NOT_ACTIVE_ERR)
+                || err.to_string().contains("session not found") =>
+        {
+            WhepReply {
+                status: 204,
+                headers: Vec::new(),
+                body: None,
+            }
+        }
+        Err(err) => return Err(map_signaller_error(err)),
+    };
     Ok(into_response(reply))
 }
 
@@ -192,6 +227,7 @@ mod tests {
         let state = fresh_state().await;
         let result = post_whep_endpoint(
             Path("00000000-0000-0000-0000-000000000000".to_string()),
+            Query(WhepPostQuery::default()),
             State(state),
             empty_body(),
         )
@@ -210,6 +246,28 @@ mod tests {
             "expected 404 or 503, got {}",
             resp.status()
         );
+    }
+
+    /// `?profile=compat` must not change the error contract for an inactive
+    /// source: the query is parsed (compat selects the realtime-VP8 854×480
+    /// branch once the source streams) but an inactive source still yields
+    /// the same 404/503 path as a default-profile POST.
+    #[tokio::test]
+    async fn post_whep_endpoint_with_compat_profile_keeps_inactive_source_contract() {
+        let state = fresh_state().await;
+        let result = post_whep_endpoint(
+            Path("00000000-0000-0000-0000-000000000000".to_string()),
+            Query(WhepPostQuery {
+                profile: Some("compat".to_string()),
+            }),
+            State(state),
+            empty_body(),
+        )
+        .await;
+        let Err(err) = result else {
+            panic!("expected Err for inactive source");
+        };
+        assert_not_found_or_unavailable(err.into_response().status());
     }
 
     /// Both 404 (manager present, source not active) and 503 (no manager) are
@@ -266,8 +324,17 @@ mod tests {
         assert_not_found_or_unavailable(err.into_response().status());
     }
 
+    /// DELETE on a WHEP session must be IDEMPOTENT: a session (or its whole
+    /// source) that is already gone means the client's desired state holds,
+    /// so the reply is 204 — NOT 404. A 404 here made every stage-display
+    /// teardown after a server-side deactivate log a browser console error
+    /// ("Failed to load resource: 404") from both the on_cleanup and the
+    /// pagehide DELETE dispatches.
+    ///
+    /// With libndi: manager exists, source not active → 204 (idempotent).
+    /// Without libndi: ndi_manager() is None → Err 503 (different failure).
     #[tokio::test]
-    async fn delete_whep_session_returns_not_found_or_unavailable_for_unknown_source() {
+    async fn delete_whep_session_is_idempotent_for_unknown_source() {
         let state = fresh_state().await;
         let result = delete_whep_session(
             Path((
@@ -277,10 +344,18 @@ mod tests {
             State(state),
         )
         .await;
-        let Err(err) = result else {
-            panic!("expected Err for unknown source");
-        };
-        assert_not_found_or_unavailable(err.into_response().status());
+        match result {
+            Ok(resp) => assert_eq!(
+                resp.status(),
+                StatusCode::NO_CONTENT,
+                "DELETE on an already-gone session must be 204 (idempotent)"
+            ),
+            Err(err) => assert_eq!(
+                err.into_response().status(),
+                StatusCode::SERVICE_UNAVAILABLE,
+                "only the no-libndi (manager missing) branch may error"
+            ),
+        }
     }
 
     #[test]

@@ -1,0 +1,303 @@
+<!DOCTYPE html>
+<!-- ndi-lite: plain-JS WHEP stage player for weak displays (experiment, see #379).
+
+     The 1GB Vestel TVs stall >10s repeatedly on the full WASM stage page
+     regardless of codec; VDO.Ninja (a small plain-JS page) has played on the
+     SAME TVs for years. Hypothesis under test: removing the WASM app frees
+     enough RAM/CPU for sustained decode. This page is deliberately minimal:
+     no clock, no status bar, no WebSocket — one fullscreen <video> driven by
+     ~150 lines of plain JS mirroring the WASM client's watchdog semantics. -->
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Stage (NDI lite)</title>
+<style>
+  html, body { margin: 0; padding: 0; width: 100%; height: 100%; background: #000; overflow: hidden; }
+  video { position: fixed; inset: 0; width: 100vw; height: 100vh; object-fit: cover; background: #000; }
+</style>
+</head>
+<body data-ndi-lite="true" data-layout-code="ndi-fullscreen">
+<video data-role="ndi-video" autoplay muted playsinline></video>
+<script>
+"use strict";
+(function () {
+  // Same localStorage keys as the WASM stage client (ndi_watchdog.rs), so a
+  // TV that already PROVED compat mode there keeps it here and vice versa.
+  // The key keeps its historical name "ndiCodecMode" deliberately.
+  var PROFILE_KEY = "ndiCodecMode";
+  var DISPLAY_ID_KEY = "ndiDisplayId";
+  var STALL_NO_FRAME_MS = 10000;     // playing, then 0 frames this long -> reconnect
+  var NO_DECODE_FALLBACK_MS = 15000; // connected, never a frame -> profile toggle (once)
+  var PROVEN_FRAMES = 100;           // frames that prove a mode...
+  var PROVEN_WINDOW_MS = 10000;      // ...iff they land within 10s of the first (>=10fps)
+  var BEACON_TICK_MS = 15000;
+  var BEACON_FRAME_PERIOD = 300;
+  var SOURCE_POLL_MS = 5000;
+
+  var video = document.querySelector('video[data-role="ndi-video"]');
+  var store = (function () { try { return window.localStorage; } catch (e) { return null; } })();
+  var compat = !!(store && store.getItem(PROFILE_KEY) === "compat");
+  var profileSwitched = false; // at most ONE compat toggle per page load
+  var backoffMs = 0;
+
+  function sleep(ms) { return new Promise(function (r) { setTimeout(r, ms); }); }
+
+  function displayId() {
+    if (!store) return null;
+    var id = store.getItem(DISPLAY_ID_KEY);
+    if (id) return id;
+    id = "";
+    for (var i = 0; i < 16; i++) id += Math.floor(Math.random() * 16).toString(16);
+    store.setItem(DISPLAY_ID_KEY, id);
+    return id;
+  }
+
+  async function findActiveSource() {
+    try {
+      var resp = await fetch("/integrations/video-sources");
+      if (!resp.ok) return null;
+      var list = await resp.json();
+      var active = (list || []).find(function (s) { return s.isActive; });
+      return active ? active.id : null;
+    } catch (e) { return null; }
+  }
+
+  async function whepConnect(sourceId) {
+    var pc = new RTCPeerConnection();
+    try {
+      return await whepNegotiate(pc, sourceId);
+    } catch (e) {
+      pc.close(); // never leak a peer connection from a failed attempt
+      throw e;
+    }
+  }
+
+  async function whepNegotiate(pc, sourceId) {
+    pc.addTransceiver("video", { direction: "recvonly" });
+    // VIDEO-ONLY offer — deliberately NO audio m-line. The server never
+    // sends audio (NDI audio is discarded), and an SDP audio track that
+    // exists but never produces makes weak TV WebViews hold video
+    // presentation hostage to A/V sync that can never be satisfied
+    // (measured 2026-06-12: VDO.Ninja with noaudio played 640x360@20 on the
+    // same Vestel where our stream with a dead audio m-line presented
+    // ~0.5fps with frames decoding fine).
+    pc.ontrack = function (ev) {
+      if (!ev.streams || !ev.streams[0]) return;
+      try {
+        // Profile-dependent buffering (#387): only strong/default-profile
+        // clients pin the jitter buffer; compat (weak device) keeps the
+        // browser's adaptive buffer - its only shock absorber.
+        if (!compat) ev.receiver.jitterBufferTarget = 0.0;
+        ev.receiver.playoutDelayHint = 0.0;
+      } catch (e) { /* optional knobs */ }
+      // muted PROPERTY before srcObject, or Chrome's autoplay policy blocks play().
+      video.muted = true;
+      video.srcObject = ev.streams[0];
+      video.muted = true;
+      var p = video.play();
+      if (p && p.catch) p.catch(function (e) { console.warn("video.play() rejected: " + e); });
+    };
+    var offer = await pc.createOffer();
+    await pc.setLocalDescription(offer);
+    await new Promise(function (res) {
+      if (pc.iceGatheringState === "complete") return res();
+      pc.addEventListener("icegatheringstatechange", function () {
+        if (pc.iceGatheringState === "complete") res();
+      });
+      setTimeout(res, 4000); // bounded gather wait; partial candidates still connect on LAN
+    });
+    var url = "/ndi/whep/" + sourceId + (compat ? "?profile=compat" : "");
+    var resp = await fetch(url, {
+      method: "POST",
+      headers: { "Content-Type": "application/sdp" },
+      body: pc.localDescription.sdp,
+    });
+    if (!resp.ok) { throw new Error("WHEP POST returned " + resp.status); }
+    var loc = resp.headers.get("Location");
+    var resourceUrl = loc ? new URL(loc, window.location.origin).toString() : null;
+    await pc.setRemoteDescription({ type: "answer", sdp: await resp.text() });
+    return { pc: pc, resourceUrl: resourceUrl };
+  }
+
+  function dispatchDelete(resourceUrl) {
+    if (!resourceUrl) return;
+    try { fetch(resourceUrl, { method: "DELETE", keepalive: true }); } catch (e) { /* best effort */ }
+  }
+
+  async function postBeacon(pc, sourceId) {
+    try {
+      var report = await pc.getStats();
+      var inbound = null;
+      report.forEach(function (s) {
+        if (s.type === "inbound-rtp" && s.kind === "video") inbound = s;
+      });
+      var codec = null;
+      if (inbound && inbound.codecId) {
+        var c = report.get(inbound.codecId);
+        codec = (c && c.mimeType) || null;
+      }
+      var jb = null;
+      if (inbound && inbound.jitterBufferEmittedCount > 0) {
+        jb = (inbound.jitterBufferDelay / inbound.jitterBufferEmittedCount) * 1000;
+      }
+      await fetch("/ndi/client-stats", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          sourceId: sourceId,
+          displayId: displayId(),
+          codec: codec,
+          profile: compat ? "compat" : "default",
+          screen: window.screen ? window.screen.width + "x" + window.screen.height : null,
+          framesDecoded: inbound ? inbound.framesDecoded : null,
+          fps: inbound ? inbound.framesPerSecond : null,
+          jitterBufferMs: jb,
+          freezeCount: inbound ? inbound.freezeCount : null,
+          framesDropped: inbound ? inbound.framesDropped : null,
+          lite: true,
+        }),
+      });
+    } catch (e) { /* beacons must never disturb playback */ }
+  }
+
+  // One connected session: resolves with a reason string when the session is
+  // no longer healthy (stall / ICE loss / profile toggle). Frame observation
+  // uses requestVideoFrameCallback (per PRESENTED frame, not timer-throttled)
+  // with a 1s currentTime-advance fallback for rVFC-less browsers.
+  function superviseSession(pc, sourceId) {
+    return new Promise(function (resolve) {
+      var done = false;
+      var frames = 0;
+      var firstFrameAt = 0;
+      var lastFrameAt = performance.now();
+      var startedAt = performance.now();
+      var lastCurrentTime = 0;
+      var hasRvfc = typeof video.requestVideoFrameCallback === "function";
+
+      function finish(reason) {
+        if (done) return;
+        done = true;
+        clearInterval(ticker);
+        clearInterval(beaconTimer);
+        resolve(reason);
+      }
+      function onFrame() {
+        frames++;
+        var now = performance.now();
+        lastFrameAt = now;
+        if (frames === 1) { firstFrameAt = now; backoffMs = 0; }
+        // Persist the CURRENT mode only once PROVEN at a usable rate
+        // (100 frames within 10s of the first) — never a broken crawl.
+        if (frames === PROVEN_FRAMES && now - firstFrameAt <= PROVEN_WINDOW_MS && store) {
+          store.setItem(PROFILE_KEY, compat ? "compat" : "default");
+        }
+        if (frames % BEACON_FRAME_PERIOD === 0) postBeacon(pc, sourceId);
+      }
+      function rvfcLoop() {
+        if (done) return;
+        onFrame();
+        video.requestVideoFrameCallback(rvfcLoop);
+      }
+      if (hasRvfc) video.requestVideoFrameCallback(rvfcLoop);
+
+      pc.oniceconnectionstatechange = function () {
+        var s = pc.iceConnectionState;
+        if (s === "failed" || s === "disconnected" || s === "closed") {
+          console.warn("ndi-lite: ICE state=" + s + ", reconnecting");
+          finish("ice-" + s);
+        }
+      };
+
+      var beaconTimer = setInterval(function () { postBeacon(pc, sourceId); }, BEACON_TICK_MS);
+      var ticker = setInterval(function () {
+        if (done) return;
+        // Belt-and-braces ICE check: catches a state reached BEFORE the
+        // oniceconnectionstatechange handler was installed.
+        var ice = pc.iceConnectionState;
+        if (ice === "failed" || ice === "disconnected" || ice === "closed") {
+          console.warn("ndi-lite: ICE state=" + ice + ", reconnecting");
+          finish("ice-" + ice);
+          return;
+        }
+        if (!hasRvfc) {
+          // coarse fallback: currentTime advancing counts as one frame per tick
+          var t = video.currentTime;
+          if (t > 0 && Math.abs(t - lastCurrentTime) > 0.001) { lastCurrentTime = t; onFrame(); }
+        }
+        var now = performance.now();
+        if (frames === 0) {
+          // Connected but never decoded: toggle the profile ONCE per page
+          // load (mirrors the WASM watchdog's bounded fallback), else WAIT —
+          // a connected frameless consumer must not reconnect-churn.
+          var connected = pc.iceConnectionState === "connected" || pc.iceConnectionState === "completed";
+          if (connected && now - startedAt > NO_DECODE_FALLBACK_MS && !profileSwitched) {
+            profileSwitched = true;
+            compat = !compat;
+            console.warn("ndi-lite: 0 frames " + ((now - startedAt) / 1000).toFixed(0) +
+              "s after connect — switching profile to " + (compat ? "compat" : "default"));
+            finish("profile-toggle");
+          }
+          return;
+        }
+        if (now - lastFrameAt > STALL_NO_FRAME_MS) {
+          console.warn("ndi-lite: no frame presented for " + Math.round(now - lastFrameAt) + "ms — reconnecting");
+          finish("stall");
+        }
+      }, 1000);
+    });
+  }
+
+  async function backoffSleep() {
+    backoffMs = Math.min(backoffMs === 0 ? 500 : backoffMs * 2, 5000);
+    await sleep(backoffMs);
+  }
+
+  var session = null; // { pc, resourceUrl }
+  window.addEventListener("pagehide", function () {
+    if (session) dispatchDelete(session.resourceUrl);
+  });
+
+  // Close the session WITHOUT touching the video element: across an
+  // intra-page reconnect the next session's ontrack simply replaces the
+  // stream (same as the WASM client), keeping the element's playback clock
+  // monotonic and avoiding a flash to black during recovery.
+  function teardown() {
+    if (!session) return;
+    dispatchDelete(session.resourceUrl);
+    try { session.pc.close(); } catch (e) { /* already closed */ }
+    session = null;
+    video.removeAttribute("data-source-id");
+  }
+
+  (async function main() {
+    for (;;) {
+      var sourceId = await findActiveSource();
+      if (!sourceId) {
+        // Idle (no active source): black screen is the honest state.
+        if (video.srcObject) video.srcObject = null;
+        await sleep(SOURCE_POLL_MS);
+        continue;
+      }
+      video.setAttribute("data-source-id", sourceId);
+      try {
+        session = await whepConnect(sourceId);
+      } catch (e) {
+        // Keep data-source-id during transient retries — the player is
+        // still bound to this source. The attribute clears on session
+        // teardown and stays cleared while no source is active (the loop
+        // re-binds it as soon as a source is).
+        console.warn("WHEP connect for " + sourceId + " failed: " + e);
+        await backoffSleep();
+        continue;
+      }
+      await superviseSession(session.pc, sourceId);
+      teardown();
+      // Stall/ICE-loss reconnects retry immediately the first time; repeated
+      // failures grow through backoffSleep (cap 5s) in the catch above.
+    }
+  })();
+})();
+</script>
+</body>
+</html>
