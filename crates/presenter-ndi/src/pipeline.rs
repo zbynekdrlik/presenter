@@ -63,6 +63,7 @@ use tokio::sync::watch;
 
 use crate::whep_session::{IceCandidate, WhepConnectionState, WhepSession};
 
+mod adaptive;
 mod build;
 mod consumers;
 mod lifecycle;
