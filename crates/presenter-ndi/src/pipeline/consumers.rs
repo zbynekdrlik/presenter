@@ -49,9 +49,8 @@ use super::negotiation::{
 use super::{
     build::{consumer_h264_caps, consumer_vp8_caps},
     AddConsumerError, NdiPipeline, PipelineSnapshot, SessionSnapshot, StreamProfile, WhepAnswer,
-    MAX_CONSUMERS_PER_SOURCE,
 };
-use crate::whep_session::{IceCandidate, WhepConnectionState, WhepSession};
+use crate::whep_session::{IceCandidate, LivenessState, WhepConnectionState, WhepSession};
 
 /// RAII owner of a consumer pipeline from the moment it is assembled until it
 /// is either promoted into a stored [`WhepSession`] (via [`Self::defuse`]) or
@@ -226,6 +225,8 @@ impl NdiPipeline {
             link,
             bus_task,
             connection_state,
+            // Fresh RTCP-liveness tracker: full stale-window grace from now.
+            liveness: Arc::new(std::sync::Mutex::new(LivenessState::new())),
             ice_tx,
         };
 
@@ -254,74 +255,6 @@ impl NdiPipeline {
             sdp_answer,
             initial_candidates,
         })
-    }
-
-    /// Enforce the soft consumer cap BEFORE allocating any GStreamer
-    /// resources.
-    ///
-    /// Soft cap: this check + the session insert in `add_consumer` are NOT
-    /// atomic. Two concurrent add_consumer calls at count=MAX-1 can both pass
-    /// and momentarily reach count=MAX+1. Acceptable per spec ("soft cap").
-    async fn check_consumer_cap(&self) -> Result<(), AddConsumerError> {
-        let sessions = self.sessions.lock().await;
-        if sessions.len() >= MAX_CONSUMERS_PER_SOURCE {
-            tracing::warn!(
-                current_count = sessions.len(),
-                max = MAX_CONSUMERS_PER_SOURCE,
-                "WHEP consumer cap reached — rejecting new POST"
-            );
-            return Err(AddConsumerError::CapReached {
-                max: MAX_CONSUMERS_PER_SOURCE,
-            });
-        }
-        Ok(())
-    }
-
-    /// The WHEP join gate, shared by production `add_consumer` and the test
-    /// stub (`add_consumer_stub`): FIRST reap dead sessions, THEN enforce the
-    /// consumer cap. Reaping before the cap check makes a pipeline full of
-    /// zombies self-heal exactly when a new display tries to join — the
-    /// 2026-06-12 incident: TVs power-cycled overnight without WHEP DELETE
-    /// left 8 dead sessions behind, the cap rejected every new consumer with
-    /// 503, and all displays sat on "Connecting…" until a manual restart.
-    pub(super) async fn reap_and_check_cap(&self) -> Result<(), AddConsumerError> {
-        let reaped = self.reap_dead_sessions().await;
-        if reaped > 0 {
-            tracing::info!(
-                reaped,
-                "freed consumer slots by reaping dead WHEP sessions before the cap check"
-            );
-        }
-        self.check_consumer_cap().await
-    }
-
-    /// Remove every session whose last-seen webrtcbin `connection-state` is
-    /// `Disconnected`, `Failed` or `Closed` — clients that vanished without a
-    /// WHEP DELETE (power-cycled stage TVs). `New`/`Connecting` are
-    /// mid-negotiation (a display mid-join is NOT a zombie) and `Connected`
-    /// is alive, so none of those are touched; a vanished client leaves
-    /// `Connected` on its own via webrtcbin's ICE timeout (~5-15 s).
-    ///
-    /// Returns how many sessions were removed. Teardown runs off the async
-    /// thread via `spawn_blocking`, same as `remove_consumer`.
-    pub async fn reap_dead_sessions(&self) -> usize {
-        let dead: Vec<WhepSession> = {
-            let mut sessions = self.sessions.lock().await;
-            let dead_ids: Vec<String> = sessions
-                .iter()
-                .filter(|(_, session)| session_is_dead(session))
-                .map(|(id, _)| id.clone())
-                .collect();
-            dead_ids
-                .iter()
-                .filter_map(|id| sessions.remove(id))
-                .collect()
-        };
-        let count = dead.len();
-        for session in dead {
-            reap_one_session(session).await;
-        }
-        count
     }
 
     /// Forward a trickle ICE candidate from the browser to the webrtcbin.
@@ -847,49 +780,6 @@ pub(super) fn request_keyframe(producer: &StreamProducer) {
             tracing::warn!("force-keyunit event was not handled upstream");
         }
     }
-}
-
-/// True when a session's last reported `connection-state` marks the client
-/// gone: `Disconnected`, `Failed` or `Closed`. See `reap_dead_sessions` for
-/// why `New`/`Connecting`/`Connected` are explicitly NOT dead.
-fn session_is_dead(session: &WhepSession) -> bool {
-    matches!(
-        *session
-            .connection_state
-            .lock()
-            .unwrap_or_else(|p| p.into_inner()),
-        WhepConnectionState::Disconnected
-            | WhepConnectionState::Failed
-            | WhepConnectionState::Closed
-    )
-}
-
-/// Tear one reaped zombie down off the async thread (blocking GStreamer
-/// Null-state transition — the same `spawn_blocking` pattern as
-/// `remove_consumer`) and log the forensic counters: a zombie typically
-/// shows a huge `buffers_pushed` (frames pushed all night to nobody).
-async fn reap_one_session(session: WhepSession) {
-    let session_id = session.session_id.clone();
-    let connection_state = *session
-        .connection_state
-        .lock()
-        .unwrap_or_else(|p| p.into_inner());
-    let pushed = session.link.pushed();
-    let dropped = session.link.dropped();
-    if let Err(e) = tokio::task::spawn_blocking(move || drop(session)).await {
-        tracing::warn!(
-            session_id = %session_id,
-            error = %e,
-            "reaped zombie session's teardown task failed"
-        );
-    }
-    tracing::info!(
-        session_id = %session_id,
-        connection_state = ?connection_state,
-        buffers_pushed = pushed,
-        buffers_dropped = dropped,
-        "Reaped dead WHEP session (client vanished without DELETE)"
-    );
 }
 
 /// Pull RTCP receiver-report stats (the browser's view of the link) from a

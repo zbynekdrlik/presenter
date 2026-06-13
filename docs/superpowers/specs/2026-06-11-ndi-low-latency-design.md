@@ -251,3 +251,67 @@ EXACTLY 640×480 H264 needs no reconfig → HW decode on the TV (zero TV CPU)
 `profile=compat`, `codec=video/H264` in their beacons on the live stage —
 hardware decode, no freezes — while sd1/laptops keep the default 720p
 profile.
+
+## Addendum 4 (2026-06-13): #387 dynamic adaptive compat controller
+
+**Quality policy (binding, user directive):** priority = (1) near-zero latency,
+(2) no stutter, (3) MAXIMUM quality/resolution/fps. Defaults start HIGH; the
+controller lowers quality ONLY on measured degradation and raises it back when
+headroom returns — both directions, VDO.Ninja-style. Floor values are never the
+shipped steady state.
+
+**Why a homegrown controller:** the upstream `rtpgccbwe` GCC element is NOT
+installed on dev2 or prod (gst-plugins-rs `net/webrtc`), and installing it on
+the prod box is a heavier infra lift than the fix warrants. webrtcsink ships a
+"Homegrown" congestion controller (AIMD on RTCP stats) that needs no extra
+element — we replicate its algorithm in our Rust over the per-session RTCP
+remote-inbound stats we ALREADY read for `/ndi/snapshot`.
+
+**Architecture change (compat profile only):**
+- Today the compat branch is ONE shared `vp8enc` → `producer_compat` fanning
+  encoded frames to all compat consumers — it can only ever serve the worst
+  TV's bitrate to all of them. To adapt per-TV, the compat path moves to a
+  RAW-video producer: `tee → q_compat → videoconvert → videoscale → caps
+  (854×480 I420) → appsink(raw) → producer_compat_raw`. Each compat consumer
+  pipeline becomes `appsrc(raw) → vp8enc(per-consumer) → rtpvp8pay →
+  webrtcbin`, so every weak TV has its OWN encoder whose `target-bitrate` is
+  driven independently.
+- The DEFAULT (H264 720p) profile stays a SHARED encoder (the #336 invariant —
+  per-consumer H264 720p encoders melt the N100). Per-consumer encoders are
+  affordable ONLY for the compat tier: ≤3 weak TVs at VP8 480p.
+- CPU budget: vp8enc 480p realtime ≈ small; 3 instances on the N100 alongside
+  one vah264enc 720p is within budget (measured headroom: load dropped to ~2.5
+  after removing the shared-720p-VP8 misstep).
+
+**The controller (per compat consumer, runs in the consumer's bus-watch task or
+a dedicated 1 s tokio interval):**
+- Read webrtcbin `get-stats` → remote-inbound-rtp: `packets-lost` delta,
+  `round-trip-time`, `jitter`. Compute EWMA loss `pl = 0.35·prev + 0.65·cur`
+  (VDO.Ninja constant).
+- AIMD on `vp8enc target-bitrate` (bits/s), bounds [200_000, 1_500_000],
+  start at 900_000 (HIGH per policy):
+  - loss > 1% (0.01): multiplicative decrease `bitrate *= 0.85`.
+  - loss < 0.5% for ≥10 s AND rtt stable: additive increase
+    `bitrate += 50_000` (probe up — the "raise when headroom returns" half).
+  - clamp; apply via `encoder.set_property("target-bitrate", bps)` (live, no
+    caps change → NO decoder reconfig).
+- **RESOLUTION STAYS FIXED.** Changing encode resolution live renegotiates caps
+  and triggers the decoder port-reconfig that KILLS these Vestels (addendum 2).
+  So unlike VDO.Ninja we adapt BITRATE ONLY; resolution is a fixed tier chosen
+  at connect (854×480 compat). A future ladder (480p↔360p) would be a full
+  reconnect, not a live change.
+- PLI/IDR rate-limit: ≤1 forced keyframe/s per encoder (a struggling TV
+  PLI-spams; every IDR worsens its load — the collapse spiral). 
+
+**Observability:** beacon already carries fps/freeze/jb; ADD server-side the
+current per-consumer `target-bitrate` to `/ndi/snapshot` so the AIMD loop is
+visible in the ledgers.
+
+**Acceptance (ledger method, #379):** a Vestel that previously oscillated holds
+a STABLE fps for ≥10 min with the controller settling its bitrate to the link's
+real capacity (no resets, freezes trending to ~0), and visibly recovers bitrate
+when the link improves. Default-profile sd1 stays 30 fps untouched.
+
+**Depends on #388** (reaper v2 — the prod reaper is inert because gst webrtcbin
+never flips connection-state for vanished peers; the same RTCP-liveness read
+this controller adds is what #388 needs, so build them together).

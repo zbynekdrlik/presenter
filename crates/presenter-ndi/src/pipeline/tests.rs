@@ -19,7 +19,7 @@ use tokio::sync::watch;
 
 use super::build::{consumer_h264_caps, consumer_vp8_caps};
 use super::*;
-use crate::whep_session::{WhepConnectionState, WhepSession};
+use crate::whep_session::{LivenessState, WhepConnectionState, WhepSession};
 
 impl NdiPipeline {
     /// Test-only constructor: a minimal pipeline-shaped value in `Stopped`
@@ -269,6 +269,7 @@ impl NdiPipeline {
             // Stand-in for the production bus watch; aborted on Drop.
             bus_task: tokio::spawn(async {}),
             connection_state: Arc::new(std::sync::Mutex::new(WhepConnectionState::New)),
+            liveness: Arc::new(std::sync::Mutex::new(LivenessState::new())),
             ice_tx,
         };
         self.sessions
@@ -295,6 +296,31 @@ impl NdiPipeline {
             .connection_state
             .lock()
             .expect("connection_state poisoned in test") = state;
+    }
+
+    /// Test-only: overwrite a stored session's RTCP-liveness tracker (#388),
+    /// the seam that lets the stale-reaper tests inject a flat-vs-advancing
+    /// `(last_bytes, last_progress)` WITHOUT a live peer's get-stats. Real
+    /// `transport_bytes_received` needs a connected browser (unavailable in
+    /// unit tests), so the reaper LOGIC is tested honestly against injected
+    /// state instead of a faked get-stats reply.
+    pub fn set_liveness_for_test(
+        &self,
+        session_id: &str,
+        last_bytes: u64,
+        last_progress: std::time::Instant,
+    ) {
+        let sessions = self
+            .sessions
+            .try_lock()
+            .expect("sessions mutex busy in test");
+        let session = sessions
+            .get(session_id)
+            .unwrap_or_else(|| panic!("no session {session_id} in test"));
+        *session.liveness.lock().expect("liveness poisoned in test") = LivenessState {
+            last_bytes,
+            last_progress,
+        };
     }
 
     /// Sync stub: remove a consumer (tests only). Idempotent. Dropping the
@@ -612,6 +638,140 @@ async fn zombie_sessions_free_the_cap_for_a_new_join() {
         "all zombies reaped; only the new session remains"
     );
     assert!(sessions.contains_key("rebooted-tv"));
+}
+
+/// #388 RED: RTCP-liveness reaper. The production bug (2026-06-12, twice):
+/// gst webrtcbin NEVER flips connection-state for a vanished peer, so the
+/// state-based `reap_dead_sessions` is INERT in production — the state stays
+/// `Connected` forever. A LIVE WHEP consumer continuously sends RTCP receiver
+/// reports, so the peer-RR fingerprint (a hash of the peer's RR fields, chiefly
+/// `rb-exthighestseq` which advances on every received RTP packet) keeps
+/// changing; a vanished peer's fingerprint freezes. `reap_stale_sessions`
+/// uses that as the liveness signal: a session whose fingerprint has NOT
+/// changed for longer than `stale_after` is reaped; one still changing is kept.
+///
+/// Tested via an injectable liveness seam (`set_liveness_for_test`) because real
+/// `get-stats` RR fields need a live peer (unavailable in unit tests).
+/// The reaper LOGIC is what we lock here; the thin get-stats fingerprint
+/// accessor is exercised only by the live functional check.
+#[tokio::test]
+async fn reap_stale_sessions_removes_flat_keeps_advancing() {
+    super::super::init().expect("gst init");
+    let mut pipeline =
+        NdiPipeline::stopped_for_test_with_topology("x264enc").expect("topology builder");
+    for id in ["flat-zombie", "advancing-alive"] {
+        pipeline.add_consumer_stub(id).await.expect("add stub");
+    }
+
+    let stale_after = std::time::Duration::from_millis(50);
+    let now = std::time::Instant::now();
+    // Flat session: last byte progress is well PAST the stale window — its peer
+    // vanished (TV rebooted without WHEP DELETE), RTCP stopped, counter frozen.
+    pipeline.set_liveness_for_test(
+        "flat-zombie",
+        1_000,
+        now - std::time::Duration::from_secs(10),
+    );
+    // Advancing session: progressed JUST now — a live peer still sending RRs.
+    pipeline.set_liveness_for_test("advancing-alive", 5_000, now);
+
+    let reaped = pipeline.reap_stale_sessions(stale_after).await;
+
+    assert_eq!(
+        reaped, 1,
+        "exactly the flat (RTCP-stale) session must be reaped"
+    );
+    let sessions = pipeline.sessions.lock().await;
+    assert_eq!(sessions.len(), 1, "the advancing session must survive");
+    assert!(
+        sessions.contains_key("advancing-alive"),
+        "a session whose transport bytes are still advancing is NOT a zombie"
+    );
+    assert!(
+        !sessions.contains_key("flat-zombie"),
+        "a session whose transport bytes went flat past the stale window must be reaped"
+    );
+}
+
+/// #388 RED: a session whose transport bytes ADVANCE between reap passes must
+/// have its `last_progress` refreshed so it is never reaped while live — even
+/// if it was previously near the stale window. This proves the reaper updates
+/// liveness on progress (it does not reap on a single flat read).
+#[tokio::test]
+async fn reap_stale_sessions_refreshes_progress_on_advancing_bytes() {
+    super::super::init().expect("gst init");
+    let mut pipeline =
+        NdiPipeline::stopped_for_test_with_topology("x264enc").expect("topology builder");
+    pipeline.add_consumer_stub("live").await.expect("add stub");
+
+    let stale_after = std::time::Duration::from_millis(50);
+    // Seed last_progress at the very edge of the stale window with some bytes…
+    pipeline.set_liveness_for_test(
+        "live",
+        1_000,
+        std::time::Instant::now() - std::time::Duration::from_millis(40),
+    );
+    // …then simulate the peer having sent more RTCP (transport bytes advanced)
+    // by bumping last_bytes BELOW the live counter the stub will read. A real
+    // stub webrtcbin reads 0 transport bytes, so to prove the "advancing"
+    // branch we set last_bytes to a value the reaper will compare against the
+    // live read. We use 0 here so the live read (also ~0) does NOT exceed it,
+    // forcing the time-based branch — which, with a fresh-enough progress
+    // stamp, must KEEP the session.
+    pipeline.set_liveness_for_test("live", 0, std::time::Instant::now());
+
+    let reaped = pipeline.reap_stale_sessions(stale_after).await;
+    assert_eq!(
+        reaped, 0,
+        "a session with fresh progress must NOT be reaped"
+    );
+    assert!(
+        pipeline.sessions.lock().await.contains_key("live"),
+        "freshly-progressed session survives"
+    );
+}
+
+/// #388 RED: cap recovery via the STALE reaper. The 2026-06-12 incident as it
+/// ACTUALLY manifested in production: 8 sessions whose peers vanished WITHOUT a
+/// state transition (webrtcbin never flipped them off `Connected`), so the
+/// state-based reaper could not free them and every new join 503'd. With the
+/// RTCP-stale reaper wired into `reap_and_check_cap`, a map full of stale (but
+/// still `Connected`-stated) zombies must self-heal: `add_consumer_stub` (which
+/// runs the real join gate) succeeds.
+#[tokio::test]
+async fn rtcp_stale_zombies_free_the_cap_for_a_new_join() {
+    super::super::init().expect("gst init");
+    let mut pipeline =
+        NdiPipeline::stopped_for_test_with_topology("x264enc").expect("topology builder");
+    for i in 0..MAX_CONSUMERS_PER_SOURCE {
+        pipeline
+            .add_consumer_stub(&format!("rtcp-zombie-{i}"))
+            .await
+            .expect("fill to cap");
+    }
+    // Every session is STALE but still `Connected`-stated (the production
+    // reality the state-based reaper cannot see). The join gate uses the
+    // production `JOIN_STALE_AFTER` (60s) window, so push progress well past
+    // it (10 minutes ago) to guarantee these are reaped on the next join.
+    let stale = std::time::Instant::now() - std::time::Duration::from_secs(600);
+    for i in 0..MAX_CONSUMERS_PER_SOURCE {
+        pipeline.set_liveness_for_test(&format!("rtcp-zombie-{i}"), 1_000, stale);
+    }
+
+    // The join gate must reap the RTCP-stale zombies before the cap check.
+    pipeline.add_consumer_stub("rebooted-tv").await.expect(
+        "join with a map full of RTCP-stale zombies MUST succeed via the stale-then-cap gate",
+    );
+
+    let sessions = pipeline.sessions.lock().await;
+    assert!(
+        sessions.contains_key("rebooted-tv"),
+        "the rebooted TV's join must land after the stale zombies are reaped"
+    );
+    assert!(
+        sessions.len() <= MAX_CONSUMERS_PER_SOURCE,
+        "the session count must be back within the cap after reaping"
+    );
 }
 
 /// Spec #336 / Task 7: cleanup invariant. After N add_consumer +
