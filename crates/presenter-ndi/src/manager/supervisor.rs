@@ -12,6 +12,18 @@ use crate::pipeline::NdiPipeline;
 
 use super::{check_active_entry, NdiManager, StateCheckOutcome};
 
+/// #388 periodic RTCP-liveness sweep cadence: how often each source's
+/// supervisor reaps zombie sessions. 30s matches the issue spec — frequent
+/// enough that a freed slot is visible within half a minute, infrequent enough
+/// that the per-session get-stats reads cost nothing measurable.
+const PERIODIC_REAP_INTERVAL: std::time::Duration = std::time::Duration::from_secs(30);
+
+/// #388 periodic stale window: a session whose webrtcbin transport has received
+/// no new bytes for longer than this is reaped by the periodic sweep. 60s — the
+/// same window the join-path gate uses (`NdiPipeline::JOIN_STALE_AFTER`) — is
+/// well above any healthy-link RTCP gap, so a live consumer is never reaped.
+const PERIODIC_STALE_AFTER: std::time::Duration = std::time::Duration::from_secs(60);
+
 /// Per-source supervisor bookkeeping: when the last rebuild was attempted,
 /// and how many consecutive failures we've seen.
 ///
@@ -30,6 +42,15 @@ pub(in crate::manager) struct SupervisorState {
 pub(in crate::manager) enum RebuildDecision {
     /// Wait this long, then attempt a rebuild. Zero duration means rebuild now.
     ProceedAfter(std::time::Duration),
+}
+
+/// What the supervisor loop should do after handling one dead-state transition.
+/// Returned by `handle_dead_state` so the loop body stays a trivial dispatch.
+enum SupervisorStep {
+    /// Keep looping (wait for the next transition or reap tick).
+    Continue,
+    /// Exit the supervisor task (source deactivated).
+    Exit,
 }
 
 impl SupervisorState {
@@ -138,12 +159,31 @@ impl NdiManager {
         let manager = std::sync::Arc::clone(self);
         tokio::spawn(async move {
             let mut state = SupervisorState::new();
+            // #388 periodic RTCP-liveness sweep: gst webrtcbin never flips
+            // connection-state for a vanished peer, so without a periodic reap
+            // a zombie blocks a consumer slot until the NEXT join triggers the
+            // join-path reap. A 30s tick reaping sessions stale for >60s keeps
+            // the slot count honest (and #387's controller + /ndi/snapshot
+            // observability see the truth) even when no new display joins.
+            let mut reap_tick = tokio::time::interval(PERIODIC_REAP_INTERVAL);
+            reap_tick.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
             loop {
-                // Wait for the next state change.
-                if watcher.changed().await.is_err() {
-                    // Pipeline dropped — exit cleanly.
-                    tracing::debug!(source_id = %source_id, "supervisor: watcher closed, exiting");
-                    return;
+                // Wait for the next state change OR the periodic reap tick.
+                tokio::select! {
+                    changed = watcher.changed() => {
+                        if changed.is_err() {
+                            // Pipeline dropped — exit cleanly.
+                            tracing::debug!(
+                                source_id = %source_id,
+                                "supervisor: watcher closed, exiting"
+                            );
+                            return;
+                        }
+                    }
+                    _ = reap_tick.tick() => {
+                        manager.periodic_reap(&source_id).await;
+                        continue;
+                    }
                 }
                 let current = watcher.borrow_and_update().clone();
                 use crate::pipeline::PipelineState::*;
@@ -159,120 +199,150 @@ impl NdiManager {
                         state.mark_rebuild_succeeded();
                     }
                     Errored(_) | Stopped => {
-                        // Apply rate-limit + backoff.
-                        let RebuildDecision::ProceedAfter(wait) =
-                            state.should_rebuild_now(std::time::Instant::now());
-                        let backoff = state.backoff_for_failure_count();
-                        let total = wait.max(backoff);
-                        if !total.is_zero() {
-                            tracing::warn!(
-                                source_id = %source_id,
-                                wait_ms = total.as_millis() as u64,
-                                consecutive_failures = state.consecutive_failures(),
-                                "supervisor: backing off before rebuild"
-                            );
-                            tokio::time::sleep(total).await;
-                        }
-                        state.mark_rebuild_started();
-                        match manager.rebuild_pipeline(&source_id, &ndi_name).await {
-                            Ok(()) => {
-                                tracing::info!(source_id = %source_id, "supervisor: rebuild succeeded");
-                                // NOTE: do NOT mark_rebuild_succeeded() yet. We only
-                                // know the pipeline build returned Ok — we don't yet
-                                // know it survived the immediate state-watcher peek
-                                // below. If we reset the counter here, the
-                                // already_dead branch below would mark_failed and
-                                // the counter would oscillate 0 → 1 → 0 → 1 forever,
-                                // never crossing the cool-off threshold (deep-review
-                                // 🟡 #1, 2026-05-24 PR #340). Reset only AFTER the
-                                // peek confirms the new pipeline is alive.
-                                // The fresh pipeline has a NEW state watcher; swap ours
-                                // so we see ITS transitions, not the dead pipeline's.
-                                match manager.state_watcher_for(&source_id).await {
-                                    Some(w) => {
-                                        watcher = w;
-                                        // After re-subscribing, the new watcher's
-                                        // "seen" mark is the current value. If the
-                                        // fresh pipeline has ALREADY errored in the
-                                        // window between active.insert and the
-                                        // state_watcher_for clone, changed() would
-                                        // block waiting for a further transition
-                                        // that never comes. Peek the state now: if
-                                        // it's already dead, mark the rebuild as a
-                                        // failure and `continue` — that returns to
-                                        // the outer loop's changed().await, which
-                                        // then blocks until either (a) the dead
-                                        // pipeline emits another transition
-                                        // (unlikely) or (b) the 30s DB-ticker
-                                        // backstop removes the entry and drops the
-                                        // state_tx, which makes changed() return
-                                        // Err and exits this supervisor cleanly.
-                                        // A fresh supervisor is then spawned by
-                                        // the ticker's start_pipeline. Worst-case
-                                        // recovery window is ~30s, which is the
-                                        // intended backstop behavior.
-                                        let already_dead = matches!(
-                                            *watcher.borrow_and_update(),
-                                            Errored(_) | Stopped
-                                        );
-                                        if already_dead {
-                                            // Mark as a failure for backoff bookkeeping —
-                                            // the rebuild "succeeded" briefly but the
-                                            // pipeline collapsed immediately, which is
-                                            // a real failure of recovery.
-                                            let was_cooling_off = state.is_cooling_off();
-                                            state.mark_rebuild_failed();
-                                            if !was_cooling_off && state.is_cooling_off() {
-                                                tracing::warn!(
-                                                    source_id = %source_id,
-                                                    consecutive_failures = state.consecutive_failures(),
-                                                    cool_off_minutes = 5,
-                                                    "supervisor: NDI source entered cool-off — pausing retries (#337); \
-                                                     manual reactivate via operator UI resumes immediately"
-                                                );
-                                            }
-                                            continue;
-                                        }
-                                        // Pipeline confirmed alive on the new watcher
-                                        // → reset the failure streak now (deferred
-                                        // from above per deep-review 🟡 #1).
-                                        state.mark_rebuild_succeeded();
-                                    }
-                                    None => {
-                                        // Source no longer active (operator deactivated
-                                        // between rebuild start and now). Exit.
-                                        tracing::debug!(
-                                            source_id = %source_id,
-                                            "supervisor: source no longer active after rebuild, exiting"
-                                        );
-                                        return;
-                                    }
-                                }
-                            }
-                            Err(e) => {
-                                let was_cooling_off = state.is_cooling_off();
-                                state.mark_rebuild_failed();
-                                tracing::warn!(
-                                    source_id = %source_id,
-                                    error = %e,
-                                    consecutive_failures = state.consecutive_failures(),
-                                    "supervisor: rebuild failed"
-                                );
-                                if !was_cooling_off && state.is_cooling_off() {
-                                    tracing::warn!(
-                                        source_id = %source_id,
-                                        consecutive_failures = state.consecutive_failures(),
-                                        cool_off_minutes = 5,
-                                        "supervisor: NDI source entered cool-off — pausing retries (#337); \
-                                         manual reactivate via operator UI resumes immediately"
-                                    );
-                                }
-                            }
+                        if let SupervisorStep::Exit = manager
+                            .handle_dead_state(&source_id, &ndi_name, &mut state, &mut watcher)
+                            .await
+                        {
+                            return;
                         }
                     }
                 }
             }
         })
+    }
+
+    /// Handle one `Errored`/`Stopped` transition: rate-limit + backoff, attempt
+    /// a rebuild, and (on success) re-subscribe `watcher` to the fresh
+    /// pipeline's state channel. Returns whether the supervisor loop should
+    /// continue or exit. Extracted from `spawn_supervisor` to keep both bodies
+    /// under the 120-line cap.
+    async fn handle_dead_state(
+        &self,
+        source_id: &str,
+        ndi_name: &str,
+        state: &mut SupervisorState,
+        watcher: &mut tokio::sync::watch::Receiver<crate::pipeline::PipelineState>,
+    ) -> SupervisorStep {
+        // Apply rate-limit + backoff.
+        let RebuildDecision::ProceedAfter(wait) =
+            state.should_rebuild_now(std::time::Instant::now());
+        let backoff = state.backoff_for_failure_count();
+        let total = wait.max(backoff);
+        if !total.is_zero() {
+            tracing::warn!(
+                source_id = %source_id,
+                wait_ms = total.as_millis() as u64,
+                consecutive_failures = state.consecutive_failures(),
+                "supervisor: backing off before rebuild"
+            );
+            tokio::time::sleep(total).await;
+        }
+        state.mark_rebuild_started();
+        match self.rebuild_pipeline(source_id, ndi_name).await {
+            Ok(()) => {
+                tracing::info!(source_id = %source_id, "supervisor: rebuild succeeded");
+                self.resubscribe_after_rebuild(source_id, state, watcher)
+                    .await
+            }
+            Err(e) => {
+                self.note_rebuild_failure(source_id, state, &e.to_string());
+                SupervisorStep::Continue
+            }
+        }
+    }
+
+    /// After a successful `rebuild_pipeline`, swap `watcher` to the FRESH
+    /// pipeline's state channel and peek it: if the new pipeline already died,
+    /// record a failure and continue; if it's alive, reset the failure streak.
+    /// Returns `Exit` only when the source is no longer active.
+    ///
+    /// NOTE: do NOT `mark_rebuild_succeeded()` before the peek confirms the new
+    /// pipeline is alive — resetting early makes the already-dead branch
+    /// oscillate 0 → 1 → 0 → 1 forever, never crossing the cool-off threshold
+    /// (deep-review 🟡 #1, 2026-05-24 PR #340).
+    async fn resubscribe_after_rebuild(
+        &self,
+        source_id: &str,
+        state: &mut SupervisorState,
+        watcher: &mut tokio::sync::watch::Receiver<crate::pipeline::PipelineState>,
+    ) -> SupervisorStep {
+        use crate::pipeline::PipelineState::*;
+        let Some(w) = self.state_watcher_for(source_id).await else {
+            // Source no longer active (operator deactivated between rebuild
+            // start and now). Exit.
+            tracing::debug!(
+                source_id = %source_id,
+                "supervisor: source no longer active after rebuild, exiting"
+            );
+            return SupervisorStep::Exit;
+        };
+        *watcher = w;
+        // After re-subscribing, the new watcher's "seen" mark is the current
+        // value. If the fresh pipeline ALREADY errored in the window between
+        // active.insert and the state_watcher_for clone, changed() would block
+        // waiting for a transition that never comes. Peek now: if it's already
+        // dead, mark the rebuild as a failure and continue — the 30s DB-ticker
+        // backstop removes the entry and spawns a fresh supervisor (worst-case
+        // ~30s recovery, the intended backstop behavior).
+        let already_dead = matches!(*watcher.borrow_and_update(), Errored(_) | Stopped);
+        if already_dead {
+            self.note_rebuild_failure(
+                source_id,
+                state,
+                "pipeline collapsed immediately after rebuild",
+            );
+            return SupervisorStep::Continue;
+        }
+        // Pipeline confirmed alive on the new watcher → reset the failure
+        // streak now (deferred from above per deep-review 🟡 #1).
+        state.mark_rebuild_succeeded();
+        SupervisorStep::Continue
+    }
+
+    /// Record a rebuild failure for backoff bookkeeping and log it, emitting the
+    /// one-shot cool-off warning when the failure count first crosses the
+    /// threshold (#337). Shared by the `Err` and already-dead paths.
+    fn note_rebuild_failure(&self, source_id: &str, state: &mut SupervisorState, reason: &str) {
+        let was_cooling_off = state.is_cooling_off();
+        state.mark_rebuild_failed();
+        tracing::warn!(
+            source_id = %source_id,
+            error = %reason,
+            consecutive_failures = state.consecutive_failures(),
+            "supervisor: rebuild failed"
+        );
+        if !was_cooling_off && state.is_cooling_off() {
+            tracing::warn!(
+                source_id = %source_id,
+                consecutive_failures = state.consecutive_failures(),
+                cool_off_minutes = 5,
+                "supervisor: NDI source entered cool-off — pausing retries (#337); \
+                 manual reactivate via operator UI resumes immediately"
+            );
+        }
+    }
+
+    /// #388 periodic RTCP-liveness sweep for ONE source. Clones the pipeline
+    /// Arc out of the active map (cheap refcount bump, lock released
+    /// immediately — never held across the reap's blocking get-stats reads),
+    /// then reaps sessions whose transport bytes have been flat for longer than
+    /// `PERIODIC_STALE_AFTER`. A no-op when the source is not active.
+    async fn periodic_reap(&self, source_id: &str) {
+        let pipeline = {
+            let active = self.active.lock().await;
+            match active.get(source_id) {
+                Some(src) => std::sync::Arc::clone(&src.pipeline),
+                None => return,
+            }
+        };
+        let reaped = pipeline.reap_stale_sessions(PERIODIC_STALE_AFTER).await;
+        if reaped > 0 {
+            tracing::info!(
+                source_id = %source_id,
+                reaped,
+                "supervisor: periodic sweep reaped RTCP-stale WHEP sessions (#388)"
+            );
+        }
     }
 
     /// Fetch the live `state_watcher` for an active source. Used by the

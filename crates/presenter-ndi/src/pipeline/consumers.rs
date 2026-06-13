@@ -51,7 +51,7 @@ use super::{
     AddConsumerError, NdiPipeline, PipelineSnapshot, SessionSnapshot, StreamProfile, WhepAnswer,
     MAX_CONSUMERS_PER_SOURCE,
 };
-use crate::whep_session::{IceCandidate, WhepConnectionState, WhepSession};
+use crate::whep_session::{IceCandidate, LivenessState, WhepConnectionState, WhepSession};
 
 /// RAII owner of a consumer pipeline from the moment it is assembled until it
 /// is either promoted into a stored [`WhepSession`] (via [`Self::defuse`]) or
@@ -226,6 +226,8 @@ impl NdiPipeline {
             link,
             bus_task,
             connection_state,
+            // Fresh RTCP-liveness tracker: full stale-window grace from now.
+            liveness: Arc::new(std::sync::Mutex::new(LivenessState::new())),
             ice_tx,
         };
 
@@ -265,10 +267,16 @@ impl NdiPipeline {
     async fn check_consumer_cap(&self) -> Result<(), AddConsumerError> {
         let sessions = self.sessions.lock().await;
         if sessions.len() >= MAX_CONSUMERS_PER_SOURCE {
+            // Structured cap-rejection log (#388 observability): the WHEP POST
+            // is about to 503. Pre-#388 the only WHEP log line was "POST → 201"
+            // on SUCCESS, so 503-rejected joins were INVISIBLE in the ledgers —
+            // that blind spot masked the 2026-06-12 cap exhaustion as a "client
+            // mount race". `reason="cap"` makes every rejection greppable.
             tracing::warn!(
+                reason = "cap",
                 current_count = sessions.len(),
                 max = MAX_CONSUMERS_PER_SOURCE,
-                "WHEP consumer cap reached — rejecting new POST"
+                "WHEP consumer rejected — per-source cap reached (503)"
             );
             return Err(AddConsumerError::CapReached {
                 max: MAX_CONSUMERS_PER_SOURCE,
@@ -277,19 +285,37 @@ impl NdiPipeline {
         Ok(())
     }
 
+    /// Join-path stale window (#388): a session whose webrtcbin transport has
+    /// received no new bytes from its peer for this long is a vanished-peer
+    /// zombie. 60 s matches the periodic-sweep window in the supervisor — long
+    /// enough that a momentary RTCP gap on a healthy link never trips it, short
+    /// enough that the cap self-heals on the next join after a TV reboots.
+    pub(super) const JOIN_STALE_AFTER: std::time::Duration = std::time::Duration::from_secs(60);
+
     /// The WHEP join gate, shared by production `add_consumer` and the test
-    /// stub (`add_consumer_stub`): FIRST reap dead sessions, THEN enforce the
-    /// consumer cap. Reaping before the cap check makes a pipeline full of
-    /// zombies self-heal exactly when a new display tries to join — the
-    /// 2026-06-12 incident: TVs power-cycled overnight without WHEP DELETE
-    /// left 8 dead sessions behind, the cap rejected every new consumer with
-    /// 503, and all displays sat on "Connecting…" until a manual restart.
+    /// stub (`add_consumer_stub`): FIRST reap zombies (BOTH RTCP-stale and
+    /// connection-state-dead), THEN enforce the consumer cap. Reaping before
+    /// the cap check makes a pipeline full of zombies self-heal exactly when a
+    /// new display tries to join — the 2026-06-12 incident (twice): TVs
+    /// power-cycled without WHEP DELETE left 8 zombie sessions behind, the cap
+    /// rejected every new consumer with 503, and all displays sat on
+    /// "Connecting…" until a manual restart.
+    ///
+    /// The RTCP-stale reap is the load-bearing fix: gst webrtcbin NEVER flips
+    /// connection-state for a vanished peer, so the state-based `reap_dead_
+    /// sessions` is INERT in production. The stale reap runs FIRST; the cheap
+    /// state-based reap stays as a fast path for the rare cases where webrtcbin
+    /// DOES report Disconnected/Failed/Closed (e.g. an explicit ICE failure).
     pub(super) async fn reap_and_check_cap(&self) -> Result<(), AddConsumerError> {
-        let reaped = self.reap_dead_sessions().await;
+        let stale = self.reap_stale_sessions(Self::JOIN_STALE_AFTER).await;
+        let dead = self.reap_dead_sessions().await;
+        let reaped = stale + dead;
         if reaped > 0 {
             tracing::info!(
                 reaped,
-                "freed consumer slots by reaping dead WHEP sessions before the cap check"
+                rtcp_stale = stale,
+                state_dead = dead,
+                "freed consumer slots by reaping zombie WHEP sessions before the cap check"
             );
         }
         self.check_consumer_cap().await
@@ -320,6 +346,68 @@ impl NdiPipeline {
         let count = dead.len();
         for session in dead {
             reap_one_session(session).await;
+        }
+        count
+    }
+
+    /// Reap every session whose webrtcbin transport has received NO new bytes
+    /// from its peer for longer than `stale_after` — the #388 RTCP-liveness
+    /// reaper. This is the LOAD-BEARING production fix: gst webrtcbin never
+    /// flips connection-state for a vanished peer, so `reap_dead_sessions` is
+    /// inert in production; the transport `bytes-received` counter is the only
+    /// reliable server-side liveness signal (a live consumer sends RTCP RRs
+    /// continuously → bytes keep arriving; a vanished peer's counter goes flat).
+    ///
+    /// For each session it reads `transport_bytes_received` (off the async
+    /// thread — get-stats blocks on a promise), then under the session-map lock:
+    ///   - bytes advanced → refresh `last_bytes` + `last_progress = now` (alive);
+    ///   - bytes flat AND `now - last_progress > stale_after` → mark for reap;
+    ///   - bytes unavailable (None) → leave `last_progress` untouched so a
+    ///     transient get-stats miss never counts as progress NOR as a forced
+    ///     stale; the session ages out naturally if the peer truly vanished.
+    ///
+    /// Returns how many sessions were removed. Teardown runs off the async
+    /// thread via `spawn_blocking`, same as `reap_dead_sessions`.
+    pub async fn reap_stale_sessions(&self, stale_after: std::time::Duration) -> usize {
+        // Phase 1: snapshot (id, webrtcbin) under the lock — cheap clone.
+        let probes: Vec<(String, gst::Element)> = {
+            let sessions = self.sessions.lock().await;
+            sessions
+                .iter()
+                .map(|(id, s)| (id.clone(), s.webrtcbin.clone()))
+                .collect()
+        };
+        // Phase 2 (blocking): read each webrtcbin's transport bytes-received —
+        // the get-stats promise wait must NOT block the async thread.
+        let reads: Vec<(String, Option<u64>)> = tokio::task::spawn_blocking(move || {
+            probes
+                .into_iter()
+                .map(|(id, webrtcbin)| (id, transport_bytes_received(&webrtcbin)))
+                .collect()
+        })
+        .await
+        .unwrap_or_default();
+        // Phase 3: update liveness + collect the stale ids under the lock.
+        let now = std::time::Instant::now();
+        let stale: Vec<WhepSession> = {
+            let mut sessions = self.sessions.lock().await;
+            let stale_ids: Vec<String> = reads
+                .into_iter()
+                .filter(|(id, _)| sessions.contains_key(id))
+                .filter(|(id, bytes)| {
+                    let session = &sessions[id];
+                    liveness_is_stale(&session.liveness, *bytes, now, stale_after)
+                })
+                .map(|(id, _)| id)
+                .collect();
+            stale_ids
+                .iter()
+                .filter_map(|id| sessions.remove(id))
+                .collect()
+        };
+        let count = stale.len();
+        for session in stale {
+            reap_one_stale_session(session).await;
         }
         count
     }
@@ -890,6 +978,140 @@ async fn reap_one_session(session: WhepSession) {
         buffers_dropped = dropped,
         "Reaped dead WHEP session (client vanished without DELETE)"
     );
+}
+
+/// Decide whether a session is RTCP-stale (#388), updating its liveness tracker
+/// in place. Returns true ⇒ the session should be reaped.
+///
+/// - `bytes = Some(n)` and `n > last_bytes` → the peer is alive (more RTCP/RTP
+///   arrived); refresh `last_bytes` + `last_progress = now`, return false.
+/// - `bytes = Some(n)` and `n <= last_bytes`, OR `bytes = None` → NO progress
+///   this pass (flat counter, or get-stats unavailable). Both look identical to
+///   a vanished peer, so both fall through to the time-based check: stale only
+///   if `now - last_progress > stale_after`.
+///
+/// `last_progress` advances ONLY on real byte progress, so the stale window
+/// (60 s) is measured from the last time the peer was actually seen sending
+/// data. A transient get-stats miss can never reap a live session because a
+/// live peer advances the counter — and therefore `last_progress` — well within
+/// the window. A truly vanished peer's counter stays flat and it ages out.
+///
+/// Holds only the session's own `std::sync::Mutex<LivenessState>` for a trivial
+/// compare-and-swap — never across an await. Poison is recovered (a panicked
+/// holder cannot corrupt two integers).
+fn liveness_is_stale(
+    liveness: &std::sync::Mutex<LivenessState>,
+    bytes: Option<u64>,
+    now: std::time::Instant,
+    stale_after: std::time::Duration,
+) -> bool {
+    let mut state = liveness.lock().unwrap_or_else(|p| p.into_inner());
+    if let Some(bytes) = bytes {
+        if bytes > state.last_bytes {
+            state.last_bytes = bytes;
+            state.last_progress = now;
+            return false;
+        }
+    }
+    now.duration_since(state.last_progress) > stale_after
+}
+
+/// Tear one RTCP-stale zombie down off the async thread and log the forensic
+/// counters with `reason="rtcp-stale"` + the session's last-seen transport
+/// bytes (#388 observability) — a zombie typically shows a huge `buffers_pushed`
+/// (frames pushed all night to a peer that vanished without WHEP DELETE).
+async fn reap_one_stale_session(session: WhepSession) {
+    let session_id = session.session_id.clone();
+    let last_bytes = session
+        .liveness
+        .lock()
+        .unwrap_or_else(|p| p.into_inner())
+        .last_bytes;
+    let pushed = session.link.pushed();
+    let dropped = session.link.dropped();
+    if let Err(e) = tokio::task::spawn_blocking(move || drop(session)).await {
+        tracing::warn!(
+            session_id = %session_id,
+            error = %e,
+            "reaped RTCP-stale session's teardown task failed"
+        );
+    }
+    tracing::info!(
+        session_id = %session_id,
+        reason = "rtcp-stale",
+        transport_bytes = last_bytes,
+        buffers_pushed = pushed,
+        buffers_dropped = dropped,
+        "Reaped RTCP-stale WHEP session (peer vanished without DELETE; transport \
+         bytes-received went flat past the stale window)"
+    );
+}
+
+/// Sum the `bytes-received` across every `transport`-type stats struct in a
+/// webrtcbin's `get-stats` reply — the total bytes received FROM the peer over
+/// this session's ICE/DTLS transport(s). A live WHEP consumer sends RTCP
+/// receiver reports continuously, so this counter advances while the peer is
+/// alive and goes flat the instant it vanishes (#388 liveness signal).
+///
+/// Returns None when no transport stat is present yet (pre-connect) or the
+/// promise times out (500 ms bound). Mirrors the get-stats idiom of
+/// `rtcp_remote_inbound`. NOTE: this thin accessor is exercised only by the
+/// live functional check — unit tests inject `LivenessState` directly via the
+/// test seam, so the reaper LOGIC is tested without a live peer's get-stats.
+fn transport_bytes_received(webrtcbin: &gst::Element) -> Option<u64> {
+    let (tx, rx) = std::sync::mpsc::channel();
+    let promise = gst::Promise::with_change_func(move |reply| {
+        if let Ok(Some(stats)) = reply {
+            let _ = tx.send(stats.to_owned());
+        }
+    });
+    webrtcbin.emit_by_name::<()>("get-stats", &[&None::<gst::Pad>, &promise]);
+    let stats = rx
+        .recv_timeout(std::time::Duration::from_millis(500))
+        .ok()?;
+    let mut total: u64 = 0;
+    let mut found = false;
+    for (_field, value) in stats.iter() {
+        let Ok(s) = value.get::<gst::Structure>() else {
+            continue;
+        };
+        // The webrtc stats `type` field marks transport structs. Read by the
+        // typed enum when present, falling back to the string nick, so this is
+        // robust across GStreamer versions. `bytes-received` is a u64 on
+        // transport stats.
+        if stats_struct_is_transport(&s) {
+            if let Some(b) = stats_bytes_received(&s) {
+                total = total.saturating_add(b);
+                found = true;
+            }
+        }
+    }
+    found.then_some(total)
+}
+
+/// True when a get-stats child struct is a `transport`-type entry. webrtcbin
+/// reports the stats `type` as a `GstWebRTCStatsType` enum; some builds expose
+/// it as a string. Check the enum nick, the string form, then fall back to the
+/// struct name prefix — robust across GStreamer versions.
+fn stats_struct_is_transport(s: &gst::Structure) -> bool {
+    if let Ok(type_str) = s.get::<String>("type") {
+        return type_str == "transport";
+    }
+    if let Ok(value) = s.value("type") {
+        if let Some((_, enum_value)) = gst::glib::EnumValue::from_value(value) {
+            return enum_value.nick() == "transport";
+        }
+    }
+    s.name().starts_with("transport")
+}
+
+/// Read `bytes-received` off a transport stats struct as a u64, tolerating the
+/// occasional i64/u32 representation across GStreamer versions.
+fn stats_bytes_received(s: &gst::Structure) -> Option<u64> {
+    s.get::<u64>("bytes-received")
+        .ok()
+        .or_else(|| s.get::<i64>("bytes-received").ok().map(|v| v.max(0) as u64))
+        .or_else(|| s.get::<u32>("bytes-received").ok().map(u64::from))
 }
 
 /// Pull RTCP receiver-report stats (the browser's view of the link) from a

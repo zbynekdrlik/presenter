@@ -20,6 +20,7 @@
 use gstreamer as gst;
 use gstreamer::prelude::*;
 use std::sync::{Arc, Mutex};
+use std::time::Instant;
 use tokio::sync::mpsc;
 use uuid::Uuid;
 
@@ -93,6 +94,44 @@ impl From<gstreamer_webrtc::WebRTCPeerConnectionState> for WhepConnectionState {
     }
 }
 
+/// RTCP-liveness tracker for one WHEP consumer (#388).
+///
+/// gst webrtcbin NEVER flips `connection-state` for a peer that vanished
+/// without closing the connection (a stage TV that rebooted/reloaded without a
+/// WHEP DELETE) — so the state-based zombie reaper is INERT in production. The
+/// only reliable server-side liveness signal is the webrtcbin TRANSPORT's
+/// `bytes-received` counter: a live WHEP consumer continuously sends RTCP
+/// receiver reports, so bytes keep arriving FROM the peer; a vanished peer's
+/// counter goes flat. The stale reaper samples this counter and tears a session
+/// down when it has not advanced for longer than the stale window.
+#[derive(Debug, Clone, Copy)]
+pub struct LivenessState {
+    /// Last transport `bytes-received` value observed for this session.
+    pub last_bytes: u64,
+    /// When `last_bytes` last INCREASED (i.e. the peer was last seen sending
+    /// RTCP/RTP back to us). A session whose bytes have not advanced since
+    /// `now - stale_after` is a vanished-peer zombie.
+    pub last_progress: Instant,
+}
+
+impl LivenessState {
+    /// Fresh tracker at consumer-add time: no bytes seen yet, progress clock
+    /// started NOW so a brand-new consumer gets a full `stale_after` grace
+    /// window before it can ever be considered stale.
+    pub fn new() -> Self {
+        Self {
+            last_bytes: 0,
+            last_progress: Instant::now(),
+        }
+    }
+}
+
+impl Default for LivenessState {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 /// One WHEP consumer. Owned by the pipeline's session map.
 ///
 /// Each consumer runs in its OWN fresh `gst::Pipeline`
@@ -125,6 +164,16 @@ pub struct WhepSession {
     /// tokio async context. Holding a tokio Mutex across a blocking
     /// GStreamer callback risks deadlock.
     pub connection_state: Arc<Mutex<WhepConnectionState>>,
+    /// RTCP-liveness tracker (#388): the last transport `bytes-received`
+    /// value and when it last advanced. Sampled by `reap_stale_sessions` to
+    /// detect peers that vanished WITHOUT a connection-state transition — the
+    /// only zombies the state-based reaper cannot see.
+    ///
+    /// `std::sync::Mutex` (not tokio) for parity with `connection_state`: the
+    /// reaper updates it from a `spawn_blocking` get-stats read, and the
+    /// critical section is a trivial compare-and-swap — never held across an
+    /// await.
+    pub liveness: Arc<Mutex<LivenessState>>,
     /// ICE candidates flowing server→browser (sender). The receiver
     /// half lives in the pipeline's add_consumer path and is drained
     /// while building the WHEP answer body OR delivered via subsequent
