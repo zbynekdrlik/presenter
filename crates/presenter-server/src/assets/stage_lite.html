@@ -1,12 +1,20 @@
 <!DOCTYPE html>
 <!-- ndi-lite: plain-JS WHEP stage player for weak displays (experiment, see #379).
 
-     The 1GB Vestel TVs stall >10s repeatedly on the full WASM stage page
-     regardless of codec; VDO.Ninja (a small plain-JS page) has played on the
-     SAME TVs for years. Hypothesis under test: removing the WASM app frees
-     enough RAM/CPU for sustained decode. This page is deliberately minimal:
-     no clock, no status bar, no WebSocket — one fullscreen <video> driven by
-     ~150 lines of plain JS mirroring the WASM client's watchdog semantics. -->
+     The 1GB Vestel TVs hitch ~400ms every ~20s on the full WASM stage page —
+     the periodic render work (status-bar autofit synchronous reflow + Leptos
+     churn) stalls the WebView compositor. The lite page is PROVEN smooth on the
+     same TVs because it has no WASM and no per-frame layout thrash: one
+     fullscreen <video> driven by ~150 lines of plain JS mirroring the WASM
+     client's watchdog semantics.
+
+     The NDI-fullscreen overlay info (clock / song number / connection / version)
+     is replicated here as LIGHTWEIGHT fixed-size plain DOM — NO autofit, NO
+     measure-resize, NO framework. Updates are cheap textContent writes: a 1s
+     clock tick, a 3s song-number fetch poll, connection text driven off the
+     player's OWN WHEP/peer state, and a one-shot /healthz version read at load.
+     Fixed CSS font sizes are the whole point — zero per-frame/per-second layout
+     work, so the overlay adds NO measurable presentation hitch. -->
 <html lang="en">
 <head>
 <meta charset="utf-8">
@@ -15,10 +23,61 @@
 <style>
   html, body { margin: 0; padding: 0; width: 100%; height: 100%; background: #000; overflow: hidden; }
   video { position: fixed; inset: 0; width: 100vw; height: 100vh; object-fit: cover; background: #000; }
+
+  /* Lightweight NDI overlay — mirrors the WASM stage status bar's look
+     (bottom strip, tabular-nums, the same colors) but with FIXED font sizes
+     in vh. NO autofit, NO reflow-per-tick — the entire reason the lite page
+     stays smooth where the WASM bar hitches. The whole overlay is
+     pointer-events:none so it never intercepts taps on the video. */
+  .nl-overlay {
+    position: fixed; left: 0; right: 0; bottom: 0; height: 7vh;
+    pointer-events: none; z-index: 10;
+    font-family: 'Inter', system-ui, -apple-system, sans-serif;
+  }
+  .nl-clock {
+    position: absolute; left: 2%; bottom: 0; width: 15%; height: 100%;
+    display: flex; align-items: center; justify-content: flex-start;
+    color: #38bdf8; font-weight: 700; font-size: 4vh;
+    font-variant-numeric: tabular-nums; white-space: nowrap; overflow: hidden;
+  }
+  .nl-song-number {
+    position: absolute; left: 18%; bottom: 0; width: 10%; height: 100%;
+    display: flex; align-items: center; justify-content: center;
+    color: #60a5fa; font-weight: 700; font-size: 4vh;
+    font-variant-numeric: tabular-nums; white-space: nowrap; overflow: hidden;
+  }
+  .nl-song-number[data-empty="true"] { display: none; }
+  .nl-connection {
+    position: absolute; right: 2%; bottom: 0; width: 30%; height: 100%;
+    display: flex; align-items: flex-end; justify-content: flex-end;
+    color: #38bdf8; font-family: "Courier New", Courier, monospace;
+    font-weight: 600; font-size: 1.8vh; letter-spacing: 0.05em;
+    text-transform: uppercase; white-space: nowrap; overflow: hidden;
+    font-variant-numeric: tabular-nums; text-align: right;
+  }
+  /* Connection-state colors mirror the WASM bar's .stage__connection--* rules. */
+  .nl-connection[data-state="connecting"] { color: #fbbf24; }
+  .nl-connection[data-state="connected"] { color: #38bdf8; }
+  .nl-connection[data-state="reconnecting"] { color: #fb923c; }
+  .nl-connection[data-state="disconnected"] { color: #ef4444; }
+  .nl-version {
+    position: absolute; right: 2%; bottom: 2vh; width: 30%; height: 1.8vh;
+    display: flex; align-items: flex-end; justify-content: flex-end;
+    color: rgba(255, 255, 255, 0.6); font-size: 1.4vh;
+    white-space: nowrap; overflow: hidden; text-align: right;
+  }
 </style>
 </head>
 <body data-ndi-lite="true" data-layout-code="ndi-fullscreen">
 <video data-role="ndi-video" autoplay muted playsinline></video>
+<!-- Fixed-size plain-DOM overlay (no autofit). Populated by cheap textContent
+     updates only — see the JS below. -->
+<div class="nl-overlay" data-role="ndi-overlay">
+  <div class="nl-clock" data-role="clock">--:--:--</div>
+  <div class="nl-song-number" data-role="song-number" data-empty="true"></div>
+  <div class="nl-version" data-role="version"></div>
+  <div class="nl-connection" data-role="connection" data-state="disconnected">DISCONNECTED</div>
+</div>
 <script>
 "use strict";
 (function () {
@@ -34,8 +93,112 @@
   var BEACON_TICK_MS = 15000;
   var BEACON_FRAME_PERIOD = 300;
   var SOURCE_POLL_MS = 5000;
+  var SONG_POLL_MS = 3000;          // cheap snapshot fetch for the #song-number overlay
+  var SONG_POLL_BACKOFF_MS = 30000; // when the snapshot 404s (empty DB, #383) poll slowly
 
   var video = document.querySelector('video[data-role="ndi-video"]');
+
+  // ── Lightweight NDI overlay (clock / song / connection / version) ──────────
+  // FIXED-size plain DOM mirroring the WASM stage StatusBar. All updates are
+  // cheap textContent writes; no measure/resize/autofit, so the overlay never
+  // forces a synchronous reflow (the WASM bar's ~400ms hitch source). The
+  // connection element is driven off the player's OWN WHEP state + getStats RTT.
+  var clockEl = document.querySelector('[data-role="clock"]');
+  var songEl = document.querySelector('[data-role="song-number"]');
+  var connEl = document.querySelector('[data-role="connection"]');
+  var versionEl = document.querySelector('[data-role="version"]');
+  // RTT (ms) sampled from getStats during beacons; null until first sample.
+  var lastRttMs = null;
+
+  function pad2(n) { return n < 10 ? "0" + n : "" + n; }
+
+  // 1s clock tick — local HH:MM:SS, written to a fixed-size element. Matches
+  // the WASM status_bar.rs current_time_string() (local hours/min/sec).
+  function updateClock() {
+    if (!clockEl) return;
+    var d = new Date();
+    clockEl.textContent = pad2(d.getHours()) + ":" + pad2(d.getMinutes()) + ":" + pad2(d.getSeconds());
+  }
+
+  // Set the connection overlay text + color. state is one of
+  // connecting|connected|reconnecting|disconnected (CSS picks the color).
+  // Mirrors status_bar.rs connection_text: "CONNECTED · 12 ms" etc.
+  function setConnection(state) {
+    if (!connEl) return;
+    var label = state === "connected" ? "CONNECTED"
+      : state === "connecting" ? "CONNECTING…"
+      : state === "reconnecting" ? "RECONNECTING…"
+      : "DISCONNECTED";
+    var rtt = (state === "connected" && lastRttMs != null)
+      ? " · " + Math.round(lastRttMs) + " ms" : "";
+    connEl.setAttribute("data-state", state);
+    connEl.textContent = label + rtt;
+  }
+
+  // Poll the song number from the SAME snapshot the WASM page uses (the stage
+  // WS `snapshot`). The lightweight equivalent is GET /stage/snapshot (JSON).
+  // Render "#142" like the WASM bar; hide gracefully when there is no song
+  // number, or when the endpoint 404s on an empty DB (#383).
+  //
+  // SELF-SCHEDULING with backoff: a 404 (empty DB) is logged by the browser's
+  // network layer regardless of our catch, so on repeated 404 we slow the poll
+  // from 3s to 30s — keeping the console quiet AND the poll cheap until data
+  // appears, then snap back to the 3s cadence as soon as the endpoint answers.
+  function hideSong() {
+    if (!songEl) return;
+    songEl.setAttribute("data-empty", "true");
+    songEl.textContent = "";
+  }
+  async function pollSongNumber() {
+    if (!songEl) return SONG_POLL_MS;
+    try {
+      var resp = await fetch("/stage/snapshot");
+      if (!resp.ok) { hideSong(); return SONG_POLL_BACKOFF_MS; }
+      var snap = await resp.json();
+      var n = snap && snap.songNumber;
+      if (n != null && n !== "") {
+        songEl.textContent = "#" + n;
+        songEl.setAttribute("data-empty", "false");
+      } else {
+        hideSong();
+      }
+      return SONG_POLL_MS;
+    } catch (e) {
+      // Network/parse failure: hide rather than show stale — overlay must
+      // never disturb the smooth player. Back off like the 404 case.
+      hideSong();
+      return SONG_POLL_BACKOFF_MS;
+    }
+  }
+  function scheduleSongPoll(delayMs) {
+    setTimeout(async function () {
+      var next = await pollSongNumber();
+      scheduleSongPoll(next);
+    }, delayMs);
+  }
+
+  // One-shot version read from /healthz (already returns {version, channel}).
+  // Mirrors VersionLabel: "v{version} ({channel})" for dev, "v{version}" for
+  // release / empty channel.
+  async function loadVersion() {
+    if (!versionEl) return;
+    try {
+      var resp = await fetch("/healthz");
+      if (!resp.ok) return;
+      var h = await resp.json();
+      if (!h || !h.version) return;
+      var ch = h.channel || "";
+      versionEl.textContent = (ch === "" || ch === "release")
+        ? "v" + h.version
+        : "v" + h.version + " (" + ch + ")";
+    } catch (e) { /* version is decorative; never disturb playback */ }
+  }
+
+  updateClock();
+  setInterval(updateClock, 1000);
+  loadVersion();
+  scheduleSongPoll(0); // self-scheduling; backs off to SONG_POLL_BACKOFF_MS on 404
+  setConnection("connecting");
   var store = (function () { try { return window.localStorage; } catch (e) { return null; } })();
   var compat = !!(store && store.getItem(PROFILE_KEY) === "compat");
   var profileSwitched = false; // at most ONE compat toggle per page load
@@ -167,9 +330,21 @@
     try {
       var report = await pc.getStats();
       var inbound = null;
+      var selectedPair = null;
       report.forEach(function (s) {
         if (s.type === "inbound-rtp" && s.kind === "video") inbound = s;
+        // Selected ICE candidate pair carries currentRoundTripTime (seconds).
+        if (s.type === "candidate-pair" && (s.nominated || s.selected) &&
+            typeof s.currentRoundTripTime === "number") {
+          selectedPair = s;
+        }
       });
+      // Surface RTT to the connection overlay (· N ms). getStats samples are
+      // already gathered here for the beacon, so this is free.
+      if (selectedPair) {
+        lastRttMs = selectedPair.currentRoundTripTime * 1000;
+        setConnection("connected");
+      }
       var codec = null;
       if (inbound && inbound.codecId) {
         var c = report.get(inbound.codecId);
@@ -230,6 +405,11 @@
       function finish(reason) {
         if (done) return;
         done = true;
+        // Session ended (stall / ICE loss / profile toggle): the main loop
+        // will retry, so reflect RECONNECTING (orange) in the overlay. RTT is
+        // stale now — clear it so a reconnect doesn't show an old "· N ms".
+        lastRttMs = null;
+        setConnection("reconnecting");
         clearInterval(ticker);
         clearInterval(beaconTimer);
         resolve(reason);
@@ -243,7 +423,9 @@
         if (frames > 1) recordPresentGap(now - lastFrameAt);
         presentedInInterval++;
         lastFrameAt = now;
-        if (frames === 1) { firstFrameAt = now; backoffMs = 0; }
+        // First presented frame proves the session is live — flip the overlay
+        // to CONNECTED immediately (RTT fills in on the next beacon).
+        if (frames === 1) { firstFrameAt = now; backoffMs = 0; setConnection("connected"); }
         // Persist the CURRENT mode only once PROVEN at a usable rate
         // (100 frames within 10s of the first) — never a broken crawl.
         if (frames === PROVEN_FRAMES && now - firstFrameAt <= PROVEN_WINDOW_MS && store) {
@@ -333,10 +515,13 @@
       if (!sourceId) {
         // Idle (no active source): black screen is the honest state.
         if (video.srcObject) video.srcObject = null;
+        lastRttMs = null;
+        setConnection("disconnected");
         await sleep(SOURCE_POLL_MS);
         continue;
       }
       video.setAttribute("data-source-id", sourceId);
+      setConnection("connecting");
       try {
         session = await whepConnect(sourceId);
       } catch (e) {

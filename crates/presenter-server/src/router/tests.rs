@@ -2378,11 +2378,12 @@ async fn stage_lite_serves_embedded_player_html() {
 }
 
 #[tokio::test]
-async fn stage_serves_full_page_even_with_ndi_fullscreen_layout() {
-    // REGRESSION GUARD (2026-06-12): the retired lite auto-redirect silently
-    // removed the stage overlay blocks (clock, song number, status) — a UX
-    // regression shipped without approval. The NDI layout MUST keep serving
-    // the full WASM stage page; /stage/lite is a manual diagnostic tool only.
+async fn stage_redirects_to_lite_player_for_ndi_fullscreen_layout() {
+    // The lite player now carries the NDI-fullscreen overlay (clock, song
+    // number, connection status, version) as lightweight fixed-size DOM, so
+    // the original #379 retirement reason (the lite page dropped the overlay)
+    // is gone. With the `ndi-fullscreen` layout active, /stage 303-redirects
+    // every weak TV to the proven-smooth /stage/lite player.
     let state = AppState::in_memory().await.unwrap();
     state.set_stage_layout_code("ndi-fullscreen").await.unwrap();
     let app = build_router(state);
@@ -2395,20 +2396,19 @@ async fn stage_serves_full_page_even_with_ndi_fullscreen_layout() {
         )
         .await
         .unwrap();
-    assert!(
-        matches!(
-            response.status(),
-            StatusCode::OK | StatusCode::SERVICE_UNAVAILABLE
-        ),
-        "ndi layout must serve the normal stage page (overlays!), got {}",
-        response.status()
+    assert_eq!(
+        response.status(),
+        StatusCode::SEE_OTHER,
+        "ndi layout must 303-redirect /stage to the lite player"
     );
-    assert!(
-        response
-            .headers()
-            .get(axum::http::header::LOCATION)
-            .is_none(),
-        "ndi layout must not redirect away from the full stage page"
+    let location = response
+        .headers()
+        .get(axum::http::header::LOCATION)
+        .and_then(|v| v.to_str().ok())
+        .unwrap_or_default();
+    assert_eq!(
+        location, "/stage/lite",
+        "ndi layout must redirect to /stage/lite, got {location}"
     );
 }
 
