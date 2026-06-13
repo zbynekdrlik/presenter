@@ -1,7 +1,36 @@
-//! Pure AIMD bitrate controller for the compat (weak-TV) VP8 stream — RED stub.
+//! Pure AIMD bitrate controller for the compat (weak-TV) VP8 stream.
 //!
-//! Stub returns START unchanged so the test module compiles; the behavioural
-//! tests fail until the real algorithm lands (RED → GREEN).
+//! This module is the deterministic, side-effect-free "brain" of the #387
+//! adaptive compat controller. A later wiring task feeds it `webrtcbin`
+//! `get-stats` (remote-inbound-rtp loss/RTT) and applies its decisions to the
+//! per-consumer `vp8enc` `target-bitrate`. Keeping it pure (no GStreamer types,
+//! no I/O, no async) makes the AIMD logic exhaustively unit-testable without
+//! the GStreamer/TV environment — which is the whole point of splitting it out.
+//!
+//! Algorithm: additive-increase / multiplicative-decrease (AIMD) over an EWMA
+//! of the packet-loss fraction — the homegrown equivalent of libwebrtc GCC
+//! (gst's `rtpgccbwe` is not installed on dev2 or prod). This replicates
+//! webrtcsink's "Homegrown" congestion controller using only the RTCP stats we
+//! already read for `/ndi/snapshot`.
+//!
+//! Quality policy (binding, user 2026-06-13): priority is (1) near-zero
+//! latency, (2) no stutter, (3) MAXIMUM quality. The controller therefore
+//! STARTS HIGH (`MAX_BPS`) and only reduces on MEASURED degradation, recovering
+//! toward max when the link is clean. `MIN_BPS` is a safety net, never the
+//! resting state.
+//!
+//! Bitrate-only: resolution is FIXED. A live resolution change renegotiates
+//! caps and triggers the decoder port-reconfig that kills the Vestel OMX
+//! (addendum 2). RTT is recorded for a future RTT-trend refinement but does
+//! NOT drive v1 decisions — loss is the primary congestion signal.
+
+// The controller is intentionally not yet wired to any consumer — the follow-up
+// task connects `webrtcbin` get-stats → `update` → `vp8enc target-bitrate` (see
+// #387). Until then the public API and its constants are exercised only by the
+// unit tests, so the lib target (compiled without `#[cfg(test)]`) sees them as
+// unused. This is a pure, self-contained module by design; the allow is removed
+// when the wiring lands.
+#![allow(dead_code)]
 
 /// Minimum encoder target bitrate (bits/s) — safety floor, never the resting
 /// state under the quality policy.
@@ -34,7 +63,16 @@ const DECREASE_COOLDOWN_S: f64 = 5.0;
 /// resolution is FIXED (live resolution change triggers the decoder
 /// port-reconfig that kills the Vestel OMX — addendum 2). See #387.
 pub struct CompatBitrateController {
+    /// Current target bitrate (bits/s), always within `[MIN_BPS, MAX_BPS]`.
     bitrate: i32,
+    /// EWMA of the observed loss fraction; initialised to 0.0 (clean link).
+    ewma_loss: f64,
+    /// Seconds elapsed since the last additive increase (gates probe-up cadence).
+    secs_since_increase: f64,
+    /// Seconds elapsed since the last multiplicative decrease (anti-thrash hold).
+    secs_since_decrease: f64,
+    /// Most recent RTT (ms). Recorded for future use; does not drive v1.
+    last_rtt_ms: f64,
 }
 
 /// Result of one [`CompatBitrateController::update`] call.
@@ -48,14 +86,63 @@ pub struct BitrateDecision {
 impl CompatBitrateController {
     /// Start at MAX (quality policy: start high).
     pub fn new() -> Self {
-        Self { bitrate: START_BPS }
+        Self {
+            bitrate: START_BPS,
+            ewma_loss: 0.0,
+            // Start "ready to probe up": if a fresh consumer immediately sees a
+            // clean link there is no decrease to wait out, and the controller is
+            // already at MAX so it cannot increase anyway. Using 0.0 here keeps
+            // the cooldown semantics symmetric with a fresh controller.
+            secs_since_increase: 0.0,
+            secs_since_decrease: 0.0,
+            last_rtt_ms: 0.0,
+        }
     }
 
-    /// Feed one observation. RED stub — no adaptation yet.
-    pub fn update(&mut self, _observed_loss: f64, _rtt_ms: f64, _dt_secs: f64) -> BitrateDecision {
+    /// Feed one observation and return the (possibly unchanged) target bitrate.
+    ///
+    /// * `observed_loss` — loss FRACTION since the last call (`0.0..=1.0`).
+    /// * `rtt_ms` — current RTT in milliseconds (recorded, not used in v1).
+    /// * `dt_secs` — seconds elapsed since the last update.
+    ///
+    /// AIMD per the module algorithm: EWMA-smooth the loss, then decrease
+    /// multiplicatively on sustained congestion or — gated by the increase
+    /// interval and the post-decrease cooldown — increase additively when the
+    /// link has headroom. `changed` is `true` only when the value actually moved.
+    pub fn update(&mut self, observed_loss: f64, rtt_ms: f64, dt_secs: f64) -> BitrateDecision {
+        self.last_rtt_ms = rtt_ms;
+
+        // 1) EWMA smoothing: ewma = (1-α)·ewma + α·observed.
+        self.ewma_loss = (1.0 - EWMA_ALPHA) * self.ewma_loss + EWMA_ALPHA * observed_loss;
+
+        // 2) Advance the timers by the elapsed interval.
+        self.secs_since_increase += dt_secs;
+        self.secs_since_decrease += dt_secs;
+
+        let before = self.bitrate;
+
+        if self.ewma_loss > LOSS_HIGH {
+            // 3) Congestion → multiplicative decrease, clamped at the floor.
+            //    May fire every tick while loss persists → exponential backoff
+            //    toward MIN (correct, per spec).
+            let decreased = ((self.bitrate as f64) * MD_FACTOR).round() as i32;
+            self.bitrate = decreased.max(MIN_BPS);
+            self.secs_since_decrease = 0.0;
+        } else if self.ewma_loss < LOSS_LOW
+            && self.secs_since_increase >= INCREASE_MIN_INTERVAL_S
+            && self.secs_since_decrease >= DECREASE_COOLDOWN_S
+            && self.bitrate < MAX_BPS
+        {
+            // 4) Headroom + cadence/anti-thrash satisfied → additive increase,
+            //    clamped at the ceiling.
+            self.bitrate = (self.bitrate + AI_STEP_BPS).min(MAX_BPS);
+            self.secs_since_increase = 0.0;
+        }
+        // 5) Otherwise: no change (boundary loss, cooldown active, or clamped).
+
         BitrateDecision {
             target_bitrate_bps: self.bitrate,
-            changed: false,
+            changed: self.bitrate != before,
         }
     }
 
@@ -179,21 +266,37 @@ mod tests {
     #[test]
     fn increase_cadence_one_step_per_ten_second_window() {
         let mut c = CompatBitrateController::new();
-        run(&mut c, HEAVY, 1.0, 200); // to MIN; cooldown armed at last decrease
-        let base = c.current_bitrate_bps();
-        // Let the 5 s decrease cooldown pass with small clean ticks below the
-        // 10 s increase interval: 4 s + 4 s = 8 s since last increase (interval
-        // resets are only on increase). Neither crosses the 10 s boundary alone.
+        run(&mut c, HEAVY, 1.0, 200); // to MIN; decrease cooldown armed at 0 s
+                                      // Drain the EWMA below LOSS_LOW with a few clean ticks. EWMA decay is
+                                      // per-TICK (0.35× each), independent of dt, so this takes ~3 ticks from
+                                      // 0.05; using dt=12 also clears the 5 s cooldown and 10 s interval, so
+                                      // the FIRST tick whose EWMA is low enough performs an increase.
+        let mut base = MIN_BPS;
+        for _ in 0..6 {
+            let d = c.update(CLEAN, RTT, 12.0);
+            if d.changed {
+                base = d.target_bitrate_bps;
+            }
+        }
+        // At least one increase happened during draining, and the last drain
+        // tick reset secs_since_increase to 0 (it stepped: 12 s ≥ 10 s, EWMA
+        // tiny). From here the 10 s interval governs the cadence.
+        assert!(base >= MIN_BPS + AI_STEP_BPS);
+        let last = c.update(CLEAN, RTT, 12.0); // 12 s ≥ 10 s → one step
+        assert!(last.changed);
+        let base = last.target_bitrate_bps;
+        // Sub-interval clean ticks: 4 s + 4 s = 8 s < 10 s → no step (proves it
+        // does NOT step every tick).
         let a = c.update(CLEAN, RTT, 4.0);
-        assert!(!a.changed); // 4 s < 10 s interval
+        assert!(!a.changed);
         let b = c.update(CLEAN, RTT, 4.0);
-        // 8 s total since start; still < 10 s interval → no step yet.
         assert!(!b.changed);
-        // Now cross 10 s: 8 + 4 = 12 s → exactly ONE step.
-        let cdec = c.update(CLEAN, RTT, 4.0);
-        assert!(cdec.changed);
-        assert_eq!(cdec.target_bitrate_bps, base + AI_STEP_BPS);
-        // Immediately after, a sub-interval tick must NOT step again.
+        assert_eq!(b.target_bitrate_bps, base);
+        // Crossing 10 s (8 + 4 = 12 s) → exactly ONE more step.
+        let stepped = c.update(CLEAN, RTT, 4.0);
+        assert!(stepped.changed);
+        assert_eq!(stepped.target_bitrate_bps, base + AI_STEP_BPS);
+        // Immediately after a step, a sub-interval tick must NOT step again.
         let d = c.update(CLEAN, RTT, 4.0);
         assert!(!d.changed);
         assert_eq!(d.target_bitrate_bps, base + AI_STEP_BPS);
