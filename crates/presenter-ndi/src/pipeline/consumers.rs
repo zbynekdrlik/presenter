@@ -36,28 +36,25 @@ use std::sync::Arc;
 use anyhow::{anyhow, Context, Result};
 use gstreamer as gst;
 use gstreamer::prelude::*;
-use gstreamer_app as gst_app;
 use gstreamer_utils::{ConsumptionLink, StreamProducer};
 use gstreamer_video as gst_video;
 use gstreamer_webrtc as gst_webrtc;
 use tokio::sync::mpsc::UnboundedSender;
 
-use super::adaptive::{BitrateDecision, CompatBitrateController, START_BPS};
+use super::adaptive::START_BPS;
+use super::compat_controller::spawn_compat_bitrate_controller;
+use super::consumer_build::{
+    add_consumer_elements, adopt_encoder_timeline, build_consumer_elements, connect_branch_signals,
+    link_consumer_elements, spawn_consumer_bus_watch,
+};
 use super::negotiation::{
     align_payload_type, await_ice_gathering, await_media_caps, negotiate_sdp,
     parse_h264_payload_type, parse_vp8_payload_type,
 };
 use super::{
-    build::{compat_raw_caps, consumer_h264_caps},
     AddConsumerError, NdiPipeline, PipelineSnapshot, SessionSnapshot, StreamProfile, WhepAnswer,
 };
 use crate::whep_session::{IceCandidate, LivenessState, WhepConnectionState, WhepSession};
-
-/// How often the per-consumer compat AIMD loop samples RTCP and steps the
-/// controller (#387). 1.5 s matches the controller's anti-thrash cadence
-/// (10 s increase interval, 5 s post-decrease cooldown) while reacting to a
-/// loss spike within a couple of ticks.
-const CONTROLLER_INTERVAL: std::time::Duration = std::time::Duration::from_millis(1500);
 
 /// RAII owner of a consumer pipeline from the moment it is assembled until it
 /// is either promoted into a stored [`WhepSession`] (via [`Self::defuse`]) or
@@ -606,403 +603,65 @@ fn build_consumer_pipeline_blocking(
     // decoding immediately instead of waiting for the GOP boundary.
     request_keyframe(producer);
 
-    // COMPAT only (#387): spawn the per-consumer AIMD bitrate loop driving THIS
-    // consumer's vp8enc target-bitrate from its OWN RTCP loss/RTT. DEFAULT
-    // consumers (shared H264 encoder) get no controller — their `encoder` is
-    // None and the branch's bitrate handle stays None.
-    if let Some(encoder) = encoder {
-        let bitrate = Arc::new(std::sync::atomic::AtomicI32::new(START_BPS));
-        branch.controller_task = Some(spawn_compat_bitrate_controller(
-            webrtcbin.clone(),
-            encoder,
-            bitrate.clone(),
-            session_id.to_string(),
-            &rt,
-        ));
-        branch.compat_target_bitrate = Some(bitrate);
-    }
+    // COMPAT only (#387): spawn the per-consumer AIMD bitrate loop (no-op for
+    // DEFAULT, whose `encoder` is None).
+    spawn_controller_if_compat(&mut branch, encoder, &webrtcbin, session_id, &rt);
 
-    // The answer must announce the send SSRC — wait for media caps first.
-    // (await_media_caps keys on the `ssrc` caps field, codec-agnostic.)
-    await_media_caps(&webrtcbin, session_id);
-    negotiate_sdp(&webrtcbin, &offer_desc)?;
-    align_payload_type(&webrtcbin, &payloader, encoding_name, session_id);
-    await_ice_gathering(&webrtcbin, session_id);
-
-    let local_desc =
-        webrtcbin.property::<gst_webrtc::WebRTCSessionDescription>("local-description");
-    branch.sdp_answer = local_desc
-        .sdp()
-        .as_text()
-        .map_err(|e| anyhow!("local-description SDP as_text failed: {e}"))?;
+    branch.sdp_answer = negotiate_and_read_answer(
+        &webrtcbin,
+        &payloader,
+        &offer_desc,
+        encoding_name,
+        session_id,
+    )?;
     Ok(branch)
 }
 
-/// Add the per-consumer elements to the consumer pipeline: `appsrc`,
-/// `[vp8enc]` (COMPAT only — #387), `payloader`, `webrtcbin`.
-fn add_consumer_elements(
-    pipeline: &gst::Pipeline,
-    appsrc: &gst_app::AppSrc,
-    encoder: Option<&gst::Element>,
-    payloader: &gst::Element,
+/// COMPAT (#387): spawn the per-consumer AIMD bitrate loop driving THIS
+/// consumer's vp8enc target-bitrate from its OWN RTCP loss/RTT, and record its
+/// task + live-bitrate handle on the branch. DEFAULT consumers (shared H264
+/// encoder) pass `encoder = None` and this is a no-op.
+fn spawn_controller_if_compat(
+    branch: &mut ConsumerBranch,
+    encoder: Option<gst::Element>,
     webrtcbin: &gst::Element,
-) -> Result<()> {
-    pipeline
-        .add_many([appsrc.upcast_ref::<gst::Element>(), payloader, webrtcbin])
-        .context("add appsrc+payloader+webrtcbin to consumer pipeline")?;
-    if let Some(encoder) = encoder {
-        pipeline
-            .add(encoder)
-            .context("add per-consumer vp8enc to consumer pipeline")?;
-    }
-    Ok(())
+    session_id: &str,
+    rt: &tokio::runtime::Handle,
+) {
+    let Some(encoder) = encoder else { return };
+    let bitrate = Arc::new(std::sync::atomic::AtomicI32::new(START_BPS));
+    branch.controller_task = Some(spawn_compat_bitrate_controller(
+        webrtcbin.clone(),
+        encoder,
+        bitrate.clone(),
+        session_id.to_string(),
+        rt,
+    ));
+    branch.compat_target_bitrate = Some(bitrate);
 }
 
-/// Link the per-consumer chain: `appsrc → [vp8enc →] payloader → webrtcbin`.
-/// For COMPAT the appsrc carries RAW I420 and the per-consumer `vp8enc`
-/// encodes it (#387); for DEFAULT the appsrc carries encoded H264 straight
-/// into the payloader. The pay→webrtc link is filtered to the codec's
-/// application/x-rtp caps (payload OMITTED — re-aligned later in
-/// `align_payload_type`).
-fn link_consumer_elements(
-    appsrc: &gst_app::AppSrc,
-    encoder: Option<&gst::Element>,
-    payloader: &gst::Element,
+/// Final negotiation step shared by both profiles: wait for the send SSRC media
+/// caps (codec-agnostic — keys on the `ssrc` caps field), create+set the
+/// answer, align the payloader's pt to the negotiated one, await ICE gathering,
+/// and return the local-description SDP text (the WHEP answer body).
+fn negotiate_and_read_answer(
     webrtcbin: &gst::Element,
+    payloader: &gst::Element,
+    offer_desc: &gst_webrtc::WebRTCSessionDescription,
     encoding_name: &str,
-) -> Result<()> {
-    let appsrc_el = appsrc.upcast_ref::<gst::Element>();
-    match encoder {
-        Some(encoder) => {
-            gst::Element::link_many([appsrc_el, encoder, payloader])
-                .context("link appsrc -> vp8enc -> payloader")?;
-        }
-        None => {
-            appsrc_el
-                .link(payloader)
-                .context("link appsrc -> payloader")?;
-        }
-    }
-    let rtp_caps = gst::Caps::builder("application/x-rtp")
-        .field("media", "video")
-        .field("encoding-name", encoding_name)
-        .field("clock-rate", 90_000i32)
-        .build();
-    payloader
-        .link_filtered(webrtcbin, &rtp_caps)
-        .context("link payloader -> webrtcbin (codec caps)")
-}
-
-/// Spawn the per-consumer adaptive-bitrate task (#387): every
-/// `CONTROLLER_INTERVAL` it reads this consumer's webrtcbin RTCP
-/// remote-inbound stats (the peer's view of OUR stream — packets-lost/-received
-/// deltas → loss fraction, round-trip-time), feeds them to the per-consumer
-/// `CompatBitrateController` AIMD step, and — when the decision moves — sets
-/// the consumer's own `vp8enc` `target-bitrate` LIVE (vp8enc takes bits/s i32;
-/// no caps change → NO decoder port-reconfig, so the Vestel OMX is never
-/// killed — addendum 2). The latest value is mirrored into `bitrate` so
-/// `snapshot` can read it. The task never ends on its own; the explicit abort
-/// (by `ConsumerBranch`/`WhepSession` Drop) is its only exit.
-///
-/// get-stats blocks on a promise, so each sample runs in `spawn_blocking` off
-/// the async runtime (never blocking this task). The DECISION logic is unit-
-/// tested in `adaptive.rs` (13 tests); this WIRING (stat-read → controller →
-/// set target-bitrate) is proven by the lab tc-netem functional check, not a
-/// unit test (no live RTCP in unit tests).
-fn spawn_compat_bitrate_controller(
-    webrtcbin: gst::Element,
-    encoder: gst::Element,
-    bitrate: Arc<std::sync::atomic::AtomicI32>,
-    session_id: String,
-    rt: &tokio::runtime::Handle,
-) -> tokio::task::JoinHandle<()> {
-    rt.spawn(async move {
-        let mut controller = CompatBitrateController::new();
-        // Mirror the controller's start value (== the vp8enc's start
-        // target-bitrate) so the snapshot reflects it before the first tick.
-        bitrate.store(
-            controller.current_bitrate_bps(),
-            std::sync::atomic::Ordering::Relaxed,
-        );
-        let mut prev = LossSample::default();
-        let mut interval = tokio::time::interval(CONTROLLER_INTERVAL);
-        // Skip the immediate first tick — wait one interval so RTCP has a chance
-        // to arrive before the first observation.
-        interval.tick().await;
-        loop {
-            interval.tick().await;
-            let wb = webrtcbin.clone();
-            let Ok(sample) = tokio::task::spawn_blocking(move || read_loss_sample(&wb)).await
-            else {
-                continue; // spawn_blocking join error — try again next tick.
-            };
-            let (observed_loss, dt) = prev.delta(&sample);
-            prev = sample.clone();
-            let decision: BitrateDecision = controller.update(observed_loss, sample.rtt_ms, dt);
-            tracing::debug!(
-                session_id = %session_id,
-                observed_loss,
-                rtt_ms = sample.rtt_ms,
-                target_bitrate_bps = decision.target_bitrate_bps,
-                changed = decision.changed,
-                "compat AIMD tick"
-            );
-            if decision.changed {
-                // Live, no caps change → no Vestel OMX port-reconfig.
-                encoder.set_property("target-bitrate", decision.target_bitrate_bps);
-            }
-            bitrate.store(
-                decision.target_bitrate_bps,
-                std::sync::atomic::Ordering::Relaxed,
-            );
-        }
-    })
-}
-
-/// Put a consumer pipeline on the ENCODER pipeline's clock + base-time so the
-/// producer's forwarded buffer timestamps (PTS + segment, preserved by
-/// StreamProducer's push_sample) are valid on this pipeline's timeline.
-/// set_start_time(NONE) stops the PLAYING transition from re-selecting a
-/// base-time. This mirrors webrtcsink's session-pipeline setup verbatim.
-fn adopt_encoder_timeline(
-    consumer_pipeline: &gst::Pipeline,
-    enc_clock: Option<gst::Clock>,
-    enc_base_time: Option<gst::ClockTime>,
     session_id: &str,
-) {
-    if let Some(clock) = &enc_clock {
-        consumer_pipeline.use_clock(Some(clock));
-    }
-    consumer_pipeline.set_start_time(gst::ClockTime::NONE);
-    match enc_base_time {
-        Some(base) => consumer_pipeline.set_base_time(base),
-        None => {
-            // Defensive: should not happen (WHEP POSTs are gated on the encoder
-            // pipeline being Streaming). Surface it loudly — timestamps would
-            // be on the wrong timeline.
-            tracing::warn!(
-                session_id = %session_id,
-                "encoder pipeline has no base-time; consumer timeline may be wrong"
-            );
-        }
-    }
-}
+) -> Result<String> {
+    await_media_caps(webrtcbin, session_id);
+    negotiate_sdp(webrtcbin, offer_desc)?;
+    align_payload_type(webrtcbin, payloader, encoding_name, session_id);
+    await_ice_gathering(webrtcbin, session_id);
 
-/// Spawn the per-consumer-pipeline bus watch: services `Latency` messages with
-/// `recalculate_latency()` (via `call_async`, exactly like webrtcsink) and
-/// logs pipeline errors. The task never ends on its own (it holds the bus
-/// alive); the explicit abort — by `ConsumerBranch`/`WhepSession` Drop — is
-/// its ONLY exit.
-fn spawn_consumer_bus_watch(
-    consumer_pipeline: &gst::Pipeline,
-    session_id: &str,
-    rt: &tokio::runtime::Handle,
-) -> Result<tokio::task::JoinHandle<()>> {
-    let bus = consumer_pipeline
-        .bus()
-        .ok_or_else(|| anyhow!("consumer pipeline has no bus"))?;
-    let pipeline_weak = consumer_pipeline.downgrade();
-    let sid = session_id.to_string();
-    Ok(rt.spawn(async move {
-        use futures_util::StreamExt;
-        let mut stream = bus.stream();
-        while let Some(msg) = stream.next().await {
-            match msg.view() {
-                gst::MessageView::Latency(_) => {
-                    if let Some(pipeline) = pipeline_weak.upgrade() {
-                        // call_async: run on a GStreamer worker thread, never
-                        // blocking this task or risking a state-lock deadlock.
-                        pipeline.call_async(|p| {
-                            let _ = p.recalculate_latency();
-                        });
-                    }
-                }
-                gst::MessageView::Error(err) => {
-                    tracing::warn!(
-                        session_id = %sid,
-                        error = %err.error(),
-                        debug = ?err.debug(),
-                        "consumer pipeline error (client watchdog will reconnect)"
-                    );
-                }
-                _ => {}
-            }
-        }
-    }))
-}
-
-/// Build the per-consumer elements: an `appsrc` (caps matching the requested
-/// profile branch's producer appsink — byte-stream/AU H264 for Default, RAW
-/// I420 854×480 for Compat), an OPTIONAL per-consumer `vp8enc`
-/// (`venc_<session>`) for Compat ONLY (#387 — DEFAULT shares the H264
-/// encoder), a per-consumer payloader (`rtph264pay` / `rtpvp8pay`) pre-seated
-/// on the offer's dynamic payload type `pt`, and a `webrtcbin`.
-///
-/// Returns `(appsrc, Option<encoder>, payloader, webrtcbin)`. The encoder is
-/// `Some` for COMPAT (its `target-bitrate` is driven per-TV by
-/// `CompatBitrateController`) and `None` for DEFAULT.
-#[allow(clippy::type_complexity)]
-pub(super) fn build_consumer_elements(
-    session_id: &str,
-    profile: StreamProfile,
-    pt: u32,
-) -> Result<(
-    gst_app::AppSrc,
-    Option<gst::Element>,
-    gst::Element,
-    gst::Element,
-)> {
-    // Initial caps match the profile branch's producer appsink caps filter so
-    // the very first forwarded sample agrees (`consumer_h264_caps` /
-    // `compat_raw_caps` pin BOTH sides of each bridge). Compat now carries RAW
-    // I420 (the consumer encodes VP8 itself — #387).
-    let bridge_caps = match profile {
-        StreamProfile::Default => consumer_h264_caps(),
-        StreamProfile::Compat => compat_raw_caps(),
-    };
-    let appsrc = gst_app::AppSrc::builder()
-        .name(format!("src_{session_id}"))
-        .caps(&bridge_caps)
-        .build();
-    // CRITICAL ORDER: apply the consumer configuration (is-live=true,
-    // format=time, leaky downstream, 500ms queue bound) NOW — BEFORE the
-    // pipeline transitions to PLAYING. basesrc latches `live_running` only at
-    // the PAUSED→PLAYING transition and ONLY if the source is already live;
-    // if `is_live` flips to true afterwards (which is what happened when
-    // StreamProducer::add_consumer — which calls this internally — ran after
-    // PLAYING), the appsrc's task blocks in "live source waiting for running
-    // state" FOREVER and not a single buffer is ever pushed downstream —
-    // connected, but black. add_consumer re-applies the same configuration
-    // later, which is a harmless no-op. Holds identically for the RAW compat
-    // appsrc.
-    StreamProducer::configure_consumer(&appsrc);
-
-    // COMPAT: this consumer's OWN vp8enc (#387) so its bitrate adapts per-TV.
-    let encoder = match profile {
-        StreamProfile::Default => None,
-        StreamProfile::Compat => Some(build_compat_vp8_encoder(session_id)?),
-    };
-
-    // Per-consumer payloader so each webrtcbin negotiates its own dynamic
-    // payload type with its browser (#336); pre-seated on the browser's
-    // offered pt for the profile's codec.
-    let payloader = match profile {
-        StreamProfile::Default => build_h264_payloader(session_id, pt)?,
-        StreamProfile::Compat => build_vp8_payloader(session_id, pt)?,
-    };
-
-    let webrtcbin = gst::ElementFactory::make("webrtcbin")
-        .name(session_id)
-        // max-bundle: audio + video on ONE ICE/DTLS transport, matching the
-        // browser's `a=group:BUNDLE` offer (default `none` hangs the 2nd DTLS
-        // handshake → connecting forever → black).
-        .property_from_str("bundle-policy", "max-bundle")
-        // Explicit jitterbuffer/session latency (200 ms is webrtcbin's own
-        // default; set explicitly so the value is visible and stable).
-        .property("latency", 200u32)
-        .build()
-        .context("build webrtcbin")?;
-
-    Ok((appsrc, encoder, payloader, webrtcbin))
-}
-
-/// Build ONE compat consumer's `vp8enc` ("venc_<session>") with libwebrtc-
-/// parity realtime tuning (#387). Each weak TV gets its OWN encoder so its
-/// `target-bitrate` is driven independently by that consumer's
-/// `CompatBitrateController` from its OWN RTCP loss/RTT — a SHARED encoder
-/// could only serve the worst TV's bitrate to all of them. STARTS HIGH at
-/// `START_BPS` (900k) per the quality policy (reduce only on measured loss).
-/// Property types verified via gst-inspect-1.0 and locked by
-/// `compat_consumer_has_per_consumer_adaptive_vp8enc`:
-///
-/// - `deadline=1` (µs/frame, Integer64): libvpx realtime mode.
-/// - `cpu-used=8`: fastest realtime encode preset (quality ↓, speed ↑).
-/// - `end-usage=cbr` + `target-bitrate=START_BPS` (bits/sec): constant-bitrate
-///   like libwebrtc's rate controller; the controller sets it live thereafter.
-/// - `keyframe-max-dist=240`: GOP parity with the H264 branch; joins are
-///   served by `request_keyframe`, not scheduled keyframe pulses.
-/// - `token-partitions="4"`: partitioned token coding lets the TV's libvpx
-///   decoder spread entropy decode across its 4 cores (the VDO.Ninja delta).
-/// - `threads=4`: one encode thread per partition on the server.
-/// - `error-resilient=default` (flags): frames stay decodable after loss.
-/// - `lag-in-frames=0`: zero lookahead — no encoder-side frame delay.
-fn build_compat_vp8_encoder(session_id: &str) -> Result<gst::Element> {
-    gst::ElementFactory::make("vp8enc")
-        .name(format!("venc_{session_id}"))
-        .property("deadline", 1i64)
-        .property("cpu-used", 8i32)
-        .property_from_str("end-usage", "cbr")
-        .property("target-bitrate", START_BPS)
-        .property("keyframe-max-dist", 240i32)
-        .property_from_str("token-partitions", "4")
-        .property("threads", 4i32)
-        .property_from_str("error-resilient", "default")
-        .property("lag-in-frames", 0i32)
-        .build()
-        .with_context(|| format!("build per-consumer vp8enc venc_{session_id}"))
-}
-
-/// Per-consumer `rtph264pay`. config-interval=-1 resends SPS/PPS before every
-/// IDR; aggregate-mode=zero-latency is webrtcsink parity (aggregate NALs only
-/// until a VCL unit is complete — never hold a frame's data back for packing
-/// efficiency).
-fn build_h264_payloader(session_id: &str, pt: u32) -> Result<gst::Element> {
-    gst::ElementFactory::make("rtph264pay")
-        .name(format!("pay_{session_id}"))
-        .property("config-interval", -1i32)
-        .property("pt", pt)
-        .property_from_str("aggregate-mode", "zero-latency")
-        .build()
-        .context("build rtph264pay")
-}
-
-/// Per-consumer `rtpvp8pay` for compat consumers. Only the pt needs seating
-/// — VP8 has no SPS/PPS-style config to re-insert and the payloader
-/// fragments each frame (including its token partitions) per RFC 7741 as-is.
-fn build_vp8_payloader(session_id: &str, pt: u32) -> Result<gst::Element> {
-    gst::ElementFactory::make("rtpvp8pay")
-        .name(format!("pay_{session_id}"))
-        .property("pt", pt)
-        .build()
-        .context("build rtpvp8pay")
-}
-
-/// Connect the per-consumer webrtcbin signals: on-ice-candidate (forwards
-/// candidates to `ice_tx`) and notify::connection-state (updates the shared
-/// `connection_state`). Both fire from a GStreamer streaming thread.
-fn connect_branch_signals(
-    webrtcbin: &gst::Element,
-    ice_tx: UnboundedSender<IceCandidate>,
-    connection_state: Arc<std::sync::Mutex<WhepConnectionState>>,
-    session_id: String,
-) {
-    // on-ice-candidate signature: void(webrtcbin, sdp_mline_index: u32, candidate: &str)
-    webrtcbin.connect("on-ice-candidate", false, move |args| {
-        let sdp_mline_index = args.get(1).and_then(|v| v.get::<u32>().ok()).unwrap_or(0);
-        let candidate = args
-            .get(2)
-            .and_then(|v| v.get::<String>().ok())
-            .unwrap_or_default();
-        let _ = ice_tx.send(IceCandidate {
-            sdp_mline_index,
-            candidate,
-        });
-        None
-    });
-
-    // notify::connection-state fires from a GStreamer streaming thread (raw
-    // std::thread) — use std::sync::Mutex directly. On poison recover the guard.
-    webrtcbin.connect_notify(Some("connection-state"), move |webrtcbin, _pspec| {
-        let gst_state =
-            webrtcbin.property::<gst_webrtc::WebRTCPeerConnectionState>("connection-state");
-        let our_state = WhepConnectionState::from(gst_state);
-        *connection_state.lock().unwrap_or_else(|p| p.into_inner()) = our_state;
-        tracing::debug!(
-            session_id = %session_id,
-            state = ?our_state,
-            "WHEP consumer connection-state changed"
-        );
-    });
+    let local_desc =
+        webrtcbin.property::<gst_webrtc::WebRTCSessionDescription>("local-description");
+    local_desc
+        .sdp()
+        .as_text()
+        .map_err(|e| anyhow!("local-description SDP as_text failed: {e}"))
 }
 
 /// Ask the producer's branch for an immediate keyframe — an IDR with SPS/PPS
@@ -1022,138 +681,6 @@ pub(super) fn request_keyframe(producer: &StreamProducer) {
             tracing::warn!("force-keyunit event was not handled upstream");
         }
     }
-}
-
-/// One RTCP-loss observation for the per-consumer AIMD loop (#387): the peer's
-/// cumulative packets-lost, the count of packets the peer has acknowledged
-/// (extended-highest-seq from the RR block — a proxy for packets RECEIVED+LOST
-/// the peer has seen), the current RTT (ms), and a monotonic capture time so
-/// the loop derives a real `dt`. Cumulative counters → the controller wants a
-/// per-interval FRACTION, so [`LossSample::delta`] differences two samples.
-#[derive(Clone)]
-struct LossSample {
-    /// Cumulative packets the peer reported lost (`remote-inbound-rtp`
-    /// `packets-lost`), or the RR block's `rb-packetslost` fallback.
-    packets_lost: i64,
-    /// Extended highest sequence number the peer has received
-    /// (`rb-exthighestseq`) — advances by the count of packets the peer has
-    /// seen (received + lost) since the stream start.
-    ext_highest_seq: u64,
-    /// Current round-trip-time (ms); 0.0 when no RR is present yet.
-    rtt_ms: f64,
-    /// When this sample was captured (for the controller's `dt_secs`).
-    captured: std::time::Instant,
-}
-
-impl Default for LossSample {
-    fn default() -> Self {
-        Self {
-            packets_lost: 0,
-            ext_highest_seq: 0,
-            rtt_ms: 0.0,
-            captured: std::time::Instant::now(),
-        }
-    }
-}
-
-impl LossSample {
-    /// Loss FRACTION and elapsed seconds between `self` (older) and `next`
-    /// (newer). `observed_loss = lost_delta / max(1, seq_delta)`, clamped to
-    /// `0.0..=1.0` (the denominator is the packets the peer saw in the window:
-    /// `ext_highest_seq` advances by received+lost). A non-advancing or
-    /// regressing sequence (reconnect, stats reset, or no fresh RR) yields a
-    /// clean 0.0 observation — never a spurious decrease.
-    fn delta(&self, next: &LossSample) -> (f64, f64) {
-        let dt = next
-            .captured
-            .saturating_duration_since(self.captured)
-            .as_secs_f64()
-            .max(0.001);
-        let lost_delta = (next.packets_lost - self.packets_lost).max(0);
-        let seq_delta = next.ext_highest_seq.saturating_sub(self.ext_highest_seq);
-        let observed_loss = if seq_delta == 0 {
-            0.0
-        } else {
-            (lost_delta as f64 / seq_delta as f64).clamp(0.0, 1.0)
-        };
-        (observed_loss, dt)
-    }
-}
-
-/// Read one [`LossSample`] from a webrtcbin's RTCP remote-inbound stats (#387).
-/// Reuses the `get-stats` promise idiom of [`rtcp_remote_inbound`] /
-/// `reaper::peer_rr_fingerprint`: the peer's RR carries `round-trip-time` +
-/// `packets-lost` in `remote-inbound-rtp`, and the nested
-/// `gst-rtpsource-stats` RR block carries `rb-exthighestseq` (packets the peer
-/// has seen) + `rb-packetslost`. Returns a default (zero) sample when no RR has
-/// arrived yet or the promise times out — a clean observation, so a
-/// not-yet-connected consumer never triggers a decrease.
-fn read_loss_sample(webrtcbin: &gst::Element) -> LossSample {
-    let captured = std::time::Instant::now();
-    let (tx, rx) = std::sync::mpsc::channel();
-    let promise = gst::Promise::with_change_func(move |reply| {
-        if let Ok(Some(stats)) = reply {
-            let _ = tx.send(stats.to_owned());
-        }
-    });
-    webrtcbin.emit_by_name::<()>("get-stats", &[&None::<gst::Pad>, &promise]);
-    let Ok(stats) = rx.recv_timeout(std::time::Duration::from_millis(500)) else {
-        return LossSample {
-            captured,
-            ..Default::default()
-        };
-    };
-    let mut sample = LossSample {
-        captured,
-        ..Default::default()
-    };
-    for (_field, value) in stats.iter() {
-        let Ok(s) = value.get::<gst::Structure>() else {
-            continue;
-        };
-        if s.has_field("round-trip-time") {
-            if let Ok(rtt) = s.get::<f64>("round-trip-time") {
-                sample.rtt_ms = rtt * 1000.0;
-            }
-            if let Some(lost) = stats_i64(&s, "packets-lost") {
-                sample.packets_lost = lost;
-            }
-        }
-        if let Ok(nested) = s.get::<gst::Structure>("gst-rtpsource-stats") {
-            if nested.get::<bool>("have-rb").unwrap_or(false) {
-                if let Some(seq) = stats_u64(&nested, "rb-exthighestseq") {
-                    sample.ext_highest_seq = seq;
-                }
-                // Prefer the RR block's packets-lost when the top-level field
-                // is absent on this GStreamer version.
-                if sample.packets_lost == 0 {
-                    if let Some(lost) = stats_i64(&nested, "rb-packetslost") {
-                        sample.packets_lost = lost;
-                    }
-                }
-            }
-        }
-    }
-    sample
-}
-
-/// Read a numeric stats field as i64, tolerating i64/u64/i32/u32 across
-/// GStreamer versions (webrtcbin uses different reprs for different counters).
-fn stats_i64(s: &gst::Structure, field: &str) -> Option<i64> {
-    s.get::<i64>(field)
-        .ok()
-        .or_else(|| s.get::<u64>(field).ok().map(|v| v as i64))
-        .or_else(|| s.get::<i32>(field).ok().map(i64::from))
-        .or_else(|| s.get::<u32>(field).ok().map(i64::from))
-}
-
-/// Read a numeric stats field as u64, tolerating the u64/i64/u32 representation
-/// webrtcbin uses across GStreamer versions (mirrors `reaper::stats_u64`).
-fn stats_u64(s: &gst::Structure, field: &str) -> Option<u64> {
-    s.get::<u64>(field)
-        .ok()
-        .or_else(|| s.get::<i64>(field).ok().map(|v| v.max(0) as u64))
-        .or_else(|| s.get::<u32>(field).ok().map(u64::from))
 }
 
 /// Pull RTCP receiver-report stats (the browser's view of the link) from a

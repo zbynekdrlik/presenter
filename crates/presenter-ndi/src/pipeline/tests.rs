@@ -293,7 +293,7 @@ impl NdiPipeline {
     ) -> Result<(), AddConsumerError> {
         self.reap_and_check_cap().await?;
         let (appsrc, encoder, payloader, webrtcbin) =
-            super::consumers::build_consumer_elements(session_id, StreamProfile::Compat, 96)
+            super::consumer_build::build_consumer_elements(session_id, StreamProfile::Compat, 96)
                 .map_err(AddConsumerError::Other)?;
         let encoder = encoder.expect("compat consumer must own a vp8enc (#387)");
         let consumer_pipeline = gst::Pipeline::with_name(&format!("consumer_{session_id}"));
@@ -959,7 +959,7 @@ fn encoder_output_is_pinned_to_constrained_baseline() {
 fn consumer_payloader_uses_zero_latency_aggregation() {
     super::super::init().expect("gst init");
     let (_appsrc, _encoder, payloader, _webrtcbin) =
-        super::consumers::build_consumer_elements("test-agg", StreamProfile::Default, 102)
+        super::consumer_build::build_consumer_elements("test-agg", StreamProfile::Default, 102)
             .expect("consumer elements build");
     let value = payloader.property_value("aggregate-mode");
     let (_, enum_value) =
@@ -978,7 +978,7 @@ fn consumer_payloader_uses_zero_latency_aggregation() {
 fn compat_consumer_elements_payload_vp8() {
     super::super::init().expect("gst init");
     let (appsrc, _encoder, payloader, _webrtcbin) =
-        super::consumers::build_consumer_elements("test-vp8", StreamProfile::Compat, 96)
+        super::consumer_build::build_consumer_elements("test-vp8", StreamProfile::Compat, 96)
             .expect("consumer elements build");
     assert_eq!(
         payloader.factory().map(|f| f.name().to_string()).as_deref(),
@@ -1017,7 +1017,7 @@ fn compat_consumer_has_per_consumer_adaptive_vp8enc() {
 
     // Default profile: NO encoder in the consumer (shared H264 producer — #336).
     let (_appsrc, default_enc, _pay, _wrtc) =
-        super::consumers::build_consumer_elements("test-h264", StreamProfile::Default, 102)
+        super::consumer_build::build_consumer_elements("test-h264", StreamProfile::Default, 102)
             .expect("default consumer elements build");
     assert!(
         default_enc.is_none(),
@@ -1027,7 +1027,7 @@ fn compat_consumer_has_per_consumer_adaptive_vp8enc() {
 
     // Compat profile: its OWN vp8enc, named venc_<session>, realtime-tuned.
     let (_appsrc, encoder, _pay, _wrtc) =
-        super::consumers::build_consumer_elements("test-vp8", StreamProfile::Compat, 96)
+        super::consumer_build::build_consumer_elements("test-vp8", StreamProfile::Compat, 96)
             .expect("compat consumer elements build");
     let encoder = encoder.expect("compat consumers MUST own a per-consumer vp8enc (#387)");
     assert_eq!(

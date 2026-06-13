@@ -65,6 +65,8 @@ use crate::whep_session::{IceCandidate, WhepConnectionState, WhepSession};
 
 mod adaptive;
 mod build;
+mod compat_controller;
+mod consumer_build;
 mod consumers;
 mod lifecycle;
 mod negotiation;
