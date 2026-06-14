@@ -107,7 +107,7 @@
   var NO_DECODE_FALLBACK_MS = 15000; // connected, never a frame -> profile toggle (once)
   var PROVEN_FRAMES = 100;           // frames that prove a mode...
   var PROVEN_WINDOW_MS = 10000;      // ...iff they land within 10s of the first (>=10fps)
-  var JITTER_BUFFER_MS = 150;       // receiver buffer slack — absorbs arrival jitter so playout never underruns (smoothness > a little latency, per quality policy)
+  var JITTER_BUFFER_MS = 0;         // receiver buffer slack (ms). 0 = minimal (lowest latency); raise to absorb arrival jitter on jittery paths. On a wired LAN 0 stays smooth; 150 forced buffer-building stalls on some TVs.
   var BEACON_TICK_MS = 15000;
   var BEACON_FRAME_PERIOD = 300;
   var SOURCE_POLL_MS = 5000;
