@@ -107,11 +107,13 @@ impl NdiPipeline {
             ])
             .context("add elements")?;
 
-        // DIAGNOSTIC (temporary): measure RAW NDI frame arrival cadence at the
-        // videoconvert sink — BEFORE the tee/encoders/fanout. A ~400ms gap here
-        // every ~15-20s proves the periodic stutter every consumer sees
-        // originates at the NDI SOURCE (Resolume), upstream of everything we do.
-        install_ndi_cadence_probe(&videoconvert);
+        // DIAGNOSTIC (temporary): bracket the encode path to locate the periodic
+        // ~400ms hitch every consumer sees. videoconvert sink = raw NDI arrival
+        // (already proven smooth); appsink = post-encode H264 output (pre-fanout).
+        // A gap at appsink but not at videoconvert ⇒ the iGPU encoder; a gap at
+        // neither ⇒ per-consumer delivery / WebRTC / TV decode.
+        install_gap_probe(&videoconvert, "sink", "ndi-arrival");
+        install_gap_probe(appsink.upcast_ref::<gst::Element>(), "sink", "h264-encoder-out");
 
         ndisrc.link(&ndisrcdemux).context("link ndisrc -> demux")?;
         // videoconvert → videoscale → capsfilter(NV12, ≤720p) → tee. Both
@@ -174,22 +176,18 @@ impl NdiPipeline {
     }
 }
 
-/// DIAGNOSTIC (temporary): log raw NDI frame inter-arrival gaps > 250ms at the
-/// videoconvert sink pad. Locates whether the periodic ~400ms present-gap every
-/// consumer sees originates upstream at the NDI source (Resolume).
-fn install_ndi_cadence_probe(videoconvert: &gst::Element) {
+/// DIAGNOSTIC (temporary): log inter-buffer wall-clock gaps > 250ms at a named
+/// pad. Used to localize the periodic ~400ms present-gap every consumer sees.
+fn install_gap_probe(element: &gst::Element, pad_name: &str, label: &'static str) {
     let last = std::sync::Arc::new(std::sync::Mutex::new(None::<std::time::Instant>));
-    if let Some(pad) = videoconvert.static_pad("sink") {
+    if let Some(pad) = element.static_pad(pad_name) {
         pad.add_probe(gst::PadProbeType::BUFFER, move |_pad, _info| {
             let now = std::time::Instant::now();
             let mut guard = last.lock().unwrap_or_else(|p| p.into_inner());
             if let Some(prev) = *guard {
                 let gap = now.duration_since(prev).as_millis() as u64;
                 if gap > 250 {
-                    tracing::warn!(
-                        ndi_arrival_gap_ms = gap,
-                        "NDI source frame-arrival gap >250ms — upstream cadence hitch"
-                    );
+                    tracing::warn!(probe = label, gap_ms = gap, "pipeline inter-buffer gap >250ms");
                 }
             }
             *guard = Some(now);
