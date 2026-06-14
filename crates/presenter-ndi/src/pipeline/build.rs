@@ -107,6 +107,12 @@ impl NdiPipeline {
             ])
             .context("add elements")?;
 
+        // DIAGNOSTIC (temporary): measure RAW NDI frame arrival cadence at the
+        // videoconvert sink — BEFORE the tee/encoders/fanout. A ~400ms gap here
+        // every ~15-20s proves the periodic stutter every consumer sees
+        // originates at the NDI SOURCE (Resolume), upstream of everything we do.
+        install_ndi_cadence_probe(&videoconvert);
+
         ndisrc.link(&ndisrcdemux).context("link ndisrc -> demux")?;
         // videoconvert → videoscale → capsfilter(NV12, ≤720p) → tee. Both
         // encode branches are linked HERE, before any state change — a tee
@@ -165,6 +171,30 @@ impl NdiPipeline {
             producer,
             producer_compat,
         })
+    }
+}
+
+/// DIAGNOSTIC (temporary): log raw NDI frame inter-arrival gaps > 250ms at the
+/// videoconvert sink pad. Locates whether the periodic ~400ms present-gap every
+/// consumer sees originates upstream at the NDI source (Resolume).
+fn install_ndi_cadence_probe(videoconvert: &gst::Element) {
+    let last = std::sync::Arc::new(std::sync::Mutex::new(None::<std::time::Instant>));
+    if let Some(pad) = videoconvert.static_pad("sink") {
+        pad.add_probe(gst::PadProbeType::BUFFER, move |_pad, _info| {
+            let now = std::time::Instant::now();
+            let mut guard = last.lock().unwrap_or_else(|p| p.into_inner());
+            if let Some(prev) = *guard {
+                let gap = now.duration_since(prev).as_millis() as u64;
+                if gap > 250 {
+                    tracing::warn!(
+                        ndi_arrival_gap_ms = gap,
+                        "NDI source frame-arrival gap >250ms — upstream cadence hitch"
+                    );
+                }
+            }
+            *guard = Some(now);
+            gst::PadProbeReturn::Ok
+        });
     }
 }
 
