@@ -107,6 +107,7 @@
   var NO_DECODE_FALLBACK_MS = 15000; // connected, never a frame -> profile toggle (once)
   var PROVEN_FRAMES = 100;           // frames that prove a mode...
   var PROVEN_WINDOW_MS = 10000;      // ...iff they land within 10s of the first (>=10fps)
+  var JITTER_BUFFER_MS = 150;       // receiver buffer slack — absorbs arrival jitter so playout never underruns (smoothness > a little latency, per quality policy)
   var BEACON_TICK_MS = 15000;
   var BEACON_FRAME_PERIOD = 300;
   var SOURCE_POLL_MS = 5000;
@@ -317,11 +318,15 @@
     pc.ontrack = function (ev) {
       if (!ev.streams || !ev.streams[0]) return;
       try {
-        // Profile-dependent buffering (#387): only strong/default-profile
-        // clients pin the jitter buffer; compat (weak device) keeps the
-        // browser's adaptive buffer - its only shock absorber.
-        if (!compat) ev.receiver.jitterBufferTarget = 0.0;
-        ev.receiver.playoutDelayHint = 0.0;
+        // SMALL jitter buffer (NOT zero). jitterBufferTarget=0 minimized latency
+        // but left the playout with no slack: a frame arriving slightly late
+        // underran the empty buffer → a ~400ms stall-then-catchup every ~20s
+        // (the residual stutter, present on EVERY TV — decode stayed at full fps,
+        // only PRESENTATION hitched). ~150ms absorbs LAN/encoder jitter while
+        // staying lip-sync-tight, exactly the balance libwebrtc/VDO.Ninja strike.
+        // Applied to BOTH tiers — the weak compat TVs need the slack most.
+        ev.receiver.jitterBufferTarget = JITTER_BUFFER_MS;
+        ev.receiver.playoutDelayHint = JITTER_BUFFER_MS / 1000;
       } catch (e) { /* optional knobs */ }
       // muted PROPERTY before srcObject, or Chrome's autoplay policy blocks play().
       video.muted = true;
