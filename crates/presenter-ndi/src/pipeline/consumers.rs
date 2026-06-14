@@ -668,15 +668,6 @@ pub(super) fn build_consumer_elements(
         .name(format!("src_{session_id}"))
         .caps(&bridge_caps)
         .build();
-    // DIAGNOSTIC (temporary): gap probe on the per-consumer appsrc OUTPUT
-    // (post-fanout). A >250ms gap here ⇒ the StreamProducer fanout stalls
-    // (server-side, fixable); smooth here while TVs still blip ⇒ network/TV
-    // jitter-buffer/decode (downstream of us).
-    crate::pipeline::build::install_gap_probe(
-        appsrc.upcast_ref::<gst::Element>(),
-        "src",
-        "appsrc-out",
-    );
     // CRITICAL ORDER: apply the consumer configuration (is-live=true,
     // format=time, leaky downstream, 500ms queue bound) NOW — BEFORE the
     // pipeline transitions to PLAYING. basesrc latches `live_running` only at

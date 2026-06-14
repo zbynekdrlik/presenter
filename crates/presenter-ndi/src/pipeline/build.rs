@@ -107,14 +107,6 @@ impl NdiPipeline {
             ])
             .context("add elements")?;
 
-        // DIAGNOSTIC (temporary): bracket the encode path to locate the periodic
-        // ~400ms hitch every consumer sees. videoconvert sink = raw NDI arrival
-        // (already proven smooth); appsink = post-encode H264 output (pre-fanout).
-        // A gap at appsink but not at videoconvert ⇒ the iGPU encoder; a gap at
-        // neither ⇒ per-consumer delivery / WebRTC / TV decode.
-        install_gap_probe(&videoconvert, "sink", "ndi-arrival");
-        install_gap_probe(appsink.upcast_ref::<gst::Element>(), "sink", "h264-encoder-out");
-
         ndisrc.link(&ndisrcdemux).context("link ndisrc -> demux")?;
         // videoconvert → videoscale → capsfilter(NV12, ≤720p) → tee. Both
         // encode branches are linked HERE, before any state change — a tee
@@ -178,6 +170,7 @@ impl NdiPipeline {
 
 /// DIAGNOSTIC (temporary): log inter-buffer wall-clock gaps > 250ms at a named
 /// pad. Used to localize the periodic ~400ms present-gap every consumer sees.
+#[allow(dead_code)]
 pub(super) fn install_gap_probe(element: &gst::Element, pad_name: &str, label: &'static str) {
     let last = std::sync::Arc::new(std::sync::Mutex::new(None::<std::time::Instant>));
     if let Some(pad) = element.static_pad(pad_name) {
@@ -455,13 +448,13 @@ fn build_compat_h264_encoder(encoder_name: &str) -> Result<gst::Element> {
     match encoder_name {
         "vah264enc" => {
             b = b
-                .property("key-int-max", 240u32)
+                .property("key-int-max", 3000u32)
                 .property("target-usage", 6u32)
                 .property("bitrate", COMPAT_BITRATE_KBPS);
         }
         "nvh264enc" => {
             b = b
-                .property("gop-size", 240i32)
+                .property("gop-size", 3000i32)
                 .property("zerolatency", true)
                 .property("bitrate", COMPAT_BITRATE_KBPS);
         }
@@ -469,7 +462,7 @@ fn build_compat_h264_encoder(encoder_name: &str) -> Result<gst::Element> {
             b = b
                 .property_from_str("tune", "zerolatency")
                 .property_from_str("speed-preset", "superfast")
-                .property("key-int-max", 240u32)
+                .property("key-int-max", 3000u32)
                 .property("bitrate", COMPAT_BITRATE_KBPS);
         }
         _ => {}
@@ -575,13 +568,13 @@ fn build_encoder(encoder_name: &str) -> Result<gst::Element> {
             // consumers::request_keyframe); loss recovery stays PLI-driven.
             // target-usage=6: faster encode on the prod N100 (default 4).
             encoder_builder = encoder_builder
-                .property("key-int-max", 240u32)
+                .property("key-int-max", 3000u32)
                 .property("target-usage", 6u32)
                 .property("bitrate", DEFAULT_BITRATE_KBPS);
         }
         "nvh264enc" => {
             encoder_builder = encoder_builder
-                .property("gop-size", 240i32)
+                .property("gop-size", 3000i32)
                 .property("zerolatency", true)
                 .property("bitrate", DEFAULT_BITRATE_KBPS);
         }
@@ -589,7 +582,7 @@ fn build_encoder(encoder_name: &str) -> Result<gst::Element> {
             encoder_builder = encoder_builder
                 .property_from_str("tune", "zerolatency")
                 .property_from_str("speed-preset", "superfast")
-                .property("key-int-max", 240u32)
+                .property("key-int-max", 3000u32)
                 .property("bitrate", DEFAULT_BITRATE_KBPS);
         }
         _ => {
