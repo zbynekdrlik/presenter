@@ -158,6 +158,18 @@ impl NdiPipeline {
     ) -> Result<WhepAnswer, AddConsumerError> {
         self.reap_and_check_cap().await?;
 
+        // HW_ONLY (see build.rs): no software VP8 branch exists — every
+        // consumer is served the hardware H264 producer, so the per-consumer
+        // pipeline MUST use the H264 payloader. Override the requested profile
+        // to Default here so producer selection AND payloader selection both
+        // resolve to H264; a browser that asked for ?profile=compat simply
+        // negotiates H264 from its offer (every browser offers H264).
+        let profile = if std::env::var("PRESENTER_NDI_HW_ONLY").is_ok() {
+            StreamProfile::Default
+        } else {
+            profile
+        };
+
         let session_id = WhepSession::new_session_id();
         // Select the profile's producer HERE; the blocking builder receives
         // exactly one producer and everything downstream (appsrc link,

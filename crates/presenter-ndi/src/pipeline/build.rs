@@ -114,10 +114,6 @@ impl NdiPipeline {
         h264parse
             .link(appsink.upcast_ref::<gst::Element>())
             .context("link h264parse -> appsink")?;
-        // Branch B (compat profile, realtime VP8 854×480@20 — see
-        // `add_compat_branch`): added and linked before any state change too.
-        let appsink_compat = add_compat_branch(&pipeline, &raw_tee, &q_compat)?;
-
         // Wrap each appsink in a StreamProducer — the battle-tested fanout
         // from gstreamer-utils that webrtcsink itself uses: forwards full
         // SAMPLES (caps + segment + PTS preserved on the shared clock/base-
@@ -129,7 +125,28 @@ impl NdiPipeline {
         // a relay.
         let settings = gstreamer_utils::streamproducer::ProducerSettings { sync: false };
         let producer = StreamProducer::with(&appsink, settings.clone());
-        let producer_compat = StreamProducer::with(&appsink_compat, settings);
+
+        // HW_ONLY: the software vp8enc compat branch encodes 854×480@20
+        // CONTINUOUSLY from startup (it is built+linked before PLAYING, so it
+        // runs whether or not any compat consumer is connected) — a permanent
+        // software-encode drain on the CPU-constrained N100 that periodically
+        // starves the shared pipeline and produces SYNCHRONIZED ~400-500ms
+        // present-gap spikes across EVERY consumer (incl. the H264 sd1).
+        // VP8 also has no hardware decode on the Vestel TVs. With this flag we
+        // build NO vp8enc branch and route every consumer to the hardware
+        // VA-API H264 producer (the Vestels decode constrained-baseline H264
+        // in hardware). producer_compat aliases producer; add_consumer forces
+        // every profile to Default so no consumer ever reaches a VP8 payloader.
+        let hw_only = std::env::var("PRESENTER_NDI_HW_ONLY").is_ok();
+        let producer_compat = if hw_only {
+            tracing::info!("PRESENTER_NDI_HW_ONLY=1 → software VP8 compat branch DISABLED; all consumers served hardware H264");
+            producer.clone()
+        } else {
+            // Branch B (compat profile, realtime VP8 854×480@20 — see
+            // `add_compat_branch`): added and linked before any state change too.
+            let appsink_compat = add_compat_branch(&pipeline, &raw_tee, &q_compat)?;
+            StreamProducer::with(&appsink_compat, settings)
+        };
 
         connect_demux_pads(&ndisrcdemux, &videoconvert, &audio_fakesink);
 
