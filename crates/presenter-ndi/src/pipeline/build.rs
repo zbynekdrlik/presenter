@@ -448,13 +448,13 @@ fn build_compat_h264_encoder(encoder_name: &str) -> Result<gst::Element> {
     match encoder_name {
         "vah264enc" => {
             b = b
-                .property("key-int-max", 3000u32)
+                .property("key-int-max", 1024u32)
                 .property("target-usage", 6u32)
                 .property("bitrate", COMPAT_BITRATE_KBPS);
         }
         "nvh264enc" => {
             b = b
-                .property("gop-size", 3000i32)
+                .property("gop-size", 1024i32)
                 .property("zerolatency", true)
                 .property("bitrate", COMPAT_BITRATE_KBPS);
         }
@@ -462,7 +462,7 @@ fn build_compat_h264_encoder(encoder_name: &str) -> Result<gst::Element> {
             b = b
                 .property_from_str("tune", "zerolatency")
                 .property_from_str("speed-preset", "superfast")
-                .property("key-int-max", 3000u32)
+                .property("key-int-max", 1024u32)
                 .property("bitrate", COMPAT_BITRATE_KBPS);
         }
         _ => {}
@@ -568,13 +568,13 @@ fn build_encoder(encoder_name: &str) -> Result<gst::Element> {
             // consumers::request_keyframe); loss recovery stays PLI-driven.
             // target-usage=6: faster encode on the prod N100 (default 4).
             encoder_builder = encoder_builder
-                .property("key-int-max", 3000u32)
+                .property("key-int-max", 1024u32)
                 .property("target-usage", 6u32)
                 .property("bitrate", DEFAULT_BITRATE_KBPS);
         }
         "nvh264enc" => {
             encoder_builder = encoder_builder
-                .property("gop-size", 3000i32)
+                .property("gop-size", 1024i32)
                 .property("zerolatency", true)
                 .property("bitrate", DEFAULT_BITRATE_KBPS);
         }
@@ -582,7 +582,7 @@ fn build_encoder(encoder_name: &str) -> Result<gst::Element> {
             encoder_builder = encoder_builder
                 .property_from_str("tune", "zerolatency")
                 .property_from_str("speed-preset", "superfast")
-                .property("key-int-max", 3000u32)
+                .property("key-int-max", 1024u32)
                 .property("bitrate", DEFAULT_BITRATE_KBPS);
         }
         _ => {
