@@ -357,36 +357,54 @@
     try { fetch(resourceUrl, { method: "DELETE", keepalive: true }); } catch (e) { /* best effort */ }
   }
 
+  // getStats() gathering BLOCKS the render thread on weak WebViews (~400ms
+  // measured on the Vestels). Calling it every beacon produced a ~400ms
+  // present-gap hitch at the beacon cadence — the residual periodic stutter the
+  // user sees "every ~20s". So gather getStats only every STATS_EVERY beacons;
+  // the cheap render-side present-gap metrics (tracked locally via rVFC, NO
+  // getStats) still report EVERY beacon, and RTT/decode/codec carry forward
+  // their last sampled value between gatherings.
+  var beaconCount = 0;
+  var STATS_EVERY = 4;
+  var lastStats = {
+    codec: null, framesDecoded: null, fps: null,
+    jitterBufferMs: null, freezeCount: null, framesDropped: null,
+  };
   async function postBeacon(pc, sourceId) {
     try {
-      var report = await pc.getStats();
-      var inbound = null;
-      var selectedPair = null;
-      report.forEach(function (s) {
-        if (s.type === "inbound-rtp" && s.kind === "video") inbound = s;
-        // Selected ICE candidate pair carries currentRoundTripTime (seconds).
-        if (s.type === "candidate-pair" && (s.nominated || s.selected) &&
-            typeof s.currentRoundTripTime === "number") {
-          selectedPair = s;
+      beaconCount++;
+      if (beaconCount % STATS_EVERY === 1) {
+        // Heavy path (≈ every 60s): gather getStats off the frequent cadence.
+        var report = await pc.getStats();
+        var inbound = null;
+        var selectedPair = null;
+        report.forEach(function (s) {
+          if (s.type === "inbound-rtp" && s.kind === "video") inbound = s;
+          // Selected ICE candidate pair carries currentRoundTripTime (seconds).
+          if (s.type === "candidate-pair" && (s.nominated || s.selected) &&
+              typeof s.currentRoundTripTime === "number") {
+            selectedPair = s;
+          }
+        });
+        if (selectedPair) {
+          lastRttMs = selectedPair.currentRoundTripTime * 1000;
+          setConnection("connected");
         }
-      });
-      // Surface RTT to the connection overlay (· N ms). getStats samples are
-      // already gathered here for the beacon, so this is free.
-      if (selectedPair) {
-        lastRttMs = selectedPair.currentRoundTripTime * 1000;
-        setConnection("connected");
+        if (inbound && inbound.codecId) {
+          var c = report.get(inbound.codecId);
+          lastStats.codec = (c && c.mimeType) || lastStats.codec;
+        }
+        if (inbound) {
+          lastStats.framesDecoded = inbound.framesDecoded;
+          lastStats.fps = inbound.framesPerSecond;
+          if (inbound.jitterBufferEmittedCount > 0) {
+            lastStats.jitterBufferMs =
+              (inbound.jitterBufferDelay / inbound.jitterBufferEmittedCount) * 1000;
+          }
+          lastStats.freezeCount = inbound.freezeCount;
+          lastStats.framesDropped = inbound.framesDropped;
+        }
       }
-      var codec = null;
-      if (inbound && inbound.codecId) {
-        var c = report.get(inbound.codecId);
-        codec = (c && c.mimeType) || null;
-      }
-      var jb = null;
-      if (inbound && inbound.jitterBufferEmittedCount > 0) {
-        jb = (inbound.jitterBufferDelay / inbound.jitterBufferEmittedCount) * 1000;
-      }
-      // Snapshot-and-reset BEFORE the await above already happened (getStats),
-      // but the reset is what matters for interval semantics — do it now.
       var gaps = snapshotPresentGaps();
       await fetch("/ndi/client-stats", {
         method: "POST",
@@ -394,14 +412,14 @@
         body: JSON.stringify({
           sourceId: sourceId,
           displayId: displayId(),
-          codec: codec,
+          codec: lastStats.codec,
           profile: compat ? "compat" : "default",
           screen: window.screen ? window.screen.width + "x" + window.screen.height : null,
-          framesDecoded: inbound ? inbound.framesDecoded : null,
-          fps: inbound ? inbound.framesPerSecond : null,
-          jitterBufferMs: jb,
-          freezeCount: inbound ? inbound.freezeCount : null,
-          framesDropped: inbound ? inbound.framesDropped : null,
+          framesDecoded: lastStats.framesDecoded,
+          fps: lastStats.fps,
+          jitterBufferMs: lastStats.jitterBufferMs,
+          freezeCount: lastStats.freezeCount,
+          framesDropped: lastStats.framesDropped,
           // Render-side presentation-cadence metrics for this beacon interval.
           maxPresentGapMs: gaps.maxPresentGapMs,
           presentGapsOver100: gaps.presentGapsOver100,
@@ -462,7 +480,9 @@
         if (frames === PROVEN_FRAMES && now - firstFrameAt <= PROVEN_WINDOW_MS && store) {
           store.setItem(PROFILE_KEY, compat ? "compat" : "default");
         }
-        if (frames % BEACON_FRAME_PERIOD === 0) postBeacon(pc, sourceId);
+        // Beacons fire on the timer ONLY (single clean cadence) — a second,
+        // frame-counted beacon source doubled getStats and its render-thread
+        // stalls. (BEACON_FRAME_PERIOD retained for the no-rVFC fallback path.)
       }
       function rvfcLoop() {
         if (done) return;
