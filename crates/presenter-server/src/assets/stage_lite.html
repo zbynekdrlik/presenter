@@ -129,14 +129,24 @@
 
   function pad2(n) { return n < 10 ? "0" + n : "" + n; }
 
-  // 1s clock tick — local HH:MM:SS, written to a fixed-size element. Matches
-  // the WASM status_bar.rs current_time_string() (local hours/min/sec).
-  var lastClock = "";
+  // Clock tick — local HH:MM, repainted at most ONCE PER MINUTE. Showing
+  // seconds forced a textContent write (→ compositor repaint of the overlay
+  // layer OVER the video) every single second; on the weak TV compositors
+  // that per-second repaint occasionally collides with a video-frame present
+  // and stalls it ~400ms (the periodic sd1 hitch that bare video-only lite did
+  // NOT have). HH:MM repaints 1×/min instead of 60×/min. The tick still fires
+  // every second (so the minute flips promptly) but does ZERO allocation and
+  // ZERO DOM work on the 59 no-op ticks: Date.now() is a number (no Date
+  // object), and we only build a Date + format string + write when the minute
+  // bucket actually changes.
+  var lastMinuteBucket = -1;
   function updateClock() {
     if (!clockEl) return;
+    var bucket = Math.floor(Date.now() / 60000); // number math, no allocation
+    if (bucket === lastMinuteBucket) return;      // same minute → no paint, no alloc
+    lastMinuteBucket = bucket;
     var d = new Date();
-    var t = pad2(d.getHours()) + ":" + pad2(d.getMinutes()) + ":" + pad2(d.getSeconds());
-    if (t !== lastClock) { lastClock = t; clockEl.textContent = t; } // write only on change
+    clockEl.textContent = pad2(d.getHours()) + ":" + pad2(d.getMinutes());
   }
 
   // Set the connection overlay text + color. state is one of
