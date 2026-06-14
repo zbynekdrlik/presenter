@@ -56,6 +56,11 @@ const COMPAT_FRAMERATE: i32 = 20;
 
 /// Primary (720p) encoder bitrate in kbit/s.
 const DEFAULT_BITRATE_KBPS: u32 = 2500;
+
+/// Compat tier H264 bitrate (kbps). 854×480 needs far less than 720p; 1200 kbps
+/// is ample for constrained-baseline at this resolution and keeps the weak TVs'
+/// network/decode load low.
+const COMPAT_BITRATE_KBPS: u32 = 1200;
 /// Compat (480p VP8) encoder bitrate in bits/s — the weak-device budget
 /// (vp8enc's `target-bitrate` is bits/sec, unlike the H264 encoders' kbps).
 const COMPAT_TARGET_BITRATE_BPS: i32 = 900_000;
@@ -126,27 +131,19 @@ impl NdiPipeline {
         let settings = gstreamer_utils::streamproducer::ProducerSettings { sync: false };
         let producer = StreamProducer::with(&appsink, settings.clone());
 
-        // HW_ONLY: the software vp8enc compat branch encodes 854×480@20
-        // CONTINUOUSLY from startup (it is built+linked before PLAYING, so it
-        // runs whether or not any compat consumer is connected) — a permanent
-        // software-encode drain on the CPU-constrained N100 that periodically
-        // starves the shared pipeline and produces SYNCHRONIZED ~400-500ms
-        // present-gap spikes across EVERY consumer (incl. the H264 sd1).
-        // VP8 also has no hardware decode on the Vestel TVs. With this flag we
-        // build NO vp8enc branch and route every consumer to the hardware
-        // VA-API H264 producer (the Vestels decode constrained-baseline H264
-        // in hardware). producer_compat aliases producer; add_consumer forces
-        // every profile to Default so no consumer ever reaches a VP8 payloader.
-        let hw_only = std::env::var("PRESENTER_NDI_HW_ONLY").is_ok();
-        let producer_compat = if hw_only {
-            tracing::info!("PRESENTER_NDI_HW_ONLY=1 → software VP8 compat branch DISABLED; all consumers served hardware H264");
-            producer.clone()
-        } else {
-            // Branch B (compat profile, realtime VP8 854×480@20 — see
-            // `add_compat_branch`): added and linked before any state change too.
-            let appsink_compat = add_compat_branch(&pipeline, &raw_tee, &q_compat)?;
-            StreamProducer::with(&appsink_compat, settings)
-        };
+        // Branch B (compat tier): a SECOND hardware VA-API H264 encoder at
+        // 854×480 — NOT software VP8. The old vp8enc had no hardware decode on
+        // the Vestel TVs AND encoded 854×480@20 in software CONTINUOUSLY from
+        // startup, draining the N100 and producing synchronized present-gap
+        // spikes across every consumer (incl. the H264 sd1). Constrained-
+        // baseline H264 decodes in hardware on the same Vestels (verified
+        // live: they decoded 720p H264 at 30fps); the compat tier just lowers
+        // the RESOLUTION to 854×480 so weak TVs both decode AND present
+        // smoothly. Two VA-API H264 encodes are cheap on the iGPU. Added and
+        // linked before any state change (a tee branch linked after PLAYING
+        // never forwards a buffer — sticky events).
+        let appsink_compat = add_compat_branch(&pipeline, &raw_tee, &q_compat, encoder_name)?;
+        let producer_compat = StreamProducer::with(&appsink_compat, settings);
 
         connect_demux_pads(&ndisrcdemux, &videoconvert, &audio_fakesink);
 
@@ -335,6 +332,7 @@ fn add_compat_branch(
     pipeline: &gst::Pipeline,
     raw_tee: &gst::Element,
     q_compat: &gst::Element,
+    encoder_name: &str,
 ) -> Result<gst_app::AppSink> {
     let videorate = gst::ElementFactory::make("videorate")
         .property("drop-only", true)
@@ -347,12 +345,14 @@ fn add_compat_branch(
         .property("add-borders", true)
         .build()
         .context("build compat videoscale")?;
+    // NV12 (not I420) — the VA-API H264 encoder takes NV12, same as the default
+    // branch's encoder input.
     let scale_caps = gst::ElementFactory::make("capsfilter")
         .name("compat_scale_caps")
         .property(
             "caps",
             gst::Caps::builder("video/x-raw")
-                .field("format", "I420")
+                .field("format", "NV12")
                 .field("width", COMPAT_VIDEO_WIDTH)
                 .field("height", COMPAT_VIDEO_HEIGHT)
                 .field("pixel-aspect-ratio", gst::Fraction::new(1, 1))
@@ -361,10 +361,27 @@ fn add_compat_branch(
         )
         .build()
         .context("build compat scale capsfilter")?;
-    let encoder_compat = build_compat_vp8_encoder()?;
+    let encoder_compat = build_compat_h264_encoder(encoder_name)?;
+    // Constrained-baseline profile + AU-aligned byte-stream parse, exactly like
+    // the default branch (the Vestels reject High profile → NullVideoDecoder).
+    let profile_caps_compat = gst::ElementFactory::make("capsfilter")
+        .name("profile_caps_compat")
+        .property(
+            "caps",
+            gst::Caps::builder("video/x-h264")
+                .field("profile", "constrained-baseline")
+                .build(),
+        )
+        .build()
+        .context("build compat profile capsfilter")?;
+    let h264parse_compat = gst::ElementFactory::make("h264parse")
+        .name("h264parse_compat")
+        .property("config-interval", -1i32)
+        .build()
+        .context("build compat h264parse")?;
     let appsink = gst_app::AppSink::builder()
         .name("enc_appsink_compat")
-        .caps(&consumer_vp8_caps())
+        .caps(&consumer_h264_caps())
         .max_buffers(5)
         .drop(true)
         .build();
@@ -376,6 +393,8 @@ fn add_compat_branch(
             &videoscale,
             &scale_caps,
             &encoder_compat,
+            &profile_caps_compat,
+            &h264parse_compat,
             appsink.upcast_ref::<gst::Element>(),
         ])
         .context("add compat branch elements")?;
@@ -387,12 +406,48 @@ fn add_compat_branch(
         &videoscale,
         &scale_caps,
         &encoder_compat,
+        &profile_caps_compat,
+        &h264parse_compat,
     ])
-    .context("link tee -> q_compat -> rate -> convert -> scale -> caps -> vp8enc")?;
-    encoder_compat
+    .context("link tee -> q_compat -> rate -> convert -> scale -> caps -> h264enc -> profile -> parse")?;
+    h264parse_compat
         .link(appsink.upcast_ref::<gst::Element>())
-        .context("link vp8enc -> compat appsink")?;
+        .context("link compat h264parse -> compat appsink")?;
     Ok(appsink)
+}
+
+/// Build the compat tier's H264 encoder ("encoder_compat") — a SECOND VA-API
+/// (or NVENC / x264 fallback) hardware encoder at the compat bitrate. Mirrors
+/// `build_encoder` but at the lower compat bitrate; the resolution is pinned by
+/// `compat_scale_caps` (854×480) and the profile by `profile_caps_compat`
+/// (constrained-baseline). Two simultaneous hardware H264 encode sessions are
+/// well within the Intel iGPU's capacity and far cheaper than one software VP8.
+fn build_compat_h264_encoder(encoder_name: &str) -> Result<gst::Element> {
+    let mut b = gst::ElementFactory::make(encoder_name).name("encoder_compat");
+    match encoder_name {
+        "vah264enc" => {
+            b = b
+                .property("key-int-max", 240u32)
+                .property("target-usage", 6u32)
+                .property("bitrate", COMPAT_BITRATE_KBPS);
+        }
+        "nvh264enc" => {
+            b = b
+                .property("gop-size", 240i32)
+                .property("zerolatency", true)
+                .property("bitrate", COMPAT_BITRATE_KBPS);
+        }
+        "x264enc" => {
+            b = b
+                .property_from_str("tune", "zerolatency")
+                .property_from_str("speed-preset", "superfast")
+                .property("key-int-max", 240u32)
+                .property("bitrate", COMPAT_BITRATE_KBPS);
+        }
+        _ => {}
+    }
+    b.build()
+        .with_context(|| format!("build compat encoder ({encoder_name})"))
 }
 
 /// Build the compat branch's `vp8enc` ("encoder_compat") with libwebrtc-

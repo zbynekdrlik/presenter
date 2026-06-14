@@ -158,18 +158,6 @@ impl NdiPipeline {
     ) -> Result<WhepAnswer, AddConsumerError> {
         self.reap_and_check_cap().await?;
 
-        // HW_ONLY (see build.rs): no software VP8 branch exists — every
-        // consumer is served the hardware H264 producer, so the per-consumer
-        // pipeline MUST use the H264 payloader. Override the requested profile
-        // to Default here so producer selection AND payloader selection both
-        // resolve to H264; a browser that asked for ?profile=compat simply
-        // negotiates H264 from its offer (every browser offers H264).
-        let profile = if std::env::var("PRESENTER_NDI_HW_ONLY").is_ok() {
-            StreamProfile::Default
-        } else {
-            profile
-        };
-
         let session_id = WhepSession::new_session_id();
         // Select the profile's producer HERE; the blocking builder receives
         // exactly one producer and everything downstream (appsrc link,
@@ -485,9 +473,11 @@ fn build_consumer_pipeline_blocking(
         gst_webrtc::WebRTCSessionDescription::new(gst_webrtc::WebRTCSDPType::Offer, sdp_msg);
     let offer_str = std::str::from_utf8(sdp_offer_bytes).unwrap_or("");
     let encoding_name = profile.encoding_name();
+    // Both tiers stream constrained-baseline H264 now (compat = low-res H264,
+    // not VP8); the profile selects resolution, so the payload type is H264's.
     let pt = match profile {
         StreamProfile::Default => parse_h264_payload_type(offer_str),
-        StreamProfile::Compat => parse_vp8_payload_type(offer_str),
+        StreamProfile::Compat => parse_h264_payload_type(offer_str),
     };
     let Some(pt) = pt else {
         tracing::warn!(
@@ -672,7 +662,7 @@ pub(super) fn build_consumer_elements(
     // `consumer_vp8_caps` pin BOTH sides of each bridge).
     let bridge_caps = match profile {
         StreamProfile::Default => consumer_h264_caps(),
-        StreamProfile::Compat => consumer_vp8_caps(),
+        StreamProfile::Compat => consumer_h264_caps(),
     };
     let appsrc = gst_app::AppSrc::builder()
         .name(format!("src_{session_id}"))
@@ -695,7 +685,7 @@ pub(super) fn build_consumer_elements(
     // offered pt for the profile's codec.
     let payloader = match profile {
         StreamProfile::Default => build_h264_payloader(session_id, pt)?,
-        StreamProfile::Compat => build_vp8_payloader(session_id, pt)?,
+        StreamProfile::Compat => build_h264_payloader(session_id, pt)?,
     };
 
     let webrtcbin = gst::ElementFactory::make("webrtcbin")

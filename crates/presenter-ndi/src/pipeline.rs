@@ -127,8 +127,11 @@ impl StreamProfile {
     /// alignment all follow this value (see `consumers`).
     pub(crate) fn encoding_name(self) -> &'static str {
         match self {
+            // Both tiers are now constrained-baseline H264 (the compat tier is
+            // a SECOND hardware VA-API encoder at 854×480, not software VP8).
+            // The profile selects RESOLUTION, no longer codec.
             Self::Default => "H264",
-            Self::Compat => "VP8",
+            Self::Compat => "H264",
         }
     }
 }
