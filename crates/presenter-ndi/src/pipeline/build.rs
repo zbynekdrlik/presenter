@@ -178,7 +178,7 @@ impl NdiPipeline {
 
 /// DIAGNOSTIC (temporary): log inter-buffer wall-clock gaps > 250ms at a named
 /// pad. Used to localize the periodic ~400ms present-gap every consumer sees.
-fn install_gap_probe(element: &gst::Element, pad_name: &str, label: &'static str) {
+pub(super) fn install_gap_probe(element: &gst::Element, pad_name: &str, label: &'static str) {
     let last = std::sync::Arc::new(std::sync::Mutex::new(None::<std::time::Instant>));
     if let Some(pad) = element.static_pad(pad_name) {
         pad.add_probe(gst::PadProbeType::BUFFER, move |_pad, _info| {
