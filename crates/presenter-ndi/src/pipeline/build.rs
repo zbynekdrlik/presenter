@@ -107,6 +107,9 @@ impl NdiPipeline {
             ])
             .context("add elements")?;
 
+        // DIAG (temporary, 80ms threshold): locate the synchronized ~20s hitch.
+        install_gap_probe(&videoconvert, "sink", "ndi-arrival");
+        install_gap_probe(appsink.upcast_ref::<gst::Element>(), "sink", "h264-encoder-out");
         ndisrc.link(&ndisrcdemux).context("link ndisrc -> demux")?;
         // videoconvert → videoscale → capsfilter(NV12, ≤720p) → tee. Both
         // encode branches are linked HERE, before any state change — a tee
@@ -179,7 +182,7 @@ pub(super) fn install_gap_probe(element: &gst::Element, pad_name: &str, label: &
             let mut guard = last.lock().unwrap_or_else(|p| p.into_inner());
             if let Some(prev) = *guard {
                 let gap = now.duration_since(prev).as_millis() as u64;
-                if gap > 250 {
+                if gap > 80 {
                     tracing::warn!(probe = label, gap_ms = gap, "pipeline inter-buffer gap >250ms");
                 }
             }
