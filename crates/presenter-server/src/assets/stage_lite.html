@@ -22,13 +22,13 @@
 <title>Stage (NDI lite)</title>
 <style>
   html, body { margin: 0; padding: 0; width: 100%; height: 100%; background: #000; overflow: hidden; }
-  /* Promote the video to its OWN compositor layer so overlay repaints never
-     force it to recomposite — the fix for the ~400ms periodic present-gap that
-     appeared on weak TV WebViews once any overlay was added over the video. */
+  /* PLAIN video element — no transform/will-change. Chrome's WebRTC + decode
+     pipeline is provably flawless (0 pause/freeze/loss), so the ~400ms/20s
+     stall is in the Android WebView COMPOSITOR. `will-change: transform` left
+     on permanently forces a GPU layer that churns periodically on weak WebViews;
+     VDO.Ninja's plain <video> (smooth on these TVs) has none of it. */
   video {
     position: fixed; inset: 0; width: 100vw; height: 100vh; object-fit: cover; background: #000;
-    transform: translateZ(0); will-change: transform; backface-visibility: hidden;
-    z-index: 1;
   }
 
   /* Lightweight NDI overlay — mirrors the WASM stage status bar's look
