@@ -125,6 +125,8 @@ impl NdiPipeline {
         install_gap_probe(appsink.upcast_ref::<gst::Element>(), "sink", "h264-encoder-out");
         install_keyframe_probe(appsink.upcast_ref::<gst::Element>(), "default");
         install_pts_probe(appsink.upcast_ref::<gst::Element>(), "default");
+        install_event_probe(appsink.upcast_ref::<gst::Element>(), "enc-out");
+        install_event_probe(&videoconvert, "ndi-in");
         ndisrc.link(&ndisrcdemux).context("link ndisrc -> demux")?;
         // videoconvert → videoscale → capsfilter(NV12, ≤720p) → tee. Both
         // encode branches are linked HERE, before any state change — a tee
@@ -242,6 +244,24 @@ pub(super) fn install_pts_probe(element: &gst::Element, label: &'static str) {
                         }
                     }
                     *g = Some(pts);
+                }
+            }
+            gst::PadProbeReturn::Ok
+        });
+    }
+}
+
+/// DIAG (temporary): log every NON-buffer downstream event (caps/segment/gap/
+/// custom/tag) passing a pad. A periodic ~20s event in the SHARED encoder path
+/// would propagate to ALL consumers at once = the synchronized hitch.
+pub(super) fn install_event_probe(element: &gst::Element, label: &'static str) {
+    let pad_name = if element.static_pad("sink").is_some() { "sink" } else { "src" };
+    if let Some(pad) = element.static_pad(pad_name) {
+        pad.add_probe(gst::PadProbeType::EVENT_DOWNSTREAM, move |_pad, info| {
+            if let Some(gst::PadProbeData::Event(ref ev)) = info.data {
+                // skip the once-only stream-start; log the rest
+                if ev.type_() != gst::EventType::StreamStart {
+                    tracing::warn!(probe = label, event = ?ev.type_(), "pipeline event");
                 }
             }
             gst::PadProbeReturn::Ok
