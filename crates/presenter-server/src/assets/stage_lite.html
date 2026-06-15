@@ -243,7 +243,12 @@
   // Weak-TV-safe DEFAULT: COMPAT (480p, reliably decodes on every TV) unless
   // this display explicitly proved DEFAULT (720p) before. Starting on 720p left
   // weak TVs unable to decode at all (frames_decoded stuck at 0, no recovery).
-  var compat = !(store && store.getItem(PROFILE_KEY) === "default");
+  // TEST (HW-H264 on com.tcl.browser, 2026-06-15): force DEFAULT (HW H264) on
+  // first attempt regardless of cached localStorage, to prove whether the
+  // standalone browser decodes HW H264. If H264 yields 0 frames (black), the
+  // NO_DECODE_FALLBACK toggle auto-reverts this session to compat VP8 — so the
+  // test is self-healing and never strands a TV black.
+  var compat = false;
   var profileSwitched = false; // at most ONE compat toggle per page load
   var backoffMs = 0;
 

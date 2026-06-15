@@ -114,16 +114,16 @@ impl StreamProfile {
     /// profile string must degrade to the primary stream, never break a
     /// display's join.
     pub fn from_query(value: Option<&str>) -> Self {
-        // TEST OVERRIDE (VP8 stutter test, 2026-06-15): the fallback is
-        // Compat (software VP8) so EVERY client gets VP8 regardless of its
-        // cached `ndiCodecMode` localStorage — the only way a default-pinned
-        // TV picks up the VP8 branch without clearing its storage. Explicit
-        // `?profile=default` still forces the 720p H264 branch (laptop control).
-        // REVERT this fallback to `Self::Default` once the VP8 verdict is in.
-        if value == Some("default") {
-            Self::Default
-        } else {
+        // TEST OVERRIDE (HW-H264-on-com.tcl.browser test, 2026-06-15): fallback
+        // is Default (720p hardware H264) so EVERY client gets HW H264 — proving
+        // whether the standalone com.tcl.browser (own Viz compositor) decodes HW
+        // H264 to a paintable surface (the earlier "HW H264 = black" verdict was
+        // only ever observed on the system WebView/libhwui, never the standalone
+        // browser). Explicit `?profile=compat` still forces software VP8.
+        if value == Some("compat") {
             Self::Compat
+        } else {
+            Self::Default
         }
     }
 
