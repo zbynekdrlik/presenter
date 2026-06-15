@@ -45,14 +45,14 @@ test.afterAll(async () => {
 // The load-bearing end-to-end proof for #336:
 //
 // Two concurrent browser contexts connect to the same NDI source via WHEP.
-// The shared-encoder architecture must route both consumers through the
-// SHARED per-profile encoders rather than spawning a second encoder per
-// consumer. The encoder pipeline holds EXACTLY TWO encoders BY DESIGN —
-// one per PROFILE (720p H264 default + 854×480 realtime-VP8 compat) —
-// regardless of how many consumers attach. The /ndi/snapshot/:source_id diagnostic route exposes
-// this invariant so the test can assert it.
+// The shared-encoder architecture must route both consumers through the ONE
+// SHARED encoder rather than spawning a second encoder per consumer. There is
+// exactly ONE stream — 1280×720 hardware-H264 fanned to every consumer via
+// StreamProducer — so the encoder pipeline holds EXACTLY ONE encoder BY DESIGN,
+// regardless of how many consumers attach. The /ndi/snapshot/:source_id
+// diagnostic route exposes this invariant so the test can assert it.
 //
-// Fanout invariant: encoderCount=2 (per profile, NOT per consumer),
+// Fanout invariant: encoderCount=1 (one shared encoder, NOT per consumer),
 // consumerCount=2.
 // ─────────────────────────────────────────────────────────────────────────
 test(
@@ -151,10 +151,9 @@ test(
     };
     expect(
       snap.encoderCount,
-      "shared-encoder invariant: exactly TWO encoders (one per profile: " +
-        "720p H264 default + 854x480 VP8 compat) for multiple consumers — " +
-        "never one per consumer",
-    ).toBe(2);
+      "shared-encoder invariant: exactly ONE encoder (the single shared " +
+        "720p H264 stream) for multiple consumers — never one per consumer",
+    ).toBe(1);
     expect(
       snap.consumerCount,
       "fanout invariant: two consumers attached to the shared pipeline",
