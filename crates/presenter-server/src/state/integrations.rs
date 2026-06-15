@@ -81,7 +81,17 @@ impl AppState {
     }
 
     pub(super) async fn sync_resolume_hosts(&self) -> anyhow::Result<()> {
-        let hosts = self.repository.list_resolume_hosts().await?;
+        // PRESENTER_DISABLE_RESOLUME: load ZERO hosts so no worker is spawned.
+        // The Resolume control integration is independent of NDI video; when its
+        // hosts are unreachable it hammers them (10s mapping refresh + per-command
+        // HTTP), flooding errors and spiking CPU — escape hatch to rule that out
+        // / run cleanly where Resolume is absent. Config in the DB is untouched.
+        let hosts = if std::env::var("PRESENTER_DISABLE_RESOLUME").is_ok() {
+            tracing::warn!("PRESENTER_DISABLE_RESOLUME=1 → Resolume integration disabled (no host workers spawned)");
+            Vec::new()
+        } else {
+            self.repository.list_resolume_hosts().await?
+        };
         self.resolume_registry.set_hosts(hosts).await;
         Ok(())
     }
