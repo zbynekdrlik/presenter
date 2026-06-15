@@ -43,7 +43,7 @@ use gstreamer_webrtc as gst_webrtc;
 use tokio::sync::mpsc::UnboundedSender;
 
 use super::negotiation::{
-    align_payload_type, await_ice_gathering, await_media_caps, negotiate_sdp,
+    align_payload_type, await_ice_gathering, await_media_caps, negotiate_sdp, parse_extmap_id,
     parse_h264_payload_type, parse_vp8_payload_type,
 };
 use super::{
@@ -500,6 +500,23 @@ fn build_consumer_pipeline_blocking(
     };
 
     let (appsrc, payloader, webrtcbin) = build_consumer_elements(session_id, profile, pt)?;
+
+    // Hard-cap the receiver jitter buffer via the playout-delay RTP header
+    // extension, on the id the browser negotiated in its offer (Chromium offers
+    // it at 5). This is the ONLY lever Chromium honors as max_playout_delay (it
+    // ignores the JS jitterBufferTarget hint), so a video-only stream's latency
+    // stays bounded + low instead of drifting to >1s. The id MUST match the
+    // offer's extmap (a mismatched/unset id corrupts every RTP packet → black).
+    if let Some(pd_id) = parse_extmap_id(offer_str, "playout-delay") {
+        let pd_ext = super::playout_delay::create_with_id(pd_id);
+        payloader.emit_by_name::<()>("add-extension", &[&pd_ext]);
+        tracing::info!(session_id = %session_id, pd_id, "playout-delay cap added (MAX=200ms)");
+    } else {
+        tracing::warn!(
+            session_id = %session_id,
+            "offer has no playout-delay extmap; latency cap skipped"
+        );
+    }
 
     let consumer_pipeline = gst::Pipeline::with_name(&format!("consumer_{session_id}"));
     adopt_encoder_timeline(&consumer_pipeline, enc_clock, enc_base_time, session_id);

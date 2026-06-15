@@ -31,6 +31,7 @@ gstreamer-app.workspace = true
 gstreamer-video.workspace = true
 gstreamer-utils.workspace = true
 gstreamer-webrtc.workspace = true
+gstreamer-rtp = { version = "0.25", features = ["v1_22"] }
 gst-plugin-webrtc.workspace = true
 gst-plugin-ndi.workspace = true
 gst-plugin-rtp.workspace = true

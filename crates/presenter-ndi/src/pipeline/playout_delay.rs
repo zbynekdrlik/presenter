@@ -211,6 +211,18 @@ pub fn create() -> RTPHeaderExtension {
     glib::Object::new::<PlayoutDelayExtension>().upcast::<RTPHeaderExtension>()
 }
 
+/// Create a playout-delay extension with its RTP extmap `id` already set to the
+/// id the browser negotiated in its offer (e.g. 5 for Chromium). Setting a
+/// VALID negotiated id is mandatory: an unset (0) id corrupts the RTP header
+/// extension block and the receiver drops every packet (black video). The
+/// caller parses the id from the offer's `a=extmap:<id> …playout-delay` line.
+pub fn create_with_id(id: u32) -> RTPHeaderExtension {
+    use gstreamer_rtp::prelude::RTPHeaderExtensionExt;
+    let ext = create();
+    ext.set_id(id);
+    ext
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
