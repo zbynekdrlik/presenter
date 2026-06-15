@@ -692,6 +692,15 @@ pub(super) fn build_consumer_elements(
         StreamProfile::Compat => build_vp8_payloader(session_id, pt)?,
     };
 
+    // playout-delay RTP header extension (MIN=0, MAX=200ms). A video-only
+    // WebRTC stream has no clock-drift resampler in Chromium, so its receiver
+    // jitter buffer drifts unbounded (latency climbs to >1s). This extension is
+    // the ONE thing Chromium honors as a hard cap on max_playout_delay (it
+    // ignores the client jitterBufferTarget hint), keeping latency bounded and
+    // low. webrtcbin negotiates the extmap from the browser's offer by URI.
+    let pd_ext = super::playout_delay::create();
+    payloader.emit_by_name::<()>("add-extension", &[&pd_ext]);
+
     let webrtcbin = gst::ElementFactory::make("webrtcbin")
         .name(session_id)
         // max-bundle: audio + video on ONE ICE/DTLS transport, matching the
