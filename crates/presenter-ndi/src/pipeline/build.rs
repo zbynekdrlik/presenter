@@ -83,6 +83,19 @@ impl NdiPipeline {
 
         let pipeline = gst::Pipeline::new();
 
+        // Force the steady system monotonic clock for the ENCODER pipeline (and
+        // therefore every consumer pipeline, which shares this clock + base-time
+        // for its RTP/RTCP timing). Left to auto-select, GStreamer can slave to a
+        // clock PROVIDED by ndisrc (the NDI sender's clock) and recalibrate it
+        // periodically; a ~20s clock correction shifts the RTP/RTCP timing of
+        // EVERY consumer at the SAME instant, which Chrome sees as a synchronized
+        // playout resync — a ~400ms render pause every ~20s on ALL TVs at once
+        // (the "naraz" hitch). A fixed system clock never recalibrates;
+        // receive-time PTS still stamps from this clock at frame arrival.
+        let sysclock = gst::SystemClock::obtain();
+        pipeline.use_clock(Some(&sysclock));
+        tracing::info!("encoder pipeline pinned to system monotonic clock (no NDI clock slaving)");
+
         let (ndisrc, ndisrcdemux) = build_ndi_source(ndi_name)?;
         let (videoconvert, videoscale, scale_caps, audio_fakesink) = build_video_chain()?;
         let (raw_tee, q_default, q_compat) = build_raw_tee_and_queues()?;
