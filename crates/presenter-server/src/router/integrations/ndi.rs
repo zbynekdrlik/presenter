@@ -84,6 +84,14 @@ pub(crate) struct NdiClientStatsBeacon {
     pub jitter_buffer_ms: Option<f64>,
     pub freeze_count: Option<f64>,
     pub frames_dropped: Option<f64>,
+    // DIAG (temporary): raw cumulative inbound-rtp counters to locate the
+    // synchronized ~20s hitch mechanism — deltas reveal delivery (RTP arriving?)
+    // vs decode vs jitter-buffer-readjust.
+    pub packets_received: Option<f64>,
+    pub packets_lost: Option<f64>,
+    pub frames_received: Option<f64>,
+    pub jitter_buffer_delay: Option<f64>,
+    pub jitter_buffer_emitted: Option<f64>,
     /// Largest inter-present gap (ms) the display observed this beacon
     /// interval — the RENDER-side metric the decode-side fields above are
     /// blind to. A frame can decode on time yet be PRESENTED late (WebView
@@ -123,6 +131,11 @@ pub(crate) async fn ndi_client_stats(Json(beacon): Json<NdiClientStatsBeacon>) -
         max_present_gap_ms = beacon.max_present_gap_ms,
         present_gaps_over100 = beacon.present_gaps_over100,
         presented_fps = beacon.presented_fps,
+        packets_received = beacon.packets_received,
+        packets_lost = beacon.packets_lost,
+        frames_received = beacon.frames_received,
+        jitter_buffer_delay = beacon.jitter_buffer_delay,
+        jitter_buffer_emitted = beacon.jitter_buffer_emitted,
         lite = beacon.lite,
         "NDI stage-display client stats beacon"
     );

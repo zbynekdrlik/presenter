@@ -109,7 +109,7 @@
   var PROVEN_WINDOW_MS = 10000;      // ...iff they land within 10s of the first (>=10fps)
   var JITTER_BUFFER_MS = 150;       // receiver buffer slack (ms). 0 stalled/froze playout (underrun); 150 keeps it playing. Non-zero is REQUIRED on these TVs.
   var SHOW_OVERLAY = false;         // RELIABILITY TEST: false = NO DOM overlay (pure video) to test whether the clock/song overlay composited over video freezes the weak TVs' compositor (decode runs, display frozen). If bare video is reliable, the overlay moves server-side into the stream.
-  var BEACON_TICK_MS = 15000;
+  var BEACON_TICK_MS = 2000;        // DIAG: fine 2s cadence to capture the ~20s hitch
   var BEACON_FRAME_PERIOD = 300;
   var SOURCE_POLL_MS = 5000;
   var SONG_POLL_MS = 8000;          // cheap snapshot fetch for the #song-number overlay (8s: fewer allocations/GC over the video)
@@ -381,10 +381,12 @@
   // getStats) still report EVERY beacon, and RTT/decode/codec carry forward
   // their last sampled value between gatherings.
   var beaconCount = 0;
-  var STATS_EVERY = 4;
+  var STATS_EVERY = 1; // DIAG: getStats every beacon (2s) to capture the ~20s hitch mechanism
   var lastStats = {
     codec: null, framesDecoded: null, fps: null,
     jitterBufferMs: null, freezeCount: null, framesDropped: null,
+    packetsReceived: null, packetsLost: null, framesReceived: null,
+    jitterBufferDelay: null, jitterBufferEmitted: null,
   };
   async function postBeacon(pc, sourceId) {
     try {
@@ -419,6 +421,12 @@
           }
           lastStats.freezeCount = inbound.freezeCount;
           lastStats.framesDropped = inbound.framesDropped;
+          // DIAG raw cumulative counters (deltas reveal delivery/decode/jitter).
+          lastStats.packetsReceived = inbound.packetsReceived;
+          lastStats.packetsLost = inbound.packetsLost;
+          lastStats.framesReceived = inbound.framesReceived;
+          lastStats.jitterBufferDelay = inbound.jitterBufferDelay;
+          lastStats.jitterBufferEmitted = inbound.jitterBufferEmittedCount;
         }
       }
       var gaps = snapshotPresentGaps();
@@ -440,6 +448,12 @@
           maxPresentGapMs: gaps.maxPresentGapMs,
           presentGapsOver100: gaps.presentGapsOver100,
           presentedFps: gaps.presentedFps,
+          // DIAG raw cumulative counters.
+          packetsReceived: lastStats.packetsReceived,
+          packetsLost: lastStats.packetsLost,
+          framesReceived: lastStats.framesReceived,
+          jitterBufferDelay: lastStats.jitterBufferDelay,
+          jitterBufferEmitted: lastStats.jitterBufferEmitted,
           lite: true,
         }),
       });
