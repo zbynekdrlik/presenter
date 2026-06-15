@@ -107,7 +107,8 @@
   var NO_DECODE_FALLBACK_MS = 15000; // connected, never a frame -> profile toggle (once)
   var PROVEN_FRAMES = 100;           // frames that prove a mode...
   var PROVEN_WINDOW_MS = 10000;      // ...iff they land within 10s of the first (>=10fps)
-  var JITTER_BUFFER_MS = 0;         // receiver buffer slack (ms). 0 = minimal (lowest latency); raise to absorb arrival jitter on jittery paths. On a wired LAN 0 stays smooth; 150 forced buffer-building stalls on some TVs.
+  var JITTER_BUFFER_MS = 150;       // receiver buffer slack (ms). 0 stalled/froze playout (underrun); 150 keeps it playing. Non-zero is REQUIRED on these TVs.
+  var SHOW_OVERLAY = false;         // RELIABILITY TEST: false = NO DOM overlay (pure video) to test whether the clock/song overlay composited over video freezes the weak TVs' compositor (decode runs, display frozen). If bare video is reliable, the overlay moves server-side into the stream.
   var BEACON_TICK_MS = 15000;
   var BEACON_FRAME_PERIOD = 300;
   var SOURCE_POLL_MS = 5000;
@@ -226,13 +227,23 @@
     } catch (e) { /* version is decorative; never disturb playback */ }
   }
 
-  updateClock();
-  setInterval(updateClock, 1000);
-  loadVersion();
-  scheduleSongPoll(0); // self-scheduling; backs off to SONG_POLL_BACKOFF_MS on 404
-  setConnection("connecting");
+  if (SHOW_OVERLAY) {
+    updateClock();
+    setInterval(updateClock, 1000);
+    loadVersion();
+    scheduleSongPoll(0); // self-scheduling; backs off to SONG_POLL_BACKOFF_MS on 404
+    setConnection("connecting");
+  } else {
+    // Pure-video mode: remove the overlay layer entirely so nothing composites
+    // over the video element (the suspected weak-TV compositor-freeze source).
+    var ov = document.querySelector(".nl-overlay");
+    if (ov && ov.parentNode) ov.parentNode.removeChild(ov);
+  }
   var store = (function () { try { return window.localStorage; } catch (e) { return null; } })();
-  var compat = !!(store && store.getItem(PROFILE_KEY) === "compat");
+  // Weak-TV-safe DEFAULT: COMPAT (480p, reliably decodes on every TV) unless
+  // this display explicitly proved DEFAULT (720p) before. Starting on 720p left
+  // weak TVs unable to decode at all (frames_decoded stuck at 0, no recovery).
+  var compat = !(store && store.getItem(PROFILE_KEY) === "default");
   var profileSwitched = false; // at most ONE compat toggle per page load
   var backoffMs = 0;
 
