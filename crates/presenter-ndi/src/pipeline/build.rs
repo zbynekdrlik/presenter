@@ -36,18 +36,18 @@ use super::{NdiPipeline, PipelineState};
 const MAX_VIDEO_WIDTH: i32 = 1280;
 const MAX_VIDEO_HEIGHT: i32 = 720;
 
-/// Compat-profile resolution: 1280×720 — full 720p. The 20s stutter was NEVER
-/// the codec or resolution; it is the Android SYSTEM WebView's libhwui
-/// compositor (proven: it stalls ~430ms/20s with H264 AND VP8, while a
-/// STANDALONE browser — Cromite or the TV's com.tcl.browser — on the SAME
-/// stream is smooth). The fix is therefore the RENDER PATH (a standalone
-/// browser), not a quality sacrifice. So compat now runs at FULL 720p@30 so
-/// the standalone-browser stage displays get the high quality they had on the
-/// old 720p H264 default, minus the WebView stall.
+/// Compat-profile resolution: 1024×576 (16:9, 576p). The 20s stutter is the
+/// system WebView's libhwui compositor (proven: stalls ~430ms/20s with H264
+/// AND VP8; the TV's STANDALONE com.tcl.browser on the SAME stream has no 20s
+/// stall), so the fix is the RENDER PATH, not the codec. BUT 720p30 software
+/// VP8 is just over what the weak TVs PRESENT steadily — they decode 30fps yet
+/// present only ~27, so frames back up then catch up (a periodic lag). 576p30
+/// keeps full 30fps motion (20fps read as choppy), is sharper than the old
+/// 480p, and gives the TV decode+present headroom to hold a steady 30fps.
 /// QUALITY POLICY (user directive): (1) near-zero latency, (2) no stuttering,
-/// (3) MAXIMUM quality — defaults start HIGH. #387 makes this DYNAMIC.
-const COMPAT_VIDEO_WIDTH: i32 = 1280;
-const COMPAT_VIDEO_HEIGHT: i32 = 720;
+/// (3) MAX quality. #387 makes this DYNAMIC — ramp toward 720p per-device.
+const COMPAT_VIDEO_WIDTH: i32 = 1024;
+const COMPAT_VIDEO_HEIGHT: i32 = 576;
 /// Compat-profile framerate: 30fps — full motion (20fps read as "continuously
 /// choppy" on the stage TVs). The NDI source is 30fps so `videorate(drop-only)`
 /// passes it through unchanged.
@@ -60,11 +60,11 @@ const DEFAULT_BITRATE_KBPS: u32 = 2500;
 /// hardware-H264 compat branch; the active compat tier is software VP8.
 #[allow(dead_code)]
 const COMPAT_BITRATE_KBPS: u32 = 1200;
-/// Compat (720p VP8) encoder bitrate in bits/s (vp8enc's `target-bitrate` is
-/// bits/sec, unlike the H264 encoders' kbps). 4 Mbps: VP8 is ~40% less
-/// efficient than H264, so it needs more bits than the 2.5 Mbps H264 default
-/// to match its 720p quality on the stage TVs.
-const COMPAT_TARGET_BITRATE_BPS: i32 = 4_000_000;
+/// Compat (576p VP8) encoder bitrate in bits/s (vp8enc's `target-bitrate` is
+/// bits/sec, unlike the H264 encoders' kbps). 2.5 Mbps is ample for 576p VP8
+/// and keeps the per-frame coefficient count (hence the TVs' software-decode
+/// cost) low enough to hold a steady 30fps.
+const COMPAT_TARGET_BITRATE_BPS: i32 = 2_500_000;
 
 impl NdiPipeline {
     /// Build but do not yet start the pipeline.
@@ -574,7 +574,7 @@ fn build_compat_vp8_encoder() -> Result<gst::Element> {
     gst::ElementFactory::make("vp8enc")
         .name("encoder_compat")
         .property("deadline", 1i64)
-        .property("cpu-used", 6i32)
+        .property("cpu-used", 8i32)
         .property_from_str("end-usage", "cbr")
         .property("target-bitrate", COMPAT_TARGET_BITRATE_BPS)
         .property("keyframe-max-dist", 240i32)
