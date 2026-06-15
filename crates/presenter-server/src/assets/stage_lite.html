@@ -387,6 +387,8 @@
     jitterBufferMs: null, freezeCount: null, framesDropped: null,
     packetsReceived: null, packetsLost: null, framesReceived: null,
     jitterBufferDelay: null, jitterBufferEmitted: null,
+    jitterBufferTargetDelay: null, framesRendered: null, pauseCount: null,
+    totalPausesDuration: null, totalFreezesDuration: null, keyFramesDecoded: null,
   };
   async function postBeacon(pc, sourceId) {
     try {
@@ -427,6 +429,15 @@
           lastStats.framesReceived = inbound.framesReceived;
           lastStats.jitterBufferDelay = inbound.jitterBufferDelay;
           lastStats.jitterBufferEmitted = inbound.jitterBufferEmittedCount;
+          // DIAG render-side (the chrome://webrtc-internals numbers): the
+          // jitter-buffer TARGET (sawtooth = NetEq readjust), frames actually
+          // rendered, and Chrome's own pause/freeze classification + durations.
+          lastStats.jitterBufferTargetDelay = inbound.jitterBufferTargetDelay;
+          lastStats.framesRendered = inbound.framesRendered;
+          lastStats.pauseCount = inbound.pauseCount;
+          lastStats.totalPausesDuration = inbound.totalPausesDuration;
+          lastStats.totalFreezesDuration = inbound.totalFreezesDuration;
+          lastStats.keyFramesDecoded = inbound.keyFramesDecoded;
         }
       }
       var gaps = snapshotPresentGaps();
@@ -454,6 +465,12 @@
           framesReceived: lastStats.framesReceived,
           jitterBufferDelay: lastStats.jitterBufferDelay,
           jitterBufferEmitted: lastStats.jitterBufferEmitted,
+          jitterBufferTargetDelay: lastStats.jitterBufferTargetDelay,
+          framesRendered: lastStats.framesRendered,
+          pauseCount: lastStats.pauseCount,
+          totalPausesDuration: lastStats.totalPausesDuration,
+          totalFreezesDuration: lastStats.totalFreezesDuration,
+          keyFramesDecoded: lastStats.keyFramesDecoded,
           lite: true,
         }),
       });
