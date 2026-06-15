@@ -472,6 +472,12 @@ fn build_consumer_pipeline_blocking(
     let offer_desc =
         gst_webrtc::WebRTCSessionDescription::new(gst_webrtc::WebRTCSDPType::Offer, sdp_msg);
     let offer_str = std::str::from_utf8(sdp_offer_bytes).unwrap_or("");
+    // DIAG (temporary): log the offer's RTP header extensions (extmap) so we
+    // know whether the browser offers playout-delay and at which id — needed to
+    // wire the playout-delay extension's id correctly without breaking RTP.
+    for line in offer_str.lines().filter(|l| l.trim_start().starts_with("a=extmap:")) {
+        tracing::info!(session_id = %session_id, "OFFER-EXTMAP {}", line.trim());
+    }
     let encoding_name = profile.encoding_name();
     // The profile implies the codec: Default = H264 (720p hw), Compat = VP8
     // (854×480@20 sw). Seat the per-consumer payloader on the browser's
