@@ -277,6 +277,16 @@ pub(crate) fn parse_vp8_payload_type(sdp: &str) -> Option<u32> {
     parse_rtpmap_payload_type(sdp, "VP8/")
 }
 
+/// Opus mirror of [`parse_h264_payload_type`]: the payload type of the first
+/// `a=rtpmap:<pt> OPUS/48000…` line. Used for the silent-audio CLOCK ANCHOR —
+/// every consumer pipeline sends a continuous silent Opus track so the browser
+/// runs a NetEq audio clock that bounds the (otherwise unbounded) video jitter
+/// buffer. The per-consumer `rtpopuspay` must be seated on the browser's dynamic
+/// Opus pt for media to flow; absent ⇒ skip audio (graceful video-only).
+pub(crate) fn parse_opus_payload_type(sdp: &str) -> Option<u32> {
+    parse_rtpmap_payload_type(sdp, "OPUS/")
+}
+
 /// Shared rtpmap scanner: payload type of the first `a=rtpmap:<pt>
 /// <codec_prefix>…` line (codec match is case-insensitive). `codec_prefix`
 /// MUST include the trailing `/` (e.g. `"H264/"`, `"VP8/"`) so `VP8` can

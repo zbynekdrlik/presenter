@@ -319,29 +319,36 @@
 
   async function whepNegotiate(pc, sourceId) {
     pc.addTransceiver("video", { direction: "recvonly" });
-    // VIDEO-ONLY offer — deliberately NO audio m-line. The server never
-    // sends audio (NDI audio is discarded), and an SDP audio track that
-    // exists but never produces makes weak TV WebViews hold video
-    // presentation hostage to A/V sync that can never be satisfied
-    // (measured 2026-06-12: VDO.Ninja with noaudio played 640x360@20 on the
-    // same Vestel where our stream with a dead audio m-line presented
-    // ~0.5fps with frames decoding fine).
+    // CLOCK-ANCHOR AUDIO m-line. A video-only WebRTC stream gets NO clock-drift
+    // compensation in the browser — libwebrtc's only resampler lives in the
+    // audio NetEq, and its stream synchronizer early-returns without audio. So
+    // the receiver's video jitter buffer ratchets up unbounded against the
+    // ~0.27%/s sender/receiver clock skew (latency climbs to >1s + periodic
+    // catch-up lag). Offering a recvonly audio m-line lets the server send a
+    // CONTINUOUS SILENT Opus track; the browser then runs a NetEq audio device
+    // clock and slaves the video to it, bounding the buffer. NOTE: the old
+    // 0.5fps regression was a DEAD audio m-line (declared, never producing) on
+    // the system WebView; this track ACTIVELY flows (a packet every 20ms) and
+    // we no longer use that WebView — the failure mode is the opposite of this.
+    pc.addTransceiver("audio", { direction: "recvonly" });
     pc.ontrack = function (ev) {
       if (!ev.streams || !ev.streams[0]) return;
+      if (ev.track && ev.track.kind === "audio") {
+        // The silent audio rides in the SAME bundled stream; attaching that
+        // stream to the (muted) <video> element below already runs its NetEq
+        // clock (muting the OUTPUT does not stop NetEq). Don't set a jitter hint
+        // on the audio receiver and don't re-attach here.
+        return;
+      }
       try {
-        // SMALL jitter buffer (NOT zero). jitterBufferTarget=0 minimized latency
-        // but left the playout with no slack: a frame arriving slightly late
-        // underran the empty buffer → a ~400ms stall-then-catchup every ~20s
-        // (the residual stutter, present on EVERY TV — decode stayed at full fps,
-        // only PRESENTATION hitched). ~150ms absorbs LAN/encoder jitter while
-        // staying lip-sync-tight, exactly the balance libwebrtc/VDO.Ninja strike.
-        // Applied to BOTH tiers — the weak compat TVs need the slack most.
+        // SMALL jitter buffer hint (advisory; this browser ignores it, the audio
+        // anchor is what actually bounds the buffer). Kept lip-sync-tight.
         ev.receiver.jitterBufferTarget = JITTER_BUFFER_MS;
         ev.receiver.playoutDelayHint = JITTER_BUFFER_MS / 1000;
       } catch (e) { /* optional knobs */ }
       // muted PROPERTY before srcObject, or Chrome's autoplay policy blocks play().
       video.muted = true;
-      video.srcObject = ev.streams[0];
+      video.srcObject = ev.streams[0]; // carries BOTH video + the silent audio anchor
       video.muted = true;
       var p = video.play();
       if (p && p.catch) p.catch(function (e) { console.warn("video.play() rejected: " + e); });
