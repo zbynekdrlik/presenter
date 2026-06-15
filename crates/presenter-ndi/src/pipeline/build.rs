@@ -36,22 +36,23 @@ use super::{NdiPipeline, PipelineState};
 const MAX_VIDEO_WIDTH: i32 = 1280;
 const MAX_VIDEO_HEIGHT: i32 = 720;
 
-/// Compat-profile resolution: 1024×576 (16:9, 576p). The 20s stutter is the
-/// system WebView's libhwui compositor (proven: stalls ~430ms/20s with H264
-/// AND VP8; the TV's STANDALONE com.tcl.browser on the SAME stream has no 20s
-/// stall), so the fix is the RENDER PATH, not the codec. BUT 720p30 software
-/// VP8 is just over what the weak TVs PRESENT steadily — they decode 30fps yet
-/// present only ~27, so frames back up then catch up (a periodic lag). 576p30
-/// keeps full 30fps motion (20fps read as choppy), is sharper than the old
-/// 480p, and gives the TV decode+present headroom to hold a steady 30fps.
-/// QUALITY POLICY (user directive): (1) near-zero latency, (2) no stuttering,
-/// (3) MAX quality. #387 makes this DYNAMIC — ramp toward 720p per-device.
-const COMPAT_VIDEO_WIDTH: i32 = 1024;
-const COMPAT_VIDEO_HEIGHT: i32 = 576;
-/// Compat-profile framerate: 30fps — full motion (20fps read as "continuously
-/// choppy" on the stage TVs). The NDI source is 30fps so `videorate(drop-only)`
-/// passes it through unchanged.
-const COMPAT_FRAMERATE: i32 = 30;
+/// Compat-profile resolution: 1280×720 (720p). The 20s stutter is the system
+/// WebView's libhwui compositor (proven: stalls ~430ms/20s with H264 AND VP8;
+/// the TV's STANDALONE com.tcl.browser on the SAME stream has no 20s stall),
+/// so the fix is the RENDER PATH (a standalone browser), not the codec or a
+/// quality cut — hence FULL 720p here.
+const COMPAT_VIDEO_WIDTH: i32 = 1280;
+const COMPAT_VIDEO_HEIGHT: i32 = 720;
+/// Compat-profile framerate: 24fps. The TVs' browser PRESENTS only ~26fps for
+/// this WebRTC video (resolution-independent — measured ~26 at both 576p and
+/// 720p). Sending 30fps piled the 4 surplus frames/sec into the receiver
+/// jitter buffer, which grew monotonically (target_delay 250→300ms) until the
+/// browser flushed it — the "fine then lag, in a loop" stutter AND rising
+/// latency. Sending 24fps (just under the ~26 present rate) means nothing
+/// accumulates: stable low latency + no catch-up lag. 24fps is film-rate
+/// motion, far smoother than the 20fps that read as choppy. `videorate
+/// (drop-only)` thins the 30fps NDI source to this. #387 makes it DYNAMIC.
+const COMPAT_FRAMERATE: i32 = 24;
 
 /// Primary (720p) encoder bitrate in kbit/s.
 const DEFAULT_BITRATE_KBPS: u32 = 2500;
@@ -60,11 +61,10 @@ const DEFAULT_BITRATE_KBPS: u32 = 2500;
 /// hardware-H264 compat branch; the active compat tier is software VP8.
 #[allow(dead_code)]
 const COMPAT_BITRATE_KBPS: u32 = 1200;
-/// Compat (576p VP8) encoder bitrate in bits/s (vp8enc's `target-bitrate` is
-/// bits/sec, unlike the H264 encoders' kbps). 2.5 Mbps is ample for 576p VP8
-/// and keeps the per-frame coefficient count (hence the TVs' software-decode
-/// cost) low enough to hold a steady 30fps.
-const COMPAT_TARGET_BITRATE_BPS: i32 = 2_500_000;
+/// Compat (720p24 VP8) encoder bitrate in bits/s (vp8enc's `target-bitrate` is
+/// bits/sec, unlike the H264 encoders' kbps). 3 Mbps suits 720p24 VP8 — fewer
+/// frames/sec than 30 means each frame can carry more bits at the same total.
+const COMPAT_TARGET_BITRATE_BPS: i32 = 3_000_000;
 
 impl NdiPipeline {
     /// Build but do not yet start the pipeline.
