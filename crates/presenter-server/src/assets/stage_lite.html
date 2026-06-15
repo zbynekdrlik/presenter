@@ -108,7 +108,7 @@
   var PROVEN_FRAMES = 100;           // frames that prove a mode...
   var PROVEN_WINDOW_MS = 10000;      // ...iff they land within 10s of the first (>=10fps)
   var JITTER_BUFFER_MS = 150;       // receiver buffer slack (ms). 0 stalled/froze playout (underrun); 150 keeps it playing. Non-zero is REQUIRED on these TVs.
-  var SHOW_OVERLAY = false;         // RELIABILITY TEST: false = NO DOM overlay (pure video) to test whether the clock/song overlay composited over video freezes the weak TVs' compositor (decode runs, display frozen). If bare video is reliable, the overlay moves server-side into the stream.
+  var SHOW_OVERLAY = true;          // Normal stage overlay (clock/song/connection/version). The DOM-overlay-freezes-compositor concern was the SYSTEM WebView (Fully Kiosk); on the standalone com.tcl.browser the lightweight fixed-size overlay composites fine alongside the smooth video.
   var BEACON_TICK_MS = 2000;        // DIAG: fine 2s cadence to capture the ~20s hitch
   var BEACON_FRAME_PERIOD = 300;
   var SOURCE_POLL_MS = 5000;
