@@ -700,7 +700,43 @@ pub(super) fn build_consumer_elements(
         .build()
         .context("build webrtcbin")?;
 
+    // Make webrtcbin's RTCP Sender-Report NTP timestamps derive from the SAME
+    // pipeline clock as the RTP timestamps. Default ntp-time-source="ntp" takes
+    // SR NTP from the system real-time clock while RTP timestamps come from the
+    // (monotonic) pipeline clock — the two drift, so Chrome periodically re-syncs
+    // its RTP→wall-clock playout mapping (~400ms render pause every ~20s, the
+    // synchronized hitch; libwebrtc/VDO.Ninja uses one clock and stays smooth).
+    // "clock-time" = the pipeline clock, identical to the RTP timestamp base.
+    configure_rtpbin_ntp_clock(&webrtcbin);
+
     Ok((appsrc, payloader, webrtcbin))
+}
+
+/// Set webrtcbin's internal rtpbin `ntp-time-source` to `clock-time` so the
+/// RTCP Sender Report NTP timestamps come from the pipeline clock — the same
+/// clock the RTP timestamps derive from. With the default (`ntp`, system
+/// real-time clock) the two clocks drift, and Chrome periodically re-syncs its
+/// RTP→wall-clock playout mapping, producing a ~400ms render pause every ~20s.
+/// The rtpbin usually exists right after construction; a `deep-element-added`
+/// fallback covers lazy creation.
+fn configure_rtpbin_ntp_clock(webrtcbin: &gst::Element) {
+    fn set_clock_time(rtpbin: &gst::Element) {
+        rtpbin.set_property_from_str("ntp-time-source", "clock-time");
+        tracing::info!("rtpbin ntp-time-source = clock-time (RTCP SR on pipeline clock)");
+    }
+    let Some(bin) = webrtcbin.dynamic_cast_ref::<gst::Bin>() else {
+        return;
+    };
+    if let Some(rtpbin) = bin.by_name("rtpbin") {
+        set_clock_time(&rtpbin);
+        return;
+    }
+    bin.connect_deep_element_added(|_, _, element| {
+        if element.factory().is_some_and(|f| f.name() == "rtpbin") {
+            element.set_property_from_str("ntp-time-source", "clock-time");
+            tracing::info!("rtpbin ntp-time-source = clock-time (deep-added)");
+        }
+    });
 }
 
 /// Per-consumer `rtph264pay`. config-interval=-1 resends SPS/PPS before every
