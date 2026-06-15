@@ -391,7 +391,7 @@
   async function postBeacon(pc, sourceId) {
     try {
       beaconCount++;
-      if (beaconCount % STATS_EVERY === 1) {
+      if (beaconCount % STATS_EVERY === 0) {
         // Heavy path (≈ every 60s): gather getStats off the frequent cadence.
         var report = await pc.getStats();
         var inbound = null;
