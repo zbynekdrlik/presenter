@@ -44,7 +44,7 @@ use tokio::sync::mpsc::UnboundedSender;
 
 use super::negotiation::{
     align_payload_type, await_ice_gathering, await_media_caps, negotiate_sdp,
-    parse_h264_payload_type, parse_opus_payload_type, parse_vp8_payload_type,
+    parse_h264_payload_type, parse_vp8_payload_type,
 };
 use super::{
     build::{consumer_h264_caps, consumer_vp8_caps},
@@ -523,27 +523,6 @@ fn build_consumer_pipeline_blocking(
         .link_filtered(&webrtcbin, &rtp_caps)
         .context("link payloader -> webrtcbin (codec caps)")?;
 
-    // Silent-audio CLOCK ANCHOR (added BEFORE PLAYING — sticky events): a
-    // continuous silent Opus track gives the browser a NetEq audio device clock
-    // that bounds the otherwise-unbounded video jitter buffer of a video-only
-    // WebRTC stream (Chromium has no video-only drift resampler). Skipped
-    // gracefully (video-only) if the offer carries no Opus rtpmap.
-    let audio_pay = match parse_opus_payload_type(offer_str) {
-        Some(opus_pt) => Some(add_consumer_audio_anchor(
-            &consumer_pipeline,
-            &webrtcbin,
-            opus_pt,
-            session_id,
-        )?),
-        None => {
-            tracing::warn!(
-                session_id = %session_id,
-                "offer carries no Opus rtpmap — no audio clock anchor (video-only; jitter buffer may drift)"
-            );
-            None
-        }
-    };
-
     connect_branch_signals(&webrtcbin, ice_tx, connection_state, session_id.to_string());
 
     // Install the bus watch BEFORE going PLAYING. THE load-bearing part:
@@ -589,9 +568,6 @@ fn build_consumer_pipeline_blocking(
     // transport, so lower the RTCP SR interval HERE (not at build time).
     tune_rtcp_interval(&webrtcbin, session_id);
     align_payload_type(&webrtcbin, &payloader, encoding_name, session_id);
-    if let Some(ref audio_pay) = audio_pay {
-        align_payload_type(&webrtcbin, audio_pay, "OPUS", session_id);
-    }
     await_ice_gathering(&webrtcbin, session_id);
 
     let local_desc =
@@ -827,72 +803,6 @@ fn build_vp8_payloader(session_id: &str, pt: u32) -> Result<gst::Element> {
         .property("pt", pt)
         .build()
         .context("build rtpvp8pay")
-}
-
-/// Add a continuous silent-Opus CLOCK ANCHOR to this consumer pipeline:
-/// `audiotestsrc(silence,is-live) → audioconvert → audioresample →
-/// caps(48k mono) → opusenc(dtx=false) → rtpopuspay → webrtcbin`. A video-only
-/// WebRTC stream has NO clock-drift resampler in the browser (that lives only in
-/// the audio NetEq), so its jitter buffer ratchets up unbounded against the
-/// ~0.27%/s sender/receiver clock skew (latency climbs + periodic catch-up).
-/// This silent track makes the browser run a NetEq audio device clock; libwebrtc
-/// slaves the video to it, bounding the buffer. `dtx=false` keeps a packet every
-/// 20ms so the clock never gaps. Linked BEFORE PLAYING (sticky events); lives in
-/// the consumer pipeline so it is torn down with it (no producer/link to track).
-/// Returns the rtpopuspay so the caller can align its pt to the answer.
-fn add_consumer_audio_anchor(
-    consumer_pipeline: &gst::Pipeline,
-    webrtcbin: &gst::Element,
-    pt: u32,
-    session_id: &str,
-) -> Result<gst::Element> {
-    let src = gst::ElementFactory::make("audiotestsrc")
-        .name(format!("asilence_{session_id}"))
-        .property("is-live", true)
-        .property_from_str("wave", "silence")
-        .property("volume", 0.0f64)
-        .build()
-        .context("build audiotestsrc")?;
-    let convert = gst::ElementFactory::make("audioconvert")
-        .build()
-        .context("build audioconvert")?;
-    let resample = gst::ElementFactory::make("audioresample")
-        .build()
-        .context("build audioresample")?;
-    let caps = gst::ElementFactory::make("capsfilter")
-        .property(
-            "caps",
-            gst::Caps::builder("audio/x-raw")
-                .field("rate", 48_000i32)
-                .field("channels", 1i32)
-                .build(),
-        )
-        .build()
-        .context("build audio capsfilter")?;
-    let opusenc = gst::ElementFactory::make("opusenc")
-        .name(format!("aopus_{session_id}"))
-        .property("dtx", false)
-        .property("bitrate", 6_000i32)
-        .build()
-        .context("build opusenc")?;
-    let pay = gst::ElementFactory::make("rtpopuspay")
-        .name(format!("apay_{session_id}"))
-        .property("pt", pt)
-        .build()
-        .context("build rtpopuspay")?;
-    consumer_pipeline
-        .add_many([&src, &convert, &resample, &caps, &opusenc, &pay])
-        .context("add audio anchor elements")?;
-    gst::Element::link_many([&src, &convert, &resample, &caps, &opusenc, &pay])
-        .context("link audio anchor chain")?;
-    let audio_caps = gst::Caps::builder("application/x-rtp")
-        .field("media", "audio")
-        .field("encoding-name", "OPUS")
-        .field("clock-rate", 48_000i32)
-        .build();
-    pay.link_filtered(webrtcbin, &audio_caps)
-        .context("link rtpopuspay -> webrtcbin (audio caps)")?;
-    Ok(pay)
 }
 
 /// Connect the per-consumer webrtcbin signals: on-ice-candidate (forwards
