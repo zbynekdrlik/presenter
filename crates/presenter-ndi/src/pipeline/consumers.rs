@@ -475,7 +475,10 @@ fn build_consumer_pipeline_blocking(
     // DIAG (temporary): log the offer's RTP header extensions (extmap) so we
     // know whether the browser offers playout-delay and at which id — needed to
     // wire the playout-delay extension's id correctly without breaking RTP.
-    for line in offer_str.lines().filter(|l| l.trim_start().starts_with("a=extmap:")) {
+    for line in offer_str
+        .lines()
+        .filter(|l| l.trim_start().starts_with("a=extmap:"))
+    {
         tracing::info!(session_id = %session_id, "OFFER-EXTMAP {}", line.trim());
     }
     let encoding_name = profile.encoding_name();

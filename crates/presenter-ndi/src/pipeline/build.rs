@@ -36,13 +36,18 @@ use super::{NdiPipeline, PipelineState};
 const MAX_VIDEO_WIDTH: i32 = 1280;
 const MAX_VIDEO_HEIGHT: i32 = 720;
 
-/// Compat-profile resolution: 1280×720 (720p). The 20s stutter is the system
-/// WebView's libhwui compositor (proven: stalls ~430ms/20s with H264 AND VP8;
-/// the TV's STANDALONE com.tcl.browser on the SAME stream has no 20s stall),
-/// so the fix is the RENDER PATH (a standalone browser), not the codec or a
-/// quality cut — hence FULL 720p here.
-const COMPAT_VIDEO_WIDTH: i32 = 1280;
-const COMPAT_VIDEO_HEIGHT: i32 = 720;
+/// Compat-profile resolution: 854×480 (480p). Telemetry (2026-06-15, correct
+/// instantaneous reading of the cumulative jitter counters) showed the powerful
+/// Tesla sd1 ran 720p VP8 @3Mbps cleanly (0% loss), but the three weak Hyundai
+/// TVs (sd2-4, armeabi-v7a) sustained 15-17% RTP packet loss at that weight and
+/// fell into reconnect loops — too much for their wifi link + software VP8
+/// decode. 480p @1.2Mbps is ~2.5× lighter (the proven-working pre-bump config);
+/// it upscales soft on the 1080p panels but plays SMOOTH, which beats a frozen
+/// 720p. (The earlier 720p bump was partly chasing a PHANTOM "jitter-buffer
+/// growth" that was a misread of the cumulative `jitterBufferTargetDelay`
+/// counter — the real buffer is a stable ~110ms; there is no latency drift.)
+const COMPAT_VIDEO_WIDTH: i32 = 854;
+const COMPAT_VIDEO_HEIGHT: i32 = 480;
 /// Compat-profile framerate: 24fps. The TVs' browser PRESENTS only ~26fps for
 /// this WebRTC video (resolution-independent — measured ~26 at both 576p and
 /// 720p). Sending 30fps piled the 4 surplus frames/sec into the receiver
@@ -61,10 +66,11 @@ const DEFAULT_BITRATE_KBPS: u32 = 2500;
 /// hardware-H264 compat branch; the active compat tier is software VP8.
 #[allow(dead_code)]
 const COMPAT_BITRATE_KBPS: u32 = 1200;
-/// Compat (720p24 VP8) encoder bitrate in bits/s (vp8enc's `target-bitrate` is
-/// bits/sec, unlike the H264 encoders' kbps). 3 Mbps suits 720p24 VP8 — fewer
-/// frames/sec than 30 means each frame can carry more bits at the same total.
-const COMPAT_TARGET_BITRATE_BPS: i32 = 3_000_000;
+/// Compat (480p24 VP8) encoder bitrate in bits/s (vp8enc's `target-bitrate` is
+/// bits/sec, unlike the H264 encoders' kbps). 1.2 Mbps suits 480p24 VP8 and,
+/// across 4 displays, keeps aggregate wifi load ~4.8Mbps (vs ~12Mbps at 3Mbps),
+/// which is what stops the congestion-driven packet loss on the weak Hyundais.
+const COMPAT_TARGET_BITRATE_BPS: i32 = 1_200_000;
 
 impl NdiPipeline {
     /// Build but do not yet start the pipeline.
