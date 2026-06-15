@@ -114,17 +114,15 @@ impl StreamProfile {
     /// profile string must degrade to the primary stream, never break a
     /// display's join.
     pub fn from_query(value: Option<&str>) -> Self {
-        // TEST OVERRIDE (HW-H264-on-com.tcl.browser test, 2026-06-15): fallback
-        // is Default (720p hardware H264) so EVERY client gets HW H264 — proving
-        // whether the standalone com.tcl.browser (own Viz compositor) decodes HW
-        // H264 to a paintable surface (the earlier "HW H264 = black" verdict was
-        // only ever observed on the system WebView/libhwui, never the standalone
-        // browser). Explicit `?profile=compat` still forces software VP8.
-        if value == Some("compat") {
-            Self::Compat
-        } else {
-            Self::Default
-        }
+        // ALL clients get Default = 720p hardware H264. Proven 2026-06-15: the
+        // standalone com.tcl.browser HW-decodes H264 on every stage TV incl. the
+        // weak Hyundais (the old "HW H264 = black" was the system WebView only).
+        // Software VP8 was an unnecessary quality cripple, so compat (VP8) is no
+        // longer served — even a client that still requests `?profile=compat`
+        // (stale WASM watchdog state) gets HW H264. Phase 2 reintroduces a
+        // genuine lower-res H264 tier for per-TV adaptive bitrate.
+        let _ = value;
+        Self::Default
     }
 
     /// The RTP encoding-name of the codec this profile streams. The profile
