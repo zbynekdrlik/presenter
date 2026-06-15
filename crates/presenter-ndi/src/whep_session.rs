@@ -162,6 +162,12 @@ pub struct WhepSession {
     /// appsink. Dropping it disconnects the consumer from the producer; it also
     /// carries pushed/dropped delivery counters for diagnostics.
     pub link: gstreamer_utils::ConsumptionLink,
+    /// The AUDIO clock-anchor link feeding this consumer's audio appsrc from the
+    /// `producer_audio` Opus appsink. `None` when the browser's offer carried no
+    /// Opus rtpmap (video-only fallback). Dropping it disconnects the consumer's
+    /// audio from the anchor producer; held alongside `link` so the session owns
+    /// BOTH media's producer connections for the consumer pipeline's lifetime.
+    pub audio_link: Option<gstreamer_utils::ConsumptionLink>,
     /// The per-pipeline bus watch (services `Latency` messages with
     /// `recalculate_latency()`, logs errors). Aborted on Drop.
     pub bus_task: tokio::task::JoinHandle<()>,
@@ -205,11 +211,12 @@ impl Drop for WhepSession {
     fn drop(&mut self) {
         // Full per-consumer teardown — this IS the canonical cleanup path
         // (remove_consumer just drops the session off the async thread):
-        //   1. the ConsumptionLink field's own Drop disconnects this consumer's
-        //      appsrc from the encoder's StreamProducer (no more samples in);
+        //   1. the `link` AND `audio_link` ConsumptionLink fields' own Drop
+        //      disconnects this consumer's video + audio appsrcs from their
+        //      StreamProducers (no more samples in on either media);
         //   2. abort the bus-watch task;
         //   3. set the whole consumer pipeline to Null (tears down appsrc +
-        //      rtph264pay + webrtcbin together).
+        //      rtph264pay + audio appsrc + rtpopuspay + webrtcbin together).
         self.bus_task.abort();
         let _ = self.consumer_pipeline.set_state(gst::State::Null);
         tracing::debug!(

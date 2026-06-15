@@ -54,8 +54,7 @@ use gstreamer_rtp::prelude::*;
 use gstreamer_rtp::subclass::prelude::*;
 
 /// The WebRTC playout-delay RTP header extension URI.
-pub const PLAYOUT_DELAY_URI: &str =
-    "http://www.webrtc.org/experiments/rtp-hdrext/playout-delay";
+pub const PLAYOUT_DELAY_URI: &str = "http://www.webrtc.org/experiments/rtp-hdrext/playout-delay";
 
 /// MIN playout delay, in units of 10ms. 0 = no minimum (0ms).
 const MIN_DELAY_10MS: u16 = 0;
@@ -126,8 +125,7 @@ mod imp {
 
         /// We support both one-byte and two-byte RTP header-extension framings.
         fn supported_flags(&self) -> gst_rtp::RTPHeaderExtensionFlags {
-            gst_rtp::RTPHeaderExtensionFlags::ONE_BYTE
-                | gst_rtp::RTPHeaderExtensionFlags::TWO_BYTE
+            gst_rtp::RTPHeaderExtensionFlags::ONE_BYTE | gst_rtp::RTPHeaderExtensionFlags::TWO_BYTE
         }
 
         /// The extension is always exactly 3 bytes.

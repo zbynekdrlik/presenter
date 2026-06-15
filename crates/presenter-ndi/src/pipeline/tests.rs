@@ -17,7 +17,7 @@ use gstreamer_utils::StreamProducer;
 use gstreamer_video as gst_video;
 use tokio::sync::watch;
 
-use super::build::{consumer_h264_caps, consumer_vp8_caps};
+use super::build::{consumer_h264_caps, consumer_opus_caps, consumer_vp8_caps};
 use super::*;
 use crate::whep_session::{LivenessState, WhepConnectionState, WhepSession};
 
@@ -43,6 +43,9 @@ impl NdiPipeline {
         // producer_compat mirrors production's parallel compat branch with
         // another detached appsink (no compat fanout is exercised here).
         let appsink_compat = gst_app::AppSink::builder().build();
+        // producer_audio mirrors production's audio clock-anchor branch with a
+        // third detached appsink (no audio fanout is exercised here).
+        let appsink_audio = gst_app::AppSink::builder().build();
         Self {
             pipeline: gst::Pipeline::new(),
             whep_url: String::new(),
@@ -52,6 +55,7 @@ impl NdiPipeline {
             sessions: Arc::new(tokio::sync::Mutex::new(HashMap::new())),
             producer: StreamProducer::from(&appsink),
             producer_compat: StreamProducer::from(&appsink_compat),
+            producer_audio: StreamProducer::from(&appsink_audio),
         }
     }
 
@@ -109,6 +113,7 @@ impl NdiPipeline {
             "enc_appsink",
         )?;
         let producer_compat = Self::add_stub_vp8_compat_branch(&pipeline, &tee)?;
+        let producer_audio = Self::add_stub_audio_branch(&pipeline)?;
         let (state_tx, state_rx) = watch::channel(PipelineState::Stopped);
         Ok(Self {
             pipeline,
@@ -119,6 +124,7 @@ impl NdiPipeline {
             sessions: Arc::new(tokio::sync::Mutex::new(HashMap::new())),
             producer,
             producer_compat,
+            producer_audio,
         })
     }
 
@@ -220,6 +226,45 @@ impl NdiPipeline {
         Ok(StreamProducer::from(&appsink))
     }
 
+    /// Test-only helper for `stopped_for_test_with_topology`: append the audio
+    /// clock-anchor branch stub (`audiotestsrc(silence) → audioconvert →
+    /// opusenc → appsink("enc_appsink_audio")`) mirroring production's audio
+    /// anchor shape. STRUCTURAL only — no audiomixer/NDI-audio input and default
+    /// tuning; the real anchor is built by `build::add_audio_branch`.
+    fn add_stub_audio_branch(pipeline: &gst::Pipeline) -> Result<StreamProducer> {
+        let src = gst::ElementFactory::make("audiotestsrc")
+            .property_from_str("wave", "silence")
+            .property("is-live", true)
+            .build()
+            .context("audiotestsrc (stub)")?;
+        let convert = gst::ElementFactory::make("audioconvert")
+            .build()
+            .context("audioconvert (stub)")?;
+        let encoder = gst::ElementFactory::make("opusenc")
+            .name("opusenc")
+            .build()
+            .context("opusenc (stub)")?;
+        let appsink = gst_app::AppSink::builder()
+            .name("enc_appsink_audio")
+            .caps(&consumer_opus_caps())
+            .max_buffers(30u32)
+            .drop(true)
+            .build();
+        pipeline
+            .add_many([
+                &src,
+                &convert,
+                &encoder,
+                appsink.upcast_ref::<gst::Element>(),
+            ])
+            .context("add audio stub branch")?;
+        gst::Element::link_many([&src, &convert, &encoder]).context("link audio stub branch")?;
+        encoder
+            .link(appsink.upcast_ref::<gst::Element>())
+            .context("link opusenc -> appsink (stub)")?;
+        Ok(StreamProducer::from(&appsink))
+    }
+
     /// Stub: add a consumer WITHOUT SDP exchange (tests only). Builds the
     /// production consumer topology — a SEPARATE pipeline with
     /// `appsrc → rtph264pay → webrtcbin` — connects its appsrc to the
@@ -266,6 +311,8 @@ impl NdiPipeline {
             consumer_pipeline,
             webrtcbin,
             link,
+            // The stub exercises video fanout only; no audio anchor link.
+            audio_link: None,
             // Stand-in for the production bus watch; aborted on Drop.
             bus_task: tokio::spawn(async {}),
             connection_state: Arc::new(std::sync::Mutex::new(WhepConnectionState::New)),

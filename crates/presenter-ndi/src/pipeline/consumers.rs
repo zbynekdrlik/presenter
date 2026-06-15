@@ -42,6 +42,7 @@ use gstreamer_video as gst_video;
 use gstreamer_webrtc as gst_webrtc;
 use tokio::sync::mpsc::UnboundedSender;
 
+use super::consumer_audio::add_audio_media;
 use super::negotiation::{
     align_payload_type, await_ice_gathering, await_media_caps, negotiate_sdp, parse_extmap_id,
     parse_h264_payload_type, parse_vp8_payload_type,
@@ -64,6 +65,10 @@ pub(super) struct ConsumerBranch {
     webrtcbin: gst::Element,
     bus_task: Option<tokio::task::JoinHandle<()>>,
     link: Option<ConsumptionLink>,
+    /// The audio clock-anchor link, when the offer carried an Opus rtpmap.
+    /// `None` when the consumer fell back to video-only (no Opus offered) —
+    /// the anchor is best-effort, never a join-blocker.
+    audio_link: Option<ConsumptionLink>,
     sdp_answer: String,
     session_id: String,
     armed: bool,
@@ -76,6 +81,7 @@ impl ConsumerBranch {
             webrtcbin,
             bus_task: None,
             link: None,
+            audio_link: None,
             sdp_answer: String::new(),
             session_id: session_id.to_string(),
             armed: true,
@@ -83,8 +89,9 @@ impl ConsumerBranch {
     }
 
     /// Take ownership of the parts for a stored `WhepSession`, disarming the
-    /// guard. Returns None if the branch never completed negotiation (no link
-    /// or bus task) — callers treat that as an internal error.
+    /// guard. Returns None if the branch never completed negotiation (no video
+    /// link or bus task) — callers treat that as an internal error. The audio
+    /// link is optional (video-only fallback) and carried through as-is.
     #[allow(clippy::type_complexity)]
     fn defuse(
         mut self,
@@ -93,16 +100,19 @@ impl ConsumerBranch {
         gst::Element,
         String,
         ConsumptionLink,
+        Option<ConsumptionLink>,
         tokio::task::JoinHandle<()>,
     )> {
         let link = self.link.take()?;
         let bus_task = self.bus_task.take()?;
+        let audio_link = self.audio_link.take();
         self.armed = false;
         Some((
             self.pipeline.clone(),
             self.webrtcbin.clone(),
             std::mem::take(&mut self.sdp_answer),
             link,
+            audio_link,
             bus_task,
         ))
     }
@@ -116,8 +126,10 @@ impl Drop for ConsumerBranch {
         if let Some(task) = self.bus_task.take() {
             task.abort();
         }
-        // Dropping the link disconnects this consumer from the StreamProducer.
+        // Dropping the links disconnects this consumer's video AND audio appsrcs
+        // from their StreamProducers.
         drop(self.link.take());
+        drop(self.audio_link.take());
         let _ = self.pipeline.set_state(gst::State::Null);
         tracing::debug!(
             session_id = %self.session_id,
@@ -159,10 +171,14 @@ impl NdiPipeline {
         self.reap_and_check_cap().await?;
 
         let session_id = WhepSession::new_session_id();
-        // Select the profile's producer HERE; the blocking builder receives
-        // exactly one producer and everything downstream (appsrc link,
-        // keyframe request) follows it.
+        // Select the profile's VIDEO producer HERE; the blocking builder
+        // receives exactly one video producer and everything downstream (appsrc
+        // link, keyframe request) follows it.
         let producer = self.producer_for_profile(profile).clone();
+        // The AUDIO clock anchor producer is profile-independent — every
+        // consumer (both profiles) gets the same continuous Opus track on the
+        // shared pipeline clock (see `producer_audio`).
+        let producer_audio = self.producer_audio.clone();
         // Share the ENCODER pipeline's clock + base-time with the consumer
         // pipeline (webrtcsink does exactly this for its session pipelines).
         // The encoder pipeline is guaranteed Streaming before WHEP POSTs are
@@ -194,6 +210,7 @@ impl NdiPipeline {
         tokio::task::spawn_blocking(move || {
             let result = build_consumer_pipeline_blocking(
                 &producer,
+                &producer_audio,
                 profile,
                 &sdp_offer_bytes,
                 &session_id_for_blocking,
@@ -215,7 +232,7 @@ impl NdiPipeline {
         let branch = answer_rx
             .await
             .context("spawn_blocking answer channel dropped")??;
-        let (consumer_pipeline, webrtcbin, sdp_answer, link, bus_task) = branch
+        let (consumer_pipeline, webrtcbin, sdp_answer, link, audio_link, bus_task) = branch
             .defuse()
             .ok_or_else(|| anyhow!("negotiated consumer branch missing link or bus task"))?;
         let session = WhepSession {
@@ -223,6 +240,7 @@ impl NdiPipeline {
             consumer_pipeline,
             webrtcbin,
             link,
+            audio_link,
             bus_task,
             connection_state,
             // Fresh RTCP-liveness tracker: full stale-window grace from now.
@@ -437,27 +455,93 @@ impl NdiPipeline {
     }
 }
 
+/// DIAG (temporary): log the offer's RTP header extensions (extmap) so we know
+/// whether the browser offers playout-delay and at which id — needed to wire the
+/// playout-delay extension's id correctly without breaking RTP.
+fn log_offer_extmaps(offer_str: &str, session_id: &str) {
+    for line in offer_str
+        .lines()
+        .filter(|l| l.trim_start().starts_with("a=extmap:"))
+    {
+        tracing::info!(session_id = %session_id, "OFFER-EXTMAP {}", line.trim());
+    }
+}
+
+/// Parse the VIDEO payload type the consumer's profile requires from the offer.
+/// The profile implies the codec: Default = H264 (720p hw), Compat = VP8
+/// (854×480@20 sw). The browser assigns each codec a dynamic pt; seating the
+/// per-consumer payloader on THAT pt is mandatory (every browser offer carries
+/// both H264 + VP8). An offer with no rtpmap for the required codec is rejected
+/// — presetting a guessed pt could never work since the browser can't decode a
+/// codec it didn't offer.
+fn parse_video_payload_type(
+    offer_str: &str,
+    profile: StreamProfile,
+    encoding_name: &str,
+    session_id: &str,
+) -> Result<u32> {
+    let pt = match profile {
+        StreamProfile::Default => parse_h264_payload_type(offer_str),
+        StreamProfile::Compat => parse_vp8_payload_type(offer_str),
+    };
+    pt.ok_or_else(|| {
+        tracing::warn!(
+            session_id = %session_id,
+            profile = ?profile,
+            codec = encoding_name,
+            "WHEP offer carries no rtpmap for the requested profile's codec — \
+             rejecting consumer (the browser could not decode this stream)"
+        );
+        anyhow!("WHEP offer contains no {encoding_name} video rtpmap")
+    })
+}
+
+/// Hard-cap the receiver jitter buffer via the playout-delay RTP header
+/// extension, on the id the browser negotiated in its offer (Chromium offers it
+/// at 5). This is the ONLY lever Chromium honors as max_playout_delay (it
+/// ignores the JS jitterBufferTarget hint), so a video-only stream's latency
+/// stays bounded + low instead of drifting to >1s. The id MUST match the offer's
+/// extmap (a mismatched/unset id corrupts every RTP packet → black). With the
+/// audio clock anchor now present this is belt-and-braces alongside the anchor.
+fn wire_playout_delay_cap(payloader: &gst::Element, offer_str: &str, session_id: &str) {
+    if let Some(pd_id) = parse_extmap_id(offer_str, "playout-delay") {
+        let pd_ext = super::playout_delay::create_with_id(pd_id);
+        payloader.emit_by_name::<()>("add-extension", &[&pd_ext]);
+        tracing::info!(session_id = %session_id, pd_id, "playout-delay cap added (MAX=200ms)");
+    } else {
+        tracing::warn!(
+            session_id = %session_id,
+            "offer has no playout-delay extmap; latency cap skipped"
+        );
+    }
+}
+
 /// Build a fresh `appsrc → rtph264pay|rtpvp8pay → webrtcbin` pipeline for
-/// one consumer, negotiate SDP, connect its appsrc to the requested profile
-/// branch's StreamProducer (already selected by `add_consumer`), and return
-/// the [`ConsumerBranch`] guard owning all of it.
+/// one consumer (PLUS a continuous Opus audio clock anchor into the SAME
+/// webrtcbin — see `add_audio_media`), negotiate SDP, connect the appsrcs to
+/// their StreamProducers (video = the requested profile branch already selected
+/// by `add_consumer`; audio = the profile-independent `producer_audio`), and
+/// return the [`ConsumerBranch`] guard owning all of it.
 ///
-/// The profile implies the codec (`StreamProfile::encoding_name` — Default →
-/// H264, Compat → VP8), so the offer MUST carry that codec's rtpmap — its
-/// dynamic payload type pre-seats the per-consumer payloader. An offer
+/// The profile implies the VIDEO codec (`StreamProfile::encoding_name` —
+/// Default → H264, Compat → VP8), so the offer MUST carry that codec's rtpmap —
+/// its dynamic payload type pre-seats the per-consumer payloader. An offer
 /// without it is rejected (presetting pt=96 could NEVER work — the browser
 /// can't decode a codec it didn't offer). In practice every browser offer
-/// carries both H264 and VP8.
+/// carries both H264 and VP8. The audio anchor is best-effort: an offer with no
+/// Opus rtpmap simply skips audio (video-only fallback), never a join-blocker.
 ///
 /// ORDER (load-bearing): build elements (appsrc configured LIVE before any
-/// state change) → new pipeline on the ENCODER's clock/base-time → link →
-/// guard → signals → bus watch → PLAYING (and wait) → connect appsrc to the
-/// producer → wait for media caps (ssrc) on the webrtcbin sink pad → SDP
-/// offer/answer/SLD → align payload type → await ICE gathering → read the
-/// final local SDP. Any `?` exit drops the guard, which tears everything down.
+/// state change) → new pipeline on the ENCODER's clock/base-time → add audio
+/// media → link → guard → signals → bus watch → PLAYING (and wait) → connect
+/// appsrcs to the producers → wait for media caps (ssrc) on the webrtcbin sink
+/// pad → SDP offer/answer/SLD → align video + audio payload types → await ICE
+/// gathering → read the final local SDP. Any `?` exit drops the guard, which
+/// tears everything down.
 #[allow(clippy::too_many_arguments)]
 fn build_consumer_pipeline_blocking(
     producer: &StreamProducer,
+    producer_audio: &StreamProducer,
     profile: StreamProfile,
     sdp_offer_bytes: &[u8],
     session_id: &str,
@@ -472,51 +556,12 @@ fn build_consumer_pipeline_blocking(
     let offer_desc =
         gst_webrtc::WebRTCSessionDescription::new(gst_webrtc::WebRTCSDPType::Offer, sdp_msg);
     let offer_str = std::str::from_utf8(sdp_offer_bytes).unwrap_or("");
-    // DIAG (temporary): log the offer's RTP header extensions (extmap) so we
-    // know whether the browser offers playout-delay and at which id — needed to
-    // wire the playout-delay extension's id correctly without breaking RTP.
-    for line in offer_str.lines().filter(|l| l.trim_start().starts_with("a=extmap:")) {
-        tracing::info!(session_id = %session_id, "OFFER-EXTMAP {}", line.trim());
-    }
+    log_offer_extmaps(offer_str, session_id);
     let encoding_name = profile.encoding_name();
-    // The profile implies the codec: Default = H264 (720p hw), Compat = VP8
-    // (854×480@20 sw). Seat the per-consumer payloader on the browser's
-    // dynamic pt for THAT codec (every browser offer carries both H264 + VP8).
-    let pt = match profile {
-        StreamProfile::Default => parse_h264_payload_type(offer_str),
-        StreamProfile::Compat => parse_vp8_payload_type(offer_str),
-    };
-    let Some(pt) = pt else {
-        tracing::warn!(
-            session_id = %session_id,
-            profile = ?profile,
-            codec = encoding_name,
-            "WHEP offer carries no rtpmap for the requested profile's codec — \
-             rejecting consumer (the browser could not decode this stream)"
-        );
-        return Err(anyhow!(
-            "WHEP offer contains no {encoding_name} video rtpmap"
-        ));
-    };
+    let pt = parse_video_payload_type(offer_str, profile, encoding_name, session_id)?;
 
     let (appsrc, payloader, webrtcbin) = build_consumer_elements(session_id, profile, pt)?;
-
-    // Hard-cap the receiver jitter buffer via the playout-delay RTP header
-    // extension, on the id the browser negotiated in its offer (Chromium offers
-    // it at 5). This is the ONLY lever Chromium honors as max_playout_delay (it
-    // ignores the JS jitterBufferTarget hint), so a video-only stream's latency
-    // stays bounded + low instead of drifting to >1s. The id MUST match the
-    // offer's extmap (a mismatched/unset id corrupts every RTP packet → black).
-    if let Some(pd_id) = parse_extmap_id(offer_str, "playout-delay") {
-        let pd_ext = super::playout_delay::create_with_id(pd_id);
-        payloader.emit_by_name::<()>("add-extension", &[&pd_ext]);
-        tracing::info!(session_id = %session_id, pd_id, "playout-delay cap added (MAX=200ms)");
-    } else {
-        tracing::warn!(
-            session_id = %session_id,
-            "offer has no playout-delay extmap; latency cap skipped"
-        );
-    }
+    wire_playout_delay_cap(&payloader, offer_str, session_id);
 
     let consumer_pipeline = gst::Pipeline::with_name(&format!("consumer_{session_id}"));
     adopt_encoder_timeline(&consumer_pipeline, enc_clock, enc_base_time, session_id);
@@ -524,27 +569,19 @@ fn build_consumer_pipeline_blocking(
         .add_many([appsrc.upcast_ref::<gst::Element>(), &payloader, &webrtcbin])
         .context("add appsrc+payloader+webrtcbin to consumer pipeline")?;
 
+    // AUDIO CLOCK ANCHOR: a SECOND media into the SAME webrtcbin — a continuous
+    // Opus track on the shared pipeline clock. Built + added + linked here,
+    // before PLAYING, so its appsrc is configured LIVE in time (same is-live
+    // ordering invariant as the video appsrc). `None` when the offer has no Opus
+    // rtpmap (video-only fallback — the anchor is best-effort, never a blocker).
+    let audio_media = add_audio_media(&consumer_pipeline, &webrtcbin, offer_str, session_id)?;
+
     // From here every resource is owned by the guard: any `?` below drops it,
-    // aborting the bus task (if spawned), disconnecting the producer link (if
+    // aborting the bus task (if spawned), disconnecting the producer link(s) (if
     // connected) and setting the pipeline to Null.
     let mut branch = ConsumerBranch::new(consumer_pipeline.clone(), webrtcbin.clone(), session_id);
 
-    // appsrc → payloader → webrtcbin. The pay→webrtc link is filtered to the
-    // profile codec's application/x-rtp caps (payload OMITTED — it is
-    // re-aligned to the negotiated pt in align_payload_type; pinning it here
-    // would fight that).
-    appsrc
-        .upcast_ref::<gst::Element>()
-        .link(&payloader)
-        .context("link appsrc -> payloader")?;
-    let rtp_caps = gst::Caps::builder("application/x-rtp")
-        .field("media", "video")
-        .field("encoding-name", encoding_name)
-        .field("clock-rate", 90_000i32)
-        .build();
-    payloader
-        .link_filtered(&webrtcbin, &rtp_caps)
-        .context("link payloader -> webrtcbin (codec caps)")?;
+    link_video_to_webrtcbin(&appsrc, &payloader, &webrtcbin, encoding_name)?;
 
     connect_branch_signals(&webrtcbin, ice_tx, connection_state, session_id.to_string());
 
@@ -579,6 +616,17 @@ fn build_consumer_pipeline_blocking(
             .map_err(|e| anyhow!("StreamProducer::add_consumer failed: {e}"))?,
     );
 
+    // Connect the audio appsrc (if any) to the audio clock-anchor producer —
+    // AFTER PLAYING, same ordering as the video link. The continuous silent
+    // mixer input means Opus is always flowing, so audio anchors immediately.
+    if let Some((audio_appsrc, _)) = &audio_media {
+        branch.audio_link = Some(
+            producer_audio
+                .add_consumer(audio_appsrc)
+                .map_err(|e| anyhow!("StreamProducer::add_consumer (audio) failed: {e}"))?,
+        );
+    }
+
     // GOP is 240 frames — explicitly request an IDR so this consumer starts
     // decoding immediately instead of waiting for the GOP boundary.
     request_keyframe(producer);
@@ -591,6 +639,10 @@ fn build_consumer_pipeline_blocking(
     // transport, so lower the RTCP SR interval HERE (not at build time).
     tune_rtcp_interval(&webrtcbin, session_id);
     align_payload_type(&webrtcbin, &payloader, encoding_name, session_id);
+    // Align the audio payloader to the negotiated Opus pt too (when present).
+    if let Some((_, audio_payloader)) = &audio_media {
+        align_payload_type(&webrtcbin, audio_payloader, "OPUS", session_id);
+    }
     await_ice_gathering(&webrtcbin, session_id);
 
     let local_desc =
@@ -600,6 +652,30 @@ fn build_consumer_pipeline_blocking(
         .as_text()
         .map_err(|e| anyhow!("local-description SDP as_text failed: {e}"))?;
     Ok(branch)
+}
+
+/// Link the consumer's VIDEO chain `appsrc → payloader → webrtcbin`. The
+/// pay→webrtc link is filtered to the profile codec's `application/x-rtp` caps
+/// (payload OMITTED — it is re-aligned to the negotiated pt in
+/// `align_payload_type`; pinning it here would fight that).
+fn link_video_to_webrtcbin(
+    appsrc: &gst_app::AppSrc,
+    payloader: &gst::Element,
+    webrtcbin: &gst::Element,
+    encoding_name: &str,
+) -> Result<()> {
+    appsrc
+        .upcast_ref::<gst::Element>()
+        .link(payloader)
+        .context("link appsrc -> payloader")?;
+    let rtp_caps = gst::Caps::builder("application/x-rtp")
+        .field("media", "video")
+        .field("encoding-name", encoding_name)
+        .field("clock-rate", 90_000i32)
+        .build();
+    payloader
+        .link_filtered(webrtcbin, &rtp_caps)
+        .context("link payloader -> webrtcbin (codec caps)")
 }
 
 /// Put a consumer pipeline on the ENCODER pipeline's clock + base-time so the

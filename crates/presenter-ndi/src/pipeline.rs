@@ -64,6 +64,7 @@ use tokio::sync::watch;
 use crate::whep_session::{IceCandidate, WhepConnectionState, WhepSession};
 
 mod build;
+mod consumer_audio;
 mod consumers;
 mod lifecycle;
 mod negotiation;
@@ -233,6 +234,18 @@ pub struct NdiPipeline {
     /// with `?profile=compat` (weak TVs whose H264 OMX decoder is vendor-
     /// broken; they software-decode token-partitioned VP8 across 4 cores).
     producer_compat: StreamProducer,
+    /// StreamProducer wrapping the AUDIO CLOCK ANCHOR's Opus appsink
+    /// (`enc_appsink_audio`) — feeds EVERY consumer (both profiles) a continuous
+    /// Opus track on the SAME pipeline clock + timeline as the video. A
+    /// video-only WebRTC stream has no drift-compensating resampler in Chromium
+    /// (it lives only in the audio NetEq, which libwebrtc's stream synchronizer
+    /// early-returns past with no audio track), so its receiver jitter buffer
+    /// drifts unbounded to >1s. Sending this audio track makes the browser run
+    /// its NetEq audio device clock and slave the video to it, bounding the
+    /// buffer. The Opus is the NDI source's OWN audio mixed with continuous
+    /// silence (so the clock never gaps when the source is quiet); see
+    /// `build::add_audio_branch`.
+    producer_audio: StreamProducer,
 }
 
 impl Drop for NdiPipeline {
