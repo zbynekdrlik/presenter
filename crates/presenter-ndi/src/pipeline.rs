@@ -67,7 +67,6 @@ mod build;
 mod consumers;
 mod lifecycle;
 mod negotiation;
-mod playout_delay;
 mod reaper;
 
 /// Pipeline lifecycle state.
