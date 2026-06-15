@@ -110,6 +110,7 @@ impl NdiPipeline {
         // DIAG (temporary, 80ms threshold): locate the synchronized ~20s hitch.
         install_gap_probe(&videoconvert, "sink", "ndi-arrival");
         install_gap_probe(appsink.upcast_ref::<gst::Element>(), "sink", "h264-encoder-out");
+        install_keyframe_probe(appsink.upcast_ref::<gst::Element>(), "default");
         ndisrc.link(&ndisrcdemux).context("link ndisrc -> demux")?;
         // videoconvert → videoscale → capsfilter(NV12, ≤720p) → tee. Both
         // encode branches are linked HERE, before any state change — a tee
@@ -187,6 +188,21 @@ pub(super) fn install_gap_probe(element: &gst::Element, pad_name: &str, label: &
                 }
             }
             *guard = Some(now);
+            gst::PadProbeReturn::Ok
+        });
+    }
+}
+
+/// DIAG (temporary): log each KEYFRAME (non-delta buffer) passing a pad, to
+/// measure the real keyframe cadence vs the ~20s hitch.
+pub(super) fn install_keyframe_probe(element: &gst::Element, label: &'static str) {
+    if let Some(pad) = element.static_pad("sink") {
+        pad.add_probe(gst::PadProbeType::BUFFER, move |_pad, info| {
+            if let Some(gst::PadProbeData::Buffer(ref buf)) = info.data {
+                if !buf.flags().contains(gst::BufferFlags::DELTA_UNIT) {
+                    tracing::warn!(probe = label, "KEYFRAME emitted");
+                }
+            }
             gst::PadProbeReturn::Ok
         });
     }
