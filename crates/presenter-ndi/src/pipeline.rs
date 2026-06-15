@@ -113,10 +113,16 @@ impl StreamProfile {
     /// profile string must degrade to the primary stream, never break a
     /// display's join.
     pub fn from_query(value: Option<&str>) -> Self {
-        if value == Some("compat") {
-            Self::Compat
-        } else {
+        // TEST OVERRIDE (VP8 stutter test, 2026-06-15): the fallback is
+        // Compat (software VP8) so EVERY client gets VP8 regardless of its
+        // cached `ndiCodecMode` localStorage — the only way a default-pinned
+        // TV picks up the VP8 branch without clearing its storage. Explicit
+        // `?profile=default` still forces the 720p H264 branch (laptop control).
+        // REVERT this fallback to `Self::Default` once the VP8 verdict is in.
+        if value == Some("default") {
             Self::Default
+        } else {
+            Self::Compat
         }
     }
 
@@ -127,11 +133,15 @@ impl StreamProfile {
     /// alignment all follow this value (see `consumers`).
     pub(crate) fn encoding_name(self) -> &'static str {
         match self {
-            // Both tiers are now constrained-baseline H264 (the compat tier is
-            // a SECOND hardware VA-API encoder at 854×480, not software VP8).
-            // The profile selects RESOLUTION, no longer codec.
+            // Default → 720p hardware H264; Compat → software VP8 (854×480@20,
+            // token-partitioned). Software-decoded VP8 produces a plain
+            // sampleable texture the weak TVs' browser can ALWAYS paint and
+            // composite smoothly — hardware-H264 on these TVs decodes to an
+            // opaque overlay buffer that renders black (Cromite) or hitches
+            // ~every 20s through the system WebView's libhwui compositor. VP8
+            // is exactly the codec VDO.Ninja used, visible+smooth, on these TVs.
             Self::Default => "H264",
-            Self::Compat => "H264",
+            Self::Compat => "VP8",
         }
     }
 }

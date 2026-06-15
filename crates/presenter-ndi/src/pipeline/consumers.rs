@@ -473,11 +473,12 @@ fn build_consumer_pipeline_blocking(
         gst_webrtc::WebRTCSessionDescription::new(gst_webrtc::WebRTCSDPType::Offer, sdp_msg);
     let offer_str = std::str::from_utf8(sdp_offer_bytes).unwrap_or("");
     let encoding_name = profile.encoding_name();
-    // Both tiers stream constrained-baseline H264 now (compat = low-res H264,
-    // not VP8); the profile selects resolution, so the payload type is H264's.
+    // The profile implies the codec: Default = H264 (720p hw), Compat = VP8
+    // (854×480@20 sw). Seat the per-consumer payloader on the browser's
+    // dynamic pt for THAT codec (every browser offer carries both H264 + VP8).
     let pt = match profile {
         StreamProfile::Default => parse_h264_payload_type(offer_str),
-        StreamProfile::Compat => parse_h264_payload_type(offer_str),
+        StreamProfile::Compat => parse_vp8_payload_type(offer_str),
     };
     let Some(pt) = pt else {
         tracing::warn!(
@@ -662,7 +663,7 @@ pub(super) fn build_consumer_elements(
     // `consumer_vp8_caps` pin BOTH sides of each bridge).
     let bridge_caps = match profile {
         StreamProfile::Default => consumer_h264_caps(),
-        StreamProfile::Compat => consumer_h264_caps(),
+        StreamProfile::Compat => consumer_vp8_caps(),
     };
     let appsrc = gst_app::AppSrc::builder()
         .name(format!("src_{session_id}"))
@@ -685,7 +686,7 @@ pub(super) fn build_consumer_elements(
     // offered pt for the profile's codec.
     let payloader = match profile {
         StreamProfile::Default => build_h264_payloader(session_id, pt)?,
-        StreamProfile::Compat => build_h264_payloader(session_id, pt)?,
+        StreamProfile::Compat => build_vp8_payloader(session_id, pt)?,
     };
 
     let webrtcbin = gst::ElementFactory::make("webrtcbin")
