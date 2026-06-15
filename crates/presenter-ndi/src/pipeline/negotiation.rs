@@ -8,44 +8,31 @@ use gstreamer as gst;
 use gstreamer::prelude::*;
 use gstreamer_webrtc as gst_webrtc;
 
-/// Wait (bounded, event-driven) until EVERY webrtcbin sink pad has CURRENT CAPS
+/// Wait (bounded, event-driven) until the webrtcbin sink pad has CURRENT CAPS
 /// that include the payloader's `ssrc` field — i.e. real media caps, not just
 /// the link-filter caps. Called between connecting the consumer to the
-/// StreamProducer(s) and create-answer, so the answer SDP always announces the
-/// send SSRC for EACH media. Without this, create-answer can win the race
-/// against media arrival: the answer then has NO `a=ssrc` line for a media and
-/// the browser DROPS every RTP packet as un-demuxable — transport bytes climb
-/// while inbound-rtp stays at zero: connected, but black. (Observed
-/// deterministically for stragglers, whose first buffer is keyframe-gated by
-/// the StreamProducer.)
+/// StreamProducer and create-answer, so the answer SDP always announces the
+/// send SSRC. Without this, create-answer can win the race against media
+/// arrival: the answer then has NO `a=ssrc` line and the browser DROPS every
+/// RTP packet as un-demuxable — transport bytes climb while inbound-rtp stays
+/// at zero: connected, but black. (Observed deterministically for stragglers,
+/// whose first buffer is keyframe-gated by the StreamProducer.)
 ///
-/// Since the audio clock anchor (#video+audio), webrtcbin has TWO sink pads
-/// (video + Opus audio); BOTH need their SSRC in the answer, so we wait per-pad.
-/// The audio anchor's continuous silence means its caps arrive immediately; the
-/// video pad's caps arrive within one GOP (≤1s; usually ~50ms thanks to the
-/// producer's force-keyunit request). The 5s per-pad bound covers a source that
-/// is momentarily not delivering frames; on timeout we proceed with a generic
+/// Media normally arrives within one GOP (≤1s; usually ~50ms thanks to the
+/// producer's force-keyunit request). The 5s bound covers a source that is
+/// momentarily not delivering frames; on timeout we proceed with a generic
 /// answer (same behavior as before this fix) and log loudly.
 pub(super) fn await_media_caps(webrtcbin: &gst::Element, session_id: &str) {
-    let pads = webrtcbin.sink_pads();
-    if pads.is_empty() {
+    let Some(pad) = webrtcbin.sink_pads().into_iter().next() else {
         tracing::warn!(session_id = %session_id, "webrtcbin has no sink pad; skipping media-caps wait");
         return;
-    }
-    for pad in pads {
-        await_pad_media_caps(&pad, session_id);
-    }
-}
-
-/// Wait for ONE webrtcbin sink pad to carry media caps (an `ssrc` field). See
-/// `await_media_caps` for why this gates create-answer.
-fn await_pad_media_caps(pad: &gst::Pad, session_id: &str) {
+    };
     let has_media_caps = |p: &gst::Pad| {
         p.current_caps()
             .and_then(|c| c.structure(0).map(|s| s.has_field("ssrc")))
             .unwrap_or(false)
     };
-    if has_media_caps(pad) {
+    if has_media_caps(&pad) {
         return;
     }
     // Event-driven wait: a probe signals when a CAPS event passes the pad.
@@ -60,17 +47,16 @@ fn await_pad_media_caps(pad: &gst::Pad, session_id: &str) {
     });
     // Cover the race where the caps event passed between the check and the
     // probe install.
-    if !has_media_caps(pad)
+    if !has_media_caps(&pad)
         && caps_rx
             .recv_timeout(std::time::Duration::from_secs(5))
             .is_err()
     {
         tracing::warn!(
             session_id = %session_id,
-            pad = %pad.name(),
-            "media caps did not reach this webrtcbin sink pad within 5s (source \
-             not delivering frames?); the answer may carry no a=ssrc for this \
-             media and the browser may fail to demux it until it reconnects"
+            "media caps did not reach webrtcbin within 5s (source not \
+             delivering frames?); the answer will carry no a=ssrc and the \
+             browser may fail to demux the stream until it reconnects"
         );
     }
     if let Some(id) = probe_id {
@@ -105,11 +91,10 @@ fn await_pad_media_caps(pad: &gst::Pad, session_id: &str) {
 /// the sink pad from the browser's offer) and BEFORE create-answer (which
 /// reads `trans->do_nack` when building the answered media). `do-nack` is a
 /// CONSTRUCT|READWRITE property, so this post-construction set is honored.
-/// Since the audio clock anchor, a consumer pipeline has TWO sink pads (video +
-/// Opus audio); RTX/NACK is a VIDEO loss-recovery knob, so we enable it ONLY on
-/// the video transceiver (Opus carries its own in-band resilience and Chromium
-/// does not retransmit it). This covers both the H264 default and the VP8 compat
-/// consumer pipelines; the audio transceiver is left untouched.
+/// The WHEP consumer pipelines are strictly video-only — `appsrc →
+/// rtph264pay|rtpvp8pay → webrtcbin`, ONE sink pad per consumer — so every
+/// transceiver here is the video one; this covers both the H264 default and
+/// the VP8 compat consumer pipelines.
 fn enable_rtx_nack(webrtcbin: &gst::Element, session_id: &str) {
     let mut enabled = 0u32;
     for pad in webrtcbin.sink_pads() {
@@ -121,10 +106,6 @@ fn enable_rtx_nack(webrtcbin: &gst::Element, session_id: &str) {
         let Some(transceiver) = transceiver else {
             continue;
         };
-        // Skip the audio transceiver — RTX/NACK is video-only here.
-        if transceiver.kind() != gst_webrtc::WebRTCKind::Video {
-            continue;
-        }
         // Generic setter: `do-nack` is added by webrtcbin's transceiver
         // subclass, not the public GstWebRTCRTPTransceiver base, so there is no
         // typed gstreamer-rs accessor — set it the same way webrtcsink does.
@@ -296,18 +277,6 @@ pub(crate) fn parse_vp8_payload_type(sdp: &str) -> Option<u32> {
     parse_rtpmap_payload_type(sdp, "VP8/")
 }
 
-/// Opus mirror of [`parse_h264_payload_type`]: the payload type of the first
-/// `a=rtpmap:<pt> opus/48000…` line. Used by the audio clock anchor: every
-/// consumer pipeline payloads a continuous Opus track into the SAME webrtcbin
-/// (alongside the video), and its per-consumer `rtpopuspay` must be seated on
-/// the browser's dynamic Opus pt for media to flow. Every browser's default
-/// audio offer carries Opus; an offer WITHOUT it makes the consumer fall back
-/// to video-only (the audio anchor is skipped gracefully — see
-/// `consumers::build_consumer_pipeline_blocking`).
-pub(crate) fn parse_opus_payload_type(sdp: &str) -> Option<u32> {
-    parse_rtpmap_payload_type(sdp, "OPUS/")
-}
-
 /// Parse the RTP extmap id for a header-extension URI from an SDP
 /// (`a=extmap:<id>[/dir] <uri>`). Used to seat a custom header extension on the
 /// id the PEER negotiated — e.g. the playout-delay extension (Chromium offers it
@@ -355,7 +324,7 @@ fn parse_rtpmap_payload_type(sdp: &str, codec_prefix: &str) -> Option<u32> {
 
 #[cfg(test)]
 mod pt_parse_tests {
-    use super::{parse_h264_payload_type, parse_opus_payload_type, parse_vp8_payload_type};
+    use super::{parse_h264_payload_type, parse_vp8_payload_type};
 
     #[test]
     fn finds_h264_payload_type_when_other_codecs_listed_first() {
@@ -413,24 +382,5 @@ mod pt_parse_tests {
     fn returns_none_without_vp8() {
         let sdp = "m=video 9 UDP/TLS/RTP/SAVPF 103\r\na=rtpmap:103 H264/90000\r\n";
         assert_eq!(parse_vp8_payload_type(sdp), None);
-    }
-
-    #[test]
-    fn finds_opus_payload_type_in_audio_mline() {
-        // The browser's audio m-line: Opus is the universal default, on a
-        // dynamic pt (Chrome commonly picks 111). The clock anchor's
-        // rtpopuspay must be seated on it.
-        let sdp = "m=audio 9 UDP/TLS/RTP/SAVPF 111 63\r\n\
-                   a=rtpmap:111 opus/48000/2\r\n\
-                   a=rtpmap:63 red/48000/2\r\n";
-        assert_eq!(parse_opus_payload_type(sdp), Some(111));
-    }
-
-    #[test]
-    fn returns_none_without_opus() {
-        // A recvonly-video-only offer carries no audio rtpmap — the consumer
-        // falls back to video-only (audio anchor skipped).
-        let sdp = "m=video 9 UDP/TLS/RTP/SAVPF 103\r\na=rtpmap:103 H264/90000\r\n";
-        assert_eq!(parse_opus_payload_type(sdp), None);
     }
 }

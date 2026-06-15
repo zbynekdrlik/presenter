@@ -319,39 +319,26 @@
 
   async function whepNegotiate(pc, sourceId) {
     pc.addTransceiver("video", { direction: "recvonly" });
-    // AUDIO CLOCK ANCHOR: receive a continuous Opus track alongside the video.
-    // A video-only WebRTC stream has NO clock-drift compensation in Chromium —
-    // the only resampler lives in the audio NetEq, and libwebrtc's stream
-    // synchronizer early-returns with no audio track — so the receiver jitter
-    // buffer drifts unbounded (latency to >1s). The server now sends a real,
-    // continuous Opus track (NDI source audio mixed with silence, on the SAME
-    // pipeline clock + timeline as the video), so the browser runs its NetEq
-    // audio device clock and slaves the video to it, BOUNDING the buffer. The
-    // earlier "dead audio m-line stalls video" failure (2026-06-12) was a
-    // PRODUCING-NOTHING audio track; a continuous track does not stall — it
-    // anchors. The audio output stays MUTED (worship displays are silent) but
-    // muting does NOT stop NetEq: as long as the track is attached to a PLAYING
-    // media element the audio clock runs.
-    pc.addTransceiver("audio", { direction: "recvonly" });
+    // VIDEO-ONLY offer — deliberately NO audio m-line. The server never
+    // sends audio (NDI audio is discarded), and an SDP audio track that
+    // exists but never produces makes weak TV WebViews hold video
+    // presentation hostage to A/V sync that can never be satisfied
+    // (measured 2026-06-12: VDO.Ninja with noaudio played 640x360@20 on the
+    // same Vestel where our stream with a dead audio m-line presented
+    // ~0.5fps with frames decoding fine).
     pc.ontrack = function (ev) {
       if (!ev.streams || !ev.streams[0]) return;
       try {
-        // SMALL jitter buffer (NOT zero) on the VIDEO receiver only. jitterBufferTarget=0
-        // minimized latency but left the playout with no slack: a frame arriving slightly
-        // late underran the empty buffer → a ~400ms stall-then-catchup every ~20s (the
-        // residual stutter, present on EVERY TV — decode stayed at full fps, only
-        // PRESENTATION hitched). ~150ms absorbs LAN/encoder jitter while staying lip-sync-
-        // tight, exactly the balance libwebrtc/VDO.Ninja strike. Applied to BOTH tiers.
-        // Do NOT set jitterBufferTarget on the AUDIO receiver — let NetEq run its own
-        // adaptive audio buffer (that IS the clock anchor the video slaves to).
-        if (ev.track && ev.track.kind === "video") {
-          ev.receiver.jitterBufferTarget = JITTER_BUFFER_MS;
-          ev.receiver.playoutDelayHint = JITTER_BUFFER_MS / 1000;
-        }
+        // SMALL jitter buffer (NOT zero). jitterBufferTarget=0 minimized latency
+        // but left the playout with no slack: a frame arriving slightly late
+        // underran the empty buffer → a ~400ms stall-then-catchup every ~20s
+        // (the residual stutter, present on EVERY TV — decode stayed at full fps,
+        // only PRESENTATION hitched). ~150ms absorbs LAN/encoder jitter while
+        // staying lip-sync-tight, exactly the balance libwebrtc/VDO.Ninja strike.
+        // Applied to BOTH tiers — the weak compat TVs need the slack most.
+        ev.receiver.jitterBufferTarget = JITTER_BUFFER_MS;
+        ev.receiver.playoutDelayHint = JITTER_BUFFER_MS / 1000;
       } catch (e) { /* optional knobs */ }
-      // ev.streams[0] now carries BOTH tracks (bundle). Attaching it to the
-      // muted <video> runs the audio track's NetEq (muting the output does not
-      // stop the audio device clock), which is what bounds the video buffer.
       // muted PROPERTY before srcObject, or Chrome's autoplay policy blocks play().
       video.muted = true;
       video.srcObject = ev.streams[0];

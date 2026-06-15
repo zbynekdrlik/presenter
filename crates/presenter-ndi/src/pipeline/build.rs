@@ -98,7 +98,7 @@ impl NdiPipeline {
         tracing::info!("encoder pipeline pinned to system monotonic clock (no NDI clock slaving)");
 
         let (ndisrc, ndisrcdemux) = build_ndi_source(ndi_name)?;
-        let (videoconvert, videoscale, scale_caps) = build_video_chain()?;
+        let (videoconvert, videoscale, scale_caps, audio_fakesink) = build_video_chain()?;
         let (raw_tee, q_default, q_compat) = build_raw_tee_and_queues()?;
         let encoder = build_encoder(encoder_name)?;
         let profile_caps = build_profile_caps()?;
@@ -111,6 +111,7 @@ impl NdiPipeline {
                 &videoconvert,
                 &videoscale,
                 &scale_caps,
+                &audio_fakesink,
                 &raw_tee,
                 &q_default,
                 &encoder,
@@ -120,46 +121,62 @@ impl NdiPipeline {
             ])
             .context("add elements")?;
 
-        install_diag_probes(&videoconvert, &appsink);
-        link_default_branch(LinkDefaultBranch {
-            ndisrc: &ndisrc,
-            ndisrcdemux: &ndisrcdemux,
-            videoconvert: &videoconvert,
-            videoscale: &videoscale,
-            scale_caps: &scale_caps,
-            raw_tee: &raw_tee,
-            q_default: &q_default,
-            encoder: &encoder,
-            profile_caps: &profile_caps,
-            h264parse: &h264parse,
-            appsink: &appsink,
-        })?;
-        // Wrap each appsink in a StreamProducer — the battle-tested gstreamer-
-        // utils fanout webrtcsink uses (forwards full samples, propagates
-        // latency, keyframe-gates new consumers, forwards PLIs upstream).
-        // sync=false: forward every encoded frame immediately (relay, not
-        // renderer — saves the ~40ms clock-deadline hold).
+        // DIAG (temporary, 80ms threshold): locate the synchronized ~20s hitch.
+        install_gap_probe(&videoconvert, "sink", "ndi-arrival");
+        install_gap_probe(
+            appsink.upcast_ref::<gst::Element>(),
+            "sink",
+            "h264-encoder-out",
+        );
+        install_keyframe_probe(appsink.upcast_ref::<gst::Element>(), "default");
+        install_pts_probe(appsink.upcast_ref::<gst::Element>(), "default");
+        install_event_probe(appsink.upcast_ref::<gst::Element>(), "enc-out");
+        install_event_probe(&videoconvert, "ndi-in");
+        ndisrc.link(&ndisrcdemux).context("link ndisrc -> demux")?;
+        // videoconvert → videoscale → capsfilter(NV12, ≤720p) → tee. Both
+        // encode branches are linked HERE, before any state change — a tee
+        // branch linked after PLAYING never forwards a buffer (sticky events).
+        gst::Element::link_many([&videoconvert, &videoscale, &scale_caps, &raw_tee])
+            .context("link videoconvert -> videoscale -> caps -> tee")?;
+        // Branch A (default profile, 720p H264):
+        gst::Element::link_many([&raw_tee, &q_default, &encoder, &profile_caps, &h264parse])
+            .context("link tee -> q_default -> encoder -> profile_caps -> h264parse")?;
+        h264parse
+            .link(appsink.upcast_ref::<gst::Element>())
+            .context("link h264parse -> appsink")?;
+        // Wrap each appsink in a StreamProducer — the battle-tested fanout
+        // from gstreamer-utils that webrtcsink itself uses: forwards full
+        // SAMPLES (caps + segment + PTS preserved on the shared clock/base-
+        // time), propagates producer latency to consumer appsrcs, gates new
+        // consumers on a keyframe, and forwards browser PLIs upstream to the
+        // branch's encoder. sync=false: forward every encoded frame
+        // IMMEDIATELY — the default (sync=true) holds each frame to its clock
+        // deadline (~40ms measured), correct for a rendering sink, wrong for
+        // a relay.
         let settings = gstreamer_utils::streamproducer::ProducerSettings { sync: false };
         let producer = StreamProducer::with(&appsink, settings.clone());
 
-        // Branch B (compat tier): software VP8 @ 854×480 for weak TVs whose H264
-        // OMX decoder is vendor-broken (full rationale in `add_compat_branch`).
+        // Branch B (compat tier): software VP8 at 854×480@20, VDO.Ninja-style.
+        // Hardware H264 on the weak stage TVs decodes to an OPAQUE overlay
+        // buffer that the displays' GPU either never scans out (black, seen in
+        // Cromite) or recycles with a ~400ms hitch every ~20s through the
+        // system WebView's libhwui compositor (the synchronized stutter).
+        // Software-decoded VP8 produces a PLAIN sampleable texture the browser
+        // can always paint and composite smoothly — exactly the codec
+        // VDO.Ninja negotiated, which played visible+smooth on these SAME TVs
+        // for years. token-partitions=4 lets the TVs spread libvpx entropy
+        // decode across their cores (see build_compat_vp8_encoder). Added and
+        // linked before any state change (a tee branch linked after PLAYING
+        // never forwards a buffer — sticky events).
         let appsink_compat = add_compat_branch(&pipeline, &raw_tee, &q_compat)?;
-        let producer_compat = StreamProducer::with(&appsink_compat, settings.clone());
+        let producer_compat = StreamProducer::with(&appsink_compat, settings);
 
-        // Audio CLOCK ANCHOR: a continuous Opus track on the SAME pipeline clock
-        // + timeline as the video, so the browser's NetEq audio device clock
-        // bounds the otherwise-unbounded video-only jitter buffer (full
-        // rationale in `add_audio_branch` and the `producer_audio` field doc).
-        let (audio_mix, appsink_audio) = add_audio_branch(&pipeline)?;
-        let producer_audio = StreamProducer::with(&appsink_audio, settings);
-
-        connect_demux_pads(&ndisrcdemux, &videoconvert, &audio_mix);
+        connect_demux_pads(&ndisrcdemux, &videoconvert, &audio_fakesink);
 
         tracing::info!(
             encoder = encoder_name,
             %ndi_name,
-            "pipeline built (720p H264 default + 854x480@20 realtime-VP8 compat + Opus audio clock anchor, per-consumer-pipeline fanout)"
+            "pipeline built (720p H264 default + 854x480@20 realtime-VP8 compat, per-consumer-pipeline fanout)"
         );
 
         let (state_tx, state_rx) = watch::channel(PipelineState::Stopped);
@@ -173,65 +190,8 @@ impl NdiPipeline {
             sessions: Arc::new(tokio::sync::Mutex::new(HashMap::new())),
             producer,
             producer_compat,
-            producer_audio,
         })
     }
-}
-
-/// Borrowed handles for `link_default_branch` (a struct keeps the call under the
-/// too-many-arguments lint while every link stays explicit + named).
-struct LinkDefaultBranch<'a> {
-    ndisrc: &'a gst::Element,
-    ndisrcdemux: &'a gst::Element,
-    videoconvert: &'a gst::Element,
-    videoscale: &'a gst::Element,
-    scale_caps: &'a gst::Element,
-    raw_tee: &'a gst::Element,
-    q_default: &'a gst::Element,
-    encoder: &'a gst::Element,
-    profile_caps: &'a gst::Element,
-    h264parse: &'a gst::Element,
-    appsink: &'a gst_app::AppSink,
-}
-
-/// Link the static head + default (720p H264) branch BEFORE any state change —
-/// `ndisrc → demux`, then `videoconvert → videoscale → caps(NV12,≤720p) → tee`,
-/// then `tee → q_default → encoder → profile_caps → h264parse → appsink`. Both
-/// encode branches are linked at build time: a tee branch linked after PLAYING
-/// never forwards a buffer (sticky events). (The audio sometimes-pad and the
-/// compat branch are wired separately — see `connect_demux_pads` /
-/// `add_compat_branch`.)
-fn link_default_branch(e: LinkDefaultBranch) -> Result<()> {
-    e.ndisrc
-        .link(e.ndisrcdemux)
-        .context("link ndisrc -> demux")?;
-    gst::Element::link_many([e.videoconvert, e.videoscale, e.scale_caps, e.raw_tee])
-        .context("link videoconvert -> videoscale -> caps -> tee")?;
-    gst::Element::link_many([
-        e.raw_tee,
-        e.q_default,
-        e.encoder,
-        e.profile_caps,
-        e.h264parse,
-    ])
-    .context("link tee -> q_default -> encoder -> profile_caps -> h264parse")?;
-    e.h264parse
-        .link(e.appsink.upcast_ref::<gst::Element>())
-        .context("link h264parse -> appsink")
-}
-
-/// DIAG (temporary, 80ms threshold): install the diagnostic probes used to
-/// locate the synchronized ~20s hitch — inter-buffer gap probes at the NDI
-/// arrival and H264 encoder output, plus keyframe/PTS/event probes on the
-/// default appsink and an event probe on the NDI input.
-fn install_diag_probes(videoconvert: &gst::Element, appsink: &gst_app::AppSink) {
-    let sink = appsink.upcast_ref::<gst::Element>();
-    install_gap_probe(videoconvert, "sink", "ndi-arrival");
-    install_gap_probe(sink, "sink", "h264-encoder-out");
-    install_keyframe_probe(sink, "default");
-    install_pts_probe(sink, "default");
-    install_event_probe(sink, "enc-out");
-    install_event_probe(videoconvert, "ndi-in");
 }
 
 /// DIAGNOSTIC (temporary): log inter-buffer wall-clock gaps > 250ms at a named
@@ -289,7 +249,7 @@ pub(super) fn install_pts_probe(element: &gst::Element, label: &'static str) {
                     if let Some(prev) = *g {
                         let d = pts.saturating_sub(prev).mseconds() as i64;
                         // expected ~33ms (30fps); flag deviations
-                        if !(10..=80).contains(&d) {
+                        if d > 80 || d < 10 {
                             tracing::warn!(probe = label, pts_delta_ms = d, "PTS irregularity");
                         }
                     }
@@ -323,20 +283,14 @@ pub(super) fn install_event_probe(element: &gst::Element, label: &'static str) {
     }
 }
 
-/// Wire ndisrcdemux's sometimes-pads: video → videoconvert, audio → the
-/// audiomixer's REQUEST sink pad (the audio clock anchor — see
-/// `add_audio_branch`). The mixer already has a continuous silent input
-/// (`audiotestsrc wave=silence`), so the Opus track flows from the moment the
-/// pipeline plays even before this NDI audio pad appears; when it does appear we
-/// request a fresh mixer sink pad and link the real audio in. audiomixer
-/// tolerates inputs that join late or never (a source with no audio at all).
+/// Wire ndisrcdemux's sometimes-pads: video → videoconvert, audio → fakesink.
 fn connect_demux_pads(
     ndisrcdemux: &gst::Element,
     videoconvert: &gst::Element,
-    audio_mix: &gst::Element,
+    audio_fakesink: &gst::Element,
 ) {
     let videoconvert = videoconvert.clone();
-    let audio_mix = audio_mix.clone();
+    let audio_fakesink = audio_fakesink.clone();
     ndisrcdemux.connect_pad_added(move |_, pad| {
         let name = pad.name();
         if name == "video" {
@@ -344,17 +298,8 @@ fn connect_demux_pads(
                 let _ = pad.link(&sink_pad);
             }
         } else if name == "audio" {
-            // audiomixer sink pads are REQUEST pads (one per input). Request a
-            // fresh one for the NDI audio so it mixes alongside the silent
-            // anchor input. A failed request/link is non-fatal: the silent
-            // input alone keeps the clock anchor continuous.
-            match audio_mix.request_pad_simple("sink_%u") {
-                Some(sink_pad) => {
-                    if pad.link(&sink_pad).is_err() {
-                        tracing::warn!("failed to link NDI audio pad into audiomixer; clock anchor stays silence-only");
-                    }
-                }
-                None => tracing::warn!("audiomixer refused a request sink pad for NDI audio; clock anchor stays silence-only"),
+            if let Some(sink_pad) = audio_fakesink.static_pad("sink") {
+                let _ = pad.link(&sink_pad);
             }
         }
     });
@@ -442,14 +387,6 @@ pub(super) fn consumer_h264_caps() -> gst::Caps {
 /// H264 bridge (vp8enc output needs no parser; rtpvp8pay takes it directly).
 pub(super) fn consumer_vp8_caps() -> gst::Caps {
     gst::Caps::builder("video/x-vp8").build()
-}
-
-/// The Opus caps used on BOTH sides of the audio clock-anchor StreamProducer
-/// bridge: the opusenc appsink's caps filter AND every consumer's audio appsrc
-/// initial caps — the same always-match guarantee `consumer_h264_caps` gives
-/// the H264 bridge (opusenc output goes straight into rtpopuspay).
-pub(super) fn consumer_opus_caps() -> gst::Caps {
-    gst::Caps::builder("audio/x-opus").build()
 }
 
 /// Build the raw fanout point placed after `scale_caps`: a `tee` named
@@ -576,96 +513,6 @@ fn add_compat_branch(
     Ok(appsink)
 }
 
-/// Append the AUDIO CLOCK ANCHOR branch to the encoder pipeline and return
-/// `(audio_mix, appsink)` — the audiomixer (named "audio_mix", whose REQUEST
-/// sink pad `connect_demux_pads` links the NDI audio into) and the bounded Opus
-/// appsink the audio StreamProducer wraps:
-///
-/// `audiotestsrc(wave=silence, volume=0.0, is-live) ↘`
-/// `                          audiomixer("audio_mix") → audioconvert →`
-/// `NDI demux "audio" pad ↗   audioresample → caps(48k stereo) → opusenc →`
-/// `                          appsink("enc_appsink_audio", audio/x-opus)`
-///
-/// - audiotestsrc `wave=silence volume=0.0 is-live=true`: a CONTINUOUS silent
-///   input so the mixer always has live audio and the Opus clock never gaps —
-///   even before the NDI audio pad appears, or when the source has no audio at
-///   all, or goes quiet. This is what makes the anchor unconditional.
-/// - audiomixer: mixes the silence with the (late/absent) NDI audio. It runs on
-///   the pipeline clock, so the produced Opus shares the video's exact timeline
-///   — the A/V sync offset Chromium computes is FIXED, not growing.
-/// - audioconvert/audioresample + capsfilter 48k/stereo: opusenc requires a
-///   defined rate/layout; 48kHz stereo is WebRTC's universal Opus format.
-/// - opusenc `dtx=false`: never enter discontinuous transmission — keep emitting
-///   frames during silence so the receiver's NetEq clock keeps ticking.
-/// - appsink: same bounded relay contract as the video branches (5 buffers,
-///   drop=true, `consumer_opus_caps` bridge caps) so the audio fanout can never
-///   back-pressure the shared encoder.
-///
-/// Linked at build time, before any state change.
-fn add_audio_branch(pipeline: &gst::Pipeline) -> Result<(gst::Element, gst_app::AppSink)> {
-    let silence = gst::ElementFactory::make("audiotestsrc")
-        .name("audio_silence")
-        .property_from_str("wave", "silence")
-        .property("volume", 0.0f64)
-        .property("is-live", true)
-        .build()
-        .context("build audiotestsrc (silence)")?;
-    let audio_mix = gst::ElementFactory::make("audiomixer")
-        .name("audio_mix")
-        .build()
-        .context("build audiomixer")?;
-    let audioconvert = gst::ElementFactory::make("audioconvert")
-        .build()
-        .context("build audioconvert")?;
-    let audioresample = gst::ElementFactory::make("audioresample")
-        .build()
-        .context("build audioresample")?;
-    let caps = gst::ElementFactory::make("capsfilter")
-        .name("audio_caps")
-        .property(
-            "caps",
-            gst::Caps::builder("audio/x-raw")
-                .field("rate", 48_000i32)
-                .field("channels", 2i32)
-                .build(),
-        )
-        .build()
-        .context("build audio capsfilter")?;
-    let opusenc = gst::ElementFactory::make("opusenc")
-        .name("opusenc")
-        .property("dtx", false)
-        .build()
-        .context("build opusenc")?;
-    let appsink = gst_app::AppSink::builder()
-        .name("enc_appsink_audio")
-        .caps(&consumer_opus_caps())
-        .max_buffers(5)
-        .drop(true)
-        .build();
-    pipeline
-        .add_many([
-            &silence,
-            &audio_mix,
-            &audioconvert,
-            &audioresample,
-            &caps,
-            &opusenc,
-            appsink.upcast_ref::<gst::Element>(),
-        ])
-        .context("add audio branch elements")?;
-    // Silent anchor → mixer (the always-present input). The NDI audio pad is
-    // added later to a fresh mixer REQUEST sink pad in `connect_demux_pads`.
-    silence
-        .link(&audio_mix)
-        .context("link audiotestsrc -> audiomixer")?;
-    gst::Element::link_many([&audio_mix, &audioconvert, &audioresample, &caps, &opusenc])
-        .context("link audiomixer -> convert -> resample -> caps -> opusenc")?;
-    opusenc
-        .link(appsink.upcast_ref::<gst::Element>())
-        .context("link opusenc -> audio appsink")?;
-    Ok((audio_mix, appsink))
-}
-
 /// Build the compat tier's H264 encoder ("encoder_compat") — a SECOND VA-API
 /// (or NVENC / x264 fallback) hardware encoder at the compat bitrate. Mirrors
 /// `build_encoder` but at the lower compat bitrate; the resolution is pinned by
@@ -740,11 +587,9 @@ fn build_compat_vp8_encoder() -> Result<gst::Element> {
 }
 
 /// Build the raw-video conditioning chain placed between the demux and the
-/// encoder: `videoconvert → videoscale → capsfilter(NV12, ≤720p)`.
-/// Returns `(videoconvert, videoscale, scale_caps)`. The NDI audio pad is no
-/// longer discarded into a fakesink — it now feeds the audio clock anchor's
-/// mixer (see `add_audio_branch` / `connect_demux_pads`).
-fn build_video_chain() -> Result<(gst::Element, gst::Element, gst::Element)> {
+/// encoder: `videoconvert → videoscale → capsfilter(NV12, ≤720p)` plus the
+/// audio `fakesink`. Returns `(videoconvert, videoscale, scale_caps, audio_fakesink)`.
+fn build_video_chain() -> Result<(gst::Element, gst::Element, gst::Element, gst::Element)> {
     let videoconvert = gst::ElementFactory::make("videoconvert")
         .build()
         .context("build videoconvert")?;
@@ -779,7 +624,12 @@ fn build_video_chain() -> Result<(gst::Element, gst::Element, gst::Element)> {
         )
         .build()
         .context("build scale capsfilter")?;
-    Ok((videoconvert, videoscale, scale_caps))
+    let audio_fakesink = gst::ElementFactory::make("fakesink")
+        .property("async", false)
+        .property("sync", false)
+        .build()
+        .context("build fakesink (audio)")?;
+    Ok((videoconvert, videoscale, scale_caps, audio_fakesink))
 }
 
 /// Build the default branch's H264 encoder ("encoder") with tuning applied
