@@ -564,6 +564,9 @@ fn build_consumer_pipeline_blocking(
     // (await_media_caps keys on the `ssrc` caps field, codec-agnostic.)
     await_media_caps(&webrtcbin, session_id);
     negotiate_sdp(&webrtcbin, &offer_desc, session_id)?;
+    // The rtpbin + internal session 0 exist only after negotiation set up the
+    // transport, so lower the RTCP SR interval HERE (not at build time).
+    tune_rtcp_interval(&webrtcbin, session_id);
     align_payload_type(&webrtcbin, &payloader, encoding_name, session_id);
     await_ice_gathering(&webrtcbin, session_id);
 
@@ -738,6 +741,43 @@ fn configure_rtpbin_ntp_clock(webrtcbin: &gst::Element) {
             tracing::info!("rtpbin ntp-time-source = clock-time (deep-added)");
         }
     });
+}
+
+/// Lower the RTCP Sender-Report interval on webrtcbin's internal rtpsession to
+/// 0.5s (GStreamer default is 5s). A VIDEO-ONLY WebRTC stream has no
+/// drift-correcting resampler — that lives only in the audio NetEq, and
+/// libwebrtc's stream synchronizer early-returns without an audio track. So the
+/// receiver tracks our sender clock purely from the RTP→NTP mapping it
+/// re-anchors on each SR. At the 5s default it extrapolates with a stale slope
+/// between anchors and the jitter buffer ratchets up unbounded (the measured
+/// ~0.27%/s drift took it from 40ms to >1000ms in minutes → climbing latency +
+/// periodic catch-up). 0.5s SR keeps Chrome's clock estimate fresh so the
+/// buffer stays bounded. Called AFTER negotiation, when rtpbin + session 0
+/// exist (the internal session is created lazily during transport setup).
+fn tune_rtcp_interval(webrtcbin: &gst::Element, session_id: &str) {
+    let Some(bin) = webrtcbin.dynamic_cast_ref::<gst::Bin>() else {
+        return;
+    };
+    let Some(rtpbin) = bin.by_name("rtpbin") else {
+        tracing::warn!(session_id = %session_id, "rtpbin not found; RTCP SR interval unchanged");
+        return;
+    };
+    let session =
+        rtpbin.emit_by_name::<Option<gst::glib::Object>>("get-internal-session", &[&0u32]);
+    match session {
+        Some(s) if s.find_property("rtcp-min-interval").is_some() => {
+            // rtcp-min-interval is a guint64 in nanoseconds.
+            s.set_property("rtcp-min-interval", 500_000_000u64);
+            tracing::info!(
+                session_id = %session_id,
+                "rtpbin session 0 rtcp-min-interval=0.5s (frequent SR bounds video-only jitter drift)"
+            );
+        }
+        _ => tracing::warn!(
+            session_id = %session_id,
+            "rtpbin internal session 0 unavailable; RTCP SR interval unchanged"
+        ),
+    }
 }
 
 /// Per-consumer `rtph264pay`. config-interval=-1 resends SPS/PPS before every
