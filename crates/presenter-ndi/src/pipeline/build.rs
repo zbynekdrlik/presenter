@@ -111,6 +111,7 @@ impl NdiPipeline {
         install_gap_probe(&videoconvert, "sink", "ndi-arrival");
         install_gap_probe(appsink.upcast_ref::<gst::Element>(), "sink", "h264-encoder-out");
         install_keyframe_probe(appsink.upcast_ref::<gst::Element>(), "default");
+        install_pts_probe(appsink.upcast_ref::<gst::Element>(), "default");
         ndisrc.link(&ndisrcdemux).context("link ndisrc -> demux")?;
         // videoconvert → videoscale → capsfilter(NV12, ≤720p) → tee. Both
         // encode branches are linked HERE, before any state change — a tee
@@ -201,6 +202,33 @@ pub(super) fn install_keyframe_probe(element: &gst::Element, label: &'static str
             if let Some(gst::PadProbeData::Buffer(ref buf)) = info.data {
                 if !buf.flags().contains(gst::BufferFlags::DELTA_UNIT) {
                     tracing::warn!(probe = label, "KEYFRAME emitted");
+                }
+            }
+            gst::PadProbeReturn::Ok
+        });
+    }
+}
+
+/// DIAG (temporary): log PTS irregularities — a buffer whose PTS delta from the
+/// previous deviates >50ms from the ~33ms frame interval. The RTP timestamp
+/// Chrome schedules playout from derives from this PTS; a ~20s-periodic jump
+/// here would explain the synchronized render resync.
+pub(super) fn install_pts_probe(element: &gst::Element, label: &'static str) {
+    use std::sync::Mutex;
+    let last = std::sync::Arc::new(Mutex::new(None::<gst::ClockTime>));
+    if let Some(pad) = element.static_pad("sink") {
+        pad.add_probe(gst::PadProbeType::BUFFER, move |_pad, info| {
+            if let Some(gst::PadProbeData::Buffer(ref buf)) = info.data {
+                if let Some(pts) = buf.pts() {
+                    let mut g = last.lock().unwrap_or_else(|p| p.into_inner());
+                    if let Some(prev) = *g {
+                        let d = pts.saturating_sub(prev).mseconds() as i64;
+                        // expected ~33ms (30fps); flag deviations
+                        if d > 80 || d < 10 {
+                            tracing::warn!(probe = label, pts_delta_ms = d, "PTS irregularity");
+                        }
+                    }
+                    *g = Some(pts);
                 }
             }
             gst::PadProbeReturn::Ok
