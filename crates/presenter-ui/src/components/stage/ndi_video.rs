@@ -32,10 +32,12 @@ struct WhepSession {
 }
 
 /// Build the WHEP endpoint URL for a given source. In compat mode the URL
-/// carries `?profile=compat`, asking the server for its 640×480 H264 branch
-/// (the stream the weak TVs' OMX decoder can play without the fatal port
-/// reconfig — spec addendum 2 pivot); default mode posts the bare URL and
-/// gets the 720p stream.
+/// carries `?profile=compat`; otherwise it posts the bare URL. NOTE: the
+/// server now serves ONE 720p H264 stream regardless of `?profile=` (see
+/// `StreamProfile::from_query`), so the profile value itself is a no-op
+/// server-side. The compat flip is retained ONLY because changing the URL
+/// triggers a reconnect, and that reconnect re-establishes a stuck session
+/// (see `ndi_watchdog`).
 pub fn whep_url(source_id: &str, compat: bool) -> String {
     if compat {
         format!("/ndi/whep/{source_id}?profile=compat")

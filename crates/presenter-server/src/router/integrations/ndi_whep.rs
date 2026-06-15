@@ -16,11 +16,9 @@ use tracing::instrument;
 use super::super::AppError;
 use crate::state::AppState;
 
-/// Query parameters on the WHEP POST. `?profile=compat` selects the 854×480
-/// realtime-VP8 compat encode branch (weak TVs whose H264 OMX decoder is
-/// vendor-broken; they software-decode token-partitioned VP8); absent or any
-/// other value selects the default 720p H264 branch — see
-/// `StreamProfile::from_query`.
+/// Query parameters on the WHEP POST. `?profile=` is parsed but always resolves
+/// to the single shared 720p H264 stream (see `StreamProfile::from_query`); the
+/// value is accepted for backward-compat and never changes the codec.
 #[derive(Debug, Default, serde::Deserialize)]
 pub(crate) struct WhepPostQuery {
     profile: Option<String>,
@@ -249,9 +247,9 @@ mod tests {
     }
 
     /// `?profile=compat` must not change the error contract for an inactive
-    /// source: the query is parsed (compat selects the realtime-VP8 854×480
-    /// branch once the source streams) but an inactive source still yields
-    /// the same 404/503 path as a default-profile POST.
+    /// source: the query is parsed but always resolves to the single shared
+    /// 720p H264 stream (see `StreamProfile::from_query`), so an inactive
+    /// source still yields the same 404/503 path as a bare-profile POST.
     #[tokio::test]
     async fn post_whep_endpoint_with_compat_profile_keeps_inactive_source_contract() {
         let state = fresh_state().await;

@@ -44,6 +44,12 @@ pub fn autofit_effect<T: 'static>(
 /// removes the per-second reflow while still re-fitting on real content changes
 /// (`CONNECTED`→`CONNECTING…`, a different-length song number). This must NOT be
 /// used for proportional text (lyrics) — there, same length ≠ same width.
+///
+/// COUPLING: the "equal char-length ⇒ equal width" optimization REQUIRES the
+/// status-bar texts to render in a tabular/monospace face. `stage.css` supplies
+/// `font-variant-numeric: tabular-nums` on `.stage__clock`, `.stage__song-number`
+/// and `.stage__connection`; dropping that CSS would silently break this autofit
+/// (proportional digits → unequal width at equal length → clipped text).
 pub fn autofit_effect_tabular(
     node_ref: NodeRef<leptos::html::Div>,
     max_font: f64,
