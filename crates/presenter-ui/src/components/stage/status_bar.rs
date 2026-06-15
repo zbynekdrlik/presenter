@@ -3,7 +3,7 @@ use leptos::prelude::*;
 
 use crate::components::version_label::VersionLabel;
 use crate::state::stage::StageContext;
-use crate::utils::autofit::autofit_effect;
+use crate::utils::autofit::autofit_effect_tabular;
 use crate::ws::stage::StageWsState;
 
 const STATUS_MAX_FONT: f64 = 200.0;
@@ -81,12 +81,12 @@ pub fn StatusBar(
         }
     };
 
-    autofit_effect(clock_ref, STATUS_MAX_FONT, move || clock_text.get());
+    autofit_effect_tabular(clock_ref, STATUS_MAX_FONT, move || clock_text.get());
     if !hide_live {
-        autofit_effect(live_ref, STATUS_MAX_FONT, live_text);
+        autofit_effect_tabular(live_ref, STATUS_MAX_FONT, live_text);
     }
-    autofit_effect(connection_ref, STATUS_MAX_FONT, connection_text);
-    autofit_effect(song_number_ref, STATUS_MAX_FONT, song_number);
+    autofit_effect_tabular(connection_ref, STATUS_MAX_FONT, connection_text);
+    autofit_effect_tabular(song_number_ref, STATUS_MAX_FONT, song_number);
 
     view! {
         <div node_ref=clock_ref class="stage__clock">
