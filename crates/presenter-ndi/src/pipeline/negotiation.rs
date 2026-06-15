@@ -92,9 +92,8 @@ pub(super) fn await_media_caps(webrtcbin: &gst::Element, session_id: &str) {
 /// reads `trans->do_nack` when building the answered media). `do-nack` is a
 /// CONSTRUCT|READWRITE property, so this post-construction set is honored.
 /// The WHEP consumer pipelines are strictly video-only — `appsrc →
-/// rtph264pay|rtpvp8pay → webrtcbin`, ONE sink pad per consumer — so every
-/// transceiver here is the video one; this covers both the H264 default and
-/// the VP8 compat consumer pipelines.
+/// rtph264pay → webrtcbin`, ONE sink pad per consumer — so every transceiver
+/// here is the video one.
 fn enable_rtx_nack(webrtcbin: &gst::Element, session_id: &str) {
     let mut enabled = 0u32;
     for pad in webrtcbin.sink_pads() {
@@ -188,12 +187,11 @@ pub(super) fn negotiate_sdp(
 
 /// Align the payloader's RTP payload type with the one webrtcbin negotiated
 /// in the answer. The browser assigns a dynamic PT to the codec (Chrome uses
-/// e.g. 103 for H264, 96 for VP8) and webrtcbin answers with THAT pt — but
-/// the payloaders default to pt=96, so their caps wouldn't match webrtcbin's
-/// negotiated sink and ZERO RTP would flow (connected, but black).
-/// Codec-aware: `encoding_name` is the RTP encoding-name of the codec this
-/// consumer's profile streams ("H264" or "VP8" — see
-/// `StreamProfile::encoding_name`).
+/// e.g. 103 for H264) and webrtcbin answers with THAT pt — but the payloader
+/// defaults to pt=96, so its caps wouldn't match webrtcbin's negotiated sink
+/// and ZERO RTP would flow (connected, but black). Codec-aware:
+/// `encoding_name` is the RTP encoding-name of the codec this consumer streams
+/// ("H264" — see `StreamProfile::encoding_name`).
 pub(super) fn align_payload_type(
     webrtcbin: &gst::Element,
     payloader: &gst::Element,
@@ -268,43 +266,10 @@ pub(crate) fn parse_h264_payload_type(sdp: &str) -> Option<u32> {
     parse_rtpmap_payload_type(sdp, "H264/")
 }
 
-/// VP8 mirror of [`parse_h264_payload_type`]: the payload type of the first
-/// `a=rtpmap:<pt> VP8/90000` line. Used by the compat profile (realtime-VP8
-/// pivot): a `?profile=compat` consumer is served the VP8 branch, and its
-/// per-consumer `rtpvp8pay` must be seated on the browser's dynamic VP8 pt
-/// for media to flow. Every browser's default offer carries VP8.
-pub(crate) fn parse_vp8_payload_type(sdp: &str) -> Option<u32> {
-    parse_rtpmap_payload_type(sdp, "VP8/")
-}
-
-/// Parse the RTP extmap id for a header-extension URI from an SDP
-/// (`a=extmap:<id>[/dir] <uri>`). Used to seat a custom header extension on the
-/// id the PEER negotiated — e.g. the playout-delay extension (Chromium offers it
-/// at id 5). The extension MUST use the offered id; an unset/mismatched id
-/// corrupts the RTP header-extension block so the receiver drops every packet.
-/// `uri_substr` is matched as a substring of the extmap line (e.g.
-/// `"playout-delay"`).
-pub(crate) fn parse_extmap_id(sdp: &str, uri_substr: &str) -> Option<u32> {
-    for line in sdp.lines() {
-        let line = line.trim();
-        let Some(rest) = line.strip_prefix("a=extmap:") else {
-            continue;
-        };
-        if line.contains(uri_substr) {
-            // rest = "<id>[/direction] <uri>" — id ends at the first space or '/'.
-            let id_tok = rest.split([' ', '/']).next()?;
-            if let Ok(id) = id_tok.trim().parse::<u32>() {
-                return Some(id);
-            }
-        }
-    }
-    None
-}
-
 /// Shared rtpmap scanner: payload type of the first `a=rtpmap:<pt>
 /// <codec_prefix>…` line (codec match is case-insensitive). `codec_prefix`
-/// MUST include the trailing `/` (e.g. `"H264/"`, `"VP8/"`) so `VP8` can
-/// never match a `VP9/90000` rtpmap.
+/// MUST include the trailing `/` (e.g. `"H264/"`) so a codec prefix can
+/// never match a longer codec name's rtpmap.
 fn parse_rtpmap_payload_type(sdp: &str, codec_prefix: &str) -> Option<u32> {
     for line in sdp.lines() {
         let line = line.trim();
@@ -324,7 +289,7 @@ fn parse_rtpmap_payload_type(sdp: &str, codec_prefix: &str) -> Option<u32> {
 
 #[cfg(test)]
 mod pt_parse_tests {
-    use super::{parse_h264_payload_type, parse_vp8_payload_type};
+    use super::parse_h264_payload_type;
 
     #[test]
     fn finds_h264_payload_type_when_other_codecs_listed_first() {
@@ -357,30 +322,5 @@ mod pt_parse_tests {
     fn returns_none_without_h264() {
         let sdp = "m=video 9 UDP/TLS/RTP/SAVPF 100\r\na=rtpmap:100 VP8/90000\r\n";
         assert_eq!(parse_h264_payload_type(sdp), None);
-    }
-
-    #[test]
-    fn finds_vp8_payload_type_in_chrome_default_offer() {
-        // Chrome's default offer: VP8 first, then VP9/H264 — the compat
-        // consumer's rtpvp8pay must be seated on VP8's dynamic pt.
-        let sdp = "m=video 9 UDP/TLS/RTP/SAVPF 96 98 102\r\n\
-                   a=rtpmap:96 VP8/90000\r\n\
-                   a=rtpmap:98 VP9/90000\r\n\
-                   a=rtpmap:102 H264/90000\r\n";
-        assert_eq!(parse_vp8_payload_type(sdp), Some(96));
-    }
-
-    #[test]
-    fn vp8_prefix_does_not_match_vp9() {
-        // The trailing '/' in the scanner prefix is load-bearing: an offer
-        // with ONLY VP9 must not satisfy the VP8 lookup.
-        let sdp = "m=video 9 UDP/TLS/RTP/SAVPF 98\r\na=rtpmap:98 VP9/90000\r\n";
-        assert_eq!(parse_vp8_payload_type(sdp), None);
-    }
-
-    #[test]
-    fn returns_none_without_vp8() {
-        let sdp = "m=video 9 UDP/TLS/RTP/SAVPF 103\r\na=rtpmap:103 H264/90000\r\n";
-        assert_eq!(parse_vp8_payload_type(sdp), None);
     }
 }

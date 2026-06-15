@@ -2342,75 +2342,7 @@ async fn ndi_client_stats_beacon_returns_no_content() {
     assert_eq!(response.status(), StatusCode::NO_CONTENT);
 }
 
-// ── Lite NDI stage page (weak-TV experiment, see #379) ──────────────────────
-
-#[tokio::test]
-async fn stage_lite_serves_embedded_player_html() {
-    let app = build_router(AppState::in_memory().await.unwrap());
-    let response = app
-        .oneshot(
-            Request::builder()
-                .uri("/stage/lite")
-                .body(Body::empty())
-                .unwrap(),
-        )
-        .await
-        .unwrap();
-    assert_eq!(response.status(), StatusCode::OK);
-    let content_type = response
-        .headers()
-        .get(axum::http::header::CONTENT_TYPE)
-        .and_then(|v| v.to_str().ok())
-        .unwrap_or_default()
-        .to_string();
-    assert!(
-        content_type.starts_with("text/html"),
-        "expected text/html content type, got {content_type}"
-    );
-    let bytes = axum::body::to_bytes(response.into_body(), usize::MAX)
-        .await
-        .unwrap();
-    let body = String::from_utf8_lossy(&bytes);
-    assert!(
-        body.contains("ndi-lite"),
-        "lite page must carry the ndi-lite marker"
-    );
-}
-
-#[tokio::test]
-async fn stage_redirects_to_lite_player_for_ndi_fullscreen_layout() {
-    // The lite player now carries the NDI-fullscreen overlay (clock, song
-    // number, connection status, version) as lightweight fixed-size DOM, so
-    // the original #379 retirement reason (the lite page dropped the overlay)
-    // is gone. With the `ndi-fullscreen` layout active, /stage 303-redirects
-    // every weak TV to the proven-smooth /stage/lite player.
-    let state = AppState::in_memory().await.unwrap();
-    state.set_stage_layout_code("ndi-fullscreen").await.unwrap();
-    let app = build_router(state);
-    let response = app
-        .oneshot(
-            Request::builder()
-                .uri("/stage")
-                .body(Body::empty())
-                .unwrap(),
-        )
-        .await
-        .unwrap();
-    assert_eq!(
-        response.status(),
-        StatusCode::SEE_OTHER,
-        "ndi layout must 303-redirect /stage to the lite player"
-    );
-    let location = response
-        .headers()
-        .get(axum::http::header::LOCATION)
-        .and_then(|v| v.to_str().ok())
-        .unwrap_or_default();
-    assert_eq!(
-        location, "/stage/lite",
-        "ndi layout must redirect to /stage/lite, got {location}"
-    );
-}
+// ── Stage page (standard WASM shell at /stage) ──────────────────────────────
 
 #[tokio::test]
 async fn stage_serves_normal_page_for_default_layout() {

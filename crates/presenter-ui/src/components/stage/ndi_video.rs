@@ -322,8 +322,8 @@ async fn connect_whep(video: &HtmlVideoElement, source_id: &str) -> Result<WhepS
 
     // VIDEO-ONLY offer — deliberately NO audio m-line. The server never
     // sends audio; a dead audio track in the SDP makes weak TV WebViews
-    // stall video presentation on unsatisfiable A/V sync (see
-    // stage_lite.html for the 2026-06-12 VDO.Ninja A/B measurement).
+    // stall video presentation on unsatisfiable A/V sync (proven by the
+    // 2026-06-12 VDO.Ninja A/B measurement).
 
     attach_ontrack(&pc, video);
 

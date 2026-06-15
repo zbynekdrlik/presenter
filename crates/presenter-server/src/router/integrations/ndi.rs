@@ -112,9 +112,9 @@ pub(crate) struct NdiClientStatsBeacon {
     /// from the rVFC callback rate) — distinct from `fps` (decode-side
     /// getStats). presentedFps below decode fps points at the compositor.
     pub presented_fps: Option<f64>,
-    /// `true` when the beacon comes from the lite plain-JS stage page
-    /// (`/stage/lite`, weak-TV experiment #379) instead of the WASM stage —
-    /// lets the logs attribute decode health to the page variant.
+    /// Legacy beacon flag from the retired plain-JS "lite" stage experiment
+    /// (#379). The standard WASM stage never sets it, so it is always absent
+    /// (`None`); retained for backward-compatible beacon parsing.
     pub lite: Option<bool>,
 }
 
