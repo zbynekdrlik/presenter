@@ -84,9 +84,37 @@ pub(crate) struct NdiClientStatsBeacon {
     pub jitter_buffer_ms: Option<f64>,
     pub freeze_count: Option<f64>,
     pub frames_dropped: Option<f64>,
-    /// `true` when the beacon comes from the lite plain-JS stage page
-    /// (`/stage/lite`, weak-TV experiment #379) instead of the WASM stage —
-    /// lets the logs attribute decode health to the page variant.
+    // DIAG (temporary): raw cumulative inbound-rtp counters to locate the
+    // synchronized ~20s hitch mechanism — deltas reveal delivery (RTP arriving?)
+    // vs decode vs jitter-buffer-readjust.
+    pub packets_received: Option<f64>,
+    pub packets_lost: Option<f64>,
+    pub frames_received: Option<f64>,
+    pub jitter_buffer_delay: Option<f64>,
+    pub jitter_buffer_emitted: Option<f64>,
+    pub jitter_buffer_target_delay: Option<f64>,
+    pub frames_rendered: Option<f64>,
+    pub pause_count: Option<f64>,
+    pub total_pauses_duration: Option<f64>,
+    pub total_freezes_duration: Option<f64>,
+    pub key_frames_decoded: Option<f64>,
+    /// Largest inter-present gap (ms) the display observed this beacon
+    /// interval — the RENDER-side metric the decode-side fields above are
+    /// blind to. A frame can decode on time yet be PRESENTED late (WebView
+    /// compositor / main-thread hitch); this captures the user-visible
+    /// "lag every ~20s" that `framesDecoded`/`fps` cannot. A high value here
+    /// with healthy `fps` means the stall is presentation-side, not decode.
+    pub max_present_gap_ms: Option<f64>,
+    /// Count of inter-present gaps > 100ms this beacon interval (perceptible
+    /// hitches). 0 = smooth presentation; rising = repeated render-side stalls.
+    pub present_gaps_over100: Option<f64>,
+    /// Render-side fps for this interval (frames PRESENTED / interval-seconds,
+    /// from the rVFC callback rate) — distinct from `fps` (decode-side
+    /// getStats). presentedFps below decode fps points at the compositor.
+    pub presented_fps: Option<f64>,
+    /// Legacy beacon flag from the retired plain-JS "lite" stage experiment
+    /// (#379). The standard WASM stage never sets it, so it is always absent
+    /// (`None`); retained for backward-compatible beacon parsing.
     pub lite: Option<bool>,
 }
 
@@ -106,6 +134,20 @@ pub(crate) async fn ndi_client_stats(Json(beacon): Json<NdiClientStatsBeacon>) -
         jitter_buffer_ms = beacon.jitter_buffer_ms,
         freeze_count = beacon.freeze_count,
         frames_dropped = beacon.frames_dropped,
+        max_present_gap_ms = beacon.max_present_gap_ms,
+        present_gaps_over100 = beacon.present_gaps_over100,
+        presented_fps = beacon.presented_fps,
+        packets_received = beacon.packets_received,
+        packets_lost = beacon.packets_lost,
+        frames_received = beacon.frames_received,
+        jitter_buffer_delay = beacon.jitter_buffer_delay,
+        jitter_buffer_emitted = beacon.jitter_buffer_emitted,
+        jitter_buffer_target_delay = beacon.jitter_buffer_target_delay,
+        frames_rendered = beacon.frames_rendered,
+        pause_count = beacon.pause_count,
+        total_pauses_duration = beacon.total_pauses_duration,
+        total_freezes_duration = beacon.total_freezes_duration,
+        key_frames_decoded = beacon.key_frames_decoded,
         lite = beacon.lite,
         "NDI stage-display client stats beacon"
     );
@@ -134,6 +176,34 @@ mod tests {
         let wasm_beacon: NdiClientStatsBeacon =
             serde_json::from_str(r#"{"sourceId":"src-1"}"#).expect("beacon without lite parses");
         assert_eq!(wasm_beacon.lite, None);
+    }
+
+    #[test]
+    fn client_stats_beacon_parses_present_gap_fields() {
+        // A full beacon as the stage client now sends it: decode-side getStats
+        // fields PLUS the render-side present-gap metrics (camelCase wire keys).
+        let beacon: NdiClientStatsBeacon = serde_json::from_str(
+            r#"{
+                "sourceId":"src-1",
+                "framesDecoded":900.0,
+                "fps":30.0,
+                "maxPresentGapMs":312.5,
+                "presentGapsOver100":4.0,
+                "presentedFps":29.7
+            }"#,
+        )
+        .expect("beacon JSON with present-gap fields parses");
+        assert_eq!(beacon.max_present_gap_ms, Some(312.5));
+        assert_eq!(beacon.present_gaps_over100, Some(4.0));
+        assert_eq!(beacon.presented_fps, Some(29.7));
+
+        // Older clients / the proxy path may omit them — they must stay
+        // optional so a beacon without present-gap data still parses.
+        let no_gap: NdiClientStatsBeacon = serde_json::from_str(r#"{"sourceId":"src-1"}"#)
+            .expect("beacon without present-gap fields parses");
+        assert_eq!(no_gap.max_present_gap_ms, None);
+        assert_eq!(no_gap.present_gaps_over100, None);
+        assert_eq!(no_gap.presented_fps, None);
     }
 
     #[tokio::test]

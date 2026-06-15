@@ -44,10 +44,9 @@ pub const SOURCE_NOT_ACTIVE_ERR: &str = "source not active";
 
 /// One operation in the WHEP signaller protocol.
 pub enum WhepOp {
-    /// SDP offer (or session-scoped re-offer). `profile` is the stream
-    /// profile the client requested via the `?profile=compat` query on its
-    /// POST (parsed at the HTTP layer); it selects which encode branch
-    /// feeds the new consumer.
+    /// SDP offer (or session-scoped re-offer). `profile` is parsed from the
+    /// `?profile=` query at the HTTP layer; only the single shared 720p H264
+    /// stream ships, so it always resolves to that stream.
     Post {
         id: Option<String>,
         body: Vec<u8>,

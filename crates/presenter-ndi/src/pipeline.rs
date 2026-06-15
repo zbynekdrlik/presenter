@@ -7,26 +7,17 @@
 //! ```text
 //! ndisrc → ndisrcdemux → videoconvert → videoscale → caps(NV12,720p) → raw_tee
 //!                audio ↘ fakesink
-//!  (default) raw_tee → q_default → encoder → profile_caps → h264parse
+//!  raw_tee → q_default → encoder → profile_caps → h264parse
 //!                        → enc_appsink                  (1280×720 H264)
-//!  (compat)  raw_tee → q_compat → videorate → videoconvert → videoscale
-//!                        → compat_scale_caps(I420 854×480 @20)
-//!                        → encoder_compat(vp8enc)
-//!                        → enc_appsink_compat   (854×480@20 realtime VP8)
-//!                       (one encoder per PROFILE — never per consumer)
-//!                                      StreamProducer fanout (one per profile)
+//!                       (ONE shared hardware-H264 encoder — never per consumer)
+//!                                      StreamProducer fanout
 //!                                                            ▼
-//!   per consumer (its OWN gst::Pipeline): appsrc → rtph264pay|rtpvp8pay
-//!                                                            → webrtcbin
+//!   per consumer (its OWN gst::Pipeline): appsrc → rtph264pay → webrtcbin
 //! ```
 //!
-//! Profile rule (realtime-VP8 pivot): a consumer is served the profile its
-//! WHEP POST requested via the `?profile=compat` query ([`StreamProfile`],
-//! parsed at the HTTP layer) — compat is the VDO.Ninja-style realtime VP8
-//! stream for weak TVs whose H264 OMX decoder is vendor-broken; every other
-//! consumer gets the default 720p H264 stream. The profile IMPLIES the codec
-//! ([`StreamProfile::encoding_name`]); the WHEP answer dictates it to the
-//! browser (every browser offer carries both H264 and VP8).
+//! Codec rule: every consumer is served the single shared 720p hardware-H264
+//! stream ([`StreamProfile::encoding_name`] is always "H264"). The WHEP answer
+//! dictates H264 to the browser (every browser offer carries H264).
 //!
 //! Why per-consumer pipelines: a `webrtcbin` added to an already-running LIVE
 //! pipeline never gets its rtpsession's running-time/latency configured, so
@@ -89,46 +80,37 @@ pub struct WhepAnswer {
     pub initial_candidates: Vec<IceCandidate>,
 }
 
-/// Which encode branch serves a WHEP consumer. Selected by the CLIENT via
-/// the `?profile=compat` query parameter on its WHEP POST (parsed at the
-/// HTTP layer with [`StreamProfile::from_query`]); `add_consumer` maps it
-/// to the matching branch's `StreamProducer`.
+/// Which stream serves a WHEP consumer. Only one ships — the single shared
+/// 720p hardware-H264 stream — so the enum has a single variant; the
+/// `?profile=` WHEP query is still parsed (for forward/backward compat with
+/// clients that send a stale value) but always resolves to [`Self::Default`].
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum StreamProfile {
-    /// 1280×720 H264 @ 2.5 Mbps — the primary stream every healthy client uses.
+    /// 1280×720 H264 @ 2.5 Mbps — the single shared stream every client uses.
     #[default]
     Default,
-    /// 854×480@20 realtime VP8 @ 900 kbps — the compat stream for weak TVs
-    /// whose MStar H264 OMX decoder is vendor-broken (even an exactly-
-    /// 640×480 H264 stream dies after ~5s). VDO.Ninja's libwebrtc VP8 plays
-    /// smoothly on the SAME TVs, so this branch mirrors its realtime stream
-    /// properties — above all token-partitions=4 for multithreaded software
-    /// decode across the TV's 4 cores (see `build::build_compat_vp8_encoder`).
-    Compat,
 }
 
 impl StreamProfile {
-    /// Parse the WHEP `profile` query value: `"compat"` selects the compat
-    /// branch; absent or ANY other value selects Default — an unknown
-    /// profile string must degrade to the primary stream, never break a
-    /// display's join.
+    /// Parse the WHEP `profile` query value. Only the 720p hardware-H264
+    /// stream ships, so ANY value (including a stale `?profile=compat` from an
+    /// old WASM watchdog state) resolves to [`Self::Default`] — an unknown
+    /// profile string must never break a display's join.
     pub fn from_query(value: Option<&str>) -> Self {
-        if value == Some("compat") {
-            Self::Compat
-        } else {
-            Self::Default
-        }
+        // ALL clients get Default = 720p hardware H264. Proven 2026-06-15: the
+        // standalone com.tcl.browser HW-decodes H264 on every stage TV incl. the
+        // weak Hyundais (the old "HW H264 = black" was the system WebView only).
+        let _ = value;
+        Self::Default
     }
 
-    /// The RTP encoding-name of the codec this profile streams. The profile
-    /// IMPLIES the codec since the realtime-VP8 compat pivot: Default → H264
-    /// (720p hw encode), Compat → VP8 (854×480 sw encode, token-partitioned).
-    /// The consumer pipeline's appsrc caps, payloader, RTP caps and pt
-    /// alignment all follow this value (see `consumers`).
+    /// The RTP encoding-name of the codec this profile streams — always "H264"
+    /// (the single shared 720p hardware encode). The consumer pipeline's
+    /// appsrc caps, payloader, RTP caps and pt alignment all follow this value
+    /// (see `consumers`).
     pub(crate) fn encoding_name(self) -> &'static str {
         match self {
             Self::Default => "H264",
-            Self::Compat => "VP8",
         }
     }
 }
@@ -210,15 +192,10 @@ pub struct NdiPipeline {
     bus_watch: std::sync::Mutex<Option<tokio::task::JoinHandle<()>>>,
     /// Active per-consumer sessions (each owns its OWN consumer pipeline).
     sessions: Arc<tokio::sync::Mutex<HashMap<String, WhepSession>>>,
-    /// StreamProducer wrapping the default-profile (720p H264) encoder
-    /// appsink — the fanout that feeds every default consumer pipeline's
-    /// appsrc. Clone-cheap (internally Arc'd).
+    /// StreamProducer wrapping the shared 720p H264 encoder appsink — the
+    /// fanout that feeds every consumer pipeline's appsrc. Clone-cheap
+    /// (internally Arc'd).
     producer: StreamProducer,
-    /// StreamProducer wrapping the compat-profile (854×480@20 realtime VP8)
-    /// vp8enc appsink (`enc_appsink_compat`) — feeds consumers that POSTed
-    /// with `?profile=compat` (weak TVs whose H264 OMX decoder is vendor-
-    /// broken; they software-decode token-partitioned VP8 across 4 cores).
-    producer_compat: StreamProducer,
 }
 
 impl Drop for NdiPipeline {

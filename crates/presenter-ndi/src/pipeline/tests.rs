@@ -17,7 +17,7 @@ use gstreamer_utils::StreamProducer;
 use gstreamer_video as gst_video;
 use tokio::sync::watch;
 
-use super::build::{consumer_h264_caps, consumer_vp8_caps};
+use super::build::consumer_h264_caps;
 use super::*;
 use crate::whep_session::{LivenessState, WhepConnectionState, WhepSession};
 
@@ -40,9 +40,6 @@ impl NdiPipeline {
         let _ = gstreamer::init();
         let (state_tx, state_rx) = watch::channel(PipelineState::Stopped);
         let appsink = gst_app::AppSink::builder().build();
-        // producer_compat mirrors production's parallel compat branch with
-        // another detached appsink (no compat fanout is exercised here).
-        let appsink_compat = gst_app::AppSink::builder().build();
         Self {
             pipeline: gst::Pipeline::new(),
             whep_url: String::new(),
@@ -51,7 +48,6 @@ impl NdiPipeline {
             bus_watch: std::sync::Mutex::new(None),
             sessions: Arc::new(tokio::sync::Mutex::new(HashMap::new())),
             producer: StreamProducer::from(&appsink),
-            producer_compat: StreamProducer::from(&appsink_compat),
         }
     }
 
@@ -64,20 +60,18 @@ impl NdiPipeline {
 
     /// Build a pipeline with the shared-encoder topology using `videotestsrc`
     /// in place of `ndisrc`/`ndisrcdemux`, so the test runs on hosts without
-    /// gst-plugin-ndi registered. Mirrors production's TWO-PROFILE shape:
-    /// `src → convert → tee` fanning into a default H264 branch (encoder →
-    /// h264parse → enc_appsink) and a VP8 compat branch (vp8enc
-    /// "encoder_compat" → enc_appsink_compat), each wrapped by its own
-    /// StreamProducer; consumers run in their OWN pipelines (see
+    /// gst-plugin-ndi registered. Mirrors production's single-encoder shape:
+    /// `src → convert → tee → queue → encoder → h264parse → enc_appsink`
+    /// wrapped by a StreamProducer; consumers run in their OWN pipelines (see
     /// `add_consumer_stub`).
     ///
     /// Fails with an error if `encoder_name` is not registered.
     ///
     /// NOTE: this stub uses FIXED legacy tuning values (GOP 30, backlog 30,
     /// sync=true) for STRUCTURAL tests only — it does not track production
-    /// tuning or the compat conditioning chain. The real values are locked by
-    /// `pipeline_tuning_properties_are_low_latency` and
-    /// `compat_branch_is_realtime_vp8` against `NdiPipeline::build`.
+    /// tuning. The real values are locked by
+    /// `pipeline_tuning_properties_are_low_latency` against
+    /// `NdiPipeline::build`.
     pub fn stopped_for_test_with_topology(encoder_name: &str) -> Result<Self> {
         crate::init()?;
         if gst::ElementFactory::find(encoder_name).is_none() {
@@ -108,7 +102,6 @@ impl NdiPipeline {
             "h264parse",
             "enc_appsink",
         )?;
-        let producer_compat = Self::add_stub_vp8_compat_branch(&pipeline, &tee)?;
         let (state_tx, state_rx) = watch::channel(PipelineState::Stopped);
         Ok(Self {
             pipeline,
@@ -118,7 +111,6 @@ impl NdiPipeline {
             bus_watch: std::sync::Mutex::new(None),
             sessions: Arc::new(tokio::sync::Mutex::new(HashMap::new())),
             producer,
-            producer_compat,
         })
     }
 
@@ -184,39 +176,6 @@ impl NdiPipeline {
         h264parse
             .link(appsink.upcast_ref::<gst::Element>())
             .context("link h264parse -> appsink")?;
-        Ok(StreamProducer::from(&appsink))
-    }
-
-    /// Test-only helper for `stopped_for_test_with_topology`: append the
-    /// compat branch stub (`queue → vp8enc("encoder_compat") →
-    /// appsink("enc_appsink_compat")`) mirroring production's realtime-VP8
-    /// compat profile shape. STRUCTURAL only — no videorate/convert/scale
-    /// conditioning and default encoder tuning; the real compat tuning is
-    /// locked by `compat_branch_is_realtime_vp8` against `NdiPipeline::build`.
-    fn add_stub_vp8_compat_branch(
-        pipeline: &gst::Pipeline,
-        tee: &gst::Element,
-    ) -> Result<StreamProducer> {
-        let queue = gst::ElementFactory::make("queue")
-            .build()
-            .context("queue (vp8 stub)")?;
-        let encoder = gst::ElementFactory::make("vp8enc")
-            .name("encoder_compat")
-            .build()
-            .context("vp8enc (stub)")?;
-        let appsink = gst_app::AppSink::builder()
-            .name("enc_appsink_compat")
-            .caps(&consumer_vp8_caps())
-            .max_buffers(30u32)
-            .drop(true)
-            .build();
-        pipeline
-            .add_many([&queue, &encoder, appsink.upcast_ref::<gst::Element>()])
-            .context("add vp8 stub branch")?;
-        gst::Element::link_many([tee, &queue, &encoder]).context("link vp8 stub branch")?;
-        encoder
-            .link(appsink.upcast_ref::<gst::Element>())
-            .context("link vp8enc -> appsink (stub)")?;
         Ok(StreamProducer::from(&appsink))
     }
 
@@ -424,7 +383,7 @@ fn pipeline_tuning_properties_are_low_latency() {
     );
     assert_eq!(appsink.max_buffers(), 5, "appsink backlog must be 5 frames");
 
-    // 3. GOP 240 (8s): no 1s IDR pulses; joins use force-keyunit instead.
+    // 3. GOP 60 (2s @30fps): no 1s IDR pulses; joins use force-keyunit instead.
     let encoder = p.pipeline.by_name("encoder").expect("encoder named");
     let factory = encoder.factory().expect("factory").name().to_string();
     let gop: i64 = match factory.as_str() {
@@ -432,19 +391,18 @@ fn pipeline_tuning_properties_are_low_latency() {
         "vah264enc" | "x264enc" => encoder.property::<u32>("key-int-max") as i64,
         other => panic!("unexpected encoder factory {other}"),
     };
-    assert_eq!(gop, 240, "GOP must be 240 frames");
+    assert_eq!(gop, 60, "GOP must be 60 frames");
 }
 
-/// The video encoder factories `iterate_encoders` counts (the H264 default
-/// branch and the vp8enc compat branch) — mirrored here so the #336 tests
-/// can ALSO prove consumer pipelines hold zero of them.
-const ENCODER_FACTORIES: [&str; 6] = [
+/// The video encoder factories `iterate_encoders` counts (the single shared
+/// H264 encoder) — mirrored here so the #336 tests can ALSO prove consumer
+/// pipelines hold zero of them.
+const ENCODER_FACTORIES: [&str; 5] = [
     "vah264enc",
     "nvh264enc",
     "x264enc",
     "nvcudah264enc",
     "nvautogpuh264enc",
-    "vp8enc",
 ];
 
 /// Count video encoder elements across every CONSUMER pipeline (the #336
@@ -462,8 +420,7 @@ async fn consumer_pipeline_encoder_count(pipeline: &NdiPipeline) -> usize {
         .count()
 }
 
-/// Regression test for #336: shared-encoder fanout — updated for the
-/// two-profile pivot (2026-06-12).
+/// Regression test for #336: shared-encoder fanout.
 ///
 /// The pre-fix pipeline ended in `whepserversink`, which (by gst-plugin-rs
 /// 0.15 design) spawns one independent encoder per WHEP consumer. With
@@ -471,21 +428,19 @@ async fn consumer_pipeline_encoder_count(pipeline: &NdiPipeline) -> usize {
 /// 3-4 encoders saturated the N100's iGPU VAAPI scheduler — the
 /// 2026-05-24 production incident.
 ///
-/// The ACTUAL #336 invariant is that encoders never multiply PER CONSUMER.
-/// Since the compat-profile pivot the ENCODER pipeline holds EXACTLY TWO
-/// encoder elements BY DESIGN — "encoder" (H264 720p default profile) and
-/// "encoder_compat" (vp8enc, the realtime-VP8 640×360 compat profile): one
-/// per PROFILE. Consumer pipelines (appsrc → rtph264pay|rtpvp8pay →
-/// webrtcbin, fed via StreamProducer) contain ZERO encoders. This test
-/// asserts both: regardless of how many consumers are added, the encoder
-/// pipeline yields exactly TWO encoder elements, the consumer pipelines
-/// yield one webrtcbin each and NO encoder.
+/// The #336 invariant is that encoders never multiply PER CONSUMER. The
+/// ENCODER pipeline holds EXACTLY ONE encoder element BY DESIGN — "encoder"
+/// (the shared 720p H264 hardware encoder). Consumer pipelines (appsrc →
+/// rtph264pay → webrtcbin, fed via StreamProducer) contain ZERO encoders. This
+/// test asserts both: regardless of how many consumers are added, the encoder
+/// pipeline yields exactly ONE encoder element, the consumer pipelines yield
+/// one webrtcbin each and NO encoder.
 ///
 /// Runs on every CI host (no GPU/libndi required) — uses
 /// `stopped_for_test_with_topology()` with `x264enc` (always available)
 /// in lieu of real HW encoders.
 #[tokio::test]
-async fn pipeline_has_exactly_two_profile_encoders_for_n_consumers() {
+async fn pipeline_has_exactly_one_shared_encoder_for_n_consumers() {
     super::super::init().expect("gst init");
     let mut pipeline = NdiPipeline::stopped_for_test_with_topology("x264enc")
         .expect("test-only topology builder must succeed when x264enc registered");
@@ -503,17 +458,16 @@ async fn pipeline_has_exactly_two_profile_encoders_for_n_consumers() {
     let consumer_encoders = consumer_pipeline_encoder_count(&pipeline).await;
 
     assert_eq!(
-        encoder_count, 2,
-        "REGRESSION (#336, two-profile pivot): the ENCODER pipeline must have \
-         EXACTLY TWO encoders — one per PROFILE (H264 \"encoder\" + vp8enc \
-         \"encoder_compat\"), NEVER one per consumer; got {encoder_count} \
-         encoders for 4 consumers. \
+        encoder_count, 1,
+        "REGRESSION (#336): the ENCODER pipeline must have EXACTLY ONE encoder \
+         — the shared 720p H264 \"encoder\", NEVER one per consumer; got \
+         {encoder_count} encoders for 4 consumers. \
          Encoder factories considered: {ENCODER_FACTORIES:?}"
     );
     assert_eq!(
         consumer_encoders, 0,
         "REGRESSION (#336): consumer pipelines must contain ZERO encoders \
-         (appsrc → rtph264pay|rtpvp8pay → webrtcbin only); got {consumer_encoders}"
+         (appsrc → rtph264pay → webrtcbin only); got {consumer_encoders}"
     );
     assert_eq!(
         webrtcbin_count, 4,
@@ -776,9 +730,9 @@ async fn rtcp_stale_zombies_free_the_cap_for_a_new_join() {
 
 /// Spec #336 / Task 7: cleanup invariant. After N add_consumer +
 /// M remove_consumer calls, exactly N-M consumer pipelines (one webrtcbin
-/// each) remain, the encoder count stays at exactly 2 (one per PROFILE —
-/// encoder + encoder_compat, never per consumer), and remove_consumer
-/// on an unknown session is idempotent.
+/// each) remain, the encoder count stays at exactly 1 (the shared encoder,
+/// never per consumer), and remove_consumer on an unknown session is
+/// idempotent.
 ///
 /// Catches the regression class where a leaked consumer pipeline or a
 /// dangling StreamProducer link accumulates on every disconnect — would
@@ -803,8 +757,8 @@ async fn add_then_remove_leaves_clean_state() {
     );
     assert_eq!(
         pipeline.iterate_encoders().count(),
-        2,
-        "encoder count must stay at 2 (one per profile) regardless of consumer churn",
+        1,
+        "encoder count must stay at 1 (the shared encoder) regardless of consumer churn",
     );
 
     // Remove 3.
@@ -820,8 +774,8 @@ async fn add_then_remove_leaves_clean_state() {
     );
     assert_eq!(
         pipeline.iterate_encoders().count(),
-        2,
-        "encoder count must stay at 2 (one per profile) across removes",
+        1,
+        "encoder count must stay at 1 (the shared encoder) across removes",
     );
 
     // Remove the rest.
@@ -837,8 +791,8 @@ async fn add_then_remove_leaves_clean_state() {
     );
     assert_eq!(
         pipeline.iterate_encoders().count(),
-        2,
-        "both profile encoders must still be present (they're part of the encoder pipeline topology)",
+        1,
+        "the shared encoder must still be present (it's part of the encoder pipeline topology)",
     );
 
     // Remove non-existent session must be idempotent.
@@ -885,38 +839,35 @@ fn consumer_payloader_uses_zero_latency_aggregation() {
     assert_eq!(enum_value.nick(), "zero-latency");
 }
 
-/// The profile implies the codec (realtime-VP8 compat pivot): a compat
-/// consumer's elements must payload VP8 — `rtpvp8pay` pre-seated on the
-/// offer's VP8 pt, with the appsrc created on the VP8 bridge caps so the
-/// very first sample forwarded from `enc_appsink_compat` agrees. (A
-/// rtph264pay here would silently discard every VP8 buffer — connected, but
-/// black.)
+/// A consumer's elements must payload H264 — `rtph264pay` pre-seated on the
+/// offer's H264 pt, with the appsrc created on the H264 bridge caps so the
+/// very first sample forwarded from `enc_appsink` agrees.
 #[test]
-fn compat_consumer_elements_payload_vp8() {
+fn consumer_elements_payload_h264() {
     super::super::init().expect("gst init");
     let (appsrc, payloader, _webrtcbin) =
-        super::consumers::build_consumer_elements("test-vp8", StreamProfile::Compat, 96)
+        super::consumers::build_consumer_elements("test-h264", StreamProfile::Default, 102)
             .expect("consumer elements build");
     assert_eq!(
         payloader.factory().map(|f| f.name().to_string()).as_deref(),
-        Some("rtpvp8pay"),
-        "compat consumers must payload VP8"
+        Some("rtph264pay"),
+        "consumers must payload H264"
     );
     assert_eq!(
         payloader.property::<u32>("pt"),
-        96,
-        "rtpvp8pay must be pre-seated on the offer's VP8 pt"
+        102,
+        "rtph264pay must be pre-seated on the offer's H264 pt"
     );
-    let caps = appsrc.caps().expect("compat appsrc has initial caps");
+    let caps = appsrc.caps().expect("appsrc has initial caps");
     assert_eq!(
         caps.structure(0).expect("caps structure").name(),
-        "video/x-vp8",
-        "compat appsrc bridge caps must match the VP8 producer appsink"
+        "video/x-h264",
+        "appsrc bridge caps must match the H264 producer appsink"
     );
 }
 
-/// With GOP=240 a joining consumer MUST trigger an immediate IDR — otherwise
-/// it would wait up to 8s for the next scheduled keyframe (black join).
+/// With GOP=60 a joining consumer MUST trigger an immediate IDR — otherwise
+/// it would wait up to 2s for the next scheduled keyframe (black join).
 #[test]
 fn request_keyframe_sends_force_key_unit_upstream() {
     use std::sync::atomic::{AtomicBool, Ordering};
@@ -953,177 +904,32 @@ fn request_keyframe_sends_force_key_unit_upstream() {
     );
 }
 
-/// Compat branch (realtime-VP8 pivot, 2026-06-12 evening): BOTH previous
-/// compat attempts failed on the real prod TVs. The H264 640×480 branch
-/// still killed the MStar OMX decoder after ~5s AND letterboxed the 16:9
-/// picture into 4:3. The FIRST VP8 attempt (vp8enc deadline=1 cpu-used=8,
-/// default SINGLE token partition) decoded at ~26fps with freezes — gst
-/// vp8enc's default emits ONE token partition, so the TV decodes tokens on
-/// ONE core. Meanwhile VDO.Ninja (browser-to-browser libwebrtc VP8) has
-/// played smoothly for years on the SAME TVs in the same WebView — the key
-/// delta is libwebrtc's realtime stream properties, above all TOKEN
-/// PARTITIONS: token-partitions=4 lets the TV's libvpx spread token decode
-/// across its 4 cores.
-///
-/// Locks the full compat branch shape against the REAL `NdiPipeline::build`:
-/// vp8enc "encoder_compat" with the VDO.Ninja-style realtime tuning
-/// (deadline=1, cpu-used=8, cbr 900kbps, token-partitions=4, threads=4,
-/// error-resilient=default, lag-in-frames=0, kf-max-dist=240), 854×480 16:9
-/// I420 @20fps conditioning caps (no 4:3 letterbox), and the same bounded
-/// relay appsink contract as the primary branch (sync=false, 5 buffers,
-/// video/x-vp8 bridge caps).
+/// WHEP `?profile=` query parsing: only the single shared 720p H264 stream
+/// ships, so EVERY value (absent, the retired "compat"/"vp8" strings some TVs
+/// may still send, any case variant) resolves to Default — an unrecognized
+/// profile must never break a display's join.
 #[test]
-fn compat_branch_is_realtime_vp8() {
-    super::super::init().unwrap();
-    if super::super::hw_h264_encoder().is_none() {
-        return;
-    }
-    let p = NdiPipeline::build("no-such-source", "http://127.0.0.1/whep".into()).unwrap();
-
-    let compat = p
-        .pipeline
-        .by_name("encoder_compat")
-        .expect("encoder named encoder_compat in the compat branch");
-    assert_eq!(
-        compat.factory().map(|f| f.name().to_string()).as_deref(),
-        Some("vp8enc"),
-        "compat encoder must be a vp8enc — VDO.Ninja-style realtime VP8 (the \
-         H264 640x480 attempt still died in the MStar OMX decoder after ~5s)"
-    );
-
-    // THE key delta vs the failed first VP8 attempt: token partitions. gst
-    // vp8enc defaults to ONE partition → single-core token decode on the TV
-    // (~26fps + freezes). libwebrtc emits partitioned streams → the TV's 4
-    // cores decode in parallel, which is why VDO.Ninja plays smoothly there.
-    let value = compat.property_value("token-partitions");
-    let (_, enum_value) =
-        gst::glib::EnumValue::from_value(&value).expect("token-partitions is an enum");
-    assert_eq!(
-        enum_value.nick(),
-        "4",
-        "token-partitions must be FOUR partitions — multithreaded decode on the TV"
-    );
-    assert_eq!(
-        compat.property::<i32>("threads"),
-        4,
-        "4 encode threads (one per partition)"
-    );
-    assert_eq!(
-        compat.property::<i32>("lag-in-frames"),
-        0,
-        "zero lookahead — realtime stream"
-    );
-    assert_eq!(
-        compat.property::<i32>("target-bitrate"),
-        900_000,
-        "900 kbps weak-device budget (vp8enc takes bits/sec)"
-    );
-    assert_eq!(
-        compat.property::<i64>("deadline"),
-        1,
-        "deadline=1 µs/frame = libvpx realtime mode"
-    );
-    assert_eq!(
-        compat.property::<i32>("cpu-used"),
-        8,
-        "cpu-used=8 — fastest realtime encode preset"
-    );
-    assert_eq!(
-        compat.property::<i32>("keyframe-max-dist"),
-        240,
-        "GOP parity with the H264 branch (joins served by force-keyunit)"
-    );
-    let value = compat.property_value("end-usage");
-    let (_, enum_value) = gst::glib::EnumValue::from_value(&value).expect("end-usage is an enum");
-    assert_eq!(
-        enum_value.nick(),
-        "cbr",
-        "CBR rate control like libwebrtc realtime streams"
-    );
-    let value = compat.property_value("error-resilient");
-    let (_, flags) =
-        gst::glib::FlagsValue::from_value(&value).expect("error-resilient is a flags property");
-    assert!(
-        flags.iter().any(|f| f.nick() == "default"),
-        "error-resilient must carry the 'default' flag (libwebrtc parity)"
-    );
-
-    let scale_caps = p
-        .pipeline
-        .by_name("compat_scale_caps")
-        .expect("capsfilter named compat_scale_caps in the compat branch");
-    let caps = scale_caps.property::<gst::Caps>("caps");
-    let s = caps.structure(0).expect("caps structure");
-    assert_eq!(s.name(), "video/x-raw");
-    assert_eq!(
-        s.get::<&str>("format").expect("format field"),
-        "I420",
-        "vp8enc's sink is I420-only (the compat videoconvert repacks NV12→I420)"
-    );
-    assert_eq!(
-        s.get::<i32>("width").expect("width field"),
-        854,
-        "854 = 16:9 at 480p — highest weak-TV-sustained tier (quality policy)"
-    );
-    assert_eq!(s.get::<i32>("height").expect("height field"), 480);
-    assert_eq!(
-        s.get::<gst::Fraction>("framerate")
-            .expect("framerate field"),
-        gst::Fraction::new(20, 1),
-        "20fps — the weak TVs' software-decode budget (videorate drops to it)"
-    );
-
-    let appsink = p
-        .pipeline
-        .by_name("enc_appsink_compat")
-        .expect("appsink named enc_appsink_compat")
-        .downcast::<gst_app::AppSink>()
-        .expect("enc_appsink_compat is an AppSink");
-    assert!(
-        !appsink.property::<bool>("sync"),
-        "compat producer appsink must be sync=false (relay, not renderer)"
-    );
-    assert_eq!(appsink.max_buffers(), 5, "compat backlog must be 5 frames");
-    let sink_caps = appsink.caps().expect("enc_appsink_compat caps");
-    assert_eq!(
-        sink_caps.structure(0).expect("caps structure").name(),
-        "video/x-vp8",
-        "compat bridge caps must be VP8 (consumers payload it with rtpvp8pay)"
-    );
-}
-
-/// WHEP `?profile=` query parsing: ONLY the exact string "compat" selects
-/// the compat branch. Absent or unknown values (including the retired "vp8"
-/// some TVs may still send, and any case variant) must degrade to Default —
-/// an unrecognized profile must never break a display's join.
-#[test]
-fn stream_profile_from_query_parses_compat_only() {
-    assert_eq!(
-        StreamProfile::from_query(Some("compat")),
-        StreamProfile::Compat
-    );
+fn stream_profile_from_query_always_default() {
     assert_eq!(StreamProfile::from_query(None), StreamProfile::Default);
     assert_eq!(StreamProfile::from_query(Some("")), StreamProfile::Default);
     assert_eq!(
-        StreamProfile::from_query(Some("vp8")),
+        StreamProfile::from_query(Some("compat")),
         StreamProfile::Default,
-        "the retired vp8 mode string must fall back to Default"
+        "the retired compat mode string must resolve to Default"
     );
     assert_eq!(
-        StreamProfile::from_query(Some("Compat")),
+        StreamProfile::from_query(Some("vp8")),
         StreamProfile::Default,
-        "exact match only — unknown casing degrades to Default, never errors"
+        "the retired vp8 mode string must resolve to Default"
     );
 }
 
-/// Profile→producer threading: `?profile=compat` must feed the consumer
-/// from the COMPAT branch's producer (the 854×480 realtime-VP8 stream) and
-/// the default profile from the primary producer. Identified by each producer's
-/// appsink name — the same handle `request_keyframe` pushes its IDR
-/// request through, so this also locks keyframe targeting to the branch
-/// the consumer is actually fed from.
+/// Profile→producer threading: the Default profile must feed the consumer
+/// from the shared 720p H264 producer (`enc_appsink`) — the same handle
+/// `request_keyframe` pushes its IDR request through, so this also locks
+/// keyframe targeting to the branch the consumer is fed from.
 #[test]
-fn producer_for_profile_selects_matching_branch() {
+fn producer_for_profile_selects_shared_branch() {
     super::super::init().unwrap();
     if super::super::hw_h264_encoder().is_none() {
         return;
@@ -1134,50 +940,7 @@ fn producer_for_profile_selects_matching_branch() {
             .appsink()
             .name(),
         "enc_appsink",
-        "Default profile must be fed from the primary 720p branch"
-    );
-    assert_eq!(
-        p.producer_for_profile(StreamProfile::Compat)
-            .appsink()
-            .name(),
-        "enc_appsink_compat",
-        "Compat profile must be fed from the 854x480 realtime-VP8 compat branch"
-    );
-}
-
-/// A compat consumer's join-time IDR request must reach the COMPAT branch
-/// (upstream from enc_appsink_compat) — not the default encoder. Mirrors
-/// `request_keyframe_sends_force_key_unit_upstream` on the compat producer.
-#[test]
-fn request_keyframe_targets_the_compat_producer_for_compat_consumers() {
-    use std::sync::atomic::{AtomicBool, Ordering};
-    super::super::init().unwrap();
-    if super::super::hw_h264_encoder().is_none() {
-        return;
-    }
-    let p = NdiPipeline::build("no-such-source", "http://127.0.0.1/whep".into()).unwrap();
-    let appsink = p.pipeline.by_name("enc_appsink_compat").unwrap();
-    // Activate just the compat appsink's pads (READY→PAUSED) so the upstream
-    // event isn't refused on a flushing pad — same setup as the default-
-    // branch keyframe test above.
-    appsink
-        .set_state(gst::State::Paused)
-        .expect("compat appsink must accept PAUSED (ASYNC pre-preroll)");
-    let appsink_pad = appsink.static_pad("sink").unwrap();
-    let seen = std::sync::Arc::new(AtomicBool::new(false));
-    let seen_probe = std::sync::Arc::clone(&seen);
-    appsink_pad.add_probe(gst::PadProbeType::EVENT_UPSTREAM, move |_, info| {
-        if let Some(gst::PadProbeData::Event(ev)) = &info.data {
-            if gst_video::UpstreamForceKeyUnitEvent::parse(ev).is_ok() {
-                seen_probe.store(true, Ordering::SeqCst);
-            }
-        }
-        gst::PadProbeReturn::Ok
-    });
-    super::consumers::request_keyframe(p.producer_for_profile(StreamProfile::Compat));
-    assert!(
-        seen.load(Ordering::SeqCst),
-        "ForceKeyUnit must be pushed upstream from the COMPAT producer appsink"
+        "Default profile must be fed from the shared 720p H264 branch"
     );
 }
 

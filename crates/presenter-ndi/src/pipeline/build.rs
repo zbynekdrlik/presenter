@@ -1,20 +1,11 @@
 //! Pipeline construction: build the shared-encoder ENCODER pipeline
-//! (`ndisrc → ndisrcdemux → videoconvert → videoscale → caps → raw_tee`,
-//! fanning into TWO parallel encode branches — one per stream profile:
-//! default `→ q_default → encoder → profile_caps → h264parse → enc_appsink`
-//! (1280×720 H264) and compat `→ q_compat → videorate → videoconvert →
-//! videoscale → compat_scale_caps → encoder_compat(vp8enc) →
-//! enc_appsink_compat` (854×480@20 realtime VP8). Each appsink is wrapped by
-//! a `gstreamer_utils::StreamProducer` which fans the encoded stream out to
-//! the per-consumer `appsrc → rtph264pay|rtpvp8pay → webrtcbin` pipelines
-//! built in `add_consumer` (see `consumers.rs`); a consumer selects its
-//! producer via the WHEP `?profile=compat` query (see `StreamProfile`). The
-//! compat branch exists because the weak stage TVs' MStar H264 OMX decoder
-//! is vendor-broken (even an exactly-640×480 H264 stream dies after ~5s) —
-//! but VDO.Ninja's libwebrtc VP8 has played smoothly on the SAME TVs for
-//! years, so compat mirrors its realtime stream properties, above all
-//! token-partitioned VP8 for multithreaded TV decode (see
-//! `build_compat_vp8_encoder`).
+//! (`ndisrc → ndisrcdemux → videoconvert → videoscale → caps → raw_tee →
+//! q_default → encoder → profile_caps → h264parse → enc_appsink`,
+//! 1280×720 H264). The appsink is wrapped by a
+//! `gstreamer_utils::StreamProducer` which fans the encoded stream out to the
+//! per-consumer `appsrc → rtph264pay → webrtcbin` pipelines built in
+//! `add_consumer` (see `consumers.rs`). ONE shared hardware-H264 encoder
+//! serves every consumer.
 
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -36,29 +27,8 @@ use super::{NdiPipeline, PipelineState};
 const MAX_VIDEO_WIDTH: i32 = 1280;
 const MAX_VIDEO_HEIGHT: i32 = 720;
 
-/// Compat-profile resolution: 854×480 — 16:9 at 480p, so the picture fills
-/// the full width (the abandoned 640×480 H264 attempt letterboxed 16:9 into
-/// 4:3 AND still killed the TVs' vendor-broken MStar OMX decoder after ~5s).
-/// VP8 has no decoder port-reconfig trap — libvpx software-decodes any size;
-/// QUALITY POLICY (user directive 2026-06-13): priority order is
-/// (1) near-zero latency, (2) no stuttering, (3) MAXIMUM quality — and
-/// defaults start HIGH. Floor-finding (360p15/500k) proved the floor alone
-/// does not fix weak TVs (the real fixes were the video-only offer +
-/// adaptive jitter buffer); the static compat tier therefore sits at the
-/// highest level a weak device sustained (480p@20). #387 makes this
-/// DYNAMIC both ways, VDO.Ninja-style: ramp up on headroom, down on loss.
-const COMPAT_VIDEO_WIDTH: i32 = 854;
-const COMPAT_VIDEO_HEIGHT: i32 = 480;
-/// Compat-profile framerate: 20fps. The TVs decode VP8 in software — fewer,
-/// cheaper frames beat 30fps with drops. `videorate(drop-only)` thins the
-/// 30fps tee output down to this.
-const COMPAT_FRAMERATE: i32 = 20;
-
 /// Primary (720p) encoder bitrate in kbit/s.
 const DEFAULT_BITRATE_KBPS: u32 = 2500;
-/// Compat (480p VP8) encoder bitrate in bits/s — the weak-device budget
-/// (vp8enc's `target-bitrate` is bits/sec, unlike the H264 encoders' kbps).
-const COMPAT_TARGET_BITRATE_BPS: i32 = 900_000;
 
 impl NdiPipeline {
     /// Build but do not yet start the pipeline.
@@ -78,9 +48,22 @@ impl NdiPipeline {
 
         let pipeline = gst::Pipeline::new();
 
+        // Force the steady system monotonic clock for the ENCODER pipeline (and
+        // therefore every consumer pipeline, which shares this clock + base-time
+        // for its RTP/RTCP timing). Left to auto-select, GStreamer can slave to a
+        // clock PROVIDED by ndisrc (the NDI sender's clock) and recalibrate it
+        // periodically; a ~20s clock correction shifts the RTP/RTCP timing of
+        // EVERY consumer at the SAME instant, which Chrome sees as a synchronized
+        // playout resync — a ~400ms render pause every ~20s on ALL TVs at once
+        // (the "naraz" hitch). A fixed system clock never recalibrates;
+        // receive-time PTS still stamps from this clock at frame arrival.
+        let sysclock = gst::SystemClock::obtain();
+        pipeline.use_clock(Some(&sysclock));
+        tracing::info!("encoder pipeline pinned to system monotonic clock (no NDI clock slaving)");
+
         let (ndisrc, ndisrcdemux) = build_ndi_source(ndi_name)?;
         let (videoconvert, videoscale, scale_caps, audio_fakesink) = build_video_chain()?;
-        let (raw_tee, q_default, q_compat) = build_raw_tee_and_queues()?;
+        let (raw_tee, q_default) = build_raw_tee_and_queues()?;
         let encoder = build_encoder(encoder_name)?;
         let profile_caps = build_profile_caps()?;
         let (h264parse, appsink) = build_parse_and_sink()?;
@@ -103,40 +86,34 @@ impl NdiPipeline {
             .context("add elements")?;
 
         ndisrc.link(&ndisrcdemux).context("link ndisrc -> demux")?;
-        // videoconvert → videoscale → capsfilter(NV12, ≤720p) → tee. Both
-        // encode branches are linked HERE, before any state change — a tee
+        // videoconvert → videoscale → capsfilter(NV12, ≤720p) → tee. The
+        // encode branch is linked HERE, before any state change — a tee
         // branch linked after PLAYING never forwards a buffer (sticky events).
         gst::Element::link_many([&videoconvert, &videoscale, &scale_caps, &raw_tee])
             .context("link videoconvert -> videoscale -> caps -> tee")?;
-        // Branch A (default profile, 720p H264):
+        // 720p H264 encode branch:
         gst::Element::link_many([&raw_tee, &q_default, &encoder, &profile_caps, &h264parse])
             .context("link tee -> q_default -> encoder -> profile_caps -> h264parse")?;
         h264parse
             .link(appsink.upcast_ref::<gst::Element>())
             .context("link h264parse -> appsink")?;
-        // Branch B (compat profile, realtime VP8 854×480@20 — see
-        // `add_compat_branch`): added and linked before any state change too.
-        let appsink_compat = add_compat_branch(&pipeline, &raw_tee, &q_compat)?;
-
-        // Wrap each appsink in a StreamProducer — the battle-tested fanout
+        // Wrap the appsink in a StreamProducer — the battle-tested fanout
         // from gstreamer-utils that webrtcsink itself uses: forwards full
         // SAMPLES (caps + segment + PTS preserved on the shared clock/base-
         // time), propagates producer latency to consumer appsrcs, gates new
         // consumers on a keyframe, and forwards browser PLIs upstream to the
-        // branch's encoder. sync=false: forward every encoded frame
-        // IMMEDIATELY — the default (sync=true) holds each frame to its clock
-        // deadline (~40ms measured), correct for a rendering sink, wrong for
-        // a relay.
+        // encoder. sync=false: forward every encoded frame IMMEDIATELY — the
+        // default (sync=true) holds each frame to its clock deadline (~40ms
+        // measured), correct for a rendering sink, wrong for a relay.
         let settings = gstreamer_utils::streamproducer::ProducerSettings { sync: false };
-        let producer = StreamProducer::with(&appsink, settings.clone());
-        let producer_compat = StreamProducer::with(&appsink_compat, settings);
+        let producer = StreamProducer::with(&appsink, settings);
 
         connect_demux_pads(&ndisrcdemux, &videoconvert, &audio_fakesink);
 
         tracing::info!(
             encoder = encoder_name,
             %ndi_name,
-            "pipeline built (720p H264 default + 854x480@20 realtime-VP8 compat, per-consumer-pipeline fanout)"
+            "pipeline built (720p H264 shared encoder, per-consumer-pipeline fanout)"
         );
 
         let (state_tx, state_rx) = watch::channel(PipelineState::Stopped);
@@ -149,7 +126,6 @@ impl NdiPipeline {
             bus_watch: std::sync::Mutex::new(None),
             sessions: Arc::new(tokio::sync::Mutex::new(HashMap::new())),
             producer,
-            producer_compat,
         })
     }
 }
@@ -207,7 +183,7 @@ fn build_ndi_source(ndi_name: &str) -> Result<(gst::Element, gst::Element)> {
 /// frames so every PER-CONSUMER rtph264pay (in its own pipeline) receives a
 /// clean, properly-capped stream. `config-interval=-1` re-inserts SPS/PPS
 /// before every IDR so a consumer that joins mid-stream gets an IDR
-/// immediately via `consumers::request_keyframe` (GOP itself is 240 frames).
+/// immediately via `consumers::request_keyframe` (GOP itself is 60 frames).
 ///
 /// The PAYLOADER is intentionally NOT here — it is per-consumer, in the
 /// consumer's own pipeline downstream of an appsrc, so each webrtcbin
@@ -252,30 +228,19 @@ pub(super) fn consumer_h264_caps() -> gst::Caps {
         .build()
 }
 
-/// The VP8 caps used on BOTH sides of the compat StreamProducer bridge: the
-/// vp8enc appsink's caps filter AND every compat consumer appsrc's initial
-/// caps — the same always-match guarantee `consumer_h264_caps` gives the
-/// H264 bridge (vp8enc output needs no parser; rtpvp8pay takes it directly).
-pub(super) fn consumer_vp8_caps() -> gst::Caps {
-    gst::Caps::builder("video/x-vp8").build()
-}
-
 /// Build the raw fanout point placed after `scale_caps`: a `tee` named
-/// "raw_tee" plus one branch-isolation queue per encode branch. A tee blocks
-/// ALL branches whenever ANY branch's downstream blocks, so each branch gets
-/// a small LEAKY queue: a transient stall in one encoder can then never
-/// stall the other encoder (or back-pressure the live NDI source) — it just
-/// drops that branch's oldest raw frame, the correct realtime behavior.
-fn build_raw_tee_and_queues() -> Result<(gst::Element, gst::Element, gst::Element)> {
+/// "raw_tee" plus the encode branch's isolation queue. A tee blocks ALL
+/// branches whenever ANY branch's downstream blocks, so the branch gets a
+/// small LEAKY queue: a transient encoder stall can then never back-pressure
+/// the live NDI source — it just drops the branch's oldest raw frame, the
+/// correct realtime behavior. (The `tee` is retained as the StreamProducer's
+/// fanout is per-consumer downstream of the appsink, not per encode branch.)
+fn build_raw_tee_and_queues() -> Result<(gst::Element, gst::Element)> {
     let raw_tee = gst::ElementFactory::make("tee")
         .name("raw_tee")
         .build()
         .context("build raw_tee")?;
-    Ok((
-        raw_tee,
-        build_branch_queue("q_default")?,
-        build_branch_queue("q_compat")?,
-    ))
+    Ok((raw_tee, build_branch_queue("q_default")?))
 }
 
 /// One branch-isolation queue (see `build_raw_tee_and_queues`): bounded to 5
@@ -290,130 +255,6 @@ fn build_branch_queue(name: &str) -> Result<gst::Element> {
         .property_from_str("leaky", "downstream")
         .build()
         .with_context(|| format!("build queue {name}"))
-}
-
-/// Append the compat encode branch (realtime VP8, VDO.Ninja-style) to the
-/// encoder pipeline and link it off `raw_tee`:
-///
-/// `raw_tee → q_compat → videorate(drop-only) → videoconvert(NV12→I420) →
-/// videoscale(add-borders) → compat_scale_caps(I420 854×480 PAR 1/1 @20/1)
-/// → vp8enc("encoder_compat") → enc_appsink_compat(video/x-vp8)`.
-///
-/// - videorate `drop-only=true`: thins the 30fps tee output to the 20fps the
-///   caps pin by DROPPING frames — never duplicates to upconvert a slower
-///   source (a realtime branch must not pad with copies).
-/// - videoconvert: REQUIRED — vp8enc's sink accepts ONLY I420 (gst-inspect
-///   verified) while the tee carries NV12 for the H264 hw encoder; this is a
-///   cheap 4:2:0→4:2:0 chroma repack.
-/// - videoscale `add-borders=true`: 720p 16:9 → 854×480 is aspect-preserving
-///   (no borders in practice); non-16:9 sources letterbox instead of stretch.
-/// - appsink: same bounded relay contract as the default branch — 5-frame
-///   backlog, drop(true) keeps the newest, VP8 bridge caps
-///   (`consumer_vp8_caps`) so every compat consumer appsrc always matches.
-///
-/// Returns the branch's appsink for its StreamProducer wrap. Linked at build
-/// time, before any state change (a tee branch linked after PLAYING never
-/// forwards a buffer — sticky events).
-fn add_compat_branch(
-    pipeline: &gst::Pipeline,
-    raw_tee: &gst::Element,
-    q_compat: &gst::Element,
-) -> Result<gst_app::AppSink> {
-    let videorate = gst::ElementFactory::make("videorate")
-        .property("drop-only", true)
-        .build()
-        .context("build compat videorate")?;
-    let videoconvert = gst::ElementFactory::make("videoconvert")
-        .build()
-        .context("build compat videoconvert")?;
-    let videoscale = gst::ElementFactory::make("videoscale")
-        .property("add-borders", true)
-        .build()
-        .context("build compat videoscale")?;
-    let scale_caps = gst::ElementFactory::make("capsfilter")
-        .name("compat_scale_caps")
-        .property(
-            "caps",
-            gst::Caps::builder("video/x-raw")
-                .field("format", "I420")
-                .field("width", COMPAT_VIDEO_WIDTH)
-                .field("height", COMPAT_VIDEO_HEIGHT)
-                .field("pixel-aspect-ratio", gst::Fraction::new(1, 1))
-                .field("framerate", gst::Fraction::new(COMPAT_FRAMERATE, 1))
-                .build(),
-        )
-        .build()
-        .context("build compat scale capsfilter")?;
-    let encoder_compat = build_compat_vp8_encoder()?;
-    let appsink = gst_app::AppSink::builder()
-        .name("enc_appsink_compat")
-        .caps(&consumer_vp8_caps())
-        .max_buffers(5)
-        .drop(true)
-        .build();
-    pipeline
-        .add_many([
-            q_compat,
-            &videorate,
-            &videoconvert,
-            &videoscale,
-            &scale_caps,
-            &encoder_compat,
-            appsink.upcast_ref::<gst::Element>(),
-        ])
-        .context("add compat branch elements")?;
-    gst::Element::link_many([
-        raw_tee,
-        q_compat,
-        &videorate,
-        &videoconvert,
-        &videoscale,
-        &scale_caps,
-        &encoder_compat,
-    ])
-    .context("link tee -> q_compat -> rate -> convert -> scale -> caps -> vp8enc")?;
-    encoder_compat
-        .link(appsink.upcast_ref::<gst::Element>())
-        .context("link vp8enc -> compat appsink")?;
-    Ok(appsink)
-}
-
-/// Build the compat branch's `vp8enc` ("encoder_compat") with libwebrtc-
-/// parity realtime tuning. VDO.Ninja (browser-to-browser libwebrtc VP8) has
-/// played smoothly for YEARS on the same weak Vestel TVs that freeze on a
-/// default-tuned vp8enc stream — the previous VP8 attempt (deadline=1
-/// cpu-used=8 alone) hit ~26fps with freezes because gst vp8enc's default
-/// emits a SINGLE token partition, forcing the TV to decode tokens on ONE of
-/// its 4 cores. Property types verified via gst-inspect-1.0 and locked by
-/// `compat_branch_is_realtime_vp8`:
-///
-/// - `deadline=1` (µs/frame, Integer64): libvpx realtime mode.
-/// - `cpu-used=8`: fastest realtime encode preset (quality ↓, speed ↑).
-/// - `end-usage=cbr` + `target-bitrate=900_000` (bits/sec): constant-bitrate
-///   like libwebrtc's rate controller — no VBR bursts to choke the TV.
-/// - `keyframe-max-dist=240`: GOP parity with the H264 branch; joins are
-///   served by `request_keyframe`, not scheduled keyframe pulses.
-/// - `token-partitions="4"` (enum nick for FOUR partitions): THE key delta —
-///   partitioned token coding lets the TV's libvpx decoder spread entropy
-///   decode across its 4 cores, exactly what libwebrtc emits.
-/// - `threads=4`: one encode thread per partition on the server.
-/// - `error-resilient=default` (flags): frames stay decodable after loss,
-///   libwebrtc parity for realtime streams.
-/// - `lag-in-frames=0`: zero lookahead — no encoder-side frame delay.
-fn build_compat_vp8_encoder() -> Result<gst::Element> {
-    gst::ElementFactory::make("vp8enc")
-        .name("encoder_compat")
-        .property("deadline", 1i64)
-        .property("cpu-used", 8i32)
-        .property_from_str("end-usage", "cbr")
-        .property("target-bitrate", COMPAT_TARGET_BITRATE_BPS)
-        .property("keyframe-max-dist", 240i32)
-        .property_from_str("token-partitions", "4")
-        .property("threads", 4i32)
-        .property_from_str("error-resilient", "default")
-        .property("lag-in-frames", 0i32)
-        .build()
-        .context("build vp8enc encoder_compat")
 }
 
 /// Build the raw-video conditioning chain placed between the demux and the
@@ -469,19 +310,19 @@ fn build_encoder(encoder_name: &str) -> Result<gst::Element> {
     let mut encoder_builder = gst::ElementFactory::make(encoder_name).name("encoder");
     match encoder_name {
         "vah264enc" => {
-            // key-int-max=240 (8s GOP): no 1s IDR pulses — large keyframes
-            // made low-end TVs choppy and inflated their jitter buffers.
-            // Consumer joins get an immediate IDR via force-keyunit (see
-            // consumers::request_keyframe); loss recovery stays PLI-driven.
+            // key-int-max=60 (2s GOP @30fps): no 1s IDR pulses — large
+            // keyframes made low-end TVs choppy and inflated their jitter
+            // buffers. Consumer joins get an immediate IDR via force-keyunit
+            // (see consumers::request_keyframe); loss recovery stays PLI-driven.
             // target-usage=6: faster encode on the prod N100 (default 4).
             encoder_builder = encoder_builder
-                .property("key-int-max", 240u32)
+                .property("key-int-max", 60u32)
                 .property("target-usage", 6u32)
                 .property("bitrate", DEFAULT_BITRATE_KBPS);
         }
         "nvh264enc" => {
             encoder_builder = encoder_builder
-                .property("gop-size", 240i32)
+                .property("gop-size", 60i32)
                 .property("zerolatency", true)
                 .property("bitrate", DEFAULT_BITRATE_KBPS);
         }
@@ -489,7 +330,7 @@ fn build_encoder(encoder_name: &str) -> Result<gst::Element> {
             encoder_builder = encoder_builder
                 .property_from_str("tune", "zerolatency")
                 .property_from_str("speed-preset", "superfast")
-                .property("key-int-max", 240u32)
+                .property("key-int-max", 60u32)
                 .property("bitrate", DEFAULT_BITRATE_KBPS);
         }
         _ => {

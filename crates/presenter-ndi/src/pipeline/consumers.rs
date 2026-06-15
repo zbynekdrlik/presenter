@@ -1,9 +1,6 @@
 //! WHEP consumer management: build/tear down a FRESH per-consumer pipeline
-//! (`appsrc → rtph264pay|rtpvp8pay → webrtcbin`) fed by the requested
-//! profile branch's `StreamProducer` (the `?profile=compat` WHEP query
-//! selects the 854×480@20 realtime-VP8 compat stream; everything else gets
-//! the 720p H264 default — see [`super::StreamProfile`], whose profile
-//! implies the codec), forward trickle ICE, and diagnostic snapshots.
+//! (`appsrc → rtph264pay → webrtcbin`) fed by the shared 720p H264
+//! `StreamProducer`, forward trickle ICE, and diagnostic snapshots.
 //!
 //! This follows the gst-plugin-rs `webrtcsink` reference recipe exactly:
 //!
@@ -44,11 +41,11 @@ use tokio::sync::mpsc::UnboundedSender;
 
 use super::negotiation::{
     align_payload_type, await_ice_gathering, await_media_caps, negotiate_sdp,
-    parse_h264_payload_type, parse_vp8_payload_type,
+    parse_h264_payload_type,
 };
 use super::{
-    build::{consumer_h264_caps, consumer_vp8_caps},
-    AddConsumerError, NdiPipeline, PipelineSnapshot, SessionSnapshot, StreamProfile, WhepAnswer,
+    build::consumer_h264_caps, AddConsumerError, NdiPipeline, PipelineSnapshot, SessionSnapshot,
+    StreamProfile, WhepAnswer,
 };
 use crate::whep_session::{IceCandidate, LivenessState, WhepConnectionState, WhepSession};
 
@@ -127,24 +124,20 @@ impl Drop for ConsumerBranch {
 }
 
 impl NdiPipeline {
-    /// The encoder-branch producer serving `profile` — the single point
-    /// where a consumer's requested profile maps to a concrete stream.
-    /// `request_keyframe` MUST target the producer returned here so a
-    /// compat joiner's IDR request reaches the compat encoder.
+    /// The shared 720p H264 producer serving every consumer. Kept as a method
+    /// (rather than an inline field access) so `request_keyframe` and the
+    /// builder share one accessor for the producer they target.
     pub(super) fn producer_for_profile(&self, profile: StreamProfile) -> &StreamProducer {
         match profile {
             StreamProfile::Default => &self.producer,
-            StreamProfile::Compat => &self.producer_compat,
         }
     }
 
-    /// Add a WHEP consumer: build a fresh `appsrc → rtph264pay|rtpvp8pay →
-    /// webrtcbin` pipeline on the encoder's clock, fed from the branch the
-    /// consumer's WHEP POST requested (`profile` — `?profile=compat` selects
-    /// the 854×480@20 realtime-VP8 compat stream; the profile implies the
-    /// codec), perform the SDP offer/answer exchange, connect its appsrc to
-    /// that branch's `StreamProducer`, and return a `WhepAnswer` (SDP answer
-    /// + initial ICE candidates).
+    /// Add a WHEP consumer: build a fresh `appsrc → rtph264pay → webrtcbin`
+    /// pipeline on the encoder's clock, fed from the shared 720p H264
+    /// `StreamProducer`, perform the SDP offer/answer exchange, connect its
+    /// appsrc to that producer, and return a `WhepAnswer` (SDP answer + initial
+    /// ICE candidates).
     ///
     /// Returns `Err(AddConsumerError::CapReached)` before allocating any
     /// GStreamer resources when the session count is at
@@ -388,11 +381,10 @@ impl NdiPipeline {
     /// Iterate encoder elements in the ENCODER pipeline. Returns a collected Vec
     /// iterator so callers don't need to hold the pipeline lock.
     ///
-    /// The ENCODER pipeline holds EXACTLY TWO encoder elements BY DESIGN —
-    /// "encoder" (H264, 720p default profile) and "encoder_compat" (vp8enc,
-    /// 854×480 realtime-VP8 compat profile): one per PROFILE, never per
-    /// consumer. Consumer pipelines contain NO encoder (only
-    /// appsrc/rtph264pay|rtpvp8pay/webrtcbin) — the #336 invariant.
+    /// The ENCODER pipeline holds EXACTLY ONE encoder element BY DESIGN —
+    /// "encoder" (the shared 720p H264 hardware encoder): one shared encoder,
+    /// never per consumer. Consumer pipelines contain NO encoder (only
+    /// appsrc/rtph264pay/webrtcbin) — the #336 invariant.
     pub fn iterate_encoders(&self) -> impl Iterator<Item = gst::Element> + '_ {
         let mut found: Vec<gst::Element> = Vec::new();
         for el in self.pipeline.iterate_elements().into_iter().flatten() {
@@ -403,7 +395,6 @@ impl NdiPipeline {
                     || name == "x264enc"
                     || name == "nvcudah264enc"
                     || name == "nvautogpuh264enc"
-                    || name == "vp8enc"
                 {
                     found.push(el);
                 }
@@ -437,17 +428,15 @@ impl NdiPipeline {
     }
 }
 
-/// Build a fresh `appsrc → rtph264pay|rtpvp8pay → webrtcbin` pipeline for
-/// one consumer, negotiate SDP, connect its appsrc to the requested profile
-/// branch's StreamProducer (already selected by `add_consumer`), and return
-/// the [`ConsumerBranch`] guard owning all of it.
+/// Build a fresh `appsrc → rtph264pay → webrtcbin` pipeline for one consumer,
+/// negotiate SDP, connect its appsrc to the shared 720p H264 StreamProducer
+/// (already selected by `add_consumer`), and return the [`ConsumerBranch`]
+/// guard owning all of it.
 ///
-/// The profile implies the codec (`StreamProfile::encoding_name` — Default →
-/// H264, Compat → VP8), so the offer MUST carry that codec's rtpmap — its
-/// dynamic payload type pre-seats the per-consumer payloader. An offer
-/// without it is rejected (presetting pt=96 could NEVER work — the browser
-/// can't decode a codec it didn't offer). In practice every browser offer
-/// carries both H264 and VP8.
+/// The offer MUST carry an H264 rtpmap — its dynamic payload type pre-seats
+/// the per-consumer payloader. An offer without it is rejected (presetting
+/// pt=96 could NEVER work — the browser can't decode a codec it didn't offer).
+/// In practice every browser offer carries H264.
 ///
 /// ORDER (load-bearing): build elements (appsrc configured LIVE before any
 /// state change) → new pipeline on the ENCODER's clock/base-time → link →
@@ -473,17 +462,14 @@ fn build_consumer_pipeline_blocking(
         gst_webrtc::WebRTCSessionDescription::new(gst_webrtc::WebRTCSDPType::Offer, sdp_msg);
     let offer_str = std::str::from_utf8(sdp_offer_bytes).unwrap_or("");
     let encoding_name = profile.encoding_name();
-    let pt = match profile {
-        StreamProfile::Default => parse_h264_payload_type(offer_str),
-        StreamProfile::Compat => parse_vp8_payload_type(offer_str),
-    };
-    let Some(pt) = pt else {
+    // Seat the per-consumer payloader on the browser's dynamic H264 pt (every
+    // browser offer carries H264).
+    let Some(pt) = parse_h264_payload_type(offer_str) else {
         tracing::warn!(
             session_id = %session_id,
-            profile = ?profile,
             codec = encoding_name,
-            "WHEP offer carries no rtpmap for the requested profile's codec — \
-             rejecting consumer (the browser could not decode this stream)"
+            "WHEP offer carries no H264 rtpmap — rejecting consumer \
+             (the browser could not decode this stream)"
         );
         return Err(anyhow!(
             "WHEP offer contains no {encoding_name} video rtpmap"
@@ -560,7 +546,7 @@ fn build_consumer_pipeline_blocking(
     // The answer must announce the send SSRC — wait for media caps first.
     // (await_media_caps keys on the `ssrc` caps field, codec-agnostic.)
     await_media_caps(&webrtcbin, session_id);
-    negotiate_sdp(&webrtcbin, &offer_desc)?;
+    negotiate_sdp(&webrtcbin, &offer_desc, session_id)?;
     align_payload_type(&webrtcbin, &payloader, encoding_name, session_id);
     await_ice_gathering(&webrtcbin, session_id);
 
@@ -645,22 +631,20 @@ fn spawn_consumer_bus_watch(
     }))
 }
 
-/// Build the per-consumer elements: an `appsrc` (caps matching the requested
-/// profile branch's producer appsink — byte-stream/AU H264 for Default,
-/// video/x-vp8 for Compat), a per-consumer payloader (`rtph264pay` /
-/// `rtpvp8pay`) pre-seated on the offer's dynamic payload type `pt` for the
-/// profile's codec, and a `webrtcbin`.
+/// Build the per-consumer elements: an `appsrc` (caps matching the shared
+/// producer appsink — byte-stream/AU H264), a per-consumer `rtph264pay`
+/// pre-seated on the offer's dynamic H264 payload type `pt`, and a
+/// `webrtcbin`.
 pub(super) fn build_consumer_elements(
     session_id: &str,
     profile: StreamProfile,
     pt: u32,
 ) -> Result<(gst_app::AppSrc, gst::Element, gst::Element)> {
-    // Initial caps match the profile branch's producer appsink caps filter
-    // so the very first forwarded sample agrees (`consumer_h264_caps` /
-    // `consumer_vp8_caps` pin BOTH sides of each bridge).
+    // Initial caps match the shared producer appsink caps filter so the very
+    // first forwarded sample agrees (`consumer_h264_caps` pins BOTH sides of
+    // the bridge).
     let bridge_caps = match profile {
         StreamProfile::Default => consumer_h264_caps(),
-        StreamProfile::Compat => consumer_vp8_caps(),
     };
     let appsrc = gst_app::AppSrc::builder()
         .name(format!("src_{session_id}"))
@@ -680,10 +664,9 @@ pub(super) fn build_consumer_elements(
 
     // Per-consumer payloader so each webrtcbin negotiates its own dynamic
     // payload type with its browser (#336); pre-seated on the browser's
-    // offered pt for the profile's codec.
+    // offered H264 pt.
     let payloader = match profile {
         StreamProfile::Default => build_h264_payloader(session_id, pt)?,
-        StreamProfile::Compat => build_vp8_payloader(session_id, pt)?,
     };
 
     let webrtcbin = gst::ElementFactory::make("webrtcbin")
@@ -698,7 +681,43 @@ pub(super) fn build_consumer_elements(
         .build()
         .context("build webrtcbin")?;
 
+    // Make webrtcbin's RTCP Sender-Report NTP timestamps derive from the SAME
+    // pipeline clock as the RTP timestamps. Default ntp-time-source="ntp" takes
+    // SR NTP from the system real-time clock while RTP timestamps come from the
+    // (monotonic) pipeline clock — the two drift, so Chrome periodically re-syncs
+    // its RTP→wall-clock playout mapping (~400ms render pause every ~20s, the
+    // synchronized hitch; libwebrtc/VDO.Ninja uses one clock and stays smooth).
+    // "clock-time" = the pipeline clock, identical to the RTP timestamp base.
+    configure_rtpbin_ntp_clock(&webrtcbin);
+
     Ok((appsrc, payloader, webrtcbin))
+}
+
+/// Set webrtcbin's internal rtpbin `ntp-time-source` to `clock-time` so the
+/// RTCP Sender Report NTP timestamps come from the pipeline clock — the same
+/// clock the RTP timestamps derive from. With the default (`ntp`, system
+/// real-time clock) the two clocks drift, and Chrome periodically re-syncs its
+/// RTP→wall-clock playout mapping, producing a ~400ms render pause every ~20s.
+/// The rtpbin usually exists right after construction; a `deep-element-added`
+/// fallback covers lazy creation.
+fn configure_rtpbin_ntp_clock(webrtcbin: &gst::Element) {
+    fn set_clock_time(rtpbin: &gst::Element) {
+        rtpbin.set_property_from_str("ntp-time-source", "clock-time");
+        tracing::info!("rtpbin ntp-time-source = clock-time (RTCP SR on pipeline clock)");
+    }
+    let Some(bin) = webrtcbin.dynamic_cast_ref::<gst::Bin>() else {
+        return;
+    };
+    if let Some(rtpbin) = bin.by_name("rtpbin") {
+        set_clock_time(&rtpbin);
+        return;
+    }
+    bin.connect_deep_element_added(|_, _, element| {
+        if element.factory().is_some_and(|f| f.name() == "rtpbin") {
+            element.set_property_from_str("ntp-time-source", "clock-time");
+            tracing::info!("rtpbin ntp-time-source = clock-time (deep-added)");
+        }
+    });
 }
 
 /// Per-consumer `rtph264pay`. config-interval=-1 resends SPS/PPS before every
@@ -713,17 +732,6 @@ fn build_h264_payloader(session_id: &str, pt: u32) -> Result<gst::Element> {
         .property_from_str("aggregate-mode", "zero-latency")
         .build()
         .context("build rtph264pay")
-}
-
-/// Per-consumer `rtpvp8pay` for compat consumers. Only the pt needs seating
-/// — VP8 has no SPS/PPS-style config to re-insert and the payloader
-/// fragments each frame (including its token partitions) per RFC 7741 as-is.
-fn build_vp8_payloader(session_id: &str, pt: u32) -> Result<gst::Element> {
-    gst::ElementFactory::make("rtpvp8pay")
-        .name(format!("pay_{session_id}"))
-        .property("pt", pt)
-        .build()
-        .context("build rtpvp8pay")
 }
 
 /// Connect the per-consumer webrtcbin signals: on-ice-candidate (forwards
@@ -764,13 +772,11 @@ fn connect_branch_signals(
     });
 }
 
-/// Ask the producer's branch encoder for an immediate keyframe — an IDR with
-/// SPS/PPS on the H264 branch (all-headers=true), a VP8 keyframe on the
-/// compat branch. Pushed upstream from THAT producer's appsink sink pad —
-/// the same path StreamProducer uses to forward browser PLIs — so a compat
-/// consumer's request reaches encoder_compat, not the default encoder.
-/// REQUIRED for consumer join with GOP=240: without it a new consumer waits
-/// up to 8s/12s for the next scheduled keyframe.
+/// Ask the shared H264 encoder for an immediate keyframe — an IDR with
+/// SPS/PPS (all-headers=true). Pushed upstream from the producer's appsink
+/// sink pad — the same path StreamProducer uses to forward browser PLIs.
+/// REQUIRED for consumer join with GOP=60: without it a new consumer waits up
+/// to 2s for the next scheduled keyframe.
 pub(super) fn request_keyframe(producer: &StreamProducer) {
     let event = gst_video::UpstreamForceKeyUnitEvent::builder()
         .all_headers(true)

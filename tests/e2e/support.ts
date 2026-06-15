@@ -15,23 +15,6 @@ import { expect, type Locator, type Page } from "@playwright/test";
  * but extracted here so concurrent-context tests (ndi-webrtc-fanout.spec.ts)
  * don't have to duplicate the setup.
  */
-/**
- * Wait for the lite NDI stage page to be the loaded document.
- *
- * /stage/lite is a MANUAL diagnostic player (plain-JS WHEP, no WASM app).
- * The 2026-06-12 experiment that 303-redirected /stage here for the
- * ndi-fullscreen layout is RETIRED — the A/B proved the WASM page was not
- * the weak-TV bottleneck, and the redirect dropped the stage overlay
- * blocks. /stage flows wait for the WASM shell
- * (`body[data-wasm-ready="true"]` + layout-code); only specs that navigate
- * to /stage/lite DIRECTLY use this marker wait.
- */
-export async function waitForNdiLitePage(page: Page): Promise<void> {
-  await page.waitForSelector('body[data-ndi-lite="true"]', {
-    timeout: 30_000,
-  });
-}
-
 export function attachConsoleErrorCollector(page: Page, errors: string[]): void {
   page.on("console", (msg) => {
     if (msg.type() === "error" || msg.type() === "warning") {

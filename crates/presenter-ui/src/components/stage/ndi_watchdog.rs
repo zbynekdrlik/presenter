@@ -144,6 +144,23 @@ struct FrameStats {
     last_frame_at: Cell<f64>,
     /// When this session's watchdog was installed (≈ connect time).
     started_at: Cell<f64>,
+    /// PRESENTATION-GAP accumulators for the CURRENT beacon interval. These
+    /// measure render-side cadence (how evenly frames reach the screen) —
+    /// distinct from getStats' decode-side `framesDecoded`/`framesPerSecond`.
+    /// A frame can decode on time yet be PRESENTED late (WebView compositor
+    /// or main-thread hitch from the WASM page's periodic work); that late
+    /// presentation is the user-visible "lag every ~20s" the decode metrics
+    /// cannot see. All three reset on each beacon (see `snapshot_present_gaps`).
+    ///
+    /// Largest inter-present gap (ms) observed this interval.
+    max_present_gap_ms: Cell<f64>,
+    /// Count of inter-present gaps > 100ms this interval (perceptible hitches).
+    present_gaps_over100: Cell<u32>,
+    /// Frames presented this interval (rVFC callback count) — the numerator
+    /// of the render-side fps, paired with the interval wall-clock duration.
+    presented_in_interval: Cell<u32>,
+    /// `now_ms()` when the current beacon interval started (last reset).
+    interval_started_at: Cell<f64>,
 }
 
 /// Watchdog that fires `on_failure` when EITHER:
@@ -227,6 +244,10 @@ impl Watchdog {
             first_frame_at: Cell::new(0.0),
             last_frame_at: Cell::new(now),
             started_at: Cell::new(now),
+            max_present_gap_ms: Cell::new(0.0),
+            present_gaps_over100: Cell::new(0),
+            presented_in_interval: Cell::new(0),
+            interval_started_at: Cell::new(now),
         });
         let rvfc_supported = start_rvfc_frame_observer(video, pc, source_id, &active, &stats);
         if !rvfc_supported {
@@ -280,6 +301,16 @@ fn record_presented_frame(stats: &FrameStats) -> u32 {
     let n = stats.frames_presented.get().saturating_add(1);
     stats.frames_presented.set(n);
     let now = now_ms();
+    // Inter-present gap = wall-clock since the PREVIOUS presented frame. Skip
+    // the first frame of the session (no predecessor) so a long pre-roll wait
+    // is never charged as a presentation hitch. Update the present-gap
+    // accumulators BEFORE overwriting last_frame_at so the delta is correct.
+    if n > 1 {
+        record_present_gap(stats, now - stats.last_frame_at.get());
+    }
+    stats
+        .presented_in_interval
+        .set(stats.presented_in_interval.get().saturating_add(1));
     stats.last_frame_at.set(now);
     if n == 1 {
         stats.first_frame_at.set(now);
@@ -290,6 +321,50 @@ fn record_presented_frame(stats: &FrameStats) -> u32 {
         persist_proven_profile_mode();
     }
     n
+}
+
+/// Threshold (ms) above which an inter-present gap is a perceptible render-side
+/// hitch. At 30fps the nominal gap is ~33ms; >100ms means ≥3 frame-times'
+/// worth of stall reached the screen even if the decoder kept up.
+const PRESENT_GAP_HITCH_MS: f64 = 100.0;
+
+/// Fold one inter-present gap (ms) into the current-interval accumulators:
+/// track the maximum and count the ones over the perceptible-hitch threshold.
+fn record_present_gap(stats: &FrameStats, gap_ms: f64) {
+    if gap_ms > stats.max_present_gap_ms.get() {
+        stats.max_present_gap_ms.set(gap_ms);
+    }
+    if gap_ms > PRESENT_GAP_HITCH_MS {
+        stats
+            .present_gaps_over100
+            .set(stats.present_gaps_over100.get().saturating_add(1));
+    }
+}
+
+/// Snapshot the present-gap accumulators for a beacon and RESET them so the
+/// NEXT beacon reports only the next interval (last-interval semantics, not
+/// cumulative). Returns `(maxPresentGapMs, presentGapsOver100, presentedFps)`:
+/// - `max_present_gap_ms` — largest inter-present gap this interval (ms).
+/// - `present_gaps_over100` — count of >100ms gaps this interval.
+/// - `presented_fps` — frames presented / interval-seconds (render-side fps,
+///   distinct from getStats' decode-side fps). `None` when the interval is too
+///   short to be meaningful (no elapsed time yet).
+fn snapshot_present_gaps(stats: &FrameStats) -> (f64, u32, Option<f64>) {
+    let now = now_ms();
+    let max_gap = stats.max_present_gap_ms.get();
+    let over100 = stats.present_gaps_over100.get();
+    let presented = stats.presented_in_interval.get();
+    let elapsed_ms = now - stats.interval_started_at.get();
+    let fps = if elapsed_ms > 0.0 {
+        Some(f64::from(presented) / (elapsed_ms / 1000.0))
+    } else {
+        None
+    };
+    stats.max_present_gap_ms.set(0.0);
+    stats.present_gaps_over100.set(0);
+    stats.presented_in_interval.set(0);
+    stats.interval_started_at.set(now);
+    (max_gap, over100, fps)
 }
 
 /// Shared holder for the self-rescheduling rVFC closure (the closure needs a
@@ -348,7 +423,7 @@ fn start_rvfc_frame_observer(
             }
             let n = record_presented_frame(&stats);
             if n % Watchdog::RVFC_BEACON_FRAME_PERIOD == 0 {
-                post_stats_beacon(&pc, &source_id);
+                post_stats_beacon(&pc, &source_id, &stats);
             }
             schedule_video_frame_callback(&video, &holder);
         })
@@ -409,7 +484,7 @@ fn start_health_ticker<F: Fn() + 'static>(
         }
         // Beacon first: the healthy-path early returns below must not
         // starve it during normal playback.
-        maybe_post_beacon(&tick_count, &pc, &source_id);
+        maybe_post_beacon(&tick_count, &pc, &source_id, &stats);
         if !rvfc_supported {
             approximate_frame_from_current_time(&video, &stats, &last_current_time);
         }
@@ -492,12 +567,18 @@ fn approximate_frame_from_current_time(
 
 /// Sample `pc.getStats()` and POST a beacon. Fire-and-forget; the beacon
 /// must never disturb playback.
-fn post_stats_beacon(pc: &RtcPeerConnection, source_id: &str) {
+///
+/// The present-gap accumulators are snapshotted-and-reset SYNCHRONOUSLY here
+/// (before the async getStats), so each beacon reports exactly the interval
+/// since the previous beacon — even though the actual POST happens later on
+/// the spawned task.
+fn post_stats_beacon(pc: &RtcPeerConnection, source_id: &str, stats: &FrameStats) {
+    let (max_gap, over100, fps) = snapshot_present_gaps(stats);
     let pc = pc.clone();
     let source_id = source_id.to_string();
     spawn_local(async move {
         if let Ok(report) = JsFuture::from(pc.get_stats()).await {
-            post_client_stats(&source_id, &report).await;
+            post_client_stats(&source_id, &report, max_gap, over100, fps).await;
         }
     });
 }
@@ -505,18 +586,35 @@ fn post_stats_beacon(pc: &RtcPeerConnection, source_id: &str) {
 /// Every 15th watchdog tick (~15s at 1s ticks — slower on throttled TVs,
 /// where the rVFC frame-count beacon is the reliable channel instead),
 /// post a stats beacon for `source_id`.
-fn maybe_post_beacon(tick_count: &Cell<u32>, pc: &RtcPeerConnection, source_id: &str) {
+fn maybe_post_beacon(
+    tick_count: &Cell<u32>,
+    pc: &RtcPeerConnection,
+    source_id: &str,
+    stats: &FrameStats,
+) {
     tick_count.set(tick_count.get().wrapping_add(1));
     if tick_count.get() % 15 != 0 {
         return;
     }
-    post_stats_beacon(pc, source_id);
+    post_stats_beacon(pc, source_id, stats);
 }
 
 /// Extract inbound-video stats from an RtcStatsReport (a JS Map) and POST a
 /// compact summary to /ndi/client-stats. Fire-and-forget; errors ignored —
 /// the beacon must never disturb playback.
-async fn post_client_stats(source_id: &str, report: &JsValue) {
+///
+/// `max_present_gap_ms` / `present_gaps_over100` / `presented_fps` are the
+/// render-side presentation-cadence metrics for the interval since the last
+/// beacon (already snapshotted-and-reset by the caller). They sit alongside
+/// the decode-side getStats fields so a reader can tell a frame that decoded
+/// on time but reached the screen late from a genuine decode stall.
+async fn post_client_stats(
+    source_id: &str,
+    report: &JsValue,
+    max_present_gap_ms: f64,
+    present_gaps_over100: u32,
+    presented_fps: Option<f64>,
+) {
     let mut frames_decoded = JsValue::NULL;
     let mut fps = JsValue::NULL;
     let mut jb_delay = JsValue::NULL;
@@ -582,6 +680,11 @@ async fn post_client_stats(source_id: &str, report: &JsValue) {
         "jitterBufferMs": jitter_buffer_ms,
         "freezeCount": freeze_count.as_f64(),
         "framesDropped": frames_dropped.as_f64(),
+        // Render-side presentation-cadence metrics for this beacon interval
+        // (the decode-side fields above can't see a frame presented late).
+        "maxPresentGapMs": max_present_gap_ms,
+        "presentGapsOver100": present_gaps_over100,
+        "presentedFps": presented_fps,
     })
     .to_string();
 
