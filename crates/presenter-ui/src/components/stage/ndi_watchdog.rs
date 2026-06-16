@@ -265,6 +265,14 @@ impl ReloadEscalation {
 /// flag. The leaked closures consume only a few `Rc` clones each.
 pub(crate) struct Watchdog {
     active: Rc<Cell<bool>>,
+    /// `setInterval` handle for the health ticker, cleared on `stop()`/drop.
+    /// Clearing it (not just flipping `active`) is required because
+    /// `maybe_reload()` runs BEFORE the `active` gate (#401): a leaked,
+    /// never-cleared ticker on a torn-down Watchdog would keep evaluating the
+    /// escalation and fire a spurious `window.location.reload()` ~`RELOAD_NO_FRAME_MS`
+    /// after the stage is deactivated/unmounted. Also stops ticker accumulation
+    /// across reconnects (each replaced Watchdog clears its own).
+    health_ticker_handle: i32,
 }
 
 impl Watchdog {
@@ -348,7 +356,7 @@ impl Watchdog {
                 "watchdog: requestVideoFrameCallback unsupported — using currentTime frame proxy"
             );
         }
-        start_health_ticker(
+        let health_ticker_handle = start_health_ticker(
             video,
             pc,
             source_id,
@@ -359,13 +367,32 @@ impl Watchdog {
             on_failure,
         );
 
-        Self { active }
+        Self {
+            active,
+            health_ticker_handle,
+        }
     }
 
     /// Disable all observers. Idempotent. Calling `stop` after `on_failure`
     /// has already fired is a safe no-op.
     pub(crate) fn stop(&self) {
         self.active.set(false);
+        // Clear the leaked health ticker so it stops evaluating `maybe_reload()`
+        // (which runs before the `active` gate). `clear_interval_with_handle` on
+        // an already-cleared / -1 handle is a harmless no-op.
+        if let Some(window) = leptos::web_sys::window() {
+            window.clear_interval_with_handle(self.health_ticker_handle);
+        }
+    }
+}
+
+impl Drop for Watchdog {
+    /// Inert the Watchdog when it is replaced on reconnect or dropped on
+    /// unmount. Without this the leaked 1s health ticker keeps running and,
+    /// because `maybe_reload()` is evaluated before the `active` gate (#401),
+    /// would fire a spurious full-page reload after the stage is deactivated.
+    fn drop(&mut self) {
+        self.stop();
     }
 }
 
@@ -615,7 +642,7 @@ fn start_health_ticker<F: Fn() + 'static>(
     rvfc_supported: bool,
     escalation: &Rc<ReloadEscalation>,
     on_failure: Rc<F>,
-) {
+) -> i32 {
     let active = Rc::clone(active);
     let stats = Rc::clone(stats);
     let video = video.clone();
@@ -664,13 +691,18 @@ fn start_health_ticker<F: Fn() + 'static>(
             (on_failure)();
         }
     });
-    if let Some(window) = leptos::web_sys::window() {
-        let _ = window.set_interval_with_callback_and_timeout_and_arguments_0(
-            cb.as_ref().unchecked_ref(),
-            Watchdog::TICK_INTERVAL_MS,
-        );
-    }
+    let handle = leptos::web_sys::window()
+        .and_then(|window| {
+            window
+                .set_interval_with_callback_and_timeout_and_arguments_0(
+                    cb.as_ref().unchecked_ref(),
+                    Watchdog::TICK_INTERVAL_MS,
+                )
+                .ok()
+        })
+        .unwrap_or(-1);
     cb.forget();
+    handle
 }
 
 /// Profile-fallback check (frame-based): a session that is ICE-connected with

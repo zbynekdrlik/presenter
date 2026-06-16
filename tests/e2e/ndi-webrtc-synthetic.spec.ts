@@ -752,8 +752,14 @@ test("stage performs LAST-RESORT page reload after prolonged video stall (synthe
       )
       .toBe(true);
 
-    // After the reload, the page renegotiates WHEP on a fresh DOM and resumes
-    // presenting frames (the recovery the reload exists to deliver).
+    // After the reload fired, assert recovery on a PRODUCTION-threshold page:
+    // re-navigate to a clean /stage (no ndiReloadMs) so the post-reload page
+    // uses the real 60s horizon and can't re-escalate while the killed pipeline
+    // rebuilds and the fresh DOM negotiates WHEP. On a loaded runner first frame
+    // can exceed the lowered 3s horizon, which would churn extra reloads
+    // (flake-hardening, #401 review).
+    const cleanStageUrl = new URL("/stage", baseURL);
+    await page.goto(cleanStageUrl.toString());
     await page.waitForSelector('body[data-wasm-ready="true"]', {
       timeout: 30_000,
     });
