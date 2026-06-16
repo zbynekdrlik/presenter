@@ -136,3 +136,52 @@ impl Default for AndroidStageDisplayDraft {
         Self::new("Stage Display", "sd1l.lan")
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn default_launch_component_is_bare_browser_package() {
+        // The launcher fires a VIEW intent at a browser PACKAGE (not a
+        // package/activity component), so the default must be a bare package.
+        assert_eq!(DEFAULT_LAUNCH_PACKAGE, "com.tcl.browser");
+    }
+
+    #[test]
+    fn validate_accepts_bare_package_name() {
+        // A bare package (no "/") is the new valid shape for the VIEW-intent
+        // launcher and MUST pass validation.
+        let draft = AndroidStageDisplayDraft::new("Stage", "sd1l.lan")
+            .with_launch_component("com.tcl.browser");
+        assert_eq!(draft.validate(), Ok(()));
+    }
+
+    #[test]
+    fn validate_still_accepts_legacy_package_activity() {
+        // Backward compat: existing "package/activity" values stay valid.
+        let draft = AndroidStageDisplayDraft::new("Stage", "sd1l.lan")
+            .with_launch_component("com.example/.Main");
+        assert_eq!(draft.validate(), Ok(()));
+    }
+
+    #[test]
+    fn validate_rejects_empty_launch_component() {
+        let draft =
+            AndroidStageDisplayDraft::new("Stage", "sd1l.lan").with_launch_component("   ");
+        assert_eq!(
+            draft.validate(),
+            Err(AndroidStageDisplayValidationError::EmptyLaunchComponent)
+        );
+    }
+
+    #[test]
+    fn validate_rejects_shell_metacharacters_in_package() {
+        let draft = AndroidStageDisplayDraft::new("Stage", "sd1l.lan")
+            .with_launch_component("com.tcl.browser; rm -rf /");
+        assert_eq!(
+            draft.validate(),
+            Err(AndroidStageDisplayValidationError::InvalidLaunchComponent)
+        );
+    }
+}

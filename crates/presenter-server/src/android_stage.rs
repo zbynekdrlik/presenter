@@ -415,4 +415,67 @@ mod tests {
             "error message should identify the unknown-id case",
         );
     }
+
+    #[test]
+    fn launch_package_strips_legacy_activity_suffix() {
+        // Legacy stored value "package/activity" — the launcher must treat the
+        // substring before "/" as the package for the VIEW intent.
+        assert_eq!(
+            launch_package("com.fullykiosk.videokiosk/de.ozerov.fully.MainActivity"),
+            "com.fullykiosk.videokiosk"
+        );
+        // A bare package (the new default shape) passes through unchanged.
+        assert_eq!(launch_package("com.tcl.browser"), "com.tcl.browser");
+        // Surrounding whitespace is trimmed.
+        assert_eq!(launch_package("  com.tcl.browser  "), "com.tcl.browser");
+    }
+
+    #[test]
+    fn build_launch_args_emits_view_intent_with_url_and_package() {
+        // The proven-working prod launch is a VIEW intent with the stage URL
+        // and the browser package — NOT the bare `am start -n <component>`.
+        let args = build_launch_args("com.tcl.browser", Some("http://10.77.9.205/stage"))
+            .expect("a configured URL must produce launch args");
+        assert_eq!(
+            args,
+            vec![
+                "am".to_string(),
+                "start".to_string(),
+                "-a".to_string(),
+                "android.intent.action.VIEW".to_string(),
+                "-d".to_string(),
+                "http://10.77.9.205/stage".to_string(),
+                "com.tcl.browser".to_string(),
+            ],
+            "launcher must fire a VIEW intent with the stage URL, not `am start -n`",
+        );
+    }
+
+    #[test]
+    fn build_launch_args_extracts_package_from_legacy_component() {
+        // Backward compat: a legacy "package/activity" launch_component still
+        // yields a VIEW intent targeting just the package.
+        let args = build_launch_args(
+            "com.fullykiosk.videokiosk/de.ozerov.fully.MainActivity",
+            Some("http://10.77.8.134:8080/stage"),
+        )
+        .expect("a configured URL must produce launch args");
+        assert_eq!(args.last().map(String::as_str), Some("com.fullykiosk.videokiosk"));
+        assert!(
+            args.iter().any(|a| a == "android.intent.action.VIEW"),
+            "must use a VIEW intent",
+        );
+        assert!(
+            args.iter().any(|a| a == "http://10.77.8.134:8080/stage"),
+            "must pass the configured stage URL as the data URI",
+        );
+    }
+
+    #[test]
+    fn build_launch_args_skips_when_url_unset() {
+        // No URL configured -> skip launching, do not fire a broken intent.
+        assert_eq!(build_launch_args("com.tcl.browser", None), None);
+        assert_eq!(build_launch_args("com.tcl.browser", Some("")), None);
+        assert_eq!(build_launch_args("com.tcl.browser", Some("   ")), None);
+    }
 }

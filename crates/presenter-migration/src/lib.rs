@@ -12,6 +12,7 @@ mod m20260420_000001_create_group_colors;
 mod m20260506_000001_normalize_text_to_nfc;
 mod m20260517_000001_create_settings_audit;
 mod m20260517_000002_fix_legacy_ableset_defaults;
+mod m20260616_000001_fix_android_stage_launch_package;
 
 pub struct Migrator;
 
@@ -28,6 +29,7 @@ impl MigratorTrait for Migrator {
             Box::new(m20260506_000001_normalize_text_to_nfc::Migration),
             Box::new(m20260517_000001_create_settings_audit::Migration),
             Box::new(m20260517_000002_fix_legacy_ableset_defaults::Migration),
+            Box::new(m20260616_000001_fix_android_stage_launch_package::Migration),
         ]
     }
 }
