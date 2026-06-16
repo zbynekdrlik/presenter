@@ -166,6 +166,76 @@ struct FrameStats {
     interval_started_at: Cell<f64>,
 }
 
+/// PAGE-SESSION reload escalation state (#401), shared across EVERY reconnect
+/// cycle of a single stage page load. Unlike `FrameStats` (recreated per
+/// Watchdog / per WHEP session), this lives in `NdiVideo`'s effect for the
+/// whole page lifetime, so it can observe "video has been dead for 60s ACROSS
+/// all reconnect attempts" — the signal a per-session counter can never see.
+///
+/// `last_decoded_frame_at` is bumped to `now` on every presented frame (any
+/// session) and seeded to page-load time, so the elapsed time only grows
+/// while NO session is decoding. When it crosses `RELOAD_NO_FRAME_MS` the
+/// health ticker performs a one-shot `window.location.reload()` (guarded by
+/// `reloaded` so concurrent ticks / sessions can't double-fire).
+pub(crate) struct ReloadEscalation {
+    last_decoded_frame_at: Cell<f64>,
+    reloaded: Cell<bool>,
+    /// The no-frames horizon (ms) for THIS page load. Defaults to
+    /// `RELOAD_NO_FRAME_MS`; an explicit `?ndiReloadMs=<n>` URL query lowers
+    /// it so the E2E can exercise the full reload path (incl. the real
+    /// `window.location.reload()`) deterministically without a 60s wait. The
+    /// param is read ONCE here; production pages never carry it, so prod always
+    /// uses the conservative 60s.
+    threshold_ms: f64,
+}
+
+impl ReloadEscalation {
+    /// Create the page-session escalation tracker, seeding the
+    /// last-decoded-frame timestamp to "now" (the page just loaded, so the
+    /// reload horizon is measured from page start until the first frame).
+    pub(crate) fn new() -> Rc<Self> {
+        Rc::new(Self {
+            last_decoded_frame_at: Cell::new(now_ms()),
+            reloaded: Cell::new(false),
+            threshold_ms: reload_threshold_ms_from_url(),
+        })
+    }
+
+    /// Record that a frame just decoded — resets the page-level reload timer.
+    /// Called from the frame path of EVERY session so a brief reconnect that
+    /// resumes decoding clears the escalation well before the threshold.
+    fn note_decoded_frame(&self) {
+        self.last_decoded_frame_at.set(now_ms());
+    }
+
+    /// Milliseconds since any session last decoded a frame (page-session).
+    fn ms_since_last_decoded_frame(&self) -> f64 {
+        now_ms() - self.last_decoded_frame_at.get()
+    }
+
+    /// Evaluate the escalation rule and, if it trips, perform the one-shot
+    /// full-page reload. Returns true once it has reloaded (so callers stop).
+    /// Idempotent: the `reloaded` flag makes repeated ticks / multiple
+    /// sessions fire `window.location.reload()` at most once.
+    fn maybe_reload(&self) -> bool {
+        if self.reloaded.get() {
+            return true;
+        }
+        if !should_escalate_reload(self.ms_since_last_decoded_frame(), self.threshold_ms) {
+            return false;
+        }
+        self.reloaded.set(true);
+        leptos::logging::warn!(
+            "watchdog: no decoded frame for {:.0}ms across reconnect attempts — LAST-RESORT full page reload (#401)",
+            self.ms_since_last_decoded_frame()
+        );
+        if let Some(window) = leptos::web_sys::window() {
+            let _ = window.location().reload();
+        }
+        true
+    }
+}
+
 /// Watchdog that fires `on_failure` when EITHER:
 /// - the RTCPeerConnection's iceConnectionState becomes "failed",
 ///   "disconnected", or "closed" (genuine connection loss), OR
@@ -195,6 +265,14 @@ struct FrameStats {
 /// flag. The leaked closures consume only a few `Rc` clones each.
 pub(crate) struct Watchdog {
     active: Rc<Cell<bool>>,
+    /// `setInterval` handle for the health ticker, cleared on `stop()`/drop.
+    /// Clearing it (not just flipping `active`) is required because
+    /// `maybe_reload()` runs BEFORE the `active` gate (#401): a leaked,
+    /// never-cleared ticker on a torn-down Watchdog would keep evaluating the
+    /// escalation and fire a spurious `window.location.reload()` ~`RELOAD_NO_FRAME_MS`
+    /// after the stage is deactivated/unmounted. Also stops ticker accumulation
+    /// across reconnects (each replaced Watchdog clears its own).
+    health_ticker_handle: i32,
 }
 
 impl Watchdog {
@@ -226,14 +304,33 @@ impl Watchdog {
     /// on displays whose setInterval is throttled to near-silence (rVFC is
     /// compositor-driven and not throttled while video plays).
     const RVFC_BEACON_FRAME_PERIOD: u32 = 450;
+    /// LAST-RESORT full-page-reload horizon. After this long with ZERO
+    /// decoded frames despite the reconnect+backoff loop continuously retrying
+    /// (#369 reconnect, #371 churn guard), the page itself is escalated with
+    /// `window.location.reload()` (#401 — Fully Kiosk auto-reload replacement,
+    /// adb-independent). This timer spans the WHOLE page session (NOT one
+    /// Watchdog instance): it is reset only when a frame actually decodes, so
+    /// a normal brief reconnect — which produces frames again within a few
+    /// seconds — never approaches it. 60s ≫ STALL_NO_FRAME_MS (10s) +
+    /// NO_DECODE_FALLBACK_MS (15s) + the 5s-capped backoff, so the reconnect
+    /// path gets many full attempts before the page-level reload fires.
+    pub(crate) const RELOAD_NO_FRAME_MS: f64 = 60_000.0;
 
     /// Install ICE-state listener + rVFC frame observer + health ticker.
     /// `on_failure` is called at most ONCE per Watchdog instance — after
     /// firing, all observers become no-ops (gated by the `active` flag).
+    ///
+    /// `escalation` is the PAGE-SESSION reload tracker shared across reconnect
+    /// cycles (#401): the frame observer resets its timer on each decoded
+    /// frame and the health ticker performs the last-resort full-page reload
+    /// when video has been dead long enough that reconnect has demonstrably
+    /// failed. It is passed in (not created here) precisely so it survives the
+    /// Watchdog being recreated on every reconnect.
     pub(crate) fn install<F: Fn() + 'static>(
         video: &HtmlVideoElement,
         pc: &RtcPeerConnection,
         source_id: &str,
+        escalation: &Rc<ReloadEscalation>,
         on_failure: F,
     ) -> Self {
         let active: Rc<Cell<bool>> = Rc::new(Cell::new(true));
@@ -252,30 +349,95 @@ impl Watchdog {
             presented_in_interval: Cell::new(0),
             interval_started_at: Cell::new(now),
         });
-        let rvfc_supported = start_rvfc_frame_observer(video, pc, source_id, &active, &stats);
+        let rvfc_supported =
+            start_rvfc_frame_observer(video, pc, source_id, &active, &stats, escalation);
         if !rvfc_supported {
             leptos::logging::warn!(
                 "watchdog: requestVideoFrameCallback unsupported — using currentTime frame proxy"
             );
         }
-        start_health_ticker(
+        let health_ticker_handle = start_health_ticker(
             video,
             pc,
             source_id,
             &active,
             &stats,
             rvfc_supported,
+            escalation,
             on_failure,
         );
 
-        Self { active }
+        Self {
+            active,
+            health_ticker_handle,
+        }
     }
 
     /// Disable all observers. Idempotent. Calling `stop` after `on_failure`
     /// has already fired is a safe no-op.
     pub(crate) fn stop(&self) {
         self.active.set(false);
+        // Clear the leaked health ticker so it stops evaluating `maybe_reload()`
+        // (which runs before the `active` gate). `clear_interval_with_handle` on
+        // an already-cleared / -1 handle is a harmless no-op.
+        if let Some(window) = leptos::web_sys::window() {
+            window.clear_interval_with_handle(self.health_ticker_handle);
+        }
     }
+}
+
+impl Drop for Watchdog {
+    /// Inert the Watchdog when it is replaced on reconnect or dropped on
+    /// unmount. Without this the leaked 1s health ticker keeps running and,
+    /// because `maybe_reload()` is evaluated before the `active` gate (#401),
+    /// would fire a spurious full-page reload after the stage is deactivated.
+    fn drop(&mut self) {
+        self.stop();
+    }
+}
+
+/// LAST-RESORT escalation decision (#401): should the stage page perform a
+/// full `window.location.reload()` because video has been dead for too long
+/// despite the reconnect loop continuously retrying?
+///
+/// `ms_since_last_decoded_frame` is measured across the WHOLE page session
+/// (it survives individual reconnect cycles — see `ReloadEscalation`), so the
+/// only way it grows past `reload_threshold_ms` is a genuinely stuck stream
+/// that reconnect alone has NOT recovered. A normal brief reconnect decodes
+/// frames again within seconds and resets the timer well before the threshold.
+///
+/// Pure + side-effect-free so the escalation rule is unit-testable without a
+/// browser (the wiring that calls `window.location.reload()` is in the health
+/// ticker; this function only decides).
+pub(crate) fn should_escalate_reload(
+    ms_since_last_decoded_frame: f64,
+    reload_threshold_ms: f64,
+) -> bool {
+    // Strictly greater-than so a tick landing exactly AT the threshold waits
+    // one more tick (no off-by-one reload on the boundary). The page-session
+    // timer is reset on every decoded frame, so reaching this point at all
+    // means reconnect has not produced a single frame for the whole window.
+    ms_since_last_decoded_frame > reload_threshold_ms
+}
+
+/// Resolve the no-frames reload horizon for THIS page load: the conservative
+/// `RELOAD_NO_FRAME_MS` default, unless a `?ndiReloadMs=<n>` URL query lowers
+/// it. The override is a read-only query param (no behavior change beyond the
+/// timer length) used solely by the deterministic E2E to exercise the full
+/// reload path without a real 60s wait — production stage pages never carry it.
+/// Only a strictly-positive numeric value is honoured; anything else falls
+/// back to the default.
+fn reload_threshold_ms_from_url() -> f64 {
+    let parsed = leptos::web_sys::window()
+        .and_then(|w| w.location().search().ok())
+        .and_then(|search| {
+            leptos::web_sys::UrlSearchParams::new_with_str(&search)
+                .ok()
+                .and_then(|p| p.get("ndiReloadMs"))
+        })
+        .and_then(|v| v.parse::<f64>().ok())
+        .filter(|v| *v > 0.0);
+    parsed.unwrap_or(Watchdog::RELOAD_NO_FRAME_MS)
 }
 
 /// Monotonic now in milliseconds: `performance.now()`, with a `Date.now()`
@@ -401,6 +563,7 @@ fn start_rvfc_frame_observer(
     source_id: &str,
     active: &Rc<Cell<bool>>,
     stats: &Rc<FrameStats>,
+    escalation: &Rc<ReloadEscalation>,
 ) -> bool {
     let supported = js_sys::Reflect::get(
         video.as_ref(),
@@ -420,10 +583,15 @@ fn start_rvfc_frame_observer(
         let pc = pc.clone();
         let source_id = source_id.to_string();
         let holder = Rc::clone(&holder);
+        let escalation = Rc::clone(escalation);
         Closure::<dyn FnMut(JsValue, JsValue)>::new(move |_now: JsValue, _meta: JsValue| {
             if !active.get() {
                 return;
             }
+            // A frame reached the screen: clear the page-level reload timer so
+            // the last-resort reload (#401) only ever fires while video is
+            // genuinely dead across reconnects, never during healthy playback.
+            escalation.note_decoded_frame();
             let n = record_presented_frame(&stats);
             if n % Watchdog::RVFC_BEACON_FRAME_PERIOD == 0 {
                 post_stats_beacon(&pc, &source_id, &stats);
@@ -472,24 +640,40 @@ fn start_health_ticker<F: Fn() + 'static>(
     active: &Rc<Cell<bool>>,
     stats: &Rc<FrameStats>,
     rvfc_supported: bool,
+    escalation: &Rc<ReloadEscalation>,
     on_failure: Rc<F>,
-) {
+) -> i32 {
     let active = Rc::clone(active);
     let stats = Rc::clone(stats);
     let video = video.clone();
     let pc = pc.clone();
     let source_id = source_id.to_string();
+    let escalation = Rc::clone(escalation);
     let tick_count = Cell::new(0u32);
     let last_current_time = Cell::new(0.0f64);
     let cb = Closure::<dyn FnMut()>::new(move || {
+        // LAST-RESORT page reload (#401) — checked BEFORE the `active` gate so
+        // it keeps evaluating across reconnect cycles (the page-session timer
+        // is reset on every decoded frame; reaching the horizon means
+        // reconnect+backoff has failed to produce a single frame for the whole
+        // window). One-shot internally, so multiple tickers can't double-fire.
+        // If it reloads, the page is tearing down — stop all further work.
+        if escalation.maybe_reload() {
+            return;
+        }
         if !active.get() {
             return;
         }
         // Beacon first: the healthy-path early returns below must not
         // starve it during normal playback.
         maybe_post_beacon(&tick_count, &pc, &source_id, &stats);
-        if !rvfc_supported {
-            approximate_frame_from_current_time(&video, &stats, &last_current_time);
+        if !rvfc_supported
+            && approximate_frame_from_current_time(&video, &stats, &last_current_time)
+        {
+            // The currentTime proxy is the rVFC-less browser's only frame
+            // signal — reset the page-level reload timer ONLY when it actually
+            // advanced (rVFC path resets in its own callback).
+            escalation.note_decoded_frame();
         }
         let now = now_ms();
         let frames = stats.frames_presented.get();
@@ -507,13 +691,18 @@ fn start_health_ticker<F: Fn() + 'static>(
             (on_failure)();
         }
     });
-    if let Some(window) = leptos::web_sys::window() {
-        let _ = window.set_interval_with_callback_and_timeout_and_arguments_0(
-            cb.as_ref().unchecked_ref(),
-            Watchdog::TICK_INTERVAL_MS,
-        );
-    }
+    let handle = leptos::web_sys::window()
+        .and_then(|window| {
+            window
+                .set_interval_with_callback_and_timeout_and_arguments_0(
+                    cb.as_ref().unchecked_ref(),
+                    Watchdog::TICK_INTERVAL_MS,
+                )
+                .ok()
+        })
+        .unwrap_or(-1);
     cb.forget();
+    handle
 }
 
 /// Profile-fallback check (frame-based): a session that is ICE-connected with
@@ -556,16 +745,21 @@ fn maybe_profile_fallback<F: Fn() + 'static>(
 /// rVFC-less fallback (non-Chromium browsers): treat currentTime advancing
 /// between ticks as one presented frame. Coarse (≤1 "frame" per tick) but
 /// keeps the stall and no-decode rules functional with identical semantics.
+/// Returns true iff a new frame was recorded this tick (currentTime advanced)
+/// — the caller uses this to reset the page-level reload timer ONLY on real
+/// advance, never on a stalled tick.
 fn approximate_frame_from_current_time(
     video: &HtmlVideoElement,
     stats: &FrameStats,
     last_current_time: &Cell<f64>,
-) {
+) -> bool {
     let t = video.current_time();
     if t > 0.0 && (t - last_current_time.get()).abs() > 0.001 {
         last_current_time.set(t);
         record_presented_frame(stats);
+        return true;
     }
+    false
 }
 
 /// Sample `pc.getStats()` and POST a beacon. Fire-and-forget; the beacon
@@ -736,4 +930,78 @@ fn install_ice_failure_listener<F: Fn() + 'static>(
     });
     pc.set_oniceconnectionstatechange(Some(cb.as_ref().unchecked_ref()));
     cb.forget();
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{should_escalate_reload, Watchdog};
+
+    // ─────────────────────────────────────────────────────────────────────
+    // #401 LAST-RESORT page-reload escalation.
+    //
+    // The stage page recovers a frozen/black/disconnected stream by reconnect
+    // alone in the common case (#369/#371). But some failures — a wedged TV
+    // WebView, a stale DOM, a WHEP negotiation that never produces frames
+    // again — survive every reconnect attempt forever (the reconnect loop in
+    // `ndi_video.rs` loops indefinitely with no page-level escape). The
+    // escalation rule decides when to give up on reconnect and reload the
+    // whole page (fresh WHEP negotiation + fresh DOM) — the adb-independent
+    // replacement for the Fully Kiosk auto-reload we lost on com.tcl.browser.
+    //
+    // The rule is deliberately conservative: it fires ONLY after a long
+    // no-decoded-frames window that a normal reconnect cannot reach, so it
+    // never short-circuits the healthy reconnect path.
+    // ─────────────────────────────────────────────────────────────────────
+
+    const T: f64 = Watchdog::RELOAD_NO_FRAME_MS;
+
+    #[test]
+    fn no_reload_while_frames_are_recent() {
+        // Frames decoding right now (timer just reset) — never reload.
+        assert!(!should_escalate_reload(0.0, T));
+    }
+
+    #[test]
+    fn no_reload_during_a_normal_brief_reconnect() {
+        // A normal reconnect (ICE drop -> reconnect -> frames) is well under
+        // the threshold: even a slow reconnect that takes 15s to produce a
+        // frame must NOT trigger a reload — reconnect is doing its job.
+        assert!(!should_escalate_reload(15_000.0, T));
+        // Even right up to the profile-fallback + a couple of backoff cycles.
+        assert!(!should_escalate_reload(30_000.0, T));
+    }
+
+    #[test]
+    fn no_reload_exactly_at_threshold() {
+        // Strictly-greater-than boundary: AT the threshold we still wait one
+        // more tick (avoids an off-by-one reload on the very first tick that
+        // crosses 60s vs 60.000s).
+        assert!(!should_escalate_reload(T, T));
+    }
+
+    #[test]
+    fn reload_after_prolonged_no_decoded_frames() {
+        // 60s+ with ZERO decoded frames despite reconnect retrying the whole
+        // time -> reconnect has demonstrably failed -> escalate to a full
+        // page reload. THIS is the assertion that fails against the RED stub.
+        assert!(should_escalate_reload(T + 1.0, T));
+        assert!(should_escalate_reload(90_000.0, T));
+        assert!(should_escalate_reload(600_000.0, T));
+    }
+
+    #[test]
+    fn threshold_is_well_above_the_reconnect_path_budget() {
+        // The reload horizon MUST exceed the worst-case single reconnect
+        // budget (stall detect 10s + no-decode fallback 15s + 5s-capped
+        // backoff) by a wide margin, so reconnect gets several full attempts
+        // before the page-level reload ever fires. Guards against a future
+        // edit lowering RELOAD_NO_FRAME_MS into the reconnect window.
+        let reconnect_path_budget = Watchdog::STALL_NO_FRAME_MS + Watchdog::NO_DECODE_FALLBACK_MS;
+        assert!(
+            Watchdog::RELOAD_NO_FRAME_MS > reconnect_path_budget * 2.0,
+            "reload horizon {} must be >2x the reconnect path budget {}",
+            Watchdog::RELOAD_NO_FRAME_MS,
+            reconnect_path_budget,
+        );
+    }
 }
