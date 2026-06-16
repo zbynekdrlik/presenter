@@ -779,9 +779,18 @@ test("stage performs LAST-RESORT page reload after prolonged video stall (synthe
       )
       .toBeGreaterThan(0);
 
+    // This test DELIBERATELY kills the server NDI pipeline repeatedly, so the
+    // browser logs transient "Failed to load resource … 503 (Service
+    // Unavailable)" while the server is mid-kill/rebuild — an expected artifact
+    // of the test's own kill loop, not an app bug (#413, was flaking PRs). Drop
+    // those resource-load errors; any OTHER console error (uncaught exception,
+    // WASM panic, WebRTC failure) still fails the test.
+    const unexpectedErrors = consoleErrors.filter(
+      (e) => !/Failed to load resource/i.test(e),
+    );
     expect(
-      consoleErrors,
-      `browser console must have zero errors, got: ${consoleErrors.join("; ")}`,
+      unexpectedErrors,
+      `browser console must have zero unexpected errors, got: ${unexpectedErrors.join("; ")}`,
     ).toEqual([]);
   } finally {
     await cleanupSource(request, src.id);

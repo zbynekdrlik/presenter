@@ -8,6 +8,7 @@ mod ndi_watchdog;
 pub mod preach_layout;
 pub mod status_bar;
 pub mod timer_layout;
+pub mod wake_lock;
 pub mod worship_pp;
 pub mod worship_snv;
 
