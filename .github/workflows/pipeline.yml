@@ -298,7 +298,13 @@ jobs:
         working-directory: crates/presenter-ui
 
       - name: Run CI shell tests
-        run: bash tests/ci/check-dev-libraries.test.sh
+        run: |
+          bash tests/ci/check-dev-libraries.test.sh
+          # Regression guard for #374: the function-length gate was a silent
+          # no-op in scoped CI runs (abs vs. relative path comparison). This
+          # self-test proves the gate FIRES on a relative-path over-cap fixture
+          # and FAILS if the abs/rel bug is reintroduced.
+          bash tests/ci/fn-length-gate.test.sh
 
   # ============================================
   # Mutation Testing
