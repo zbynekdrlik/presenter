@@ -303,10 +303,8 @@ impl ReloadEscalation {
 /// Pure + side-effect-free so the gate is unit-testable on host without a
 /// browser or a running server. The fetch-failure case is handled by the
 /// caller (it defaults to reloading), NOT here.
-pub(crate) fn should_reload_given_pipeline_state(_server_has_streaming_pipeline: bool) -> bool {
-    // RED stub: pre-#410 behavior reloaded unconditionally, ignoring server
-    // state. Replaced by the real gate in the GREEN commit.
-    true
+pub(crate) fn should_reload_given_pipeline_state(server_has_streaming_pipeline: bool) -> bool {
+    server_has_streaming_pipeline
 }
 
 /// Parse a `/healthz` JSON body and decide whether the server has at least one
@@ -320,10 +318,19 @@ pub(crate) fn should_reload_given_pipeline_state(_server_has_streaming_pipeline:
 /// (network error, non-2xx) as "reload anyway", so a parse-of-garbage that
 /// only happens on a successful-but-malformed response stays conservative
 /// (no reload) rather than masking a real stuck consumer.
-pub(crate) fn healthz_body_has_streaming_pipeline(_body: &str) -> bool {
-    // RED stub: pre-#410 code never inspected /healthz. Replaced by the real
-    // parser in the GREEN commit.
-    false
+pub(crate) fn healthz_body_has_streaming_pipeline(body: &str) -> bool {
+    let Ok(json) = serde_json::from_str::<serde_json::Value>(body) else {
+        return false;
+    };
+    let Some(pipelines) = json.get("ndi_pipelines").and_then(|v| v.as_array()) else {
+        return false;
+    };
+    pipelines.iter().any(|p| {
+        matches!(
+            p.get("state").and_then(|s| s.as_str()),
+            Some("streaming") | Some("starting")
+        )
+    })
 }
 
 /// Fetch `/healthz` and report whether the server has an actively-streaming NDI
