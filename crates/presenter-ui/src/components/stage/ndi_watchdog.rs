@@ -180,6 +180,11 @@ struct FrameStats {
 pub(crate) struct ReloadEscalation {
     last_decoded_frame_at: Cell<f64>,
     reloaded: Cell<bool>,
+    /// True while a `/healthz` server-liveness check spawned by `maybe_reload`
+    /// is in flight (#410). Guards against the 1s health ticker spawning a
+    /// fresh fetch on every tick once the no-frames horizon is crossed — at
+    /// most one check is outstanding at a time. Cleared when the check resolves.
+    check_in_flight: Cell<bool>,
     /// The no-frames horizon (ms) for THIS page load. Defaults to
     /// `RELOAD_NO_FRAME_MS`; an explicit `?ndiReloadMs=<n>` URL query lowers
     /// it so the E2E can exercise the full reload path (incl. the real
@@ -197,6 +202,7 @@ impl ReloadEscalation {
         Rc::new(Self {
             last_decoded_frame_at: Cell::new(now_ms()),
             reloaded: Cell::new(false),
+            check_in_flight: Cell::new(false),
             threshold_ms: reload_threshold_ms_from_url(),
         })
     }
@@ -213,27 +219,131 @@ impl ReloadEscalation {
         now_ms() - self.last_decoded_frame_at.get()
     }
 
-    /// Evaluate the escalation rule and, if it trips, perform the one-shot
-    /// full-page reload. Returns true once it has reloaded (so callers stop).
-    /// Idempotent: the `reloaded` flag makes repeated ticks / multiple
-    /// sessions fire `window.location.reload()` at most once.
-    fn maybe_reload(&self) -> bool {
+    /// Evaluate the escalation rule. When the no-frames horizon is crossed,
+    /// the reload is NOT performed unconditionally: first a lightweight
+    /// `/healthz` check decides whether reloading can even help (#410).
+    ///
+    /// - If the SERVER has an actively-streaming NDI pipeline but THIS consumer
+    ///   still has no frames → the page/consumer is genuinely stuck → reload
+    ///   (the #401 recovery).
+    /// - If the server has NO streaming pipeline → the source itself is down
+    ///   (Resolume silent), reloading cannot conjure frames → SKIP the reload
+    ///   and reset the escalation timer so it re-evaluates after another full
+    ///   window instead of reloading every ~60s forever.
+    /// - If the `/healthz` fetch fails → fall back to the existing behavior and
+    ///   reload (a fetch error must never SUPPRESS a genuinely-needed reload).
+    ///
+    /// Returns true once the page is reloading OR a server check has been
+    /// spawned for this horizon crossing — in both cases the caller should stop
+    /// the rest of this tick (the async check, if any, owns the decision).
+    /// Idempotent: the `reloaded` one-shot and the `check_in_flight` guard make
+    /// repeated ticks / multiple sessions fire at most one `/healthz` check and
+    /// at most one `window.location.reload()`.
+    fn maybe_reload(self: &Rc<Self>) -> bool {
         if self.reloaded.get() {
             return true;
         }
         if !should_escalate_reload(self.ms_since_last_decoded_frame(), self.threshold_ms) {
             return false;
         }
-        self.reloaded.set(true);
-        leptos::logging::warn!(
-            "watchdog: no decoded frame for {:.0}ms across reconnect attempts — LAST-RESORT full page reload (#401)",
-            self.ms_since_last_decoded_frame()
-        );
-        if let Some(window) = leptos::web_sys::window() {
-            let _ = window.location().reload();
+        // Horizon crossed. Don't spawn a second check while one is in flight.
+        if self.check_in_flight.get() {
+            return true;
         }
+        self.check_in_flight.set(true);
+        let escalation = Rc::clone(self);
+        spawn_local(async move {
+            let has_streaming = fetch_healthz_has_streaming_pipeline().await;
+            escalation.check_in_flight.set(false);
+            // A frame may have decoded while the check was in flight — re-check
+            // the horizon so a recovered stream is never reloaded out from
+            // under itself.
+            if escalation.reloaded.get()
+                || !should_escalate_reload(
+                    escalation.ms_since_last_decoded_frame(),
+                    escalation.threshold_ms,
+                )
+            {
+                return;
+            }
+            if !should_reload_given_pipeline_state(has_streaming) {
+                // Source legitimately down — reloading can't help. Reset the
+                // page-session timer so the rule re-evaluates after another
+                // full window instead of looping reloads every ~60s.
+                leptos::logging::warn!(
+                    "watchdog: no decoded frame for {:.0}ms but server has NO streaming pipeline — source is down, SKIPPING reload (#410)",
+                    escalation.ms_since_last_decoded_frame()
+                );
+                escalation.last_decoded_frame_at.set(now_ms());
+                return;
+            }
+            escalation.reloaded.set(true);
+            leptos::logging::warn!(
+                "watchdog: no decoded frame for {:.0}ms across reconnect attempts AND server has a streaming pipeline — LAST-RESORT full page reload (#401)",
+                escalation.ms_since_last_decoded_frame()
+            );
+            if let Some(window) = leptos::web_sys::window() {
+                let _ = window.location().reload();
+            }
+        });
         true
     }
+}
+
+/// LAST-RESORT reload gate (#410): given whether the SERVER currently has an
+/// actively-streaming NDI pipeline, should the stuck stage page reload?
+///
+/// - `true` (server is streaming, but this consumer decoded nothing) → reload:
+///   the page/consumer is stuck and a fresh WHEP negotiation + DOM can recover
+///   it (the #401 case).
+/// - `false` (no streaming pipeline) → DON'T reload: the source itself is down
+///   (Resolume silent / `ndi_pipelines` empty), so reloading cannot produce
+///   frames — it would just loop every ~60s. Keep waiting instead.
+///
+/// Pure + side-effect-free so the gate is unit-testable on host without a
+/// browser or a running server. The fetch-failure case is handled by the
+/// caller (it defaults to reloading), NOT here.
+pub(crate) fn should_reload_given_pipeline_state(_server_has_streaming_pipeline: bool) -> bool {
+    // RED stub: pre-#410 behavior reloaded unconditionally, ignoring server
+    // state. Replaced by the real gate in the GREEN commit.
+    true
+}
+
+/// Parse a `/healthz` JSON body and decide whether the server has at least one
+/// actively-streaming NDI pipeline. An entry counts as "streaming" when its
+/// `state` is `"streaming"` or `"starting"` (about to deliver frames) — a
+/// `"stopped"` / `"errored"` pipeline, or an empty/absent `ndi_pipelines`
+/// array, means the source is NOT delivering media.
+///
+/// Pure over the response text so it is unit-testable on host. A body that
+/// fails to parse returns `false` here — but callers treat a FAILED fetch
+/// (network error, non-2xx) as "reload anyway", so a parse-of-garbage that
+/// only happens on a successful-but-malformed response stays conservative
+/// (no reload) rather than masking a real stuck consumer.
+pub(crate) fn healthz_body_has_streaming_pipeline(_body: &str) -> bool {
+    // RED stub: pre-#410 code never inspected /healthz. Replaced by the real
+    // parser in the GREEN commit.
+    false
+}
+
+/// Fetch `/healthz` and report whether the server has an actively-streaming NDI
+/// pipeline. Returns `true` on ANY fetch/response failure so a transient
+/// `/healthz` outage never SUPPRESSES a genuinely-needed last-resort reload
+/// (#410 — additive guard, must not break #401 recovery).
+async fn fetch_healthz_has_streaming_pipeline() -> bool {
+    async fn try_fetch() -> Option<bool> {
+        let window = leptos::web_sys::window()?;
+        let resp_val = JsFuture::from(window.fetch_with_str("/healthz")).await.ok()?;
+        let resp: leptos::web_sys::Response = resp_val.dyn_into().ok()?;
+        if !resp.ok() {
+            return None;
+        }
+        let text = JsFuture::from(resp.text().ok()?).await.ok()?;
+        let body = text.as_string()?;
+        Some(healthz_body_has_streaming_pipeline(&body))
+    }
+    // Fetch/parse failure → default to TRUE (reload), preserving #401 behavior.
+    try_fetch().await.unwrap_or(true)
 }
 
 /// Watchdog that fires `on_failure` when EITHER:
@@ -934,7 +1044,10 @@ fn install_ice_failure_listener<F: Fn() + 'static>(
 
 #[cfg(test)]
 mod tests {
-    use super::{should_escalate_reload, Watchdog};
+    use super::{
+        healthz_body_has_streaming_pipeline, should_escalate_reload,
+        should_reload_given_pipeline_state, Watchdog,
+    };
 
     // ─────────────────────────────────────────────────────────────────────
     // #401 LAST-RESORT page-reload escalation.
@@ -1003,5 +1116,72 @@ mod tests {
             Watchdog::RELOAD_NO_FRAME_MS,
             reconnect_path_budget,
         );
+    }
+
+    // ─────────────────────────────────────────────────────────────────────
+    // #410 server-liveness reload gate.
+    //
+    // The #401 last-resort reload assumed reloading could recover any stuck
+    // stream. But when the SOURCE itself is legitimately offline (Resolume
+    // silent → the server has NO streaming pipeline, /healthz ndi_pipelines is
+    // empty), no consumer can ever decode a frame, so the page reloaded every
+    // ~60s forever — benign but wasteful. The gate distinguishes
+    // "source legitimately down" (don't reload, keep waiting) from
+    // "my page/consumer is stuck while the server IS streaming" (reload, the
+    // #401 recovery). A failed /healthz fetch must NOT suppress a needed
+    // reload, so the caller defaults to reloading on fetch error.
+    // ─────────────────────────────────────────────────────────────────────
+
+    #[test]
+    fn reload_when_server_has_a_streaming_pipeline_but_consumer_is_stuck() {
+        // Server is streaming, but THIS page decoded nothing for the whole
+        // window → the consumer/page is stuck → reload (the #401 recovery).
+        assert!(should_reload_given_pipeline_state(true));
+    }
+
+    #[test]
+    fn suppress_reload_when_server_has_no_streaming_pipeline() {
+        // No streaming pipeline → the source itself is down → reloading cannot
+        // help → DON'T reload, keep waiting.
+        assert!(!should_reload_given_pipeline_state(false));
+    }
+
+    #[test]
+    fn healthz_with_streaming_pipeline_means_server_is_streaming() {
+        let body = r#"{"status":"ok","version":"0.4.138","channel":"dev",
+            "ndi_pipelines":[{"source_id":"abc","state":"streaming"}]}"#;
+        assert!(healthz_body_has_streaming_pipeline(body));
+    }
+
+    #[test]
+    fn healthz_with_starting_pipeline_counts_as_streaming() {
+        // A "starting" pipeline is about to deliver frames — treat it as live
+        // so we still attempt the consumer-stuck reload.
+        let body = r#"{"ndi_pipelines":[{"source_id":"abc","state":"starting"}]}"#;
+        assert!(healthz_body_has_streaming_pipeline(body));
+    }
+
+    #[test]
+    fn healthz_empty_pipelines_means_source_down() {
+        // The exact #410 symptom: source offline → empty ndi_pipelines.
+        let body = r#"{"status":"ok","ndi_pipelines":[]}"#;
+        assert!(!healthz_body_has_streaming_pipeline(body));
+    }
+
+    #[test]
+    fn healthz_only_errored_or_stopped_pipeline_means_source_down() {
+        let body = r#"{"ndi_pipelines":[
+            {"source_id":"a","state":"errored","last_error":"no source"},
+            {"source_id":"b","state":"stopped"}]}"#;
+        assert!(!healthz_body_has_streaming_pipeline(body));
+    }
+
+    #[test]
+    fn healthz_missing_field_or_garbage_means_not_streaming() {
+        // No ndi_pipelines key, or unparseable body → not streaming (the
+        // SUCCESSFUL-but-malformed case; a FAILED fetch is the caller's
+        // reload-anyway default, not this function's).
+        assert!(!healthz_body_has_streaming_pipeline(r#"{"status":"ok"}"#));
+        assert!(!healthz_body_has_streaming_pipeline("not json at all"));
     }
 }
