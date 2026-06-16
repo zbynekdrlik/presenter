@@ -511,6 +511,115 @@ async fn from_config_against_empty_db_leaves_libraries_empty() {
     );
 }
 
+/// Build a `ServerConfig` pointed at a specific on-disk SQLite file so two
+/// successive `AppState::from_config` calls share the same database — i.e. a
+/// faithful "server restart" against persistent data.
+fn config_for_db(url: String) -> crate::config::ServerConfig {
+    crate::config::ServerConfig {
+        http: crate::config::HttpConfig { port: 0 },
+        database: crate::config::DatabaseConfig { url },
+        companion: crate::config::CompanionConfig::default(),
+        osc: crate::config::OscConfig::default(),
+        stage: crate::config::StageConfig {
+            heartbeat: crate::stage_connections::StageHeartbeatConfig::default_values(),
+        },
+        android: crate::config::AndroidConfig::default(),
+        network: crate::config::NetworkConfig::default(),
+    }
+}
+
+/// Regression for issue #384: the selected stage layout MUST survive a server
+/// restart. Before the fix `set_stage_layout_code` only wrote the in-memory
+/// `RwLock`, so every `presenter.service` restart silently reset the layout to
+/// `DEFAULT_STAGE_LAYOUT_CODE` — blanking NDI stage displays after every deploy
+/// (found during 2026-06-12 prod testing of PR #382).
+///
+/// The existing router test `stage_layout_endpoint_reports_and_sets_layout`
+/// uses ONE in-memory AppState and never simulates a restart, so it could not
+/// catch this. This test constructs a SECOND AppState from the SAME on-disk DB
+/// and asserts the persisted layout is restored, not the default.
+#[tokio::test]
+async fn stage_layout_persists_across_restart() {
+    let tmp = tempfile::NamedTempFile::new().expect("temp file");
+    let url = format!("sqlite://{}?mode=rwc", tmp.path().display());
+
+    // First "boot": set a non-default layout, then drop the state.
+    {
+        let state = AppState::from_config(config_for_db(url.clone()))
+            .await
+            .expect("from_config (first boot)");
+        // Sanity: a fresh DB starts on the default layout.
+        assert_eq!(
+            state.stage_layout_code().await,
+            DEFAULT_STAGE_LAYOUT_CODE,
+            "fresh DB must start on the default layout"
+        );
+        state
+            .set_stage_layout_code("timer")
+            .await
+            .expect("set layout to timer");
+        assert_eq!(state.stage_layout_code().await, "timer");
+    }
+
+    // Second "boot" against the SAME DB file — this is the restart.
+    let restarted = AppState::from_config(config_for_db(url))
+        .await
+        .expect("from_config (restart)");
+    assert_eq!(
+        restarted.stage_layout_code().await,
+        "timer",
+        "stage layout must persist across restart, not reset to default (#384)"
+    );
+}
+
+/// Regression guard tied to the CLAUDE.md startup invariant
+/// (`second_startup_writes_no_audit_rows`): loading the persisted stage layout
+/// on startup is a READ and must not write any `settings_audit` rows on an
+/// unchanged DB. A second restart on the same DB produces zero new audit rows.
+#[tokio::test]
+async fn stage_layout_load_on_startup_writes_no_audit_rows() {
+    let tmp = tempfile::NamedTempFile::new().expect("temp file");
+    let url = format!("sqlite://{}?mode=rwc", tmp.path().display());
+
+    // First boot: select a layout (this is an intentional change).
+    {
+        let state = AppState::from_config(config_for_db(url.clone()))
+            .await
+            .expect("from_config (first boot)");
+        state
+            .set_stage_layout_code("timer")
+            .await
+            .expect("set layout to timer");
+    }
+
+    // Second boot — record the audit count, then a third boot must add nothing.
+    let second = AppState::from_config(config_for_db(url.clone()))
+        .await
+        .expect("from_config (second boot)");
+    let count_after_second = second
+        .repository()
+        .list_settings_audit(None, None, None, 10_000)
+        .await
+        .expect("list audit")
+        .len();
+    drop(second);
+
+    let third = AppState::from_config(config_for_db(url))
+        .await
+        .expect("from_config (third boot)");
+    let count_after_third = third
+        .repository()
+        .list_settings_audit(None, None, None, 10_000)
+        .await
+        .expect("list audit")
+        .len();
+
+    assert_eq!(
+        count_after_second, count_after_third,
+        "startup load of stage layout must not write audit rows on an unchanged DB"
+    );
+}
+
 #[tokio::test]
 async fn api_input_does_not_leak_when_layout_is_worship() {
     use std::time::Duration;

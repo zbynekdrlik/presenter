@@ -409,34 +409,80 @@ impl AppState {
             .await
             .unwrap_or_default();
         *state.group_color_cache.write().await = group_colors;
+
+        // Restore the operator-selected stage layout from the database (#384).
+        // Without this, every restart/deploy reset the layout to the default
+        // (worship-snv), silently blanking NDI stage displays after each deploy.
+        // This is a pure read — it writes nothing on an unchanged DB, preserving
+        // the second-startup-no-audit invariant (CLAUDE.md).
+        {
+            let persisted = state.load_persisted_stage_layout().await;
+            *state.stage_layout.write().await = persisted;
+        }
+
         state.ensure_demo_playlist().await?;
         state.sync_resolume_hosts().await?;
         state.sync_android_stage_displays().await?;
 
-        // Restore active NDI video source from database — gated on BOTH the
-        // NDI manager being available AND a hardware H264 encoder being
-        // registered. The encoder gate is #333 item 6: without it, a host
-        // that booted with a stale GStreamer registry would silently
-        // re-trigger the wedge state from 2026-05-24 the moment auto-restore
-        // ran. With this gate, auto-restore is skipped on encoder-missing
-        // hosts and a structured warning is logged so dashboards and
-        // operators see the issue immediately.
-        let manager_loaded = state.ndi_manager().is_some();
-        // Encoder probe requires gstreamer::init() to have run.
-        // In production main.rs calls presenter_ndi::init() before AppState
-        // is built; in tests (AppState::in_memory) that doesn't happen, so
-        // gst::ElementFactory::find would panic. We re-call init() here —
-        // idempotent via OnceLock — to ensure the probe is safe regardless
-        // of caller. If init fails the encoder is treated as unavailable
-        // and the auto-restore branch is skipped (the safer default).
+        // Restore the active NDI video source from the database on startup
+        // (encoder-gated, #333 item 6). Extracted to keep from_config under the
+        // function-length cap.
+        state.restore_active_ndi_source().await;
+
+        // Auto-detect public IP for LAN/WAN classification via Cloudflare Tunnel.
+        // Only runs if PRESENTER_LOCAL_PUBLIC_IP is not set (the env var is an
+        // optional override, not a requirement). Mirrors the reaperiem pattern.
+        if state.local_public_ip.is_none() {
+            match detect_public_ip().await {
+                Some(ip) => {
+                    tracing::info!(ip = %ip, "auto-detected public IP for LAN/WAN detection");
+                    state.local_public_ip = Arc::new(Some(ip));
+                }
+                None => {
+                    tracing::warn!(
+                        "could not auto-detect public IP; LAN/WAN detection will use private IP fallback"
+                    );
+                }
+            }
+        }
+
+        Self::apply_osc_settings(&state, &osc_bridge).await?;
+        Self::apply_ableset_settings(&state, &ableset_bridge).await?;
+
+        // Re-broadcast stage snapshots whenever AbleSet switches songs.
+        state.spawn_ableset_rebroadcast(&ableset_bridge);
+
+        state
+            .configure_companion_service(companion_enabled, companion_port)
+            .await?;
+        state.spawn_background_tasks();
+        state.ai_proxy.auto_start().await;
+        Ok(state)
+    }
+
+    /// Restore the active NDI video source on startup, gated on BOTH the NDI
+    /// manager being available AND a hardware H264 encoder being registered
+    /// (#333 item 6: without the encoder gate a stale GStreamer registry would
+    /// re-trigger the 2026-05-24 wedge the moment auto-restore ran). On
+    /// encoder-missing hosts the saved source is NOT re-activated and a
+    /// structured warning is logged. Extracted from `from_config` to keep that
+    /// constructor under the function-length cap.
+    async fn restore_active_ndi_source(&self) {
+        let manager_loaded = self.ndi_manager().is_some();
+        // Encoder probe requires gstreamer::init() to have run. In production
+        // main.rs calls presenter_ndi::init() before AppState is built; in tests
+        // (AppState::in_memory) it doesn't, so gst::ElementFactory::find would
+        // panic. We re-call init() here — idempotent via OnceLock — so the probe
+        // is safe regardless of caller. If init fails the encoder is treated as
+        // unavailable and the auto-restore branch is skipped (the safer default).
         let encoder_available = manager_loaded
             && presenter_ndi::init().is_ok()
             && presenter_ndi::hw_h264_encoder().is_some();
         if should_auto_restore_ndi(manager_loaded, encoder_available) {
-            match state.repository.get_active_video_source().await {
+            match self.repository.get_active_video_source().await {
                 Ok(Some(source)) => {
                     let ndi_name = source.ndi_name.clone();
-                    if let Err(err) = state
+                    if let Err(err) = self
                         .activate_video_source(
                             source.id,
                             presenter_persistence::SettingsAuditSource::StartupDefault,
@@ -467,55 +513,30 @@ impl AppState {
                  See #333 item 6."
             );
         }
+    }
 
-        // Auto-detect public IP for LAN/WAN classification via Cloudflare Tunnel.
-        // Only runs if PRESENTER_LOCAL_PUBLIC_IP is not set (the env var is an
-        // optional override, not a requirement). Mirrors the reaperiem pattern.
-        if state.local_public_ip.is_none() {
-            match detect_public_ip().await {
-                Some(ip) => {
-                    tracing::info!(ip = %ip, "auto-detected public IP for LAN/WAN detection");
-                    state.local_public_ip = Arc::new(Some(ip));
-                }
-                None => {
-                    tracing::warn!(
-                        "could not auto-detect public IP; LAN/WAN detection will use private IP fallback"
-                    );
+    /// Spawn the background task that re-broadcasts stage snapshots whenever
+    /// AbleSet switches songs. Extracted from `from_config` to keep that
+    /// constructor under the function-length cap.
+    fn spawn_ableset_rebroadcast(&self, ableset_bridge: &AbleSetBridge) {
+        let mut rx = ableset_bridge.subscribe_song_changes();
+        let app = self.clone();
+        tokio::spawn(async move {
+            loop {
+                match rx.recv().await {
+                    Ok(()) => {
+                        if let Err(err) = app.broadcast_stage_snapshots().await {
+                            tracing::warn!(
+                                ?err,
+                                "failed to broadcast stage after AbleSet song change"
+                            );
+                        }
+                    }
+                    Err(tokio::sync::broadcast::error::RecvError::Lagged(_)) => continue,
+                    Err(tokio::sync::broadcast::error::RecvError::Closed) => break,
                 }
             }
-        }
-
-        Self::apply_osc_settings(&state, &osc_bridge).await?;
-        Self::apply_ableset_settings(&state, &ableset_bridge).await?;
-
-        // Re-broadcast stage snapshots whenever AbleSet switches songs
-        {
-            let mut rx = ableset_bridge.subscribe_song_changes();
-            let app = state.clone();
-            tokio::spawn(async move {
-                loop {
-                    match rx.recv().await {
-                        Ok(()) => {
-                            if let Err(err) = app.broadcast_stage_snapshots().await {
-                                tracing::warn!(
-                                    ?err,
-                                    "failed to broadcast stage after AbleSet song change"
-                                );
-                            }
-                        }
-                        Err(tokio::sync::broadcast::error::RecvError::Lagged(_)) => continue,
-                        Err(tokio::sync::broadcast::error::RecvError::Closed) => break,
-                    }
-                }
-            });
-        }
-
-        state
-            .configure_companion_service(companion_enabled, companion_port)
-            .await?;
-        state.spawn_background_tasks();
-        state.ai_proxy.auto_start().await;
-        Ok(state)
+        });
     }
 
     async fn apply_osc_settings(state: &Self, osc_bridge: &OscBridge) -> anyhow::Result<()> {
