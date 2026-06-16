@@ -171,6 +171,20 @@ impl NdiManager {
         }
     }
 
+    /// Stop every active pipeline EXCEPT the one for `keep_id`.
+    ///
+    /// #370: called from the activate-switch path. Switching the active video
+    /// source (deactivate A → activate B) used to start B's pipeline while
+    /// leaving A's pipeline + its `nvh264enc` encoder streaming forever — the
+    /// DB flipped A's row to `is_active=false` but the manager was never told.
+    /// Two source pipelines (= two NVENC encoders) then accumulated after every
+    /// switch. Reaping the orphaned siblings here keeps exactly ONE source
+    /// pipeline running per the single-active-source invariant.
+    pub async fn stop_other_pipelines(&self, keep_id: &str) {
+        let mut active = self.active.lock().await;
+        super::retain_only_active(&mut active, keep_id).await;
+    }
+
     /// Stop ALL pipelines.
     pub async fn stop_all(&self) {
         let mut active = self.active.lock().await;

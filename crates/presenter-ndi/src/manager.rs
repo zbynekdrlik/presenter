@@ -164,10 +164,28 @@ async fn check_active_entry(
 /// kept running after every switch — NVENC contention + wasted GPU. This helper
 /// reaps the orphaned siblings so exactly ONE source pipeline remains.
 ///
-/// STUB (RED): currently a no-op — leaves every sibling in the map, reproducing
-/// the leak. The GREEN commit makes it actually remove + stop the siblings.
-async fn retain_only_active(_active: &mut HashMap<String, ActiveSource>, _keep_id: &str) {
-    // RED placeholder — does nothing yet (the bug). GREEN fix follows.
+/// Mirrors `stop_pipeline`/`stop_all`: aborts each reaped source's supervisor
+/// before stopping its pipeline, leaving the kept source untouched.
+async fn retain_only_active(active: &mut HashMap<String, ActiveSource>, keep_id: &str) {
+    // Collect the siblings to reap first (can't remove while iterating).
+    let stale: Vec<String> = active
+        .keys()
+        .filter(|id| id.as_str() != keep_id)
+        .cloned()
+        .collect();
+    for id in stale {
+        if let Some(mut src) = active.remove(&id) {
+            tracing::info!(
+                source_id = %id,
+                kept = %keep_id,
+                "#370: stopping orphaned source pipeline on activate-switch"
+            );
+            if let Some(handle) = src.supervisor.take() {
+                handle.abort();
+            }
+            src.pipeline.stop().await;
+        }
+    }
 }
 
 pub struct NdiManager {

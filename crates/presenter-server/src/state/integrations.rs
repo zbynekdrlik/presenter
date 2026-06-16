@@ -244,6 +244,15 @@ impl AppState {
             self.live_hub.publish(LiveEvent::NdiConnectionStatus {
                 status: "connected".to_string(),
             });
+            // #370: the DB just flipped every sibling source to
+            // `is_active=false` (repository.activate_video_source), but the
+            // manager was never told to stop their pipelines. Without this,
+            // switching the active source (deactivate A → activate B) leaked
+            // A's pipeline + its nvh264enc encoder — two source pipelines (=
+            // two NVENC encoders) kept running after every switch. Reap them
+            // now that the new source is confirmed Streaming, so the operator
+            // never sees a gap and exactly ONE source pipeline remains.
+            manager.stop_other_pipelines(&source.id.to_string()).await;
         }
         Ok(source)
     }
