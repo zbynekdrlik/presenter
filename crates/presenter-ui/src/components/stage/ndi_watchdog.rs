@@ -340,7 +340,9 @@ pub(crate) fn healthz_body_has_streaming_pipeline(body: &str) -> bool {
 async fn fetch_healthz_has_streaming_pipeline() -> bool {
     async fn try_fetch() -> Option<bool> {
         let window = leptos::web_sys::window()?;
-        let resp_val = JsFuture::from(window.fetch_with_str("/healthz")).await.ok()?;
+        let resp_val = JsFuture::from(window.fetch_with_str("/healthz"))
+            .await
+            .ok()?;
         let resp: leptos::web_sys::Response = resp_val.dyn_into().ok()?;
         if !resp.ok() {
             return None;

@@ -1285,7 +1285,10 @@ async fn reactivating_already_active_source_writes_no_audit_row() {
             .activate_video_source(a.id, SettingsAuditSource::StartupDefault, "system")
             .await
             .unwrap();
-        assert!(returned.is_active, "re-activation still returns the active row");
+        assert!(
+            returned.is_active,
+            "re-activation still returns the active row"
+        );
         assert_eq!(returned.id, a.id);
     }
 
