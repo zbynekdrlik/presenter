@@ -21,6 +21,39 @@ const RETRY_INTERVAL: Duration = Duration::from_secs(20);
 /// in the deploy systemd units. When unset/empty the launcher skips launching.
 const STAGE_URL_ENV: &str = "PRESENTER_ANDROID_STAGE_URL";
 
+/// Validate that a configured stage URL is a well-formed `http(s)://` URL before
+/// it is spliced into the `am start -a VIEW -d <url>` adb args (which reach the
+/// device's `/system/bin/sh`). Returns the normalized URL string on success, or
+/// `None` when the value is empty or malformed. Defense-in-depth: a malformed
+/// value is treated the same as unset (warn + skip) rather than passed through.
+fn validate_stage_url(raw: &str) -> Option<String> {
+    let trimmed = raw.trim();
+    if trimmed.is_empty() {
+        return None;
+    }
+    // Reject any whitespace or shell metacharacters anywhere in the value.
+    // `Url::parse` is lenient and folds such characters into the path (e.g.
+    // `http://host/stage; rm -rf /` parses fine), so a scheme/host check alone
+    // is not enough to keep the value safe to splice into the on-device
+    // `am start -a VIEW -d <url>` command. A legitimate stage URL never contains
+    // these characters.
+    const FORBIDDEN: &[char] = &[
+        ' ', '\t', '\n', '\r', ';', '&', '|', '`', '$', '(', ')', '<', '>', '"', '\'', '\\',
+    ];
+    if trimmed
+        .chars()
+        .any(|c| c.is_control() || FORBIDDEN.contains(&c))
+    {
+        return None;
+    }
+    match reqwest::Url::parse(trimmed) {
+        Ok(url) if matches!(url.scheme(), "http" | "https") && url.has_host() => {
+            Some(trimmed.to_string())
+        }
+        _ => None,
+    }
+}
+
 #[derive(Debug, Clone, Copy, Serialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
 pub enum AndroidStageDisplayState {
@@ -81,17 +114,26 @@ impl AndroidStageRegistry {
         let adb_path = env::var_os("PRESENTER_ANDROID_ADB_BIN")
             .map(Arc::from)
             .unwrap_or_else(|| Arc::new(OsString::from("adb")));
-        let stage_url = env::var(STAGE_URL_ENV)
-            .ok()
-            .map(|v| v.trim().to_string())
-            .filter(|v| !v.is_empty());
-        if let Some(url) = &stage_url {
-            debug!(env = STAGE_URL_ENV, %url, "android stage launcher URL configured");
-        } else {
-            warn!(
-                env = STAGE_URL_ENV,
-                "android stage launcher URL is unset — displays will not be launched until it is set"
-            );
+        let raw_stage_url = env::var(STAGE_URL_ENV).ok();
+        let stage_url = raw_stage_url.as_deref().and_then(validate_stage_url);
+        match (&stage_url, raw_stage_url.as_deref().map(str::trim)) {
+            (Some(url), _) => {
+                debug!(env = STAGE_URL_ENV, %url, "android stage launcher URL configured");
+            }
+            (None, Some(raw)) if !raw.is_empty() => {
+                warn!(
+                    env = STAGE_URL_ENV,
+                    raw,
+                    "android stage launcher URL is malformed (not a well-formed http(s):// URL) — \
+                     treating as unset; displays will not be launched until it is corrected"
+                );
+            }
+            _ => {
+                warn!(
+                    env = STAGE_URL_ENV,
+                    "android stage launcher URL is unset — displays will not be launched until it is set"
+                );
+            }
         }
         Self {
             adb_path,
@@ -563,5 +605,62 @@ mod tests {
         assert_eq!(build_launch_args("com.tcl.browser", None), None);
         assert_eq!(build_launch_args("com.tcl.browser", Some("")), None);
         assert_eq!(build_launch_args("com.tcl.browser", Some("   ")), None);
+    }
+
+    #[test]
+    fn validate_stage_url_accepts_well_formed_http_urls() {
+        // Well-formed http/https URLs pass through (trimmed).
+        assert_eq!(
+            validate_stage_url("http://10.77.9.205/stage"),
+            Some("http://10.77.9.205/stage".to_string()),
+        );
+        assert_eq!(
+            validate_stage_url("https://presenter.lan/stage"),
+            Some("https://presenter.lan/stage".to_string()),
+        );
+        assert_eq!(
+            validate_stage_url("  http://10.77.8.134:8080/stage  "),
+            Some("http://10.77.8.134:8080/stage".to_string()),
+            "surrounding whitespace is trimmed",
+        );
+    }
+
+    #[test]
+    fn validate_stage_url_rejects_malformed_values_as_skip() {
+        // A set-but-malformed value is treated as unset (None -> skip launching),
+        // so it can never be spliced into the adb VIEW-intent args.
+        assert_eq!(validate_stage_url(""), None, "empty -> skip");
+        assert_eq!(validate_stage_url("   "), None, "whitespace-only -> skip");
+        assert_eq!(
+            validate_stage_url("not a url"),
+            None,
+            "non-URL garbage -> skip",
+        );
+        assert_eq!(
+            validate_stage_url("10.77.9.205/stage"),
+            None,
+            "missing scheme -> skip",
+        );
+        assert_eq!(
+            validate_stage_url("ftp://10.77.9.205/stage"),
+            None,
+            "non-http(s) scheme -> skip",
+        );
+        assert_eq!(
+            validate_stage_url("http://"),
+            None,
+            "scheme without host -> skip",
+        );
+        assert_eq!(
+            validate_stage_url("javascript:alert(1)"),
+            None,
+            "javascript scheme -> skip",
+        );
+        // A shell-injection attempt is not a well-formed http URL -> rejected.
+        assert_eq!(
+            validate_stage_url("http://10.0.0.1/stage; rm -rf /"),
+            None,
+            "embedded shell metacharacters make it malformed -> skip",
+        );
     }
 }

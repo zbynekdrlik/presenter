@@ -212,7 +212,7 @@
       label: '',
       host: '',
       port: 5555,
-      launchComponent: 'com.fullykiosk.videokiosk/de.ozerov.fully.MainActivity',
+      launchComponent: 'com.tcl.browser',
       isEnabled: true,
       createdAt: new Date().toISOString(),
       createdAtDisplay: '',
@@ -455,7 +455,7 @@
     if (els.androidFormSubtitle) {
       els.androidFormSubtitle.textContent = mode === 'edit'
         ? 'Update connection details or disable auto-launch.'
-        : 'Presenter relaunches Fully Kiosk whenever this device wakes up.';
+        : 'Presenter relaunches the stage in the browser whenever this device wakes up.';
     }
   }
 
@@ -482,7 +482,7 @@
       els.androidPort.value = '5555';
     }
     if (els.androidComponent) {
-      els.androidComponent.value = 'com.fullykiosk.videokiosk/de.ozerov.fully.MainActivity';
+      els.androidComponent.value = 'com.tcl.browser';
     }
     if (els.androidEnabled) {
       els.androidEnabled.checked = true;
