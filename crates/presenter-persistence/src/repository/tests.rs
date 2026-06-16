@@ -1216,6 +1216,122 @@ async fn activate_video_source_audits_each_deactivated_sibling() {
     assert_eq!(c_row.after_json["isActive"], true);
 }
 
+/// #375: re-activating the SAME source that is already active (and the only
+/// active row) must be a no-op — it must NOT write a settings_audit row, and a
+/// genuine switch must still write its audit rows. The 30s NDI auto-reconnect
+/// loop re-calls `activate_video_source` every tick while an active source is
+/// unreachable (pipeline start fails but the DB row stays `is_active=true`);
+/// before this fix each tick wrote a fresh audit row, spamming the forensic log
+/// with one no-op row every ~30s forever.
+#[tokio::test]
+async fn reactivating_already_active_source_writes_no_audit_row() {
+    use crate::audit::SettingsAuditSource;
+    let repo = Repository::connect_in_memory().await.unwrap();
+
+    let a = repo
+        .create_video_source(
+            &VideoSourceDraft::new("Cam A", "CAM_A"),
+            SettingsAuditSource::HttpSetter,
+            "test",
+        )
+        .await
+        .unwrap();
+    let b = repo
+        .create_video_source(
+            &VideoSourceDraft::new("Cam B", "CAM_B"),
+            SettingsAuditSource::HttpSetter,
+            "test",
+        )
+        .await
+        .unwrap();
+
+    // Baseline: creating A+B already wrote one audit row each. Measure all
+    // subsequent assertions as deltas against this baseline.
+    let baseline = repo
+        .list_settings_audit(Some("video_source"), None, None, 1000)
+        .await
+        .unwrap()
+        .len();
+
+    // Genuine activation of A: writes exactly one audit row (A activated, no
+    // siblings active yet).
+    repo.activate_video_source(a.id, SettingsAuditSource::StartupDefault, "system")
+        .await
+        .unwrap();
+    let after_first = repo
+        .list_settings_audit(Some("video_source"), None, None, 1000)
+        .await
+        .unwrap();
+    assert_eq!(
+        after_first.len(),
+        baseline + 1,
+        "first (genuine) activation must write exactly one audit row, got {after_first:?}"
+    );
+
+    // Capture the activated row's updated_at so we can assert it is NOT bumped
+    // by the no-op re-activation.
+    let updated_at_before = repo
+        .get_active_video_source()
+        .await
+        .unwrap()
+        .expect("A is active")
+        .updated_at;
+
+    // Re-activate A three times (simulating three 30s auto-reconnect ticks
+    // against an unreachable-but-active source). Each is a no-op: A is already
+    // active and is the only active row, so nothing changes.
+    for _ in 0..3 {
+        let returned = repo
+            .activate_video_source(a.id, SettingsAuditSource::StartupDefault, "system")
+            .await
+            .unwrap();
+        assert!(returned.is_active, "re-activation still returns the active row");
+        assert_eq!(returned.id, a.id);
+    }
+
+    let after_noops = repo
+        .list_settings_audit(Some("video_source"), None, None, 1000)
+        .await
+        .unwrap();
+    assert_eq!(
+        after_noops.len(),
+        baseline + 1,
+        "re-activating an already-active source must add NO audit rows, got {after_noops:?}"
+    );
+
+    let updated_at_after = repo
+        .get_active_video_source()
+        .await
+        .unwrap()
+        .expect("A still active")
+        .updated_at;
+    assert_eq!(
+        updated_at_before, updated_at_after,
+        "no-op re-activation must NOT bump updated_at"
+    );
+
+    // A genuine switch A -> B must STILL write audit rows (B activated + A
+    // deactivated): the idempotency guard must not break the real audit trail.
+    repo.activate_video_source(b.id, SettingsAuditSource::HttpSetter, "ip-9.9.9.9")
+        .await
+        .unwrap();
+    let switch_rows = repo
+        .list_settings_audit(Some("video_source"), None, None, 1000)
+        .await
+        .unwrap();
+    // Delta = +2 over (baseline + 1): B activation + A deactivation.
+    assert_eq!(
+        switch_rows.len(),
+        baseline + 3,
+        "a genuine A->B switch must still write its audit rows, got {switch_rows:?}"
+    );
+    let b_row = switch_rows
+        .iter()
+        .find(|r| r.setting_id == b.id.to_string())
+        .expect("audit row for newly-activated B");
+    assert_eq!(b_row.after_json["isActive"], true);
+}
+
 /// Assert that `rows` contains the audit row for a sibling video source that
 /// was deactivated by an activation: actor/source match and the row records the
 /// is_active=true → is_active=false transition.
