@@ -405,6 +405,13 @@ jobs:
           shared-key: ci
           cache-on-failure: false
 
+      # Regression guard for #374: the function-length gate was a silent no-op
+      # in scoped CI runs (abs vs. relative path comparison). This self-test
+      # proves the gate FIRES on a relative-path over-cap fixture and FAILS if
+      # the abs/rel bug is reintroduced. Must pass before the gate runs.
+      - name: Self-test function-length gate (regression guard for #374)
+        run: ./scripts/ci/test-fn-length-gate.sh
+
       - name: Run quality checks
         run: ./scripts/dev/quality-check.sh --strict --against origin/${{ github.base_ref || 'main' }}
 
