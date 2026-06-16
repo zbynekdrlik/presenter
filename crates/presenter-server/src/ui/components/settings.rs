@@ -285,7 +285,7 @@ pub fn AndroidStageSettingsCard(
                 <div>
                     <h2>"Android Stage Launchers"</h2>
                     <p>
-                        "Configure Fully Kiosk devices for remote presentation control."
+                        "Configure Android stage display devices for remote presentation control."
                     </p>
                 </div>
                 <div class="settings__badge-group">
@@ -337,12 +337,12 @@ pub fn AndroidStageSettingsCard(
                 </div>
                 <div class="settings__form-row settings__form-row--single">
                     <label>
-                        <span>"Launch Component"</span>
+                        <span>"Launch Package"</span>
                         <input
                             type="text"
                             name="launchComponent"
                             data-role="android-component"
-                            placeholder="com.fullykiosk.videokiosk/de.ozerov.fully.MainActivity"
+                            placeholder="com.tcl.browser"
                             required
                         />
                     </label>

@@ -6,7 +6,7 @@ use presenter_core::{
     OscSettingsDraft, PlaylistEntry, PlaylistEntryId, PreachTimer, Presentation, PresentationId,
     ResolumeHostDraft, SearchResultKind, Slide, SlideContent, SlideGroup, SlideId, SlideText,
     StageState, TimerState, TimersState, VelocityMode, VideoSourceDraft, DEFAULT_ADB_PORT,
-    DEFAULT_LAUNCH_COMPONENT,
+    DEFAULT_LAUNCH_PACKAGE,
 };
 
 fn sample_library() -> Library {
@@ -294,10 +294,7 @@ async fn android_stage_display_crud_round_trip() {
     assert_eq!(created.label, "Stage Left");
     assert_eq!(created.host, "test-stage.invalid");
     assert_eq!(created.port, DEFAULT_ADB_PORT);
-    assert_eq!(
-        created.launch_component,
-        DEFAULT_LAUNCH_COMPONENT.to_string()
-    );
+    assert_eq!(created.launch_component, DEFAULT_LAUNCH_PACKAGE.to_string());
     assert!(created.is_enabled);
 
     let displays = repo.list_android_stage_displays().await.unwrap();
@@ -781,10 +778,12 @@ async fn seed_migration_populates_four_android_stage_displays_on_empty_table() {
     );
     for d in &displays {
         assert_eq!(d.port, 5555);
-        assert_eq!(
-            d.launch_component,
-            "com.fullykiosk.videokiosk/de.ozerov.fully.MainActivity",
-        );
+        // The seed (m20260414_000002) inserts the dead Fully Kiosk component,
+        // but the full migration chain run by `connect_in_memory` then applies
+        // m20260616_000001, which rewrites those rows to the TCL browser
+        // package (issue #404). So after migrations the launcher target is the
+        // package, not the dead component.
+        assert_eq!(d.launch_component, "com.tcl.browser");
         assert!(d.is_enabled, "seeded displays should be enabled");
     }
 }
@@ -947,12 +946,56 @@ async fn record_and_list_settings_audit_roundtrip() {
     assert_eq!(rows[0].after_json["enabled"], true);
 }
 
+/// Look up the legacy-ableset-defaults migration from the registry.
+fn legacy_ableset_defaults_migration() -> Box<dyn presenter_migration::MigrationTrait> {
+    use presenter_migration::MigratorTrait;
+    presenter_migration::Migrator::migrations()
+        .into_iter()
+        .find(|m| m.name() == "m20260517_000002_fix_legacy_ableset_defaults")
+        .expect("legacy-defaults migration present in registry")
+}
+
+/// A fresh DB whose ableset row is ALREADY at the new defaults must get zero
+/// audit rows from the legacy-defaults migration.
+async fn assert_legacy_migration_skips_already_current_row(
+    migration: &dyn presenter_migration::MigrationTrait,
+) {
+    use sea_orm::{ConnectionTrait, Statement};
+    use sea_orm_migration::SchemaManager;
+
+    let repo2 = Repository::connect_in_memory().await.unwrap();
+    // Force table creation.
+    let _ = repo2.get_ableset_settings().await.unwrap();
+    // Wipe the audit log so we can isolate the migration's behaviour on a row
+    // that is ALREADY at new defaults.
+    let conn = repo2.connection_for_tests();
+    conn.execute(Statement::from_string(
+        conn.get_database_backend(),
+        "DELETE FROM settings_audit".to_string(),
+    ))
+    .await
+    .unwrap();
+    // The default row already has http_port=80, osc_port=39051, library="NEW LEVEL".
+    let schema2 = SchemaManager::new(conn);
+    migration
+        .up(&schema2)
+        .await
+        .expect("migration on already-current row");
+    let audit_clean = repo2
+        .list_settings_audit(None, None, None, 100)
+        .await
+        .unwrap();
+    assert!(
+        audit_clean.is_empty(),
+        "migration must write zero audit rows when no legacy values are present, got {audit_clean:?}"
+    );
+}
+
 #[tokio::test]
 async fn legacy_ableset_defaults_migration_rewrites_and_audits() {
     use crate::audit::SettingsAuditSource;
     use presenter_core::AbleSetSettingsDraft;
-    use presenter_migration::{MigrationTrait, MigratorTrait};
-    use sea_orm::{ConnectionTrait, Statement};
+    use presenter_migration::MigrationTrait;
     use sea_orm_migration::SchemaManager;
 
     // Fresh DB with all migrations applied — `settings_audit` is empty,
@@ -996,10 +1039,7 @@ async fn legacy_ableset_defaults_migration_rewrites_and_audits() {
     // Run the legacy-defaults migration directly against the live connection.
     let connection = repo.connection_for_tests();
     let schema = SchemaManager::new(connection);
-    let migration: Box<dyn MigrationTrait> = presenter_migration::Migrator::migrations()
-        .into_iter()
-        .find(|m| m.name() == "m20260517_000002_fix_legacy_ableset_defaults")
-        .expect("legacy-defaults migration present in registry");
+    let migration: Box<dyn MigrationTrait> = legacy_ableset_defaults_migration();
     migration
         .up(&schema)
         .await
@@ -1061,34 +1101,8 @@ async fn legacy_ableset_defaults_migration_rewrites_and_audits() {
     );
 
     // Also sanity-check: a fresh DB with NO legacy rows produces no audit
-    // rows from this migration. We test this by direct raw insertion below.
-    let repo2 = Repository::connect_in_memory().await.unwrap();
-    // Force table creation.
-    let _ = repo2.get_ableset_settings().await.unwrap();
-    // Wipe the audit log and the single startup-default row so we can
-    // isolate the migration's behaviour on a row that is ALREADY at new
-    // defaults.
-    let conn = repo2.connection_for_tests();
-    conn.execute(Statement::from_string(
-        conn.get_database_backend(),
-        "DELETE FROM settings_audit".to_string(),
-    ))
-    .await
-    .unwrap();
-    // The default row already has http_port=80, osc_port=39051, library="NEW LEVEL".
-    let schema2 = SchemaManager::new(conn);
-    migration
-        .up(&schema2)
-        .await
-        .expect("migration on already-current row");
-    let audit_clean = repo2
-        .list_settings_audit(None, None, None, 100)
-        .await
-        .unwrap();
-    assert!(
-        audit_clean.is_empty(),
-        "migration must write zero audit rows when no legacy values are present, got {audit_clean:?}"
-    );
+    // rows from this migration.
+    assert_legacy_migration_skips_already_current_row(migration.as_ref()).await;
 }
 
 #[tokio::test]
@@ -1191,21 +1205,7 @@ async fn activate_video_source_audits_each_deactivated_sibling() {
 
     // Sibling rows show the is_active=true → is_active=false transition.
     for sibling_id in [a.id.to_string(), b.id.to_string()] {
-        let r = rows
-            .iter()
-            .find(|r| r.setting_id == sibling_id)
-            .expect("audit row for deactivated sibling");
-        assert_eq!(r.actor, "ip-1.2.3.4");
-        assert_eq!(r.source, SettingsAuditSource::HttpSetter);
-        let before = r
-            .before_json
-            .as_ref()
-            .expect("deactivation audit needs before_json");
-        assert_eq!(before["isActive"], true, "before should have isActive=true");
-        assert_eq!(
-            r.after_json["isActive"], false,
-            "after should have isActive=false",
-        );
+        assert_sibling_deactivation_audit_row(&rows, &sibling_id);
     }
 
     // The target row's audit shows the activation.
@@ -1214,4 +1214,29 @@ async fn activate_video_source_audits_each_deactivated_sibling() {
         .find(|r| r.setting_id == c.id.to_string())
         .expect("audit row for activated target");
     assert_eq!(c_row.after_json["isActive"], true);
+}
+
+/// Assert that `rows` contains the audit row for a sibling video source that
+/// was deactivated by an activation: actor/source match and the row records the
+/// is_active=true → is_active=false transition.
+fn assert_sibling_deactivation_audit_row(
+    rows: &[crate::audit::SettingsAuditEntry],
+    sibling_id: &str,
+) {
+    use crate::audit::SettingsAuditSource;
+    let r = rows
+        .iter()
+        .find(|r| r.setting_id == sibling_id)
+        .expect("audit row for deactivated sibling");
+    assert_eq!(r.actor, "ip-1.2.3.4");
+    assert_eq!(r.source, SettingsAuditSource::HttpSetter);
+    let before = r
+        .before_json
+        .as_ref()
+        .expect("deactivation audit needs before_json");
+    assert_eq!(before["isActive"], true, "before should have isActive=true");
+    assert_eq!(
+        r.after_json["isActive"], false,
+        "after should have isActive=false",
+    );
 }

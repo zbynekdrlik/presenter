@@ -440,7 +440,7 @@ fn SettingsDocument(
                         <header class="settings__card-header">
                             <div>
                                 <h2>"Android Stage Launchers"</h2>
-                                <p>"Keep each Android TV pinned to the Fully Kiosk stage display."</p>
+                                <p>"Keep each Android TV pinned to the stage display."</p>
                             </div>
                             <div class="settings__badge-group">
                                 <span class="settings__badge" data-role="android-count">{android_count_text.clone()}</span>
@@ -452,7 +452,7 @@ fn SettingsDocument(
                             <div class="settings__form-header">
                                 <div>
                                     <h3 data-role="android-form-title">"Add Android Stage Display"</h3>
-                                    <p data-role="android-form-subtitle">"Presenter reconnects and relaunches Fully Kiosk whenever the device appears."</p>
+                                    <p data-role="android-form-subtitle">"Presenter reconnects and reopens the stage URL in the launch package whenever the device appears."</p>
                                 </div>
                             </div>
                             <div class="settings__form-row">
@@ -471,12 +471,12 @@ fn SettingsDocument(
                             </div>
                             <div class="settings__form-row settings__form-row--single">
                                 <label>
-                                    <span>"Launch Component"</span>
+                                    <span>"Launch Package"</span>
                                     <input
                                         type="text"
                                         name="launchComponent"
                                         data-role="android-component"
-                                        placeholder="com.fullykiosk.videokiosk/de.ozerov.fully.MainActivity"
+                                        placeholder="com.tcl.browser"
                                         required
                                     />
                                 </label>
