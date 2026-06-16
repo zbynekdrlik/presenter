@@ -799,6 +799,21 @@ impl Repository {
             .all(&txn)
             .await?;
 
+        // #375: idempotency guard. When the target is ALREADY active and there
+        // is no sibling to deactivate, this activation changes nothing (before
+        // == after). Returning early — without bumping `updated_at` and without
+        // writing an audit row — keeps the settings_audit log a record of real
+        // CHANGES, not no-ops. The NDI 30s auto-reconnect loop re-calls this
+        // every tick while an active source is unreachable (its pipeline start
+        // fails but the DB row stays `is_active=true`); without this guard that
+        // wrote one audit row every ~30s forever. A genuine activate (the row
+        // was inactive) or switch (a sibling is active) still falls through and
+        // writes exactly the audit rows it always did.
+        if target_before.is_active && siblings.is_empty() {
+            txn.commit().await?;
+            return Ok(target_before);
+        }
+
         // Deactivate each sibling individually so we can record per-row
         // before/after JSON for the audit log. Using `update_many` would
         // erase the per-row identity we need to log.
