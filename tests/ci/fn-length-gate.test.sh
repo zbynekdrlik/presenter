@@ -23,8 +23,8 @@ set -euo pipefail
 #   3. Sanity — the real checker no-ops on an ABSOLUTE-path target (confirming
 #      relative comparison is what makes scoping work) and still fires unscoped.
 #
-# Runs in CI as a standalone step (no cargo, no Rust build) — fast and binary.
-# Exits 0 only when all assertions pass.
+# Run in CI by the Test job's "Run CI shell tests" step (alongside the other
+# tests/ci/*.test.sh regression tests). Exits 0 only when all assertions pass.
 # ============================================================================
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"

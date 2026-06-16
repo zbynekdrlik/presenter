@@ -169,7 +169,7 @@ fi
 export QC_TARGETS
 
 # The checker logic lives in scripts/dev/fn_length_check.py so it can be
-# exercised directly by the gate self-test (scripts/ci/test-fn-length-gate.sh,
+# exercised directly by the gate self-test (tests/ci/fn-length-gate.test.sh,
 # regression guard for #374: the abs/rel no-op bug). It reads QC_TARGETS and
 # QC_FN_ADVISORY from the environment (exported above).
 fn_check=$(python3 "$ROOT_DIR/scripts/dev/fn_length_check.py" "$ROOT_DIR") \
