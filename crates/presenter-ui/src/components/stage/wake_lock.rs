@@ -85,9 +85,15 @@ mod wasm_impl {
     /// `install_pagehide_teardown` in `ndi_video.rs`.
     pub fn start_wake_lock_guard() {
         if !wake_lock_supported() {
-            leptos::logging::warn!(
-                "wake_lock: navigator.wakeLock unsupported on this platform; \
-                 stage screen may sleep"
+            // Expected on insecure contexts (plain http) and older browsers —
+            // the Wake Lock API is secure-context-only, so on the http stage
+            // TVs this is normal, not a fault. Keep-awake there is provided by
+            // the device screen_off_timeout (set via adb), so log at info level
+            // (NOT warn — a benign environmental condition must not trip the
+            // zero-console-warnings E2E gate / pollute the stage console).
+            leptos::logging::log!(
+                "wake_lock: navigator.wakeLock unavailable (insecure context / \
+                 unsupported); relying on device screen_off_timeout"
             );
             return;
         }
@@ -136,8 +142,12 @@ mod wasm_impl {
                     leptos::logging::log!("wake_lock: screen wake lock acquired");
                 }
                 Err(e) => {
-                    leptos::logging::warn!(
-                        "wake_lock: request('screen') rejected: {e:?}; stage screen may sleep"
+                    // Rejection is expected on insecure contexts / without user
+                    // activation; benign (device screen_off_timeout covers it).
+                    // Info level, not warn, to keep the stage console clean.
+                    leptos::logging::log!(
+                        "wake_lock: request('screen') not granted: {e:?}; \
+                         relying on device screen_off_timeout"
                     );
                 }
             }
