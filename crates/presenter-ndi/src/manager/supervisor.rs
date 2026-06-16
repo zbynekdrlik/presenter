@@ -13,10 +13,11 @@ use crate::pipeline::NdiPipeline;
 use super::{check_active_entry, NdiManager, StateCheckOutcome};
 
 /// #388 periodic RTCP-liveness sweep cadence: how often each source's
-/// supervisor reaps zombie sessions. 30s matches the issue spec — frequent
-/// enough that a freed slot is visible within half a minute, infrequent enough
-/// that the per-session get-stats reads cost nothing measurable.
-const PERIODIC_REAP_INTERVAL: std::time::Duration = std::time::Duration::from_secs(3600);
+/// supervisor reaps zombie sessions. ~30s matches the issue spec — frequent
+/// enough that a vanished consumer's slot is freed within half a minute,
+/// infrequent enough that the per-session get-stats reads cost nothing
+/// measurable.
+const PERIODIC_REAP_INTERVAL: std::time::Duration = std::time::Duration::from_secs(30);
 
 /// #388 periodic stale window: a session whose webrtcbin transport has received
 /// no new bytes for longer than this is reaped by the periodic sweep. 60s — the

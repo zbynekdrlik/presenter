@@ -15,11 +15,14 @@ use leptos::web_sys::{HtmlVideoElement, RtcIceConnectionState, RtcPeerConnection
 use wasm_bindgen_futures::{spawn_local, JsFuture};
 
 /// localStorage key for the stream-profile fallback mode. Absent or
-/// `"default"` = default behavior (WHEP POST without a profile query → the
-/// server serves the 720p stream). `"compat"` = fallback (the WHEP POST URL
-/// carries `?profile=compat`, selecting the server's 640×480 H264 branch —
-/// spec addendum 2 pivot: the Vestel TVs' OMX decoder default-inits at
-/// 640×480 and dies on the port reconfig any other size forces).
+/// `"default"` = WHEP POST without a profile query; `"compat"` = the WHEP
+/// POST URL carries `?profile=compat`.
+///
+/// NOTE: the server now serves ONE 720p H264 stream regardless of
+/// `?profile=` (see `StreamProfile::from_query`), so the compat flip is a
+/// no-op server-side — it does NOT switch to any 640×480 / VP8 branch (that
+/// branch never shipped). The flip is retained ONLY because changing the URL
+/// forces a reconnect, and that reconnect re-establishes a stuck session.
 ///
 /// The KEY deliberately keeps its historical name ("ndiCodecMode") so
 /// deployed TVs don't grow a second orphaned entry; the retired "vp8" value
@@ -671,8 +674,10 @@ async fn post_client_stats(
         "displayId": display_id(),
         "codec": codec,
         // Which stream profile this display requested ("default"/"compat").
-        // codec now reads video/H264 everywhere, so this is the field that
-        // attributes weak-TV health to the 640×480 compat branch.
+        // The server serves ONE 720p H264 stream regardless of this value
+        // (see `StreamProfile::from_query`); it is reported only to record
+        // which watchdog mode the display was in when it sent this beacon —
+        // there is no 640×480 / VP8 branch.
         "profile": profile_mode_name(profile_mode_is_compat()),
         "screen": screen,
         "framesDecoded": frames_decoded.as_f64(),

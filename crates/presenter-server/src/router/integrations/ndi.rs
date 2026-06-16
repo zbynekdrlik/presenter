@@ -38,11 +38,11 @@ pub(crate) async fn ndi_status(State(state): State<AppState>) -> Json<serde_json
 ///
 /// Returns JSON (camelCase) with `encoderCount`, `consumerCount`, and a
 /// per-session `sessions` array. Used by the Playwright fanout E2E test
-/// to assert `encoderCount=2` (one encoder per PROFILE — 720p default +
-/// 640×480 compat — never per consumer) + `consumerCount=2` when two
-/// browser tabs are connected to the same NDI source, and as an operator/
-/// incident-debugging tool for checking pipeline health without tailing
-/// logs.
+/// to assert `encoderCount=1` (one shared encoder — the single 720p H264
+/// stream every consumer shares, never one per consumer) + `consumerCount=2`
+/// when two browser tabs are connected to the same NDI source, and as an
+/// operator/incident-debugging tool for checking pipeline health without
+/// tailing logs.
 ///
 /// 404 — source is not currently active (no pipeline exists for this id).
 /// 503 — NDI SDK not available on this host.
@@ -70,12 +70,13 @@ pub(crate) struct NdiClientStatsBeacon {
     /// Persistent random per-display id (localStorage `ndiDisplayId`) — the
     /// attribution key that makes per-TV health traceable across sessions.
     pub display_id: Option<String>,
-    /// Negotiated video codec mimeType from getStats (now "video/H264" for
-    /// every consumer — both stream profiles are H264).
+    /// Negotiated video codec mimeType from getStats ("video/H264" for every
+    /// consumer — there is a single shared 720p H264 stream).
     pub codec: Option<String>,
-    /// Stream profile the display requested ("default"/"compat") — the
-    /// field that attributes weak-TV health to the 640×480 compat branch,
-    /// since `codec` no longer distinguishes the branches.
+    /// Stream profile the display requested ("default"/"compat"). The server
+    /// always serves the single shared 720p H264 stream regardless of this
+    /// value (see `StreamProfile::from_query`); it is logged only to record
+    /// which mode a display's WASM watchdog was in when it reported health.
     pub profile: Option<String>,
     /// Physical screen size as "WxH" — tells TV models apart in the logs.
     pub screen: Option<String>,
