@@ -226,6 +226,17 @@ impl Watchdog {
     /// on displays whose setInterval is throttled to near-silence (rVFC is
     /// compositor-driven and not throttled while video plays).
     const RVFC_BEACON_FRAME_PERIOD: u32 = 450;
+    /// LAST-RESORT full-page-reload horizon. After this long with ZERO
+    /// decoded frames despite the reconnect+backoff loop continuously retrying
+    /// (#369 reconnect, #371 churn guard), the page itself is escalated with
+    /// `window.location.reload()` (#401 — Fully Kiosk auto-reload replacement,
+    /// adb-independent). This timer spans the WHOLE page session (NOT one
+    /// Watchdog instance): it is reset only when a frame actually decodes, so
+    /// a normal brief reconnect — which produces frames again within a few
+    /// seconds — never approaches it. 60s ≫ STALL_NO_FRAME_MS (10s) +
+    /// NO_DECODE_FALLBACK_MS (15s) + the 5s-capped backoff, so the reconnect
+    /// path gets many full attempts before the page-level reload fires.
+    pub(crate) const RELOAD_NO_FRAME_MS: f64 = 60_000.0;
 
     /// Install ICE-state listener + rVFC frame observer + health ticker.
     /// `on_failure` is called at most ONCE per Watchdog instance — after
@@ -276,6 +287,28 @@ impl Watchdog {
     pub(crate) fn stop(&self) {
         self.active.set(false);
     }
+}
+
+/// LAST-RESORT escalation decision (#401): should the stage page perform a
+/// full `window.location.reload()` because video has been dead for too long
+/// despite the reconnect loop continuously retrying?
+///
+/// `ms_since_last_decoded_frame` is measured across the WHOLE page session
+/// (it survives individual reconnect cycles — see `ReloadEscalation`), so the
+/// only way it grows past `reload_threshold_ms` is a genuinely stuck stream
+/// that reconnect alone has NOT recovered. A normal brief reconnect decodes
+/// frames again within seconds and resets the timer well before the threshold.
+///
+/// Pure + side-effect-free so the escalation rule is unit-testable without a
+/// browser (the wiring that calls `window.location.reload()` is in the health
+/// ticker; this function only decides).
+pub(crate) fn should_escalate_reload(
+    ms_since_last_decoded_frame: f64,
+    reload_threshold_ms: f64,
+) -> bool {
+    // STUB (RED): real logic added in the GREEN commit.
+    let _ = (ms_since_last_decoded_frame, reload_threshold_ms);
+    false
 }
 
 /// Monotonic now in milliseconds: `performance.now()`, with a `Date.now()`
@@ -736,4 +769,79 @@ fn install_ice_failure_listener<F: Fn() + 'static>(
     });
     pc.set_oniceconnectionstatechange(Some(cb.as_ref().unchecked_ref()));
     cb.forget();
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{should_escalate_reload, Watchdog};
+
+    // ─────────────────────────────────────────────────────────────────────
+    // #401 LAST-RESORT page-reload escalation.
+    //
+    // The stage page recovers a frozen/black/disconnected stream by reconnect
+    // alone in the common case (#369/#371). But some failures — a wedged TV
+    // WebView, a stale DOM, a WHEP negotiation that never produces frames
+    // again — survive every reconnect attempt forever (the reconnect loop in
+    // `ndi_video.rs` loops indefinitely with no page-level escape). The
+    // escalation rule decides when to give up on reconnect and reload the
+    // whole page (fresh WHEP negotiation + fresh DOM) — the adb-independent
+    // replacement for the Fully Kiosk auto-reload we lost on com.tcl.browser.
+    //
+    // The rule is deliberately conservative: it fires ONLY after a long
+    // no-decoded-frames window that a normal reconnect cannot reach, so it
+    // never short-circuits the healthy reconnect path.
+    // ─────────────────────────────────────────────────────────────────────
+
+    const T: f64 = Watchdog::RELOAD_NO_FRAME_MS;
+
+    #[test]
+    fn no_reload_while_frames_are_recent() {
+        // Frames decoding right now (timer just reset) — never reload.
+        assert!(!should_escalate_reload(0.0, T));
+    }
+
+    #[test]
+    fn no_reload_during_a_normal_brief_reconnect() {
+        // A normal reconnect (ICE drop -> reconnect -> frames) is well under
+        // the threshold: even a slow reconnect that takes 15s to produce a
+        // frame must NOT trigger a reload — reconnect is doing its job.
+        assert!(!should_escalate_reload(15_000.0, T));
+        // Even right up to the profile-fallback + a couple of backoff cycles.
+        assert!(!should_escalate_reload(30_000.0, T));
+    }
+
+    #[test]
+    fn no_reload_exactly_at_threshold() {
+        // Strictly-greater-than boundary: AT the threshold we still wait one
+        // more tick (avoids an off-by-one reload on the very first tick that
+        // crosses 60s vs 60.000s).
+        assert!(!should_escalate_reload(T, T));
+    }
+
+    #[test]
+    fn reload_after_prolonged_no_decoded_frames() {
+        // 60s+ with ZERO decoded frames despite reconnect retrying the whole
+        // time -> reconnect has demonstrably failed -> escalate to a full
+        // page reload. THIS is the assertion that fails against the RED stub.
+        assert!(should_escalate_reload(T + 1.0, T));
+        assert!(should_escalate_reload(90_000.0, T));
+        assert!(should_escalate_reload(600_000.0, T));
+    }
+
+    #[test]
+    fn threshold_is_well_above_the_reconnect_path_budget() {
+        // The reload horizon MUST exceed the worst-case single reconnect
+        // budget (stall detect 10s + no-decode fallback 15s + 5s-capped
+        // backoff) by a wide margin, so reconnect gets several full attempts
+        // before the page-level reload ever fires. Guards against a future
+        // edit lowering RELOAD_NO_FRAME_MS into the reconnect window.
+        let reconnect_path_budget =
+            Watchdog::STALL_NO_FRAME_MS + Watchdog::NO_DECODE_FALLBACK_MS;
+        assert!(
+            Watchdog::RELOAD_NO_FRAME_MS > reconnect_path_budget * 2.0,
+            "reload horizon {} must be >2x the reconnect path budget {}",
+            Watchdog::RELOAD_NO_FRAME_MS,
+            reconnect_path_budget,
+        );
+    }
 }
