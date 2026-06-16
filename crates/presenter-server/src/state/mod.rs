@@ -409,6 +409,17 @@ impl AppState {
             .await
             .unwrap_or_default();
         *state.group_color_cache.write().await = group_colors;
+
+        // Restore the operator-selected stage layout from the database (#384).
+        // Without this, every restart/deploy reset the layout to the default
+        // (worship-snv), silently blanking NDI stage displays after each deploy.
+        // This is a pure read — it writes nothing on an unchanged DB, preserving
+        // the second-startup-no-audit invariant (CLAUDE.md).
+        {
+            let persisted = state.load_persisted_stage_layout().await;
+            *state.stage_layout.write().await = persisted;
+        }
+
         state.ensure_demo_playlist().await?;
         state.sync_resolume_hosts().await?;
         state.sync_android_stage_displays().await?;

@@ -3,9 +3,54 @@
 use super::stage::build_stage_snapshot;
 use super::AppState;
 use crate::live::LiveEvent;
-use presenter_core::{StageDisplayLayout, StageDisplaySnapshot, API_STAGE_LAYOUT_CODE};
+use presenter_core::{
+    StageDisplayLayout, StageDisplaySnapshot, API_STAGE_LAYOUT_CODE, DEFAULT_STAGE_LAYOUT_CODE,
+};
+
+/// `app_settings` key under which the operator-selected stage layout code is
+/// persisted so it survives a server restart/deploy (issue #384). Stored via
+/// the same generic k/v mechanism as the Companion feature flags
+/// (`feature.companion.*`), which intentionally bypass `settings_audit` — only
+/// the typed singleton settings tables (osc/ableset/resolume/video_source) are
+/// audited. Reading this key on startup is a pure read; on an unchanged DB it
+/// writes nothing, preserving the second-startup-no-audit invariant.
+pub(crate) const STAGE_LAYOUT_KEY: &str = "feature.stage.layout";
 
 impl AppState {
+    /// Load the persisted stage layout code from the database, falling back to
+    /// [`DEFAULT_STAGE_LAYOUT_CODE`] when none is stored or the stored value no
+    /// longer matches a built-in layout. Pure read — never writes.
+    pub(crate) async fn load_persisted_stage_layout(&self) -> String {
+        match self.repository().get_app_setting(STAGE_LAYOUT_KEY).await {
+            Ok(Some(code)) => {
+                // Guard against a stored code that no longer exists (e.g. a
+                // layout removed in a later release) — fall back to default
+                // rather than serve an unknown layout.
+                let known = code == API_STAGE_LAYOUT_CODE
+                    || StageDisplayLayout::built_in()
+                        .into_iter()
+                        .any(|layout| layout.code == code);
+                if known {
+                    code
+                } else {
+                    tracing::warn!(
+                        stored = %code,
+                        "persisted stage layout no longer recognized — falling back to default"
+                    );
+                    DEFAULT_STAGE_LAYOUT_CODE.to_string()
+                }
+            }
+            Ok(None) => DEFAULT_STAGE_LAYOUT_CODE.to_string(),
+            Err(err) => {
+                tracing::warn!(
+                    ?err,
+                    "failed to load persisted stage layout — falling back to default"
+                );
+                DEFAULT_STAGE_LAYOUT_CODE.to_string()
+            }
+        }
+    }
+
     // Stage display methods
     pub async fn stage_display_snapshot(
         &self,
@@ -60,6 +105,21 @@ impl AppState {
                 return Ok(layout);
             }
             *guard = layout.code.clone();
+        }
+        // Persist the new layout so it survives a restart/deploy (#384). The
+        // in-memory RwLock above is the live source of truth for broadcasts;
+        // the DB write only seeds the RwLock on the next startup. A failed
+        // write must NOT abort the live layout switch, so log and continue.
+        if let Err(err) = self
+            .repository()
+            .set_app_setting(STAGE_LAYOUT_KEY, &layout.code)
+            .await
+        {
+            tracing::warn!(
+                ?err,
+                code = %layout.code,
+                "failed to persist stage layout — it will reset to default on next restart"
+            );
         }
         self.live_hub.publish(LiveEvent::StageLayout {
             code: layout.code.clone(),
