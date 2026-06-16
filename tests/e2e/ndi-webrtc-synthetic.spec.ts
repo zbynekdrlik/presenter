@@ -620,3 +620,164 @@ test("stage remounts NDI video and resumes decoding after deactivate→reactivat
     await cleanupSource(request, src.id);
   }
 });
+
+// ── Test 5: the #401 LAST-RESORT page-reload guard. When the stage stream
+// stays dead (no decoded frames) long enough that reconnect+backoff alone has
+// NOT recovered it, the WASM watchdog escalates to a full `window.location.
+// reload()` — the adb-independent replacement for the Fully Kiosk auto-reload
+// lost on com.tcl.browser. The reload horizon is normally 60s; this test
+// lowers it to a few seconds via the read-only `?ndiReloadMs` query param
+// (production pages never carry it) so the full reload path runs
+// deterministically. We get real frames flowing, then kill the server-side
+// pipeline so frames stop, and assert the document RELOADS (a fresh page load
+// the test observes), then resumes presenting frames after re-negotiation.
+//
+// What this proves: the end-to-end wiring — page-session escalation timer →
+// `should_escalate_reload` → real `window.location.reload()` → fresh WHEP
+// negotiation. The conservative 60s threshold and "never fire during a normal
+// reconnect" property are proven separately by the WASM unit suite
+// (ndi_watchdog::tests) — a real 60s no-frames E2E wait is impractical, so the
+// override exercises the same code path on a short clock.
+test("stage performs LAST-RESORT page reload after prolonged video stall (synthetic source) @video-codec @synthetic-ndi", async ({
+  page,
+  request,
+}) => {
+  const synthetic = await discoverSyntheticSource(request);
+  expect(
+    synthetic,
+    "synthetic NDI source '(PRESENTER-TEST)' must be on the network — start ndi_test_sender",
+  ).toBeTruthy();
+
+  const src = await createAndActivateSource(
+    request,
+    synthetic!.name,
+    "Synthetic-E2E-Reload",
+  );
+  try {
+    await waitForPipelineStreaming(request, src.id);
+
+    const layoutResp = await request.post(
+      new URL("/stage/layout", baseURL).toString(),
+      { data: { code: "ndi-fullscreen" } },
+    );
+    expect(
+      layoutResp.ok(),
+      "switching stage layout to ndi-fullscreen must succeed",
+    ).toBe(true);
+
+    // Count document loads the test observes — the initial load plus any
+    // reload the watchdog triggers. `page.on("load")` fires once per committed
+    // navigation (incl. location.reload()).
+    let loadCount = 0;
+    page.on("load", () => {
+      loadCount += 1;
+    });
+
+    // Errors only: the stall phase legitimately emits watchdog/reconnect
+    // WARNINGS by design (same convention as the recovery/reactivate tests).
+    const consoleErrors: string[] = [];
+    page.on("console", (msg) => {
+      if (msg.type() === "error") consoleErrors.push(msg.text());
+    });
+
+    // Lower the reload horizon to ~3s so the escalation fires within the
+    // pipeline-rebuild gap instead of after 60s. Production never sets this.
+    const stageUrl = new URL("/stage", baseURL);
+    stageUrl.searchParams.set("ndiReloadMs", "3000");
+    await page.goto(stageUrl.toString());
+    await page.waitForSelector('body[data-wasm-ready="true"]', {
+      timeout: 30_000,
+    });
+    await page.waitForSelector('body[data-layout-code="ndi-fullscreen"]', {
+      timeout: 10_000,
+    });
+
+    const video = page.locator('video[data-role="ndi-video"]').first();
+    await expect(video).toBeVisible({ timeout: 15_000 });
+
+    const framesPresented = () =>
+      video.evaluate(
+        (v: HTMLVideoElement) => v.getVideoPlaybackQuality().totalVideoFrames,
+      );
+
+    // Phase 1: initial playback presents frames (timer keeps resetting).
+    await expect
+      .poll(framesPresented, {
+        timeout: 25_000,
+        message: "initial NDI playback never presented a frame",
+      })
+      .toBeGreaterThan(0);
+
+    const loadsBeforeStall = loadCount;
+
+    // Phase 2: kill the server pipeline repeatedly so frames stay GONE past
+    // the lowered reload horizon (each kill triggers a rebuild that would
+    // otherwise recover within a few seconds; re-killing keeps the no-frames
+    // window open long enough for the ~3s escalation to fire). The
+    // test-helpers route is required on the e2e-ndi lane.
+    const kill = async () =>
+      request.post(
+        new URL(`/test/ndi/kill-pipeline/${src.id}`, baseURL).toString(),
+      );
+    const firstKill = await kill();
+    if (
+      firstKill.status() === 404 &&
+      (await firstKill.text()).includes("Not Found")
+    ) {
+      test.skip(
+        true,
+        "binary built without `test-helpers` feature; the kill route is absent",
+      );
+      return;
+    }
+    expect(firstKill.status(), "kill endpoint must return 204").toBe(204);
+
+    // Phase 3: within the reload horizon + margin, the document must RELOAD.
+    // Re-kill on each poll so a fast rebuild can't feed frames and reset the
+    // page-session timer before the escalation fires.
+    await expect
+      .poll(
+        async () => {
+          if (loadCount > loadsBeforeStall) return true;
+          await kill().catch(() => {});
+          return loadCount > loadsBeforeStall;
+        },
+        {
+          timeout: 30_000,
+          intervals: [500, 500, 1000, 1000, 1000, 1000, 1000],
+          message:
+            "stage did not perform a LAST-RESORT page reload while video " +
+            "stayed dead past the (lowered) reload horizon (#401)",
+        },
+      )
+      .toBe(true);
+
+    // After the reload, the page renegotiates WHEP on a fresh DOM and resumes
+    // presenting frames (the recovery the reload exists to deliver).
+    await page.waitForSelector('body[data-wasm-ready="true"]', {
+      timeout: 30_000,
+    });
+    const videoAfter = page.locator('video[data-role="ndi-video"]').first();
+    await expect(videoAfter).toBeVisible({ timeout: 15_000 });
+    await expect
+      .poll(
+        () =>
+          videoAfter.evaluate(
+            (v: HTMLVideoElement) =>
+              v.getVideoPlaybackQuality().totalVideoFrames,
+          ),
+        {
+          timeout: 30_000,
+          message: "stage never resumed presenting frames after the reload",
+        },
+      )
+      .toBeGreaterThan(0);
+
+    expect(
+      consoleErrors,
+      `browser console must have zero errors, got: ${consoleErrors.join("; ")}`,
+    ).toEqual([]);
+  } finally {
+    await cleanupSource(request, src.id);
+  }
+});

@@ -16,7 +16,7 @@ use leptos::web_sys::{
 };
 use wasm_bindgen_futures::{spawn_local, JsFuture};
 
-use super::ndi_watchdog::{profile_mode_is_compat, Watchdog};
+use super::ndi_watchdog::{profile_mode_is_compat, ReloadEscalation, Watchdog};
 
 /// Holds an active WHEP session: the peer connection AND the WHEP resource URL
 /// returned in the `Location` header on POST. The resource URL is used to
@@ -77,6 +77,14 @@ pub fn NdiVideo(source_id: String, #[prop(optional)] class: Option<&'static str>
             // flag; the loop drains it and reconnects.
             let reconnect_flag = std::rc::Rc::new(std::cell::Cell::new(false));
 
+            // PAGE-SESSION reload escalation (#401), created ONCE here so it
+            // survives every reconnect cycle below. Each Watchdog shares it:
+            // the frame observer resets its timer on decoded frames, and the
+            // health ticker performs a one-shot full-page reload when video
+            // has been dead long enough that reconnect alone has failed (the
+            // Fully Kiosk auto-reload replacement, adb-independent).
+            let escalation = ReloadEscalation::new();
+
             loop {
                 if cancelled.load(Ordering::Acquire) {
                     return;
@@ -93,11 +101,16 @@ pub fn NdiVideo(source_id: String, #[prop(optional)] class: Option<&'static str>
                             return;
                         }
                         // Install watchdog: on failure, set the reconnect flag.
+                        // It shares the page-session `escalation` so the
+                        // last-resort reload spans reconnect cycles (#401).
                         let flag = std::rc::Rc::clone(&reconnect_flag);
-                        let watchdog =
-                            Watchdog::install(&video, &session.pc, &source_id, move || {
-                                flag.set(true)
-                            });
+                        let watchdog = Watchdog::install(
+                            &video,
+                            &session.pc,
+                            &source_id,
+                            &escalation,
+                            move || flag.set(true),
+                        );
 
                         install_pagehide_teardown(&session);
                         session_holder.set_value(Some(ActiveConnection { session, watchdog }));
