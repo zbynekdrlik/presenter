@@ -25,6 +25,9 @@ RestartSec=5
 Environment=PRESENTER_PORT=8080
 Environment=PRESENTER_DB_URL=sqlite:///opt/presenter-dev/presenter.db
 Environment=PRESENTER_LIBRARY_ROOT=/home/newlevel/devel/presenter/presenter-libraries
+# #404: stage URL the launcher opens on every Android stage display (see
+# presenter.service). Dev points at its own /stage on port 8080.
+Environment=PRESENTER_ANDROID_STAGE_URL=http://10.77.8.134:8080/stage
 Environment=RUST_LOG=info,tower_http=debug
 # Offset integration ports to avoid conflicts with production
 Environment=PRESENTER_COMPANION_ENABLED=0

@@ -36,7 +36,7 @@ pub use ableset::{
 };
 pub use android_stage_display::{
     AndroidStageDisplay, AndroidStageDisplayDraft, AndroidStageDisplayValidationError,
-    DEFAULT_ADB_PORT, DEFAULT_LAUNCH_COMPONENT,
+    DEFAULT_ADB_PORT, DEFAULT_LAUNCH_PACKAGE,
 };
 pub use bible::{
     BibleBroadcast, BiblePassage, BiblePreferences, BiblePreferencesDraft, BiblePresentation,

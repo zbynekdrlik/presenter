@@ -9,12 +9,17 @@ use tokio::{
     task::JoinHandle,
     time::{interval, timeout, MissedTickBehavior},
 };
-use tracing::{debug, error};
+use tracing::{debug, error, warn};
 
 const ADB_COMMAND_TIMEOUT: Duration = Duration::from_secs(10);
 
 const COMMAND_CHANNEL_CAPACITY: usize = 8;
 const RETRY_INTERVAL: Duration = Duration::from_secs(20);
+
+/// Server-wide env var carrying the stage URL the launcher opens on every
+/// Android stage display (e.g. `http://10.77.9.205/stage`). Set per environment
+/// in the deploy systemd units. When unset/empty the launcher skips launching.
+const STAGE_URL_ENV: &str = "PRESENTER_ANDROID_STAGE_URL";
 
 #[derive(Debug, Clone, Copy, Serialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
@@ -50,6 +55,10 @@ impl AndroidStageDisplayStatusSnapshot {
 #[derive(Clone)]
 pub struct AndroidStageRegistry {
     adb_path: Arc<OsString>,
+    /// The stage URL opened on every display, read once from
+    /// `PRESENTER_ANDROID_STAGE_URL` at construction. `None` when unset/empty —
+    /// the launcher then warns and skips rather than firing a broken intent.
+    stage_url: Arc<Option<String>>,
     displays: Arc<RwLock<HashMap<AndroidStageDisplayId, DeviceEntry>>>,
 }
 
@@ -72,8 +81,21 @@ impl AndroidStageRegistry {
         let adb_path = env::var_os("PRESENTER_ANDROID_ADB_BIN")
             .map(Arc::from)
             .unwrap_or_else(|| Arc::new(OsString::from("adb")));
+        let stage_url = env::var(STAGE_URL_ENV)
+            .ok()
+            .map(|v| v.trim().to_string())
+            .filter(|v| !v.is_empty());
+        if let Some(url) = &stage_url {
+            debug!(env = STAGE_URL_ENV, %url, "android stage launcher URL configured");
+        } else {
+            warn!(
+                env = STAGE_URL_ENV,
+                "android stage launcher URL is unset — displays will not be launched until it is set"
+            );
+        }
         Self {
             adb_path,
+            stage_url: Arc::new(stage_url),
             displays: Arc::new(RwLock::new(HashMap::new())),
         }
     }
@@ -173,11 +195,12 @@ impl AndroidStageRegistry {
             AndroidStageDisplayStatusSnapshot::disabled()
         }));
         let adb_path = Arc::clone(&self.adb_path);
+        let stage_url = Arc::clone(&self.stage_url);
         let status_clone = Arc::clone(&status);
         let config_clone = display.clone();
         let handle = tokio::spawn(async move {
             if let Err(err) =
-                run_device_worker(adb_path, config_clone, status_clone, command_rx).await
+                run_device_worker(adb_path, stage_url, config_clone, status_clone, command_rx).await
             {
                 error!(?err, "android stage display worker exited");
             }
@@ -196,6 +219,7 @@ impl AndroidStageRegistry {
 
 async fn run_device_worker(
     adb_path: Arc<OsString>,
+    stage_url: Arc<Option<String>>,
     mut config: AndroidStageDisplay,
     status: Arc<RwLock<AndroidStageDisplayStatusSnapshot>>,
     mut command_rx: mpsc::Receiver<DeviceCommand>,
@@ -207,7 +231,7 @@ async fn run_device_worker(
         tokio::select! {
             _ = ticker.tick() => {
                 if config.is_enabled {
-                    if let Err(err) = connect_and_launch(&adb_path, &config, &status).await {
+                    if let Err(err) = connect_and_launch(&adb_path, &stage_url, &config, &status).await {
                         debug!(display = %config.label, ?err, "android stage display launch attempt failed");
                     }
                 } else {
@@ -224,7 +248,7 @@ async fn run_device_worker(
                     }
                     DeviceCommand::LaunchNow => {
                         if config.is_enabled {
-                            if let Err(err) = connect_and_launch(&adb_path, &config, &status).await {
+                            if let Err(err) = connect_and_launch(&adb_path, &stage_url, &config, &status).await {
                                 debug!(display = %config.label, ?err, "android stage display manual launch failed");
                             }
                         }
@@ -241,12 +265,66 @@ async fn run_device_worker(
     Ok(())
 }
 
+/// Disconnect any stale entry then `adb connect <serial>`, returning an error
+/// (without recording status) on timeout, exec failure, or a connect error.
+///
+/// The disconnect clears stale offline entries ADB leaves after a TV power
+/// cycle, which otherwise make subsequent `-s serial` commands fail until the
+/// daemon restarts. Its result is intentionally ignored — the typical case is
+/// "not connected", a non-zero exit we don't care about.
+async fn adb_connect(adb_bin: &std::ffi::OsStr, serial: &str) -> anyhow::Result<()> {
+    let _ = timeout(
+        ADB_COMMAND_TIMEOUT,
+        Command::new(adb_bin).arg("disconnect").arg(serial).output(),
+    )
+    .await;
+
+    let connect_result = timeout(
+        ADB_COMMAND_TIMEOUT,
+        Command::new(adb_bin).arg("connect").arg(serial).output(),
+    )
+    .await;
+
+    let connect_output = match connect_result {
+        Ok(Ok(output)) => output,
+        Ok(Err(io_err)) => {
+            return Err(anyhow!("failed to execute adb for {}: {}", serial, io_err));
+        }
+        Err(_elapsed) => {
+            return Err(anyhow!("adb connect timed out for {}", serial));
+        }
+    };
+
+    if let Err(msg) = ensure_success(&connect_output) {
+        return Err(anyhow!("adb connect error for {}: {}", serial, msg));
+    }
+    Ok(())
+}
+
 async fn connect_and_launch(
     adb_path: &Arc<OsString>,
+    stage_url: &Arc<Option<String>>,
     config: &AndroidStageDisplay,
     status: &Arc<RwLock<AndroidStageDisplayStatusSnapshot>>,
 ) -> anyhow::Result<()> {
     let serial = format!("{}:{}", config.host, config.port);
+
+    // Build the launch args BEFORE touching the device. If no stage URL is
+    // configured, warn and skip — firing `am start` with no data URI would
+    // open a broken page, so we deliberately do nothing and mark an error so
+    // the operator dashboard surfaces the misconfiguration.
+    let Some(launch_args) = build_launch_args(&config.launch_component, stage_url.as_deref())
+    else {
+        warn!(
+            display = %config.label,
+            env = STAGE_URL_ENV,
+            "skipping android stage launch — stage URL not configured"
+        );
+        let msg = format!("{STAGE_URL_ENV} not configured — launch skipped");
+        record_error(status, msg.clone()).await;
+        return Err(anyhow!(msg));
+    };
+
     let attempt_started = Utc::now();
     {
         let mut guard = status.write().await;
@@ -257,43 +335,7 @@ async fn connect_and_launch(
 
     let adb_bin = adb_path.as_os_str();
 
-    // Clear any stale offline device entry from a previous attempt.
-    // ADB leaves stale entries after TV power cycles which then cause
-    // subsequent `-s serial` commands to fail until the daemon is restarted.
-    // Errors are intentionally ignored — the typical case is "not connected"
-    // which returns a non-zero exit code we don't care about.
-    let _ = timeout(
-        ADB_COMMAND_TIMEOUT,
-        Command::new(adb_bin)
-            .arg("disconnect")
-            .arg(&serial)
-            .output(),
-    )
-    .await;
-
-    // Run adb connect
-    let connect_result = timeout(
-        ADB_COMMAND_TIMEOUT,
-        Command::new(adb_bin).arg("connect").arg(&serial).output(),
-    )
-    .await;
-
-    let connect_output = match connect_result {
-        Ok(Ok(output)) => output,
-        Ok(Err(io_err)) => {
-            let err = anyhow!("failed to execute adb for {}: {}", serial, io_err);
-            record_error(status, err.to_string()).await;
-            return Err(err);
-        }
-        Err(_elapsed) => {
-            let err = anyhow!("adb connect timed out for {}", serial);
-            record_error(status, err.to_string()).await;
-            return Err(err);
-        }
-    };
-
-    if let Err(msg) = ensure_success(&connect_output) {
-        let err = anyhow!("adb connect error for {}: {}", serial, msg);
+    if let Err(err) = adb_connect(adb_bin, &serial).await {
         record_error(status, err.to_string()).await;
         return Err(err);
     }
@@ -303,37 +345,7 @@ async fn connect_and_launch(
         guard.state = AndroidStageDisplayState::Launching;
     }
 
-    // Run adb shell am start
-    let launch_result = timeout(
-        ADB_COMMAND_TIMEOUT,
-        Command::new(adb_bin)
-            .arg("-s")
-            .arg(&serial)
-            .arg("shell")
-            .arg("am")
-            .arg("start")
-            .arg("-n")
-            .arg(&config.launch_component)
-            .output(),
-    )
-    .await;
-
-    let launch_output = match launch_result {
-        Ok(Ok(output)) => output,
-        Ok(Err(io_err)) => {
-            let err = anyhow!("failed to execute adb shell for {}: {}", serial, io_err);
-            record_error(status, err.to_string()).await;
-            return Err(err);
-        }
-        Err(_elapsed) => {
-            let err = anyhow!("adb shell am start timed out for {}", serial);
-            record_error(status, err.to_string()).await;
-            return Err(err);
-        }
-    };
-
-    if let Err(msg) = ensure_success(&launch_output) {
-        let err = anyhow!("adb shell error for {}: {}", serial, msg);
+    if let Err(err) = adb_launch(adb_bin, &serial, &launch_args).await {
         record_error(status, err.to_string()).await;
         return Err(err);
     }
@@ -344,6 +356,77 @@ async fn connect_and_launch(
     guard.last_success = Some(success);
     guard.last_error = None;
     Ok(())
+}
+
+/// Run `adb -s <serial> shell <launch_args>` (the `am start` VIEW intent),
+/// returning an error (without recording status) on timeout, exec failure, or
+/// a non-success `am start` result.
+async fn adb_launch(
+    adb_bin: &std::ffi::OsStr,
+    serial: &str,
+    launch_args: &[String],
+) -> anyhow::Result<()> {
+    let launch_result = timeout(
+        ADB_COMMAND_TIMEOUT,
+        Command::new(adb_bin)
+            .arg("-s")
+            .arg(serial)
+            .arg("shell")
+            .args(launch_args)
+            .output(),
+    )
+    .await;
+
+    let launch_output = match launch_result {
+        Ok(Ok(output)) => output,
+        Ok(Err(io_err)) => {
+            return Err(anyhow!(
+                "failed to execute adb shell for {}: {}",
+                serial,
+                io_err
+            ));
+        }
+        Err(_elapsed) => {
+            return Err(anyhow!("adb shell am start timed out for {}", serial));
+        }
+    };
+
+    if let Err(msg) = ensure_success(&launch_output) {
+        return Err(anyhow!("adb shell error for {}: {}", serial, msg));
+    }
+    Ok(())
+}
+
+/// Extract the Android PACKAGE from a stored `launch_component`. New rows store
+/// a bare package (`com.tcl.browser`); legacy rows may store
+/// `package/activity` — in that case we take the substring before the first
+/// `/`. Surrounding whitespace is trimmed.
+fn launch_package(launch_component: &str) -> &str {
+    let trimmed = launch_component.trim();
+    match trimmed.split_once('/') {
+        Some((package, _activity)) => package,
+        None => trimmed,
+    }
+}
+
+/// Build the `am start` argument vector for an `adb shell` launch.
+///
+/// Returns `None` when no stage URL is configured (unset/empty) — the caller
+/// must then skip launching rather than fire a broken intent. Otherwise emits a
+/// `VIEW` intent carrying the stage URL targeted at the browser package:
+/// `am start -a android.intent.action.VIEW -d <url> <package>`.
+fn build_launch_args(launch_component: &str, stage_url: Option<&str>) -> Option<Vec<String>> {
+    let url = stage_url.map(str::trim).filter(|u| !u.is_empty())?;
+    let package = launch_package(launch_component);
+    Some(vec![
+        "am".to_string(),
+        "start".to_string(),
+        "-a".to_string(),
+        "android.intent.action.VIEW".to_string(),
+        "-d".to_string(),
+        url.to_string(),
+        package.to_string(),
+    ])
 }
 
 fn ensure_success(output: &Output) -> Result<(), String> {
@@ -460,7 +543,10 @@ mod tests {
             Some("http://10.77.8.134:8080/stage"),
         )
         .expect("a configured URL must produce launch args");
-        assert_eq!(args.last().map(String::as_str), Some("com.fullykiosk.videokiosk"));
+        assert_eq!(
+            args.last().map(String::as_str),
+            Some("com.fullykiosk.videokiosk")
+        );
         assert!(
             args.iter().any(|a| a == "android.intent.action.VIEW"),
             "must use a VIEW intent",

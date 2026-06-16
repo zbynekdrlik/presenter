@@ -6,7 +6,7 @@ use presenter_core::{
     OscSettingsDraft, PlaylistEntry, PlaylistEntryId, PreachTimer, Presentation, PresentationId,
     ResolumeHostDraft, SearchResultKind, Slide, SlideContent, SlideGroup, SlideId, SlideText,
     StageState, TimerState, TimersState, VelocityMode, VideoSourceDraft, DEFAULT_ADB_PORT,
-    DEFAULT_LAUNCH_COMPONENT,
+    DEFAULT_LAUNCH_PACKAGE,
 };
 
 fn sample_library() -> Library {
@@ -294,10 +294,7 @@ async fn android_stage_display_crud_round_trip() {
     assert_eq!(created.label, "Stage Left");
     assert_eq!(created.host, "test-stage.invalid");
     assert_eq!(created.port, DEFAULT_ADB_PORT);
-    assert_eq!(
-        created.launch_component,
-        DEFAULT_LAUNCH_COMPONENT.to_string()
-    );
+    assert_eq!(created.launch_component, DEFAULT_LAUNCH_PACKAGE.to_string());
     assert!(created.is_enabled);
 
     let displays = repo.list_android_stage_displays().await.unwrap();
@@ -781,10 +778,12 @@ async fn seed_migration_populates_four_android_stage_displays_on_empty_table() {
     );
     for d in &displays {
         assert_eq!(d.port, 5555);
-        assert_eq!(
-            d.launch_component,
-            "com.fullykiosk.videokiosk/de.ozerov.fully.MainActivity",
-        );
+        // The seed (m20260414_000002) inserts the dead Fully Kiosk component,
+        // but the full migration chain run by `connect_in_memory` then applies
+        // m20260616_000001, which rewrites those rows to the TCL browser
+        // package (issue #404). So after migrations the launcher target is the
+        // package, not the dead component.
+        assert_eq!(d.launch_component, "com.tcl.browser");
         assert!(d.is_enabled, "seeded displays should be enabled");
     }
 }

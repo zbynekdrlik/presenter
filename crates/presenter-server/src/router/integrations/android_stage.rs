@@ -13,7 +13,7 @@ use crate::android_stage::AndroidStageDisplayStatusSnapshot;
 use crate::state::AppState;
 use presenter_core::{
     AndroidStageDisplay, AndroidStageDisplayDraft, AndroidStageDisplayId, DEFAULT_ADB_PORT,
-    DEFAULT_LAUNCH_COMPONENT,
+    DEFAULT_LAUNCH_PACKAGE,
 };
 use presenter_persistence::SettingsAuditSource;
 
@@ -67,13 +67,13 @@ const fn default_android_stage_port() -> u16 {
     DEFAULT_ADB_PORT
 }
 fn default_android_stage_launch_component() -> String {
-    DEFAULT_LAUNCH_COMPONENT.to_string()
+    DEFAULT_LAUNCH_PACKAGE.to_string()
 }
 
 fn normalize_launch_component(component: &str) -> String {
     let trimmed = component.trim();
     if trimmed.is_empty() {
-        DEFAULT_LAUNCH_COMPONENT.to_string()
+        DEFAULT_LAUNCH_PACKAGE.to_string()
     } else {
         trimmed.to_string()
     }

@@ -3,7 +3,14 @@ use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
 
-pub const DEFAULT_LAUNCH_COMPONENT: &str = "com.fullykiosk.videokiosk/de.ozerov.fully.MainActivity";
+/// Default launcher target: the TCL built-in browser PACKAGE.
+///
+/// The launcher fires a `VIEW` intent at this package with the configured
+/// `PRESENTER_ANDROID_STAGE_URL` (see `android_stage.rs`). It is a bare package
+/// (no `/activity`), which is the proven-working shape on the prod stage TVs.
+/// Legacy `package/activity` values are still accepted by `validate()` and the
+/// launcher extracts the package from them for backward compatibility.
+pub const DEFAULT_LAUNCH_PACKAGE: &str = "com.tcl.browser";
 pub const DEFAULT_ADB_PORT: u16 = 5555;
 
 #[derive(Debug, Error, PartialEq, Eq)]
@@ -18,7 +25,9 @@ pub enum AndroidStageDisplayValidationError {
     InvalidPort,
     #[error("launch component cannot be empty")]
     EmptyLaunchComponent,
-    #[error("launch component must be in format 'package/activity' with valid characters")]
+    #[error(
+        "launch component must be a package name (or 'package/activity') with valid characters"
+    )]
     InvalidLaunchComponent,
 }
 
@@ -76,7 +85,7 @@ impl AndroidStageDisplayDraft {
             label: label.into(),
             host: host.into(),
             port: DEFAULT_ADB_PORT,
-            launch_component: DEFAULT_LAUNCH_COMPONENT.to_string(),
+            launch_component: DEFAULT_LAUNCH_PACKAGE.to_string(),
             is_enabled: true,
         }
     }
@@ -118,12 +127,14 @@ impl AndroidStageDisplayDraft {
         if component.is_empty() {
             return Err(AndroidStageDisplayValidationError::EmptyLaunchComponent);
         }
-        // Launch component must be package/activity format with valid Android identifier chars
-        // Valid: alphanumeric, dots, underscores, slashes, dollar signs (inner classes)
-        if !component.contains('/')
-            || !component
-                .chars()
-                .all(|c| c.is_ascii_alphanumeric() || c == '.' || c == '_' || c == '/' || c == '$')
+        // Launch component is a package name (e.g. "com.tcl.browser"), or a
+        // legacy "package/activity" component. Only Android identifier chars
+        // are allowed so the value is safe to splice into an `adb shell am`
+        // command: alphanumeric, dots, underscores, slashes (legacy
+        // package/activity separator), dollar signs (inner classes).
+        if !component
+            .chars()
+            .all(|c| c.is_ascii_alphanumeric() || c == '.' || c == '_' || c == '/' || c == '$')
         {
             return Err(AndroidStageDisplayValidationError::InvalidLaunchComponent);
         }
@@ -167,8 +178,7 @@ mod tests {
 
     #[test]
     fn validate_rejects_empty_launch_component() {
-        let draft =
-            AndroidStageDisplayDraft::new("Stage", "sd1l.lan").with_launch_component("   ");
+        let draft = AndroidStageDisplayDraft::new("Stage", "sd1l.lan").with_launch_component("   ");
         assert_eq!(
             draft.validate(),
             Err(AndroidStageDisplayValidationError::EmptyLaunchComponent)
