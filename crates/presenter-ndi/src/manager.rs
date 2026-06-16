@@ -151,6 +151,43 @@ async fn check_active_entry(
     StateCheckOutcome::Rebuild
 }
 
+/// Remove every active-map entry whose `source_id` is NOT `keep_id`, stopping
+/// each removed pipeline (and aborting its supervisor). Extracted from the
+/// activate-switch path so the regression test for the "old source pipeline
+/// leaks on switch" bug (#370) can run without libndi/GPU/gst-plugins — see
+/// `stop_other_pipelines_tests` below.
+///
+/// #370: switching the active video source (deactivate A → activate B) used to
+/// start B's pipeline while leaving A's pipeline + its `nvh264enc` encoder
+/// streaming forever. The DB flipped A's sibling row to `is_active=false` but
+/// the manager was never told, so two source pipelines (= two NVENC encoders)
+/// kept running after every switch — NVENC contention + wasted GPU. This helper
+/// reaps the orphaned siblings so exactly ONE source pipeline remains.
+///
+/// Mirrors `stop_pipeline`/`stop_all`: aborts each reaped source's supervisor
+/// before stopping its pipeline, leaving the kept source untouched.
+async fn retain_only_active(active: &mut HashMap<String, ActiveSource>, keep_id: &str) {
+    // Collect the siblings to reap first (can't remove while iterating).
+    let stale: Vec<String> = active
+        .keys()
+        .filter(|id| id.as_str() != keep_id)
+        .cloned()
+        .collect();
+    for id in stale {
+        if let Some(mut src) = active.remove(&id) {
+            tracing::info!(
+                source_id = %id,
+                kept = %keep_id,
+                "#370: stopping orphaned source pipeline on activate-switch"
+            );
+            if let Some(handle) = src.supervisor.take() {
+                handle.abort();
+            }
+            src.pipeline.stop().await;
+        }
+    }
+}
+
 pub struct NdiManager {
     pub(in crate::manager) _sdk: Arc<NdiLib>,
     pub(in crate::manager) source_list: SourceList,
@@ -390,5 +427,85 @@ mod start_pipeline_state_check_tests {
             "successful rebuild must clear the cool-off flag (#337)"
         );
         assert_eq!(state.consecutive_failures(), 0);
+    }
+}
+
+/// #370 — regression tests for the activate-switch pipeline leak. The bug:
+/// switching the active video source started the new source's pipeline but
+/// left the old source's pipeline (and its encoder) running, so two source
+/// pipelines accumulated after every switch. `retain_only_active` reaps the
+/// siblings so exactly ONE source remains in the active map after a switch.
+///
+/// Runs on every CI host (no libndi, no GPU, no gst-plugins) using the same
+/// `NdiPipeline::stopped_for_test()` shaping the `check_active_entry` tests use.
+#[cfg(test)]
+mod stop_other_pipelines_tests {
+    use super::*;
+
+    fn insert_stopped(active: &mut HashMap<String, ActiveSource>, id: &str) {
+        active.insert(
+            id.to_string(),
+            ActiveSource {
+                pipeline: std::sync::Arc::new(crate::pipeline::NdiPipeline::stopped_for_test()),
+                supervisor: None,
+            },
+        );
+    }
+
+    /// RED: after activating source B while source A is already active, the
+    /// active map must hold EXACTLY ONE source — B. The buggy version (no
+    /// sibling reap) left A's pipeline in the map alongside B → two encoders.
+    #[tokio::test]
+    async fn activate_switch_leaves_exactly_one_source() {
+        let mut active: HashMap<String, ActiveSource> = HashMap::new();
+        insert_stopped(&mut active, "source-a");
+        insert_stopped(&mut active, "source-b");
+        assert_eq!(active.len(), 2, "precondition: both A and B in the map");
+
+        // Simulate "activate B": keep B, reap every other source.
+        retain_only_active(&mut active, "source-b").await;
+
+        assert_eq!(
+            active.len(),
+            1,
+            "REGRESSION #370: switching to B must leave exactly ONE source pipeline, \
+             not leak A's pipeline + encoder alongside B's"
+        );
+        assert!(
+            active.contains_key("source-b"),
+            "the newly-activated source B must remain active",
+        );
+        assert!(
+            !active.contains_key("source-a"),
+            "REGRESSION #370: the previously-active source A must be stopped on switch",
+        );
+    }
+
+    /// The kept source survives even when several stale siblings exist (e.g.
+    /// rapid switches A→B→C left A and B both leaked). Activating D reaps all.
+    #[tokio::test]
+    async fn activate_reaps_all_stale_siblings() {
+        let mut active: HashMap<String, ActiveSource> = HashMap::new();
+        for id in ["source-a", "source-b", "source-c", "source-d"] {
+            insert_stopped(&mut active, id);
+        }
+
+        retain_only_active(&mut active, "source-d").await;
+
+        assert_eq!(active.len(), 1, "all stale siblings must be reaped");
+        assert!(active.contains_key("source-d"));
+    }
+
+    /// Re-activating the already-active source is a no-op for the map (it stays
+    /// the only entry) — guards against accidentally stopping the kept source.
+    #[tokio::test]
+    async fn reactivate_same_source_keeps_it() {
+        let mut active: HashMap<String, ActiveSource> = HashMap::new();
+        insert_stopped(&mut active, "source-a");
+
+        retain_only_active(&mut active, "source-a").await;
+
+        assert_eq!(active.len(), 1);
+        assert!(active.contains_key("source-a"));
     }
 }
