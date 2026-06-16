@@ -180,6 +180,11 @@ struct FrameStats {
 pub(crate) struct ReloadEscalation {
     last_decoded_frame_at: Cell<f64>,
     reloaded: Cell<bool>,
+    /// True while a `/healthz` server-liveness check spawned by `maybe_reload`
+    /// is in flight (#410). Guards against the 1s health ticker spawning a
+    /// fresh fetch on every tick once the no-frames horizon is crossed — at
+    /// most one check is outstanding at a time. Cleared when the check resolves.
+    check_in_flight: Cell<bool>,
     /// The no-frames horizon (ms) for THIS page load. Defaults to
     /// `RELOAD_NO_FRAME_MS`; an explicit `?ndiReloadMs=<n>` URL query lowers
     /// it so the E2E can exercise the full reload path (incl. the real
@@ -197,6 +202,7 @@ impl ReloadEscalation {
         Rc::new(Self {
             last_decoded_frame_at: Cell::new(now_ms()),
             reloaded: Cell::new(false),
+            check_in_flight: Cell::new(false),
             threshold_ms: reload_threshold_ms_from_url(),
         })
     }
@@ -213,25 +219,74 @@ impl ReloadEscalation {
         now_ms() - self.last_decoded_frame_at.get()
     }
 
-    /// Evaluate the escalation rule and, if it trips, perform the one-shot
-    /// full-page reload. Returns true once it has reloaded (so callers stop).
-    /// Idempotent: the `reloaded` flag makes repeated ticks / multiple
-    /// sessions fire `window.location.reload()` at most once.
-    fn maybe_reload(&self) -> bool {
+    /// Evaluate the escalation rule. When the no-frames horizon is crossed,
+    /// the reload is NOT performed unconditionally: first a lightweight
+    /// `/healthz` check decides whether reloading can even help (#410).
+    ///
+    /// - If the SERVER has an actively-streaming NDI pipeline but THIS consumer
+    ///   still has no frames → the page/consumer is genuinely stuck → reload
+    ///   (the #401 recovery).
+    /// - If the server has NO streaming pipeline → the source itself is down
+    ///   (Resolume silent), reloading cannot conjure frames → SKIP the reload
+    ///   and reset the escalation timer so it re-evaluates after another full
+    ///   window instead of reloading every ~60s forever.
+    /// - If the `/healthz` fetch fails → fall back to the existing behavior and
+    ///   reload (a fetch error must never SUPPRESS a genuinely-needed reload).
+    ///
+    /// Returns true once the page is reloading OR a server check has been
+    /// spawned for this horizon crossing — in both cases the caller should stop
+    /// the rest of this tick (the async check, if any, owns the decision).
+    /// Idempotent: the `reloaded` one-shot and the `check_in_flight` guard make
+    /// repeated ticks / multiple sessions fire at most one `/healthz` check and
+    /// at most one `window.location.reload()`.
+    fn maybe_reload(self: &Rc<Self>) -> bool {
         if self.reloaded.get() {
             return true;
         }
         if !should_escalate_reload(self.ms_since_last_decoded_frame(), self.threshold_ms) {
             return false;
         }
-        self.reloaded.set(true);
-        leptos::logging::warn!(
-            "watchdog: no decoded frame for {:.0}ms across reconnect attempts — LAST-RESORT full page reload (#401)",
-            self.ms_since_last_decoded_frame()
-        );
-        if let Some(window) = leptos::web_sys::window() {
-            let _ = window.location().reload();
+        // Horizon crossed. Don't spawn a second check while one is in flight.
+        if self.check_in_flight.get() {
+            return true;
         }
+        self.check_in_flight.set(true);
+        let escalation = Rc::clone(self);
+        spawn_local(async move {
+            let has_streaming =
+                super::ndi_reload_guard::fetch_healthz_has_streaming_pipeline().await;
+            escalation.check_in_flight.set(false);
+            // A frame may have decoded while the check was in flight — re-check
+            // the horizon so a recovered stream is never reloaded out from
+            // under itself.
+            if escalation.reloaded.get()
+                || !should_escalate_reload(
+                    escalation.ms_since_last_decoded_frame(),
+                    escalation.threshold_ms,
+                )
+            {
+                return;
+            }
+            if !super::ndi_reload_guard::should_reload_given_pipeline_state(has_streaming) {
+                // Source legitimately down — reloading can't help. Reset the
+                // page-session timer so the rule re-evaluates after another
+                // full window instead of looping reloads every ~60s.
+                leptos::logging::warn!(
+                    "watchdog: no decoded frame for {:.0}ms but server has NO streaming pipeline — source is down, SKIPPING reload (#410)",
+                    escalation.ms_since_last_decoded_frame()
+                );
+                escalation.last_decoded_frame_at.set(now_ms());
+                return;
+            }
+            escalation.reloaded.set(true);
+            leptos::logging::warn!(
+                "watchdog: no decoded frame for {:.0}ms across reconnect attempts AND server has a streaming pipeline — LAST-RESORT full page reload (#401)",
+                escalation.ms_since_last_decoded_frame()
+            );
+            if let Some(window) = leptos::web_sys::window() {
+                let _ = window.location().reload();
+            }
+        });
         true
     }
 }
