@@ -402,8 +402,13 @@ async fn connect_and_launch(
                 package = launch_pkg,
                 "android stage keep-alive: browser already foreground — skipping relaunch (#419)"
             );
+            // A confirmed-foreground probe IS a liveness success: refresh
+            // last_success so a healthy display that skips relaunch every cycle
+            // does not show an ever-aging "last success" on the operator
+            // dashboard (#419 review).
             let mut guard = status.write().await;
             guard.state = AndroidStageDisplayState::Running;
+            guard.last_success = Some(Utc::now());
             guard.last_error = None;
             return Ok(());
         }
