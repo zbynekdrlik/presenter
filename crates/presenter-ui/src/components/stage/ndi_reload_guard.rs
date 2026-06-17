@@ -83,6 +83,39 @@ pub(crate) async fn fetch_healthz_has_streaming_pipeline() -> bool {
     try_fetch().await.unwrap_or(true)
 }
 
+/// LAST-RESORT escalation decision (#401): should the stage page perform a full
+/// `window.location.reload()` because video has been dead for too long despite
+/// the reconnect loop continuously retrying? `ms_since_last_decoded_frame` is
+/// measured across the WHOLE page session, so the only way it grows past
+/// `reload_threshold_ms` is a genuinely stuck stream reconnect alone has NOT
+/// recovered. Pure + side-effect-free so it is unit-testable without a browser.
+pub(crate) fn should_escalate_reload(
+    ms_since_last_decoded_frame: f64,
+    reload_threshold_ms: f64,
+) -> bool {
+    // Strictly greater-than so a tick landing exactly AT the threshold waits one
+    // more tick (no off-by-one reload on the boundary).
+    ms_since_last_decoded_frame > reload_threshold_ms
+}
+
+/// TEST-ONLY (#422): whether the page URL carries `?ndiReloadSkipHealthz=1`,
+/// which makes the last-resort reload bypass the #410 `/healthz` streaming gate.
+/// The E2E uses it to exercise the real `window.location.reload()` path
+/// deterministically — a pipeline-kill cannot create the gate's
+/// "server-streaming-but-this-consumer-stuck" precondition. Production stage
+/// pages never set it, so prod always takes the full gated path. Read ONCE.
+pub(crate) fn reload_skip_healthz_from_url() -> bool {
+    leptos::web_sys::window()
+        .and_then(|w| w.location().search().ok())
+        .and_then(|search| {
+            leptos::web_sys::UrlSearchParams::new_with_str(&search)
+                .ok()
+                .and_then(|p| p.get("ndiReloadSkipHealthz"))
+        })
+        .as_deref()
+        == Some("1")
+}
+
 #[cfg(test)]
 mod tests {
     use super::{healthz_body_has_streaming_pipeline, should_reload_given_pipeline_state};

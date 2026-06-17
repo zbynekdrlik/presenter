@@ -9,7 +9,7 @@ use tokio::{
     task::JoinHandle,
     time::{interval, timeout, MissedTickBehavior},
 };
-use tracing::{debug, error, warn};
+use tracing::{debug, error, info, warn};
 
 const ADB_COMMAND_TIMEOUT: Duration = Duration::from_secs(10);
 
@@ -273,7 +273,9 @@ async fn run_device_worker(
         tokio::select! {
             _ = ticker.tick() => {
                 if config.is_enabled {
-                    if let Err(err) = connect_and_launch(&adb_path, &stage_url, &config, &status).await {
+                    // Periodic keep-alive: foreground-aware (#419) — only
+                    // relaunches when the browser is not already up.
+                    if let Err(err) = connect_and_launch(&adb_path, &stage_url, &config, &status, false).await {
                         debug!(display = %config.label, ?err, "android stage display launch attempt failed");
                     }
                 } else {
@@ -290,7 +292,9 @@ async fn run_device_worker(
                     }
                     DeviceCommand::LaunchNow => {
                         if config.is_enabled {
-                            if let Err(err) = connect_and_launch(&adb_path, &stage_url, &config, &status).await {
+                            // Explicit/forced launch (startup, config change,
+                            // launch-now endpoint): always (re)launch (#419).
+                            if let Err(err) = connect_and_launch(&adb_path, &stage_url, &config, &status, true).await {
                                 debug!(display = %config.label, ?err, "android stage display manual launch failed");
                             }
                         }
@@ -348,6 +352,7 @@ async fn connect_and_launch(
     stage_url: &Arc<Option<String>>,
     config: &AndroidStageDisplay,
     status: &Arc<RwLock<AndroidStageDisplayStatusSnapshot>>,
+    force_launch: bool,
 ) -> anyhow::Result<()> {
     let serial = format!("{}:{}", config.host, config.port);
 
@@ -380,6 +385,38 @@ async fn connect_and_launch(
     if let Err(err) = adb_connect(adb_bin, &serial).await {
         record_error(status, err.to_string()).await;
         return Err(err);
+    }
+
+    // #419: foreground-aware keep-alive. On the periodic tick (force_launch =
+    // false) skip the am-start when the browser is ALREADY the resumed app —
+    // re-firing the VIEW intent reloads com.tcl.browser (black blink + spinner)
+    // every cycle. An inconclusive probe (None) falls through to launching so a
+    // genuinely-down display still recovers. Explicit/forced launches (config
+    // change, launch-now endpoint) bypass the gate and always relaunch.
+    if !force_launch {
+        let launch_pkg = launch_package(&config.launch_component);
+        let foreground = adb_foreground_package(adb_bin, &serial).await;
+        if !should_launch_stage(foreground.as_deref(), launch_pkg) {
+            debug!(
+                display = %config.label,
+                package = launch_pkg,
+                "android stage keep-alive: browser already foreground — skipping relaunch (#419)"
+            );
+            // A confirmed-foreground probe IS a liveness success: refresh
+            // last_success so a healthy display that skips relaunch every cycle
+            // does not show an ever-aging "last success" on the operator
+            // dashboard (#419 review).
+            let mut guard = status.write().await;
+            guard.state = AndroidStageDisplayState::Running;
+            guard.last_success = Some(Utc::now());
+            guard.last_error = None;
+            return Ok(());
+        }
+        info!(
+            display = %config.label,
+            foreground = foreground.as_deref().unwrap_or("<unknown>"),
+            "android stage keep-alive: browser not foreground — relaunching (#419)"
+        );
     }
 
     {
@@ -469,6 +506,73 @@ fn build_launch_args(launch_component: &str, stage_url: Option<&str>) -> Option<
         url.to_string(),
         package.to_string(),
     ])
+}
+
+/// Decide whether the periodic keep-alive should (re)launch the stage browser.
+/// Launch ONLY when the configured browser package is NOT the device's current
+/// foreground/resumed app. `None` (foreground could not be determined — the adb
+/// probe failed) defaults to launching, so a genuinely-down display still
+/// recovers and an inconclusive probe never SUPPRESSES a needed launch.
+///
+/// Re-firing `am start` (a VIEW intent) at an already-foreground com.tcl.browser
+/// reloads the page (black blink + spinner) every cycle — the #419 regression.
+/// Gating the keep-alive on this check stops the periodic reload while keeping
+/// crash/sleep/exit recovery. Explicit/forced launches bypass it entirely.
+fn should_launch_stage(foreground_package: Option<&str>, launch_package: &str) -> bool {
+    match foreground_package {
+        // The browser is already the resumed app → it is up; relaunching would
+        // only reload the page. Skip.
+        Some(fg) => fg != launch_package,
+        // Foreground could not be determined → don't suppress a possibly-needed
+        // launch; (re)launch and let the device sort it out.
+        None => true,
+    }
+}
+
+/// Parse the resumed-activity PACKAGE from `dumpsys activity activities` output.
+/// Finds the `[m]ResumedActivity: ActivityRecord{<hash> u0 <pkg>/<activity> …}`
+/// line and returns `<pkg>`. Returns None when no resumed activity is reported
+/// (`mResumedActivity: null`) or the line is absent — the caller treats None as
+/// "foreground unknown → (re)launch".
+fn parse_foreground_package(dumpsys_output: &str) -> Option<String> {
+    // Match either `mResumedActivity:` or `ResumedActivity:` (label varies by
+    // Android version); both carry the same `<pkg>/<activity>` component token.
+    let line = dumpsys_output
+        .lines()
+        .find(|l| l.contains("ResumedActivity"))?;
+    // The component is the first whitespace token shaped `<pkg>/<activity>`;
+    // the package is the part before `/` (it always contains a dot and never a
+    // `{`, which excludes the `ActivityRecord{<hash>` token).
+    line.split_whitespace().find_map(|tok| {
+        let (pkg, _activity) = tok.split_once('/')?;
+        (pkg.contains('.') && !pkg.contains('{')).then(|| pkg.to_string())
+    })
+}
+
+/// Query the device's currently-resumed app package via
+/// `adb -s <serial> shell dumpsys activity activities`. Returns the resumed
+/// package, or None on any adb error/timeout/non-success or when no resumed
+/// activity is reported — the caller treats None as "foreground unknown →
+/// (re)launch". Read-only: the dumpsys probe never disturbs the running browser.
+async fn adb_foreground_package(adb_bin: &std::ffi::OsStr, serial: &str) -> Option<String> {
+    let output = timeout(
+        ADB_COMMAND_TIMEOUT,
+        Command::new(adb_bin)
+            .arg("-s")
+            .arg(serial)
+            .arg("shell")
+            .arg("dumpsys")
+            .arg("activity")
+            .arg("activities")
+            .output(),
+    )
+    .await
+    .ok()?
+    .ok()?;
+    if !output.status.success() {
+        return None;
+    }
+    parse_foreground_package(&String::from_utf8_lossy(&output.stdout))
 }
 
 fn ensure_success(output: &Output) -> Result<(), String> {
@@ -661,6 +765,65 @@ mod tests {
             validate_stage_url("http://10.0.0.1/stage; rm -rf /"),
             None,
             "embedded shell metacharacters make it malformed -> skip",
+        );
+    }
+
+    // ── #419: foreground-aware keep-alive ──────────────────────────────────
+    // The 20s keep-alive must NOT re-fire `am start` when com.tcl.browser is
+    // already the resumed app (re-firing the VIEW intent reloads the page —
+    // the black blink + spinner every ~20s). It SHOULD launch when the browser
+    // is not foreground (crash/sleep/exit recovery) or when foreground is
+    // unknown (an inconclusive adb probe must never suppress a needed launch).
+
+    #[test]
+    fn skip_launch_when_browser_already_foreground() {
+        assert!(
+            !should_launch_stage(Some("com.tcl.browser"), "com.tcl.browser"),
+            "must NOT relaunch when the browser is already the resumed app (#419)",
+        );
+    }
+
+    #[test]
+    fn launch_when_a_different_app_is_foreground() {
+        assert!(
+            should_launch_stage(Some("com.android.tv.settings"), "com.tcl.browser"),
+            "must relaunch when another app is foreground (user left the stage)",
+        );
+    }
+
+    #[test]
+    fn launch_when_foreground_is_unknown() {
+        assert!(
+            should_launch_stage(None, "com.tcl.browser"),
+            "an inconclusive probe must default to launching (recover a down display)",
+        );
+    }
+
+    #[test]
+    fn parse_foreground_reads_resumed_activity_package() {
+        let out = "  ResumedActivity: ActivityRecord{deadbeef u0 com.tcl.browser/.portal.browse.activity.BrowsePageActivity t1}\n    mResumedActivity: ActivityRecord{5372874 u0 com.tcl.browser/.portal.browse.activity.BrowsePageActivity t17469}\n";
+        assert_eq!(
+            parse_foreground_package(out).as_deref(),
+            Some("com.tcl.browser"),
+        );
+    }
+
+    #[test]
+    fn parse_foreground_reads_legacy_fully_kiosk_package() {
+        let out = "    mResumedActivity: ActivityRecord{abc u0 com.fullykiosk.videokiosk/de.ozerov.fully.MainActivity t9}";
+        assert_eq!(
+            parse_foreground_package(out).as_deref(),
+            Some("com.fullykiosk.videokiosk"),
+        );
+    }
+
+    #[test]
+    fn parse_foreground_none_when_no_resumed_activity() {
+        assert_eq!(parse_foreground_package("    mResumedActivity: null"), None);
+        assert_eq!(parse_foreground_package(""), None);
+        assert_eq!(
+            parse_foreground_package("some unrelated dumpsys text"),
+            None
         );
     }
 }

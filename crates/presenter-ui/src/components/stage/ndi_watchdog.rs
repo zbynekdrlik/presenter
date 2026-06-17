@@ -192,6 +192,10 @@ pub(crate) struct ReloadEscalation {
     /// param is read ONCE here; production pages never carry it, so prod always
     /// uses the conservative 60s.
     threshold_ms: f64,
+    /// TEST-ONLY (#422): when set (via `?ndiReloadSkipHealthz=1`), the
+    /// last-resort reload bypasses the #410 `/healthz` gate and fires on the
+    /// no-frames horizon alone. Prod pages never set it. Read ONCE.
+    skip_healthz_gate: bool,
 }
 
 impl ReloadEscalation {
@@ -204,6 +208,7 @@ impl ReloadEscalation {
             reloaded: Cell::new(false),
             check_in_flight: Cell::new(false),
             threshold_ms: reload_threshold_ms_from_url(),
+            skip_healthz_gate: super::ndi_reload_guard::reload_skip_healthz_from_url(),
         })
     }
 
@@ -243,8 +248,28 @@ impl ReloadEscalation {
         if self.reloaded.get() {
             return true;
         }
-        if !should_escalate_reload(self.ms_since_last_decoded_frame(), self.threshold_ms) {
+        if !super::ndi_reload_guard::should_escalate_reload(
+            self.ms_since_last_decoded_frame(),
+            self.threshold_ms,
+        ) {
             return false;
+        }
+        // TEST-ONLY (#422): bypass the #410 `/healthz` gate so the E2E exercises
+        // the real `window.location.reload()` on the no-frames horizon alone.
+        // Prod stage pages never carry `?ndiReloadSkipHealthz`, so this branch is
+        // dead in production — the full gated path below is unchanged there.
+        if self.skip_healthz_gate {
+            if self.reloaded.replace(true) {
+                return true;
+            }
+            leptos::logging::warn!(
+                "watchdog: no decoded frame for {:.0}ms — LAST-RESORT reload (healthz gate bypassed, test-only #422)",
+                self.ms_since_last_decoded_frame()
+            );
+            if let Some(window) = leptos::web_sys::window() {
+                let _ = window.location().reload();
+            }
+            return true;
         }
         // Horizon crossed. Don't spawn a second check while one is in flight.
         if self.check_in_flight.get() {
@@ -260,7 +285,7 @@ impl ReloadEscalation {
             // the horizon so a recovered stream is never reloaded out from
             // under itself.
             if escalation.reloaded.get()
-                || !should_escalate_reload(
+                || !super::ndi_reload_guard::should_escalate_reload(
                     escalation.ms_since_last_decoded_frame(),
                     escalation.threshold_ms,
                 )
@@ -449,30 +474,6 @@ impl Drop for Watchdog {
     fn drop(&mut self) {
         self.stop();
     }
-}
-
-/// LAST-RESORT escalation decision (#401): should the stage page perform a
-/// full `window.location.reload()` because video has been dead for too long
-/// despite the reconnect loop continuously retrying?
-///
-/// `ms_since_last_decoded_frame` is measured across the WHOLE page session
-/// (it survives individual reconnect cycles — see `ReloadEscalation`), so the
-/// only way it grows past `reload_threshold_ms` is a genuinely stuck stream
-/// that reconnect alone has NOT recovered. A normal brief reconnect decodes
-/// frames again within seconds and resets the timer well before the threshold.
-///
-/// Pure + side-effect-free so the escalation rule is unit-testable without a
-/// browser (the wiring that calls `window.location.reload()` is in the health
-/// ticker; this function only decides).
-pub(crate) fn should_escalate_reload(
-    ms_since_last_decoded_frame: f64,
-    reload_threshold_ms: f64,
-) -> bool {
-    // Strictly greater-than so a tick landing exactly AT the threshold waits
-    // one more tick (no off-by-one reload on the boundary). The page-session
-    // timer is reset on every decoded frame, so reaching this point at all
-    // means reconnect has not produced a single frame for the whole window.
-    ms_since_last_decoded_frame > reload_threshold_ms
 }
 
 /// Resolve the no-frames reload horizon for THIS page load: the conservative
@@ -989,7 +990,8 @@ fn install_ice_failure_listener<F: Fn() + 'static>(
 
 #[cfg(test)]
 mod tests {
-    use super::{should_escalate_reload, Watchdog};
+    use super::super::ndi_reload_guard::should_escalate_reload;
+    use super::Watchdog;
 
     // ─────────────────────────────────────────────────────────────────────
     // #401 LAST-RESORT page-reload escalation.
