@@ -192,13 +192,9 @@ pub(crate) struct ReloadEscalation {
     /// param is read ONCE here; production pages never carry it, so prod always
     /// uses the conservative 60s.
     threshold_ms: f64,
-    /// TEST-ONLY (#422): when the page URL carries `?ndiReloadSkipHealthz=1`,
-    /// the last-resort reload bypasses the #410 `/healthz` streaming gate and
-    /// fires on the no-frames horizon alone. The E2E needs this because a
-    /// pipeline-kill cannot create the gate's "server-streaming-but-this-
-    /// consumer-stuck" precondition (killing the source makes the gate correctly
-    /// suppress the reload). Production stage pages never set it, so prod always
-    /// takes the full gated path. Read ONCE at construction.
+    /// TEST-ONLY (#422): when set (via `?ndiReloadSkipHealthz=1`), the
+    /// last-resort reload bypasses the #410 `/healthz` gate and fires on the
+    /// no-frames horizon alone. Prod pages never set it. Read ONCE.
     skip_healthz_gate: bool,
 }
 
@@ -212,7 +208,7 @@ impl ReloadEscalation {
             reloaded: Cell::new(false),
             check_in_flight: Cell::new(false),
             threshold_ms: reload_threshold_ms_from_url(),
-            skip_healthz_gate: reload_skip_healthz_from_url(),
+            skip_healthz_gate: super::ndi_reload_guard::reload_skip_healthz_from_url(),
         })
     }
 
@@ -252,7 +248,10 @@ impl ReloadEscalation {
         if self.reloaded.get() {
             return true;
         }
-        if !should_escalate_reload(self.ms_since_last_decoded_frame(), self.threshold_ms) {
+        if !super::ndi_reload_guard::should_escalate_reload(
+            self.ms_since_last_decoded_frame(),
+            self.threshold_ms,
+        ) {
             return false;
         }
         // TEST-ONLY (#422): bypass the #410 `/healthz` gate so the E2E exercises
@@ -286,7 +285,7 @@ impl ReloadEscalation {
             // the horizon so a recovered stream is never reloaded out from
             // under itself.
             if escalation.reloaded.get()
-                || !should_escalate_reload(
+                || !super::ndi_reload_guard::should_escalate_reload(
                     escalation.ms_since_last_decoded_frame(),
                     escalation.threshold_ms,
                 )
@@ -477,30 +476,6 @@ impl Drop for Watchdog {
     }
 }
 
-/// LAST-RESORT escalation decision (#401): should the stage page perform a
-/// full `window.location.reload()` because video has been dead for too long
-/// despite the reconnect loop continuously retrying?
-///
-/// `ms_since_last_decoded_frame` is measured across the WHOLE page session
-/// (it survives individual reconnect cycles — see `ReloadEscalation`), so the
-/// only way it grows past `reload_threshold_ms` is a genuinely stuck stream
-/// that reconnect alone has NOT recovered. A normal brief reconnect decodes
-/// frames again within seconds and resets the timer well before the threshold.
-///
-/// Pure + side-effect-free so the escalation rule is unit-testable without a
-/// browser (the wiring that calls `window.location.reload()` is in the health
-/// ticker; this function only decides).
-pub(crate) fn should_escalate_reload(
-    ms_since_last_decoded_frame: f64,
-    reload_threshold_ms: f64,
-) -> bool {
-    // Strictly greater-than so a tick landing exactly AT the threshold waits
-    // one more tick (no off-by-one reload on the boundary). The page-session
-    // timer is reset on every decoded frame, so reaching this point at all
-    // means reconnect has not produced a single frame for the whole window.
-    ms_since_last_decoded_frame > reload_threshold_ms
-}
-
 /// Resolve the no-frames reload horizon for THIS page load: the conservative
 /// `RELOAD_NO_FRAME_MS` default, unless a `?ndiReloadMs=<n>` URL query lowers
 /// it. The override is a read-only query param (no behavior change beyond the
@@ -519,24 +494,6 @@ fn reload_threshold_ms_from_url() -> f64 {
         .and_then(|v| v.parse::<f64>().ok())
         .filter(|v| *v > 0.0);
     parsed.unwrap_or(Watchdog::RELOAD_NO_FRAME_MS)
-}
-
-/// TEST-ONLY (#422): whether the page URL carries `?ndiReloadSkipHealthz=1`,
-/// which makes the last-resort reload bypass the #410 `/healthz` streaming gate.
-/// The E2E uses it to exercise the real `window.location.reload()` path
-/// deterministically — a pipeline-kill cannot create the gate's
-/// "server-streaming-but-this-consumer-stuck" precondition. Production stage
-/// pages never set it, so prod always takes the full gated path. Read ONCE.
-fn reload_skip_healthz_from_url() -> bool {
-    leptos::web_sys::window()
-        .and_then(|w| w.location().search().ok())
-        .and_then(|search| {
-            leptos::web_sys::UrlSearchParams::new_with_str(&search)
-                .ok()
-                .and_then(|p| p.get("ndiReloadSkipHealthz"))
-        })
-        .as_deref()
-        == Some("1")
 }
 
 /// Monotonic now in milliseconds: `performance.now()`, with a `Date.now()`
@@ -1033,7 +990,8 @@ fn install_ice_failure_listener<F: Fn() + 'static>(
 
 #[cfg(test)]
 mod tests {
-    use super::{should_escalate_reload, Watchdog};
+    use super::super::ndi_reload_guard::should_escalate_reload;
+    use super::Watchdog;
 
     // ─────────────────────────────────────────────────────────────────────
     // #401 LAST-RESORT page-reload escalation.
