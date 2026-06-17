@@ -422,7 +422,13 @@ impl AppState {
 
         state.ensure_demo_playlist().await?;
         state.sync_resolume_hosts().await?;
-        state.sync_android_stage_displays().await?;
+        // NOTE: Android stage displays are launched by `main` AFTER the HTTP
+        // listener is bound (`start_android_stage_displays`), NOT here (#423).
+        // Launching during `from_config` raced the listener: the on-device
+        // `am start` hit a not-yet-serving server, the TV showed the browser
+        // connection-refused error page, and the #419 foreground-aware keep-alive
+        // then skipped the relaunch forever. The test-only `in_memory`
+        // constructor still calls `sync_android_stage_displays` directly.
 
         // Restore the active NDI video source from the database on startup
         // (encoder-gated, #333 item 6). Extracted to keep from_config under the

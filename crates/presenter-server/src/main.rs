@@ -125,12 +125,22 @@ async fn main() -> anyhow::Result<()> {
     let config = ServerConfig::load()?;
     let addr: SocketAddr = SocketAddr::from(([0, 0, 0, 0], config.http.port));
     let state = AppState::from_config(config).await?;
-    let app = build_router(state);
+    let app = build_router(state.clone());
 
     let listener = TcpListener::bind(addr)
         .await
         .with_context(|| format!("failed to bind to {addr}"))?;
     tracing::info!(%addr, "presenter server listening");
+
+    // #423: launch the Android stage displays NOW that the listener is bound, so
+    // the on-device `am start` lands on a serving server. Doing this during
+    // `from_config` (before bind) raced the listener — the TV hit
+    // connection-refused, showed the browser error page, and the #419
+    // foreground-aware keep-alive then skipped the relaunch forever. Non-fatal:
+    // a launch failure must never stop the server from serving.
+    if let Err(err) = state.start_android_stage_displays().await {
+        tracing::warn!(?err, "failed to launch android stage displays on startup");
+    }
     // Mock integrations (OSC/AbleSet/Resolume) bind FIXED localhost ports
     // (e.g. 127.0.0.1:8091). When a test server is spawned on a host that
     // already runs another mock-integrations build (e.g. the deployed
