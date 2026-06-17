@@ -422,7 +422,7 @@ impl AppState {
 
         state.ensure_demo_playlist().await?;
         state.sync_resolume_hosts().await?;
-        state.sync_android_stage_displays().await?;
+        // #423: android stage displays are launched from `main` AFTER bind, not here (raced the listener) — see start_android_stage_displays.
 
         // Restore the active NDI video source from the database on startup
         // (encoder-gated, #333 item 6). Extracted to keep from_config under the

@@ -158,6 +158,18 @@ impl AppState {
         Ok(())
     }
 
+    /// Populate + launch the Android stage displays. Called ONCE at startup from
+    /// `main` AFTER the HTTP listener is bound (#423), not during `from_config`:
+    /// firing the launcher before the server is serving made the on-device
+    /// `am start` hit a connection-refused, the TV showed the browser error
+    /// page, and the #419 foreground-aware keep-alive then skipped the relaunch
+    /// forever (the browser was foreground on the error page). Triggering it once
+    /// the listener is up means the startup launch always lands on a serving
+    /// server, so a deploy/restart never strands a display.
+    pub async fn start_android_stage_displays(&self) -> anyhow::Result<()> {
+        self.sync_android_stage_displays().await
+    }
+
     // Video source methods
     pub async fn list_video_sources(&self) -> anyhow::Result<Vec<VideoSource>> {
         self.repository.list_video_sources().await
