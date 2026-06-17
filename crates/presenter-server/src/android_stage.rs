@@ -471,6 +471,33 @@ fn build_launch_args(launch_component: &str, stage_url: Option<&str>) -> Option<
     ])
 }
 
+/// Decide whether the periodic keep-alive should (re)launch the stage browser.
+/// Launch ONLY when the configured browser package is NOT the device's current
+/// foreground/resumed app. `None` (foreground could not be determined — the adb
+/// probe failed) defaults to launching, so a genuinely-down display still
+/// recovers and an inconclusive probe never SUPPRESSES a needed launch.
+///
+/// Re-firing `am start` (a VIEW intent) at an already-foreground com.tcl.browser
+/// reloads the page (black blink + spinner) every cycle — the #419 regression.
+/// Gating the keep-alive on this check stops the periodic reload while keeping
+/// crash/sleep/exit recovery. Explicit/forced launches bypass it entirely.
+fn should_launch_stage(foreground_package: Option<&str>, launch_package: &str) -> bool {
+    // RED stub (#419): current behavior re-launches unconditionally.
+    let _ = (foreground_package, launch_package);
+    true
+}
+
+/// Parse the resumed-activity PACKAGE from `dumpsys activity activities` output.
+/// Finds the `[m]ResumedActivity: ActivityRecord{<hash> u0 <pkg>/<activity> …}`
+/// line and returns `<pkg>`. Returns None when no resumed activity is reported
+/// (`mResumedActivity: null`) or the line is absent — the caller treats None as
+/// "foreground unknown → (re)launch".
+fn parse_foreground_package(dumpsys_output: &str) -> Option<String> {
+    // RED stub (#419): no foreground awareness yet.
+    let _ = dumpsys_output;
+    None
+}
+
 fn ensure_success(output: &Output) -> Result<(), String> {
     if !output.status.success() {
         return Err(format_command_failure(output));
@@ -661,6 +688,65 @@ mod tests {
             validate_stage_url("http://10.0.0.1/stage; rm -rf /"),
             None,
             "embedded shell metacharacters make it malformed -> skip",
+        );
+    }
+
+    // ── #419: foreground-aware keep-alive ──────────────────────────────────
+    // The 20s keep-alive must NOT re-fire `am start` when com.tcl.browser is
+    // already the resumed app (re-firing the VIEW intent reloads the page —
+    // the black blink + spinner every ~20s). It SHOULD launch when the browser
+    // is not foreground (crash/sleep/exit recovery) or when foreground is
+    // unknown (an inconclusive adb probe must never suppress a needed launch).
+
+    #[test]
+    fn skip_launch_when_browser_already_foreground() {
+        assert!(
+            !should_launch_stage(Some("com.tcl.browser"), "com.tcl.browser"),
+            "must NOT relaunch when the browser is already the resumed app (#419)",
+        );
+    }
+
+    #[test]
+    fn launch_when_a_different_app_is_foreground() {
+        assert!(
+            should_launch_stage(Some("com.android.tv.settings"), "com.tcl.browser"),
+            "must relaunch when another app is foreground (user left the stage)",
+        );
+    }
+
+    #[test]
+    fn launch_when_foreground_is_unknown() {
+        assert!(
+            should_launch_stage(None, "com.tcl.browser"),
+            "an inconclusive probe must default to launching (recover a down display)",
+        );
+    }
+
+    #[test]
+    fn parse_foreground_reads_resumed_activity_package() {
+        let out = "  ResumedActivity: ActivityRecord{deadbeef u0 com.tcl.browser/.portal.browse.activity.BrowsePageActivity t1}\n    mResumedActivity: ActivityRecord{5372874 u0 com.tcl.browser/.portal.browse.activity.BrowsePageActivity t17469}\n";
+        assert_eq!(
+            parse_foreground_package(out).as_deref(),
+            Some("com.tcl.browser"),
+        );
+    }
+
+    #[test]
+    fn parse_foreground_reads_legacy_fully_kiosk_package() {
+        let out = "    mResumedActivity: ActivityRecord{abc u0 com.fullykiosk.videokiosk/de.ozerov.fully.MainActivity t9}";
+        assert_eq!(
+            parse_foreground_package(out).as_deref(),
+            Some("com.fullykiosk.videokiosk"),
+        );
+    }
+
+    #[test]
+    fn parse_foreground_none_when_no_resumed_activity() {
+        assert_eq!(parse_foreground_package("    mResumedActivity: null"), None);
+        assert_eq!(parse_foreground_package(""), None);
+        assert_eq!(
+            parse_foreground_package("some unrelated dumpsys text"),
+            None
         );
     }
 }
