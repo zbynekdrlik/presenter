@@ -684,6 +684,14 @@ test("stage performs LAST-RESORT page reload after prolonged video stall (synthe
     // pipeline-rebuild gap instead of after 60s. Production never sets this.
     const stageUrl = new URL("/stage", baseURL);
     stageUrl.searchParams.set("ndiReloadMs", "3000");
+    // #422: bypass the #410 /healthz streaming gate so the reload fires on the
+    // no-frames horizon alone. The continuous pipeline-kill below makes the
+    // server NOT streaming, which the #410 gate would (correctly) treat as
+    // "source down → don't reload" — so without this the reload never fires and
+    // the test deadlocks. A pipeline-kill cannot create the gate's real
+    // "server-streaming-but-this-consumer-stuck" precondition; that branch stays
+    // covered by the ndi_reload_guard unit tests. Production never sets this.
+    stageUrl.searchParams.set("ndiReloadSkipHealthz", "1");
     await page.goto(stageUrl.toString());
     await page.waitForSelector('body[data-wasm-ready="true"]', {
       timeout: 30_000,

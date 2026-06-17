@@ -192,6 +192,14 @@ pub(crate) struct ReloadEscalation {
     /// param is read ONCE here; production pages never carry it, so prod always
     /// uses the conservative 60s.
     threshold_ms: f64,
+    /// TEST-ONLY (#422): when the page URL carries `?ndiReloadSkipHealthz=1`,
+    /// the last-resort reload bypasses the #410 `/healthz` streaming gate and
+    /// fires on the no-frames horizon alone. The E2E needs this because a
+    /// pipeline-kill cannot create the gate's "server-streaming-but-this-
+    /// consumer-stuck" precondition (killing the source makes the gate correctly
+    /// suppress the reload). Production stage pages never set it, so prod always
+    /// takes the full gated path. Read ONCE at construction.
+    skip_healthz_gate: bool,
 }
 
 impl ReloadEscalation {
@@ -204,6 +212,7 @@ impl ReloadEscalation {
             reloaded: Cell::new(false),
             check_in_flight: Cell::new(false),
             threshold_ms: reload_threshold_ms_from_url(),
+            skip_healthz_gate: reload_skip_healthz_from_url(),
         })
     }
 
@@ -245,6 +254,23 @@ impl ReloadEscalation {
         }
         if !should_escalate_reload(self.ms_since_last_decoded_frame(), self.threshold_ms) {
             return false;
+        }
+        // TEST-ONLY (#422): bypass the #410 `/healthz` gate so the E2E exercises
+        // the real `window.location.reload()` on the no-frames horizon alone.
+        // Prod stage pages never carry `?ndiReloadSkipHealthz`, so this branch is
+        // dead in production — the full gated path below is unchanged there.
+        if self.skip_healthz_gate {
+            if self.reloaded.replace(true) {
+                return true;
+            }
+            leptos::logging::warn!(
+                "watchdog: no decoded frame for {:.0}ms — LAST-RESORT reload (healthz gate bypassed, test-only #422)",
+                self.ms_since_last_decoded_frame()
+            );
+            if let Some(window) = leptos::web_sys::window() {
+                let _ = window.location().reload();
+            }
+            return true;
         }
         // Horizon crossed. Don't spawn a second check while one is in flight.
         if self.check_in_flight.get() {
@@ -493,6 +519,24 @@ fn reload_threshold_ms_from_url() -> f64 {
         .and_then(|v| v.parse::<f64>().ok())
         .filter(|v| *v > 0.0);
     parsed.unwrap_or(Watchdog::RELOAD_NO_FRAME_MS)
+}
+
+/// TEST-ONLY (#422): whether the page URL carries `?ndiReloadSkipHealthz=1`,
+/// which makes the last-resort reload bypass the #410 `/healthz` streaming gate.
+/// The E2E uses it to exercise the real `window.location.reload()` path
+/// deterministically — a pipeline-kill cannot create the gate's
+/// "server-streaming-but-this-consumer-stuck" precondition. Production stage
+/// pages never set it, so prod always takes the full gated path. Read ONCE.
+fn reload_skip_healthz_from_url() -> bool {
+    leptos::web_sys::window()
+        .and_then(|w| w.location().search().ok())
+        .and_then(|search| {
+            leptos::web_sys::UrlSearchParams::new_with_str(&search)
+                .ok()
+                .and_then(|p| p.get("ndiReloadSkipHealthz"))
+        })
+        .as_deref()
+        == Some("1")
 }
 
 /// Monotonic now in milliseconds: `performance.now()`, with a `Date.now()`
