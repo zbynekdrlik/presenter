@@ -203,19 +203,6 @@ impl AndroidStageRegistry {
         }
     }
 
-    /// Construct a registry with an injected [`AdbRunner`] and explicit stage
-    /// URL — the test seam (#421). Production code uses [`Self::new`]; this
-    /// lets integration tests drive `run_device_worker`/`connect_and_launch`
-    /// with a fake runner and no real device.
-    #[cfg(test)]
-    fn with_runner(runner: Arc<dyn AdbRunner>, stage_url: Option<String>) -> Self {
-        Self {
-            runner,
-            stage_url: Arc::new(stage_url),
-            displays: Arc::new(RwLock::new(HashMap::new())),
-        }
-    }
-
     pub async fn set_displays(&self, displays: Vec<AndroidStageDisplay>) {
         let mut guard = self.displays.write().await;
         let mut desired: HashMap<AndroidStageDisplayId, AndroidStageDisplay> = displays
@@ -869,6 +856,273 @@ mod tests {
         assert_eq!(
             parse_foreground_package("some unrelated dumpsys text"),
             None
+        );
+    }
+
+    // ── #421: keep-alive wiring integration tests (fake AdbRunner) ──────────
+    //
+    // These exercise the WIRING — the force_launch dispatch + the foreground
+    // gate consulted only when !force_launch — with a fake adb runner that
+    // records every invocation and returns canned output, so no real `adb`
+    // binary or device is needed. The pure helpers are unit-tested above; this
+    // proves the helpers are wired together correctly:
+    //   (a) a periodic tick (force_launch=false) fires NO `am start` when the
+    //       browser is already foreground,
+    //   (b) a tick fires `am start` when the device is backgrounded/unknown,
+    //   (c) LaunchNow (force_launch=true) always fires `am start`, regardless
+    //       of foreground state and WITHOUT probing it.
+
+    use std::os::unix::process::ExitStatusExt;
+    use std::process::{ExitStatus, Output};
+    use std::sync::Mutex;
+    use tokio::sync::mpsc;
+
+    const TEST_STAGE_URL: &str = "http://10.77.9.205/stage";
+    const TEST_PKG: &str = "com.tcl.browser";
+
+    fn ok_output(stdout: &str) -> Output {
+        Output {
+            status: ExitStatus::from_raw(0),
+            stdout: stdout.as_bytes().to_vec(),
+            stderr: Vec::new(),
+        }
+    }
+
+    /// Whether `dumpsys activity activities` reports the stage browser as the
+    /// resumed app, another app, or fails (probe inconclusive).
+    #[derive(Clone, Copy)]
+    enum Foreground {
+        Browser,
+        OtherApp,
+        ProbeFails,
+    }
+
+    /// Fake [`AdbRunner`] recording every invocation as a single space-joined
+    /// string, and answering `dumpsys` per the configured foreground state.
+    struct FakeAdbRunner {
+        foreground: Foreground,
+        calls: Mutex<Vec<String>>,
+    }
+
+    impl FakeAdbRunner {
+        fn new(foreground: Foreground) -> Self {
+            Self {
+                foreground,
+                calls: Mutex::new(Vec::new()),
+            }
+        }
+
+        fn invocations(&self) -> Vec<String> {
+            self.calls.lock().expect("calls mutex poisoned").clone()
+        }
+
+        fn am_start_calls(&self) -> usize {
+            self.invocations()
+                .iter()
+                .filter(|c| c.contains("am start"))
+                .count()
+        }
+
+        fn dumpsys_calls(&self) -> usize {
+            self.invocations()
+                .iter()
+                .filter(|c| c.contains("dumpsys activity activities"))
+                .count()
+        }
+    }
+
+    #[async_trait]
+    impl AdbRunner for FakeAdbRunner {
+        async fn run(&self, args: &[OsString]) -> std::io::Result<Output> {
+            let joined = args
+                .iter()
+                .map(|a| a.to_string_lossy().into_owned())
+                .collect::<Vec<_>>()
+                .join(" ");
+            self.calls
+                .lock()
+                .expect("calls mutex poisoned")
+                .push(joined.clone());
+
+            if joined.contains("dumpsys activity activities") {
+                return match self.foreground {
+                    Foreground::Browser => Ok(ok_output(&format!(
+                        "    mResumedActivity: ActivityRecord{{abc u0 {TEST_PKG}/.Main t1}}"
+                    ))),
+                    Foreground::OtherApp => Ok(ok_output(
+                        "    mResumedActivity: ActivityRecord{def u0 com.android.tv.settings/.Main t2}",
+                    )),
+                    // An inconclusive probe = adb exec failure (None foreground).
+                    Foreground::ProbeFails => {
+                        Err(std::io::Error::other("simulated dumpsys failure"))
+                    }
+                };
+            }
+
+            // connect / disconnect / `am start` all succeed cleanly.
+            Ok(ok_output(""))
+        }
+    }
+
+    fn test_display() -> AndroidStageDisplay {
+        let now = Utc::now();
+        AndroidStageDisplay::new(
+            AndroidStageDisplayId::from_uuid(Uuid::new_v4()),
+            "Stage TV".to_string(),
+            "10.0.0.42".to_string(),
+            5555,
+            TEST_PKG.to_string(),
+            true,
+            now,
+            now,
+        )
+    }
+
+    fn test_status() -> Arc<RwLock<AndroidStageDisplayStatusSnapshot>> {
+        Arc::new(RwLock::new(AndroidStageDisplayStatusSnapshot {
+            state: AndroidStageDisplayState::Connecting,
+            last_attempt: None,
+            last_success: None,
+            last_error: None,
+        }))
+    }
+
+    // (a) Periodic keep-alive, browser already foreground → NO `am start`.
+    #[tokio::test]
+    async fn tick_skips_am_start_when_browser_foreground() {
+        let runner = FakeAdbRunner::new(Foreground::Browser);
+        let stage_url = Arc::new(Some(TEST_STAGE_URL.to_string()));
+        let config = test_display();
+        let status = test_status();
+
+        // force_launch=false models the periodic tick.
+        let result = connect_and_launch(&runner, &stage_url, &config, &status, false).await;
+        assert!(
+            result.is_ok(),
+            "keep-alive on a healthy display must succeed"
+        );
+
+        assert_eq!(
+            runner.dumpsys_calls(),
+            1,
+            "the tick MUST consult the foreground gate (dumpsys) when !force_launch",
+        );
+        assert_eq!(
+            runner.am_start_calls(),
+            0,
+            "the tick must NOT re-fire `am start` when the browser is already foreground (#419 wiring)",
+        );
+        assert_eq!(
+            status.read().await.state,
+            AndroidStageDisplayState::Running,
+            "a confirmed-foreground probe is a liveness success → Running",
+        );
+    }
+
+    // (b) Periodic keep-alive, another app foreground → DOES fire `am start`.
+    #[tokio::test]
+    async fn tick_fires_am_start_when_backgrounded() {
+        let runner = FakeAdbRunner::new(Foreground::OtherApp);
+        let stage_url = Arc::new(Some(TEST_STAGE_URL.to_string()));
+        let config = test_display();
+        let status = test_status();
+
+        let result = connect_and_launch(&runner, &stage_url, &config, &status, false).await;
+        assert!(
+            result.is_ok(),
+            "a backgrounded display must relaunch and succeed"
+        );
+
+        assert_eq!(
+            runner.dumpsys_calls(),
+            1,
+            "the tick MUST consult the foreground gate when !force_launch",
+        );
+        assert_eq!(
+            runner.am_start_calls(),
+            1,
+            "the tick MUST fire `am start` when the browser is not foreground (recovery wiring)",
+        );
+    }
+
+    // (b') Periodic keep-alive, foreground probe inconclusive → still launches.
+    #[tokio::test]
+    async fn tick_fires_am_start_when_foreground_unknown() {
+        let runner = FakeAdbRunner::new(Foreground::ProbeFails);
+        let stage_url = Arc::new(Some(TEST_STAGE_URL.to_string()));
+        let config = test_display();
+        let status = test_status();
+
+        let result = connect_and_launch(&runner, &stage_url, &config, &status, false).await;
+        assert!(result.is_ok());
+
+        assert_eq!(runner.dumpsys_calls(), 1, "the gate is consulted on a tick");
+        assert_eq!(
+            runner.am_start_calls(),
+            1,
+            "an inconclusive foreground probe must NOT suppress a needed launch",
+        );
+    }
+
+    // (c) LaunchNow / forced launch → always `am start`, NEVER probes foreground.
+    #[tokio::test]
+    async fn launch_now_always_fires_am_start_without_probing() {
+        // Even with the browser already foreground, force_launch=true must
+        // relaunch and must NOT consult the gate.
+        let runner = FakeAdbRunner::new(Foreground::Browser);
+        let stage_url = Arc::new(Some(TEST_STAGE_URL.to_string()));
+        let config = test_display();
+        let status = test_status();
+
+        let result = connect_and_launch(&runner, &stage_url, &config, &status, true).await;
+        assert!(result.is_ok(), "a forced launch must succeed");
+
+        assert_eq!(
+            runner.dumpsys_calls(),
+            0,
+            "a forced launch (force_launch=true) MUST bypass the foreground gate",
+        );
+        assert_eq!(
+            runner.am_start_calls(),
+            1,
+            "a forced launch MUST always fire `am start` regardless of foreground state",
+        );
+    }
+
+    // The DISPATCH wiring end-to-end: a LaunchNow command through the worker
+    // fires `am start` even when the browser is already foreground (proving the
+    // worker dispatches force_launch=true for LaunchNow, never consulting the
+    // gate). Drives run_device_worker directly so the command→force_launch
+    // mapping is exercised, not just connect_and_launch.
+    #[tokio::test]
+    async fn worker_launch_now_command_forces_am_start() {
+        // Keep a concrete Arc to read recorded calls after the worker exits;
+        // hand a coerced `Arc<dyn AdbRunner>` clone to the worker (no downcast).
+        let fake = Arc::new(FakeAdbRunner::new(Foreground::Browser));
+        let runner: Arc<dyn AdbRunner> = Arc::clone(&fake) as Arc<dyn AdbRunner>;
+        let stage_url = Arc::new(Some(TEST_STAGE_URL.to_string()));
+        let config = test_display();
+        let status = test_status();
+
+        let (tx, rx) = mpsc::channel(COMMAND_CHANNEL_CAPACITY);
+        // LaunchNow then Shutdown so the worker processes the command and exits
+        // promptly (the 20s tick never fires within this test window).
+        tx.try_send(DeviceCommand::LaunchNow).unwrap();
+        tx.try_send(DeviceCommand::Shutdown).unwrap();
+
+        run_device_worker(runner, stage_url, config, status, rx)
+            .await
+            .expect("worker should exit cleanly on Shutdown");
+
+        assert_eq!(
+            fake.dumpsys_calls(),
+            0,
+            "LaunchNow must dispatch force_launch=true → the gate is never consulted",
+        );
+        assert_eq!(
+            fake.am_start_calls(),
+            1,
+            "LaunchNow must fire `am start` even when the browser is already foreground",
         );
     }
 }
