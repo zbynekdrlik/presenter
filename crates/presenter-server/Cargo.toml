@@ -35,6 +35,7 @@ rosc = "0.10"
 include_dir = "0.7"
 async-stream = "0.3"
 regex = "1"
+async-trait.workspace = true
 
 [features]
 default = []
@@ -47,7 +48,6 @@ serde_json.workspace = true
 tokio.workspace = true
 tower.workspace = true
 presenter-persistence = { path = "../presenter-persistence" }
-async-trait.workspace = true
 wiremock = "0.6"
 tempfile = "3.10"
 
