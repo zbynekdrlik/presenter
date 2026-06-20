@@ -45,3 +45,38 @@ Terse per-issue record of autonomous cycles (issue #, commits, tests, decisions)
 - **Version:** 0.4.136 → 0.4.137 (`5687f0d`). Local: `cargo test --lib wake_lock` 3/3; clippy `--lib` host + `--target wasm32` clean; `cargo check --lib --target wasm32-unknown-unknown` (real run target) compiles clean; fmt clean; quality-check `--strict --against origin/main` exit 0.
 - **Out-of-repo follow-ups (noted in PR, ops handles):** set `screen_off_timeout=max` on sd1 via adb; fix prod `stage-watchdog.sh` stale "VP8" comment (script not in repo).
 - **PR #414** dev→main — opened, NOT merged (supervisor drives CI→merge→deploy).
+
+---
+
+## 2026-06-20 — Batch: #364 + #366 (one PR, one CI cycle) → PR #427, merge 5f8e5f9
+
+**Version:** 0.4.140 → 0.4.141 (`9b91706`).
+
+### #364 — quality-check.sh placeholder/TODO gate was a silent no-op (BUG FIX, RED→GREEN)
+- **Root cause:** `crates/**/*.rs` rg include glob is version-fragile (older rg misses nested files) + both rg calls ended in `2>/dev/null || true` (swallowed real scan errors → gate passed silently). No self-test.
+- **Fix:** extracted scan into `scripts/dev/placeholder_check.sh` — scans explicit relative `crates` path via `--type rust`/`--type ts`, branches on rg exit code (0 match / 1 no-match / ≥2 error) so a real scan error exits 2 loudly. quality-check.sh §16 calls it + maps exit code. Self-test `tests/ci/placeholder-gate.test.sh` wired into CI "Run CI shell tests".
+- **Regression test:** `tests/ci/placeholder-gate.test.sh` — RED `4716b45` (test only, gate absent / old shallow-glob no-ops), GREEN `723881f` (robust gate fires on deeply-nested marker, fails loudly on scan error). `Closes #364`.
+- **Review fixes:** `456e200` (rel scan path fixes spaced-checkout false-positive in comment filter; meaningful RED-pin), `a65000f` (assertion 3 → genuine differential pin vs $GATE), `5407f6b` (CI: install ripgrep in Test job — runner lacked it, self-test failed on missing rg).
+
+### #366 — consolidate cargo-audit/deny advisory-ignore config (REFACTOR, no behavior change) — `a840fe7`
+- Moved RUSTSEC-2026-0097 + RUSTSEC-2026-0173 from CI `--ignore` flags into `.cargo/audit.toml` (file cargo-audit actually reads); dropped `--ignore` from pipeline.yml + security-schedule.yml (kept in sync); added cross-ref comment to deny.toml; deleted dead repo-root `audit.toml` (empirically proven never read). RUSTSEC-2026-0173 stays ignored (blocked by #367). Verified: `cargo audit --deny warnings` (no flags) + `cargo deny check advisories / bans licenses sources` all green.
+
+**Audits:** /review (code-review skill) + /requesting-code-review (deep) — all findings fixed. CI all 13 required checks + Mutation advisory green; PR mergeable+clean. Deployed v0.4.141: dev DOM `v0.4.141 (dev)`, prod DOM `v0.4.141`, 0 console errors.
+
+---
+
+## 2026-06-20 — #429 CI: make the Mutation Testing PR gate airuleset-compliant (joins PR #428)
+
+**Version:** unchanged — dev already at 0.4.142 (> main 0.4.141). No bump.
+
+### #429 — Mutation gate full-`--workspace` shard timed out at 45min (`|| true` fake-green) → every PR UNSTABLE (CI-FOUNDATION FIX)
+- **Root cause:** `pipeline.yml` `mutation` job ran `cargo mutants --workspace --timeout 120 --no-shuffle --shard 1/12 ... || true` with `timeout-minutes: 45` — a full-tree shard that timed out at the 45-min cap → run conclusion `cancelled` → PR mergeStateStatus UNSTABLE, despite all required checks green. The `|| true` made it a fake-green advisory, never a real gate.
+- **Fix (airuleset `ci/mutation-testing.md` two-tier shape):**
+  - `pipeline.yml` `mutation` job → **diff-scoped REAL gate**: `timeout-minutes: 20` (hard cap), checkout `fetch-depth: 0`, install cargo-mutants+cargo-nextest via `taiki-e/install-action@v2` (prebuilt), run `git diff origin/${{ github.base_ref || 'main' }}...HEAD > pr.diff` then `cargo mutants --in-diff pr.diff --baseline=skip --test-tool=nextest --jobs 2 -- --all-targets`. Removed `|| true` + `--workspace --shard 1/12`.
+  - `.cargo/mutants.toml`: `profile = "mutants"`, `test_workspace = false` (per-package tests only — `test_package = true` is invalid TOML; the boolean key is `test_workspace`), `exclude_globs` for migrations / proto vendor / companion protocol / build.rs.
+  - `Cargo.toml`: `[profile.mutants]` `inherits = "test"`, `debug = "none"`.
+  - `.github/workflows/mutation-full.yml`: `workflow_dispatch`-only full-tree sweep, sharded 1..8 on `ubuntu-latest`, survivors → `gh issue create` label `test-quality` (label auto-created). The `/mutation-sweep` target.
+  - `.gitignore`: `mutants.out/` + `/pr.diff`.
+- **Diff mutation result (local, verified):** 3 mutants in the PR diff — 1 CaughtMutant (`stage_display_snapshot` match-arm, killed by #383 unit tests), 2 Unviable, **0 survivors** → no new tests needed. `Closes #429`.
+
+**Cycle:** local fmt + clippy (`-D warnings`) + `cargo test --workspace` (all green) + quality-check `--strict --against origin/main` (exit 0) + diff-scoped `cargo mutants` (0 survivors). PR #428 body extended with `Closes #429`.

@@ -1,0 +1,28 @@
+# cargo-mutants configuration (airuleset mutation-testing.md).
+#
+# The mutants profile (see [profile.mutants] in the workspace Cargo.toml) builds
+# without debuginfo so per-mutant rebuilds stay fast.
+profile = "mutants"
+
+# Per-package tests only — NEVER test_workspace = true. With the workspace-wide
+# test set, every mutant would re-run the ENTIRE workspace suite (including the
+# slow integration tests in other crates), blowing the 20-min PR budget. Each
+# mutant runs only the tests of the crate it lives in. `false` is also the
+# cargo-mutants default, set here explicitly so the intent is recorded.
+test_workspace = false
+
+# Skip generated / declarative / vendored code that carries no behavior worth
+# mutating:
+#   - migration files (m*_create_*.rs / m*.rs): declarative schema, CLAUDE.md exempt
+#   - protobuf vendor + checked-in proto descriptors (companion/protocol.rs is a
+#     hand-maintained wire mapping with no branch logic to verify)
+#   - build scripts: compile-time codegen, not runtime behavior
+# (OUT_DIR-generated protobuf — rv.data.rs — is outside the source tree and is
+#  never mutated by cargo-mutants in the first place.)
+exclude_globs = [
+    "crates/presenter-migration/src/m*.rs",
+    "crates/presenter-importer/proto/**",
+    "crates/presenter-importer/vendor/**",
+    "crates/presenter-server/src/companion/protocol.rs",
+    "**/build.rs",
+]

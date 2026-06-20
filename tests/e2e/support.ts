@@ -1,4 +1,4 @@
-import { spawn, type ChildProcessWithoutNullStreams } from "child_process";
+import { spawn, type ChildProcess } from "child_process";
 import { once } from "events";
 import http from "http";
 import path from "path";
@@ -168,7 +168,10 @@ function stableHash(input: string): number {
 }
 
 export type ServerHandle = {
-  process: ChildProcessWithoutNullStreams;
+  // `spawn(..., { stdio: "inherit" })` returns a plain `ChildProcess` whose
+  // .stdout/.stderr are `null` (inherited by the parent), NOT a
+  // `ChildProcessWithoutNullStreams`. Type it as `ChildProcess` to match.
+  process: ChildProcess;
   port: number;
   stop: () => Promise<void>;
 };
