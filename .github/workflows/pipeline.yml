@@ -198,14 +198,10 @@ jobs:
         run: rm -rf ~/.cargo/advisory-db
 
       - name: Run cargo audit
-        # RUSTSEC-2026-0097: rand soundness issue only triggers with a custom
-        # logger that recursively calls rand::rng() — we use tracing_subscriber
-        # which does not. Affects rand 0.8.5 (via sqlx) which has no patched
-        # 0.8.x release; rand 0.9.3+ is patched and we use 0.9.3.
-        # RUSTSEC-2026-0173: proc-macro-error2 unmaintained — transitive
-        # build-time proc-macro dep of leptos & sea-orm; no upgrade path
-        # until those frameworks migrate (dependency-refresh #343).
-        run: cargo audit --deny warnings --ignore RUSTSEC-2026-0097 --ignore RUSTSEC-2026-0173
+        # Advisory ignores (incl. RUSTSEC-2026-0097 and RUSTSEC-2026-0173) live
+        # in .cargo/audit.toml — the single source cargo-audit reads — each with
+        # its justification. Do NOT add --ignore flags here (consolidation #366).
+        run: cargo audit --deny warnings
 
   # ============================================
   # Dependency Policy (cargo-deny)

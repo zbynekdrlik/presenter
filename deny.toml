@@ -11,6 +11,10 @@ all-features = true
 db-path = "~/.cargo/advisory-db"
 db-urls = ["https://github.com/rustsec/advisory-db"]
 version = 2
+# This is the SINGLE source of advisory ignores for cargo-DENY. The cargo-AUDIT
+# side has its own ignore list in .cargo/audit.toml (the file cargo-audit reads)
+# — the two tools are configured separately on purpose (#366). Keep this list in
+# mind when updating advisory ignores: a RUSTSEC may need ignoring in both files.
 # Ignore unmaintained crates where no alternative exists (transitive deps)
 ignore = [
     # paste is unmaintained but required by leptos; no safe upgrade path

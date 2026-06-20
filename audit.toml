@@ -1,7 +1,0 @@
-# Presenter security policy scaffold
-[advisories]
-ignore = []
-
-[output]
-denied = "list"
-quiet = true
