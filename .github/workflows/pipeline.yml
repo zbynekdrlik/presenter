@@ -306,6 +306,12 @@ jobs:
           # rg errors). This self-test proves the gate FIRES on a deeply-nested
           # marker, passes a clean tree, and fails loudly on a real scan error.
           bash tests/ci/placeholder-gate.test.sh
+          # Regression guard for #392: bootstrap-host.sh must install adb
+          # (android-tools-adb), a hard runtime dependency of the Android Stage
+          # Launcher. This self-test FAILS if adb is dropped from APT_PACKAGES,
+          # which would let un-provisioned controllers silently fail their
+          # stage launchers.
+          bash tests/ci/bootstrap-adb.test.sh
 
   # ============================================
   # Mutation Testing
