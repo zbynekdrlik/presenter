@@ -45,3 +45,20 @@ Terse per-issue record of autonomous cycles (issue #, commits, tests, decisions)
 - **Version:** 0.4.136 → 0.4.137 (`5687f0d`). Local: `cargo test --lib wake_lock` 3/3; clippy `--lib` host + `--target wasm32` clean; `cargo check --lib --target wasm32-unknown-unknown` (real run target) compiles clean; fmt clean; quality-check `--strict --against origin/main` exit 0.
 - **Out-of-repo follow-ups (noted in PR, ops handles):** set `screen_off_timeout=max` on sd1 via adb; fix prod `stage-watchdog.sh` stale "VP8" comment (script not in repo).
 - **PR #414** dev→main — opened, NOT merged (supervisor drives CI→merge→deploy).
+
+---
+
+## 2026-06-20 — Batch: #364 + #366 (one PR, one CI cycle) → PR #427, merge 5f8e5f9
+
+**Version:** 0.4.140 → 0.4.141 (`9b91706`).
+
+### #364 — quality-check.sh placeholder/TODO gate was a silent no-op (BUG FIX, RED→GREEN)
+- **Root cause:** `crates/**/*.rs` rg include glob is version-fragile (older rg misses nested files) + both rg calls ended in `2>/dev/null || true` (swallowed real scan errors → gate passed silently). No self-test.
+- **Fix:** extracted scan into `scripts/dev/placeholder_check.sh` — scans explicit relative `crates` path via `--type rust`/`--type ts`, branches on rg exit code (0 match / 1 no-match / ≥2 error) so a real scan error exits 2 loudly. quality-check.sh §16 calls it + maps exit code. Self-test `tests/ci/placeholder-gate.test.sh` wired into CI "Run CI shell tests".
+- **Regression test:** `tests/ci/placeholder-gate.test.sh` — RED `4716b45` (test only, gate absent / old shallow-glob no-ops), GREEN `723881f` (robust gate fires on deeply-nested marker, fails loudly on scan error). `Closes #364`.
+- **Review fixes:** `456e200` (rel scan path fixes spaced-checkout false-positive in comment filter; meaningful RED-pin), `a65000f` (assertion 3 → genuine differential pin vs $GATE), `5407f6b` (CI: install ripgrep in Test job — runner lacked it, self-test failed on missing rg).
+
+### #366 — consolidate cargo-audit/deny advisory-ignore config (REFACTOR, no behavior change) — `a840fe7`
+- Moved RUSTSEC-2026-0097 + RUSTSEC-2026-0173 from CI `--ignore` flags into `.cargo/audit.toml` (file cargo-audit actually reads); dropped `--ignore` from pipeline.yml + security-schedule.yml (kept in sync); added cross-ref comment to deny.toml; deleted dead repo-root `audit.toml` (empirically proven never read). RUSTSEC-2026-0173 stays ignored (blocked by #367). Verified: `cargo audit --deny warnings` (no flags) + `cargo deny check advisories / bans licenses sources` all green.
+
+**Audits:** /review (code-review skill) + /requesting-code-review (deep) — all findings fixed. CI all 13 required checks + Mutation advisory green; PR mergeable+clean. Deployed v0.4.141: dev DOM `v0.4.141 (dev)`, prod DOM `v0.4.141`, 0 console errors.
