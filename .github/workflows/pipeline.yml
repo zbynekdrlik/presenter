@@ -305,6 +305,11 @@ jobs:
           # self-test proves the gate FIRES on a relative-path over-cap fixture
           # and FAILS if the abs/rel bug is reintroduced.
           bash tests/ci/fn-length-gate.test.sh
+          # Regression guard for #364: the placeholder/unfinished-work gate was a
+          # silent no-op (ripgrep-version-fragile `**` include glob + swallowed
+          # rg errors). This self-test proves the gate FIRES on a deeply-nested
+          # marker, passes a clean tree, and fails loudly on a real scan error.
+          bash tests/ci/placeholder-gate.test.sh
 
   # ============================================
   # Mutation Testing
