@@ -45,7 +45,11 @@ if ! command -v rg >/dev/null 2>&1; then
 fi
 
 ROOT_DIR="${1:-$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)}"
-SCAN_DIR="$ROOT_DIR/crates"
+# Scan the `crates` subtree by its RELATIVE name (rg is run from ROOT_DIR), so
+# match output paths are `crates/...` regardless of where the repo is checked
+# out. SCAN_DIR is the absolute form, used only for existence checks/messages.
+SCAN_REL="crates"
+SCAN_DIR="$ROOT_DIR/$SCAN_REL"
 
 if [[ ! -d "$SCAN_DIR" ]]; then
   echo "::error::placeholder gate: scan dir not found: $SCAN_DIR" >&2
@@ -72,8 +76,13 @@ run_rg() {
   local out rc
   # Disable errexit around rg so we can branch on its exit code (rg exits 1 on
   # no-match, which is the normal clean case and must NOT abort the script).
+  # Run from ROOT_DIR and scan the RELATIVE `crates` path so match output is
+  # `crates/...:line:text` (never the absolute checkout prefix). A checkout path
+  # containing a space would otherwise inject a space into the filename field
+  # that the comment filter's `\S+` cannot span — a false positive. The
+  # subshell `cd` keeps the caller's cwd untouched.
   set +e
-  out=$(rg "$@" --type rust --type ts "$SCAN_DIR" "${EXCLUDES[@]}")
+  out=$(cd "$ROOT_DIR" && rg "$@" --type rust --type ts "$SCAN_REL" "${EXCLUDES[@]}")
   rc=$?
   set -e
   case "$rc" in

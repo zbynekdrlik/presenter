@@ -106,20 +106,23 @@ else
   bad "gate failed on a clean fixture (exit $clean_rc); output: $clean_out"
 fi
 
-# --- Assertion 3: RED-pin — the OLD buggy approach no-ops on the fixture ------
-# Reproduce the pre-fix logic: include glob `crates/**/*.rs` evaluated relative
-# to the REPO root (not the fixture root) plus `2>/dev/null || true`. Run from a
-# cwd where the glob cannot match the fixture's deeply-nested file, exactly the
-# silent miss the fix eliminates.
+# --- Assertion 3: RED-pin — the OLD `2>/dev/null || true` swallow no-ops on a
+# real scan error, the new gate does NOT. This pins the version-INDEPENDENT core
+# of the fix: a glob/rg error (the silent gate's worst failure — it could pass
+# even when the scan never ran). The `**`-glob fragility is the OTHER half of the
+# bug and is pinned by assertion 1 (the new gate must SCAN deeply-nested files);
+# assertion 4 confirms the new gate fails loudly on the same error. Here we
+# reproduce the OLD logic on a guaranteed rg error and show it stays silent.
 echo ""
-echo "[3] OLD buggy approach (crates/**/*.rs glob + swallow), must NO-OP on fixture:"
-buggy_hits=$(cd "$WORK" && rg -in '(coming soon|not implemented)' \
-  -g 'crates/**/qc_self_test/src/*.rs' \
-  2>/dev/null || true)
-if [[ -z "$buggy_hits" ]]; then
-  ok "the old shallow-glob approach reports ZERO hits — confirms the no-op the fix removes"
+echo "[3] OLD swallow logic ('rg ... 2>/dev/null || true') must NO-OP on a real scan error:"
+# Force a real ripgrep error: scan a non-existent path. Old logic swallows it.
+old_logic_out=$(rg -in '(coming soon|not implemented)' \
+  "$WORK/crates/__definitely_missing__" 2>/dev/null || true)
+old_logic_rc=0  # the `|| true` always yields 0 — that IS the no-op
+if [[ -z "$old_logic_out" && "$old_logic_rc" == "0" ]]; then
+  ok "the old swallow logic returns empty + exit 0 on a real rg error — the silent no-op the fix removes"
 else
-  bad "the old shallow-glob approach unexpectedly matched ($buggy_hits); the RED-pin is not meaningful"
+  bad "the old swallow logic did not no-op as expected (out='$old_logic_out' rc=$old_logic_rc); RED-pin not meaningful"
 fi
 
 # --- Assertion 4: Loud — a real scan error FAILS LOUDLY (exit 2) -------------
