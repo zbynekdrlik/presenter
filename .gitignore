@@ -37,3 +37,7 @@ NDI SDK for Linux/
 /*.png
 /*.jpeg
 /*.jpg
+
+# cargo-mutants output + the diff the in-diff PR gate writes (CI + local runs)
+mutants.out/
+/pr.diff

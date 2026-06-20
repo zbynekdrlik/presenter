@@ -1,0 +1,126 @@
+name: Mutation Full Sweep
+
+# Full-tree mutation catch-up (airuleset mutation-testing.md). This is the
+# on-demand `/mutation-sweep` target — it mutates the WHOLE workspace, sharded,
+# and files any surviving mutants as `test-quality` GitHub issues. It is
+# DELIBERATELY workflow_dispatch ONLY (never schedule / push / pull_request): a
+# multi-hour mutation run must never compete with active dev CI. The user fires
+# it when there is capacity. It runs on GitHub-hosted runners so it never ties
+# up the self-hosted dev runner.
+on:
+  workflow_dispatch:
+
+concurrency:
+  group: mutation-full
+  cancel-in-progress: false
+
+env:
+  CARGO_TERM_COLOR: always
+  CARGO_INCREMENTAL: 0
+  RUST_BACKTRACE: short
+
+permissions:
+  contents: read
+  issues: write
+
+jobs:
+  mutation-full:
+    name: Mutation Full Sweep (shard ${{ matrix.shard }}/8)
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: [1, 2, 3, 4, 5, 6, 7, 8]
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Install system dependencies
+        run: sudo apt-get update -qq && sudo apt-get install -y -qq protobuf-compiler cmake nasm gstreamer1.0-plugins-base gstreamer1.0-plugins-good gstreamer1.0-plugins-bad gstreamer1.0-plugins-ugly gstreamer1.0-vaapi gstreamer1.0-libav gstreamer1.0-nice libgstreamer1.0-dev libgstreamer-plugins-base1.0-dev libgstreamer-plugins-bad1.0-dev libva-dev intel-media-va-driver-non-free
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Setup Rust cache
+        uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: ci
+          cache-on-failure: false
+
+      - name: Install cargo-mutants + cargo-nextest (prebuilt)
+        uses: taiki-e/install-action@v2
+        with:
+          tool: cargo-mutants,cargo-nextest
+
+      # Run the full-tree mutation set for this shard. cargo-mutants exits
+      # non-zero when mutants survive; survivors are EXPECTED output here (they
+      # become tracked issues below), so a non-zero exit from surviving mutants
+      # must NOT fail the job — only a genuine tooling failure should. We detect
+      # the difference via the outcomes.json artifact: present + parseable =>
+      # mutants ran successfully; absent => the tool failed and we re-raise.
+      - name: Run full-tree mutation testing (shard ${{ matrix.shard }}/8)
+        id: mutants
+        run: |
+          set +e
+          cargo mutants --shard ${{ matrix.shard }}/8 --baseline=skip \
+            --test-tool=nextest --jobs 2 -- --all-targets
+          status=$?
+          set -e
+          if [ ! -f mutants.out/outcomes.json ]; then
+            echo "::error::cargo-mutants did not produce outcomes.json — tooling failure (exit $status)"
+            exit 1
+          fi
+          echo "cargo-mutants completed (exit $status); outcomes.json present."
+
+      - name: Collect surviving mutants
+        id: survivors
+        run: |
+          : > survivors.txt
+          # Prefer cargo-mutants' own human-readable missed list when present.
+          if [ -f mutants.out/missed.txt ]; then
+            cp mutants.out/missed.txt survivors.txt
+          elif [ -f mutants.out/outcomes.json ]; then
+            jq -r '
+              .outcomes[]
+              | select(.summary == "MissedMutant")
+              | "\(.scenario.Mutant.file):\(.scenario.Mutant.span.start.line) — \(.scenario.Mutant.function.function_name)"
+            ' mutants.out/outcomes.json > survivors.txt || true
+          fi
+          count=$(grep -c . survivors.txt || true)
+          echo "count=$count" >> "$GITHUB_OUTPUT"
+          echo "Surviving mutants in shard ${{ matrix.shard }}: $count"
+          cat survivors.txt || true
+
+      - name: File surviving mutants as a test-quality issue
+        if: steps.survivors.outputs.count != '0'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          # Ensure the label exists (idempotent).
+          gh label create test-quality \
+            --color FBCA04 \
+            --description "Surviving mutants from the full-tree mutation sweep" \
+            2>/dev/null || true
+          title="Mutation sweep: surviving mutants (shard ${{ matrix.shard }}/8, run ${{ github.run_id }})"
+          {
+            echo "The full-tree mutation sweep (mutation-full.yml) found surviving mutants in shard ${{ matrix.shard }}/8."
+            echo "These are code mutations that NO test caught — tests assert on them weakly or not at all."
+            echo ""
+            echo "Kill each by adding/strengthening a test, then the mutant is caught."
+            echo ""
+            echo '```'
+            cat survivors.txt
+            echo '```'
+            echo ""
+            echo "Run id: ${{ github.run_id }} — see the mutation-results artifact for full output."
+          } > issue-body.txt
+          gh issue create --title "$title" --label test-quality --body-file issue-body.txt
+
+      - name: Upload mutation results
+        uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: mutation-full-results-shard-${{ matrix.shard }}-${{ github.run_id }}
+          path: mutants.out/
+          retention-days: 14

@@ -310,13 +310,20 @@ jobs:
   # ============================================
   # Mutation Testing
   # ============================================
+  # Diff-scoped PR gate (airuleset mutation-testing.md). Mutates ONLY the lines
+  # changed in this PR vs the base branch — a REAL pass/fail gate, HARD-CAPPED at
+  # 20 min. The previous full-`--workspace --shard 1/12 ... || true` job timed
+  # out at its 45-min cap on every PR (#429), leaving the PR UNSTABLE. The
+  # full-tree catch-up runs on demand via mutation-full.yml (`/mutation-sweep`).
   mutation:
     name: Mutation Testing
     runs-on: ubuntu-latest
     needs: test
-    timeout-minutes: 45
+    timeout-minutes: 20
     steps:
       - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
 
       - name: Install system dependencies
         run: sudo apt-get update -qq && sudo apt-get install -y -qq protobuf-compiler cmake nasm gstreamer1.0-plugins-base gstreamer1.0-plugins-good gstreamer1.0-plugins-bad gstreamer1.0-plugins-ugly gstreamer1.0-vaapi gstreamer1.0-libav gstreamer1.0-nice libgstreamer1.0-dev libgstreamer-plugins-base1.0-dev libgstreamer-plugins-bad1.0-dev libva-dev intel-media-va-driver-non-free
@@ -330,47 +337,22 @@ jobs:
           shared-key: ci
           cache-on-failure: false
 
-      - name: Cache cargo-mutants binary
-        uses: actions/cache@v4
+      - name: Install cargo-mutants + cargo-nextest (prebuilt)
+        uses: taiki-e/install-action@v2
         with:
-          path: ~/.cargo/bin/cargo-mutants
-          key: cargo-mutants-${{ runner.os }}-v1
-          restore-keys: cargo-mutants-${{ runner.os }}-
+          tool: cargo-mutants,cargo-nextest
 
-      - name: Install cargo-mutants
-        run: command -v cargo-mutants >/dev/null 2>&1 || cargo install cargo-mutants --locked
-
-      - name: Run mutation testing (baseline — advisory only)
+      - name: Run diff-scoped mutation testing (real gate)
         run: |
-          cargo mutants --workspace --timeout 120 --no-shuffle \
-            --shard 1/12 --output mutants.out 2>&1 | tee mutants-output.txt || true
-
-          echo "=== Mutation Testing Summary ==="
-          if [ -f mutants.out/outcomes.json ]; then
-            CAUGHT=$(jq '[.[] | select(.summary == "CaughtMutant")] | length' mutants.out/outcomes.json)
-            MISSED=$(jq '[.[] | select(.summary == "MissedMutant")] | length' mutants.out/outcomes.json)
-            TIMEOUT=$(jq '[.[] | select(.summary == "Timeout")] | length' mutants.out/outcomes.json)
-            TOTAL=$((CAUGHT + MISSED + TIMEOUT))
-            echo "Caught: $CAUGHT / $TOTAL"
-            echo "Missed: $MISSED / $TOTAL"
-            echo "Timeout: $TIMEOUT / $TOTAL"
-            if [ "$TOTAL" -gt 0 ]; then
-              SCORE=$(( CAUGHT * 100 / TOTAL ))
-              echo "Mutation score: ${SCORE}%"
-            fi
-          else
-            echo "No outcomes.json found — cargo-mutants may have failed to run"
-            cat mutants-output.txt
-          fi
+          git diff origin/${{ github.base_ref || 'main' }}...HEAD > pr.diff
+          cargo mutants --in-diff pr.diff --baseline=skip --test-tool=nextest --jobs 2 -- --all-targets
 
       - name: Upload mutation results
         uses: actions/upload-artifact@v4
         if: always()
         with:
           name: mutation-results-${{ github.run_id }}
-          path: |
-            mutants.out/
-            mutants-output.txt
+          path: mutants.out/
           retention-days: 14
 
   # ============================================
