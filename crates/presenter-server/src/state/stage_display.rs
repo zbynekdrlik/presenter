@@ -68,14 +68,18 @@ impl AppState {
         let Some(layout) = layout else {
             return Ok(None);
         };
-        // When the DB has no presentations / no default stage,
-        // `build_stage_context` returns `None`. The layout itself is valid, so
-        // serve a 200 with an EMPTY snapshot (cleared resolution + live timers)
-        // instead of a 404 the browser logs as a console error (issue #383).
+        // When the DB has no presentations / no default stage (or the active
+        // presentation was deleted), `build_stage_context` returns `None`. The
+        // layout itself is valid, so serve a 200 with an EMPTY snapshot (cleared
+        // resolution + live timers) instead of a 404 the browser logs as a
+        // console error (issue #383). Both branches are then enriched uniformly
+        // so AbleSet-sourced song names + group colors still surface even when
+        // the DB has no presentations (AbleSet is independent of the DB).
         let context = match self.build_stage_context().await? {
-            Some(context) => self.enrich_stage_context(&context).await,
+            Some(context) => context,
             None => self.empty_stage_context().await?,
         };
+        let context = self.enrich_stage_context(&context).await;
         Ok(Some(build_stage_snapshot(layout, &context)))
     }
 
