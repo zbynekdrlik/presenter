@@ -243,6 +243,25 @@ impl AppState {
         }))
     }
 
+    /// Build a `StageContext` with a *cleared* (empty) resolution — no
+    /// presentation, no slides — but a live timers overview. Used to serve a
+    /// valid 200 empty snapshot for the stage display when the database has no
+    /// presentations / no default stage (issue #383), instead of a 404 that the
+    /// browser network layer logs as a console error. The timers + layout still
+    /// render; the slide area is simply blank.
+    pub(super) async fn empty_stage_context(&self) -> anyhow::Result<StageContext> {
+        let now = Utc::now();
+        let timers_state = self.load_or_init_timers(now).await?;
+        let overview = timers_state.overview(now);
+        let latency_ms = self.sample_resolume_latency().await;
+        Ok(StageContext {
+            generated_at: now,
+            overview,
+            resolution: StageResolution::cleared(),
+            latency_ms,
+        })
+    }
+
     async fn resolve_stage_from_state(
         &self,
         stage_state: &StageState,

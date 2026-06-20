@@ -62,13 +62,20 @@ impl AppState {
         let layout = StageDisplayLayout::built_in()
             .into_iter()
             .find(|layout| layout.code == layout_code);
+        // An UNKNOWN explicitly-requested layout stays a genuine 404 — do NOT
+        // mask real "not found" errors. Only the empty-DB / no-presentation
+        // case below is downgraded to a 200 empty snapshot (issue #383).
         let Some(layout) = layout else {
             return Ok(None);
         };
-        let Some(context) = self.build_stage_context().await? else {
-            return Ok(None);
+        // When the DB has no presentations / no default stage,
+        // `build_stage_context` returns `None`. The layout itself is valid, so
+        // serve a 200 with an EMPTY snapshot (cleared resolution + live timers)
+        // instead of a 404 the browser logs as a console error (issue #383).
+        let context = match self.build_stage_context().await? {
+            Some(context) => self.enrich_stage_context(&context).await,
+            None => self.empty_stage_context().await?,
         };
-        let context = self.enrich_stage_context(&context).await;
         Ok(Some(build_stage_snapshot(layout, &context)))
     }
 
@@ -147,5 +154,66 @@ impl AppState {
             .into_iter()
             .filter(|l| l.code != "camera-crew")
             .collect())
+    }
+}
+
+#[cfg(test)]
+mod empty_db_snapshot_tests {
+    use super::*;
+    use crate::state::AppState;
+
+    /// Issue #383: on an EMPTY database (no presentations / no default stage),
+    /// requesting a VALID built-in layout must return `Some(empty snapshot)` —
+    /// served as a 200 by the handler — NOT `None` (which the handler turns into
+    /// a 404 the browser logs as a console error).
+    #[tokio::test]
+    async fn valid_layout_on_empty_db_returns_empty_snapshot_not_none() {
+        let state = AppState::in_memory().await.unwrap();
+        // No seed_sample_library — the DB is empty.
+
+        let result = state
+            .stage_display_snapshot(DEFAULT_STAGE_LAYOUT_CODE)
+            .await
+            .unwrap();
+
+        let snapshot = result.expect("empty DB must yield Some(empty snapshot), not None (#383)");
+        assert_eq!(snapshot.layout.code, DEFAULT_STAGE_LAYOUT_CODE);
+        // The slide area is blank on an empty DB, but the snapshot is valid.
+        assert!(snapshot.current.is_none());
+        assert!(snapshot.next.is_none());
+        assert!(snapshot.presentation_id.is_none());
+    }
+
+    /// Issue #383 design constraint: an UNKNOWN explicitly-requested layout must
+    /// STILL return `None` (→ genuine 404). The empty-snapshot downgrade applies
+    /// only to the empty-DB case, never to masking a real "layout not found".
+    #[tokio::test]
+    async fn unknown_layout_still_returns_none_for_404() {
+        let state = AppState::in_memory().await.unwrap();
+
+        let result = state
+            .stage_display_snapshot("definitely-not-a-real-layout")
+            .await
+            .unwrap();
+
+        assert!(
+            result.is_none(),
+            "unknown layout must stay None (404), not be masked as an empty snapshot (#383)"
+        );
+    }
+
+    /// The default-selected snapshot path (no explicit layout) must also serve a
+    /// 200 empty snapshot on an empty DB, since the persisted/default layout code
+    /// is always a valid built-in.
+    #[tokio::test]
+    async fn selected_snapshot_on_empty_db_returns_empty_snapshot() {
+        let state = AppState::in_memory().await.unwrap();
+
+        let result = state.selected_stage_display_snapshot().await.unwrap();
+
+        let snapshot =
+            result.expect("default selected snapshot on empty DB must be Some, not None (#383)");
+        assert!(snapshot.current.is_none());
+        assert!(snapshot.presentation_id.is_none());
     }
 }
