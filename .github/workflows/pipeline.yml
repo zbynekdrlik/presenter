@@ -345,7 +345,7 @@ jobs:
       - name: Run diff-scoped mutation testing (real gate)
         run: |
           git diff origin/${{ github.base_ref || 'main' }}...HEAD > pr.diff
-          cargo mutants --in-diff pr.diff --baseline=skip --test-tool=nextest --jobs 2 -- --all-targets
+          cargo mutants --in-diff pr.diff --baseline=skip --timeout 300 --test-tool=nextest --jobs 2 -- --all-targets
 
       - name: Upload mutation results
         uses: actions/upload-artifact@v4

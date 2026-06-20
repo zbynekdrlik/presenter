@@ -65,7 +65,7 @@ jobs:
         id: mutants
         run: |
           set +e
-          cargo mutants --shard ${{ matrix.shard }}/8 --baseline=skip \
+          cargo mutants --shard ${{ matrix.shard }}/8 --baseline=skip --timeout 300 \
             --test-tool=nextest --jobs 2 -- --all-targets
           status=$?
           set -e
