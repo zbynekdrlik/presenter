@@ -106,30 +106,41 @@ else
   bad "gate failed on a clean fixture (exit $clean_rc); output: $clean_out"
 fi
 
-# --- Assertion 3: RED-pin — the OLD `2>/dev/null || true` swallow no-ops on a
-# real scan error, the new gate does NOT. This pins the version-INDEPENDENT core
-# of the fix: a glob/rg error (the silent gate's worst failure — it could pass
-# even when the scan never ran). The `**`-glob fragility is the OTHER half of the
-# bug and is pinned by assertion 1 (the new gate must SCAN deeply-nested files);
-# assertion 4 confirms the new gate fails loudly on the same error. Here we
-# reproduce the OLD logic on a guaranteed rg error and show it stays silent.
+# --- Assertion 3: DIFFERENTIAL pin — on the SAME real scan error, the OLD
+# `2>/dev/null || true` swallow logic silently no-ops (empty output, exit 0)
+# while the NEW gate fails loudly. This pins the version-INDEPENDENT core of the
+# fix: a glob/rg error (the silent gate's worst failure — it could pass even when
+# the scan never ran) must now be surfaced, not swallowed. It exercises $GATE
+# directly, so it breaks if the swallow is reintroduced. (The `**`-glob fragility
+# is the OTHER half of the bug, pinned by assertion 1 requiring deeply-nested
+# files to be scanned.) Trigger a real ripgrep error with an unreadable dir.
 echo ""
-echo "[3] OLD swallow logic ('rg ... 2>/dev/null || true') must NO-OP on a real scan error:"
-# Force a real ripgrep error: scan a non-existent path. Old logic swallows it.
-old_logic_out=$(rg -in '(coming soon|not implemented)' \
-  "$WORK/crates/__definitely_missing__" 2>/dev/null || true)
-old_logic_rc=0  # the `|| true` always yields 0 — that IS the no-op
-if [[ -z "$old_logic_out" && "$old_logic_rc" == "0" ]]; then
-  ok "the old swallow logic returns empty + exit 0 on a real rg error — the silent no-op the fix removes"
+echo "[3] On the SAME scan error: OLD swallow no-ops, NEW gate fails loudly (differential pin):"
+DIFFDIR="$(mktemp -d)"
+trap 'rm -rf "$WORK" "$CLEAN" "$DIFFDIR"' EXIT
+mkdir -p "$DIFFDIR/crates/sealed"
+chmod 000 "$DIFFDIR/crates/sealed"
+# OLD logic: rg over the unreadable subtree with the swallow — yields nothing, no fail signal.
+old_out=$(rg -in '(coming soon|not implemented)' "$DIFFDIR/crates" 2>/dev/null || true)
+# NEW gate: same scan dir, must fail loudly (exit 2).
+set +e
+new_out=$("$GATE" "$DIFFDIR" 2>&1)
+new_rc=$?
+set -e
+chmod 755 "$DIFFDIR/crates/sealed" 2>/dev/null || true
+if [[ "$(id -u)" == "0" ]]; then
+  ok "running as root — skipping unreadable-dir differential (root bypasses permission bits)"
+elif [[ -z "$old_out" ]] && (( new_rc == 2 )); then
+  ok "old swallow stayed silent (empty) while the new gate failed loudly (exit 2) on the same error"
 else
-  bad "the old swallow logic did not no-op as expected (out='$old_logic_out' rc=$old_logic_rc); RED-pin not meaningful"
+  bad "differential pin failed: old_out='$old_out' new_rc=$new_rc (expected old empty, new exit 2)"
 fi
 
 # --- Assertion 4: Loud — a real scan error FAILS LOUDLY (exit 2) -------------
 echo ""
 echo "[4] Real gate on an UNREADABLE scan dir (must FAIL LOUDLY = exit 2, never silent pass):"
 ERRDIR="$(mktemp -d)"
-trap 'rm -rf "$WORK" "$CLEAN" "$ERRDIR"' EXIT
+trap 'rm -rf "$WORK" "$CLEAN" "$DIFFDIR" "$ERRDIR"' EXIT
 mkdir -p "$ERRDIR/crates"
 chmod 000 "$ERRDIR/crates"
 set +e
