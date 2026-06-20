@@ -417,48 +417,30 @@ TEST_PY
   fi
 fi
 
-# 16) Placeholder / unfinished-work detection (Issue #200)
+# 16) Placeholder / unfinished-work detection (Issue #200; robustness fix #364)
+# The scan logic lives in scripts/dev/placeholder_check.sh so it can be
+# exercised directly by the gate self-test (tests/ci/placeholder-gate.test.sh).
+# It scans an explicit path with `--type rust`/`--type ts` (robust across
+# ripgrep versions, unlike the old `crates/**/*.rs` include glob) and branches
+# on ripgrep's exit code so a real rg/glob error FAILS LOUDLY instead of being
+# swallowed by `2>/dev/null || true` (the silent no-op bug #364 fixed).
 if command -v rg >/dev/null 2>&1; then
-  placeholder_hits=""
-
-  # Pattern group 1: multi-word phrases (always placeholder, even in comments)
-  phrase_hits=$(rg -in '(coming soon|not implemented)' \
-    -g 'crates/**/*.rs' \
-    -g 'crates/**/*.ts' \
-    -g '!**/tests.rs' -g '!**/tests/*.rs' -g '!**/test_*.rs' \
-    -g '!**/vendor/**' \
-    -g '!*/presenter-migration/**' \
-    -g '!**/*.css' \
-    2>/dev/null || true)
-  if [[ -n "$phrase_hits" ]]; then
-    placeholder_hits+="$phrase_hits"$'\n'
-  fi
-
-  # Pattern group 2: marker words — exclude comment lines (// or * or #)
-  marker_hits=$(rg -n '\b(TODO|FIXME|HACK)\b' \
-    -g 'crates/**/*.rs' \
-    -g 'crates/**/*.ts' \
-    -g '!**/tests.rs' -g '!**/tests/*.rs' -g '!**/test_*.rs' \
-    -g '!**/vendor/**' \
-    -g '!*/presenter-migration/**' \
-    -g '!**/*.css' \
-    2>/dev/null || true)
-  # Filter out comment lines
-  if [[ -n "$marker_hits" ]]; then
-    filtered_markers=$(echo "$marker_hits" | grep -vP '^\S+:\d+:\s*(//|/?\*|#)' || true)
-    if [[ -n "$filtered_markers" ]]; then
-      placeholder_hits+="$filtered_markers"$'\n'
-    fi
-  fi
-
-  # Remove trailing newlines and check
-  placeholder_hits=$(echo "$placeholder_hits" | sed '/^$/d')
-  if [[ -n "$placeholder_hits" ]]; then
-    fail "Placeholder/unfinished text found in production code:"
-    while IFS= read -r line; do
-      fail "  $line"
-    done <<< "$placeholder_hits"
-  fi
+  set +e
+  placeholder_hits=$(bash "$ROOT_DIR/scripts/dev/placeholder_check.sh" "$ROOT_DIR")
+  placeholder_rc=$?
+  set -e
+  case "$placeholder_rc" in
+    0) : ;;  # clean
+    1)        # markers found
+      fail "Placeholder/unfinished text found in production code:"
+      while IFS= read -r line; do
+        [[ -n "$line" ]] && fail "  $line"
+      done <<< "$placeholder_hits"
+      ;;
+    *)        # real scan error — never silent
+      fail "Placeholder gate scan failed (exit $placeholder_rc): ${placeholder_hits:-<no output>}"
+      ;;
+  esac
 fi
 
 # Emit results

@@ -1,3 +1,9 @@
+# cargo-audit configuration — the SINGLE source of advisory ignores for
+# cargo-audit. cargo-audit reads THIS file (.cargo/audit.toml); the repo-root
+# audit.toml was dead config and has been removed (Issue #366). The CI
+# `cargo audit` steps in .github/workflows/{pipeline,security-schedule}.yml no
+# longer pass `--ignore` flags — every ignore lives here with its justification.
+# For the cargo-deny side, see deny.toml.
 [advisories]
 ignore = [
   "RUSTSEC-2024-0421", # idna
@@ -5,4 +11,16 @@ ignore = [
   "RUSTSEC-2024-0370", # proc-macro-error
   "RUSTSEC-2023-0071", # rsa vulnerability (no upstream fix)
   "RUSTSEC-2026-0001", # rkyv OOM edge case (transitive dep, low risk)
+  # rand soundness issue only triggers with a custom logger that recursively
+  # calls rand::rng() — we use tracing_subscriber which does not. Affects
+  # rand 0.8.5 (via sqlx) which has no patched 0.8.x release; rand 0.9.3+ is
+  # patched and we use 0.9.3+. (Moved here from the CI --ignore flags, #366.)
+  "RUSTSEC-2026-0097", # rand soundness (not reachable in our usage)
+  # proc-macro-error2 unmaintained — transitive build-time proc-macro dep of
+  # both leptos (leptos_macro / reactive_stores_macro / syn_derive) and sea-orm
+  # (sea-bae). Build-time only, not a runtime vulnerability; no upgrade path
+  # until those frameworks migrate (dependency-refresh #343). Do NOT remove —
+  # tracked separately as #367 (blocked: proc-macro-error2 still transitive).
+  # (Moved here from the CI --ignore flags, #366.)
+  "RUSTSEC-2026-0173", # proc-macro-error2 unmaintained (transitive)
 ]

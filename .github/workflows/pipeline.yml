@@ -198,14 +198,10 @@ jobs:
         run: rm -rf ~/.cargo/advisory-db
 
       - name: Run cargo audit
-        # RUSTSEC-2026-0097: rand soundness issue only triggers with a custom
-        # logger that recursively calls rand::rng() — we use tracing_subscriber
-        # which does not. Affects rand 0.8.5 (via sqlx) which has no patched
-        # 0.8.x release; rand 0.9.3+ is patched and we use 0.9.3.
-        # RUSTSEC-2026-0173: proc-macro-error2 unmaintained — transitive
-        # build-time proc-macro dep of leptos & sea-orm; no upgrade path
-        # until those frameworks migrate (dependency-refresh #343).
-        run: cargo audit --deny warnings --ignore RUSTSEC-2026-0097 --ignore RUSTSEC-2026-0173
+        # Advisory ignores (incl. RUSTSEC-2026-0097 and RUSTSEC-2026-0173) live
+        # in .cargo/audit.toml — the single source cargo-audit reads — each with
+        # its justification. Do NOT add --ignore flags here (consolidation #366).
+        run: cargo audit --deny warnings
 
   # ============================================
   # Dependency Policy (cargo-deny)
@@ -271,7 +267,7 @@ jobs:
       - uses: actions/checkout@v4
 
       - name: Install system dependencies
-        run: sudo apt-get update -qq && sudo apt-get install -y -qq protobuf-compiler cmake nasm gstreamer1.0-plugins-base gstreamer1.0-plugins-good gstreamer1.0-plugins-bad gstreamer1.0-plugins-ugly gstreamer1.0-vaapi gstreamer1.0-libav gstreamer1.0-nice libgstreamer1.0-dev libgstreamer-plugins-base1.0-dev libgstreamer-plugins-bad1.0-dev libva-dev intel-media-va-driver-non-free
+        run: sudo apt-get update -qq && sudo apt-get install -y -qq protobuf-compiler cmake nasm ripgrep gstreamer1.0-plugins-base gstreamer1.0-plugins-good gstreamer1.0-plugins-bad gstreamer1.0-plugins-ugly gstreamer1.0-vaapi gstreamer1.0-libav gstreamer1.0-nice libgstreamer1.0-dev libgstreamer-plugins-base1.0-dev libgstreamer-plugins-bad1.0-dev libva-dev intel-media-va-driver-non-free
 
       - name: Install Rust toolchain
         uses: dtolnay/rust-toolchain@stable
@@ -305,6 +301,11 @@ jobs:
           # self-test proves the gate FIRES on a relative-path over-cap fixture
           # and FAILS if the abs/rel bug is reintroduced.
           bash tests/ci/fn-length-gate.test.sh
+          # Regression guard for #364: the placeholder/unfinished-work gate was a
+          # silent no-op (ripgrep-version-fragile `**` include glob + swallowed
+          # rg errors). This self-test proves the gate FIRES on a deeply-nested
+          # marker, passes a clean tree, and fails loudly on a real scan error.
+          bash tests/ci/placeholder-gate.test.sh
 
   # ============================================
   # Mutation Testing
