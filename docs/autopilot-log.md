@@ -80,3 +80,13 @@ Terse per-issue record of autonomous cycles (issue #, commits, tests, decisions)
 - **Diff mutation result (local, verified):** 3 mutants in the PR diff — 1 CaughtMutant (`stage_display_snapshot` match-arm, killed by #383 unit tests), 2 Unviable, **0 survivors** → no new tests needed. `Closes #429`.
 
 **Cycle:** local fmt + clippy (`-D warnings`) + `cargo test --workspace` (all green) + quality-check `--strict --against origin/main` (exit 0) + diff-scoped `cargo mutants` (0 survivors). PR #428 body extended with `Closes #429`.
+
+## 2026-06-21 — batch #392 + #421 (Android stage launcher) — PR #432, v0.4.143
+
+- **#392** (provisioning bug): `bootstrap-host.sh` did not install `adb` (hard runtime dep of the Android Stage Launcher). RED `caa6abe` (tests/ci/bootstrap-adb.test.sh asserts `android-tools-adb` in APT_PACKAGES — failed against adb-less bootstrap) → GREEN `0d4b4f9` (added the package; updated runbook.md; added "Ensure ADB is installed" step to release.yml PP deploy, mirroring deploy.yml — closes PP coverage gap). CI self-test wired into pipeline.yml "Run CI shell tests".
+- **#421** (test-addition gated on DI refactor): keep-alive wiring untested (bare `Command::new(adb_bin)`, no seam). Seam refactor `3d0cd79` (`trait AdbRunner`; `ProcessAdbRunner` prod impl; `&dyn AdbRunner` threaded through run_device_worker/connect_and_launch/adb_connect/adb_launch/adb_foreground_package; `async-trait` moved dev-dep→dep). Wiring test `4d705ba` (FakeAdbRunner; tests: tick_skips_am_start_when_browser_foreground, tick_fires_am_start_when_backgrounded, tick_fires_am_start_when_foreground_unknown, launch_now_always_fires_am_start_without_probing, worker_launch_now_command_forces_am_start). Proven non-tautological: bypassing `if !force_launch` failed all 3 tick tests (reverted).
+- **Mutation:** diff-scoped `cargo mutants` first run = 1 survivor (`adb_connect -> Ok(())`). Killed by `61208d9` (launch_aborts_when_adb_connect_fails + connect_calls assertion); targeted re-run = 1 caught → **0 survivors**.
+- **Reviews:** /review correctness (2 cosmetic notes — timeout wording, fact still surfaced), /review ci-ops ([]), requesting-code-review (Ready to merge, 0 Critical/Important).
+- Decision: the two cosmetic timeout-message notes left as-is — the propagated io error message still names "adb command timed out", so the timeout fact is preserved on the operator dashboard's last_error.
+
+**Cycle:** local fmt + clippy (`-D warnings`) + `cargo test --workspace` (277 passed, 0 fail) + diff-scoped `cargo mutants` (0 survivors after the kill). One push, one Pipeline CI run, PR #432 (`Closes #392`, `Closes #421`).
