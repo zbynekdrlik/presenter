@@ -143,6 +143,17 @@ jobs:
         run: |
           ssh deploy-target "sudo mkdir -p ${{ env.DEPLOY_DIR }} && sudo chown -R ${{ env.DEPLOY_USER }}:${{ env.DEPLOY_USER }} ${{ env.DEPLOY_DIR }}"
 
+      - name: Ensure ADB is installed
+        run: |
+          ssh deploy-target << 'REMOTE_SCRIPT'
+          if ! command -v adb &> /dev/null; then
+            echo "Installing ADB..."
+            sudo apt-get update -qq
+            sudo apt-get install -y -qq android-tools-adb
+          fi
+          echo "ADB version: $(adb --version | head -1)"
+          REMOTE_SCRIPT
+
       - name: Stop service (if running)
         run: |
           ssh deploy-target "if systemctl is-active --quiet ${{ env.SERVICE_NAME }}; then sudo systemctl stop ${{ env.SERVICE_NAME }}; echo 'Service stopped'; else echo 'Service not running'; fi"
