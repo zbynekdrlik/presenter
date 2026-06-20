@@ -71,9 +71,15 @@ test("stage page on empty DB has a clean console (no 404 for /stage/snapshot)", 
       // preload warning for the trunk-generated <link rel=preload as=fetch
       // type=wasm integrity=...> tag. It is purely a browser-version artifact
       // (absent on the CI runner's Chromium) and unrelated to issue #383's
-      // server-side 404. Ignore it so this regression guard is reliable in
-      // both CI and local dev environments while still catching the 404.
-      if (text.includes("crbug.com/981419")) {
+      // server-side 404. Ignore ONLY that exact warning so this regression
+      // guard stays reliable in both CI and local dev while still catching the
+      // 404. The guard is narrow (type===warning AND both tokens) so it cannot
+      // mask an unrelated real error — the #383 404 contains neither token.
+      const isIntegrityPreloadWarning =
+        msg.type() === "warning" &&
+        text.includes("crbug.com/981419") &&
+        text.includes("integrity");
+      if (isIntegrityPreloadWarning) {
         return;
       }
       consoleMessages.push(`[${msg.type()}] ${text}`);
