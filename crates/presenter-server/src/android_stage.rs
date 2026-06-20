@@ -897,10 +897,21 @@ mod tests {
         ProbeFails,
     }
 
+    fn err_output(stderr: &str) -> Output {
+        Output {
+            status: ExitStatus::from_raw(1 << 8), // non-zero exit (wait-status)
+            stdout: Vec::new(),
+            stderr: stderr.as_bytes().to_vec(),
+        }
+    }
+
     /// Fake [`AdbRunner`] recording every invocation as a single space-joined
     /// string, and answering `dumpsys` per the configured foreground state.
     struct FakeAdbRunner {
         foreground: Foreground,
+        /// When true, `adb connect <serial>` returns a failed/non-success
+        /// Output so `adb_connect` errors (modeling an unreachable device).
+        connect_fails: bool,
         calls: Mutex<Vec<String>>,
     }
 
@@ -908,6 +919,15 @@ mod tests {
         fn new(foreground: Foreground) -> Self {
             Self {
                 foreground,
+                connect_fails: false,
+                calls: Mutex::new(Vec::new()),
+            }
+        }
+
+        fn with_connect_failure(foreground: Foreground) -> Self {
+            Self {
+                foreground,
+                connect_fails: true,
                 calls: Mutex::new(Vec::new()),
             }
         }
@@ -920,6 +940,13 @@ mod tests {
             self.invocations()
                 .iter()
                 .filter(|c| c.contains("am start"))
+                .count()
+        }
+
+        fn connect_calls(&self) -> usize {
+            self.invocations()
+                .iter()
+                .filter(|c| c.starts_with("connect "))
                 .count()
         }
 
@@ -957,6 +984,11 @@ mod tests {
                         Err(std::io::Error::other("simulated dumpsys failure"))
                     }
                 };
+            }
+
+            // `adb connect <serial>` fails when the device is unreachable.
+            if self.connect_fails && joined.starts_with("connect ") {
+                return Ok(err_output("error: failed to connect to 'host:port'"));
             }
 
             // connect / disconnect / `am start` all succeed cleanly.
@@ -1002,6 +1034,11 @@ mod tests {
             "keep-alive on a healthy display must succeed"
         );
 
+        assert_eq!(
+            runner.connect_calls(),
+            1,
+            "connect_and_launch MUST `adb connect` the device before probing/launching",
+        );
         assert_eq!(
             runner.dumpsys_calls(),
             1,
@@ -1086,6 +1123,41 @@ mod tests {
             runner.am_start_calls(),
             1,
             "a forced launch MUST always fire `am start` regardless of foreground state",
+        );
+    }
+
+    // A failing `adb connect` MUST abort the launch: connect_and_launch errors,
+    // records the error, and fires NO `am start` (and never probes foreground).
+    // This pins the adb_connect call into the launch path — a no-op connect that
+    // always succeeded would let the launch proceed against an unreachable
+    // device.
+    #[tokio::test]
+    async fn launch_aborts_when_adb_connect_fails() {
+        let runner = FakeAdbRunner::with_connect_failure(Foreground::Browser);
+        let stage_url = Arc::new(Some(TEST_STAGE_URL.to_string()));
+        let config = test_display();
+        let status = test_status();
+
+        let result = connect_and_launch(&runner, &stage_url, &config, &status, true).await;
+        assert!(
+            result.is_err(),
+            "a failed `adb connect` MUST abort the launch with an error",
+        );
+
+        assert_eq!(
+            runner.connect_calls(),
+            1,
+            "connect_and_launch MUST attempt `adb connect` before launching",
+        );
+        assert_eq!(
+            runner.am_start_calls(),
+            0,
+            "no `am start` may fire once `adb connect` has failed",
+        );
+        assert_eq!(
+            status.read().await.state,
+            AndroidStageDisplayState::Error,
+            "a connect failure must surface as Error on the operator dashboard",
         );
     }
 
