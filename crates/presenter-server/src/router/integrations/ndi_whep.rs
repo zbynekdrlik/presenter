@@ -61,7 +61,7 @@ pub(crate) async fn post_whep_endpoint(
     let manager = state
         .ndi_manager()
         .ok_or_else(|| AppError::service_unavailable("NDI SDK not available"))?;
-    let reply = manager
+    let reply = match manager
         .whep_signaller_call(
             &source_id,
             WhepOp::Post {
@@ -71,7 +71,24 @@ pub(crate) async fn post_whep_endpoint(
             },
         )
         .await
-        .map_err(map_signaller_error)?;
+    {
+        Ok(reply) => reply,
+        // #431: a configured-but-not-currently-producing source is a transient,
+        // expected state — answer 204 No Content, NOT 404. The stage only POSTs
+        // WHEP for a source the operator has activated (it never renders an
+        // <NdiVideo> for an unknown source), so "source not active" here means
+        // "configured, pipeline not producing yet" — the same reconnect-and-
+        // wait semantics the client already handles for the placeholder. A 404
+        // made the browser network layer log "Failed to load resource: 404" as
+        // a console ERROR on every reconnect poll of the prod stage, violating
+        // browser-console-zero-errors. Mirrors the idempotent-DELETE fix below.
+        Err(err) if err.to_string().contains(SOURCE_NOT_ACTIVE_ERR) => WhepReply {
+            status: 204,
+            headers: Vec::new(),
+            body: None,
+        },
+        Err(err) => return Err(map_signaller_error(err)),
+    };
     Ok(into_response(reply))
 }
 
@@ -220,8 +237,15 @@ mod tests {
         Bytes::new()
     }
 
+    /// Pre-#431 this asserted a 404/503 contract for a not-active POST. #431
+    /// deliberately changed the not-producing POST to 204 (see
+    /// `post_whep_endpoint_returns_204_for_configured_not_producing_source`),
+    /// because the stage only POSTs for configured sources and a 404 logged a
+    /// browser console error. Kept as a regression guard that the POST handler
+    /// NEVER returns 404 for the not-active case — only 204 (libndi) or 503
+    /// (no libndi).
     #[tokio::test]
-    async fn post_whep_endpoint_returns_not_found_or_unavailable_for_inactive_source() {
+    async fn post_whep_endpoint_never_404_for_inactive_source() {
         let state = fresh_state().await;
         let result = post_whep_endpoint(
             Path("00000000-0000-0000-0000-000000000000".to_string()),
@@ -230,26 +254,25 @@ mod tests {
             empty_body(),
         )
         .await;
-        let Err(err) = result else {
-            panic!("expected Err for inactive source");
+        let status = match result {
+            // With libndi: manager exists but the source isn't active → 204.
+            Ok(resp) => resp.status(),
+            // Without libndi: ndi_manager() is None → 503.
+            Err(err) => err.into_response().status(),
         };
-        // With libndi: manager exists but the source isn't active → 404.
-        // Without libndi: ndi_manager() is None → 503.
-        let resp = err.into_response();
         assert!(
             matches!(
-                resp.status(),
-                StatusCode::NOT_FOUND | StatusCode::SERVICE_UNAVAILABLE
+                status,
+                StatusCode::NO_CONTENT | StatusCode::SERVICE_UNAVAILABLE
             ),
-            "expected 404 or 503, got {}",
-            resp.status()
+            "POST for a not-active source must be 204 or 503, never 404 (#431), got {status}"
         );
     }
 
-    /// `?profile=compat` must not change the error contract for an inactive
-    /// source: the query is parsed but always resolves to the single shared
-    /// 720p H264 stream (see `StreamProfile::from_query`), so an inactive
-    /// source still yields the same 404/503 path as a bare-profile POST.
+    /// `?profile=compat` must not change the contract for a not-active source:
+    /// the query is parsed but always resolves to the single shared 720p H264
+    /// stream (see `StreamProfile::from_query`), so it still yields the same
+    /// 204/503 path as a bare-profile POST (#431).
     #[tokio::test]
     async fn post_whep_endpoint_with_compat_profile_keeps_inactive_source_contract() {
         let state = fresh_state().await;
@@ -262,10 +285,17 @@ mod tests {
             empty_body(),
         )
         .await;
-        let Err(err) = result else {
-            panic!("expected Err for inactive source");
+        let status = match result {
+            Ok(resp) => resp.status(),
+            Err(err) => err.into_response().status(),
         };
-        assert_not_found_or_unavailable(err.into_response().status());
+        assert!(
+            matches!(
+                status,
+                StatusCode::NO_CONTENT | StatusCode::SERVICE_UNAVAILABLE
+            ),
+            "compat-profile POST for a not-active source must be 204 or 503, never 404 (#431), got {status}"
+        );
     }
 
     /// Both 404 (manager present, source not active) and 503 (no manager) are
