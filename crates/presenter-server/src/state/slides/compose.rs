@@ -69,9 +69,11 @@ fn format_verse_range(verses: &BTreeSet<u32>) -> String {
 /// next verse would overflow the character limit, then flush. Emphasis
 /// items and translation/book/chapter changes force a slide break.
 ///
-/// If a single verse item is longer than `character_limit`, it is emitted
-/// as its own oversized slide — the validator's `MainExceedsCharacterLimit`
-/// rule catches this downstream and the LLM sees a rule-keyed error.
+/// A verse is NEVER split mid-text (issue #394): consecutive `Verse` items that
+/// share the same verse number are merged back into one whole verse, and a lone
+/// verse longer than `character_limit` is kept WHOLE on its own slide — the
+/// validator accepts such a lone oversized verse (autofit shrinks it for
+/// display) rather than rejecting it.
 pub(crate) fn compose_bible_items_into_slides(
     items: &[BibleItem],
     character_limit: u32,
@@ -101,66 +103,12 @@ pub(crate) fn compose_bible_items_into_slides(
     }
 
     // Accumulator for the current verse slide.
-    let mut cur_lines: Vec<String> = Vec::new();
-    let mut cur_numbers: Vec<u32> = Vec::new();
-    let mut cur_group: Option<(String, u32, String)> = None; // (book, chapter, translation)
-
-    // Flush the current verse accumulator into a slide. The reference is
-    // derived from the GROUP's full verse set (built in pass 1), not from
-    // cur_numbers, so every slide of one passage displays the same label.
-    //
-    // Uses let-else pattern matching instead of expect()/unwrap() so there
-    // is no panic path — if an invariant is ever broken by a future
-    // refactor (e.g., group set without lines), the flush is a no-op
-    // rather than a crash.
-    let flush_verses =
-        |slides: &mut Vec<ComposedBibleSlide>,
-         lines: &mut Vec<String>,
-         numbers: &mut Vec<u32>,
-         group: &mut Option<(String, u32, String)>,
-         group_verses: &HashMap<(String, u32, String), BTreeSet<u32>>| {
-            if lines.is_empty() {
-                *group = None;
-                return;
-            }
-            let Some((book, chapter, translation)) = group.take() else {
-                lines.clear();
-                numbers.clear();
-                return;
-            };
-            if numbers.is_empty() {
-                lines.clear();
-                return;
-            }
-            let main = lines.join("\n");
-            let reference = match group_verses.get(&(book.clone(), chapter, translation.clone())) {
-                Some(verses) => format!(
-                    "{} {}:{} ({})",
-                    book,
-                    chapter,
-                    format_verse_range(verses),
-                    translation
-                ),
-                None => String::new(),
-            };
-            slides.push(ComposedBibleSlide {
-                main,
-                main_reference: reference,
-            });
-            lines.clear();
-            numbers.clear();
-        };
+    let mut acc = VerseAccumulator::default();
 
     for item in items {
         match item {
             BibleItem::Emphasis { text } => {
-                flush_verses(
-                    &mut slides,
-                    &mut cur_lines,
-                    &mut cur_numbers,
-                    &mut cur_group,
-                    &group_verses,
-                );
+                acc.flush(&mut slides, &group_verses);
                 slides.push(ComposedBibleSlide {
                     main: text.clone(),
                     main_reference: String::new(),
@@ -174,54 +122,194 @@ pub(crate) fn compose_bible_items_into_slides(
                 translation,
             } => {
                 // Translation / book / chapter change forces a slide break.
-                if let Some((cur_book, cur_chapter, cur_tr)) = &cur_group {
+                if let Some((cur_book, cur_chapter, cur_tr)) = &acc.group {
                     if cur_book != book || cur_chapter != chapter || cur_tr != translation {
-                        flush_verses(
-                            &mut slides,
-                            &mut cur_lines,
-                            &mut cur_numbers,
-                            &mut cur_group,
-                            &group_verses,
-                        );
+                        acc.flush(&mut slides, &group_verses);
                     }
                 }
 
-                let line = format!("{}. {}", number, text);
-                let existing_len: usize = cur_lines.iter().map(String::len).sum();
-                let prospective = if cur_lines.is_empty() {
-                    line.len()
-                } else {
-                    // existing lines joined by "\n" = existing_len + (cur_lines.len() - 1)
-                    // plus "\n" + new line = + 1 + line.len()
-                    // total = existing_len + cur_lines.len() + line.len()
-                    existing_len + cur_lines.len() + line.len()
-                };
-
-                if prospective > limit && !cur_lines.is_empty() {
-                    flush_verses(
-                        &mut slides,
-                        &mut cur_lines,
-                        &mut cur_numbers,
-                        &mut cur_group,
-                        &group_verses,
-                    );
+                // Issue #394: the LLM's oversized-single-verse recovery path may
+                // emit ONE logical verse as several consecutive `Verse` items
+                // that share the SAME verse number. Merge those back into the
+                // current line so the verse is never split mid-text — a whole
+                // verse always lands intact on a slide.
+                if acc.numbers.last() == Some(number) && !acc.lines.is_empty() {
+                    // If the fragment would push this slide over the limit while
+                    // OTHER (earlier-numbered) verses already share it, flush
+                    // those earlier verses first so this growing verse ends up
+                    // WHOLE on its own slide — never an oversized multi-verse
+                    // slide that the validator would then reject. (flush_keeping_last
+                    // is a no-op when the verse is alone on the slide, so no extra
+                    // line-count guard is needed here.)
+                    if acc.would_overflow_merge(text.len(), limit) {
+                        acc.flush_keeping_last(&mut slides, &group_verses);
+                    }
+                    if let Some(last) = acc.lines.last_mut() {
+                        last.push(' ');
+                        last.push_str(text);
+                        acc.group = Some((book.clone(), *chapter, translation.clone()));
+                        continue;
+                    }
                 }
 
-                cur_lines.push(line);
-                cur_numbers.push(*number);
-                cur_group = Some((book.clone(), *chapter, translation.clone()));
+                let line = format!("{number}. {text}");
+                if acc.would_overflow(line.len(), limit) {
+                    acc.flush(&mut slides, &group_verses);
+                }
+
+                acc.lines.push(line);
+                acc.numbers.push(*number);
+                acc.group = Some((book.clone(), *chapter, translation.clone()));
             }
         }
     }
 
-    flush_verses(
-        &mut slides,
-        &mut cur_lines,
-        &mut cur_numbers,
-        &mut cur_group,
-        &group_verses,
-    );
+    acc.flush(&mut slides, &group_verses);
     slides
+}
+
+/// Mutable accumulator for the verses being packed onto the current slide.
+/// `group` is `(book, chapter, translation)` for the in-progress slide.
+#[derive(Default)]
+struct VerseAccumulator {
+    lines: Vec<String>,
+    numbers: Vec<u32>,
+    group: Option<(String, u32, String)>,
+}
+
+impl VerseAccumulator {
+    /// True when appending `new_line_len` chars as a NEW line would push the
+    /// joined slide past `limit` AND there is already content to flush. A lone
+    /// verse (empty accumulator) is NEVER reported as overflowing — it is kept
+    /// whole on its own slide even when it alone exceeds the limit (issue #394;
+    /// the validator accepts a lone oversized verse, autofit shrinks it).
+    fn would_overflow(&self, new_line_len: usize, limit: usize) -> bool {
+        if self.lines.is_empty() {
+            return false;
+        }
+        let existing_len: usize = self.lines.iter().map(String::len).sum();
+        // joined existing lines = existing_len + (len - 1) separators; adding a
+        // "\n" + new line = + 1 + new_line_len -> existing_len + len + new_line_len.
+        let prospective = existing_len + self.lines.len() + new_line_len;
+        prospective > limit
+    }
+
+    /// True when MERGING `frag_len` chars (plus a joining space) into the last
+    /// line would push the joined slide past `limit`. Used to decide whether a
+    /// same-number continuation fragment should force the EARLIER verses on the
+    /// slide onto their own slide first (so the growing verse stays whole on its
+    /// own slide rather than producing a rejected oversized multi-verse slide).
+    fn would_overflow_merge(&self, frag_len: usize, limit: usize) -> bool {
+        if self.lines.is_empty() {
+            return false;
+        }
+        let existing_len: usize = self.lines.iter().map(String::len).sum();
+        // current joined length + " " + fragment.
+        let prospective = existing_len + (self.lines.len() - 1) + 1 + frag_len;
+        prospective > limit
+    }
+
+    /// Build the reference label for the current group from its full verse set.
+    fn group_reference(
+        group: &(String, u32, String),
+        group_verses: &HashMap<(String, u32, String), BTreeSet<u32>>,
+    ) -> String {
+        let (book, chapter, translation) = group;
+        match group_verses.get(group) {
+            Some(verses) => format!(
+                "{} {}:{} ({})",
+                book,
+                chapter,
+                format_verse_range(verses),
+                translation
+            ),
+            None => String::new(),
+        }
+    }
+
+    /// Flush every accumulated line EXCEPT the last into one slide, keeping the
+    /// last line (and its verse number) in the accumulator. Used when a
+    /// same-number continuation fragment would overflow a slide that also holds
+    /// earlier verses: the earlier verses flush, the growing verse stays.
+    fn flush_keeping_last(
+        &mut self,
+        slides: &mut Vec<ComposedBibleSlide>,
+        group_verses: &HashMap<(String, u32, String), BTreeSet<u32>>,
+    ) {
+        if self.lines.len() < 2 {
+            return;
+        }
+        let Some(group) = self.group.clone() else {
+            return;
+        };
+        let last_line = self.lines.pop().unwrap_or_default();
+        let last_number = self.numbers.pop();
+        let main = self.lines.join("\n");
+        slides.push(ComposedBibleSlide {
+            main,
+            main_reference: Self::group_reference(&group, group_verses),
+        });
+        self.lines.clear();
+        self.numbers.clear();
+        self.lines.push(last_line);
+        if let Some(n) = last_number {
+            self.numbers.push(n);
+        }
+        // group stays set — the kept verse continues in the same group.
+    }
+
+    /// Flush the accumulated verses into one slide. The reference is derived
+    /// from the GROUP's full verse set (pass 1), not from `numbers`, so every
+    /// slide of one passage displays the same label.
+    ///
+    /// Uses let-else so there is no panic path — if an invariant is broken by a
+    /// future refactor (e.g., group set without lines), the flush is a no-op
+    /// rather than a crash.
+    fn flush(
+        &mut self,
+        slides: &mut Vec<ComposedBibleSlide>,
+        group_verses: &HashMap<(String, u32, String), BTreeSet<u32>>,
+    ) {
+        if self.lines.is_empty() {
+            self.group = None;
+            return;
+        }
+        let Some((book, chapter, translation)) = self.group.take() else {
+            self.lines.clear();
+            self.numbers.clear();
+            return;
+        };
+        if self.numbers.is_empty() {
+            self.lines.clear();
+            return;
+        }
+        let main = self.lines.join("\n");
+        let reference = Self::group_reference(&(book, chapter, translation), group_verses);
+        slides.push(ComposedBibleSlide {
+            main,
+            main_reference: reference,
+        });
+        self.lines.clear();
+        self.numbers.clear();
+    }
+}
+
+/// Build a `Book Ch:V (CODE)` (or `Book Ch:V-V (CODE)`) reference label for a
+/// passage range in the given translation. Used for both the main label and an
+/// optional secondary-translation label on live-mode bible slides.
+fn build_reference_label(
+    book: &str,
+    chapter: u16,
+    verse_start: u16,
+    verse_end: u16,
+    translation_code: &str,
+) -> String {
+    let short_code = translation_short_code(translation_code);
+    if verse_start == verse_end {
+        format!("{book} {chapter}:{verse_start} ({short_code})")
+    } else {
+        format!("{book} {chapter}:{verse_start}-{verse_end} ({short_code})")
+    }
 }
 
 pub(crate) fn compose_bible_slides(
@@ -243,35 +331,17 @@ pub(crate) fn compose_bible_slides(
     let book_number = main_passages[0].reference.book_number;
     let chapter = main_passages[0].reference.chapter;
 
-    // Build the full reference label that will appear on all slides (includes translation code)
-    let main_short_code = translation_short_code(&main_translation.code);
-    let full_reference_label = if full_verse_start == full_verse_end {
-        format!(
-            "{} {}:{} ({})",
-            book, chapter, full_verse_start, main_short_code
-        )
-    } else {
-        format!(
-            "{} {}:{}-{} ({})",
-            book, chapter, full_verse_start, full_verse_end, main_short_code
-        )
-    };
-
-    // Build translation reference label if secondary translation is present
-    let translation_reference_label = secondary_translation.map(|t| {
-        let secondary_short_code = translation_short_code(&t.code);
-        if full_verse_start == full_verse_end {
-            format!(
-                "{} {}:{} ({})",
-                book, chapter, full_verse_start, secondary_short_code
-            )
-        } else {
-            format!(
-                "{} {}:{}-{} ({})",
-                book, chapter, full_verse_start, full_verse_end, secondary_short_code
-            )
-        }
-    });
+    // The full reference label appears on all slides (includes translation
+    // code). A secondary translation gets its own label.
+    let full_reference_label = build_reference_label(
+        &book,
+        chapter,
+        full_verse_start,
+        full_verse_end,
+        &main_translation.code,
+    );
+    let translation_reference_label = secondary_translation
+        .map(|t| build_reference_label(&book, chapter, full_verse_start, full_verse_end, &t.code));
 
     let mut current_main = String::new();
     let mut current_tr = String::new();

@@ -189,6 +189,31 @@ fn compose_items_two_verses_that_overflow_emit_two_slides() {
 }
 
 #[test]
+fn compose_items_second_verse_exactly_at_limit_stays_on_one_slide() {
+    // Pins the overflow boundary at `prospective > limit` (ASCII = 1 byte/char).
+    // verse 1 = "1. " + 6 a = 9 bytes; verse 2 = "2. " + 7 b = 10 bytes.
+    // prospective = 9 (existing) + 1 (lines.len()) + 10 (new line) = 20 == limit
+    // → does NOT overflow → both verses share ONE slide. This kills the
+    // `> -> >=` and the `+ -> -`/`+ -> *` mutants on would_overflow's arithmetic.
+    let items = vec![verse(1, "aaaaaa"), verse(2, "bbbbbbb")];
+    let slides = compose_bible_items_into_slides(&items, 20);
+    assert_eq!(slides.len(), 1, "prospective == limit must NOT overflow");
+    assert_eq!(slides[0].main, "1. aaaaaa\n2. bbbbbbb");
+}
+
+#[test]
+fn compose_items_second_verse_one_over_limit_splits_to_two_slides() {
+    // One byte more than the at-limit case above: verse 2 = "2. " + 8 b = 11
+    // bytes → prospective = 9 + 1 + 11 = 21 > 20 → overflow → two slides.
+    // Together with the at-limit test this pins the exact boundary.
+    let items = vec![verse(1, "aaaaaa"), verse(2, "bbbbbbbb")];
+    let slides = compose_bible_items_into_slides(&items, 20);
+    assert_eq!(slides.len(), 2, "prospective == limit+1 must overflow");
+    assert_eq!(slides[0].main, "1. aaaaaa");
+    assert_eq!(slides[1].main, "2. bbbbbbbb");
+}
+
+#[test]
 fn compose_items_emphasis_between_verses_breaks_slide() {
     let items = vec![
         verse(1, "Na počiatku."),
@@ -285,14 +310,142 @@ fn compose_items_empty_returns_empty() {
 }
 
 #[test]
-fn compose_items_single_verse_longer_than_limit_emits_oversized_slide() {
-    // Limit 20; verse line is much longer. Composer still emits it —
-    // the validator catches oversize downstream.
+fn compose_items_single_verse_longer_than_limit_kept_whole_on_own_slide() {
+    // Limit 20; verse line is much longer. A lone oversized verse is kept
+    // WHOLE on its own slide — it is never split mid-verse, and the
+    // validator now ACCEPTS it (display shrink / autofit handles oversize),
+    // so no oversized-slide error is emitted downstream (issue #394).
     let items = vec![verse(1, "Na počiatku bolo Slovo a Slovo bolo u Boha.")];
     let slides = compose_bible_items_into_slides(&items, 20);
     assert_eq!(slides.len(), 1);
+    // The full verse text is intact on the single slide — nothing dropped.
+    assert_eq!(
+        slides[0].main,
+        "1. Na počiatku bolo Slovo a Slovo bolo u Boha."
+    );
     assert!(slides[0].main.len() > 20);
     assert_eq!(slides[0].main_reference, "Ján 1:1 (SEB)");
+}
+
+#[test]
+fn compose_items_same_verse_number_split_is_merged_whole_not_split_mid_verse() {
+    // Issue #394: the LLM's oversized-single-verse recovery path may emit
+    // ONE logical verse as several consecutive `Verse` items that share the
+    // SAME verse number (it broke the verse text apart). The composer must
+    // merge those back into one slide rather than flushing mid-verse into
+    // two slides. Low limit (30) would, with the buggy packer, force a
+    // mid-verse flush after the first fragment — that is the bug.
+    let items = vec![
+        verse(1, "Na počiatku bolo Slovo"),
+        verse(1, "a Slovo bolo u Boha a Boh bol to Slovo."),
+    ];
+    let slides = compose_bible_items_into_slides(&items, 30);
+    // Whole verse 1 lands on ONE slide — never split across two.
+    assert_eq!(
+        slides.len(),
+        1,
+        "a single verse must never be split mid-verse across slides"
+    );
+    assert_eq!(
+        slides[0].main,
+        "1. Na počiatku bolo Slovo a Slovo bolo u Boha a Boh bol to Slovo."
+    );
+    assert_eq!(slides[0].main_reference, "Ján 1:1 (SEB)");
+}
+
+#[test]
+fn compose_items_same_number_merge_then_next_verse_overflows_to_own_slide() {
+    // Two fragments of verse 1 merge into one (oversized) slide; verse 2 is a
+    // separate verse and overflows to its own slide. The whole-verse rule for
+    // verse 1 must not bleed verse 2's text onto the same line.
+    let items = vec![
+        verse(1, "Na počiatku bolo Slovo"),
+        verse(1, "a Slovo bolo u Boha a Boh bol to Slovo."),
+        verse(2, "Ono bolo na počiatku u Boha."),
+    ];
+    let slides = compose_bible_items_into_slides(&items, 30);
+    assert_eq!(slides.len(), 2);
+    assert_eq!(
+        slides[0].main,
+        "1. Na počiatku bolo Slovo a Slovo bolo u Boha a Boh bol to Slovo."
+    );
+    assert_eq!(slides[1].main, "2. Ono bolo na počiatku u Boha.");
+    // Both slides share the full group range (verses 1-2).
+    assert_eq!(slides[0].main_reference, "Ján 1:1-2 (SEB)");
+    assert_eq!(slides[1].main_reference, "Ján 1:1-2 (SEB)");
+}
+
+#[test]
+fn compose_items_same_number_fragment_after_earlier_verse_moves_growing_verse_to_own_slide() {
+    // Issue #394 edge (from code review): verse 1 and verse 2 first pack onto
+    // one slide; then a verse-2 continuation fragment arrives that would push
+    // the slide over the limit. The growing verse 2 must move to its OWN slide
+    // kept WHOLE — never an oversized two-verse slide (which the validator would
+    // reject). So: slide 0 = verse 1 alone, slide 1 = whole verse 2.
+    let items = vec![
+        verse(1, "short one"),
+        verse(2, "bbb"),
+        verse(2, "this is a long continuation fragment that makes it big"),
+    ];
+    let slides = compose_bible_items_into_slides(&items, 30);
+    assert_eq!(slides.len(), 2);
+    assert_eq!(slides[0].main, "1. short one");
+    assert_eq!(
+        slides[1].main,
+        "2. bbb this is a long continuation fragment that makes it big"
+    );
+    // Each slide is a single verse-prefixed line — the validator accepts both
+    // (slide 1 is a lone oversized whole verse).
+    assert_eq!(slides[0].main.lines().count(), 1);
+    assert_eq!(slides[1].main.lines().count(), 1);
+    assert_eq!(slides[0].main_reference, "Ján 1:1-2 (SEB)");
+    assert_eq!(slides[1].main_reference, "Ján 1:1-2 (SEB)");
+}
+
+#[test]
+fn compose_items_same_number_fragment_that_still_fits_stays_with_earlier_verse() {
+    // When the merged verse still fits under the limit, the same-number fragment
+    // merges in place and stays on the shared slide (no premature split).
+    let items = vec![verse(1, "alpha"), verse(2, "beta"), verse(2, "gamma")];
+    let slides = compose_bible_items_into_slides(&items, 320);
+    assert_eq!(slides.len(), 1);
+    assert_eq!(slides[0].main, "1. alpha\n2. beta gamma");
+    assert_eq!(slides[0].main_reference, "Ján 1:1-2 (SEB)");
+}
+
+#[test]
+fn compose_items_merge_fragment_exactly_at_limit_stays_on_one_slide() {
+    // Pins would_overflow_merge's boundary at `prospective > limit` (ASCII).
+    // verse 1 = "1. a" (4), verse 2 = "2. b" (4) pack onto one slide (existing
+    // = 8, lines = 2). A verse-2 fragment of 10 chars gives prospective =
+    // 8 + (2-1) + 1 + 10 = 20 == limit → does NOT overflow → all three stay on
+    // ONE slide. Kills the `+`/`-` arithmetic and `> -> >=` mutants on
+    // would_overflow_merge. Final main = "1. a\n2. b cccccccccc" (20 bytes).
+    let items = vec![verse(1, "a"), verse(2, "b"), verse(2, "cccccccccc")];
+    let slides = compose_bible_items_into_slides(&items, 20);
+    assert_eq!(
+        slides.len(),
+        1,
+        "merge prospective == limit must NOT overflow"
+    );
+    assert_eq!(slides[0].main, "1. a\n2. b cccccccccc");
+    assert_eq!(slides[0].main.len(), 20);
+}
+
+#[test]
+fn compose_items_merge_fragment_one_over_limit_splits_growing_verse() {
+    // One char more than the at-limit merge case: fragment of 11 chars →
+    // prospective = 8 + 1 + 1 + 11 = 21 > 20 → overflow → verse 1 flushes
+    // alone, verse 2 grows whole on its own slide.
+    let items = vec![verse(1, "a"), verse(2, "b"), verse(2, "ccccccccccc")];
+    let slides = compose_bible_items_into_slides(&items, 20);
+    assert_eq!(
+        slides.len(),
+        2,
+        "merge prospective == limit+1 must overflow"
+    );
+    assert_eq!(slides[0].main, "1. a");
+    assert_eq!(slides[1].main, "2. b ccccccccccc");
 }
 
 #[test]
