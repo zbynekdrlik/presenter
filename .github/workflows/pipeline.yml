@@ -355,10 +355,52 @@ jobs:
   #
   # The full-tree catch-up still runs on demand via mutation-full.yml
   # (`/mutation-sweep`).
+  #
+  # ---- mutation-warm: bootstrap the mutants-profile cache ONCE (#439) --------
+  # The prior design warmed the build INSIDE each shard with
+  # `cache-on-failure: false`. But all 8 shards cold-built the heavy dep graph
+  # (~15-19 min) simultaneously and were each cancelled by the 20-min JOB-level
+  # timeout BEFORE rust-cache's post-step could save (a job-level timeout skips
+  # post-actions). So the `mutants` cache was never populated and every run
+  # cold-built forever — a permanent deadlock (#430 "fixed" but ineffective).
+  # This dedicated job builds the deps ONCE under a generous cap, SUCCEEDS, and
+  # saves the `mutants` cache; the shards below `needs:` it and restore the warm
+  # cache (restore-only). After the first run the cache restores in seconds and
+  # a per-PR version bump only recompiles workspace crates, not deps.
+  mutation-warm:
+    name: Mutation warm-up (build mutants profile)
+    runs-on: ubuntu-latest
+    needs: test
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Install system dependencies
+        run: sudo apt-get update -qq && sudo apt-get install -y -qq protobuf-compiler cmake nasm gstreamer1.0-plugins-base gstreamer1.0-plugins-good gstreamer1.0-plugins-bad gstreamer1.0-plugins-ugly gstreamer1.0-vaapi gstreamer1.0-libav gstreamer1.0-nice libgstreamer1.0-dev libgstreamer-plugins-base1.0-dev libgstreamer-plugins-bad1.0-dev libva-dev intel-media-va-driver-non-free
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      # Saves the `mutants`-keyed cache on success (cache-on-failure also keeps a
+      # partial cache if the build is slow). This is the ONLY job that writes the
+      # mutants cache; the shards restore it read-only.
+      - name: Setup Rust cache (mutants profile)
+        uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: mutants
+          cache-on-failure: true
+
+      # Cold once (~15-19 min), incremental + cache-restored thereafter. Builds
+      # all test targets to match the per-mutant `-- --all-targets` link set.
+      - name: Warm mutants-profile build
+        run: cargo build --tests --profile mutants --workspace --all-targets
+
   mutation:
     name: Mutation Testing (shard ${{ matrix.shard }}/8)
     runs-on: ubuntu-latest
-    needs: test
+    needs: [test, mutation-warm]
     timeout-minutes: 20
     strategy:
       fail-fast: false
@@ -382,17 +424,16 @@ jobs:
       - name: Install Rust toolchain
         uses: dtolnay/rust-toolchain@stable
 
-      # Dedicated cache for the `mutants` build profile. The main `ci` cache key
-      # holds the debug/test-profile target/ and does NOT warm the separate
-      # `mutants` profile cargo-mutants builds — that gap (#430) is the cold
-      # build that blew the cap. A `mutants`-keyed cache persists the warmed
-      # target/ across runs; the matrix shards share one key (the warmed deps
-      # are identical for every shard) so only the first job populates it.
-      - name: Setup Rust cache (mutants profile)
+      # Restore (read-only) the `mutants` cache populated by the mutation-warm
+      # job above. The shards must NOT save: 8 shards racing to save the same
+      # key wastes upload time, and saving from a shard that may be cancelled at
+      # the cap is exactly the deadlock the warm job exists to avoid (#439). The
+      # `ci` cache holds the debug/test profile and does not cover `mutants`.
+      - name: Setup Rust cache (mutants profile, restore-only)
         uses: Swatinem/rust-cache@v2
         with:
           shared-key: mutants
-          cache-on-failure: false
+          save-if: false
 
       - name: Install cargo-mutants + cargo-nextest (prebuilt)
         uses: taiki-e/install-action@v2
