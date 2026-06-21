@@ -456,3 +456,78 @@ pub fn detect_deploy_dir() -> PathBuf {
         .and_then(|p| p.parent().map(Path::to_path_buf))
         .unwrap_or_else(|| PathBuf::from("."))
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use chrono::{Duration, Utc};
+
+    /// Write a `claude-<email>.json` OAuth token file into the manager's auth
+    /// dir, with the given `expired` RFC3339 timestamp (mirrors CLIProxyAPI's
+    /// on-disk token format).
+    async fn write_token(mgr: &ProxyManager, email: &str, expired: &str) {
+        let auth_dir = mgr.auth_dir();
+        tokio::fs::create_dir_all(&auth_dir).await.unwrap();
+        let body = format!(
+            r#"{{"access_token":"a","refresh_token":"r","id_token":"i","email":"{email}","expired":"{expired}","last_refresh":"2026-06-01T00:00:00+02:00","type":"claude","disabled":false}}"#
+        );
+        tokio::fs::write(auth_dir.join(format!("claude-{email}.json")), body)
+            .await
+            .unwrap();
+    }
+
+    /// Regression for #438: an EXPIRED OAuth token must report NOT authenticated.
+    /// Before the fix, `is_claude_authenticated()` only checked file existence,
+    /// so a dead/expired token reported `claudeAuthenticated:true` (masked the
+    /// 2026-06-20 PP outage). No network — pure file + timestamp check.
+    #[tokio::test]
+    async fn expired_token_is_not_authenticated() {
+        let tmp = tempfile::tempdir().unwrap();
+        let mgr = ProxyManager::new(tmp.path().to_path_buf());
+        let past = (Utc::now() - Duration::hours(2)).to_rfc3339();
+        write_token(&mgr, "expired@example.com", &past).await;
+        assert!(
+            !mgr.is_claude_authenticated().await,
+            "an expired token must not count as authenticated"
+        );
+    }
+
+    /// A fresh (not-yet-expired) token must still report authenticated.
+    #[tokio::test]
+    async fn fresh_token_is_authenticated() {
+        let tmp = tempfile::tempdir().unwrap();
+        let mgr = ProxyManager::new(tmp.path().to_path_buf());
+        let future = (Utc::now() + Duration::hours(8)).to_rfc3339();
+        write_token(&mgr, "fresh@example.com", &future).await;
+        assert!(
+            mgr.is_claude_authenticated().await,
+            "a fresh token must count as authenticated"
+        );
+    }
+
+    /// One expired + one fresh token: at least one valid → authenticated.
+    #[tokio::test]
+    async fn one_fresh_among_expired_is_authenticated() {
+        let tmp = tempfile::tempdir().unwrap();
+        let mgr = ProxyManager::new(tmp.path().to_path_buf());
+        let past = (Utc::now() - Duration::hours(2)).to_rfc3339();
+        let future = (Utc::now() + Duration::hours(8)).to_rfc3339();
+        write_token(&mgr, "dead@example.com", &past).await;
+        write_token(&mgr, "live@example.com", &future).await;
+        assert!(
+            mgr.is_claude_authenticated().await,
+            "a fresh token alongside an expired one must count as authenticated"
+        );
+    }
+
+    /// No token files at all → not authenticated.
+    #[tokio::test]
+    async fn no_token_is_not_authenticated() {
+        let tmp = tempfile::tempdir().unwrap();
+        let mgr = ProxyManager::new(tmp.path().to_path_buf());
+        assert!(
+            !mgr.is_claude_authenticated().await,
+            "no token files means not authenticated"
+        );
+    }
+}
