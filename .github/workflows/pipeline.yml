@@ -313,10 +313,10 @@ jobs:
           # stage launchers.
           bash tests/ci/bootstrap-adb.test.sh
           # Regression guard for #433: the "Ensure ADB is installed" remote
-          # heredoc in deploy.yml AND release.yml must start with `set -e`, so a
-          # failed adb install fails the deploy loudly instead of passing
-          # silently (the trailing echo returns 0 regardless). FAILS if either
-          # ADB-install heredoc loses `set -e`.
+          # heredoc in deploy.yml, release.yml, AND this file's deploy-dev job
+          # must start with `set -e`, so a failed adb install fails the deploy
+          # loudly instead of passing silently (the trailing echo returns 0
+          # regardless). FAILS if any ADB-install heredoc loses `set -e`.
           bash tests/ci/adb-install-set-e.test.sh
 
   # ============================================
@@ -889,6 +889,7 @@ jobs:
       - name: Ensure ADB is installed
         run: |
           ssh deploy-target << 'REMOTE_SCRIPT'
+          set -e
           if ! command -v adb &> /dev/null; then
             echo "Installing ADB..."
             sudo apt-get update -qq

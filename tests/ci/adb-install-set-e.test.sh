@@ -62,10 +62,12 @@ assert_set_e() {
 
 assert_set_e deploy.yml
 assert_set_e release.yml
+# pipeline.yml's deploy-dev job has its OWN ADB-install heredoc — the same gap.
+assert_set_e pipeline.yml
 
 if [ "$fail" -ne 0 ]; then
     echo "Shell tests for ADB-install set -e gate: FAILED" >&2
     exit 1
 fi
 
-echo "Shell tests for ADB-install set -e gate (deploy.yml + release.yml): all passed"
+echo "Shell tests for ADB-install set -e gate (deploy.yml + release.yml + pipeline.yml): all passed"
