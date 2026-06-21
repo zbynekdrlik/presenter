@@ -146,6 +146,7 @@ jobs:
       - name: Ensure ADB is installed
         run: |
           ssh deploy-target << 'REMOTE_SCRIPT'
+          set -e
           if ! command -v adb &> /dev/null; then
             echo "Installing ADB..."
             sudo apt-get update -qq
