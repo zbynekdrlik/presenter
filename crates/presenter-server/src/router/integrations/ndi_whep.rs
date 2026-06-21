@@ -356,6 +356,71 @@ mod tests {
         }
     }
 
+    /// #431: a WHEP POST for a source that is configured (the stage only
+    /// renders `<NdiVideo>` for an operator-activated source) but not currently
+    /// producing a pipeline must return 204 No Content — NOT 404. This is a
+    /// transient, expected state (the NDI sender went quiet / the pipeline
+    /// hasn't started yet); 404 made the browser log a "Failed to load
+    /// resource: 404" console error on the prod stage on every reconnect poll,
+    /// violating browser-console-zero-errors. 404 is reserved for a genuinely
+    /// unknown source, which the stage never POSTs for. Mirrors the DELETE
+    /// idempotency fix below.
+    ///
+    /// With libndi: manager exists, source not active → 204.
+    /// Without libndi: ndi_manager() is None → Err 503 (different failure).
+    #[tokio::test]
+    async fn post_whep_endpoint_returns_204_for_configured_not_producing_source() {
+        let state = fresh_state().await;
+        let result = post_whep_endpoint(
+            Path("00000000-0000-0000-0000-000000000000".to_string()),
+            Query(WhepPostQuery::default()),
+            State(state),
+            empty_body(),
+        )
+        .await;
+        match result {
+            Ok(resp) => assert_eq!(
+                resp.status(),
+                StatusCode::NO_CONTENT,
+                "POST on a configured-but-not-producing source must be 204, not 404 (#431)"
+            ),
+            Err(err) => assert_eq!(
+                err.into_response().status(),
+                StatusCode::SERVICE_UNAVAILABLE,
+                "only the no-libndi (manager missing) branch may error"
+            ),
+        }
+    }
+
+    /// `?profile=compat` must follow the same 204 contract for a
+    /// configured-but-not-producing source (the profile query is a no-op
+    /// server-side; it must not change the not-producing status code).
+    #[tokio::test]
+    async fn post_whep_endpoint_with_compat_profile_returns_204_for_not_producing_source() {
+        let state = fresh_state().await;
+        let result = post_whep_endpoint(
+            Path("00000000-0000-0000-0000-000000000000".to_string()),
+            Query(WhepPostQuery {
+                profile: Some("compat".to_string()),
+            }),
+            State(state),
+            empty_body(),
+        )
+        .await;
+        match result {
+            Ok(resp) => assert_eq!(
+                resp.status(),
+                StatusCode::NO_CONTENT,
+                "compat-profile POST on a not-producing source must also be 204 (#431)"
+            ),
+            Err(err) => assert_eq!(
+                err.into_response().status(),
+                StatusCode::SERVICE_UNAVAILABLE,
+                "only the no-libndi (manager missing) branch may error"
+            ),
+        }
+    }
+
     #[test]
     fn into_response_passes_status_headers_and_body() {
         let reply = WhepReply {
