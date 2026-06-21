@@ -414,9 +414,35 @@ mod tests {
     }
 
     #[test]
-    fn length_rule_rejects_slide_well_over_limit() {
+    fn length_rule_accepts_lone_oversized_verse() {
+        // Issue #394: a single whole verse over the limit is autofit's job
+        // (display shrink), NOT a packing error. The slide has exactly ONE
+        // verse-number-prefixed line, so it must be ACCEPTED rather than
+        // rejected with MainExceedsCharacterLimit — otherwise the LLM retry
+        // loop is forced to split the verse mid-text.
         let main = format!("1. {}", "a".repeat(1000));
-        let err = validate_bible_slide(&main, "Ján 1:1 (SEB)", 320).unwrap_err();
+        assert!(
+            validate_bible_slide(&main, "Ján 1:1 (SEB)", 320).is_ok(),
+            "a lone whole verse over the limit must be accepted, not rejected"
+        );
+    }
+
+    #[test]
+    fn length_rule_rejects_multi_verse_slide_over_limit() {
+        // A slide that over-packs MULTIPLE verses past the limit is a genuine
+        // packing error (the composer should have flushed before overflow) —
+        // still rejected. Two verse-number-prefixed lines, total over 320.
+        let main = format!("1. {}\n2. {}", "a".repeat(200), "b".repeat(200));
+        let err = validate_bible_slide(&main, "Ján 1:1-2 (SEB)", 320).unwrap_err();
+        assert_eq!(err.rule, ValidationRule::MainExceedsCharacterLimit);
+    }
+
+    #[test]
+    fn length_rule_rejects_oversized_emphasis_slide() {
+        // An emphasis/title slide (no verse-number prefix, empty reference)
+        // over the limit is NOT a whole verse — still rejected.
+        let main = "a".repeat(400);
+        let err = validate_bible_slide(&main, "", 320).unwrap_err();
         assert_eq!(err.rule, ValidationRule::MainExceedsCharacterLimit);
     }
 

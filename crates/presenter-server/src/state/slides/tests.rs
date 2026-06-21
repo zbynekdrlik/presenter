@@ -285,14 +285,69 @@ fn compose_items_empty_returns_empty() {
 }
 
 #[test]
-fn compose_items_single_verse_longer_than_limit_emits_oversized_slide() {
-    // Limit 20; verse line is much longer. Composer still emits it —
-    // the validator catches oversize downstream.
+fn compose_items_single_verse_longer_than_limit_kept_whole_on_own_slide() {
+    // Limit 20; verse line is much longer. A lone oversized verse is kept
+    // WHOLE on its own slide — it is never split mid-verse, and the
+    // validator now ACCEPTS it (display shrink / autofit handles oversize),
+    // so no oversized-slide error is emitted downstream (issue #394).
     let items = vec![verse(1, "Na počiatku bolo Slovo a Slovo bolo u Boha.")];
     let slides = compose_bible_items_into_slides(&items, 20);
     assert_eq!(slides.len(), 1);
+    // The full verse text is intact on the single slide — nothing dropped.
+    assert_eq!(
+        slides[0].main,
+        "1. Na počiatku bolo Slovo a Slovo bolo u Boha."
+    );
     assert!(slides[0].main.len() > 20);
     assert_eq!(slides[0].main_reference, "Ján 1:1 (SEB)");
+}
+
+#[test]
+fn compose_items_same_verse_number_split_is_merged_whole_not_split_mid_verse() {
+    // Issue #394: the LLM's oversized-single-verse recovery path may emit
+    // ONE logical verse as several consecutive `Verse` items that share the
+    // SAME verse number (it broke the verse text apart). The composer must
+    // merge those back into one slide rather than flushing mid-verse into
+    // two slides. Low limit (30) would, with the buggy packer, force a
+    // mid-verse flush after the first fragment — that is the bug.
+    let items = vec![
+        verse(1, "Na počiatku bolo Slovo"),
+        verse(1, "a Slovo bolo u Boha a Boh bol to Slovo."),
+    ];
+    let slides = compose_bible_items_into_slides(&items, 30);
+    // Whole verse 1 lands on ONE slide — never split across two.
+    assert_eq!(
+        slides.len(),
+        1,
+        "a single verse must never be split mid-verse across slides"
+    );
+    assert_eq!(
+        slides[0].main,
+        "1. Na počiatku bolo Slovo a Slovo bolo u Boha a Boh bol to Slovo."
+    );
+    assert_eq!(slides[0].main_reference, "Ján 1:1 (SEB)");
+}
+
+#[test]
+fn compose_items_same_number_merge_then_next_verse_overflows_to_own_slide() {
+    // Two fragments of verse 1 merge into one (oversized) slide; verse 2 is a
+    // separate verse and overflows to its own slide. The whole-verse rule for
+    // verse 1 must not bleed verse 2's text onto the same line.
+    let items = vec![
+        verse(1, "Na počiatku bolo Slovo"),
+        verse(1, "a Slovo bolo u Boha a Boh bol to Slovo."),
+        verse(2, "Ono bolo na počiatku u Boha."),
+    ];
+    let slides = compose_bible_items_into_slides(&items, 30);
+    assert_eq!(slides.len(), 2);
+    assert_eq!(
+        slides[0].main,
+        "1. Na počiatku bolo Slovo a Slovo bolo u Boha a Boh bol to Slovo."
+    );
+    assert_eq!(slides[1].main, "2. Ono bolo na počiatku u Boha.");
+    // Both slides share the full group range (verses 1-2).
+    assert_eq!(slides[0].main_reference, "Ján 1:1-2 (SEB)");
+    assert_eq!(slides[1].main_reference, "Ján 1:1-2 (SEB)");
 }
 
 #[test]

@@ -62,7 +62,12 @@ async fn create_presentation_in_non_bible_library_has_no_metadata() {
 }
 
 #[tokio::test]
-async fn create_bible_presentation_rejects_oversized_single_verse() {
+async fn create_bible_presentation_accepts_lone_oversized_verse_whole() {
+    // Issue #394: a single whole verse longer than the character limit is
+    // kept WHOLE on its own slide and ACCEPTED — display autofit handles the
+    // shrink. It must NOT be rejected with MainExceedsCharacterLimit (which
+    // forced the LLM to split the verse mid-text), and the full verse text
+    // must persist intact.
     let state = AppState::in_memory().await.unwrap();
     let long_text = "a".repeat(400);
     let args = json!({
@@ -83,9 +88,23 @@ async fn create_bible_presentation_rejects_oversized_single_verse() {
             .await
             .unwrap();
     let parsed: Value = serde_json::from_str(&body).unwrap();
-    assert_eq!(parsed["error"], "slide_validation");
-    assert_eq!(parsed["rule"], "main_exceeds_character_limit");
-    assert_eq!(parsed["limit"], 320);
+    assert!(
+        parsed.get("error").is_none(),
+        "lone oversized verse must be accepted, got error: {parsed}"
+    );
+    assert_eq!(parsed["slide_count"].as_u64().unwrap(), 1);
+
+    // The persisted slide carries the full verse text — nothing split off.
+    let pres_id_str = parsed["id"].as_str().unwrap();
+    let pres_id = BiblePresentationId::from_uuid(Uuid::parse_str(pres_id_str).unwrap());
+    let pres = state
+        .bible_presentation_detail(pres_id)
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(pres.slides.len(), 1);
+    assert_eq!(pres.slides[0].main.value(), format!("1. {long_text}"));
+    assert_eq!(pres.slides[0].main_reference, "Ján 1:1 (SEB)");
 }
 
 #[tokio::test]
