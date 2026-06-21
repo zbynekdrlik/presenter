@@ -138,8 +138,10 @@ pub(crate) fn compose_bible_items_into_slides(
                     // OTHER (earlier-numbered) verses already share it, flush
                     // those earlier verses first so this growing verse ends up
                     // WHOLE on its own slide — never an oversized multi-verse
-                    // slide that the validator would then reject.
-                    if acc.lines.len() > 1 && acc.would_overflow_merge(text.len(), limit) {
+                    // slide that the validator would then reject. (flush_keeping_last
+                    // is a no-op when the verse is alone on the slide, so no extra
+                    // line-count guard is needed here.)
+                    if acc.would_overflow_merge(text.len(), limit) {
                         acc.flush_keeping_last(&mut slides, &group_verses);
                     }
                     if let Some(last) = acc.lines.last_mut() {

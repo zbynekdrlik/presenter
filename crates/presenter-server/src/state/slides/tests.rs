@@ -189,6 +189,31 @@ fn compose_items_two_verses_that_overflow_emit_two_slides() {
 }
 
 #[test]
+fn compose_items_second_verse_exactly_at_limit_stays_on_one_slide() {
+    // Pins the overflow boundary at `prospective > limit` (ASCII = 1 byte/char).
+    // verse 1 = "1. " + 6 a = 9 bytes; verse 2 = "2. " + 7 b = 10 bytes.
+    // prospective = 9 (existing) + 1 (lines.len()) + 10 (new line) = 20 == limit
+    // → does NOT overflow → both verses share ONE slide. This kills the
+    // `> -> >=` and the `+ -> -`/`+ -> *` mutants on would_overflow's arithmetic.
+    let items = vec![verse(1, "aaaaaa"), verse(2, "bbbbbbb")];
+    let slides = compose_bible_items_into_slides(&items, 20);
+    assert_eq!(slides.len(), 1, "prospective == limit must NOT overflow");
+    assert_eq!(slides[0].main, "1. aaaaaa\n2. bbbbbbb");
+}
+
+#[test]
+fn compose_items_second_verse_one_over_limit_splits_to_two_slides() {
+    // One byte more than the at-limit case above: verse 2 = "2. " + 8 b = 11
+    // bytes → prospective = 9 + 1 + 11 = 21 > 20 → overflow → two slides.
+    // Together with the at-limit test this pins the exact boundary.
+    let items = vec![verse(1, "aaaaaa"), verse(2, "bbbbbbbb")];
+    let slides = compose_bible_items_into_slides(&items, 20);
+    assert_eq!(slides.len(), 2, "prospective == limit+1 must overflow");
+    assert_eq!(slides[0].main, "1. aaaaaa");
+    assert_eq!(slides[1].main, "2. bbbbbbbb");
+}
+
+#[test]
 fn compose_items_emphasis_between_verses_breaks_slide() {
     let items = vec![
         verse(1, "Na počiatku."),
