@@ -414,6 +414,41 @@ fn compose_items_same_number_fragment_that_still_fits_stays_with_earlier_verse()
 }
 
 #[test]
+fn compose_items_merge_fragment_exactly_at_limit_stays_on_one_slide() {
+    // Pins would_overflow_merge's boundary at `prospective > limit` (ASCII).
+    // verse 1 = "1. a" (4), verse 2 = "2. b" (4) pack onto one slide (existing
+    // = 8, lines = 2). A verse-2 fragment of 10 chars gives prospective =
+    // 8 + (2-1) + 1 + 10 = 20 == limit → does NOT overflow → all three stay on
+    // ONE slide. Kills the `+`/`-` arithmetic and `> -> >=` mutants on
+    // would_overflow_merge. Final main = "1. a\n2. b cccccccccc" (20 bytes).
+    let items = vec![verse(1, "a"), verse(2, "b"), verse(2, "cccccccccc")];
+    let slides = compose_bible_items_into_slides(&items, 20);
+    assert_eq!(
+        slides.len(),
+        1,
+        "merge prospective == limit must NOT overflow"
+    );
+    assert_eq!(slides[0].main, "1. a\n2. b cccccccccc");
+    assert_eq!(slides[0].main.len(), 20);
+}
+
+#[test]
+fn compose_items_merge_fragment_one_over_limit_splits_growing_verse() {
+    // One char more than the at-limit merge case: fragment of 11 chars →
+    // prospective = 8 + 1 + 1 + 11 = 21 > 20 → overflow → verse 1 flushes
+    // alone, verse 2 grows whole on its own slide.
+    let items = vec![verse(1, "a"), verse(2, "b"), verse(2, "ccccccccccc")];
+    let slides = compose_bible_items_into_slides(&items, 20);
+    assert_eq!(
+        slides.len(),
+        2,
+        "merge prospective == limit+1 must overflow"
+    );
+    assert_eq!(slides[0].main, "1. a");
+    assert_eq!(slides[1].main, "2. b ccccccccccc");
+}
+
+#[test]
 fn compose_items_adjacent_emphasis_emit_separate_slides() {
     let items = vec![emphasis("FIRST"), emphasis("SECOND"), verse(1, "verse")];
     let slides = compose_bible_items_into_slides(&items, 320);
