@@ -46,6 +46,20 @@ pub(crate) struct ReloadEscalation {
     /// fresh fetch on every tick once the no-frames horizon is crossed — at
     /// most one check is outstanding at a time. Cleared when the check resolves.
     check_in_flight: Cell<bool>,
+    /// Page-session liveness flag (#417). `true` for the whole page session;
+    /// flipped to `false` ONLY by the PAGE-level teardown (`NdiVideo`'s
+    /// `on_cleanup`, via `cancel()`), NEVER by `Watchdog::stop()`/`Drop`.
+    ///
+    /// Load-bearing distinction: `Watchdog::stop()`/`Drop` fire on EVERY
+    /// reconnect cycle, but the `escalation` is page-session (created once and
+    /// shared by `&Rc` into each `Watchdog::install`), so it OUTLIVES every
+    /// Watchdog. A `/healthz` check spawned by `maybe_reload` just before
+    /// teardown holds only an `Rc<ReloadEscalation>`; after its `.await` it
+    /// could otherwise still call `window.location().reload()` AFTER the page
+    /// is being torn down. Gating that post-await reload on `active` closes the
+    /// window — while tying the flag to page teardown (not Watchdog teardown)
+    /// keeps the #401 last-resort reload alive across normal reconnects.
+    active: Cell<bool>,
     /// The no-frames horizon (ms) for THIS page load. Defaults to
     /// `RELOAD_NO_FRAME_MS`; an explicit `?ndiReloadMs=<n>` URL query lowers
     /// it so the E2E can exercise the full reload path (incl. the real
@@ -68,6 +82,7 @@ impl ReloadEscalation {
             last_decoded_frame_at: Cell::new(now_ms()),
             reloaded: Cell::new(false),
             check_in_flight: Cell::new(false),
+            active: Cell::new(true),
             threshold_ms: reload_threshold_ms_from_url(),
             skip_healthz_gate: super::ndi_reload_guard::reload_skip_healthz_from_url(),
         })
@@ -78,6 +93,34 @@ impl ReloadEscalation {
     /// resumes decoding clears the escalation well before the threshold.
     pub(crate) fn note_decoded_frame(&self) {
         self.last_decoded_frame_at.set(now_ms());
+    }
+
+    /// PAGE-level teardown signal (#417): mark the page session as gone so any
+    /// in-flight `/healthz` check spawned by `maybe_reload` does NOT reload
+    /// after the page is being torn down. Called ONLY from `NdiVideo`'s
+    /// `on_cleanup` (where the page `cancelled` flag is set) — NOT from
+    /// `Watchdog::stop()`/`Drop`, which fire on every reconnect and would
+    /// otherwise permanently suppress the #401 last-resort reload.
+    pub(crate) fn cancel(&self) {
+        self.active.set(false);
+    }
+
+    /// Decide, AFTER the `/healthz` check resolves, whether the detached task
+    /// should perform the last-resort `window.location().reload()`. Gathers the
+    /// page-session cells + the `now_ms()`-based horizon and delegates to the
+    /// pure `should_perform_post_await_reload` (host-testable in
+    /// `ndi_reload_guard`). The #417 `active` gate is the first argument — a
+    /// torn-down page (cancel()) is never reloaded by an in-flight check.
+    fn should_reload_after_check(&self, server_has_streaming: bool) -> bool {
+        super::ndi_reload_guard::should_perform_post_await_reload(
+            self.active.get(),
+            self.reloaded.get(),
+            super::ndi_reload_guard::should_escalate_reload(
+                self.ms_since_last_decoded_frame(),
+                self.threshold_ms,
+            ),
+            server_has_streaming,
+        )
     }
 
     /// Milliseconds since any session last decoded a frame (page-session).
@@ -142,26 +185,26 @@ impl ReloadEscalation {
             let has_streaming =
                 super::ndi_reload_guard::fetch_healthz_has_streaming_pipeline().await;
             escalation.check_in_flight.set(false);
-            // A frame may have decoded while the check was in flight — re-check
-            // the horizon so a recovered stream is never reloaded out from
-            // under itself.
-            if escalation.reloaded.get()
-                || !super::ndi_reload_guard::should_escalate_reload(
-                    escalation.ms_since_last_decoded_frame(),
-                    escalation.threshold_ms,
-                )
-            {
-                return;
-            }
-            if !super::ndi_reload_guard::should_reload_given_pipeline_state(has_streaming) {
-                // Source legitimately down — reloading can't help. Reset the
-                // page-session timer so the rule re-evaluates after another
-                // full window instead of looping reloads every ~60s.
-                leptos::logging::warn!(
-                    "watchdog: no decoded frame for {:.0}ms but server has NO streaming pipeline — source is down, SKIPPING reload (#410)",
-                    escalation.ms_since_last_decoded_frame()
-                );
-                escalation.last_decoded_frame_at.set(now_ms());
+            // The post-await reload decision (incl. the #417 page-teardown gate)
+            // is centralized in `should_reload_after_check`. If it says no, the
+            // task does NOT reload — but a still-live page whose SOURCE is down
+            // resets its timer so #410 re-evaluates after another full window
+            // (instead of looping reloads every ~60s).
+            if !escalation.should_reload_after_check(has_streaming) {
+                if escalation.active.get()
+                    && !escalation.reloaded.get()
+                    && super::ndi_reload_guard::should_escalate_reload(
+                        escalation.ms_since_last_decoded_frame(),
+                        escalation.threshold_ms,
+                    )
+                    && !super::ndi_reload_guard::should_reload_given_pipeline_state(has_streaming)
+                {
+                    leptos::logging::warn!(
+                        "watchdog: no decoded frame for {:.0}ms but server has NO streaming pipeline — source is down, SKIPPING reload (#410)",
+                        escalation.ms_since_last_decoded_frame()
+                    );
+                    escalation.last_decoded_frame_at.set(now_ms());
+                }
                 return;
             }
             escalation.reloaded.set(true);
