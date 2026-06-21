@@ -28,6 +28,16 @@ const OAUTH_CALLBACK_PORT: u16 = 54545;
 /// Name of the CLIProxyAPI binary.
 const PROXY_BINARY_NAME: &str = "cli-proxy-api";
 
+/// Freshness classification of an on-disk Claude OAuth token (#438).
+enum TokenValidity {
+    /// Token's `expired` timestamp is in the future — usable.
+    Fresh,
+    /// Token's `expired` timestamp is in the past — dead, re-login required.
+    Expired { expired: String },
+    /// File unreadable or has no parseable `expired` field — fail-open as valid.
+    Unknown,
+}
+
 /// State of the managed CLIProxyAPI process.
 #[derive(Debug, Clone, serde::Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -117,7 +127,17 @@ impl ProxyManager {
         self.deploy_dir.join("cli-proxy-api-config.yaml")
     }
 
-    /// Check if Claude credentials exist (either OAuth tokens or API key in config).
+    /// Check if Claude credentials exist AND are still valid.
+    ///
+    /// An explicit `claude-api-key` in the config counts as authenticated.
+    /// Otherwise, OAuth token files (`claude-*.json`) are validated: a token
+    /// whose `expired` timestamp is in the past does NOT count (it can no
+    /// longer mint completions — #438). At least one fresh token → authenticated.
+    ///
+    /// This is an offline freshness check only (no live network probe per the
+    /// #438 MVP scope). A token file with no parseable `expired` field is
+    /// treated as valid (fail-open) so we never regress a working install on a
+    /// format we don't recognise — only a *provably* expired token is rejected.
     pub async fn is_claude_authenticated(&self) -> bool {
         if let Ok(content) = tokio::fs::read_to_string(self.config_path()).await {
             if content.contains("claude-api-key:") {
@@ -128,12 +148,64 @@ impl ProxyManager {
         let Ok(mut entries) = tokio::fs::read_dir(&auth_dir).await else {
             return false;
         };
+        let mut found_token = false;
+        let mut expired_count = 0usize;
         while let Ok(Some(entry)) = entries.next_entry().await {
-            if entry.file_name().to_string_lossy().contains("claude") {
-                return true;
+            let name = entry.file_name().to_string_lossy().into_owned();
+            if !name.contains("claude") {
+                continue;
+            }
+            found_token = true;
+            match Self::token_validity(&entry.path()).await {
+                TokenValidity::Fresh => return true,
+                TokenValidity::Unknown => {
+                    // Unparseable expiry — fail-open, this token counts as valid.
+                    warn!(token = %name, "Claude token has no parseable expiry; treating as valid");
+                    return true;
+                }
+                TokenValidity::Expired { expired } => {
+                    expired_count += 1;
+                    warn!(
+                        token = %name,
+                        expired = %expired,
+                        "Claude OAuth token is EXPIRED — reporting not authenticated; re-login required"
+                    );
+                }
             }
         }
+        if found_token && expired_count > 0 {
+            warn!(
+                expired_count,
+                "all Claude OAuth tokens are expired — AI auth is dead, re-login required"
+            );
+        }
         false
+    }
+
+    /// Inspect a `claude-*.json` OAuth token file and classify its freshness
+    /// from the on-disk `expired` RFC3339 timestamp.
+    async fn token_validity(path: &Path) -> TokenValidity {
+        let Ok(content) = tokio::fs::read_to_string(path).await else {
+            return TokenValidity::Unknown;
+        };
+        let Ok(json) = serde_json::from_str::<serde_json::Value>(&content) else {
+            return TokenValidity::Unknown;
+        };
+        let Some(expired_str) = json.get("expired").and_then(|v| v.as_str()) else {
+            return TokenValidity::Unknown;
+        };
+        match chrono::DateTime::parse_from_rfc3339(expired_str) {
+            Ok(expired_at) => {
+                if expired_at <= chrono::Utc::now() {
+                    TokenValidity::Expired {
+                        expired: expired_str.to_string(),
+                    }
+                } else {
+                    TokenValidity::Fresh
+                }
+            }
+            Err(_) => TokenValidity::Unknown,
+        }
     }
 
     /// Write the config YAML file for CLIProxyAPI.
