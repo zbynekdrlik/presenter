@@ -133,3 +133,5 @@ _RED-before-GREEN verified: RED 40b3147c (#437), 61564d81 (#438) precede their G
   - `4149e304` proxy.rs: skip non-regular-file auth-dir entries (a `claude`-named subdir would EISDIR→Unknown→fail-open, masking expired tokens). +regression test `claude_named_subdir_does_not_grant_auth`.
   - `7cbd1727` ndi-fullscreen E2E: replaced blind `waitForTimeout(1500)` with a positive snapshot-arrival anchor (assert #042 on worship-snv first, then absence on ndi-fullscreen). Verified locally: 2 passed; removing `hide_song_number` makes the HIDDEN test fail (Received: 1).
 - Filed airuleset hook gap (Rust in-file `#[cfg(test)]` tests undetectable by filename-based RED-before-GREEN gate) — see filed issue.
+
+- Mutation gate: shard 7/16 caught a surviving `&&`→`||` mutant on the aggregate expired-log guard (`ddfcbccd`); fixed by removing the redundant counter/conditional (mutant target line deleted) + added fail-open Unknown-token test. Local fmt/clippy/6 proxy tests green.
