@@ -16,7 +16,7 @@ use leptos::web_sys::{
 };
 use wasm_bindgen_futures::{spawn_local, JsFuture};
 
-use super::ndi_watchdog::{profile_mode_is_compat, ReloadEscalation, Watchdog};
+use super::ndi_watchdog::{now_ms, profile_mode_is_compat, ReloadEscalation, Watchdog};
 
 /// Holds an active WHEP session: the peer connection AND the WHEP resource URL
 /// returned in the `Location` header on POST. The resource URL is used to
@@ -85,12 +85,27 @@ pub fn NdiVideo(source_id: String, #[prop(optional)] class: Option<&'static str>
             // Fully Kiosk auto-reload replacement, adb-independent).
             let escalation = ReloadEscalation::new();
 
+            // Per-instance reconnect backoff step (#369), created ONCE here so
+            // it survives reconnect cycles. Shared by BOTH the connect-error
+            // branch and the watchdog-reconnect fall-through so neither retries
+            // with no delay. Reset to 0 after a session that was clearly
+            // healthy (see should_reset_backoff).
+            let backoff_step: BackoffStep = std::rc::Rc::new(std::cell::Cell::new(0));
+
             loop {
                 if cancelled.load(Ordering::Acquire) {
                     return;
                 }
                 match connect_whep(&video, &source_id).await {
-                    Ok(session) => {
+                    // #431: source configured but not producing yet (server
+                    // replied 204). NOT an error — show the placeholder (no
+                    // srcObject is set) and back off quietly, with NO console
+                    // warning/error. This is the path that eliminated the prod
+                    // stage's repeated "/ndi/whep 404" console spam.
+                    Ok(ConnectOutcome::NotProducing) => {
+                        sleep_for_backoff(&backoff_step).await;
+                    }
+                    Ok(ConnectOutcome::Connected(session)) => {
                         if cancelled.load(Ordering::Acquire) {
                             // Unmounted between POST and now — clean up server
                             // session and bail.
@@ -114,6 +129,12 @@ pub fn NdiVideo(source_id: String, #[prop(optional)] class: Option<&'static str>
 
                         install_pagehide_teardown(&session);
                         session_holder.set_value(Some(ActiveConnection { session, watchdog }));
+
+                        // When this session was established — used to decide
+                        // whether its later drop was a transient blip (reset
+                        // backoff) or a connect-but-never-decode source (let
+                        // backoff escalate) — see should_reset_backoff (#369).
+                        let session_started_at = now_ms();
 
                         // Wait until either cancellation OR a watchdog fire.
                         loop {
@@ -147,14 +168,24 @@ pub fn NdiVideo(source_id: String, #[prop(optional)] class: Option<&'static str>
                             }
                             active.session.pc.close();
                         }
-                        // Loop falls through to connect_whep again with no
-                        // additional backoff (first retry is immediate).
+
+                        // #369: back off before the watchdog-triggered
+                        // reconnect re-POSTs WHEP. A session that lived long
+                        // enough to clearly be decoding (a transient blip)
+                        // resets the step so the reconnect is prompt; a
+                        // connect-but-never-decode source keeps the step
+                        // climbing toward the 5s cap, so it no longer reconnects
+                        // immediately every ~12s cycle.
+                        if should_reset_backoff(now_ms() - session_started_at) {
+                            backoff_step.set(0);
+                        }
+                        sleep_for_backoff(&backoff_step).await;
                     }
                     Err(e) => {
                         leptos::logging::warn!(
                             "reconnect_loop: connect_whep failed: {e:?}, backing off"
                         );
-                        sleep_for_backoff().await;
+                        sleep_for_backoff(&backoff_step).await;
                     }
                 }
             }
@@ -201,76 +232,61 @@ pub fn NdiVideo(source_id: String, #[prop(optional)] class: Option<&'static str>
 /// multiple `<NdiVideo>` components, instance A's failure streak will
 /// inflate instance B's first retry delay (still capped at 5s). When that
 /// layout ships, move STEP into a per-component Rc<Cell<usize>>.
-/// Capped backoff delay (ms) for a given watchdog-reconnect / connect-error
-/// retry step. See `reconnect_backoff_for_watchdog_step` for the #369 contract
-/// the supervising loop relies on.
+/// Capped-exponential backoff delay (ms) for a given reconnect retry step.
+/// Step 0 is the FIRST retry and is deliberately NON-ZERO (#369).
 ///
-/// RED STUB (#369): the watchdog-triggered reconnect path currently re-POSTs
-/// WHEP IMMEDIATELY on the first retry (step 0) — the Ok-branch fall-through in
-/// the effect does NO backoff at all. This stub models that bug: step 0 → 0ms.
-/// The GREEN fix replaces this with a real 500ms→5s capped schedule applied to
-/// the watchdog-reconnect path so a connect-but-never-decode source stops
-/// reconnecting every cycle with no delay.
+/// Both reconnect paths in the supervising loop use this:
+/// - the connect-error `Err` branch (a POST that failed / a 204 not-producing
+///   reply), and
+/// - the watchdog-triggered reconnect `Ok`-branch fall-through (a source that
+///   connected but stalled / never decoded a frame).
+///
+/// Before #369 the watchdog-reconnect path re-POSTed WHEP IMMEDIATELY on the
+/// first retry, so a connect-but-never-decode source reconnected every ~12s
+/// cycle with no delay — creating + tearing down a server-side WHEP session
+/// each time. Applying this schedule (500ms → 5s, capped) to that path settles
+/// a persistently-broken source into one reconnect every 5s.
 pub(crate) fn reconnect_backoff_for_watchdog_step(step: usize) -> i32 {
-    // BUG (pre-#369): first watchdog reconnect is immediate.
-    if step == 0 {
-        return 0;
-    }
-    let schedule_ms: [i32; 7] = [500, 1000, 2000, 4000, 5000, 5000, 5000];
-    schedule_ms[step.min(schedule_ms.len() - 1)]
+    const SCHEDULE_MS: [i32; 7] = [500, 1000, 2000, 4000, 5000, 5000, 5000];
+    SCHEDULE_MS[step.min(SCHEDULE_MS.len() - 1)]
 }
 
-async fn sleep_for_backoff() {
-    use std::sync::atomic::{AtomicUsize, Ordering as AtomicOrdering};
-    static STEP: AtomicUsize = AtomicUsize::new(0);
-    let schedule_ms: [i32; 7] = [500, 1000, 2000, 4000, 5000, 5000, 5000];
-    let i = STEP
-        .fetch_add(1, AtomicOrdering::Relaxed)
-        .min(schedule_ms.len() - 1);
-    let ms = schedule_ms[i];
+/// Per-`<NdiVideo>`-instance reconnect backoff step counter. Created ONCE in
+/// the effect so it survives every reconnect cycle of that instance, and shared
+/// by BOTH reconnect branches (#369). Per-instance (an `Rc<Cell<usize>>`, not
+/// the old process-global `static`) so a future multi-tile layout's instance A
+/// failure streak never inflates instance B's first retry delay.
+type BackoffStep = std::rc::Rc<std::cell::Cell<usize>>;
+
+/// A session that stayed up at least this long before the watchdog fired was
+/// CLEARLY decoding fine (it lived well past `NO_DECODE_FALLBACK_MS` 15s, the
+/// never-decode horizon), so its drop is a transient blip — reset the backoff
+/// step so the reconnect is prompt. A session that died sooner (≈ within the
+/// no-decode window) is a connect-but-never-decode source: do NOT reset, let
+/// the backoff escalate toward the 5s cap (#369).
+pub(crate) const HEALTHY_SESSION_MS: f64 = 20_000.0;
+
+/// True if a session that lived `session_lifetime_ms` before the watchdog fired
+/// was healthy enough to reset the reconnect backoff (#369). Pure + unit-tested.
+pub(crate) fn should_reset_backoff(session_lifetime_ms: f64) -> bool {
+    session_lifetime_ms >= HEALTHY_SESSION_MS
+}
+
+/// Sleep for this instance's next capped-exponential backoff duration, then
+/// advance the step. Used by the connect-error branch AND the watchdog-
+/// reconnect fall-through so BOTH back off (#369). The caller resets the step
+/// (`step.set(0)`) after a connect that actually started decoding, so a healthy
+/// reconnect doesn't carry a stale long delay.
+async fn sleep_for_backoff(step: &BackoffStep) {
+    let i = step.get();
+    let ms = reconnect_backoff_for_watchdog_step(i);
+    step.set(i.saturating_add(1));
     let promise = leptos::web_sys::js_sys::Promise::new(&mut |resolve, _| {
         if let Some(window) = leptos::web_sys::window() {
             let _ = window.set_timeout_with_callback_and_timeout_and_arguments_0(&resolve, ms);
         }
     });
     let _ = wasm_bindgen_futures::JsFuture::from(promise).await;
-}
-
-#[cfg(test)]
-mod tests {
-    use super::reconnect_backoff_for_watchdog_step as backoff;
-
-    /// #369: the watchdog-triggered reconnect path MUST back off before
-    /// re-POSTing WHEP — even on the FIRST retry. A source that connects (DTLS
-    /// ok) but never decodes a frame trips the watchdog every ~12s; with an
-    /// immediate (0ms) first retry it re-POSTs with no delay each cycle,
-    /// creating + tearing down a server-side WHEP session every time. The
-    /// first watchdog reconnect must wait at least the base 500ms.
-    #[test]
-    fn first_watchdog_reconnect_is_not_immediate() {
-        assert!(
-            backoff(0) >= 500,
-            "first watchdog reconnect must back off >=500ms, got {}ms (#369: \
-             Ok-branch reconnect was immediate)",
-            backoff(0)
-        );
-    }
-
-    /// The backoff grows then CAPS at 5s — a persistently-broken source settles
-    /// into one reconnect every 5s, never a tight no-delay spiral and never an
-    /// unbounded delay.
-    #[test]
-    fn backoff_is_monotonic_then_capped_at_5s() {
-        let prev = backoff(0);
-        assert!(prev > 0);
-        for step in 1..10 {
-            let cur = backoff(step);
-            assert!(cur >= prev, "backoff must not decrease at step {step}");
-            assert!(cur <= 5000, "backoff must cap at 5000ms, got {cur} at step {step}");
-        }
-        // Well past the schedule length it stays capped, not panicking/0.
-        assert_eq!(backoff(100), 5000, "backoff must stay capped at 5s for large steps");
-    }
 }
 
 /// Fire-and-forget DELETE to the WHEP session resource. SYNCHRONOUS dispatch —
@@ -376,7 +392,19 @@ async fn wait_for_ice_gathering_complete(pc: &RtcPeerConnection) {
     drop(cb_holder);
 }
 
-async fn connect_whep(video: &HtmlVideoElement, source_id: &str) -> Result<WhepSession, JsValue> {
+/// Connect outcome: a live session, or "the source is configured but not
+/// currently producing" (#431). The not-producing case is an EXPECTED,
+/// non-error state (server replies 204) — it must NOT surface as a console
+/// error/warning; the supervising loop shows the placeholder and backs off.
+enum ConnectOutcome {
+    Connected(WhepSession),
+    NotProducing,
+}
+
+async fn connect_whep(
+    video: &HtmlVideoElement,
+    source_id: &str,
+) -> Result<ConnectOutcome, JsValue> {
     // Default RTCPeerConnection config (no explicit bundle-policy). A plain
     // default-bundle client is proven to decode this server's stream in CI
     // (e2e check 1). Forcing max-bundle here was a REGRESSION — CI showed the
@@ -423,11 +451,18 @@ async fn connect_whep(video: &HtmlVideoElement, source_id: &str) -> Result<WhepS
         })
         .unwrap_or_default();
 
-    let (answer_text, resource_url) = post_whep_offer(source_id, &offer_sdp).await?;
+    // #431: a configured-but-not-producing source replies 204 No Content (no
+    // SDP answer). That is NOT an error — close this peer connection and report
+    // NotProducing so the loop shows the placeholder and backs off quietly,
+    // with no "Failed to load resource" / "POST returned 404" console noise.
+    let Some((answer_text, resource_url)) = post_whep_offer(source_id, &offer_sdp).await? else {
+        pc.close();
+        return Ok(ConnectOutcome::NotProducing);
+    };
     let answer = RtcSessionDescriptionInit::new(RtcSdpType::Answer);
     answer.set_sdp(&answer_text);
     JsFuture::from(pc.set_remote_description(&answer)).await?;
-    Ok(WhepSession { pc, resource_url })
+    Ok(ConnectOutcome::Connected(WhepSession { pc, resource_url }))
 }
 
 /// Attach the `ontrack` handler: on the first inbound MediaStream, set it as the
@@ -504,15 +539,22 @@ fn attach_ontrack(pc: &RtcPeerConnection, video: &HtmlVideoElement) {
     ontrack.forget();
 }
 
-/// POST the WHEP offer SDP and return `(answer_sdp, resource_url)`. The resource
-/// URL comes from the `Location` header (resolved against the page origin) and
-/// is DELETEd on cleanup so server-side sessions don't leak — after ~10 leaked
-/// sessions webrtcsink's discovery starts failing for new consumers (transient
-/// `failed to set sps/pps` errors that don't recover).
+/// POST the WHEP offer SDP. On 201 the answer comes back with a `Location`
+/// header (resolved against the page origin) and is DELETEd on cleanup so
+/// server-side sessions don't leak — after ~10 leaked sessions webrtcsink's
+/// discovery starts failing for new consumers (transient `failed to set
+/// sps/pps` errors that don't recover).
+///
+/// Returns:
+/// - `Ok(Some((answer_sdp, resource_url)))` — 201 Created with an SDP answer,
+/// - `Ok(None)` — 204 No Content: the source is configured but not currently
+///   producing (#431); an EXPECTED transient state, NOT an error,
+/// - `Err(_)` — a genuine failure (network, or a non-2xx the client can't
+///   recover from).
 async fn post_whep_offer(
     source_id: &str,
     offer_sdp: &str,
-) -> Result<(String, Option<String>), JsValue> {
+) -> Result<Option<(String, Option<String>)>, JsValue> {
     // Profile fallback (spec addendum 2 pivot): compat mode requests the
     // server's 640×480 H264 branch via the URL query.
     let url = whep_url(source_id, profile_mode_is_compat());
@@ -526,6 +568,12 @@ async fn post_whep_offer(
     let window = leptos::web_sys::window().ok_or_else(|| JsValue::from_str("no window"))?;
     let resp_val = JsFuture::from(window.fetch_with_request(&request)).await?;
     let resp: leptos::web_sys::Response = resp_val.dyn_into()?;
+    // #431: 204 No Content = the source is configured but not currently
+    // producing — an expected transient state, not an error. Report it as
+    // NotProducing (Ok(None)) so the loop backs off quietly; never log it.
+    if resp.status() == 204 {
+        return Ok(None);
+    }
     if !resp.ok() {
         return Err(JsValue::from_str(&format!(
             "WHEP POST returned {}",
@@ -554,5 +602,71 @@ async fn post_whep_offer(
         .await?
         .as_string()
         .unwrap_or_default();
-    Ok((answer_text, resource_url))
+    Ok(Some((answer_text, resource_url)))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::reconnect_backoff_for_watchdog_step as backoff;
+
+    /// #369: the watchdog-triggered reconnect path MUST back off before
+    /// re-POSTing WHEP — even on the FIRST retry. A source that connects (DTLS
+    /// ok) but never decodes a frame trips the watchdog every ~12s; with an
+    /// immediate (0ms) first retry it re-POSTs with no delay each cycle,
+    /// creating + tearing down a server-side WHEP session every time. The
+    /// first watchdog reconnect must wait at least the base 500ms.
+    #[test]
+    fn first_watchdog_reconnect_is_not_immediate() {
+        assert!(
+            backoff(0) >= 500,
+            "first watchdog reconnect must back off >=500ms, got {}ms (#369: \
+             Ok-branch reconnect was immediate)",
+            backoff(0)
+        );
+    }
+
+    /// The backoff grows then CAPS at 5s — a persistently-broken source settles
+    /// into one reconnect every 5s, never a tight no-delay spiral and never an
+    /// unbounded delay.
+    #[test]
+    fn backoff_is_monotonic_then_capped_at_5s() {
+        let mut prev = backoff(0);
+        assert!(prev > 0);
+        for step in 1..10 {
+            let cur = backoff(step);
+            assert!(cur >= prev, "backoff must not decrease at step {step}");
+            assert!(
+                cur <= 5000,
+                "backoff must cap at 5000ms, got {cur} at step {step}"
+            );
+            prev = cur;
+        }
+        // Well past the schedule length it stays capped, not panicking/0.
+        assert_eq!(
+            backoff(100),
+            5000,
+            "backoff must stay capped at 5s for large steps"
+        );
+        // The escalation is real: a later step is strictly slower than step 0.
+        assert!(
+            backoff(3) > backoff(0),
+            "backoff must escalate across steps"
+        );
+    }
+
+    /// #369 reset rule: a session that lived past the healthy threshold (it was
+    /// clearly decoding) resets the backoff so its reconnect is prompt; one that
+    /// died within the no-decode window (connect-but-never-decode) does NOT
+    /// reset, so the backoff keeps escalating toward the 5s cap.
+    #[test]
+    fn backoff_resets_only_for_healthy_sessions() {
+        use super::{should_reset_backoff, HEALTHY_SESSION_MS};
+        // A connect-but-never-decode source drops ~10-15s in — do NOT reset.
+        assert!(!should_reset_backoff(0.0));
+        assert!(!should_reset_backoff(12_000.0));
+        assert!(!should_reset_backoff(HEALTHY_SESSION_MS - 1.0));
+        // A long-lived session that blipped — reset (prompt reconnect).
+        assert!(should_reset_backoff(HEALTHY_SESSION_MS));
+        assert!(should_reset_backoff(300_000.0));
+    }
 }
