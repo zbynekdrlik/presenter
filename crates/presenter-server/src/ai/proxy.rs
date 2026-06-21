@@ -155,6 +155,18 @@ impl ProxyManager {
             if !name.contains("claude") {
                 continue;
             }
+            // Only regular files are token files. A directory whose name happens
+            // to contain "claude" (e.g. a cache/log subdir) must NOT be read as
+            // a token: read_to_string would EISDIR → Unknown → fail-open, which
+            // would mask a genuinely-expired-token state and defeat #438.
+            match entry.file_type().await {
+                Ok(ft) if ft.is_file() => {}
+                Ok(_) => continue,
+                Err(e) => {
+                    warn!(entry = %name, ?e, "could not stat auth-dir entry; skipping");
+                    continue;
+                }
+            }
             found_token = true;
             match Self::token_validity(&entry.path()).await {
                 TokenValidity::Fresh => return true,
@@ -600,6 +612,25 @@ mod tests {
         assert!(
             !mgr.is_claude_authenticated().await,
             "no token files means not authenticated"
+        );
+    }
+
+    /// A "claude"-named SUBDIRECTORY alongside an expired token must not be
+    /// read as a token (it would EISDIR → Unknown → fail-open). The expired
+    /// token must still win → not authenticated.
+    #[tokio::test]
+    async fn claude_named_subdir_does_not_grant_auth() {
+        let tmp = tempfile::tempdir().unwrap();
+        let mgr = ProxyManager::new(tmp.path().to_path_buf());
+        let auth_dir = mgr.auth_dir();
+        tokio::fs::create_dir_all(auth_dir.join("claude-logs"))
+            .await
+            .unwrap();
+        let past = (Utc::now() - Duration::hours(2)).to_rfc3339();
+        write_token(&mgr, "expired@example.com", &past).await;
+        assert!(
+            !mgr.is_claude_authenticated().await,
+            "a claude-named subdir must not grant authentication while the only token is expired"
         );
     }
 }
