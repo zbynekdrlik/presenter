@@ -127,3 +127,9 @@ Terse per-issue record of autonomous cycles (issue #, commits, tests, decisions)
 - Note: RED tests are in-file `#[cfg(test)] mod tests` inside `ai/mod.rs`/`ai/proxy.rs` (standard Rust convention) — the filename-based `pre-push-test-check` RED-before-GREEN gate can't see them, so push used `[no-test: ...]` with the honest reason that the RED tests exist and precede the fixes (verified failing→passing).
 
 _RED-before-GREEN verified: RED 40b3147c (#437), 61564d81 (#438) precede their GREEN fixes._
+
+### batch#5 review hardening (post-review, same PR #440)
+- `/code-review` (high) + deep second-pass review found 2 issues, both fixed in-PR:
+  - `4149e304` proxy.rs: skip non-regular-file auth-dir entries (a `claude`-named subdir would EISDIR→Unknown→fail-open, masking expired tokens). +regression test `claude_named_subdir_does_not_grant_auth`.
+  - `7cbd1727` ndi-fullscreen E2E: replaced blind `waitForTimeout(1500)` with a positive snapshot-arrival anchor (assert #042 on worship-snv first, then absence on ndi-fullscreen). Verified locally: 2 passed; removing `hide_song_number` makes the HIDDEN test fail (Received: 1).
+- Filed airuleset hook gap (Rust in-file `#[cfg(test)]` tests undetectable by filename-based RED-before-GREEN gate) — see filed issue.
