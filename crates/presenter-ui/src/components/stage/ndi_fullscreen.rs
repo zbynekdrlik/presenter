@@ -58,7 +58,7 @@ pub fn NdiFullscreen(
                 </div>
             </Show>
 
-            <StatusBar ws_state=ws_state latency_ms=latency_ms hide_live=true />
+            <StatusBar ws_state=ws_state latency_ms=latency_ms hide_live=true hide_song_number=true />
         </div>
     }
 }

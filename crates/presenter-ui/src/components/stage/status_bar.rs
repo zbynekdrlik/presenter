@@ -15,6 +15,9 @@ pub fn StatusBar(
     /// Hide the live/broadcast pill (used by NDI fullscreen layout)
     #[prop(default = false)]
     hide_live: bool,
+    /// Hide the song number (used by NDI fullscreen layout — #436)
+    #[prop(default = false)]
+    hide_song_number: bool,
 ) -> impl IntoView {
     let ctx = use_context::<StageContext>().expect("StageContext not provided");
 
@@ -39,7 +42,8 @@ pub fn StatusBar(
             .unwrap_or_default()
     };
 
-    let has_song_number = move || ctx.snapshot.get().and_then(|s| s.song_number).is_some();
+    let has_song_number =
+        move || !hide_song_number && ctx.snapshot.get().and_then(|s| s.song_number).is_some();
 
     let live_text = move || {
         if broadcast_live.get() {
@@ -86,7 +90,9 @@ pub fn StatusBar(
         autofit_effect_tabular(live_ref, STATUS_MAX_FONT, live_text);
     }
     autofit_effect_tabular(connection_ref, STATUS_MAX_FONT, connection_text);
-    autofit_effect_tabular(song_number_ref, STATUS_MAX_FONT, song_number);
+    if !hide_song_number {
+        autofit_effect_tabular(song_number_ref, STATUS_MAX_FONT, song_number);
+    }
 
     view! {
         <div node_ref=clock_ref class="stage__clock">

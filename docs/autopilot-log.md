@@ -114,3 +114,24 @@ Terse per-issue record of autonomous cycles (issue #, commits, tests, decisions)
   - Filed #434 (stale agent.rs prompt step 8 — "separate slides" now wrong; blocked by fn-length gate on `build_system_prompt`/`run_agent`, out of scope).
 - **#433 (deploy.yml ADB `set -e` twin):** `fafe0f57` — `set -e` in deploy.yml ADB heredoc mirroring release.yml 47d466a; new `tests/ci/adb-install-set-e.test.sh` (genuine guard: fails when set -e removed). Review found a THIRD gap → `ae8e6cbe` added `set -e` to pipeline.yml deploy-dev ADB step + extended the test to all 3 workflows.
 - Reviews: `/code-review` + `/requesting-code-review` both clean (0 critical/important; one minor doc-comment fixed).
+
+## Batch #5 (2026-06-21) — #437 + #438 + #436 (one PR, v0.4.145)
+
+- **Version:** bumped `0.4.144 -> 0.4.145` (Cargo.toml workspace, first commit `3fbc7154`).
+- **#437 (bug — AI model default was retired `claude-opus-4-20250514`, 404'd prod 2026-06-21):**
+  RED `40b3147c` (`ai::tests::default_model_is_not_retired` — asserts default != retired ID, == `claude-opus-4-6`) → GREEN `70a46330` (`Closes #437`). Extracted `DEFAULT_AI_MODEL` const = `claude-opus-4-6` (newest Opus the on-device CLIProxyAPI catalog serves; 4-8 not in catalog). Updated retired UI placeholder `crates/presenter-ui/src/pages/ai.rs:297` → `claude-opus-4-6`.
+- **#438 (bug — `/ai/status` reported `claudeAuthenticated:true` for expired/dead OAuth token):**
+  RED `61564d81` (`ai::proxy::tests::expired_token_is_not_authenticated` + fresh/mixed/none cases) → GREEN `6ecc3691` (`Closes #438`). `is_claude_authenticated()` now parses each `claude-*.json` token's RFC3339 `expired` field; provably-expired → not authenticated, unparseable → fail-open. WARN log per expired token + aggregate. Offline freshness check only (MVP, no live probe). Added `TokenValidity` enum.
+- **#436 (behavior — hide song number on NDI fullscreen):** `13b2736d` (`Closes #436`). Added `hide_song_number` prop to `StatusBar` (mirrors `hide_live`), gated song-number `<div data-role="song-number">` render + its autofit on it, `NdiFullscreen` passes `hide_song_number=true`. Other layouts unchanged. E2E `tests/e2e/ndi-fullscreen-song-number.spec.ts` (absent on ndi-fullscreen, present on worship-snv, zero console errors). Synced presenter-ui Cargo.lock presenter-core 0.4.141→0.4.145.
+- Local gates: fmt clean, clippy `--workspace --all-targets -D warnings` clean, full workspace tests green (293 server bin + persistence ok, no SIGSEGV), presenter-ui wasm32 check + 118 lib tests green.
+- Note: RED tests are in-file `#[cfg(test)] mod tests` inside `ai/mod.rs`/`ai/proxy.rs` (standard Rust convention) — the filename-based `pre-push-test-check` RED-before-GREEN gate can't see them, so push used `[no-test: ...]` with the honest reason that the RED tests exist and precede the fixes (verified failing→passing).
+
+_RED-before-GREEN verified: RED 40b3147c (#437), 61564d81 (#438) precede their GREEN fixes._
+
+### batch#5 review hardening (post-review, same PR #440)
+- `/code-review` (high) + deep second-pass review found 2 issues, both fixed in-PR:
+  - `4149e304` proxy.rs: skip non-regular-file auth-dir entries (a `claude`-named subdir would EISDIR→Unknown→fail-open, masking expired tokens). +regression test `claude_named_subdir_does_not_grant_auth`.
+  - `7cbd1727` ndi-fullscreen E2E: replaced blind `waitForTimeout(1500)` with a positive snapshot-arrival anchor (assert #042 on worship-snv first, then absence on ndi-fullscreen). Verified locally: 2 passed; removing `hide_song_number` makes the HIDDEN test fail (Received: 1).
+- Filed airuleset hook gap (Rust in-file `#[cfg(test)]` tests undetectable by filename-based RED-before-GREEN gate) — see filed issue.
+
+- Mutation gate: shard 7/16 caught a surviving `&&`→`||` mutant on the aggregate expired-log guard (`ddfcbccd`); fixed by removing the redundant counter/conditional (mutant target line deleted) + added fail-open Unknown-token test. Local fmt/clippy/6 proxy tests green.
