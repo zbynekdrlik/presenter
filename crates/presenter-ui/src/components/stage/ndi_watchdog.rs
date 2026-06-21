@@ -385,15 +385,21 @@ impl Watchdog {
     /// compositor-driven and not throttled while video plays).
     const RVFC_BEACON_FRAME_PERIOD: u32 = 450;
     /// LAST-RESORT full-page-reload horizon. After this long with ZERO
-    /// decoded frames despite the reconnect+backoff loop continuously retrying
-    /// (#369 reconnect, #371 churn guard), the page itself is escalated with
-    /// `window.location.reload()` (#401 — Fully Kiosk auto-reload replacement,
-    /// adb-independent). This timer spans the WHOLE page session (NOT one
-    /// Watchdog instance): it is reset only when a frame actually decodes, so
-    /// a normal brief reconnect — which produces frames again within a few
-    /// seconds — never approaches it. 60s ≫ STALL_NO_FRAME_MS (10s) +
-    /// NO_DECODE_FALLBACK_MS (15s) + the 5s-capped backoff, so the reconnect
-    /// path gets many full attempts before the page-level reload fires.
+    /// decoded frames despite the reconnect+backoff loop continuously retrying,
+    /// the page itself is escalated with `window.location.reload()` (#401 —
+    /// Fully Kiosk auto-reload replacement, adb-independent). This timer spans
+    /// the WHOLE page session (NOT one Watchdog instance): it is reset only when
+    /// a frame actually decodes, so a normal brief reconnect — which produces
+    /// frames again within a few seconds — never approaches it.
+    ///
+    /// 60s ≫ STALL_NO_FRAME_MS (10s) + NO_DECODE_FALLBACK_MS (15s) + the
+    /// 5s-capped reconnect backoff. The backoff (`reconnect_backoff_for_watchdog
+    /// _step` in `ndi_video.rs`) is applied to BOTH reconnect paths — the
+    /// connect-error branch AND the watchdog-triggered reconnect fall-through
+    /// (#369) — so even a connect-but-never-decode source reconnects at most
+    /// once every 5s, never every cycle with no delay (#371 churn guard). The
+    /// reconnect path therefore gets many full attempts before this page-level
+    /// reload fires.
     pub(crate) const RELOAD_NO_FRAME_MS: f64 = 60_000.0;
 
     /// Install ICE-state listener + rVFC frame observer + health ticker.
@@ -498,7 +504,7 @@ fn reload_threshold_ms_from_url() -> f64 {
 
 /// Monotonic now in milliseconds: `performance.now()`, with a `Date.now()`
 /// fallback when the Performance API is unavailable.
-fn now_ms() -> f64 {
+pub(crate) fn now_ms() -> f64 {
     leptos::web_sys::window()
         .and_then(|w| w.performance())
         .map(|p| p.now())

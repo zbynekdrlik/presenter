@@ -59,12 +59,17 @@ test("WHEP endpoint returns SDP answer for active source", async ({ request }) =
       headers: { "Content-Type": "application/sdp" },
     },
   );
-  // Three acceptable shapes:
+  // Acceptable shapes:
   //   201 — WHEP spec: pipeline ready, returned SDP answer (Location header set)
   //   200 — legacy fallback (kept for defensive compatibility)
+  //   204 — configured-but-not-producing source (#431): the source is in the DB
+  //         but has no active pipeline (real NDI absent in CI), so the shim
+  //         returns 204 No Content, NOT 404 — the client treats it as a quiet
+  //         "not producing yet" state with no browser console error.
   //   503 — pipeline starting / source not connected (real NDI absent in CI)
-  // 500 / 404 / 4xx-other are bugs.
-  expect([200, 201, 503]).toContain(whep.status());
+  // 500 / 404 / 4xx-other are bugs (404 is the #431 regression and is banned).
+  expect([200, 201, 204, 503]).toContain(whep.status());
+  expect(whep.status()).not.toBe(404);
   if (whep.status() === 200 || whep.status() === 201) {
     const answer = await whep.text();
     expect(answer).toMatch(/^v=0/);

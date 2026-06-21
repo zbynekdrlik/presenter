@@ -51,6 +51,35 @@ fn map_signaller_error(err: anyhow::Error) -> AppError {
     }
 }
 
+/// #431: map a `whep_signaller_call` POST error to its WHEP response.
+///
+/// A configured-but-not-currently-producing source (`SOURCE_NOT_ACTIVE_ERR`)
+/// is a transient, EXPECTED state — answer 204 No Content, NOT 404. The stage
+/// only POSTs WHEP for a source the operator has activated (it never renders an
+/// `<NdiVideo>` for an unknown source), so "source not active" here means
+/// "configured, pipeline not producing yet" — the same reconnect-and-wait
+/// semantics the client already handles for the placeholder. A 404 made the
+/// browser network layer log "Failed to load resource: 404" as a console ERROR
+/// on every reconnect poll of the prod stage, violating
+/// browser-console-zero-errors. Any OTHER error maps via `map_signaller_error`
+/// (404 for unknown on the session-scoped paths, 503 otherwise).
+///
+/// Pure + directly unit-tested (no live NdiManager needed) so the
+/// `SOURCE_NOT_ACTIVE_ERR` → 204 vs the fall-through → error distinction is
+/// exercised even on a host without libndi — which is required to KILL the
+/// mutation-testing mutants on this match guard.
+fn map_post_whep_error(err: anyhow::Error) -> Result<WhepReply, AppError> {
+    if err.to_string().contains(SOURCE_NOT_ACTIVE_ERR) {
+        Ok(WhepReply {
+            status: 204,
+            headers: Vec::new(),
+            body: None,
+        })
+    } else {
+        Err(map_signaller_error(err))
+    }
+}
+
 #[instrument(skip_all, fields(source_id = %source_id))]
 pub(crate) async fn post_whep_endpoint(
     Path(source_id): Path<String>,
@@ -61,7 +90,7 @@ pub(crate) async fn post_whep_endpoint(
     let manager = state
         .ndi_manager()
         .ok_or_else(|| AppError::service_unavailable("NDI SDK not available"))?;
-    let reply = manager
+    let reply = match manager
         .whep_signaller_call(
             &source_id,
             WhepOp::Post {
@@ -71,7 +100,10 @@ pub(crate) async fn post_whep_endpoint(
             },
         )
         .await
-        .map_err(map_signaller_error)?;
+    {
+        Ok(reply) => reply,
+        Err(err) => map_post_whep_error(err)?,
+    };
     Ok(into_response(reply))
 }
 
@@ -220,8 +252,15 @@ mod tests {
         Bytes::new()
     }
 
+    /// Pre-#431 this asserted a 404/503 contract for a not-active POST. #431
+    /// deliberately changed the not-producing POST to 204 (see
+    /// `post_whep_endpoint_returns_204_for_configured_not_producing_source`),
+    /// because the stage only POSTs for configured sources and a 404 logged a
+    /// browser console error. Kept as a regression guard that the POST handler
+    /// NEVER returns 404 for the not-active case — only 204 (libndi) or 503
+    /// (no libndi).
     #[tokio::test]
-    async fn post_whep_endpoint_returns_not_found_or_unavailable_for_inactive_source() {
+    async fn post_whep_endpoint_never_404_for_inactive_source() {
         let state = fresh_state().await;
         let result = post_whep_endpoint(
             Path("00000000-0000-0000-0000-000000000000".to_string()),
@@ -230,26 +269,25 @@ mod tests {
             empty_body(),
         )
         .await;
-        let Err(err) = result else {
-            panic!("expected Err for inactive source");
+        let status = match result {
+            // With libndi: manager exists but the source isn't active → 204.
+            Ok(resp) => resp.status(),
+            // Without libndi: ndi_manager() is None → 503.
+            Err(err) => err.into_response().status(),
         };
-        // With libndi: manager exists but the source isn't active → 404.
-        // Without libndi: ndi_manager() is None → 503.
-        let resp = err.into_response();
         assert!(
             matches!(
-                resp.status(),
-                StatusCode::NOT_FOUND | StatusCode::SERVICE_UNAVAILABLE
+                status,
+                StatusCode::NO_CONTENT | StatusCode::SERVICE_UNAVAILABLE
             ),
-            "expected 404 or 503, got {}",
-            resp.status()
+            "POST for a not-active source must be 204 or 503, never 404 (#431), got {status}"
         );
     }
 
-    /// `?profile=compat` must not change the error contract for an inactive
-    /// source: the query is parsed but always resolves to the single shared
-    /// 720p H264 stream (see `StreamProfile::from_query`), so an inactive
-    /// source still yields the same 404/503 path as a bare-profile POST.
+    /// `?profile=compat` must not change the contract for a not-active source:
+    /// the query is parsed but always resolves to the single shared 720p H264
+    /// stream (see `StreamProfile::from_query`), so it still yields the same
+    /// 204/503 path as a bare-profile POST (#431).
     #[tokio::test]
     async fn post_whep_endpoint_with_compat_profile_keeps_inactive_source_contract() {
         let state = fresh_state().await;
@@ -262,10 +300,17 @@ mod tests {
             empty_body(),
         )
         .await;
-        let Err(err) = result else {
-            panic!("expected Err for inactive source");
+        let status = match result {
+            Ok(resp) => resp.status(),
+            Err(err) => err.into_response().status(),
         };
-        assert_not_found_or_unavailable(err.into_response().status());
+        assert!(
+            matches!(
+                status,
+                StatusCode::NO_CONTENT | StatusCode::SERVICE_UNAVAILABLE
+            ),
+            "compat-profile POST for a not-active source must be 204 or 503, never 404 (#431), got {status}"
+        );
     }
 
     /// Both 404 (manager present, source not active) and 503 (no manager) are
@@ -356,6 +401,71 @@ mod tests {
         }
     }
 
+    /// #431: a WHEP POST for a source that is configured (the stage only
+    /// renders `<NdiVideo>` for an operator-activated source) but not currently
+    /// producing a pipeline must return 204 No Content — NOT 404. This is a
+    /// transient, expected state (the NDI sender went quiet / the pipeline
+    /// hasn't started yet); 404 made the browser log a "Failed to load
+    /// resource: 404" console error on the prod stage on every reconnect poll,
+    /// violating browser-console-zero-errors. 404 is reserved for a genuinely
+    /// unknown source, which the stage never POSTs for. Mirrors the DELETE
+    /// idempotency fix below.
+    ///
+    /// With libndi: manager exists, source not active → 204.
+    /// Without libndi: ndi_manager() is None → Err 503 (different failure).
+    #[tokio::test]
+    async fn post_whep_endpoint_returns_204_for_configured_not_producing_source() {
+        let state = fresh_state().await;
+        let result = post_whep_endpoint(
+            Path("00000000-0000-0000-0000-000000000000".to_string()),
+            Query(WhepPostQuery::default()),
+            State(state),
+            empty_body(),
+        )
+        .await;
+        match result {
+            Ok(resp) => assert_eq!(
+                resp.status(),
+                StatusCode::NO_CONTENT,
+                "POST on a configured-but-not-producing source must be 204, not 404 (#431)"
+            ),
+            Err(err) => assert_eq!(
+                err.into_response().status(),
+                StatusCode::SERVICE_UNAVAILABLE,
+                "only the no-libndi (manager missing) branch may error"
+            ),
+        }
+    }
+
+    /// `?profile=compat` must follow the same 204 contract for a
+    /// configured-but-not-producing source (the profile query is a no-op
+    /// server-side; it must not change the not-producing status code).
+    #[tokio::test]
+    async fn post_whep_endpoint_with_compat_profile_returns_204_for_not_producing_source() {
+        let state = fresh_state().await;
+        let result = post_whep_endpoint(
+            Path("00000000-0000-0000-0000-000000000000".to_string()),
+            Query(WhepPostQuery {
+                profile: Some("compat".to_string()),
+            }),
+            State(state),
+            empty_body(),
+        )
+        .await;
+        match result {
+            Ok(resp) => assert_eq!(
+                resp.status(),
+                StatusCode::NO_CONTENT,
+                "compat-profile POST on a not-producing source must also be 204 (#431)"
+            ),
+            Err(err) => assert_eq!(
+                err.into_response().status(),
+                StatusCode::SERVICE_UNAVAILABLE,
+                "only the no-libndi (manager missing) branch may error"
+            ),
+        }
+    }
+
     #[test]
     fn into_response_passes_status_headers_and_body() {
         let reply = WhepReply {
@@ -367,6 +477,63 @@ mod tests {
         assert_eq!(resp.status(), StatusCode::CREATED);
         let location = resp.headers().get("location").and_then(|v| v.to_str().ok());
         assert_eq!(location, Some("/whep/abc"));
+    }
+
+    /// #431 + mutation-kill: `map_post_whep_error` must return a 204 reply for a
+    /// `SOURCE_NOT_ACTIVE_ERR` (configured-but-not-producing) and an Err for
+    /// anything else. Tested directly (no NdiManager) so the match-guard
+    /// `err.to_string().contains(SOURCE_NOT_ACTIVE_ERR)` is exercised on every
+    /// host — killing the cargo-mutants mutants that replace it with
+    /// `true`/`false` (which the handler-level tests couldn't catch on a
+    /// libndi-less CI runner, where the manager-missing 503 short-circuits
+    /// before the guard).
+    #[test]
+    fn map_post_whep_error_returns_204_for_source_not_active() {
+        // Guard MUST be true for a not-active error → 204 reply, NOT an Err.
+        // Kills the "guard with false" mutant.
+        match map_post_whep_error(anyhow::anyhow!(SOURCE_NOT_ACTIVE_ERR)) {
+            Ok(reply) => {
+                assert_eq!(
+                    reply.status, 204,
+                    "configured-but-not-producing POST must be 204 (#431)"
+                );
+                assert!(reply.body.is_none(), "204 reply carries no body");
+            }
+            Err(err) => panic!(
+                "not-active POST error must map to a 204 reply, got HTTP {}",
+                err.into_response().status()
+            ),
+        }
+    }
+
+    #[test]
+    fn map_post_whep_error_passes_through_non_not_active_errors() {
+        // Guard MUST be false for a non-not-active error → it maps to an
+        // AppError (here: 503), NOT a 204. Kills the "guard with true" mutant.
+        match map_post_whep_error(anyhow::anyhow!("pipeline errored: ndisrc crash")) {
+            Ok(reply) => panic!(
+                "a non-not-active error must NOT become a 204 reply, got status {}",
+                reply.status
+            ),
+            Err(err) => assert_eq!(
+                err.into_response().status(),
+                StatusCode::SERVICE_UNAVAILABLE,
+                "a generic pipeline error maps to 503, not 204"
+            ),
+        }
+
+        // A consumer-cap error also passes through (503 + Retry-After), never 204.
+        match map_post_whep_error(anyhow::anyhow!("WHEP consumer cap reached (8 per source)")) {
+            Ok(reply) => panic!(
+                "consumer-cap must not become a 204 reply, got status {}",
+                reply.status
+            ),
+            Err(err) => assert_eq!(
+                err.into_response().status(),
+                StatusCode::SERVICE_UNAVAILABLE,
+                "consumer cap maps to 503, not 204"
+            ),
+        }
     }
 
     #[test]
