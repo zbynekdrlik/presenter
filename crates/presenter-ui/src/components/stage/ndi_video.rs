@@ -201,6 +201,25 @@ pub fn NdiVideo(source_id: String, #[prop(optional)] class: Option<&'static str>
 /// multiple `<NdiVideo>` components, instance A's failure streak will
 /// inflate instance B's first retry delay (still capped at 5s). When that
 /// layout ships, move STEP into a per-component Rc<Cell<usize>>.
+/// Capped backoff delay (ms) for a given watchdog-reconnect / connect-error
+/// retry step. See `reconnect_backoff_for_watchdog_step` for the #369 contract
+/// the supervising loop relies on.
+///
+/// RED STUB (#369): the watchdog-triggered reconnect path currently re-POSTs
+/// WHEP IMMEDIATELY on the first retry (step 0) — the Ok-branch fall-through in
+/// the effect does NO backoff at all. This stub models that bug: step 0 → 0ms.
+/// The GREEN fix replaces this with a real 500ms→5s capped schedule applied to
+/// the watchdog-reconnect path so a connect-but-never-decode source stops
+/// reconnecting every cycle with no delay.
+pub(crate) fn reconnect_backoff_for_watchdog_step(step: usize) -> i32 {
+    // BUG (pre-#369): first watchdog reconnect is immediate.
+    if step == 0 {
+        return 0;
+    }
+    let schedule_ms: [i32; 7] = [500, 1000, 2000, 4000, 5000, 5000, 5000];
+    schedule_ms[step.min(schedule_ms.len() - 1)]
+}
+
 async fn sleep_for_backoff() {
     use std::sync::atomic::{AtomicUsize, Ordering as AtomicOrdering};
     static STEP: AtomicUsize = AtomicUsize::new(0);
@@ -215,6 +234,43 @@ async fn sleep_for_backoff() {
         }
     });
     let _ = wasm_bindgen_futures::JsFuture::from(promise).await;
+}
+
+#[cfg(test)]
+mod tests {
+    use super::reconnect_backoff_for_watchdog_step as backoff;
+
+    /// #369: the watchdog-triggered reconnect path MUST back off before
+    /// re-POSTing WHEP — even on the FIRST retry. A source that connects (DTLS
+    /// ok) but never decodes a frame trips the watchdog every ~12s; with an
+    /// immediate (0ms) first retry it re-POSTs with no delay each cycle,
+    /// creating + tearing down a server-side WHEP session every time. The
+    /// first watchdog reconnect must wait at least the base 500ms.
+    #[test]
+    fn first_watchdog_reconnect_is_not_immediate() {
+        assert!(
+            backoff(0) >= 500,
+            "first watchdog reconnect must back off >=500ms, got {}ms (#369: \
+             Ok-branch reconnect was immediate)",
+            backoff(0)
+        );
+    }
+
+    /// The backoff grows then CAPS at 5s — a persistently-broken source settles
+    /// into one reconnect every 5s, never a tight no-delay spiral and never an
+    /// unbounded delay.
+    #[test]
+    fn backoff_is_monotonic_then_capped_at_5s() {
+        let prev = backoff(0);
+        assert!(prev > 0);
+        for step in 1..10 {
+            let cur = backoff(step);
+            assert!(cur >= prev, "backoff must not decrease at step {step}");
+            assert!(cur <= 5000, "backoff must cap at 5000ms, got {cur} at step {step}");
+        }
+        // Well past the schedule length it stays capped, not panicking/0.
+        assert_eq!(backoff(100), 5000, "backoff must stay capped at 5s for large steps");
+    }
 }
 
 /// Fire-and-forget DELETE to the WHEP session resource. SYNCHRONOUS dispatch —
