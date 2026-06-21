@@ -69,9 +69,11 @@ fn format_verse_range(verses: &BTreeSet<u32>) -> String {
 /// next verse would overflow the character limit, then flush. Emphasis
 /// items and translation/book/chapter changes force a slide break.
 ///
-/// If a single verse item is longer than `character_limit`, it is emitted
-/// as its own oversized slide — the validator's `MainExceedsCharacterLimit`
-/// rule catches this downstream and the LLM sees a rule-keyed error.
+/// A verse is NEVER split mid-text (issue #394): consecutive `Verse` items that
+/// share the same verse number are merged back into one whole verse, and a lone
+/// verse longer than `character_limit` is kept WHOLE on its own slide — the
+/// validator accepts such a lone oversized verse (autofit shrinks it for
+/// display) rather than rejecting it.
 pub(crate) fn compose_bible_items_into_slides(
     items: &[BibleItem],
     character_limit: u32,
