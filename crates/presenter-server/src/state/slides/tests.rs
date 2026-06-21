@@ -351,6 +351,44 @@ fn compose_items_same_number_merge_then_next_verse_overflows_to_own_slide() {
 }
 
 #[test]
+fn compose_items_same_number_fragment_after_earlier_verse_moves_growing_verse_to_own_slide() {
+    // Issue #394 edge (from code review): verse 1 and verse 2 first pack onto
+    // one slide; then a verse-2 continuation fragment arrives that would push
+    // the slide over the limit. The growing verse 2 must move to its OWN slide
+    // kept WHOLE — never an oversized two-verse slide (which the validator would
+    // reject). So: slide 0 = verse 1 alone, slide 1 = whole verse 2.
+    let items = vec![
+        verse(1, "short one"),
+        verse(2, "bbb"),
+        verse(2, "this is a long continuation fragment that makes it big"),
+    ];
+    let slides = compose_bible_items_into_slides(&items, 30);
+    assert_eq!(slides.len(), 2);
+    assert_eq!(slides[0].main, "1. short one");
+    assert_eq!(
+        slides[1].main,
+        "2. bbb this is a long continuation fragment that makes it big"
+    );
+    // Each slide is a single verse-prefixed line — the validator accepts both
+    // (slide 1 is a lone oversized whole verse).
+    assert_eq!(slides[0].main.lines().count(), 1);
+    assert_eq!(slides[1].main.lines().count(), 1);
+    assert_eq!(slides[0].main_reference, "Ján 1:1-2 (SEB)");
+    assert_eq!(slides[1].main_reference, "Ján 1:1-2 (SEB)");
+}
+
+#[test]
+fn compose_items_same_number_fragment_that_still_fits_stays_with_earlier_verse() {
+    // When the merged verse still fits under the limit, the same-number fragment
+    // merges in place and stays on the shared slide (no premature split).
+    let items = vec![verse(1, "alpha"), verse(2, "beta"), verse(2, "gamma")];
+    let slides = compose_bible_items_into_slides(&items, 320);
+    assert_eq!(slides.len(), 1);
+    assert_eq!(slides[0].main, "1. alpha\n2. beta gamma");
+    assert_eq!(slides[0].main_reference, "Ján 1:1-2 (SEB)");
+}
+
+#[test]
 fn compose_items_adjacent_emphasis_emit_separate_slides() {
     let items = vec![emphasis("FIRST"), emphasis("SECOND"), verse(1, "verse")];
     let slides = compose_bible_items_into_slides(&items, 320);

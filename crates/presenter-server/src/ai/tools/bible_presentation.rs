@@ -156,8 +156,11 @@ pub(super) async fn create_bible_presentation(
     let composed: Vec<ComposedBibleSlide> =
         compose_bible_items_into_slides(&items, default_char_limit);
 
-    // Validate each composed slide. With a correct composer only
-    // the oversized-single-verse case should ever trip this.
+    // Validate each composed slide. With a correct composer this should never
+    // trip: a lone oversized verse is now accepted (kept whole, autofit shrinks
+    // it — issue #394), and the composer flushes before packing multiple verses
+    // past the limit, so a MainExceedsCharacterLimit here would signal a real
+    // packing regression rather than the expected oversized-single-verse case.
     for (idx, slide) in composed.iter().enumerate() {
         if let Err(mut err) =
             validate_bible_slide(&slide.main, &slide.main_reference, default_char_limit)
@@ -177,11 +180,12 @@ pub(super) async fn create_bible_presentation(
     let final_presentation = if composed.is_empty() {
         presentation
     } else {
-        // SlideText::new only fails at ~4000 chars; the validator
-        // has already guaranteed slide.main.len() <= default_char_limit
-        // (typically 320) above, so this is statically unreachable.
-        // Propagate the error anyway so a future limit change does
-        // not silently drop slide content through an unwrap_or fallback.
+        // SlideText::new only fails at ~4000 chars. A lone oversized verse can
+        // now exceed default_char_limit (issue #394 — the validator accepts it),
+        // but the longest real Bible verse (~530 chars) is far below the ~4000
+        // SlideText cap, so this is unreachable in practice. Propagate the error
+        // anyway so a future limit/content change does not silently drop slide
+        // content through an unwrap_or fallback.
         let mut new_slides: Vec<BiblePresentationSlide> = Vec::with_capacity(composed.len());
         for c in composed {
             let main = SlideText::new(&c.main)

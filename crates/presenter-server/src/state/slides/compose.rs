@@ -131,7 +131,15 @@ pub(crate) fn compose_bible_items_into_slides(
                 // that share the SAME verse number. Merge those back into the
                 // current line so the verse is never split mid-text — a whole
                 // verse always lands intact on a slide.
-                if acc.numbers.last() == Some(number) {
+                if acc.numbers.last() == Some(number) && !acc.lines.is_empty() {
+                    // If the fragment would push this slide over the limit while
+                    // OTHER (earlier-numbered) verses already share it, flush
+                    // those earlier verses first so this growing verse ends up
+                    // WHOLE on its own slide — never an oversized multi-verse
+                    // slide that the validator would then reject.
+                    if acc.lines.len() > 1 && acc.would_overflow_merge(text.len(), limit) {
+                        acc.flush_keeping_last(&mut slides, &group_verses);
+                    }
                     if let Some(last) = acc.lines.last_mut() {
                         last.push(' ');
                         last.push_str(text);
@@ -182,6 +190,70 @@ impl VerseAccumulator {
         prospective > limit
     }
 
+    /// True when MERGING `frag_len` chars (plus a joining space) into the last
+    /// line would push the joined slide past `limit`. Used to decide whether a
+    /// same-number continuation fragment should force the EARLIER verses on the
+    /// slide onto their own slide first (so the growing verse stays whole on its
+    /// own slide rather than producing a rejected oversized multi-verse slide).
+    fn would_overflow_merge(&self, frag_len: usize, limit: usize) -> bool {
+        if self.lines.is_empty() {
+            return false;
+        }
+        let existing_len: usize = self.lines.iter().map(String::len).sum();
+        // current joined length + " " + fragment.
+        let prospective = existing_len + (self.lines.len() - 1) + 1 + frag_len;
+        prospective > limit
+    }
+
+    /// Build the reference label for the current group from its full verse set.
+    fn group_reference(
+        group: &(String, u32, String),
+        group_verses: &HashMap<(String, u32, String), BTreeSet<u32>>,
+    ) -> String {
+        let (book, chapter, translation) = group;
+        match group_verses.get(group) {
+            Some(verses) => format!(
+                "{} {}:{} ({})",
+                book,
+                chapter,
+                format_verse_range(verses),
+                translation
+            ),
+            None => String::new(),
+        }
+    }
+
+    /// Flush every accumulated line EXCEPT the last into one slide, keeping the
+    /// last line (and its verse number) in the accumulator. Used when a
+    /// same-number continuation fragment would overflow a slide that also holds
+    /// earlier verses: the earlier verses flush, the growing verse stays.
+    fn flush_keeping_last(
+        &mut self,
+        slides: &mut Vec<ComposedBibleSlide>,
+        group_verses: &HashMap<(String, u32, String), BTreeSet<u32>>,
+    ) {
+        if self.lines.len() < 2 {
+            return;
+        }
+        let Some(group) = self.group.clone() else {
+            return;
+        };
+        let last_line = self.lines.pop().unwrap_or_default();
+        let last_number = self.numbers.pop();
+        let main = self.lines.join("\n");
+        slides.push(ComposedBibleSlide {
+            main,
+            main_reference: Self::group_reference(&group, group_verses),
+        });
+        self.lines.clear();
+        self.numbers.clear();
+        self.lines.push(last_line);
+        if let Some(n) = last_number {
+            self.numbers.push(n);
+        }
+        // group stays set — the kept verse continues in the same group.
+    }
+
     /// Flush the accumulated verses into one slide. The reference is derived
     /// from the GROUP's full verse set (pass 1), not from `numbers`, so every
     /// slide of one passage displays the same label.
@@ -208,16 +280,7 @@ impl VerseAccumulator {
             return;
         }
         let main = self.lines.join("\n");
-        let reference = match group_verses.get(&(book.clone(), chapter, translation.clone())) {
-            Some(verses) => format!(
-                "{} {}:{} ({})",
-                book,
-                chapter,
-                format_verse_range(verses),
-                translation
-            ),
-            None => String::new(),
-        };
+        let reference = Self::group_reference(&(book, chapter, translation), group_verses);
         slides.push(ComposedBibleSlide {
             main,
             main_reference: reference,
