@@ -63,6 +63,81 @@ pub(super) async fn get_bible_presentation(
     }
 }
 
+/// Parse a JSON `items` array into typed `BibleItem` values, failing fast on
+/// any malformed item. Returns `Ok(Ok(items))` on success, or `Ok(Err(response))`
+/// carrying the `(json_body, preview)` error response to return to the LLM.
+fn parse_bible_items(
+    items_arr: &[Value],
+) -> anyhow::Result<Result<Vec<BibleItem>, (String, String)>> {
+    let mut items: Vec<BibleItem> = Vec::with_capacity(items_arr.len());
+    for (idx, raw) in items_arr.iter().enumerate() {
+        let kind = raw["kind"].as_str().unwrap_or("");
+        match kind {
+            "verse" => {
+                // try_from(u64->u32): any u64 that does not fit in u32 collapses
+                // to 0 and is rejected by the number>=1 / chapter>=1 checks
+                // below. Avoids the silent truncation of e.g. 2^33+5 → 5 that a
+                // raw `as u32` cast would do.
+                let number = u32::try_from(raw["number"].as_u64().unwrap_or(0)).unwrap_or(0);
+                let text = raw["text"].as_str().unwrap_or("").to_string();
+                let book = raw["book"].as_str().unwrap_or("").to_string();
+                let chapter = u32::try_from(raw["chapter"].as_u64().unwrap_or(0)).unwrap_or(0);
+                let translation = raw["translation"].as_str().unwrap_or("").to_string();
+                if number == 0
+                    || text.is_empty()
+                    || book.is_empty()
+                    || chapter == 0
+                    || translation.is_empty()
+                {
+                    return Ok(Err((
+                        json!({
+                            "error": "invalid_verse_item",
+                            "expected": "verse items require number>=1, non-empty text, book, chapter>=1, translation",
+                            "got": format!("item[{idx}]"),
+                        })
+                        .to_string(),
+                        format!("Invalid verse item at index {idx}"),
+                    )));
+                }
+                items.push(BibleItem::Verse {
+                    number,
+                    text,
+                    book,
+                    chapter,
+                    translation,
+                });
+            }
+            "emphasis" => {
+                let text = raw["text"].as_str().unwrap_or("").to_string();
+                if text.trim().is_empty() {
+                    return Ok(Err((
+                        json!({
+                            "error": "invalid_emphasis_item",
+                            "expected": "emphasis items require non-empty text",
+                            "got": format!("item[{idx}]"),
+                        })
+                        .to_string(),
+                        format!("Invalid emphasis item at index {idx}"),
+                    )));
+                }
+                items.push(BibleItem::Emphasis { text });
+            }
+            other => {
+                return Ok(Err((
+                    json!({
+                        "error": "invalid_item_kind",
+                        "expected": "kind must be 'verse' or 'emphasis'",
+                        "got": format!("item[{idx}] kind={other}"),
+                    })
+                    .to_string(),
+                    format!("Invalid kind '{other}' at index {idx}"),
+                )));
+            }
+        }
+    }
+    Ok(Ok(items))
+}
+
 pub(super) async fn create_bible_presentation(
     args: &Value,
     state: &AppState,
@@ -83,74 +158,12 @@ pub(super) async fn create_bible_presentation(
         }
     };
 
-    // Parse items into typed BibleItem values. Fail fast on any
-    // malformed item — the LLM sees the error and retries.
-    let mut items: Vec<BibleItem> = Vec::with_capacity(items_arr.len());
-    for (idx, raw) in items_arr.iter().enumerate() {
-        let kind = raw["kind"].as_str().unwrap_or("");
-        match kind {
-            "verse" => {
-                // try_from(u64->u32): any u64 that does not fit in u32
-                // collapses to 0 and is rejected by the number>=1 /
-                // chapter>=1 checks below. Avoids silent truncation
-                // of e.g. 2^33+5 → 5 that a raw `as u32` cast would do.
-                let number = u32::try_from(raw["number"].as_u64().unwrap_or(0)).unwrap_or(0);
-                let text = raw["text"].as_str().unwrap_or("").to_string();
-                let book = raw["book"].as_str().unwrap_or("").to_string();
-                let chapter = u32::try_from(raw["chapter"].as_u64().unwrap_or(0)).unwrap_or(0);
-                let translation = raw["translation"].as_str().unwrap_or("").to_string();
-                if number == 0
-                    || text.is_empty()
-                    || book.is_empty()
-                    || chapter == 0
-                    || translation.is_empty()
-                {
-                    return Ok((
-                        json!({
-                            "error": "invalid_verse_item",
-                            "expected": "verse items require number>=1, non-empty text, book, chapter>=1, translation",
-                            "got": format!("item[{idx}]"),
-                        })
-                        .to_string(),
-                        format!("Invalid verse item at index {idx}"),
-                    ));
-                }
-                items.push(BibleItem::Verse {
-                    number,
-                    text,
-                    book,
-                    chapter,
-                    translation,
-                });
-            }
-            "emphasis" => {
-                let text = raw["text"].as_str().unwrap_or("").to_string();
-                if text.trim().is_empty() {
-                    return Ok((
-                        json!({
-                            "error": "invalid_emphasis_item",
-                            "expected": "emphasis items require non-empty text",
-                            "got": format!("item[{idx}]"),
-                        })
-                        .to_string(),
-                        format!("Invalid emphasis item at index {idx}"),
-                    ));
-                }
-                items.push(BibleItem::Emphasis { text });
-            }
-            other => {
-                return Ok((
-                    json!({
-                        "error": "invalid_item_kind",
-                        "expected": "kind must be 'verse' or 'emphasis'",
-                        "got": format!("item[{idx}] kind={other}"),
-                    })
-                    .to_string(),
-                    format!("Invalid kind '{other}' at index {idx}"),
-                ));
-            }
-        }
-    }
+    // Parse items into typed BibleItem values. Fail fast on any malformed item
+    // — the LLM sees the error response and retries.
+    let items = match parse_bible_items(items_arr)? {
+        Ok(items) => items,
+        Err(error_response) => return Ok(error_response),
+    };
 
     // Compose slides server-side using the configured character limit.
     let composed: Vec<ComposedBibleSlide> =
