@@ -428,6 +428,18 @@ mod tests {
     }
 
     #[test]
+    fn length_rule_accepts_multi_verse_slide_at_exactly_limit() {
+        // A MULTI-verse slide (is_lone_whole_verse is false, so it does NOT take
+        // the #394 lone-verse exception) sitting EXACTLY at the limit must be
+        // ACCEPTED — the rule rejects only main.len() STRICTLY GREATER than the
+        // limit. This pins the boundary at `>` (not `>=`): "1. " (3) + 156 a's +
+        // "\n2. " (4) + 157 b's = 320 bytes, two verse-prefixed lines.
+        let main = format!("1. {}\n2. {}", "a".repeat(156), "b".repeat(157));
+        assert_eq!(main.len(), 320);
+        assert!(validate_bible_slide(&main, "Ján 1:1-2 (SEB)", 320).is_ok());
+    }
+
+    #[test]
     fn length_rule_accepts_lone_verse_one_char_over_limit() {
         // Issue #394: even one char over the limit, a LONE whole verse is kept
         // whole and accepted (autofit shrinks it) — it is never rejected, which
