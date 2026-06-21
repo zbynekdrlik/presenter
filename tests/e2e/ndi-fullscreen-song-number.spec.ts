@@ -100,8 +100,23 @@ test.afterAll(async () => {
 test("song number is HIDDEN on the ndi-fullscreen layout", async ({
   context,
 }) => {
-  const consoleMessages: string[] = [];
+  // Trigger the numbered presentation FIRST and POSITIVELY prove its snapshot
+  // (song_number=42) is delivered by asserting #042 renders on a worship-snv
+  // page. This is the deterministic anchor — no blind sleep (CLAUDE.md:
+  // "prefer retry-with-assert poll helpers over arbitrary sleeps"). Without
+  // this proof, toHaveCount(0) on the NDI page could pass trivially if the
+  // snapshot simply hadn't arrived yet, weakening the regression guard.
+  await triggerNumbered(context);
+  await setLayout(context, "worship-snv");
+  const proofPage = await openStage(context, "worship-snv");
+  await expect(proofPage.locator('[data-role="song-number"]')).toContainText(
+    "#042",
+    { timeout: 10_000 },
+  );
+  await proofPage.close();
 
+  // Same persisted snapshot is now delivered to the ndi-fullscreen page.
+  const consoleMessages: string[] = [];
   await setLayout(context, "ndi-fullscreen");
   const stagePage = await openStage(context, "ndi-fullscreen");
   stagePage.on("console", (msg) => {
@@ -110,17 +125,13 @@ test("song number is HIDDEN on the ndi-fullscreen layout", async ({
     }
   });
 
-  // Trigger the numbered presentation — its snapshot carries song_number=42.
-  await triggerNumbered(context);
-
   // The placeholder confirms the NDI layout is mounted (no active source here).
   await expect(stagePage.locator(".stage-ndi__placeholder")).toBeVisible({
     timeout: 10_000,
   });
 
-  // Even with a numbered presentation active, the song number must be absent.
-  // Give the WS snapshot time to arrive, then assert the element never shows.
-  await stagePage.waitForTimeout(1_500);
+  // The numbered snapshot is proven-delivered (above), yet the song number
+  // must be absent on this layout.
   const songNumberEl = stagePage.locator('[data-role="song-number"]');
   await expect(songNumberEl).toHaveCount(0);
 
