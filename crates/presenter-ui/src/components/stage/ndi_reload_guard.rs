@@ -124,12 +124,8 @@ pub(crate) fn should_perform_post_await_reload(
     horizon_crossed: bool,
     server_has_streaming_pipeline: bool,
 ) -> bool {
-    // RED (#417): the post-teardown gate is intentionally ABSENT here — this
-    // reproduces the bug (a detached check reloads even after page teardown).
-    // The GREEN commit adds `page_active &&`. `page_active` is bound only to
-    // keep the signature stable across RED→GREEN.
-    let _ = page_active;
-    !already_reloaded
+    page_active
+        && !already_reloaded
         && horizon_crossed
         && should_reload_given_pipeline_state(server_has_streaming_pipeline)
 }
