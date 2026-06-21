@@ -51,6 +51,35 @@ fn map_signaller_error(err: anyhow::Error) -> AppError {
     }
 }
 
+/// #431: map a `whep_signaller_call` POST error to its WHEP response.
+///
+/// A configured-but-not-currently-producing source (`SOURCE_NOT_ACTIVE_ERR`)
+/// is a transient, EXPECTED state — answer 204 No Content, NOT 404. The stage
+/// only POSTs WHEP for a source the operator has activated (it never renders an
+/// `<NdiVideo>` for an unknown source), so "source not active" here means
+/// "configured, pipeline not producing yet" — the same reconnect-and-wait
+/// semantics the client already handles for the placeholder. A 404 made the
+/// browser network layer log "Failed to load resource: 404" as a console ERROR
+/// on every reconnect poll of the prod stage, violating
+/// browser-console-zero-errors. Any OTHER error maps via `map_signaller_error`
+/// (404 for unknown on the session-scoped paths, 503 otherwise).
+///
+/// Pure + directly unit-tested (no live NdiManager needed) so the
+/// `SOURCE_NOT_ACTIVE_ERR` → 204 vs the fall-through → error distinction is
+/// exercised even on a host without libndi — which is required to KILL the
+/// mutation-testing mutants on this match guard.
+fn map_post_whep_error(err: anyhow::Error) -> Result<WhepReply, AppError> {
+    if err.to_string().contains(SOURCE_NOT_ACTIVE_ERR) {
+        Ok(WhepReply {
+            status: 204,
+            headers: Vec::new(),
+            body: None,
+        })
+    } else {
+        Err(map_signaller_error(err))
+    }
+}
+
 #[instrument(skip_all, fields(source_id = %source_id))]
 pub(crate) async fn post_whep_endpoint(
     Path(source_id): Path<String>,
@@ -73,21 +102,7 @@ pub(crate) async fn post_whep_endpoint(
         .await
     {
         Ok(reply) => reply,
-        // #431: a configured-but-not-currently-producing source is a transient,
-        // expected state — answer 204 No Content, NOT 404. The stage only POSTs
-        // WHEP for a source the operator has activated (it never renders an
-        // <NdiVideo> for an unknown source), so "source not active" here means
-        // "configured, pipeline not producing yet" — the same reconnect-and-
-        // wait semantics the client already handles for the placeholder. A 404
-        // made the browser network layer log "Failed to load resource: 404" as
-        // a console ERROR on every reconnect poll of the prod stage, violating
-        // browser-console-zero-errors. Mirrors the idempotent-DELETE fix below.
-        Err(err) if err.to_string().contains(SOURCE_NOT_ACTIVE_ERR) => WhepReply {
-            status: 204,
-            headers: Vec::new(),
-            body: None,
-        },
-        Err(err) => return Err(map_signaller_error(err)),
+        Err(err) => map_post_whep_error(err)?,
     };
     Ok(into_response(reply))
 }
@@ -462,6 +477,63 @@ mod tests {
         assert_eq!(resp.status(), StatusCode::CREATED);
         let location = resp.headers().get("location").and_then(|v| v.to_str().ok());
         assert_eq!(location, Some("/whep/abc"));
+    }
+
+    /// #431 + mutation-kill: `map_post_whep_error` must return a 204 reply for a
+    /// `SOURCE_NOT_ACTIVE_ERR` (configured-but-not-producing) and an Err for
+    /// anything else. Tested directly (no NdiManager) so the match-guard
+    /// `err.to_string().contains(SOURCE_NOT_ACTIVE_ERR)` is exercised on every
+    /// host — killing the cargo-mutants mutants that replace it with
+    /// `true`/`false` (which the handler-level tests couldn't catch on a
+    /// libndi-less CI runner, where the manager-missing 503 short-circuits
+    /// before the guard).
+    #[test]
+    fn map_post_whep_error_returns_204_for_source_not_active() {
+        // Guard MUST be true for a not-active error → 204 reply, NOT an Err.
+        // Kills the "guard with false" mutant.
+        match map_post_whep_error(anyhow::anyhow!(SOURCE_NOT_ACTIVE_ERR)) {
+            Ok(reply) => {
+                assert_eq!(
+                    reply.status, 204,
+                    "configured-but-not-producing POST must be 204 (#431)"
+                );
+                assert!(reply.body.is_none(), "204 reply carries no body");
+            }
+            Err(err) => panic!(
+                "not-active POST error must map to a 204 reply, got HTTP {}",
+                err.into_response().status()
+            ),
+        }
+    }
+
+    #[test]
+    fn map_post_whep_error_passes_through_non_not_active_errors() {
+        // Guard MUST be false for a non-not-active error → it maps to an
+        // AppError (here: 503), NOT a 204. Kills the "guard with true" mutant.
+        match map_post_whep_error(anyhow::anyhow!("pipeline errored: ndisrc crash")) {
+            Ok(reply) => panic!(
+                "a non-not-active error must NOT become a 204 reply, got status {}",
+                reply.status
+            ),
+            Err(err) => assert_eq!(
+                err.into_response().status(),
+                StatusCode::SERVICE_UNAVAILABLE,
+                "a generic pipeline error maps to 503, not 204"
+            ),
+        }
+
+        // A consumer-cap error also passes through (503 + Retry-After), never 204.
+        match map_post_whep_error(anyhow::anyhow!("WHEP consumer cap reached (8 per source)")) {
+            Ok(reply) => panic!(
+                "consumer-cap must not become a 204 reply, got status {}",
+                reply.status
+            ),
+            Err(err) => assert_eq!(
+                err.into_response().status(),
+                StatusCode::SERVICE_UNAVAILABLE,
+                "consumer cap maps to 503, not 204"
+            ),
+        }
     }
 
     #[test]
