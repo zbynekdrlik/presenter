@@ -294,7 +294,7 @@ pub fn AiPage() -> impl IntoView {
                     <input
                         type="text"
                         data-role="ai-model"
-                        placeholder="claude-sonnet-4-20250514"
+                        placeholder="claude-opus-4-6"
                         prop:value=move || model.get()
                         on:input=move |ev| model.set(event_target_value(&ev))
                     />

@@ -12,7 +12,7 @@ pub(crate) const AI_SETTINGS_KEY: &str = "ai-settings";
 /// Hardcoded default AI model used when neither a DB override nor the
 /// `PRESENTER_AI_MODEL` env var is set. Must be a model the bundled on-device
 /// CLIProxyAPI catalog actually serves (see #437).
-pub(crate) const DEFAULT_AI_MODEL: &str = "claude-opus-4-20250514";
+pub(crate) const DEFAULT_AI_MODEL: &str = "claude-opus-4-6";
 
 /// AI configuration settings persisted in app_settings.
 #[derive(Debug, Clone, Serialize, Deserialize)]
