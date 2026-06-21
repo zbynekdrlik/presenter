@@ -459,6 +459,17 @@ async fn connect_whep(
         pc.close();
         return Ok(ConnectOutcome::NotProducing);
     };
+    // #431: a pipeline that is still STARTING (the source is being brought up
+    // but hasn't produced frames yet) can answer 201 with an EMPTY or non-SDP
+    // body. Feeding that to setRemoteDescription throws "Failed to parse
+    // SessionDescription. Expect line: v=", which the browser logs as a console
+    // error — the same zero-console-errors violation as the 404. A valid SDP
+    // always begins with "v=" (RFC 4566 §5); anything else is the not-producing
+    // state, handled quietly like the 204.
+    if !answer_text.trim_start().starts_with("v=") {
+        pc.close();
+        return Ok(ConnectOutcome::NotProducing);
+    }
     let answer = RtcSessionDescriptionInit::new(RtcSdpType::Answer);
     answer.set_sdp(&answer_text);
     JsFuture::from(pc.set_remote_description(&answer)).await?;
