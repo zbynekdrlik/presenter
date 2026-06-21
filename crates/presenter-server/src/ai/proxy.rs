@@ -148,8 +148,6 @@ impl ProxyManager {
         let Ok(mut entries) = tokio::fs::read_dir(&auth_dir).await else {
             return false;
         };
-        let mut found_token = false;
-        let mut expired_count = 0usize;
         while let Ok(Some(entry)) = entries.next_entry().await {
             let name = entry.file_name().to_string_lossy().into_owned();
             if !name.contains("claude") {
@@ -167,7 +165,6 @@ impl ProxyManager {
                     continue;
                 }
             }
-            found_token = true;
             match Self::token_validity(&entry.path()).await {
                 TokenValidity::Fresh => return true,
                 TokenValidity::Unknown => {
@@ -176,7 +173,10 @@ impl ProxyManager {
                     return true;
                 }
                 TokenValidity::Expired { expired } => {
-                    expired_count += 1;
+                    // Each expired token is logged individually; reaching the end
+                    // of the loop without an early `return true` means every token
+                    // we inspected was present-but-expired → AI auth is dead and a
+                    // re-login is required.
                     warn!(
                         token = %name,
                         expired = %expired,
@@ -184,12 +184,6 @@ impl ProxyManager {
                     );
                 }
             }
-        }
-        if found_token && expired_count > 0 {
-            warn!(
-                expired_count,
-                "all Claude OAuth tokens are expired — AI auth is dead, re-login required"
-            );
         }
         false
     }
@@ -612,6 +606,28 @@ mod tests {
         assert!(
             !mgr.is_claude_authenticated().await,
             "no token files means not authenticated"
+        );
+    }
+
+    /// A token file with no parseable `expired` field is treated as valid
+    /// (fail-open) — we never regress a working install on a format we don't
+    /// recognise; only a *provably* expired token is rejected (#438).
+    #[tokio::test]
+    async fn unparseable_token_is_authenticated_fail_open() {
+        let tmp = tempfile::tempdir().unwrap();
+        let mgr = ProxyManager::new(tmp.path().to_path_buf());
+        let auth_dir = mgr.auth_dir();
+        tokio::fs::create_dir_all(&auth_dir).await.unwrap();
+        // Valid JSON but no `expired` field → Unknown → fail-open.
+        tokio::fs::write(
+            auth_dir.join("claude-weird@example.com.json"),
+            r#"{"access_token":"a","type":"claude"}"#,
+        )
+        .await
+        .unwrap();
+        assert!(
+            mgr.is_claude_authenticated().await,
+            "a token with no parseable expiry must fail open as authenticated"
         );
     }
 
