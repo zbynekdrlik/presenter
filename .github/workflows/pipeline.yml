@@ -398,21 +398,25 @@ jobs:
         run: cargo build --tests --profile mutants --workspace --all-targets
 
   mutation:
-    name: Mutation Testing (shard ${{ matrix.shard }}/8)
+    name: Mutation Testing (shard ${{ matrix.shard }}/16)
     runs-on: ubuntu-latest
     needs: [test, mutation-warm]
     timeout-minutes: 20
     strategy:
       fail-fast: false
       matrix:
-        # cargo-mutants shards are 0-indexed (valid range 0/8..7/8); `--shard
-        # 8/8` is rejected ("shard k must be less than n"). Eight shards = 0..7.
-        # Bumped 4 -> 8 (#435): a 3-file diff produced 63 diff-mutants; at 4
-        # shards (~16 mutants each) the per-mutant nextest runs plus the warm
-        # build exceeded the 20-min cap and the shards were cancelled. Eight
-        # shards (~8 mutants each) fit under the cap. Per ci/mutation-testing.md
-        # "Budget overrun = setup bug": SHARD harder, never raise the cap.
-        shard: [0, 1, 2, 3, 4, 5, 6, 7]
+        # cargo-mutants shards are 0-indexed (valid range 0/16..15/16); `--shard
+        # 16/16` is rejected ("shard k must be less than n"). Sixteen = 0..15.
+        # History (#435/#439): the build deadlock is now fixed by the dedicated
+        # `mutation-warm` job above (deps cached, per-shard warm build ~3 min).
+        # The remaining cost is per-mutant TEST time: presenter-server is a big
+        # crate and each mutant reruns its scoped suite (~2.5 min). At 8 shards a
+        # ~50-mutant diff put ~6-7 mutants on the heavy shards (~17 min testing +
+        # build) and they were cancelled at the 20-min cap; only the light shard
+        # finished. Bumped 8 -> 16 so each shard runs ~3 mutants (~7.5 min) and
+        # fits. Per ci/mutation-testing.md "Budget overrun = setup bug": SHARD
+        # harder, never raise the cap.
+        shard: [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15]
     steps:
       - uses: actions/checkout@v4
         with:
@@ -448,10 +452,10 @@ jobs:
       - name: Warm mutants-profile build
         run: cargo build --tests --profile mutants --workspace --all-targets
 
-      - name: Run diff-scoped mutation testing (real gate, shard ${{ matrix.shard }}/8)
+      - name: Run diff-scoped mutation testing (real gate, shard ${{ matrix.shard }}/16)
         run: |
           git diff origin/${{ github.base_ref || 'main' }}...HEAD > pr.diff
-          cargo mutants --in-diff pr.diff --shard ${{ matrix.shard }}/8 --in-place \
+          cargo mutants --in-diff pr.diff --shard ${{ matrix.shard }}/16 --in-place \
             --baseline=skip --timeout 300 --test-tool=nextest -- --all-targets
 
       - name: Upload mutation results
