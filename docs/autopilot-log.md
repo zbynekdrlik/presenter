@@ -90,3 +90,13 @@ Terse per-issue record of autonomous cycles (issue #, commits, tests, decisions)
 - Decision: the two cosmetic timeout-message notes left as-is — the propagated io error message still names "adb command timed out", so the timeout fact is preserved on the operator dashboard's last_error.
 
 **Cycle:** local fmt + clippy (`-D warnings`) + `cargo test --workspace` (277 passed, 0 fail) + diff-scoped `cargo mutants` (0 survivors after the kill). One push, one Pipeline CI run, PR #432 (`Closes #392`, `Closes #421`).
+
+### Follow-up on PR #432 — mutation gate timed out (#430), sharded + warmed
+
+- **Root cause (#430):** the single-job diff-scoped `mutation` gate (#429) hit its 20-min `timeout-minutes` cap. cargo-mutants builds the `mutants` profile in an isolated dir that the `ci` rust-cache (keyed for the debug/test profile in `target/`) does NOT warm, so the heavy dep graph (gstreamer/NDI/leptos/seaorm) cold-built from scratch; CI run 27887309677 logged "Found 11 mutants" then cancelled at 20m16s with ZERO mutants tested → PR mergeStateStatus UNSTABLE (all REQUIRED checks green; mutation is non-required, deploy-dev does not `needs` it, so v0.4.143 already deployed to dev).
+- **Fix (airuleset `ci/mutation-testing.md` "Budget overrun = setup bug" — SHARD + WARM, never raise the cap):**
+  - `pipeline.yml` `mutation` job → 4-job matrix `shard: [0,1,2,3]` (cargo-mutants `--shard k/4` is 0-indexed; `4/4` is rejected). `--in-diff` then `--shard` splits the 11 diff mutants 3+3+3+2.
+  - Dedicated `mutants`-keyed `Swatinem/rust-cache` (separate from `ci`) + a `cargo build --tests --profile mutants --workspace --all-targets` warm step, then `cargo mutants --in-place` reuses the warm `target/` directly (dropped `--jobs 2` — in-place serializes). `timeout-minutes: 20` UNCHANGED (now per shard).
+  - `.gitignore`: added `mutants.out.old/` (cargo-mutants rotates the previous run aside).
+- **Local verification (warm):** cold warm-build 7m21s (8-core dev2 under GPU load); full-diff `cargo mutants --in-place` = **11 mutants in 6m: 9 caught, 2 unviable, 0 survivors** (exit 0). With 4 shards each ≈ warm build + ~3 mutants → comfortably under the 20-min cap. No new tests needed — the seam diff is fully covered.
+- **PR #432 body** extended with `Closes #430` (keeps `Closes #392`, `Closes #421`).

@@ -318,14 +318,40 @@ jobs:
   # ============================================
   # Diff-scoped PR gate (airuleset mutation-testing.md). Mutates ONLY the lines
   # changed in this PR vs the base branch — a REAL pass/fail gate, HARD-CAPPED at
-  # 20 min. The previous full-`--workspace --shard 1/12 ... || true` job timed
-  # out at its 45-min cap on every PR (#429), leaving the PR UNSTABLE. The
-  # full-tree catch-up runs on demand via mutation-full.yml (`/mutation-sweep`).
+  # 20 min PER SHARD. The previous full-`--workspace --shard 1/12 ... || true`
+  # job timed out at its 45-min cap on every PR (#429); the single-job diff gate
+  # that replaced it still timed out at the 20-min cap (#430) because the COLD
+  # cargo-mutants build dominates: cargo-mutants builds in an isolated dir that
+  # the `ci` rust-cache (keyed for the debug/test profile in target/) does not
+  # populate, so the heavy dep graph (gstreamer/NDI/leptos/seaorm) rebuilt from
+  # scratch (~15–19 min on a 2–4-core ubuntu-latest) and the run was cancelled
+  # before a single mutant was tested (CI run 27887309677: "Found 11 mutants",
+  # then cancelled at 20m16s with zero results).
+  #
+  # Fix (airuleset "Budget overrun = setup bug" — SHARD + WARM, NEVER raise the
+  # cap), closes #430:
+  #   1. SHARD across a 4-job matrix (`--shard k/4`, 0-indexed per cargo-mutants:
+  #      valid range 0/4..3/4) so the diff's mutants are split 4 ways.
+  #   2. WARM the build: pre-build the `mutants` profile into the source target/
+  #      with a dedicated rust-cache key, then run cargo-mutants `--in-place` so
+  #      it reuses that warm target directly instead of cold-building an isolated
+  #      copy per mutant. After warm-up every mutant is an incremental rebuild.
+  # Each shard = warm/restore the build once + test ~1/4 of the diff's mutants,
+  # which fits the 20-min cap even on the first (cold-cache) run.
+  #
+  # The full-tree catch-up still runs on demand via mutation-full.yml
+  # (`/mutation-sweep`).
   mutation:
-    name: Mutation Testing
+    name: Mutation Testing (shard ${{ matrix.shard }}/4)
     runs-on: ubuntu-latest
     needs: test
     timeout-minutes: 20
+    strategy:
+      fail-fast: false
+      matrix:
+        # cargo-mutants shards are 0-indexed (valid range 0/4..3/4); `--shard
+        # 4/4` is rejected ("shard k must be less than n"). Four shards = 0..3.
+        shard: [0, 1, 2, 3]
     steps:
       - uses: actions/checkout@v4
         with:
@@ -337,10 +363,16 @@ jobs:
       - name: Install Rust toolchain
         uses: dtolnay/rust-toolchain@stable
 
-      - name: Setup Rust cache
+      # Dedicated cache for the `mutants` build profile. The main `ci` cache key
+      # holds the debug/test-profile target/ and does NOT warm the separate
+      # `mutants` profile cargo-mutants builds — that gap (#430) is the cold
+      # build that blew the cap. A `mutants`-keyed cache persists the warmed
+      # target/ across runs; the matrix shards share one key (the warmed deps
+      # are identical for every shard) so only the first job populates it.
+      - name: Setup Rust cache (mutants profile)
         uses: Swatinem/rust-cache@v2
         with:
-          shared-key: ci
+          shared-key: mutants
           cache-on-failure: false
 
       - name: Install cargo-mutants + cargo-nextest (prebuilt)
@@ -348,16 +380,25 @@ jobs:
         with:
           tool: cargo-mutants,cargo-nextest
 
-      - name: Run diff-scoped mutation testing (real gate)
+      # Warm target/ for the mutants profile so cargo-mutants --in-place reuses
+      # compiled deps instead of cold-building. On a warm cache this restores in
+      # seconds; on a cold cache it pays the full build ONCE, after which every
+      # per-mutant rebuild is incremental. Builds all test targets to match what
+      # the per-mutant `-- --all-targets` runs link against.
+      - name: Warm mutants-profile build
+        run: cargo build --tests --profile mutants --workspace --all-targets
+
+      - name: Run diff-scoped mutation testing (real gate, shard ${{ matrix.shard }}/4)
         run: |
           git diff origin/${{ github.base_ref || 'main' }}...HEAD > pr.diff
-          cargo mutants --in-diff pr.diff --baseline=skip --timeout 300 --test-tool=nextest --jobs 2 -- --all-targets
+          cargo mutants --in-diff pr.diff --shard ${{ matrix.shard }}/4 --in-place \
+            --baseline=skip --timeout 300 --test-tool=nextest -- --all-targets
 
       - name: Upload mutation results
         uses: actions/upload-artifact@v4
         if: always()
         with:
-          name: mutation-results-${{ github.run_id }}
+          name: mutation-results-${{ github.run_id }}-shard-${{ matrix.shard }}
           path: mutants.out/
           retention-days: 14
 
