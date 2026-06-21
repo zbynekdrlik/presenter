@@ -9,6 +9,11 @@ use serde::{Deserialize, Serialize};
 
 pub(crate) const AI_SETTINGS_KEY: &str = "ai-settings";
 
+/// Hardcoded default AI model used when neither a DB override nor the
+/// `PRESENTER_AI_MODEL` env var is set. Must be a model the bundled on-device
+/// CLIProxyAPI catalog actually serves (see #437).
+pub(crate) const DEFAULT_AI_MODEL: &str = "claude-opus-4-20250514";
+
 /// AI configuration settings persisted in app_settings.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -28,7 +33,7 @@ impl Default for AiSettings {
                 .unwrap_or_else(|_| "http://localhost:8787/v1".to_string()),
             api_key: std::env::var("PRESENTER_AI_API_KEY").ok(),
             model: std::env::var("PRESENTER_AI_MODEL")
-                .unwrap_or_else(|_| "claude-opus-4-20250514".to_string()),
+                .unwrap_or_else(|_| DEFAULT_AI_MODEL.to_string()),
             system_prompt_extra: None,
         }
     }
@@ -75,4 +80,25 @@ pub struct ToolCallFunction {
 pub struct ToolAction {
     pub tool: String,
     pub result_preview: String,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Regression for #437: the hardcoded default AI model must NOT be the
+    /// retired `claude-opus-4-20250514` (retired at Anthropic 2026-06-15 → 404)
+    /// and must be `claude-opus-4-6` — the newest Opus the bundled on-device
+    /// CLIProxyAPI catalog serves (4-8 is not in the proxy catalog → would 404).
+    #[test]
+    fn default_model_is_not_retired() {
+        assert_ne!(
+            DEFAULT_AI_MODEL, "claude-opus-4-20250514",
+            "default AI model must not be the retired claude-opus-4-20250514"
+        );
+        assert_eq!(
+            DEFAULT_AI_MODEL, "claude-opus-4-6",
+            "default AI model must be claude-opus-4-6"
+        );
+    }
 }
