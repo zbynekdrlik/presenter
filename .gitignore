@@ -38,6 +38,8 @@ NDI SDK for Linux/
 /*.jpeg
 /*.jpg
 
-# cargo-mutants output + the diff the in-diff PR gate writes (CI + local runs)
+# cargo-mutants output + the diff the in-diff PR gate writes (CI + local runs).
+# mutants.out.old/ is the previous run's output that cargo-mutants rotates aside.
 mutants.out/
+mutants.out.old/
 /pr.diff

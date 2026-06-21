@@ -14,6 +14,10 @@ APT_PACKAGES=(
   pkg-config
   libssl-dev
   protobuf-compiler
+  # Android Stage Launcher runtime dependency (#392): the launcher spawns
+  # `adb` (android_stage.rs) to connect to and drive Android TV stage displays.
+  # Without it, an un-provisioned controller's stage launchers silently fail.
+  android-tools-adb
   # Playwright/browser runtime dependencies
   libasound2t64
   libatk-bridge2.0-0t64

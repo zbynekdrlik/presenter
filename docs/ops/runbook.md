@@ -15,7 +15,10 @@ The script installs build essentials, browser/runtime libraries, the Rust toolch
 
 ## Android Stage Launchers
 
-- Install the Android platform tools on every controller (and CI runner that executes `verify-and-refresh`):
+- The Android platform tools (`android-tools-adb`) are now installed automatically by
+  `scripts/ops/bootstrap-host.sh` (#392), so a freshly bootstrapped controller already has `adb`.
+  Only run the manual install on a host that was provisioned before this change or where bootstrap
+  was skipped (CI runners that execute `verify-and-refresh` are provisioned by the bootstrap script):
   ```bash
   sudo apt install android-tools-adb
   ```

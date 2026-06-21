@@ -80,3 +80,23 @@ Terse per-issue record of autonomous cycles (issue #, commits, tests, decisions)
 - **Diff mutation result (local, verified):** 3 mutants in the PR diff — 1 CaughtMutant (`stage_display_snapshot` match-arm, killed by #383 unit tests), 2 Unviable, **0 survivors** → no new tests needed. `Closes #429`.
 
 **Cycle:** local fmt + clippy (`-D warnings`) + `cargo test --workspace` (all green) + quality-check `--strict --against origin/main` (exit 0) + diff-scoped `cargo mutants` (0 survivors). PR #428 body extended with `Closes #429`.
+
+## 2026-06-21 — batch #392 + #421 (Android stage launcher) — PR #432, v0.4.143
+
+- **#392** (provisioning bug): `bootstrap-host.sh` did not install `adb` (hard runtime dep of the Android Stage Launcher). RED `caa6abe` (tests/ci/bootstrap-adb.test.sh asserts `android-tools-adb` in APT_PACKAGES — failed against adb-less bootstrap) → GREEN `0d4b4f9` (added the package; updated runbook.md; added "Ensure ADB is installed" step to release.yml PP deploy, mirroring deploy.yml — closes PP coverage gap). CI self-test wired into pipeline.yml "Run CI shell tests".
+- **#421** (test-addition gated on DI refactor): keep-alive wiring untested (bare `Command::new(adb_bin)`, no seam). Seam refactor `3d0cd79` (`trait AdbRunner`; `ProcessAdbRunner` prod impl; `&dyn AdbRunner` threaded through run_device_worker/connect_and_launch/adb_connect/adb_launch/adb_foreground_package; `async-trait` moved dev-dep→dep). Wiring test `4d705ba` (FakeAdbRunner; tests: tick_skips_am_start_when_browser_foreground, tick_fires_am_start_when_backgrounded, tick_fires_am_start_when_foreground_unknown, launch_now_always_fires_am_start_without_probing, worker_launch_now_command_forces_am_start). Proven non-tautological: bypassing `if !force_launch` failed all 3 tick tests (reverted).
+- **Mutation:** diff-scoped `cargo mutants` first run = 1 survivor (`adb_connect -> Ok(())`). Killed by `61208d9` (launch_aborts_when_adb_connect_fails + connect_calls assertion); targeted re-run = 1 caught → **0 survivors**.
+- **Reviews:** /review correctness (2 cosmetic notes — timeout wording, fact still surfaced), /review ci-ops ([]), requesting-code-review (Ready to merge, 0 Critical/Important).
+- Decision: the two cosmetic timeout-message notes left as-is — the propagated io error message still names "adb command timed out", so the timeout fact is preserved on the operator dashboard's last_error.
+
+**Cycle:** local fmt + clippy (`-D warnings`) + `cargo test --workspace` (277 passed, 0 fail) + diff-scoped `cargo mutants` (0 survivors after the kill). One push, one Pipeline CI run, PR #432 (`Closes #392`, `Closes #421`).
+
+### Follow-up on PR #432 — mutation gate timed out (#430), sharded + warmed
+
+- **Root cause (#430):** the single-job diff-scoped `mutation` gate (#429) hit its 20-min `timeout-minutes` cap. cargo-mutants builds the `mutants` profile in an isolated dir that the `ci` rust-cache (keyed for the debug/test profile in `target/`) does NOT warm, so the heavy dep graph (gstreamer/NDI/leptos/seaorm) cold-built from scratch; CI run 27887309677 logged "Found 11 mutants" then cancelled at 20m16s with ZERO mutants tested → PR mergeStateStatus UNSTABLE (all REQUIRED checks green; mutation is non-required, deploy-dev does not `needs` it, so v0.4.143 already deployed to dev).
+- **Fix (airuleset `ci/mutation-testing.md` "Budget overrun = setup bug" — SHARD + WARM, never raise the cap):**
+  - `pipeline.yml` `mutation` job → 4-job matrix `shard: [0,1,2,3]` (cargo-mutants `--shard k/4` is 0-indexed; `4/4` is rejected). `--in-diff` then `--shard` splits the 11 diff mutants 3+3+3+2.
+  - Dedicated `mutants`-keyed `Swatinem/rust-cache` (separate from `ci`) + a `cargo build --tests --profile mutants --workspace --all-targets` warm step, then `cargo mutants --in-place` reuses the warm `target/` directly (dropped `--jobs 2` — in-place serializes). `timeout-minutes: 20` UNCHANGED (now per shard).
+  - `.gitignore`: added `mutants.out.old/` (cargo-mutants rotates the previous run aside).
+- **Local verification (warm):** cold warm-build 7m21s (8-core dev2 under GPU load); full-diff `cargo mutants --in-place` = **11 mutants in 6m: 9 caught, 2 unviable, 0 survivors** (exit 0). With 4 shards each ≈ warm build + ~3 mutants → comfortably under the 20-min cap. No new tests needed — the seam diff is fully covered.
+- **PR #432 body** extended with `Closes #430` (keeps `Closes #392`, `Closes #421`).

@@ -1,8 +1,16 @@
 use anyhow::anyhow;
+use async_trait::async_trait;
 use chrono::{DateTime, Utc};
 use presenter_core::{AndroidStageDisplay, AndroidStageDisplayId};
 use serde::Serialize;
-use std::{collections::HashMap, env, ffi::OsString, process::Output, sync::Arc, time::Duration};
+use std::{
+    collections::HashMap,
+    env,
+    ffi::{OsStr, OsString},
+    process::Output,
+    sync::Arc,
+    time::Duration,
+};
 use tokio::{
     process::Command,
     sync::{mpsc, RwLock},
@@ -12,6 +20,56 @@ use tokio::{
 use tracing::{debug, error, info, warn};
 
 const ADB_COMMAND_TIMEOUT: Duration = Duration::from_secs(10);
+
+/// Injection seam for adb invocation (#421). All device I/O goes through this
+/// trait so the keep-alive wiring (`run_device_worker` → `connect_and_launch`
+/// → the adb helpers) is testable without a real `adb` binary or device: the
+/// production impl (`ProcessAdbRunner`) spawns `adb`, while tests inject a fake
+/// that records the invocations and returns canned `Output`.
+///
+/// `args` is the full adb argument vector (e.g. `["-s", serial, "shell", …]`).
+/// The implementation is responsible for applying `ADB_COMMAND_TIMEOUT`.
+#[async_trait]
+pub trait AdbRunner: Send + Sync {
+    async fn run(&self, args: &[OsString]) -> std::io::Result<Output>;
+}
+
+/// Production [`AdbRunner`]: spawns the configured `adb` binary with a timeout.
+/// A timeout maps to an `io::Error` of kind `TimedOut` so callers handle it
+/// identically to a spawn failure.
+struct ProcessAdbRunner {
+    adb_bin: Arc<OsString>,
+}
+
+#[async_trait]
+impl AdbRunner for ProcessAdbRunner {
+    async fn run(&self, args: &[OsString]) -> std::io::Result<Output> {
+        match timeout(
+            ADB_COMMAND_TIMEOUT,
+            Command::new(self.adb_bin.as_os_str()).args(args).output(),
+        )
+        .await
+        {
+            Ok(result) => result,
+            Err(_elapsed) => Err(std::io::Error::new(
+                std::io::ErrorKind::TimedOut,
+                "adb command timed out",
+            )),
+        }
+    }
+}
+
+/// Convenience for building an adb argument vector from string-ish parts.
+fn adb_args<I, S>(parts: I) -> Vec<OsString>
+where
+    I: IntoIterator<Item = S>,
+    S: AsRef<OsStr>,
+{
+    parts
+        .into_iter()
+        .map(|p| p.as_ref().to_os_string())
+        .collect()
+}
 
 const COMMAND_CHANNEL_CAPACITY: usize = 8;
 const RETRY_INTERVAL: Duration = Duration::from_secs(20);
@@ -87,7 +145,9 @@ impl AndroidStageDisplayStatusSnapshot {
 
 #[derive(Clone)]
 pub struct AndroidStageRegistry {
-    adb_path: Arc<OsString>,
+    /// adb invocation seam (#421). Production wraps `Command::new(adb)`; tests
+    /// inject a fake. Shared by every spawned device worker.
+    runner: Arc<dyn AdbRunner>,
     /// The stage URL opened on every display, read once from
     /// `PRESENTER_ANDROID_STAGE_URL` at construction. `None` when unset/empty —
     /// the launcher then warns and skips rather than firing a broken intent.
@@ -111,9 +171,10 @@ enum DeviceCommand {
 
 impl AndroidStageRegistry {
     pub fn new() -> Self {
-        let adb_path = env::var_os("PRESENTER_ANDROID_ADB_BIN")
+        let adb_bin = env::var_os("PRESENTER_ANDROID_ADB_BIN")
             .map(Arc::from)
             .unwrap_or_else(|| Arc::new(OsString::from("adb")));
+        let runner: Arc<dyn AdbRunner> = Arc::new(ProcessAdbRunner { adb_bin });
         let raw_stage_url = env::var(STAGE_URL_ENV).ok();
         let stage_url = raw_stage_url.as_deref().and_then(validate_stage_url);
         match (&stage_url, raw_stage_url.as_deref().map(str::trim)) {
@@ -136,7 +197,7 @@ impl AndroidStageRegistry {
             }
         }
         Self {
-            adb_path,
+            runner,
             stage_url: Arc::new(stage_url),
             displays: Arc::new(RwLock::new(HashMap::new())),
         }
@@ -236,13 +297,13 @@ impl AndroidStageRegistry {
         } else {
             AndroidStageDisplayStatusSnapshot::disabled()
         }));
-        let adb_path = Arc::clone(&self.adb_path);
+        let runner = Arc::clone(&self.runner);
         let stage_url = Arc::clone(&self.stage_url);
         let status_clone = Arc::clone(&status);
         let config_clone = display.clone();
         let handle = tokio::spawn(async move {
             if let Err(err) =
-                run_device_worker(adb_path, stage_url, config_clone, status_clone, command_rx).await
+                run_device_worker(runner, stage_url, config_clone, status_clone, command_rx).await
             {
                 error!(?err, "android stage display worker exited");
             }
@@ -260,7 +321,7 @@ impl AndroidStageRegistry {
 }
 
 async fn run_device_worker(
-    adb_path: Arc<OsString>,
+    runner: Arc<dyn AdbRunner>,
     stage_url: Arc<Option<String>>,
     mut config: AndroidStageDisplay,
     status: Arc<RwLock<AndroidStageDisplayStatusSnapshot>>,
@@ -275,7 +336,7 @@ async fn run_device_worker(
                 if config.is_enabled {
                     // Periodic keep-alive: foreground-aware (#419) — only
                     // relaunches when the browser is not already up.
-                    if let Err(err) = connect_and_launch(&adb_path, &stage_url, &config, &status, false).await {
+                    if let Err(err) = connect_and_launch(runner.as_ref(), &stage_url, &config, &status, false).await {
                         debug!(display = %config.label, ?err, "android stage display launch attempt failed");
                     }
                 } else {
@@ -294,7 +355,7 @@ async fn run_device_worker(
                         if config.is_enabled {
                             // Explicit/forced launch (startup, config change,
                             // launch-now endpoint): always (re)launch (#419).
-                            if let Err(err) = connect_and_launch(&adb_path, &stage_url, &config, &status, true).await {
+                            if let Err(err) = connect_and_launch(runner.as_ref(), &stage_url, &config, &status, true).await {
                                 debug!(display = %config.label, ?err, "android stage display manual launch failed");
                             }
                         }
@@ -318,26 +379,13 @@ async fn run_device_worker(
 /// cycle, which otherwise make subsequent `-s serial` commands fail until the
 /// daemon restarts. Its result is intentionally ignored — the typical case is
 /// "not connected", a non-zero exit we don't care about.
-async fn adb_connect(adb_bin: &std::ffi::OsStr, serial: &str) -> anyhow::Result<()> {
-    let _ = timeout(
-        ADB_COMMAND_TIMEOUT,
-        Command::new(adb_bin).arg("disconnect").arg(serial).output(),
-    )
-    .await;
+async fn adb_connect(runner: &dyn AdbRunner, serial: &str) -> anyhow::Result<()> {
+    let _ = runner.run(&adb_args(["disconnect", serial])).await;
 
-    let connect_result = timeout(
-        ADB_COMMAND_TIMEOUT,
-        Command::new(adb_bin).arg("connect").arg(serial).output(),
-    )
-    .await;
-
-    let connect_output = match connect_result {
-        Ok(Ok(output)) => output,
-        Ok(Err(io_err)) => {
+    let connect_output = match runner.run(&adb_args(["connect", serial])).await {
+        Ok(output) => output,
+        Err(io_err) => {
             return Err(anyhow!("failed to execute adb for {}: {}", serial, io_err));
-        }
-        Err(_elapsed) => {
-            return Err(anyhow!("adb connect timed out for {}", serial));
         }
     };
 
@@ -348,7 +396,7 @@ async fn adb_connect(adb_bin: &std::ffi::OsStr, serial: &str) -> anyhow::Result<
 }
 
 async fn connect_and_launch(
-    adb_path: &Arc<OsString>,
+    runner: &dyn AdbRunner,
     stage_url: &Arc<Option<String>>,
     config: &AndroidStageDisplay,
     status: &Arc<RwLock<AndroidStageDisplayStatusSnapshot>>,
@@ -380,9 +428,7 @@ async fn connect_and_launch(
         guard.last_error = None;
     }
 
-    let adb_bin = adb_path.as_os_str();
-
-    if let Err(err) = adb_connect(adb_bin, &serial).await {
+    if let Err(err) = adb_connect(runner, &serial).await {
         record_error(status, err.to_string()).await;
         return Err(err);
     }
@@ -395,7 +441,7 @@ async fn connect_and_launch(
     // change, launch-now endpoint) bypass the gate and always relaunch.
     if !force_launch {
         let launch_pkg = launch_package(&config.launch_component);
-        let foreground = adb_foreground_package(adb_bin, &serial).await;
+        let foreground = adb_foreground_package(runner, &serial).await;
         if !should_launch_stage(foreground.as_deref(), launch_pkg) {
             debug!(
                 display = %config.label,
@@ -424,7 +470,7 @@ async fn connect_and_launch(
         guard.state = AndroidStageDisplayState::Launching;
     }
 
-    if let Err(err) = adb_launch(adb_bin, &serial, &launch_args).await {
+    if let Err(err) = adb_launch(runner, &serial, &launch_args).await {
         record_error(status, err.to_string()).await;
         return Err(err);
     }
@@ -441,32 +487,21 @@ async fn connect_and_launch(
 /// returning an error (without recording status) on timeout, exec failure, or
 /// a non-success `am start` result.
 async fn adb_launch(
-    adb_bin: &std::ffi::OsStr,
+    runner: &dyn AdbRunner,
     serial: &str,
     launch_args: &[String],
 ) -> anyhow::Result<()> {
-    let launch_result = timeout(
-        ADB_COMMAND_TIMEOUT,
-        Command::new(adb_bin)
-            .arg("-s")
-            .arg(serial)
-            .arg("shell")
-            .args(launch_args)
-            .output(),
-    )
-    .await;
+    let mut args = adb_args(["-s", serial, "shell"]);
+    args.extend(launch_args.iter().map(OsString::from));
 
-    let launch_output = match launch_result {
-        Ok(Ok(output)) => output,
-        Ok(Err(io_err)) => {
+    let launch_output = match runner.run(&args).await {
+        Ok(output) => output,
+        Err(io_err) => {
             return Err(anyhow!(
                 "failed to execute adb shell for {}: {}",
                 serial,
                 io_err
             ));
-        }
-        Err(_elapsed) => {
-            return Err(anyhow!("adb shell am start timed out for {}", serial));
         }
     };
 
@@ -554,21 +589,18 @@ fn parse_foreground_package(dumpsys_output: &str) -> Option<String> {
 /// package, or None on any adb error/timeout/non-success or when no resumed
 /// activity is reported — the caller treats None as "foreground unknown →
 /// (re)launch". Read-only: the dumpsys probe never disturbs the running browser.
-async fn adb_foreground_package(adb_bin: &std::ffi::OsStr, serial: &str) -> Option<String> {
-    let output = timeout(
-        ADB_COMMAND_TIMEOUT,
-        Command::new(adb_bin)
-            .arg("-s")
-            .arg(serial)
-            .arg("shell")
-            .arg("dumpsys")
-            .arg("activity")
-            .arg("activities")
-            .output(),
-    )
-    .await
-    .ok()?
-    .ok()?;
+async fn adb_foreground_package(runner: &dyn AdbRunner, serial: &str) -> Option<String> {
+    let output = runner
+        .run(&adb_args([
+            "-s",
+            serial,
+            "shell",
+            "dumpsys",
+            "activity",
+            "activities",
+        ]))
+        .await
+        .ok()?;
     if !output.status.success() {
         return None;
     }
@@ -824,6 +856,345 @@ mod tests {
         assert_eq!(
             parse_foreground_package("some unrelated dumpsys text"),
             None
+        );
+    }
+
+    // ── #421: keep-alive wiring integration tests (fake AdbRunner) ──────────
+    //
+    // These exercise the WIRING — the force_launch dispatch + the foreground
+    // gate consulted only when !force_launch — with a fake adb runner that
+    // records every invocation and returns canned output, so no real `adb`
+    // binary or device is needed. The pure helpers are unit-tested above; this
+    // proves the helpers are wired together correctly:
+    //   (a) a periodic tick (force_launch=false) fires NO `am start` when the
+    //       browser is already foreground,
+    //   (b) a tick fires `am start` when the device is backgrounded/unknown,
+    //   (c) LaunchNow (force_launch=true) always fires `am start`, regardless
+    //       of foreground state and WITHOUT probing it.
+
+    use std::os::unix::process::ExitStatusExt;
+    use std::process::{ExitStatus, Output};
+    use std::sync::Mutex;
+    use tokio::sync::mpsc;
+
+    const TEST_STAGE_URL: &str = "http://10.77.9.205/stage";
+    const TEST_PKG: &str = "com.tcl.browser";
+
+    fn ok_output(stdout: &str) -> Output {
+        Output {
+            status: ExitStatus::from_raw(0),
+            stdout: stdout.as_bytes().to_vec(),
+            stderr: Vec::new(),
+        }
+    }
+
+    /// Whether `dumpsys activity activities` reports the stage browser as the
+    /// resumed app, another app, or fails (probe inconclusive).
+    #[derive(Clone, Copy)]
+    enum Foreground {
+        Browser,
+        OtherApp,
+        ProbeFails,
+    }
+
+    fn err_output(stderr: &str) -> Output {
+        Output {
+            status: ExitStatus::from_raw(1 << 8), // non-zero exit (wait-status)
+            stdout: Vec::new(),
+            stderr: stderr.as_bytes().to_vec(),
+        }
+    }
+
+    /// Fake [`AdbRunner`] recording every invocation as a single space-joined
+    /// string, and answering `dumpsys` per the configured foreground state.
+    struct FakeAdbRunner {
+        foreground: Foreground,
+        /// When true, `adb connect <serial>` returns a failed/non-success
+        /// Output so `adb_connect` errors (modeling an unreachable device).
+        connect_fails: bool,
+        calls: Mutex<Vec<String>>,
+    }
+
+    impl FakeAdbRunner {
+        fn new(foreground: Foreground) -> Self {
+            Self {
+                foreground,
+                connect_fails: false,
+                calls: Mutex::new(Vec::new()),
+            }
+        }
+
+        fn with_connect_failure(foreground: Foreground) -> Self {
+            Self {
+                foreground,
+                connect_fails: true,
+                calls: Mutex::new(Vec::new()),
+            }
+        }
+
+        fn invocations(&self) -> Vec<String> {
+            self.calls.lock().expect("calls mutex poisoned").clone()
+        }
+
+        fn am_start_calls(&self) -> usize {
+            self.invocations()
+                .iter()
+                .filter(|c| c.contains("am start"))
+                .count()
+        }
+
+        fn connect_calls(&self) -> usize {
+            self.invocations()
+                .iter()
+                .filter(|c| c.starts_with("connect "))
+                .count()
+        }
+
+        fn dumpsys_calls(&self) -> usize {
+            self.invocations()
+                .iter()
+                .filter(|c| c.contains("dumpsys activity activities"))
+                .count()
+        }
+    }
+
+    #[async_trait]
+    impl AdbRunner for FakeAdbRunner {
+        async fn run(&self, args: &[OsString]) -> std::io::Result<Output> {
+            let joined = args
+                .iter()
+                .map(|a| a.to_string_lossy().into_owned())
+                .collect::<Vec<_>>()
+                .join(" ");
+            self.calls
+                .lock()
+                .expect("calls mutex poisoned")
+                .push(joined.clone());
+
+            if joined.contains("dumpsys activity activities") {
+                return match self.foreground {
+                    Foreground::Browser => Ok(ok_output(&format!(
+                        "    mResumedActivity: ActivityRecord{{abc u0 {TEST_PKG}/.Main t1}}"
+                    ))),
+                    Foreground::OtherApp => Ok(ok_output(
+                        "    mResumedActivity: ActivityRecord{def u0 com.android.tv.settings/.Main t2}",
+                    )),
+                    // An inconclusive probe = adb exec failure (None foreground).
+                    Foreground::ProbeFails => {
+                        Err(std::io::Error::other("simulated dumpsys failure"))
+                    }
+                };
+            }
+
+            // `adb connect <serial>` fails when the device is unreachable.
+            if self.connect_fails && joined.starts_with("connect ") {
+                return Ok(err_output("error: failed to connect to 'host:port'"));
+            }
+
+            // connect / disconnect / `am start` all succeed cleanly.
+            Ok(ok_output(""))
+        }
+    }
+
+    fn test_display() -> AndroidStageDisplay {
+        let now = Utc::now();
+        AndroidStageDisplay::new(
+            AndroidStageDisplayId::from_uuid(Uuid::new_v4()),
+            "Stage TV".to_string(),
+            "10.0.0.42".to_string(),
+            5555,
+            TEST_PKG.to_string(),
+            true,
+            now,
+            now,
+        )
+    }
+
+    fn test_status() -> Arc<RwLock<AndroidStageDisplayStatusSnapshot>> {
+        Arc::new(RwLock::new(AndroidStageDisplayStatusSnapshot {
+            state: AndroidStageDisplayState::Connecting,
+            last_attempt: None,
+            last_success: None,
+            last_error: None,
+        }))
+    }
+
+    // (a) Periodic keep-alive, browser already foreground → NO `am start`.
+    #[tokio::test]
+    async fn tick_skips_am_start_when_browser_foreground() {
+        let runner = FakeAdbRunner::new(Foreground::Browser);
+        let stage_url = Arc::new(Some(TEST_STAGE_URL.to_string()));
+        let config = test_display();
+        let status = test_status();
+
+        // force_launch=false models the periodic tick.
+        let result = connect_and_launch(&runner, &stage_url, &config, &status, false).await;
+        assert!(
+            result.is_ok(),
+            "keep-alive on a healthy display must succeed"
+        );
+
+        assert_eq!(
+            runner.connect_calls(),
+            1,
+            "connect_and_launch MUST `adb connect` the device before probing/launching",
+        );
+        assert_eq!(
+            runner.dumpsys_calls(),
+            1,
+            "the tick MUST consult the foreground gate (dumpsys) when !force_launch",
+        );
+        assert_eq!(
+            runner.am_start_calls(),
+            0,
+            "the tick must NOT re-fire `am start` when the browser is already foreground (#419 wiring)",
+        );
+        assert_eq!(
+            status.read().await.state,
+            AndroidStageDisplayState::Running,
+            "a confirmed-foreground probe is a liveness success → Running",
+        );
+    }
+
+    // (b) Periodic keep-alive, another app foreground → DOES fire `am start`.
+    #[tokio::test]
+    async fn tick_fires_am_start_when_backgrounded() {
+        let runner = FakeAdbRunner::new(Foreground::OtherApp);
+        let stage_url = Arc::new(Some(TEST_STAGE_URL.to_string()));
+        let config = test_display();
+        let status = test_status();
+
+        let result = connect_and_launch(&runner, &stage_url, &config, &status, false).await;
+        assert!(
+            result.is_ok(),
+            "a backgrounded display must relaunch and succeed"
+        );
+
+        assert_eq!(
+            runner.dumpsys_calls(),
+            1,
+            "the tick MUST consult the foreground gate when !force_launch",
+        );
+        assert_eq!(
+            runner.am_start_calls(),
+            1,
+            "the tick MUST fire `am start` when the browser is not foreground (recovery wiring)",
+        );
+    }
+
+    // (b') Periodic keep-alive, foreground probe inconclusive → still launches.
+    #[tokio::test]
+    async fn tick_fires_am_start_when_foreground_unknown() {
+        let runner = FakeAdbRunner::new(Foreground::ProbeFails);
+        let stage_url = Arc::new(Some(TEST_STAGE_URL.to_string()));
+        let config = test_display();
+        let status = test_status();
+
+        let result = connect_and_launch(&runner, &stage_url, &config, &status, false).await;
+        assert!(result.is_ok());
+
+        assert_eq!(runner.dumpsys_calls(), 1, "the gate is consulted on a tick");
+        assert_eq!(
+            runner.am_start_calls(),
+            1,
+            "an inconclusive foreground probe must NOT suppress a needed launch",
+        );
+    }
+
+    // (c) LaunchNow / forced launch → always `am start`, NEVER probes foreground.
+    #[tokio::test]
+    async fn launch_now_always_fires_am_start_without_probing() {
+        // Even with the browser already foreground, force_launch=true must
+        // relaunch and must NOT consult the gate.
+        let runner = FakeAdbRunner::new(Foreground::Browser);
+        let stage_url = Arc::new(Some(TEST_STAGE_URL.to_string()));
+        let config = test_display();
+        let status = test_status();
+
+        let result = connect_and_launch(&runner, &stage_url, &config, &status, true).await;
+        assert!(result.is_ok(), "a forced launch must succeed");
+
+        assert_eq!(
+            runner.dumpsys_calls(),
+            0,
+            "a forced launch (force_launch=true) MUST bypass the foreground gate",
+        );
+        assert_eq!(
+            runner.am_start_calls(),
+            1,
+            "a forced launch MUST always fire `am start` regardless of foreground state",
+        );
+    }
+
+    // A failing `adb connect` MUST abort the launch: connect_and_launch errors,
+    // records the error, and fires NO `am start` (and never probes foreground).
+    // This pins the adb_connect call into the launch path — a no-op connect that
+    // always succeeded would let the launch proceed against an unreachable
+    // device.
+    #[tokio::test]
+    async fn launch_aborts_when_adb_connect_fails() {
+        let runner = FakeAdbRunner::with_connect_failure(Foreground::Browser);
+        let stage_url = Arc::new(Some(TEST_STAGE_URL.to_string()));
+        let config = test_display();
+        let status = test_status();
+
+        let result = connect_and_launch(&runner, &stage_url, &config, &status, true).await;
+        assert!(
+            result.is_err(),
+            "a failed `adb connect` MUST abort the launch with an error",
+        );
+
+        assert_eq!(
+            runner.connect_calls(),
+            1,
+            "connect_and_launch MUST attempt `adb connect` before launching",
+        );
+        assert_eq!(
+            runner.am_start_calls(),
+            0,
+            "no `am start` may fire once `adb connect` has failed",
+        );
+        assert_eq!(
+            status.read().await.state,
+            AndroidStageDisplayState::Error,
+            "a connect failure must surface as Error on the operator dashboard",
+        );
+    }
+
+    // The DISPATCH wiring end-to-end: a LaunchNow command through the worker
+    // fires `am start` even when the browser is already foreground (proving the
+    // worker dispatches force_launch=true for LaunchNow, never consulting the
+    // gate). Drives run_device_worker directly so the command→force_launch
+    // mapping is exercised, not just connect_and_launch.
+    #[tokio::test]
+    async fn worker_launch_now_command_forces_am_start() {
+        // Keep a concrete Arc to read recorded calls after the worker exits;
+        // hand a coerced `Arc<dyn AdbRunner>` clone to the worker (no downcast).
+        let fake = Arc::new(FakeAdbRunner::new(Foreground::Browser));
+        let runner: Arc<dyn AdbRunner> = Arc::clone(&fake) as Arc<dyn AdbRunner>;
+        let stage_url = Arc::new(Some(TEST_STAGE_URL.to_string()));
+        let config = test_display();
+        let status = test_status();
+
+        let (tx, rx) = mpsc::channel(COMMAND_CHANNEL_CAPACITY);
+        // LaunchNow then Shutdown so the worker processes the command and exits
+        // promptly (the 20s tick never fires within this test window).
+        tx.try_send(DeviceCommand::LaunchNow).unwrap();
+        tx.try_send(DeviceCommand::Shutdown).unwrap();
+
+        run_device_worker(runner, stage_url, config, status, rx)
+            .await
+            .expect("worker should exit cleanly on Shutdown");
+
+        assert_eq!(
+            fake.dumpsys_calls(),
+            0,
+            "LaunchNow must dispatch force_launch=true → the gate is never consulted",
+        );
+        assert_eq!(
+            fake.am_start_calls(),
+            1,
+            "LaunchNow must fire `am start` even when the browser is already foreground",
         );
     }
 }
