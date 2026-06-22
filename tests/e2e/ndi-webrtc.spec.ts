@@ -223,6 +223,19 @@ test("ndi-fullscreen shows neutral placeholder (not red error) for an off/silent
   });
   expect(covered).toBe(true);
 
+  // #447/#448 interaction: a fresh page load / stage relaunch (which the #447
+  // keep-alive makes routine) must NOT briefly expose the bare-video play-arrow.
+  // On reload the WASM resyncs via REST and starts the active source in the
+  // neutral "connecting" state, so the covering placeholder is present
+  // IMMEDIATELY — it must not wait for the server's next ~30s status tick.
+  await page.reload();
+  await page.waitForSelector('body[data-wasm-ready="true"]', { timeout: 30_000 });
+  await page.waitForSelector('body[data-layout-code="ndi-fullscreen"]', { timeout: 10_000 });
+  // The covering placeholder appears promptly on reload (no red overlay), well
+  // under the 30s server-tick window the gap would otherwise impose.
+  await expect(page.locator(".stage-ndi__placeholder--cover")).toBeVisible({ timeout: 8_000 });
+  await expect(page.locator(".stage-ndi__overlay")).toHaveCount(0);
+
   // Browser console must be clean — no real errors/warnings, no page errors.
   expect(consoleMessages).toEqual([]);
 });

@@ -1,8 +1,8 @@
 use leptos::prelude::*;
 
-use crate::components::stage::ndi_status_text;
 use crate::components::stage::ndi_video::NdiVideo;
 use crate::components::stage::worship_snv::WorshipSnv;
+use crate::components::stage::{ndi_overlay_kind, ndi_status_text, NdiOverlayKind};
 use crate::state::stage::StageContext;
 use crate::ws::stage::StageWsState;
 
@@ -40,12 +40,13 @@ pub fn ApiStage(
                 }}
             </Show>
 
-            <Show when=move || {
-                let status = ndi_status.get();
-                status == "disconnected"
-                    || status == "connecting"
-                    || status.starts_with("failed")
-            }>
+            // #448: the NDI video here is a BACKGROUND behind the slides, so a
+            // neutral (off/silent or connecting) source shows NOTHING over the
+            // slides — only a GENUINE failure surfaces the red overlay. Routed
+            // through `ndi_overlay_kind` so the off/silent `no-signal` state is
+            // not painted red (and `connecting` no longer flashes red either),
+            // consistent with the ndi-fullscreen layout.
+            <Show when=move || ndi_overlay_kind(&ndi_status.get()) == NdiOverlayKind::Error>
                 <div class="stage-api__overlay">
                     {move || ndi_status_text(&ndi_status.get())}
                 </div>

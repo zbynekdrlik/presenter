@@ -2,8 +2,8 @@ use leptos::prelude::*;
 use wasm_bindgen::JsCast;
 use web_sys::HtmlElement;
 
-use crate::components::stage::ndi_status_text;
 use crate::components::stage::ndi_video::NdiVideo;
+use crate::components::stage::{ndi_overlay_kind, ndi_status_text, NdiOverlayKind};
 use crate::state::stage::StageContext;
 use crate::utils::autofit::autofit_text;
 use crate::ws::stage::StageWsState;
@@ -64,12 +64,12 @@ pub fn TimerLayout(
                 }}
             </Show>
 
-            <Show when=move || {
-                let status = ndi_status.get();
-                status == "disconnected"
-                    || status == "connecting"
-                    || status.starts_with("failed")
-            }>
+            // #448: the NDI video here is a BACKGROUND behind the timer, so a
+            // neutral (off/silent or connecting) source shows NOTHING over the
+            // timer — only a GENUINE failure surfaces the red overlay. Routed
+            // through `ndi_overlay_kind` so the off/silent `no-signal` state is
+            // not painted red, consistent with the ndi-fullscreen layout.
+            <Show when=move || ndi_overlay_kind(&ndi_status.get()) == NdiOverlayKind::Error>
                 <div class="stage-timer__overlay">
                     {move || ndi_status_text(&ndi_status.get())}
                 </div>
