@@ -140,7 +140,7 @@ test("NDI WebRTC recovery @video-codec — video resumes within 10s after server
     .poll(
       async () =>
         await video.evaluate(
-          ({ beforeKillTime }: { beforeKillTime: number }) =>
+          (_el: Element, { beforeKillTime }: { beforeKillTime: number }) =>
             (() => {
               const v = document.querySelector(
                 'video[data-role="ndi-video"]',

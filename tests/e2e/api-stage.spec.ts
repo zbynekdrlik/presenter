@@ -357,3 +357,9 @@ test("api put does not switch preview when layout is worship-snv", async ({
   // symmetry with other tests in this file that use it).
   void context;
 });
+
+declare global {
+  interface Window {
+    __presenterStageLayout?: string;
+  }
+}

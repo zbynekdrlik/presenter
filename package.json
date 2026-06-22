@@ -10,7 +10,8 @@
     "test": "npm run test:companion && npm run test:playwright",
     "test:playwright": "playwright test",
     "test:playwright:headed": "playwright test --headed",
-    "test:companion": "node --test ops/companion/presenter/lib/time.test.js ops/companion/presenter/lib/commands.test.js ops/companion/presenter/lib/variable-batch.test.js"
+    "test:companion": "node --test ops/companion/presenter/lib/time.test.js ops/companion/presenter/lib/commands.test.js ops/companion/presenter/lib/variable-batch.test.js",
+    "typecheck": "tsc --noEmit"
   },
   "repository": {
     "type": "git",
@@ -25,6 +26,9 @@
   "homepage": "https://github.com/zbynekdrlik/presenter#readme",
   "devDependencies": {
     "@playwright/test": "^1.55.1",
+    "@types/node": "^26.0.0",
+    "@types/ws": "^8.18.1",
+    "typescript": "^6.0.3",
     "ws": "^8.18.3"
   }
 }
