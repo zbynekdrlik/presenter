@@ -198,7 +198,7 @@ async fn build_system_prompt(state: &AppState, extra: Option<&str>) -> (String, 
     let char_limit = prefs.character_limit;
 
     let mut prompt =
-        render_system_prompt(&libraries_str, &bible_str, &translations_str, char_limit);
+        format_system_prompt(&libraries_str, &bible_str, &translations_str, char_limit);
 
     if let Some(extra_prompt) = extra {
         if !extra_prompt.is_empty() {
@@ -210,11 +210,13 @@ async fn build_system_prompt(state: &AppState, extra: Option<&str>) -> (String, 
     (prompt, char_limit)
 }
 
-/// Render the static system-prompt template, interpolating the live-context
+/// Format the static system-prompt template, interpolating the live-context
 /// strings and the character limit. Pure (no DB / async) so it is unit-tested
 /// directly. Extracted from `build_system_prompt` to keep that function under
 /// the 120-line cap and to give the prompt's wording a direct test target.
-fn render_system_prompt(
+/// Named `format_*` (not `render_*`) deliberately so the function-length gate
+/// still applies — `render_*` is the Leptos-UI exemption prefix.
+fn format_system_prompt(
     libraries: &str,
     bibles: &str,
     translations: &str,
@@ -954,7 +956,7 @@ mod tests {
         // into one whole verse. It must NOT carry the pre-#394 "split that verse
         // into multiple items, emitted as separate slides" recovery — that
         // instruction now misleads the model.
-        let prompt = render_system_prompt("(none)", "(none yet)", "SEB", 320);
+        let prompt = format_system_prompt("(none)", "(none yet)", "SEB", 320);
 
         // Stale wording must be gone.
         assert!(

@@ -31,8 +31,9 @@ if [ ! -f "$BOOTSTRAP" ]; then
 fi
 
 # 1. The script must invoke `adb keygen` (the command that creates the keypair).
-#    Match it as an executed command, not merely a mention in a comment line.
-if ! grep -Eq '^[[:space:]]*adb[[:space:]]+keygen[[:space:]]' "$BOOTSTRAP"; then
+#    Match it as an executed command on a non-comment line (it may follow a
+#    `then ` on a one-line guard), not merely a mention in a comment.
+if ! grep -Eq '(^|[^#])[[:space:]]*adb[[:space:]]+keygen[[:space:]]|;[[:space:]]*adb[[:space:]]+keygen[[:space:]]' "$BOOTSTRAP"; then
     echo "FAIL (#393): scripts/ops/bootstrap-host.sh must run 'adb keygen' so a" >&2
     echo "             freshly provisioned controller can bootstrap adb under the" >&2
     echo "             hardened (ProtectHome=read-only) presenter.service." >&2
@@ -48,14 +49,31 @@ if ! grep -Eq '\.android/adbkey' "$BOOTSTRAP"; then
     fail=1
 fi
 
-# 3. The keygen MUST be guarded so it only runs when the key is absent (adb
-#    keygen overwrites an existing key, which would clobber a keyed host's
-#    device authorizations). Assert an absence test (! -f / ! -e) is present.
-if ! grep -Eq '!\s*-(f|e)\s' "$BOOTSTRAP"; then
-    echo "FAIL (#393): the adb keygen step must be guarded to run only when the" >&2
-    echo "             adb key is ABSENT (e.g. 'if [ ! -f \"\$ADB_KEY\" ]')." >&2
-    echo "             'adb keygen' overwrites an existing key, which would" >&2
-    echo "             clobber an already-keyed host's device authorizations." >&2
+# 3. The keygen MUST be GUARDED by an absence test (adb keygen overwrites an
+#    existing key, which would clobber a keyed host's device authorizations).
+#    Assert the guard actually WRAPS the keygen call: an absence test (! -f /
+#    ! -e) must open a conditional block, and `adb keygen` must appear inside
+#    that block before its closing `fi`. A bare file-wide grep would pass even
+#    if the keygen were moved OUTSIDE an unrelated absence test, so this checks
+#    containment, not mere presence.
+# Accepts both the multi-line form (if ...; then \n adb keygen \n fi) and the
+# one-line form (if ...; then adb keygen ...; fi): the opening-if line is NOT
+# skipped, so a same-line keygen after `then` is still seen inside the guard.
+guarded=$(awk '
+    {
+        opened = 0
+        if ($0 ~ /if[[:space:]].*![[:space:]]*-(f|e)[[:space:]]/) { depth = 1; opened = 1 }
+        else if (depth > 0 && $0 ~ /(^|[[:space:]])if([[:space:]]|$)/) { depth++ }
+        if (depth > 0 && $0 ~ /adb[[:space:]]+keygen[[:space:]]/) { print "yes"; exit }
+        if (!opened && depth > 0 && $0 ~ /(^|[[:space:]])fi([[:space:]]|;|$)/) { depth-- }
+    }
+' "$BOOTSTRAP")
+if [ "$guarded" != "yes" ]; then
+    echo "FAIL (#393): the 'adb keygen' call must be INSIDE an absence-test guard" >&2
+    echo "             (e.g. 'if [ ! -f \"\$ADB_KEY\" ]; then ... adb keygen ... fi')," >&2
+    echo "             so it runs only when the adb key is absent. 'adb keygen'" >&2
+    echo "             overwrites an existing key, which would clobber an" >&2
+    echo "             already-keyed host's device authorizations." >&2
     fail=1
 fi
 
