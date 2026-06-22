@@ -1,5 +1,6 @@
 import { test, expect, type Page } from '@playwright/test';
 import {
+  assertVersionLabel,
   deriveTestConfig,
   refreshDevData,
   startTestServer,
@@ -111,6 +112,9 @@ async function getFeatureFlags() {
 test('resolume settings CRUD with status feedback', async ({ page }) => {
   const testLabel = `Resolume Arena ${Date.now()}`;
   await page.goto(new URL('/ui/settings', baseURL).toString());
+  // Settings is now a Leptos WASM page (#347) — wait for the bundle to mount
+  // before interacting, like every other WASM surface's E2E.
+  await page.waitForSelector('body[data-wasm-ready="true"]', { timeout: 30_000 });
   await page.waitForLoadState('networkidle');
 
   await expect(page.locator('[data-role="osc-port"]')).toHaveCount(1);
@@ -207,6 +211,9 @@ test('resolume connection diagnostics and test button', async ({ page }) => {
   const mockPort = String(mockResolume.port);
 
   await page.goto(new URL('/ui/settings', baseURL).toString());
+  // Settings is now a Leptos WASM page (#347) — wait for the bundle to mount
+  // before interacting, like every other WASM surface's E2E.
+  await page.waitForSelector('body[data-wasm-ready="true"]', { timeout: 30_000 });
   await page.waitForLoadState('networkidle');
 
   // Create a connection pointing at mock Resolume
@@ -230,6 +237,7 @@ test('resolume connection diagnostics and test button', async ({ page }) => {
 
   // Reload to get the Test button rendered
   await page.reload();
+  await page.waitForSelector('body[data-wasm-ready="true"]', { timeout: 30_000 });
   await page.waitForLoadState('networkidle');
 
   // Click test button
@@ -250,6 +258,7 @@ test('resolume connection diagnostics and test button', async ({ page }) => {
 
   // Verify the error detail is displayed in UI
   await page.reload();
+  await page.waitForSelector('body[data-wasm-ready="true"]', { timeout: 30_000 });
   await page.waitForLoadState('networkidle');
   const errorDetail = page.locator('[data-role="host-error-detail"]');
   await expect(errorDetail).toContainText('Retrying', { timeout: 20_000 });
@@ -284,6 +293,9 @@ test('resolume connection diagnostics and test button', async ({ page }) => {
 
 test('android stage launchers CRUD', async ({ page }) => {
   await page.goto(new URL('/ui/settings', baseURL).toString());
+  // Settings is now a Leptos WASM page (#347) — wait for the bundle to mount
+  // before interacting, like every other WASM surface's E2E.
+  await page.waitForSelector('body[data-wasm-ready="true"]', { timeout: 30_000 });
   await page.waitForLoadState('networkidle');
 
   // The seed migration adds 4 displays on a fresh DB — establish the baseline
@@ -353,6 +365,9 @@ test('android stage launchers CRUD', async ({ page }) => {
 
 test('companion settings reflect feature flags', async ({ page }) => {
   await page.goto(new URL('/ui/settings', baseURL).toString());
+  // Settings is now a Leptos WASM page (#347) — wait for the bundle to mount
+  // before interacting, like every other WASM surface's E2E.
+  await page.waitForSelector('body[data-wasm-ready="true"]', { timeout: 30_000 });
   await page.waitForLoadState('networkidle');
 
   const toggle = page.locator(selectors.companionToggle);
@@ -386,15 +401,68 @@ test('companion settings reflect feature flags', async ({ page }) => {
 
   await updateFeatures(true, desiredPort);
   await page.reload();
+  await page.waitForSelector('body[data-wasm-ready="true"]', { timeout: 30_000 });
   await expect(toggle).toBeChecked();
   await expect(portInput).toHaveValue(String(desiredPort));
 
   await updateFeatures(false, desiredPort);
   await page.reload();
+  await page.waitForSelector('body[data-wasm-ready="true"]', { timeout: 30_000 });
   await expect(toggle).not.toBeChecked();
 
   await updateFeatures(initiallyEnabled, initialPort);
   await page.reload();
+  await page.waitForSelector('body[data-wasm-ready="true"]', { timeout: 30_000 });
   await expect(toggle).toHaveJSProperty('checked', initiallyEnabled);
   await expect(portInput).toHaveValue(String(initialPort));
+});
+
+// #347: the settings page was migrated from a 1307-line vanilla-JS blob to a
+// Leptos WASM component. This is the migration safety net — it proves the WASM
+// page mounts, every card renders, the version label shows, the toast fires on a
+// real save, and the browser console stays clean (browser-console-zero-errors).
+test('migrated WASM settings page renders every card with a clean console', async ({ page }) => {
+  const consoleMessages: string[] = [];
+  page.on('console', (msg) => {
+    if (msg.type() === 'error' || msg.type() === 'warning') {
+      consoleMessages.push(`[${msg.type()}] ${msg.text()}`);
+    }
+  });
+
+  await page.goto(new URL('/ui/settings', baseURL).toString());
+  await page.waitForSelector('body[data-wasm-ready="true"]', { timeout: 30_000 });
+  await page.waitForLoadState('networkidle');
+
+  // Every integration card the old blob managed must render in the WASM page.
+  await expect(page.locator('[data-role="feature-companion-form"]')).toHaveCount(1);
+  await expect(page.locator('[data-role="pref-line-limit"]')).toHaveCount(1);
+  await expect(page.locator('[data-role="host-form"]')).toHaveCount(1);
+  await expect(page.locator('[data-role="android-form"]')).toHaveCount(1);
+  await expect(page.locator('[data-role="ableset-form"]')).toHaveCount(1);
+  await expect(page.locator('[data-role="video-sources-card"]')).toHaveCount(1);
+
+  // Version label is build-time injected and matches the backend /healthz.
+  await assertVersionLabel(page, baseURL);
+
+  // A real save fires the toast (the migrated settings__toast element).
+  await page.check('[data-role="ableset-enabled"]');
+  await page.click('[data-role="ableset-submit"]');
+  await expect(page.locator('[data-role="toast"]')).toHaveAttribute('data-visible', 'true', {
+    timeout: 20_000,
+  });
+  await expect(page.locator('[data-role="toast"]')).toHaveText('Ableton settings saved.');
+
+  // #272 line-limit pref persists to localStorage from the migrated component.
+  // The WASM session layer namespaces keys with the `presenter:` prefix and
+  // JSON-encodes values (gloo-storage), so the raw value is the quoted string
+  // "48" — the same key the operator reads back (state/operator.rs), so the
+  // pref now round-trips across pages.
+  await page.fill('[data-role="pref-line-limit"]', '48');
+  await expect
+    .poll(async () => page.evaluate(() => window.localStorage.getItem('presenter:lineLimit')), {
+      timeout: 5_000,
+    })
+    .toBe(JSON.stringify('48'));
+
+  expect(consoleMessages).toEqual([]);
 });

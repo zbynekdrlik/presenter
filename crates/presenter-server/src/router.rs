@@ -131,6 +131,8 @@ pub fn build_router(state: AppState) -> Router {
         .route("/ui-pkg/{*path}", get(wasm_ui::wasm_ui_asset))
         .route("/ui/tablet", get(wasm_ui::wasm_ui_shell))
         .route("/ui/camera", get(wasm_ui::wasm_ui_shell))
+        // Settings is now a WASM page (#347 — migrated from settings_script.js)
+        .route("/ui/settings", get(wasm_ui::wasm_ui_shell))
         .route("/ui/tablet/manifest.json", get(tablet_pwa::tablet_manifest))
         .route("/ui/tablet/icon-192.png", get(tablet_pwa::icon_192))
         .route("/ui/tablet/icon-512.png", get(tablet_pwa::icon_512))
@@ -145,7 +147,6 @@ pub fn build_router(state: AppState) -> Router {
             "/ui/bible",
             get(|| async { axum::response::Redirect::permanent("/ui/operator/bible") }),
         )
-        .route("/ui/settings", get(ui_routes::settings_ui))
         .route("/overlays/timer", get(ui_routes::timer_overlay))
         .route("/stage-displays", get(stage::list_stage_displays))
         .route(

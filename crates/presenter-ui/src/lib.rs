@@ -46,6 +46,8 @@ fn App() -> impl IntoView {
             view! { <pages::stage::StagePage /> }.into_any()
         } else if p == "/ui/camera" {
             view! { <pages::camera::CameraPage /> }.into_any()
+        } else if p == "/ui/settings" {
+            view! { <pages::settings::SettingsPage /> }.into_any()
         } else {
             view! {
                 <div data-role="not-found">
