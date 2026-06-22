@@ -1,8 +1,8 @@
 use leptos::prelude::*;
 
-use crate::components::stage::ndi_status_text;
 use crate::components::stage::ndi_video::NdiVideo;
 use crate::components::stage::status_bar::StatusBar;
+use crate::components::stage::{ndi_overlay_kind, ndi_status_text, NdiOverlayKind};
 use crate::state::stage::StageContext;
 use crate::ws::stage::StageWsState;
 
@@ -47,12 +47,22 @@ pub fn NdiFullscreen(
                 </div>
             </Show>
 
+            // #448: a configured source that is OFF/silent (`no-signal`) or
+            // still starting (`connecting`) is an EXPECTED state — render a calm
+            // GRAY placeholder. The `--cover` modifier paints a solid black
+            // background so the bare `<video>` (no srcObject yet) and its native
+            // browser play-arrow are hidden behind it. Only a GENUINE failure
+            // (`failed[: reason]` / `disconnected`) shows the alarming red
+            // `.stage-ndi__overlay`.
             <Show when=move || {
-                let status = ndi_status.get();
-                status == "disconnected"
-                    || status == "connecting"
-                    || status.starts_with("failed")
+                ndi_active.get() && ndi_overlay_kind(&ndi_status.get()) == NdiOverlayKind::Neutral
             }>
+                <div class="stage-ndi__placeholder stage-ndi__placeholder--cover">
+                    {move || ndi_status_text(&ndi_status.get())}
+                </div>
+            </Show>
+
+            <Show when=move || ndi_overlay_kind(&ndi_status.get()) == NdiOverlayKind::Error>
                 <div class="stage-ndi__overlay">
                     {move || ndi_status_text(&ndi_status.get())}
                 </div>

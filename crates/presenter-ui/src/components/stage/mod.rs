@@ -45,11 +45,15 @@ pub enum NdiOverlayKind {
 /// `""`, `streaming`, unknown — is `None` (a stream is flowing or there is no
 /// NDI activity). See #448: an off/silent source must not paint the stage red.
 pub fn ndi_overlay_kind(status: &str) -> NdiOverlayKind {
-    // BUG (pre-#448): every shown state is treated as a red ERROR — a silent
-    // source (`no-signal`) is painted red. Fixed in the GREEN commit.
-    if status == "connecting" || status.starts_with("failed") || status == "disconnected" {
+    if status == "no-signal" || status == "connecting" {
+        // Expected, non-error states → calm gray placeholder (#448).
+        NdiOverlayKind::Neutral
+    } else if status == "disconnected" || status == "failed" || status.starts_with("failed: ") {
+        // Genuine problems → red overlay.
         NdiOverlayKind::Error
     } else {
+        // `connected` / `""` / `streaming` / unknown → a stream is flowing or
+        // there is no NDI activity → nothing over the video.
         NdiOverlayKind::None
     }
 }
@@ -65,7 +69,9 @@ pub fn ndi_overlay_kind(status: &str) -> NdiOverlayKind {
 /// - `"failed: <reason>"` → pipeline.start() returned Err; show the reason so
 ///   the operator can actually see what's wrong.
 pub fn ndi_status_text(status: &str) -> String {
-    if status == "disconnected" {
+    if status == "no-signal" {
+        "Waiting for video source…".to_string()
+    } else if status == "disconnected" {
         "Signal Lost — Reconnecting...".to_string()
     } else if status == "connecting" {
         "Connecting...".to_string()

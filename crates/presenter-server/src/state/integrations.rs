@@ -31,12 +31,20 @@ struct NdiStartStatus {
 /// Classify a `start_pipeline` error into the stage status to publish and
 /// whether the activation is a hard error. See [`NdiStartStatus`] and #448.
 fn ndi_status_for_start_error(err: &PipelineStartError) -> NdiStartStatus {
-    // BUG (pre-#448): every failure — including a merely-silent source — is
-    // published as a red `failed: …` error and propagated. Fixed in the GREEN
-    // commit so a silent source becomes a neutral `no-signal`.
-    NdiStartStatus {
-        status: format!("failed: {err}"),
-        is_hard_error: true,
+    match err {
+        // The source is configured but its broadcaster is silent / not producing
+        // — an EXPECTED state. Publish the neutral `no-signal` status (gray
+        // "waiting for source" placeholder) and DON'T fail the activation (#448).
+        PipelineStartError::SourceSilent { .. } => NdiStartStatus {
+            status: "no-signal".to_string(),
+            is_hard_error: false,
+        },
+        // A genuine pipeline failure → red `failed: <reason>` overlay + hard
+        // error so the operator sees what's wrong and the activate call errors.
+        PipelineStartError::Failed(e) => NdiStartStatus {
+            status: format!("failed: {e}"),
+            is_hard_error: true,
+        },
     }
 }
 

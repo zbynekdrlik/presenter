@@ -540,6 +540,15 @@ body.stage {
     color: #6b7280;
     font-size: 1.5rem;
 }
+/* #448: covering variant for the off/silent (`no-signal`) and `connecting`
+   states. A solid black background sits ABOVE the bare <video> (which has no
+   srcObject yet) so the browser's native empty-video play-arrow is hidden
+   behind a calm gray "waiting for source" placeholder instead of showing as a
+   broken affordance + red error. */
+.stage-ndi__placeholder--cover {
+    background: #000;
+    z-index: 5;
+}
 .stage-ndi__overlay {
     position: absolute;
     inset: 0;
