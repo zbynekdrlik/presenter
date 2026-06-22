@@ -441,12 +441,13 @@ async fn connect_and_launch(
     // change, launch-now endpoint) bypass the gate and always relaunch.
     if !force_launch {
         let launch_pkg = launch_package(&config.launch_component);
-        let foreground = adb_foreground_package(runner, &serial).await;
+        let foreground = adb_foreground_component(runner, &serial).await;
         if !should_launch_stage(foreground.as_deref(), launch_pkg) {
             debug!(
                 display = %config.label,
                 package = launch_pkg,
-                "android stage keep-alive: browser already foreground — skipping relaunch (#419)"
+                foreground = foreground.as_deref().unwrap_or("<unknown>"),
+                "android stage keep-alive: stage page already foreground — skipping relaunch (#419)"
             );
             // A confirmed-foreground probe IS a liveness success: refresh
             // last_success so a healthy display that skips relaunch every cycle
@@ -543,53 +544,87 @@ fn build_launch_args(launch_component: &str, stage_url: Option<&str>) -> Option<
     ])
 }
 
-/// Decide whether the periodic keep-alive should (re)launch the stage browser.
-/// Launch ONLY when the configured browser package is NOT the device's current
-/// foreground/resumed app. `None` (foreground could not be determined — the adb
-/// probe failed) defaults to launching, so a genuinely-down display still
-/// recovers and an inconclusive probe never SUPPRESSES a needed launch.
+/// The browser's resumed component (`<pkg>/<activity>`) suffix that means the
+/// STAGE PAGE is genuinely showing — `com.tcl.browser`'s content/browse
+/// activity. When the foreground component ends with this, the stage is loaded
+/// and the keep-alive must NOT relaunch (re-firing the VIEW intent would reload
+/// the page — the #419 black blink). Any OTHER activity of the same package
+/// (notably the home portal `.portal.home.activity.StartActivity` the TV opens
+/// to at power-on — #447) is NOT the stage and MUST be (re)launched.
+const STAGE_CONTENT_ACTIVITY_SUFFIX: &str = "BrowsePageActivity";
+
+/// Decide whether the periodic keep-alive should (re)launch the stage browser,
+/// given the device's current foreground/resumed COMPONENT (`<pkg>/<activity>`).
 ///
-/// Re-firing `am start` (a VIEW intent) at an already-foreground com.tcl.browser
-/// reloads the page (black blink + spinner) every cycle — the #419 regression.
-/// Gating the keep-alive on this check stops the periodic reload while keeping
-/// crash/sleep/exit recovery. Explicit/forced launches bypass it entirely.
-fn should_launch_stage(foreground_package: Option<&str>, launch_package: &str) -> bool {
-    match foreground_package {
-        // The browser is already the resumed app → it is up; relaunching would
-        // only reload the page. Skip.
-        Some(fg) => fg != launch_package,
+/// Skip the relaunch ONLY when the stage page is genuinely showing — i.e. the
+/// foreground component's package is the configured browser package AND its
+/// activity is the content/browse activity (`…BrowsePageActivity`). Otherwise
+/// launch:
+///   - the browser is on its HOME PORTAL (`…StartActivity`) — the same package
+///     but the stage is NOT loaded (the #447 power-on-to-home-portal case);
+///   - another app is foreground (the user left the stage);
+///   - `None` (the adb probe failed / no resumed activity) — never suppress a
+///     possibly-needed launch.
+///
+/// Comparing only the package (the pre-#447 logic) wrongly skipped when the
+/// browser sat on its home portal, because home-portal and stage-page are the
+/// SAME package. Gating on the ACTIVITY fixes that while preserving #419's
+/// no-periodic-reload guarantee for a genuinely-loaded stage. Explicit/forced
+/// launches bypass this gate entirely.
+fn should_launch_stage(foreground_component: Option<&str>, launch_package: &str) -> bool {
+    match foreground_component {
+        Some(component) => {
+            let (package, activity) = match component.split_once('/') {
+                Some(parts) => parts,
+                // A package-only component (no activity) cannot be confirmed as
+                // the stage page → (re)launch rather than leave a blank browser.
+                None => return true,
+            };
+            // Skip ONLY when the configured browser is foreground AND it is on
+            // its content/browse activity — i.e. the stage page is genuinely
+            // showing. The home portal (`…StartActivity`) is the same package
+            // but a different activity, so it correctly relaunches (#447).
+            let stage_is_showing =
+                package == launch_package && activity.ends_with(STAGE_CONTENT_ACTIVITY_SUFFIX);
+            !stage_is_showing
+        }
         // Foreground could not be determined → don't suppress a possibly-needed
         // launch; (re)launch and let the device sort it out.
         None => true,
     }
 }
 
-/// Parse the resumed-activity PACKAGE from `dumpsys activity activities` output.
-/// Finds the `[m]ResumedActivity: ActivityRecord{<hash> u0 <pkg>/<activity> …}`
-/// line and returns `<pkg>`. Returns None when no resumed activity is reported
+/// Parse the resumed-activity COMPONENT (`<pkg>/<activity>`) from
+/// `dumpsys activity activities` output. Finds the
+/// `[m]ResumedActivity: ActivityRecord{<hash> u0 <pkg>/<activity> …}` line and
+/// returns `<pkg>/<activity>`. Returns None when no resumed activity is reported
 /// (`mResumedActivity: null`) or the line is absent — the caller treats None as
 /// "foreground unknown → (re)launch".
-fn parse_foreground_package(dumpsys_output: &str) -> Option<String> {
+///
+/// The component (package AND activity) is required by [`should_launch_stage`]
+/// to tell the loaded stage page (`…BrowsePageActivity`) from the home portal
+/// (`…StartActivity`), which share the `com.tcl.browser` package (#447).
+fn parse_foreground_component(dumpsys_output: &str) -> Option<String> {
     // Match either `mResumedActivity:` or `ResumedActivity:` (label varies by
     // Android version); both carry the same `<pkg>/<activity>` component token.
     let line = dumpsys_output
         .lines()
         .find(|l| l.contains("ResumedActivity"))?;
     // The component is the first whitespace token shaped `<pkg>/<activity>`;
-    // the package is the part before `/` (it always contains a dot and never a
-    // `{`, which excludes the `ActivityRecord{<hash>` token).
+    // the package part always contains a dot and never a `{` (which excludes
+    // the `ActivityRecord{<hash>` token).
     line.split_whitespace().find_map(|tok| {
         let (pkg, _activity) = tok.split_once('/')?;
-        (pkg.contains('.') && !pkg.contains('{')).then(|| pkg.to_string())
+        (pkg.contains('.') && !pkg.contains('{')).then(|| tok.to_string())
     })
 }
 
-/// Query the device's currently-resumed app package via
+/// Query the device's currently-resumed COMPONENT (`<pkg>/<activity>`) via
 /// `adb -s <serial> shell dumpsys activity activities`. Returns the resumed
-/// package, or None on any adb error/timeout/non-success or when no resumed
+/// component, or None on any adb error/timeout/non-success or when no resumed
 /// activity is reported — the caller treats None as "foreground unknown →
 /// (re)launch". Read-only: the dumpsys probe never disturbs the running browser.
-async fn adb_foreground_package(runner: &dyn AdbRunner, serial: &str) -> Option<String> {
+async fn adb_foreground_component(runner: &dyn AdbRunner, serial: &str) -> Option<String> {
     let output = runner
         .run(&adb_args([
             "-s",
@@ -604,7 +639,7 @@ async fn adb_foreground_package(runner: &dyn AdbRunner, serial: &str) -> Option<
     if !output.status.success() {
         return None;
     }
-    parse_foreground_package(&String::from_utf8_lossy(&output.stdout))
+    parse_foreground_component(&String::from_utf8_lossy(&output.stdout))
 }
 
 fn ensure_success(output: &Output) -> Result<(), String> {
@@ -807,18 +842,37 @@ mod tests {
     // is not foreground (crash/sleep/exit recovery) or when foreground is
     // unknown (an inconclusive adb probe must never suppress a needed launch).
 
+    // Component shapes the TCL browser reports for the stage page vs the home
+    // portal — the same package, different activity (the #447 distinction).
+    const STAGE_PAGE_COMPONENT: &str = "com.tcl.browser/.portal.browse.activity.BrowsePageActivity";
+    const HOME_PORTAL_COMPONENT: &str = "com.tcl.browser/.portal.home.activity.StartActivity";
+
     #[test]
-    fn skip_launch_when_browser_already_foreground() {
+    fn skip_launch_when_stage_page_already_foreground() {
+        // #419: the stage page (browse activity) is genuinely showing → no reload.
         assert!(
-            !should_launch_stage(Some("com.tcl.browser"), "com.tcl.browser"),
-            "must NOT relaunch when the browser is already the resumed app (#419)",
+            !should_launch_stage(Some(STAGE_PAGE_COMPONENT), "com.tcl.browser"),
+            "must NOT relaunch when the stage page (BrowsePageActivity) is foreground (#419)",
+        );
+    }
+
+    #[test]
+    fn launch_when_browser_on_home_portal() {
+        // #447: the TV powered on to the browser's home portal (StartActivity).
+        // Same package, but the stage is NOT loaded → MUST relaunch.
+        assert!(
+            should_launch_stage(Some(HOME_PORTAL_COMPONENT), "com.tcl.browser"),
+            "must relaunch when the browser sits on its home portal — the stage is not loaded (#447)",
         );
     }
 
     #[test]
     fn launch_when_a_different_app_is_foreground() {
         assert!(
-            should_launch_stage(Some("com.android.tv.settings"), "com.tcl.browser"),
+            should_launch_stage(
+                Some("com.android.tv.settings/.MainActivity"),
+                "com.tcl.browser"
+            ),
             "must relaunch when another app is foreground (user left the stage)",
         );
     }
@@ -832,30 +886,74 @@ mod tests {
     }
 
     #[test]
-    fn parse_foreground_reads_resumed_activity_package() {
-        let out = "  ResumedActivity: ActivityRecord{deadbeef u0 com.tcl.browser/.portal.browse.activity.BrowsePageActivity t1}\n    mResumedActivity: ActivityRecord{5372874 u0 com.tcl.browser/.portal.browse.activity.BrowsePageActivity t17469}\n";
-        assert_eq!(
-            parse_foreground_package(out).as_deref(),
-            Some("com.tcl.browser"),
+    fn launch_when_browser_foreground_but_activity_unknown() {
+        // A package-only component (no `/activity`) cannot be confirmed as the
+        // loaded stage page → relaunch rather than risk leaving a blank browser.
+        assert!(
+            should_launch_stage(Some("com.tcl.browser"), "com.tcl.browser"),
+            "a bare package (activity unknown) must not be treated as the loaded stage (#447)",
         );
     }
 
     #[test]
-    fn parse_foreground_reads_legacy_fully_kiosk_package() {
+    fn parse_foreground_reads_resumed_activity_component() {
+        let out = "  ResumedActivity: ActivityRecord{deadbeef u0 com.tcl.browser/.portal.browse.activity.BrowsePageActivity t1}\n    mResumedActivity: ActivityRecord{5372874 u0 com.tcl.browser/.portal.browse.activity.BrowsePageActivity t17469}\n";
+        assert_eq!(
+            parse_foreground_component(out).as_deref(),
+            Some("com.tcl.browser/.portal.browse.activity.BrowsePageActivity"),
+        );
+    }
+
+    #[test]
+    fn parse_foreground_reads_home_portal_component() {
+        // #447: at power-on the TV resumes the browser's HOME PORTAL activity.
+        let out = "    mResumedActivity: ActivityRecord{5372874 u0 com.tcl.browser/.portal.home.activity.StartActivity t9}";
+        assert_eq!(
+            parse_foreground_component(out).as_deref(),
+            Some("com.tcl.browser/.portal.home.activity.StartActivity"),
+        );
+    }
+
+    #[test]
+    fn parse_foreground_reads_legacy_fully_kiosk_component() {
         let out = "    mResumedActivity: ActivityRecord{abc u0 com.fullykiosk.videokiosk/de.ozerov.fully.MainActivity t9}";
         assert_eq!(
-            parse_foreground_package(out).as_deref(),
-            Some("com.fullykiosk.videokiosk"),
+            parse_foreground_component(out).as_deref(),
+            Some("com.fullykiosk.videokiosk/de.ozerov.fully.MainActivity"),
         );
     }
 
     #[test]
     fn parse_foreground_none_when_no_resumed_activity() {
-        assert_eq!(parse_foreground_package("    mResumedActivity: null"), None);
-        assert_eq!(parse_foreground_package(""), None);
         assert_eq!(
-            parse_foreground_package("some unrelated dumpsys text"),
+            parse_foreground_component("    mResumedActivity: null"),
             None
+        );
+        assert_eq!(parse_foreground_component(""), None);
+        assert_eq!(
+            parse_foreground_component("some unrelated dumpsys text"),
+            None
+        );
+    }
+
+    #[test]
+    fn parse_foreground_skips_activity_record_token_that_has_dot_and_slash() {
+        // The component picker keeps the FIRST whitespace token shaped
+        // `<pkg>/<activity>` whose pkg part contains a dot AND no `{` — the
+        // `&&` guard at parse_foreground_component:618 rejects the
+        // `ActivityRecord{<hash>` wrapper token (which carries the `{`). This
+        // input puts an `ActivityRecord{…}` token BEFORE the real component AND
+        // makes that wrapper token itself contain both a `.` and a `/` in its
+        // pkg part. With the correct `&&` (pkg has a dot AND no `{`) the wrapper
+        // is rejected and the real component is returned; the surviving mutant
+        // (`&&` → `||`, "pkg has a dot OR no `{`") would WRONGLY accept the
+        // wrapper token and return `ActivityRecord{ab.cd/x`. So this test passes
+        // with `&&` and FAILS with `||` — killing the mutant.
+        let out = "  mResumedActivity: ActivityRecord{ab.cd/x u0 com.tcl.browser/.portal.browse.activity.BrowsePageActivity t1}";
+        assert_eq!(
+            parse_foreground_component(out).as_deref(),
+            Some("com.tcl.browser/.portal.browse.activity.BrowsePageActivity"),
+            "must skip the ActivityRecord wrapper token (carries `{{`) and keep the real component",
         );
     }
 
@@ -888,11 +986,14 @@ mod tests {
         }
     }
 
-    /// Whether `dumpsys activity activities` reports the stage browser as the
-    /// resumed app, another app, or fails (probe inconclusive).
+    /// Whether `dumpsys activity activities` reports the stage browser with its
+    /// stage page genuinely showing (`StagePage`), the browser sitting on its
+    /// home portal (`HomePortal` — same package, stage NOT loaded, the #447
+    /// power-on case), another app, or a failed (inconclusive) probe.
     #[derive(Clone, Copy)]
     enum Foreground {
-        Browser,
+        StagePage,
+        HomePortal,
         OtherApp,
         ProbeFails,
     }
@@ -973,8 +1074,14 @@ mod tests {
 
             if joined.contains("dumpsys activity activities") {
                 return match self.foreground {
-                    Foreground::Browser => Ok(ok_output(&format!(
-                        "    mResumedActivity: ActivityRecord{{abc u0 {TEST_PKG}/.Main t1}}"
+                    // Stage page genuinely showing → no relaunch (#419).
+                    Foreground::StagePage => Ok(ok_output(&format!(
+                        "    mResumedActivity: ActivityRecord{{abc u0 {TEST_PKG}/.portal.browse.activity.BrowsePageActivity t1}}"
+                    ))),
+                    // Same package, but the home portal — stage NOT loaded (#447)
+                    // → MUST relaunch.
+                    Foreground::HomePortal => Ok(ok_output(&format!(
+                        "    mResumedActivity: ActivityRecord{{abc u0 {TEST_PKG}/.portal.home.activity.StartActivity t1}}"
                     ))),
                     Foreground::OtherApp => Ok(ok_output(
                         "    mResumedActivity: ActivityRecord{def u0 com.android.tv.settings/.Main t2}",
@@ -1019,10 +1126,10 @@ mod tests {
         }))
     }
 
-    // (a) Periodic keep-alive, browser already foreground → NO `am start`.
+    // (a) Periodic keep-alive, stage page already foreground → NO `am start`.
     #[tokio::test]
-    async fn tick_skips_am_start_when_browser_foreground() {
-        let runner = FakeAdbRunner::new(Foreground::Browser);
+    async fn tick_skips_am_start_when_stage_page_foreground() {
+        let runner = FakeAdbRunner::new(Foreground::StagePage);
         let stage_url = Arc::new(Some(TEST_STAGE_URL.to_string()));
         let config = test_display();
         let status = test_status();
@@ -1047,12 +1154,40 @@ mod tests {
         assert_eq!(
             runner.am_start_calls(),
             0,
-            "the tick must NOT re-fire `am start` when the browser is already foreground (#419 wiring)",
+            "the tick must NOT re-fire `am start` when the stage page is already foreground (#419 wiring)",
         );
         assert_eq!(
             status.read().await.state,
             AndroidStageDisplayState::Running,
-            "a confirmed-foreground probe is a liveness success → Running",
+            "a confirmed-stage-page probe is a liveness success → Running",
+        );
+    }
+
+    // (a') #447: Periodic keep-alive, browser on its HOME PORTAL (same package,
+    // stage NOT loaded) → MUST fire `am start`. This is the power-on-to-portal
+    // bug: the pre-#447 package-only gate wrongly skipped here forever.
+    #[tokio::test]
+    async fn tick_fires_am_start_when_browser_on_home_portal() {
+        let runner = FakeAdbRunner::new(Foreground::HomePortal);
+        let stage_url = Arc::new(Some(TEST_STAGE_URL.to_string()));
+        let config = test_display();
+        let status = test_status();
+
+        let result = connect_and_launch(&runner, &stage_url, &config, &status, false).await;
+        assert!(
+            result.is_ok(),
+            "a TV stuck on the home portal must relaunch and succeed (#447)"
+        );
+
+        assert_eq!(
+            runner.dumpsys_calls(),
+            1,
+            "the tick MUST consult the foreground gate when !force_launch",
+        );
+        assert_eq!(
+            runner.am_start_calls(),
+            1,
+            "the tick MUST fire `am start` when the browser sits on its home portal — the stage is not loaded (#447)",
         );
     }
 
@@ -1106,7 +1241,7 @@ mod tests {
     async fn launch_now_always_fires_am_start_without_probing() {
         // Even with the browser already foreground, force_launch=true must
         // relaunch and must NOT consult the gate.
-        let runner = FakeAdbRunner::new(Foreground::Browser);
+        let runner = FakeAdbRunner::new(Foreground::StagePage);
         let stage_url = Arc::new(Some(TEST_STAGE_URL.to_string()));
         let config = test_display();
         let status = test_status();
@@ -1133,7 +1268,7 @@ mod tests {
     // device.
     #[tokio::test]
     async fn launch_aborts_when_adb_connect_fails() {
-        let runner = FakeAdbRunner::with_connect_failure(Foreground::Browser);
+        let runner = FakeAdbRunner::with_connect_failure(Foreground::StagePage);
         let stage_url = Arc::new(Some(TEST_STAGE_URL.to_string()));
         let config = test_display();
         let status = test_status();
@@ -1170,7 +1305,7 @@ mod tests {
     async fn worker_launch_now_command_forces_am_start() {
         // Keep a concrete Arc to read recorded calls after the worker exits;
         // hand a coerced `Arc<dyn AdbRunner>` clone to the worker (no downcast).
-        let fake = Arc::new(FakeAdbRunner::new(Foreground::Browser));
+        let fake = Arc::new(FakeAdbRunner::new(Foreground::StagePage));
         let runner: Arc<dyn AdbRunner> = Arc::clone(&fake) as Arc<dyn AdbRunner>;
         let stage_url = Arc::new(Some(TEST_STAGE_URL.to_string()));
         let config = test_display();

@@ -17,16 +17,61 @@ pub mod wake_lock;
 pub mod worship_pp;
 pub mod worship_snv;
 
+/// How the stage should present an `ndi_status` over the NDI video area.
+///
+/// Decouples the on-screen TREATMENT (neutral gray placeholder vs alarming red
+/// error overlay vs nothing) from the status string, so a source that is simply
+/// OFF/silent (`no-signal`) is shown as a calm "waiting" placeholder rather than
+/// a red "pipeline failed" error (#448).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum NdiOverlayKind {
+    /// A stream is flowing (or no NDI activity) → show nothing over the video.
+    None,
+    /// Expected, non-error states — source configured but not yet producing
+    /// (`no-signal`) or the pipeline is still starting (`connecting`). Render a
+    /// calm GRAY placeholder; never the red error overlay (#448).
+    Neutral,
+    /// A genuine problem — the pipeline failed to build/run (`failed[: reason]`)
+    /// or lost a previously-good signal (`disconnected`). Render the RED overlay.
+    Error,
+}
+
+/// Classify an `ndi_status` into how it should be shown over the NDI video.
+///
+/// `no-signal` (the source is configured but its broadcaster is silent / not
+/// producing — an EXPECTED state, not a failure) and `connecting` are NEUTRAL.
+/// `failed`/`failed: <reason>` (a real pipeline failure) and `disconnected` (a
+/// previously-good signal was lost) are ERRORs. Everything else — `connected`,
+/// `""`, `streaming`, unknown — is `None` (a stream is flowing or there is no
+/// NDI activity). See #448: an off/silent source must not paint the stage red.
+pub fn ndi_overlay_kind(status: &str) -> NdiOverlayKind {
+    if status == "no-signal" || status == "connecting" {
+        // Expected, non-error states → calm gray placeholder (#448).
+        NdiOverlayKind::Neutral
+    } else if status == "disconnected" || status == "failed" || status.starts_with("failed: ") {
+        // Genuine problems → red overlay.
+        NdiOverlayKind::Error
+    } else {
+        // `connected` / `""` / `streaming` / unknown → a stream is flowing or
+        // there is no NDI activity → nothing over the video.
+        NdiOverlayKind::None
+    }
+}
+
 /// Map an `ndi_status` string (from `LiveEvent::NdiConnectionStatus`) to the
-/// user-facing overlay text rendered on top of the NDI video. The three
-/// expected values are produced by `presenter-server`:
-/// - `""` → no NDI activity (no overlay)
+/// user-facing text rendered over the NDI video. The expected values are
+/// produced by `presenter-server`:
+/// - `""` / `"connected"` → no NDI activity / a stream is flowing (no text)
+/// - `"no-signal"` → source configured but broadcaster silent/not producing;
+///   show a calm "Waiting for video source…" placeholder (#448 — NOT an error)
 /// - `"connecting"` → pipeline starting; show "Connecting…"
 /// - `"disconnected"` → pipeline lost frames; show "Signal Lost — Reconnecting…"
 /// - `"failed: <reason>"` → pipeline.start() returned Err; show the reason so
 ///   the operator can actually see what's wrong.
 pub fn ndi_status_text(status: &str) -> String {
-    if status == "disconnected" {
+    if status == "no-signal" {
+        "Waiting for video source…".to_string()
+    } else if status == "disconnected" {
         "Signal Lost — Reconnecting...".to_string()
     } else if status == "connecting" {
         "Connecting...".to_string()
@@ -41,7 +86,56 @@ pub fn ndi_status_text(status: &str) -> String {
 
 #[cfg(test)]
 mod tests {
-    use super::ndi_status_text;
+    use super::{ndi_overlay_kind, ndi_status_text, NdiOverlayKind};
+
+    // ── #448: off/silent source is a NEUTRAL state, not a red error ──────────
+    //
+    // Live on prod 2026-06-22 (Resolume 'cg' OFF), the ndi-fullscreen layout
+    // painted a configured-but-silent source as a RED "NDI pipeline failed:
+    // … broadcaster is silent" overlay. A source that is simply off is an
+    // EXPECTED state — it must render as a calm gray "waiting" placeholder.
+
+    #[test]
+    fn no_signal_status_is_neutral_not_error() {
+        // The off/silent source publishes `no-signal` (#448). It MUST be a
+        // NEUTRAL placeholder — never the red error overlay.
+        assert_eq!(ndi_overlay_kind("no-signal"), NdiOverlayKind::Neutral);
+    }
+
+    #[test]
+    fn no_signal_status_text_is_waiting_placeholder() {
+        assert_eq!(ndi_status_text("no-signal"), "Waiting for video source…");
+    }
+
+    #[test]
+    fn connecting_status_is_neutral() {
+        // The pipeline-starting state is not an error either → neutral.
+        assert_eq!(ndi_overlay_kind("connecting"), NdiOverlayKind::Neutral);
+    }
+
+    #[test]
+    fn genuine_failure_status_is_error() {
+        // A REAL pipeline failure (e.g. encoder build failure) stays RED.
+        assert_eq!(
+            ndi_overlay_kind("failed: no hardware H264 encoder registered"),
+            NdiOverlayKind::Error,
+        );
+        assert_eq!(ndi_overlay_kind("failed"), NdiOverlayKind::Error);
+    }
+
+    #[test]
+    fn disconnected_status_is_error() {
+        // A previously-good signal that was lost is a genuine problem → RED.
+        assert_eq!(ndi_overlay_kind("disconnected"), NdiOverlayKind::Error);
+    }
+
+    #[test]
+    fn flowing_or_idle_status_has_no_overlay() {
+        assert_eq!(ndi_overlay_kind("connected"), NdiOverlayKind::None);
+        assert_eq!(ndi_overlay_kind(""), NdiOverlayKind::None);
+        assert_eq!(ndi_overlay_kind("streaming"), NdiOverlayKind::None);
+        assert_eq!(ndi_overlay_kind("totally-new-state"), NdiOverlayKind::None);
+    }
 
     /// Regression test for the bug surfaced 2026-05-19 where the stage
     /// `.stage-ndi__overlay` rendered "Connecting…" indefinitely even after

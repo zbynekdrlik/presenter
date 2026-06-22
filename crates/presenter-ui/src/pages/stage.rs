@@ -211,10 +211,19 @@ fn sync_ndi_source_state(ctx: StageContext) {
             Some(active) => {
                 let id = Some(active.id.clone());
                 if ctx.ndi_active_source_id.get_untracked() != id {
-                    // New/changed source: clear any stale status overlay
-                    // ("disconnected"/"failed" from before the gap) so it
-                    // doesn't stick over the freshly mounted video.
-                    ctx.ndi_status.set(String::new());
+                    // New/changed source (incl. every FRESH page load / stage
+                    // relaunch, where the prior id is None): start in the
+                    // neutral "connecting" state, NOT "" — the empty status maps
+                    // to NdiOverlayKind::None, which renders NEITHER the covering
+                    // placeholder NOR the overlay, leaving the bare <video>'s
+                    // native play-arrow exposed until the server's next ~30s
+                    // status tick (#448 regression on the #447-frequent relaunch
+                    // path). "connecting" is a neutral covering state, so the
+                    // gray placeholder hides the bare video immediately; the
+                    // real status (no-signal / connected / failed) replaces it
+                    // when the pipeline resolves. It also clears any stale
+                    // "disconnected"/"failed" overlay from before the gap.
+                    ctx.ndi_status.set("connecting".to_string());
                 }
                 ctx.ndi_active.set(true);
                 ctx.ndi_active_source_id.set(id);

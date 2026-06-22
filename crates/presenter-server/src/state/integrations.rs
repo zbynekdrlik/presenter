@@ -5,9 +5,48 @@ use presenter_core::{
     ResolumeHostDraft, ResolumeHostId, VideoSource, VideoSourceDraft, VideoSourceId,
 };
 
+use presenter_ndi::PipelineStartError;
+
 use super::AppState;
 use crate::android_stage::AndroidStageDisplayStatusSnapshot;
 use crate::resolume::ResolumeConnectionSnapshot;
+
+/// How a failed `start_pipeline` should be surfaced when activating a source.
+///
+/// Separates the published stage status from whether the activation itself is a
+/// hard error. A SILENT source (broadcaster off / not producing) is NOT a hard
+/// error — the source is genuinely activated and just waiting for signal, so the
+/// HTTP activate succeeds and the stage shows a neutral `no-signal` placeholder.
+/// A GENUINE pipeline failure is a hard error: publish `failed: <reason>` (red
+/// overlay) and propagate the error to the caller (#448).
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct NdiStartStatus {
+    /// The `ndi_status` string published over the live hub.
+    status: String,
+    /// Whether activation should fail (propagate `Err`) — true only for a
+    /// genuine pipeline failure, false for a silent/not-producing source.
+    is_hard_error: bool,
+}
+
+/// Classify a `start_pipeline` error into the stage status to publish and
+/// whether the activation is a hard error. See [`NdiStartStatus`] and #448.
+fn ndi_status_for_start_error(err: &PipelineStartError) -> NdiStartStatus {
+    match err {
+        // The source is configured but its broadcaster is silent / not producing
+        // — an EXPECTED state. Publish the neutral `no-signal` status (gray
+        // "waiting for source" placeholder) and DON'T fail the activation (#448).
+        PipelineStartError::SourceSilent { .. } => NdiStartStatus {
+            status: "no-signal".to_string(),
+            is_hard_error: false,
+        },
+        // A genuine pipeline failure → red `failed: <reason>` overlay + hard
+        // error so the operator sees what's wrong and the activate call errors.
+        PipelineStartError::Failed(e) => NdiStartStatus {
+            status: format!("failed: {e}"),
+            is_hard_error: true,
+        },
+    }
+}
 
 impl AppState {
     // Resolume methods
@@ -234,20 +273,42 @@ impl AppState {
                 .start_pipeline(&source.id.to_string(), &source.ndi_name)
                 .await
             {
-                // Surface the failure to the stage view so the operator sees
-                // the actual reason instead of an endless "Connecting…"
-                // overlay. The DB row stays `is_active=true` so the operator
-                // can retry by toggling off+on once the issue is fixed.
-                tracing::error!(
-                    error = %e,
+                let classified = ndi_status_for_start_error(&e);
+                if classified.is_hard_error {
+                    // A GENUINE pipeline failure. Surface the reason to the
+                    // stage view so the operator sees what's wrong instead of
+                    // an endless "Connecting…" overlay. The DB row stays
+                    // `is_active=true` so the operator can retry by toggling
+                    // off+on once the issue is fixed.
+                    tracing::error!(
+                        error = %e,
+                        source_id = %source.id,
+                        ndi_name = %source.ndi_name,
+                        "NDI pipeline start failed"
+                    );
+                    self.live_hub.publish(LiveEvent::NdiConnectionStatus {
+                        status: classified.status,
+                    });
+                    return Err(anyhow::Error::new(e));
+                }
+                // #448: the source is configured but its broadcaster is silent /
+                // not producing — an EXPECTED state, not a failure. The
+                // activation SUCCEEDS (the source is genuinely active, just
+                // waiting for signal); the stage shows a neutral `no-signal`
+                // placeholder, not a red error.
+                tracing::info!(
                     source_id = %source.id,
                     ndi_name = %source.ndi_name,
-                    "NDI pipeline start failed"
+                    "NDI source activated but not yet producing — broadcaster silent (#448)"
                 );
                 self.live_hub.publish(LiveEvent::NdiConnectionStatus {
-                    status: format!("failed: {e}"),
+                    status: classified.status,
                 });
-                return Err(e);
+                // Reap any sibling pipelines just as the success path does, so a
+                // switch to a not-yet-live source still tears down the previous
+                // source's encoder (the #370 single-active-source invariant).
+                manager.stop_other_pipelines(&source.id.to_string()).await;
+                return Ok(source);
             }
             // start_pipeline only returns Ok AFTER the webrtcsink video pad
             // has negotiated caps — at that point frames are flowing through
@@ -283,5 +344,48 @@ impl AppState {
             manager.stop_all().await;
         }
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{ndi_status_for_start_error, PipelineStartError};
+
+    // ── #448: an off/silent source is NOT a hard error / red overlay ─────────
+    //
+    // Live on prod 2026-06-22 (Resolume 'cg' OFF), activating a source whose
+    // broadcaster is silent published `failed: … broadcaster is silent`, which
+    // the stage painted RED. A silent source is an expected state — it must
+    // publish the neutral `no-signal` status and NOT fail the activation.
+
+    #[test]
+    fn silent_source_maps_to_neutral_no_signal_and_is_not_a_hard_error() {
+        let err = PipelineStartError::SourceSilent {
+            ndi_name: "RESOLUME-SNV (cg-obs)".to_string(),
+        };
+        let classified = ndi_status_for_start_error(&err);
+        assert_eq!(
+            classified.status, "no-signal",
+            "a silent broadcaster must publish the neutral `no-signal` status (#448)",
+        );
+        assert!(
+            !classified.is_hard_error,
+            "a silent broadcaster must NOT fail the activation (#448)",
+        );
+    }
+
+    #[test]
+    fn genuine_failure_maps_to_red_failed_status_and_is_a_hard_error() {
+        let err =
+            PipelineStartError::Failed(anyhow::anyhow!("no hardware H264 encoder registered"));
+        let classified = ndi_status_for_start_error(&err);
+        assert_eq!(
+            classified.status, "failed: no hardware H264 encoder registered",
+            "a genuine failure must publish `failed: <reason>` so the operator sees it",
+        );
+        assert!(
+            classified.is_hard_error,
+            "a genuine pipeline failure must fail the activation",
+        );
     }
 }

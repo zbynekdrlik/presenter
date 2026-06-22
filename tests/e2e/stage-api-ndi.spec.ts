@@ -135,13 +135,25 @@ test("worship-snv layout is not affected by api stage changes", async ({ page })
   expect(consoleMessages).toEqual([]);
 });
 
-test("api layout shows connection-status overlay when NDI source activates", async ({ page }) => {
+test("api layout mounts NDI video but shows NO red overlay for a connecting/not-producing source", async ({ page }) => {
+  // #448 changed the api_stage layout: the NDI video here is a BACKGROUND
+  // behind the slides, so a NEUTRAL state (connecting / no-signal — the source
+  // is configured but not yet producing) must paint NOTHING over the slides.
+  // Only a GENUINE failure (`ndi_overlay_kind == Error`: `failed`/`disconnected`)
+  // surfaces the red `.stage-api__overlay`. This test replaces the old one,
+  // which asserted the now-removed "Connecting" red overlay on activation.
+  //
   // We deliberately activate a bogus NDI source so the WS event fires while
-  // the page is open. Once `ndi_active=true`, the <NdiVideo> mounts and
-  // tries to fetch the WHEP endpoint, which returns 503 because the bogus
-  // name has no real stream — that 503 is expected noise for this test only.
-  // The new reconnect_loop (per ndi-stage-auto-recovery spec) retries with
-  // backoff and emits a WARN on each failed attempt; allow that too.
+  // the page is open. Once `ndi_active=true`, the <NdiVideo> mounts and tries
+  // to fetch the WHEP endpoint, which returns 503 because the bogus name has no
+  // real stream — that 503 is expected noise for this test only. The
+  // reconnect_loop retries with backoff and emits a WARN on each failed
+  // attempt; allow that too. The published status stays NEUTRAL the whole time
+  // (`connecting` on activate; `no-signal` if a manager classifies it as
+  // SourceSilent) — both map to `NdiOverlayKind::Neutral`, so the red overlay
+  // must never appear (verified against `ndi_overlay_kind` in
+  // crates/presenter-ui/src/components/stage/mod.rs). The Error→red-overlay path
+  // is covered by the unit tests there (`failed`/`disconnected` → Error).
   const consoleMessages = collectConsoleErrors(page, [
     /Failed to load resource.*503/i,
     /WHEP connect for.*failed/i,
@@ -166,8 +178,9 @@ test("api layout shows connection-status overlay when NDI source activates", asy
     timeout: 10_000,
   });
 
-  // Sanity: NdiVideo not present yet
+  // Sanity: NdiVideo not present yet, and no overlay
   await expect(page.locator('[data-role="ndi-video"]')).toHaveCount(0);
+  await expect(page.locator("div.stage-api__overlay")).toHaveCount(0);
 
   // Create a bogus video source
   const createResp = await page.request.post(
@@ -189,16 +202,20 @@ test("api layout shows connection-status overlay when NDI source activates", asy
   );
 
   try {
-    // The overlay should appear (status = "connecting") and the <NdiVideo> should mount
+    // NEW behavior: the <NdiVideo> mounts (ndi_active=true) …
     await expect(page.locator('[data-role="ndi-video"]')).toHaveCount(1, {
       timeout: 10_000,
     });
-    await expect(page.locator("div.stage-api__overlay")).toBeVisible({
-      timeout: 5_000,
-    });
-    await expect(page.locator("div.stage-api__overlay")).toContainText(
-      /Connecting/i,
-    );
+    // … but the NEUTRAL connecting/not-producing state paints NOTHING over the
+    // slides — the red overlay must NOT appear. Give the status time to settle
+    // (connecting → possibly no-signal) and assert the overlay stays absent so
+    // the slides show through.
+    await page.waitForTimeout(2_000);
+    await expect(page.locator("div.stage-api__overlay")).toHaveCount(0);
+    // The slides remain visible through the (absent) overlay.
+    await expect(
+      page.locator("div.stage-api .stage__current-slide"),
+    ).toBeAttached();
   } finally {
     // Cleanup so subsequent test runs are clean
     await page.request.post(

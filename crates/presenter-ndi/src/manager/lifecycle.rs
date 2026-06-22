@@ -14,6 +14,45 @@ use crate::pipeline::NdiPipeline;
 
 use super::{check_active_entry, ActiveSource, NdiManager, StateCheckOutcome};
 
+/// Outcome classification for [`NdiManager::start_pipeline`] failures.
+///
+/// Lets the caller distinguish an EXPECTED "the source is configured but its
+/// broadcaster is silent / not producing" condition from a GENUINE pipeline
+/// failure, so the stage view can show a calm "waiting for source" placeholder
+/// for the former and a red error overlay only for the latter (#448). Before
+/// this, both collapsed into one `anyhow::Error` and a configured-but-OFF source
+/// was painted as a red "NDI pipeline failed: … broadcaster is silent" error.
+#[derive(Debug)]
+pub enum PipelineStartError {
+    /// The pipeline built and started, but the NDI source did not begin
+    /// streaming within the budget — the broadcaster is silent / not producing
+    /// (e.g. Resolume output is off). An expected, non-error state.
+    SourceSilent { ndi_name: String },
+    /// A genuine failure to build/start/run the pipeline (encoder build failure,
+    /// GStreamer element error, etc.).
+    Failed(anyhow::Error),
+}
+
+impl std::fmt::Display for PipelineStartError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            PipelineStartError::SourceSilent { ndi_name } => write!(
+                f,
+                "NDI source '{ndi_name}' is not producing — broadcaster silent or off"
+            ),
+            PipelineStartError::Failed(e) => write!(f, "{e}"),
+        }
+    }
+}
+
+impl std::error::Error for PipelineStartError {}
+
+impl From<anyhow::Error> for PipelineStartError {
+    fn from(e: anyhow::Error) -> Self {
+        PipelineStartError::Failed(e)
+    }
+}
+
 impl NdiManager {
     pub fn try_new() -> Option<Self> {
         let sdk = Arc::new(NdiLib::load().ok()?);
@@ -54,7 +93,7 @@ impl NdiManager {
         self: &std::sync::Arc<Self>,
         source_id: &str,
         ndi_name: &str,
-    ) -> Result<()> {
+    ) -> std::result::Result<(), PipelineStartError> {
         let mut active = self.active.lock().await;
 
         // Operator-reactivation path: if the existing entry is dead, snapshot
@@ -147,15 +186,21 @@ impl NdiManager {
                 Ok(())
             }
             Ok(Err(e)) => {
+                // The pipeline element posted an error (encoder build failure,
+                // GStreamer element error, …) — a GENUINE failure.
                 pipeline.stop().await;
-                Err(e)
+                Err(PipelineStartError::Failed(e))
             }
             Err(_) => {
+                // The pipeline never reached Streaming within the budget. With
+                // no element error posted, this is the broadcaster-silent /
+                // not-producing case (e.g. the Resolume output is off) — an
+                // EXPECTED state, not a failure (#448). The caller surfaces it
+                // as a neutral "waiting for source" placeholder, not a red error.
                 pipeline.stop().await;
-                Err(anyhow!(
-                    "NDI source '{ndi_name}' did not reach Streaming within 8s; \
-                     ndisrc could not connect or the broadcaster is silent"
-                ))
+                Err(PipelineStartError::SourceSilent {
+                    ndi_name: ndi_name.to_string(),
+                })
             }
         }
     }
@@ -199,5 +244,46 @@ impl NdiManager {
     /// Is the given source's pipeline currently active?
     pub async fn is_active(&self, source_id: &str) -> bool {
         self.active.lock().await.contains_key(source_id)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    // Kills the surviving Display mutant (lifecycle.rs:38 — `fmt` replaced with
+    // `Ok(Default::default())`, i.e. empty output). Both arms of
+    // `PipelineStartError`'s Display must produce the documented, non-empty text:
+    // the SourceSilent arm carries the human-facing "not producing / broadcaster"
+    // wording plus the ndi_name; the Failed arm transparently forwards the inner
+    // error's Display. A pure constructor + Display assertion — no NDI SDK needed.
+    #[test]
+    fn source_silent_display_names_source_and_explains_not_producing() {
+        let ndi_name = "RESOLUME-SNV (cg-obs)";
+        let msg = PipelineStartError::SourceSilent {
+            ndi_name: ndi_name.into(),
+        }
+        .to_string();
+        assert!(
+            msg.contains("not producing"),
+            "SourceSilent Display must explain the source is not producing; got {msg:?}",
+        );
+        assert!(
+            msg.contains("broadcaster"),
+            "SourceSilent Display must mention the broadcaster; got {msg:?}",
+        );
+        assert!(
+            msg.contains(ndi_name),
+            "SourceSilent Display must name the NDI source; got {msg:?}",
+        );
+    }
+
+    #[test]
+    fn failed_display_forwards_inner_error_text() {
+        let msg = PipelineStartError::Failed(anyhow!("boom")).to_string();
+        assert_eq!(
+            msg, "boom",
+            "Failed Display must forward the inner error's text verbatim",
+        );
     }
 }

@@ -137,6 +137,117 @@ test("stage page mounts NdiVideo with correct data attributes when source active
   expect(consoleMessages).toEqual([]);
 });
 
+// ─────────────────────────────────────────────────────────────────────────
+// #448: a configured NDI source that is NOT producing (off/silent broadcaster)
+// must render a NEUTRAL COVERING placeholder on the ndi-fullscreen layout —
+// NOT a red "NDI pipeline failed" overlay, and NOT the browser's native
+// empty-video play-arrow.
+//
+// SCOPE OF THIS TEST = the CLIENT rendering. It runs on the GitHub-hosted `e2e`
+// lane, which has NO NDI SDK (`ndi_manager()` is None), so `activate` succeeds
+// without ever starting a pipeline: the client holds the neutral `connecting`
+// state (from the `NdiSourceActivated` WS event + the REST-resync seed in
+// pages/stage.rs). Either neutral status — `connecting` or the server's
+// `no-signal` — maps to NdiOverlayKind::Neutral and the SAME covering gray
+// placeholder, so this test asserts the neutral covering treatment + no red
+// overlay + no exposed bare-video play affordance + clean console, on a fresh
+// load AND on a reload (the #447-frequent relaunch path).
+//
+// The SERVER-side `SourceSilent → no-signal` classification (the other half of
+// #448) is covered directly by the unit test
+// `state::integrations::tests::silent_source_maps_to_neutral_no_signal_and_is_not_a_hard_error`,
+// which runs in `cargo test` on every CI run (the no-SDK e2e lane cannot
+// exercise the pipeline path that produces `no-signal`).
+// ─────────────────────────────────────────────────────────────────────────
+test("ndi-fullscreen renders a neutral covering placeholder (no red error, no bare-video play-arrow) for a not-producing source (#448)", async ({
+  page,
+}) => {
+  // Expected, non-error console output on a host with no live NDI source: the
+  // WHEP POST is answered 204 (configured-but-not-producing, #431) or 503 (no
+  // SDK) and the client backs off quietly. A RED overlay or play-arrow would be
+  // the #448 bug. Keep these patterns TIGHT so they cannot swallow a genuine
+  // WebRTC error (deep-review #449): match only the known not-producing replies.
+  const ALLOWED = [
+    /Failed to load resource.*\b(503|204)\b/i,
+    /WHEP (POST|connect)[^\n]*\b(503|204)\b/i,
+  ];
+  const consoleMessages: string[] = [];
+  page.on("console", (msg) => {
+    if (msg.type() === "error" || msg.type() === "warning") {
+      const text = msg.text();
+      if (!ALLOWED.some((re) => re.test(text))) consoleMessages.push(`[${msg.type()}] ${text}`);
+    }
+  });
+  page.on("pageerror", (err) => {
+    if (!ALLOWED.some((re) => re.test(err.message))) consoleMessages.push(`[pageerror] ${err.message}`);
+  });
+
+  const created = await page.request.post(
+    new URL("/integrations/video-sources", baseURL).toString(),
+    { data: { label: "TEST-SILENT", ndiName: "RESOLUME-SNV (cg-obs)" } },
+  );
+  expect(created.status()).toBeLessThan(500);
+  const src = await created.json();
+
+  // Activating a not-producing source MUST succeed (#448: activating a
+  // not-yet-live source is not an error). On a no-SDK host the pipeline is
+  // never started, so this returns promptly.
+  const activate = await page.request.post(
+    new URL(`/integrations/video-sources/${src.id}/activate`, baseURL).toString(),
+    { data: {} },
+  );
+  expect(activate.status()).toBe(200);
+
+  await page.request.post(
+    new URL("/stage/layout", baseURL).toString(),
+    { data: { code: "ndi-fullscreen" } },
+  );
+
+  // Asserts the neutral covering placeholder is present (no red overlay, no
+  // exposed bare-video play affordance) and that this holds both on a fresh
+  // load and after a reload (the #447-frequent stage-relaunch path — the seed
+  // in pages/stage.rs must cover the bare <video> immediately, not after the
+  // server's next ~30s tick).
+  const assertNeutralCover = async () => {
+    await page.waitForSelector('body[data-wasm-ready="true"]', { timeout: 30_000 });
+    await page.waitForSelector('body[data-layout-code="ndi-fullscreen"]', { timeout: 10_000 });
+
+    // The covering placeholder appears promptly (from the neutral connecting /
+    // no-signal status), well under the 30s server-tick window.
+    const placeholder = page.locator(".stage-ndi__placeholder--cover");
+    await expect(placeholder).toBeVisible({ timeout: 10_000 });
+    // Either neutral copy is acceptable: "Waiting for video source…" (no-signal)
+    // or "Connecting..." (connecting) — both are the calm neutral treatment.
+    await expect(placeholder).toHaveText(/Waiting for video source|Connecting/i);
+
+    // No RED error overlay for a merely-not-producing source — core #448 assertion.
+    await expect(page.locator(".stage-ndi__overlay")).toHaveCount(0);
+
+    // The covering placeholder must sit ABOVE the bare <video> with a solid
+    // (opaque) black background, so the native empty-video play-arrow is hidden.
+    const covered = await page.evaluate(() => {
+      const cover = document.querySelector(".stage-ndi__placeholder--cover") as HTMLElement | null;
+      if (!cover) return false;
+      const bg = getComputedStyle(cover).backgroundColor;
+      const opaque = bg === "rgb(0, 0, 0)" || /rgb\(0,\s*0,\s*0\)/.test(bg);
+      const rect = cover.getBoundingClientRect();
+      return opaque && rect.width > 0 && rect.height > 0;
+    });
+    expect(covered).toBe(true);
+  };
+
+  await page.goto(new URL("/stage", baseURL).toString());
+  await assertNeutralCover();
+
+  // #447/#448 interaction: a stage relaunch / reload must NOT expose the
+  // bare-video play-arrow even briefly.
+  await page.reload();
+  await assertNeutralCover();
+
+  // Browser console must be clean — no real errors/warnings, no page errors.
+  expect(consoleMessages).toEqual([]);
+});
+
 test("NdiVideo videoWidth resolves above zero within 5 seconds of mount", async ({ page }) => {
   // This test is the actual "video is flowing" check. On CI with no live NDI
   // source it would time out — we mark it skipped when NDI is unavailable.

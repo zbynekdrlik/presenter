@@ -29,6 +29,8 @@ mod lifecycle;
 mod supervisor;
 mod whep;
 
+pub use lifecycle::PipelineStartError;
+
 /// Status callback retained for backwards compatibility with the old MJPEG
 /// status-reporting path. The WebRTC manager currently invokes it on
 /// pipeline state transitions so the live-event hub keeps emitting
