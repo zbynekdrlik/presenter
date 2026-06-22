@@ -105,6 +105,32 @@ jobs:
         run: npm run test:companion
 
   # ============================================
+  # TypeScript type-check (e2e/tests) — #426
+  # ============================================
+  # The 63 e2e .ts files are otherwise compiled by Playwright/esbuild WITHOUT
+  # type-checking, so type errors in the test harness ship invisibly. This gate
+  # runs `tsc --noEmit` against tsconfig.json so a type error (e.g. a regressed
+  # ServerHandle field, a wrong Locator.evaluate signature) fails CI loudly.
+  typecheck:
+    name: TypeScript Type Check
+    runs-on: ubuntu-latest
+    needs: branch-sync
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: "npm"
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Type-check e2e tests (tsc --noEmit)
+        run: npm run typecheck
+
+  # ============================================
   # Version Check
   # ============================================
   version-check:

@@ -1,4 +1,4 @@
-import { test, expect } from '@playwright/test';
+import { test, expect, type Page } from '@playwright/test';
 import {
   deriveTestConfig,
   refreshDevData,
@@ -57,14 +57,14 @@ test.afterAll(async () => {
   }
 });
 
-async function waitForToast(page, expected: string | RegExp) {
+async function waitForToast(page: Page, expected: string | RegExp) {
   const toast = page.locator(selectors.toast);
   await expect(toast).toHaveAttribute('data-visible', 'true', { timeout: 20_000 });
   await expect(toast).toHaveText(expected);
   await expect(toast).toHaveAttribute('data-visible', 'false');
 }
 
-async function getHostsViaApi(page) {
+async function getHostsViaApi(page: Page) {
   const response = await page.request.get(new URL('/integrations/resolume/hosts', baseURL).toString(), {
     timeout: 60_000,
   });
@@ -77,7 +77,7 @@ async function getHostsViaApi(page) {
   }>;
 }
 
-async function getAndroidDisplaysViaApi(page) {
+async function getAndroidDisplaysViaApi(page: Page) {
   const response = await page.request.get(
     new URL('/integrations/android-stage/displays', baseURL).toString(),
     { timeout: 60_000 }
