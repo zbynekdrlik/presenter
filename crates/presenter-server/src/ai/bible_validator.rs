@@ -64,10 +64,12 @@ impl ValidationRule {
             }
             Self::MainExceedsCharacterLimit => {
                 "Slide main text exceeds the character limit. The server composes \
-                 slides from your verse items automatically — this error means a \
-                 single verse is longer than the limit on its own. Recovery: split \
-                 the verse text across multiple verse items with the same verse \
-                 number, or reduce the sermon's custom wording."
+                 slides from your verse items automatically. A LONE whole verse \
+                 over the limit is accepted as-is (autofit shrinks it) — do NOT \
+                 split a single verse. This error means the slide over-packed \
+                 MULTIPLE distinct verses, or an emphasis/title slide is too long. \
+                 Recovery: submit each verse as its own item and let the server \
+                 pack them, or shorten the emphasis/title text."
             }
         }
     }
@@ -116,10 +118,12 @@ impl ValidationError {
             if self.rule == ValidationRule::MainExceedsCharacterLimit {
                 let with_limit = format!(
                     "Slide main text exceeds the character limit ({limit} characters). \
-                     The server composes slides from your verse items automatically — this \
-                     error means a single verse is longer than the limit on its own. Recovery: \
-                     split the verse text across multiple verse items with the same verse \
-                     number, or reduce the sermon's custom wording."
+                     The server composes slides from your verse items automatically. A LONE \
+                     whole verse over the limit is accepted as-is (autofit shrinks it) — do \
+                     NOT split a single verse. This error means the slide over-packed MULTIPLE \
+                     distinct verses, or an emphasis/title slide is too long. Recovery: submit \
+                     each verse as its own item and let the server pack them, or shorten the \
+                     emphasis/title text."
                 );
                 obj["expected"] = serde_json::json!(with_limit);
             }

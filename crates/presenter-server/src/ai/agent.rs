@@ -197,12 +197,8 @@ async fn build_system_prompt(state: &AppState, extra: Option<&str>) -> (String, 
     let prefs = state.get_bible_preferences().await.unwrap_or_default();
     let char_limit = prefs.character_limit;
 
-    let mut prompt = render_system_prompt(
-        &libraries_str,
-        &bible_str,
-        &translations_str,
-        char_limit,
-    );
+    let mut prompt =
+        render_system_prompt(&libraries_str, &bible_str, &translations_str, char_limit);
 
     if let Some(extra_prompt) = extra {
         if !extra_prompt.is_empty() {
@@ -290,10 +286,15 @@ how many slides they become.
    reference labels like "Ján 1:1-2 (SEB)".
 
 8. If a single verse is longer than the character limit on its own
-   (rare), the validator returns main_exceeds_character_limit. Recovery:
-   split that verse into multiple verse items with the same number —
-   the server will emit them as separate slides both labeled with the
-   same verse number.
+   (rare), DO NOTHING SPECIAL — submit it as one normal verse item. A lone
+   whole verse over the limit is accepted whole on its own slide and shrunk
+   to fit by display autofit; it is NOT an error and you must NOT split it
+   across items. If you do supply several continuation items that share the
+   same verse number, the server merges them back into ONE whole verse on a
+   single slide (a verse is never split mid-text). So
+   main_exceeds_character_limit only ever means a slide over-packed MULTIPLE
+   distinct verses, or an emphasis/title slide is too long — keep verses as
+   separate items (let the server pack them) or shorten the emphasis text.
 
 9. The server validates composed slides and returns a rule-keyed JSON
    error on failure (rules: main_exceeds_character_limit,
@@ -331,6 +332,157 @@ claim success for tools that errored."#,
     )
 }
 
+/// Build the OpenAI-style messages array for one API call: the system prompt
+/// followed by every conversation message (content / tool_calls / tool_call_id
+/// / name copied through). Extracted from `run_agent` to keep it under the
+/// 120-line cap; pure transformation, no behavior change.
+fn build_api_messages(
+    system_prompt: &str,
+    conversation: &[ChatMessage],
+) -> anyhow::Result<Vec<Value>> {
+    let mut messages: Vec<Value> = vec![json!({
+        "role": "system",
+        "content": system_prompt
+    })];
+
+    for msg in conversation.iter() {
+        let mut m = json!({"role": msg.role});
+        if let Some(ref content) = msg.content {
+            m["content"] = json!(content);
+        }
+        if let Some(ref tool_calls) = msg.tool_calls {
+            m["tool_calls"] = serde_json::to_value(tool_calls)?;
+        }
+        if let Some(ref tool_call_id) = msg.tool_call_id {
+            m["tool_call_id"] = json!(tool_call_id);
+        }
+        if let Some(ref name) = msg.name {
+            m["name"] = json!(name);
+        }
+        messages.push(m);
+    }
+
+    Ok(messages)
+}
+
+/// Execute each tool call from one assistant turn: apply the delete-intent
+/// gate, run the tool, push progress events + the tool-result message into the
+/// conversation, and record each `ToolAction`. Extracted from `run_agent` to
+/// keep it under the 120-line cap; the loop body is unchanged.
+async fn execute_tool_calls(
+    tool_calls: &[super::client::ResponseToolCall],
+    conversation: &mut Vec<ChatMessage>,
+    actions: &mut Vec<ToolAction>,
+    state: &AppState,
+    char_limit: u32,
+    original_user_message: &str,
+    progress_tx: Option<&tokio::sync::mpsc::UnboundedSender<ProgressEvent>>,
+) {
+    for tc in tool_calls {
+        // Delete-intent gate: block any delete_* tool unless either the
+        // current user message OR a deferred-intent pattern across prior
+        // user messages signals an explicit delete request. Prevents
+        // model hallucinations from causing data loss while still
+        // allowing the "user asks to delete → AI defers for confirmation
+        // → user replies 'yes'" workflow that the single-message gate
+        // mistakenly blocked (#310). See spec
+        // docs/superpowers/specs/2026-04-11-ai-mode-cleanup-design.md
+        if tc.function.name.starts_with("delete_")
+            && !delete_intent_for_turn(original_user_message, conversation)
+        {
+            warn!(
+                tool = %tc.function.name,
+                "blocked delete tool call — user message did not contain delete intent"
+            );
+            let error_json = serde_json::json!({
+                "error": "delete_blocked",
+                "reason": "Delete operations require explicit user intent. The user's message did not contain any delete keywords (delete, remove, vymazať, odstrániť, zmazať, etc.). Ask the user to confirm the deletion explicitly before retrying."
+            })
+            .to_string();
+            let preview = "BLOCKED: delete requires explicit user intent".to_string();
+
+            if let Some(tx) = progress_tx {
+                let _ = tx.send(ProgressEvent::ToolDone {
+                    tool: tc.function.name.clone(),
+                    preview: preview.clone(),
+                });
+            }
+            actions.push(ToolAction {
+                tool: tc.function.name.clone(),
+                result_preview: preview.clone(),
+            });
+            conversation.push(ChatMessage {
+                role: "tool".to_string(),
+                content: Some(error_json),
+                tool_calls: None,
+                tool_call_id: Some(tc.id.clone()),
+                name: Some(tc.function.name.clone()),
+                preview: Some(preview),
+            });
+            continue;
+        }
+
+        info!(tool = %tc.function.name, "executing AI tool call");
+
+        // Send progress: tool starting
+        if let Some(tx) = progress_tx {
+            let _ = tx.send(ProgressEvent::ToolStart {
+                tool: tc.function.name.clone(),
+            });
+        }
+
+        let (result, preview) = match super::tools::execute_tool(
+            &tc.function.name,
+            &tc.function.arguments,
+            state,
+            char_limit,
+        )
+        .await
+        {
+            Ok((result, preview)) => {
+                // Send progress: tool done
+                if let Some(tx) = progress_tx {
+                    let _ = tx.send(ProgressEvent::ToolDone {
+                        tool: tc.function.name.clone(),
+                        preview: preview.clone(),
+                    });
+                }
+                actions.push(ToolAction {
+                    tool: tc.function.name.clone(),
+                    result_preview: preview.clone(),
+                });
+                (result, preview)
+            }
+            Err(err) => {
+                warn!(tool = %tc.function.name, ?err, "AI tool call failed");
+                let preview = format!("Error: {err}");
+                if let Some(tx) = progress_tx {
+                    let _ = tx.send(ProgressEvent::ToolDone {
+                        tool: tc.function.name.clone(),
+                        preview: preview.clone(),
+                    });
+                }
+                actions.push(ToolAction {
+                    tool: tc.function.name.clone(),
+                    result_preview: preview.clone(),
+                });
+                (json!({"error": err.to_string()}).to_string(), preview)
+            }
+        };
+
+        // Add tool result to conversation (preview is internal-only,
+        // not sent to the LLM — it's used for UI badges after reload).
+        conversation.push(ChatMessage {
+            role: "tool".to_string(),
+            content: Some(result),
+            tool_calls: None,
+            tool_call_id: Some(tc.id.clone()),
+            name: Some(tc.function.name.clone()),
+            preview: Some(preview),
+        });
+    }
+}
+
 /// Run the agentic loop: send to LLM, execute tools, repeat until text response.
 ///
 /// If `progress_tx` is provided, sends real-time progress events for each tool execution.
@@ -361,28 +513,7 @@ pub async fn run_agent(
     let original_user_message = user_message.to_string();
 
     for iteration in 0..MAX_ITERATIONS {
-        // Build messages array for API call
-        let mut messages: Vec<Value> = vec![json!({
-            "role": "system",
-            "content": system_prompt
-        })];
-
-        for msg in conversation.iter() {
-            let mut m = json!({"role": msg.role});
-            if let Some(ref content) = msg.content {
-                m["content"] = json!(content);
-            }
-            if let Some(ref tool_calls) = msg.tool_calls {
-                m["tool_calls"] = serde_json::to_value(tool_calls)?;
-            }
-            if let Some(ref tool_call_id) = msg.tool_call_id {
-                m["tool_call_id"] = json!(tool_call_id);
-            }
-            if let Some(ref name) = msg.name {
-                m["name"] = json!(name);
-            }
-            messages.push(m);
-        }
+        let messages = build_api_messages(&system_prompt, conversation)?;
 
         info!(iteration, "AI agent loop iteration");
         let response =
@@ -421,110 +552,16 @@ pub async fn run_agent(
                     preview: None,
                 });
 
-                // Execute each tool call
-                for tc in tool_calls {
-                    // Delete-intent gate: block any delete_* tool unless either the
-                    // current user message OR a deferred-intent pattern across prior
-                    // user messages signals an explicit delete request. Prevents
-                    // model hallucinations from causing data loss while still
-                    // allowing the "user asks to delete → AI defers for confirmation
-                    // → user replies 'yes'" workflow that the single-message gate
-                    // mistakenly blocked (#310). See spec
-                    // docs/superpowers/specs/2026-04-11-ai-mode-cleanup-design.md
-                    if tc.function.name.starts_with("delete_")
-                        && !delete_intent_for_turn(&original_user_message, &conversation)
-                    {
-                        warn!(
-                            tool = %tc.function.name,
-                            "blocked delete tool call — user message did not contain delete intent"
-                        );
-                        let error_json = serde_json::json!({
-                            "error": "delete_blocked",
-                            "reason": "Delete operations require explicit user intent. The user's message did not contain any delete keywords (delete, remove, vymazať, odstrániť, zmazať, etc.). Ask the user to confirm the deletion explicitly before retrying."
-                        })
-                        .to_string();
-                        let preview = "BLOCKED: delete requires explicit user intent".to_string();
-
-                        if let Some(ref tx) = progress_tx {
-                            let _ = tx.send(ProgressEvent::ToolDone {
-                                tool: tc.function.name.clone(),
-                                preview: preview.clone(),
-                            });
-                        }
-                        actions.push(ToolAction {
-                            tool: tc.function.name.clone(),
-                            result_preview: preview.clone(),
-                        });
-                        conversation.push(ChatMessage {
-                            role: "tool".to_string(),
-                            content: Some(error_json),
-                            tool_calls: None,
-                            tool_call_id: Some(tc.id.clone()),
-                            name: Some(tc.function.name.clone()),
-                            preview: Some(preview),
-                        });
-                        continue;
-                    }
-
-                    info!(tool = %tc.function.name, "executing AI tool call");
-
-                    // Send progress: tool starting
-                    if let Some(ref tx) = progress_tx {
-                        let _ = tx.send(ProgressEvent::ToolStart {
-                            tool: tc.function.name.clone(),
-                        });
-                    }
-
-                    let (result, preview) = match super::tools::execute_tool(
-                        &tc.function.name,
-                        &tc.function.arguments,
-                        state,
-                        char_limit,
-                    )
-                    .await
-                    {
-                        Ok((result, preview)) => {
-                            // Send progress: tool done
-                            if let Some(ref tx) = progress_tx {
-                                let _ = tx.send(ProgressEvent::ToolDone {
-                                    tool: tc.function.name.clone(),
-                                    preview: preview.clone(),
-                                });
-                            }
-                            actions.push(ToolAction {
-                                tool: tc.function.name.clone(),
-                                result_preview: preview.clone(),
-                            });
-                            (result, preview)
-                        }
-                        Err(err) => {
-                            warn!(tool = %tc.function.name, ?err, "AI tool call failed");
-                            let preview = format!("Error: {err}");
-                            if let Some(ref tx) = progress_tx {
-                                let _ = tx.send(ProgressEvent::ToolDone {
-                                    tool: tc.function.name.clone(),
-                                    preview: preview.clone(),
-                                });
-                            }
-                            actions.push(ToolAction {
-                                tool: tc.function.name.clone(),
-                                result_preview: preview.clone(),
-                            });
-                            (json!({"error": err.to_string()}).to_string(), preview)
-                        }
-                    };
-
-                    // Add tool result to conversation (preview is internal-only,
-                    // not sent to the LLM — it's used for UI badges after reload).
-                    conversation.push(ChatMessage {
-                        role: "tool".to_string(),
-                        content: Some(result),
-                        tool_calls: None,
-                        tool_call_id: Some(tc.id.clone()),
-                        name: Some(tc.function.name.clone()),
-                        preview: Some(preview),
-                    });
-                }
+                execute_tool_calls(
+                    tool_calls,
+                    conversation,
+                    &mut actions,
+                    state,
+                    char_limit,
+                    &original_user_message,
+                    progress_tx.as_ref(),
+                )
+                .await;
 
                 continue; // Call LLM again with tool results
             }
