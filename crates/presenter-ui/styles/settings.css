@@ -502,6 +502,7 @@ body.in-iframe.settings .settings__card {
   }
 }
 
+/* ── Video Sources (NDI) — merged from former WASM-orphan settings.css ── */
 /* Video Sources */
 .settings__badge--ok {
   background: rgba(34, 197, 94, 0.2);

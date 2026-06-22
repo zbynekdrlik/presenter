@@ -128,8 +128,6 @@ pub struct AppState {
     bible_ingestion_override: Option<std::sync::Arc<dyn TestBibleIngestion + Send + Sync>>,
 }
 
-pub use presenter_core::FeatureFlags;
-
 /// Gate predicate for the startup NDI auto-restore branch.
 ///
 /// Auto-restore must be skipped when either the NDI manager failed to load
@@ -692,13 +690,6 @@ impl AppState {
 
     pub fn companion_port(&self) -> u16 {
         self.companion_port.load(Ordering::SeqCst)
-    }
-
-    pub fn feature_flags(&self) -> FeatureFlags {
-        FeatureFlags {
-            companion_enabled: self.companion_enabled(),
-            companion_port: self.companion_port(),
-        }
     }
 
     // Broadcast live state

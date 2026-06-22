@@ -302,7 +302,13 @@ async fn favicon_is_served_so_no_404_console_error() {
 }
 
 #[tokio::test]
-async fn settings_page_has_no_dead_links() {
+async fn settings_route_serves_wasm_shell() {
+    // #347: /ui/settings was migrated from the SSR settings_script.js page to a
+    // Leptos WASM component, so it now serves the WASM app shell (index.html).
+    // In unit tests the trunk bundle isn't built, so the shell returns 503 —
+    // still proving the route is registered and reaches the WASM handler (not a
+    // 404/500). The page's links/behavior are exercised by the Playwright E2E
+    // (tests/e2e/settings.spec.ts) against the real built bundle.
     let app = build_router(AppState::in_memory().await.unwrap());
     let response = app
         .clone()
@@ -314,15 +320,18 @@ async fn settings_page_has_no_dead_links() {
         )
         .await
         .unwrap();
-    assert_eq!(response.status(), StatusCode::OK);
+    let status = response.status();
+    assert!(
+        matches!(status.as_u16(), 200..=399) || status == StatusCode::SERVICE_UNAVAILABLE,
+        "/ui/settings must serve the WASM shell (got {status})"
+    );
     let bytes = axum::body::to_bytes(response.into_body(), usize::MAX)
         .await
         .unwrap();
     let body = String::from_utf8(bytes.to_vec()).unwrap();
-
     assert!(
         !body.contains("/ui/stage-design"),
-        "/ui/settings must not link to /ui/stage-design (no such route)"
+        "/ui/settings must not reference /ui/stage-design (no such route)"
     );
 }
 

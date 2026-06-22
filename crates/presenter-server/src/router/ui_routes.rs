@@ -19,11 +19,3 @@ pub(super) async fn timer_overlay(
     let html = ui::render_timer_overlay(&state).await?;
     Ok(html)
 }
-
-#[instrument(skip_all)]
-pub(super) async fn settings_ui(
-    State(state): State<AppState>,
-) -> Result<axum::response::Html<String>, AppError> {
-    let html = ui::render_settings_ui(&state).await?;
-    Ok(html)
-}

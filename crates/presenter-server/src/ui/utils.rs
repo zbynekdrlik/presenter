@@ -8,11 +8,6 @@ pub fn json_safe<T: Serialize>(value: &T) -> String {
         .replace("</script>", r"<\/script>")
 }
 
-/// Escape `</script>` tags in a pre-serialized JSON string for safe HTML embedding.
-pub fn escape_script_tag(json: &str) -> String {
-    json.replace("</script>", r"<\/script>")
-}
-
 pub fn format_seconds_compact(total_seconds: i64) -> String {
     let total = total_seconds.max(0);
     if total < 60 {
