@@ -255,9 +255,24 @@ test("NdiVideo videoWidth resolves above zero within 5 seconds of mount", async 
   const { available } = await status.json();
   test.skip(!available, "NDI SDK not available on this host");
 
+  // #441: libndi being loaded (available=true) does NOT mean a live NDI source
+  // is broadcasting. On a libndi host with no broadcaster (the dev2 runner /
+  // local runs) the videoWidth assertion below can never pass, so this test
+  // would FAIL (not skip). Gate on /ndi/sources being non-empty and use the
+  // discovered source — mirroring the sibling tests in this file.
+  const sourcesResp = await page.request.get(
+    new URL("/ndi/sources", baseURL).toString(),
+  );
+  const sources = sourcesResp.ok() ? await sourcesResp.json() : [];
+  test.skip(
+    !Array.isArray(sources) || sources.length === 0,
+    "No live NDI source on network — videoWidth test can't be exercised",
+  );
+  const ndiName = sources[0].name;
+
   const created = await page.request.post(
     new URL("/integrations/video-sources", baseURL).toString(),
-    { data: { label: "TEST-SNV", ndiName: "STREAM-SNV (stream)" } },
+    { data: { label: "TEST-SNV", ndiName } },
   );
   const src = await created.json();
   await page.request.post(
