@@ -26,3 +26,16 @@ exclude_globs = [
     "crates/presenter-server/src/companion/protocol.rs",
     "**/build.rs",
 ]
+
+# Skip mutating HARDWARE-BOUND functions that cannot be exercised by a CI unit
+# test (per airuleset mutation-testing.md — hardware-bound code is legitimately
+# excluded). Matched against the names shown by `cargo mutants --list`.
+#   - NdiManager::start_pipeline: needs a real `NdiManager`, which only exists
+#     when libndi loads (`try_new` returns None otherwise). The GitHub-hosted
+#     mutation runner has no libndi, so no unit test can construct the manager or
+#     drive the GStreamer/NDI pipeline this fn builds. Faking a test that didn't
+#     really exercise it would be a no-op, so the mutant (lifecycle.rs:97 →
+#     `Ok(())`, and the in-body match-arm mutants) is excluded here instead.
+exclude_re = [
+    "NdiManager::start_pipeline",
+]

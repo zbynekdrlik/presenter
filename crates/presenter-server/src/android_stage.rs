@@ -936,6 +936,27 @@ mod tests {
         );
     }
 
+    #[test]
+    fn parse_foreground_skips_activity_record_token_that_has_dot_and_slash() {
+        // The component picker keeps the FIRST whitespace token shaped
+        // `<pkg>/<activity>` whose pkg part contains a dot AND no `{` — the
+        // `&&` guard at parse_foreground_component:618 rejects the
+        // `ActivityRecord{<hash>` wrapper token (which carries the `{`). This
+        // input puts an `ActivityRecord{…}` token BEFORE the real component AND
+        // makes that wrapper token itself contain both a `.` and a `/` in its
+        // pkg part. With the correct `&&` (pkg has a dot AND no `{`) the wrapper
+        // is rejected and the real component is returned; the surviving mutant
+        // (`&&` → `||`, "pkg has a dot OR no `{`") would WRONGLY accept the
+        // wrapper token and return `ActivityRecord{ab.cd/x`. So this test passes
+        // with `&&` and FAILS with `||` — killing the mutant.
+        let out = "  mResumedActivity: ActivityRecord{ab.cd/x u0 com.tcl.browser/.portal.browse.activity.BrowsePageActivity t1}";
+        assert_eq!(
+            parse_foreground_component(out).as_deref(),
+            Some("com.tcl.browser/.portal.browse.activity.BrowsePageActivity"),
+            "must skip the ActivityRecord wrapper token (carries `{{`) and keep the real component",
+        );
+    }
+
     // ── #421: keep-alive wiring integration tests (fake AdbRunner) ──────────
     //
     // These exercise the WIRING — the force_launch dispatch + the foreground

@@ -246,3 +246,44 @@ impl NdiManager {
         self.active.lock().await.contains_key(source_id)
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    // Kills the surviving Display mutant (lifecycle.rs:38 — `fmt` replaced with
+    // `Ok(Default::default())`, i.e. empty output). Both arms of
+    // `PipelineStartError`'s Display must produce the documented, non-empty text:
+    // the SourceSilent arm carries the human-facing "not producing / broadcaster"
+    // wording plus the ndi_name; the Failed arm transparently forwards the inner
+    // error's Display. A pure constructor + Display assertion — no NDI SDK needed.
+    #[test]
+    fn source_silent_display_names_source_and_explains_not_producing() {
+        let ndi_name = "RESOLUME-SNV (cg-obs)";
+        let msg = PipelineStartError::SourceSilent {
+            ndi_name: ndi_name.into(),
+        }
+        .to_string();
+        assert!(
+            msg.contains("not producing"),
+            "SourceSilent Display must explain the source is not producing; got {msg:?}",
+        );
+        assert!(
+            msg.contains("broadcaster"),
+            "SourceSilent Display must mention the broadcaster; got {msg:?}",
+        );
+        assert!(
+            msg.contains(ndi_name),
+            "SourceSilent Display must name the NDI source; got {msg:?}",
+        );
+    }
+
+    #[test]
+    fn failed_display_forwards_inner_error_text() {
+        let msg = PipelineStartError::Failed(anyhow!("boom")).to_string();
+        assert_eq!(
+            msg, "boom",
+            "Failed Display must forward the inner error's text verbatim",
+        );
+    }
+}
