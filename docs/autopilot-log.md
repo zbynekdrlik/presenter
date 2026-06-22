@@ -4,6 +4,16 @@ Terse per-issue record of autonomous cycles (issue #, commits, tests, decisions)
 
 ---
 
+## 2026-06-22 — #347 Migrate settings_script.js (1307-line JS blob) → Leptos WASM component
+
+- **Validated still real:** `settings_script.js` = 1307 lines, included via `ui/scripts/mod.rs`, injected in `ui/settings.rs:883`; route `/ui/settings` was pure SSR. The orphan `pages/settings.rs` (185-line NDI-only `SettingsPage`, zero callers) was NOT the migration — folded its NDI piece into the full page.
+- **Version:** 0.4.151 → **0.4.152** (first commit `b8ad2bb4`), after FF dev→main `aa6686ff`.
+- **Implementation (commit `a48949c7`, PR #454 → merge `0740b8d2`):** built `pages/settings/` Leptos module (mod + companion/preferences/resolume/android/ableton/video_sources cards) driven by signals + `on:*` + the existing `api::settings`/`api::ndi` client fns; added the resolume/android/osc/feature client fns + camelCase DTOs to `api/settings.rs`; wired `/ui/settings` → WASM shell (router + lib.rs route); folded settings CSS into the WASM bundle (`styles/settings.css` + index.html). **Deleted −1809 lines net:** `settings_script.js`, SSR `ui/settings.rs` (918), orphan `ui/components/settings.rs` (608), `ui/scripts/mod.rs`, `ui/styles/settings.css`, `escape_script_tag`, `styles::SETTINGS`, `AppState::feature_flags()`. 5s status poll, toast, and the #272 line-limit pref preserved (now keyed `presenter:lineLimit` to match what the operator reads — fixed a latent cross-page key mismatch). Split into 7 submodules to stay under the 1000-line file cap (`#[component]` fns are fn-length-exempt).
+- **Tests:** `tests/e2e/settings.spec.ts` updated to wait for `data-wasm-ready` + a migration safety-net test (all cards render, version label, toast on save, line-limit persists, **0 console errors**). `quality-check.sh` §3 UI-page gate dropped `settings` (migrated to WASM, like tablet); `router/tests.rs` → `settings_route_serves_wasm_shell` (accepts 503 when bundle unbuilt).
+- **Gates:** full Pipeline green — Clippy/Format/TS/Quality/Version/Coverage/Build, all 16 mutation shards, all 3 Playwright E2E shards, NDI synthetic E2E, Deploy-Dev + Deploy. mergeable=clean.
+- **Deploy verified (Playwright):** prod SNV `http://10.77.9.205/ui/settings` — WASM mounts, version label `v0.4.152` (matches deployed prod binary), all 6 cards render, real settings read back (3 resolume hosts, 4 android displays, ableset host `fohabl.lan`, OSC 39051, companion 18175), 0 console errors. Dev also verified `v0.4.152 (dev)`.
+- **Post-merge review findings → #455** (could not land in the already-merged #454; `dev` was concurrently owned by the #346 worker): (1) `parse_port` overflow silently substitutes fallback for >65535 ports (should reject); (2) video_sources activate/deactivate/delete discard the Result → false success toast. Both small, fully described + patch preserved on #455.
+
 ## 2026-06-16 — #374 CI: function-length gate self-test (regression guard for abs/rel no-op)
 
 - **Scope (rescoped by ticket-validator):** only the remaining-open item — add a self-test so the function-length gate's abs/rel no-op bug can't silently return. Gate fix (`5f5fe9f`) + the 4 over-cap NDI/WebRTC fns were already resolved (PR #368); not re-touched.
