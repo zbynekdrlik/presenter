@@ -376,9 +376,8 @@ mod tests {
 
     #[test]
     fn genuine_failure_maps_to_red_failed_status_and_is_a_hard_error() {
-        let err = PipelineStartError::Failed(anyhow::anyhow!(
-            "no hardware H264 encoder registered"
-        ));
+        let err =
+            PipelineStartError::Failed(anyhow::anyhow!("no hardware H264 encoder registered"));
         let classified = ndi_status_for_start_error(&err);
         assert_eq!(
             classified.status, "failed: no hardware H264 encoder registered",

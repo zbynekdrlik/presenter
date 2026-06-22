@@ -844,8 +844,7 @@ mod tests {
 
     // Component shapes the TCL browser reports for the stage page vs the home
     // portal — the same package, different activity (the #447 distinction).
-    const STAGE_PAGE_COMPONENT: &str =
-        "com.tcl.browser/.portal.browse.activity.BrowsePageActivity";
+    const STAGE_PAGE_COMPONENT: &str = "com.tcl.browser/.portal.browse.activity.BrowsePageActivity";
     const HOME_PORTAL_COMPONENT: &str = "com.tcl.browser/.portal.home.activity.StartActivity";
 
     #[test]
@@ -926,7 +925,10 @@ mod tests {
 
     #[test]
     fn parse_foreground_none_when_no_resumed_activity() {
-        assert_eq!(parse_foreground_component("    mResumedActivity: null"), None);
+        assert_eq!(
+            parse_foreground_component("    mResumedActivity: null"),
+            None
+        );
         assert_eq!(parse_foreground_component(""), None);
         assert_eq!(
             parse_foreground_component("some unrelated dumpsys text"),

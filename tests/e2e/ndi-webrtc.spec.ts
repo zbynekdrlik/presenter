@@ -137,6 +137,96 @@ test("stage page mounts NdiVideo with correct data attributes when source active
   expect(consoleMessages).toEqual([]);
 });
 
+// ─────────────────────────────────────────────────────────────────────────
+// #448: an off/silent NDI source must render a NEUTRAL "waiting" placeholder
+// on the ndi-fullscreen layout — NOT a red "NDI pipeline failed: … broadcaster
+// is silent" overlay, and NOT the browser's native empty-video play-arrow.
+//
+// On a CI host with no live NDI source, activating a source is EXACTLY the
+// off/silent case: start_pipeline never reaches Streaming within 8s and the
+// server now publishes the neutral `no-signal` status (was `failed: …`). This
+// test asserts the stage shows the covering gray placeholder, no red overlay,
+// and a clean console — the precise prod symptom from #448.
+// ─────────────────────────────────────────────────────────────────────────
+test("ndi-fullscreen shows neutral placeholder (not red error) for an off/silent source (#448)", async ({
+  page,
+}) => {
+  const status = await page.request.get(new URL("/ndi/status", baseURL).toString());
+  const { available } = await status.json();
+  // This test targets the NOT-producing case. If a real NDI source is live on
+  // this host it would instead stream — skip, the producing path is covered by
+  // the videoWidth test below.
+  test.skip(available, "live NDI source present — this test exercises the off/silent path");
+
+  // Expected, non-error console output on a host with no live NDI source: the
+  // WHEP POST is answered 204/503 (not-producing) and the client backs off
+  // quietly. None of these are bugs; a RED overlay or play-arrow would be.
+  const ALLOWED = [
+    /Failed to load resource.*(503|204)/i,
+    /WHEP connect for.*failed/i,
+    /WHEP POST returned (503|204)/i,
+  ];
+  const consoleMessages: string[] = [];
+  page.on("console", (msg) => {
+    if (msg.type() === "error" || msg.type() === "warning") {
+      const text = msg.text();
+      if (!ALLOWED.some((re) => re.test(text))) consoleMessages.push(`[${msg.type()}] ${text}`);
+    }
+  });
+  page.on("pageerror", (err) => {
+    if (!ALLOWED.some((re) => re.test(err.message))) consoleMessages.push(`[pageerror] ${err.message}`);
+  });
+
+  const created = await page.request.post(
+    new URL("/integrations/video-sources", baseURL).toString(),
+    { data: { label: "TEST-SILENT", ndiName: "RESOLUME-SNV (cg-obs)" } },
+  );
+  expect(created.status()).toBeLessThan(500);
+  const src = await created.json();
+
+  // activate blocks until start_pipeline resolves; on a silent source that is
+  // the 8s timeout → `no-signal`. The activation itself MUST succeed (#448:
+  // activating a not-yet-live source is not an error).
+  const activate = await page.request.post(
+    new URL(`/integrations/video-sources/${src.id}/activate`, baseURL).toString(),
+    { data: {} },
+  );
+  expect(activate.status()).toBe(200);
+
+  await page.request.post(
+    new URL("/stage/layout", baseURL).toString(),
+    { data: { code: "ndi-fullscreen" } },
+  );
+
+  await page.goto(new URL("/stage", baseURL).toString());
+  await page.waitForSelector('body[data-wasm-ready="true"]', { timeout: 30_000 });
+  await page.waitForSelector('body[data-layout-code="ndi-fullscreen"]', { timeout: 10_000 });
+
+  // The neutral covering placeholder appears once the WS delivers `no-signal`.
+  const placeholder = page.locator(".stage-ndi__placeholder--cover");
+  await expect(placeholder).toBeVisible({ timeout: 15_000 });
+  await expect(placeholder).toHaveText(/Waiting for video source/i);
+
+  // No RED error overlay for a merely-silent source — the core #448 assertion.
+  await expect(page.locator(".stage-ndi__overlay")).toHaveCount(0);
+
+  // The covering placeholder must sit ABOVE the bare <video> so the native
+  // play-arrow is hidden behind a solid background (no exposed play affordance).
+  const covered = await page.evaluate(() => {
+    const cover = document.querySelector(".stage-ndi__placeholder--cover") as HTMLElement | null;
+    if (!cover) return false;
+    const bg = getComputedStyle(cover).backgroundColor;
+    // Solid (opaque) black background hiding the video beneath it.
+    const opaque = /rgb\(0,\s*0,\s*0\)/.test(bg) || bg === "rgb(0, 0, 0)";
+    const rect = cover.getBoundingClientRect();
+    return opaque && rect.width > 0 && rect.height > 0;
+  });
+  expect(covered).toBe(true);
+
+  // Browser console must be clean — no real errors/warnings, no page errors.
+  expect(consoleMessages).toEqual([]);
+});
+
 test("NdiVideo videoWidth resolves above zero within 5 seconds of mount", async ({ page }) => {
   // This test is the actual "video is flowing" check. On CI with no live NDI
   // source it would time out — we mark it skipped when NDI is unavailable.
