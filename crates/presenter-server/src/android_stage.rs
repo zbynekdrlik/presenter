@@ -574,13 +574,19 @@ const STAGE_CONTENT_ACTIVITY_SUFFIX: &str = "BrowsePageActivity";
 fn should_launch_stage(foreground_component: Option<&str>, launch_package: &str) -> bool {
     match foreground_component {
         Some(component) => {
-            let package = match component.split_once('/') {
-                Some((pkg, _activity)) => pkg,
-                None => component,
+            let (package, activity) = match component.split_once('/') {
+                Some(parts) => parts,
+                // A package-only component (no activity) cannot be confirmed as
+                // the stage page → (re)launch rather than leave a blank browser.
+                None => return true,
             };
-            // BUG (pre-#447): package-only comparison — can't tell the loaded
-            // stage page from the home portal (same package). Fixed below.
-            package != launch_package
+            // Skip ONLY when the configured browser is foreground AND it is on
+            // its content/browse activity — i.e. the stage page is genuinely
+            // showing. The home portal (`…StartActivity`) is the same package
+            // but a different activity, so it correctly relaunches (#447).
+            let stage_is_showing =
+                package == launch_package && activity.ends_with(STAGE_CONTENT_ACTIVITY_SUFFIX);
+            !stage_is_showing
         }
         // Foreground could not be determined → don't suppress a possibly-needed
         // launch; (re)launch and let the device sort it out.
