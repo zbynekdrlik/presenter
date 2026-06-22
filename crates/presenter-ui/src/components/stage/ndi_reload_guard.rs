@@ -98,6 +98,38 @@ pub(crate) fn should_escalate_reload(
     ms_since_last_decoded_frame > reload_threshold_ms
 }
 
+/// POST-AWAIT last-resort reload decision (#417): after the detached `/healthz`
+/// check resolves, should the task perform the `window.location().reload()`?
+/// All four gates must hold:
+/// - `page_active` — the PAGE session is still alive. The check is spawned by
+///   `maybe_reload` and holds only an `Rc<ReloadEscalation>`; the page can be
+///   torn down (`on_cleanup` → `ReloadEscalation::cancel()`) while the check is
+///   in flight. A detached task must NOT reload a page that is already
+///   unmounting — this is the exact post-teardown window #417 closes.
+/// - `!already_reloaded` — the one-shot guard: no other tick/session has
+///   already fired the reload.
+/// - `horizon_crossed` — the no-frames horizon is STILL crossed. A frame may
+///   have decoded while the check was in flight; a recovered stream must never
+///   be reloaded out from under itself.
+/// - `server_has_streaming_pipeline` — the #410 gate: reloading a
+///   genuinely-down source can't conjure frames, so don't.
+///
+/// Pure + side-effect-free so the #417 post-teardown guard is unit-testable on
+/// host without a browser (the real reload, and `ReloadEscalation` itself, need
+/// `web_sys::window()`). The owning method on `ReloadEscalation` gathers the
+/// cell values + the `now_ms()`-based horizon and delegates here.
+pub(crate) fn should_perform_post_await_reload(
+    page_active: bool,
+    already_reloaded: bool,
+    horizon_crossed: bool,
+    server_has_streaming_pipeline: bool,
+) -> bool {
+    page_active
+        && !already_reloaded
+        && horizon_crossed
+        && should_reload_given_pipeline_state(server_has_streaming_pipeline)
+}
+
 /// TEST-ONLY (#422): whether the page URL carries `?ndiReloadSkipHealthz=1`,
 /// which makes the last-resort reload bypass the #410 `/healthz` streaming gate.
 /// The E2E uses it to exercise the real `window.location.reload()` path
@@ -118,7 +150,10 @@ pub(crate) fn reload_skip_healthz_from_url() -> bool {
 
 #[cfg(test)]
 mod tests {
-    use super::{healthz_body_has_streaming_pipeline, should_reload_given_pipeline_state};
+    use super::{
+        healthz_body_has_streaming_pipeline, should_perform_post_await_reload,
+        should_reload_given_pipeline_state,
+    };
 
     // ─────────────────────────────────────────────────────────────────────
     // #410 server-liveness reload gate.
@@ -185,5 +220,61 @@ mod tests {
         // reload-anyway default, not this function's).
         assert!(!healthz_body_has_streaming_pipeline(r#"{"status":"ok"}"#));
         assert!(!healthz_body_has_streaming_pipeline("not json at all"));
+    }
+
+    // ─────────────────────────────────────────────────────────────────────
+    // #417 post-teardown async reload window.
+    //
+    // `maybe_reload` spawns a detached `/healthz` check holding only an
+    // `Rc<ReloadEscalation>`. After the `.await`, the original code re-checked
+    // ONLY `reloaded` + the frame horizon + the pipeline state — never whether
+    // the PAGE was torn down. So a check spawned just before `on_cleanup` could
+    // `window.location().reload()` after the stage was already unmounting.
+    //
+    // `should_perform_post_await_reload` is the pure post-await decision (the
+    // owning `ReloadEscalation::should_reload_after_check` gathers the cells +
+    // the now_ms()-based horizon and delegates here). The #417 fix adds the
+    // `page_active` gate — fed from a page-session `active` flag flipped to
+    // false ONLY by PAGE teardown (`cancel()` from on_cleanup), NEVER by
+    // `Watchdog::stop()`/Drop (which fire on every reconnect and would
+    // permanently suppress the #401 reload).
+    // ─────────────────────────────────────────────────────────────────────
+
+    #[test]
+    fn post_await_reloads_when_active_horizon_crossed_and_streaming() {
+        // The #401 recovery path is intact: live page, horizon crossed, server
+        // IS streaming → reload.
+        assert!(should_perform_post_await_reload(true, false, true, true));
+    }
+
+    #[test]
+    fn post_await_suppressed_after_page_teardown() {
+        // #417 REGRESSION: the page was torn down (on_cleanup → cancel() →
+        // page_active=false) while the /healthz check was in flight. Even though
+        // the frame horizon is crossed AND the server reports a streaming
+        // pipeline, the detached task must NOT reload a page that is already
+        // unmounting. FAILS against the RED function that drops the
+        // `page_active` gate; PASSES once the gate is restored.
+        assert!(!should_perform_post_await_reload(false, false, true, true));
+    }
+
+    #[test]
+    fn post_await_suppressed_when_source_down() {
+        // #410 still holds: no streaming pipeline → reloading can't help → no
+        // reload, even on a live page with the horizon crossed.
+        assert!(!should_perform_post_await_reload(true, false, true, false));
+    }
+
+    #[test]
+    fn post_await_suppressed_once_already_reloaded() {
+        // One-shot guard: a second resolving check must not double-fire.
+        assert!(!should_perform_post_await_reload(true, true, true, true));
+    }
+
+    #[test]
+    fn post_await_suppressed_when_horizon_recovered_mid_check() {
+        // A frame decoded while the check was in flight (horizon no longer
+        // crossed) → never reload a recovered stream.
+        assert!(!should_perform_post_await_reload(true, false, false, true));
     }
 }

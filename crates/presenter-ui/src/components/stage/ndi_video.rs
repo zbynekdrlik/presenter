@@ -67,6 +67,18 @@ pub fn NdiVideo(source_id: String, #[prop(optional)] class: Option<&'static str>
     // `connect_whep` resolves.
     let cancelled = Arc::new(AtomicBool::new(false));
 
+    // PAGE-SESSION reload escalation (#401), created ONCE here so it survives
+    // every reconnect cycle inside the effect below (each Watchdog shares it by
+    // &Rc). Held in a !Send-friendly StoredValue (like `session_holder`) so
+    // BOTH the effect and `on_cleanup` can reach it: the effect installs it into
+    // each Watchdog; on_cleanup calls `escalation.cancel()` so an in-flight
+    // /healthz check spawned just before teardown does NOT reload the page after
+    // it unmounts (#417). It is created out here (not in the effect) for exactly
+    // that on_cleanup reach — flipping its flag on PAGE teardown, NOT on the
+    // per-reconnect Watchdog::stop()/Drop, which would suppress the #401 reload.
+    let escalation_holder: StoredValue<Option<std::rc::Rc<ReloadEscalation>>, LocalStorage> =
+        StoredValue::new_local(Some(ReloadEscalation::new()));
+
     let cancelled_for_effect = Arc::clone(&cancelled);
     Effect::new(move |_| {
         let Some(video) = video_ref.get() else { return };
@@ -77,13 +89,16 @@ pub fn NdiVideo(source_id: String, #[prop(optional)] class: Option<&'static str>
             // flag; the loop drains it and reconnects.
             let reconnect_flag = std::rc::Rc::new(std::cell::Cell::new(false));
 
-            // PAGE-SESSION reload escalation (#401), created ONCE here so it
-            // survives every reconnect cycle below. Each Watchdog shares it:
-            // the frame observer resets its timer on decoded frames, and the
-            // health ticker performs a one-shot full-page reload when video
-            // has been dead long enough that reconnect alone has failed (the
-            // Fully Kiosk auto-reload replacement, adb-independent).
-            let escalation = ReloadEscalation::new();
+            // PAGE-SESSION reload escalation (#401): created ONCE outside the
+            // effect (in `escalation_holder`) so it survives every reconnect
+            // cycle below AND is reachable from `on_cleanup`. Each Watchdog
+            // shares it: the frame observer resets its timer on decoded frames,
+            // and the health ticker performs a one-shot full-page reload when
+            // video has been dead long enough that reconnect alone has failed
+            // (the Fully Kiosk auto-reload replacement, adb-independent).
+            let Some(escalation) = escalation_holder.try_get_value().flatten() else {
+                return;
+            };
 
             // Per-instance reconnect backoff step (#369), created ONCE here so
             // it survives reconnect cycles. Shared by BOTH the connect-error
@@ -195,6 +210,15 @@ pub fn NdiVideo(source_id: String, #[prop(optional)] class: Option<&'static str>
     let cancelled_for_cleanup = Arc::clone(&cancelled);
     on_cleanup(move || {
         cancelled_for_cleanup.store(true, Ordering::Release);
+        // #417: signal PAGE teardown to the page-session escalation so any
+        // /healthz check spawned by `maybe_reload` just before this cleanup does
+        // NOT call window.location().reload() after the page unmounts. This is
+        // the PAGE-level teardown — distinct from `Watchdog::stop()` below, which
+        // fires on every reconnect (tying the cancel to it would permanently
+        // suppress the #401 last-resort reload after the first reconnect).
+        if let Some(escalation) = escalation_holder.try_get_value().flatten() {
+            escalation.cancel();
+        }
         let active = session_holder.try_update_value(|opt| opt.take()).flatten();
         if let Some(active) = active {
             active.watchdog.stop();
