@@ -197,7 +197,34 @@ async fn build_system_prompt(state: &AppState, extra: Option<&str>) -> (String, 
     let prefs = state.get_bible_preferences().await.unwrap_or_default();
     let char_limit = prefs.character_limit;
 
-    let mut prompt = format!(
+    let mut prompt = render_system_prompt(
+        &libraries_str,
+        &bible_str,
+        &translations_str,
+        char_limit,
+    );
+
+    if let Some(extra_prompt) = extra {
+        if !extra_prompt.is_empty() {
+            prompt.push_str("\n\n## Additional Instructions\n");
+            prompt.push_str(extra_prompt);
+        }
+    }
+
+    (prompt, char_limit)
+}
+
+/// Render the static system-prompt template, interpolating the live-context
+/// strings and the character limit. Pure (no DB / async) so it is unit-tested
+/// directly. Extracted from `build_system_prompt` to keep that function under
+/// the 120-line cap and to give the prompt's wording a direct test target.
+fn render_system_prompt(
+    libraries: &str,
+    bibles: &str,
+    translations: &str,
+    char_limit: u32,
+) -> String {
+    format!(
         r#"You are a presentation assistant for a church worship app.
 
 ## Live context
@@ -297,20 +324,11 @@ how many slides they become.
 Respond in the user's language (typically Slovak). Keep responses
 concise. Summarize what you actually did based on tool results. Do not
 claim success for tools that errored."#,
-        libraries = libraries_str,
-        bibles = bible_str,
-        translations = translations_str,
+        libraries = libraries,
+        bibles = bibles,
+        translations = translations,
         char_limit = char_limit,
-    );
-
-    if let Some(extra_prompt) = extra {
-        if !extra_prompt.is_empty() {
-            prompt.push_str("\n\n## Additional Instructions\n");
-            prompt.push_str(extra_prompt);
-        }
-    }
-
-    (prompt, char_limit)
+    )
 }
 
 /// Run the agentic loop: send to LLM, execute tools, repeat until text response.
@@ -887,5 +905,40 @@ mod tests {
         assert!(!"create_presentation".starts_with("delete_"));
         assert!(!"update_slide".starts_with("delete_"));
         assert!(!"trigger_slide".starts_with("delete_"));
+    }
+
+    // --- #434: system prompt reflects post-#394 whole-verse behavior ---
+
+    #[test]
+    fn system_prompt_describes_post_394_whole_verse_behavior() {
+        // The prompt's bible-slide guidance must match the shipped #394 composer
+        // behavior: a lone oversized verse is ACCEPTED WHOLE automatically (the
+        // model does not split it), and same-number continuation items are MERGED
+        // into one whole verse. It must NOT carry the pre-#394 "split that verse
+        // into multiple items, emitted as separate slides" recovery — that
+        // instruction now misleads the model.
+        let prompt = render_system_prompt("(none)", "(none yet)", "SEB", 320);
+
+        // Stale wording must be gone.
+        assert!(
+            !prompt.contains("split that verse into multiple verse items"),
+            "system prompt still tells the model to split a verse into multiple items (pre-#394)"
+        );
+        assert!(
+            !prompt.contains("emit them as separate slides"),
+            "system prompt still says same-number items are emitted as separate slides (pre-#394)"
+        );
+
+        // New behavior must be described: lone oversized verse accepted whole.
+        let lower = prompt.to_lowercase();
+        assert!(
+            lower.contains("accepted whole") || lower.contains("kept whole"),
+            "system prompt must state a lone oversized verse is accepted/kept whole (post-#394)"
+        );
+        // And same-number continuation items merge into one whole verse.
+        assert!(
+            lower.contains("merged") || lower.contains("merge"),
+            "system prompt must state same-number continuation items are merged (post-#394)"
+        );
     }
 }
