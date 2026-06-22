@@ -197,7 +197,32 @@ async fn build_system_prompt(state: &AppState, extra: Option<&str>) -> (String, 
     let prefs = state.get_bible_preferences().await.unwrap_or_default();
     let char_limit = prefs.character_limit;
 
-    let mut prompt = format!(
+    let mut prompt =
+        format_system_prompt(&libraries_str, &bible_str, &translations_str, char_limit);
+
+    if let Some(extra_prompt) = extra {
+        if !extra_prompt.is_empty() {
+            prompt.push_str("\n\n## Additional Instructions\n");
+            prompt.push_str(extra_prompt);
+        }
+    }
+
+    (prompt, char_limit)
+}
+
+/// Format the static system-prompt template, interpolating the live-context
+/// strings and the character limit. Pure (no DB / async) so it is unit-tested
+/// directly. Extracted from `build_system_prompt` to keep that function under
+/// the 120-line cap and to give the prompt's wording a direct test target.
+/// Named `format_*` (not `render_*`) deliberately so the function-length gate
+/// still applies — `render_*` is the Leptos-UI exemption prefix.
+fn format_system_prompt(
+    libraries: &str,
+    bibles: &str,
+    translations: &str,
+    char_limit: u32,
+) -> String {
+    format!(
         r#"You are a presentation assistant for a church worship app.
 
 ## Live context
@@ -263,10 +288,15 @@ how many slides they become.
    reference labels like "Ján 1:1-2 (SEB)".
 
 8. If a single verse is longer than the character limit on its own
-   (rare), the validator returns main_exceeds_character_limit. Recovery:
-   split that verse into multiple verse items with the same number —
-   the server will emit them as separate slides both labeled with the
-   same verse number.
+   (rare), DO NOTHING SPECIAL — submit it as one normal verse item. A lone
+   whole verse over the limit is accepted whole on its own slide and shrunk
+   to fit by display autofit; it is NOT an error and you must NOT split it
+   across items. If you do supply several continuation items that share the
+   same verse number, the server merges them back into ONE whole verse on a
+   single slide (a verse is never split mid-text). So
+   main_exceeds_character_limit only ever means a slide over-packed MULTIPLE
+   distinct verses, or an emphasis/title slide is too long — keep verses as
+   separate items (let the server pack them) or shorten the emphasis text.
 
 9. The server validates composed slides and returns a rule-keyed JSON
    error on failure (rules: main_exceeds_character_limit,
@@ -297,20 +327,162 @@ how many slides they become.
 Respond in the user's language (typically Slovak). Keep responses
 concise. Summarize what you actually did based on tool results. Do not
 claim success for tools that errored."#,
-        libraries = libraries_str,
-        bibles = bible_str,
-        translations = translations_str,
+        libraries = libraries,
+        bibles = bibles,
+        translations = translations,
         char_limit = char_limit,
-    );
+    )
+}
 
-    if let Some(extra_prompt) = extra {
-        if !extra_prompt.is_empty() {
-            prompt.push_str("\n\n## Additional Instructions\n");
-            prompt.push_str(extra_prompt);
+/// Build the OpenAI-style messages array for one API call: the system prompt
+/// followed by every conversation message (content / tool_calls / tool_call_id
+/// / name copied through). Extracted from `run_agent` to keep it under the
+/// 120-line cap; pure transformation, no behavior change.
+fn build_api_messages(
+    system_prompt: &str,
+    conversation: &[ChatMessage],
+) -> anyhow::Result<Vec<Value>> {
+    let mut messages: Vec<Value> = vec![json!({
+        "role": "system",
+        "content": system_prompt
+    })];
+
+    for msg in conversation.iter() {
+        let mut m = json!({"role": msg.role});
+        if let Some(ref content) = msg.content {
+            m["content"] = json!(content);
         }
+        if let Some(ref tool_calls) = msg.tool_calls {
+            m["tool_calls"] = serde_json::to_value(tool_calls)?;
+        }
+        if let Some(ref tool_call_id) = msg.tool_call_id {
+            m["tool_call_id"] = json!(tool_call_id);
+        }
+        if let Some(ref name) = msg.name {
+            m["name"] = json!(name);
+        }
+        messages.push(m);
     }
 
-    (prompt, char_limit)
+    Ok(messages)
+}
+
+/// Execute each tool call from one assistant turn: apply the delete-intent
+/// gate, run the tool, push progress events + the tool-result message into the
+/// conversation, and record each `ToolAction`. Extracted from `run_agent` to
+/// keep it under the 120-line cap; the loop body is unchanged.
+async fn execute_tool_calls(
+    tool_calls: &[super::client::ResponseToolCall],
+    conversation: &mut Vec<ChatMessage>,
+    actions: &mut Vec<ToolAction>,
+    state: &AppState,
+    char_limit: u32,
+    original_user_message: &str,
+    progress_tx: Option<&tokio::sync::mpsc::UnboundedSender<ProgressEvent>>,
+) {
+    for tc in tool_calls {
+        // Delete-intent gate: block any delete_* tool unless either the
+        // current user message OR a deferred-intent pattern across prior
+        // user messages signals an explicit delete request. Prevents
+        // model hallucinations from causing data loss while still
+        // allowing the "user asks to delete → AI defers for confirmation
+        // → user replies 'yes'" workflow that the single-message gate
+        // mistakenly blocked (#310). See spec
+        // docs/superpowers/specs/2026-04-11-ai-mode-cleanup-design.md
+        if tc.function.name.starts_with("delete_")
+            && !delete_intent_for_turn(original_user_message, conversation)
+        {
+            warn!(
+                tool = %tc.function.name,
+                "blocked delete tool call — user message did not contain delete intent"
+            );
+            let error_json = serde_json::json!({
+                "error": "delete_blocked",
+                "reason": "Delete operations require explicit user intent. The user's message did not contain any delete keywords (delete, remove, vymazať, odstrániť, zmazať, etc.). Ask the user to confirm the deletion explicitly before retrying."
+            })
+            .to_string();
+            let preview = "BLOCKED: delete requires explicit user intent".to_string();
+
+            if let Some(tx) = progress_tx {
+                let _ = tx.send(ProgressEvent::ToolDone {
+                    tool: tc.function.name.clone(),
+                    preview: preview.clone(),
+                });
+            }
+            actions.push(ToolAction {
+                tool: tc.function.name.clone(),
+                result_preview: preview.clone(),
+            });
+            conversation.push(ChatMessage {
+                role: "tool".to_string(),
+                content: Some(error_json),
+                tool_calls: None,
+                tool_call_id: Some(tc.id.clone()),
+                name: Some(tc.function.name.clone()),
+                preview: Some(preview),
+            });
+            continue;
+        }
+
+        info!(tool = %tc.function.name, "executing AI tool call");
+
+        // Send progress: tool starting
+        if let Some(tx) = progress_tx {
+            let _ = tx.send(ProgressEvent::ToolStart {
+                tool: tc.function.name.clone(),
+            });
+        }
+
+        let (result, preview) = match super::tools::execute_tool(
+            &tc.function.name,
+            &tc.function.arguments,
+            state,
+            char_limit,
+        )
+        .await
+        {
+            Ok((result, preview)) => {
+                // Send progress: tool done
+                if let Some(tx) = progress_tx {
+                    let _ = tx.send(ProgressEvent::ToolDone {
+                        tool: tc.function.name.clone(),
+                        preview: preview.clone(),
+                    });
+                }
+                actions.push(ToolAction {
+                    tool: tc.function.name.clone(),
+                    result_preview: preview.clone(),
+                });
+                (result, preview)
+            }
+            Err(err) => {
+                warn!(tool = %tc.function.name, ?err, "AI tool call failed");
+                let preview = format!("Error: {err}");
+                if let Some(tx) = progress_tx {
+                    let _ = tx.send(ProgressEvent::ToolDone {
+                        tool: tc.function.name.clone(),
+                        preview: preview.clone(),
+                    });
+                }
+                actions.push(ToolAction {
+                    tool: tc.function.name.clone(),
+                    result_preview: preview.clone(),
+                });
+                (json!({"error": err.to_string()}).to_string(), preview)
+            }
+        };
+
+        // Add tool result to conversation (preview is internal-only,
+        // not sent to the LLM — it's used for UI badges after reload).
+        conversation.push(ChatMessage {
+            role: "tool".to_string(),
+            content: Some(result),
+            tool_calls: None,
+            tool_call_id: Some(tc.id.clone()),
+            name: Some(tc.function.name.clone()),
+            preview: Some(preview),
+        });
+    }
 }
 
 /// Run the agentic loop: send to LLM, execute tools, repeat until text response.
@@ -343,28 +515,7 @@ pub async fn run_agent(
     let original_user_message = user_message.to_string();
 
     for iteration in 0..MAX_ITERATIONS {
-        // Build messages array for API call
-        let mut messages: Vec<Value> = vec![json!({
-            "role": "system",
-            "content": system_prompt
-        })];
-
-        for msg in conversation.iter() {
-            let mut m = json!({"role": msg.role});
-            if let Some(ref content) = msg.content {
-                m["content"] = json!(content);
-            }
-            if let Some(ref tool_calls) = msg.tool_calls {
-                m["tool_calls"] = serde_json::to_value(tool_calls)?;
-            }
-            if let Some(ref tool_call_id) = msg.tool_call_id {
-                m["tool_call_id"] = json!(tool_call_id);
-            }
-            if let Some(ref name) = msg.name {
-                m["name"] = json!(name);
-            }
-            messages.push(m);
-        }
+        let messages = build_api_messages(&system_prompt, conversation)?;
 
         info!(iteration, "AI agent loop iteration");
         let response =
@@ -403,110 +554,16 @@ pub async fn run_agent(
                     preview: None,
                 });
 
-                // Execute each tool call
-                for tc in tool_calls {
-                    // Delete-intent gate: block any delete_* tool unless either the
-                    // current user message OR a deferred-intent pattern across prior
-                    // user messages signals an explicit delete request. Prevents
-                    // model hallucinations from causing data loss while still
-                    // allowing the "user asks to delete → AI defers for confirmation
-                    // → user replies 'yes'" workflow that the single-message gate
-                    // mistakenly blocked (#310). See spec
-                    // docs/superpowers/specs/2026-04-11-ai-mode-cleanup-design.md
-                    if tc.function.name.starts_with("delete_")
-                        && !delete_intent_for_turn(&original_user_message, &conversation)
-                    {
-                        warn!(
-                            tool = %tc.function.name,
-                            "blocked delete tool call — user message did not contain delete intent"
-                        );
-                        let error_json = serde_json::json!({
-                            "error": "delete_blocked",
-                            "reason": "Delete operations require explicit user intent. The user's message did not contain any delete keywords (delete, remove, vymazať, odstrániť, zmazať, etc.). Ask the user to confirm the deletion explicitly before retrying."
-                        })
-                        .to_string();
-                        let preview = "BLOCKED: delete requires explicit user intent".to_string();
-
-                        if let Some(ref tx) = progress_tx {
-                            let _ = tx.send(ProgressEvent::ToolDone {
-                                tool: tc.function.name.clone(),
-                                preview: preview.clone(),
-                            });
-                        }
-                        actions.push(ToolAction {
-                            tool: tc.function.name.clone(),
-                            result_preview: preview.clone(),
-                        });
-                        conversation.push(ChatMessage {
-                            role: "tool".to_string(),
-                            content: Some(error_json),
-                            tool_calls: None,
-                            tool_call_id: Some(tc.id.clone()),
-                            name: Some(tc.function.name.clone()),
-                            preview: Some(preview),
-                        });
-                        continue;
-                    }
-
-                    info!(tool = %tc.function.name, "executing AI tool call");
-
-                    // Send progress: tool starting
-                    if let Some(ref tx) = progress_tx {
-                        let _ = tx.send(ProgressEvent::ToolStart {
-                            tool: tc.function.name.clone(),
-                        });
-                    }
-
-                    let (result, preview) = match super::tools::execute_tool(
-                        &tc.function.name,
-                        &tc.function.arguments,
-                        state,
-                        char_limit,
-                    )
-                    .await
-                    {
-                        Ok((result, preview)) => {
-                            // Send progress: tool done
-                            if let Some(ref tx) = progress_tx {
-                                let _ = tx.send(ProgressEvent::ToolDone {
-                                    tool: tc.function.name.clone(),
-                                    preview: preview.clone(),
-                                });
-                            }
-                            actions.push(ToolAction {
-                                tool: tc.function.name.clone(),
-                                result_preview: preview.clone(),
-                            });
-                            (result, preview)
-                        }
-                        Err(err) => {
-                            warn!(tool = %tc.function.name, ?err, "AI tool call failed");
-                            let preview = format!("Error: {err}");
-                            if let Some(ref tx) = progress_tx {
-                                let _ = tx.send(ProgressEvent::ToolDone {
-                                    tool: tc.function.name.clone(),
-                                    preview: preview.clone(),
-                                });
-                            }
-                            actions.push(ToolAction {
-                                tool: tc.function.name.clone(),
-                                result_preview: preview.clone(),
-                            });
-                            (json!({"error": err.to_string()}).to_string(), preview)
-                        }
-                    };
-
-                    // Add tool result to conversation (preview is internal-only,
-                    // not sent to the LLM — it's used for UI badges after reload).
-                    conversation.push(ChatMessage {
-                        role: "tool".to_string(),
-                        content: Some(result),
-                        tool_calls: None,
-                        tool_call_id: Some(tc.id.clone()),
-                        name: Some(tc.function.name.clone()),
-                        preview: Some(preview),
-                    });
-                }
+                execute_tool_calls(
+                    tool_calls,
+                    conversation,
+                    &mut actions,
+                    state,
+                    char_limit,
+                    &original_user_message,
+                    progress_tx.as_ref(),
+                )
+                .await;
 
                 continue; // Call LLM again with tool results
             }
@@ -887,5 +944,221 @@ mod tests {
         assert!(!"create_presentation".starts_with("delete_"));
         assert!(!"update_slide".starts_with("delete_"));
         assert!(!"trigger_slide".starts_with("delete_"));
+    }
+
+    // --- #434: system prompt reflects post-#394 whole-verse behavior ---
+
+    #[test]
+    fn system_prompt_describes_post_394_whole_verse_behavior() {
+        // The prompt's bible-slide guidance must match the shipped #394 composer
+        // behavior: a lone oversized verse is ACCEPTED WHOLE automatically (the
+        // model does not split it), and same-number continuation items are MERGED
+        // into one whole verse. It must NOT carry the pre-#394 "split that verse
+        // into multiple items, emitted as separate slides" recovery — that
+        // instruction now misleads the model.
+        let prompt = format_system_prompt("(none)", "(none yet)", "SEB", 320);
+
+        // Stale wording must be gone.
+        assert!(
+            !prompt.contains("split that verse into multiple verse items"),
+            "system prompt still tells the model to split a verse into multiple items (pre-#394)"
+        );
+        assert!(
+            !prompt.contains("emit them as separate slides"),
+            "system prompt still says same-number items are emitted as separate slides (pre-#394)"
+        );
+
+        // New behavior must be described: lone oversized verse accepted whole.
+        let lower = prompt.to_lowercase();
+        assert!(
+            lower.contains("accepted whole") || lower.contains("kept whole"),
+            "system prompt must state a lone oversized verse is accepted/kept whole (post-#394)"
+        );
+        // And same-number continuation items merge into one whole verse.
+        assert!(
+            lower.contains("merged") || lower.contains("merge"),
+            "system prompt must state same-number continuation items are merged (post-#394)"
+        );
+    }
+
+    // --- coverage for the run_agent helpers extracted in #434 ---
+
+    fn response_tool_call(
+        id: &str,
+        name: &str,
+        args: &str,
+    ) -> super::super::client::ResponseToolCall {
+        super::super::client::ResponseToolCall {
+            id: id.to_string(),
+            call_type: "function".to_string(),
+            function: super::super::client::ResponseFunction {
+                name: name.to_string(),
+                arguments: args.to_string(),
+            },
+        }
+    }
+
+    #[test]
+    fn build_api_messages_prepends_system_and_maps_each_message() {
+        let conv = vec![
+            user_msg("hello"),
+            assistant_tool_call_msg("call_1", "create_presentation"),
+            tool_result_msg("call_1", "create_presentation", "{\"ok\":true}"),
+            assistant_msg("done"),
+        ];
+        let messages = build_api_messages("SYSTEM-PROMPT", &conv).expect("must build");
+
+        // System prompt is element 0, with the exact content (kills the
+        // empty-vec / default-vec / wrong-content mutants).
+        assert_eq!(messages.len(), conv.len() + 1);
+        assert_eq!(messages[0]["role"], "system");
+        assert_eq!(messages[0]["content"], "SYSTEM-PROMPT");
+
+        // Conversation messages are mapped through with their fields.
+        assert_eq!(messages[1]["role"], "user");
+        assert_eq!(messages[1]["content"], "hello");
+
+        // The tool-call assistant message carries its tool_calls array.
+        assert_eq!(messages[2]["role"], "assistant");
+        assert_eq!(messages[2]["tool_calls"][0]["id"], "call_1");
+
+        // The tool result carries tool_call_id + name + content.
+        assert_eq!(messages[3]["role"], "tool");
+        assert_eq!(messages[3]["tool_call_id"], "call_1");
+        assert_eq!(messages[3]["name"], "create_presentation");
+        assert_eq!(messages[3]["content"], "{\"ok\":true}");
+
+        assert_eq!(messages[4]["content"], "done");
+    }
+
+    #[tokio::test]
+    async fn build_system_prompt_returns_real_prompt_and_appends_extra() {
+        let state = AppState::in_memory().await.unwrap();
+
+        // No extra: prompt is non-empty, contains the bible-slide guidance, and
+        // does NOT carry an Additional Instructions section. char_limit is the
+        // real configured value, not 0/1 (kills the (String::new(),0/1) and
+        // ("xyzzy",0/1) return-value mutants).
+        let (prompt, char_limit) = build_system_prompt(&state, None).await;
+        assert!(prompt.contains("presentation assistant for a church worship app"));
+        assert!(prompt.contains("## Creating Bible slides"));
+        assert!(!prompt.contains("## Additional Instructions"));
+        assert!(char_limit > 1, "char_limit must be the real limit, not 0/1");
+
+        // An EMPTY extra must NOT append the section (the `!extra.is_empty()`
+        // guard — kills the `delete !` mutant at the guard).
+        let (prompt_empty_extra, _) = build_system_prompt(&state, Some("")).await;
+        assert!(!prompt_empty_extra.contains("## Additional Instructions"));
+
+        // A NON-empty extra MUST append it (kills the guard-removed mutant the
+        // other way and proves the append path runs).
+        let (prompt_with_extra, _) = build_system_prompt(&state, Some("CUSTOM RULE 42")).await;
+        assert!(prompt_with_extra.contains("## Additional Instructions"));
+        assert!(prompt_with_extra.contains("CUSTOM RULE 42"));
+    }
+
+    #[tokio::test]
+    async fn execute_tool_calls_blocks_delete_without_intent_and_runs_otherwise() {
+        let state = AppState::in_memory().await.unwrap();
+
+        // 1. A delete_* tool with NO delete intent in the user message must be
+        //    BLOCKED: a delete_blocked tool message is pushed and the tool is
+        //    NOT executed. This kills: the body→() mutant (conversation/actions
+        //    would not change), the `&&`→`||` mutant (would also block a
+        //    non-delete tool), and the `delete !` mutant (would allow the
+        //    delete through without intent).
+        let mut conversation: Vec<ChatMessage> = Vec::new();
+        let mut actions: Vec<ToolAction> = Vec::new();
+        let calls = vec![response_tool_call(
+            "c1",
+            "delete_presentation",
+            "{\"id\":1}",
+        )];
+        execute_tool_calls(
+            &calls,
+            &mut conversation,
+            &mut actions,
+            &state,
+            320,
+            "please create a presentation", // no delete keyword
+            None,
+        )
+        .await;
+
+        assert_eq!(
+            conversation.len(),
+            1,
+            "a tool result message must be pushed"
+        );
+        assert_eq!(conversation[0].role, "tool");
+        assert_eq!(conversation[0].tool_call_id.as_deref(), Some("c1"));
+        let content = conversation[0].content.as_deref().unwrap_or_default();
+        assert!(
+            content.contains("delete_blocked"),
+            "delete without intent must be blocked, got: {content}"
+        );
+        assert_eq!(actions.len(), 1);
+        assert!(actions[0].result_preview.contains("BLOCKED"));
+
+        // 2. The SAME delete tool WITH explicit delete intent must NOT be
+        //    blocked — it reaches execution (the in-memory state has no such
+        //    presentation, so the tool errors, but the point is the gate let it
+        //    through: no delete_blocked message). This proves the `&&`/`!`
+        //    operands are evaluated correctly, not short-circuited the wrong way.
+        let mut conversation2: Vec<ChatMessage> = Vec::new();
+        let mut actions2: Vec<ToolAction> = Vec::new();
+        let calls2 = vec![response_tool_call(
+            "c2",
+            "delete_presentation",
+            "{\"id\":1}",
+        )];
+        execute_tool_calls(
+            &calls2,
+            &mut conversation2,
+            &mut actions2,
+            &state,
+            320,
+            "delete that presentation please", // explicit delete intent
+            None,
+        )
+        .await;
+
+        assert_eq!(conversation2.len(), 1);
+        let content2 = conversation2[0].content.as_deref().unwrap_or_default();
+        assert!(
+            !content2.contains("delete_blocked"),
+            "delete WITH intent must not be gate-blocked, got: {content2}"
+        );
+    }
+
+    #[tokio::test]
+    async fn run_agent_propagates_error_when_llm_unreachable() {
+        // run_agent's first action each iteration is to call the LLM. With an
+        // unreachable endpoint, call_chat_completions fails and run_agent
+        // propagates the error via `?` — it returns Err, NOT Ok. This exercises
+        // the real run_agent body (kills the `replace run_agent body with
+        // Ok((..., vec![]))` mutants) without needing a live LLM: the mutant
+        // would return Ok and this assertion would fail.
+        let state = AppState::in_memory().await.unwrap();
+        let settings = AiSettings {
+            // Port 1 is reserved/unbound — the connection is refused immediately.
+            api_url: "http://127.0.0.1:1/v1".to_string(),
+            api_key: None,
+            model: "test-model".to_string(),
+            system_prompt_extra: None,
+        };
+        let mut conversation: Vec<ChatMessage> = Vec::new();
+
+        let result = run_agent("hello", &mut conversation, &state, &settings, None).await;
+        assert!(
+            result.is_err(),
+            "run_agent must propagate the LLM error (Err), not return a canned Ok value"
+        );
+
+        // The user message is pushed before the (failing) LLM call, so the
+        // conversation is not left empty — further proof the real body ran.
+        assert_eq!(conversation.len(), 1);
+        assert_eq!(conversation[0].role, "user");
+        assert_eq!(conversation[0].content.as_deref(), Some("hello"));
     }
 }

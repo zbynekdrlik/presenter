@@ -318,6 +318,14 @@ jobs:
           # loudly instead of passing silently (the trailing echo returns 0
           # regardless). FAILS if any ADB-install heredoc loses `set -e`.
           bash tests/ci/adb-install-set-e.test.sh
+          # Regression guard for #393: bootstrap-host.sh must generate adb's
+          # RSA keypair at ~/.android/adbkey when absent. The hardened
+          # presenter.service (ProtectHome=read-only) cannot mkdir ~/.android to
+          # generate the key on first run, so a freshly provisioned controller
+          # cannot bootstrap adb without it. The step is guarded to run only when
+          # the key is absent (adb keygen overwrites an existing key). FAILS if
+          # the keygen step or its absent-only guard is removed.
+          bash tests/ci/bootstrap-adb-keygen.test.sh
           # Regression guard for #439: the diff-scoped mutation PR gate must
           # bootstrap its `mutants`-profile build cache via a dedicated
           # `mutation-warm` job that the sharded `mutation` jobs depend on.
