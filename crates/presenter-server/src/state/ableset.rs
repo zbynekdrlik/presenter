@@ -51,7 +51,7 @@ impl AppState {
             .await?;
         self.ableset_bridge.apply_settings(settings.clone()).await?;
         {
-            let mut cache = self.ableset_cache.write().await;
+            let mut cache = self.caches.ableset.write().await;
             cache.invalidate();
             cache.library_name = None;
             cache.song_prefix_length = settings.song_prefix_length;
@@ -85,13 +85,13 @@ impl AppState {
         }
         self.ensure_ableset_cache(&settings).await?;
         let lookup = key.to_ascii_lowercase();
-        let cache = self.ableset_cache.read().await;
+        let cache = self.caches.ableset.read().await;
         Ok(cache.entries.get(&lookup).copied())
     }
 
     async fn ensure_ableset_cache(&self, settings: &AbleSetStatusSnapshot) -> anyhow::Result<()> {
         let needs_refresh = {
-            let cache = self.ableset_cache.read().await;
+            let cache = self.caches.ableset.read().await;
             !cache.matches(&settings.library_name, settings.song_prefix_length)
                 || cache.entries.is_empty()
         };
@@ -109,7 +109,7 @@ impl AppState {
         let target = summaries
             .into_iter()
             .find(|summary| summary.name.eq_ignore_ascii_case(&settings.library_name));
-        let mut cache = self.ableset_cache.write().await;
+        let mut cache = self.caches.ableset.write().await;
         cache.library_name = Some(settings.library_name.clone());
         cache.song_prefix_length = settings.song_prefix_length;
         cache.entries.clear();

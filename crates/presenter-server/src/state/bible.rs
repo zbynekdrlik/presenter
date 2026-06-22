@@ -434,7 +434,7 @@ impl AppState {
 
     // Bible broadcast methods
     pub async fn active_bible_broadcast(&self) -> Option<BibleBroadcast> {
-        self.bible_broadcast.read().await.clone()
+        self.bible.broadcast.read().await.clone()
     }
 
     pub async fn trigger_bible_passage(
@@ -537,7 +537,7 @@ impl AppState {
 
         let broadcast = BibleBroadcast::new(passage, Utc::now());
         {
-            let mut guard = self.bible_broadcast.write().await;
+            let mut guard = self.bible.broadcast.write().await;
             *guard = Some(broadcast.clone());
         }
         self.live_hub.publish(LiveEvent::Bible {
@@ -563,7 +563,7 @@ impl AppState {
     ) {
         // Store as the new active output
         {
-            let mut guard = self.bible_slide_output.write().await;
+            let mut guard = self.bible.slide_output.write().await;
             *guard = Some(output.clone());
         }
         // Also update legacy bible_broadcast for backwards compatibility with /bible/active endpoint
@@ -609,7 +609,7 @@ impl AppState {
         )
         .with_reference_label(output.main_reference.clone());
         {
-            let mut guard = self.bible_broadcast.write().await;
+            let mut guard = self.bible.broadcast.write().await;
             *guard = Some(legacy_broadcast.clone());
         }
         // Publish to WebSocket subscribers (both old and new formats)
@@ -628,16 +628,16 @@ impl AppState {
     /// Get the current active Bible slide output.
     /// Used by `/bible/active-slide` endpoint (stage page initial load).
     pub async fn active_bible_slide_output(&self) -> Option<BibleSlideOutput> {
-        self.bible_slide_output.read().await.clone()
+        self.bible.slide_output.read().await.clone()
     }
 
     pub async fn clear_bible_broadcast(&self) {
         {
-            let mut guard = self.bible_broadcast.write().await;
+            let mut guard = self.bible.broadcast.write().await;
             *guard = None;
         }
         {
-            let mut guard = self.bible_slide_output.write().await;
+            let mut guard = self.bible.slide_output.write().await;
             *guard = None;
         }
         self.live_hub.publish(LiveEvent::BibleCleared);
@@ -651,7 +651,7 @@ impl AppState {
         &self,
     ) -> anyhow::Result<Vec<BibleImportSummary>> {
         #[cfg(test)]
-        if let Some(ingestion) = &self.bible_ingestion_override {
+        if let Some(ingestion) = &self.bible.ingestion_override {
             return ingestion.ingest_default_translations().await;
         }
 
@@ -664,6 +664,6 @@ impl AppState {
         &mut self,
         ingestion: std::sync::Arc<dyn super::seed::TestBibleIngestion + Send + Sync>,
     ) {
-        self.bible_ingestion_override = Some(ingestion);
+        self.bible.ingestion_override = Some(ingestion);
     }
 }

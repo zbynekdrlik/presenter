@@ -68,7 +68,7 @@ impl AppState {
             .rename_presentation(presentation_id, name)
             .await?;
         {
-            let mut guard = self.presentation_cache.write().await;
+            let mut guard = self.caches.presentation.write().await;
             if let Some(entry) = guard.get_mut(&presentation_id) {
                 let pres = std::sync::Arc::make_mut(entry);
                 pres.name = name.to_string();
@@ -80,7 +80,7 @@ impl AppState {
     pub async fn delete_presentation(&self, presentation_id: PresentationId) -> anyhow::Result<()> {
         self.repository.delete_presentation(presentation_id).await?;
         {
-            let mut guard = self.presentation_cache.write().await;
+            let mut guard = self.caches.presentation.write().await;
             guard.remove(&presentation_id);
         }
         Ok(())

@@ -22,8 +22,11 @@
 
 mod ableset;
 pub(crate) mod bible;
+mod bible_manager;
 mod broadcasting;
+mod cache_manager;
 mod companion;
+mod companion_manager;
 mod integrations;
 mod presentations;
 mod seed;
@@ -48,16 +51,15 @@ use crate::{
 };
 use chrono::Utc;
 use presenter_core::{
-    BibleBroadcast, BibleSlideOutput, OscSettings, OscSettingsDraft, PlaylistId, Presentation,
-    PresentationId, Slide, SlideId, StageClientSnapshot, StageDisplayLayout, StageDisplaySlide,
-    StageDisplaySnapshot, StageState, TimersOverview, API_STAGE_LAYOUT_CODE,
-    DEFAULT_STAGE_LAYOUT_CODE,
+    OscSettings, OscSettingsDraft, PlaylistId, Presentation, PresentationId, Slide, SlideId,
+    StageClientSnapshot, StageDisplayLayout, StageDisplaySlide, StageDisplaySnapshot, StageState,
+    TimersOverview, API_STAGE_LAYOUT_CODE, DEFAULT_STAGE_LAYOUT_CODE,
 };
 use presenter_persistence::{DatabaseSettings, Repository};
 use std::{
     collections::HashMap,
     env,
-    sync::{atomic::AtomicBool, atomic::AtomicU16, atomic::Ordering, Arc},
+    sync::{atomic::AtomicBool, atomic::Ordering, Arc},
     time::Instant,
 };
 use tokio::{
@@ -67,11 +69,12 @@ use tokio::{
 use tracing::{instrument, warn};
 use uuid::Uuid;
 
-use ableset::AbleSetLibraryCache;
+use bible_manager::BibleManager;
+use cache_manager::CacheManager;
 use companion::{
-    parse_bool_flag, CompanionServerManager, COMPANION_FEATURE_KEY, COMPANION_PORT_KEY,
-    DEFAULT_COMPANION_PORT,
+    parse_bool_flag, COMPANION_FEATURE_KEY, COMPANION_PORT_KEY, DEFAULT_COMPANION_PORT,
 };
+use companion_manager::CompanionManager;
 #[cfg(test)]
 pub(crate) use seed::seed_sample_library;
 #[cfg(test)]
@@ -101,31 +104,25 @@ pub(crate) struct ApiStageState {
 pub struct AppState {
     repository: Repository,
     live_hub: LiveHub,
-    bible_broadcast: Arc<RwLock<Option<BibleBroadcast>>>,
-    /// New single-source-of-truth Bible slide output
-    bible_slide_output: Arc<RwLock<Option<BibleSlideOutput>>>,
-    companion_token: Option<String>,
-    companion_enabled: Arc<AtomicBool>,
-    companion_port: Arc<AtomicU16>,
-    companion_server: CompanionServerManager,
+    /// Bible broadcast / slide-output state (see [`BibleManager`]).
+    bible: BibleManager,
+    /// Companion (Bitfocus) integration state (see [`CompanionManager`]).
+    companion: CompanionManager,
     resolume_registry: ResolumeRegistry,
     android_stage_registry: AndroidStageRegistry,
     stage_connections: StageConnections,
     heartbeat_config: StageHeartbeatConfig,
-    presentation_cache: Arc<RwLock<HashMap<PresentationId, Arc<Presentation>>>>,
+    /// In-memory caches: presentation / group-color / ableset (see [`CacheManager`]).
+    caches: CacheManager,
     stage_layout: Arc<RwLock<String>>,
     osc_bridge: OscBridge,
     ableset_bridge: AbleSetBridge,
-    ableset_cache: Arc<RwLock<AbleSetLibraryCache>>,
     broadcast_live: Arc<AtomicBool>,
     ai_conversation: Arc<RwLock<Vec<ChatMessage>>>,
     ai_proxy: Arc<ProxyManager>,
     ndi_manager: Option<Arc<presenter_ndi::NdiManager>>,
-    group_color_cache: Arc<RwLock<HashMap<String, String>>>,
     api_stage: Arc<RwLock<ApiStageState>>,
     pub local_public_ip: Arc<Option<String>>,
-    #[cfg(test)]
-    bible_ingestion_override: Option<std::sync::Arc<dyn TestBibleIngestion + Send + Sync>>,
 }
 
 /// Gate predicate for the startup NDI auto-restore branch.
@@ -186,7 +183,6 @@ impl AppState {
             .map(|layout| layout.code)
             .find(|code| code == DEFAULT_STAGE_LAYOUT_CODE)
             .unwrap_or_else(|| DEFAULT_STAGE_LAYOUT_CODE.to_string());
-        let ableset_cache = Arc::new(RwLock::new(AbleSetLibraryCache::default()));
         let ndi_manager = presenter_ndi::NdiManager::try_new().map(Arc::new);
         if ndi_manager.is_some() {
             tracing::info!("NDI SDK loaded successfully");
@@ -196,30 +192,22 @@ impl AppState {
         let state = Self {
             repository,
             live_hub: LiveHub::new(),
-            bible_broadcast: Arc::new(RwLock::new(None)),
-            bible_slide_output: Arc::new(RwLock::new(None)),
-            companion_token,
-            companion_enabled: Arc::new(AtomicBool::new(companion_enabled)),
-            companion_port: Arc::new(AtomicU16::new(companion_port)),
-            companion_server: CompanionServerManager::default(),
+            bible: BibleManager::new(),
+            companion: CompanionManager::new(companion_token, companion_enabled, companion_port),
             resolume_registry,
             android_stage_registry,
             stage_connections,
             heartbeat_config,
-            presentation_cache: Arc::new(RwLock::new(HashMap::new())),
+            caches: CacheManager::new(),
             stage_layout: Arc::new(RwLock::new(default_layout)),
             osc_bridge,
             ableset_bridge,
-            ableset_cache,
             broadcast_live: Arc::new(AtomicBool::new(false)),
             ai_conversation: Arc::new(RwLock::new(Vec::new())),
             ai_proxy: Arc::new(ProxyManager::new(crate::ai::proxy::detect_deploy_dir())),
             ndi_manager,
-            group_color_cache: Arc::new(RwLock::new(HashMap::new())),
             api_stage: Arc::new(RwLock::new(ApiStageState::default())),
             local_public_ip,
-            #[cfg(test)]
-            bible_ingestion_override: None,
         };
         state.spawn_heartbeat_tasks();
         state
@@ -406,7 +394,7 @@ impl AppState {
             .load_all_group_colors()
             .await
             .unwrap_or_default();
-        *state.group_color_cache.write().await = group_colors;
+        *state.caches.group_color.write().await = group_colors;
 
         // Restore the operator-selected stage layout from the database (#384).
         // Without this, every restart/deploy reset the layout to the default
@@ -681,15 +669,15 @@ impl AppState {
 
     // Companion methods
     pub fn companion_token(&self) -> Option<&str> {
-        self.companion_token.as_deref()
+        self.companion.token.as_deref()
     }
 
     pub fn companion_enabled(&self) -> bool {
-        self.companion_enabled.load(Ordering::SeqCst)
+        self.companion.enabled.load(Ordering::SeqCst)
     }
 
     pub fn companion_port(&self) -> u16 {
-        self.companion_port.load(Ordering::SeqCst)
+        self.companion.port.load(Ordering::SeqCst)
     }
 
     // Broadcast live state
@@ -709,7 +697,8 @@ impl AppState {
         enabled: bool,
         port: u16,
     ) -> anyhow::Result<()> {
-        self.companion_server
+        self.companion
+            .server
             .reconfigure(self.clone(), enabled, port)
             .await
     }
@@ -769,8 +758,8 @@ impl AppState {
             return Err(err);
         }
 
-        self.companion_enabled.store(enabled, Ordering::SeqCst);
-        self.companion_port.store(port, Ordering::SeqCst);
+        self.companion.enabled.store(enabled, Ordering::SeqCst);
+        self.companion.port.store(port, Ordering::SeqCst);
         Ok(())
     }
 
@@ -780,7 +769,7 @@ impl AppState {
         presentation_id: PresentationId,
     ) -> anyhow::Result<Arc<Presentation>> {
         if let Some(cached) = {
-            let guard = self.presentation_cache.read().await;
+            let guard = self.caches.presentation.read().await;
             guard.get(&presentation_id).cloned()
         } {
             return Ok(cached);
@@ -793,25 +782,25 @@ impl AppState {
             return Err(anyhow::anyhow!("presentation not found"));
         };
         let arc = Arc::new(presentation);
-        let mut guard = self.presentation_cache.write().await;
+        let mut guard = self.caches.presentation.write().await;
         guard.insert(presentation_id, arc.clone());
         Ok(arc)
     }
 
     pub(crate) async fn get_all_group_colors(&self) -> HashMap<String, String> {
-        self.group_color_cache.read().await.clone()
+        self.caches.group_color.read().await.clone()
     }
 
     pub(crate) async fn resolve_group_color(&self, name: &str) -> Option<String> {
         {
-            let cache = self.group_color_cache.read().await;
+            let cache = self.caches.group_color.read().await;
             if let Some(color) = cache.get(name) {
                 return Some(color.clone());
             }
         }
         match self.repository.resolve_group_color(name).await {
             Ok(color) => {
-                let mut cache = self.group_color_cache.write().await;
+                let mut cache = self.caches.group_color.write().await;
                 cache.insert(name.to_string(), color.clone());
                 Some(color)
             }
@@ -914,12 +903,12 @@ impl AppState {
     }
 
     async fn cache_presentation_ref(&self, presentation: &Presentation) {
-        let mut guard = self.presentation_cache.write().await;
+        let mut guard = self.caches.presentation.write().await;
         guard.insert(presentation.id, Arc::new(presentation.clone()));
     }
 
     async fn cache_presentation_value(&self, presentation: Presentation) {
-        let mut guard = self.presentation_cache.write().await;
+        let mut guard = self.caches.presentation.write().await;
         guard.insert(presentation.id, Arc::new(presentation));
     }
 
