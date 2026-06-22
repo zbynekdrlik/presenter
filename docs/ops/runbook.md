@@ -22,10 +22,18 @@ The script installs build essentials, browser/runtime libraries, the Rust toolch
   ```bash
   sudo apt install android-tools-adb
   ```
+- `scripts/ops/bootstrap-host.sh` also **generates adb's RSA keypair** at `~/.android/adbkey` on a
+  fresh host (#393). This matters because the hardened `presenter.service`
+  (`ProtectHome=read-only`, `ReadWritePaths=/opt/presenter*`) cannot create `~/.android` to generate
+  the key on adb's first `start-server` — without a pre-generated key the service's first `adb connect`
+  fails with "ADB server didn't ACK". Bootstrap generates the key only when it is **absent**, so an
+  already-keyed host keeps its existing keypair and device authorizations. The manual `cp` below is no
+  longer the only source of the key — it is needed only to **share** a single keypair across multiple
+  runtimes.
 - Create a shared key directory so all runtimes reuse the same trusted keypair:
   ```bash
   mkdir -p ~/.config/presenter/adb
-  cp ~/.android/adbkey ~/.config/presenter/adb/  # after first successful pairing
+  cp ~/.android/adbkey ~/.config/presenter/adb/      # bootstrap generates this on a fresh host (#393)
   cp ~/.android/adbkey.pub ~/.config/presenter/adb/
   ```
   All docker stacks mount this folder at `/root/.android`, so when one environment authorizes a TV the

@@ -108,6 +108,27 @@ sudo apt-get update
 printf '[bootstrap] Installing base packages...\n'
 sudo apt-get install -y "${APT_PACKAGES[@]}"
 
+# Generate adb's RSA keypair while HOME is still writable (#393). The hardened
+# presenter.service runs with ProtectHome=read-only and ReadWritePaths limited
+# to /opt/presenter*, so adb cannot mkdir ~/.android to generate its keypair on
+# its first `start-server` — the server never ACKs ("ADB server didn't ACK") and
+# a freshly provisioned controller (or one whose ~/.android was wiped) cannot
+# bootstrap adb at all. Generating the key here, under the normal user with a
+# writable HOME, lets the read-only-HOME service merely READ the key thereafter
+# (which ProtectHome=read-only permits) without widening its writable surface.
+#
+# `adb keygen` overwrites the target file with a fresh key on every call, so it
+# is guarded to run ONLY when the key is absent — an already-keyed host (prod,
+# dev) keeps its existing keypair and its established device authorizations.
+ADB_KEY="$HOME/.android/adbkey"
+if [ ! -f "$ADB_KEY" ]; then
+  printf '[bootstrap] Generating adb keypair at %s...\n' "$ADB_KEY"
+  mkdir -p "$(dirname "$ADB_KEY")"
+  adb keygen "$ADB_KEY"
+else
+  printf '[bootstrap] adb keypair already present at %s — leaving it untouched.\n' "$ADB_KEY"
+fi
+
 # Rust toolchain
 if ! command -v rustup >/dev/null 2>&1; then
   printf '[bootstrap] Installing Rust toolchain via rustup...\n'

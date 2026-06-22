@@ -30,21 +30,30 @@ if [ ! -f "$BOOTSTRAP" ]; then
     exit 1
 fi
 
-# 1. The script must invoke `adb keygen` targeting the .android/adbkey path.
-if ! grep -Eq 'adb[[:space:]]+keygen[[:space:]]+.*\.android/adbkey' "$BOOTSTRAP"; then
-    echo "FAIL (#393): scripts/ops/bootstrap-host.sh must run" >&2
-    echo "             'adb keygen \"\$HOME/.android/adbkey\"' so a freshly" >&2
-    echo "             provisioned controller can bootstrap adb under the" >&2
+# 1. The script must invoke `adb keygen` (the command that creates the keypair).
+#    Match it as an executed command, not merely a mention in a comment line.
+if ! grep -Eq '^[[:space:]]*adb[[:space:]]+keygen[[:space:]]' "$BOOTSTRAP"; then
+    echo "FAIL (#393): scripts/ops/bootstrap-host.sh must run 'adb keygen' so a" >&2
+    echo "             freshly provisioned controller can bootstrap adb under the" >&2
     echo "             hardened (ProtectHome=read-only) presenter.service." >&2
     fail=1
 fi
 
-# 2. The keygen MUST be guarded so it only runs when the key is absent (adb
-#    keygen overwrites an existing key, which would break a keyed host). Assert
-#    the script tests for the absence of the adbkey file near the keygen call.
-if ! grep -Eq '! *-(f|e) .*\.android/adbkey|-(f|e) .*\.android/adbkey.*\|\||\[\[ *! *-(f|e)' "$BOOTSTRAP"; then
-    echo "FAIL (#393): the adb keygen step must be guarded to run only when" >&2
-    echo "             \$HOME/.android/adbkey is ABSENT (e.g. 'if [ ! -f ... ]')." >&2
+# 2. The keygen must target the adb keypair path ~/.android/adbkey (the path adb
+#    reads on start-server). Assert the script references it (directly or via a
+#    variable assigned that path), so a keygen pointed at the wrong file fails.
+if ! grep -Eq '\.android/adbkey' "$BOOTSTRAP"; then
+    echo "FAIL (#393): the keygen step must target \$HOME/.android/adbkey — the" >&2
+    echo "             path adb reads when starting its server." >&2
+    fail=1
+fi
+
+# 3. The keygen MUST be guarded so it only runs when the key is absent (adb
+#    keygen overwrites an existing key, which would clobber a keyed host's
+#    device authorizations). Assert an absence test (! -f / ! -e) is present.
+if ! grep -Eq '!\s*-(f|e)\s' "$BOOTSTRAP"; then
+    echo "FAIL (#393): the adb keygen step must be guarded to run only when the" >&2
+    echo "             adb key is ABSENT (e.g. 'if [ ! -f \"\$ADB_KEY\" ]')." >&2
     echo "             'adb keygen' overwrites an existing key, which would" >&2
     echo "             clobber an already-keyed host's device authorizations." >&2
     fail=1
