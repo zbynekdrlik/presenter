@@ -4,6 +4,15 @@ Terse per-issue record of autonomous cycles (issue #, commits, tests, decisions)
 
 ---
 
+## 2026-06-22 — #346 Decompose state/mod.rs AppState facade → subsystem managers (PR #456, v0.4.153)
+
+- **Validated still real:** `crates/presenter-server/src/state/mod.rs` = 1115 lines, `AppState` = 24 fields. NOT a 1000-line-cap fix — the CI fn-size gate miscounts this file (stops at the first `#[cfg(test)]` ~line 33; that undercount is open #407). So done as voluntary readability decomposition, not gate compliance.
+- **Version:** 0.4.152 → **0.4.153** (first commit `15ba9ab3`), after FF dev→main `0740b8d2`.
+- **Refactor (commit `4676e844`, `Closes #346`):** behavior-preserving — extracted 3 cohesive manager structs into new `state/` modules, shrinking AppState **24 → 18 fields**. `CacheManager` (`cache_manager.rs`) owns the 3 `Arc<RwLock>` caches (`presentation`/`group_color`/`ableset`); `CompanionManager` (`companion_manager.rs`) owns `token`/`enabled`(AtomicBool)/`port`(AtomicU16)/`server`; `BibleManager` (`bible_manager.rs`) owns `broadcast`/`slide_output` `Arc<RwLock>` + the `#[cfg(test)] ingestion_override`. Pure field relocation: every Arc/RwLock/atomic keeps its exact type → single-lock-at-a-time policy + Ordering::SeqCst + heartbeat/background-task/NDI-restore wiring unchanged; `clear_bible_broadcast` still takes the 2 bible locks in separate scoped blocks. All access is encapsulated within the `state/` module tree (submodules ableset.rs/bible.rs/presentations.rs use `self.caches.*`/`self.bible.*`); public accessors (`active_bible_broadcast`, `companion_enabled`, etc.) unchanged → zero cross-crate call-site churn.
+- **No new tests (no-behavior-change refactor):** existing `state/tests.rs` + `router/tests.rs` are the net (active/clear_bible_broadcast, set_test_bible_ingestion, `state.api_stage` direct read at tests.rs:665 — `api_stage` deliberately left inline so that test stays untouched). Marker commits `f64b7198`/`9b8769fd` carry `[no-test: ...]` per the pre-push hook contract (the multi-line bracket form is invisible to the single-line hook regex — must be one line).
+- **Local gates:** `cargo fmt --all --check` clean; `cargo check -p presenter-server --all-targets` clean; `cargo clippy -p presenter-server --all-targets -D warnings` clean (0 warnings).
+- **Shared branch:** `dev` concurrently owned by the #347 worker — its docs commit `d5439b23` (autopilot-log) rode onto this PR's diff (docs-only, no `Closes #347`); harmless.
+
 ## 2026-06-22 — #347 Migrate settings_script.js (1307-line JS blob) → Leptos WASM component
 
 - **Validated still real:** `settings_script.js` = 1307 lines, included via `ui/scripts/mod.rs`, injected in `ui/settings.rs:883`; route `/ui/settings` was pure SSR. The orphan `pages/settings.rs` (185-line NDI-only `SettingsPage`, zero callers) was NOT the migration — folded its NDI piece into the full page.
