@@ -952,8 +952,21 @@ async fn set_companion_settings_updates_enabled_and_port() {
         "companion port must reflect the value just set"
     );
 
+    // Side effect of configure_companion_service: the websocket server must be
+    // actually LISTENING on the port. This kills the `configure_companion_service
+    // -> Ok(())` mutant — a no-op stub would set the atomics (so the asserts
+    // above still pass) but never bind the listener, so this connect would fail.
+    let connected = tokio::net::TcpStream::connect(("127.0.0.1", port)).await;
+    assert!(
+        connected.is_ok(),
+        "companion server must be listening on port {port} after enable — \
+         configure_companion_service must have bound the listener, not no-op'd"
+    );
+    drop(connected);
+
     // Disabling flips it back and persists a different port — proves the setter
-    // writes both fields, not a fixed value.
+    // writes both fields, not a fixed value — AND tears the listener down so the
+    // port is free again (further proof configure_companion_service ran).
     state
         .set_companion_settings(false, super::DEFAULT_COMPANION_PORT)
         .await
