@@ -980,4 +980,185 @@ mod tests {
             "system prompt must state same-number continuation items are merged (post-#394)"
         );
     }
+
+    // --- coverage for the run_agent helpers extracted in #434 ---
+
+    fn response_tool_call(
+        id: &str,
+        name: &str,
+        args: &str,
+    ) -> super::super::client::ResponseToolCall {
+        super::super::client::ResponseToolCall {
+            id: id.to_string(),
+            call_type: "function".to_string(),
+            function: super::super::client::ResponseFunction {
+                name: name.to_string(),
+                arguments: args.to_string(),
+            },
+        }
+    }
+
+    #[test]
+    fn build_api_messages_prepends_system_and_maps_each_message() {
+        let conv = vec![
+            user_msg("hello"),
+            assistant_tool_call_msg("call_1", "create_presentation"),
+            tool_result_msg("call_1", "create_presentation", "{\"ok\":true}"),
+            assistant_msg("done"),
+        ];
+        let messages = build_api_messages("SYSTEM-PROMPT", &conv).expect("must build");
+
+        // System prompt is element 0, with the exact content (kills the
+        // empty-vec / default-vec / wrong-content mutants).
+        assert_eq!(messages.len(), conv.len() + 1);
+        assert_eq!(messages[0]["role"], "system");
+        assert_eq!(messages[0]["content"], "SYSTEM-PROMPT");
+
+        // Conversation messages are mapped through with their fields.
+        assert_eq!(messages[1]["role"], "user");
+        assert_eq!(messages[1]["content"], "hello");
+
+        // The tool-call assistant message carries its tool_calls array.
+        assert_eq!(messages[2]["role"], "assistant");
+        assert_eq!(messages[2]["tool_calls"][0]["id"], "call_1");
+
+        // The tool result carries tool_call_id + name + content.
+        assert_eq!(messages[3]["role"], "tool");
+        assert_eq!(messages[3]["tool_call_id"], "call_1");
+        assert_eq!(messages[3]["name"], "create_presentation");
+        assert_eq!(messages[3]["content"], "{\"ok\":true}");
+
+        assert_eq!(messages[4]["content"], "done");
+    }
+
+    #[tokio::test]
+    async fn build_system_prompt_returns_real_prompt_and_appends_extra() {
+        let state = AppState::in_memory().await.unwrap();
+
+        // No extra: prompt is non-empty, contains the bible-slide guidance, and
+        // does NOT carry an Additional Instructions section. char_limit is the
+        // real configured value, not 0/1 (kills the (String::new(),0/1) and
+        // ("xyzzy",0/1) return-value mutants).
+        let (prompt, char_limit) = build_system_prompt(&state, None).await;
+        assert!(prompt.contains("presentation assistant for a church worship app"));
+        assert!(prompt.contains("## Creating Bible slides"));
+        assert!(!prompt.contains("## Additional Instructions"));
+        assert!(char_limit > 1, "char_limit must be the real limit, not 0/1");
+
+        // An EMPTY extra must NOT append the section (the `!extra.is_empty()`
+        // guard — kills the `delete !` mutant at the guard).
+        let (prompt_empty_extra, _) = build_system_prompt(&state, Some("")).await;
+        assert!(!prompt_empty_extra.contains("## Additional Instructions"));
+
+        // A NON-empty extra MUST append it (kills the guard-removed mutant the
+        // other way and proves the append path runs).
+        let (prompt_with_extra, _) = build_system_prompt(&state, Some("CUSTOM RULE 42")).await;
+        assert!(prompt_with_extra.contains("## Additional Instructions"));
+        assert!(prompt_with_extra.contains("CUSTOM RULE 42"));
+    }
+
+    #[tokio::test]
+    async fn execute_tool_calls_blocks_delete_without_intent_and_runs_otherwise() {
+        let state = AppState::in_memory().await.unwrap();
+
+        // 1. A delete_* tool with NO delete intent in the user message must be
+        //    BLOCKED: a delete_blocked tool message is pushed and the tool is
+        //    NOT executed. This kills: the body→() mutant (conversation/actions
+        //    would not change), the `&&`→`||` mutant (would also block a
+        //    non-delete tool), and the `delete !` mutant (would allow the
+        //    delete through without intent).
+        let mut conversation: Vec<ChatMessage> = Vec::new();
+        let mut actions: Vec<ToolAction> = Vec::new();
+        let calls = vec![response_tool_call(
+            "c1",
+            "delete_presentation",
+            "{\"id\":1}",
+        )];
+        execute_tool_calls(
+            &calls,
+            &mut conversation,
+            &mut actions,
+            &state,
+            320,
+            "please create a presentation", // no delete keyword
+            None,
+        )
+        .await;
+
+        assert_eq!(
+            conversation.len(),
+            1,
+            "a tool result message must be pushed"
+        );
+        assert_eq!(conversation[0].role, "tool");
+        assert_eq!(conversation[0].tool_call_id.as_deref(), Some("c1"));
+        let content = conversation[0].content.as_deref().unwrap_or_default();
+        assert!(
+            content.contains("delete_blocked"),
+            "delete without intent must be blocked, got: {content}"
+        );
+        assert_eq!(actions.len(), 1);
+        assert!(actions[0].result_preview.contains("BLOCKED"));
+
+        // 2. The SAME delete tool WITH explicit delete intent must NOT be
+        //    blocked — it reaches execution (the in-memory state has no such
+        //    presentation, so the tool errors, but the point is the gate let it
+        //    through: no delete_blocked message). This proves the `&&`/`!`
+        //    operands are evaluated correctly, not short-circuited the wrong way.
+        let mut conversation2: Vec<ChatMessage> = Vec::new();
+        let mut actions2: Vec<ToolAction> = Vec::new();
+        let calls2 = vec![response_tool_call(
+            "c2",
+            "delete_presentation",
+            "{\"id\":1}",
+        )];
+        execute_tool_calls(
+            &calls2,
+            &mut conversation2,
+            &mut actions2,
+            &state,
+            320,
+            "delete that presentation please", // explicit delete intent
+            None,
+        )
+        .await;
+
+        assert_eq!(conversation2.len(), 1);
+        let content2 = conversation2[0].content.as_deref().unwrap_or_default();
+        assert!(
+            !content2.contains("delete_blocked"),
+            "delete WITH intent must not be gate-blocked, got: {content2}"
+        );
+    }
+
+    #[tokio::test]
+    async fn run_agent_propagates_error_when_llm_unreachable() {
+        // run_agent's first action each iteration is to call the LLM. With an
+        // unreachable endpoint, call_chat_completions fails and run_agent
+        // propagates the error via `?` — it returns Err, NOT Ok. This exercises
+        // the real run_agent body (kills the `replace run_agent body with
+        // Ok((..., vec![]))` mutants) without needing a live LLM: the mutant
+        // would return Ok and this assertion would fail.
+        let state = AppState::in_memory().await.unwrap();
+        let settings = AiSettings {
+            // Port 1 is reserved/unbound — the connection is refused immediately.
+            api_url: "http://127.0.0.1:1/v1".to_string(),
+            api_key: None,
+            model: "test-model".to_string(),
+            system_prompt_extra: None,
+        };
+        let mut conversation: Vec<ChatMessage> = Vec::new();
+
+        let result = run_agent("hello", &mut conversation, &state, &settings, None).await;
+        assert!(
+            result.is_err(),
+            "run_agent must propagate the LLM error (Err), not return a canned Ok value"
+        );
+
+        // The user message is pushed before the (failing) LLM call, so the
+        // conversation is not left empty — further proof the real body ran.
+        assert_eq!(conversation.len(), 1);
+        assert_eq!(conversation[0].role, "user");
+        assert_eq!(conversation[0].content.as_deref(), Some("hello"));
+    }
 }
