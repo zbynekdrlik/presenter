@@ -36,6 +36,19 @@ exclude_globs = [
 #     drive the GStreamer/NDI pipeline this fn builds. Faking a test that didn't
 #     really exercise it would be a no-op, so the mutant (lifecycle.rs:97 →
 #     `Ok(())`, and the in-body match-arm mutants) is excluded here instead.
+#   - NdiManagerHandle::* pure-delegation forwarders (#406 seam, ndi_control.rs):
+#     these forward to the libndi-bound NdiManager (Real arm) so they are NOT
+#     exercisable on a libndi-free CI host. The seam exists for the #370 reap
+#     WIRING test, which exercises (and kills the mutants in) start_pipeline +
+#     stop_other_pipelines via the Fake — those two are NOT excluded. The other
+#     forwarders carry no CI-testable behavior; excluding them is the same
+#     hardware-boundary rationale as NdiManager::start_pipeline above.
 exclude_re = [
     "NdiManager::start_pipeline",
+    "NdiManagerHandle::stop_pipeline",
+    "NdiManagerHandle::stop_all",
+    "NdiManagerHandle::discover_sources",
+    "NdiManagerHandle::pipeline_snapshots",
+    "NdiManagerHandle::pipeline_snapshot",
+    "NdiManagerHandle::simulate_pipeline_error",
 ]
