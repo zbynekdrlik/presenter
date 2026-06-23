@@ -56,9 +56,11 @@ pub fn AbletonCard(toast: ToastHandle) -> impl IntoView {
         ev.prevent_default();
         let want_enabled = enabled.get_untracked();
         let host_val = host.get_untracked().trim().to_string();
-        // Ableton ports fall back to sane defaults on invalid/out-of-range input
-        // (matching the original `toNumber(value, fallback)`), and the server
-        // still validates the draft. `parse_port_in_range` avoids the u16
+        // Ableton ports stay lenient: invalid / out-of-range input falls back to
+        // the sane default (the original used `toNumber(value, fallback)`, which
+        // fell back on non-numeric input; we additionally fall back on
+        // out-of-range, which is safe because the draft field is `u16` and the
+        // server still validates). `parse_port_in_range` avoids the u16
         // overflow-truncation a naive parse would hit on a too-large value.
         let http_port_val = parse_port_in_range(&http_port.get_untracked()).unwrap_or(80);
         let library_val = library.get_untracked().trim().to_string();
