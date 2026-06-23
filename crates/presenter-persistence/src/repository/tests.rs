@@ -42,6 +42,65 @@ fn sample_library() -> Library {
         .with_id(LibraryId::new())
 }
 
+fn library_named(name: &str, song_names: &[&str]) -> Library {
+    let presentations = song_names
+        .iter()
+        .map(|song| {
+            Presentation::new(
+                *song,
+                vec![Slide::new(
+                    0,
+                    SlideContent::new(
+                        SlideText::new("main").unwrap(),
+                        SlideText::new("translation").unwrap(),
+                        SlideText::new("stage").unwrap(),
+                        None,
+                    ),
+                )
+                .with_id(SlideId::new())],
+            )
+            .unwrap()
+            .with_id(PresentationId::new())
+        })
+        .collect();
+    Library::new(name, presentations)
+        .unwrap()
+        .with_id(LibraryId::new())
+}
+
+#[tokio::test]
+async fn upsert_library_reimports_same_name_with_fresh_id() {
+    // Regression for #463: the importer assigns a fresh random LibraryId on every
+    // run, but the DB enforces UNIQUE(libraries.name). Re-importing a library that
+    // already exists under the same NAME (the normal dev/prod case) must REPLACE it,
+    // not fail with `UNIQUE constraint failed: libraries.name`.
+    let repo = Repository::connect_in_memory().await.unwrap();
+
+    let first = library_named("NEW LEVEL", &["Song A"]);
+    repo.upsert_library(&first).await.unwrap();
+
+    // Same name, different (fresh) id, plus a newly added song — exactly what
+    // `import_propresenter --keep` does after two new .pro files are dropped in.
+    let second = library_named("NEW LEVEL", &["Song A", "Song B (new)"]);
+    repo.upsert_library(&second).await.unwrap();
+
+    let libraries = repo.fetch_libraries().await.unwrap();
+    let new_level: Vec<_> = libraries
+        .iter()
+        .filter(|library| library.name == "NEW LEVEL")
+        .collect();
+    assert_eq!(
+        new_level.len(),
+        1,
+        "exactly one NEW LEVEL library after re-import (no duplicate, no leftover)"
+    );
+    assert_eq!(
+        new_level[0].presentations.len(),
+        2,
+        "re-import reflects the newly added song"
+    );
+}
+
 #[tokio::test]
 async fn round_trip_library() {
     let repo = Repository::connect_in_memory().await.unwrap();
