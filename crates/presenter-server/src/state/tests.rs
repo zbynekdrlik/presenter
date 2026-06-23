@@ -1007,24 +1007,19 @@ async fn group_color_cache_resolves_and_lists() {
 }
 
 #[tokio::test]
-async fn presentation_cache_serves_repeat_reads() {
-    // Kills cache_presentation_ref / cache_presentation_value -> (): if caching
-    // is a no-op the second read still works (falls back to DB), so instead we
-    // assert the cached value is the SAME Arc as a follow-up read — proving the
-    // cache was populated and reused rather than re-fetched.
+async fn presentation_from_cache_serves_repeat_reads() {
+    // Kills presentation_from_cache's own cache write: a repeat read must return
+    // the very same Arc allocation (cache hit), only true if the value was
+    // actually inserted.
     let state = AppState::in_memory().await.unwrap();
     super::seed_sample_library(&state).await.unwrap();
     let libraries = state.libraries().await.unwrap();
     let presentation_id = libraries[0].presentations[0].id;
 
-    // First read populates the cache via presentation_from_cache.
     let first = state
         .presentation_from_cache(presentation_id)
         .await
         .expect("first cache read");
-    // Second read must return the very same Arc allocation (cache hit), which
-    // only holds if the value was actually inserted (not dropped by a `-> ()`
-    // mutant on the cache writers feeding this path).
     let second = state
         .presentation_from_cache(presentation_id)
         .await
@@ -1034,6 +1029,76 @@ async fn presentation_cache_serves_repeat_reads() {
         "presentation cache must return the same Arc on a repeat read (cache hit)"
     );
     assert_eq!(first.id, presentation_id);
+}
+
+#[tokio::test]
+async fn presentation_detail_populates_cache_via_cache_presentation_ref() {
+    // Kills cache_presentation_ref -> (): presentation_detail caches the fetched
+    // presentation as a side effect. A no-op write leaves the cache empty, so we
+    // assert the cache map directly contains the entry afterwards.
+    let state = AppState::in_memory().await.unwrap();
+    super::seed_sample_library(&state).await.unwrap();
+    let libraries = state.libraries().await.unwrap();
+    let presentation_id = libraries[0].presentations[0].id;
+
+    assert!(
+        !state
+            .caches
+            .presentation
+            .read()
+            .await
+            .contains_key(&presentation_id),
+        "cache should be empty before presentation_detail"
+    );
+
+    let detail = state.presentation_detail(presentation_id).await.unwrap();
+    assert!(detail.is_some(), "presentation should exist");
+
+    let cached = state.caches.presentation.read().await;
+    let entry = cached
+        .get(&presentation_id)
+        .expect("presentation_detail must cache the presentation via cache_presentation_ref");
+    assert_eq!(entry.id, presentation_id);
+}
+
+#[tokio::test]
+async fn slide_edit_refreshes_cache_via_cache_presentation_value() {
+    // Kills cache_presentation_value -> (): a slide edit re-caches the UPDATED
+    // presentation. A no-op write leaves the cache without the new text, so we
+    // assert the cache map holds the edited content afterwards.
+    let state = AppState::in_memory().await.unwrap();
+    super::seed_sample_library(&state).await.unwrap();
+    let libraries = state.libraries().await.unwrap();
+    let presentation = libraries[0].presentations[0].clone();
+    let slide_id = presentation.slides[0].id;
+
+    state
+        .update_slide_content(
+            presentation.id,
+            slide_id,
+            "Cache witness main".to_string(),
+            "Cache witness translation".to_string(),
+            "Cache witness stage".to_string(),
+            None,
+            None,
+        )
+        .await
+        .unwrap();
+
+    let cached = state.caches.presentation.read().await;
+    let entry = cached
+        .get(&presentation.id)
+        .expect("a slide edit must (re)cache the presentation via cache_presentation_value");
+    let edited = entry
+        .slides
+        .iter()
+        .find(|s| s.id == slide_id)
+        .expect("edited slide present in cached presentation");
+    assert_eq!(
+        edited.content.main.value(),
+        "Cache witness main",
+        "the cached presentation must reflect the edit, not stale/absent content"
+    );
 }
 
 #[tokio::test]
