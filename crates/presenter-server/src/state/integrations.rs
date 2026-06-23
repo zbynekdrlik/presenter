@@ -350,6 +350,145 @@ impl AppState {
 #[cfg(test)]
 mod tests {
     use super::{ndi_status_for_start_error, PipelineStartError};
+    use crate::state::ndi_control::{NdiCall, NdiManagerHandle, StartOutcome};
+    use crate::state::AppState;
+    use presenter_core::{VideoSourceDraft, VideoSourceId};
+    use presenter_persistence::SettingsAuditSource;
+
+    // ── #406: GUARD the #370 source-switch reap WIRING ───────────────────────
+    //
+    // The #370 fix reaps stale sibling pipelines on a source switch by calling
+    // `manager.stop_other_pipelines(new_id)` inside `activate_video_source`
+    // AFTER `start_pipeline` returns Ok. The reap HELPER is unit-tested in the
+    // NDI crate, but NOTHING tested the WIRING — that `activate_video_source`
+    // actually CALLS the reap. A refactor could silently delete that call and
+    // reintroduce the #370 two-encoder NVENC leak with all tests still green.
+    //
+    // These tests inject a recording `FakeNdiControl` (a stand-in for the
+    // libndi/GPU hardware boundary — see `ndi_control` module docs) so the
+    // hardware-gated `if let Some(manager) = &self.ndi_manager` branch is
+    // reachable on the libndi-free `Rust Tests` CI host.
+    //
+    // ACCEPTANCE (#406): deleting the `manager.stop_other_pipelines(...)` call
+    // in `activate_video_source` MUST make `activation_reaps_siblings_after_…`
+    // FAIL — proving it guards the wiring, not just the helper.
+
+    /// Build an in-memory AppState with a `FakeNdiControl` injected and one
+    /// video source created. Returns the state, the new source id (and its
+    /// string form, which is the key the reap is expected to keep), and the
+    /// fake for assertions.
+    async fn state_with_fake(
+        outcome: StartOutcome,
+    ) -> (
+        AppState,
+        VideoSourceId,
+        String,
+        std::sync::Arc<crate::state::ndi_control::FakeNdiControl>,
+    ) {
+        let mut state = AppState::in_memory().await.expect("in-memory AppState");
+        let fake = crate::state::ndi_control::FakeNdiControl::with_outcome(outcome);
+        state.set_ndi_handle(NdiManagerHandle::Fake(fake.clone()));
+        let source = state
+            .create_video_source(
+                VideoSourceDraft::new("Cam 1", "STREAM-SNV (stream)"),
+                SettingsAuditSource::HttpSetter,
+                "test",
+            )
+            .await
+            .expect("create video source");
+        (state, source.id, source.id.to_string(), fake)
+    }
+
+    #[tokio::test]
+    async fn activation_reaps_siblings_after_successful_start() {
+        let (state, source_id, id, fake) = state_with_fake(StartOutcome::Ok).await;
+
+        let activated = state
+            .activate_video_source(source_id, SettingsAuditSource::HttpSetter, "test")
+            .await
+            .expect("activation succeeds");
+        assert_eq!(activated.id.to_string(), id);
+
+        let calls = fake.calls();
+        // start_pipeline must have been called for the new source…
+        assert!(
+            matches!(
+                calls.first(),
+                Some(NdiCall::StartPipeline { source_id, .. }) if *source_id == id
+            ),
+            "activate_video_source must call start_pipeline(new_id); calls = {calls:?}",
+        );
+        // …and the reap must have been called for the SAME id, AFTER the start.
+        // This is the line guarded by #406: deleting the reap call in
+        // activate_video_source makes this assertion fail.
+        assert!(
+            fake.reaped(&id),
+            "after a successful start, activate_video_source MUST reap siblings via \
+             stop_other_pipelines(new_id) (#370 single-active-source invariant); calls = {calls:?}",
+        );
+        assert_eq!(
+            calls,
+            vec![
+                NdiCall::StartPipeline {
+                    source_id: id.clone(),
+                    ndi_name: "STREAM-SNV (stream)".to_string(),
+                },
+                NdiCall::StopOtherPipelines {
+                    keep_id: id.clone()
+                },
+            ],
+            "the reap must run exactly once, AFTER start_pipeline, keeping the new id",
+        );
+    }
+
+    #[tokio::test]
+    async fn activation_does_not_reap_when_start_hard_errors() {
+        let (state, source_id, id, fake) = state_with_fake(StartOutcome::HardError).await;
+
+        let result = state
+            .activate_video_source(source_id, SettingsAuditSource::HttpSetter, "test")
+            .await;
+        assert!(
+            result.is_err(),
+            "a hard start_pipeline failure must fail the activation",
+        );
+
+        // start was attempted, but the reap must NOT run on a hard error —
+        // there is no new active pipeline to keep, so reaping siblings would
+        // be wrong.
+        assert!(
+            !fake.reaped(&id),
+            "on a hard start failure the reap MUST NOT run; calls = {:?}",
+            fake.calls(),
+        );
+        assert_eq!(
+            fake.calls(),
+            vec![NdiCall::StartPipeline {
+                source_id: id.clone(),
+                ndi_name: "STREAM-SNV (stream)".to_string(),
+            }],
+            "only start_pipeline should have been attempted on a hard error",
+        );
+    }
+
+    #[tokio::test]
+    async fn activation_reaps_siblings_for_silent_source() {
+        // #448 path: a silent broadcaster is an Ok-returning activation, and it
+        // must STILL reap siblings (a switch to a not-yet-live source still
+        // tears down the previous source's encoder).
+        let (state, source_id, id, fake) = state_with_fake(StartOutcome::SilentSource).await;
+
+        state
+            .activate_video_source(source_id, SettingsAuditSource::HttpSetter, "test")
+            .await
+            .expect("silent-source activation still succeeds (#448)");
+
+        assert!(
+            fake.reaped(&id),
+            "a silent-source (Ok) activation MUST also reap siblings (#370 + #448); calls = {:?}",
+            fake.calls(),
+        );
+    }
 
     // ── #448: an off/silent source is NOT a hard error / red overlay ─────────
     //
