@@ -66,17 +66,25 @@ pub fn VideoSourcesCard(toast: ToastHandle) -> impl IntoView {
 
     let activate = move |id: String| {
         leptos::task::spawn_local(async move {
-            let _ = ndi::activate_video_source(&id).await;
-            refresh();
-            toast.show("Source activated", "success");
+            match ndi::activate_video_source(&id).await {
+                Ok(_) => {
+                    refresh();
+                    toast.show("Source activated", "success");
+                }
+                Err(err) => toast.show(&format!("Error: {err}"), "error"),
+            }
         });
     };
 
     let deactivate = move |_| {
         leptos::task::spawn_local(async move {
-            let _ = ndi::deactivate_video_sources().await;
-            refresh();
-            toast.show("Sources deactivated", "success");
+            match ndi::deactivate_video_sources().await {
+                Ok(()) => {
+                    refresh();
+                    toast.show("Sources deactivated", "success");
+                }
+                Err(err) => toast.show(&format!("Error: {err}"), "error"),
+            }
         });
     };
 
@@ -85,9 +93,13 @@ pub fn VideoSourcesCard(toast: ToastHandle) -> impl IntoView {
             return;
         }
         leptos::task::spawn_local(async move {
-            let _ = ndi::delete_video_source(&id).await;
-            refresh();
-            toast.show("Source deleted", "success");
+            match ndi::delete_video_source(&id).await {
+                Ok(()) => {
+                    refresh();
+                    toast.show("Source deleted", "success");
+                }
+                Err(err) => toast.show(&format!("Error: {err}"), "error"),
+            }
         });
     };
 

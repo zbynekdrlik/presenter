@@ -2,7 +2,7 @@
 
 use leptos::prelude::*;
 
-use super::{capitalize, format_timestamp, parse_port, ToastHandle, STATUS_REFRESH_MS};
+use super::{capitalize, format_timestamp, parse_port_in_range, ToastHandle, STATUS_REFRESH_MS};
 use crate::api::settings::{self, AndroidDisplayDraft, AndroidDisplayDto};
 use crate::components::modal::confirm;
 
@@ -54,7 +54,6 @@ pub fn AndroidCard(toast: ToastHandle) -> impl IntoView {
         ev.prevent_default();
         let label_val = label.get_untracked().trim().to_string();
         let host_val = host.get_untracked().trim().to_string();
-        let port_val = parse_port(&port.get_untracked(), 5555);
         let component_val = component.get_untracked().trim().to_string();
         if label_val.is_empty() {
             form_state.set("error".to_string());
@@ -66,11 +65,11 @@ pub fn AndroidCard(toast: ToastHandle) -> impl IntoView {
             form_status.set("Host cannot be empty.".to_string());
             return;
         }
-        if port_val == 0 {
+        let Some(port_val) = parse_port_in_range(&port.get_untracked()) else {
             form_state.set("error".to_string());
             form_status.set("Port must be between 1 and 65535.".to_string());
             return;
-        }
+        };
         if component_val.is_empty() {
             form_state.set("error".to_string());
             form_status.set("Launch component cannot be empty.".to_string());

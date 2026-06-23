@@ -34,8 +34,19 @@ pub(super) const STATUS_REFRESH_MS: u32 = 5_000;
 /// Toast auto-hide delay, matching the JS blob's 4200ms.
 const TOAST_HIDE_MS: u32 = 4_200;
 
-pub(super) fn parse_port(raw: &str, fallback: u16) -> u16 {
-    raw.trim().parse::<u16>().unwrap_or(fallback)
+/// Parse a port from form input, rejecting anything outside 1..=65535.
+///
+/// Returns `None` for empty / non-numeric / out-of-range input so the caller
+/// shows "Port must be between 1 and 65535." — matching the original JS, which
+/// validated `port < 1 || port > 65535` and threw. A naive `parse::<u16>()`
+/// would make a too-large value (e.g. 99999) *overflow-fail* and silently fall
+/// back to a default port, saving the wrong host (the bug this replaces). We
+/// parse as `u32` first so an over-65535 value is rejected, not truncated.
+pub(super) fn parse_port_in_range(raw: &str) -> Option<u16> {
+    match raw.trim().parse::<u32>() {
+        Ok(n) if (1..=65535).contains(&n) => Some(n as u16),
+        _ => None,
+    }
 }
 
 /// Format an RFC3339 timestamp string as `dd.mm.yyyy HH:MM:SS` in local time,
@@ -128,5 +139,69 @@ pub fn SettingsPage() -> impl IntoView {
                 {move || toast.message.get()}
             </div>
         </div>
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::parse_port_in_range;
+
+    // #455: out-of-range / non-numeric / empty input must return None so the
+    // caller shows "Port must be between 1 and 65535." instead of silently
+    // falling back to a default port. These cases also pin the boundary so the
+    // mutation gate cannot survive a flipped comparison on `1..=65535`.
+
+    #[test]
+    fn zero_is_rejected() {
+        // Lower-boundary-minus-one: 0 is not a valid port.
+        assert_eq!(parse_port_in_range("0"), None);
+    }
+
+    #[test]
+    fn one_is_accepted() {
+        // Lower boundary: smallest valid port.
+        assert_eq!(parse_port_in_range("1"), Some(1));
+    }
+
+    #[test]
+    fn max_port_is_accepted() {
+        // Upper boundary: largest valid port.
+        assert_eq!(parse_port_in_range("65535"), Some(65535));
+    }
+
+    #[test]
+    fn just_over_max_is_rejected() {
+        // Upper-boundary-plus-one: this is exactly the value a naive
+        // `parse::<u16>()` would overflow-fail on — must be rejected, not
+        // truncated to a wrapped u16.
+        assert_eq!(parse_port_in_range("65536"), None);
+    }
+
+    #[test]
+    fn the_99999_bug_value_is_rejected() {
+        // The concrete value from the #455 report.
+        assert_eq!(parse_port_in_range("99999"), None);
+    }
+
+    #[test]
+    fn typical_default_ports_round_trip() {
+        // The fallbacks the call sites used must still parse cleanly.
+        assert_eq!(parse_port_in_range("8090"), Some(8090));
+        assert_eq!(parse_port_in_range("5555"), Some(5555));
+        assert_eq!(parse_port_in_range("39051"), Some(39051));
+    }
+
+    #[test]
+    fn whitespace_is_trimmed() {
+        assert_eq!(parse_port_in_range("  443  "), Some(443));
+    }
+
+    #[test]
+    fn empty_and_non_numeric_are_rejected() {
+        assert_eq!(parse_port_in_range(""), None);
+        assert_eq!(parse_port_in_range("   "), None);
+        assert_eq!(parse_port_in_range("abc"), None);
+        assert_eq!(parse_port_in_range("80x"), None);
+        assert_eq!(parse_port_in_range("-1"), None);
     }
 }
