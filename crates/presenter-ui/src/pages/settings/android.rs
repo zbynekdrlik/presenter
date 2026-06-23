@@ -223,7 +223,11 @@ pub fn AndroidCard(toast: ToastHandle) -> impl IntoView {
                     </label>
                     <label class="settings__form-control--small">
                         <span>"Port"</span>
-                        <input type="number" data-role="android-port" min="1" max="65535" required
+                        // No native min/max/required — see resolume.rs: the out-of-range
+                        // value must reach `on_submit` so the Rust `parse_port_in_range`
+                        // guard shows the styled "Port must be between 1 and 65535."
+                        // message rather than the browser silently blocking submit. (#455)
+                        <input type="number" data-role="android-port"
                             prop:value=move || port.get()
                             on:input=move |ev| port.set(event_target_value(&ev)) />
                     </label>

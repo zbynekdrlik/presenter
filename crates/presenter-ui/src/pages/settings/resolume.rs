@@ -221,7 +221,15 @@ pub fn ResolumeCard(toast: ToastHandle) -> impl IntoView {
                     </label>
                     <label class="settings__form-control--small">
                         <span>"Port"</span>
-                        <input type="number" data-role="host-port" min="1" max="65535" required
+                        // No native min/max/required: an out-of-range value (e.g.
+                        // 99999) must REACH `on_submit` so the Rust
+                        // `parse_port_in_range` guard rejects it with the styled
+                        // "Port must be between 1 and 65535." message. With the
+                        // native `max` constraint the browser silently blocks the
+                        // submit (the field is `:invalid`) and `on_submit` never
+                        // fires — making the #455 guard unreachable. The Rust guard
+                        // is the single authority for the 1..=65535 range. (#455)
+                        <input type="number" data-role="host-port"
                             prop:value=move || port.get()
                             on:input=move |ev| port.set(event_target_value(&ev)) />
                     </label>
