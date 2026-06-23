@@ -2,8 +2,9 @@ use super::stage::{format_countdown_text, sanitize_song_title};
 use super::*;
 use crate::live::LiveEvent;
 use presenter_core::{
-    bible::BibleIngestionBatch, BiblePassage, BibleReference, BibleTranslation, Library, LibraryId,
-    SlideContent, SlideText, TimerCommand, TimerState,
+    bible::BibleIngestionBatch, AbleSetSettingsDraft, BiblePassage, BibleReference,
+    BibleSlideOutput, BibleTranslation, Library, LibraryId, SlideContent, SlideText, TimerCommand,
+    TimerState,
 };
 
 /// Regression for #333 item 6: the startup auto-restore branch must skip when
@@ -878,4 +879,360 @@ async fn set_stage_layout_code_rejects_camera_crew() {
         msg.contains("camera-crew") && msg.contains("not"),
         "error message should explain the rejection; got: {msg}"
     );
+}
+
+// --- #346 manager-decomposition coverage ------------------------------------
+//
+// The CacheManager / CompanionManager / BibleManager extraction was a pure
+// field relocation, but it touched one body line in each of the accessor /
+// cache methods below, pulling them into the diff-scoped mutation gate. These
+// tests pin the behaviors those methods promise so the gate's mutants die —
+// they exercise the real success paths, not the relocation per se.
+
+/// Build a token-bearing in-memory AppState (the `in_memory()` helper passes
+/// `None` for the token, so it cannot exercise `companion_token`).
+#[cfg(test)]
+async fn in_memory_with_companion_token(token: &str) -> AppState {
+    let repo = presenter_persistence::Repository::connect_in_memory()
+        .await
+        .unwrap();
+    let registry = crate::resolume::ResolumeRegistry::new().unwrap();
+    let android_stage_registry = crate::android_stage::AndroidStageRegistry::new();
+    let osc_bridge = crate::osc::OscBridge::new(&crate::config::OscConfig::default());
+    let ableset_bridge = crate::ableset::AbleSetBridge::new();
+    AppState::new(
+        repo,
+        Some(token.to_string()),
+        false,
+        super::DEFAULT_COMPANION_PORT,
+        registry,
+        android_stage_registry,
+        osc_bridge,
+        ableset_bridge,
+    )
+}
+
+#[tokio::test]
+async fn companion_token_returns_configured_token() {
+    // Kills companion_token -> {None, Some(""), Some("xyzzy")}: a state built
+    // with a real token must return exactly that token, not a stand-in.
+    let state = in_memory_with_companion_token("super-secret-token").await;
+    assert_eq!(state.companion_token(), Some("super-secret-token"));
+
+    // And the default (no-token) state returns None — kills the Some("") /
+    // Some("xyzzy") mutants which would force a token where none exists.
+    let no_token = AppState::in_memory().await.unwrap();
+    assert_eq!(no_token.companion_token(), None);
+}
+
+#[tokio::test]
+async fn set_companion_settings_updates_enabled_and_port() {
+    // Kills: companion_enabled -> {true,false}, companion_port -> {0,1},
+    // set_companion_settings -> Ok(()), configure_companion_service -> Ok(()).
+    // A no-op stub for any of these would leave the atomics at their defaults
+    // (disabled / DEFAULT_COMPANION_PORT) and the assertions below would fail.
+    let state = AppState::in_memory().await.unwrap();
+    assert!(!state.companion_enabled(), "fresh state is disabled");
+    assert_eq!(state.companion_port(), super::DEFAULT_COMPANION_PORT);
+
+    // Pick a free ephemeral port so enabling actually binds a real listener
+    // (configure_companion_service must run; a no-op stub would not change state).
+    let probe = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let port = probe.local_addr().unwrap().port();
+    drop(probe);
+
+    state.set_companion_settings(true, port).await.unwrap();
+    assert!(
+        state.companion_enabled(),
+        "companion must be enabled after set_companion_settings(true, _)"
+    );
+    assert_eq!(
+        state.companion_port(),
+        port,
+        "companion port must reflect the value just set"
+    );
+
+    // Side effect of configure_companion_service: the websocket server must be
+    // actually LISTENING on the port. This kills the `configure_companion_service
+    // -> Ok(())` mutant — a no-op stub would set the atomics (so the asserts
+    // above still pass) but never bind the listener, so this connect would fail.
+    let connected = tokio::net::TcpStream::connect(("127.0.0.1", port)).await;
+    assert!(
+        connected.is_ok(),
+        "companion server must be listening on port {port} after enable — \
+         configure_companion_service must have bound the listener, not no-op'd"
+    );
+    drop(connected);
+
+    // Disabling flips it back and persists a different port — proves the setter
+    // writes both fields, not a fixed value — AND tears the listener down so the
+    // port is free again (further proof configure_companion_service ran).
+    state
+        .set_companion_settings(false, super::DEFAULT_COMPANION_PORT)
+        .await
+        .unwrap();
+    assert!(!state.companion_enabled());
+    assert_eq!(state.companion_port(), super::DEFAULT_COMPANION_PORT);
+}
+
+#[tokio::test]
+async fn group_color_cache_resolves_and_lists() {
+    // Kills resolve_group_color -> {None, Some(""), Some("xyzzy")} and
+    // get_all_group_colors -> {empty / fabricated maps}. resolve_group_color
+    // returns a deterministic palette color and caches it; get_all_group_colors
+    // must then expose exactly that cached entry.
+    let state = AppState::in_memory().await.unwrap();
+
+    let color = state
+        .resolve_group_color("Intro")
+        .await
+        .expect("resolve_group_color must return a color for a group name");
+    assert!(
+        color.starts_with('#') && color.len() == 7,
+        "expected a #RRGGBB palette color, got {color:?}"
+    );
+
+    // Resolving again returns the SAME color (cache + DB are deterministic) —
+    // kills the Some("xyzzy") / Some("") mutants.
+    let again = state.resolve_group_color("Intro").await.unwrap();
+    assert_eq!(again, color, "group color must be stable across calls");
+
+    let all = state.get_all_group_colors().await;
+    assert_eq!(
+        all.get("Intro").map(String::as_str),
+        Some(color.as_str()),
+        "get_all_group_colors must expose the cached Intro color, not an \
+         empty or fabricated map"
+    );
+}
+
+#[tokio::test]
+async fn presentation_from_cache_serves_repeat_reads() {
+    // Kills presentation_from_cache's own cache write: a repeat read must return
+    // the very same Arc allocation (cache hit), only true if the value was
+    // actually inserted.
+    let state = AppState::in_memory().await.unwrap();
+    super::seed_sample_library(&state).await.unwrap();
+    let libraries = state.libraries().await.unwrap();
+    let presentation_id = libraries[0].presentations[0].id;
+
+    let first = state
+        .presentation_from_cache(presentation_id)
+        .await
+        .expect("first cache read");
+    let second = state
+        .presentation_from_cache(presentation_id)
+        .await
+        .expect("second cache read");
+    assert!(
+        std::sync::Arc::ptr_eq(&first, &second),
+        "presentation cache must return the same Arc on a repeat read (cache hit)"
+    );
+    assert_eq!(first.id, presentation_id);
+}
+
+#[tokio::test]
+async fn presentation_detail_populates_cache_via_cache_presentation_ref() {
+    // Kills cache_presentation_ref -> (): presentation_detail caches the fetched
+    // presentation as a side effect. A no-op write leaves the cache empty, so we
+    // assert the cache map directly contains the entry afterwards.
+    let state = AppState::in_memory().await.unwrap();
+    super::seed_sample_library(&state).await.unwrap();
+    let libraries = state.libraries().await.unwrap();
+    let presentation_id = libraries[0].presentations[0].id;
+
+    assert!(
+        !state
+            .caches
+            .presentation
+            .read()
+            .await
+            .contains_key(&presentation_id),
+        "cache should be empty before presentation_detail"
+    );
+
+    let detail = state.presentation_detail(presentation_id).await.unwrap();
+    assert!(detail.is_some(), "presentation should exist");
+
+    let cached = state.caches.presentation.read().await;
+    let entry = cached
+        .get(&presentation_id)
+        .expect("presentation_detail must cache the presentation via cache_presentation_ref");
+    assert_eq!(entry.id, presentation_id);
+}
+
+#[tokio::test]
+async fn slide_edit_refreshes_cache_via_cache_presentation_value() {
+    // Kills cache_presentation_value -> (): a slide edit re-caches the UPDATED
+    // presentation. A no-op write leaves the cache without the new text, so we
+    // assert the cache map holds the edited content afterwards.
+    let state = AppState::in_memory().await.unwrap();
+    super::seed_sample_library(&state).await.unwrap();
+    let libraries = state.libraries().await.unwrap();
+    let presentation = libraries[0].presentations[0].clone();
+    let slide_id = presentation.slides[0].id;
+
+    state
+        .update_slide_content(
+            presentation.id,
+            slide_id,
+            "Cache witness main".to_string(),
+            "Cache witness translation".to_string(),
+            "Cache witness stage".to_string(),
+            None,
+            None,
+        )
+        .await
+        .unwrap();
+
+    let cached = state.caches.presentation.read().await;
+    let entry = cached
+        .get(&presentation.id)
+        .expect("a slide edit must (re)cache the presentation via cache_presentation_value");
+    let edited = entry
+        .slides
+        .iter()
+        .find(|s| s.id == slide_id)
+        .expect("edited slide present in cached presentation");
+    assert_eq!(
+        edited.content.main.value(),
+        "Cache witness main",
+        "the cached presentation must reflect the edit, not stale/absent content"
+    );
+}
+
+#[tokio::test]
+async fn delete_presentation_removes_it() {
+    // Kills delete_presentation -> Ok(()): a stub that skips the actual delete
+    // would leave the presentation retrievable.
+    let state = AppState::in_memory().await.unwrap();
+    super::seed_sample_library(&state).await.unwrap();
+    let libraries = state.libraries().await.unwrap();
+    let presentation_id = libraries[0].presentations[0].id;
+
+    assert!(
+        state
+            .presentation_detail(presentation_id)
+            .await
+            .unwrap()
+            .is_some(),
+        "presentation should exist before delete"
+    );
+
+    state.delete_presentation(presentation_id).await.unwrap();
+
+    assert!(
+        state
+            .presentation_detail(presentation_id)
+            .await
+            .unwrap()
+            .is_none(),
+        "presentation must be gone after delete_presentation"
+    );
+}
+
+#[tokio::test]
+async fn trigger_and_read_bible_slide_output() {
+    // Kills trigger_bible_slide_output -> () and active_bible_slide_output -> None:
+    // after triggering an output it must be readable back verbatim.
+    let state = AppState::in_memory().await.unwrap();
+    assert!(
+        state.active_bible_slide_output().await.is_none(),
+        "no slide output before any trigger"
+    );
+
+    let output = BibleSlideOutput::new(
+        "For God so loved the world",
+        "John 3:16 (NIV)",
+        "",
+        "",
+        chrono::Utc::now(),
+    );
+    state
+        .trigger_bible_slide_output(
+            output.clone(),
+            super::bible::BibleSlideReferenceMetadata::default(),
+        )
+        .await;
+
+    let active = state
+        .active_bible_slide_output()
+        .await
+        .expect("slide output must be readable after trigger");
+    assert_eq!(active.main_text, "For God so loved the world");
+    assert_eq!(active.main_reference, "John 3:16 (NIV)");
+
+    // The legacy broadcast must also be set (trigger updates both) — a `-> ()`
+    // stub would leave both empty.
+    assert!(
+        state.active_bible_broadcast().await.is_some(),
+        "legacy bible broadcast must be set by trigger_bible_slide_output"
+    );
+}
+
+#[tokio::test]
+async fn ableset_resolves_presentation_through_cache() {
+    // Kills resolve_ableset_presentation -> Ok(None)/Ok(Some(default)),
+    // ensure_ableset_cache -> Ok(()), refresh_ableset_cache -> Ok(()): enabling
+    // AbleSet with a digit-prefixed library and resolving the prefix must return
+    // the matching presentation id (which requires the cache to be built).
+    let state = AppState::in_memory().await.unwrap();
+
+    // Seed a library with a digit-prefixed presentation so extract_song_prefix
+    // (length 3) yields a cacheable key "001".
+    let pres = Presentation::new(
+        "001 Amazing Grace",
+        vec![Slide::new(
+            0,
+            SlideContent::new(
+                SlideText::new("Amazing grace").unwrap(),
+                SlideText::new("Úžasná milosť").unwrap(),
+                SlideText::new("").unwrap(),
+                None,
+            ),
+        )
+        .with_id(SlideId::new())],
+    )
+    .unwrap()
+    .with_id(PresentationId::new());
+    let expected_id = pres.id;
+    let library = Library::new("Hymnal", vec![pres])
+        .unwrap()
+        .with_id(LibraryId::new());
+    state.repository().upsert_library(&library).await.unwrap();
+
+    // Enable AbleSet pointing at that library (start_tracker spawns async and
+    // returns Ok without a live host, so the snapshot reports enabled=true).
+    let draft = AbleSetSettingsDraft {
+        enabled: true,
+        host: "ableset.invalid".to_string(),
+        osc_port: 39051,
+        http_port: 80,
+        library_name: "Hymnal".to_string(),
+        song_prefix_length: 3,
+    };
+    state
+        .update_ableset_settings(
+            draft,
+            presenter_persistence::SettingsAuditSource::HttpSetter,
+            "test",
+        )
+        .await
+        .unwrap();
+
+    let resolved = state
+        .resolve_ableset_presentation("001")
+        .await
+        .expect("resolve must not error");
+    assert_eq!(
+        resolved,
+        Some(expected_id),
+        "AbleSet prefix '001' must resolve to the seeded presentation via the \
+         (re)built cache — a None/default/no-op stub would not"
+    );
+
+    // Unknown prefix resolves to None — proves the lookup discriminates rather
+    // than always returning the same id.
+    let missing = state.resolve_ableset_presentation("999").await.unwrap();
+    assert_eq!(missing, None, "unknown prefix must resolve to None");
 }
