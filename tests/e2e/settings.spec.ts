@@ -466,3 +466,64 @@ test('migrated WASM settings page renders every card with a clean console', asyn
 
   expect(consoleMessages).toEqual([]);
 });
+
+// #455 regression — out-of-range ports must be REJECTED, not silently saved.
+// The migrated `parse_port` did `parse::<u16>().unwrap_or(fallback)`, so a value
+// > 65535 (e.g. 99999) overflow-failed the u16 parse and fell back to the
+// default port (8090 resolume / 5555 android). The `port == 0` guard never
+// caught it (the fallback is non-zero), so the form SAVED a host with the wrong
+// port. The fix parses as u32 and rejects 1..=65535 → the form shows
+// "Port must be between 1 and 65535." and creates nothing. Mirrors the original
+// settings_script.js (`if (port < 1 || port > 65535) throw`).
+test('#455 out-of-range port is rejected, not silently saved', async ({ page }) => {
+  const consoleMessages: string[] = [];
+  page.on('console', (msg) => {
+    if (msg.type() === 'error' || msg.type() === 'warning') {
+      consoleMessages.push(`[${msg.type()}] ${msg.text()}`);
+    }
+  });
+
+  await page.goto(new URL('/ui/settings', baseURL).toString());
+  await page.waitForSelector('body[data-wasm-ready="true"]', { timeout: 30_000 });
+  await page.waitForLoadState('networkidle');
+
+  // ── Resolume: a too-large port must show the range error and create no host ──
+  const resolumeBefore = await getHostsViaApi(page);
+  const resolumeLabel = `Range Test ${Date.now()}`;
+  await page.fill(selectors.labelInput, resolumeLabel);
+  await page.fill(selectors.hostInput, 'resolume.invalid');
+  // The <input type=number max=65535> only blocks the spinner arrows, not a
+  // typed/pasted value — fill() injects 99999 exactly as a paste would.
+  await page.fill(selectors.portInput, '99999');
+  await page.check(selectors.enabledCheckbox);
+  await page.click(selectors.submitButton);
+
+  const resolumeStatus = page.locator('[data-role="form-status"]');
+  await expect(resolumeStatus).toHaveText('Port must be between 1 and 65535.');
+  await expect(resolumeStatus).toHaveAttribute('data-state', 'error');
+
+  // The bug: a host would have been created with port 8090. The fix: none.
+  const resolumeAfter = await getHostsViaApi(page);
+  expect(resolumeAfter).toHaveLength(resolumeBefore.length);
+  expect(resolumeAfter.find((h) => h.label === resolumeLabel)).toBeUndefined();
+
+  // ── Android: same regression on the second port call site ──────────────────
+  const androidBefore = await getAndroidDisplaysViaApi(page);
+  const androidLabel = `Range Display ${Date.now()}`;
+  await page.fill(selectors.androidLabel, androidLabel);
+  await page.fill(selectors.androidHost, 'stage.invalid');
+  await page.fill(selectors.androidPort, '99999');
+  await page.fill(selectors.androidComponent, 'com.tcl.browser');
+  await page.check(selectors.androidEnabled);
+  await page.click(selectors.androidSubmit);
+
+  const androidStatus = page.locator('[data-role="android-form-status"]');
+  await expect(androidStatus).toHaveText('Port must be between 1 and 65535.');
+  await expect(androidStatus).toHaveAttribute('data-state', 'error');
+
+  const androidAfter = await getAndroidDisplaysViaApi(page);
+  expect(androidAfter).toHaveLength(androidBefore.length);
+  expect(androidAfter.find((d) => d.label === androidLabel)).toBeUndefined();
+
+  expect(consoleMessages).toEqual([]);
+});

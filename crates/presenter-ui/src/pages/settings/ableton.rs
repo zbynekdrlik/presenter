@@ -2,7 +2,7 @@
 
 use leptos::prelude::*;
 
-use super::{capitalize, format_timestamp, parse_port, ToastHandle, STATUS_REFRESH_MS};
+use super::{capitalize, format_timestamp, parse_port_in_range, ToastHandle, STATUS_REFRESH_MS};
 use crate::api::settings::{self, OscStatusDto};
 use presenter_core::{AbleSetSettingsDraft, AbleSetStatusSnapshot, OscSettingsDraft, VelocityMode};
 
@@ -56,9 +56,15 @@ pub fn AbletonCard(toast: ToastHandle) -> impl IntoView {
         ev.prevent_default();
         let want_enabled = enabled.get_untracked();
         let host_val = host.get_untracked().trim().to_string();
-        let http_port_val = parse_port(&http_port.get_untracked(), 80);
+        // Ableton ports stay lenient: invalid / out-of-range input falls back to
+        // the sane default (the original used `toNumber(value, fallback)`, which
+        // fell back on non-numeric input; we additionally fall back on
+        // out-of-range, which is safe because the draft field is `u16` and the
+        // server still validates). `parse_port_in_range` avoids the u16
+        // overflow-truncation a naive parse would hit on a too-large value.
+        let http_port_val = parse_port_in_range(&http_port.get_untracked()).unwrap_or(80);
         let library_val = library.get_untracked().trim().to_string();
-        let listen_port = parse_port(&osc_port.get_untracked(), 39051);
+        let listen_port = parse_port_in_range(&osc_port.get_untracked()).unwrap_or(39051);
         let prefix = song_prefix_length.get_untracked().max(1);
         busy.set(true);
         form_state.set("loading".to_string());
