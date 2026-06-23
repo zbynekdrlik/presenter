@@ -28,6 +28,7 @@ mod cache_manager;
 mod companion;
 mod companion_manager;
 mod integrations;
+mod ndi_control;
 mod presentations;
 mod seed;
 pub(crate) mod slides;
@@ -120,7 +121,7 @@ pub struct AppState {
     broadcast_live: Arc<AtomicBool>,
     ai_conversation: Arc<RwLock<Vec<ChatMessage>>>,
     ai_proxy: Arc<ProxyManager>,
-    ndi_manager: Option<Arc<presenter_ndi::NdiManager>>,
+    ndi_manager: Option<ndi_control::NdiManagerHandle>,
     api_stage: Arc<RwLock<ApiStageState>>,
     pub local_public_ip: Arc<Option<String>>,
 }
@@ -183,7 +184,9 @@ impl AppState {
             .map(|layout| layout.code)
             .find(|code| code == DEFAULT_STAGE_LAYOUT_CODE)
             .unwrap_or_else(|| DEFAULT_STAGE_LAYOUT_CODE.to_string());
-        let ndi_manager = presenter_ndi::NdiManager::try_new().map(Arc::new);
+        let ndi_manager = presenter_ndi::NdiManager::try_new()
+            .map(Arc::new)
+            .map(ndi_control::NdiManagerHandle::Real);
         if ndi_manager.is_some() {
             tracing::info!("NDI SDK loaded successfully");
         } else {
@@ -655,8 +658,18 @@ impl AppState {
         &self.ai_proxy
     }
 
-    pub fn ndi_manager(&self) -> Option<&Arc<presenter_ndi::NdiManager>> {
+    pub(crate) fn ndi_manager(&self) -> Option<&ndi_control::NdiManagerHandle> {
         self.ndi_manager.as_ref()
+    }
+
+    /// Test-only: replace the NDI manager handle with a recording fake.
+    ///
+    /// Used by the #406 activation-wiring tests to inject a libndi-free
+    /// [`ndi_control::FakeNdiControl`] so the hardware-gated reap branch in
+    /// [`Self::activate_video_source`] is reachable on CI hosts without libndi.
+    #[cfg(test)]
+    pub(crate) fn set_ndi_handle(&mut self, handle: ndi_control::NdiManagerHandle) {
+        self.ndi_manager = Some(handle);
     }
 
     pub fn stage_connections_handle(&self) -> StageConnections {
