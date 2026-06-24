@@ -6,6 +6,8 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Local Build Policy
 
+<!-- airuleset:local-builds=allowed -->
+
 **Local Rust builds (cargo build, cargo clippy, cargo test) are ALLOWED on this machine.** This is the powerful dev2 build machine. Run fmt, clippy, test, and build locally before pushing. The global airuleset default (CI-only) does NOT apply here.
 
 <!-- Global rules applied via airuleset modules (~/devel/airuleset/):
