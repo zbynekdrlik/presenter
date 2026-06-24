@@ -99,6 +99,29 @@ async fn upsert_library_reimports_same_name_with_fresh_id() {
         2,
         "re-import reflects the newly added song"
     );
+
+    // Kills the mutant that deletes the `!` in `if !stale_presentation_ids
+    // .is_empty()` (library.rs): skipping that branch leaves the OLD library's
+    // presentations + slides orphaned (foreign_keys are off, so nothing
+    // cascades). `fetch_libraries` joins by library_id and would NOT surface
+    // those orphans — so assert the RAW row counts. Exactly the new library's
+    // 2 presentations and 2 slides must remain; an orphaned set would make
+    // these 3.
+    use crate::entities::{presentation as presentation_entity, slide as slide_entity};
+    use sea_orm::EntityTrait;
+    let db = repo.connection_for_tests();
+    let presentation_rows = presentation_entity::Entity::find().all(db).await.unwrap();
+    assert_eq!(
+        presentation_rows.len(),
+        2,
+        "no orphaned presentations after re-import (stale rows must be deleted)"
+    );
+    let slide_rows = slide_entity::Entity::find().all(db).await.unwrap();
+    assert_eq!(
+        slide_rows.len(),
+        2,
+        "no orphaned slides after re-import (stale rows must be deleted)"
+    );
 }
 
 #[tokio::test]
