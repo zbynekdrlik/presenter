@@ -96,11 +96,31 @@ impl ToastHandle {
 }
 
 /// Settings page — configuration for all integrations.
+///
+/// Renders in two contexts (#462):
+/// - **Standalone** `/ui/settings` (`embedded = false`): owns the `<body>` for
+///   full-page dark styling and shows its own page header.
+/// - **Embedded** as a native operator panel (`embedded = true`): the operator
+///   shell already provides the nav + version chrome, so the page header is
+///   skipped and the shared `<body>` class is left untouched. This replaces the
+///   former `<iframe src="/ui/settings">`, which double-rendered the header and
+///   clipped scrolling to the fixed iframe height.
 #[component]
-pub fn SettingsPage() -> impl IntoView {
-    if let Some(body) = crate::utils::window::document_body() {
-        let _ = body.set_attribute("class", "settings");
-        let _ = body.set_attribute("data-mode", "create");
+pub fn SettingsPage(#[prop(optional)] embedded: bool) -> impl IntoView {
+    // Standalone page only: own the <body> for full-page styling, and restore it
+    // on unmount so an in-app navigation can't leave a stale `.settings` class
+    // behind (a contributor to the "header multiplied on each visit" report).
+    if !embedded {
+        if let Some(body) = crate::utils::window::document_body() {
+            let _ = body.set_attribute("class", "settings");
+            let _ = body.set_attribute("data-mode", "create");
+        }
+        on_cleanup(|| {
+            if let Some(body) = crate::utils::window::document_body() {
+                let _ = body.set_attribute("class", "");
+                let _ = body.remove_attribute("data-mode");
+            }
+        });
     }
 
     // ── Toast state (shared across every card) ──────────────────────────────
@@ -112,16 +132,18 @@ pub fn SettingsPage() -> impl IntoView {
 
     view! {
         <div class="settings-layout">
-            <header class="settings__header">
-                <div class="settings__header-title">
-                    <h1>"Presenter Settings"</h1>
-                    <p>"Configure integrations and controller connections."</p>
-                </div>
-                <nav class="settings__header-nav">
-                    <a href="/" class="settings__link">"← Back to hub"</a>
-                    <span class="settings__version"><VersionLabel /></span>
-                </nav>
-            </header>
+            {(!embedded).then(|| view! {
+                <header class="settings__header">
+                    <div class="settings__header-title">
+                        <h1>"Presenter Settings"</h1>
+                        <p>"Configure integrations and controller connections."</p>
+                    </div>
+                    <nav class="settings__header-nav">
+                        <a href="/" class="settings__link">"← Back to hub"</a>
+                        <span class="settings__version"><VersionLabel /></span>
+                    </nav>
+                </header>
+            })}
             <main class="settings__main">
                 <CompanionCard />
                 <PreferencesCard />

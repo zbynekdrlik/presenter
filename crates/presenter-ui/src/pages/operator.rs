@@ -17,6 +17,7 @@ use crate::components::toast::Toast;
 use crate::components::version_label::VersionLabel;
 use crate::pages::ai::AiPage;
 use crate::pages::bible::BiblePage;
+use crate::pages::settings::SettingsPage;
 use crate::state::operator::OperatorState;
 use crate::state::AppContext;
 use crate::ws;
@@ -188,7 +189,7 @@ pub fn OperatorPage(#[prop(default = String::new())] initial_view: String) -> im
                 <AiPage />
             </section>
             <section class="operator__panel operator__panel--settings" data-view-panel="settings">
-                <iframe src="/ui/settings" title="Settings" class="operator__settings-frame"></iframe>
+                <SettingsPage embedded=true />
             </section>
         </main>
         <Toast />
