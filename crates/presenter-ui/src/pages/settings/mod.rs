@@ -130,6 +130,13 @@ pub fn SettingsPage(#[prop(optional)] embedded: bool) -> impl IntoView {
         state: RwSignal::new(String::from("info")),
     };
 
+    // The standalone page is the sole owner of `data-role="toast"`. When embedded
+    // in the operator shell, the operator already renders its own
+    // `data-role="toast"`, so use a distinct role here — otherwise operator E2E
+    // selectors (`[data-role="toast"]`) match BOTH and hit a strict-mode
+    // violation (#462).
+    let toast_role = if embedded { "settings-toast" } else { "toast" };
+
     view! {
         <div class="settings-layout">
             {(!embedded).then(|| view! {
@@ -154,7 +161,7 @@ pub fn SettingsPage(#[prop(optional)] embedded: bool) -> impl IntoView {
             </main>
             <div
                 class="settings__toast"
-                data-role="toast"
+                data-role=toast_role
                 data-visible=move || if toast.visible.get() { "true" } else { "false" }
                 data-state=move || toast.state.get()
             >

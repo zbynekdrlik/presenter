@@ -79,6 +79,12 @@ test("operator Settings is a native panel, not an iframe, with a single header",
   // render its own "Presenter Settings / Back to hub" header.
   await expect(page.locator(".settings__header")).toHaveCount(0);
 
+  // The embedded settings toast must NOT collide with the operator's own
+  // [data-role="toast"] — when embedded it uses data-role="settings-toast".
+  // Otherwise operator E2E selectors match two elements (strict-mode
+  // violation), which is the regression this guards (#462).
+  await expect(page.locator('[data-role="toast"]')).toHaveCount(1);
+
   expect(errors).toEqual([]);
 });
 
