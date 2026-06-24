@@ -39,6 +39,14 @@ Build order matters (WASM embedded into server at compile time via `include_dir!
 
 5. **Verify**: `curl http://10.77.8.134:8080/healthz`
 
+### ⚠️ Known issue — local WASM build currently BROKEN (#465)
+
+`trunk build` fails at wasm-bindgen with `failed to find the __wbindgen_externref_table_alloc function`: the trunk-cached wasm-bindgen 0.2.122 CLI is incompatible with rustc 1.96 (reference-types enabled by default). `RUSTFLAGS=-Ctarget-feature=-reference-types` does NOT fix it. **CI builds WASM fine** (it deploys), so until #465 is fixed:
+
+- Validate Rust locally with the cheap path: `cd crates/presenter-ui && cargo check --target wasm32-unknown-unknown` (and `cargo clippy ... --target wasm32-unknown-unknown -- -D warnings`). These skip wasm-bindgen, so they work.
+- For UI changes that need a real built artifact, **push and let CI build it**, then verify on the live dev server (`10.77.8.134:8080`) with Playwright. Don't fight the local trunk build.
+- `presenter-ui` is OUTSIDE the workspace (own `Cargo.lock`, version `0.1.x`): `cargo <cmd> -p presenter-ui` from root fails — run from `crates/presenter-ui/`.
+
 ## CLIProxyAPI Login Flow
 
 Use `cli-proxy-api -claude-login -no-browser` with callback URL paste.
