@@ -288,10 +288,6 @@ body.settings {
   transform: translateY(-1px);
 }
 
-body.settings[data-mode="create"] [data-role="host-reset"] {
-  display: none;
-}
-
 .settings__form-status {
   min-height: 1.2rem;
   font-size: 0.9rem;

@@ -85,6 +85,14 @@ test("operator Settings is a native panel, not an iframe, with a single header",
   // violation), which is the regression this guards (#462).
   await expect(page.locator('[data-role="toast"]')).toHaveCount(1);
 
+  // In create mode (nothing being edited) the Resolume "Cancel" button must not
+  // render — guards the embedded regression where it relied on a body[data-mode]
+  // CSS rule that never matched under body.operator, leaving Cancel always
+  // visible and polluting the operator's data-mode (#462).
+  await expect(
+    page.locator('[data-view-panel="settings"] [data-role="host-reset"]'),
+  ).toHaveCount(0);
+
   expect(errors).toEqual([]);
 });
 

@@ -73,6 +73,7 @@ impl Repository {
         let db = Database::connect("sqlite::memory:?cache=shared")
             .await
             .context("failed to start in-memory sqlite")?;
+        Self::apply_sqlite_pragmas(&db).await?;
         Self::migrate(&db).await?;
         Ok(Self { db })
     }
@@ -85,6 +86,11 @@ impl Repository {
     async fn apply_sqlite_pragmas(db: &DatabaseConnection) -> anyhow::Result<()> {
         let backend = db.get_database_backend();
         for pragma in [
+            // Make the ON DELETE CASCADE foreign keys load-bearing: upsert_library
+            // deletes only the stale library row and relies on the cascade to drop
+            // its presentations + slides. sqlx enables this by default, but pin it
+            // so the invariant survives a dependency default change.
+            "PRAGMA foreign_keys = ON",
             "PRAGMA journal_mode = WAL",
             "PRAGMA wal_autocheckpoint = 1000",
             "PRAGMA busy_timeout = 5000",

@@ -113,12 +113,10 @@ pub fn SettingsPage(#[prop(optional)] embedded: bool) -> impl IntoView {
     if !embedded {
         if let Some(body) = crate::utils::window::document_body() {
             let _ = body.set_attribute("class", "settings");
-            let _ = body.set_attribute("data-mode", "create");
         }
         on_cleanup(|| {
             if let Some(body) = crate::utils::window::document_body() {
                 let _ = body.set_attribute("class", "");
-                let _ = body.remove_attribute("data-mode");
             }
         });
     }
