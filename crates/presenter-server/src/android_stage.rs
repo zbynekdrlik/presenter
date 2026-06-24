@@ -90,6 +90,14 @@ const STAGE_URL_ENV: &str = "PRESENTER_ANDROID_STAGE_URL";
 const STAGE_APK_ENV: &str = "PRESENTER_ANDROID_STAGE_APK";
 const DEFAULT_STAGE_APK_PATH: &str = "/opt/presenter/presenter-stage.apk";
 
+/// The `versionCode` of the bundled Presenter Stage APK. MUST be kept in lockstep
+/// with `android/presenter-stage/app/build.gradle.kts` `versionCode`. The watchdog
+/// compares this against the versionCode installed on a TV and reinstalls when the
+/// TV's copy is older — so bumping the app's versionCode (and this constant)
+/// actually ships the new APK to TVs that already have an older one. Without this
+/// comparison, an already-installed (but stale) app would never be upgraded.
+const EXPECTED_STAGE_APK_VERSION_CODE: i64 = 1;
+
 /// Validate that a configured stage URL is a well-formed `http(s)://` URL before
 /// it is spliced into the `am start -a VIEW -d <url>` adb args (which reach the
 /// device's `/system/bin/sh`). Returns the normalized URL string on success, or
@@ -598,11 +606,35 @@ fn adb_install_succeeded(output: &Output) -> bool {
     ensure_success(output).is_ok() && String::from_utf8_lossy(&output.stdout).contains("Success")
 }
 
-/// Ensure our Presenter Stage app is installed on the device. No-op when already
-/// present. Otherwise `adb install -r <apk>`; if that fails (e.g. a signature
-/// mismatch from a rebuilt APK, or a downgrade), fall back to `adb uninstall` +
-/// a clean `adb install`. The app is a stateless WebView shell, so reinstalling
-/// loses nothing.
+/// Read the `versionCode` of `package` installed on the device via
+/// `dumpsys package <pkg>`. Returns `None` when the command fails or no
+/// `versionCode=` line is present (e.g. package absent).
+async fn adb_installed_version_code(
+    runner: &dyn AdbRunner,
+    serial: &str,
+    package: &str,
+) -> Option<i64> {
+    let args = adb_args(["-s", serial, "shell", "dumpsys", "package", package]);
+    let output = runner.run(&args).await.ok()?;
+    parse_version_code(&String::from_utf8_lossy(&output.stdout))
+}
+
+/// Parse the first `versionCode=<n>` integer out of `dumpsys package` output.
+/// `dumpsys` prints e.g. `    versionCode=7 minSdk=22 targetSdk=34` — we take the
+/// digits immediately after the first `versionCode=`. Returns `None` when no such
+/// field is present. Pure (no I/O) so the parsing is unit-testable.
+fn parse_version_code(dumpsys: &str) -> Option<i64> {
+    let after = dumpsys.split("versionCode=").nth(1)?;
+    let digits: String = after.chars().take_while(|c| c.is_ascii_digit()).collect();
+    digits.parse().ok()
+}
+
+/// Ensure our Presenter Stage app is installed AND up to date on the device.
+/// No-op when present at a versionCode >= [`EXPECTED_STAGE_APK_VERSION_CODE`].
+/// Otherwise (absent, stale, or version unreadable) `adb install -r <apk>`; if
+/// that fails (e.g. a signature mismatch from a rebuilt APK, or a downgrade),
+/// fall back to `adb uninstall` + a clean `adb install`. The app is a stateless
+/// WebView shell, so reinstalling loses nothing.
 async fn ensure_app_installed(
     runner: &dyn AdbRunner,
     serial: &str,
@@ -610,9 +642,30 @@ async fn ensure_app_installed(
     apk: &Path,
 ) -> anyhow::Result<()> {
     if adb_package_installed(runner, serial, package).await {
-        return Ok(());
+        match adb_installed_version_code(runner, serial, package).await {
+            // Up to date — nothing to do.
+            Some(installed) if installed >= EXPECTED_STAGE_APK_VERSION_CODE => return Ok(()),
+            // Older than the bundled APK — upgrade in place.
+            Some(installed) => {
+                info!(
+                    serial,
+                    package,
+                    installed,
+                    expected = EXPECTED_STAGE_APK_VERSION_CODE,
+                    "Presenter Stage app is stale — upgrading"
+                );
+            }
+            // Present but versionCode unreadable — reinstall to be safe.
+            None => {
+                warn!(
+                    serial,
+                    package, "Presenter Stage installed but versionCode unreadable — reinstalling"
+                );
+            }
+        }
+    } else {
+        info!(serial, package, apk = %apk.display(), "installing Presenter Stage app on TV");
     }
-    info!(serial, package, apk = %apk.display(), "installing Presenter Stage app on TV");
 
     let mut install_args = adb_args(["-s", serial, "install", "-r"]);
     install_args.push(apk.as_os_str().to_os_string());
@@ -827,7 +880,13 @@ fn truncate_error(message: &str) -> String {
     if message.len() <= MAX_LEN {
         message.to_string()
     } else {
-        format!("{}…", &message[..MAX_LEN - 1])
+        // Slice on a UTF-8 char boundary at or below MAX_LEN-1 so multi-byte
+        // codepoints in adb output never panic the byte slice.
+        let mut end = MAX_LEN - 1;
+        while end > 0 && !message.is_char_boundary(end) {
+            end -= 1;
+        }
+        format!("{}…", &message[..end])
     }
 }
 
@@ -1155,6 +1214,10 @@ mod tests {
         /// Whether `pm path <pkg>` reports the app installed. `false` models a TV
         /// that needs the Presenter Stage APK installed first.
         installed: bool,
+        /// The versionCode `dumpsys package <pkg>` reports for the installed app.
+        /// Defaults to [`EXPECTED_STAGE_APK_VERSION_CODE`] (up to date → no
+        /// reinstall); lower models a stale install the watchdog must upgrade.
+        installed_version: i64,
         calls: Mutex<Vec<String>>,
     }
 
@@ -1164,6 +1227,7 @@ mod tests {
                 foreground,
                 connect_fails: false,
                 installed: true,
+                installed_version: EXPECTED_STAGE_APK_VERSION_CODE,
                 calls: Mutex::new(Vec::new()),
             }
         }
@@ -1173,6 +1237,7 @@ mod tests {
                 foreground,
                 connect_fails: true,
                 installed: true,
+                installed_version: EXPECTED_STAGE_APK_VERSION_CODE,
                 calls: Mutex::new(Vec::new()),
             }
         }
@@ -1181,6 +1246,14 @@ mod tests {
         /// the watchdog must `adb install` the APK).
         fn app_missing(mut self) -> Self {
             self.installed = false;
+            self
+        }
+
+        /// Builder: the app IS installed but at an older versionCode, so the
+        /// watchdog must upgrade it.
+        fn installed_version(mut self, version: i64) -> Self {
+            self.installed = true;
+            self.installed_version = version;
             self
         }
 
@@ -1257,6 +1330,19 @@ mod tests {
                     "package:/data/app/test/base.apk"
                 } else {
                     ""
+                }));
+            }
+
+            // `dumpsys package <pkg>` reports the installed versionCode (empty
+            // when the app is absent).
+            if joined.contains("dumpsys package") {
+                return Ok(ok_output(&if self.installed {
+                    format!(
+                        "    versionCode={} minSdk=22 targetSdk=34",
+                        self.installed_version
+                    )
+                } else {
+                    String::new()
                 }));
             }
 
@@ -1385,6 +1471,82 @@ mod tests {
             0,
             "an already-installed app MUST NOT be reinstalled",
         );
+    }
+
+    // An app present at a versionCode OLDER than the bundled APK MUST be upgraded
+    // (the versionCode comparison the gradle comment promises). Without it, a
+    // bumped APK never reaches a TV that already has an older copy.
+    #[tokio::test]
+    async fn upgrades_our_app_when_installed_version_is_stale() {
+        let runner = FakeAdbRunner::new(Foreground::StagePage)
+            .installed_version(EXPECTED_STAGE_APK_VERSION_CODE - 1);
+        let stage_url = Arc::new(Some(TEST_STAGE_URL.to_string()));
+        let config = our_app_display();
+        let status = test_status();
+
+        let result =
+            connect_and_launch(&runner, &stage_url, &some_apk(), &config, &status, true).await;
+        assert!(result.is_ok(), "upgrade + launch must succeed: {result:?}");
+        assert_eq!(
+            runner.install_calls(),
+            1,
+            "a stale (older versionCode) app MUST be upgraded via adb install",
+        );
+    }
+
+    // A present app at the EXACT expected versionCode must NOT be reinstalled
+    // (boundary: installed == expected → up to date).
+    #[tokio::test]
+    async fn skips_install_when_installed_version_matches_expected() {
+        let runner = FakeAdbRunner::new(Foreground::StagePage)
+            .installed_version(EXPECTED_STAGE_APK_VERSION_CODE);
+        let stage_url = Arc::new(Some(TEST_STAGE_URL.to_string()));
+        let config = our_app_display();
+        let status = test_status();
+
+        let result =
+            connect_and_launch(&runner, &stage_url, &some_apk(), &config, &status, true).await;
+        assert!(result.is_ok());
+        assert_eq!(
+            runner.install_calls(),
+            0,
+            "an app already at the expected versionCode MUST NOT be reinstalled",
+        );
+    }
+
+    #[test]
+    fn parse_version_code_extracts_first_integer_or_none() {
+        assert_eq!(
+            parse_version_code("    versionCode=7 minSdk=22 targetSdk=34"),
+            Some(7),
+            "must parse the integer right after versionCode=",
+        );
+        assert_eq!(
+            parse_version_code("flags=[ DEBUGGABLE ]\n    versionCode=42 ..."),
+            Some(42),
+        );
+        assert_eq!(
+            parse_version_code("no version field here"),
+            None,
+            "absent versionCode must yield None (→ reinstall to be safe)",
+        );
+        assert_eq!(
+            parse_version_code("versionCode= notanumber"),
+            None,
+            "non-numeric versionCode must yield None",
+        );
+    }
+
+    #[test]
+    fn truncate_error_is_utf8_safe_at_boundary() {
+        // A multi-byte codepoint straddling the 279-byte cut must not panic and
+        // must produce valid UTF-8.
+        let message = "x".repeat(278) + "č" + &"y".repeat(20); // 'č' = 2 bytes at 278
+        let out = truncate_error(&message);
+        assert!(out.ends_with('…'), "long message must be ellipsized");
+        assert!(out.len() <= 282, "stays near the cap");
+        // Short messages pass through unchanged.
+        assert_eq!(truncate_error("short"), "short");
     }
 
     // A browser package (e.g. com.tcl.browser) is assumed pre-installed — the
