@@ -23,6 +23,25 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ---
 
+## Playbook Router
+
+| Topic | Where to look |
+|---|---|
+| NDI pipeline, WebRTC testing, cleanup | `.claude/skills/ndi/SKILL.md` |
+| Companion plugin, /etc/hosts, batching | `.claude/skills/companion/SKILL.md` |
+| Runner management, GPU wedge, probe cleanup | `.claude/skills/ci/SKILL.md` |
+| Local build/deploy workflow, CLIProxyAPI login | `.claude/skills/deploy/SKILL.md` |
+
+## Always-Rules
+
+- **Box dimensions** — NEVER change stage layout box sizes or positions without explicit user instruction. Explain the constraint and ask what dimensions they want.
+- **Tablet triggers** — Tablet sends only `(presentation_id, slide_id)` to server; server looks up and broadcasts full data. NEVER reconstruct slide data in the tablet. Fixes go in WASM Rust (`tablet.rs`), not CSS.
+- **Hardware features** — If a feature depends on external hardware/SDK (NDI, cameras, audio), ask the user about availability BEFORE implementing. Write tests for the real pipeline, not just the fallback path. Never report hardware features as done based only on CI green.
+- **External API integration** — Always WebSearch + WebFetch official docs BEFORE writing integration code. Never guess API behavior. (AbleSet `/api/setlist` returns the full session; `internalMeta.skipped: true` marks songs not in the active set.)
+- **Drag-drop** — A single middle-position E2E test is insufficient. Before claiming complete, verify in Playwright: empty list, drop above first entry, drop below last entry, middle-position drop.
+
+---
+
 ## Project Overview
 
 Presenter is a monolithic Rust application for church worship services, providing lyrics display, Bible passages, timers, and stage displays.
