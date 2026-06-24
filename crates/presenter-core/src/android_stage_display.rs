@@ -3,14 +3,17 @@ use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
 
-/// Default launcher target: the TCL built-in browser PACKAGE.
+/// Default launcher target: our own Presenter Stage app PACKAGE.
 ///
 /// The launcher fires a `VIEW` intent at this package with the configured
-/// `PRESENTER_ANDROID_STAGE_URL` (see `android_stage.rs`). It is a bare package
-/// (no `/activity`), which is the proven-working shape on the prod stage TVs.
-/// Legacy `package/activity` values are still accepted by `validate()` and the
-/// launcher extracts the package from them for backward compatibility.
-pub const DEFAULT_LAUNCH_PACKAGE: &str = "com.tcl.browser";
+/// `PRESENTER_ANDROID_STAGE_URL` (see `android_stage.rs`). When the package is
+/// our own app, the watchdog also auto-installs it via ADB if missing — so the
+/// stage runs on ANY Android TV without a kiosk browser and without depending on
+/// a per-brand browser (e.g. `com.tcl.browser`, absent on Sharp/MediaTek TVs).
+/// It is a bare package (no `/activity`). Legacy `package/activity` values are
+/// still accepted by `validate()` and the launcher extracts the package from
+/// them for backward compatibility.
+pub const DEFAULT_LAUNCH_PACKAGE: &str = "sk.newlevel.presenterstage";
 pub const DEFAULT_ADB_PORT: u16 = 5555;
 
 #[derive(Debug, Error, PartialEq, Eq)]
@@ -153,10 +156,11 @@ mod tests {
     use super::*;
 
     #[test]
-    fn default_launch_component_is_bare_browser_package() {
-        // The launcher fires a VIEW intent at a browser PACKAGE (not a
-        // package/activity component), so the default must be a bare package.
-        assert_eq!(DEFAULT_LAUNCH_PACKAGE, "com.tcl.browser");
+    fn default_launch_component_is_bare_app_package() {
+        // The launcher fires a VIEW intent at a bare PACKAGE (not a
+        // package/activity component); the default is our own Presenter Stage app
+        // so the stage runs on ANY Android TV without a kiosk/per-brand browser.
+        assert_eq!(DEFAULT_LAUNCH_PACKAGE, "sk.newlevel.presenterstage");
     }
 
     #[test]

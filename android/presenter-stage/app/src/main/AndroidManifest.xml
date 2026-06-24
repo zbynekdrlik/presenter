@@ -1,0 +1,53 @@
+<?xml version="1.0" encoding="utf-8"?>
+<manifest xmlns:android="http://schemas.android.com/apk/res/android">
+
+    <uses-permission android:name="android.permission.INTERNET" />
+    <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />
+    <uses-permission android:name="android.permission.WAKE_LOCK" />
+
+    <!-- TV app, but keep it installable on phones/tablets too (required=false). -->
+    <uses-feature
+        android:name="android.software.leanback"
+        android:required="false" />
+    <uses-feature
+        android:name="android.hardware.touchscreen"
+        android:required="false" />
+
+    <application
+        android:allowBackup="false"
+        android:banner="@drawable/banner"
+        android:hardwareAccelerated="true"
+        android:icon="@drawable/ic_launcher"
+        android:label="@string/app_name"
+        android:supportsRtl="true"
+        android:usesCleartextTraffic="true"
+        android:theme="@android:style/Theme.DeviceDefault.NoActionBar.Fullscreen">
+
+        <activity
+            android:name=".StageActivity"
+            android:configChanges="orientation|screenSize|smallestScreenSize|screenLayout|keyboard|keyboardHidden|navigation|uiMode|density|fontScale"
+            android:exported="true"
+            android:launchMode="singleTask"
+            android:screenOrientation="landscape"
+            android:theme="@android:style/Theme.DeviceDefault.NoActionBar.Fullscreen">
+
+            <!-- Launchable from the TV home (LEANBACK) and the phone launcher. -->
+            <intent-filter>
+                <action android:name="android.intent.action.MAIN" />
+                <category android:name="android.intent.category.LAUNCHER" />
+                <category android:name="android.intent.category.LEANBACK_LAUNCHER" />
+            </intent-filter>
+
+            <!-- The server watchdog opens the stage with:
+                 am start -a android.intent.action.VIEW -d <stage-url> sk.newlevel.presenterstage
+                 so the activity must handle VIEW http/https intents. -->
+            <intent-filter>
+                <action android:name="android.intent.action.VIEW" />
+                <category android:name="android.intent.category.DEFAULT" />
+                <category android:name="android.intent.category.BROWSABLE" />
+                <data android:scheme="http" />
+                <data android:scheme="https" />
+            </intent-filter>
+        </activity>
+    </application>
+</manifest>

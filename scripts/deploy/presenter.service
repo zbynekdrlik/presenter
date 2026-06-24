@@ -52,6 +52,9 @@ Environment=PRESENTER_LIBRARY_ROOT=/opt/presenter/libraries
 # points at its own /stage. If unset the launcher warns and skips (no broken
 # intent).
 Environment=PRESENTER_ANDROID_STAGE_URL=http://10.77.9.205/stage
+# #472: the Presenter Stage APK the watchdog installs on any TV that needs our
+# own app (so the stage runs on every Android TV without a kiosk browser).
+Environment=PRESENTER_ANDROID_STAGE_APK=/opt/presenter/presenter-stage.apk
 Environment=RUST_LOG=info,tower_http=debug
 
 # Security hardening - allow binding to port 80

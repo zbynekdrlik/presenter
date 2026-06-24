@@ -70,6 +70,22 @@ jobs:
         env:
           PRESENTER_BUILD_CHANNEL: release
 
+      - name: Set up JDK 17 (Android Stage APK)
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "17"
+
+      - name: Set up Gradle
+        uses: gradle/actions/setup-gradle@v4
+
+      - name: Build Android Stage APK
+        working-directory: android/presenter-stage
+        run: gradle assembleDebug --no-daemon --stacktrace
+
+      - name: Stage APK into release dir
+        run: cp android/presenter-stage/app/build/outputs/apk/debug/app-debug.apk target/release/presenter-stage.apk
+
       - name: Verify prod artifact has no test-only features
         run: |
           if strings target/release/presenter-server | grep -E "mock_integrations|MOCK_RESOLUME_ADDR|MOCK_ABLESET_ADDR|mock-resolume|mock-ableset|kill_pipeline_for_test|simulate_error_for_test|simulate_pipeline_error" >/dev/null; then
@@ -84,6 +100,7 @@ jobs:
           cp target/release/presenter-server release/
           cp target/release/import_propresenter release/
           cp target/release/ingest_bibles release/
+          cp target/release/presenter-stage.apk release/
           cp data/bibles/*.zip release/bibles/
           cp -r data/libraries/* release/libraries/
           tar -czvf presenter-${{ github.event.release.tag_name }}-linux-x64.tar.gz -C release .
@@ -103,6 +120,7 @@ jobs:
             target/release/presenter-server
             target/release/import_propresenter
             target/release/ingest_bibles
+            target/release/presenter-stage.apk
 
   deploy-pp:
     name: Deploy to companion-pp.lan
@@ -167,6 +185,11 @@ jobs:
             binaries/ingest_bibles \
             deploy-target:${{ env.DEPLOY_DIR }}/
           ssh deploy-target "chmod +x ${{ env.DEPLOY_DIR }}/presenter-server ${{ env.DEPLOY_DIR }}/import_propresenter ${{ env.DEPLOY_DIR }}/ingest_bibles"
+
+      - name: Deploy Android Stage APK
+        run: |
+          scp -i ~/.ssh/id_deploy binaries/presenter-stage.apk deploy-target:${{ env.DEPLOY_DIR }}/presenter-stage.apk
+          echo "Presenter Stage APK deployed to ${{ env.DEPLOY_DIR }}/presenter-stage.apk"
 
       - name: Deploy CLIProxyAPI
         run: |

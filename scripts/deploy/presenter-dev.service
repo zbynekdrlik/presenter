@@ -28,6 +28,9 @@ Environment=PRESENTER_LIBRARY_ROOT=/home/newlevel/devel/presenter/presenter-libr
 # #404: stage URL the launcher opens on every Android stage display (see
 # presenter.service). Dev points at its own /stage on port 8080.
 Environment=PRESENTER_ANDROID_STAGE_URL=http://10.77.8.134:8080/stage
+# #472: the Presenter Stage APK the watchdog installs on TVs that need our own
+# app. Dev deploys to /opt/presenter-dev (the default path is /opt/presenter).
+Environment=PRESENTER_ANDROID_STAGE_APK=/opt/presenter-dev/presenter-stage.apk
 Environment=RUST_LOG=info,tower_http=debug
 # Offset integration ports to avoid conflicts with production
 Environment=PRESENTER_COMPANION_ENABLED=0
