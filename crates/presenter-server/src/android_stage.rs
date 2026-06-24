@@ -880,10 +880,12 @@ fn truncate_error(message: &str) -> String {
     if message.len() <= MAX_LEN {
         message.to_string()
     } else {
-        // Slice on a UTF-8 char boundary at or below MAX_LEN-1 so multi-byte
-        // codepoints in adb output never panic the byte slice.
+        // Walk down to the nearest UTF-8 char boundary at or below MAX_LEN-1 so
+        // multi-byte codepoints in adb output never panic the byte slice. No
+        // `end > 0` guard is needed: byte 0 is always a char boundary, so the
+        // loop always stops at end >= 0 without underflowing.
         let mut end = MAX_LEN - 1;
-        while end > 0 && !message.is_char_boundary(end) {
+        while !message.is_char_boundary(end) {
             end -= 1;
         }
         format!("{}…", &message[..end])
@@ -1539,14 +1541,24 @@ mod tests {
 
     #[test]
     fn truncate_error_is_utf8_safe_at_boundary() {
-        // A multi-byte codepoint straddling the 279-byte cut must not panic and
-        // must produce valid UTF-8.
-        let message = "x".repeat(278) + "č" + &"y".repeat(20); // 'č' = 2 bytes at 278
+        // 'č' (2 bytes) occupies bytes 278-279; the cut index MAX_LEN-1 = 279
+        // lands MID-codepoint. Correct code walks DOWN to byte 278 (the char
+        // boundary at the start of 'č'), so the result is exactly the 278 'x's
+        // plus the ellipsis — 'č' is dropped, never split. Asserting the EXACT
+        // string kills the boundary-walk mutants (end += 1 would instead keep
+        // 'č'; && → || would walk all the way to 0).
+        let message = "x".repeat(278) + "č" + &"y".repeat(20);
         let out = truncate_error(&message);
-        assert!(out.ends_with('…'), "long message must be ellipsized");
-        assert!(out.len() <= 282, "stays near the cap");
+        assert_eq!(
+            out,
+            format!("{}…", "x".repeat(278)),
+            "must cut on the char boundary below the limit (drop the split 'č')",
+        );
         // Short messages pass through unchanged.
         assert_eq!(truncate_error("short"), "short");
+        // A message exactly at the cap passes through unchanged (boundary of the
+        // len() <= MAX_LEN branch).
+        assert_eq!(truncate_error(&"a".repeat(280)), "a".repeat(280));
     }
 
     // A browser package (e.g. com.tcl.browser) is assumed pre-installed — the
