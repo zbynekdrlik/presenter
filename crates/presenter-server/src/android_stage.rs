@@ -126,9 +126,13 @@ fn validate_stage_url(raw: &str) -> Option<String> {
 /// Resolve the Presenter Stage APK path from [`STAGE_APK_ENV`] (default
 /// [`DEFAULT_STAGE_APK_PATH`]). Returns `Some(path)` only when the file actually
 /// exists, so the watchdog never attempts an `adb install` of a missing file.
-fn resolve_stage_apk_path() -> Option<PathBuf> {
-    let raw = env::var(STAGE_APK_ENV)
-        .ok()
+/// Resolve the Presenter Stage APK path from the [`STAGE_APK_ENV`] value: fall
+/// back to [`DEFAULT_STAGE_APK_PATH`] when empty/unset, then return the path only
+/// if the file actually exists (so the watchdog never tries to install a missing
+/// file). Kept as a pure function of its argument so it is testable without
+/// touching the process environment; the caller passes `env::var(...).ok()`.
+fn resolve_apk_path_from(raw: Option<String>) -> Option<PathBuf> {
+    let raw = raw
         .filter(|v| !v.trim().is_empty())
         .unwrap_or_else(|| DEFAULT_STAGE_APK_PATH.to_string());
     let path = PathBuf::from(raw);
@@ -223,7 +227,7 @@ impl AndroidStageRegistry {
                 );
             }
         }
-        let apk_path = resolve_stage_apk_path();
+        let apk_path = resolve_apk_path_from(env::var(STAGE_APK_ENV).ok());
         match &apk_path {
             Some(path) => {
                 debug!(env = STAGE_APK_ENV, path = %path.display(), "presenter stage APK available for auto-install");
@@ -1399,6 +1403,50 @@ mod tests {
             runner.install_calls(),
             0,
             "only our own app is auto-installed; a browser package is left alone",
+        );
+    }
+
+    // APK path resolution: an existing configured file resolves to itself; a
+    // missing path (or empty → default, absent in tests) resolves to None so the
+    // watchdog never tries to install a non-existent file.
+    #[test]
+    fn resolve_apk_path_uses_existing_file_and_rejects_missing() {
+        let f =
+            std::env::temp_dir().join(format!("presenter-stage-test-{}.apk", std::process::id()));
+        std::fs::write(&f, b"x").unwrap();
+        assert_eq!(
+            resolve_apk_path_from(Some(f.to_string_lossy().into_owned())),
+            Some(f.clone()),
+            "an existing configured APK path must resolve to itself",
+        );
+        std::fs::remove_file(&f).ok();
+        assert_eq!(
+            resolve_apk_path_from(Some("/no/such/dir/presenter-stage.apk".to_string())),
+            None,
+            "a missing APK path must resolve to None (install skipped)",
+        );
+        assert_eq!(
+            resolve_apk_path_from(Some(String::new())),
+            None,
+            "empty falls back to the default path, which is absent under test → None",
+        );
+    }
+
+    // `adb install` success requires BOTH a success exit AND a `Success` line —
+    // a `Failure [..]` printed on a zero exit must NOT count as installed.
+    #[test]
+    fn adb_install_succeeded_requires_success_exit_and_marker() {
+        assert!(
+            adb_install_succeeded(&ok_output("Success")),
+            "exit 0 + Success ⇒ installed",
+        );
+        assert!(
+            !adb_install_succeeded(&ok_output("Failure [INSTALL_FAILED_VERSION_DOWNGRADE]")),
+            "exit 0 but no Success marker ⇒ NOT installed",
+        );
+        assert!(
+            !adb_install_succeeded(&err_output("Success")),
+            "non-zero exit ⇒ NOT installed",
         );
     }
 
