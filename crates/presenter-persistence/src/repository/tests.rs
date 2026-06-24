@@ -42,6 +42,88 @@ fn sample_library() -> Library {
         .with_id(LibraryId::new())
 }
 
+fn library_named(name: &str, song_names: &[&str]) -> Library {
+    let presentations = song_names
+        .iter()
+        .map(|song| {
+            Presentation::new(
+                *song,
+                vec![Slide::new(
+                    0,
+                    SlideContent::new(
+                        SlideText::new("main").unwrap(),
+                        SlideText::new("translation").unwrap(),
+                        SlideText::new("stage").unwrap(),
+                        None,
+                    ),
+                )
+                .with_id(SlideId::new())],
+            )
+            .unwrap()
+            .with_id(PresentationId::new())
+        })
+        .collect();
+    Library::new(name, presentations)
+        .unwrap()
+        .with_id(LibraryId::new())
+}
+
+#[tokio::test]
+async fn upsert_library_reimports_same_name_with_fresh_id() {
+    // Regression for #463: the importer assigns a fresh random LibraryId on every
+    // run, but the DB enforces UNIQUE(libraries.name). Re-importing a library that
+    // already exists under the same NAME (the normal dev/prod case) must REPLACE it,
+    // not fail with `UNIQUE constraint failed: libraries.name`.
+    let repo = Repository::connect_in_memory().await.unwrap();
+
+    let first = library_named("NEW LEVEL", &["Song A"]);
+    repo.upsert_library(&first).await.unwrap();
+
+    // Same name, different (fresh) id, plus a newly added song — exactly what
+    // `import_propresenter --keep` does after two new .pro files are dropped in.
+    let second = library_named("NEW LEVEL", &["Song A", "Song B (new)"]);
+    repo.upsert_library(&second).await.unwrap();
+
+    let libraries = repo.fetch_libraries().await.unwrap();
+    let new_level: Vec<_> = libraries
+        .iter()
+        .filter(|library| library.name == "NEW LEVEL")
+        .collect();
+    assert_eq!(
+        new_level.len(),
+        1,
+        "exactly one NEW LEVEL library after re-import (no duplicate, no leftover)"
+    );
+    assert_eq!(
+        new_level[0].presentations.len(),
+        2,
+        "re-import reflects the newly added song"
+    );
+
+    // `upsert_library` deletes only the stale LIBRARY row and relies on
+    // ON DELETE CASCADE (foreign_keys is on) to remove its presentations +
+    // slides. `fetch_libraries` joins by library_id and would NOT surface
+    // orphans, so a regression that broke the cascade or skipped the delete
+    // could pass the checks above. Assert the RAW row counts to catch that:
+    // exactly the new library's 2 presentations and 2 slides must remain — an
+    // orphaned set from the old import would make these 3.
+    use crate::entities::{presentation as presentation_entity, slide as slide_entity};
+    use sea_orm::EntityTrait;
+    let db = repo.connection_for_tests();
+    let presentation_rows = presentation_entity::Entity::find().all(db).await.unwrap();
+    assert_eq!(
+        presentation_rows.len(),
+        2,
+        "no orphaned presentations after re-import (stale rows must be deleted)"
+    );
+    let slide_rows = slide_entity::Entity::find().all(db).await.unwrap();
+    assert_eq!(
+        slide_rows.len(),
+        2,
+        "no orphaned slides after re-import (stale rows must be deleted)"
+    );
+}
+
 #[tokio::test]
 async fn round_trip_library() {
     let repo = Repository::connect_in_memory().await.unwrap();

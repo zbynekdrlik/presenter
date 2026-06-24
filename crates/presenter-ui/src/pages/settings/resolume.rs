@@ -47,9 +47,6 @@ pub fn ResolumeCard(toast: ToastHandle) -> impl IntoView {
         host_enabled.set(true);
         form_status.set(String::new());
         form_state.set("idle".to_string());
-        if let Some(body) = crate::utils::window::document_body() {
-            let _ = body.set_attribute("data-mode", "create");
-        }
     };
 
     let on_submit = move |ev: leptos::ev::SubmitEvent| {
@@ -126,9 +123,6 @@ pub fn ResolumeCard(toast: ToastHandle) -> impl IntoView {
             host_enabled.set(h.is_enabled);
             form_status.set(String::new());
             form_state.set("idle".to_string());
-            if let Some(body) = crate::utils::window::document_body() {
-                let _ = body.set_attribute("data-mode", "edit");
-            }
         }
     };
 
@@ -247,8 +241,10 @@ pub fn ResolumeCard(toast: ToastHandle) -> impl IntoView {
                         data-role="host-submit" prop:disabled=move || busy.get()>
                         {move || if editing_id.get().is_some() { "Save Changes" } else { "Add Connection" }}
                     </button>
-                    <button type="button" class="settings__button settings__button--ghost"
-                        data-role="host-reset" on:click=move |_| reset_form()>"Cancel"</button>
+                    {move || editing_id.get().is_some().then(|| view! {
+                        <button type="button" class="settings__button settings__button--ghost"
+                            data-role="host-reset" on:click=move |_| reset_form()>"Cancel"</button>
+                    })}
                 </div>
                 <p class="settings__form-status" data-role="form-status" data-state=move || form_state.get()>
                     {move || form_status.get()}

@@ -6,6 +6,8 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Local Build Policy
 
+<!-- airuleset:local-builds=allowed -->
+
 **Local Rust builds (cargo build, cargo clippy, cargo test) are ALLOWED on this machine.** This is the powerful dev2 build machine. Run fmt, clippy, test, and build locally before pushing. The global airuleset default (CI-only) does NOT apply here.
 
 <!-- Global rules applied via airuleset modules (~/devel/airuleset/):
@@ -18,6 +20,25 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
      quality/architecture-first, quality/security-basics,
      deploy/post-deploy-verification, deploy/ssh-deployment
 -->
+
+---
+
+## Playbook Router
+
+| Topic | Where to look |
+|---|---|
+| NDI pipeline, WebRTC testing, cleanup | `.claude/skills/ndi/SKILL.md` |
+| Companion plugin, /etc/hosts, batching | `.claude/skills/companion/SKILL.md` |
+| Runner management, GPU wedge, probe cleanup | `.claude/skills/ci/SKILL.md` |
+| Local build/deploy workflow, CLIProxyAPI login | `.claude/skills/deploy/SKILL.md` |
+
+## Always-Rules
+
+- **Box dimensions** — NEVER change stage layout box sizes or positions without explicit user instruction. Explain the constraint and ask what dimensions they want.
+- **Tablet triggers** — Tablet sends only `(presentation_id, slide_id)` to server; server looks up and broadcasts full data. NEVER reconstruct slide data in the tablet. Fixes go in WASM Rust (`tablet.rs`), not CSS.
+- **Hardware features** — If a feature depends on external hardware/SDK (NDI, cameras, audio), ask the user about availability BEFORE implementing. Write tests for the real pipeline, not just the fallback path. Never report hardware features as done based only on CI green.
+- **External API integration** — Always WebSearch + WebFetch official docs BEFORE writing integration code. Never guess API behavior. (AbleSet `/api/setlist` returns the full session; `internalMeta.skipped: true` marks songs not in the active set.)
+- **Drag-drop** — A single middle-position E2E test is insufficient. Before claiming complete, verify in Playwright: empty list, drop above first entry, drop below last entry, middle-position drop.
 
 ---
 

@@ -24,9 +24,34 @@ impl Repository {
     pub async fn upsert_library(&self, library: &Library) -> anyhow::Result<()> {
         let txn = self.db.begin().await?;
 
-        library::Entity::delete_by_id(library.id.to_string())
-            .exec(&txn)
-            .await?;
+        // Replace any existing library that collides with this one — matched by
+        // id OR by name. The importer assigns a fresh random LibraryId on every
+        // run (`Library::new`), so a library that already exists under the same
+        // NAME but a different id MUST be removed before the insert below, or it
+        // fails on the `idx_libraries_name_unique` UNIQUE(name) constraint
+        // (#463). Deleting the colliding library row cascades to its
+        // presentations and slides (ON DELETE CASCADE in the schema; foreign_keys
+        // is on by default on our sqlx connections), scoped to that one library
+        // only — never a global purge, so other libraries and playlists are
+        // untouched.
+        let stale_library_ids: Vec<String> = library::Entity::find()
+            .filter(
+                sea_orm::Condition::any()
+                    .add(library::Column::Id.eq(library.id.to_string()))
+                    .add(library::Column::Name.eq(library.name.clone())),
+            )
+            .all(&txn)
+            .await?
+            .into_iter()
+            .map(|model| model.id)
+            .collect();
+
+        if !stale_library_ids.is_empty() {
+            library::Entity::delete_many()
+                .filter(library::Column::Id.is_in(stale_library_ids))
+                .exec(&txn)
+                .await?;
+        }
 
         let lib_model = library::ActiveModel {
             id: Set(library.id.to_string()),

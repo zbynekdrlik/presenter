@@ -2,16 +2,33 @@
   color-scheme: dark;
 }
 
-/* Hide header when embedded in operator iframe */
-body.in-iframe .settings__header {
-  display: none;
-}
-body.in-iframe.settings {
-  background: transparent;
-}
-
+/* Standalone /ui/settings owns the <body> and fills the viewport. The embedded
+   operator panel does NOT own the body, so the visual chrome + scroll context
+   live on `.settings-layout` (below), which works in both contexts (#462). */
 body.settings {
   margin: 0;
+  height: 100vh;
+  background: #0f172a;
+  color: #f8fafc;
+  font-family:
+    "Inter",
+    system-ui,
+    -apple-system,
+    BlinkMacSystemFont,
+    "Segoe UI",
+    sans-serif;
+}
+
+/* Self-contained layout: its own background/typography and its own scroll, so
+   it renders correctly whether mounted on body.settings (standalone) or inside
+   an operator panel (embedded). Fills its parent's height and scrolls its
+   overflow — the fix for #462 (the page previously had NO .settings-layout
+   rule, so it could not scroll inside the fixed-height iframe). */
+.settings-layout {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  overflow-y: auto;
   background: #0f172a;
   color: #f8fafc;
   font-family:
@@ -269,10 +286,6 @@ body.settings {
 
 .settings__button--danger:hover {
   transform: translateY(-1px);
-}
-
-body.settings[data-mode="create"] [data-role="host-reset"] {
-  display: none;
 }
 
 .settings__form-status {
