@@ -90,6 +90,14 @@ const STAGE_URL_ENV: &str = "PRESENTER_ANDROID_STAGE_URL";
 const STAGE_APK_ENV: &str = "PRESENTER_ANDROID_STAGE_APK";
 const DEFAULT_STAGE_APK_PATH: &str = "/opt/presenter/presenter-stage.apk";
 
+/// Per-brand kiosk/browser packages the TV's own system resurfaces to the
+/// foreground, fighting our stage app (#477). When our own app is the launch
+/// target, the watchdog disables these so OUR app holds. `pm disable-user` is
+/// reversible (a later `pm enable` restores them) and these are NOT the TV's
+/// HOME launcher (verified on the TCL: Google TV launcher is HOME), so disabling
+/// them does not break the device.
+const KIOSK_PACKAGES_TO_SUPPRESS: &[&str] = &["com.tcl.browser", "com.fullykiosk.videokiosk"];
+
 /// The `versionCode` of the bundled Presenter Stage APK. MUST be kept in lockstep
 /// with `android/presenter-stage/app/build.gradle.kts` `versionCode`. The watchdog
 /// compares this against the versionCode installed on a TV and reinstalls when the
@@ -509,6 +517,14 @@ async fn connect_and_launch(
                 return Err(err);
             }
         }
+        // #477: suppress the old per-brand kiosk browsers. The TV's own system
+        // keeps resurfacing them (e.g. TCL relaunches com.tcl.browser to the
+        // foreground), so the watchdog otherwise fights a losing battle —
+        // relaunching our app every tick while the browser flickers back. Disable
+        // them so OUR app holds. Only done when our app is the launch target, so
+        // an operator who deliberately set a browser as the launch_component is
+        // never affected.
+        suppress_kiosk_browsers(runner, &serial).await;
     }
 
     // #419: foreground-aware keep-alive. On the periodic tick (force_launch =
@@ -587,6 +603,28 @@ async fn adb_launch(
         return Err(anyhow!("adb shell error for {}: {}", serial, msg));
     }
     Ok(())
+}
+
+/// Disable the known per-brand kiosk browsers ([`KIOSK_PACKAGES_TO_SUPPRESS`])
+/// via `pm disable-user`, so the TV cannot keep resurfacing them over our stage
+/// app (#477). Best-effort: a package that is absent, already disabled, or not
+/// disable-able just no-ops (its error is ignored). Idempotent — safe to call on
+/// every connect.
+async fn suppress_kiosk_browsers(runner: &dyn AdbRunner, serial: &str) {
+    for pkg in KIOSK_PACKAGES_TO_SUPPRESS {
+        let _ = runner
+            .run(&adb_args([
+                "-s",
+                serial,
+                "shell",
+                "pm",
+                "disable-user",
+                "--user",
+                "0",
+                pkg,
+            ]))
+            .await;
+    }
 }
 
 /// True when `package` is installed on the device — `pm path <package>` prints a
@@ -1299,6 +1337,13 @@ mod tests {
                 .filter(|c| c.contains("dumpsys package"))
                 .count()
         }
+
+        fn disable_user_calls(&self) -> usize {
+            self.invocations()
+                .iter()
+                .filter(|c| c.contains("pm disable-user"))
+                .count()
+        }
     }
 
     #[async_trait]
@@ -1607,6 +1652,41 @@ mod tests {
             0,
             "only our own app is auto-installed; a browser package is left alone",
         );
+        // #477: a non-our-app (operator-set browser) display must NOT have kiosk
+        // browsers disabled — only our-app displays do.
+        assert_eq!(
+            runner.disable_user_calls(),
+            0,
+            "kiosk browsers must NOT be disabled when the launch target is a browser",
+        );
+    }
+
+    // #477: when our app is the launch target, the watchdog disables the known
+    // kiosk browsers (pm disable-user) so the TV cannot resurface them over the
+    // stage — one disable call per package in KIOSK_PACKAGES_TO_SUPPRESS.
+    #[tokio::test]
+    async fn suppresses_kiosk_browsers_for_our_app_display() {
+        let runner = FakeAdbRunner::new(Foreground::StagePage);
+        let stage_url = Arc::new(Some(TEST_STAGE_URL.to_string()));
+        let config = our_app_display();
+        let status = test_status();
+
+        let result =
+            connect_and_launch(&runner, &stage_url, &some_apk(), &config, &status, true).await;
+        assert!(result.is_ok());
+        assert_eq!(
+            runner.disable_user_calls(),
+            KIOSK_PACKAGES_TO_SUPPRESS.len(),
+            "every kiosk browser must be disabled when our app is the launch target",
+        );
+        // Each configured kiosk package is the one disabled.
+        let calls = runner.invocations().join("\n");
+        for pkg in KIOSK_PACKAGES_TO_SUPPRESS {
+            assert!(
+                calls.contains(&format!("pm disable-user --user 0 {pkg}")),
+                "must disable-user {pkg}",
+            );
+        }
     }
 
     // APK path resolution: an existing configured file resolves to itself; a
