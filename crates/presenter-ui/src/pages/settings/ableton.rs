@@ -168,27 +168,18 @@ pub fn AbletonCard(toast: ToastHandle) -> impl IntoView {
                     <label>
                         <span>"AbleSet Host"</span>
                         <input type="text" data-role="ableset-host" required
-                            aria-required="true"
-                            aria-describedby="ableton-form-status"
-                            aria-invalid=move || (form_state.get() == "error").to_string()
                             prop:value=move || host.get()
                             on:input=move |ev| host.set(event_target_value(&ev)) />
                     </label>
                     <label class="settings__form-control settings__form-control--small">
                         <span>"HTTP Port"</span>
                         <input type="number" data-role="ableset-http-port" min="1" max="65535" required
-                            aria-required="true"
-                            aria-describedby="ableton-form-status"
-                            aria-invalid=move || (form_state.get() == "error").to_string()
                             prop:value=move || http_port.get()
                             on:input=move |ev| http_port.set(event_target_value(&ev)) />
                     </label>
                     <label>
                         <span>"Library Name"</span>
                         <input type="text" data-role="ableset-library" required
-                            aria-required="true"
-                            aria-describedby="ableton-form-status"
-                            aria-invalid=move || (form_state.get() == "error").to_string()
                             prop:value=move || library.get()
                             on:input=move |ev| library.set(event_target_value(&ev)) />
                     </label>
@@ -197,9 +188,6 @@ pub fn AbletonCard(toast: ToastHandle) -> impl IntoView {
                     <label class="settings__form-control settings__form-control--small">
                         <span>"OSC Listener Port"</span>
                         <input type="number" data-role="osc-port" min="1" max="65535" required
-                            aria-required="true"
-                            aria-describedby="ableton-form-status"
-                            aria-invalid=move || (form_state.get() == "error").to_string()
                             prop:value=move || osc_port.get()
                             on:input=move |ev| osc_port.set(event_target_value(&ev)) />
                     </label>
@@ -208,7 +196,7 @@ pub fn AbletonCard(toast: ToastHandle) -> impl IntoView {
                     <button type="submit" class="settings__button settings__button--primary"
                         data-role="ableset-submit" prop:disabled=move || busy.get()>"Save AbleSet Settings"</button>
                 </div>
-                <p id="ableton-form-status" class="settings__form-status" data-role="ableset-form-status" data-state=move || form_state.get()>
+                <p class="settings__form-status" data-role="ableset-form-status" data-state=move || form_state.get()>
                     {move || form_status.get()}
                 </p>
             </form>

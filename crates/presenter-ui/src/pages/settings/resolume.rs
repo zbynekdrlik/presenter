@@ -204,18 +204,12 @@ pub fn ResolumeCard(toast: ToastHandle) -> impl IntoView {
                     <label>
                         <span>"Label"</span>
                         <input type="text" data-role="host-label" placeholder="Main Arena" required
-                            aria-required="true"
-                            aria-describedby="resolume-form-status"
-                            aria-invalid=move || (form_state.get() == "error").to_string()
                             prop:value=move || label.get()
                             on:input=move |ev| label.set(event_target_value(&ev)) />
                     </label>
                     <label>
                         <span>"Hostname or DNS"</span>
                         <input type="text" data-role="host-host" placeholder="resolume.lan" required
-                            aria-required="true"
-                            aria-describedby="resolume-form-status"
-                            aria-invalid=move || (form_state.get() == "error").to_string()
                             prop:value=move || host.get()
                             on:input=move |ev| host.set(event_target_value(&ev)) />
                     </label>
@@ -230,9 +224,6 @@ pub fn ResolumeCard(toast: ToastHandle) -> impl IntoView {
                         // fires — making the #455 guard unreachable. The Rust guard
                         // is the single authority for the 1..=65535 range. (#455)
                         <input type="number" data-role="host-port"
-                            aria-required="true"
-                            aria-describedby="resolume-form-status"
-                            aria-invalid=move || (form_state.get() == "error").to_string()
                             prop:value=move || port.get()
                             on:input=move |ev| port.set(event_target_value(&ev)) />
                     </label>
@@ -255,7 +246,7 @@ pub fn ResolumeCard(toast: ToastHandle) -> impl IntoView {
                             data-role="host-reset" on:click=move |_| reset_form()>"Cancel"</button>
                     })}
                 </div>
-                <p id="resolume-form-status" class="settings__form-status" data-role="form-status" data-state=move || form_state.get()>
+                <p class="settings__form-status" data-role="form-status" data-state=move || form_state.get()>
                     {move || form_status.get()}
                 </p>
             </form>

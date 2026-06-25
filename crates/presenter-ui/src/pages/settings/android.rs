@@ -212,18 +212,12 @@ pub fn AndroidCard(toast: ToastHandle) -> impl IntoView {
                     <label>
                         <span>"Label"</span>
                         <input type="text" data-role="android-label" placeholder="Stage Left" required
-                            aria-required="true"
-                            aria-describedby="android-form-status"
-                            aria-invalid=move || (form_state.get() == "error").to_string()
                             prop:value=move || label.get()
                             on:input=move |ev| label.set(event_target_value(&ev)) />
                     </label>
                     <label>
                         <span>"Hostname or DNS"</span>
                         <input type="text" data-role="android-host" placeholder="sd1l.lan" required
-                            aria-required="true"
-                            aria-describedby="android-form-status"
-                            aria-invalid=move || (form_state.get() == "error").to_string()
                             prop:value=move || host.get()
                             on:input=move |ev| host.set(event_target_value(&ev)) />
                     </label>
@@ -234,9 +228,6 @@ pub fn AndroidCard(toast: ToastHandle) -> impl IntoView {
                         // guard shows the styled "Port must be between 1 and 65535."
                         // message rather than the browser silently blocking submit. (#455)
                         <input type="number" data-role="android-port"
-                            aria-required="true"
-                            aria-describedby="android-form-status"
-                            aria-invalid=move || (form_state.get() == "error").to_string()
                             prop:value=move || port.get()
                             on:input=move |ev| port.set(event_target_value(&ev)) />
                     </label>
@@ -245,9 +236,6 @@ pub fn AndroidCard(toast: ToastHandle) -> impl IntoView {
                     <label>
                         <span>"Launch Package"</span>
                         <input type="text" data-role="android-component" placeholder="com.tcl.browser" required
-                            aria-required="true"
-                            aria-describedby="android-form-status"
-                            aria-invalid=move || (form_state.get() == "error").to_string()
                             prop:value=move || component.get()
                             on:input=move |ev| component.set(event_target_value(&ev)) />
                     </label>
@@ -268,7 +256,7 @@ pub fn AndroidCard(toast: ToastHandle) -> impl IntoView {
                     <button type="button" class="settings__button settings__button--ghost"
                         data-role="android-reset" on:click=move |_| reset_form()>"Cancel"</button>
                 </div>
-                <p id="android-form-status" class="settings__form-status" data-role="android-form-status" data-state=move || form_state.get()>
+                <p class="settings__form-status" data-role="android-form-status" data-state=move || form_state.get()>
                     {move || form_status.get()}
                 </p>
             </form>

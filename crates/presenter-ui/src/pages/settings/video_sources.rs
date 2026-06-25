@@ -166,7 +166,6 @@ pub fn VideoSourcesCard(toast: ToastHandle) -> impl IntoView {
                     <label>"Label"</label>
                     <input type="text" placeholder="Main Camera" class="settings__input"
                         data-role="video-source-label"
-                        aria-required="true"
                         prop:value=move || new_label.get()
                         on:input=move |ev| new_label.set(event_target_value(&ev)) />
                 </div>
@@ -175,7 +174,6 @@ pub fn VideoSourcesCard(toast: ToastHandle) -> impl IntoView {
                     <div class="settings__ndi-select">
                         <input type="text" placeholder="CAM1 (usb)" class="settings__input"
                             data-role="video-source-ndi-name" list="ndi-sources"
-                            aria-required="true"
                             prop:value=move || new_ndi_name.get()
                             on:input=move |ev| new_ndi_name.set(event_target_value(&ev)) />
                         <datalist id="ndi-sources">
