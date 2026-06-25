@@ -258,5 +258,7 @@ fn ws_url() -> String {
     let protocol = location.protocol().unwrap_or_else(|_| "http:".to_string());
     let host = location.host().unwrap_or_else(|_| "localhost".to_string());
     let ws_protocol = if protocol == "https:" { "wss:" } else { "ws:" };
-    format!("{ws_protocol}//{host}/live/ws")
+    // Tag the surface so the server can log which UI opened the socket (#471).
+    // The stage page and the camera page both render the stage display family.
+    format!("{ws_protocol}//{host}/live/ws?surface=stage")
 }

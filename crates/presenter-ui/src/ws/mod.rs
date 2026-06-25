@@ -17,14 +17,17 @@ pub enum WsState {
     Reconnecting,
 }
 
-/// Build the WebSocket URL from the current page location.
-fn ws_url() -> String {
+/// Build the WebSocket URL from the current page location, tagging the
+/// connecting surface so the server can log which UI (operator/tablet) opened
+/// the socket (see #471). `/live/ws` is shared by every UI and the handshake
+/// carries no other surface signal, so the surface travels as a query param.
+fn ws_url(surface: &str) -> String {
     let window = web_sys::window().expect("no global window");
     let location = window.location();
     let protocol = location.protocol().unwrap_or_else(|_| "http:".to_string());
     let host = location.host().unwrap_or_else(|_| "localhost".to_string());
     let ws_protocol = if protocol == "https:" { "wss:" } else { "ws:" };
-    format!("{ws_protocol}//{host}/live/ws")
+    format!("{ws_protocol}//{host}/live/ws?surface={surface}")
 }
 
 /// Create a reactive WebSocket connection that automatically reconnects.
@@ -32,25 +35,28 @@ fn ws_url() -> String {
 /// Returns:
 /// - `ReadSignal<WsState>` - current connection state
 /// - `ReadSignal<Option<LiveEvent>>` - latest received event
-pub fn use_live_websocket() -> (ReadSignal<WsState>, ReadSignal<Option<LiveEvent>>) {
+pub fn use_live_websocket(
+    surface: &'static str,
+) -> (ReadSignal<WsState>, ReadSignal<Option<LiveEvent>>) {
     let (ws_state, set_ws_state) = signal(WsState::Connecting);
     let (last_event, set_last_event) = signal::<Option<LiveEvent>>(None);
 
     // Initial connection
-    spawn_ws_connection(set_ws_state, set_last_event);
+    spawn_ws_connection(surface, set_ws_state, set_last_event);
 
     (ws_state, last_event)
 }
 
 /// Spawn a WebSocket connection task.
 fn spawn_ws_connection(
+    surface: &'static str,
     set_ws_state: WriteSignal<WsState>,
     set_last_event: WriteSignal<Option<LiveEvent>>,
 ) {
     use futures_util::StreamExt;
 
     leptos::task::spawn_local(async move {
-        let url = ws_url();
+        let url = ws_url(surface);
 
         match WebSocket::open(&url) {
             Ok(ws) => {
@@ -72,11 +78,11 @@ fn spawn_ws_connection(
 
                 // Connection closed — schedule reconnect
                 set_ws_state.set(WsState::Reconnecting);
-                schedule_reconnect(set_ws_state, set_last_event);
+                schedule_reconnect(surface, set_ws_state, set_last_event);
             }
             Err(_) => {
                 set_ws_state.set(WsState::Disconnected);
-                schedule_reconnect(set_ws_state, set_last_event);
+                schedule_reconnect(surface, set_ws_state, set_last_event);
             }
         }
     });
@@ -84,12 +90,13 @@ fn spawn_ws_connection(
 
 /// Schedule a reconnection attempt after a delay.
 fn schedule_reconnect(
+    surface: &'static str,
     set_ws_state: WriteSignal<WsState>,
     set_last_event: WriteSignal<Option<LiveEvent>>,
 ) {
     Timeout::new(RECONNECT_DELAY_MS, move || {
         set_ws_state.set(WsState::Connecting);
-        spawn_ws_connection(set_ws_state, set_last_event);
+        spawn_ws_connection(surface, set_ws_state, set_last_event);
     })
     .forget();
 }

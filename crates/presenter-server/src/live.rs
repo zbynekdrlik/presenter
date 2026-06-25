@@ -5,7 +5,7 @@ use futures_util::{SinkExt, StreamExt};
 pub use presenter_core::{InboundMessage, LiveEvent};
 use tokio::{sync::broadcast, task::JoinHandle};
 use tokio_stream::wrappers::BroadcastStream;
-use tracing::{debug, warn};
+use tracing::{debug, info, warn};
 use uuid::Uuid;
 
 #[derive(Clone)]
@@ -66,7 +66,18 @@ where
     }
 }
 
-pub async fn serve_websocket(hub: LiveHub, connections: StageConnections, socket: WebSocket) {
+pub async fn serve_websocket(
+    hub: LiveHub,
+    connections: StageConnections,
+    socket: WebSocket,
+    client_ip: String,
+    surface: String,
+) {
+    // Mirrors the companion connect/disconnect INFO logs (companion/mod.rs) but
+    // carries the client IP and surface so live (stage/operator/tablet) clients
+    // are attributable in the logs (#471).
+    info!(client_ip = %client_ip, surface = %surface, "live ws client connected");
+
     let rx = hub.subscribe();
     let mut stream = BroadcastStream::new(rx);
     let (mut sender, mut receiver) = socket.split();
@@ -140,6 +151,8 @@ pub async fn serve_websocket(hub: LiveHub, connections: StageConnections, socket
     }
 
     forward_handle.abort();
+
+    info!(client_ip = %client_ip, surface = %surface, "live ws client disconnected");
 }
 
 #[cfg(test)]

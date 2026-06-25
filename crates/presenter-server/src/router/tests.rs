@@ -2384,3 +2384,21 @@ async fn stage_serves_normal_page_for_default_layout() {
         "default layout must not redirect"
     );
 }
+
+#[test]
+fn normalize_ws_surface_keeps_known_surface() {
+    // A real surface label passes through unchanged so the connect log records it.
+    assert_eq!(
+        normalize_ws_surface(Some("operator".to_string())),
+        "operator"
+    );
+    assert_eq!(normalize_ws_surface(Some("tablet".to_string())), "tablet");
+    assert_eq!(normalize_ws_surface(Some("stage".to_string())), "stage");
+}
+
+#[test]
+fn normalize_ws_surface_falls_back_to_unknown() {
+    // Missing or empty surface query param becomes "unknown" (never a blank label).
+    assert_eq!(normalize_ws_surface(None), "unknown");
+    assert_eq!(normalize_ws_surface(Some(String::new())), "unknown");
+}
