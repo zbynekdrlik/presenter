@@ -880,15 +880,17 @@ fn truncate_error(message: &str) -> String {
     if message.len() <= MAX_LEN {
         message.to_string()
     } else {
-        // Walk down to the nearest UTF-8 char boundary at or below MAX_LEN-1 so
-        // multi-byte codepoints in adb output never panic the byte slice. No
-        // `end > 0` guard is needed: byte 0 is always a char boundary, so the
-        // loop always stops at end >= 0 without underflowing.
-        let mut end = MAX_LEN - 1;
-        while !message.is_char_boundary(end) {
-            end -= 1;
+        // Accumulate whole chars until the next one would exceed the byte budget,
+        // so multi-byte codepoints in adb output are never split (no panic) and
+        // there is no decrement loop to mutate into an infinite loop.
+        let mut truncated = String::new();
+        for c in message.chars() {
+            if truncated.len() + c.len_utf8() > MAX_LEN - 1 {
+                break;
+            }
+            truncated.push(c);
         }
-        format!("{}…", &message[..end])
+        format!("{truncated}…")
     }
 }
 
@@ -1290,6 +1292,13 @@ mod tests {
                 .filter(|c| c.contains("dumpsys activity activities"))
                 .count()
         }
+
+        fn dumpsys_package_calls(&self) -> usize {
+            self.invocations()
+                .iter()
+                .filter(|c| c.contains("dumpsys package"))
+                .count()
+        }
     }
 
     #[async_trait]
@@ -1455,6 +1464,14 @@ mod tests {
             1,
             "the stage must still be launched after install",
         );
+        // The version check (dumpsys package) is ONLY reached when the package is
+        // already present. An absent app must install directly without probing the
+        // version — asserts adb_package_installed actually gates that branch.
+        assert_eq!(
+            runner.dumpsys_package_calls(),
+            0,
+            "an absent app must NOT be version-probed before install",
+        );
     }
 
     // An already-installed app MUST NOT be reinstalled on every launch.
@@ -1513,6 +1530,10 @@ mod tests {
             runner.install_calls(),
             0,
             "an app already at the expected versionCode MUST NOT be reinstalled",
+        );
+        assert!(
+            runner.dumpsys_package_calls() >= 1,
+            "a present app MUST be version-probed (dumpsys package) to decide upgrade",
         );
     }
 
