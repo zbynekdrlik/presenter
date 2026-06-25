@@ -25,8 +25,11 @@ Build order matters (WASM embedded into server at compile time via `include_dir!
    `cargo fmt --all && cargo clippy --workspace --all-targets -- -D warnings`
 
 2. **WASM I/F first** (server embeds dist/ at compile time):
-   `bash scripts/build-ui.sh`
-   Manual equivalent: `cd crates/presenter-ui && trunk build --release`
+   `bash scripts/build-ui.sh`  ← ALWAYS use this; it builds with **nightly +
+   `-Zbuild-std` + target-cpu=mvp** (Safari-12 MVP wasm). Do NOT run a plain
+   `trunk build` on stable — see the #465 note below.
+   Manual equivalent: `RUSTUP_TOOLCHAIN=nightly trunk build --release` from
+   `crates/presenter-ui` (the nightly + MVP `.cargo/config.toml` is what makes it work).
 
 3. **Server** -- run from WORKSPACE ROOT, not a subcrate directory:
    `cd /home/newlevel/devel/presenter/presenter-dev2`
@@ -39,13 +42,28 @@ Build order matters (WASM embedded into server at compile time via `include_dir!
 
 5. **Verify**: `curl http://10.77.8.134:8080/healthz`
 
-### ⚠️ Known issue — local WASM build currently BROKEN (#465)
+### Local WASM build — use `scripts/build-ui.sh`, NOT plain `trunk build` (#465 resolved)
 
-`trunk build` fails at wasm-bindgen with `failed to find the __wbindgen_externref_table_alloc function`: the trunk-cached wasm-bindgen 0.2.122 CLI is incompatible with rustc 1.96 (reference-types enabled by default). `RUSTFLAGS=-Ctarget-feature=-reference-types` does NOT fix it. **CI builds WASM fine** (it deploys), so until #465 is fixed:
+The local WASM build **works** — via `scripts/build-ui.sh`. The #465 symptom
+(`failed to find the __wbindgen_externref_table_alloc function`) only happens
+when you run a **plain `trunk build` on the stable toolchain**: rustc 1.82+
+enables wasm `reference-types` by default, emitting an externref table the
+wasm-bindgen step can't resolve. The project's canonical build avoids this
+entirely: `scripts/build-ui.sh` runs `RUSTUP_TOOLCHAIN=nightly trunk build`
+with `crates/presenter-ui/.cargo/config.toml`'s `-Zbuild-std` +
+`-Ctarget-cpu=mvp`, which recompiles std for the MVP wasm target (reference-types
+OFF). So:
 
-- Validate Rust locally with the cheap path: `cd crates/presenter-ui && cargo check --target wasm32-unknown-unknown` (and `cargo clippy ... --target wasm32-unknown-unknown -- -D warnings`). These skip wasm-bindgen, so they work.
-- For UI changes that need a real built artifact, **push and let CI build it**, then verify on the live dev server (`10.77.8.134:8080`) with Playwright. Don't fight the local trunk build.
-- `presenter-ui` is OUTSIDE the workspace (own `Cargo.lock`, version `0.1.x`): `cargo <cmd> -p presenter-ui` from root fails — run from `crates/presenter-ui/`.
+- **Build WASM locally with `bash scripts/build-ui.sh`** (verified working on dev2,
+  rustc 1.96, wasm-bindgen 0.2.122). Then `cargo build --release -p presenter-server`
+  embeds `dist/`, and Playwright E2E run locally. `RUSTFLAGS=-Ctarget-feature=-reference-types`
+  does NOT help — the fix is the nightly + build-std-mvp path, not RUSTFLAGS.
+- A plain `cd crates/presenter-ui && trunk build` on stable WILL fail by design —
+  that is expected, not a bug. Use the script.
+- Cheap Rust-only check (no wasm-bindgen): `cd crates/presenter-ui && cargo check
+  --target wasm32-unknown-unknown` (+ clippy). `presenter-ui` is OUTSIDE the
+  workspace (own `Cargo.lock`, version `0.1.x`): `cargo <cmd> -p presenter-ui` from
+  root fails — run from `crates/presenter-ui/`.
 
 ## PP location (companion-pp.lan) — release + manual recovery
 

@@ -96,6 +96,9 @@ pub fn CompanionCard() -> impl IntoView {
                                 status_msg.set(String::new());
                             }
                             required
+                            aria-required="true"
+                            aria-describedby="feature-companion-status"
+                            aria-invalid=move || (status_state.get() == "error").to_string()
                         />
                     </label>
                     <button
@@ -106,6 +109,7 @@ pub fn CompanionCard() -> impl IntoView {
                     >"Save"</button>
                 </div>
                 <p
+                    id="feature-companion-status"
                     class="settings__form-status"
                     data-role="feature-status"
                     data-state=move || status_state.get()
