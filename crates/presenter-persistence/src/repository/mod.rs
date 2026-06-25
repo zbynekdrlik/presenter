@@ -73,6 +73,7 @@ impl Repository {
         let db = Database::connect("sqlite::memory:?cache=shared")
             .await
             .context("failed to start in-memory sqlite")?;
+        Self::apply_sqlite_pragmas(&db).await?;
         Self::migrate(&db).await?;
         Ok(Self { db })
     }
@@ -85,6 +86,7 @@ impl Repository {
     async fn apply_sqlite_pragmas(db: &DatabaseConnection) -> anyhow::Result<()> {
         let backend = db.get_database_backend();
         for pragma in [
+            "PRAGMA foreign_keys = ON",
             "PRAGMA journal_mode = WAL",
             "PRAGMA wal_autocheckpoint = 1000",
             "PRAGMA busy_timeout = 5000",

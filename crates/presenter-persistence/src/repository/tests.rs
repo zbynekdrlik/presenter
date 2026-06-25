@@ -1417,6 +1417,47 @@ async fn reactivating_already_active_source_writes_no_audit_row() {
     assert_eq!(b_row.after_json["isActive"], true);
 }
 
+#[tokio::test]
+async fn connect_applies_sqlite_pragmas() {
+    // Regression for #467: `apply_sqlite_pragmas` must actually run (and run on
+    // the in-memory path too). Reading the pragma values back proves the body
+    // executed — this kills the "replace body with Ok(())" mutant that an earlier
+    // attempt (#466, reverted in 303ec9eb) shipped with no assertion.
+    use sea_orm::ConnectionTrait;
+
+    let repo = Repository::connect_in_memory().await.unwrap();
+    let conn = repo.connection_for_tests();
+    let backend = conn.get_database_backend();
+
+    // PRAGMA foreign_keys must be ON (1). SQLite defaults this OFF per-connection,
+    // so a 1 here can ONLY come from our explicit `PRAGMA foreign_keys = ON`.
+    let fk = conn
+        .query_one(sea_orm::Statement::from_string(
+            backend,
+            "PRAGMA foreign_keys".to_string(),
+        ))
+        .await
+        .unwrap()
+        .expect("PRAGMA foreign_keys returns a row");
+    let fk_on: i32 = fk.try_get_by_index(0).unwrap();
+    assert_eq!(fk_on, 1, "foreign_keys pragma must be ON after connect");
+
+    // PRAGMA busy_timeout must be the 5000ms we set (default is 0).
+    let busy = conn
+        .query_one(sea_orm::Statement::from_string(
+            backend,
+            "PRAGMA busy_timeout".to_string(),
+        ))
+        .await
+        .unwrap()
+        .expect("PRAGMA busy_timeout returns a row");
+    let busy_ms: i32 = busy.try_get_by_index(0).unwrap();
+    assert_eq!(
+        busy_ms, 5000,
+        "busy_timeout pragma must be 5000ms after connect"
+    );
+}
+
 /// Assert that `rows` contains the audit row for a sibling video source that
 /// was deactivated by an activation: actor/source match and the row records the
 /// is_active=true → is_active=false transition.
