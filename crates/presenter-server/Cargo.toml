@@ -50,4 +50,7 @@ tower.workspace = true
 presenter-persistence = { path = "../presenter-persistence" }
 wiremock = "0.6"
 tempfile = "3.10"
+# Real WebSocket client for the /live/ws integration test (#471). Version
+# matches the tokio-tungstenite axum's `ws` feature already pulls in.
+tokio-tungstenite = "0.29"
 
