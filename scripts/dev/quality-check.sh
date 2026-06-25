@@ -140,14 +140,12 @@ for file in "${target_files[@]}"; do
   for cf in "${changed[@]:-}"; do
     if [[ "$cf" == "$file" ]]; then is_changed=1; break; fi
   done
-  # Count production lines only (exclude inline #[cfg(test)] module and below)
-  test_line=$(awk '/^\s*#\[cfg\(test\)\]/{print NR; exit}' "$file")
-  if [[ -n "${test_line}" ]]; then
-    prod_lines=$(( test_line - 1 ))
-  else
-    prod_lines=$(wc -l < "$file" | tr -d ' ')
-  fi
-  lines=$prod_lines
+  # Count production lines only (exclude the inline #[cfg(test)] module). #407:
+  # delegated to count_prod_lines.sh, which stops ONLY at an inline `mod ... {`
+  # test module — NOT at a `#[cfg(test)] mod tests;` external-file declaration
+  # (the old inline awk stopped there and undercounted, letting 1100-line files
+  # slip past the cap). Self-test: tests/ci/file-size-gate.test.sh.
+  lines=$(bash "$(dirname "${BASH_SOURCE[0]}")/count_prod_lines.sh" "$file")
   if (( lines > 1000 )); then
     if (( is_changed )); then
       fail "${file} exceeds hard cap (1000 lines): ${lines}"
