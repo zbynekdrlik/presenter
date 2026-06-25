@@ -860,12 +860,12 @@ async fn seed_migration_populates_four_android_stage_displays_on_empty_table() {
     );
     for d in &displays {
         assert_eq!(d.port, 5555);
-        // The seed (m20260414_000002) inserts the dead Fully Kiosk component,
-        // but the full migration chain run by `connect_in_memory` then applies
-        // m20260616_000001, which rewrites those rows to the TCL browser
-        // package (issue #404). So after migrations the launcher target is the
-        // package, not the dead component.
-        assert_eq!(d.launch_component, "com.tcl.browser");
+        // The seed (m20260414_000002) inserts the dead Fully Kiosk component;
+        // the full migration chain run by `connect_in_memory` then applies
+        // m20260616_000001 (→ com.tcl.browser, #404) and finally m20260624_000001
+        // (→ our own Presenter Stage app, #472), which is the universal launcher
+        // target. So after migrations the launcher target is our app package.
+        assert_eq!(d.launch_component, "sk.newlevel.presenterstage");
         assert!(d.is_enabled, "seeded displays should be enabled");
     }
 }

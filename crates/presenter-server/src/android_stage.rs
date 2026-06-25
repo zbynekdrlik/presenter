@@ -1,12 +1,13 @@
 use anyhow::anyhow;
 use async_trait::async_trait;
 use chrono::{DateTime, Utc};
-use presenter_core::{AndroidStageDisplay, AndroidStageDisplayId};
+use presenter_core::{AndroidStageDisplay, AndroidStageDisplayId, DEFAULT_LAUNCH_PACKAGE};
 use serde::Serialize;
 use std::{
     collections::HashMap,
     env,
     ffi::{OsStr, OsString},
+    path::{Path, PathBuf},
     process::Output,
     sync::Arc,
     time::Duration,
@@ -79,6 +80,24 @@ const RETRY_INTERVAL: Duration = Duration::from_secs(20);
 /// in the deploy systemd units. When unset/empty the launcher skips launching.
 const STAGE_URL_ENV: &str = "PRESENTER_ANDROID_STAGE_URL";
 
+/// Server-wide env var pointing at the Presenter Stage APK on disk. The watchdog
+/// installs this APK via ADB on any TV whose configured launch package is our
+/// own app ([`DEFAULT_LAUNCH_PACKAGE`]) but does not have it installed yet — so
+/// the stage runs on ANY Android TV (incl. ones with no browser, e.g. Sharp/
+/// MediaTek) without a third-party kiosk browser. Defaults to
+/// [`DEFAULT_STAGE_APK_PATH`]; when the file is absent, install is skipped (the
+/// TV must already have the app, or a browser package configured).
+const STAGE_APK_ENV: &str = "PRESENTER_ANDROID_STAGE_APK";
+const DEFAULT_STAGE_APK_PATH: &str = "/opt/presenter/presenter-stage.apk";
+
+/// The `versionCode` of the bundled Presenter Stage APK. MUST be kept in lockstep
+/// with `android/presenter-stage/app/build.gradle.kts` `versionCode`. The watchdog
+/// compares this against the versionCode installed on a TV and reinstalls when the
+/// TV's copy is older — so bumping the app's versionCode (and this constant)
+/// actually ships the new APK to TVs that already have an older one. Without this
+/// comparison, an already-installed (but stale) app would never be upgraded.
+const EXPECTED_STAGE_APK_VERSION_CODE: i64 = 1;
+
 /// Validate that a configured stage URL is a well-formed `http(s)://` URL before
 /// it is spliced into the `am start -a VIEW -d <url>` adb args (which reach the
 /// device's `/system/bin/sh`). Returns the normalized URL string on success, or
@@ -110,6 +129,22 @@ fn validate_stage_url(raw: &str) -> Option<String> {
         }
         _ => None,
     }
+}
+
+/// Resolve the Presenter Stage APK path from [`STAGE_APK_ENV`] (default
+/// [`DEFAULT_STAGE_APK_PATH`]). Returns `Some(path)` only when the file actually
+/// exists, so the watchdog never attempts an `adb install` of a missing file.
+/// Resolve the Presenter Stage APK path from the [`STAGE_APK_ENV`] value: fall
+/// back to [`DEFAULT_STAGE_APK_PATH`] when empty/unset, then return the path only
+/// if the file actually exists (so the watchdog never tries to install a missing
+/// file). Kept as a pure function of its argument so it is testable without
+/// touching the process environment; the caller passes `env::var(...).ok()`.
+fn resolve_apk_path_from(raw: Option<String>) -> Option<PathBuf> {
+    let raw = raw
+        .filter(|v| !v.trim().is_empty())
+        .unwrap_or_else(|| DEFAULT_STAGE_APK_PATH.to_string());
+    let path = PathBuf::from(raw);
+    path.is_file().then_some(path)
 }
 
 #[derive(Debug, Clone, Copy, Serialize, PartialEq, Eq)]
@@ -152,6 +187,10 @@ pub struct AndroidStageRegistry {
     /// `PRESENTER_ANDROID_STAGE_URL` at construction. `None` when unset/empty —
     /// the launcher then warns and skips rather than firing a broken intent.
     stage_url: Arc<Option<String>>,
+    /// Path to the Presenter Stage APK to install on TVs that should run our own
+    /// app but don't have it yet. `None` when the configured/default APK file is
+    /// absent (then install is skipped — see [`STAGE_APK_ENV`]).
+    apk_path: Arc<Option<PathBuf>>,
     displays: Arc<RwLock<HashMap<AndroidStageDisplayId, DeviceEntry>>>,
 }
 
@@ -196,9 +235,22 @@ impl AndroidStageRegistry {
                 );
             }
         }
+        let apk_path = resolve_apk_path_from(env::var(STAGE_APK_ENV).ok());
+        match &apk_path {
+            Some(path) => {
+                debug!(env = STAGE_APK_ENV, path = %path.display(), "presenter stage APK available for auto-install");
+            }
+            None => {
+                debug!(
+                    env = STAGE_APK_ENV,
+                    "presenter stage APK not found — TVs must already have the app or a browser package configured"
+                );
+            }
+        }
         Self {
             runner,
             stage_url: Arc::new(stage_url),
+            apk_path: Arc::new(apk_path),
             displays: Arc::new(RwLock::new(HashMap::new())),
         }
     }
@@ -299,11 +351,19 @@ impl AndroidStageRegistry {
         }));
         let runner = Arc::clone(&self.runner);
         let stage_url = Arc::clone(&self.stage_url);
+        let apk_path = Arc::clone(&self.apk_path);
         let status_clone = Arc::clone(&status);
         let config_clone = display.clone();
         let handle = tokio::spawn(async move {
-            if let Err(err) =
-                run_device_worker(runner, stage_url, config_clone, status_clone, command_rx).await
+            if let Err(err) = run_device_worker(
+                runner,
+                stage_url,
+                apk_path,
+                config_clone,
+                status_clone,
+                command_rx,
+            )
+            .await
             {
                 error!(?err, "android stage display worker exited");
             }
@@ -323,6 +383,7 @@ impl AndroidStageRegistry {
 async fn run_device_worker(
     runner: Arc<dyn AdbRunner>,
     stage_url: Arc<Option<String>>,
+    apk_path: Arc<Option<PathBuf>>,
     mut config: AndroidStageDisplay,
     status: Arc<RwLock<AndroidStageDisplayStatusSnapshot>>,
     mut command_rx: mpsc::Receiver<DeviceCommand>,
@@ -336,7 +397,7 @@ async fn run_device_worker(
                 if config.is_enabled {
                     // Periodic keep-alive: foreground-aware (#419) — only
                     // relaunches when the browser is not already up.
-                    if let Err(err) = connect_and_launch(runner.as_ref(), &stage_url, &config, &status, false).await {
+                    if let Err(err) = connect_and_launch(runner.as_ref(), &stage_url, &apk_path, &config, &status, false).await {
                         debug!(display = %config.label, ?err, "android stage display launch attempt failed");
                     }
                 } else {
@@ -355,7 +416,7 @@ async fn run_device_worker(
                         if config.is_enabled {
                             // Explicit/forced launch (startup, config change,
                             // launch-now endpoint): always (re)launch (#419).
-                            if let Err(err) = connect_and_launch(runner.as_ref(), &stage_url, &config, &status, true).await {
+                            if let Err(err) = connect_and_launch(runner.as_ref(), &stage_url, &apk_path, &config, &status, true).await {
                                 debug!(display = %config.label, ?err, "android stage display manual launch failed");
                             }
                         }
@@ -398,6 +459,7 @@ async fn adb_connect(runner: &dyn AdbRunner, serial: &str) -> anyhow::Result<()>
 async fn connect_and_launch(
     runner: &dyn AdbRunner,
     stage_url: &Arc<Option<String>>,
+    apk_path: &Arc<Option<PathBuf>>,
     config: &AndroidStageDisplay,
     status: &Arc<RwLock<AndroidStageDisplayStatusSnapshot>>,
     force_launch: bool,
@@ -433,6 +495,22 @@ async fn connect_and_launch(
         return Err(err);
     }
 
+    let launch_pkg = launch_package(&config.launch_component);
+
+    // Ensure our own Presenter Stage app is installed before we launch it, so the
+    // stage runs on ANY Android TV — including ones with no usable browser (e.g.
+    // Sharp/MediaTek, where com.tcl.browser is absent) — without a kiosk browser.
+    // Only our app ([`DEFAULT_LAUNCH_PACKAGE`]) is auto-installed; a legacy or
+    // operator-set browser package is assumed already present on the device.
+    if launch_pkg == DEFAULT_LAUNCH_PACKAGE {
+        if let Some(apk) = apk_path.as_deref() {
+            if let Err(err) = ensure_app_installed(runner, &serial, launch_pkg, apk).await {
+                record_error(status, err.to_string()).await;
+                return Err(err);
+            }
+        }
+    }
+
     // #419: foreground-aware keep-alive. On the periodic tick (force_launch =
     // false) skip the am-start when the browser is ALREADY the resumed app —
     // re-firing the VIEW intent reloads com.tcl.browser (black blink + spinner)
@@ -440,7 +518,6 @@ async fn connect_and_launch(
     // genuinely-down display still recovers. Explicit/forced launches (config
     // change, launch-now endpoint) bypass the gate and always relaunch.
     if !force_launch {
-        let launch_pkg = launch_package(&config.launch_component);
         let foreground = adb_foreground_component(runner, &serial).await;
         if !should_launch_stage(foreground.as_deref(), launch_pkg) {
             debug!(
@@ -512,6 +589,116 @@ async fn adb_launch(
     Ok(())
 }
 
+/// True when `package` is installed on the device — `pm path <package>` prints a
+/// `package:` line. A missing package prints nothing (or errors) → false.
+async fn adb_package_installed(runner: &dyn AdbRunner, serial: &str, package: &str) -> bool {
+    let args = adb_args(["-s", serial, "shell", "pm", "path", package]);
+    match runner.run(&args).await {
+        Ok(output) => String::from_utf8_lossy(&output.stdout).contains("package:"),
+        Err(_) => false,
+    }
+}
+
+/// `adb install` reports failure on stdout (`Failure [INSTALL_FAILED_…]`) and,
+/// depending on adb version, may still exit 0 — so require BOTH a success exit
+/// AND a `Success` line.
+fn adb_install_succeeded(output: &Output) -> bool {
+    ensure_success(output).is_ok() && String::from_utf8_lossy(&output.stdout).contains("Success")
+}
+
+/// Read the `versionCode` of `package` installed on the device via
+/// `dumpsys package <pkg>`. Returns `None` when the command fails or no
+/// `versionCode=` line is present (e.g. package absent).
+async fn adb_installed_version_code(
+    runner: &dyn AdbRunner,
+    serial: &str,
+    package: &str,
+) -> Option<i64> {
+    let args = adb_args(["-s", serial, "shell", "dumpsys", "package", package]);
+    let output = runner.run(&args).await.ok()?;
+    parse_version_code(&String::from_utf8_lossy(&output.stdout))
+}
+
+/// Parse the first `versionCode=<n>` integer out of `dumpsys package` output.
+/// `dumpsys` prints e.g. `    versionCode=7 minSdk=22 targetSdk=34` — we take the
+/// digits immediately after the first `versionCode=`. Returns `None` when no such
+/// field is present. Pure (no I/O) so the parsing is unit-testable.
+fn parse_version_code(dumpsys: &str) -> Option<i64> {
+    let after = dumpsys.split("versionCode=").nth(1)?;
+    let digits: String = after.chars().take_while(|c| c.is_ascii_digit()).collect();
+    digits.parse().ok()
+}
+
+/// Ensure our Presenter Stage app is installed AND up to date on the device.
+/// No-op when present at a versionCode >= [`EXPECTED_STAGE_APK_VERSION_CODE`].
+/// Otherwise (absent, stale, or version unreadable) `adb install -r <apk>`; if
+/// that fails (e.g. a signature mismatch from a rebuilt APK, or a downgrade),
+/// fall back to `adb uninstall` + a clean `adb install`. The app is a stateless
+/// WebView shell, so reinstalling loses nothing.
+async fn ensure_app_installed(
+    runner: &dyn AdbRunner,
+    serial: &str,
+    package: &str,
+    apk: &Path,
+) -> anyhow::Result<()> {
+    if adb_package_installed(runner, serial, package).await {
+        match adb_installed_version_code(runner, serial, package).await {
+            // Up to date — nothing to do.
+            Some(installed) if installed >= EXPECTED_STAGE_APK_VERSION_CODE => return Ok(()),
+            // Older than the bundled APK — upgrade in place.
+            Some(installed) => {
+                info!(
+                    serial,
+                    package,
+                    installed,
+                    expected = EXPECTED_STAGE_APK_VERSION_CODE,
+                    "Presenter Stage app is stale — upgrading"
+                );
+            }
+            // Present but versionCode unreadable — reinstall to be safe.
+            None => {
+                warn!(
+                    serial,
+                    package, "Presenter Stage installed but versionCode unreadable — reinstalling"
+                );
+            }
+        }
+    } else {
+        info!(serial, package, apk = %apk.display(), "installing Presenter Stage app on TV");
+    }
+
+    let mut install_args = adb_args(["-s", serial, "install", "-r"]);
+    install_args.push(apk.as_os_str().to_os_string());
+    if let Ok(output) = runner.run(&install_args).await {
+        if adb_install_succeeded(&output) {
+            return Ok(());
+        }
+    }
+
+    // Reinstall path: drop any conflicting/old copy, then install clean.
+    warn!(
+        serial,
+        package, "adb install -r failed — retrying with uninstall + install"
+    );
+    let _ = runner
+        .run(&adb_args(["-s", serial, "uninstall", package]))
+        .await;
+    let mut clean_args = adb_args(["-s", serial, "install"]);
+    clean_args.push(apk.as_os_str().to_os_string());
+    let output = runner
+        .run(&clean_args)
+        .await
+        .map_err(|e| anyhow!("failed to execute adb install for {serial}: {e}"))?;
+    if adb_install_succeeded(&output) {
+        Ok(())
+    } else {
+        Err(anyhow!(
+            "adb install failed for {serial}: {}",
+            format_command_failure(&output)
+        ))
+    }
+}
+
 /// Extract the Android PACKAGE from a stored `launch_component`. New rows store
 /// a bare package (`com.tcl.browser`); legacy rows may store
 /// `package/activity` — in that case we take the substring before the first
@@ -544,14 +731,17 @@ fn build_launch_args(launch_component: &str, stage_url: Option<&str>) -> Option<
     ])
 }
 
-/// The browser's resumed component (`<pkg>/<activity>`) suffix that means the
-/// STAGE PAGE is genuinely showing — `com.tcl.browser`'s content/browse
-/// activity. When the foreground component ends with this, the stage is loaded
-/// and the keep-alive must NOT relaunch (re-firing the VIEW intent would reload
-/// the page — the #419 black blink). Any OTHER activity of the same package
-/// (notably the home portal `.portal.home.activity.StartActivity` the TV opens
-/// to at power-on — #447) is NOT the stage and MUST be (re)launched.
-const STAGE_CONTENT_ACTIVITY_SUFFIX: &str = "BrowsePageActivity";
+/// Resumed-activity suffixes that mean the STAGE PAGE is genuinely showing:
+/// - `StageActivity` — our own Presenter Stage app (its single activity);
+/// - `BrowsePageActivity` — legacy `com.tcl.browser`'s content/browse activity.
+///
+/// When the foreground component ends with one of these AND its package is the
+/// configured launch package, the stage is loaded and the keep-alive must NOT
+/// relaunch (re-firing the VIEW intent would reload the page — the #419 black
+/// blink). Any OTHER activity of the same package (notably com.tcl.browser's
+/// home portal `.portal.home.activity.StartActivity` the TV opens to at
+/// power-on — #447) is NOT the stage and MUST be (re)launched.
+const STAGE_CONTENT_ACTIVITY_SUFFIXES: &[&str] = &["StageActivity", "BrowsePageActivity"];
 
 /// Decide whether the periodic keep-alive should (re)launch the stage browser,
 /// given the device's current foreground/resumed COMPONENT (`<pkg>/<activity>`).
@@ -584,8 +774,10 @@ fn should_launch_stage(foreground_component: Option<&str>, launch_package: &str)
             // its content/browse activity — i.e. the stage page is genuinely
             // showing. The home portal (`…StartActivity`) is the same package
             // but a different activity, so it correctly relaunches (#447).
-            let stage_is_showing =
-                package == launch_package && activity.ends_with(STAGE_CONTENT_ACTIVITY_SUFFIX);
+            let stage_is_showing = package == launch_package
+                && STAGE_CONTENT_ACTIVITY_SUFFIXES
+                    .iter()
+                    .any(|suffix| activity.ends_with(suffix));
             !stage_is_showing
         }
         // Foreground could not be determined → don't suppress a possibly-needed
@@ -688,7 +880,17 @@ fn truncate_error(message: &str) -> String {
     if message.len() <= MAX_LEN {
         message.to_string()
     } else {
-        format!("{}…", &message[..MAX_LEN - 1])
+        // Accumulate whole chars until the next one would exceed the byte budget,
+        // so multi-byte codepoints in adb output are never split (no panic) and
+        // there is no decrement loop to mutate into an infinite loop.
+        let mut truncated = String::new();
+        for c in message.chars() {
+            if truncated.len() + c.len_utf8() > MAX_LEN - 1 {
+                break;
+            }
+            truncated.push(c);
+        }
+        format!("{truncated}…")
     }
 }
 
@@ -1013,6 +1215,13 @@ mod tests {
         /// When true, `adb connect <serial>` returns a failed/non-success
         /// Output so `adb_connect` errors (modeling an unreachable device).
         connect_fails: bool,
+        /// Whether `pm path <pkg>` reports the app installed. `false` models a TV
+        /// that needs the Presenter Stage APK installed first.
+        installed: bool,
+        /// The versionCode `dumpsys package <pkg>` reports for the installed app.
+        /// Defaults to [`EXPECTED_STAGE_APK_VERSION_CODE`] (up to date → no
+        /// reinstall); lower models a stale install the watchdog must upgrade.
+        installed_version: i64,
         calls: Mutex<Vec<String>>,
     }
 
@@ -1021,6 +1230,8 @@ mod tests {
             Self {
                 foreground,
                 connect_fails: false,
+                installed: true,
+                installed_version: EXPECTED_STAGE_APK_VERSION_CODE,
                 calls: Mutex::new(Vec::new()),
             }
         }
@@ -1029,8 +1240,32 @@ mod tests {
             Self {
                 foreground,
                 connect_fails: true,
+                installed: true,
+                installed_version: EXPECTED_STAGE_APK_VERSION_CODE,
                 calls: Mutex::new(Vec::new()),
             }
+        }
+
+        /// Builder: the app is NOT yet installed (so `pm path` reports nothing and
+        /// the watchdog must `adb install` the APK).
+        fn app_missing(mut self) -> Self {
+            self.installed = false;
+            self
+        }
+
+        /// Builder: the app IS installed but at an older versionCode, so the
+        /// watchdog must upgrade it.
+        fn installed_version(mut self, version: i64) -> Self {
+            self.installed = true;
+            self.installed_version = version;
+            self
+        }
+
+        fn install_calls(&self) -> usize {
+            self.invocations()
+                .iter()
+                .filter(|c| c.contains("install") && !c.contains("uninstall"))
+                .count()
         }
 
         fn invocations(&self) -> Vec<String> {
@@ -1055,6 +1290,13 @@ mod tests {
             self.invocations()
                 .iter()
                 .filter(|c| c.contains("dumpsys activity activities"))
+                .count()
+        }
+
+        fn dumpsys_package_calls(&self) -> usize {
+            self.invocations()
+                .iter()
+                .filter(|c| c.contains("dumpsys package"))
                 .count()
         }
     }
@@ -1093,12 +1335,40 @@ mod tests {
                 };
             }
 
+            // `pm path <pkg>` reports install state (`package:` line = installed).
+            if joined.contains("shell pm path") {
+                return Ok(ok_output(if self.installed {
+                    "package:/data/app/test/base.apk"
+                } else {
+                    ""
+                }));
+            }
+
+            // `dumpsys package <pkg>` reports the installed versionCode (empty
+            // when the app is absent).
+            if joined.contains("dumpsys package") {
+                return Ok(ok_output(&if self.installed {
+                    format!(
+                        "    versionCode={} minSdk=22 targetSdk=34",
+                        self.installed_version
+                    )
+                } else {
+                    String::new()
+                }));
+            }
+
+            // `adb install [-r] <apk>` succeeds (prints `Success`); `uninstall`
+            // is handled by the generic clean-success path below.
+            if joined.contains("install") && !joined.contains("uninstall") {
+                return Ok(ok_output("Success"));
+            }
+
             // `adb connect <serial>` fails when the device is unreachable.
             if self.connect_fails && joined.starts_with("connect ") {
                 return Ok(err_output("error: failed to connect to 'host:port'"));
             }
 
-            // connect / disconnect / `am start` all succeed cleanly.
+            // connect / disconnect / uninstall / `am start` all succeed cleanly.
             Ok(ok_output(""))
         }
     }
@@ -1126,6 +1396,263 @@ mod tests {
         }))
     }
 
+    /// No APK configured → the watchdog never attempts an install (the default
+    /// for the keep-alive/foreground tests, which use a browser package).
+    fn no_apk() -> Arc<Option<PathBuf>> {
+        Arc::new(None)
+    }
+
+    /// An APK is available on disk → install-if-missing can fire.
+    fn some_apk() -> Arc<Option<PathBuf>> {
+        Arc::new(Some(PathBuf::from("/opt/presenter/presenter-stage.apk")))
+    }
+
+    /// A display configured to launch our OWN app ([`DEFAULT_LAUNCH_PACKAGE`]),
+    /// which is the only package the watchdog auto-installs.
+    fn our_app_display() -> AndroidStageDisplay {
+        let now = Utc::now();
+        AndroidStageDisplay::new(
+            AndroidStageDisplayId::from_uuid(Uuid::new_v4()),
+            "Stage TV".to_string(),
+            "10.0.0.42".to_string(),
+            5555,
+            DEFAULT_LAUNCH_PACKAGE.to_string(),
+            true,
+            now,
+            now,
+        )
+    }
+
+    // Our own app's single activity IS the stage page → keep-alive must NOT
+    // relaunch when it is foreground; a different app must (re)launch.
+    #[test]
+    fn should_launch_stage_skips_for_our_stage_activity() {
+        assert!(
+            !should_launch_stage(
+                Some("sk.newlevel.presenterstage/sk.newlevel.presenterstage.StageActivity"),
+                "sk.newlevel.presenterstage",
+            ),
+            "our StageActivity foreground IS the stage — must not relaunch",
+        );
+        assert!(
+            should_launch_stage(
+                Some("com.android.tv.settings/.Main"),
+                "sk.newlevel.presenterstage"
+            ),
+            "another app foreground must relaunch our stage",
+        );
+    }
+
+    // A TV missing our app MUST get it installed via adb before the stage launch.
+    #[tokio::test]
+    async fn installs_our_app_when_missing_before_launch() {
+        let runner = FakeAdbRunner::new(Foreground::StagePage).app_missing();
+        let stage_url = Arc::new(Some(TEST_STAGE_URL.to_string()));
+        let config = our_app_display();
+        let status = test_status();
+
+        let result =
+            connect_and_launch(&runner, &stage_url, &some_apk(), &config, &status, true).await;
+        assert!(result.is_ok(), "install + launch must succeed: {result:?}");
+        assert_eq!(
+            runner.install_calls(),
+            1,
+            "a missing app MUST be installed via adb before launch",
+        );
+        assert_eq!(
+            runner.am_start_calls(),
+            1,
+            "the stage must still be launched after install",
+        );
+        // The version check (dumpsys package) is ONLY reached when the package is
+        // already present. An absent app must install directly without probing the
+        // version — asserts adb_package_installed actually gates that branch.
+        assert_eq!(
+            runner.dumpsys_package_calls(),
+            0,
+            "an absent app must NOT be version-probed before install",
+        );
+    }
+
+    // An already-installed app MUST NOT be reinstalled on every launch.
+    #[tokio::test]
+    async fn skips_install_when_our_app_present() {
+        let runner = FakeAdbRunner::new(Foreground::StagePage);
+        let stage_url = Arc::new(Some(TEST_STAGE_URL.to_string()));
+        let config = our_app_display();
+        let status = test_status();
+
+        let result =
+            connect_and_launch(&runner, &stage_url, &some_apk(), &config, &status, true).await;
+        assert!(result.is_ok());
+        assert_eq!(
+            runner.install_calls(),
+            0,
+            "an already-installed app MUST NOT be reinstalled",
+        );
+    }
+
+    // An app present at a versionCode OLDER than the bundled APK MUST be upgraded
+    // (the versionCode comparison the gradle comment promises). Without it, a
+    // bumped APK never reaches a TV that already has an older copy.
+    #[tokio::test]
+    async fn upgrades_our_app_when_installed_version_is_stale() {
+        let runner = FakeAdbRunner::new(Foreground::StagePage)
+            .installed_version(EXPECTED_STAGE_APK_VERSION_CODE - 1);
+        let stage_url = Arc::new(Some(TEST_STAGE_URL.to_string()));
+        let config = our_app_display();
+        let status = test_status();
+
+        let result =
+            connect_and_launch(&runner, &stage_url, &some_apk(), &config, &status, true).await;
+        assert!(result.is_ok(), "upgrade + launch must succeed: {result:?}");
+        assert_eq!(
+            runner.install_calls(),
+            1,
+            "a stale (older versionCode) app MUST be upgraded via adb install",
+        );
+    }
+
+    // A present app at the EXACT expected versionCode must NOT be reinstalled
+    // (boundary: installed == expected → up to date).
+    #[tokio::test]
+    async fn skips_install_when_installed_version_matches_expected() {
+        let runner = FakeAdbRunner::new(Foreground::StagePage)
+            .installed_version(EXPECTED_STAGE_APK_VERSION_CODE);
+        let stage_url = Arc::new(Some(TEST_STAGE_URL.to_string()));
+        let config = our_app_display();
+        let status = test_status();
+
+        let result =
+            connect_and_launch(&runner, &stage_url, &some_apk(), &config, &status, true).await;
+        assert!(result.is_ok());
+        assert_eq!(
+            runner.install_calls(),
+            0,
+            "an app already at the expected versionCode MUST NOT be reinstalled",
+        );
+        assert!(
+            runner.dumpsys_package_calls() >= 1,
+            "a present app MUST be version-probed (dumpsys package) to decide upgrade",
+        );
+    }
+
+    #[test]
+    fn parse_version_code_extracts_first_integer_or_none() {
+        assert_eq!(
+            parse_version_code("    versionCode=7 minSdk=22 targetSdk=34"),
+            Some(7),
+            "must parse the integer right after versionCode=",
+        );
+        assert_eq!(
+            parse_version_code("flags=[ DEBUGGABLE ]\n    versionCode=42 ..."),
+            Some(42),
+        );
+        assert_eq!(
+            parse_version_code("no version field here"),
+            None,
+            "absent versionCode must yield None (→ reinstall to be safe)",
+        );
+        assert_eq!(
+            parse_version_code("versionCode= notanumber"),
+            None,
+            "non-numeric versionCode must yield None",
+        );
+    }
+
+    #[test]
+    fn truncate_error_is_utf8_safe_at_boundary() {
+        // 'č' (2 bytes) occupies bytes 278-279; the cut index MAX_LEN-1 = 279
+        // lands MID-codepoint. Correct code walks DOWN to byte 278 (the char
+        // boundary at the start of 'č'), so the result is exactly the 278 'x's
+        // plus the ellipsis — 'č' is dropped, never split. Asserting the EXACT
+        // string kills the boundary-walk mutants (end += 1 would instead keep
+        // 'č'; && → || would walk all the way to 0).
+        let message = "x".repeat(278) + "č" + &"y".repeat(20);
+        let out = truncate_error(&message);
+        assert_eq!(
+            out,
+            format!("{}…", "x".repeat(278)),
+            "must cut on the char boundary below the limit (drop the split 'č')",
+        );
+        // Short messages pass through unchanged.
+        assert_eq!(truncate_error("short"), "short");
+        // A message exactly at the cap passes through unchanged (boundary of the
+        // len() <= MAX_LEN branch).
+        assert_eq!(truncate_error(&"a".repeat(280)), "a".repeat(280));
+        // All single-byte chars: the budget cut lands EXACTLY at MAX_LEN-1 = 279,
+        // so the result is exactly 279 'a's + ellipsis. This pins the budget
+        // comparison precisely — `> → >=` would keep 278, `+ → *` would keep 280.
+        assert_eq!(
+            truncate_error(&"a".repeat(400)),
+            format!("{}…", "a".repeat(279)),
+            "byte budget must keep exactly MAX_LEN-1 single-byte chars",
+        );
+    }
+
+    // A browser package (e.g. com.tcl.browser) is assumed pre-installed — the
+    // watchdog must NOT try to install it even when an APK is available.
+    #[tokio::test]
+    async fn skips_install_for_non_default_package() {
+        let runner = FakeAdbRunner::new(Foreground::StagePage).app_missing();
+        let stage_url = Arc::new(Some(TEST_STAGE_URL.to_string()));
+        let config = test_display();
+        let status = test_status();
+
+        let result =
+            connect_and_launch(&runner, &stage_url, &some_apk(), &config, &status, true).await;
+        assert!(result.is_ok());
+        assert_eq!(
+            runner.install_calls(),
+            0,
+            "only our own app is auto-installed; a browser package is left alone",
+        );
+    }
+
+    // APK path resolution: an existing configured file resolves to itself; a
+    // missing path (or empty → default, absent in tests) resolves to None so the
+    // watchdog never tries to install a non-existent file.
+    #[test]
+    fn resolve_apk_path_uses_existing_file_and_rejects_missing() {
+        let f =
+            std::env::temp_dir().join(format!("presenter-stage-test-{}.apk", std::process::id()));
+        std::fs::write(&f, b"x").unwrap();
+        assert_eq!(
+            resolve_apk_path_from(Some(f.to_string_lossy().into_owned())),
+            Some(f.clone()),
+            "an existing configured APK path must resolve to itself",
+        );
+        std::fs::remove_file(&f).ok();
+        assert_eq!(
+            resolve_apk_path_from(Some("/no/such/dir/presenter-stage.apk".to_string())),
+            None,
+            "a missing APK path must resolve to None (install skipped)",
+        );
+        assert_eq!(
+            resolve_apk_path_from(Some(String::new())),
+            None,
+            "empty falls back to the default path, which is absent under test → None",
+        );
+    }
+
+    // `adb install` success requires BOTH a success exit AND a `Success` line —
+    // a `Failure [..]` printed on a zero exit must NOT count as installed.
+    #[test]
+    fn adb_install_succeeded_requires_success_exit_and_marker() {
+        assert!(
+            adb_install_succeeded(&ok_output("Success")),
+            "exit 0 + Success ⇒ installed",
+        );
+        assert!(
+            !adb_install_succeeded(&ok_output("Failure [INSTALL_FAILED_VERSION_DOWNGRADE]")),
+            "exit 0 but no Success marker ⇒ NOT installed",
+        );
+        assert!(
+            !adb_install_succeeded(&err_output("Success")),
+            "non-zero exit ⇒ NOT installed",
+        );
+    }
+
     // (a) Periodic keep-alive, stage page already foreground → NO `am start`.
     #[tokio::test]
     async fn tick_skips_am_start_when_stage_page_foreground() {
@@ -1135,7 +1662,8 @@ mod tests {
         let status = test_status();
 
         // force_launch=false models the periodic tick.
-        let result = connect_and_launch(&runner, &stage_url, &config, &status, false).await;
+        let result =
+            connect_and_launch(&runner, &stage_url, &no_apk(), &config, &status, false).await;
         assert!(
             result.is_ok(),
             "keep-alive on a healthy display must succeed"
@@ -1173,7 +1701,8 @@ mod tests {
         let config = test_display();
         let status = test_status();
 
-        let result = connect_and_launch(&runner, &stage_url, &config, &status, false).await;
+        let result =
+            connect_and_launch(&runner, &stage_url, &no_apk(), &config, &status, false).await;
         assert!(
             result.is_ok(),
             "a TV stuck on the home portal must relaunch and succeed (#447)"
@@ -1199,7 +1728,8 @@ mod tests {
         let config = test_display();
         let status = test_status();
 
-        let result = connect_and_launch(&runner, &stage_url, &config, &status, false).await;
+        let result =
+            connect_and_launch(&runner, &stage_url, &no_apk(), &config, &status, false).await;
         assert!(
             result.is_ok(),
             "a backgrounded display must relaunch and succeed"
@@ -1225,7 +1755,8 @@ mod tests {
         let config = test_display();
         let status = test_status();
 
-        let result = connect_and_launch(&runner, &stage_url, &config, &status, false).await;
+        let result =
+            connect_and_launch(&runner, &stage_url, &no_apk(), &config, &status, false).await;
         assert!(result.is_ok());
 
         assert_eq!(runner.dumpsys_calls(), 1, "the gate is consulted on a tick");
@@ -1246,7 +1777,8 @@ mod tests {
         let config = test_display();
         let status = test_status();
 
-        let result = connect_and_launch(&runner, &stage_url, &config, &status, true).await;
+        let result =
+            connect_and_launch(&runner, &stage_url, &no_apk(), &config, &status, true).await;
         assert!(result.is_ok(), "a forced launch must succeed");
 
         assert_eq!(
@@ -1273,7 +1805,8 @@ mod tests {
         let config = test_display();
         let status = test_status();
 
-        let result = connect_and_launch(&runner, &stage_url, &config, &status, true).await;
+        let result =
+            connect_and_launch(&runner, &stage_url, &no_apk(), &config, &status, true).await;
         assert!(
             result.is_err(),
             "a failed `adb connect` MUST abort the launch with an error",
@@ -1317,7 +1850,7 @@ mod tests {
         tx.try_send(DeviceCommand::LaunchNow).unwrap();
         tx.try_send(DeviceCommand::Shutdown).unwrap();
 
-        run_device_worker(runner, stage_url, config, status, rx)
+        run_device_worker(runner, stage_url, no_apk(), config, status, rx)
             .await
             .expect("worker should exit cleanly on Shutdown");
 
