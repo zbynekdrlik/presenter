@@ -503,6 +503,14 @@ async fn connect_and_launch(
         return Err(err);
     }
 
+    // #481: keep the stage TV awake. After moving off Fully Kiosk (which held the
+    // screen on), the TVs dropped to standby (black screen, red LED) — the stage
+    // stopped showing even though our app was foreground. The app's
+    // FLAG_KEEP_SCREEN_ON only holds while it is the visible foreground and does
+    // not override the TV's hardware display-sleep timeout. Disable that timeout
+    // on every connect so a stage TV never sleeps (every display, any launcher).
+    keep_screen_awake(runner, &serial).await;
+
     let launch_pkg = launch_package(&config.launch_component);
 
     // Ensure our own Presenter Stage app is installed before we launch it, so the
@@ -603,6 +611,24 @@ async fn adb_launch(
         return Err(anyhow!("adb shell error for {}: {}", serial, msg));
     }
     Ok(())
+}
+
+/// Disable the TV's display-sleep timeout so a stage TV never drops to standby
+/// (#481). `screen_off_timeout` is set to the i32 max (~24 days), effectively
+/// "never". Best-effort: errors are ignored. Idempotent — safe every connect.
+async fn keep_screen_awake(runner: &dyn AdbRunner, serial: &str) {
+    let _ = runner
+        .run(&adb_args([
+            "-s",
+            serial,
+            "shell",
+            "settings",
+            "put",
+            "system",
+            "screen_off_timeout",
+            "2147483647",
+        ]))
+        .await;
 }
 
 /// Disable the known per-brand kiosk browsers ([`KIOSK_PACKAGES_TO_SUPPRESS`])
@@ -1344,6 +1370,13 @@ mod tests {
                 .filter(|c| c.contains("pm disable-user"))
                 .count()
         }
+
+        fn screen_awake_calls(&self) -> usize {
+            self.invocations()
+                .iter()
+                .filter(|c| c.contains("settings put system screen_off_timeout"))
+                .count()
+        }
     }
 
     #[async_trait]
@@ -1658,6 +1691,29 @@ mod tests {
             runner.disable_user_calls(),
             0,
             "kiosk browsers must NOT be disabled when the launch target is a browser",
+        );
+    }
+
+    // #481: every connect disables the TV's display-sleep timeout so a stage TV
+    // never drops to standby — for ANY display (our app or an operator browser).
+    #[tokio::test]
+    async fn keeps_stage_tv_awake_on_connect() {
+        let runner = FakeAdbRunner::new(Foreground::StagePage);
+        let stage_url = Arc::new(Some(TEST_STAGE_URL.to_string()));
+        let config = our_app_display();
+        let status = test_status();
+
+        let result =
+            connect_and_launch(&runner, &stage_url, &some_apk(), &config, &status, true).await;
+        assert!(result.is_ok());
+        assert!(
+            runner.screen_awake_calls() >= 1,
+            "connect must disable the display-sleep timeout (settings put screen_off_timeout)",
+        );
+        let calls = runner.invocations().join("\n");
+        assert!(
+            calls.contains("settings put system screen_off_timeout 2147483647"),
+            "screen_off_timeout must be set to the never-sleep max",
         );
     }
 
