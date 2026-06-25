@@ -43,16 +43,7 @@ exclude_globs = [
 #     stop_other_pipelines via the Fake — those two are NOT excluded. The other
 #     forwarders carry no CI-testable behavior; excluding them is the same
 #     hardware-boundary rationale as NdiManager::start_pipeline above.
-# Repository::apply_sqlite_pragmas → Ok(()) is a genuine EQUIVALENT mutant (per
-# cargo-mutants docs, equivalent mutants are a legitimate skip): sqlx 0.8
-# SqliteConnectOptions already applies foreign_keys=ON, busy_timeout=5000ms and
-# journal_mode=WAL BY DEFAULT, so removing our explicit PRAGMAs leaves identical,
-# observable DB state — no test can distinguish the empty body. The explicit
-# pragmas are kept as defensive belt-and-suspenders against sqlx changing those
-# defaults, and the connect_applies_sqlite_pragmas regression test guards the
-# expected pragma state regardless of source (#467).
 exclude_re = [
-    "Repository::apply_sqlite_pragmas",
     "NdiManager::start_pipeline",
     "NdiManagerHandle::stop_pipeline",
     "NdiManagerHandle::stop_all",
