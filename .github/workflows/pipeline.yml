@@ -360,6 +360,13 @@ jobs:
           # post-actions), so the cache never warms — a permanent deadlock.
           # FAILS if the warm job is removed or the shards stop depending on it.
           bash tests/ci/mutation-warm-bootstrap.test.sh
+          # Regression guard for #407: the file-size gate stopped counting at the
+          # FIRST #[cfg(test)], so a file with an early `#[cfg(test)] mod tests;`
+          # external declaration had its real production code undercounted —
+          # 1100-line files bypassed the 1000-line cap. This proves the corrected
+          # count (count_prod_lines.sh) sees the full size and FAILS if the
+          # undercount regresses.
+          bash tests/ci/file-size-gate.test.sh
 
   # ============================================
   # Mutation Testing
