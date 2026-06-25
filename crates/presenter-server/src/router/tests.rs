@@ -2402,3 +2402,71 @@ fn normalize_ws_surface_falls_back_to_unknown() {
     assert_eq!(normalize_ws_surface(None), "unknown");
     assert_eq!(normalize_ws_surface(Some(String::new())), "unknown");
 }
+
+// #471: serve_websocket must actually run on a /live/ws connection — it logs the
+// client IP + surface on connect/disconnect and registers stage presence. A real
+// WebSocket client connection is the only way to exercise the upgrade handler +
+// serve_websocket body (a `oneshot` request can't perform the WS upgrade), and it
+// kills the "replace serve_websocket with ()" mutant: with the body stubbed out,
+// the StagePresence is never registered and the assertion below fails.
+// Multi-thread runtime: this test runs a real axum server (tokio::spawn) AND a
+// real WS client concurrently. On the default current-thread runtime the server
+// task is only scheduled cooperatively, so under the full parallel test suite it
+// gets starved and the presence never registers in time. A dedicated worker pool
+// lets the server and client truly run in parallel.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn live_ws_connection_registers_stage_presence() {
+    use futures_util::SinkExt;
+    use tokio_tungstenite::tungstenite::Message as WsMessage;
+
+    let state = AppState::in_memory().await.unwrap();
+    let connections = state.stage_connections_handle();
+    let app = build_router(state);
+
+    // Bind an ephemeral port and serve the real router.
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let addr = listener.local_addr().unwrap();
+    let server = tokio::spawn(async move {
+        axum::serve(listener, app).await.unwrap();
+    });
+
+    // Connect a real WS client to /live/ws, tagging the surface (#471).
+    let url = format!("ws://{addr}/live/ws?surface=stage");
+    let (mut ws, _resp) = tokio_tungstenite::connect_async(&url).await.unwrap();
+
+    // Send a StagePresence — serve_websocket must register it.
+    // InboundMessage is tagged snake_case (crates/presenter-core/src/live.rs).
+    let client_id = uuid::Uuid::new_v4().to_string();
+    let presence = serde_json::json!({
+        "type": "stage_presence",
+        "client_id": client_id,
+        "layout_code": "worship-snv",
+    });
+    ws.send(WsMessage::Text(presence.to_string().into()))
+        .await
+        .unwrap();
+
+    // Poll the connection tracker until the client appears (serve_websocket ran
+    // its body). The `()` mutant never registers it → this times out → fails.
+    // Budget is generous (≈6s, breaks early on success) because this is a real
+    // TCP+WebSocket round-trip: under the full parallel test suite the connect +
+    // first-message handling can take well over 1s of wall-clock even though the
+    // work itself is near-instant in isolation.
+    let mut registered = false;
+    for _ in 0..300 {
+        let snapshot = connections.snapshot().await;
+        if snapshot.iter().any(|c| c.id.to_string() == client_id) {
+            registered = true;
+            break;
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+    }
+    assert!(
+        registered,
+        "serve_websocket must register the stage presence sent over /live/ws",
+    );
+
+    // Closing the socket drives serve_websocket through its disconnect path.
+    ws.close(None).await.unwrap();
+    server.abort();
+}
