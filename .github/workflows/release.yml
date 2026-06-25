@@ -249,12 +249,17 @@ jobs:
             sudo apt-get update -qq
             sudo apt-get install -y -qq $MISSING
           fi
-          # Probe that VAAPI H264 encoder is available
+          # Probe that the VAAPI H264 encoder is available. NON-FATAL (#469): PP
+          # is GPU-less (Intel Alder Lake-N, no working VA-API), so vah264enc is
+          # legitimately absent there. A hard `exit 1` here previously aborted the
+          # deploy AFTER the service was stopped + the new binary copied, leaving
+          # PP DOWN. Warn and continue instead — NDI hardware encode is simply
+          # unavailable on such a host; the stage display + software paths work.
           if ! gst-inspect-1.0 vah264enc >/dev/null 2>&1; then
-            echo "::error::vah264enc element not available after install — VA-API driver missing or kernel/firmware mismatch"
-            exit 1
+            echo "::warning::vah264enc not available on this host — VA-API hardware H264 encoding unavailable (expected on the GPU-less PP). Continuing deploy."
+          else
+            echo "vah264enc available: $(gst-inspect-1.0 vah264enc | head -1)"
           fi
-          echo "vah264enc available: $(gst-inspect-1.0 vah264enc | head -1)"
           REMOTE_SCRIPT
 
       - name: Backup database
@@ -350,9 +355,22 @@ jobs:
       - name: Deploy systemd service
         run: |
           scp -i ~/.ssh/id_deploy scripts/deploy/presenter.service deploy-target:/tmp/presenter.service
-          ssh deploy-target "sudo cp /tmp/presenter.service /etc/systemd/system/ && sudo systemctl daemon-reload"
+          # The shared unit hardcodes SNV's PRESENTER_ANDROID_STAGE_URL. PP needs
+          # its OWN stage URL (its server IP) so the watchdog points PP's TV at PP,
+          # not SNV (#470). Ship a per-env drop-in that overrides it. Override the
+          # default with the PP_STAGE_URL repo variable if PP's IP changes.
+          PP_STAGE_URL="${{ vars.PP_STAGE_URL || 'http://10.77.8.205/stage' }}"
+          ssh deploy-target "sudo cp /tmp/presenter.service /etc/systemd/system/ && \
+            sudo mkdir -p /etc/systemd/system/presenter.service.d && \
+            printf '[Service]\nEnvironment=PRESENTER_ANDROID_STAGE_URL=%s\n' '${PP_STAGE_URL}' | sudo tee /etc/systemd/system/presenter.service.d/stage-url.conf >/dev/null && \
+            sudo systemctl daemon-reload"
 
       - name: Start service
+        # Run even if an earlier step failed (#469): a deploy that stops the
+        # service then hits a later error must never leave PP DOWN — always
+        # bring the service back up. The job still reports failure for the real
+        # error, but PP keeps serving.
+        if: always()
         run: |
           ssh deploy-target "sudo systemctl enable ${{ env.SERVICE_NAME }} && sudo systemctl start ${{ env.SERVICE_NAME }}"
 
