@@ -1417,6 +1417,79 @@ async fn reactivating_already_active_source_writes_no_audit_row() {
     assert_eq!(b_row.after_json["isActive"], true);
 }
 
+#[tokio::test]
+async fn apply_sqlite_pragmas_enables_wal_journal_mode() {
+    // Regression for #467: `apply_sqlite_pragmas` must actually run.
+    //
+    // The test must DISTINGUISH the real body from the "replace body with Ok(())"
+    // mutant. That is harder than it looks: sqlx (under SeaORM) already enables
+    // `foreign_keys=ON` and `busy_timeout=5000` on EVERY connection by default,
+    // so asserting those values proves nothing — they hold even when the body is
+    // a no-op. (That is exactly why #466, reverted in 303ec9eb, was rejected: its
+    // assertions read defaults sqlx had already set.)
+    //
+    // `journal_mode = WAL` is the ONE pragma here that sqlx does NOT apply: a
+    // fresh FILE-backed connection defaults to `journal_mode = delete`, and only
+    // our explicit `PRAGMA journal_mode = WAL` flips it to `wal`. The `Ok(())`
+    // mutant leaves it `delete` → this assertion fails → the mutant is caught.
+    //
+    // It must be a FILE DB (not `:memory:`, where journal_mode is always
+    // "memory" and WAL is inapplicable) and pinned to one pooled connection so
+    // the before/after reads hit the same connection the pragma is applied to.
+    use sea_orm::{ConnectOptions, ConnectionTrait, Database};
+
+    let dir = std::env::temp_dir().join(format!(
+        "presenter-pragma-test-{}-{}",
+        std::process::id(),
+        uuid::Uuid::new_v4()
+    ));
+    std::fs::create_dir_all(&dir).unwrap();
+    let db_path = dir.join("pragma.db");
+    let url = format!("sqlite://{}?mode=rwc", db_path.display());
+
+    let mut opts = ConnectOptions::new(url);
+    opts.max_connections(1).min_connections(1);
+    let db = Database::connect(opts).await.unwrap();
+    let backend = db.get_database_backend();
+
+    let read_journal_mode = |db: &sea_orm::DatabaseConnection| {
+        let db = db.clone();
+        async move {
+            db.query_one(sea_orm::Statement::from_string(
+                backend,
+                "PRAGMA journal_mode".to_string(),
+            ))
+            .await
+            .unwrap()
+            .expect("PRAGMA journal_mode returns a row")
+            .try_get_by_index::<String>(0)
+            .unwrap()
+        }
+    };
+
+    // Before: a fresh file-backed connection defaults to the rollback journal,
+    // NOT WAL (sqlx does not enable WAL).
+    assert_eq!(
+        read_journal_mode(&db).await,
+        "delete",
+        "fresh file connection must default to the delete (rollback) journal",
+    );
+
+    // Apply the pragmas — the body under test.
+    Repository::apply_sqlite_pragmas(&db).await.unwrap();
+
+    // After: only the real body flips the journal to WAL. The `Ok(())` mutant
+    // leaves it `delete`.
+    assert_eq!(
+        read_journal_mode(&db).await,
+        "wal",
+        "apply_sqlite_pragmas must switch the journal to WAL",
+    );
+
+    drop(db);
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
 /// Assert that `rows` contains the audit row for a sibling video source that
 /// was deactivated by an activation: actor/source match and the row records the
 /// is_active=true → is_active=false transition.

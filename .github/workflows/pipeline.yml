@@ -572,20 +572,15 @@ jobs:
             cargo install cargo-llvm-cov --locked
           fi
 
-      - name: Generate coverage report
+      - name: Coverage (fail under threshold)
+        # The in-CI fail-under-lines job is the coverage GATE (per
+        # ~/devel/airuleset/modules/ci/coverage-thresholds.md). Codecov was
+        # removed (#452) — its project status was the only coverage check and
+        # it gated nothing useful; this job fails the build below threshold.
+        # Threshold = measured line coverage (72.45%) − 2 → 70, leaving room for
+        # fluctuation. Ratchet UP as tests improve, never down.
         run: |
-          cargo llvm-cov --workspace --all-features \
-            --codecov --output-path codecov.json
-
-      # NOTE: Set fail_ci_if_error: true once CODECOV_TOKEN secret is configured
-      - name: Upload coverage to Codecov
-        uses: codecov/codecov-action@v4
-        with:
-          files: codecov.json
-          fail_ci_if_error: false
-          verbose: true
-        env:
-          CODECOV_TOKEN: ${{ secrets.CODECOV_TOKEN }}
+          cargo llvm-cov --workspace --all-features --fail-under-lines 70
 
   # ============================================
   # Build Release Artifacts (gate: ALL checks must pass)

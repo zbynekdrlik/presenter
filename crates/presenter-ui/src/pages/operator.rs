@@ -74,7 +74,7 @@ pub fn OperatorPage(#[prop(default = String::new())] initial_view: String) -> im
     }
 
     // Connect WebSocket
-    let (ws_state, last_event) = ws::use_live_websocket();
+    let (ws_state, last_event) = ws::use_live_websocket("operator");
 
     // Track ws connected state
     {

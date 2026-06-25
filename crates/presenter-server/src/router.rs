@@ -16,8 +16,8 @@ mod ui_routes;
 mod wasm_ui;
 use crate::state::AppState;
 use axum::{
-    extract::{ws::WebSocketUpgrade, State},
-    http::StatusCode,
+    extract::{ws::WebSocketUpgrade, Query, State},
+    http::{HeaderMap, StatusCode},
     response::{IntoResponse, Response},
     routing::{get, patch, post, put},
     Json, Router,
@@ -393,12 +393,40 @@ async fn health(State(state): State<AppState>) -> impl IntoResponse {
 
 // stage state request moved to stage.rs
 
+/// Query string of the `/live/ws` upgrade. The connecting UI tags itself with
+/// `?surface=operator|tablet|stage` so the connect/disconnect log records which
+/// surface opened the socket (see #471). `/live/ws` is shared by every UI and
+/// the handshake carries no other surface signal, so it travels as a query param.
+#[derive(serde::Deserialize, Default)]
+struct LiveWsQuery {
+    #[serde(default)]
+    surface: Option<String>,
+}
+
+/// Normalise the `?surface=` query param to a non-empty label for logging.
+/// A missing or empty value becomes `"unknown"`.
+fn normalize_ws_surface(surface: Option<String>) -> String {
+    match surface {
+        Some(s) if !s.is_empty() => s,
+        _ => "unknown".to_string(),
+    }
+}
+
 #[instrument(skip_all)]
-async fn live_websocket(ws: WebSocketUpgrade, State(state): State<AppState>) -> impl IntoResponse {
+async fn live_websocket(
+    ws: WebSocketUpgrade,
+    Query(query): Query<LiveWsQuery>,
+    headers: HeaderMap,
+    State(state): State<AppState>,
+) -> impl IntoResponse {
     let hub = state.live_hub();
     let connections = state.stage_connections_handle();
+    // Reuse the audit actor-IP helper: X-Forwarded-For → X-Real-IP → "anonymous"
+    // (ConnectInfo<SocketAddr> was dropped in the axum 0.8 migration).
+    let client_ip = integrations::extract_actor(&headers);
+    let surface = normalize_ws_surface(query.surface);
     ws.on_upgrade(move |socket| async move {
-        crate::live::serve_websocket(hub, connections, socket).await;
+        crate::live::serve_websocket(hub, connections, socket, client_ip, surface).await;
     })
 }
 

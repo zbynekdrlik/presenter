@@ -29,7 +29,7 @@ pub fn TabletPage() -> impl IntoView {
     register_service_worker();
 
     // Connect WebSocket
-    let (ws_state, last_event) = ws::use_live_websocket();
+    let (ws_state, last_event) = ws::use_live_websocket("tablet");
 
     // Track WS connected state
     {

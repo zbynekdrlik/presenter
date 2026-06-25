@@ -77,7 +77,6 @@ GitHub Actions repository variables:
 | Variable        | Purpose                                   |
 | --------------- | ----------------------------------------- |
 | `RUNNER_LABEL`  | Custom runner label (e.g., `self-hosted`) |
-| `CODECOV_TOKEN` | Codecov upload token (secret)             |
 
 ## Related
 
