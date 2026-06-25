@@ -531,6 +531,21 @@ body.stage {
     height: 100%;
     object-fit: contain;
 }
+/* Android System WebView (the stage-display app) renders a giant native
+   "start playback" / overlay play button OVER the <video> even when it is
+   autoplaying muted with frames flowing — desktop Chromium does not. The video
+   IS playing (autoplay+muted+playsinline + explicit .play()); this only
+   suppresses the UA media-control chrome so a clean fullscreen video shows on
+   the stage instead of a huge play-arrow. */
+.stage-ndi__video::-webkit-media-controls,
+.stage-ndi__video::-webkit-media-controls-enclosure,
+.stage-ndi__video::-webkit-media-controls-panel,
+.stage-ndi__video::-webkit-media-controls-overlay-play-button,
+.stage-ndi__video::-webkit-media-controls-start-playback-button {
+    display: none !important;
+    -webkit-appearance: none;
+    appearance: none;
+}
 .stage-ndi__placeholder {
     position: absolute;
     inset: 0;
