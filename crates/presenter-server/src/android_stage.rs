@@ -1580,6 +1580,14 @@ mod tests {
         // A message exactly at the cap passes through unchanged (boundary of the
         // len() <= MAX_LEN branch).
         assert_eq!(truncate_error(&"a".repeat(280)), "a".repeat(280));
+        // All single-byte chars: the budget cut lands EXACTLY at MAX_LEN-1 = 279,
+        // so the result is exactly 279 'a's + ellipsis. This pins the budget
+        // comparison precisely — `> → >=` would keep 278, `+ → *` would keep 280.
+        assert_eq!(
+            truncate_error(&"a".repeat(400)),
+            format!("{}…", "a".repeat(279)),
+            "byte budget must keep exactly MAX_LEN-1 single-byte chars",
+        );
     }
 
     // A browser package (e.g. com.tcl.browser) is assumed pre-installed — the
