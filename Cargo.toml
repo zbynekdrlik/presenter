@@ -21,7 +21,9 @@ repository = "https://github.com/zbynekdrlik/presenter"
 # Profile used by cargo-mutants (airuleset mutation-testing.md). Inherits the
 # test profile but drops debuginfo so the per-mutant rebuilds stay fast in the
 # on-demand full-tree sweep (mutation-full.yml / `/mutation-sweep`). cargo-mutants
-# auto-selects this profile when present; there is no longer a per-PR mutation gate.
+# binds this profile via `profile = "mutants"` in .cargo/mutants.toml (do NOT remove
+# that line — it is the only thing selecting this profile, not auto-detect). There
+# is no longer a per-PR mutation gate.
 [profile.mutants]
 inherits = "test"
 debug = "none"

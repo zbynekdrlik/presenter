@@ -92,7 +92,8 @@ A cancelled e2e-ndi caused by overload is a legitimate ONE rerun after cleanup:
 self-test) are gone from `pipeline.yml`, so the pipeline (checks → build → e2e → deploy-dev) reaches
 deploy faster. Mutation is now **on-demand only** via `mutation-full.yml` (`/mutation-sweep`), which
 runs the full-tree sweep and files surviving mutants as `test-quality` issues. The `[profile.mutants]`
-in `Cargo.toml` stays (cargo-mutants auto-selects it for the sweep).
+in `Cargo.toml` stays — the sweep binds it via `profile = "mutants"` in `.cargo/mutants.toml` (not
+auto-detect; removing either would drop the sweep back to the `test` profile).
 
 History: the per-PR gate was fixed twice (#430 diff-scoping, #435/#439 `mutation-warm` + 16 shards)
 but the user decided (2026-06-28) the per-PR cost was too high for the MVP/autopilot backlog.
