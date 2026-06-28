@@ -7,6 +7,7 @@ use anyhow::{anyhow, Context};
 use chrono::Utc;
 use futures_util::{stream::FuturesUnordered, StreamExt};
 use presenter_core::ResolumeHost;
+use presenter_persistence::ResolumePushAuditEntry;
 use reqwest::{header::HOST, Client, RequestBuilder};
 use std::{
     net::{IpAddr, SocketAddr},
@@ -25,10 +26,46 @@ pub(super) const TRIGGER_DELAY: Duration = Duration::from_millis(35);
 #[cfg(test)]
 pub(super) const TRIGGER_DELAY: Duration = Duration::from_millis(0);
 const MAPPING_REFRESH_INTERVAL: Duration = Duration::from_secs(10);
-const MAPPING_CACHE_TTL: Duration = Duration::from_secs(1);
 const RESOLUTION_TTL: Duration = Duration::from_secs(300);
 const COMPOSITION_TIMEOUT: Duration = Duration::from_secs(5);
 pub(super) const ACTION_TIMEOUT: Duration = Duration::from_secs(2);
+
+/// Why `refresh_mapping` ran — logged on every composition fetch so a refetch
+/// storm (e.g. an error loop) is distinguishable from the normal 10 s
+/// background refresh (#483 logging requirement).
+#[derive(Debug, Clone, Copy)]
+pub(super) enum FetchReason {
+    /// No mapping cached yet (cold start or config change).
+    Missing,
+    /// A prior push/refresh errored and invalidated the cached mapping.
+    ErrorInvalidated,
+    /// The periodic background refresh (every `MAPPING_REFRESH_INTERVAL`).
+    BackgroundTimer,
+}
+
+impl FetchReason {
+    pub(super) fn as_str(self) -> &'static str {
+        match self {
+            Self::Missing => "missing",
+            Self::ErrorInvalidated => "error-invalidated",
+            Self::BackgroundTimer => "background-timer",
+        }
+    }
+}
+
+/// Convert a `Duration` to milliseconds (telemetry only). Pure + deterministic
+/// so a unit test can pin the conversion (keeps the `* 1000.0` honest under the
+/// mutation gate rather than living untested inside the timing path).
+pub(super) fn duration_ms(d: Duration) -> f64 {
+    d.as_secs_f64() * 1000.0
+}
+
+/// Result of `ensure_mapping`: whether the call had to fetch the composition
+/// inline (true only on a cold/invalidated cache) — recorded in the push audit.
+#[derive(Debug, Clone, Copy)]
+pub(super) struct MappingFetchOutcome {
+    pub refetched: bool,
+}
 
 #[derive(Debug)]
 pub(super) enum HostCommand {
@@ -44,8 +81,10 @@ pub(super) async fn run_host_worker(
     mut host: ResolumeHost,
     status: Arc<RwLock<ResolumeConnectionSnapshot>>,
     mut commands: mpsc::Receiver<HostCommand>,
+    audit_tx: Option<mpsc::Sender<ResolumePushAuditEntry>>,
 ) -> anyhow::Result<()> {
     let mut driver = HostDriver::new(client, host.clone());
+    driver.audit_tx = audit_tx;
     driver.refresh_status(&status).await;
 
     let mut mapping_timer = tokio::time::interval(MAPPING_REFRESH_INTERVAL);
@@ -98,10 +137,20 @@ pub(super) struct HostDriver {
     pub(super) mapping: Option<ClipMapping>,
     pub(super) lane_state: SlotState,
     pub(super) endpoint: Option<ResolvedEndpoint>,
+    /// When the cached mapping was last fetched. After #483 this is no longer a
+    /// staleness trigger on the push path — it is read only to log the served
+    /// mapping's age (`mapping_age_ms`), the diagnostic the issue cares about.
     pub(super) last_mapping_refresh: Option<Instant>,
+    /// True when the cache was cleared by `record_error` (vs a cold start), so
+    /// the next inline fetch is logged as `error-invalidated`, not `missing`.
+    pub(super) mapping_cleared_by_error: bool,
     pub(super) last_timer_payload: Option<String>,
     pub(super) last_song_name_payload: Option<String>,
     pub(super) last_band_name_payload: Option<String>,
+    /// Non-blocking sink for per-push audit rows (#483). `None` in unit tests
+    /// and whenever no DB-backed writer is wired. Sent via `try_send` so a full
+    /// channel drops the audit row rather than ever blocking the push.
+    pub(super) audit_tx: Option<mpsc::Sender<ResolumePushAuditEntry>>,
 }
 
 impl HostDriver {
@@ -113,9 +162,11 @@ impl HostDriver {
             lane_state: SlotState::default(),
             endpoint: None,
             last_mapping_refresh: None,
+            mapping_cleared_by_error: false,
             last_timer_payload: None,
             last_song_name_payload: None,
             last_band_name_payload: None,
+            audit_tx: None,
         }
     }
 
@@ -125,6 +176,7 @@ impl HostDriver {
         self.lane_state = SlotState::default();
         self.endpoint = None;
         self.last_mapping_refresh = None;
+        self.mapping_cleared_by_error = false;
         self.last_timer_payload = None;
         self.last_song_name_payload = None;
         self.last_band_name_payload = None;
@@ -140,33 +192,67 @@ impl HostDriver {
         }
     }
 
-    pub(super) async fn ensure_mapping(&mut self) -> anyhow::Result<()> {
+    /// Ensure a clip-mapping is available for the push path.
+    ///
+    /// #483: the push path is served from cache and is NEVER re-fetched inline
+    /// on staleness. The only inline fetch is when there is no mapping at all
+    /// (cold start, config change, or an error that invalidated it). The 10 s
+    /// background timer (`run_host_worker`) and on-error invalidation are the
+    /// only refresh triggers, so a lyric line is never blocked on a 300–620 ms
+    /// composition fetch.
+    pub(super) async fn ensure_mapping(&mut self) -> anyhow::Result<MappingFetchOutcome> {
         if !self.config.is_enabled {
             self.mapping = None;
-            return Ok(());
+            return Ok(MappingFetchOutcome { refetched: false });
         }
         if self.mapping.is_none() {
-            self.refresh_mapping().await?;
-            return Ok(());
+            let reason = if self.mapping_cleared_by_error {
+                FetchReason::ErrorInvalidated
+            } else {
+                FetchReason::Missing
+            };
+            debug!(
+                target: "presenter::resolume::timing",
+                host = %self.config.host,
+                mapping_cache = "miss",
+                reason = reason.as_str(),
+                "resolume mapping cache miss — fetching composition inline"
+            );
+            self.refresh_mapping_with_reason(reason).await?;
+            self.mapping_cleared_by_error = false;
+            return Ok(MappingFetchOutcome { refetched: true });
         }
 
-        let stale = self
-            .last_mapping_refresh
-            .map(|instant| instant.elapsed() >= MAPPING_CACHE_TTL)
-            .unwrap_or(true);
-        if stale {
-            self.refresh_mapping().await?;
-        }
-        Ok(())
+        let mapping_age = self.last_mapping_refresh.map(|instant| instant.elapsed());
+        debug!(
+            target: "presenter::resolume::timing",
+            host = %self.config.host,
+            mapping_cache = "hit",
+            mapping_age = ?mapping_age,
+            "resolume mapping cache hit — serving cached mapping"
+        );
+        Ok(MappingFetchOutcome { refetched: false })
     }
 
+    /// Periodic background refresh entry point (the `mapping_timer` tick and the
+    /// direct test calls). Inline push-path fetches go through
+    /// `refresh_mapping_with_reason` with their specific reason.
     pub(super) async fn refresh_mapping(&mut self) -> anyhow::Result<()> {
+        self.refresh_mapping_with_reason(FetchReason::BackgroundTimer)
+            .await
+    }
+
+    pub(super) async fn refresh_mapping_with_reason(
+        &mut self,
+        reason: FetchReason,
+    ) -> anyhow::Result<()> {
         if !self.config.is_enabled {
             self.mapping = None;
             return Ok(());
         }
         let endpoint = self.endpoint().await?;
         let url = format!("{}/composition", endpoint.base_url);
+        let fetch_start = Instant::now();
         let response = self
             .apply_host_header(self.client.get(&url), &endpoint)
             .timeout(COMPOSITION_TIMEOUT)
@@ -174,14 +260,35 @@ impl HostDriver {
             .await
             .with_context(|| format!("failed to fetch composition from {}", url))?;
         let status = response.status();
-        let body = response
-            .json::<serde_json::Value>()
+        let bytes = response
+            .bytes()
             .await
-            .with_context(|| format!("invalid composition JSON from {}", url))?;
+            .with_context(|| format!("failed to read composition body from {}", url))?;
+        let fetch_ms = duration_ms(fetch_start.elapsed());
         if !status.is_success() {
             return Err(anyhow!("composition request failed with status {status}"));
         }
+        let parse_start = Instant::now();
+        let body: serde_json::Value = serde_json::from_slice(&bytes)
+            .with_context(|| format!("invalid composition JSON from {}", url))?;
         let mapping = ClipMapping::from_composition(&body)?;
+        let parse_ms = duration_ms(parse_start.elapsed());
+        let clip_count = count_clips(&body);
+
+        // #483: a dedicated line so "we re-fetch a huge composition" is a single
+        // grep. `reason` distinguishes a background refresh from an error- or
+        // cold-start-driven inline fetch.
+        tracing::info!(
+            target: "presenter::resolume::timing",
+            host = %self.config.host,
+            reason = reason.as_str(),
+            bytes = bytes.len(),
+            fetch_ms,
+            parse_ms,
+            clip_count,
+            "resolume composition fetched"
+        );
+
         let missing = mapping.missing_tokens().to_vec();
         if !missing.is_empty() {
             tracing::warn!(
@@ -356,5 +463,27 @@ impl HostDriver {
         self.mapping = None;
         self.endpoint = None;
         self.last_mapping_refresh = None;
+        // #483: the next inline fetch is error-driven, not a cold start.
+        self.mapping_cleared_by_error = true;
     }
+}
+
+/// Total number of clips across all layers in a Resolume `/composition` body —
+/// the composition "size" logged on every fetch (#483).
+pub(super) fn count_clips(body: &serde_json::Value) -> usize {
+    body.get("layers")
+        .and_then(|layers| layers.as_array())
+        .map(|layers| {
+            layers
+                .iter()
+                .map(|layer| {
+                    layer
+                        .get("clips")
+                        .and_then(|clips| clips.as_array())
+                        .map(|clips| clips.len())
+                        .unwrap_or(0)
+                })
+                .sum()
+        })
+        .unwrap_or(0)
 }

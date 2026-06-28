@@ -120,6 +120,12 @@ impl AppState {
     }
 
     pub(super) async fn sync_resolume_hosts(&self) -> anyhow::Result<()> {
+        // #483: wire the DB-backed per-push audit writer before any host worker
+        // is spawned, so each push persists a `resolume_push_audit` row and the
+        // cross-host perceived-latency line is emitted. Idempotent — only the
+        // first call spawns the writer task.
+        self.resolume_registry
+            .attach_audit_writer(self.repository.clone());
         let hosts = self.repository.list_resolume_hosts().await?;
         self.resolume_registry.set_hosts(hosts).await;
         Ok(())
@@ -352,8 +358,33 @@ mod tests {
     use super::{ndi_status_for_start_error, PipelineStartError};
     use crate::state::ndi_control::{NdiCall, NdiManagerHandle, StartOutcome};
     use crate::state::AppState;
-    use presenter_core::{VideoSourceDraft, VideoSourceId};
+    use presenter_core::{ResolumeHostDraft, VideoSourceDraft, VideoSourceId};
     use presenter_persistence::SettingsAuditSource;
+
+    /// #483: `sync_resolume_hosts` must load hosts from the DB and register them
+    /// in the registry (and wire the audit writer). Guards against the body being
+    /// short-circuited away (mutation: `-> Ok(())`).
+    #[tokio::test]
+    async fn sync_resolume_hosts_registers_hosts_from_db() {
+        let state = AppState::in_memory().await.expect("state");
+        // Registry starts empty (no resolume hosts seeded).
+        assert!(state.resolume_status_snapshot().await.is_empty());
+
+        let draft = ResolumeHostDraft::new("Arena", "127.0.0.1", 8090);
+        state
+            .repository()
+            .create_resolume_host(&draft, SettingsAuditSource::HttpSetter, "test")
+            .await
+            .expect("create host");
+
+        state.sync_resolume_hosts().await.expect("sync");
+
+        assert_eq!(
+            state.resolume_status_snapshot().await.len(),
+            1,
+            "sync must register the host that exists in the DB"
+        );
+    }
 
     // ── #406: GUARD the #370 source-switch reap WIRING ───────────────────────
     //
