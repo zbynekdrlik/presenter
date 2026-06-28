@@ -43,6 +43,11 @@ impl HostDriver {
         if !self.config.is_enabled {
             return Ok(());
         }
+        // #484: skip pushes while the host is in its post-error backoff window,
+        // so a down host does not re-fetch /composition (and re-log) per line.
+        if self.in_backoff() {
+            return Ok(());
+        }
 
         let pickup_at = Instant::now();
         let t_queue_wait_ms = update
@@ -276,6 +281,10 @@ impl HostDriver {
         status: &Arc<RwLock<ResolumeConnectionSnapshot>>,
     ) -> anyhow::Result<()> {
         if !self.config.is_enabled {
+            return Ok(());
+        }
+        // #484: skip pushes while the host is in its post-error backoff window.
+        if self.in_backoff() {
             return Ok(());
         }
         self.ensure_mapping().await?;
@@ -571,6 +580,10 @@ impl HostDriver {
         status: &Arc<RwLock<ResolumeConnectionSnapshot>>,
     ) -> anyhow::Result<()> {
         if !self.config.is_enabled {
+            return Ok(());
+        }
+        // #484: skip pushes while the host is in its post-error backoff window.
+        if self.in_backoff() {
             return Ok(());
         }
         self.ensure_mapping().await?;

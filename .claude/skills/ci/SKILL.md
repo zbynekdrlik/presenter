@@ -106,9 +106,11 @@ correctly (past `#[cfg(test)] mod tests;`). Two pre-existing-debt landmines:
 
 - **File-size (>1000 prod lines) + fn-length (>120 lines, tests NOT exempt):** TOUCHING an
   already-over-cap file/function pulls it into the diff and HARD-FAILS your PR — even if your edit
-  is unrelated. Known offenders: `state/mod.rs` (~1117 prod lines, #486), `resolume/tests.rs`
-  (test fns 168/166 lines, #487). Check before editing: `bash scripts/dev/count_prod_lines.sh <file>`
-  and `QC_TARGETS=<file> python3 scripts/dev/fn_length_check.py .`.
+  is unrelated. Known offender STILL open: `state/mod.rs` (~1117 prod lines, #486). `resolume/tests.rs`
+  was fixed in #487 (shared `mount_composition`/`mount_params`/`mount_clips`/`mount_full_composition`/
+  `build_driver` helpers + `stage_all`/`stage_main_meta` builders → all fns now ≤120). Check before
+  editing: `bash scripts/dev/count_prod_lines.sh <file>` and
+  `QC_TARGETS=<file> python3 scripts/dev/fn_length_check.py .`.
   **Workaround when you must add code near an offender:** wire through a SMALL sibling file instead
   of the god-file (e.g. add the call in `state/integrations.rs`, not `state/mod.rs`), and put NEW
   tests in their OWN file (e.g. `resolume/latency_tests.rs`) so the bloated `tests.rs` stays out of
@@ -131,3 +133,29 @@ correctly (past `#[cfg(test)] mod tests;`). Two pre-existing-debt landmines:
     `git diff origin/main...HEAD > /tmp/pr.diff && cargo mutants --in-diff /tmp/pr.diff --baseline=skip --test-tool=nextest --jobs 4 -- --all-targets`.
     Watch `mutants.out/missed.txt` (must stay empty). Local cold-build is slow (~50 min for ~50 mutants).
     cargo-mutants does NOT mutate `#[cfg(test)]`/`#[test]` code.
+
+## Testing patterns for driver behavior (logs / timing / backoff) — #484 lessons
+
+When a fix is about WHEN something happens (log frequency, retry spacing, backoff), make the
+decision a PURE helper and unit-test it — don't bury it in the async path:
+
+- **Decision as a pure `pub(super)` fn** (`backoff_interval(consecutive_failures)->Duration`,
+  `should_log_error(consecutive_failures)->bool` in `resolume/driver.rs`) → deterministic unit tests
+  pin the exact schedule with NO sleeping (mirrors `duration_ms`/`count_clips` from #483). Strong
+  mutation killer too.
+- **Assert on actual ERROR-log frequency** with a minimal scoped subscriber: a tiny
+  `struct ErrorCounter` impl `tracing::Subscriber` that bumps an `AtomicUsize` in `event()` when
+  `*event.metadata().level()==Level::ERROR`, installed via `tracing::subscriber::set_default(...)`
+  (keep the `DefaultGuard` alive). Works because `#[tokio::test]` defaults to current-thread → the
+  thread-local default captures events across `.await`. Lets a test prove "N failures → bounded
+  ERROR lines, not N" against the real `error!` call (RED on the unconditional log). See
+  `resolume/backoff_tests.rs`.
+- **Time-based behavior without wall-clock sleep:** `#[tokio::test(start_paused = true)]` +
+  `tokio::time::advance(d)` — but this needs tokio's `test-util` feature. Add it to the crate's
+  dev-deps only: `tokio = { workspace = true, features = ["test-util"] }` (additive, test build only;
+  default behavior unchanged when not paused, so other `tokio::time::sleep` tests are unaffected).
+  The driver's `next_retry_at`/`in_backoff` use `tokio::time::Instant`, so the paused clock + advance
+  drive them deterministically.
+- Keep new behavior tests in a SELF-CONTAINED file (`resolume/backoff_tests.rs`, registered
+  `#[cfg(test)] mod backoff_tests;` in `resolume/mod.rs`) so the over-cap `tests.rs` debt never blocks
+  you and the fn-length gate stays green.

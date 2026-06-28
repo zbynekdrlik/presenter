@@ -1,3 +1,5 @@
+#[cfg(test)]
+mod backoff_tests;
 mod clip_map;
 mod driver;
 mod handlers;

@@ -55,6 +55,134 @@ fn count_requests(requests: &[wiremock::Request], method_name: &str, path_name: 
         .count()
 }
 
+// ── Shared mock-mounting + driver-build helpers (#487) ──────────────
+// Extracted from the (formerly over-cap) stage/refresh tests so each test
+// stays under the 120-line fn cap and the composition/param/clip mounting is
+// not duplicated across the resolume tests.
+
+/// Mount the `GET /composition` response returning `composition`.
+async fn mount_composition(server: &MockServer, composition: &serde_json::Value) {
+    Mock::given(method("GET"))
+        .and(path("/api/v1/composition"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(composition))
+        .mount(server)
+        .await;
+}
+
+/// Mount a 200 `PUT /parameter/by-id/{id}` for each text-parameter id.
+async fn mount_params(server: &MockServer, param_ids: &[i64]) {
+    for id in param_ids {
+        Mock::given(method("PUT"))
+            .and(path(format!("/api/v1/parameter/by-id/{id}").as_str()))
+            .respond_with(ResponseTemplate::new(200))
+            .mount(server)
+            .await;
+    }
+}
+
+/// Mount a 200 `POST /composition/clips/by-id/{id}/connect` for each clip id.
+async fn mount_clips(server: &MockServer, clip_ids: &[i64]) {
+    for id in clip_ids {
+        Mock::given(method("POST"))
+            .and(path(
+                format!("/api/v1/composition/clips/by-id/{id}/connect").as_str(),
+            ))
+            .respond_with(ResponseTemplate::new(200))
+            .mount(server)
+            .await;
+    }
+}
+
+/// Build a `HostDriver` + status snapshot pointing at the mock `server`.
+fn build_driver(server: &MockServer) -> (HostDriver, Arc<RwLock<ResolumeConnectionSnapshot>>) {
+    let addr = server.address();
+    let now = Utc::now();
+    let config = ResolumeHost::new(
+        ResolumeHostId::new(),
+        "Mock".into(),
+        addr.ip().to_string(),
+        addr.port(),
+        true,
+        now,
+        now,
+    );
+    let client = Client::builder()
+        .connect_timeout(CONNECT_TIMEOUT)
+        .build()
+        .expect("client");
+    (
+        HostDriver::new(client, config),
+        Arc::new(RwLock::new(ResolumeConnectionSnapshot::disabled())),
+    )
+}
+
+/// Mount the standard 16-clip composition (main/translate/bible/metadata/timer)
+/// plus all of its param and clip endpoints — the fixture shared by the stage
+/// and bible tests.
+async fn mount_full_composition(server: &MockServer) {
+    let composition = serde_json::json!({
+        "layers": [
+            {
+                "clips": [
+                    clip(100, "#main-a", Some(1)),
+                    clip(101, "#main-b", Some(2)),
+                    clip(200, "#translate-a", Some(10)),
+                    clip(201, "#translate-b", Some(20)),
+                    clip(300, "#bible-a", Some(30)),
+                    clip(301, "#bible-b", Some(31)),
+                    clip(350, "#bible-reference-a", Some(35)),
+                    clip(351, "#bible-reference-b", Some(36)),
+                    clip(400, "#bible-translate-a", Some(40)),
+                    clip(401, "#bible-translate-b", Some(41)),
+                    clip(450, "#bible-translate-reference-a", Some(45)),
+                    clip(451, "#bible-translate-reference-b", Some(46)),
+                    clip(500, "#bible-clear", None),
+                    clip(600, "#song-name", Some(60)),
+                    clip(601, "#band-name", Some(61)),
+                    clip(900, "#timer", Some(90)),
+                ],
+            }
+        ]
+    });
+    mount_composition(server, &composition).await;
+    mount_params(
+        server,
+        &[1, 2, 10, 20, 30, 31, 35, 36, 40, 41, 45, 46, 60, 61, 90],
+    )
+    .await;
+    mount_clips(
+        server,
+        &[
+            100, 101, 200, 201, 300, 301, 350, 351, 400, 401, 450, 451, 500, 900,
+        ],
+    )
+    .await;
+}
+
+/// Build a stage update with all four lanes filled.
+fn stage_all(main: &str, trans: &str, song: &str, band: &str) -> StageUpdate {
+    StageUpdate {
+        current_main: Some(main.to_string()),
+        current_translation: Some(trans.to_string()),
+        song_name: Some(song.to_string()),
+        band_name: Some(band.to_string()),
+        enqueued_at: None,
+        correlation_id: None,
+    }
+}
+
+/// Build a stage update with main + song/band metadata (no translation).
+fn stage_main_meta(main: &str, song: &str, band: &str) -> StageUpdate {
+    StageUpdate {
+        current_main: Some(main.to_string()),
+        current_translation: None,
+        song_name: Some(song.to_string()),
+        band_name: Some(band.to_string()),
+        enqueued_at: None,
+        correlation_id: None,
+    }
+}
+
 #[test]
 fn clip_mapping_parses_tags_inside_names() {
     let composition = serde_json::json!({
@@ -117,112 +245,22 @@ async fn resolve_endpoint_with_hostname_sets_header() {
 #[tokio::test]
 async fn stage_updates_alternate_main_and_translation_lanes() {
     let server = MockServer::start().await;
-
-    let composition = serde_json::json!({
-        "layers": [
-            {
-                "clips": [
-                    clip(100, "#main-a", Some(1)),
-                    clip(101, "#main-b", Some(2)),
-                    clip(200, "#translate-a", Some(10)),
-                    clip(201, "#translate-b", Some(20)),
-                    clip(300, "#bible-a", Some(30)),
-                    clip(301, "#bible-b", Some(31)),
-                    clip(350, "#bible-reference-a", Some(35)),
-                    clip(351, "#bible-reference-b", Some(36)),
-                    clip(400, "#bible-translate-a", Some(40)),
-                    clip(401, "#bible-translate-b", Some(41)),
-                    clip(450, "#bible-translate-reference-a", Some(45)),
-                    clip(451, "#bible-translate-reference-b", Some(46)),
-                    clip(500, "#bible-clear", None),
-                    clip(600, "#song-name", Some(60)),
-                    clip(601, "#band-name", Some(61)),
-                    clip(900, "#timer", Some(90)),
-                ],
-            }
-        ]
-    });
-
-    Mock::given(method("GET"))
-        .and(path("/api/v1/composition"))
-        .respond_with(ResponseTemplate::new(200).set_body_json(&composition))
-        .mount(&server)
-        .await;
-
-    for endpoint in &[1, 2, 10, 20, 30, 31, 35, 36, 40, 41, 45, 46, 90] {
-        let route = format!("/api/v1/parameter/by-id/{endpoint}");
-        Mock::given(method("PUT"))
-            .and(path(route.as_str()))
-            .respond_with(ResponseTemplate::new(200))
-            .mount(&server)
-            .await;
-    }
-    for endpoint in &[60, 61] {
-        let route = format!("/api/v1/parameter/by-id/{endpoint}");
-        Mock::given(method("PUT"))
-            .and(path(route.as_str()))
-            .respond_with(ResponseTemplate::new(200))
-            .mount(&server)
-            .await;
-    }
-
-    for clip_id in &[
-        100, 101, 200, 201, 300, 301, 350, 351, 400, 401, 450, 451, 500, 900,
-    ] {
-        let route = format!("/api/v1/composition/clips/by-id/{clip_id}/connect");
-        Mock::given(method("POST"))
-            .and(path(route.as_str()))
-            .respond_with(ResponseTemplate::new(200))
-            .mount(&server)
-            .await;
-    }
-
-    let addr = server.address();
-    let host = addr.ip().to_string();
-    let port = addr.port();
-    let now = Utc::now();
-    let config = ResolumeHost::new(
-        ResolumeHostId::new(),
-        "Mock".into(),
-        host,
-        port,
-        true,
-        now,
-        now,
-    );
-
-    let client = Client::builder()
-        .connect_timeout(CONNECT_TIMEOUT)
-        .build()
-        .expect("client build");
-    let mut driver = HostDriver::new(client, config);
-    let status = Arc::new(RwLock::new(ResolumeConnectionSnapshot::disabled()));
-
+    mount_full_composition(&server).await;
+    let (mut driver, status) = build_driver(&server);
     driver.refresh_status(&status).await;
 
-    let stage_first = StageUpdate {
-        current_main: Some("Line 1".to_string()),
-        current_translation: Some("Trans 1".to_string()),
-        song_name: Some("First Song".to_string()),
-        band_name: Some("Library".to_string()),
-        enqueued_at: None,
-        correlation_id: None,
-    };
     driver
-        .handle_stage(stage_first, &status)
+        .handle_stage(
+            stage_all("Line 1", "Trans 1", "First Song", "Library"),
+            &status,
+        )
         .await
         .expect("first stage");
-
-    let stage_second = StageUpdate {
-        current_main: Some("Line 2".to_string()),
-        current_translation: Some("Trans 2".to_string()),
-        song_name: Some("Second Song".to_string()),
-        band_name: Some("Library".to_string()),
-        enqueued_at: None,
-        correlation_id: None,
-    };
     driver
-        .handle_stage(stage_second, &status)
+        .handle_stage(
+            stage_all("Line 2", "Trans 2", "Second Song", "Library"),
+            &status,
+        )
         .await
         .expect("second stage");
 
@@ -553,109 +591,51 @@ async fn refreshes_mapping_after_cache_ttl_for_new_deck() {
         ]
     });
 
-    Mock::given(method("GET"))
-        .and(path("/api/v1/composition"))
-        .respond_with(ResponseTemplate::new(200).set_body_json(&composition_a))
-        .mount(&server)
-        .await;
+    mount_composition(&server, &composition_a).await;
+    mount_params(
+        &server,
+        &[1, 2, 10, 20, 30, 31, 35, 36, 40, 41, 45, 46, 90, 95, 96],
+    )
+    .await;
+    mount_clips(
+        &server,
+        &[
+            100, 101, 200, 201, 300, 301, 350, 351, 400, 401, 450, 451, 500, 900, 910, 911,
+        ],
+    )
+    .await;
 
-    for endpoint in [1, 2, 10, 20, 30, 31, 35, 36, 40, 41, 45, 46, 90, 95, 96] {
-        let route = format!("/api/v1/parameter/by-id/{endpoint}");
-        Mock::given(method("PUT"))
-            .and(path(route.as_str()))
-            .respond_with(ResponseTemplate::new(200))
-            .mount(&server)
-            .await;
-    }
-
-    for clip_id in [
-        100, 101, 200, 201, 300, 301, 350, 351, 400, 401, 450, 451, 500, 900, 910, 911,
-    ] {
-        let route = format!("/api/v1/composition/clips/by-id/{clip_id}/connect");
-        Mock::given(method("POST"))
-            .and(path(route.as_str()))
-            .respond_with(ResponseTemplate::new(200))
-            .mount(&server)
-            .await;
-    }
-
-    let addr = server.address();
-    let now = Utc::now();
-    let config = ResolumeHost::new(
-        ResolumeHostId::new(),
-        "Mock".into(),
-        addr.ip().to_string(),
-        addr.port(),
-        true,
-        now,
-        now,
-    );
-
-    let client = Client::builder()
-        .connect_timeout(CONNECT_TIMEOUT)
-        .build()
-        .expect("client");
-
-    let mut driver = HostDriver::new(client, config);
-    let status = Arc::new(RwLock::new(ResolumeConnectionSnapshot::disabled()));
+    let (mut driver, status) = build_driver(&server);
 
     driver.ensure_mapping().await.unwrap();
 
-    let first = StageUpdate {
-        current_main: Some("First".to_string()),
-        current_translation: None,
-        song_name: Some("First Song".to_string()),
-        band_name: Some("Band A".to_string()),
-        enqueued_at: None,
-        correlation_id: None,
-    };
     driver
-        .handle_stage(first, &status)
+        .handle_stage(stage_main_meta("First", "First Song", "Band A"), &status)
         .await
         .expect("first stage");
 
     server.reset().await;
 
-    Mock::given(method("GET"))
-        .and(path("/api/v1/composition"))
-        .respond_with(ResponseTemplate::new(200).set_body_json(&composition_b))
-        .mount(&server)
-        .await;
-
-    for endpoint in [
-        101, 102, 110, 120, 130, 131, 135, 136, 140, 141, 145, 146, 190, 195, 196,
-    ] {
-        let route = format!("/api/v1/parameter/by-id/{endpoint}");
-        Mock::given(method("PUT"))
-            .and(path(route.as_str()))
-            .respond_with(ResponseTemplate::new(200))
-            .mount(&server)
-            .await;
-    }
-
-    for clip_id in [
-        300, 301, 400, 401, 500, 550, 551, 600, 601, 650, 651, 700, 950, 960, 961,
-    ] {
-        let route = format!("/api/v1/composition/clips/by-id/{clip_id}/connect");
-        Mock::given(method("POST"))
-            .and(path(route.as_str()))
-            .respond_with(ResponseTemplate::new(200))
-            .mount(&server)
-            .await;
-    }
+    mount_composition(&server, &composition_b).await;
+    mount_params(
+        &server,
+        &[
+            101, 102, 110, 120, 130, 131, 135, 136, 140, 141, 145, 146, 190, 195, 196,
+        ],
+    )
+    .await;
+    mount_clips(
+        &server,
+        &[
+            300, 301, 400, 401, 500, 550, 551, 600, 601, 650, 651, 700, 950, 960, 961,
+        ],
+    )
+    .await;
 
     driver.refresh_mapping().await.unwrap();
 
-    let second = StageUpdate {
-        current_main: Some("Second".to_string()),
-        current_translation: None,
-        song_name: Some("Second Song".to_string()),
-        band_name: Some("Band B".to_string()),
-        enqueued_at: None,
-        correlation_id: None,
-    };
     driver
-        .handle_stage(second, &status)
+        .handle_stage(stage_main_meta("Second", "Second Song", "Band B"), &status)
         .await
         .expect("second stage");
 
@@ -700,79 +680,8 @@ async fn setup_bible_driver() -> (
     Arc<RwLock<ResolumeConnectionSnapshot>>,
 ) {
     let server = MockServer::start().await;
-
-    let composition = serde_json::json!({
-        "layers": [
-            {
-                "clips": [
-                    clip(100, "#main-a", Some(1)),
-                    clip(101, "#main-b", Some(2)),
-                    clip(200, "#translate-a", Some(10)),
-                    clip(201, "#translate-b", Some(20)),
-                    clip(300, "#bible-a", Some(30)),
-                    clip(301, "#bible-b", Some(31)),
-                    clip(350, "#bible-reference-a", Some(35)),
-                    clip(351, "#bible-reference-b", Some(36)),
-                    clip(400, "#bible-translate-a", Some(40)),
-                    clip(401, "#bible-translate-b", Some(41)),
-                    clip(450, "#bible-translate-reference-a", Some(45)),
-                    clip(451, "#bible-translate-reference-b", Some(46)),
-                    clip(500, "#bible-clear", None),
-                    clip(600, "#song-name", Some(60)),
-                    clip(601, "#band-name", Some(61)),
-                    clip(900, "#timer", Some(90)),
-                ],
-            }
-        ]
-    });
-
-    Mock::given(method("GET"))
-        .and(path("/api/v1/composition"))
-        .respond_with(ResponseTemplate::new(200).set_body_json(&composition))
-        .mount(&server)
-        .await;
-
-    // Mount PUT endpoints for all text params
-    for param_id in [1, 2, 10, 20, 30, 31, 35, 36, 40, 41, 45, 46, 60, 61, 90] {
-        let route = format!("/api/v1/parameter/by-id/{param_id}");
-        Mock::given(method("PUT"))
-            .and(path(route.as_str()))
-            .respond_with(ResponseTemplate::new(200))
-            .mount(&server)
-            .await;
-    }
-
-    // Mount POST (trigger) endpoints for all clips
-    for clip_id in [
-        100, 101, 200, 201, 300, 301, 350, 351, 400, 401, 450, 451, 500, 900,
-    ] {
-        let route = format!("/api/v1/composition/clips/by-id/{clip_id}/connect");
-        Mock::given(method("POST"))
-            .and(path(route.as_str()))
-            .respond_with(ResponseTemplate::new(200))
-            .mount(&server)
-            .await;
-    }
-
-    let addr = server.address();
-    let now = Utc::now();
-    let config = ResolumeHost::new(
-        ResolumeHostId::new(),
-        "Mock".into(),
-        addr.ip().to_string(),
-        addr.port(),
-        true,
-        now,
-        now,
-    );
-
-    let client = Client::builder()
-        .connect_timeout(CONNECT_TIMEOUT)
-        .build()
-        .expect("client");
-    let driver = HostDriver::new(client, config);
-    let status = Arc::new(RwLock::new(ResolumeConnectionSnapshot::disabled()));
-
+    mount_full_composition(&server).await;
+    let (driver, status) = build_driver(&server);
     (server, driver, status)
 }
 
