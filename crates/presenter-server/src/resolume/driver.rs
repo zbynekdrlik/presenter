@@ -44,13 +44,20 @@ pub(super) enum FetchReason {
 }
 
 impl FetchReason {
-    fn as_str(self) -> &'static str {
+    pub(super) fn as_str(self) -> &'static str {
         match self {
             Self::Missing => "missing",
             Self::ErrorInvalidated => "error-invalidated",
             Self::BackgroundTimer => "background-timer",
         }
     }
+}
+
+/// Convert a `Duration` to milliseconds (telemetry only). Pure + deterministic
+/// so a unit test can pin the conversion (keeps the `* 1000.0` honest under the
+/// mutation gate rather than living untested inside the timing path).
+pub(super) fn duration_ms(d: Duration) -> f64 {
+    d.as_secs_f64() * 1000.0
 }
 
 /// Result of `ensure_mapping`: whether the call had to fetch the composition
@@ -216,15 +223,12 @@ impl HostDriver {
             return Ok(MappingFetchOutcome { refetched: true });
         }
 
-        let mapping_age_ms = self
-            .last_mapping_refresh
-            .map(|instant| instant.elapsed().as_secs_f64() * 1000.0)
-            .unwrap_or(0.0);
+        let mapping_age = self.last_mapping_refresh.map(|instant| instant.elapsed());
         debug!(
             target: "presenter::resolume::timing",
             host = %self.config.host,
             mapping_cache = "hit",
-            mapping_age_ms,
+            mapping_age = ?mapping_age,
             "resolume mapping cache hit — serving cached mapping"
         );
         Ok(MappingFetchOutcome { refetched: false })
@@ -260,7 +264,7 @@ impl HostDriver {
             .bytes()
             .await
             .with_context(|| format!("failed to read composition body from {}", url))?;
-        let fetch_ms = fetch_start.elapsed().as_secs_f64() * 1000.0;
+        let fetch_ms = duration_ms(fetch_start.elapsed());
         if !status.is_success() {
             return Err(anyhow!("composition request failed with status {status}"));
         }
@@ -268,7 +272,7 @@ impl HostDriver {
         let body: serde_json::Value = serde_json::from_slice(&bytes)
             .with_context(|| format!("invalid composition JSON from {}", url))?;
         let mapping = ClipMapping::from_composition(&body)?;
-        let parse_ms = parse_start.elapsed().as_secs_f64() * 1000.0;
+        let parse_ms = duration_ms(parse_start.elapsed());
         let clip_count = count_clips(&body);
 
         // #483: a dedicated line so "we re-fetch a huge composition" is a single
@@ -466,7 +470,7 @@ impl HostDriver {
 
 /// Total number of clips across all layers in a Resolume `/composition` body —
 /// the composition "size" logged on every fetch (#483).
-fn count_clips(body: &serde_json::Value) -> usize {
+pub(super) fn count_clips(body: &serde_json::Value) -> usize {
     body.get("layers")
         .and_then(|layers| layers.as_array())
         .map(|layers| {

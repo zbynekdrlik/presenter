@@ -153,9 +153,10 @@ impl HostDriver {
             self.apply_stage_metadata(update, mapping, status).await?;
 
         if !to_trigger.is_empty() {
-            if TRIGGER_DELAY.as_millis() > 0 {
-                sleep(TRIGGER_DELAY).await;
-            }
+            // Unconditional: TRIGGER_DELAY is 0 in test builds (a no-op await),
+            // 35 ms in prod. (No `> 0` guard — it carried no behavior beyond the
+            // sleep itself and the comparison was untestable at compile-time 0.)
+            sleep(TRIGGER_DELAY).await;
             let trigger_start = Instant::now();
             self.trigger_clips(&to_trigger).await?;
             steps.t_trigger_ms = elapsed_ms(trigger_start);
