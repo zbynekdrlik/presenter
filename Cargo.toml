@@ -20,7 +20,8 @@ repository = "https://github.com/zbynekdrlik/presenter"
 
 # Profile used by cargo-mutants (airuleset mutation-testing.md). Inherits the
 # test profile but drops debuginfo so the per-mutant rebuilds stay fast in the
-# 20-min diff-scoped PR gate.
+# on-demand full-tree sweep (mutation-full.yml / `/mutation-sweep`). cargo-mutants
+# auto-selects this profile when present; there is no longer a per-PR mutation gate.
 [profile.mutants]
 inherits = "test"
 debug = "none"

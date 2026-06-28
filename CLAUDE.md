@@ -125,6 +125,7 @@ sudo ./svc.sh install && sudo ./svc.sh start
 | `release.yml`           | GitHub Release published   | Build release, upload tarball, deploy to companion-pp.lan |
 | `security-schedule.yml` | Weekly (Sunday) + manual   | Scheduled vulnerability scanning                          |
 | `import-data.yml`       | Manual (workflow_dispatch) | Re-import ProPresenter/Bible data                         |
+| `mutation-full.yml`     | Manual (workflow_dispatch) | On-demand full-tree mutation sweep (`/mutation-sweep`)    |
 | `pr-labeler.yml`        | PR opened/edited           | Auto-label PRs by changed paths                           |
 
 **Pipeline dependency chain:** `branch-sync → [fmt, clippy, companion, version-check, security] → [test, quality] → coverage → build → e2e → deploy-dev`

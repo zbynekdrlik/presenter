@@ -87,8 +87,15 @@ A cancelled e2e-ndi caused by overload is a legitimate ONE rerun after cleanup:
 
 ## Mutation Gate
 
-Fixed 2026-06-21 (PR #435, issue #439): dedicated `mutation-warm` bootstrap job + 16 shards.
-The gate now passes on normal small PRs. Full-tree catch-up is on-demand via `/mutation-sweep`.
+**Removed from the per-PR pipeline (#488, 2026-06-28).** Mutation testing no longer runs on every
+`dev` push — the `mutation-warm` + sharded `mutation` jobs (and their `mutation-warm-bootstrap`
+self-test) are gone from `pipeline.yml`, so the pipeline (checks → build → e2e → deploy-dev) reaches
+deploy faster. Mutation is now **on-demand only** via `mutation-full.yml` (`/mutation-sweep`), which
+runs the full-tree sweep and files surviving mutants as `test-quality` issues. The `[profile.mutants]`
+in `Cargo.toml` stays (cargo-mutants auto-selects it for the sweep).
+
+History: the per-PR gate was fixed twice (#430 diff-scoping, #435/#439 `mutation-warm` + 16 shards)
+but the user decided (2026-06-28) the per-PR cost was too high for the MVP/autopilot backlog.
 
 ## Quality-Check Gate Landmines (#483 lessons)
 
@@ -106,10 +113,11 @@ correctly (past `#[cfg(test)] mod tests;`). Two pre-existing-debt landmines:
   tests in their OWN file (e.g. `resolume/latency_tests.rs`) so the bloated `tests.rs` stays out of
   the diff. Then `git diff --name-only origin/main...HEAD` must NOT list the offender.
 
-- **Diff-scoped mutation gate (`cargo mutants --in-diff`, 16 shards, blocking):** mutates only
-  CHANGED lines. Refactoring a function (e.g. extracting `handle_stage` under the 120 cap) marks ALL
-  its lines changed → drags pre-existing EDGE logic into mutation scope. Kill survivors HONESTLY (no
-  `exclude_re` for code that carries behavior):
+- **Mutation survivors (on-demand sweep only since #488 — NOT a per-PR gate anymore):** mutation no
+  longer blocks PRs; the full-tree `/mutation-sweep` (`mutation-full.yml`) files survivors as
+  `test-quality` issues. When you DO work a survivor (from a sweep, or proactively before a refactor
+  that widens scope), kill it HONESTLY — same techniques as the old diff gate (no `exclude_re` for
+  code that carries behavior):
   - pure telemetry helpers (`count_clips`, an `as_str`, a `duration_ms(Duration)->f64`) → make
     `pub(super)` + unit-test the exact output (kills `replace-body` + arithmetic mutants).
   - side-effect/audit/wiring fns (writer task, `record_*`, `attach_*`) → ONE end-to-end test that
@@ -118,7 +126,7 @@ correctly (past `#[cfg(test)] mod tests;`). Two pre-existing-debt landmines:
     DROP the guard (the bare op is a no-op at 0).
   - log a `Duration` via `?d` instead of `d.as_secs_f64() * 1000.0` to remove arithmetic mutants from
     a behavioral fn (or route the `* 1000.0` through a tested `duration_ms` helper).
-  - **VERIFY LOCALLY before re-pushing** (CI mutation is ~13 min sharded but a full re-push is ~30 min):
+  - **Verify a fix locally** (no CI mutation gate to lean on anymore — #488):
     `git diff origin/main...HEAD > /tmp/pr.diff && cargo mutants --in-diff /tmp/pr.diff --baseline=skip --test-tool=nextest --jobs 4 -- --all-targets`.
-    Watch `mutants.out/missed.txt` (must stay empty). Local cold-build is slow (~50 min for ~50 mutants)
-    but cheaper than a failed CI cycle. cargo-mutants does NOT mutate `#[cfg(test)]`/`#[test]` code.
+    Watch `mutants.out/missed.txt` (must stay empty). Local cold-build is slow (~50 min for ~50 mutants).
+    cargo-mutants does NOT mutate `#[cfg(test)]`/`#[test]` code.
