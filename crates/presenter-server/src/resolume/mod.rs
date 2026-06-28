@@ -36,6 +36,14 @@ const AUDIT_CHANNEL_CAPACITY: usize = 512;
 /// with the next slide's correlation id.
 const PERCEIVED_FLUSH_AFTER: Duration = Duration::from_secs(2);
 const PERCEIVED_SWEEP_INTERVAL: Duration = Duration::from_millis(500);
+/// #489: retention for the append-only `resolume_push_audit` table. The writer
+/// task prunes on this cadence (and once at startup): rows older than
+/// `AUDIT_RETENTION_DAYS` go, and if still over `AUDIT_RETENTION_MAX_ROWS` the
+/// oldest beyond the cap are dropped. Both bounds keep the table from growing
+/// unbounded over months of services without losing recent diagnostics.
+const AUDIT_PRUNE_INTERVAL: Duration = Duration::from_secs(3600);
+const AUDIT_RETENTION_DAYS: i64 = 30;
+const AUDIT_RETENTION_MAX_ROWS: u64 = 10_000;
 
 #[derive(Debug, Clone, Serialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
@@ -323,6 +331,9 @@ fn spawn_audit_writer(repo: Repository, mut rx: mpsc::Receiver<ResolumePushAudit
     tokio::spawn(async move {
         let mut pending: HashMap<String, PerceivedAgg> = HashMap::new();
         let mut sweep = tokio::time::interval(PERCEIVED_SWEEP_INTERVAL);
+        // #489: prune the audit table on a slow cadence (first tick fires
+        // immediately → a startup prune), keeping it bounded by age + row count.
+        let mut prune = tokio::time::interval(AUDIT_PRUNE_INTERVAL);
         loop {
             tokio::select! {
                 maybe = rx.recv() => {
@@ -354,6 +365,17 @@ fn spawn_audit_writer(repo: Repository, mut rx: mpsc::Receiver<ResolumePushAudit
                     }
                 }
                 _ = sweep.tick() => flush_perceived(&mut pending, false),
+                _ = prune.tick() => {
+                    if let Err(err) = repo
+                        .prune_resolume_push_audit(
+                            chrono::Duration::days(AUDIT_RETENTION_DAYS),
+                            AUDIT_RETENTION_MAX_ROWS,
+                        )
+                        .await
+                    {
+                        tracing::warn!(?err, "failed to prune resolume push audit table");
+                    }
+                }
             }
         }
         flush_perceived(&mut pending, true);

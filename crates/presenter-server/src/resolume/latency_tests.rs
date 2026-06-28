@@ -280,7 +280,7 @@ async fn stage_push_persists_audit_row_through_registry() {
     let mut found = None;
     for _ in 0..60 {
         let rows = repo
-            .list_resolume_push_audit(None, None, 10)
+            .list_resolume_push_audit(None, None, None, 10)
             .await
             .expect("list audit");
         if let Some(row) = rows.into_iter().next() {
@@ -300,6 +300,55 @@ async fn stage_push_persists_audit_row_through_registry() {
     assert!(
         row.refetched,
         "the first push fetches the composition inline"
+    );
+}
+
+#[tokio::test]
+async fn failed_stage_push_persists_error_audit_row_through_registry() {
+    // #489: a push that FAILS (Resolume returns a non-2xx on /composition) must
+    // still leave an audit row with outcome starting `error`, so the failures
+    // that hurt most — a down Resolume → COMPOSITION_TIMEOUT — are visible in
+    // the audit table instead of being silently dropped (the gap #489 fixes).
+    let server = MockServer::start().await;
+    Mock::given(method("GET"))
+        .and(path("/api/v1/composition"))
+        .respond_with(ResponseTemplate::new(500))
+        .mount(&server)
+        .await;
+
+    let repo = Repository::connect_in_memory().await.expect("repo");
+    let registry = ResolumeRegistry::new().expect("registry");
+    registry.attach_audit_writer(repo.clone());
+    registry.set_hosts(vec![mock_host(&server)]).await;
+
+    let correlation_id = uuid::Uuid::new_v4();
+    let mut update = stage_main("Line 1");
+    update.correlation_id = Some(correlation_id);
+    registry.stage_update(update).await;
+
+    // Retry-with-assert: the worker + writer run on background tasks.
+    let mut found = None;
+    for _ in 0..60 {
+        let rows = repo
+            .list_resolume_push_audit(None, Some("error"), None, 10)
+            .await
+            .expect("list audit");
+        if let Some(row) = rows.into_iter().next() {
+            found = Some(row);
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(50)).await;
+    }
+    let row = found.expect("a failed push must persist an outcome=error audit row");
+    assert_eq!(
+        row.correlation_id.as_deref(),
+        Some(correlation_id.to_string().as_str())
+    );
+    assert_eq!(row.host, server.address().ip().to_string());
+    assert!(
+        row.outcome.starts_with("error"),
+        "failed push outcome must start with `error`, got {:?}",
+        row.outcome
     );
 }
 

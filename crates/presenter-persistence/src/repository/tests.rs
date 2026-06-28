@@ -1548,12 +1548,15 @@ async fn resolume_push_audit_round_trip() {
     repo.record_resolume_push_audit(&other_host).await.unwrap();
 
     // All rows.
-    let all = repo.list_resolume_push_audit(None, None, 50).await.unwrap();
+    let all = repo
+        .list_resolume_push_audit(None, None, None, 50)
+        .await
+        .unwrap();
     assert_eq!(all.len(), 2);
 
     // Host filter returns only the matching host, fields intact.
     let only_cg = repo
-        .list_resolume_push_audit(Some("cg-resolume.lan"), None, 50)
+        .list_resolume_push_audit(Some("cg-resolume.lan"), None, None, 50)
         .await
         .unwrap();
     assert_eq!(only_cg.len(), 1);
@@ -1568,8 +1571,153 @@ async fn resolume_push_audit_round_trip() {
     // `since` cutoff in the future excludes everything.
     let future = now + Duration::seconds(3600);
     let none = repo
-        .list_resolume_push_audit(None, Some(future), 50)
+        .list_resolume_push_audit(None, None, Some(future), 50)
         .await
         .unwrap();
     assert!(none.is_empty());
+}
+
+/// #489: the outcome prefix filter lists failed pushes (`error: <reason>`) and
+/// successful pushes separately — the key read-side query for the audit table.
+#[tokio::test]
+async fn list_resolume_push_audit_filters_by_outcome_prefix() {
+    let repo = Repository::connect_in_memory().await.unwrap();
+    let now = Utc::now();
+
+    let ok_row = crate::audit::ResolumePushAuditEntry {
+        correlation_id: None,
+        host: "cg-resolume.lan".to_string(),
+        t_queue_wait_ms: 1.0,
+        t_ensure_mapping_ms: 0.0,
+        t_total_ms: 20.0,
+        refetched: false,
+        outcome: "ok".to_string(),
+        created_at: now,
+    };
+    let err_row = crate::audit::ResolumePushAuditEntry {
+        correlation_id: None,
+        host: "cg-resolume.lan".to_string(),
+        t_queue_wait_ms: 0.0,
+        t_ensure_mapping_ms: 5000.0,
+        t_total_ms: 5000.0,
+        refetched: false,
+        outcome: "error: composition request failed with status 500".to_string(),
+        created_at: now,
+    };
+    repo.record_resolume_push_audit(&ok_row).await.unwrap();
+    repo.record_resolume_push_audit(&err_row).await.unwrap();
+
+    let errors = repo
+        .list_resolume_push_audit(None, Some("error"), None, 50)
+        .await
+        .unwrap();
+    assert_eq!(
+        errors.len(),
+        1,
+        "outcome=error must return only failed pushes"
+    );
+    assert!(errors[0].outcome.starts_with("error: "));
+
+    let oks = repo
+        .list_resolume_push_audit(None, Some("ok"), None, 50)
+        .await
+        .unwrap();
+    assert_eq!(
+        oks.len(),
+        1,
+        "outcome=ok must return only successful pushes"
+    );
+    assert_eq!(oks[0].outcome, "ok");
+}
+
+/// #489: retention prune drops rows older than the retention window.
+#[tokio::test]
+async fn prune_resolume_push_audit_removes_rows_older_than_retention() {
+    let repo = Repository::connect_in_memory().await.unwrap();
+    let now = Utc::now();
+
+    let insert = |created_at: chrono::DateTime<Utc>| {
+        let repo = &repo;
+        async move {
+            repo.record_resolume_push_audit(&crate::audit::ResolumePushAuditEntry {
+                correlation_id: None,
+                host: "h".to_string(),
+                t_queue_wait_ms: 0.0,
+                t_ensure_mapping_ms: 0.0,
+                t_total_ms: 1.0,
+                refetched: false,
+                outcome: "ok".to_string(),
+                created_at,
+            })
+            .await
+            .unwrap();
+        }
+    };
+
+    // 3 rows older than 30 days, 2 recent.
+    for i in 0..3 {
+        insert(now - Duration::days(40) - Duration::seconds(i)).await;
+    }
+    for i in 0..2 {
+        insert(now - Duration::seconds(i)).await;
+    }
+
+    // Age-only prune (count cap disabled): exactly the 3 old rows go.
+    let deleted = repo
+        .prune_resolume_push_audit(Duration::days(30), 0)
+        .await
+        .unwrap();
+    assert_eq!(deleted, 3, "the 3 rows older than 30 days must be pruned");
+
+    let remaining = repo
+        .list_resolume_push_audit(None, None, None, 100)
+        .await
+        .unwrap();
+    assert_eq!(remaining.len(), 2, "the 2 recent rows must remain");
+
+    // Idempotent: a second prune deletes nothing.
+    let again = repo
+        .prune_resolume_push_audit(Duration::days(30), 0)
+        .await
+        .unwrap();
+    assert_eq!(again, 0, "prune must be idempotent");
+}
+
+/// #489: retention prune caps the row count, keeping the newest `max_rows`.
+#[tokio::test]
+async fn prune_resolume_push_audit_caps_row_count_keeping_newest() {
+    let repo = Repository::connect_in_memory().await.unwrap();
+    let now = Utc::now();
+
+    // 5 rows with distinct, recent timestamps (newest = i==0).
+    for i in 0..5i64 {
+        repo.record_resolume_push_audit(&crate::audit::ResolumePushAuditEntry {
+            correlation_id: Some(format!("c{i}")),
+            host: "h".to_string(),
+            t_queue_wait_ms: 0.0,
+            t_ensure_mapping_ms: 0.0,
+            t_total_ms: 1.0,
+            refetched: false,
+            outcome: "ok".to_string(),
+            created_at: now - Duration::seconds(i),
+        })
+        .await
+        .unwrap();
+    }
+
+    // Cap at 2 (no age prune in play): drop the 3 oldest.
+    let deleted = repo
+        .prune_resolume_push_audit(Duration::days(365), 2)
+        .await
+        .unwrap();
+    assert_eq!(deleted, 3, "rows beyond the newest 2 must be pruned");
+
+    let remaining = repo
+        .list_resolume_push_audit(None, None, None, 100)
+        .await
+        .unwrap();
+    assert_eq!(remaining.len(), 2, "exactly max_rows must remain");
+    // Newest two kept: c0 (now) and c1 (now-1s), newest-first.
+    assert_eq!(remaining[0].correlation_id.as_deref(), Some("c0"));
+    assert_eq!(remaining[1].correlation_id.as_deref(), Some("c1"));
 }

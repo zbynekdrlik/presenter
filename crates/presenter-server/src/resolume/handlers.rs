@@ -22,6 +22,18 @@ struct StageStepTimings {
     t_trigger_ms: f64,
 }
 
+/// Telemetry captured while a stage push runs, populated incrementally so the
+/// audit row + timing log can be emitted on BOTH the success and the error path
+/// (#489). On an early error (e.g. the composition fetch timing out) the
+/// progress recorded so far — most importantly `t_ensure_mapping_ms` — is still
+/// reported, so a failed push leaves an honest audit row.
+#[derive(Default)]
+struct StagePushMetrics {
+    t_ensure_mapping_ms: f64,
+    refetched: bool,
+    steps: StageStepTimings,
+}
+
 use super::driver::TRIGGER_DELAY;
 
 pub(super) fn translation_short_code(code: &str) -> String {
@@ -56,48 +68,81 @@ impl HostDriver {
             .unwrap_or(0.0);
         let correlation_id = update.correlation_id;
 
+        // #489: run the fallible push, then emit the timing log + audit row on
+        // BOTH outcomes. A failed push (e.g. Resolume unreachable → the 5 s
+        // COMPOSITION_TIMEOUT) now records an `outcome=error` row instead of
+        // vanishing, so it shows in the audit table and the latency aggregate.
+        let mut metrics = StagePushMetrics::default();
+        let result = self.handle_stage_push(&update, status, &mut metrics).await;
+        let t_total_ms = elapsed_ms(pickup_at);
+        let correlation_str = correlation_id.map(|u| u.to_string()).unwrap_or_default();
+
+        let outcome = match &result {
+            Ok(()) => "ok".to_string(),
+            Err(err) => audit_failure_outcome(err),
+        };
+        tracing::info!(
+            target: "presenter::resolume::timing",
+            correlation_id = correlation_str,
+            host = %self.config.host,
+            t_queue_wait_ms,
+            t_ensure_mapping_ms = metrics.t_ensure_mapping_ms,
+            t_main_ms = metrics.steps.t_main_ms,
+            t_trans_ms = metrics.steps.t_trans_ms,
+            t_song_ms = metrics.steps.t_song_ms,
+            t_band_ms = metrics.steps.t_band_ms,
+            t_trigger_delay_ms = TRIGGER_DELAY.as_secs_f64() * 1000.0,
+            t_trigger_ms = metrics.steps.t_trigger_ms,
+            t_total_ms,
+            refetched = metrics.refetched,
+            outcome = %outcome,
+            "resolume stage timing"
+        );
+
+        // #483/#489: persist a per-push audit row (non-blocking) on both paths,
+        // so post-event latency + failure analysis is a SQL/HTTP query, and the
+        // cross-host perceived-latency line is emitted by the writer task. The
+        // audit emit never blocks or fails the push (`try_send`, errors dropped).
+        self.record_push_audit(
+            correlation_id,
+            t_queue_wait_ms,
+            metrics.t_ensure_mapping_ms,
+            t_total_ms,
+            metrics.refetched,
+            &outcome,
+        );
+
+        // Propagate the error so the worker still records it (#484 backoff +
+        // dedup'd ERROR log) — the audit row is in ADDITION, not a replacement.
+        result
+    }
+
+    /// The fallible body of a stage push, separated so [`handle_stage`] can
+    /// record an audit row on both success and failure (#489). Populates
+    /// `metrics` as it progresses; on an early error the timings recorded so far
+    /// (notably `t_ensure_mapping_ms`) are kept for the audit row.
+    async fn handle_stage_push(
+        &mut self,
+        update: &StageUpdate,
+        status: &Arc<RwLock<ResolumeConnectionSnapshot>>,
+        metrics: &mut StagePushMetrics,
+    ) -> anyhow::Result<()> {
         let mapping_start = Instant::now();
         // #483: serves from cache on the push path; `refetched` is true only on
-        // a cold/invalidated cache (NOT on staleness anymore).
-        let fetch = self.ensure_mapping().await?;
-        let t_ensure_mapping_ms = elapsed_ms(mapping_start);
+        // a cold/invalidated cache (NOT on staleness anymore). Capture the
+        // elapsed mapping time even if the fetch errors (the COMPOSITION_TIMEOUT
+        // spike is the failure we most want recorded) BEFORE propagating.
+        let fetch = self.ensure_mapping().await;
+        metrics.t_ensure_mapping_ms = elapsed_ms(mapping_start);
+        let fetch = fetch?;
+        metrics.refetched = fetch.refetched;
 
-        let steps = if let Some(mapping) = self.mapping.clone() {
-            self.apply_stage_mapping(&update, &mapping, status).await?
+        metrics.steps = if let Some(mapping) = self.mapping.clone() {
+            self.apply_stage_mapping(update, &mapping, status).await?
         } else {
             StageStepTimings::default()
         };
         self.mark_connected(status).await;
-
-        let t_total_ms = elapsed_ms(pickup_at);
-        tracing::info!(
-            target: "presenter::resolume::timing",
-            correlation_id = correlation_id.map(|u| u.to_string()).unwrap_or_default(),
-            host = %self.config.host,
-            t_queue_wait_ms,
-            t_ensure_mapping_ms,
-            t_main_ms = steps.t_main_ms,
-            t_trans_ms = steps.t_trans_ms,
-            t_song_ms = steps.t_song_ms,
-            t_band_ms = steps.t_band_ms,
-            t_trigger_delay_ms = TRIGGER_DELAY.as_secs_f64() * 1000.0,
-            t_trigger_ms = steps.t_trigger_ms,
-            t_total_ms,
-            refetched = fetch.refetched,
-            "resolume stage timing"
-        );
-
-        // #483: persist a per-push audit row (non-blocking) so post-event
-        // latency analysis is a SQL query, and so the cross-host perceived
-        // latency line can be emitted by the writer task.
-        self.record_push_audit(
-            correlation_id,
-            t_queue_wait_ms,
-            t_ensure_mapping_ms,
-            t_total_ms,
-            fetch.refetched,
-            "ok",
-        );
         Ok(())
     }
 
@@ -781,4 +826,47 @@ fn put_text_param_future(
 
 fn elapsed_ms(start: Instant) -> f64 {
     start.elapsed().as_secs_f64() * 1000.0
+}
+
+/// #489: a compact, single-line audit `outcome` for a FAILED push, stored in the
+/// `outcome` column as `error: <reason>`. The full error (with its `?` chain)
+/// still goes to the dedup'd ERROR log via `record_error`; the audit row just
+/// needs a greppable reason, so the reason is flattened to one line and capped.
+fn audit_failure_outcome(err: &anyhow::Error) -> String {
+    const MAX_REASON: usize = 160;
+    let reason: String = err
+        .to_string()
+        .replace('\n', " ")
+        .chars()
+        .take(MAX_REASON)
+        .collect();
+    format!("error: {reason}")
+}
+
+#[cfg(test)]
+mod tests {
+    use super::audit_failure_outcome;
+
+    #[test]
+    fn audit_failure_outcome_prefixes_error_and_flattens_reason() {
+        let err = anyhow::anyhow!("composition request failed with status 500");
+        assert_eq!(
+            audit_failure_outcome(&err),
+            "error: composition request failed with status 500"
+        );
+        // outcome=error prefix filter must match.
+        assert!(audit_failure_outcome(&err).starts_with("error"));
+    }
+
+    #[test]
+    fn audit_failure_outcome_flattens_newlines_and_caps_length() {
+        let err = anyhow::anyhow!("line one\nline two");
+        let out = audit_failure_outcome(&err);
+        assert!(!out.contains('\n'), "newlines must be flattened");
+
+        let long = anyhow::anyhow!("{}", "x".repeat(500));
+        let out = audit_failure_outcome(&long);
+        // "error: " (7) + 160 capped reason chars.
+        assert_eq!(out.chars().count(), 7 + 160);
+    }
 }
