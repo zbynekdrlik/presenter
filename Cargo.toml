@@ -12,7 +12,7 @@ exclude = ["crates/presenter-ui"]
 resolver = "2"
 
 [workspace.package]
-version = "0.4.163"
+version = "0.4.164"
 edition = "2021"
 authors = ["Presenter Team <drlik.zbynek@gmail.com>"]
 license = "MIT"
@@ -20,7 +20,10 @@ repository = "https://github.com/zbynekdrlik/presenter"
 
 # Profile used by cargo-mutants (airuleset mutation-testing.md). Inherits the
 # test profile but drops debuginfo so the per-mutant rebuilds stay fast in the
-# 20-min diff-scoped PR gate.
+# on-demand full-tree sweep (mutation-full.yml / `/mutation-sweep`). cargo-mutants
+# binds this profile via `profile = "mutants"` in .cargo/mutants.toml (do NOT remove
+# that line — it is the only thing selecting this profile, not auto-detect). There
+# is no longer a per-PR mutation gate.
 [profile.mutants]
 inherits = "test"
 debug = "none"
