@@ -1,5 +1,8 @@
 use leptos::prelude::*;
 
+use super::worship_pp_helpers::{
+    current_song_from_entries, next_song_from_entries, scroll_active_entry_into_view,
+};
 use crate::state::stage::StageContext;
 use crate::utils::autofit::autofit_effect;
 use crate::utils::color::group_pill_style;
@@ -92,13 +95,6 @@ pub fn WorshipPp(
     let current_group_text = move || current_group().unwrap_or_default();
     let next_group_text = move || next_group().unwrap_or_default();
 
-    let current_song_text = move || {
-        ctx.snapshot
-            .get()
-            .and_then(|s| s.song_name)
-            .unwrap_or_default()
-    };
-
     let playlist_entries = move || {
         ctx.snapshot
             .get()
@@ -106,17 +102,35 @@ pub fn WorshipPp(
             .unwrap_or_default()
     };
 
+    // worship-pp specific: derive the CURRENT-song badge from the Presenter
+    // playlist's active entry, NOT from AbleSet's server-side s.song_name (#461).
+    let current_song_text = move || current_song_from_entries(&playlist_entries());
+
     // worship-pp specific: derive next-song from the Presenter playlist's
     // entry-after-active, NOT from AbleSet's s.next_song_name. If no entry
     // is active, or the active one is last, returns "" (no next song).
-    let next_song_text = move || {
-        let entries = playlist_entries();
-        let mut iter = entries.iter().skip_while(|e| !e.is_active);
-        iter.next(); // consume the active entry itself
-        iter.next()
-            .map(|e| clean_song_name(&e.name))
-            .unwrap_or_default()
-    };
+    let next_song_text = move || next_song_from_entries(&playlist_entries());
+
+    // Auto-scroll the playlist sidebar so the ACTIVE song stays visible as the
+    // service advances past the ~10 rows that fit at 1080p (#461). Tracks the
+    // active entry's name; when it changes, defers one tick (Timeout 0) so the
+    // `--active` class is applied to the DOM before scrolling, then centers the
+    // active row in the sidebar. Mirrors the operator slide-list scroll Effect.
+    {
+        let snapshot = ctx.snapshot;
+        Effect::new(move |prev: Option<Option<String>>| {
+            let active_name = snapshot.with(|opt| {
+                opt.as_ref()
+                    .and_then(|s| s.playlist_entries.as_ref())
+                    .and_then(|entries| entries.iter().find(|e| e.is_active))
+                    .map(|e| e.name.clone())
+            });
+            if active_name.is_some() && active_name != prev.flatten() {
+                gloo_timers::callback::Timeout::new(0, scroll_active_entry_into_view).forget();
+            }
+            active_name
+        });
+    }
 
     autofit_effect(current_text_ref, CURRENT_MAX_FONT, current_text);
     autofit_effect(next_text_ref, NEXT_MAX_FONT, next_text);

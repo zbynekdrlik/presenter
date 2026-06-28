@@ -15,6 +15,7 @@ pub mod status_bar;
 pub mod timer_layout;
 pub mod wake_lock;
 pub mod worship_pp;
+mod worship_pp_helpers;
 pub mod worship_snv;
 
 /// How the stage should present an `ndi_status` over the NDI video area.
