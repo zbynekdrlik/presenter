@@ -120,6 +120,12 @@ impl AppState {
     }
 
     pub(super) async fn sync_resolume_hosts(&self) -> anyhow::Result<()> {
+        // #483: wire the DB-backed per-push audit writer before any host worker
+        // is spawned, so each push persists a `resolume_push_audit` row and the
+        // cross-host perceived-latency line is emitted. Idempotent — only the
+        // first call spawns the writer task.
+        self.resolume_registry
+            .attach_audit_writer(self.repository.clone());
         let hosts = self.repository.list_resolume_hosts().await?;
         self.resolume_registry.set_hosts(hosts).await;
         Ok(())

@@ -1,6 +1,8 @@
 mod clip_map;
 mod driver;
 mod handlers;
+#[cfg(test)]
+mod latency_tests;
 mod types;
 
 use anyhow::anyhow;
@@ -11,7 +13,7 @@ use reqwest::Client;
 use serde::Serialize;
 use std::{
     collections::HashMap,
-    sync::Arc,
+    sync::{Arc, OnceLock},
     time::{Duration, Instant},
 };
 use tokio::sync::{mpsc, RwLock};
@@ -123,9 +125,12 @@ impl TimerFrame {
 pub struct ResolumeRegistry {
     client: Client,
     hosts: Arc<RwLock<HashMap<ResolumeHostId, HostEntry>>>,
-    /// Non-blocking sink for per-push audit rows (#483). `None` when no DB-backed
-    /// writer is wired (e.g. unit tests built via `new()`).
-    audit_tx: Option<mpsc::Sender<ResolumePushAuditEntry>>,
+    /// Non-blocking sink for per-push audit rows (#483). Set once via
+    /// [`ResolumeRegistry::attach_audit_writer`] (the registry is constructed
+    /// before the DB-backed writer is available, then the writer is attached
+    /// before the first host is spawned). Empty in unit tests built via `new()`.
+    /// `Arc<OnceLock>` so all clones of the registry share the same sink.
+    audit_tx: Arc<OnceLock<mpsc::Sender<ResolumePushAuditEntry>>>,
 }
 
 #[derive(Debug)]
@@ -145,19 +150,25 @@ impl ResolumeRegistry {
         Ok(Self {
             client,
             hosts: Arc::new(RwLock::new(HashMap::new())),
-            audit_tx: None,
+            audit_tx: Arc::new(OnceLock::new()),
         })
     }
 
-    /// #483: registry whose host workers persist a per-push audit row and feed
-    /// the cross-host perceived-latency log line. Spawns one background writer
-    /// task that owns the repository; the push path only `try_send`s to it.
-    pub fn with_audit(repo: Repository) -> anyhow::Result<Self> {
-        let mut me = Self::new()?;
+    /// #483: wire the DB-backed per-push audit writer (idempotent). Spawns one
+    /// background task that owns the repository, persists each push-audit row,
+    /// and emits the cross-host perceived-latency line. The push path only
+    /// `try_send`s to it. MUST be called before hosts are spawned (i.e. before
+    /// `set_hosts`) so workers pick up the sink. Repeated calls are no-ops.
+    pub fn attach_audit_writer(&self, repo: Repository) {
+        if self.audit_tx.get().is_some() {
+            return;
+        }
         let (tx, rx) = mpsc::channel(AUDIT_CHANNEL_CAPACITY);
-        spawn_audit_writer(repo, rx);
-        me.audit_tx = Some(tx);
-        Ok(me)
+        // If a concurrent caller won the race, drop our channel (its writer
+        // task exits when the sender drops) and keep the installed one.
+        if self.audit_tx.set(tx).is_ok() {
+            spawn_audit_writer(repo, rx);
+        }
     }
 
     pub async fn set_hosts(&self, hosts: Vec<ResolumeHost>) {
@@ -219,7 +230,7 @@ impl ResolumeRegistry {
         let client = self.client.clone();
         let status_clone = Arc::clone(&status);
         let config_clone = host.clone();
-        let audit_tx = self.audit_tx.clone();
+        let audit_tx = self.audit_tx.get().cloned();
         let handle = tokio::spawn(async move {
             if let Err(err) =
                 run_host_worker(client, config_clone, status_clone, command_rx, audit_tx).await
