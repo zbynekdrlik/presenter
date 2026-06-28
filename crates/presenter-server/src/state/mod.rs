@@ -21,6 +21,7 @@
 //! acquisition order (e.g., alphabetical by field name) to prevent deadlocks.
 
 mod ableset;
+mod api_stage;
 pub(crate) mod bible;
 mod bible_manager;
 mod broadcasting;
@@ -29,11 +30,13 @@ mod companion;
 mod companion_manager;
 mod integrations;
 mod ndi_control;
+mod osc;
 mod presentations;
 mod seed;
 pub(crate) mod slides;
 pub(crate) mod stage;
 mod stage_display;
+mod stage_state;
 #[cfg(test)]
 mod tests;
 mod timers;
@@ -46,23 +49,16 @@ use crate::{
     android_stage::AndroidStageRegistry,
     config::ServerConfig,
     live::{LiveEvent, LiveHub},
-    osc::{OscBridge, OscStatusSnapshot},
+    osc::OscBridge,
     resolume::ResolumeRegistry,
     stage_connections::{StageConnections, StageHeartbeatConfig},
 };
 use chrono::Utc;
 use presenter_core::{
-    OscSettings, OscSettingsDraft, PlaylistId, Presentation, PresentationId, Slide, SlideId,
-    StageClientSnapshot, StageDisplayLayout, StageDisplaySlide, StageDisplaySnapshot, StageState,
-    TimersOverview, API_STAGE_LAYOUT_CODE, DEFAULT_STAGE_LAYOUT_CODE,
+    StageClientSnapshot, StageDisplayLayout, TimersOverview, DEFAULT_STAGE_LAYOUT_CODE,
 };
 use presenter_persistence::{DatabaseSettings, Repository};
-use std::{
-    collections::HashMap,
-    env,
-    sync::{atomic::AtomicBool, atomic::Ordering, Arc},
-    time::Instant,
-};
+use std::sync::{atomic::AtomicBool, atomic::Ordering, Arc};
 use tokio::{
     sync::RwLock,
     time::{interval, Duration as TokioDuration, MissedTickBehavior},
@@ -80,7 +76,6 @@ use companion_manager::CompanionManager;
 pub(crate) use seed::seed_sample_library;
 #[cfg(test)]
 pub use seed::TestBibleIngestion;
-use stage::{build_stage_playlist_entries, stage_resolution_from_presentation, StageResolution};
 
 /// External API-driven stage state. All fields default to empty strings.
 /// Missing or null JSON fields deserialize to "".
@@ -528,40 +523,7 @@ impl AppState {
         });
     }
 
-    async fn apply_osc_settings(state: &Self, osc_bridge: &OscBridge) -> anyhow::Result<()> {
-        let mut osc_settings = state.repository.get_osc_settings().await?;
-        if let Ok(port_raw) = env::var("PRESENTER_OSC_LISTEN_PORT") {
-            match port_raw.parse::<u16>() {
-                Ok(port) if port != 0 && port != osc_settings.listen_port => {
-                    let draft = OscSettingsDraft {
-                        enabled: osc_settings.enabled,
-                        listen_port: port,
-                        address_pattern: osc_settings.address_pattern.clone(),
-                        velocity_mode: osc_settings.velocity_mode,
-                    };
-                    osc_settings = state
-                        .repository
-                        .upsert_osc_settings(
-                            &draft,
-                            presenter_persistence::SettingsAuditSource::StartupDefault,
-                            "system",
-                        )
-                        .await?;
-                }
-                Ok(_) => {}
-                Err(err) => {
-                    tracing::warn!(value = %port_raw, ?err, "invalid PRESENTER_OSC_LISTEN_PORT")
-                }
-            }
-        }
-        if let Err(err) = osc_bridge
-            .apply_settings(osc_settings.clone(), state.clone())
-            .await
-        {
-            tracing::warn!(?err, "failed to initialise OSC listener");
-        }
-        Ok(())
-    }
+    // OSC settings application is in osc.rs (Self::apply_osc_settings)
 
     async fn apply_ableset_settings(
         state: &Self,
@@ -613,31 +575,7 @@ impl AppState {
         Ok(state)
     }
 
-    // OSC methods
-    pub async fn osc_settings(&self) -> anyhow::Result<OscSettings> {
-        self.repository.get_osc_settings().await
-    }
-
-    pub async fn update_osc_settings(
-        &self,
-        draft: OscSettingsDraft,
-        source: presenter_persistence::SettingsAuditSource,
-        actor: &str,
-    ) -> anyhow::Result<OscSettings> {
-        let settings = self
-            .repository
-            .upsert_osc_settings(&draft, source, actor)
-            .await?;
-        self.osc_bridge
-            .apply_settings(settings.clone(), self.clone())
-            .await?;
-        Ok(settings)
-    }
-
-    pub async fn osc_status_snapshot(&self) -> OscStatusSnapshot {
-        self.osc_bridge.status().await
-    }
-
+    // OSC methods are in osc.rs
     // AbleSet methods are in ableset.rs
     // Resolume and Android stage methods are in integrations.rs
 
@@ -776,154 +714,7 @@ impl AppState {
         Ok(())
     }
 
-    // Presentation cache methods
-    async fn presentation_from_cache(
-        &self,
-        presentation_id: PresentationId,
-    ) -> anyhow::Result<Arc<Presentation>> {
-        if let Some(cached) = {
-            let guard = self.caches.presentation.read().await;
-            guard.get(&presentation_id).cloned()
-        } {
-            return Ok(cached);
-        }
-        let detail = self
-            .repository
-            .fetch_presentation_detail(presentation_id)
-            .await?;
-        let Some((_, _, presentation)) = detail else {
-            return Err(anyhow::anyhow!("presentation not found"));
-        };
-        let arc = Arc::new(presentation);
-        let mut guard = self.caches.presentation.write().await;
-        guard.insert(presentation_id, arc.clone());
-        Ok(arc)
-    }
-
-    pub(crate) async fn get_all_group_colors(&self) -> HashMap<String, String> {
-        self.caches.group_color.read().await.clone()
-    }
-
-    pub(crate) async fn resolve_group_color(&self, name: &str) -> Option<String> {
-        {
-            let cache = self.caches.group_color.read().await;
-            if let Some(color) = cache.get(name) {
-                return Some(color.clone());
-            }
-        }
-        match self.repository.resolve_group_color(name).await {
-            Ok(color) => {
-                let mut cache = self.caches.group_color.write().await;
-                cache.insert(name.to_string(), color.clone());
-                Some(color)
-            }
-            Err(_) => None,
-        }
-    }
-
-    pub(crate) async fn update_api_stage(&self, state: ApiStageState) -> anyhow::Result<()> {
-        let snapshot = self.build_api_stage_snapshot(&state).await;
-        *self.api_stage.write().await = state;
-        // Issue #281: only publish a Stage event when the operator's
-        // current layout is "api". Otherwise the api state is stored but
-        // does not affect the live preview, mirroring the existing inverse
-        // gate in `broadcasting.rs::publish_stage_context` (which skips
-        // non-api updates when api layout is selected).
-        if self.stage_layout_code().await == API_STAGE_LAYOUT_CODE {
-            self.live_hub.publish(LiveEvent::Stage { snapshot });
-        }
-        Ok(())
-    }
-
-    pub(crate) async fn api_stage_snapshot(&self) -> StageDisplaySnapshot {
-        let state = self.api_stage.read().await;
-        self.build_api_stage_snapshot(&state).await
-    }
-
-    async fn build_api_stage_snapshot(&self, state: &ApiStageState) -> StageDisplaySnapshot {
-        let layout = StageDisplayLayout::api();
-
-        let current = self
-            .build_api_slide(&state.current_text, &state.current_group)
-            .await;
-        let next = self
-            .build_api_slide(&state.next_text, &state.next_group)
-            .await;
-
-        let song_name = if state.current_song.is_empty() {
-            None
-        } else {
-            Some(state.current_song.clone())
-        };
-        let next_song_name = if state.next_song.is_empty() {
-            None
-        } else {
-            Some(state.next_song.clone())
-        };
-
-        let now = Utc::now();
-        let timers = self
-            .load_or_init_timers(now)
-            .await
-            .map(|t| t.overview(now))
-            .unwrap_or_else(|_| TimersOverview::demo(now));
-
-        StageDisplaySnapshot::new(
-            layout,
-            now,
-            None,           // presentation_id
-            None,           // presentation_name
-            None,           // library_name
-            song_name,      // song_name
-            None,           // song_number
-            next_song_name, // next_song_name
-            None,           // current_slide_id
-            current,        // current
-            None,           // next_slide_id
-            next,           // next
-            timers,         // timers
-            None,           // latency_ms
-            None,           // current_position
-            None,           // total_slides
-            None,           // playlist_id
-            None,           // playlist_name
-            None,           // playlist_entries
-            Vec::new(),     // upcoming_groups (api layout has no upcoming context)
-        )
-    }
-
-    async fn build_api_slide(&self, text: &str, group_name: &str) -> Option<StageDisplaySlide> {
-        if text.is_empty() && group_name.is_empty() {
-            return None;
-        }
-        let group = if group_name.is_empty() {
-            None
-        } else {
-            Some(group_name.to_string())
-        };
-        let group_color = if let Some(ref name) = group {
-            self.resolve_group_color(name).await
-        } else {
-            None
-        };
-        Some(StageDisplaySlide {
-            main: text.to_string(),
-            translation: String::new(),
-            stage: String::new(),
-            group,
-            group_color,
-        })
-    }
-
-    async fn cache_presentation_ref(&self, presentation: &Presentation) {
-        let mut guard = self.caches.presentation.write().await;
-        guard.insert(presentation.id, Arc::new(presentation.clone()));
-    }
-
-    async fn cache_presentation_value(&self, presentation: Presentation) {
-        let mut guard = self.caches.presentation.write().await;
-        guard.insert(presentation.id, Arc::new(presentation));
-    }
+    // Presentation cache, group-color, and API-stage methods are in api_stage.rs
 
     pub async fn timers_overview(&self) -> anyhow::Result<TimersOverview> {
         let now = Utc::now();
@@ -931,159 +722,13 @@ impl AppState {
         Ok(state.overview(now))
     }
 
-    pub async fn update_stage_state(
-        &self,
-        presentation_id: PresentationId,
-        current_slide_id: SlideId,
-        next_slide_id: Option<SlideId>,
-        playlist_id: Option<PlaylistId>,
-    ) -> anyhow::Result<()> {
-        let correlation_id = Uuid::new_v4();
-        let start = Instant::now();
-
-        let validate_start = Instant::now();
-        let Some((_, library_name, presentation)) =
-            self.presentation_detail(presentation_id).await?
-        else {
-            anyhow::bail!("presentation not found");
-        };
-
-        if !presentation
-            .slides
-            .iter()
-            .any(|slide| slide.id == current_slide_id)
-        {
-            anyhow::bail!("current slide not found in presentation");
-        }
-
-        if let Some(next_slide_id) = next_slide_id {
-            if !presentation
-                .slides
-                .iter()
-                .any(|slide| slide.id == next_slide_id)
-            {
-                anyhow::bail!("next slide not found in presentation");
-            }
-        }
-        let t_validate_ms = validate_start.elapsed().as_secs_f64() * 1000.0;
-
-        let stage_state = presenter_core::StageState::new(
-            Some(presentation_id),
-            Some(current_slide_id),
-            next_slide_id,
-            playlist_id,
-        );
-        let db_start = Instant::now();
-        self.repository.upsert_stage_state(&stage_state).await?;
-        let t_db_write_ms = db_start.elapsed().as_secs_f64() * 1000.0;
-
-        let mut resolution = stage_resolution_from_presentation(
-            &presentation,
-            Some(library_name),
-            Some(current_slide_id),
-            next_slide_id,
-        );
-        if let Some(pid) = playlist_id {
-            if let Some(playlist) = self.repository.fetch_playlist_by_id(pid).await? {
-                let name_lookup = self
-                    .repository
-                    .fetch_presentation_names_for_playlist(&playlist)
-                    .await?;
-                resolution.playlist_id = Some(pid);
-                resolution.playlist_name = Some(playlist.name.clone());
-                resolution.playlist_entries = Some(build_stage_playlist_entries(
-                    &playlist,
-                    resolution.presentation_id,
-                    &name_lookup,
-                ));
-            }
-        }
-
-        let broadcast_start = Instant::now();
-        self.broadcast_stage_resolution(resolution, Some(correlation_id))
-            .await?;
-        let t_broadcast_ms = broadcast_start.elapsed().as_secs_f64() * 1000.0;
-
-        let t_total_ms = start.elapsed().as_secs_f64() * 1000.0;
-        tracing::info!(
-            target: "presenter::stage::handler",
-            correlation_id = %correlation_id,
-            t_validate_ms,
-            t_db_write_ms,
-            t_broadcast_ms,
-            t_total_ms,
-            "stage handler timing"
-        );
-
-        Ok(())
-    }
-
-    pub async fn clear_stage(&self) -> anyhow::Result<()> {
-        let cleared = StageState::cleared();
-        self.repository.upsert_stage_state(&cleared).await?;
-        self.broadcast_stage_resolution(StageResolution::cleared(), None)
-            .await?;
-        Ok(())
-    }
-
+    // Stage-state mutation (update_stage_state / clear_stage) and slide-edit
+    // reconciliation (reindex_slides / reconcile_stage_state_after_edit) are in
+    // stage_state.rs
     // Stage display methods are in stage_display.rs
     // Slide editing methods are in slides.rs
     // Timer methods are in timers.rs
     // Broadcasting methods are in broadcasting.rs
-
-    fn reindex_slides(slides: &mut [Slide]) {
-        for (index, slide) in slides.iter_mut().enumerate() {
-            slide.order = index as u32;
-        }
-    }
-
-    async fn reconcile_stage_state_after_edit(
-        &self,
-        presentation_id: PresentationId,
-        slides: &[Slide],
-    ) -> anyhow::Result<()> {
-        let Some(mut state) = self.repository.get_stage_state().await? else {
-            return Ok(());
-        };
-        if state.presentation_id != Some(presentation_id) {
-            return Ok(());
-        }
-
-        if slides.is_empty() {
-            if state.current_slide_id.is_some() || state.next_slide_id.is_some() {
-                state.current_slide_id = None;
-                state.next_slide_id = None;
-                self.repository.upsert_stage_state(&state).await?;
-            }
-            return Ok(());
-        }
-
-        let mut changed = false;
-        let contains = |id: Option<SlideId>| {
-            id.is_none_or(|target| slides.iter().any(|slide| slide.id == target))
-        };
-        if !contains(state.current_slide_id) {
-            state.current_slide_id = Some(slides[0].id);
-            state.next_slide_id = slides.get(1).map(|slide| slide.id);
-            changed = true;
-        } else if !contains(state.next_slide_id) {
-            if let Some(current) = state.current_slide_id {
-                if let Some(position) = slides.iter().position(|slide| slide.id == current) {
-                    state.next_slide_id = slides.get(position + 1).map(|slide| slide.id);
-                } else {
-                    state.next_slide_id = slides.get(1).map(|slide| slide.id);
-                }
-            } else {
-                state.next_slide_id = slides.get(1).map(|slide| slide.id);
-            }
-            changed = true;
-        }
-
-        if changed {
-            self.repository.upsert_stage_state(&state).await?;
-        }
-        Ok(())
-    }
 }
 
 /// Auto-detect the server's public IP by querying external services.

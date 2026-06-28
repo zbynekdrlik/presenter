@@ -1,10 +1,12 @@
-use super::stage::{format_countdown_text, sanitize_song_title};
+use super::stage::{
+    format_countdown_text, sanitize_song_title, stage_resolution_from_presentation,
+};
 use super::*;
 use crate::live::LiveEvent;
 use presenter_core::{
     bible::BibleIngestionBatch, AbleSetSettingsDraft, BiblePassage, BibleReference,
-    BibleSlideOutput, BibleTranslation, Library, LibraryId, SlideContent, SlideText, TimerCommand,
-    TimerState,
+    BibleSlideOutput, BibleTranslation, Library, LibraryId, Presentation, PresentationId, Slide,
+    SlideContent, SlideId, SlideText, TimerCommand, TimerState,
 };
 
 /// Regression for #333 item 6: the startup auto-restore branch must skip when
