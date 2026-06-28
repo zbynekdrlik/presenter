@@ -113,22 +113,25 @@ pub fn WorshipPp(
 
     // Auto-scroll the playlist sidebar so the ACTIVE song stays visible as the
     // service advances past the ~10 rows that fit at 1080p (#461). Tracks the
-    // active entry's name; when it changes, defers one tick (Timeout 0) so the
-    // `--active` class is applied to the DOM before scrolling, then centers the
-    // active row in the sidebar. Mirrors the operator slide-list scroll Effect.
+    // active entry's POSITION (not its name): a worship set can legitimately
+    // repeat the same song, so name-based dedup would suppress the scroll when
+    // advancing between two same-named entries. When the active position
+    // changes, defers one tick (Timeout 0) so the `--active` class is applied
+    // to the DOM before scrolling, then centers the active row in the sidebar.
+    // Mirrors the operator slide-list scroll Effect (which dedups on the unique
+    // slide id for the same reason).
     {
         let snapshot = ctx.snapshot;
-        Effect::new(move |prev: Option<Option<String>>| {
-            let active_name = snapshot.with(|opt| {
+        Effect::new(move |prev: Option<Option<usize>>| {
+            let active_idx = snapshot.with(|opt| {
                 opt.as_ref()
                     .and_then(|s| s.playlist_entries.as_ref())
-                    .and_then(|entries| entries.iter().find(|e| e.is_active))
-                    .map(|e| e.name.clone())
+                    .and_then(|entries| entries.iter().position(|e| e.is_active))
             });
-            if active_name.is_some() && active_name != prev.flatten() {
+            if active_idx.is_some() && active_idx != prev.flatten() {
                 gloo_timers::callback::Timeout::new(0, scroll_active_entry_into_view).forget();
             }
-            active_name
+            active_idx
         });
     }
 

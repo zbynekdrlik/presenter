@@ -520,13 +520,12 @@ test.describe("Stage worship-pp layout", () => {
       }
       if (picked.length >= 16) break;
     }
-    if (picked.length < 14) {
-      test.skip(
-        true,
-        `fixture has fewer than 14 distinct presentations with slides (got ${picked.length})`,
-      );
-      return;
-    }
+    // The seeded library has 1000+ presentations, so this is a hard guard, not
+    // a silent skip (test-strictness): a thin fixture must fail loudly.
+    expect(
+      picked.length,
+      `fixture needs >=14 distinct slide-bearing presentations (got ${picked.length})`,
+    ).toBeGreaterThanOrEqual(14);
 
     // Create a playlist holding all picked presentations, in order.
     const playlistResp = await page.request.post(
