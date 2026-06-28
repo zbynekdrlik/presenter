@@ -26,5 +26,5 @@ pub mod audit;
 pub mod entities;
 mod repository;
 
-pub use audit::{SettingsAuditEntry, SettingsAuditSource};
+pub use audit::{ResolumePushAuditEntry, SettingsAuditEntry, SettingsAuditSource};
 pub use repository::{DatabaseSettings, Repository};

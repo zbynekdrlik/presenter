@@ -625,3 +625,28 @@ pub mod settings_audit {
 
     impl ActiveModelBehavior for ActiveModel {}
 }
+
+pub mod resolume_push_audit {
+    use sea_orm::entity::prelude::*;
+
+    // No `Eq` derive: the timing columns are `f64`, which is not `Eq`.
+    #[derive(Clone, Debug, PartialEq, DeriveEntityModel)]
+    #[sea_orm(table_name = "resolume_push_audit")]
+    pub struct Model {
+        #[sea_orm(primary_key, auto_increment = false)]
+        pub id: String,
+        pub correlation_id: Option<String>,
+        pub host: String,
+        pub t_queue_wait_ms: f64,
+        pub t_ensure_mapping_ms: f64,
+        pub t_total_ms: f64,
+        pub refetched: bool,
+        pub outcome: String,
+        pub created_at: DateTimeWithTimeZone,
+    }
+
+    #[derive(Copy, Clone, Debug, EnumIter, DeriveRelation)]
+    pub enum Relation {}
+
+    impl ActiveModelBehavior for ActiveModel {}
+}

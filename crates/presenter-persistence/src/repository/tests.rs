@@ -1514,3 +1514,62 @@ fn assert_sibling_deactivation_audit_row(
         "after should have isActive=false",
     );
 }
+
+#[tokio::test]
+async fn resolume_push_audit_round_trip() {
+    // #483: a push-audit row inserts and reads back with all timings, the
+    // refetched flag, the correlation id, and the outcome intact, and the
+    // host/since filters work.
+    let repo = Repository::connect_in_memory().await.unwrap();
+    let now = Utc::now();
+
+    let cached = crate::audit::ResolumePushAuditEntry {
+        correlation_id: Some("abc-123".to_string()),
+        host: "cg-resolume.lan".to_string(),
+        t_queue_wait_ms: 1.5,
+        t_ensure_mapping_ms: 0.0003,
+        t_total_ms: 37.2,
+        refetched: false,
+        outcome: "ok".to_string(),
+        created_at: now,
+    };
+    let other_host = crate::audit::ResolumePushAuditEntry {
+        correlation_id: None,
+        host: "10.77.9.201".to_string(),
+        t_queue_wait_ms: 60.0,
+        t_ensure_mapping_ms: 618.0,
+        t_total_ms: 655.0,
+        refetched: true,
+        outcome: "ok".to_string(),
+        created_at: now,
+    };
+
+    repo.record_resolume_push_audit(&cached).await.unwrap();
+    repo.record_resolume_push_audit(&other_host).await.unwrap();
+
+    // All rows.
+    let all = repo.list_resolume_push_audit(None, None, 50).await.unwrap();
+    assert_eq!(all.len(), 2);
+
+    // Host filter returns only the matching host, fields intact.
+    let only_cg = repo
+        .list_resolume_push_audit(Some("cg-resolume.lan"), None, 50)
+        .await
+        .unwrap();
+    assert_eq!(only_cg.len(), 1);
+    let row = &only_cg[0];
+    assert_eq!(row.correlation_id.as_deref(), Some("abc-123"));
+    assert_eq!(row.t_queue_wait_ms, 1.5);
+    assert_eq!(row.t_ensure_mapping_ms, 0.0003);
+    assert_eq!(row.t_total_ms, 37.2);
+    assert!(!row.refetched);
+    assert_eq!(row.outcome, "ok");
+
+    // `since` cutoff in the future excludes everything.
+    let future = now + Duration::seconds(3600);
+    let none = repo
+        .list_resolume_push_audit(None, Some(future), 50)
+        .await
+        .unwrap();
+    assert!(none.is_empty());
+}

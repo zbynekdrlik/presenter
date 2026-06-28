@@ -379,8 +379,7 @@ async fn stage_push_does_not_refetch_composition_when_cache_is_fresh() {
 
     // Age the cached mapping to 3 s — past the OLD 1 s TTL, below the 10 s
     // background interval (the exact gap between two sung lines).
-    driver.last_mapping_refresh =
-        Some(tokio::time::Instant::now() - Duration::from_secs(3));
+    driver.last_mapping_refresh = Some(tokio::time::Instant::now() - Duration::from_secs(3));
 
     // Second push: mapping is cached and younger than the refresh interval, so
     // it MUST be served from cache with NO additional /composition fetch.

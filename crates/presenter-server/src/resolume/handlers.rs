@@ -3,12 +3,24 @@ use super::driver::HostDriver;
 use super::types::{apply_transforms, ClipTarget, LaneTarget, SlotKind};
 use super::{BibleUpdate, ResolumeConnectionSnapshot, StageUpdate, TimerFrame};
 use futures_util::{stream::FuturesUnordered, StreamExt};
+use presenter_persistence::ResolumePushAuditEntry;
 use reqwest::header::HOST;
 use std::sync::Arc;
 use std::time::Instant;
 use tokio::sync::RwLock;
 use tokio::time::sleep;
 use tracing::warn;
+
+/// Per-step timings collected while applying a stage update, fed into the
+/// `presenter::resolume::timing` log line.
+#[derive(Default)]
+struct StageStepTimings {
+    t_main_ms: f64,
+    t_trans_ms: f64,
+    t_song_ms: f64,
+    t_band_ms: f64,
+    t_trigger_ms: f64,
+}
 
 use super::driver::TRIGGER_DELAY;
 
@@ -40,125 +52,16 @@ impl HostDriver {
         let correlation_id = update.correlation_id;
 
         let mapping_start = Instant::now();
-        self.ensure_mapping().await?;
+        // #483: serves from cache on the push path; `refetched` is true only on
+        // a cold/invalidated cache (NOT on staleness anymore).
+        let fetch = self.ensure_mapping().await?;
         let t_ensure_mapping_ms = elapsed_ms(mapping_start);
 
-        let mut t_main_ms = 0.0;
-        let mut t_trans_ms = 0.0;
-        let mut t_song_ms = 0.0;
-        let mut t_band_ms = 0.0;
-        let mut t_trigger_ms = 0.0;
-
-        if let Some(mapping) = self.mapping.clone() {
-            let main_lane = self.lane_state.current(SlotKind::Main);
-            let translation_lane = self.lane_state.current(SlotKind::Translation);
-
-            let mut to_trigger = Vec::new();
-            let mut main_lane_filled = false;
-            if let Some(ref main_text) = update.current_main {
-                let step_start = Instant::now();
-                let mut main_targets = self
-                    .update_lane_text(
-                        main_lane,
-                        &mapping.main_a,
-                        &mapping.main_b,
-                        Some(main_text),
-                        status,
-                    )
-                    .await?;
-                t_main_ms = elapsed_ms(step_start);
-                if !main_targets.is_empty() {
-                    to_trigger.append(&mut main_targets);
-                    main_lane_filled = true;
-                }
-            }
-
-            let mut translation_lane_filled = false;
-            if let Some(ref translation_text) = update.current_translation {
-                let step_start = Instant::now();
-                let mut translation_targets = self
-                    .update_lane_text(
-                        translation_lane,
-                        &mapping.translation_a,
-                        &mapping.translation_b,
-                        Some(translation_text),
-                        status,
-                    )
-                    .await?;
-                t_trans_ms = elapsed_ms(step_start);
-                if !translation_targets.is_empty() {
-                    to_trigger.append(&mut translation_targets);
-                    translation_lane_filled = true;
-                }
-            }
-
-            if let Some(ref song_name) = update.song_name {
-                if mapping.song_name.is_empty() {
-                    warn!(
-                        host = %self.config.host,
-                        port = self.config.port,
-                        "Resolume mapping missing #song-name clip"
-                    );
-                } else {
-                    let step_start = Instant::now();
-                    self.update_metadata_targets(
-                        &mapping.song_name,
-                        song_name,
-                        MetadataSlot::SongName,
-                        status,
-                    )
-                    .await?;
-                    t_song_ms = elapsed_ms(step_start);
-                }
-            } else {
-                self.last_song_name_payload = None;
-            }
-
-            if let Some(ref band_name) = update.band_name {
-                if mapping.band_name.is_empty() {
-                    warn!(
-                        host = %self.config.host,
-                        port = self.config.port,
-                        "Resolume mapping missing #band-name clip"
-                    );
-                } else {
-                    let step_start = Instant::now();
-                    self.update_metadata_targets(
-                        &mapping.band_name,
-                        band_name,
-                        MetadataSlot::BandName,
-                        status,
-                    )
-                    .await?;
-                    t_band_ms = elapsed_ms(step_start);
-                }
-            } else {
-                self.last_band_name_payload = None;
-            }
-
-            if !to_trigger.is_empty() {
-                if TRIGGER_DELAY.as_millis() > 0 {
-                    sleep(TRIGGER_DELAY).await;
-                }
-                let trigger_start = Instant::now();
-                self.trigger_clips(&to_trigger).await?;
-                t_trigger_ms = elapsed_ms(trigger_start);
-            }
-
-            if main_lane_filled {
-                self.lane_state.flip(SlotKind::Main);
-                if !translation_lane_filled
-                    && !mapping.translation_a.is_empty()
-                    && !mapping.translation_b.is_empty()
-                {
-                    self.lane_state.flip(SlotKind::Translation);
-                }
-            }
-
-            if translation_lane_filled {
-                self.lane_state.flip(SlotKind::Translation);
-            }
-        }
+        let steps = if let Some(mapping) = self.mapping.clone() {
+            self.apply_stage_mapping(&update, &mapping, status).await?
+        } else {
+            StageStepTimings::default()
+        };
         self.mark_connected(status).await;
 
         let t_total_ms = elapsed_ms(pickup_at);
@@ -168,16 +71,202 @@ impl HostDriver {
             host = %self.config.host,
             t_queue_wait_ms,
             t_ensure_mapping_ms,
-            t_main_ms,
-            t_trans_ms,
-            t_song_ms,
-            t_band_ms,
+            t_main_ms = steps.t_main_ms,
+            t_trans_ms = steps.t_trans_ms,
+            t_song_ms = steps.t_song_ms,
+            t_band_ms = steps.t_band_ms,
             t_trigger_delay_ms = TRIGGER_DELAY.as_secs_f64() * 1000.0,
-            t_trigger_ms,
+            t_trigger_ms = steps.t_trigger_ms,
             t_total_ms,
+            refetched = fetch.refetched,
             "resolume stage timing"
         );
+
+        // #483: persist a per-push audit row (non-blocking) so post-event
+        // latency analysis is a SQL query, and so the cross-host perceived
+        // latency line can be emitted by the writer task.
+        self.record_push_audit(
+            correlation_id,
+            t_queue_wait_ms,
+            t_ensure_mapping_ms,
+            t_total_ms,
+            fetch.refetched,
+            "ok",
+        );
         Ok(())
+    }
+
+    /// Apply the main + translation lyric lanes for a stage update: push the
+    /// text, trigger the filled clips, and flip the lanes. Song/band metadata is
+    /// handled separately by `apply_stage_metadata`. Returns the per-step
+    /// timings for the `resolume::timing` log line.
+    async fn apply_stage_mapping(
+        &mut self,
+        update: &StageUpdate,
+        mapping: &ClipMapping,
+        status: &Arc<RwLock<ResolumeConnectionSnapshot>>,
+    ) -> anyhow::Result<StageStepTimings> {
+        let mut steps = StageStepTimings::default();
+        let main_lane = self.lane_state.current(SlotKind::Main);
+        let translation_lane = self.lane_state.current(SlotKind::Translation);
+
+        let mut to_trigger = Vec::new();
+        let mut main_lane_filled = false;
+        if let Some(ref main_text) = update.current_main {
+            let step_start = Instant::now();
+            let mut main_targets = self
+                .update_lane_text(
+                    main_lane,
+                    &mapping.main_a,
+                    &mapping.main_b,
+                    Some(main_text),
+                    status,
+                )
+                .await?;
+            steps.t_main_ms = elapsed_ms(step_start);
+            if !main_targets.is_empty() {
+                to_trigger.append(&mut main_targets);
+                main_lane_filled = true;
+            }
+        }
+
+        let mut translation_lane_filled = false;
+        if let Some(ref translation_text) = update.current_translation {
+            let step_start = Instant::now();
+            let mut translation_targets = self
+                .update_lane_text(
+                    translation_lane,
+                    &mapping.translation_a,
+                    &mapping.translation_b,
+                    Some(translation_text),
+                    status,
+                )
+                .await?;
+            steps.t_trans_ms = elapsed_ms(step_start);
+            if !translation_targets.is_empty() {
+                to_trigger.append(&mut translation_targets);
+                translation_lane_filled = true;
+            }
+        }
+
+        (steps.t_song_ms, steps.t_band_ms) =
+            self.apply_stage_metadata(update, mapping, status).await?;
+
+        if !to_trigger.is_empty() {
+            if TRIGGER_DELAY.as_millis() > 0 {
+                sleep(TRIGGER_DELAY).await;
+            }
+            let trigger_start = Instant::now();
+            self.trigger_clips(&to_trigger).await?;
+            steps.t_trigger_ms = elapsed_ms(trigger_start);
+        }
+
+        if main_lane_filled {
+            self.lane_state.flip(SlotKind::Main);
+            if !translation_lane_filled
+                && !mapping.translation_a.is_empty()
+                && !mapping.translation_b.is_empty()
+            {
+                self.lane_state.flip(SlotKind::Translation);
+            }
+        }
+
+        if translation_lane_filled {
+            self.lane_state.flip(SlotKind::Translation);
+        }
+
+        Ok(steps)
+    }
+
+    /// Push the #song-name / #band-name metadata clips for a stage update.
+    /// Returns `(t_song_ms, t_band_ms)`.
+    async fn apply_stage_metadata(
+        &mut self,
+        update: &StageUpdate,
+        mapping: &ClipMapping,
+        status: &Arc<RwLock<ResolumeConnectionSnapshot>>,
+    ) -> anyhow::Result<(f64, f64)> {
+        let mut t_song_ms = 0.0;
+        let mut t_band_ms = 0.0;
+
+        if let Some(ref song_name) = update.song_name {
+            if mapping.song_name.is_empty() {
+                warn!(
+                    host = %self.config.host,
+                    port = self.config.port,
+                    "Resolume mapping missing #song-name clip"
+                );
+            } else {
+                let step_start = Instant::now();
+                self.update_metadata_targets(
+                    &mapping.song_name,
+                    song_name,
+                    MetadataSlot::SongName,
+                    status,
+                )
+                .await?;
+                t_song_ms = elapsed_ms(step_start);
+            }
+        } else {
+            self.last_song_name_payload = None;
+        }
+
+        if let Some(ref band_name) = update.band_name {
+            if mapping.band_name.is_empty() {
+                warn!(
+                    host = %self.config.host,
+                    port = self.config.port,
+                    "Resolume mapping missing #band-name clip"
+                );
+            } else {
+                let step_start = Instant::now();
+                self.update_metadata_targets(
+                    &mapping.band_name,
+                    band_name,
+                    MetadataSlot::BandName,
+                    status,
+                )
+                .await?;
+                t_band_ms = elapsed_ms(step_start);
+            }
+        } else {
+            self.last_band_name_payload = None;
+        }
+
+        Ok((t_song_ms, t_band_ms))
+    }
+
+    /// Non-blocking per-push audit emit (#483). Sends an audit row to the writer
+    /// task via `try_send`; a full channel drops the row rather than blocking the
+    /// push. No-op when no audit sink is wired (unit tests).
+    fn record_push_audit(
+        &self,
+        correlation_id: Option<uuid::Uuid>,
+        t_queue_wait_ms: f64,
+        t_ensure_mapping_ms: f64,
+        t_total_ms: f64,
+        refetched: bool,
+        outcome: &str,
+    ) {
+        let Some(tx) = &self.audit_tx else {
+            return;
+        };
+        let entry = ResolumePushAuditEntry {
+            correlation_id: correlation_id.map(|u| u.to_string()),
+            host: self.config.host.clone(),
+            t_queue_wait_ms,
+            t_ensure_mapping_ms,
+            t_total_ms,
+            refetched,
+            outcome: outcome.to_string(),
+            created_at: chrono::Utc::now(),
+        };
+        if tx.try_send(entry).is_err() {
+            tracing::debug!(
+                host = %self.config.host,
+                "resolume push-audit channel full; dropping audit row"
+            );
+        }
     }
 
     pub(super) async fn handle_bible(

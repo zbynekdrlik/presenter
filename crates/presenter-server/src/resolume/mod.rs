@@ -6,6 +6,7 @@ mod types;
 use anyhow::anyhow;
 use chrono::{DateTime, Utc};
 use presenter_core::{BibleBroadcast, BibleSlideOutput, ResolumeHost, ResolumeHostId};
+use presenter_persistence::{Repository, ResolumePushAuditEntry};
 use reqwest::Client;
 use serde::Serialize;
 use std::{
@@ -22,6 +23,15 @@ use driver::{run_host_worker, HostCommand};
 
 const CONNECT_TIMEOUT: Duration = Duration::from_secs(3);
 const HOST_COMMAND_CAPACITY: usize = 16;
+/// Bounded buffer for per-push audit rows (#483). `try_send` drops rows when
+/// full so the push path never blocks on the DB writer.
+const AUDIT_CHANNEL_CAPACITY: usize = 512;
+/// How long to collect per-host completions for one slide before emitting the
+/// cross-host perceived-latency line. Slides during singing are >1 s apart, so
+/// a 2 s window captures all hosts (incl. a slow ~655 ms one) without colliding
+/// with the next slide's correlation id.
+const PERCEIVED_FLUSH_AFTER: Duration = Duration::from_secs(2);
+const PERCEIVED_SWEEP_INTERVAL: Duration = Duration::from_millis(500);
 
 #[derive(Debug, Clone, Serialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
@@ -113,6 +123,9 @@ impl TimerFrame {
 pub struct ResolumeRegistry {
     client: Client,
     hosts: Arc<RwLock<HashMap<ResolumeHostId, HostEntry>>>,
+    /// Non-blocking sink for per-push audit rows (#483). `None` when no DB-backed
+    /// writer is wired (e.g. unit tests built via `new()`).
+    audit_tx: Option<mpsc::Sender<ResolumePushAuditEntry>>,
 }
 
 #[derive(Debug)]
@@ -132,7 +145,19 @@ impl ResolumeRegistry {
         Ok(Self {
             client,
             hosts: Arc::new(RwLock::new(HashMap::new())),
+            audit_tx: None,
         })
+    }
+
+    /// #483: registry whose host workers persist a per-push audit row and feed
+    /// the cross-host perceived-latency log line. Spawns one background writer
+    /// task that owns the repository; the push path only `try_send`s to it.
+    pub fn with_audit(repo: Repository) -> anyhow::Result<Self> {
+        let mut me = Self::new()?;
+        let (tx, rx) = mpsc::channel(AUDIT_CHANNEL_CAPACITY);
+        spawn_audit_writer(repo, rx);
+        me.audit_tx = Some(tx);
+        Ok(me)
     }
 
     pub async fn set_hosts(&self, hosts: Vec<ResolumeHost>) {
@@ -194,8 +219,10 @@ impl ResolumeRegistry {
         let client = self.client.clone();
         let status_clone = Arc::clone(&status);
         let config_clone = host.clone();
+        let audit_tx = self.audit_tx.clone();
         let handle = tokio::spawn(async move {
-            if let Err(err) = run_host_worker(client, config_clone, status_clone, command_rx).await
+            if let Err(err) =
+                run_host_worker(client, config_clone, status_clone, command_rx, audit_tx).await
             {
                 error!(host_id = %host.id, ?err, "resolume worker terminated with error");
             }
@@ -262,6 +289,84 @@ impl ResolumeRegistry {
             ResolumeConnectionSnapshot::disabled()
         }
     }
+}
+
+/// In-flight cross-host perceived-latency accumulator for one slide trigger
+/// (keyed by correlation_id) — #483 logging requirement point 3.
+struct PerceivedAgg {
+    first_seen: Instant,
+    /// max over hosts of (queue_wait + t_total) — the latency the user feels.
+    max_perceived_ms: f64,
+    hosts: usize,
+    slowest_host: String,
+}
+
+/// Background task (one per `with_audit` registry) that owns the repository and:
+/// 1. persists each per-push audit row (`resolume_push_audit`), and
+/// 2. aggregates per-correlation_id perceived latency across all hosts and emits
+///    ONE `presenter::resolume::timing` line per slide (the number felt on the
+///    LED wall), so you don't mentally join the per-host lines (#483).
+fn spawn_audit_writer(repo: Repository, mut rx: mpsc::Receiver<ResolumePushAuditEntry>) {
+    tokio::spawn(async move {
+        let mut pending: HashMap<String, PerceivedAgg> = HashMap::new();
+        let mut sweep = tokio::time::interval(PERCEIVED_SWEEP_INTERVAL);
+        loop {
+            tokio::select! {
+                maybe = rx.recv() => {
+                    match maybe {
+                        Some(entry) => {
+                            if let Err(err) = repo.record_resolume_push_audit(&entry).await {
+                                tracing::warn!(
+                                    ?err,
+                                    host = %entry.host,
+                                    "failed to persist resolume push audit row"
+                                );
+                            }
+                            if let Some(cid) = entry.correlation_id.clone() {
+                                let perceived = entry.t_queue_wait_ms + entry.t_total_ms;
+                                let agg = pending.entry(cid).or_insert_with(|| PerceivedAgg {
+                                    first_seen: Instant::now(),
+                                    max_perceived_ms: 0.0,
+                                    hosts: 0,
+                                    slowest_host: String::new(),
+                                });
+                                if perceived >= agg.max_perceived_ms {
+                                    agg.max_perceived_ms = perceived;
+                                    agg.slowest_host = entry.host.clone();
+                                }
+                                agg.hosts += 1;
+                            }
+                        }
+                        None => break, // all senders dropped → registry gone
+                    }
+                }
+                _ = sweep.tick() => flush_perceived(&mut pending, false),
+            }
+        }
+        flush_perceived(&mut pending, true);
+    });
+}
+
+/// Emit + remove perceived-latency aggregates. When `force` is false, only
+/// entries older than `PERCEIVED_FLUSH_AFTER` are flushed (all hosts have had
+/// time to report); when true, everything is drained (writer shutting down).
+fn flush_perceived(pending: &mut HashMap<String, PerceivedAgg>, force: bool) {
+    let now = Instant::now();
+    pending.retain(|cid, agg| {
+        if force || now.duration_since(agg.first_seen) >= PERCEIVED_FLUSH_AFTER {
+            tracing::info!(
+                target: "presenter::resolume::timing",
+                correlation_id = cid.as_str(),
+                hosts = agg.hosts,
+                perceived_latency_ms = agg.max_perceived_ms,
+                slowest_host = %agg.slowest_host,
+                "resolume perceived latency (max across hosts)"
+            );
+            false
+        } else {
+            true
+        }
+    });
 }
 
 #[derive(Debug, Serialize)]

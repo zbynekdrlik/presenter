@@ -15,6 +15,7 @@ mod m20260517_000002_fix_legacy_ableset_defaults;
 mod m20260616_000001_fix_android_stage_launch_package;
 mod m20260624_000001_default_launch_to_presenter_stage;
 mod m20260625_000001_add_video_sources;
+mod m20260628_000001_create_resolume_push_audit;
 
 pub struct Migrator;
 
@@ -34,6 +35,7 @@ impl MigratorTrait for Migrator {
             Box::new(m20260616_000001_fix_android_stage_launch_package::Migration),
             Box::new(m20260624_000001_default_launch_to_presenter_stage::Migration),
             Box::new(m20260625_000001_add_video_sources::Migration),
+            Box::new(m20260628_000001_create_resolume_push_audit::Migration),
         ]
     }
 }

@@ -372,7 +372,9 @@ impl AppState {
                 .await?;
         }
 
-        let registry = ResolumeRegistry::new()?;
+        // #483: DB-backed registry — host workers persist a per-push audit row
+        // and feed the cross-host perceived-latency log line.
+        let registry = ResolumeRegistry::with_audit(repo.clone())?;
         let android_stage_registry = AndroidStageRegistry::new();
         let osc_bridge = OscBridge::new(&config.osc);
         let ableset_bridge = AbleSetBridge::new();
