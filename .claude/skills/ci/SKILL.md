@@ -89,3 +89,36 @@ A cancelled e2e-ndi caused by overload is a legitimate ONE rerun after cleanup:
 
 Fixed 2026-06-21 (PR #435, issue #439): dedicated `mutation-warm` bootstrap job + 16 shards.
 The gate now passes on normal small PRs. Full-tree catch-up is on-demand via `/mutation-sweep`.
+
+## Quality-Check Gate Landmines (#483 lessons)
+
+The `quality-check.sh --strict --against origin/main` gate (the "Quality Checks" job) hard-fails
+on the **changed-file set only** — but since the #407/#482 `count_prod_lines.sh` fix it now counts
+correctly (past `#[cfg(test)] mod tests;`). Two pre-existing-debt landmines:
+
+- **File-size (>1000 prod lines) + fn-length (>120 lines, tests NOT exempt):** TOUCHING an
+  already-over-cap file/function pulls it into the diff and HARD-FAILS your PR — even if your edit
+  is unrelated. Known offenders: `state/mod.rs` (~1117 prod lines, #486), `resolume/tests.rs`
+  (test fns 168/166 lines, #487). Check before editing: `bash scripts/dev/count_prod_lines.sh <file>`
+  and `QC_TARGETS=<file> python3 scripts/dev/fn_length_check.py .`.
+  **Workaround when you must add code near an offender:** wire through a SMALL sibling file instead
+  of the god-file (e.g. add the call in `state/integrations.rs`, not `state/mod.rs`), and put NEW
+  tests in their OWN file (e.g. `resolume/latency_tests.rs`) so the bloated `tests.rs` stays out of
+  the diff. Then `git diff --name-only origin/main...HEAD` must NOT list the offender.
+
+- **Diff-scoped mutation gate (`cargo mutants --in-diff`, 16 shards, blocking):** mutates only
+  CHANGED lines. Refactoring a function (e.g. extracting `handle_stage` under the 120 cap) marks ALL
+  its lines changed → drags pre-existing EDGE logic into mutation scope. Kill survivors HONESTLY (no
+  `exclude_re` for code that carries behavior):
+  - pure telemetry helpers (`count_clips`, an `as_str`, a `duration_ms(Duration)->f64`) → make
+    `pub(super)` + unit-test the exact output (kills `replace-body` + arithmetic mutants).
+  - side-effect/audit/wiring fns (writer task, `record_*`, `attach_*`) → ONE end-to-end test that
+    asserts the observable effect (a DB row appears) kills all the `-> ()` / `-> Ok(())` no-op mutants.
+  - untestable guards (`if TRIGGER_DELAY.as_millis() > 0` — TRIGGER_DELAY is 0 in test builds) → just
+    DROP the guard (the bare op is a no-op at 0).
+  - log a `Duration` via `?d` instead of `d.as_secs_f64() * 1000.0` to remove arithmetic mutants from
+    a behavioral fn (or route the `* 1000.0` through a tested `duration_ms` helper).
+  - **VERIFY LOCALLY before re-pushing** (CI mutation is ~13 min sharded but a full re-push is ~30 min):
+    `git diff origin/main...HEAD > /tmp/pr.diff && cargo mutants --in-diff /tmp/pr.diff --baseline=skip --test-tool=nextest --jobs 4 -- --all-targets`.
+    Watch `mutants.out/missed.txt` (must stay empty). Local cold-build is slow (~50 min for ~50 mutants)
+    but cheaper than a failed CI cycle. cargo-mutants does NOT mutate `#[cfg(test)]`/`#[test]` code.
