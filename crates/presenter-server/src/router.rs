@@ -237,6 +237,10 @@ pub fn build_router(state: AppState) -> Router {
             "/integrations/audit",
             get(integrations::audit::list_settings_audit),
         )
+        .route(
+            "/integrations/resolume-push-audit",
+            get(integrations::resolume_push_audit::list_resolume_push_audit),
+        )
         .route("/ndi/sources", get(integrations::ndi::discover_ndi_sources))
         .route("/ndi/status", get(integrations::ndi::ndi_status))
         .route(

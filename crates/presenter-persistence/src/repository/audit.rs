@@ -83,12 +83,15 @@ impl Repository {
         Ok(())
     }
 
-    /// #483: most-recent push-audit rows (newest first), optionally scoped to a
-    /// host and/or a `since` cutoff. For post-event latency analysis.
+    /// #483/#489: most-recent push-audit rows (newest first), optionally scoped
+    /// to a host, an `outcome` prefix (e.g. `error` to list every failed push —
+    /// the outcome column is `ok` or `error: <reason>`), and/or a `since` cutoff.
+    /// For post-event latency + failure analysis.
     #[instrument(skip(self))]
     pub async fn list_resolume_push_audit(
         &self,
         host: Option<&str>,
+        outcome: Option<&str>,
         since: Option<chrono::DateTime<chrono::Utc>>,
         limit: u64,
     ) -> anyhow::Result<Vec<ResolumePushAuditEntry>> {
@@ -99,6 +102,11 @@ impl Repository {
             .limit(limit);
         if let Some(h) = host {
             q = q.filter(resolume_push_audit::Column::Host.eq(h));
+        }
+        if let Some(o) = outcome {
+            // Prefix match so `error` matches `error: <reason>` rows while `ok`
+            // matches the plain success rows.
+            q = q.filter(resolume_push_audit::Column::Outcome.starts_with(o));
         }
         if let Some(t) = since {
             let stamp: chrono::DateTime<chrono::FixedOffset> = t.into();
@@ -118,6 +126,56 @@ impl Repository {
                 created_at: m.created_at.into(),
             })
             .collect())
+    }
+
+    /// #489: bound the `resolume_push_audit` table so months of services don't
+    /// grow it without limit. Deletes rows older than `retain`, then — if the
+    /// table is still over `max_rows` — drops the oldest rows beyond that cap
+    /// (newest `max_rows` kept). `max_rows == 0` disables the count cap. Returns
+    /// the number of rows deleted. Idempotent and cheap (indexed on created_at);
+    /// safe to call on a timer and at startup.
+    #[instrument(skip(self))]
+    pub async fn prune_resolume_push_audit(
+        &self,
+        retain: chrono::Duration,
+        max_rows: u64,
+    ) -> anyhow::Result<u64> {
+        use crate::entities::resolume_push_audit;
+        use sea_orm::{PaginatorTrait, QuerySelect};
+
+        let mut deleted = 0u64;
+
+        // Age-based prune: drop everything older than the retention window.
+        let cutoff: chrono::DateTime<chrono::FixedOffset> = (Utc::now() - retain).into();
+        let res = resolume_push_audit::Entity::delete_many()
+            .filter(resolume_push_audit::Column::CreatedAt.lt(cutoff))
+            .exec(&self.db)
+            .await?;
+        deleted += res.rows_affected;
+
+        // Count-cap prune: if still over the cap, delete the oldest rows beyond
+        // the newest `max_rows`. The boundary is the created_at of the first row
+        // that should be dropped (offset `max_rows` in newest-first order).
+        if max_rows > 0 {
+            let total = resolume_push_audit::Entity::find().count(&self.db).await?;
+            if total > max_rows {
+                if let Some(boundary) = resolume_push_audit::Entity::find()
+                    .order_by_desc(resolume_push_audit::Column::CreatedAt)
+                    .offset(max_rows)
+                    .limit(1)
+                    .one(&self.db)
+                    .await?
+                {
+                    let res = resolume_push_audit::Entity::delete_many()
+                        .filter(resolume_push_audit::Column::CreatedAt.lte(boundary.created_at))
+                        .exec(&self.db)
+                        .await?;
+                    deleted += res.rows_affected;
+                }
+            }
+        }
+
+        Ok(deleted)
     }
 
     #[instrument(skip(self))]

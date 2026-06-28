@@ -5,6 +5,7 @@ pub(super) mod ndi;
 pub(super) mod ndi_whep;
 pub(super) mod osc;
 pub(super) mod resolume;
+pub(super) mod resolume_push_audit;
 pub(super) mod video_source;
 
 use axum::http::HeaderMap;
