@@ -45,7 +45,10 @@ test-helpers = ["presenter-ndi/test-helpers"]
 [dev-dependencies]
 axum.workspace = true
 serde_json.workspace = true
-tokio.workspace = true
+# test-util enables tokio's pausable clock (start_paused / advance) used by the
+# #484 backoff window test — no wall-clock sleeping. Additive over the workspace
+# tokio features; only affects the test build.
+tokio = { workspace = true, features = ["test-util"] }
 tower.workspace = true
 presenter-persistence = { path = "../presenter-persistence" }
 wiremock = "0.6"

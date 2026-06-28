@@ -9,13 +9,14 @@
 //! Kept in its own file (self-contained helpers) so it is independent of the
 //! larger `tests.rs` fixtures and does not trip the fn-length cap there.
 
-use super::driver::HostDriver;
+use super::driver::{backoff_interval, should_log_error, HostDriver};
 use super::{ResolumeConnectionSnapshot, StageUpdate, CONNECT_TIMEOUT};
 use chrono::Utc;
 use presenter_core::{ResolumeHost, ResolumeHostId};
 use reqwest::Client;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Arc;
+use std::time::Duration;
 use tokio::sync::RwLock;
 use wiremock::matchers::{method, path};
 use wiremock::{Mock, MockServer, ResponseTemplate};
@@ -153,4 +154,89 @@ async fn down_host_skips_push_attempts_while_in_backoff() {
         1,
         "a down host must attempt once then back off, not re-fetch on every push"
     );
+}
+
+/// #484 (backoff schedule): retry spacing must GROW with consecutive failures
+/// and cap at ~1 attempt per minute, so a persistently-down host stops
+/// hammering. Pure, so the schedule is pinned without sleeping.
+#[test]
+fn backoff_interval_grows_with_failures_and_caps_at_one_per_minute() {
+    assert_eq!(
+        backoff_interval(0),
+        Duration::ZERO,
+        "no backoff when healthy"
+    );
+    assert_eq!(backoff_interval(1), Duration::from_secs(1));
+    assert_eq!(backoff_interval(2), Duration::from_secs(2));
+    assert_eq!(backoff_interval(3), Duration::from_secs(4));
+    assert_eq!(backoff_interval(4), Duration::from_secs(8));
+
+    // Spacing strictly grows over the early failures (the regression: it used
+    // to retry on every push + every 10 s tick, i.e. constant spacing).
+    assert!(backoff_interval(1) < backoff_interval(2));
+    assert!(backoff_interval(2) < backoff_interval(3));
+    assert!(backoff_interval(3) < backoff_interval(4));
+
+    // Caps at ~1/min for a persistently-down host.
+    assert_eq!(backoff_interval(7), Duration::from_secs(60));
+    assert_eq!(backoff_interval(1000), Duration::from_secs(60));
+    assert!(backoff_interval(u32::MAX) <= Duration::from_secs(60));
+}
+
+/// #484 (log dedup schedule): the ERROR log fires on the transition into Error
+/// and then only at power-of-two milestones, so a long down-streak is
+/// logarithmic, not one line per attempt.
+#[test]
+fn should_log_error_logs_on_transition_then_at_widening_milestones() {
+    // The transition (first failure) and power-of-two milestones log.
+    for n in [1, 2, 4, 8, 16, 32, 64, 1024] {
+        assert!(
+            should_log_error(n),
+            "failure #{n} is a milestone and must log"
+        );
+    }
+    // Everything in between is suppressed.
+    for n in [0, 3, 5, 6, 7, 9, 100, 1000] {
+        assert!(!should_log_error(n), "failure #{n} must be suppressed");
+    }
+    // Over a long streak the logged count is logarithmic in the failure count.
+    let logged = (1..=1024).filter(|n| should_log_error(*n)).count();
+    assert_eq!(
+        logged, 11,
+        "1..=1024 → milestones 1,2,4,…,1024 = 11 ERROR lines, not 1024"
+    );
+}
+
+/// #484 (recovery): an error opens the backoff window; it clears once the
+/// interval elapses (so the host can retry) and a successful op clears it
+/// outright (so the host is never permanently stuck). Uses paused tokio time —
+/// no wall-clock sleeping.
+#[tokio::test(start_paused = true)]
+async fn backoff_window_opens_on_error_and_clears_after_the_interval() {
+    let (mut driver, status) = driver_for("127.0.0.1", 65501);
+    assert!(!driver.in_backoff(), "no backoff before any error");
+
+    // First failure → ~1 s window.
+    driver.record_error(anyhow::anyhow!("down"), &status).await;
+    assert!(driver.in_backoff(), "in backoff immediately after an error");
+
+    tokio::time::advance(Duration::from_millis(500)).await;
+    assert!(
+        driver.in_backoff(),
+        "still backing off before the interval elapses"
+    );
+
+    tokio::time::advance(Duration::from_secs(1)).await;
+    assert!(
+        !driver.in_backoff(),
+        "backoff window clears after the interval, allowing a retry"
+    );
+
+    // A successful op clears the window outright.
+    driver
+        .record_error(anyhow::anyhow!("down again"), &status)
+        .await;
+    assert!(driver.in_backoff());
+    driver.mark_connected(&status).await;
+    assert!(!driver.in_backoff(), "recovery clears the backoff window");
 }

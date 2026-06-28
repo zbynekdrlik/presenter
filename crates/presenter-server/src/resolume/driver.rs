@@ -29,6 +29,35 @@ const MAPPING_REFRESH_INTERVAL: Duration = Duration::from_secs(10);
 const RESOLUTION_TTL: Duration = Duration::from_secs(300);
 const COMPOSITION_TIMEOUT: Duration = Duration::from_secs(5);
 pub(super) const ACTION_TIMEOUT: Duration = Duration::from_secs(2);
+/// Spacing before the FIRST retry after a host enters `Error` (#484).
+const BACKOFF_BASE: Duration = Duration::from_secs(1);
+/// Backoff ceiling — a persistently-down host retries at most ~once per minute
+/// instead of on every push + every 10 s mapping tick (#484).
+const BACKOFF_CAP: Duration = Duration::from_secs(60);
+
+/// Minimum spacing before the next retry for a host with `consecutive_failures`
+/// recorded failures (1-based). Exponential (1 s, 2 s, 4 s, …) capped at
+/// `BACKOFF_CAP`, so a down host stops hammering every push + every 10 s tick.
+///
+/// Pure + deterministic so the schedule is unit-tested without sleeping (#484).
+pub(super) fn backoff_interval(consecutive_failures: u32) -> Duration {
+    if consecutive_failures == 0 {
+        return Duration::ZERO;
+    }
+    // 2^(n-1) seconds, saturating, then capped. Shift clamped well under 64.
+    let shift = consecutive_failures.saturating_sub(1).min(32);
+    let secs = BACKOFF_BASE.as_secs().saturating_mul(1u64 << shift);
+    Duration::from_secs(secs).min(BACKOFF_CAP)
+}
+
+/// Whether `record_error` should emit the ERROR-level log line for the failure
+/// with this 1-based `consecutive_failures` count. Logs on the first failure
+/// (the transition into `Error`) and then only at power-of-two milestones, so a
+/// host that fails N times in a row produces ~log2(N)+1 ERROR lines instead of
+/// N — the #484 incident saw 163,943 identical lines from one down host.
+pub(super) fn should_log_error(consecutive_failures: u32) -> bool {
+    consecutive_failures > 0 && consecutive_failures.is_power_of_two()
+}
 
 /// Why `refresh_mapping` ran — logged on every composition fetch so a refetch
 /// storm (e.g. an error loop) is distinguishable from the normal 10 s
@@ -119,7 +148,11 @@ pub(super) async fn run_host_worker(
                 }
             }
             _ = mapping_timer.tick() => {
-                if let Err(err) = driver.refresh_mapping().await {
+                if driver.in_backoff() {
+                    // #484: a down host is in its backoff window — skip this
+                    // 10 s refresh instead of re-attempting (and re-logging).
+                    debug!(host = %driver.config.host, "resolume host in backoff; skipping mapping refresh");
+                } else if let Err(err) = driver.refresh_mapping().await {
                     driver.record_error(err, &status).await;
                 } else {
                     driver.mark_connected(&status).await;
@@ -144,6 +177,11 @@ pub(super) struct HostDriver {
     /// True when the cache was cleared by `record_error` (vs a cold start), so
     /// the next inline fetch is logged as `error-invalidated`, not `missing`.
     pub(super) mapping_cleared_by_error: bool,
+    /// #484: when the next retry is allowed while the host is in `Error`. While
+    /// `Instant::now()` is before this, pushes and the 10 s mapping tick are
+    /// skipped (exponential backoff keyed on `consecutive_failures`). `None`
+    /// when the host is healthy.
+    pub(super) next_retry_at: Option<Instant>,
     pub(super) last_timer_payload: Option<String>,
     pub(super) last_song_name_payload: Option<String>,
     pub(super) last_band_name_payload: Option<String>,
@@ -163,6 +201,7 @@ impl HostDriver {
             endpoint: None,
             last_mapping_refresh: None,
             mapping_cleared_by_error: false,
+            next_retry_at: None,
             last_timer_payload: None,
             last_song_name_payload: None,
             last_band_name_payload: None,
@@ -177,9 +216,16 @@ impl HostDriver {
         self.endpoint = None;
         self.last_mapping_refresh = None;
         self.mapping_cleared_by_error = false;
+        self.next_retry_at = None;
         self.last_timer_payload = None;
         self.last_song_name_payload = None;
         self.last_band_name_payload = None;
+    }
+
+    /// #484: true while the host is within its post-error backoff window — the
+    /// next retry is not yet due, so the worker skips this push / mapping tick.
+    pub(super) fn in_backoff(&self) -> bool {
+        matches!(self.next_retry_at, Some(at) if Instant::now() < at)
     }
 
     pub(super) async fn refresh_status(&self, status: &Arc<RwLock<ResolumeConnectionSnapshot>>) {
@@ -421,15 +467,34 @@ impl HostDriver {
         }
     }
 
-    pub(super) async fn mark_connected(&self, status: &Arc<RwLock<ResolumeConnectionSnapshot>>) {
-        let mut guard = status.write().await;
-        guard.state = ResolumeConnectionState::Connected;
-        let now = Utc::now();
-        guard.last_success = Some(now);
-        guard.last_attempt = Some(now);
-        guard.last_error = None;
-        guard.consecutive_failures = 0;
-        guard.error_since = None;
+    pub(super) async fn mark_connected(
+        &mut self,
+        status: &Arc<RwLock<ResolumeConnectionSnapshot>>,
+    ) {
+        let recovered_from = {
+            let mut guard = status.write().await;
+            let prior_failures = guard.consecutive_failures;
+            let was_in_error = prior_failures > 0 || guard.state == ResolumeConnectionState::Error;
+            guard.state = ResolumeConnectionState::Connected;
+            let now = Utc::now();
+            guard.last_success = Some(now);
+            guard.last_attempt = Some(now);
+            guard.last_error = None;
+            guard.consecutive_failures = 0;
+            guard.error_since = None;
+            was_in_error.then_some(prior_failures)
+        };
+        // #484: clear the backoff window on recovery and log the state change
+        // ONCE (symmetric with the error-transition log), so a recovery is
+        // greppable without per-attempt spam.
+        self.next_retry_at = None;
+        if let Some(prior_failures) = recovered_from {
+            tracing::info!(
+                host = %self.config.host,
+                recovered_after_failures = prior_failures,
+                "resolume host recovered"
+            );
+        }
     }
 
     pub(super) async fn note_latency(
@@ -446,16 +511,45 @@ impl HostDriver {
         err: anyhow::Error,
         status: &Arc<RwLock<ResolumeConnectionSnapshot>>,
     ) {
-        error!(host = %self.config.host, error = ?err, "resolume host error");
-        let mut guard = status.write().await;
-        let now = Utc::now();
-        if guard.state != ResolumeConnectionState::Error {
-            guard.error_since = Some(now);
+        let failures = {
+            let mut guard = status.write().await;
+            let now = Utc::now();
+            if guard.state != ResolumeConnectionState::Error {
+                guard.error_since = Some(now);
+            }
+            guard.state = ResolumeConnectionState::Error;
+            guard.last_error = Some(err.to_string());
+            guard.consecutive_failures = guard.consecutive_failures.saturating_add(1);
+            guard.last_attempt = Some(now);
+            guard.consecutive_failures
+        };
+
+        // #484: open/extend the backoff window so a persistently-down host stops
+        // retrying on every push + every 10 s tick. Spacing grows with the
+        // failure count and caps at ~1/min.
+        self.next_retry_at = Some(Instant::now() + backoff_interval(failures));
+
+        // #484: dedup the ERROR log — emit once on the transition into Error and
+        // then only at widening milestones, so a down host produces O(log N)
+        // lines, not one per attempt (163,943 in the incident). Suppressed
+        // failures keep a DEBUG trace so the detail isn't lost.
+        if should_log_error(failures) {
+            error!(
+                host = %self.config.host,
+                consecutive_failures = failures,
+                error = ?err,
+                "resolume host error"
+            );
+        } else {
+            debug!(
+                target: "presenter::resolume",
+                host = %self.config.host,
+                consecutive_failures = failures,
+                error = ?err,
+                "resolume host error (suppressed; backing off)"
+            );
         }
-        guard.state = ResolumeConnectionState::Error;
-        guard.last_error = Some(err.to_string());
-        guard.consecutive_failures += 1;
-        guard.last_attempt = Some(now);
+
         // #267: preserve last_timer_payload, last_song_name_payload,
         // last_band_name_payload across transient errors. They will only
         // be reset when refresh_mapping detects a real param-ID change.
