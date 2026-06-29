@@ -91,6 +91,36 @@ To validate a stage/UI change with the real Playwright specs before pushing
    /playlists`, `PUT /playlists/{id}/entries`, `POST /stage/state {presentationId,
    currentSlideId, playlistId}` (returns 204) → the matching playlist entry goes
    `is_active`. Each spec starts its own server via `startTestServer()`.
+5. Read content INSIDE the operator's embedded stage preview iframe (#460) with
+   `page.frameLocator("iframe.operator__stage-iframe").locator("<sel>")`. The
+   stage's own selectors work: `.stage__current-slide .stage__slide-text` for the
+   current line (valid in worship-snv AND api layouts — `ApiStage` wraps
+   `WorshipSnv`), `.stage__bible-text`/`.stage__bible-reference` for a triggered
+   verse (set `POST /stage/layout {code:"bible"}` first so the mirror renders it).
+
+### GOTCHA — Playwright `page.on("console")` ALSO captures IFRAME console (#460)
+
+The operator header now embeds `<iframe src="/stage?preview=1">` on EVERY operator
+page. Playwright's `page.on("console")` fires for the page AND all its child frames,
+so anything the embedded `/stage` logs lands in the operator's console listener and
+breaks every `expect(consoleMessages).toEqual([])` operator spec. The real stage
+emits the `crbug.com/981419` wake-lock permissions warning in headless — so the
+stage page SKIPS `start_wake_lock_guard()` in preview mode (`?preview=1`,
+`stage.rs`). When embedding any page-in-page, gate its heavy/noisy side-effects
+(wake lock, self-reload watchdogs, beacons) behind a preview flag, or the parent's
+console-zero assertions fail.
+
+### Stage-monitor count must EXCLUDE preview clients (#460)
+
+Stage WS clients register in `StageConnections` by SENDING an inbound
+`StagePresence` over `/live/ws` (driven client-side in `ws/stage.rs`), NOT by the
+WS upgrade. The preview iframe is one more `/stage` WS client, so it would inflate
+the operator's "N stage displays connected" count. Fix: it tags its socket
+`/live/ws?surface=stage&preview=1` (`ws_url()` appends it when
+`utils::window::url_flag_enabled("preview")`); the server (`router.rs` →
+`live.rs::serve_websocket(preview)`) skips `connections.register(...)` for preview
+sockets while still forwarding every live event. To embed another live stage view
+without polluting the count, reuse `?preview=1`.
 
 ## PP location (companion-pp.lan) — release + manual recovery
 

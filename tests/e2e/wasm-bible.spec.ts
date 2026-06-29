@@ -1632,80 +1632,96 @@ test.describe("WASM Operator Bible Tests", () => {
     const worshipPreview = page.locator('[data-role="worship-preview"]');
     await expect(worshipPreview).toBeHidden();
 
-    // Put the stage (and thus the mirror iframe) into the Bible layout so the
-    // triggered verse renders in it.
-    await page.evaluate(async (url: string) => {
-      await fetch(`${url}/stage/layout`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ code: "bible" }),
-      });
-    }, baseURL);
+    const setLayout = (code: string) =>
+      page.evaluate(
+        async ([url, c]: string[]) => {
+          await fetch(`${url}/stage/layout`, {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ code: c }),
+          });
+        },
+        [baseURL, code],
+      );
 
-    // Load a passage and trigger the first slide via the operator UI.
-    const firstBook = page.locator('[data-role="book-item"]').first();
-    await firstBook.click();
-    await page.locator('[data-role="load-button"]').click();
-
-    await page.waitForFunction(
-      () => document.querySelectorAll('[data-role="slide-card"]').length > 0,
-      { timeout: 15_000 },
-    );
-
-    const firstTrigger = page
-      .locator('[data-role="slide-trigger-zone"]')
-      .first();
-    await firstTrigger.click();
-
-    // Wait for success toast.
-    await page.waitForFunction(
-      () => {
-        const toast = document.querySelector('[data-role="toast"]');
-        return toast && toast.textContent?.includes("Triggered");
-      },
-      { timeout: 5_000 },
-    );
-
-    // The verse text + reference must appear INSIDE the preview iframe — the
-    // real stage render, mirrored live into the header.
     const frame = page.frameLocator("iframe.operator__stage-iframe");
-    const bibleText = frame.locator(".stage__bible-text");
-    await expect(bibleText).toBeVisible({ timeout: 10_000 });
-    const textContent = await bibleText.textContent();
-    expect(textContent).toBeTruthy();
-    expect(textContent!.length).toBeGreaterThan(0);
 
-    const bibleRef = frame.locator(".stage__bible-reference");
-    await expect(bibleRef).toBeVisible();
-    expect(await bibleRef.textContent()).toBeTruthy();
+    // The mutation below leaves the SHARED test server in the "bible" layout;
+    // the try/finally guarantees the reset to worship-snv runs even if an
+    // assertion throws, so a failure here can't cascade into later tests on the
+    // same server (workers:1, no per-test reset).
+    try {
+      // Put the stage (and thus the mirror iframe) into the Bible layout so the
+      // triggered verse renders in it.
+      await setLayout("bible");
 
-    // Clearing the broadcast hides the verse in the mirror (waiting state).
-    await clearBroadcast();
-    await expect(frame.locator(".stage__bible-waiting")).toBeVisible({
-      timeout: 10_000,
-    });
-
-    // Switch to worship view — the worship-only toggles show again; the live
-    // preview iframe stays present (it mirrors the stage in every view).
-    const worshipButton = page.locator(
-      '[data-role="view-toggle"][data-view="worship"]',
-    );
-    await worshipButton.click();
-    await page.waitForFunction(
-      () => document.body.getAttribute("data-view") === "worship",
-      { timeout: 5_000 },
-    );
-    await expect(worshipPreview).toBeVisible();
-    await expect(previewIframe).toBeVisible();
-
-    // Reset the stage layout for the next test.
-    await page.evaluate(async (url: string) => {
-      await fetch(`${url}/stage/layout`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ code: "worship-snv" }),
+      // Gate on the embedded /stage app actually being up before reading its
+      // content — it is an independent second WASM app whose boot + WS-connect
+      // budget is ~30s (see wasm-stage.spec.ts), so don't read content against
+      // an unmounted frame.
+      await expect(frame.locator(".stage-container")).toBeVisible({
+        timeout: 30_000,
       });
-    }, baseURL);
+
+      // Load a passage and trigger the first slide via the operator UI.
+      const firstBook = page.locator('[data-role="book-item"]').first();
+      await firstBook.click();
+      await page.locator('[data-role="load-button"]').click();
+
+      await page.waitForFunction(
+        () => document.querySelectorAll('[data-role="slide-card"]').length > 0,
+        { timeout: 15_000 },
+      );
+
+      const firstTrigger = page
+        .locator('[data-role="slide-trigger-zone"]')
+        .first();
+      await firstTrigger.click();
+
+      // Wait for success toast.
+      await page.waitForFunction(
+        () => {
+          const toast = document.querySelector('[data-role="toast"]');
+          return toast && toast.textContent?.includes("Triggered");
+        },
+        { timeout: 5_000 },
+      );
+
+      // The verse text + reference must appear INSIDE the preview iframe — the
+      // real stage render, mirrored live into the header.
+      const bibleText = frame.locator(".stage__bible-text");
+      await expect(bibleText).toBeVisible({ timeout: 15_000 });
+      const textContent = await bibleText.textContent();
+      expect(textContent).toBeTruthy();
+      expect(textContent!.length).toBeGreaterThan(0);
+
+      const bibleRef = frame.locator(".stage__bible-reference");
+      await expect(bibleRef).toBeVisible();
+      expect(await bibleRef.textContent()).toBeTruthy();
+
+      // Clearing the broadcast hides the verse in the mirror (waiting state).
+      await clearBroadcast();
+      await expect(frame.locator(".stage__bible-waiting")).toBeVisible({
+        timeout: 15_000,
+      });
+
+      // Switch to worship view — the worship-only toggles show again; the live
+      // preview iframe stays present (it mirrors the stage in every view).
+      const worshipButton = page.locator(
+        '[data-role="view-toggle"][data-view="worship"]',
+      );
+      await worshipButton.click();
+      await page.waitForFunction(
+        () => document.body.getAttribute("data-view") === "worship",
+        { timeout: 5_000 },
+      );
+      await expect(worshipPreview).toBeVisible();
+      await expect(previewIframe).toBeVisible();
+    } finally {
+      // Always restore the shared server's layout for the following tests.
+      await clearBroadcast();
+      await setLayout("worship-snv");
+    }
   });
 
   test("trigger button in edit mode sends current (edited) text to stage", async ({

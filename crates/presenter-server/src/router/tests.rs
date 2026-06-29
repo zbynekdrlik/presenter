@@ -2517,16 +2517,12 @@ async fn live_ws_preview_client_is_excluded_from_stage_count() {
         .to_string()
     };
 
-    // Real stage TV — preview off → must register.
-    let real_id = uuid::Uuid::new_v4().to_string();
-    let real_url = format!("ws://{addr}/live/ws?surface=stage");
-    let (mut real_ws, _) = tokio_tungstenite::connect_async(&real_url).await.unwrap();
-    real_ws
-        .send(WsMessage::Text(send_presence(&real_id).into()))
-        .await
-        .unwrap();
-
-    // Preview mirror — preview on → must NOT register.
+    // Preview mirror — preview on → must NOT register. Connect + send its
+    // presence FIRST so it has the head start: under the guard-removal mutant
+    // (always register) it would register at ~T0, well before the real client
+    // below, so the final snapshot reliably catches it (snapshot.len()==2) and
+    // the mutant dies. Sending it LAST would be the worst case — the mutant's
+    // late registration could miss the snapshot and survive.
     let preview_id = uuid::Uuid::new_v4().to_string();
     let preview_url = format!("ws://{addr}/live/ws?surface=stage&preview=1");
     let (mut preview_ws, _) = tokio_tungstenite::connect_async(&preview_url)
@@ -2537,8 +2533,20 @@ async fn live_ws_preview_client_is_excluded_from_stage_count() {
         .await
         .unwrap();
 
-    // Wait until the REAL client registers (proves both presence messages have
-    // had time to be handled), then assert the preview client never did.
+    // Real stage TV — preview off → must register. Connected + sent AFTER the
+    // preview, so once it registers the preview's (earlier) presence has had
+    // strictly more time to be handled — a sound happens-before barrier.
+    let real_id = uuid::Uuid::new_v4().to_string();
+    let real_url = format!("ws://{addr}/live/ws?surface=stage");
+    let (mut real_ws, _) = tokio_tungstenite::connect_async(&real_url).await.unwrap();
+    real_ws
+        .send(WsMessage::Text(send_presence(&real_id).into()))
+        .await
+        .unwrap();
+
+    // Wait until the REAL client registers (the barrier: the preview presence was
+    // sent earlier, so by now it too has been handled), then assert the preview
+    // client never registered.
     let mut real_registered = false;
     for _ in 0..300 {
         let snapshot = connections.snapshot().await;
