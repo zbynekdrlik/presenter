@@ -359,6 +359,12 @@ jobs:
           # count (count_prod_lines.sh) sees the full size and FAILS if the
           # undercount regresses.
           bash tests/ci/file-size-gate.test.sh
+          # Regression guard for #445: the e2e-ndi GPU/NVENC preflight must FAIL
+          # on a wedged dev2 GPU (nvh264enc gone / 100%-util + no-process +
+          # tiny-mem signature) and PASS on a healthy GPU, with a stale-dmesg
+          # false-positive guard. Proves the detection logic with mock
+          # wedged-vs-healthy facts (no real GPU needed on the hosted runner).
+          bash tests/ci/gpu-preflight.test.sh
 
   # ============================================
   # Quality Checks
@@ -718,6 +724,13 @@ jobs:
           # Give NDI discovery a moment to advertise the source.
           sleep 5
           cat /tmp/ndi_test_sender.log || true
+
+      - name: GPU / NVENC preflight (#445)
+        # Fail FAST with an actionable message if the shared dev2 GPU is wedged
+        # (nvh264enc gone / NV_ERR_RESET_REQUIRED), instead of letting all 6 NDI
+        # tests fail opaquely on `build encoder (nvh264enc)` 500s. Detection
+        # logic is unit-tested in tests/ci/gpu-preflight.test.sh.
+        run: bash scripts/ci/gpu-preflight.sh
 
       - name: Run NDI WebRTC E2E (real frames)
         # Exclude @latency-ndi — the glass-to-glass latency assertion is
