@@ -65,6 +65,33 @@ OFF). So:
   workspace (own `Cargo.lock`, version `0.1.x`): `cargo <cmd> -p presenter-ui` from
   root fails — run from `crates/presenter-ui/`.
 
+## Running Playwright E2E locally (#461)
+
+To validate a stage/UI change with the real Playwright specs before pushing
+(saves a ~45-min CI cycle):
+
+1. **Rebuild the server after ANY WASM change.** The server embeds `dist/` at
+   compile time, so `bash scripts/build-ui.sh` ALONE is not enough — the running
+   binary still has the OLD WASM. Order: `build-ui.sh` → rebuild the server →
+   run E2E. Skipping the server rebuild silently tests stale WASM.
+2. **Build the test server WITH the E2E feature flags** (CI uses these):
+   `cargo build --release -p presenter-server -p presenter-importer --features
+   presenter-server/mock-integrations,presenter-server/test-helpers`.
+   `startTestServer` picks the NEWER of `target/{debug,release}/presenter-server`.
+3. **Free the fixed mock-resolume port 8091 first.** `mock-integrations` binds a
+   HARD-CODED `127.0.0.1:8091` (`mock_integrations/resolume.rs`), and the deployed
+   `presenter-dev.service` already holds 8091 — so a local E2E run dies on
+   `mock-resolume failed to bind 127.0.0.1:8091 Address already in use` /
+   `beforeAll hook timeout`. Fix: `sudo systemctl stop presenter-dev` → run the
+   spec → `sudo systemctl start presenter-dev` (stopping the app you're testing
+   is in-scope; restart right after). Run with `--workers=1` (specs serialize on
+   the fixed ports).
+   `npx playwright test <spec> -g "<title>" --reporter=line --workers=1`
+4. Stage specs seed via the HTTP API: `POST /stage/layout {code}`, `POST
+   /playlists`, `PUT /playlists/{id}/entries`, `POST /stage/state {presentationId,
+   currentSlideId, playlistId}` (returns 204) → the matching playlist entry goes
+   `is_active`. Each spec starts its own server via `startTestServer()`.
+
 ## PP location (companion-pp.lan) — release + manual recovery
 
 PP is upgraded via a **GitHub Release** (`gh release create vX.Y.Z --target main --generate-notes`, X.Y.Z = current main version) → `release.yml` builds + `deploy-pp` SSH-deploys. SSH from dev2: `newlevel@companion-pp.lan` (creds in memory `project-pp-location-upgrade`; no `sqlite3` CLI on the box — use `python3 -c "import sqlite3; ..."`).
