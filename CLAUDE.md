@@ -126,11 +126,21 @@ sudo ./svc.sh install && sudo ./svc.sh start
 | `security-schedule.yml` | Weekly (Sunday) + manual   | Scheduled vulnerability scanning                          |
 | `import-data.yml`       | Manual (workflow_dispatch) | Re-import ProPresenter/Bible data                         |
 | `mutation-full.yml`     | Manual (workflow_dispatch) | On-demand full-tree mutation sweep (`/mutation-sweep`)    |
+| `ndi-latency.yml`       | Manual (workflow_dispatch) | On-demand NDI glass-to-glass latency guard on a quiet box (#386) |
 | `pr-labeler.yml`        | PR opened/edited           | Auto-label PRs by changed paths                           |
 
 **Pipeline dependency chain:** `branch-sync → [fmt, clippy, companion, version-check, security] → [test, quality] → coverage → build → e2e → deploy-dev`
 
 Deploy-dev **cannot run** unless every check, test, build, and E2E job succeeds.
+
+**NDI E2E split (load-sensitivity, #386):** The per-PR `e2e-ndi` lane runs the load-INSENSITIVE
+NDI guards (decode / freeze / console / straggler / reactivate / reload in
+`ndi-webrtc-synthetic.spec.ts`) — PRs still fail if NDI video is actually broken. The
+load-SENSITIVE glass-to-glass latency assertion (`ndi-latency.spec.ts`, tag `@latency-ndi`) is
+NOT in the per-PR pipeline: on the shared dev2 runner, concurrent CPU load (another project's
+cargo-mutants / rebuilds) starves the in-browser sampling loop + GPU encoder and false-reds the
+timing bound. Its bounds are unchanged — it runs on-demand on a quiet box via `ndi-latency.yml`
+(same pattern as the #488 mutation full-sweep). Run it after NDI/WebRTC pipeline changes.
 
 ---
 

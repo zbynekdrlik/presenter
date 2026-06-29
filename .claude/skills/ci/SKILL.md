@@ -85,6 +85,39 @@ or unrelated python http servers (e.g. n8n docs :8099).
 A cancelled e2e-ndi caused by overload is a legitimate ONE rerun after cleanup:
 `gh run rerun <id> --failed`.
 
+## NDI E2E Lane Split — load-sensitive latency is on-demand (#386)
+
+The `e2e-ndi` self-hosted lane is REQUIRED on every PR but split by load-sensitivity:
+
+- **Per-PR `e2e-ndi` lane** runs the load-INSENSITIVE NDI guards (decode / freeze / console /
+  straggler / reactivate / reload) in `ndi-webrtc-synthetic.spec.ts`. A PR still fails if NDI video
+  is actually broken. Selector: `--grep "@synthetic-ndi" --grep-invert "@latency-ndi" --project chrome-video`.
+- **On-demand `ndi-latency.yml`** (`workflow_dispatch`) runs the load-SENSITIVE glass-to-glass
+  latency assertion (`ndi-latency.spec.ts`, tag `@latency-ndi`: median ≤350ms / p95 ≤600ms /
+  ≥300 samples / freeze <1s). It builds release binaries fresh + starts `ndi_test_sender`, same
+  self-hosted setup as the per-PR lane. Selector: `--grep "@latency-ndi" --project chrome-video`.
+
+**Why:** the latency assert is a timing measurement; concurrent CPU load on the shared dev2 runner
+(bakerion cargo-mutants / rebuilds) starves the in-browser rVFC sampling loop + GPU encoder → median
+crosses the bound on otherwise-healthy code (issue #386 had median 161-168ms quiet vs 394ms under
+load against the 350 cap). Bounds are NOT loosened and the test is NOT skipped — it just runs where
+load can't corrupt the measurement. Same on-demand pattern as the #488 mutation full-sweep.
+
+**Tag scheme:** `@synthetic-ndi` keeps the GitHub-hosted `e2e` job excluding the NDI tests (no SDK
+there); `@video-codec` routes to the real-Chrome (H.264) `chrome-video` Playwright project;
+`@latency-ndi` moves the latency test OUT of the per-PR lane and INTO `ndi-latency.yml`. Playwright
+ANDs the project's own `grep` with the CLI `--grep`/`--grep-invert`. **Run `ndi-latency.yml` after any
+NDI/WebRTC pipeline change** (encoder, downscale, fanout, WHEP) — it is the strict latency guard.
+
+Run it: `gh workflow run ndi-latency.yml --ref dev` (then `gh run watch <id>` on a quiet box), or the
+Actions tab → "NDI Glass-to-Glass Latency (on-demand)" → Run workflow.
+
+**Local latency check (quiet box):** `cargo build -p presenter-ndi --features test-helpers --bin
+ndi_test_sender && PRESENTER_NDI_TEST_NAME=PRESENTER-TEST ./target/debug/ndi_test_sender &` then
+`NDI_RUNTIME_DIR_V6=/usr/lib/ndi PRESENTER_SKIP_MOCK_INTEGRATIONS=1 npx playwright test --grep
+"@latency-ndi" --project chrome-video --reporter=line` (needs `/usr/bin/google-chrome` for H.264 —
+bundled Chromium has none).
+
 ## Mutation Gate
 
 **Removed from the per-PR pipeline (#488, 2026-06-28).** Mutation testing no longer runs on every

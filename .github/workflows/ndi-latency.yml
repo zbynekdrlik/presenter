@@ -1,0 +1,115 @@
+name: NDI Glass-to-Glass Latency (on-demand)
+
+# On-demand glass-to-glass latency guard for the NDI→WebRTC path (#386).
+#
+# The strict latency assertion (ndi-latency.spec.ts: median ≤350ms / p95 ≤600ms
+# / ≥300 decoded samples / freeze <1s) is a TIMING measurement and is sensitive
+# to CPU load on the shared dev2 self-hosted runner: when another project's
+# heavy job (cargo-mutants, full rebuilds) competes for the box, the in-browser
+# requestVideoFrameCallback sampling loop + the GPU H264 encoder starve and the
+# measured latency exceeds the bound — a false red on good code, NOT a latency
+# regression. So it is DELIBERATELY workflow_dispatch ONLY (never push / PR):
+# fire it when the runner is QUIET (the user's call, same pattern as the #488
+# mutation full-sweep in mutation-full.yml). The per-PR `e2e-ndi` lane keeps the
+# load-INSENSITIVE NDI guards (decode/freeze/console) and excludes this test via
+# `--grep-invert "@latency-ndi"`.
+#
+# The bounds are NOT loosened and the test is NOT skipped — it stays a real
+# guard that fails hard on a genuine latency regression; it just runs where
+# concurrent load cannot corrupt the measurement.
+#
+# Self-hosted because it needs the NDI SDK + NVENC GPU encoder + branded Chrome
+# (H.264) + a real NDI source on the LAN — none of which the GitHub-hosted
+# runners have.
+on:
+  workflow_dispatch:
+
+concurrency:
+  group: ndi-latency
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+jobs:
+  ndi-latency:
+    name: NDI glass-to-glass latency (synthetic, self-hosted)
+    runs-on: self-hosted
+    timeout-minutes: 45
+    env:
+      # gst-plugin-ndi (server) and ndi_test_sender locate libndi via this var;
+      # /usr/lib/ndi is the SDK install on the dev2 runner (not on the default
+      # linker path).
+      NDI_RUNTIME_DIR_V6: /usr/lib/ndi
+    steps:
+      - uses: actions/checkout@v4
+
+      # Build fresh (this lane is standalone — there is no `build` job to
+      # download artifacts from). The latency server MUST be a RELEASE build:
+      # an unoptimized debug binary would inflate latency and false-fail. The
+      # importer bins (import_propresenter / ingest_bibles) are built release
+      # too so refresh-dev-data.sh (the spec's beforeAll) uses prebuilt binaries
+      # instead of a cold `cargo run` that would time out the 180s hook.
+      - name: Build presenter-server + importer (release)
+        run: cargo build --release -p presenter-server -p presenter-importer
+
+      # The synthetic NDI sender that bakes the pixel clock strip the test
+      # decodes. Built debug with the `test-helpers` feature, same as the per-PR
+      # e2e-ndi lane.
+      - name: Build synthetic NDI sender (test-helpers)
+        run: cargo build -p presenter-ndi --features test-helpers --bin ndi_test_sender
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: "npm"
+
+      - name: Install npm dependencies
+        run: npm ci
+
+      - name: Install Playwright (branded Chrome for H.264)
+        run: npx playwright install --with-deps chromium chrome
+
+      - name: Start synthetic NDI sender
+        # Publishes "<host> (PRESENTER-TEST)" on the LAN so the test (and the
+        # presenter test-server it spawns) can discover + consume it. Runs in
+        # the background; stopped in the cleanup step below.
+        run: |
+          PRESENTER_NDI_TEST_NAME="PRESENTER-TEST" nohup ./target/debug/ndi_test_sender > /tmp/ndi_test_sender_latency.log 2>&1 &
+          echo $! > /tmp/ndi_test_sender_latency.pid
+          # Give NDI discovery a moment to advertise the source.
+          sleep 5
+          cat /tmp/ndi_test_sender_latency.log || true
+
+      - name: Run NDI glass-to-glass latency test
+        run: npx playwright test --grep "@latency-ndi" --project chrome-video --reporter=line
+        env:
+          CI: true
+          # Skip mock integrations (OSC/AbleSet/Resolume) in the spawned test
+          # server — their FIXED localhost ports collide with the deployed
+          # presenter-dev service already running on this self-hosted runner.
+          # The latency test doesn't use those mocks.
+          PRESENTER_SKIP_MOCK_INTEGRATIONS: "1"
+          PRESENTER_LIBRARY_ROOT: ${{ github.workspace }}/data/libraries
+          PRESENTER_BIBLE_KJV: ${{ github.workspace }}/data/bibles/kjv.usfm.zip
+          PRESENTER_BIBLE_SEB: ${{ github.workspace }}/data/bibles/seb.bbl.mybible.zip
+          PRESENTER_BIBLE_ROHACEK: ${{ github.workspace }}/data/bibles/rohacek.bbl.mybible.zip
+          PRESENTER_BIBLE_SEVP: ${{ github.workspace }}/data/bibles/sevp.obohu.mybible.zip
+          PRESENTER_BIBLE_MILOST: ${{ github.workspace }}/data/bibles/milost.bbl.mybible.zip
+
+      - name: Stop synthetic NDI sender
+        if: always()
+        run: |
+          if [ -f /tmp/ndi_test_sender_latency.pid ]; then
+            kill "$(cat /tmp/ndi_test_sender_latency.pid)" 2>/dev/null || true
+            rm -f /tmp/ndi_test_sender_latency.pid
+          fi
+
+      - name: Upload test traces
+        uses: actions/upload-artifact@v4
+        if: failure()
+        with:
+          name: playwright-traces-ndi-latency-${{ github.run_id }}
+          path: test-results/
+          retention-days: 7
