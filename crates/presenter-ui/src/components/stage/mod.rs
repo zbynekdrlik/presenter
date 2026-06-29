@@ -6,6 +6,7 @@ mod ndi_beacon;
 mod ndi_frame_stats;
 pub mod ndi_fullscreen;
 mod ndi_health_ticker;
+mod ndi_ice;
 mod ndi_profile;
 mod ndi_reload_guard;
 pub mod ndi_video;

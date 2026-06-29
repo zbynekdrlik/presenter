@@ -56,6 +56,12 @@ Environment=PRESENTER_ANDROID_STAGE_URL=http://10.77.9.205/stage
 # own app (so the stage runs on every Android TV without a kiosk browser).
 Environment=PRESENTER_ANDROID_STAGE_APK=/opt/presenter/presenter-stage.apk
 Environment=RUST_LOG=info,tower_http=debug
+# #502: Cloudflare Realtime TURN credentials. Kept OUT of this committed unit
+# (secret) — the deploy writes a 0600 root-only EnvironmentFile. Leading `-`
+# makes it optional: absent → TURN disabled (LAN-only), service still starts.
+# EnvironmentFile values are NOT exposed by `systemctl show` (unlike inline
+# Environment=), so the long-lived TURN key is not readable by local users.
+EnvironmentFile=-/etc/presenter/turn.env
 
 # Security hardening - allow binding to port 80
 AmbientCapabilities=CAP_NET_BIND_SERVICE

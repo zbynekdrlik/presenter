@@ -134,11 +134,27 @@ pub fn NdiVideo(source_id: String, #[prop(optional)] class: Option<&'static str>
             // healthy (see should_reset_backoff).
             let backoff_step: BackoffStep = std::rc::Rc::new(std::cell::Cell::new(0));
 
+            // #502: fetch the Cloudflare TURN ICE servers for this page and
+            // reuse them across reconnects (no re-mint per reconnect). The minted
+            // credential has a 24h TTL, so on a long-lived stage display refresh
+            // it when stale (>6h) at the top of a reconnect — otherwise a
+            // reconnect after the credential expires would relay-fail (black)
+            // until the #401 page reload. None (TURN unconfigured / fetch failed)
+            // → default config = today's LAN-only behavior; no point re-fetching
+            // a None (TURN is off), so refresh only when we already have some.
+            const ICE_REFRESH_MS: f64 = 6.0 * 60.0 * 60.0 * 1000.0;
+            let mut ice_servers = super::ndi_ice::fetch_ice_servers().await;
+            let mut ice_fetched_at = now_ms();
+
             loop {
                 if cancelled.load(Ordering::Acquire) {
                     return;
                 }
-                match connect_whep(&video, &source_id).await {
+                if ice_servers.is_some() && now_ms() - ice_fetched_at > ICE_REFRESH_MS {
+                    ice_servers = super::ndi_ice::fetch_ice_servers().await;
+                    ice_fetched_at = now_ms();
+                }
+                match connect_whep(&video, &source_id, &ice_servers).await {
                     // #431: source configured but not producing yet (server
                     // replied 204). NOT an error — show the placeholder (no
                     // srcObject is set) and back off quietly, with NO console
@@ -470,12 +486,17 @@ enum ConnectOutcome {
 async fn connect_whep(
     video: &HtmlVideoElement,
     source_id: &str,
+    ice_servers: &Option<JsValue>,
 ) -> Result<ConnectOutcome, JsValue> {
     // Default RTCPeerConnection config (no explicit bundle-policy). A plain
     // default-bundle client is proven to decode this server's stream in CI
     // (e2e check 1). Forcing max-bundle here was a REGRESSION — CI showed the
     // max-bundle client received ZERO frames (#372). Keep the browser default.
     let cfg = RtcConfiguration::new();
+    // #502: set the Cloudflare TURN ICE servers (when configured) so a relay
+    // candidate exists when the direct LAN path is unreachable (Tailscale /
+    // remote). iceTransportPolicy stays default (`all`) — direct wins on LAN.
+    super::ndi_ice::apply_ice_servers(&cfg, ice_servers);
     let pc = RtcPeerConnection::new_with_configuration(&cfg)?;
 
     let video_init = RtcRtpTransceiverInit::new();

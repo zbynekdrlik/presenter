@@ -97,7 +97,8 @@ impl NdiManager {
                 id: None,
                 body,
                 profile,
-            } => self.whep_post(source_id, body, profile).await,
+                turn_server,
+            } => self.whep_post(source_id, body, profile, turn_server).await,
             WhepOp::Post { id: Some(_), .. } => self.whep_reoffer(source_id).await,
             WhepOp::Patch {
                 id,
@@ -128,9 +129,10 @@ impl NdiManager {
         source_id: &str,
         body: Vec<u8>,
         profile: StreamProfile,
+        turn_server: Option<String>,
     ) -> Result<WhepReply> {
         let pipeline = self.streaming_pipeline(source_id).await?;
-        let answer = pipeline.add_consumer(body, profile).await?;
+        let answer = pipeline.add_consumer(body, profile, turn_server).await?;
         let location = format!("/ndi/whep/{source_id}/{}", answer.session_id);
         tracing::info!(
             source_id = %source_id,
