@@ -156,3 +156,43 @@ ABSENT — do NOT treat its absence as a regression when post-deploy-verifying a
 To see it live, switch the stage to an NDI layout (`ndi_fullscreen`/`worship_snv`/`api_stage`)
 with an active stream; otherwise its behavior is proven by the green NDI WebRTC E2E + the
 `status_bar` Playwright spec on the deployed tree.
+
+### Surfacing a per-frame signal to a StageContext UI signal (#479, #500)
+
+To drive any UI state from "is video actually presenting / what is its rVFC metadata", REUSE the
+setter-threading pattern — do NOT re-derive it:
+
+1. Add an `RwSignal<…>` to `StageContext` (owned by `StagePage`, so it survives `NdiVideo`
+   mount/unmount; safe to clear from `on_cleanup`).
+2. In `NdiVideo`, build a `Rc<dyn Fn(…)>` setter from that signal (`VideoLatencySetter` /
+   `FramesLiveSetter` in `ndi_frame_stats.rs`) and thread it through `Watchdog::install` into
+   `start_rvfc_frame_observer` (per presented frame) AND, if it must also react to STALLS,
+   `start_health_ticker` (the 1s tick is the ONLY place that can mark "no longer flowing", and the
+   `approximate_frame_from_current_time` proxy is the rVFC-less browsers' frame signal — wire BOTH).
+3. Transition-guard the reactive write with a per-session `Cell` on `FrameStats` (rVFC fires ~30×/s
+   — write the signal only on the false→true / true→false edge, never every frame).
+4. `Watchdog::install` already has `#[allow(clippy::too_many_arguments)]`; `start_rvfc_frame_observer`
+   needs it too once you add a setter (it hits 8 args). Clone the setter to share it across the rVFC
+   observer + the ticker (`Option<Rc<…>>` is Clone).
+5. Reset the signal on `NdiVideo` `on_cleanup` AND in `pages/stage.rs` on `NdiSourceDeactivated` /
+   `NdiSourceActivated` / `sync_ndi_source_state` (no-source + changed-source) so it never carries a
+   stale value across a source change.
+
+**#500 cover gate:** the ndi-fullscreen neutral covering placeholder (`stage-ndi__placeholder--cover`)
+is gated on `should_show_neutral_cover(ndi_active, status, frames_live)` = `ndi_active &&
+ndi_overlay_kind(status)==Neutral && !frames_live`. ONLY `ndi_fullscreen.rs` has this cover —
+`api_stage.rs` / `timer_layout.rs` draw NDI as a BACKGROUND and render NOTHING for a neutral state
+(only their red Error overlay), so there is no cover to gate there. The Error overlay is a separate,
+unchanged gate (a failed source has no frames → errors still show).
+
+### Deterministic stage-NDI E2E on the GH-hosted (no-NDI/GPU) lane
+
+The GitHub-hosted `e2e` lane has NO NDI SDK, so `POST /integrations/video-sources` +
+`…/{id}/activate` SUCCEEDS without starting a pipeline and the client holds the neutral
+`connecting`/`no-signal` state — exactly the late-join / not-producing UI state, with NO live source
+needed (the `ndi-webrtc.spec.ts` #448 cover test + `stage-ndi-frames-live-cover.spec.ts` #500 test
+both rely on this). To drive a WASM-internal signal a server WS event can't reach deterministically,
+expose a `__presenterStageSet*` global in `pages/stage.rs` (mirror `__presenterStageSetVideoLatency`
+/ `__presenterStageSetNdiFramesLive`) and call it from the spec — these globals are always compiled
+(not feature-gated) and never called in production. Allow-list the expected 503/204 WHEP-backoff
+console lines (TIGHT regexes) so console-zero still catches real errors.
