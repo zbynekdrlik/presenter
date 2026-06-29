@@ -16,6 +16,13 @@ pub struct StageContext {
     pub ndi_active: RwSignal<bool>,
     pub ndi_active_source_id: RwSignal<Option<String>>,
     pub ndi_status: RwSignal<String>,
+    /// Stage-side VIDEO latency in ms (#479): the received→displayed decode+
+    /// present lag of the NDI/WHEP video, derived per-frame from rVFC metadata
+    /// by `NdiVideo`'s frame observer and shown in the stage's separate
+    /// "video · N ms" readout. `None` when no video is flowing (no `NdiVideo`
+    /// mounted, or no frames yet) — the readout is then hidden. Distinct from
+    /// the WS connection round-trip shown in the "CONNECTED · N ms" readout.
+    pub video_latency_ms: RwSignal<Option<f64>>,
 }
 
 impl StageContext {
@@ -29,6 +36,7 @@ impl StageContext {
             ndi_active: RwSignal::new(false),
             ndi_active_source_id: RwSignal::new(None),
             ndi_status: RwSignal::new(String::new()),
+            video_latency_ms: RwSignal::new(None),
         }
     }
 }

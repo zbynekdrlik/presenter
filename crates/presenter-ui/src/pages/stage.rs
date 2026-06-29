@@ -38,6 +38,26 @@ pub fn StagePage() -> impl IntoView {
     set_global_string("__presenterStageClientId", &ctx.client_id);
     set_global_string("__presenterStageLayout", &ctx.layout_code.get_untracked());
 
+    // Test hook (#479): drive the stage-side video-latency readout
+    // deterministically from the E2E without a live NDI pipeline (the
+    // GitHub-hosted e2e lane has no NDI source/GPU). Accepts a number (ms) to
+    // show "video · N ms", or null/undefined to clear it. In production this
+    // global is simply never called — the real value is written per-frame by
+    // `NdiVideo`'s rVFC observer.
+    {
+        let video_latency = ctx.video_latency_ms;
+        let setter = Closure::wrap(Box::new(move |v: JsValue| match v.as_f64() {
+            Some(ms) => video_latency.set(Some(ms)),
+            None => video_latency.set(None),
+        }) as Box<dyn Fn(JsValue)>);
+        let _ = js_sys::Reflect::set(
+            &js_sys::global(),
+            &JsValue::from_str("__presenterStageSetVideoLatency"),
+            setter.as_ref(),
+        );
+        setter.forget();
+    }
+
     // Connect stage WebSocket
     let ws_handle = stage::use_stage_websocket(ctx.client_id.clone(), ctx.layout_code);
 

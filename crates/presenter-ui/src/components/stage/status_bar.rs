@@ -25,6 +25,7 @@ pub fn StatusBar(
     let live_ref = NodeRef::<leptos::html::Div>::new();
     let connection_ref = NodeRef::<leptos::html::Div>::new();
     let song_number_ref = NodeRef::<leptos::html::Div>::new();
+    let video_latency_ref = NodeRef::<leptos::html::Div>::new();
 
     let (clock_text, set_clock_text) = signal(current_time_string());
     let _clock_interval = Interval::new(1_000, move || {
@@ -85,6 +86,21 @@ pub fn StatusBar(
         }
     };
 
+    // #479: stage-side VIDEO latency — shown as a SEPARATE readout next to the
+    // connection one (decode→render lag of the NDI/WHEP video, distinct from
+    // the WS connection round-trip). Sourced from the shared StageContext
+    // signal written by `NdiVideo`'s frame observer. Rendered ONLY when a value
+    // is present (a video layout with frames flowing); non-video layouts leave
+    // the signal None so the readout simply doesn't appear.
+    let video_latency = ctx.video_latency_ms;
+    let has_video_latency = move || video_latency.get().is_some();
+    let video_latency_text = move || {
+        video_latency
+            .get()
+            .map(|ms| format!("video \u{00b7} {} ms", ms as u32))
+            .unwrap_or_default()
+    };
+
     autofit_effect_tabular(clock_ref, STATUS_MAX_FONT, move || clock_text.get());
     if !hide_live {
         autofit_effect_tabular(live_ref, STATUS_MAX_FONT, live_text);
@@ -93,6 +109,7 @@ pub fn StatusBar(
     if !hide_song_number {
         autofit_effect_tabular(song_number_ref, STATUS_MAX_FONT, song_number);
     }
+    autofit_effect_tabular(video_latency_ref, STATUS_MAX_FONT, video_latency_text);
 
     view! {
         <div node_ref=clock_ref class="stage__clock">
@@ -115,6 +132,12 @@ pub fn StatusBar(
             <span class="stage__debug-label">"connection"</span>
             {connection_text}
         </div>
+        {move || has_video_latency().then(|| view! {
+            <div node_ref=video_latency_ref class="stage__video-latency" data-role="video-latency">
+                <span class="stage__debug-label">"video-latency"</span>
+                {video_latency_text}
+            </div>
+        })}
         <div class="stage__version">
             <span class="stage__debug-label">"version"</span>
             <VersionLabel />
