@@ -61,6 +61,25 @@ on encoder init, check `nvidia-smi` before concluding code regression.
 **Prevention:** never run two GPU processes simultaneously (bakerion inference + presenter e2e-ndi).
 Do NOT set `EXCLUSIVE_PROCESS` — it breaks NVDEC, which the NDI decode path needs.
 
+**Preflight (the e2e-ndi lane now fails FAST on a wedge):** `scripts/ci/gpu-preflight.sh` runs
+between "Start synthetic NDI sender" and "Run NDI WebRTC E2E". It exits non-zero with an actionable
+"run the recover-hung-gpu skill" message instead of letting all 6 tests fail opaquely on a 500.
+Detection logic is unit-tested with mock facts in `tests/ci/gpu-preflight.test.sh` (wired into the
+"Run CI shell tests" step — no real GPU needed on the hosted runner). Run it manually:
+`bash scripts/ci/gpu-preflight.sh` (live) or `GPU_PREFLIGHT_FAKE=1 GPU_PREFLIGHT_FAKE_NVENC=missing
+... bash scripts/ci/gpu-preflight.sh` (mock).
+
+**Two false-positive landmines when diagnosing a wedge (both cost time on #445):**
+- **Stale GStreamer registry cache hides `nvh264enc` even after the GPU recovers.** `gst-inspect-1.0
+  nvh264enc` can report "missing" against a healthy GPU because `~/.cache/gstreamer-1.0/registry.
+  x86_64.bin` was written while wedged. ALWAYS `rm -f ~/.cache/gstreamer-1.0/registry.x86_64.bin`
+  then re-probe — that re-scans nvcodec against the CURRENT GPU. (The preflight does this itself.)
+- **`dmesg` keeps pre-recovery `NV_ERR_RESET_REQUIRED` lines after a driver/module reload.** The ring
+  buffer is NOT cleared by the FLR/reload, so `dmesg | grep -i 'reset required'` matches OLD lines on
+  a now-healthy GPU. dmesg is a HINT, not a live wedge signal — confirm with a fresh `gst-inspect`
+  probe + `nvidia-smi` (compute process present? util/mem?). The preflight uses dmesg only to enrich
+  the message, never as a standalone trigger.
+
 ## Probe / Headless Chrome Cleanup
 
 After manual NDI/WHEP verification, stale processes starve the e2e-ndi CI lane:

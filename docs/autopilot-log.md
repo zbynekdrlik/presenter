@@ -280,3 +280,26 @@ _RED-before-GREEN verified: RED 40b3147c (#437), 61564d81 (#438) precede their G
   - ui: AppContext `selected_entry_index` set on playlist-entry click (None for library picks); sent on `trigger_slide` + `navigate_slides` + follow-sync from snapshot; worship-pp sidebar keys `<For>` by INDEX (fixes name collision) and highlights/scrolls via `active_sidebar_index(entries, snapshot.active_entry_index)` (explicit index, fallback first-is_active). Name + class both reactive (robust to live playlist edits under index keys).
 - **Tests:** server `build_stage_playlist_entries_marks_only_triggered_occurrence_of_repeated_song` (RED→GREEN) + `_without_index_falls_back_to_presentation_id` + `_index_must_match_presentation`; client `active_sidebar_index_*` (3); persistence `stage_state_round_trip` now asserts `active_entry_index == Some(2)` survives DB; E2E `stage-worship-pp.spec.ts` `repeated song (reprise): only the TRIGGERED occurrence highlights` ([A,B,A], trigger entryIndex=2 → only row 2 active, then entryIndex=0 → row 0).
 - **Local gates:** fmt (workspace+ui) clean; clippy `--workspace --all-targets -D warnings` clean; wasm clippy clean; `cargo test` core+server 367 pass, persistence 57 pass, ui 167 pass; quality-check.sh exit 0 (file-size: mod.rs 964 under cap; `update_stage_state` 90 lines = warn only <120); cargo audit exit 0; tsc --noEmit clean. Solo PR (dev→main, Closes #496).
+- 2026-06-29 #496 (worship-pp repeated-song highlight) — PR #507 merged 466a4fb9, deployed v0.4.177. Threaded active playlist-ENTRY index core->server->ui so the triggered occurrence highlights/scrolls correctly when a song repeats; server build_stage_playlist_entries marks only the triggered index; RED->GREEN unit tests + Playwright. Backward-tolerant (None index = old behavior).
+
+## 2026-06-29 — #445 (e2e-ndi GPU/NVENC preflight)
+- **Scope (rescoped per ticket-validator to the code/CI slice):** add a GPU/NVENC preflight to the
+  `e2e-ndi` lane so a wedged dev2 GPU fails the lane FAST with an actionable message instead of all
+  6 @synthetic-ndi tests failing opaquely on `build encoder (nvh264enc)` 500s. Did NOT touch the
+  shared-GPU contention (bakerion scheduling, out of repo scope) and did NOT run FLR recovery (GPU
+  was healthy — bakerion inference live).
+- **Impl:** `scripts/ci/gpu-preflight.sh` (`set -euo pipefail`) — fails if a FRESH `gst-inspect-1.0
+  nvh264enc` probe is missing (clears `~/.cache/gstreamer-1.0/registry.x86_64.bin` first so the probe
+  reflects the CURRENT GPU, not a stale wedged cache) OR the pure-wedge nvidia-smi signature (>=90%
+  util + no compute process + <=64 MiB). dmesg only enriches the message (ring buffer keeps
+  pre-recovery reset lines → never a standalone trigger). Wired as a step between "Start synthetic NDI
+  sender" and "Run NDI WebRTC E2E" in `pipeline.yml`.
+- **Tests:** `tests/ci/gpu-preflight.test.sh` (RED aa127fa5 → GREEN b87e1ab7) — mock-driven
+  (`GPU_PREFLIGHT_FAKE=1` + injected nvenc/util-mem/procs/dmesg), 6 cases: healthy-busy, healthy-idle,
+  classic wedge, pure-wedge-signature, missing-nvenc-other, and a STALE-DMESG false-positive guard
+  (matches the live observation that dmesg keeps pre-recovery reset lines). Wired into the "Run CI
+  shell tests" step. Live `bash scripts/ci/gpu-preflight.sh` on the healthy GPU exits 0 (no false
+  positive).
+- **Gotchas → ci skill:** stale GStreamer registry cache hides nvh264enc after recovery; dmesg
+  retains pre-recovery NV_ERR_RESET_REQUIRED. Both documented in `.claude/skills/ci/SKILL.md`.
+- Solo PR (dev→main, Closes #445), version 0.4.178.
