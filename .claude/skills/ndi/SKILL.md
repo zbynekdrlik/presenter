@@ -144,3 +144,15 @@ Never kill another project's live session or its mcp/chrome. The heavy GPU load 
 - Stage UI beacons `getStats` to `POST /ndi/client-stats` every 15s (→ journald)
 - Regression guards: `tests/e2e/ndi-webrtc-synthetic.spec.ts` + `tests/e2e/ndi-latency.spec.ts`
   (glass-to-glass median ≤350ms, p95 ≤600ms; measured dev 173/190ms, CI 168/192ms)
+
+### Stage status-bar readouts (#479)
+
+The stage status bar (`crates/presenter-ui/src/components/stage/status_bar.rs`) renders TWO
+separate latency readouts: `CONNECTED · N ms` (WS RTT, ALWAYS present once the WS is up) and
+`video · N ms` (rVFC decode→render latency). **The `video · N ms` readout only renders on an
+NDI layout while frames are actually flowing** (it derives from the rVFC metadata observer in
+`ndi_frame_stats.rs`). On a lyrics/worship layout, or with broadcast off, it is correctly
+ABSENT — do NOT treat its absence as a regression when post-deploy-verifying a non-NDI stage.
+To see it live, switch the stage to an NDI layout (`ndi_fullscreen`/`worship_snv`/`api_stage`)
+with an active stream; otherwise its behavior is proven by the green NDI WebRTC E2E + the
+`status_bar` Playwright spec on the deployed tree.
