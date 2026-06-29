@@ -469,4 +469,211 @@ test.describe("Stage worship-pp layout", () => {
 
     expect(consoleErrors).toEqual([]);
   });
+
+  test("current-song badge is sourced from the playlist's active entry, and the active row auto-scrolls into view as the song advances past the visible area (#461)", async ({
+    page,
+  }) => {
+    const consoleErrors: string[] = [];
+    page.on("console", (msg) => {
+      if (msg.type() === "error" || msg.type() === "warning") {
+        const t = msg.text();
+        if (!t.includes("favicon") && !t.includes("crbug.com/981419")) {
+          consoleErrors.push(`[${msg.type()}] ${t}`);
+        }
+      }
+    });
+
+    // Set worship-pp layout.
+    const layoutResp = await page.request.post(
+      new URL("/stage/layout", baseURL).toString(),
+      { data: { code: "worship-pp" } },
+    );
+    expect(layoutResp.ok()).toBeTruthy();
+
+    // Collect MANY presentations with slides, with DISTINCT sanitized names so
+    // the keyed <For> doesn't collide. Skip names with a 3-digit prefix so the
+    // sanitized name equals the trimmed raw name (clean assertion).
+    const libsResp = await page.request.get(
+      new URL("/libraries", baseURL).toString(),
+    );
+    expect(libsResp.ok()).toBeTruthy();
+    const libs = (await libsResp.json()) as Array<{
+      id: string;
+      presentations?: Array<{
+        id: string;
+        name?: string;
+        slides?: Array<{ id: string }>;
+      }>;
+    }>;
+    const seen = new Set<string>();
+    const picked: Array<{ id: string; name: string; slideId: string }> = [];
+    for (const lib of libs) {
+      for (const p of lib.presentations ?? []) {
+        const rawName = (p.name ?? "").trim();
+        const firstSlide = p.slides?.[0]?.id;
+        if (!rawName || !firstSlide) continue;
+        if (/^\d{3}\s/.test(rawName)) continue; // would be stripped server-side
+        if (seen.has(rawName)) continue;
+        seen.add(rawName);
+        picked.push({ id: p.id, name: rawName, slideId: firstSlide });
+        if (picked.length >= 16) break;
+      }
+      if (picked.length >= 16) break;
+    }
+    // The seeded library has 1000+ presentations, so this is a hard guard, not
+    // a silent skip (test-strictness): a thin fixture must fail loudly.
+    expect(
+      picked.length,
+      `fixture needs >=14 distinct slide-bearing presentations (got ${picked.length})`,
+    ).toBeGreaterThanOrEqual(14);
+
+    // Create a playlist holding all picked presentations, in order.
+    const playlistResp = await page.request.post(
+      new URL("/playlists", baseURL).toString(),
+      { data: { name: `Autoscroll Test ${Date.now()}`, showInDashboard: true } },
+    );
+    expect(playlistResp.ok()).toBeTruthy();
+    const playlist = (await playlistResp.json()) as { id: string };
+    const entriesResp = await page.request.put(
+      new URL(`/playlists/${playlist.id}/entries`, baseURL).toString(),
+      {
+        data: {
+          entries: picked.map((p) => ({
+            type: "presentation",
+            presentationId: p.id,
+          })),
+        },
+      },
+    );
+    expect(entriesResp.ok()).toBeTruthy();
+
+    const lastIdx = picked.length - 1;
+
+    // Trigger the FIRST presentation so the early row is active.
+    const trigFirst = await page.request.post(
+      new URL("/stage/state", baseURL).toString(),
+      {
+        data: {
+          presentationId: picked[0].id,
+          currentSlideId: picked[0].slideId,
+          playlistId: playlist.id,
+        },
+      },
+    );
+    expect(trigFirst.status()).toBe(204);
+
+    // Open the stage at 1080p (sidebar fits ~10 rows; 14+ entries overflow).
+    await page.setViewportSize({ width: 1920, height: 1080 });
+    await page.goto(new URL("/stage", baseURL).toString());
+    await page.waitForFunction(() => document.body.dataset.wasmReady === "true", {
+      timeout: 30_000,
+    });
+    await page.waitForFunction(
+      () => document.body.dataset.layoutCode === "worship-pp",
+      { timeout: 30_000 },
+    );
+    await page.waitForFunction(
+      (n) =>
+        document.querySelectorAll(".stage-pp__playlist-entry").length >= n,
+      picked.length,
+      { timeout: 15_000 },
+    );
+
+    const activeIndex = async (): Promise<number> =>
+      page.evaluate(() => {
+        const rows = Array.from(
+          document.querySelectorAll(".stage-pp__playlist-entry"),
+        );
+        return rows.findIndex((r) =>
+          r.classList.contains("stage-pp__playlist-entry--active"),
+        );
+      });
+
+    const badgeText = async (): Promise<string> =>
+      (
+        (await page
+          .locator(".stage__current-song .stage__song-name-text")
+          .textContent()) ?? ""
+      ).trim();
+
+    const activeRowText = async (): Promise<string> =>
+      (
+        (await page
+          .locator(".stage-pp__playlist-entry--active")
+          .first()
+          .textContent()) ?? ""
+      ).trim();
+
+    // Row 0 active; the badge must reflect the PLAYLIST's active entry — equal
+    // to both the active row's text and the triggered presentation's name.
+    await expect.poll(activeIndex, { timeout: 10_000 }).toBe(0);
+    await expect.poll(badgeText, { timeout: 10_000 }).toBe(picked[0].name);
+    expect(await badgeText()).toBe(await activeRowText());
+
+    // Sanity: the LAST row must currently be OUT of view (below the fold), so
+    // there is genuinely something to scroll. Proves overflow exists.
+    const lastRowInitiallyHidden = await page.evaluate((idx) => {
+      const sidebar = document
+        .querySelector(".stage-pp__playlist-sidebar")
+        ?.getBoundingClientRect();
+      const rows = document.querySelectorAll(".stage-pp__playlist-entry");
+      const last = rows[idx]?.getBoundingClientRect();
+      if (!sidebar || !last) return false;
+      // Below the fold: the row's top is at/under the sidebar's bottom edge.
+      return last.top >= sidebar.bottom;
+    }, lastIdx);
+    expect(
+      lastRowInitiallyHidden,
+      "last playlist row should start below the fold",
+    ).toBe(true);
+
+    // Advance to the LAST presentation (off-screen). The active row must
+    // auto-scroll into view AND the badge must update to the new active song.
+    const trigLast = await page.request.post(
+      new URL("/stage/state", baseURL).toString(),
+      {
+        data: {
+          presentationId: picked[lastIdx].id,
+          currentSlideId: picked[lastIdx].slideId,
+          playlistId: playlist.id,
+        },
+      },
+    );
+    expect(trigLast.status()).toBe(204);
+
+    await expect.poll(activeIndex, { timeout: 10_000 }).toBe(lastIdx);
+    await expect
+      .poll(badgeText, { timeout: 10_000 })
+      .toBe(picked[lastIdx].name);
+    expect(await badgeText()).toBe(await activeRowText());
+
+    // The active row is now scrolled INTO the sidebar's visible viewport.
+    await expect
+      .poll(
+        async () =>
+          page.evaluate(() => {
+            const sidebar = document
+              .querySelector(".stage-pp__playlist-sidebar")
+              ?.getBoundingClientRect();
+            const active = document
+              .querySelector(".stage-pp__playlist-entry--active")
+              ?.getBoundingClientRect();
+            if (!sidebar || !active) return false;
+            // Fully within the sidebar's vertical viewport (2px slack).
+            return (
+              active.top >= sidebar.top - 2 &&
+              active.bottom <= sidebar.bottom + 2
+            );
+          }),
+        { timeout: 10_000 },
+      )
+      .toBe(true);
+
+    // Cleanup.
+    await page.request.delete(
+      new URL(`/playlists/${playlist.id}`, baseURL).toString(),
+    );
+
+    expect(consoleErrors).toEqual([]);
+  });
 });
