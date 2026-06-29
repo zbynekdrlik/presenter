@@ -293,6 +293,7 @@ impl AppState {
                 resolution.playlist_entries = Some(super::stage::build_stage_playlist_entries(
                     &playlist,
                     resolution.presentation_id,
+                    None,
                     &name_lookup,
                 ));
             }

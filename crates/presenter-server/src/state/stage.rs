@@ -359,8 +359,10 @@ pub(crate) fn blank_slide_content() -> SlideContent {
 pub(crate) fn build_stage_playlist_entries(
     playlist: &Playlist,
     active_presentation_id: Option<PresentationId>,
+    active_entry_index: Option<u32>,
     name_lookup: &std::collections::HashMap<PresentationId, String>,
 ) -> Vec<StagePlaylistEntry> {
+    let _ = active_entry_index;
     playlist
         .entries
         .iter()
@@ -433,6 +435,54 @@ mod tests {
         assert_eq!(
             sanitize_song_title("Song Without Number"),
             "Song Without Number"
+        );
+    }
+
+    fn presentation_entry(presentation_id: PresentationId) -> presenter_core::PlaylistEntry {
+        presenter_core::PlaylistEntry {
+            id: presenter_core::PlaylistEntryId::new(),
+            kind: PlaylistEntryKind::Presentation {
+                presentation_id,
+                midi_binding: None,
+                presentation_name: None,
+            },
+        }
+    }
+
+    /// #496: a worship set that legitimately repeats the same song (a reprise)
+    /// has the SAME `presentation_id` in two playlist entries. Marking active by
+    /// presentation_id alone lights BOTH rows. The triggered ENTRY INDEX must
+    /// disambiguate so only the occurrence the operator triggered is active.
+    #[test]
+    fn build_stage_playlist_entries_marks_only_triggered_occurrence_of_repeated_song() {
+        let song_a = PresentationId::new();
+        let song_b = PresentationId::new();
+        let playlist = Playlist::new(
+            "Sunday set",
+            vec![
+                presentation_entry(song_a), // index 0 — first occurrence
+                presentation_entry(song_b), // index 1
+                presentation_entry(song_a), // index 2 — reprise (the one triggered)
+            ],
+        )
+        .expect("valid playlist");
+        let mut name_lookup = std::collections::HashMap::new();
+        name_lookup.insert(song_a, "010 Reprise Song".to_string());
+        name_lookup.insert(song_b, "020 Other Song".to_string());
+
+        // Operator triggered the SECOND occurrence (entry index 2).
+        let entries =
+            build_stage_playlist_entries(&playlist, Some(song_a), Some(2), &name_lookup);
+
+        assert_eq!(entries.len(), 3);
+        assert!(
+            !entries[0].is_active,
+            "first occurrence (index 0) must NOT be active when the reprise was triggered"
+        );
+        assert!(!entries[1].is_active, "the other song must not be active");
+        assert!(
+            entries[2].is_active,
+            "only the triggered occurrence (index 2) must be active"
         );
     }
 
