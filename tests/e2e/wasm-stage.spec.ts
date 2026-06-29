@@ -132,11 +132,15 @@ test.describe("WASM Operator Stage Monitor Tests", () => {
   test("header preview is a live /stage?preview=1 iframe that renders", async ({
     page,
   }) => {
+    // NOTE: we deliberately do NOT filter the `crbug.com/981419` wake-lock
+    // warning here. The preview stage SKIPS the screen wake lock (stage.rs, in
+    // preview mode) precisely so the embedded iframe never emits that warning —
+    // so a clean console below ALSO positively proves the wake-lock skip works.
+    // If preview-detection regressed and the iframe re-acquired the wake lock,
+    // the warning would land in this listener and fail the assertion.
     const consoleMessages: string[] = [];
     page.on("console", (msg) => {
       if (msg.type() === "error" || msg.type() === "warning") {
-        // Chromium logs a benign deprecation for the wake-lock perms in headless.
-        if (msg.text().includes("crbug.com/981419")) return;
         consoleMessages.push(`[${msg.type()}] ${msg.text()}`);
       }
     });
@@ -159,7 +163,8 @@ test.describe("WASM Operator Stage Monitor Tests", () => {
       .locator(".stage-container");
     await expect(stageContainer).toBeVisible({ timeout: 30_000 });
 
-    // The embedded stage must not throw in the iframe.
+    // The embedded stage must not throw in the iframe AND must not emit the
+    // wake-lock warning (proves the preview wake-lock skip).
     expect(consoleMessages).toEqual([]);
   });
 });

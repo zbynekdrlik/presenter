@@ -293,6 +293,13 @@ test("api put does not switch preview when layout is worship-snv", async ({
   // current-slide text lives INSIDE the iframe (the real stage render), read
   // via frameLocator. This is the most faithful form of the isolation check:
   // it verifies api content does/doesn't reach the ACTUAL stage output.
+  //
+  // Gate on the embedded /stage (a second WASM app) actually being up before
+  // reading its content — matches the explicit readiness gate in the sibling
+  // wasm-stage / wasm-bible iframe tests.
+  await expect(
+    page.frameLocator("iframe.operator__stage-iframe").locator(".stage-container"),
+  ).toBeVisible({ timeout: 30_000 });
   const currentInFrame = () =>
     page
       .frameLocator("iframe.operator__stage-iframe")
