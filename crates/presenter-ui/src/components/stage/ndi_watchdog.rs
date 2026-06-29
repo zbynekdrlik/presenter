@@ -20,7 +20,7 @@ use leptos::wasm_bindgen::{closure::Closure, JsCast, JsValue};
 use leptos::web_sys::{HtmlVideoElement, RtcIceConnectionState, RtcPeerConnection};
 use wasm_bindgen_futures::spawn_local;
 
-use super::ndi_frame_stats::{start_rvfc_frame_observer, FrameStats};
+use super::ndi_frame_stats::{start_rvfc_frame_observer, FrameStats, VideoLatencySetter};
 use super::ndi_health_ticker::start_health_ticker;
 
 // Re-export the profile-mode query so `ndi_video.rs` keeps importing it from
@@ -321,6 +321,7 @@ impl Watchdog {
         pc: &RtcPeerConnection,
         source_id: &str,
         escalation: &Rc<ReloadEscalation>,
+        video_latency_setter: Option<VideoLatencySetter>,
         on_failure: F,
     ) -> Self {
         let active: Rc<Cell<bool>> = Rc::new(Cell::new(true));
@@ -329,8 +330,15 @@ impl Watchdog {
         install_ice_failure_listener(pc, Rc::clone(&active), Rc::clone(&on_failure));
 
         let stats = FrameStats::new(now_ms());
-        let rvfc_supported =
-            start_rvfc_frame_observer(video, pc, source_id, &active, &stats, escalation);
+        let rvfc_supported = start_rvfc_frame_observer(
+            video,
+            pc,
+            source_id,
+            &active,
+            &stats,
+            escalation,
+            video_latency_setter,
+        );
         if !rvfc_supported {
             leptos::logging::warn!(
                 "watchdog: requestVideoFrameCallback unsupported — using currentTime frame proxy"

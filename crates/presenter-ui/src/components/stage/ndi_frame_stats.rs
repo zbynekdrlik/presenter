@@ -18,6 +18,105 @@ use super::ndi_beacon::post_stats_beacon;
 use super::ndi_profile::persist_proven_profile_mode;
 use super::ndi_watchdog::{now_ms, ReloadEscalation, Watchdog};
 
+/// Callback that publishes the smoothed stage-side video latency (ms) to the
+/// on-screen readout signal (`StageContext::video_latency_ms`). `Some(ms)`
+/// updates the "video · N ms" readout; `None` clears it. Boxed behind `Rc` so
+/// it threads cheaply from `NdiVideo` through `Watchdog::install` into the rVFC
+/// observer. `None` (no setter) disables the readout entirely (e.g. a video
+/// element with no StageContext).
+pub(crate) type VideoLatencySetter = Rc<dyn Fn(Option<f64>)>;
+
+/// Cadence (ms) at which the smoothed video latency is pushed to the on-screen
+/// signal. rVFC fires ~30×/s; writing the reactive signal that often would
+/// re-run the StatusBar autofit every frame. ~1 update/s keeps the readout
+/// live without churning the render.
+const VIDEO_LATENCY_EMIT_INTERVAL_MS: f64 = 1000.0;
+
+/// EMA responsiveness for the on-screen video-latency figure. Lower = smoother
+/// (rides out per-frame jitter so the displayed number is stable and readable),
+/// higher = more responsive. 0.2 gives a calm, legible stage readout.
+const VIDEO_LATENCY_SMOOTHING_ALPHA: f64 = 0.2;
+
+/// Derive the stage-side VIDEO latency in milliseconds from one frame's rVFC
+/// metadata fields (#479). "Stage-side video latency" is the time from a
+/// frame's media being RECEIVED to it being DISPLAYED on screen — the user's
+/// decode→render definition, distinct from the WS connection round-trip.
+///
+/// Preference order:
+/// 1. received→displayed: `expected_display_time - receive_time`. WebRTC rVFC
+///    exposes both (`receiveTime` = last packet of the frame received,
+///    `expectedDisplayTime` = when the UA expects it visible) — the truest
+///    end-to-end figure.
+/// 2. decode duration: `processing_duration_s * 1000`. When `receiveTime` is
+///    absent (non-WebRTC / older browsers) the decode lag is the closest proxy
+///    rVFC offers.
+///
+/// Returns `None` when neither pair is available. Negatives (clock skew between
+/// the receive and display timestamps) clamp to 0 so the stage never shows a
+/// nonsensical negative latency.
+pub(crate) fn derive_video_latency_ms(
+    receive_time: Option<f64>,
+    expected_display_time: Option<f64>,
+    processing_duration_s: Option<f64>,
+) -> Option<f64> {
+    if let (Some(recv), Some(disp)) = (receive_time, expected_display_time) {
+        return Some((disp - recv).max(0.0));
+    }
+    processing_duration_s.map(|s| (s * 1000.0).max(0.0))
+}
+
+/// Fold one latency `sample` (ms) into the running EMA. `prev = None` (no
+/// sample yet) passes the first sample through unchanged. `alpha` in (0, 1].
+pub(crate) fn smooth_latency(prev: Option<f64>, sample: f64, alpha: f64) -> f64 {
+    match prev {
+        Some(p) => p + alpha * (sample - p),
+        None => sample,
+    }
+}
+
+/// Read the rVFC metadata object's timing fields and run them through
+/// `derive_video_latency_ms`. The metadata is a plain JS object; web_sys has no
+/// typed binding for it, so the fields are read via `Reflect` (missing/non-numeric
+/// → `None`, never an error/log). Returns `None` when the frame carries no
+/// usable timing metadata.
+fn video_latency_from_meta(meta: &JsValue) -> Option<f64> {
+    let get = |k: &str| {
+        js_sys::Reflect::get(meta, &JsValue::from_str(k))
+            .ok()
+            .and_then(|v| v.as_f64())
+    };
+    derive_video_latency_ms(
+        get("receiveTime"),
+        get("expectedDisplayTime"),
+        get("processingDuration"),
+    )
+}
+
+/// Per presented frame: derive this frame's stage-side video latency from its
+/// rVFC `meta`, fold it into the smoothed value on `stats`, and push the
+/// smoothed figure to the on-screen `setter` at most once per
+/// `VIDEO_LATENCY_EMIT_INTERVAL_MS` (#479). No-op when the frame carries no
+/// usable timing metadata, so a browser whose rVFC omits the timing fields
+/// simply never shows the readout (rather than showing a wrong value).
+fn update_video_latency(meta: &JsValue, stats: &FrameStats, setter: &Option<VideoLatencySetter>) {
+    let Some(sample) = video_latency_from_meta(meta) else {
+        return;
+    };
+    let smoothed = smooth_latency(
+        stats.video_latency_ms.get(),
+        sample,
+        VIDEO_LATENCY_SMOOTHING_ALPHA,
+    );
+    stats.video_latency_ms.set(Some(smoothed));
+    let now = now_ms();
+    if now - stats.last_latency_emit_at.get() >= VIDEO_LATENCY_EMIT_INTERVAL_MS {
+        stats.last_latency_emit_at.set(now);
+        if let Some(setter) = setter {
+            setter(Some(smoothed));
+        }
+    }
+}
+
 /// Frame-presentation counters shared between the rVFC observer (writer)
 /// and the health ticker (reader). All timestamps are `now_ms()` values.
 pub(crate) struct FrameStats {
@@ -48,6 +147,18 @@ pub(crate) struct FrameStats {
     pub(crate) presented_in_interval: Cell<u32>,
     /// `now_ms()` when the current beacon interval started (last reset).
     pub(crate) interval_started_at: Cell<f64>,
+    /// Smoothed stage-side VIDEO latency in ms (#479) — the "received →
+    /// displayed" decode+present lag derived from each frame's rVFC metadata
+    /// (`derive_video_latency_ms`) and folded through an EMA. `None` until the
+    /// first frame carries usable timing metadata. This is the figure shown in
+    /// the stage's separate "video · N ms" readout (distinct from the WS
+    /// connection round-trip in the "CONNECTED · N ms" readout).
+    pub(crate) video_latency_ms: Cell<Option<f64>>,
+    /// `now_ms()` of the last push of `video_latency_ms` to the on-screen
+    /// signal. The rVFC callback fires ~30×/s; the readout is updated at most
+    /// once per `VIDEO_LATENCY_EMIT_INTERVAL_MS` so the StatusBar autofit does
+    /// not re-run every frame. Seeded to 0.0 so the first sample emits at once.
+    pub(crate) last_latency_emit_at: Cell<f64>,
 }
 
 impl FrameStats {
@@ -64,6 +175,8 @@ impl FrameStats {
             present_gaps_over100: Cell::new(0),
             presented_in_interval: Cell::new(0),
             interval_started_at: Cell::new(now),
+            video_latency_ms: Cell::new(None),
+            last_latency_emit_at: Cell::new(0.0),
         })
     }
 }
@@ -183,6 +296,7 @@ pub(crate) fn start_rvfc_frame_observer(
     active: &Rc<Cell<bool>>,
     stats: &Rc<FrameStats>,
     escalation: &Rc<ReloadEscalation>,
+    video_latency_setter: Option<VideoLatencySetter>,
 ) -> bool {
     let supported = js_sys::Reflect::get(
         video.as_ref(),
@@ -203,7 +317,7 @@ pub(crate) fn start_rvfc_frame_observer(
         let source_id = source_id.to_string();
         let holder = Rc::clone(&holder);
         let escalation = Rc::clone(escalation);
-        Closure::<dyn FnMut(JsValue, JsValue)>::new(move |_now: JsValue, _meta: JsValue| {
+        Closure::<dyn FnMut(JsValue, JsValue)>::new(move |_now: JsValue, meta: JsValue| {
             if !active.get() {
                 return;
             }
@@ -211,6 +325,9 @@ pub(crate) fn start_rvfc_frame_observer(
             // the last-resort reload (#401) only ever fires while video is
             // genuinely dead across reconnects, never during healthy playback.
             escalation.note_decoded_frame();
+            // #479: surface this frame's received→displayed latency to the
+            // stage's separate "video · N ms" readout (throttled + smoothed).
+            update_video_latency(&meta, &stats, &video_latency_setter);
             let n = record_presented_frame(&stats);
             if n % Watchdog::RVFC_BEACON_FRAME_PERIOD == 0 {
                 post_stats_beacon(&pc, &source_id, &stats);
@@ -237,5 +354,76 @@ fn schedule_video_frame_callback(video: &HtmlVideoElement, holder: &SharedRvfcCl
     };
     if let Some(cb) = holder.borrow().as_ref() {
         let _ = f.call1(video.as_ref(), cb.as_ref().unchecked_ref());
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{derive_video_latency_ms, smooth_latency, VIDEO_LATENCY_SMOOTHING_ALPHA};
+
+    // ─────────────────────────────────────────────────────────────────────
+    // #479 stage-side VIDEO latency derivation (received → displayed).
+    //
+    // The figure shown in the stage's separate "video · N ms" readout is the
+    // decode+present lag of each frame, derived from rVFC metadata. These
+    // tests pin the derivation math (the JsValue field-reading shim is a thin
+    // wrapper over `derive_video_latency_ms`, covered by the E2E render test).
+    // ─────────────────────────────────────────────────────────────────────
+
+    #[test]
+    fn prefers_received_to_displayed_when_both_present() {
+        // receiveTime=1000, expectedDisplayTime=1080 → 80ms received→displayed.
+        // processingDuration is IGNORED when the receive/display pair exists.
+        assert_eq!(
+            derive_video_latency_ms(Some(1000.0), Some(1080.0), Some(0.005)),
+            Some(80.0)
+        );
+    }
+
+    #[test]
+    fn falls_back_to_processing_duration_without_receive_time() {
+        // No receiveTime → decode duration (seconds → ms): 0.012s = 12ms.
+        assert_eq!(
+            derive_video_latency_ms(None, Some(1080.0), Some(0.012)),
+            Some(12.0)
+        );
+        // expectedDisplayTime alone (no receiveTime) also falls back to decode.
+        assert_eq!(derive_video_latency_ms(None, None, Some(0.02)), Some(20.0));
+    }
+
+    #[test]
+    fn none_when_no_usable_metadata() {
+        assert_eq!(derive_video_latency_ms(None, None, None), None);
+        // receiveTime without expectedDisplayTime and no processingDuration
+        // cannot produce a figure.
+        assert_eq!(derive_video_latency_ms(Some(1000.0), None, None), None);
+    }
+
+    #[test]
+    fn clamps_negative_skew_to_zero() {
+        // Clock skew making display appear BEFORE receive must never surface a
+        // negative latency on the stage.
+        assert_eq!(
+            derive_video_latency_ms(Some(1080.0), Some(1000.0), None),
+            Some(0.0)
+        );
+        // Negative processingDuration (defensive) also clamps.
+        assert_eq!(derive_video_latency_ms(None, None, Some(-0.01)), Some(0.0));
+    }
+
+    #[test]
+    fn ema_passes_first_sample_through_then_smooths() {
+        // First sample (prev=None) passes through unchanged.
+        let first = smooth_latency(None, 100.0, VIDEO_LATENCY_SMOOTHING_ALPHA);
+        assert_eq!(first, 100.0);
+        // Next sample moves the average toward it by alpha (0.2): 100 + 0.2*(200-100) = 120.
+        let second = smooth_latency(Some(first), 200.0, VIDEO_LATENCY_SMOOTHING_ALPHA);
+        assert!((second - 120.0).abs() < 1e-9, "EMA second = {second}");
+        // A steady stream of equal samples converges to that value.
+        let mut v = smooth_latency(None, 50.0, VIDEO_LATENCY_SMOOTHING_ALPHA);
+        for _ in 0..100 {
+            v = smooth_latency(Some(v), 50.0, VIDEO_LATENCY_SMOOTHING_ALPHA);
+        }
+        assert!((v - 50.0).abs() < 1e-6, "EMA converged = {v}");
     }
 }

@@ -16,7 +16,9 @@ use leptos::web_sys::{
 };
 use wasm_bindgen_futures::{spawn_local, JsFuture};
 
+use super::ndi_frame_stats::VideoLatencySetter;
 use super::ndi_watchdog::{now_ms, profile_mode_is_compat, ReloadEscalation, Watchdog};
+use crate::state::stage::StageContext;
 
 /// Holds an active WHEP session: the peer connection AND the WHEP resource URL
 /// returned in the `Location` header on POST. The resource URL is used to
@@ -51,6 +53,17 @@ pub fn NdiVideo(source_id: String, #[prop(optional)] class: Option<&'static str>
     let video_ref = NodeRef::<leptos::html::Video>::new();
     let source_id_for_effect = source_id.clone();
 
+    // #479: surface stage-side VIDEO latency to the StatusBar's separate
+    // "video · N ms" readout. The figure lives on the shared `StageContext`
+    // signal (StatusBar reads it); the rVFC frame observer inside the watchdog
+    // writes it via the `setter` below. The signal is owned by the parent
+    // StagePage, so it stays alive across this <NdiVideo>'s mount/unmount —
+    // safe to clear from `on_cleanup`. A stray <NdiVideo> with no StageContext
+    // simply gets no setter (None) and never shows a readout.
+    let video_latency_sig = use_context::<StageContext>().map(|ctx| ctx.video_latency_ms);
+    let video_latency_setter: Option<VideoLatencySetter> = video_latency_sig
+        .map(|sig| std::rc::Rc::new(move |v: Option<f64>| sig.set(v)) as VideoLatencySetter);
+
     // Holds the active connection: the WHEP session + the watchdog observing
     // its health. Cleanup must close both — see on_cleanup below.
     struct ActiveConnection {
@@ -80,10 +93,12 @@ pub fn NdiVideo(source_id: String, #[prop(optional)] class: Option<&'static str>
         StoredValue::new_local(Some(ReloadEscalation::new()));
 
     let cancelled_for_effect = Arc::clone(&cancelled);
+    let video_latency_setter_for_effect = video_latency_setter;
     Effect::new(move |_| {
         let Some(video) = video_ref.get() else { return };
         let source_id = source_id_for_effect.clone();
         let cancelled = Arc::clone(&cancelled_for_effect);
+        let video_latency_setter = video_latency_setter_for_effect.clone();
         spawn_local(async move {
             // The reconnect-trigger flag: when a watchdog fires, it sets this
             // flag; the loop drains it and reconnects.
@@ -139,6 +154,7 @@ pub fn NdiVideo(source_id: String, #[prop(optional)] class: Option<&'static str>
                             &session.pc,
                             &source_id,
                             &escalation,
+                            video_latency_setter.clone(),
                             move || flag.set(true),
                         );
 
@@ -210,6 +226,13 @@ pub fn NdiVideo(source_id: String, #[prop(optional)] class: Option<&'static str>
     let cancelled_for_cleanup = Arc::clone(&cancelled);
     on_cleanup(move || {
         cancelled_for_cleanup.store(true, Ordering::Release);
+        // #479: this <NdiVideo> is unmounting (source deactivated / layout
+        // change) — no more frames, so clear the "video · N ms" readout. The
+        // signal is owned by the still-alive parent StageContext, so this set
+        // is safe (not a disposed-signal write).
+        if let Some(sig) = video_latency_sig {
+            sig.set(None);
+        }
         // #417: signal PAGE teardown to the page-session escalation so any
         // /healthz check spawned by `maybe_reload` just before this cleanup does
         // NOT call window.location().reload() after the page unmounts. This is
