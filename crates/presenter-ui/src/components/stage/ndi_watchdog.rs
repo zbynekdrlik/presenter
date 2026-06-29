@@ -20,7 +20,9 @@ use leptos::wasm_bindgen::{closure::Closure, JsCast, JsValue};
 use leptos::web_sys::{HtmlVideoElement, RtcIceConnectionState, RtcPeerConnection};
 use wasm_bindgen_futures::spawn_local;
 
-use super::ndi_frame_stats::{start_rvfc_frame_observer, FrameStats, VideoLatencySetter};
+use super::ndi_frame_stats::{
+    start_rvfc_frame_observer, FrameStats, FramesLiveSetter, VideoLatencySetter,
+};
 use super::ndi_health_ticker::start_health_ticker;
 
 // Re-export the profile-mode query so `ndi_video.rs` keeps importing it from
@@ -316,12 +318,14 @@ impl Watchdog {
     /// when video has been dead long enough that reconnect has demonstrably
     /// failed. It is passed in (not created here) precisely so it survives the
     /// Watchdog being recreated on every reconnect.
+    #[allow(clippy::too_many_arguments)]
     pub(crate) fn install<F: Fn() + 'static>(
         video: &HtmlVideoElement,
         pc: &RtcPeerConnection,
         source_id: &str,
         escalation: &Rc<ReloadEscalation>,
         video_latency_setter: Option<VideoLatencySetter>,
+        frames_live_setter: Option<FramesLiveSetter>,
         on_failure: F,
     ) -> Self {
         let active: Rc<Cell<bool>> = Rc::new(Cell::new(true));
@@ -330,6 +334,16 @@ impl Watchdog {
         install_ice_failure_listener(pc, Rc::clone(&active), Rc::clone(&on_failure));
 
         let stats = FrameStats::new(now_ms());
+        // #500: a freshly-installed session has NOT decoded a frame yet, and its
+        // per-session `stats.frames_live` cell starts false. Reset the shared
+        // page signal to match, so a stale `true` left by a prior (now-torn-down)
+        // session can never survive into a connect-but-never-decode session and
+        // wrongly hide the neutral cover. The first presented frame re-marks it
+        // true; on a healthy mid-stream reconnect the status is `connected`
+        // (no cover) so this never flashes the cover.
+        if let Some(setter) = &frames_live_setter {
+            setter(false);
+        }
         let rvfc_supported = start_rvfc_frame_observer(
             video,
             pc,
@@ -338,6 +352,10 @@ impl Watchdog {
             &stats,
             escalation,
             video_latency_setter,
+            // #500: the rVFC path marks frames live on each presented frame; the
+            // health ticker (below) flips them back to not-live on staleness, so
+            // BOTH share the same per-session setter.
+            frames_live_setter.clone(),
         );
         if !rvfc_supported {
             leptos::logging::warn!(
@@ -352,6 +370,7 @@ impl Watchdog {
             &stats,
             rvfc_supported,
             escalation,
+            frames_live_setter,
             on_failure,
         );
 

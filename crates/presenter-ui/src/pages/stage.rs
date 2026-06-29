@@ -58,6 +58,25 @@ pub fn StagePage() -> impl IntoView {
         setter.forget();
     }
 
+    // Test hook (#500): drive the "frames are presenting" flag deterministically
+    // from the E2E without a live NDI/GPU pipeline (the GitHub-hosted e2e lane
+    // has neither). Accepts a boolean — the SAME signal the rVFC observer /
+    // proxy write per frame — so a spec can simulate frames flowing while the
+    // status is still a stale `connecting` and assert the neutral cover drops.
+    // In production this global is simply never called.
+    {
+        let frames_live = ctx.ndi_frames_live;
+        let setter = Closure::wrap(Box::new(move |v: JsValue| {
+            frames_live.set(v.as_bool().unwrap_or(false));
+        }) as Box<dyn Fn(JsValue)>);
+        let _ = js_sys::Reflect::set(
+            &js_sys::global(),
+            &JsValue::from_str("__presenterStageSetNdiFramesLive"),
+            setter.as_ref(),
+        );
+        setter.forget();
+    }
+
     // Connect stage WebSocket
     let ws_handle = stage::use_stage_websocket(ctx.client_id.clone(), ctx.layout_code);
 
@@ -115,11 +134,16 @@ pub fn StagePage() -> impl IntoView {
                     ctx.ndi_active.set(true);
                     ctx.ndi_active_source_id.set(Some(source_id));
                     ctx.ndi_status.set("connecting".to_string());
+                    // #500: a freshly-activated source has no frames yet — the
+                    // neutral cover must show until the WHEP video decodes.
+                    ctx.ndi_frames_live.set(false);
                 }
                 LiveEvent::NdiSourceDeactivated => {
                     ctx.ndi_active.set(false);
                     ctx.ndi_active_source_id.set(None);
                     ctx.ndi_status.set(String::new());
+                    // #500: no source → no frames; clear the live-frames flag.
+                    ctx.ndi_frames_live.set(false);
                 }
                 LiveEvent::NdiConnectionStatus { status } => {
                     ctx.ndi_status.set(status);
@@ -253,6 +277,10 @@ fn sync_ndi_source_state(ctx: StageContext) {
                     // when the pipeline resolves. It also clears any stale
                     // "disconnected"/"failed" overlay from before the gap.
                     ctx.ndi_status.set("connecting".to_string());
+                    // #500: a new/changed source (incl. every fresh page load /
+                    // relaunch) has no frames yet — show the neutral cover until
+                    // the WHEP video decodes, never carry a stale `true`.
+                    ctx.ndi_frames_live.set(false);
                 }
                 ctx.ndi_active.set(true);
                 ctx.ndi_active_source_id.set(id);
@@ -261,6 +289,8 @@ fn sync_ndi_source_state(ctx: StageContext) {
                 ctx.ndi_active.set(false);
                 ctx.ndi_active_source_id.set(None);
                 ctx.ndi_status.set(String::new());
+                // #500: no active source → no frames; clear the live-frames flag.
+                ctx.ndi_frames_live.set(false);
             }
         }
     });

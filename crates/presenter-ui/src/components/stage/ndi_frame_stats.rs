@@ -26,6 +26,65 @@ use super::ndi_watchdog::{now_ms, ReloadEscalation, Watchdog};
 /// element with no StageContext).
 pub(crate) type VideoLatencySetter = Rc<dyn Fn(Option<f64>)>;
 
+/// Callback that publishes whether NDI frames are CURRENTLY presenting to the
+/// shared `StageContext::ndi_frames_live` signal (#500). Called with `true` on
+/// the first presented frame after a gap (so the neutral cover drops the instant
+/// video is on screen) and `false` once frames go stale. Boxed behind `Rc` so it
+/// threads cheaply from `NdiVideo` through `Watchdog::install` into both the rVFC
+/// observer and the health ticker. `None` (no setter) disables the live-frame
+/// gate entirely (e.g. a video element with no StageContext).
+pub(crate) type FramesLiveSetter = Rc<dyn Fn(bool)>;
+
+/// How long after the last presented frame the video is considered no longer
+/// "live" (#500). Once `now - last_frame_at` exceeds this, the 1s health ticker
+/// flips `ndi_frames_live` back to `false` so a genuinely silent/stopped source
+/// restores the neutral covering placeholder. Comfortably above one 30fps frame
+/// interval (~33ms) and the ticker's own 1s cadence, but far below the 10s
+/// real-freeze reconnect horizon — so a brief render hitch never drops the cover,
+/// yet a truly stopped source restores it within ~1–2 ticks.
+pub(crate) const FRAMES_LIVE_STALENESS_MS: f64 = 1500.0;
+
+/// Pure: are presented frames stale (no frame for longer than `window_ms`)?
+/// Strictly-greater so a frame exactly at the window edge still counts as live.
+/// Host-unit-tested; the reactive wiring (`refresh_frames_live_staleness`) reads
+/// the live `now_ms()` / `last_frame_at` and delegates here.
+pub(crate) fn frames_are_stale(now_ms: f64, last_frame_at: f64, window_ms: f64) -> bool {
+    now_ms - last_frame_at > window_ms
+}
+
+/// Mark frames as LIVE (#500). Idempotent within a session: the per-session
+/// `stats.frames_live` cell tracks the last-emitted state, so the reactive
+/// `setter(true)` fires only on the false→true transition — never ~30×/s from
+/// the rVFC callback. Called from the rVFC frame path and the currentTime proxy.
+pub(crate) fn mark_frames_live(stats: &FrameStats, setter: &Option<FramesLiveSetter>) {
+    if !stats.frames_live.get() {
+        stats.frames_live.set(true);
+        if let Some(setter) = setter {
+            setter(true);
+        }
+    }
+}
+
+/// Flip frames back to NOT-live (#500) when they have gone stale
+/// (`frames_are_stale`). Idempotent: only acts on the true→false transition, so
+/// the reactive `setter(false)` fires once when a live source stops. Called once
+/// per 1s health tick. The neutral cover then reappears if the status is still
+/// neutral (a genuinely silent/stopped source).
+pub(crate) fn refresh_frames_live_staleness(stats: &FrameStats, setter: &Option<FramesLiveSetter>) {
+    if stats.frames_live.get()
+        && frames_are_stale(
+            now_ms(),
+            stats.last_frame_at.get(),
+            FRAMES_LIVE_STALENESS_MS,
+        )
+    {
+        stats.frames_live.set(false);
+        if let Some(setter) = setter {
+            setter(false);
+        }
+    }
+}
+
 /// Cadence (ms) at which the smoothed video latency is pushed to the on-screen
 /// signal. rVFC fires ~30×/s; writing the reactive signal that often would
 /// re-run the StatusBar autofit every frame. ~1 update/s keeps the readout
@@ -159,6 +218,13 @@ pub(crate) struct FrameStats {
     /// once per `VIDEO_LATENCY_EMIT_INTERVAL_MS` so the StatusBar autofit does
     /// not re-run every frame. Seeded to 0.0 so the first sample emits at once.
     pub(crate) last_latency_emit_at: Cell<f64>,
+    /// Last-EMITTED frames-live state for THIS session (#500). Tracks what was
+    /// last pushed to `StageContext::ndi_frames_live` via the `FramesLiveSetter`
+    /// so the reactive signal is written only on transitions (frame path sets
+    /// true once; the health ticker sets false once on staleness) — not ~30×/s.
+    /// Per-session (reset to `false` each `FrameStats::new`), so a fresh session
+    /// re-emits `true` on its first presented frame.
+    pub(crate) frames_live: Cell<bool>,
 }
 
 impl FrameStats {
@@ -177,6 +243,7 @@ impl FrameStats {
             interval_started_at: Cell::new(now),
             video_latency_ms: Cell::new(None),
             last_latency_emit_at: Cell::new(0.0),
+            frames_live: Cell::new(false),
         })
     }
 }
@@ -289,6 +356,7 @@ type SharedRvfcClosure = Rc<RefCell<Option<Closure<dyn FnMut(JsValue, JsValue)>>
 /// The closure is gated by `active`: once cleared it returns WITHOUT
 /// rescheduling, ending the chain (the leaked holder cycle goes inert —
 /// same bounded-leak idiom as the rest of this file).
+#[allow(clippy::too_many_arguments)]
 pub(crate) fn start_rvfc_frame_observer(
     video: &HtmlVideoElement,
     pc: &RtcPeerConnection,
@@ -297,6 +365,7 @@ pub(crate) fn start_rvfc_frame_observer(
     stats: &Rc<FrameStats>,
     escalation: &Rc<ReloadEscalation>,
     video_latency_setter: Option<VideoLatencySetter>,
+    frames_live_setter: Option<FramesLiveSetter>,
 ) -> bool {
     let supported = js_sys::Reflect::get(
         video.as_ref(),
@@ -325,6 +394,9 @@ pub(crate) fn start_rvfc_frame_observer(
             // the last-resort reload (#401) only ever fires while video is
             // genuinely dead across reconnects, never during healthy playback.
             escalation.note_decoded_frame();
+            // #500: frames are presenting → drop the neutral covering placeholder
+            // (idempotent: only the false→true transition writes the signal).
+            mark_frames_live(&stats, &frames_live_setter);
             // #479: surface this frame's received→displayed latency to the
             // stage's separate "video · N ms" readout (throttled + smoothed).
             update_video_latency(&meta, &stats, &video_latency_setter);
@@ -359,7 +431,76 @@ fn schedule_video_frame_callback(video: &HtmlVideoElement, holder: &SharedRvfcCl
 
 #[cfg(test)]
 mod tests {
-    use super::{derive_video_latency_ms, smooth_latency, VIDEO_LATENCY_SMOOTHING_ALPHA};
+    use super::{
+        derive_video_latency_ms, frames_are_stale, mark_frames_live, smooth_latency, FrameStats,
+        FramesLiveSetter, FRAMES_LIVE_STALENESS_MS, VIDEO_LATENCY_SMOOTHING_ALPHA,
+    };
+    use std::cell::Cell;
+    use std::rc::Rc;
+
+    // ─────────────────────────────────────────────────────────────────────
+    // #500 frames-live gate: the neutral covering placeholder must reflect
+    // whether frames are ACTUALLY presenting. `frames_are_stale` is the pure
+    // staleness decision; `mark_frames_live` is the transition-guarded setter.
+    // ─────────────────────────────────────────────────────────────────────
+
+    #[test]
+    fn frames_are_stale_only_past_the_window() {
+        // Just decoded → not stale.
+        assert!(!frames_are_stale(1000.0, 1000.0, FRAMES_LIVE_STALENESS_MS));
+        // Within the window → not stale.
+        assert!(!frames_are_stale(
+            1000.0 + FRAMES_LIVE_STALENESS_MS - 1.0,
+            1000.0,
+            FRAMES_LIVE_STALENESS_MS
+        ));
+        // Exactly at the window edge → still live (strictly-greater boundary).
+        assert!(!frames_are_stale(
+            1000.0 + FRAMES_LIVE_STALENESS_MS,
+            1000.0,
+            FRAMES_LIVE_STALENESS_MS
+        ));
+        // Past the window → stale.
+        assert!(frames_are_stale(
+            1000.0 + FRAMES_LIVE_STALENESS_MS + 1.0,
+            1000.0,
+            FRAMES_LIVE_STALENESS_MS
+        ));
+    }
+
+    #[test]
+    fn mark_frames_live_emits_only_on_the_false_to_true_transition() {
+        let stats = FrameStats::new(0.0);
+        assert!(!stats.frames_live.get());
+        let calls = Rc::new(Cell::new(0u32));
+        let last = Rc::new(Cell::new(false));
+        let setter: FramesLiveSetter = {
+            let calls = Rc::clone(&calls);
+            let last = Rc::clone(&last);
+            Rc::new(move |v: bool| {
+                calls.set(calls.get() + 1);
+                last.set(v);
+            })
+        };
+        // First call flips the cell and emits true once.
+        mark_frames_live(&stats, &Some(Rc::clone(&setter)));
+        assert!(stats.frames_live.get());
+        assert_eq!(calls.get(), 1);
+        assert!(last.get());
+        // Subsequent calls while already live do NOT re-emit (no ~30×/s churn).
+        mark_frames_live(&stats, &Some(Rc::clone(&setter)));
+        mark_frames_live(&stats, &Some(setter));
+        assert_eq!(calls.get(), 1);
+    }
+
+    #[test]
+    fn mark_frames_live_without_setter_still_updates_the_cell() {
+        // No StageContext → no setter, but the per-session cell still flips so
+        // the staleness logic remains consistent.
+        let stats = FrameStats::new(0.0);
+        mark_frames_live(&stats, &None);
+        assert!(stats.frames_live.get());
+    }
 
     // ─────────────────────────────────────────────────────────────────────
     // #479 stage-side VIDEO latency derivation (received → displayed).

@@ -16,7 +16,7 @@ use leptos::web_sys::{
 };
 use wasm_bindgen_futures::{spawn_local, JsFuture};
 
-use super::ndi_frame_stats::VideoLatencySetter;
+use super::ndi_frame_stats::{FramesLiveSetter, VideoLatencySetter};
 use super::ndi_watchdog::{now_ms, profile_mode_is_compat, ReloadEscalation, Watchdog};
 use crate::state::stage::StageContext;
 
@@ -64,6 +64,16 @@ pub fn NdiVideo(source_id: String, #[prop(optional)] class: Option<&'static str>
     let video_latency_setter: Option<VideoLatencySetter> = video_latency_sig
         .map(|sig| std::rc::Rc::new(move |v: Option<f64>| sig.set(v)) as VideoLatencySetter);
 
+    // #500: the same shared-signal pattern for "frames are presenting". The rVFC
+    // observer / proxy set it true per frame; the health ticker flips it false on
+    // staleness. It gates the neutral covering placeholder so a late-joining
+    // client whose status is a stale `connecting` doesn't hide already-decoding
+    // video. Owned by the parent StagePage, so it survives this mount/unmount and
+    // is safe to clear from `on_cleanup`. No StageContext → no setter (None).
+    let frames_live_sig = use_context::<StageContext>().map(|ctx| ctx.ndi_frames_live);
+    let frames_live_setter: Option<FramesLiveSetter> =
+        frames_live_sig.map(|sig| std::rc::Rc::new(move |v: bool| sig.set(v)) as FramesLiveSetter);
+
     // Holds the active connection: the WHEP session + the watchdog observing
     // its health. Cleanup must close both — see on_cleanup below.
     struct ActiveConnection {
@@ -94,11 +104,13 @@ pub fn NdiVideo(source_id: String, #[prop(optional)] class: Option<&'static str>
 
     let cancelled_for_effect = Arc::clone(&cancelled);
     let video_latency_setter_for_effect = video_latency_setter;
+    let frames_live_setter_for_effect = frames_live_setter;
     Effect::new(move |_| {
         let Some(video) = video_ref.get() else { return };
         let source_id = source_id_for_effect.clone();
         let cancelled = Arc::clone(&cancelled_for_effect);
         let video_latency_setter = video_latency_setter_for_effect.clone();
+        let frames_live_setter = frames_live_setter_for_effect.clone();
         spawn_local(async move {
             // The reconnect-trigger flag: when a watchdog fires, it sets this
             // flag; the loop drains it and reconnects.
@@ -155,6 +167,7 @@ pub fn NdiVideo(source_id: String, #[prop(optional)] class: Option<&'static str>
                             &source_id,
                             &escalation,
                             video_latency_setter.clone(),
+                            frames_live_setter.clone(),
                             move || flag.set(true),
                         );
 
@@ -232,6 +245,12 @@ pub fn NdiVideo(source_id: String, #[prop(optional)] class: Option<&'static str>
         // is safe (not a disposed-signal write).
         if let Some(sig) = video_latency_sig {
             sig.set(None);
+        }
+        // #500: this <NdiVideo> is unmounting — no frames are presenting, so
+        // clear the live-frames flag. The neutral cover then reflects the
+        // next source's true (no-frames-yet) state instead of a stale `true`.
+        if let Some(sig) = frames_live_sig {
+            sig.set(false);
         }
         // #417: signal PAGE teardown to the page-session escalation so any
         // /healthz check spawned by `maybe_reload` just before this cleanup does

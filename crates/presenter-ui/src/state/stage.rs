@@ -23,6 +23,15 @@ pub struct StageContext {
     /// mounted, or no frames yet) — the readout is then hidden. Distinct from
     /// the WS connection round-trip shown in the "CONNECTED · N ms" readout.
     pub video_latency_ms: RwSignal<Option<f64>>,
+    /// Whether NDI video frames are ACTUALLY presenting on screen right now
+    /// (#500). Set `true` per presented frame by `NdiVideo`'s rVFC observer (or
+    /// the currentTime proxy on rVFC-less browsers), and flipped back to `false`
+    /// by the 1s health ticker once frames go stale (`FRAMES_LIVE_STALENESS_MS`),
+    /// on `NdiVideo` cleanup, and when NDI goes inactive. Gates the neutral
+    /// covering placeholder (`should_show_neutral_cover`) so a late-joining stage
+    /// client whose `ndi_status` is still a stale `connecting` does not hide a
+    /// video that is already decoding. `false` whenever no frames are flowing.
+    pub ndi_frames_live: RwSignal<bool>,
 }
 
 impl StageContext {
@@ -37,6 +46,7 @@ impl StageContext {
             ndi_active_source_id: RwSignal::new(None),
             ndi_status: RwSignal::new(String::new()),
             video_latency_ms: RwSignal::new(None),
+            ndi_frames_live: RwSignal::new(false),
         }
     }
 }
