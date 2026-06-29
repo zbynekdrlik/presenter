@@ -116,6 +116,23 @@ pub fn init() -> anyhow::Result<()> {
     }
 }
 
+/// Pick the first H264 encoder candidate (in priority order) that actually
+/// loads. The registry/loadability probe is injected via `can_load` so this
+/// is a PURE function — unit-testable without depending on the machine's live
+/// GStreamer registry state (#443). `hw_h264_encoder()` is the only caller and
+/// supplies the real probe.
+fn pick_h264_encoder(
+    candidates: &[&'static str],
+    can_load: impl Fn(&str) -> bool,
+) -> Option<&'static str> {
+    // BUG (#443): picks the highest-priority candidate regardless of whether
+    // it can actually load. An advertised-but-unloadable encoder (e.g.
+    // `nvh264enc` after a boot-race registry-cache drift, #333/#339) is
+    // therefore selected and the pipeline build later fails.
+    let _ = can_load;
+    candidates.first().copied()
+}
+
 /// Detect which H264 encoder webrtcsink will end up picking.
 ///
 /// Returns the element name (`"vah264enc"` Intel iris Xe / N100, or
@@ -199,5 +216,56 @@ mod gst_init_tests {
             "ensure_registry_rescan_env_var must set GST_REGISTRY_UPDATE=yes; \
              it is the named contract that init() depends on for the #333 item 1 fix"
         );
+    }
+}
+
+#[cfg(test)]
+mod pick_h264_encoder_tests {
+    use super::*;
+
+    const CANDIDATES: &[&str] = &["nvh264enc", "vah264enc", "x264enc"];
+
+    /// #443 regression: the highest-priority candidate (`nvh264enc`) is
+    /// ADVERTISED in the registry but cannot be instantiated (boot-race
+    /// registry-cache drift, #333/#339). The selector MUST skip it and fall
+    /// through to the next encoder that actually loads (`x264enc`), NOT return
+    /// the unloadable one. This is the exact failure the #443 bug exhibited.
+    #[test]
+    fn skips_advertised_but_unloadable_encoder() {
+        let picked = pick_h264_encoder(CANDIDATES, |name| name == "x264enc");
+        assert_eq!(
+            picked,
+            Some("x264enc"),
+            "an advertised-but-unloadable nvh264enc must be skipped in favour \
+             of the next loadable encoder (x264enc)"
+        );
+    }
+
+    /// No regression on healthy hosts: when every candidate loads, the
+    /// highest-priority one (first in the list) is chosen — identical to the
+    /// pre-fix behaviour.
+    #[test]
+    fn returns_first_when_all_load() {
+        let picked = pick_h264_encoder(CANDIDATES, |_name| true);
+        assert_eq!(picked, Some("nvh264enc"));
+    }
+
+    /// On a host with no loadable H264 encoder (e.g. GH `ubuntu-latest` with
+    /// no GPU plugins) the selector returns None so callers fail loudly / the
+    /// pipeline test skip-guards skip.
+    #[test]
+    fn returns_none_when_none_load() {
+        let picked = pick_h264_encoder(CANDIDATES, |_name| false);
+        assert_eq!(picked, None);
+    }
+
+    /// Priority order is honoured: the FIRST loadable candidate wins even when
+    /// a lower-priority one also loads. Here `nvh264enc` (highest priority)
+    /// cannot load but `vah264enc` can, so `vah264enc` is picked over the
+    /// also-loadable `x264enc`.
+    #[test]
+    fn respects_priority_order_among_loadable() {
+        let picked = pick_h264_encoder(CANDIDATES, |name| name != "nvh264enc");
+        assert_eq!(picked, Some("vah264enc"));
     }
 }
