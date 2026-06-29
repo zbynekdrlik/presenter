@@ -109,6 +109,19 @@ if [ "$RC" -ne 0 ]; then
     fail=1
 fi
 
+# Case 7 — MEM diagnostic parses independently of util: a non-numeric util
+# ("[N/A]", a real driver/wedged state) must NOT corrupt the reported mem value.
+run_preflight "missing" "[N/A], 1193" "123" ""
+if [ "$RC" -eq 0 ]; then
+    echo "FAIL case7: missing nvh264enc must FAIL even with [N/A] util; rc=$RC" >&2
+    fail=1
+fi
+if ! printf '%s' "$OUT" | grep -q "1193MiB"; then
+    echo "FAIL case7: mem diagnostic must report 1193MiB despite non-numeric util" >&2
+    echo "  output: $OUT" >&2
+    fail=1
+fi
+
 if [ "$fail" -ne 0 ]; then
     echo "Shell tests for scripts/ci/gpu-preflight.sh: FAILED" >&2
     exit 1
