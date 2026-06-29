@@ -31,6 +31,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 | Companion plugin, /etc/hosts, batching | `.claude/skills/companion/SKILL.md` |
 | Runner management, GPU wedge, probe cleanup | `.claude/skills/ci/SKILL.md` |
 | Local build/deploy workflow, CLIProxyAPI login | `.claude/skills/deploy/SKILL.md` |
+| Leptos/WASM frontend gotchas (view! macro, keyed `<For>`) | `.claude/skills/ui/SKILL.md` |
 
 ## Always-Rules
 
