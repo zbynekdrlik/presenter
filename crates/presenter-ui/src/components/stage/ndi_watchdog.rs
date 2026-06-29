@@ -334,6 +334,16 @@ impl Watchdog {
         install_ice_failure_listener(pc, Rc::clone(&active), Rc::clone(&on_failure));
 
         let stats = FrameStats::new(now_ms());
+        // #500: a freshly-installed session has NOT decoded a frame yet, and its
+        // per-session `stats.frames_live` cell starts false. Reset the shared
+        // page signal to match, so a stale `true` left by a prior (now-torn-down)
+        // session can never survive into a connect-but-never-decode session and
+        // wrongly hide the neutral cover. The first presented frame re-marks it
+        // true; on a healthy mid-stream reconnect the status is `connected`
+        // (no cover) so this never flashes the cover.
+        if let Some(setter) = &frames_live_setter {
+            setter(false);
+        }
         let rvfc_supported = start_rvfc_frame_observer(
             video,
             pc,
