@@ -153,6 +153,41 @@ ls ~/.cache/ms-playwright-mcp/
 Never kill another project's live session or its mcp/chrome. The heavy GPU load on dev2
 (`backend-inference`, `ffmpeg`, `python3`) is the user's inference job — NOT mess, never touch.
 
+## TURN relay — remote / Tailscale clients (#502)
+
+WebRTC media needs a path the client can reach. The server gathers **LAN host candidates**
+(10.77.x); a client off-LAN — OR on-LAN but with a **Tailscale subnet route hijacking 10.77.x
+through DERP** — can't reach them → **black preview + reconnect spiral** (NOT the #500 cover bug;
+that was the gray overlay). Proven by prod RTCP: affected client lost 519–4005 pkts vs a wired
+client's 11. Fix = Cloudflare Realtime TURN relay.
+
+- **Server** reads `PRESENTER_TURN_KEY_ID` + `PRESENTER_TURN_KEY_API_TOKEN` (unset → TURN off,
+  LAN-only, unchanged). `crates/presenter-server/src/turn.rs` mints short-lived ICE creds from the
+  Cloudflare key (12h cache, 10s mint timeout, 60s failure-throttle, stale-but-valid on error),
+  exposed at **`GET /ndi/ice-servers`**.
+- **Browser** (`ndi_video.rs`): fetches `/ndi/ice-servers` once/page (re-fetch >6h, before the 24h
+  cred TTL), sets them on the `RtcPeerConnection`. `iceTransportPolicy` stays DEFAULT (all) — direct
+  wins on LAN (no added latency), relay is the fallback.
+- **Server `webrtcbin`** (`consumers.rs`) also gets `turn-server` so BOTH sides have a relay candidate.
+- **Secrets:** GitHub Actions secrets `TURN_KEY_ID`/`TURN_KEY_API_TOKEN`; deploy writes a **0600
+  root-only EnvironmentFile** `/etc/presenter/turn.env` (NOT a drop-in `Environment=`, which
+  `systemctl show` exposes); unit has `EnvironmentFile=-/etc/presenter/turn.env`. NEVER commit values.
+  Full setup + the Cloudflare token gotchas (API needs **Calls Read/Write**, NOT "Realtime Admin";
+  product must be **activated via dashboard** first) are in local memory `project_cloudflare_turn.md`.
+
+### Verify TURN works (relay-only probe — the definitive check)
+On LAN the direct path wins, so TURN is never exercised by a normal load. To PROVE the relay path
+carries video, force relay-only with REAL chrome (bundled Chromium has no H264):
+```js
+const ice = await (await fetch(origin+'/ndi/ice-servers')).json();
+const pc = new RTCPeerConnection({ iceServers: ice, iceTransportPolicy: 'relay' }); // RELAY ONLY
+// addTransceiver('video',{direction:'recvonly'}) → offer → ICE-gather → POST /ndi/whep/<src> → setRemote
+// then getStats(): nominated candidate-pair's localCandidate.candidateType MUST be 'relay',
+// inbound-rtp framesDecoded>0, and a canvas pixel-variance of the <video> >~500 (real pixels, not black).
+```
+Verified 2026-06-29 on prod: `selectedLocalCandidateType=relay`, 256 frames, variance 3875.
+(Full script: scratchpad `relay_probe.mjs`.)
+
 ## Observability
 
 - `/ndi/snapshot/{id}` — per-session `buffersPushed/Dropped` + RTCP rtt/jitter/loss

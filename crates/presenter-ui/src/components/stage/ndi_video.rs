@@ -495,7 +495,10 @@ async fn connect_whep(
     let cfg = RtcConfiguration::new();
     // #502: set the Cloudflare TURN ICE servers (when configured) so a relay
     // candidate exists when the direct LAN path is unreachable (Tailscale /
-    // remote). iceTransportPolicy stays default (`all`) — direct wins on LAN.
+    // remote). On a PUBLIC origin (domain/remote) this also forces
+    // iceTransportPolicy=`relay` so the browser uses the clean Cloudflare relay
+    // instead of latching onto a lossy Tailscale pair; on-LAN (private IP) it
+    // stays `all` (direct wins, low latency). See ndi_ice::apply_ice_servers.
     super::ndi_ice::apply_ice_servers(&cfg, ice_servers);
     let pc = RtcPeerConnection::new_with_configuration(&cfg)?;
 
