@@ -877,9 +877,13 @@ fn consumer_webrtcbin_turn_server_applied_when_provided() {
     // With a TURN URI: the property is set (webrtcbin may normalise it, so
     // assert on the host substring rather than exact string equality).
     let uri = "turn://aabbccdd:deadbeef@turn.cloudflare.com:3478?transport=udp";
-    let (_a, _p, webrtcbin) =
-        super::consumers::build_consumer_elements("turn-on", StreamProfile::Default, 102, Some(uri))
-            .expect("consumer elements build (turn)");
+    let (_a, _p, webrtcbin) = super::consumers::build_consumer_elements(
+        "turn-on",
+        StreamProfile::Default,
+        102,
+        Some(uri),
+    )
+    .expect("consumer elements build (turn)");
     let configured = webrtcbin.property::<Option<String>>("turn-server");
     assert!(
         configured
