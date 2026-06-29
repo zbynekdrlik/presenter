@@ -280,6 +280,43 @@ test("api put does not switch preview when layout is worship-snv", async ({
   );
   expect(setLayoutRes.ok()).toBeTruthy();
 
+  // 1b. Seed worship-snv with a REAL current slide so the negative leak check
+  // below is NON-VACUOUS (#498). Without a seeded slide, worship-snv has no
+  // current lyrics, so `previewBefore` is "" and the old check
+  // `previewAfterPut === previewBefore` reduced to "" === "" — it passed even
+  // if a leak had set the preview to the api text. Seeding a known, NON-EMPTY
+  // baseline means a leak would change the preview AWAY from `seededText`, so
+  // the stability assertion can actually fail.
+  const seededText = `seeded-worship-snv-baseline-498-${Date.now()}`;
+  const libRes = await request.post(new URL("/libraries", baseURL).toString(), {
+    data: { name: `ApiStage498 Lib ${Date.now()}` },
+  });
+  expect(libRes.ok()).toBeTruthy();
+  const lib498: { id: string } = await libRes.json();
+  const presRes = await request.post(
+    new URL(`/libraries/${lib498.id}/presentations`, baseURL).toString(),
+    { data: { name: "Seeded Worship Song 498" } },
+  );
+  expect(presRes.ok()).toBeTruthy();
+  const presPayload498: {
+    presentation: { id: string; slides: Array<{ id: string }> };
+  } = await presRes.json();
+  const presId498 = presPayload498.presentation.id;
+  const slideId498 = presPayload498.presentation.slides[0].id;
+  const patchRes = await request.patch(
+    new URL(
+      `/presentations/${presId498}/slides/${slideId498}`,
+      baseURL,
+    ).toString(),
+    { data: { main: seededText, translation: "", stage: "" } },
+  );
+  expect(patchRes.ok()).toBeTruthy();
+  const seedStateRes = await request.post(
+    new URL("/stage/state", baseURL).toString(),
+    { data: { presentationId: presId498, currentSlideId: slideId498 } },
+  );
+  expect(seedStateRes.status()).toBe(204);
+
   // 2. Open the operator UI; wait for WASM ready.
   await page.goto(new URL("/ui/operator", baseURL).toString());
   await page.waitForSelector('body[data-wasm-ready="true"]', {
@@ -287,7 +324,8 @@ test("api put does not switch preview when layout is worship-snv", async ({
   });
   await page.waitForLoadState("networkidle");
 
-  // 3. Snapshot the current preview text BEFORE the api PUT.
+  // 3. PROVE the seeded baseline is actually rendered in the preview before the
+  // api PUT.
   //
   // #460: the header preview is now a live `/stage?preview=1` iframe, so the
   // current-slide text lives INSIDE the iframe (the real stage render), read
@@ -304,10 +342,20 @@ test("api put does not switch preview when layout is worship-snv", async ({
     page
       .frameLocator("iframe.operator__stage-iframe")
       .locator(".stage__current-slide .stage__slide-text");
-  const previewBefore = await currentInFrame()
-    .first()
-    .textContent()
-    .catch(() => "");
+  // Re-assert the seeded state now that the preview iframe has connected, so a
+  // late-connecting preview client cannot miss the original broadcast (mirrors
+  // the re-trigger pattern in the sibling "does not interfere" test).
+  await request.post(new URL("/stage/state", baseURL).toString(), {
+    data: { presentationId: presId498, currentSlideId: slideId498 },
+  });
+  // Positive assertion: the seeded slide IS visible in the worship-snv preview.
+  // This is what makes the later negative check non-vacuous — the baseline is a
+  // real, non-empty value an actual leak would have to overwrite.
+  await expect(currentInFrame().first()).toContainText(seededText, {
+    timeout: 15_000,
+  });
+  const previewBefore = (await currentInFrame().first().textContent()) ?? "";
+  expect(previewBefore).toContain(seededText);
 
   // 4. PUT api/stage with distinctive content. With the gate, this MUST NOT
   // cause the operator preview to update.
@@ -327,16 +375,30 @@ test("api put does not switch preview when layout is worship-snv", async ({
   );
   expect(putRes.ok()).toBeTruthy();
 
-  // 5. Wait briefly for any potential leak event to land.
-  await page.waitForTimeout(500);
-
-  // 6. Verify the operator preview did NOT change.
-  const previewAfterPut = await currentInFrame()
-    .first()
-    .textContent()
-    .catch(() => "");
-  expect(previewAfterPut ?? "").not.toContain(distinctiveText);
-  expect(previewAfterPut).toBe(previewBefore);
+  // 5-6. Over a bounded window the worship-snv preview must STAY the seeded
+  // baseline and never show the api content. Sampling repeatedly is a
+  // retry-with-assert poll (CLAUDE.md anti-sleep rule) — it replaces the old
+  // fixed `waitForTimeout(500)`. Because the baseline is a known NON-EMPTY
+  // value, a leak would change the preview text and fail one of these
+  // assertions instead of silently passing on an empty-vs-empty comparison.
+  const stabilityDeadline = Date.now() + 1_500;
+  let samples = 0;
+  while (Date.now() < stabilityDeadline) {
+    const text = (await currentInFrame().first().textContent()) ?? "";
+    expect(
+      text,
+      "api content leaked into the worship-snv preview",
+    ).not.toContain(distinctiveText);
+    expect(text, "worship-snv preview changed after the api PUT").toBe(
+      previewBefore,
+    );
+    samples += 1;
+    await page.waitForTimeout(100);
+  }
+  expect(
+    samples,
+    "stability window must take at least one sample",
+  ).toBeGreaterThan(0);
 
   // 7. Switch to api layout — operator preview SHOULD now reflect the
   // stored api content (per the switch-to-api refresh in
