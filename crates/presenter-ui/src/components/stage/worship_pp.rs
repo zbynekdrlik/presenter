@@ -113,13 +113,15 @@ pub fn WorshipPp(
 
     // Auto-scroll the playlist sidebar so the ACTIVE song stays visible as the
     // service advances past the ~10 rows that fit at 1080p (#461). Tracks the
-    // active entry's POSITION (not its name): a worship set can legitimately
-    // repeat the same song, so name-based dedup would suppress the scroll when
-    // advancing between two same-named entries. When the active position
+    // active entry's POSITION (not its name) so the scroll still FIRES when a
+    // set repeats a song and the operator advances between two same-named
+    // entries (name-based dedup would suppress it). When the active position
     // changes, defers one tick (Timeout 0) so the `--active` class is applied
     // to the DOM before scrolling, then centers the active row in the sidebar.
     // Mirrors the operator slide-list scroll Effect (which dedups on the unique
-    // slide id for the same reason).
+    // slide id for the same reason). Note: for a REPEATED song the scroll still
+    // targets the first matching `--active` row because rows are name-keyed;
+    // correct per-occurrence targeting is tracked in #496.
     {
         let snapshot = ctx.snapshot;
         Effect::new(move |prev: Option<Option<usize>>| {
