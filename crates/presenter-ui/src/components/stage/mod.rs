@@ -59,6 +59,32 @@ pub fn ndi_overlay_kind(status: &str) -> NdiOverlayKind {
     }
 }
 
+/// Decide whether the NDI fullscreen layout should render its NEUTRAL COVERING
+/// placeholder (`stage-ndi__placeholder--cover`) over the `<video>` (#500).
+///
+/// The cover hides the bare `<video>` while a configured source is in a neutral,
+/// non-error state (`connecting` / `no-signal`). But that gray cover must NOT
+/// hide a video that is ALREADY decoding frames. A late-joining stage client
+/// (the operator preview iframe, or any stage box that loads/reloads after the
+/// last broadcast) seeds `ndi_status = "connecting"` and stays there for up to
+/// ~30s until the server's next NDI-status tick, while the WHEP `<video>`
+/// decodes immediately — so the cover would hide live video for ~30s. Gating it
+/// additionally on `!frames_live` makes the cover reflect REALITY (frames on
+/// screen) rather than the lagging server status.
+///
+/// `frames_live` is true while frames are actually presenting (set per presented
+/// frame by `NdiVideo`'s rVFC observer / currentTime proxy, flipped false by the
+/// health ticker once frames go stale). The genuine-failure ERROR overlay
+/// (`NdiOverlayKind::Error`) is a SEPARATE gate and is intentionally unaffected:
+/// a failed/disconnected source has no frames, so errors still surface.
+pub fn should_show_neutral_cover(ndi_active: bool, status: &str, frames_live: bool) -> bool {
+    // RED STUB (#500): intentionally IGNORES `frames_live`, reproducing the bug
+    // where the cover is gated only on the lagging server status — so a live,
+    // already-decoding video is hidden behind the gray cover on late-join.
+    let _ = frames_live;
+    ndi_active && ndi_overlay_kind(status) == NdiOverlayKind::Neutral
+}
+
 /// Map an `ndi_status` string (from `LiveEvent::NdiConnectionStatus`) to the
 /// user-facing text rendered over the NDI video. The expected values are
 /// produced by `presenter-server`:
@@ -87,7 +113,58 @@ pub fn ndi_status_text(status: &str) -> String {
 
 #[cfg(test)]
 mod tests {
-    use super::{ndi_overlay_kind, ndi_status_text, NdiOverlayKind};
+    use super::{ndi_overlay_kind, ndi_status_text, should_show_neutral_cover, NdiOverlayKind};
+
+    // ── #500: the Neutral covering placeholder must reflect whether frames are
+    // ACTUALLY presenting, not just the lagging server status ────────────────
+    //
+    // Live on prod 2026-06-29 (v0.4.170), a late-joining stage client (the
+    // operator preview iframe) held `ndi_status="connecting"` for up to ~30s
+    // while the WHEP `<video>` was already decoding (1280x720, readyState=4,
+    // "VIDEO · 52 MS") — yet the gray "Connecting…" cover hid that live video
+    // because it was gated ONLY on the server status. The cover must drop the
+    // moment frames are presenting (frames_live), and reappear when they stop.
+
+    #[test]
+    fn neutral_cover_hidden_when_frames_are_live() {
+        // connecting + frames live ⇒ NO cover (the late-join bug: the WHEP
+        // video is already on screen; the gray cover must not hide it).
+        assert!(!should_show_neutral_cover(true, "connecting", true));
+        // no-signal + frames live ⇒ NO cover (presenting frames win over a
+        // stale neutral status).
+        assert!(!should_show_neutral_cover(true, "no-signal", true));
+    }
+
+    #[test]
+    fn neutral_cover_shown_when_no_frames_yet() {
+        // connecting / no-signal with NO frames ⇒ cover (the genuine pre-video
+        // state — #448: hide the bare <video> + native play-arrow).
+        assert!(should_show_neutral_cover(true, "connecting", false));
+        assert!(should_show_neutral_cover(true, "no-signal", false));
+    }
+
+    #[test]
+    fn neutral_cover_requires_active_ndi() {
+        // No active source ⇒ never the neutral cover (the "No video source
+        // configured" placeholder covers that case instead).
+        assert!(!should_show_neutral_cover(false, "connecting", false));
+        assert!(!should_show_neutral_cover(false, "no-signal", true));
+    }
+
+    #[test]
+    fn error_state_is_never_a_neutral_cover_regardless_of_frames() {
+        // A genuine failure/disconnect is the RED ERROR overlay, NOT the neutral
+        // cover — independent of frames_live. This pins that the #500 frames
+        // gate never suppresses the error overlay (a failed source has no
+        // frames anyway, so frames_live is false in practice — but assert both).
+        assert_eq!(ndi_overlay_kind("failed"), NdiOverlayKind::Error);
+        assert_eq!(ndi_overlay_kind("disconnected"), NdiOverlayKind::Error);
+        assert!(!should_show_neutral_cover(true, "failed", false));
+        assert!(!should_show_neutral_cover(true, "failed", true));
+        assert!(!should_show_neutral_cover(true, "disconnected", false));
+        // `connected` (a stream flowing → None kind) is also never the cover.
+        assert!(!should_show_neutral_cover(true, "connected", false));
+    }
 
     // ── #448: off/silent source is a NEUTRAL state, not a red error ──────────
     //
