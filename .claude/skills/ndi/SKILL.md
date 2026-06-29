@@ -107,6 +107,21 @@ Check transport-level `bytesReceived` vs `inbound-rtp`:
 Dev encoder is `nvh264enc` (RTX 5060); `vah264enc` is NOT registered on this NVIDIA box.
 `GST_PLUGIN_FEATURE_RANK=nvh264enc:NONE` only affects autoplug rank, not `ElementFactory::find`.
 
+**Encoder selection probes LOADABILITY, not name-presence (#443).** `hw_h264_encoder()`
+(`presenter-ndi/src/lib.rs`) uses the pure helper `pick_h264_encoder(candidates, can_load)`
+with the real probe `|name| ElementFactory::make(name).build().is_ok()` — NOT
+`ElementFactory::find(name).is_some()`. Reason: a boot-race registry-cache drift (#333/#339)
+can ADVERTISE `nvh264enc` while the plugin can't be instantiated → `find()` returns `Some` but
+`make().build()` fails → picking on name-presence chose an unloadable encoder and the pipeline
+build (+ the `pipeline::tests` skip-guards keyed on `hw_h264_encoder().is_none()`) failed with
+`Failed to load element factory nvh264enc`. **When you need "is element X usable?", always
+`make(X).build().is_ok()`, never `find(X).is_some()`.** It's cheap + side-effect-free
+(construction only allocates the GObject; hardware opens at the READY transition), so it's safe
+even on the 30s NDI-reconnect tick and is intentionally re-probed (un-memoized) so a self-healed
+registry resumes without a restart. Diagnose locally with `gst-inspect-1.0 nvh264enc` (→ "No such
+element" = not loadable). Unit-test the selection via the pure helper's injected `can_load` closure
+— never depend on the machine's live registry.
+
 ## Cleanup After NDI/Stage Debug Sessions
 
 After any NDI / stage-display debug session, clean up BEFORE ending:

@@ -276,8 +276,10 @@ impl AppState {
         // startup auto-restore is gated by should_auto_restore_ndi() above,
         // but this 30s loop was NOT gated and would re-trigger the wedge
         // state every 30 seconds on an encoder-missing host. We probe
-        // hw_h264_encoder() PER TICK (cheap registry hash lookup) so a host
-        // whose plugin registry self-heals can resume reconnect without a
+        // hw_h264_encoder() PER TICK (a cheap instantiate-and-discard
+        // loadability probe — #443; GStreamer element construction only
+        // allocates the GObject, hardware opens at the READY transition) so a
+        // host whose plugin registry self-heals can resume reconnect without a
         // process restart.
         if self.ndi_manager().is_some() {
             let ndi_state = self.clone();
