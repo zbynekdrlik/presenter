@@ -40,6 +40,12 @@ const CRED_TTL_SECS: u64 = 86_400;
 /// Re-mint once the cached creds are older than this (12h) — comfortably inside
 /// the 24h TTL so a consumer never receives an already-expired credential.
 const REFRESH_AFTER: Duration = Duration::from_secs(12 * 60 * 60);
+/// After a FAILED mint, do not retry for this long — throttles a per-request
+/// HTTP storm to Cloudflare when creds are misconfigured or Cloudflare is down.
+const MIN_RETRY_AFTER: Duration = Duration::from_secs(60);
+/// Bound on the Cloudflare mint HTTP call — caps how long the cache lock is held
+/// when Cloudflare hangs (so concurrent WHEP POSTs can't wedge indefinitely).
+const MINT_TIMEOUT: Duration = Duration::from_secs(10);
 
 /// The long-lived Cloudflare TURN key (id + API token) read from env.
 #[derive(Clone)]
@@ -80,6 +86,16 @@ struct CacheEntry {
     minted_at: Instant,
 }
 
+/// Cache + retry-throttle state behind one lock. `entry` is the last
+/// successfully-minted creds (kept across a later mint failure — stale-but-valid
+/// beats none); `last_attempt` throttles re-minting after a failure so a
+/// misconfigured key / Cloudflare outage can't trigger a per-request HTTP storm.
+#[derive(Default)]
+struct CacheState {
+    entry: Option<CacheEntry>,
+    last_attempt: Option<Instant>,
+}
+
 /// Shared, cloneable TURN service. Mints on demand and caches for ~12h.
 #[derive(Clone)]
 pub struct TurnService {
@@ -89,7 +105,7 @@ pub struct TurnService {
 struct Inner {
     key: Option<TurnKey>,
     client: reqwest::Client,
-    cache: Mutex<Option<CacheEntry>>,
+    cache: Mutex<CacheState>,
     /// Base URL of the Cloudflare keys endpoint (overridable in tests).
     base_url: String,
 }
@@ -107,11 +123,17 @@ impl TurnService {
                  WebRTC uses LAN host candidates only"
             );
         }
+        // Bounded-timeout client so a hung Cloudflare endpoint can't pin the
+        // cache lock (and thus block WHEP POSTs) indefinitely.
+        let client = reqwest::Client::builder()
+            .timeout(MINT_TIMEOUT)
+            .build()
+            .unwrap_or_else(|_| reqwest::Client::new());
         Self {
             inner: Arc::new(Inner {
                 key,
-                client: reqwest::Client::new(),
-                cache: Mutex::new(None),
+                client,
+                cache: Mutex::new(CacheState::default()),
                 base_url: CLOUDFLARE_TURN_BASE.to_string(),
             }),
         }
@@ -132,41 +154,53 @@ impl TurnService {
         self.fresh_parsed().await.and_then(|p| p.turn_uri)
     }
 
-    /// Return a fresh (cache-or-mint) `ParsedIce`. Mints under the cache lock so
-    /// concurrent callers don't cause a mint storm. On mint failure: log + keep
-    /// the existing cache (stale-but-valid creds beat none); if nothing is
-    /// cached, returns `None` so callers degrade to LAN-only.
+    /// Return a fresh (cache-or-mint) `ParsedIce`. Mints under the cache lock
+    /// (so concurrent callers don't cause a mint storm), but bounded two ways:
+    /// the `MINT_TIMEOUT` client caps how long the lock is held when Cloudflare
+    /// hangs, and a failed mint is throttled to once per `MIN_RETRY_AFTER` so a
+    /// misconfigured key / outage can't fire an HTTP request per WHEP connect.
+    /// On mint failure: log + keep any existing cache (stale-but-valid beats
+    /// none); if nothing is cached, returns `None` → callers degrade to LAN-only.
     async fn fresh_parsed(&self) -> Option<ParsedIce> {
         if self.inner.key.is_none() {
             return None;
         }
-        let mut guard = self.inner.cache.lock().await;
-        let stale = match guard.as_ref() {
-            Some(entry) => entry.minted_at.elapsed() >= REFRESH_AFTER,
-            None => true,
-        };
-        if stale {
-            match self.mint().await {
-                Ok(body) => {
-                    let parsed = parse_cloudflare_ice(&body);
-                    *guard = Some(CacheEntry {
-                        parsed,
-                        minted_at: Instant::now(),
-                    });
-                }
-                Err(e) => {
-                    // Never log the token; the error string carries only status
-                    // + body text from reqwest (no auth header).
-                    tracing::warn!(error = %e, "TURN: minting ICE servers failed — \
-                        keeping any cached creds; WebRTC falls back to LAN-only this cycle");
+        let mut st = self.inner.cache.lock().await;
+        let fresh = st
+            .entry
+            .as_ref()
+            .is_some_and(|e| e.minted_at.elapsed() < REFRESH_AFTER);
+        if !fresh {
+            let may_retry = st
+                .last_attempt
+                .map_or(true, |t| t.elapsed() >= MIN_RETRY_AFTER);
+            if may_retry {
+                st.last_attempt = Some(Instant::now());
+                match self.mint().await {
+                    Ok(body) => {
+                        st.entry = Some(CacheEntry {
+                            parsed: parse_cloudflare_ice(&body),
+                            minted_at: Instant::now(),
+                        });
+                    }
+                    Err(e) => {
+                        // Never log the token (api_token is not in the error) nor
+                        // the key_id (mint() strips the URL from reqwest errors).
+                        tracing::warn!(error = %e, "TURN: minting ICE servers failed — \
+                            keeping any cached creds; retry throttled ~60s; WebRTC \
+                            falls back to LAN-only meanwhile");
+                    }
                 }
             }
         }
-        guard.as_ref().map(|e| e.parsed.clone())
+        st.entry.as_ref().map(|e| e.parsed.clone())
     }
 
     /// POST to Cloudflare and return the raw JSON response body. Errors carry
-    /// the HTTP status + truncated body for diagnostics — never the API token.
+    /// the HTTP status + truncated body for diagnostics — never the API token,
+    /// and never the request URL (which embeds the secret `key_id`): a reqwest
+    /// transport error's `Display` includes the URL, so `without_url()` strips it
+    /// before the error can reach the WARN log.
     async fn mint(&self) -> anyhow::Result<Value> {
         let key = self
             .inner
@@ -184,7 +218,8 @@ impl TurnService {
             .bearer_auth(&key.api_token)
             .json(&json!({ "ttl": CRED_TTL_SECS }))
             .send()
-            .await?;
+            .await
+            .map_err(|e| anyhow::anyhow!("Cloudflare TURN request failed: {}", e.without_url()))?;
         let status = resp.status();
         let body = resp.text().await.unwrap_or_default();
         if !status.is_success() {
@@ -379,7 +414,7 @@ mod tests {
             inner: Arc::new(Inner {
                 key: None,
                 client: reqwest::Client::new(),
-                cache: Mutex::new(None),
+                cache: Mutex::new(CacheState::default()),
                 base_url: CLOUDFLARE_TURN_BASE.to_string(),
             }),
         };
@@ -399,10 +434,13 @@ mod tests {
                     api_token: "test-token".to_string(),
                 }),
                 client: reqwest::Client::new(),
-                cache: Mutex::new(Some(CacheEntry {
-                    parsed,
-                    minted_at: Instant::now(),
-                })),
+                cache: Mutex::new(CacheState {
+                    entry: Some(CacheEntry {
+                        parsed,
+                        minted_at: Instant::now(),
+                    }),
+                    last_attempt: None,
+                }),
                 base_url: "http://127.0.0.1:1/unused".to_string(),
             }),
         };

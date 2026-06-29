@@ -352,27 +352,31 @@ jobs:
           scp -i ~/.ssh/id_deploy scripts/deploy/presenter.service deploy-target:/tmp/presenter.service
           ssh deploy-target "sudo cp /tmp/presenter.service /etc/systemd/system/ && sudo systemctl daemon-reload"
 
-      # #502: inject the Cloudflare Realtime TURN credentials as a systemd
-      # drop-in (secrets — must NOT live in the committed unit file). Written
-      # via the bash builtin printf (value never in any process argv) piped over
-      # ssh stdin (never in the remote argv / ps). When the secrets are unset,
-      # remove any stale drop-in so TURN cleanly disables (LAN-only).
+      # #502: write the Cloudflare Realtime TURN credentials to a 0600 root-only
+      # EnvironmentFile (the committed unit references it as `EnvironmentFile=-`).
+      # Secrets — must NOT live in the committed unit. The value is passed via
+      # the bash builtin printf (never in any process argv) piped over ssh stdin
+      # (never in the remote argv / ps), and written under `umask 077` so the
+      # file is 0600 from creation (no 0644 window). Unlike an inline
+      # `Environment=` drop-in, EnvironmentFile values are NOT exposed by
+      # `systemctl show`. When the secrets are unset, remove any stale file so
+      # TURN cleanly disables (LAN-only).
       - name: Configure TURN credentials
         env:
           TURN_KEY_ID: ${{ secrets.TURN_KEY_ID }}
           TURN_KEY_API_TOKEN: ${{ secrets.TURN_KEY_API_TOKEN }}
         run: |
           set -euo pipefail
-          DROPIN_DIR=/etc/systemd/system/${{ env.SERVICE_NAME }}.service.d
+          SECRET_FILE=/etc/presenter/turn.env
           if [ -n "$TURN_KEY_ID" ] && [ -n "$TURN_KEY_API_TOKEN" ]; then
-            ssh deploy-target "sudo mkdir -p $DROPIN_DIR"
-            printf '[Service]\nEnvironment="PRESENTER_TURN_KEY_ID=%s"\nEnvironment="PRESENTER_TURN_KEY_API_TOKEN=%s"\n' \
+            ssh deploy-target "sudo install -d -m 755 /etc/presenter"
+            printf 'PRESENTER_TURN_KEY_ID=%s\nPRESENTER_TURN_KEY_API_TOKEN=%s\n' \
               "$TURN_KEY_ID" "$TURN_KEY_API_TOKEN" \
-              | ssh deploy-target "sudo tee $DROPIN_DIR/turn.conf >/dev/null"
-            echo "TURN credentials configured (drop-in written)"
+              | ssh deploy-target "sudo sh -c 'umask 077 && cat > $SECRET_FILE'"
+            echo "TURN credentials written to $SECRET_FILE (0600 root-only)"
           else
-            ssh deploy-target "sudo rm -f $DROPIN_DIR/turn.conf 2>/dev/null || true"
-            echo "TURN secrets unset — TURN disabled (LAN-only); any stale drop-in removed"
+            ssh deploy-target "sudo rm -f $SECRET_FILE 2>/dev/null || true"
+            echo "TURN secrets unset — TURN disabled (LAN-only); any stale secret file removed"
           fi
           ssh deploy-target "sudo systemctl daemon-reload"
 
