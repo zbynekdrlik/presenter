@@ -52,9 +52,12 @@ pub fn active_sidebar_index(
     snapshot_active_index: Option<u32>,
 ) -> Option<usize> {
     if let Some(index) = snapshot_active_index {
-        let index = index as usize;
-        if index < entries.len() {
-            return Some(index);
+        // Honor the explicit occurrence only when that row is actually active.
+        // If a live playlist reorder left the index pointing at a now-inactive
+        // row, fall through to the first active row so the highlight never
+        // diverges from the server's per-entry is_active marking.
+        if entries.get(index as usize).is_some_and(|e| e.is_active) {
+            return Some(index as usize);
         }
     }
     entries.iter().position(|e| e.is_active)
@@ -185,5 +188,20 @@ mod tests {
     fn active_sidebar_index_none_when_nothing_active() {
         let entries = vec![entry("A", false), entry("B", false)];
         assert_eq!(active_sidebar_index(&entries, None), None);
+    }
+
+    #[test]
+    fn active_sidebar_index_falls_back_when_explicit_index_row_is_inactive() {
+        // Edit-while-live race: the persisted index points at a row the server
+        // no longer marks active. Don't highlight that row — fall back to the
+        // first active row so the UI matches the server's is_active marking.
+        let entries = vec![entry("A", true), entry("B", false), entry("C", false)];
+        assert_eq!(active_sidebar_index(&entries, Some(1)), Some(0));
+    }
+
+    #[test]
+    fn active_sidebar_index_none_when_explicit_index_inactive_and_nothing_active() {
+        let entries = vec![entry("A", false), entry("B", false)];
+        assert_eq!(active_sidebar_index(&entries, Some(1)), None);
     }
 }

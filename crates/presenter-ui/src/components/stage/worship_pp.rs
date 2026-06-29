@@ -103,16 +103,12 @@ pub fn WorshipPp(
             .unwrap_or_default()
     };
 
-    // #496: enumerate so the sidebar <For> can key by the unique INDEX (a
-    // repeated song shares name + presentation_id, which collided under the old
-    // name key). The `view!` macro needs `each` as a named closure, not an
-    // inline `move ||`.
-    let indexed_entries = move || {
-        playlist_entries()
-            .into_iter()
-            .enumerate()
-            .collect::<Vec<_>>()
-    };
+    // #496: the sidebar <For> keys by the unique row INDEX (a repeated song
+    // shares name + presentation_id, which collided under the old name key).
+    // Iterate plain indices — the row reads its name/active-state reactively
+    // from the snapshot by index, so the entries themselves aren't carried. The
+    // `view!` macro needs `each` as a named closure, not an inline `move ||`.
+    let entry_indices = move || (0..playlist_entries().len()).collect::<Vec<usize>>();
 
     // worship-pp specific: derive the CURRENT-song badge from the Presenter
     // playlist's active entry, NOT from AbleSet's server-side s.song_name (#461).
@@ -207,9 +203,9 @@ pub fn WorshipPp(
             <div class="stage-pp__playlist-sidebar">
                 <span class="stage__debug-label">"playlist-sidebar"</span>
                 <For
-                    each=indexed_entries
-                    key=|(idx, _entry)| *idx
-                    children=move |(idx, _entry)| {
+                    each=entry_indices
+                    key=|idx| *idx
+                    children=move |idx| {
                         // #496: key by INDEX (unique) — a repeated song shares
                         // name AND presentation_id, so name-keying collided and
                         // highlighted/scrolled the wrong occurrence. Both the
