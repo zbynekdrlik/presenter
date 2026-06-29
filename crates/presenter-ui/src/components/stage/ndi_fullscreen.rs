@@ -2,7 +2,9 @@ use leptos::prelude::*;
 
 use crate::components::stage::ndi_video::NdiVideo;
 use crate::components::stage::status_bar::StatusBar;
-use crate::components::stage::{ndi_overlay_kind, ndi_status_text, NdiOverlayKind};
+use crate::components::stage::{
+    ndi_overlay_kind, ndi_status_text, should_show_neutral_cover, NdiOverlayKind,
+};
 use crate::state::stage::StageContext;
 use crate::ws::stage::StageWsState;
 
@@ -20,6 +22,7 @@ pub fn NdiFullscreen(
     let ndi_active = ctx.ndi_active;
     let ndi_active_source_id = ctx.ndi_active_source_id;
     let ndi_status = ctx.ndi_status;
+    let ndi_frames_live = ctx.ndi_frames_live;
 
     // De-duplicate signal writes: WS replays and initial-fetch both set the
     // same source_id during page load. Without Memo, every set() re-runs the
@@ -54,8 +57,14 @@ pub fn NdiFullscreen(
             // browser play-arrow are hidden behind it. Only a GENUINE failure
             // (`failed[: reason]` / `disconnected`) shows the alarming red
             // `.stage-ndi__overlay`.
+            //
+            // #500: the cover is ALSO gated on `!ndi_frames_live` — a
+            // late-joining client whose status is still a stale `connecting`
+            // but whose WHEP `<video>` is already decoding drops the cover
+            // immediately instead of hiding live video for ~30s. The status text
+            // still reflects `ndi_status` for the genuine no-frames case.
             <Show when=move || {
-                ndi_active.get() && ndi_overlay_kind(&ndi_status.get()) == NdiOverlayKind::Neutral
+                should_show_neutral_cover(ndi_active.get(), &ndi_status.get(), ndi_frames_live.get())
             }>
                 <div class="stage-ndi__placeholder stage-ndi__placeholder--cover">
                     {move || ndi_status_text(&ndi_status.get())}

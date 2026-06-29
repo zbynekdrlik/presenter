@@ -15,7 +15,10 @@ use leptos::wasm_bindgen::{closure::Closure, JsCast};
 use leptos::web_sys::{HtmlVideoElement, RtcPeerConnection};
 
 use super::ndi_beacon::maybe_post_beacon;
-use super::ndi_frame_stats::{record_presented_frame, FrameStats};
+use super::ndi_frame_stats::{
+    mark_frames_live, record_presented_frame, refresh_frames_live_staleness, FrameStats,
+    FramesLiveSetter,
+};
 use super::ndi_profile::maybe_profile_fallback;
 use super::ndi_watchdog::{now_ms, ReloadEscalation, Watchdog};
 
@@ -39,6 +42,7 @@ pub(crate) fn start_health_ticker<F: Fn() + 'static>(
     stats: &Rc<FrameStats>,
     rvfc_supported: bool,
     escalation: &Rc<ReloadEscalation>,
+    frames_live_setter: Option<FramesLiveSetter>,
     on_failure: Rc<F>,
 ) -> i32 {
     let active = Rc::clone(active);
@@ -72,7 +76,14 @@ pub(crate) fn start_health_ticker<F: Fn() + 'static>(
             // signal — reset the page-level reload timer ONLY when it actually
             // advanced (rVFC path resets in its own callback).
             escalation.note_decoded_frame();
+            // #500: proxy frame advanced → frames are live (drop the cover) on
+            // rVFC-less browsers too. Idempotent (transition-guarded).
+            mark_frames_live(&stats, &frames_live_setter);
         }
+        // #500: restore the neutral cover when frames have gone stale — runs on
+        // BOTH rVFC and proxy browsers (the rVFC path only marks live; this is
+        // the single place that marks NOT-live). Transition-guarded.
+        refresh_frames_live_staleness(&stats, &frames_live_setter);
         let now = now_ms();
         let frames = stats.frames_presented.get();
         if frames == 0 {

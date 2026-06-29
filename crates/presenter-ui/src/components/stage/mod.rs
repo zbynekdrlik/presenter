@@ -78,11 +78,12 @@ pub fn ndi_overlay_kind(status: &str) -> NdiOverlayKind {
 /// (`NdiOverlayKind::Error`) is a SEPARATE gate and is intentionally unaffected:
 /// a failed/disconnected source has no frames, so errors still surface.
 pub fn should_show_neutral_cover(ndi_active: bool, status: &str, frames_live: bool) -> bool {
-    // RED STUB (#500): intentionally IGNORES `frames_live`, reproducing the bug
-    // where the cover is gated only on the lagging server status — so a live,
-    // already-decoding video is hidden behind the gray cover on late-join.
-    let _ = frames_live;
-    ndi_active && ndi_overlay_kind(status) == NdiOverlayKind::Neutral
+    // The cover shows ONLY when a source is active, its status is neutral
+    // (connecting / no-signal), AND no frames are currently presenting. The
+    // `!frames_live` term is the #500 fix: a late-joining client whose status is
+    // a stale `connecting` but whose `<video>` is already decoding drops the
+    // cover immediately instead of hiding live video for ~30s.
+    ndi_active && ndi_overlay_kind(status) == NdiOverlayKind::Neutral && !frames_live
 }
 
 /// Map an `ndi_status` string (from `LiveEvent::NdiConnectionStatus`) to the
