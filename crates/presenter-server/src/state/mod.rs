@@ -52,6 +52,7 @@ use crate::{
     osc::OscBridge,
     resolume::ResolumeRegistry,
     stage_connections::{StageConnections, StageHeartbeatConfig},
+    turn::TurnService,
 };
 use chrono::Utc;
 use presenter_core::{
@@ -119,6 +120,9 @@ pub struct AppState {
     ndi_manager: Option<ndi_control::NdiManagerHandle>,
     api_stage: Arc<RwLock<ApiStageState>>,
     pub local_public_ip: Arc<Option<String>>,
+    /// Cloudflare Realtime TURN minting (#502). Disabled (no-op) when the
+    /// `PRESENTER_TURN_KEY_*` env vars are unset — on-LAN WebRTC is unaffected.
+    turn: TurnService,
 }
 
 /// Gate predicate for the startup NDI auto-restore branch.
@@ -206,6 +210,7 @@ impl AppState {
             ndi_manager,
             api_stage: Arc::new(RwLock::new(ApiStageState::default())),
             local_public_ip,
+            turn: TurnService::from_env(),
         };
         state.spawn_heartbeat_tasks();
         state
@@ -596,6 +601,12 @@ impl AppState {
 
     pub fn ai_proxy(&self) -> &Arc<ProxyManager> {
         &self.ai_proxy
+    }
+
+    /// Cloudflare Realtime TURN service (#502): mints browser ICE servers for
+    /// `GET /ndi/ice-servers` and the `webrtcbin` relay `turn://` URI.
+    pub(crate) fn turn(&self) -> &TurnService {
+        &self.turn
     }
 
     pub(crate) fn ndi_manager(&self) -> Option<&ndi_control::NdiManagerHandle> {

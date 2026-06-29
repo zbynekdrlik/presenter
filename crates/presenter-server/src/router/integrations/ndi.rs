@@ -33,6 +33,18 @@ pub(crate) async fn ndi_status(State(state): State<AppState>) -> Json<serde_json
     Json(serde_json::json!({ "available": state.ndi_manager().is_some() }))
 }
 
+/// `GET /ndi/ice-servers` (#502) — returns the browser-ready WebRTC ICE
+/// servers (Cloudflare Realtime TURN). The browser sets these on its
+/// `RTCPeerConnection` so a relay candidate exists when the direct LAN path is
+/// unreachable (Tailscale subnet route / remote client). Returns `[]` when TURN
+/// is unconfigured — the browser then uses LAN host candidates only, exactly as
+/// before. Credentials are minted short-lived server-side; the long-lived TURN
+/// key never reaches the browser.
+#[instrument(skip_all)]
+pub(crate) async fn ndi_ice_servers(State(state): State<AppState>) -> Json<serde_json::Value> {
+    Json(state.turn().ice_servers().await)
+}
+
 /// `GET /ndi/snapshot/:source_id` — diagnostic route exposing the live
 /// pipeline state for a single NDI source.
 ///
@@ -205,6 +217,16 @@ mod tests {
         assert_eq!(no_gap.max_present_gap_ms, None);
         assert_eq!(no_gap.present_gaps_over100, None);
         assert_eq!(no_gap.presented_fps, None);
+    }
+
+    #[tokio::test]
+    async fn ice_servers_empty_when_turn_unconfigured() {
+        // #502: with no PRESENTER_TURN_KEY_* env (the test/CI default), the
+        // endpoint returns an empty array so the browser uses LAN host
+        // candidates only — exactly today's behavior.
+        let state = fresh_state().await;
+        let Json(value) = ndi_ice_servers(State(state)).await;
+        assert_eq!(value, serde_json::json!([]));
     }
 
     #[tokio::test]

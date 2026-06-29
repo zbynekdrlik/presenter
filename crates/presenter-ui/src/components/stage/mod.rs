@@ -4,6 +4,7 @@ pub mod bible_overlay;
 pub mod camera_crew;
 mod ndi_beacon;
 mod ndi_frame_stats;
+mod ndi_ice;
 pub mod ndi_fullscreen;
 mod ndi_health_ticker;
 mod ndi_profile;

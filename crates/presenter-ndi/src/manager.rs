@@ -53,6 +53,11 @@ pub enum WhepOp {
         id: Option<String>,
         body: Vec<u8>,
         profile: StreamProfile,
+        /// `webrtcbin`-format TURN relay URI (`turn://user:cred@host:port?…`)
+        /// minted server-side (#502), or `None` when TURN is unconfigured. Set
+        /// on the consumer `webrtcbin` so the SERVER gathers a relay candidate
+        /// reachable by a Tailscale/remote browser.
+        turn_server: Option<String>,
     },
     /// ICE trickle update.
     Patch {

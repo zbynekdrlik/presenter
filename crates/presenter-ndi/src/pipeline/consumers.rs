@@ -148,6 +148,7 @@ impl NdiPipeline {
         &self,
         sdp_offer_bytes: Vec<u8>,
         profile: StreamProfile,
+        turn_server: Option<String>,
     ) -> Result<WhepAnswer, AddConsumerError> {
         self.reap_and_check_cap().await?;
 
@@ -195,6 +196,7 @@ impl NdiPipeline {
                 enc_clock,
                 enc_base_time,
                 rt,
+                turn_server.as_deref(),
             );
             // If the receiver is already gone, the returned branch guard drops
             // here and tears itself down.
@@ -455,6 +457,7 @@ fn build_consumer_pipeline_blocking(
     enc_clock: Option<gst::Clock>,
     enc_base_time: Option<gst::ClockTime>,
     rt: tokio::runtime::Handle,
+    turn_server: Option<&str>,
 ) -> Result<ConsumerBranch> {
     let sdp_msg = gstreamer_webrtc::gst_sdp::SDPMessage::parse_buffer(sdp_offer_bytes)
         .map_err(|e| anyhow!("SDP parse failed: {e}"))?;
@@ -476,7 +479,8 @@ fn build_consumer_pipeline_blocking(
         ));
     };
 
-    let (appsrc, payloader, webrtcbin) = build_consumer_elements(session_id, profile, pt)?;
+    let (appsrc, payloader, webrtcbin) =
+        build_consumer_elements(session_id, profile, pt, turn_server)?;
 
     let consumer_pipeline = gst::Pipeline::with_name(&format!("consumer_{session_id}"));
     adopt_encoder_timeline(&consumer_pipeline, enc_clock, enc_base_time, session_id);
@@ -639,6 +643,7 @@ pub(super) fn build_consumer_elements(
     session_id: &str,
     profile: StreamProfile,
     pt: u32,
+    turn_server: Option<&str>,
 ) -> Result<(gst_app::AppSrc, gst::Element, gst::Element)> {
     // Initial caps match the shared producer appsink caps filter so the very
     // first forwarded sample agrees (`consumer_h264_caps` pins BOTH sides of
@@ -689,6 +694,18 @@ pub(super) fn build_consumer_elements(
     // synchronized hitch; libwebrtc/VDO.Ninja uses one clock and stays smooth).
     // "clock-time" = the pipeline clock, identical to the RTP timestamp base.
     configure_rtpbin_ntp_clock(&webrtcbin);
+
+    // #502: set a Cloudflare TURN relay so the SERVER gathers its OWN relay
+    // candidate — required for a fully-relayed path to a browser that can't
+    // reach the server's LAN host candidates (Tailscale subnet route / remote).
+    // Set BEFORE the pipeline goes PLAYING (negotiation). Additive: the direct
+    // LAN candidate still wins where reachable (iceTransportPolicy stays `all`).
+    // `None` (TURN unconfigured) is a no-op → today's LAN-only behavior. The
+    // URI embeds credentials, so it is NOT logged verbatim.
+    if let Some(uri) = turn_server {
+        webrtcbin.set_property("turn-server", uri);
+        tracing::info!(session_id = %session_id, "consumer webrtcbin: TURN relay configured");
+    }
 
     Ok((appsrc, payloader, webrtcbin))
 }

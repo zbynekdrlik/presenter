@@ -134,11 +134,17 @@ pub fn NdiVideo(source_id: String, #[prop(optional)] class: Option<&'static str>
             // healthy (see should_reset_backoff).
             let backoff_step: BackoffStep = std::rc::Rc::new(std::cell::Cell::new(0));
 
+            // #502: fetch the Cloudflare TURN ICE servers ONCE for this page,
+            // before the reconnect loop, and reuse them across every reconnect
+            // so we don't re-mint per reconnect. None (TURN unconfigured or
+            // fetch failed) → default config = today's LAN-only behavior.
+            let ice_servers = super::ndi_ice::fetch_ice_servers().await;
+
             loop {
                 if cancelled.load(Ordering::Acquire) {
                     return;
                 }
-                match connect_whep(&video, &source_id).await {
+                match connect_whep(&video, &source_id, &ice_servers).await {
                     // #431: source configured but not producing yet (server
                     // replied 204). NOT an error — show the placeholder (no
                     // srcObject is set) and back off quietly, with NO console
@@ -470,12 +476,17 @@ enum ConnectOutcome {
 async fn connect_whep(
     video: &HtmlVideoElement,
     source_id: &str,
+    ice_servers: &Option<JsValue>,
 ) -> Result<ConnectOutcome, JsValue> {
     // Default RTCPeerConnection config (no explicit bundle-policy). A plain
     // default-bundle client is proven to decode this server's stream in CI
     // (e2e check 1). Forcing max-bundle here was a REGRESSION — CI showed the
     // max-bundle client received ZERO frames (#372). Keep the browser default.
     let cfg = RtcConfiguration::new();
+    // #502: set the Cloudflare TURN ICE servers (when configured) so a relay
+    // candidate exists when the direct LAN path is unreachable (Tailscale /
+    // remote). iceTransportPolicy stays default (`all`) — direct wins on LAN.
+    super::ndi_ice::apply_ice_servers(&cfg, ice_servers);
     let pc = RtcPeerConnection::new_with_configuration(&cfg)?;
 
     let video_init = RtcRtpTransceiverInit::new();

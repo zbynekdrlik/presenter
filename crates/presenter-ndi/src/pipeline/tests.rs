@@ -831,7 +831,7 @@ fn encoder_output_is_pinned_to_constrained_baseline() {
 fn consumer_payloader_uses_zero_latency_aggregation() {
     super::super::init().expect("gst init");
     let (_appsrc, payloader, _webrtcbin) =
-        super::consumers::build_consumer_elements("test-agg", StreamProfile::Default, 102)
+        super::consumers::build_consumer_elements("test-agg", StreamProfile::Default, 102, None)
             .expect("consumer elements build");
     let value = payloader.property_value("aggregate-mode");
     let (_, enum_value) =
@@ -846,7 +846,7 @@ fn consumer_payloader_uses_zero_latency_aggregation() {
 fn consumer_elements_payload_h264() {
     super::super::init().expect("gst init");
     let (appsrc, payloader, _webrtcbin) =
-        super::consumers::build_consumer_elements("test-h264", StreamProfile::Default, 102)
+        super::consumers::build_consumer_elements("test-h264", StreamProfile::Default, 102, None)
             .expect("consumer elements build");
     assert_eq!(
         payloader.factory().map(|f| f.name().to_string()).as_deref(),
@@ -863,6 +863,40 @@ fn consumer_elements_payload_h264() {
         caps.structure(0).expect("caps structure").name(),
         "video/x-h264",
         "appsrc bridge caps must match the H264 producer appsink"
+    );
+}
+
+/// #502: when a TURN relay URI is provided, it MUST be applied to the consumer
+/// `webrtcbin` (`turn-server` property) so the server gathers a relay candidate
+/// reachable by a Tailscale/remote browser. When `None`, the property stays
+/// unset (today's LAN-only behavior).
+#[test]
+fn consumer_webrtcbin_turn_server_applied_when_provided() {
+    super::super::init().expect("gst init");
+
+    // With a TURN URI: the property is set (webrtcbin may normalise it, so
+    // assert on the host substring rather than exact string equality).
+    let uri = "turn://aabbccdd:deadbeef@turn.cloudflare.com:3478?transport=udp";
+    let (_a, _p, webrtcbin) =
+        super::consumers::build_consumer_elements("turn-on", StreamProfile::Default, 102, Some(uri))
+            .expect("consumer elements build (turn)");
+    let configured = webrtcbin.property::<Option<String>>("turn-server");
+    assert!(
+        configured
+            .as_deref()
+            .is_some_and(|s| s.contains("turn.cloudflare.com")),
+        "turn-server must be set on webrtcbin when a URI is provided, got {configured:?}"
+    );
+
+    // Without a TURN URI: the property is left at its default (unset).
+    let (_a2, _p2, webrtcbin_off) =
+        super::consumers::build_consumer_elements("turn-off", StreamProfile::Default, 102, None)
+            .expect("consumer elements build (no turn)");
+    assert!(
+        webrtcbin_off
+            .property::<Option<String>>("turn-server")
+            .is_none(),
+        "turn-server must stay unset when no URI is provided (LAN-only)"
     );
 }
 

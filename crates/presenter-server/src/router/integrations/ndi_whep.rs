@@ -87,6 +87,10 @@ pub(crate) async fn post_whep_endpoint(
     State(state): State<AppState>,
     body: Bytes,
 ) -> Result<Response, AppError> {
+    // #502: mint (or read cached) the server-side TURN relay URI so the
+    // consumer webrtcbin gathers a relay candidate. `None` when TURN is
+    // unconfigured → today's LAN-only behavior.
+    let turn_server = state.turn().turn_uri().await;
     let manager = state
         .ndi_manager()
         .ok_or_else(|| AppError::service_unavailable("NDI SDK not available"))?;
@@ -97,6 +101,7 @@ pub(crate) async fn post_whep_endpoint(
                 id: None,
                 body: body.to_vec(),
                 profile: StreamProfile::from_query(query.profile.as_deref()),
+                turn_server,
             },
         )
         .await
@@ -123,8 +128,9 @@ pub(crate) async fn post_whep_session(
                 id: Some(session_id),
                 body: body.to_vec(),
                 // Session-scoped re-offer is unsupported (501) — the profile
-                // is irrelevant on this path.
+                // and TURN URI are irrelevant on this path.
                 profile: StreamProfile::Default,
+                turn_server: None,
             },
         )
         .await
