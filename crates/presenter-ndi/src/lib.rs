@@ -125,12 +125,12 @@ fn pick_h264_encoder(
     candidates: &[&'static str],
     can_load: impl Fn(&str) -> bool,
 ) -> Option<&'static str> {
-    // BUG (#443): picks the highest-priority candidate regardless of whether
-    // it can actually load. An advertised-but-unloadable encoder (e.g.
-    // `nvh264enc` after a boot-race registry-cache drift, #333/#339) is
-    // therefore selected and the pipeline build later fails.
-    let _ = can_load;
-    candidates.first().copied()
+    // #443: select the FIRST candidate (in priority order) that actually
+    // loads. Probing loadability (not mere name-presence in the registry)
+    // means an advertised-but-unloadable encoder — e.g. `nvh264enc` after a
+    // boot-race registry-cache drift (#333/#339) — is skipped in favour of
+    // the next encoder that can really be instantiated.
+    candidates.iter().copied().find(|&name| can_load(name))
 }
 
 /// Detect which H264 encoder webrtcsink will end up picking.
@@ -150,12 +150,26 @@ fn pick_h264_encoder(
 /// with the demotion env var falls through to x264enc which is what
 /// webrtcsink will actually use.
 ///
-/// Probes the live element registry on every call — cheap (hash lookup), no
-/// memoization needed.
+/// Probes each candidate on every call by actually INSTANTIATING it
+/// (`ElementFactory::make(name).build()`) and discarding the result, rather
+/// than only checking the registry advertises the factory by name
+/// (`ElementFactory::find`). This distinction is the #443 fix: a boot-race
+/// registry-cache drift (#333/#339) can leave `nvh264enc` advertised in the
+/// cached registry while the plugin cannot be loaded to create the element —
+/// `find()` returns Some but `make().build()` fails. Selecting on name-presence
+/// alone then picked an unloadable encoder and the pipeline build failed.
+/// Probing loadability skips it and falls through to a real, loadable encoder.
+///
+/// Construction is cheap and side-effect-free: GStreamer element creation only
+/// allocates the GObject — hardware (CUDA/VA display) is opened later at the
+/// READY state transition, not at `build()`. So this stays safe to call on the
+/// 30 s NDI-reconnect tick, and re-probing every call preserves the #333 item 6
+/// self-heal: a host whose registry recovers resumes without a process restart
+/// (so it is intentionally NOT memoized).
 pub fn hw_h264_encoder() -> Option<&'static str> {
-    ["vah264enc", "nvh264enc", "x264enc"]
-        .into_iter()
-        .find(|name| gstreamer::ElementFactory::find(name).is_some())
+    pick_h264_encoder(&["vah264enc", "nvh264enc", "x264enc"], |name| {
+        gstreamer::ElementFactory::make(name).build().is_ok()
+    })
 }
 
 #[cfg(test)]
