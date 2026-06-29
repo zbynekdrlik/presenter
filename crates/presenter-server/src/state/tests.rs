@@ -180,7 +180,7 @@ async fn stage_updates_emit_live_event() {
     let next = presentation.slides.get(1).map(|slide| slide.id);
 
     state
-        .update_stage_state(presentation.id, current, next, None)
+        .update_stage_state(presentation.id, current, next, None, None)
         .await
         .unwrap();
 

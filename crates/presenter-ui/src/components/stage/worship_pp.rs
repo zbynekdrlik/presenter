@@ -1,7 +1,8 @@
 use leptos::prelude::*;
 
 use super::worship_pp_helpers::{
-    current_song_from_entries, next_song_from_entries, scroll_active_entry_into_view,
+    active_sidebar_index, current_song_from_entries, next_song_from_entries,
+    scroll_active_entry_into_view,
 };
 use crate::state::stage::StageContext;
 use crate::utils::autofit::autofit_effect;
@@ -102,6 +103,17 @@ pub fn WorshipPp(
             .unwrap_or_default()
     };
 
+    // #496: enumerate so the sidebar <For> can key by the unique INDEX (a
+    // repeated song shares name + presentation_id, which collided under the old
+    // name key). The `view!` macro needs `each` as a named closure, not an
+    // inline `move ||`.
+    let indexed_entries = move || {
+        playlist_entries()
+            .into_iter()
+            .enumerate()
+            .collect::<Vec<_>>()
+    };
+
     // worship-pp specific: derive the CURRENT-song badge from the Presenter
     // playlist's active entry, NOT from AbleSet's server-side s.song_name (#461).
     let current_song_text = move || current_song_from_entries(&playlist_entries());
@@ -113,22 +125,20 @@ pub fn WorshipPp(
 
     // Auto-scroll the playlist sidebar so the ACTIVE song stays visible as the
     // service advances past the ~10 rows that fit at 1080p (#461). Tracks the
-    // active entry's POSITION (not its name) so the scroll still FIRES when a
-    // set repeats a song and the operator advances between two same-named
-    // entries (name-based dedup would suppress it). When the active position
-    // changes, defers one tick (Timeout 0) so the `--active` class is applied
-    // to the DOM before scrolling, then centers the active row in the sidebar.
-    // Mirrors the operator slide-list scroll Effect (which dedups on the unique
-    // slide id for the same reason). Note: for a REPEATED song the scroll still
-    // targets the first matching `--active` row because rows are name-keyed;
-    // correct per-occurrence targeting is tracked in #496.
+    // active entry's INDEX (#496: the explicit triggered occurrence from the
+    // snapshot, not the first name/id match) so the scroll fires on each advance
+    // AND targets the correct row when a set repeats a song. When the active
+    // index changes, defers one tick (Timeout 0) so the `--active` class is
+    // applied to the DOM before scrolling, then centers the active row.
     {
         let snapshot = ctx.snapshot;
         Effect::new(move |prev: Option<Option<usize>>| {
             let active_idx = snapshot.with(|opt| {
-                opt.as_ref()
-                    .and_then(|s| s.playlist_entries.as_ref())
-                    .and_then(|entries| entries.iter().position(|e| e.is_active))
+                opt.as_ref().and_then(|s| {
+                    s.playlist_entries
+                        .as_ref()
+                        .and_then(|entries| active_sidebar_index(entries, s.active_entry_index))
+                })
             });
             if active_idx.is_some() && active_idx != prev.flatten() {
                 gloo_timers::callback::Timeout::new(0, scroll_active_entry_into_view).forget();
@@ -197,26 +207,25 @@ pub fn WorshipPp(
             <div class="stage-pp__playlist-sidebar">
                 <span class="stage__debug-label">"playlist-sidebar"</span>
                 <For
-                    each=playlist_entries
-                    key=|entry| entry.name.clone()
-                    children=move |entry| {
-                        // Capture the entry's name once. The active-class
-                        // must be REACTIVE — read from ctx.snapshot (a
-                        // RwSignal) on every update so the highlight follows
-                        // the currently-triggered song.
-                        // Without this, Leptos's <For> reuses the row's DOM
-                        // (same key = entry.name) and the captured entry's
-                        // is_active stays at its first-render value forever.
-                        let entry_name = entry.name.clone();
+                    each=indexed_entries
+                    key=|(idx, _entry)| *idx
+                    children=move |(idx, _entry)| {
+                        // #496: key by INDEX (unique) — a repeated song shares
+                        // name AND presentation_id, so name-keying collided and
+                        // highlighted/scrolled the wrong occurrence. Both the
+                        // active-class AND the display name are read REACTIVELY
+                        // from the snapshot by index, so the highlight follows
+                        // the triggered occurrence and the name stays correct
+                        // even if the playlist is edited live.
                         let snapshot = ctx.snapshot;
                         let is_active = move || {
                             snapshot.with(|opt| {
                                 opt.as_ref()
-                                    .and_then(|s| s.playlist_entries.as_ref())
-                                    .map(|entries| {
-                                        entries
-                                            .iter()
-                                            .any(|e| e.name == entry_name && e.is_active)
+                                    .and_then(|s| {
+                                        s.playlist_entries.as_ref().map(|entries| {
+                                            active_sidebar_index(entries, s.active_entry_index)
+                                                == Some(idx)
+                                        })
                                     })
                                     .unwrap_or(false)
                             })
@@ -228,7 +237,15 @@ pub fn WorshipPp(
                                 "stage-pp__playlist-entry"
                             }
                         };
-                        let display_name = clean_song_name(&entry.name);
+                        let display_name = move || {
+                            snapshot.with(|opt| {
+                                opt.as_ref()
+                                    .and_then(|s| s.playlist_entries.as_ref())
+                                    .and_then(|entries| entries.get(idx))
+                                    .map(|e| clean_song_name(&e.name))
+                                    .unwrap_or_default()
+                            })
+                        };
                         view! { <div class=class>{display_name}</div> }
                     }
                 />

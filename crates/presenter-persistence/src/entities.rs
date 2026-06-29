@@ -532,6 +532,10 @@ pub mod stage_state {
         pub current_slide_id: Option<String>,
         pub next_slide_id: Option<String>,
         pub playlist_id: Option<String>,
+        // #496: index of the triggered playlist entry, disambiguating which
+        // occurrence of a repeated song is active. Nullable; added by
+        // m20260629_000001_add_stage_active_entry_index.
+        pub active_entry_index: Option<i32>,
         pub updated_at: DateTimeWithTimeZone,
     }
 

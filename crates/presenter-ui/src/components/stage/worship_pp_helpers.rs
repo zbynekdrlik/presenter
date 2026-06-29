@@ -51,6 +51,12 @@ pub fn active_sidebar_index(
     entries: &[StagePlaylistEntry],
     snapshot_active_index: Option<u32>,
 ) -> Option<usize> {
+    if let Some(index) = snapshot_active_index {
+        let index = index as usize;
+        if index < entries.len() {
+            return Some(index);
+        }
+    }
     entries.iter().position(|e| e.is_active)
 }
 
@@ -162,9 +168,9 @@ mod tests {
     #[test]
     fn active_sidebar_index_prefers_explicit_occurrence_for_repeated_song() {
         let entries = vec![
-            entry("Reprise", true),  // index 0 — first occurrence
-            entry("Other", false),   // index 1
-            entry("Reprise", true),  // index 2 — the triggered reprise
+            entry("Reprise", true), // index 0 — first occurrence
+            entry("Other", false),  // index 1
+            entry("Reprise", true), // index 2 — the triggered reprise
         ];
         assert_eq!(active_sidebar_index(&entries, Some(2)), Some(2));
     }

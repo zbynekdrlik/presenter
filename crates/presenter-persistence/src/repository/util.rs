@@ -305,7 +305,8 @@ pub(super) fn stage_state_model_to_state(
         current_slide_id,
         next_slide_id,
         playlist_id,
-    ))
+    )
+    .with_active_entry_index(model.active_entry_index.map(|i| i as u32)))
 }
 
 pub(super) fn timers_model_to_state(model: timers::Model) -> Result<TimersState, RepositoryError> {

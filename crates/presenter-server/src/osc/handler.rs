@@ -302,7 +302,7 @@ async fn trigger_slide(
     let next_id = next.map(|slide| slide.id);
 
     app_state
-        .update_stage_state(presentation_id, current.id, next_id, None)
+        .update_stage_state(presentation_id, current.id, next_id, None, None)
         .await
         .map_err(|err| anyhow!(err))?;
 

@@ -38,6 +38,10 @@ pub(crate) struct StageResolution {
     pub(crate) playlist_name: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub(crate) playlist_entries: Option<Vec<StagePlaylistEntry>>,
+    /// #496: index of the active playlist entry, threaded to the snapshot so the
+    /// worship-pp sidebar highlights/scrolls the triggered occurrence.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(crate) active_entry_index: Option<u32>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub(crate) upcoming_groups: Vec<presenter_core::UpcomingGroup>,
 }
@@ -59,6 +63,7 @@ impl StageResolution {
             playlist_id: None,
             playlist_name: None,
             playlist_entries: None,
+            active_entry_index: None,
             upcoming_groups: Vec::new(),
         }
     }
@@ -112,6 +117,7 @@ pub(crate) fn stage_resolution_from_presentation(
             playlist_id: None,
             playlist_name: None,
             playlist_entries: None,
+            active_entry_index: None,
             upcoming_groups: Vec::new(),
         };
     }
@@ -149,6 +155,7 @@ pub(crate) fn stage_resolution_from_presentation(
         playlist_id: None,
         playlist_name: None,
         playlist_entries: None,
+        active_entry_index: None,
         upcoming_groups: resolved.upcoming_groups,
     }
 }
@@ -280,7 +287,7 @@ pub(crate) fn build_stage_snapshot(
     layout: StageDisplayLayout,
     context: &StageContext,
 ) -> StageDisplaySnapshot {
-    StageDisplaySnapshot::new(
+    let mut snapshot = StageDisplaySnapshot::new(
         layout,
         context.generated_at,
         context.resolution.presentation_id,
@@ -312,7 +319,9 @@ pub(crate) fn build_stage_snapshot(
         context.resolution.playlist_name.clone(),
         context.resolution.playlist_entries.clone(),
         context.resolution.upcoming_groups.clone(),
-    )
+    );
+    snapshot.active_entry_index = context.resolution.active_entry_index;
+    snapshot
 }
 
 fn has_song_number_prefix(bytes: &[u8]) -> bool {
@@ -362,15 +371,26 @@ pub(crate) fn build_stage_playlist_entries(
     active_entry_index: Option<u32>,
     name_lookup: &std::collections::HashMap<PresentationId, String>,
 ) -> Vec<StagePlaylistEntry> {
-    let _ = active_entry_index;
     playlist
         .entries
         .iter()
-        .map(|entry| match &entry.kind {
+        .enumerate()
+        .map(|(idx, entry)| match &entry.kind {
             PlaylistEntryKind::Presentation {
                 presentation_id, ..
             } => {
-                let is_active = active_presentation_id == Some(*presentation_id);
+                // #496: a worship set may repeat the same song, so several
+                // entries share one `presentation_id`. When the triggered entry
+                // index is known, mark ONLY that occurrence active; matching by
+                // presentation_id alone would light every copy. Fall back to
+                // presentation_id matching for legacy / non-playlist triggers
+                // that carry no index.
+                let is_active = match active_entry_index {
+                    Some(active_idx) => {
+                        idx as u32 == active_idx && active_presentation_id == Some(*presentation_id)
+                    }
+                    None => active_presentation_id == Some(*presentation_id),
+                };
                 let raw_name = name_lookup
                     .get(presentation_id)
                     .cloned()
@@ -471,8 +491,7 @@ mod tests {
         name_lookup.insert(song_b, "020 Other Song".to_string());
 
         // Operator triggered the SECOND occurrence (entry index 2).
-        let entries =
-            build_stage_playlist_entries(&playlist, Some(song_a), Some(2), &name_lookup);
+        let entries = build_stage_playlist_entries(&playlist, Some(song_a), Some(2), &name_lookup);
 
         assert_eq!(entries.len(), 3);
         assert!(
@@ -484,6 +503,51 @@ mod tests {
             entries[2].is_active,
             "only the triggered occurrence (index 2) must be active"
         );
+    }
+
+    /// Legacy / non-playlist triggers carry no entry index; the builder must
+    /// fall back to presentation_id matching (every matching row active). This
+    /// preserves behavior for OSC / Companion / AI triggers (#496).
+    #[test]
+    fn build_stage_playlist_entries_without_index_falls_back_to_presentation_id() {
+        let song_a = PresentationId::new();
+        let song_b = PresentationId::new();
+        let playlist = Playlist::new(
+            "set",
+            vec![
+                presentation_entry(song_a),
+                presentation_entry(song_b),
+                presentation_entry(song_a),
+            ],
+        )
+        .expect("valid playlist");
+        let name_lookup = std::collections::HashMap::new();
+
+        let entries = build_stage_playlist_entries(&playlist, Some(song_a), None, &name_lookup);
+
+        assert!(entries[0].is_active, "fallback marks every song_a row");
+        assert!(!entries[1].is_active);
+        assert!(entries[2].is_active, "fallback marks every song_a row");
+    }
+
+    /// An out-of-range / mismatched index activates nothing rather than the
+    /// wrong row — graceful degradation (#496).
+    #[test]
+    fn build_stage_playlist_entries_index_must_match_presentation() {
+        let song_a = PresentationId::new();
+        let song_b = PresentationId::new();
+        let playlist = Playlist::new(
+            "set",
+            vec![presentation_entry(song_a), presentation_entry(song_b)],
+        )
+        .expect("valid playlist");
+        let name_lookup = std::collections::HashMap::new();
+
+        // index 1 is song_b, but active presentation is song_a → no row active.
+        let entries = build_stage_playlist_entries(&playlist, Some(song_a), Some(1), &name_lookup);
+
+        assert!(!entries[0].is_active);
+        assert!(!entries[1].is_active);
     }
 
     fn make_context(
@@ -508,6 +572,7 @@ mod tests {
                 playlist_id: None,
                 playlist_name: None,
                 playlist_entries: None,
+                active_entry_index: None,
                 upcoming_groups: Vec::new(),
             },
             latency_ms: None,

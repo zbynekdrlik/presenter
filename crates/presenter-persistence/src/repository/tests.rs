@@ -632,7 +632,10 @@ async fn stage_state_round_trip() {
 
     let current = presentation.slides[0].id;
     let next = presentation.slides.get(1).map(|slide| slide.id);
-    let state = StageState::new(Some(presentation.id), Some(current), next, None);
+    // #496: a non-None active_entry_index must survive the DB round-trip so
+    // rebuilds keep targeting the triggered occurrence of a repeated song.
+    let state = StageState::new(Some(presentation.id), Some(current), next, None)
+        .with_active_entry_index(Some(2));
 
     repo.upsert_stage_state(&state).await.unwrap();
 
@@ -640,6 +643,7 @@ async fn stage_state_round_trip() {
     assert_eq!(stored.presentation_id, Some(presentation.id));
     assert_eq!(stored.current_slide_id, Some(current));
     assert_eq!(stored.next_slide_id, next);
+    assert_eq!(stored.active_entry_index, Some(2));
 }
 
 // ── create_presentation tests ───────────────────────────────────────

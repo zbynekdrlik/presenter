@@ -19,6 +19,7 @@ impl AppState {
         current_slide_id: SlideId,
         next_slide_id: Option<SlideId>,
         playlist_id: Option<PlaylistId>,
+        entry_index: Option<u32>,
     ) -> anyhow::Result<()> {
         let correlation_id = Uuid::new_v4();
         let start = Instant::now();
@@ -54,7 +55,8 @@ impl AppState {
             Some(current_slide_id),
             next_slide_id,
             playlist_id,
-        );
+        )
+        .with_active_entry_index(entry_index);
         let db_start = Instant::now();
         self.repository.upsert_stage_state(&stage_state).await?;
         let t_db_write_ms = db_start.elapsed().as_secs_f64() * 1000.0;
@@ -73,10 +75,11 @@ impl AppState {
                     .await?;
                 resolution.playlist_id = Some(pid);
                 resolution.playlist_name = Some(playlist.name.clone());
+                resolution.active_entry_index = entry_index;
                 resolution.playlist_entries = Some(build_stage_playlist_entries(
                     &playlist,
                     resolution.presentation_id,
-                    None,
+                    entry_index,
                     &name_lookup,
                 ));
             }

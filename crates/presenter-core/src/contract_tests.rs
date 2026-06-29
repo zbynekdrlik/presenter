@@ -56,6 +56,7 @@ mod tests {
             playlist_id: None,
             playlist_name: None,
             playlist_entries: None,
+            active_entry_index: None,
             upcoming_groups: Vec::new(),
         };
         let event = LiveEvent::Stage { snapshot };
@@ -271,6 +272,7 @@ mod tests {
             playlist_id: None,
             playlist_name: None,
             playlist_entries: None,
+            active_entry_index: None,
             upcoming_groups: Vec::new(),
         };
         let json = serde_json::to_string(&snapshot).expect("serialize");
@@ -286,6 +288,7 @@ mod tests {
             current_slide_id: Some(crate::SlideId::new()),
             next_slide_id: None,
             playlist_id: None,
+            active_entry_index: None,
         };
         let result = roundtrip_json(&state);
         assert_eq!(result.presentation_id, state.presentation_id);
