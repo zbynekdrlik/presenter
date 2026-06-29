@@ -61,9 +61,14 @@ test("operator Settings is a native panel, not an iframe, with a single header",
 
   await gotoOperatorSettings(page);
 
-  // No iframe anywhere — Settings is rendered natively like every other view.
+  // Settings is rendered natively — no settings iframe. (The #460 live
+  // stage-output preview is a deliberate `<iframe>` in the operator HEADER, so
+  // the original blanket "no iframe anywhere" guard no longer holds; scope the
+  // guard to the settings panel, which must still contain zero iframes.)
   await expect(page.locator("iframe.operator__settings-frame")).toHaveCount(0);
-  await expect(page.locator("iframe")).toHaveCount(0);
+  await expect(page.locator('[data-view-panel="settings"] iframe')).toHaveCount(
+    0,
+  );
 
   // The settings content lives in the operator document (same DOM, reachable
   // by the top-level page), inside the settings panel.

@@ -839,7 +839,7 @@ body.operator {
 .operator__stage-preview {
   position: relative;
   display: inline-flex;
-  align-items: stretch;
+  align-items: center;
   gap: 1rem;
   padding: 0.65rem 1rem;
   background: #101828;
@@ -848,6 +848,36 @@ body.operator {
   min-width: 0;
   border-radius: 14px;
   box-shadow: inset 0 0 0 1px rgba(15, 23, 42, 0.25);
+}
+
+/* Live stage mirror (#460): a fixed-size window that shows the real /stage
+   render — lyrics / Bible / timer AND NDI video — proportionally shrunk. The
+   iframe is rendered at full 1920x1080 stage resolution and CSS-scaled by 1/8
+   so it shows EXACTLY the stage, just small. `overflow:hidden` clips it to the
+   slot; the scaled 1920x1080 fills the 240x135 wrapper precisely. */
+.operator__stage-iframe-wrap {
+  position: relative;
+  width: 240px;
+  height: 135px;
+  flex: 0 0 auto;
+  overflow: hidden;
+  border-radius: 10px;
+  border: 1px solid rgba(148, 163, 184, 0.3);
+  background: #000;
+}
+
+.operator__stage-iframe {
+  position: absolute;
+  top: 0;
+  left: 0;
+  width: 1920px;
+  height: 1080px;
+  border: 0;
+  transform: scale(0.125);
+  transform-origin: top left;
+  /* Operator clicks must not drive the embedded stage — the preview is a
+     read-only mirror, not an interactive surface. */
+  pointer-events: none;
 }
 
 
@@ -920,34 +950,12 @@ body.operator {
   }
 }
 
-.operator__worship-preview-wrap {
-  display: contents;
-}
-
-.operator__stage-preview-stack {
-  display: flex;
-  flex-direction: column;
-  justify-content: flex-start;
-  gap: 0.5rem;
-  min-width: 12rem;
-  align-items: center;
-}
-
-.operator__stage-preview-song {
-  font-size: 0.72rem;
-  font-weight: 400;
-  letter-spacing: 0.01em;
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  max-width: 100%;
-  text-align: center;
-}
-
 .operator__stage-preview-actions {
   display: flex;
+  flex-direction: column;
   gap: 0.5rem;
   justify-content: center;
+  align-items: stretch;
 }
 
 .operator__stage-toggle {
@@ -973,73 +981,6 @@ body.operator {
 .operator__stage-toggle:disabled {
   opacity: 0.55;
   cursor: not-allowed;
-}
-
-.operator__stage-preview-panel {
-  width: 180px;
-  min-height: 70px;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  text-align: center;
-  padding: 0.35rem 0.5rem;
-  background: rgba(15, 23, 42, 0.82);
-  border: 1px solid rgba(148, 163, 184, 0.3);
-  border-radius: 10px;
-  overflow: hidden;
-}
-
-.operator__stage-preview-text {
-  white-space: pre;
-  line-height: 1.15;
-  width: 100%;
-  height: 100%;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  overflow: hidden;
-}
-
-.operator__stage-preview-panel--current {
-  width: 200px;
-  background: rgba(59, 124, 255, 0.28);
-  font-weight: 600;
-}
-
-.operator__stage-preview-panel--next {
-  min-height: 3.5rem;
-}
-
-.operator__bible-preview {
-  display: flex;
-  flex-direction: column;
-  gap: 0.4rem;
-  min-width: 280px;
-  max-width: 400px;
-  padding: 0.5rem 0.75rem;
-}
-
-.operator__bible-preview-text {
-  font-size: 0.92rem;
-  line-height: 1.4;
-  color: #f8fafc;
-  max-height: 4.5em;
-  overflow: hidden;
-  text-overflow: ellipsis;
-}
-
-.operator__bible-preview-ref {
-  display: flex;
-  justify-content: space-between;
-  font-size: 0.78rem;
-  color: #93c5fd;
-  font-style: italic;
-}
-
-.operator__bible-preview-empty {
-  color: #94a3b8;
-  font-size: 0.85rem;
-  font-style: italic;
 }
 
 .operator__clear-button {
@@ -2163,12 +2104,14 @@ body.operator[data-view="settings"] [data-view-panel="settings"] {
 
 /* ── Responsive: tablet ── */
 @media (max-width: 1024px) {
-  .operator__stage-preview-panel {
-    width: 140px;
-    min-height: 55px;
+  /* Shrink the live stage mirror so it doesn't dominate the header on smaller
+     screens — same 1920x1080 iframe, scaled by 1/10 into a 192x108 slot. */
+  .operator__stage-iframe-wrap {
+    width: 192px;
+    height: 108px;
   }
-  .operator__stage-preview-stack {
-    min-width: 9rem;
+  .operator__stage-iframe {
+    transform: scale(0.1);
   }
   .operator__catalog {
     flex: 0 0 260px;

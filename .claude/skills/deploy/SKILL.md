@@ -65,6 +65,63 @@ OFF). So:
   workspace (own `Cargo.lock`, version `0.1.x`): `cargo <cmd> -p presenter-ui` from
   root fails — run from `crates/presenter-ui/`.
 
+## Running Playwright E2E locally (#461)
+
+To validate a stage/UI change with the real Playwright specs before pushing
+(saves a ~45-min CI cycle):
+
+1. **Rebuild the server after ANY WASM change.** The server embeds `dist/` at
+   compile time, so `bash scripts/build-ui.sh` ALONE is not enough — the running
+   binary still has the OLD WASM. Order: `build-ui.sh` → rebuild the server →
+   run E2E. Skipping the server rebuild silently tests stale WASM.
+2. **Build the test server WITH the E2E feature flags** (CI uses these):
+   `cargo build --release -p presenter-server -p presenter-importer --features
+   presenter-server/mock-integrations,presenter-server/test-helpers`.
+   `startTestServer` picks the NEWER of `target/{debug,release}/presenter-server`.
+3. **Free the fixed mock-resolume port 8091 first.** `mock-integrations` binds a
+   HARD-CODED `127.0.0.1:8091` (`mock_integrations/resolume.rs`), and the deployed
+   `presenter-dev.service` already holds 8091 — so a local E2E run dies on
+   `mock-resolume failed to bind 127.0.0.1:8091 Address already in use` /
+   `beforeAll hook timeout`. Fix: `sudo systemctl stop presenter-dev` → run the
+   spec → `sudo systemctl start presenter-dev` (stopping the app you're testing
+   is in-scope; restart right after). Run with `--workers=1` (specs serialize on
+   the fixed ports).
+   `npx playwright test <spec> -g "<title>" --reporter=line --workers=1`
+4. Stage specs seed via the HTTP API: `POST /stage/layout {code}`, `POST
+   /playlists`, `PUT /playlists/{id}/entries`, `POST /stage/state {presentationId,
+   currentSlideId, playlistId}` (returns 204) → the matching playlist entry goes
+   `is_active`. Each spec starts its own server via `startTestServer()`.
+5. Read content INSIDE the operator's embedded stage preview iframe (#460) with
+   `page.frameLocator("iframe.operator__stage-iframe").locator("<sel>")`. The
+   stage's own selectors work: `.stage__current-slide .stage__slide-text` for the
+   current line (valid in worship-snv AND api layouts — `ApiStage` wraps
+   `WorshipSnv`), `.stage__bible-text`/`.stage__bible-reference` for a triggered
+   verse (set `POST /stage/layout {code:"bible"}` first so the mirror renders it).
+
+### GOTCHA — Playwright `page.on("console")` ALSO captures IFRAME console (#460)
+
+The operator header now embeds `<iframe src="/stage?preview=1">` on EVERY operator
+page. Playwright's `page.on("console")` fires for the page AND all its child frames,
+so anything the embedded `/stage` logs lands in the operator's console listener and
+breaks every `expect(consoleMessages).toEqual([])` operator spec. The real stage
+emits the `crbug.com/981419` wake-lock permissions warning in headless — so the
+stage page SKIPS `start_wake_lock_guard()` in preview mode (`?preview=1`,
+`stage.rs`). When embedding any page-in-page, gate its heavy/noisy side-effects
+(wake lock, self-reload watchdogs, beacons) behind a preview flag, or the parent's
+console-zero assertions fail.
+
+### Stage-monitor count must EXCLUDE preview clients (#460)
+
+Stage WS clients register in `StageConnections` by SENDING an inbound
+`StagePresence` over `/live/ws` (driven client-side in `ws/stage.rs`), NOT by the
+WS upgrade. The preview iframe is one more `/stage` WS client, so it would inflate
+the operator's "N stage displays connected" count. Fix: it tags its socket
+`/live/ws?surface=stage&preview=1` (`ws_url()` appends it when
+`utils::window::url_flag_enabled("preview")`); the server (`router.rs` →
+`live.rs::serve_websocket(preview)`) skips `connections.register(...)` for preview
+sockets while still forwarding every live event. To embed another live stage view
+without polluting the count, reuse `?preview=1`.
+
 ## PP location (companion-pp.lan) — release + manual recovery
 
 PP is upgraded via a **GitHub Release** (`gh release create vX.Y.Z --target main --generate-notes`, X.Y.Z = current main version) → `release.yml` builds + `deploy-pp` SSH-deploys. SSH from dev2: `newlevel@companion-pp.lan` (creds in memory `project-pp-location-upgrade`; no `sqlite3` CLI on the box — use `python3 -c "import sqlite3; ..."`).

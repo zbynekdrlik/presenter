@@ -17,10 +17,19 @@ pub fn StagePage() -> impl IntoView {
         let _ = body.set_attribute("class", "stage");
     }
 
+    // #460: a preview mirror (`/stage?preview=1`, embedded in the operator
+    // header) is a small passive snapshot of the stage, NOT a real display —
+    // it must not grab a screen wake lock (that's for the operator's own
+    // screen, and the redundant request just logs a permissions warning in
+    // the iframe). Detect preview mode once and skip the wake lock for it.
+    let preview = crate::utils::window::url_flag_enabled("preview");
+
     // Keep the TV screen awake for the whole service (issue #402). Acquires a
     // screen wake lock now and re-acquires it on every visibilitychange back
     // to visible (the browser auto-releases the lock when the page hides).
-    crate::components::stage::wake_lock::start_wake_lock_guard();
+    if !preview {
+        crate::components::stage::wake_lock::start_wake_lock_guard();
+    }
 
     let ctx = StageContext::new("worship-snv".to_string());
     provide_context(ctx.clone());

@@ -51,6 +51,10 @@ test("worship view shows worship UI", async ({ page }) => {
   await expect(page.locator('[data-view-panel="worship"]')).toBeVisible();
   await expect(page.locator('[data-role="stage-monitor"]')).toBeVisible();
   await expect(page.locator('[data-role="clear-slide"]')).toBeVisible();
+  // #460: the live stage preview iframe mirrors the stage in EVERY view.
+  await expect(
+    page.locator('[data-role="stage-preview-frame"]'),
+  ).toBeVisible();
 
   expect(consoleMessages).toEqual([]);
 });
@@ -64,6 +68,10 @@ test("bible view hides worship UI, shows bible panel", async ({ page }) => {
   await expect(page.locator('[data-view-panel="bible"]')).toBeVisible();
   await expect(page.locator('[data-role="stage-monitor"]')).toBeVisible();
   await expect(page.locator('[data-role="clear-slide"]')).toBeVisible();
+  // #460: the live stage preview iframe mirrors the stage in EVERY view.
+  await expect(
+    page.locator('[data-role="stage-preview-frame"]'),
+  ).toBeVisible();
 
   expect(consoleMessages).toEqual([]);
 });
@@ -77,6 +85,10 @@ test("timers view hides worship UI, shows timers panel", async ({ page }) => {
   await expect(page.locator('[data-view-panel="timers"]')).toBeVisible();
   await expect(page.locator('[data-role="stage-monitor"]')).toBeVisible();
   await expect(page.locator('[data-role="clear-slide"]')).toBeVisible();
+  // #460: the live stage preview iframe mirrors the stage in EVERY view.
+  await expect(
+    page.locator('[data-role="stage-preview-frame"]'),
+  ).toBeVisible();
 
   expect(consoleMessages).toEqual([]);
 });
@@ -90,6 +102,10 @@ test("ai view hides worship UI, shows ai panel", async ({ page }) => {
   await expect(page.locator('[data-view-panel="ai"]')).toBeVisible();
   await expect(page.locator('[data-role="stage-monitor"]')).toBeVisible();
   await expect(page.locator('[data-role="clear-slide"]')).toBeVisible();
+  // #460: the live stage preview iframe mirrors the stage in EVERY view.
+  await expect(
+    page.locator('[data-role="stage-preview-frame"]'),
+  ).toBeVisible();
 
   expect(consoleMessages).toEqual([]);
 });
@@ -105,6 +121,10 @@ test("settings view hides worship UI, shows settings panel", async ({
   await expect(page.locator('[data-view-panel="settings"]')).toBeVisible();
   await expect(page.locator('[data-role="stage-monitor"]')).toBeVisible();
   await expect(page.locator('[data-role="clear-slide"]')).toBeVisible();
+  // #460: the live stage preview iframe mirrors the stage in EVERY view.
+  await expect(
+    page.locator('[data-role="stage-preview-frame"]'),
+  ).toBeVisible();
 
   expect(consoleMessages).toEqual([]);
 });

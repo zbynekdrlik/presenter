@@ -260,5 +260,13 @@ fn ws_url() -> String {
     let ws_protocol = if protocol == "https:" { "wss:" } else { "ws:" };
     // Tag the surface so the server can log which UI opened the socket (#471).
     // The stage page and the camera page both render the stage display family.
-    format!("{ws_protocol}//{host}/live/ws?surface=stage")
+    let mut url = format!("{ws_protocol}//{host}/live/ws?surface=stage");
+    // The operator-header preview mirror loads `/stage?preview=1` (#460). Tag its
+    // socket so the server excludes it from the stage-monitor connection count —
+    // it still receives every live event and renders live, it just doesn't count
+    // as a real stage display.
+    if crate::utils::window::url_flag_enabled("preview") {
+        url.push_str("&preview=1");
+    }
+    url
 }
