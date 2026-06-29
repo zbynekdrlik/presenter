@@ -288,10 +288,16 @@ test("api put does not switch preview when layout is worship-snv", async ({
   await page.waitForLoadState("networkidle");
 
   // 3. Snapshot the current preview text BEFORE the api PUT.
-  const currentSelector =
-    '[data-role="stage-current"] .operator__stage-preview-text';
-  const previewBefore = await page
-    .locator(currentSelector)
+  //
+  // #460: the header preview is now a live `/stage?preview=1` iframe, so the
+  // current-slide text lives INSIDE the iframe (the real stage render), read
+  // via frameLocator. This is the most faithful form of the isolation check:
+  // it verifies api content does/doesn't reach the ACTUAL stage output.
+  const currentInFrame = () =>
+    page
+      .frameLocator("iframe.operator__stage-iframe")
+      .locator(".stage__current-slide .stage__slide-text");
+  const previewBefore = await currentInFrame()
     .first()
     .textContent()
     .catch(() => "");
@@ -318,8 +324,7 @@ test("api put does not switch preview when layout is worship-snv", async ({
   await page.waitForTimeout(500);
 
   // 6. Verify the operator preview did NOT change.
-  const previewAfterPut = await page
-    .locator(currentSelector)
+  const previewAfterPut = await currentInFrame()
     .first()
     .textContent()
     .catch(() => "");
@@ -339,14 +344,13 @@ test("api put does not switch preview when layout is worship-snv", async ({
   await expect
     .poll(
       async () => {
-        const text = await page
-          .locator(currentSelector)
+        const text = await currentInFrame()
           .first()
           .textContent()
           .catch(() => "");
         return text ?? "";
       },
-      { timeout: 5_000 },
+      { timeout: 10_000 },
     )
     .toContain(distinctiveText);
 

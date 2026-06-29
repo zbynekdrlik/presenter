@@ -405,6 +405,14 @@ async fn health(State(state): State<AppState>) -> impl IntoResponse {
 struct LiveWsQuery {
     #[serde(default)]
     surface: Option<String>,
+    /// `?preview=1` marks a PREVIEW stage client — the small live mirror the
+    /// operator header embeds (`/stage?preview=1`, see stage_preview.rs / #460).
+    /// A preview client receives every live event (so it renders live) but MUST
+    /// NOT register in the stage-connection tracker: it is not a real stage TV
+    /// and would otherwise inflate the operator's "N stage displays connected"
+    /// monitor count. The exclusion is enforced server-side in serve_websocket.
+    #[serde(default)]
+    preview: Option<String>,
 }
 
 /// Normalise the `?surface=` query param to a non-empty label for logging.
@@ -414,6 +422,12 @@ fn normalize_ws_surface(surface: Option<String>) -> String {
         Some(s) if !s.is_empty() => s,
         _ => "unknown".to_string(),
     }
+}
+
+/// True when the `?preview=` query param marks a preview stage client (`1` or
+/// `true`). Preview clients are excluded from the stage-monitor count (#460).
+fn ws_is_preview(preview: Option<String>) -> bool {
+    matches!(preview.as_deref(), Some("1") | Some("true"))
 }
 
 #[instrument(skip_all)]
@@ -429,8 +443,9 @@ async fn live_websocket(
     // (ConnectInfo<SocketAddr> was dropped in the axum 0.8 migration).
     let client_ip = integrations::extract_actor(&headers);
     let surface = normalize_ws_surface(query.surface);
+    let preview = ws_is_preview(query.preview);
     ws.on_upgrade(move |socket| async move {
-        crate::live::serve_websocket(hub, connections, socket, client_ip, surface).await;
+        crate::live::serve_websocket(hub, connections, socket, client_ip, surface, preview).await;
     })
 }
 

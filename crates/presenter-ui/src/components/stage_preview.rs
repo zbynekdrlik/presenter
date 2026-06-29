@@ -1,17 +1,19 @@
 use crate::state::{save_baseline_to_storage, AppContext};
-use crate::utils::autofit::autofit_effect;
 use leptos::prelude::*;
 
-const PREVIEW_CURRENT_MAX_FONT: f64 = 40.0;
-const PREVIEW_NEXT_MAX_FONT: f64 = 18.0;
-
 /// Stage preview panel rendered inside the header.
+///
+/// The top-right preview is a small LIVE mirror of the real `/stage` output —
+/// an `<iframe src="/stage?preview=1">` rendered at full stage resolution and
+/// CSS-scaled down into the header slot (#460). It shows EXACTLY what stage
+/// displays show: lyrics, Bible, timers AND the NDI/WHEP video — not a
+/// text-only reconstruction. The iframe is its own stage WS client, so it
+/// auto-updates live; `?preview=1` tags it so the server excludes it from the
+/// stage-monitor connection count (see live.rs), and `pointer-events:none`
+/// keeps operator clicks from driving the embedded stage.
 #[component]
 pub fn StagePreview() -> impl IntoView {
     let ctx = use_ctx!(AppContext);
-
-    let current_ref = NodeRef::<leptos::html::Div>::new();
-    let next_ref = NodeRef::<leptos::html::Div>::new();
 
     // Compute alert state: connected < baseline connected
     let has_alert = move || {
@@ -138,22 +140,6 @@ pub fn StagePreview() -> impl IntoView {
         });
     };
 
-    let current_text = move || {
-        ctx.stage_snapshot
-            .get()
-            .and_then(|s| s.current.as_ref().map(|slide| slide.main.clone()))
-            .unwrap_or_else(|| "\u{2014}".to_string())
-    };
-    let next_text = move || {
-        ctx.stage_snapshot
-            .get()
-            .and_then(|s| s.next.as_ref().map(|slide| slide.main.clone()))
-            .unwrap_or_else(|| "\u{2014}".to_string())
-    };
-
-    autofit_effect(current_ref, PREVIEW_CURRENT_MAX_FONT, current_text);
-    autofit_effect(next_ref, PREVIEW_NEXT_MAX_FONT, next_text);
-
     view! {
         <div
             class="operator__stage-preview"
@@ -163,111 +149,65 @@ pub fn StagePreview() -> impl IntoView {
                 if snap.as_ref().and_then(|s| s.current_slide_id.as_ref()).is_some() { "true" } else { "false" }
             }
         >
+            // Live mirror of the real stage output (lyrics / Bible / timer AND
+            // video). Full stage resolution, CSS-scaled into the slot; its own
+            // stage WS client (auto-updates live). `?preview=1` excludes it from
+            // the stage-monitor count; `pointer-events:none` (CSS) and tabindex
+            // keep operator clicks/focus from driving the embedded stage (#460).
+            <div class="operator__stage-iframe-wrap" data-role="stage-preview-frame">
+                <iframe
+                    class="operator__stage-iframe"
+                    src="/stage?preview=1"
+                    title="Live stage preview"
+                    tabindex="-1"
+                    aria-hidden="true"
+                    scrolling="no"
+                ></iframe>
+            </div>
+            // Worship-only quick toggles (AbleSet enable + follow). Kept from the
+            // old text preview — these are functional controls, not preview text,
+            // so they survive the iframe swap. Shown only in worship view.
             <div
+                class="operator__stage-preview-actions"
                 data-role="worship-preview"
-                class="operator__worship-preview-wrap"
                 style=move || {
                     if ctx.view.get() == "worship" { "" } else { "display:none" }
                 }
             >
-                <div class="operator__stage-preview-stack">
-                    <div class="operator__stage-preview-panel operator__stage-preview-panel--next" data-role="stage-next">
-                        <div node_ref=next_ref class="operator__stage-preview-text">
-                            {next_text}
-                        </div>
-                    </div>
-                    <div class="operator__stage-preview-song" data-role="stage-song-line">
-                        {move || {
-                            ctx.stage_snapshot.get()
-                                .and_then(|s| s.presentation_name.clone())
-                                .unwrap_or_else(|| "\u{2014}".to_string())
-                        }}
-                    </div>
-                    <div class="operator__stage-preview-actions">
-                        <button
-                            type="button"
-                            class="operator__stage-toggle"
-                            data-role="ableset-enable"
-                            data-state=move || {
-                                if ctx.ableset_status.get().map(|s| s.enabled).unwrap_or(false) { "on" } else { "off" }
-                            }
-                            on:click=on_ableset_enable
-                        >
-                            {move || {
-                                if ctx.ableset_status.get().map(|s| s.enabled).unwrap_or(false) {
-                                    "Ableton ON"
-                                } else {
-                                    "Ableton OFF"
-                                }
-                            }}
-                        </button>
-                        <button
-                            type="button"
-                            class="operator__stage-toggle"
-                            data-role="ableset-follow"
-                            data-state=move || {
-                                if ctx.ableset_status.get().map(|s| s.follow_enabled).unwrap_or(false) { "on" } else { "off" }
-                            }
-                            on:click=on_ableset_follow
-                        >
-                            {move || {
-                                if ctx.ableset_status.get().map(|s| s.follow_enabled).unwrap_or(false) {
-                                    "Follow ON"
-                                } else {
-                                    "Follow OFF"
-                                }
-                            }}
-                        </button>
-                    </div>
-                </div>
-                <div class="operator__stage-preview-panel operator__stage-preview-panel--current" data-role="stage-current">
-                    <div node_ref=current_ref class="operator__stage-preview-text">
-                        {current_text}
-                    </div>
-                </div>
-            </div>
-            <div
-                class="operator__bible-preview"
-                data-role="bible-preview"
-                style=move || {
-                    if ctx.view.get() == "bible" { "" } else { "display:none" }
-                }
-                data-active=move || {
-                    if ctx.active_bible_broadcast.get().is_some() { "true" } else { "false" }
-                }
-            >
-                {move || {
-                    match ctx.active_bible_broadcast.get() {
-                        Some(broadcast) => {
-                            let text = &broadcast.passage.text;
-                            let truncated = if text.chars().count() > 100 {
-                                let end: String = text.chars().take(100).collect();
-                                format!("{end}…")
-                            } else {
-                                text.clone()
-                            };
-                            let reference = broadcast
-                                .reference_label
-                                .clone()
-                                .unwrap_or_else(|| {
-                                    format!(
-                                        "{} ({})",
-                                        broadcast.passage.reference.to_human_readable(),
-                                        broadcast.passage.translation.code
-                                    )
-                                });
-                            leptos::prelude::view! {
-                                <span class="operator__bible-preview-text" data-role="bible-preview-text">{truncated}</span>
-                                <span class="operator__bible-preview-ref" data-role="bible-preview-ref">{reference}</span>
-                            }.into_any()
-                        }
-                        None => {
-                            leptos::prelude::view! {
-                                <span class="operator__bible-preview-empty">"No active passage"</span>
-                            }.into_any()
-                        }
+                <button
+                    type="button"
+                    class="operator__stage-toggle"
+                    data-role="ableset-enable"
+                    data-state=move || {
+                        if ctx.ableset_status.get().map(|s| s.enabled).unwrap_or(false) { "on" } else { "off" }
                     }
-                }}
+                    on:click=on_ableset_enable
+                >
+                    {move || {
+                        if ctx.ableset_status.get().map(|s| s.enabled).unwrap_or(false) {
+                            "Ableton ON"
+                        } else {
+                            "Ableton OFF"
+                        }
+                    }}
+                </button>
+                <button
+                    type="button"
+                    class="operator__stage-toggle"
+                    data-role="ableset-follow"
+                    data-state=move || {
+                        if ctx.ableset_status.get().map(|s| s.follow_enabled).unwrap_or(false) { "on" } else { "off" }
+                    }
+                    on:click=on_ableset_follow
+                >
+                    {move || {
+                        if ctx.ableset_status.get().map(|s| s.follow_enabled).unwrap_or(false) {
+                            "Follow ON"
+                        } else {
+                            "Follow OFF"
+                        }
+                    }}
+                </button>
             </div>
             <button
                 type="button"

@@ -1608,7 +1608,13 @@ test.describe("WASM Operator Bible Tests", () => {
   // Header Bible preview
   // -----------------------------------------------------------------------
 
-  test("header preview shows triggered Bible verse text", async ({ page }) => {
+  // #460: the header preview is a live `/stage?preview=1` iframe mirror — a
+  // triggered Bible verse appears INSIDE the iframe (the real stage render),
+  // not in a text-only `bible-preview` reconstruction (removed). The worship-
+  // only quick toggles still live behind `worship-preview` (worship-view-gated).
+  test("header preview iframe mirrors a triggered Bible verse", async ({
+    page,
+  }) => {
     await navigateToBible(page);
     await clearBroadcast();
 
@@ -1617,17 +1623,26 @@ test.describe("WASM Operator Bible Tests", () => {
       return;
     }
 
-    // In Bible view, bible-preview should be visible (even if empty)
-    const biblePreview = page.locator('[data-role="bible-preview"]');
-    await expect(biblePreview).toBeVisible();
-    // Worship preview should be hidden
+    // The live preview iframe is present and points at the real stage.
+    const previewIframe = page.locator("iframe.operator__stage-iframe");
+    await expect(previewIframe).toHaveCount(1);
+    expect(await previewIframe.getAttribute("src")).toBe("/stage?preview=1");
+
+    // Worship-only quick toggles are hidden in Bible view.
     const worshipPreview = page.locator('[data-role="worship-preview"]');
     await expect(worshipPreview).toBeHidden();
 
-    // Initially shows "No active passage"
-    await expect(biblePreview).toContainText("No active passage");
+    // Put the stage (and thus the mirror iframe) into the Bible layout so the
+    // triggered verse renders in it.
+    await page.evaluate(async (url: string) => {
+      await fetch(`${url}/stage/layout`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ code: "bible" }),
+      });
+    }, baseURL);
 
-    // Load a passage
+    // Load a passage and trigger the first slide via the operator UI.
     const firstBook = page.locator('[data-role="book-item"]').first();
     await firstBook.click();
     await page.locator('[data-role="load-button"]').click();
@@ -1637,13 +1652,12 @@ test.describe("WASM Operator Bible Tests", () => {
       { timeout: 15_000 },
     );
 
-    // Trigger first slide
     const firstTrigger = page
       .locator('[data-role="slide-trigger-zone"]')
       .first();
     await firstTrigger.click();
 
-    // Wait for success toast
+    // Wait for success toast.
     await page.waitForFunction(
       () => {
         const toast = document.querySelector('[data-role="toast"]');
@@ -1652,68 +1666,46 @@ test.describe("WASM Operator Bible Tests", () => {
       { timeout: 5_000 },
     );
 
-    // Wait for bible preview to update with verse text (via WS event)
-    await page.waitForFunction(
-      () => {
-        const preview = document.querySelector('[data-role="bible-preview"]');
-        return (
-          preview &&
-          preview.getAttribute("data-active") === "true" &&
-          !preview.textContent?.includes("No active passage")
-        );
-      },
-      { timeout: 5_000 },
-    );
-
-    // Bible preview should contain verse text and reference
-    const previewText = page.locator('[data-role="bible-preview-text"]');
-    await expect(previewText).toBeVisible();
-    const textContent = await previewText.textContent();
+    // The verse text + reference must appear INSIDE the preview iframe — the
+    // real stage render, mirrored live into the header.
+    const frame = page.frameLocator("iframe.operator__stage-iframe");
+    const bibleText = frame.locator(".stage__bible-text");
+    await expect(bibleText).toBeVisible({ timeout: 10_000 });
+    const textContent = await bibleText.textContent();
     expect(textContent).toBeTruthy();
     expect(textContent!.length).toBeGreaterThan(0);
 
-    const previewRef = page.locator('[data-role="bible-preview-ref"]');
-    await expect(previewRef).toBeVisible();
-    const refContent = await previewRef.textContent();
-    expect(refContent).toBeTruthy();
+    const bibleRef = frame.locator(".stage__bible-reference");
+    await expect(bibleRef).toBeVisible();
+    expect(await bibleRef.textContent()).toBeTruthy();
 
-    // Clear the broadcast
-    await page.evaluate(async (url: string) => {
-      await fetch(`${url}/bible/clear`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: "{}",
-      });
-    }, baseURL);
+    // Clearing the broadcast hides the verse in the mirror (waiting state).
+    await clearBroadcast();
+    await expect(frame.locator(".stage__bible-waiting")).toBeVisible({
+      timeout: 10_000,
+    });
 
-    // Wait for preview to show empty state again
-    await page.waitForFunction(
-      () => {
-        const preview = document.querySelector('[data-role="bible-preview"]');
-        return (
-          preview &&
-          preview.getAttribute("data-active") === "false" &&
-          preview.textContent?.includes("No active passage")
-        );
-      },
-      { timeout: 5_000 },
-    );
-
-    await expect(biblePreview).toContainText("No active passage");
-
-    // Switch to worship view — worship preview should show, bible preview hidden
+    // Switch to worship view — the worship-only toggles show again; the live
+    // preview iframe stays present (it mirrors the stage in every view).
     const worshipButton = page.locator(
       '[data-role="view-toggle"][data-view="worship"]',
     );
     await worshipButton.click();
-
     await page.waitForFunction(
       () => document.body.getAttribute("data-view") === "worship",
       { timeout: 5_000 },
     );
-
     await expect(worshipPreview).toBeVisible();
-    await expect(biblePreview).toBeHidden();
+    await expect(previewIframe).toBeVisible();
+
+    // Reset the stage layout for the next test.
+    await page.evaluate(async (url: string) => {
+      await fetch(`${url}/stage/layout`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ code: "worship-snv" }),
+      });
+    }, baseURL);
   });
 
   test("trigger button in edit mode sends current (edited) text to stage", async ({

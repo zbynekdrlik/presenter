@@ -2403,6 +2403,21 @@ fn normalize_ws_surface_falls_back_to_unknown() {
     assert_eq!(normalize_ws_surface(Some(String::new())), "unknown");
 }
 
+#[test]
+fn ws_is_preview_only_true_for_one_or_true() {
+    // The operator-header preview mirror tags its socket `?preview=1` (#460) so
+    // the server excludes it from the stage-monitor count. Only "1"/"true" mark
+    // a preview; everything else (missing, empty, "0", "false", noise) is a real
+    // stage client that DOES count.
+    assert!(ws_is_preview(Some("1".to_string())));
+    assert!(ws_is_preview(Some("true".to_string())));
+    assert!(!ws_is_preview(None));
+    assert!(!ws_is_preview(Some(String::new())));
+    assert!(!ws_is_preview(Some("0".to_string())));
+    assert!(!ws_is_preview(Some("false".to_string())));
+    assert!(!ws_is_preview(Some("yes".to_string())));
+}
+
 // #471: serve_websocket must actually run on a /live/ws connection — it logs the
 // client IP + surface on connect/disconnect and registers stage presence. A real
 // WebSocket client connection is the only way to exercise the upgrade handler +
@@ -2468,5 +2483,85 @@ async fn live_ws_connection_registers_stage_presence() {
 
     // Closing the socket drives serve_websocket through its disconnect path.
     ws.close(None).await.unwrap();
+    server.abort();
+}
+
+// #460: a PREVIEW stage client (`/live/ws?surface=stage&preview=1`, the operator
+// header's small live mirror) sends a StagePresence just like a real stage TV —
+// but the server MUST NOT register it, so it never inflates the operator's
+// "N stage displays connected" monitor count. This connects TWO clients: a real
+// one (preview off → registers) and a preview one (preview on → excluded), then
+// asserts only the real client appears in the tracker. It kills the mutant that
+// drops the `if preview` guard (which would register the preview client too).
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn live_ws_preview_client_is_excluded_from_stage_count() {
+    use futures_util::SinkExt;
+    use tokio_tungstenite::tungstenite::Message as WsMessage;
+
+    let state = AppState::in_memory().await.unwrap();
+    let connections = state.stage_connections_handle();
+    let app = build_router(state);
+
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let addr = listener.local_addr().unwrap();
+    let server = tokio::spawn(async move {
+        axum::serve(listener, app).await.unwrap();
+    });
+
+    let send_presence = |id: &str| {
+        serde_json::json!({
+            "type": "stage_presence",
+            "client_id": id,
+            "layout_code": "worship-snv",
+        })
+        .to_string()
+    };
+
+    // Real stage TV — preview off → must register.
+    let real_id = uuid::Uuid::new_v4().to_string();
+    let real_url = format!("ws://{addr}/live/ws?surface=stage");
+    let (mut real_ws, _) = tokio_tungstenite::connect_async(&real_url).await.unwrap();
+    real_ws
+        .send(WsMessage::Text(send_presence(&real_id).into()))
+        .await
+        .unwrap();
+
+    // Preview mirror — preview on → must NOT register.
+    let preview_id = uuid::Uuid::new_v4().to_string();
+    let preview_url = format!("ws://{addr}/live/ws?surface=stage&preview=1");
+    let (mut preview_ws, _) = tokio_tungstenite::connect_async(&preview_url)
+        .await
+        .unwrap();
+    preview_ws
+        .send(WsMessage::Text(send_presence(&preview_id).into()))
+        .await
+        .unwrap();
+
+    // Wait until the REAL client registers (proves both presence messages have
+    // had time to be handled), then assert the preview client never did.
+    let mut real_registered = false;
+    for _ in 0..300 {
+        let snapshot = connections.snapshot().await;
+        if snapshot.iter().any(|c| c.id.to_string() == real_id) {
+            real_registered = true;
+            break;
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+    }
+    assert!(real_registered, "real stage client must register");
+
+    let snapshot = connections.snapshot().await;
+    assert!(
+        !snapshot.iter().any(|c| c.id.to_string() == preview_id),
+        "preview stage client (?preview=1) must be EXCLUDED from the stage-monitor count"
+    );
+    assert_eq!(
+        snapshot.len(),
+        1,
+        "only the real stage client counts; the preview must not appear",
+    );
+
+    real_ws.close(None).await.unwrap();
+    preview_ws.close(None).await.unwrap();
     server.abort();
 }

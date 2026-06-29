@@ -72,11 +72,12 @@ pub async fn serve_websocket(
     socket: WebSocket,
     client_ip: String,
     surface: String,
+    preview: bool,
 ) {
     // Mirrors the companion connect/disconnect INFO logs (companion/mod.rs) but
     // carries the client IP and surface so live (stage/operator/tablet) clients
     // are attributable in the logs (#471).
-    info!(client_ip = %client_ip, surface = %surface, "live ws client connected");
+    info!(client_ip = %client_ip, surface = %surface, preview, "live ws client connected");
 
     let rx = hub.subscribe();
     let mut stream = BroadcastStream::new(rx);
@@ -95,15 +96,32 @@ pub async fn serve_websocket(
                     InboundMessage::StagePresence {
                         client_id,
                         layout_code,
-                    } => match Uuid::parse_str(&client_id) {
-                        Ok(id) => {
-                            let now = Utc::now();
-                            let snapshot = connections.register(id, &layout_code, now).await;
-                            hub.publish(LiveEvent::StageConnection { snapshot });
-                            registered_client = Some(id);
+                    } => {
+                        if preview {
+                            // The operator-header preview mirror (`/stage?preview=1`,
+                            // #460) is NOT a real stage TV. It still receives every
+                            // broadcast event (so it renders live), but it must NOT
+                            // register in the connection tracker — otherwise it would
+                            // inflate the operator's "N stage displays connected"
+                            // monitor count. Skip registration entirely.
+                            debug!(
+                                %client_id,
+                                %layout_code,
+                                "preview stage client — excluded from stage-monitor count"
+                            );
+                        } else {
+                            match Uuid::parse_str(&client_id) {
+                                Ok(id) => {
+                                    let now = Utc::now();
+                                    let snapshot =
+                                        connections.register(id, &layout_code, now).await;
+                                    hub.publish(LiveEvent::StageConnection { snapshot });
+                                    registered_client = Some(id);
+                                }
+                                Err(err) => warn!(?client_id, ?err, "invalid stage client id"),
+                            }
                         }
-                        Err(err) => warn!(?client_id, ?err, "invalid stage client id"),
-                    },
+                    }
                     InboundMessage::StageHeartbeatAck {
                         client_id,
                         heartbeat_id,
