@@ -21,9 +21,23 @@ import {
 // (self-hosted e2e-ndi lane) → same clock → per-frame glass-to-glass latency
 // = (Date.now() % 2^24 − decoded), mod-wrapped.
 //
-// Like ndi-webrtc-synthetic.spec.ts this file is driven by the `e2e-ndi`
-// self-hosted CI lane (`--grep "@synthetic-ndi"`); the GitHub-hosted `e2e`
-// job excludes it (`--grep-invert "@synthetic-ndi"`) — no NDI SDK there.
+// LOAD-SENSITIVE — runs ON-DEMAND, NOT in the per-PR pipeline (#386).
+// Glass-to-glass latency is a timing measurement: when the shared dev2
+// self-hosted runner is under concurrent CPU load (e.g. another project's
+// cargo-mutants / full rebuilds), the in-browser requestVideoFrameCallback
+// sampling loop + the GPU encoder starve and the measured latency exceeds the
+// (deliberately generous) bound — a false red on good code, NOT a regression.
+// So the strict bound is verified on a QUIET box via the manual
+// `ndi-latency.yml` (workflow_dispatch) lane (`--grep "@latency-ndi"`), the
+// same on-demand pattern as the #488 mutation full-sweep. The per-PR `e2e-ndi`
+// lane keeps the load-INSENSITIVE NDI guards (decode/freeze/console in
+// ndi-webrtc-synthetic.spec.ts) and explicitly EXCLUDES this file via
+// `--grep-invert "@latency-ndi"`. The bounds below are unchanged: this is still
+// a REAL test that fails hard on a genuine latency regression.
+//
+// Tags: @synthetic-ndi keeps the GitHub-hosted `e2e` job excluding it
+// (`--grep-invert "@synthetic-ndi"` — no NDI SDK there); @latency-ndi selects
+// it into the on-demand lane (and out of the per-PR `e2e-ndi` lane);
 // @video-codec routes it to the real-Chrome (H.264) Playwright project.
 // ─────────────────────────────────────────────────────────────────────────
 
@@ -289,7 +303,7 @@ async function measureGlassToGlass(
 // Bounds are deliberately generous for the shared runner (quiet-machine
 // reality after the low-latency package is ~120-160ms median): a regression
 // back to seconds-level latency or to growing-buffer behavior fails hard.
-test("NDI glass-to-glass latency stays low for the synthetic source @video-codec @synthetic-ndi", async ({
+test("NDI glass-to-glass latency stays low for the synthetic source @video-codec @synthetic-ndi @latency-ndi", async ({
   page,
   request,
 }) => {

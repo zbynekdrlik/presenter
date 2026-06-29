@@ -648,6 +648,13 @@ jobs:
   # NDI source on the LAN and asserts that actual H264 frames decode in a real
   # browser. It is the regression guard for the #336 "connected but black
   # screen" bug (broken ICE / DTLS bundle / payload-type / branch lifecycle).
+  #
+  # This lane runs the LOAD-INSENSITIVE NDI guards (decode / freeze / console /
+  # straggler / reactivate / reload) and EXCLUDES the load-sensitive
+  # glass-to-glass latency assertion (#386 — `--grep-invert "@latency-ndi"`).
+  # The strict latency bound is verified on-demand on a quiet box via
+  # `ndi-latency.yml` (workflow_dispatch), the same pattern as the #488 mutation
+  # full-sweep, so concurrent runner CPU load can't false-red a good PR.
   # ============================================
   e2e-ndi:
     name: NDI WebRTC E2E (synthetic, self-hosted)
@@ -713,7 +720,11 @@ jobs:
           cat /tmp/ndi_test_sender.log || true
 
       - name: Run NDI WebRTC E2E (real frames)
-        run: npx playwright test --grep "@synthetic-ndi" --project chrome-video --reporter=line
+        # Exclude @latency-ndi — the glass-to-glass latency assertion is
+        # load-sensitive and false-reds under concurrent runner CPU load (#386).
+        # It runs on-demand via ndi-latency.yml on a quiet box instead. The
+        # load-insensitive decode/freeze/console guards stay here.
+        run: npx playwright test --grep "@synthetic-ndi" --grep-invert "@latency-ndi" --project chrome-video --reporter=line
         env:
           CI: true
           # Skip mock integrations (OSC/AbleSet/Resolume) in the spawned test
