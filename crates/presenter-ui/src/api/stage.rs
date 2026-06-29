@@ -24,6 +24,10 @@ pub struct StageStateRequest {
     pub next_slide_id: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub playlist_id: Option<String>,
+    /// #496: index of the triggered playlist entry so the server marks the
+    /// correct occurrence of a repeated song active.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub entry_index: Option<u32>,
 }
 
 pub async fn update_state(request: &StageStateRequest) -> Result<(), ApiError> {

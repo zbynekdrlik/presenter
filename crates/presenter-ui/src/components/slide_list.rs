@@ -239,6 +239,9 @@ pub fn SlideList() -> impl IntoView {
 
     let trigger_slide = move |pres_id: String, slide_id: String, next_slide_id: Option<String>| {
         let playlist_id = ctx.selected_playlist_id.get_untracked();
+        // #496: send the selected playlist-entry index so the server marks the
+        // triggered occurrence of a repeated song active (None outside a playlist).
+        let entry_index = ctx.selected_entry_index.get_untracked();
         op.triggering_slide_id.set(Some(slide_id.clone()));
         let triggering_signal = op.triggering_slide_id;
         leptos::task::spawn_local(async move {
@@ -247,6 +250,7 @@ pub fn SlideList() -> impl IntoView {
                 current_slide_id: slide_id,
                 next_slide_id,
                 playlist_id,
+                entry_index,
             })
             .await;
             triggering_signal.set(None);

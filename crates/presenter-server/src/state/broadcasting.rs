@@ -290,9 +290,11 @@ impl AppState {
                     .await?;
                 resolution.playlist_id = Some(playlist_id);
                 resolution.playlist_name = Some(playlist.name.clone());
+                resolution.active_entry_index = stage_state.active_entry_index;
                 resolution.playlist_entries = Some(super::stage::build_stage_playlist_entries(
                     &playlist,
                     resolution.presentation_id,
+                    stage_state.active_entry_index,
                     &name_lookup,
                 ));
             }

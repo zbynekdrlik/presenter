@@ -96,7 +96,7 @@ pub(super) async fn trigger_slide(
     });
 
     state
-        .update_stage_state(pres_id, slide_id, next_slide_id, None)
+        .update_stage_state(pres_id, slide_id, next_slide_id, None, None)
         .await?;
     Ok((
         json!({"ok": true}).to_string(),

@@ -140,6 +140,12 @@ pub struct StageDisplaySnapshot {
     pub playlist_name: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub playlist_entries: Option<Vec<StagePlaylistEntry>>,
+    /// Index of the active playlist entry (#496). Lets the worship-pp sidebar
+    /// highlight/scroll the exact triggered OCCURRENCE when a set repeats a
+    /// song. `None` for non-playlist snapshots; the sidebar then falls back to
+    /// the first `is_active` entry.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub active_entry_index: Option<u32>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub upcoming_groups: Vec<UpcomingGroup>,
 }
@@ -180,6 +186,12 @@ pub struct StageState {
     pub next_slide_id: Option<SlideId>,
     #[serde(default)]
     pub playlist_id: Option<PlaylistId>,
+    /// Zero-based index of the triggered playlist entry. Disambiguates which
+    /// occurrence is active when a set repeats a song (the same
+    /// `presentation_id` appears in multiple entries). `None` for non-playlist
+    /// triggers or legacy state written before #496.
+    #[serde(default)]
+    pub active_entry_index: Option<u32>,
 }
 
 impl StageState {
@@ -194,7 +206,14 @@ impl StageState {
             current_slide_id,
             next_slide_id,
             playlist_id,
+            active_entry_index: None,
         }
+    }
+
+    /// Builder-style setter for the triggered playlist-entry index (#496).
+    pub fn with_active_entry_index(mut self, index: Option<u32>) -> Self {
+        self.active_entry_index = index;
+        self
     }
 
     pub fn cleared() -> Self {
@@ -246,6 +265,7 @@ impl StageDisplaySnapshot {
             playlist_id,
             playlist_name,
             playlist_entries,
+            active_entry_index: None,
             upcoming_groups,
         }
     }

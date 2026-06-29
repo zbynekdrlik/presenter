@@ -15,8 +15,11 @@ pub fn PresentationList() -> impl IntoView {
     let ctx = use_ctx!(AppContext);
     let op = use_ctx!(OperatorState);
 
-    let select_presentation = move |id: String| {
+    let select_presentation = move |id: String, entry_index: Option<u32>| {
         ctx.selected_presentation_id.set(Some(id.clone()));
+        // #496: remember which playlist OCCURRENCE was picked so triggers send
+        // the right entry index for a repeated song (None for library picks).
+        ctx.selected_entry_index.set(entry_index);
         crate::state::session::set("currentPresentationId", &id);
 
         // Check slides cache first
@@ -437,7 +440,7 @@ pub fn PresentationList() -> impl IntoView {
                                                 draggable="true"
                                                 on:click={
                                                     let id = id_for_click.clone();
-                                                    move |_| select_presentation(id.clone())
+                                                    move |_| select_presentation(id.clone(), Some(idx as u32))
                                                 }
                                                 on:dragstart=move |ev: web_sys::DragEvent| {
                                                     if let Some(dt) = ev.data_transfer() {
@@ -681,7 +684,7 @@ pub fn PresentationList() -> impl IntoView {
                                 draggable="true"
                                 on:click={
                                     let id = id_for_click.clone();
-                                    move |_| select_presentation(id.clone())
+                                    move |_| select_presentation(id.clone(), None)
                                 }
                                 on:dragstart=move |ev: web_sys::DragEvent| {
                                     if let Some(dt) = ev.data_transfer() {

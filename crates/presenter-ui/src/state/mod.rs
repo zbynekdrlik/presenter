@@ -43,6 +43,10 @@ pub struct AppContext {
     pub playlists: RwSignal<Vec<Playlist>>,
     pub selected_playlist_id: RwSignal<Option<String>>,
     pub selected_playlist: RwSignal<Option<Playlist>>,
+    /// #496: index of the playlist entry the operator selected/triggered, so a
+    /// repeated song's correct OCCURRENCE is sent to the server. `None` when the
+    /// selection came from a library (no playlist position).
+    pub selected_entry_index: RwSignal<Option<u32>>,
     pub stage_snapshot: RwSignal<Option<StageDisplaySnapshot>>,
     pub stage_layout_code: RwSignal<String>,
     pub stage_layouts: RwSignal<Vec<StageDisplayLayout>>,
@@ -96,6 +100,7 @@ impl AppContext {
             playlists: RwSignal::new(Vec::new()),
             selected_playlist_id: RwSignal::new(session::get("activePlaylistId")),
             selected_playlist: RwSignal::new(None),
+            selected_entry_index: RwSignal::new(None),
             stage_snapshot: RwSignal::new(None),
             stage_layout_code: RwSignal::new(String::new()),
             stage_layouts: RwSignal::new(Vec::new()),

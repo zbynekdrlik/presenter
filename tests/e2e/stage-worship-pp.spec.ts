@@ -676,4 +676,137 @@ test.describe("Stage worship-pp layout", () => {
 
     expect(consoleErrors).toEqual([]);
   });
+
+  test("repeated song (reprise): only the TRIGGERED occurrence highlights, not the first match (#496)", async ({
+    page,
+  }) => {
+    const consoleErrors: string[] = [];
+    page.on("console", (msg) => {
+      if (msg.type() === "error" || msg.type() === "warning") {
+        const t = msg.text();
+        if (!t.includes("favicon") && !t.includes("crbug.com/981419")) {
+          consoleErrors.push(`[${msg.type()}] ${t}`);
+        }
+      }
+    });
+
+    // Set worship-pp layout.
+    const layoutResp = await page.request.post(
+      new URL("/stage/layout", baseURL).toString(),
+      { data: { code: "worship-pp" } },
+    );
+    expect(layoutResp.ok()).toBeTruthy();
+
+    // Find two presentations with slides; A will be REPEATED in the playlist.
+    const libsResp = await page.request.get(
+      new URL("/libraries", baseURL).toString(),
+    );
+    const libs = (await libsResp.json()) as Array<{
+      id: string;
+      presentations?: Array<{
+        id: string;
+        name?: string;
+        slides?: Array<{ id: string }>;
+      }>;
+    }>;
+    const allPres = libs
+      .flatMap((lib) => lib.presentations ?? [])
+      .filter((p) => (p.slides?.length ?? 0) > 0 && !!p.name);
+    if (allPres.length < 2) {
+      test.skip(true, "fixture has fewer than 2 presentations with slides");
+      return;
+    }
+    const songA = allPres[0];
+    const songB = allPres[1];
+    const aSlideId = songA.slides![0]!.id;
+
+    // Playlist [A, B, A] — A appears twice (a reprise). Both A rows share the
+    // SAME presentation_id; only the entry INDEX disambiguates them.
+    const playlistResp = await page.request.post(
+      new URL("/playlists", baseURL).toString(),
+      { data: { name: `Repeat Test ${Date.now()}`, showInDashboard: true } },
+    );
+    const playlist = (await playlistResp.json()) as { id: string };
+    const entriesResp = await page.request.put(
+      new URL(`/playlists/${playlist.id}/entries`, baseURL).toString(),
+      {
+        data: {
+          entries: [
+            { type: "presentation", presentationId: songA.id }, // index 0
+            { type: "presentation", presentationId: songB.id }, // index 1
+            { type: "presentation", presentationId: songA.id }, // index 2 (reprise)
+          ],
+        },
+      },
+    );
+    expect(entriesResp.ok()).toBeTruthy();
+
+    // Trigger the SECOND occurrence of A (entry index 2).
+    const trig = await page.request.post(
+      new URL("/stage/state", baseURL).toString(),
+      {
+        data: {
+          presentationId: songA.id,
+          currentSlideId: aSlideId,
+          playlistId: playlist.id,
+          entryIndex: 2,
+        },
+      },
+    );
+    expect(trig.status()).toBe(204);
+
+    await page.setViewportSize({ width: 1920, height: 1080 });
+    await page.goto(new URL("/stage", baseURL).toString());
+    await page.waitForFunction(() => document.body.dataset.wasmReady === "true", {
+      timeout: 30_000,
+    });
+    await page.waitForFunction(
+      () => document.body.dataset.layoutCode === "worship-pp",
+      { timeout: 30_000 },
+    );
+    await page.waitForFunction(
+      () =>
+        document.querySelectorAll(".stage-pp__playlist-entry").length >= 3,
+      { timeout: 15_000 },
+    );
+
+    // All rows carrying the active class (there must be EXACTLY one, at index 2).
+    const activeIndices = async (): Promise<number[]> =>
+      page.evaluate(() => {
+        const rows = Array.from(
+          document.querySelectorAll(".stage-pp__playlist-entry"),
+        );
+        return rows
+          .map((r, i) =>
+            r.classList.contains("stage-pp__playlist-entry--active") ? i : -1,
+          )
+          .filter((i) => i >= 0);
+      });
+
+    // The triggered reprise (index 2) is the ONLY active row — NOT the first
+    // matching occurrence (index 0), which was the #496 bug.
+    await expect.poll(activeIndices, { timeout: 10_000 }).toEqual([2]);
+
+    // Re-trigger the FIRST occurrence (entry index 0); highlight must move to 0.
+    const trig0 = await page.request.post(
+      new URL("/stage/state", baseURL).toString(),
+      {
+        data: {
+          presentationId: songA.id,
+          currentSlideId: aSlideId,
+          playlistId: playlist.id,
+          entryIndex: 0,
+        },
+      },
+    );
+    expect(trig0.status()).toBe(204);
+    await expect.poll(activeIndices, { timeout: 10_000 }).toEqual([0]);
+
+    // Cleanup.
+    await page.request.delete(
+      new URL(`/playlists/${playlist.id}`, baseURL).toString(),
+    );
+
+    expect(consoleErrors).toEqual([]);
+  });
 });

@@ -5,27 +5,28 @@ mod library;
 mod playlist;
 mod presentation;
 mod search;
+mod stage_state;
 #[cfg(test)]
 mod tests;
 mod util;
 
 use util::{
     ableset_model_to_domain, android_stage_display_model_to_domain, osc_model_to_domain,
-    resolume_model_to_domain, stage_state_model_to_state, timer_state_to_string,
-    timers_model_to_state, velocity_mode_to_string, video_source_model_to_domain,
+    resolume_model_to_domain, timer_state_to_string, timers_model_to_state,
+    velocity_mode_to_string, video_source_model_to_domain,
 };
 
 use crate::audit::SettingsAuditSource;
 use crate::entities::{
-    ableset_settings, android_stage_display, app_settings, osc_settings, resolume_host,
-    stage_state, timers, video_source,
+    ableset_settings, android_stage_display, app_settings, osc_settings, resolume_host, timers,
+    video_source,
 };
 use anyhow::{anyhow, Context};
 use chrono::Utc;
 use presenter_core::{
     AbleSetSettings, AbleSetSettingsDraft, AndroidStageDisplay, AndroidStageDisplayDraft,
     AndroidStageDisplayId, OscSettings, OscSettingsDraft, ResolumeHost, ResolumeHostDraft,
-    ResolumeHostId, StageState, TimersState, VideoSource, VideoSourceDraft, VideoSourceId,
+    ResolumeHostId, TimersState, VideoSource, VideoSourceDraft, VideoSourceId,
 };
 use presenter_migration::{Migrator, MigratorTrait};
 use sea_orm::Statement;
@@ -914,46 +915,6 @@ impl Repository {
             .await?;
         }
         txn.commit().await?;
-        Ok(())
-    }
-
-    #[instrument(skip_all)]
-    pub async fn get_stage_state(&self) -> anyhow::Result<Option<StageState>> {
-        let model = stage_state::Entity::find_by_id(STAGE_STATE_SINGLETON_ID.to_string())
-            .one(&self.db)
-            .await?;
-        model
-            .map(|record| stage_state_model_to_state(record).map_err(anyhow::Error::from))
-            .transpose()
-    }
-
-    #[instrument(skip_all)]
-    pub async fn upsert_stage_state(&self, state: &StageState) -> anyhow::Result<()> {
-        let now = Utc::now();
-        let model = stage_state::ActiveModel {
-            id: Set(STAGE_STATE_SINGLETON_ID.to_string()),
-            presentation_id: Set(state.presentation_id.map(|id| id.into_uuid().to_string())),
-            current_slide_id: Set(state.current_slide_id.map(|id| id.into_uuid().to_string())),
-            next_slide_id: Set(state.next_slide_id.map(|id| id.into_uuid().to_string())),
-            playlist_id: Set(state.playlist_id.map(|id| id.into_uuid().to_string())),
-            updated_at: Set(now.into()),
-        };
-
-        stage_state::Entity::insert(model)
-            .on_conflict(
-                OnConflict::column(stage_state::Column::Id)
-                    .update_columns([
-                        stage_state::Column::PresentationId,
-                        stage_state::Column::CurrentSlideId,
-                        stage_state::Column::NextSlideId,
-                        stage_state::Column::PlaylistId,
-                        stage_state::Column::UpdatedAt,
-                    ])
-                    .to_owned(),
-            )
-            .exec(&self.db)
-            .await?;
-
         Ok(())
     }
 

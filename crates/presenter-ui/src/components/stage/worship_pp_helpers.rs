@@ -38,6 +38,31 @@ pub fn next_song_from_entries(entries: &[StagePlaylistEntry]) -> String {
         .unwrap_or_default()
 }
 
+/// Which sidebar row INDEX should be highlighted as the active song.
+///
+/// #496: a worship set may repeat the same song (a reprise), so two rows share
+/// both `name` AND `presentation_id`. The server now disambiguates by marking a
+/// single occurrence and reporting its index via `snapshot_active_index`; this
+/// resolver prefers that explicit index so the correct OCCURRENCE highlights,
+/// falling back to the first `is_active` entry only for legacy/non-playlist
+/// snapshots that carry no explicit index. Returns `None` when nothing is
+/// active.
+pub fn active_sidebar_index(
+    entries: &[StagePlaylistEntry],
+    snapshot_active_index: Option<u32>,
+) -> Option<usize> {
+    if let Some(index) = snapshot_active_index {
+        // Honor the explicit occurrence only when that row is actually active.
+        // If a live playlist reorder left the index pointing at a now-inactive
+        // row, fall through to the first active row so the highlight never
+        // diverges from the server's per-entry is_active marking.
+        if entries.get(index as usize).is_some_and(|e| e.is_active) {
+            return Some(index as usize);
+        }
+    }
+    entries.iter().position(|e| e.is_active)
+}
+
 /// CSS selector for the worship-pp playlist sidebar's active entry row.
 const ACTIVE_ENTRY_SELECTOR: &str = ".stage-pp__playlist-sidebar .stage-pp__playlist-entry--active";
 
@@ -137,5 +162,46 @@ mod tests {
     #[test]
     fn next_song_empty_for_empty_list() {
         assert_eq!(next_song_from_entries(&[]), "");
+    }
+
+    /// #496: when a set repeats a song, the explicit per-occurrence index from
+    /// the snapshot must win over "first is_active row". Simulates the ambiguous
+    /// case (both occurrences marked active, as the pre-fix server produced) and
+    /// asserts the resolver targets the triggered occurrence (index 2).
+    #[test]
+    fn active_sidebar_index_prefers_explicit_occurrence_for_repeated_song() {
+        let entries = vec![
+            entry("Reprise", true), // index 0 — first occurrence
+            entry("Other", false),  // index 1
+            entry("Reprise", true), // index 2 — the triggered reprise
+        ];
+        assert_eq!(active_sidebar_index(&entries, Some(2)), Some(2));
+    }
+
+    #[test]
+    fn active_sidebar_index_falls_back_to_first_active_without_explicit_index() {
+        let entries = vec![entry("A", false), entry("B", true), entry("C", false)];
+        assert_eq!(active_sidebar_index(&entries, None), Some(1));
+    }
+
+    #[test]
+    fn active_sidebar_index_none_when_nothing_active() {
+        let entries = vec![entry("A", false), entry("B", false)];
+        assert_eq!(active_sidebar_index(&entries, None), None);
+    }
+
+    #[test]
+    fn active_sidebar_index_falls_back_when_explicit_index_row_is_inactive() {
+        // Edit-while-live race: the persisted index points at a row the server
+        // no longer marks active. Don't highlight that row — fall back to the
+        // first active row so the UI matches the server's is_active marking.
+        let entries = vec![entry("A", true), entry("B", false), entry("C", false)];
+        assert_eq!(active_sidebar_index(&entries, Some(1)), Some(0));
+    }
+
+    #[test]
+    fn active_sidebar_index_none_when_explicit_index_inactive_and_nothing_active() {
+        let entries = vec![entry("A", false), entry("B", false)];
+        assert_eq!(active_sidebar_index(&entries, Some(1)), None);
     }
 }

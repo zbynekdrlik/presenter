@@ -92,6 +92,11 @@ pub(super) struct StageStateRequest {
     pub(super) next_slide_id: Option<String>,
     #[serde(default)]
     pub(super) playlist_id: Option<String>,
+    /// #496: zero-based index of the triggered playlist entry. Additive and
+    /// optional — old clients omit it and the server falls back to marking by
+    /// presentation_id. Lets the server disambiguate a repeated song.
+    #[serde(default)]
+    pub(super) entry_index: Option<u32>,
 }
 
 #[instrument(skip_all)]
@@ -117,6 +122,7 @@ pub(super) async fn update_stage_state(
             current_slide_id,
             next_slide_id,
             playlist_id,
+            payload.entry_index,
         )
         .await
         .map_err(AppError::bad_request)?;

@@ -295,6 +295,7 @@ fn setup_ws_dispatch(last_event: ReadSignal<Option<LiveEvent>>, ctx: &AppContext
     let selected_library_id = ctx.selected_library_id;
     let selected_playlist_id = ctx.selected_playlist_id;
     let selected_playlist = ctx.selected_playlist;
+    let selected_entry_index = ctx.selected_entry_index;
     let presentations = ctx.presentations;
 
     Effect::new(move || {
@@ -310,6 +311,10 @@ fn setup_ws_dispatch(last_event: ReadSignal<Option<LiveEvent>>, ctx: &AppContext
                         .unwrap_or(true);
 
                     if follow_enabled {
+                        // #496: mirror the active playlist occurrence so a later
+                        // keyboard advance targets the same repeated-song row the
+                        // stage is on (e.g. after an AbleSet-driven change).
+                        selected_entry_index.set(snapshot.active_entry_index);
                         let new_pres_id = snapshot.presentation_id.map(|id| id.to_string());
                         let current_pres_id = selected_presentation_id.get_untracked();
                         if new_pres_id.is_some() && new_pres_id != current_pres_id {
@@ -614,6 +619,9 @@ fn navigate_slides(ctx: &AppContext, forward: bool) {
     let snapshot = ctx.stage_snapshot.get_untracked();
     let pres = ctx.selected_presentation.get_untracked();
     let playlist_id = ctx.selected_playlist_id.get_untracked();
+    // #496: keep targeting the same playlist occurrence as the operator
+    // advances slides within the selected song (None outside a playlist).
+    let entry_index = ctx.selected_entry_index.get_untracked();
 
     let Some(presentation) = pres else { return };
     let slides = &presentation.slides;
@@ -654,6 +662,7 @@ fn navigate_slides(ctx: &AppContext, forward: bool) {
                 current_slide_id: slide_id,
                 next_slide_id,
                 playlist_id,
+                entry_index,
             })
             .await;
         });
