@@ -303,3 +303,11 @@ _RED-before-GREEN verified: RED 40b3147c (#437), 61564d81 (#438) precede their G
 - **Gotchas → ci skill:** stale GStreamer registry cache hides nvh264enc after recovery; dmesg
   retains pre-recovery NV_ERR_RESET_REQUIRED. Both documented in `.claude/skills/ci/SKILL.md`.
 - Solo PR (dev→main, Closes #445), version 0.4.178.
+
+## 2026-07-01 — #509 (NDI latency: device-capability + lag-location probe)
+- Shipped the diagnostic probe measuring device capability + where NDI latency arises on real stage displays; gates the true server→display metric (#512). No user-facing metric change yet — diagnostic surface only.
+- Solo PR #516 (dev→main), merged 0a1b902, version 0.4.179. Deployed prod (0.4.179, NDI streaming healthy) + dev, DOM-verified.
+
+## 2026-07-01 — #510 (NDI latency: /ndi/time pipeline-clock endpoint + browser offset estimator)
+- `/ndi/time` returns the server GStreamer pipeline-clock time (same clock RTCP SR encodes — not wall-clock/dantesync). Browser estimator: NTP-style handshake → offset_browser→serverPipelineClock + RTT, with min-RTT/median selection, outlier rejection, staleness bound. Feeds #512. Pipeline clock untouched (`ntp-time-source=clock-time` preserved — avoids the ~400ms/20s render hitch).
+- Tests: 11 offset-math + endpoint unit tests. Solo PR (dev→main, Closes #510), version 0.4.180.
