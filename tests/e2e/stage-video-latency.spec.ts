@@ -8,19 +8,27 @@ import {
 } from "./support";
 
 // ─────────────────────────────────────────────────────────────────────────
-// #479 — the stage shows VIDEO latency (decode→render) as a SEPARATE readout
-// next to the web/connection latency. The connection readout ("CONNECTED · N
-// ms") is the WS heartbeat round-trip; the new readout ("video · N ms") is the
-// stage-side received→displayed lag derived per-frame from rVFC metadata by
-// `NdiVideo`'s frame observer.
+// #512 — the stage shows the TRUE server→display video latency as a SEPARATE
+// readout next to the web/connection latency. The connection readout
+// ("CONNECTED · N ms") is the WS heartbeat round-trip; the video readout
+// ("server→displej · N ms") is the network transit (RTT/2 via /ndi/time) plus
+// the per-frame render residual (buffer+decode+present) — written per frame by
+// `NdiVideo`'s rVFC observer.
+//
+// The readout is shown whenever NDI video is LIVE; its value is the number, or
+// "n/a" when there is no trustworthy measurement (no fresh /ndi/time offset) —
+// never a misleading residual-only figure. Non-video layouts leave frames
+// not-live so the readout is absent.
 //
 // The real per-frame value needs a live NDI/WebRTC stream (the self-hosted
 // `@synthetic-ndi` GPU lane). This deterministic test runs on the standard
-// GitHub-hosted `e2e` lane: it drives the readout via the stage test hook
-// (`__presenterStageSetVideoLatency`) — the same signal the rVFC observer
-// writes — and asserts BOTH readouts render, are distinct, and that clearing
-// the value hides the video readout. The derivation math itself
-// (rVFC metadata → ms) is unit-tested in `ndi_frame_stats.rs`.
+// GitHub-hosted `e2e` lane: it drives the frames-live flag and the latency
+// value via the stage test hooks (`__presenterStageSetNdiFramesLive` /
+// `__presenterStageSetVideoLatency`) — the same signals the rVFC observer
+// writes — and asserts the readout appears when video is live, shows the
+// number when measurable and "n/a" when not, and disappears when video stops.
+// The derivation math (residual + network → ms, n/a-without-network,
+// Tailscale-≥-LAN) is unit-tested in `ndi_frame_stats.rs`.
 // ─────────────────────────────────────────────────────────────────────────
 
 test.describe.configure({ timeout: 120_000 });
@@ -65,8 +73,8 @@ async function openVideoStage(context: BrowserContext): Promise<Page> {
   return stagePage;
 }
 
-/** Drive the stage-side video-latency readout (the same signal the rVFC
- * observer writes). `null` clears it. */
+/** Drive the stage-side video-latency value (the same signal the rVFC observer
+ * writes). `null` clears it → the readout shows "n/a" while video is live. */
 async function setVideoLatency(page: Page, ms: number | null): Promise<void> {
   await page.evaluate((value) => {
     (
@@ -77,7 +85,19 @@ async function setVideoLatency(page: Page, ms: number | null): Promise<void> {
   }, ms);
 }
 
-test("stage shows video latency as a separate readout next to connection latency", async ({
+/** Drive the "NDI frames are presenting" flag (gates the readout's visibility,
+ * the same signal the rVFC observer / proxy write per frame). */
+async function setFramesLive(page: Page, live: boolean): Promise<void> {
+  await page.evaluate((value) => {
+    (
+      window as unknown as {
+        __presenterStageSetNdiFramesLive?: (v: boolean) => void;
+      }
+    ).__presenterStageSetNdiFramesLive?.(value);
+  }, live);
+}
+
+test("stage shows true server→display latency as a separate readout, with honest n/a", async ({
   context,
 }) => {
   const consoleMessages: string[] = [];
@@ -95,28 +115,37 @@ test("stage shows video latency as a separate readout next to connection latency
   await expect(connectionEl).toBeVisible();
   await expect(connectionEl).toContainText("CONNECTED");
 
-  // No video flowing yet → the video readout is absent (not just empty).
+  // No NDI video flowing yet → the video readout is absent (not just empty).
   await expect(videoEl).toHaveCount(0);
 
-  // A frame's derived latency arrives → the SEPARATE "video · N ms" readout
-  // appears with the expected "<number> ms" format.
-  await setVideoLatency(stagePage, 42);
+  // Video goes live but no trustworthy measurement yet → the readout appears
+  // showing "n/a" (honest), NOT a misleading number.
+  await setFramesLive(stagePage, true);
   await expect(videoEl).toBeVisible();
-  await expect(videoEl).toContainText(/video\s*·\s*42\s*ms/);
+  await expect(videoEl).toContainText(/server→displej\s*·\s*n\/a/);
 
-  // The two readouts coexist as DISTINCT elements (the user's decision: video
-  // latency shown SEPARATELY from connection latency, not combined).
+  // A measured server→display latency arrives → the readout shows "<n> ms".
+  await setVideoLatency(stagePage, 42);
+  await expect(videoEl).toContainText(/server→displej\s*·\s*42\s*ms/);
+
+  // The two readouts coexist as DISTINCT elements (video latency shown
+  // SEPARATELY from connection latency, not combined).
   await expect(connectionEl).toContainText("CONNECTED");
-  await expect(connectionEl).not.toContainText("video");
+  await expect(connectionEl).not.toContainText("displej");
   await expect(videoEl).not.toContainText("CONNECTED");
 
   // The value updates live (a later, larger figure).
   await setVideoLatency(stagePage, 137);
-  await expect(videoEl).toContainText(/video\s*·\s*137\s*ms/);
+  await expect(videoEl).toContainText(/server→displej\s*·\s*137\s*ms/);
+
+  // Measurement lost while video still live (offset aged out) → honest n/a,
+  // never a stale-but-confident number.
+  await setVideoLatency(stagePage, null);
+  await expect(videoEl).toContainText(/server→displej\s*·\s*n\/a/);
 
   // Video stops (source deactivated) → the readout disappears; the connection
   // readout remains.
-  await setVideoLatency(stagePage, null);
+  await setFramesLive(stagePage, false);
   await expect(videoEl).toHaveCount(0);
   await expect(connectionEl).toBeVisible();
 
