@@ -18,7 +18,16 @@
 //! The accounting is a pure, unit-tested accumulator; the pad probe is thin glue
 //! that never mutates the buffer and always returns `Ok`.
 
+use std::sync::Mutex;
 use std::time::Duration;
+
+use gstreamer as gst;
+use gstreamer::prelude::*;
+
+/// Interval between ingest-cadence log lines (media time).
+const REPORT_INTERVAL: Duration = Duration::from_secs(5);
+/// An inter-arrival gap over this counts as a perceptible ingest hitch.
+const GAP_THRESHOLD: Duration = Duration::from_millis(100);
 
 /// Emitted once per interval by [`IngestTimingAccumulator::record`].
 #[derive(Debug, Clone, PartialEq)]
@@ -74,10 +83,77 @@ impl IngestTimingAccumulator {
     /// Returns `Some(report)` once `interval` of media time has elapsed since
     /// the interval's first frame, resetting for the next interval.
     pub(super) fn record(&mut self, pts_ns: Option<u64>) -> Option<IngestTimingReport> {
-        // RED stub — real accounting lands in the [green] commit.
-        let _ = pts_ns;
-        None
+        self.frames += 1;
+        let Some(pts) = pts_ns else {
+            // A frame with no PTS can't contribute to timing; count it (a
+            // finding in itself) and leave the interval state untouched.
+            self.frames_no_pts += 1;
+            return None;
+        };
+        if let Some(last) = self.last_pts {
+            let gap = pts.saturating_sub(last);
+            self.max_gap_ns = self.max_gap_ns.max(gap);
+            if gap > self.gap_threshold_ns {
+                self.gaps_over_threshold += 1;
+            }
+        }
+        self.last_pts = Some(pts);
+        let first = *self.first_pts.get_or_insert(pts);
+        let span = pts.saturating_sub(first);
+        if span < self.interval_ns {
+            return None;
+        }
+        let report = IngestTimingReport {
+            frames: self.frames,
+            frames_no_pts: self.frames_no_pts,
+            span_ms: span as f64 / 1_000_000.0,
+            fps: if span > 0 {
+                self.frames as f64 / (span as f64 / 1_000_000_000.0)
+            } else {
+                0.0
+            },
+            max_gap_ms: self.max_gap_ns as f64 / 1_000_000.0,
+            gaps_over_threshold: self.gaps_over_threshold,
+            gap_threshold_ms: self.gap_threshold_ns as f64 / 1_000_000.0,
+        };
+        // Reset: the current frame seeds the next interval.
+        self.first_pts = Some(pts);
+        self.frames = 0;
+        self.frames_no_pts = 0;
+        self.max_gap_ns = 0;
+        self.gaps_over_threshold = 0;
+        Some(report)
     }
+}
+
+/// Install the read-only ingest-timing pad probe on `pad` (the raw-video pad
+/// feeding the encoder). `label` identifies the NDI source in the logs. The
+/// probe never mutates the buffer and always returns `Ok` — it must never
+/// disturb the live pipeline.
+pub(super) fn install_probe(pad: &gst::Pad, label: &str) {
+    let acc = Mutex::new(IngestTimingAccumulator::new(REPORT_INTERVAL, GAP_THRESHOLD));
+    let label = label.to_string();
+    pad.add_probe(gst::PadProbeType::BUFFER, move |_pad, info| {
+        if let Some(gst::PadProbeData::Buffer(buffer)) = &info.data {
+            let pts_ns = buffer.pts().map(|c| c.nseconds());
+            if let Ok(mut acc) = acc.lock() {
+                if let Some(report) = acc.record(pts_ns) {
+                    tracing::info!(
+                        ndi_source = %label,
+                        frames = report.frames,
+                        frames_no_pts = report.frames_no_pts,
+                        span_ms = report.span_ms,
+                        arrival_fps = report.fps,
+                        max_arrival_gap_ms = report.max_gap_ms,
+                        arrival_gaps_over_threshold = report.gaps_over_threshold,
+                        gap_threshold_ms = report.gap_threshold_ms,
+                        "NDI ingest receive-time cadence (server-side; PTS=receive-time)"
+                    );
+                }
+            }
+        }
+        gst::PadProbeReturn::Ok
+    });
 }
 
 #[cfg(test)]
@@ -103,7 +179,11 @@ mod tests {
             }
         }
         let r = report.expect("a 5s interval must emit within 6s of frames");
-        assert!(r.span_ms >= 5000.0, "span {} should reach the interval", r.span_ms);
+        assert!(
+            r.span_ms >= 5000.0,
+            "span {} should reach the interval",
+            r.span_ms
+        );
         assert!(
             (r.fps - 30.0).abs() < 2.0,
             "arrival fps {} should be ~30",
@@ -159,6 +239,9 @@ mod tests {
             }
         }
         let r = report.expect("interval emits after PTS frames start");
-        assert_eq!(r.frames_no_pts, 1, "the single no-PTS frame is counted once");
+        assert_eq!(
+            r.frames_no_pts, 1,
+            "the single no-PTS frame is counted once"
+        );
     }
 }

@@ -129,6 +129,21 @@ pub(crate) struct NdiClientStatsBeacon {
     /// (#379). The standard WASM stage never sets it, so it is always absent
     /// (`None`); retained for backward-compatible beacon parsing.
     pub lite: Option<bool>,
+    /// (#509 T0 probe) `estimatedPlayoutTimestamp` from the SAME inbound-rtp
+    /// getStats snapshot — the field T4's true server→display metric would read.
+    /// `null` = the WebView doesn't expose it (metric permanently n/a there);
+    /// `0.0` = present but pre-first-SR (must not be read as a real timestamp).
+    /// Logged raw every beacon so advancement across consecutive beacons is
+    /// readable server-side; also classified via `classify_playout`.
+    pub estimated_playout_timestamp: Option<f64>,
+    /// (#509 T0 probe) The inbound-rtp stat's OWN Unix-epoch `.timestamp` (ms)
+    /// from the same snapshot — the epoch reference `estimatedPlayoutTimestamp`
+    /// is checked against to prove it shares the Unix-epoch domain.
+    pub report_timestamp: Option<f64>,
+    /// (#509 T0 probe) Full browser `navigator.userAgent` — records the exact
+    /// WebView/Chrome version per real stage TV (SD1, Hyundai), which decides
+    /// whether the playout field is available on the devices that matter.
+    pub user_agent: Option<String>,
 }
 
 /// Classification of a display's `estimatedPlayoutTimestamp` for the #509 (T0)
@@ -180,9 +195,21 @@ pub(crate) fn classify_playout(
     estimated_playout_ms: Option<f64>,
     report_timestamp_ms: Option<f64>,
 ) -> PlayoutClass {
-    // RED stub — real classification lands in the [green] commit.
-    let _ = (estimated_playout_ms, report_timestamp_ms);
-    PlayoutClass::Absent
+    let Some(v) = estimated_playout_ms else {
+        return PlayoutClass::Absent;
+    };
+    if !v.is_finite() {
+        return PlayoutClass::NonFinite;
+    }
+    if v == 0.0 {
+        return PlayoutClass::Zero;
+    }
+    match report_timestamp_ms {
+        Some(r) if r.is_finite() && (v - r).abs() <= PLAYOUT_EPOCH_MATCH_WINDOW_MS => {
+            PlayoutClass::ValidUnixEpoch
+        }
+        _ => PlayoutClass::ValidOtherDomain,
+    }
 }
 
 /// Stage displays POST a compact getStats summary every 15s. Log-only (MVP):
@@ -190,6 +217,8 @@ pub(crate) fn classify_playout(
 /// answerable from data (fps, jitter buffer, freezes per display).
 #[instrument(skip_all)]
 pub(crate) async fn ndi_client_stats(Json(beacon): Json<NdiClientStatsBeacon>) -> StatusCode {
+    let playout_class =
+        classify_playout(beacon.estimated_playout_timestamp, beacon.report_timestamp).as_str();
     tracing::info!(
         display_id = beacon.display_id.as_deref(),
         source_id = %beacon.source_id,
@@ -216,6 +245,10 @@ pub(crate) async fn ndi_client_stats(Json(beacon): Json<NdiClientStatsBeacon>) -
         total_freezes_duration = beacon.total_freezes_duration,
         key_frames_decoded = beacon.key_frames_decoded,
         lite = beacon.lite,
+        estimated_playout_timestamp = beacon.estimated_playout_timestamp,
+        report_timestamp = beacon.report_timestamp,
+        playout_class,
+        user_agent = beacon.user_agent.as_deref(),
         "NDI stage-display client stats beacon"
     );
     StatusCode::NO_CONTENT
@@ -274,6 +307,40 @@ mod tests {
     }
 
     #[test]
+    fn client_stats_beacon_parses_t0_probe_fields() {
+        // #509 T0: the device-capability probe fields the stage now sends.
+        let beacon: NdiClientStatsBeacon = serde_json::from_str(
+            r#"{
+                "sourceId":"src-1",
+                "estimatedPlayoutTimestamp":1750000000080.0,
+                "reportTimestamp":1750000000000.0,
+                "userAgent":"Mozilla/5.0 (Linux; Android 11; SmartTV) Chrome/90"
+            }"#,
+        )
+        .expect("beacon JSON with T0 probe fields parses");
+        assert_eq!(
+            beacon.estimated_playout_timestamp,
+            Some(1_750_000_000_080.0)
+        );
+        assert_eq!(beacon.report_timestamp, Some(1_750_000_000_000.0));
+        assert_eq!(
+            beacon.user_agent.as_deref(),
+            Some("Mozilla/5.0 (Linux; Android 11; SmartTV) Chrome/90")
+        );
+        // A literal 0 playout (pre-first-SR) must round-trip as Some(0.0), not None.
+        let zero: NdiClientStatsBeacon =
+            serde_json::from_str(r#"{"sourceId":"src-1","estimatedPlayoutTimestamp":0.0}"#)
+                .expect("beacon with zero playout parses");
+        assert_eq!(zero.estimated_playout_timestamp, Some(0.0));
+        // Older clients omit them → all optional.
+        let bare: NdiClientStatsBeacon =
+            serde_json::from_str(r#"{"sourceId":"src-1"}"#).expect("bare beacon parses");
+        assert_eq!(bare.estimated_playout_timestamp, None);
+        assert_eq!(bare.report_timestamp, None);
+        assert_eq!(bare.user_agent, None);
+    }
+
+    #[test]
     fn classify_playout_absent_when_field_missing() {
         // The WebView doesn't expose estimatedPlayoutTimestamp → permanently n/a.
         assert_eq!(classify_playout(None, Some(1.75e12)), PlayoutClass::Absent);
@@ -282,7 +349,10 @@ mod tests {
     #[test]
     fn classify_playout_zero_is_not_a_real_timestamp() {
         // The Some(0.0) gotcha: pre-first-SR literal 0 must NOT read as valid.
-        assert_eq!(classify_playout(Some(0.0), Some(1.75e12)), PlayoutClass::Zero);
+        assert_eq!(
+            classify_playout(Some(0.0), Some(1.75e12)),
+            PlayoutClass::Zero
+        );
     }
 
     #[test]

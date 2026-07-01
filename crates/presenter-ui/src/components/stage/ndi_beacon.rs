@@ -98,6 +98,12 @@ async fn post_client_stats(
     let mut freeze_count = JsValue::NULL;
     let mut frames_dropped = JsValue::NULL;
     let mut codec_id = JsValue::NULL;
+    // #509 (T0) device-capability probe: the field T4's true server→display
+    // metric would read, plus the inbound-rtp report's OWN Unix-epoch timestamp
+    // from the SAME snapshot (the epoch reference the playout value is checked
+    // against server-side via `classify_playout`).
+    let mut estimated_playout = JsValue::NULL;
+    let mut report_ts = JsValue::NULL;
 
     let map: &js_sys::Map = report.unchecked_ref();
     let entries = js_sys::try_iter(&map.values()).ok().flatten();
@@ -116,6 +122,11 @@ async fn post_client_stats(
                 freeze_count = get("freezeCount");
                 frames_dropped = get("framesDropped");
                 codec_id = get("codecId");
+                // Read from the same inbound-rtp snapshot: absent → undefined →
+                // `as_f64()` None → null on the wire; a literal 0 → Some(0.0)
+                // (the pre-first-SR gotcha), distinguished server-side.
+                estimated_playout = get("estimatedPlayoutTimestamp");
+                report_ts = get("timestamp");
             }
         }
     }
@@ -127,6 +138,12 @@ async fn post_client_stats(
         .map(|id| map.get(&JsValue::from_str(&id)))
         .and_then(|entry| js_sys::Reflect::get(&entry, &JsValue::from_str("mimeType")).ok())
         .and_then(|v| v.as_string());
+
+    // #509 (T0): full userAgent — the exact WebView/Chrome version per real
+    // stage TV, which decides whether the playout field is available there.
+    let user_agent = leptos::web_sys::window()
+        .map(|w| w.navigator())
+        .and_then(|n| n.user_agent().ok());
 
     // Physical screen size, for telling TV models apart in the logs.
     let screen = leptos::web_sys::window()
@@ -163,6 +180,10 @@ async fn post_client_stats(
         "maxPresentGapMs": max_present_gap_ms,
         "presentGapsOver100": present_gaps_over100,
         "presentedFps": presented_fps,
+        // #509 (T0) device-capability probe fields.
+        "estimatedPlayoutTimestamp": estimated_playout.as_f64(),
+        "reportTimestamp": report_ts.as_f64(),
+        "userAgent": user_agent,
     })
     .to_string();
 
