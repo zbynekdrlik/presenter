@@ -502,6 +502,14 @@ jobs:
         env:
           PRESENTER_BUILD_CHANNEL: dev
 
+      - name: Build synthetic NDI sender (test-helpers)
+        # Built HERE (deps hot from the step above) and shipped as an artifact so
+        # the self-hosted e2e-ndi lane never compiles Rust — per the runner
+        # architecture (CLAUDE.md: the local runner only runs pre-built
+        # artifacts). A toolchain bump on dev2 used to force a ~19-min cold
+        # rebuild of the gstreamer tree there, blowing e2e-ndi's 20-min cap.
+        run: cargo build --release -p presenter-ndi --features test-helpers --bin ndi_test_sender
+
       - name: Upload build artifacts
         uses: actions/upload-artifact@v4
         with:
@@ -511,6 +519,7 @@ jobs:
             target/release/presenter-server
             target/release/import_propresenter
             target/release/ingest_bibles
+            target/release/ndi_test_sender
 
   # ============================================
   # Android Stage APK (the universal stage-display app the server installs on TVs)
@@ -687,20 +696,20 @@ jobs:
           path: _artifacts
 
       - name: Place binaries
-        # ALL three prebuilt binaries are required: the spec's beforeAll runs
-        # refresh-dev-data.sh, which invokes import_propresenter + ingest_bibles.
-        # If they're missing it falls back to `cargo run` (cold compile) and the
-        # 180s beforeAll hook times out before any test runs.
+        # ALL four prebuilt binaries are required: the spec's beforeAll runs
+        # refresh-dev-data.sh, which invokes import_propresenter + ingest_bibles
+        # (missing → `cargo run` cold-compile → 180s beforeAll timeout), and the
+        # synthetic sender is prebuilt in the GH-hosted Build job — this runner
+        # never compiles Rust (a dev2 toolchain bump once forced a ~19-min cold
+        # gstreamer rebuild here, blowing the 20-min job cap).
         run: |
           mkdir -p target/release
           cp _artifacts/presenter-server target/release/
           cp _artifacts/import_propresenter target/release/
           cp _artifacts/ingest_bibles target/release/
-          chmod +x target/release/presenter-server target/release/import_propresenter target/release/ingest_bibles
-          ls -la target/release/presenter-server target/release/import_propresenter target/release/ingest_bibles
-
-      - name: Build synthetic NDI sender (test-helpers)
-        run: cargo build -p presenter-ndi --features test-helpers --bin ndi_test_sender
+          cp _artifacts/ndi_test_sender target/release/
+          chmod +x target/release/presenter-server target/release/import_propresenter target/release/ingest_bibles target/release/ndi_test_sender
+          ls -la target/release/presenter-server target/release/import_propresenter target/release/ingest_bibles target/release/ndi_test_sender
 
       - name: Setup Node.js
         uses: actions/setup-node@v4
@@ -719,7 +728,7 @@ jobs:
         # presenter test-server it spawns) can discover + consume it. Runs in
         # the background; stopped in the cleanup step below.
         run: |
-          PRESENTER_NDI_TEST_NAME="PRESENTER-TEST" nohup ./target/debug/ndi_test_sender > /tmp/ndi_test_sender.log 2>&1 &
+          PRESENTER_NDI_TEST_NAME="PRESENTER-TEST" nohup ./target/release/ndi_test_sender > /tmp/ndi_test_sender.log 2>&1 &
           echo $! > /tmp/ndi_test_sender.pid
           # Give NDI discovery a moment to advertise the source.
           sleep 5
