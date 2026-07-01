@@ -32,6 +32,13 @@ pub struct StageContext {
     /// client whose `ndi_status` is still a stale `connecting` does not hide a
     /// video that is already decoding. `false` whenever no frames are flowing.
     pub ndi_frames_live: RwSignal<bool>,
+    /// Browser↔server pipeline-clock offset estimate (#510, T3):
+    /// `Some((offset_ms, rtt_ms))` once a fresh, low-RTT NTP-style round trip
+    /// against `/ndi/time` has landed, `None` before the first sample or once
+    /// the freshest one ages out (design's honest `n/a` trust predicate — see
+    /// `ndi_clock_offset`). A later ticket (#512, T4) reads this to convert a
+    /// `report.timestamp` reading into the server pipeline-clock domain.
+    pub clock_offset: RwSignal<Option<(f64, f64)>>,
 }
 
 impl StageContext {
@@ -47,6 +54,7 @@ impl StageContext {
             ndi_status: RwSignal::new(String::new()),
             video_latency_ms: RwSignal::new(None),
             ndi_frames_live: RwSignal::new(false),
+            clock_offset: RwSignal::new(None),
         }
     }
 }

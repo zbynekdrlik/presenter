@@ -20,6 +20,7 @@ use leptos::wasm_bindgen::{closure::Closure, JsCast, JsValue};
 use leptos::web_sys::{HtmlVideoElement, RtcIceConnectionState, RtcPeerConnection};
 use wasm_bindgen_futures::spawn_local;
 
+use super::ndi_clock_offset::{self, ClockOffsetEstimator, ClockOffsetSetter};
 use super::ndi_frame_stats::{
     start_rvfc_frame_observer, FrameStats, FramesLiveSetter, VideoLatencySetter,
 };
@@ -326,6 +327,7 @@ impl Watchdog {
         escalation: &Rc<ReloadEscalation>,
         video_latency_setter: Option<VideoLatencySetter>,
         frames_live_setter: Option<FramesLiveSetter>,
+        clock_offset_setter: Option<ClockOffsetSetter>,
         on_failure: F,
     ) -> Self {
         let active: Rc<Cell<bool>> = Rc::new(Cell::new(true));
@@ -362,6 +364,13 @@ impl Watchdog {
                 "watchdog: requestVideoFrameCallback unsupported — using currentTime frame proxy"
             );
         }
+        // #510 (T3): an INDEPENDENT rVFC-driven loop (own registration on the
+        // same `video` element) doing the browser<->server pipeline-clock
+        // offset handshake. Independent of the frame-stats observer above —
+        // it needs no decode-side counters, just a periodic tick that survives
+        // TV WebView timer throttling the same way.
+        let clock_offset_estimator = ClockOffsetEstimator::new();
+        ndi_clock_offset::start(video, &active, &clock_offset_estimator, clock_offset_setter);
         let health_ticker_handle = start_health_ticker(
             video,
             pc,

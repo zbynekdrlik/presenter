@@ -77,6 +77,38 @@ pub fn StagePage() -> impl IntoView {
         setter.forget();
     }
 
+    // Test/diagnostic hook (#510 T3): read-only getter for the browser<->server
+    // pipeline-clock offset estimate. Returns `{offsetMs, rttMs}` once a
+    // fresh, low-RTT NTP-style round trip against `/ndi/time` has landed, or
+    // `null` before the first sample / once it ages out (honest `n/a` — see
+    // `ndi_clock_offset`'s trust predicate). A later ticket (#512, T4) will
+    // read the SAME `ctx.clock_offset` signal to build the true server→display
+    // latency metric; in production this getter is simply never called.
+    {
+        let clock_offset = ctx.clock_offset;
+        let getter = Closure::wrap(Box::new(move || -> JsValue {
+            match clock_offset.get_untracked() {
+                Some((offset_ms, rtt_ms)) => {
+                    let obj = js_sys::Object::new();
+                    let _ = js_sys::Reflect::set(
+                        &obj,
+                        &"offsetMs".into(),
+                        &JsValue::from_f64(offset_ms),
+                    );
+                    let _ = js_sys::Reflect::set(&obj, &"rttMs".into(), &JsValue::from_f64(rtt_ms));
+                    obj.into()
+                }
+                None => JsValue::NULL,
+            }
+        }) as Box<dyn Fn() -> JsValue>);
+        let _ = js_sys::Reflect::set(
+            &js_sys::global(),
+            &JsValue::from_str("__presenterStageClockOffset"),
+            getter.as_ref(),
+        );
+        getter.forget();
+    }
+
     // Connect stage WebSocket
     let ws_handle = stage::use_stage_websocket(ctx.client_id.clone(), ctx.layout_code);
 
