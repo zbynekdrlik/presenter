@@ -3,6 +3,7 @@ pub mod bible_layout;
 pub mod bible_overlay;
 pub mod camera_crew;
 mod ndi_beacon;
+mod ndi_clock_offset;
 mod ndi_frame_stats;
 pub mod ndi_fullscreen;
 mod ndi_health_ticker;

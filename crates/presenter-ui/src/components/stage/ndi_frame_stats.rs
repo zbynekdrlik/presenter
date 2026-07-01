@@ -332,8 +332,10 @@ pub(crate) fn snapshot_present_gaps(stats: &FrameStats) -> (f64, u32, Option<f64
 }
 
 /// Shared holder for the self-rescheduling rVFC closure (the closure needs a
-/// handle to itself to re-register for the next presented frame).
-type SharedRvfcClosure = Rc<RefCell<Option<Closure<dyn FnMut(JsValue, JsValue)>>>>;
+/// handle to itself to re-register for the next presented frame). `pub(crate)`
+/// so `ndi_clock_offset`'s independent rVFC-driven handshake loop (#510) can
+/// reuse the SAME scheduling idiom instead of duplicating it.
+pub(crate) type SharedRvfcClosure = Rc<RefCell<Option<Closure<dyn FnMut(JsValue, JsValue)>>>>;
 
 /// Start a self-rescheduling `requestVideoFrameCallback` loop on `video`,
 /// maintaining `stats.frames_presented` / `stats.last_frame_at`. rVFC fires
@@ -367,13 +369,7 @@ pub(crate) fn start_rvfc_frame_observer(
     video_latency_setter: Option<VideoLatencySetter>,
     frames_live_setter: Option<FramesLiveSetter>,
 ) -> bool {
-    let supported = js_sys::Reflect::get(
-        video.as_ref(),
-        &JsValue::from_str("requestVideoFrameCallback"),
-    )
-    .map(|f| f.is_function())
-    .unwrap_or(false);
-    if !supported {
+    if !video_supports_rvfc(video) {
         return false;
     }
 
@@ -412,9 +408,23 @@ pub(crate) fn start_rvfc_frame_observer(
     true
 }
 
+/// Does `video` support `requestVideoFrameCallback`? `pub(crate)` so
+/// `ndi_clock_offset`'s independent rVFC-driven handshake loop (#510) shares
+/// this same feature check instead of duplicating it.
+pub(crate) fn video_supports_rvfc(video: &HtmlVideoElement) -> bool {
+    js_sys::Reflect::get(
+        video.as_ref(),
+        &JsValue::from_str("requestVideoFrameCallback"),
+    )
+    .map(|f| f.is_function())
+    .unwrap_or(false)
+}
+
 /// Invoke `video.requestVideoFrameCallback(cb)` via Reflect (web_sys has no
 /// stable binding for rVFC). Silent no-op if the method is missing.
-fn schedule_video_frame_callback(video: &HtmlVideoElement, holder: &SharedRvfcClosure) {
+/// `pub(crate)` so `ndi_clock_offset`'s independent rVFC-driven handshake loop
+/// (#510) can reuse the SAME scheduling idiom instead of duplicating it.
+pub(crate) fn schedule_video_frame_callback(video: &HtmlVideoElement, holder: &SharedRvfcClosure) {
     let Ok(f) = js_sys::Reflect::get(
         video.as_ref(),
         &JsValue::from_str("requestVideoFrameCallback"),

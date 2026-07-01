@@ -244,6 +244,7 @@ pub fn build_router(state: AppState) -> Router {
         .route("/ndi/sources", get(integrations::ndi::discover_ndi_sources))
         .route("/ndi/status", get(integrations::ndi::ndi_status))
         .route("/ndi/ice-servers", get(integrations::ndi::ndi_ice_servers))
+        .route("/ndi/time", get(integrations::ndi::ndi_time))
         .route(
             "/ndi/client-stats",
             post(integrations::ndi::ndi_client_stats),

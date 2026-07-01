@@ -1,5 +1,6 @@
 #![allow(non_camel_case_types)]
 
+pub mod clock;
 pub mod discovery;
 pub mod manager;
 pub mod ndi_sdk;
@@ -8,6 +9,7 @@ pub mod pipeline;
 pub mod test_strip;
 pub mod whep_session;
 
+pub use clock::pipeline_clock_now_ms;
 pub use discovery::SourceList;
 pub use manager::NdiManager;
 pub use manager::PipelineStartError;

@@ -33,6 +33,37 @@ pub(crate) async fn ndi_status(State(state): State<AppState>) -> Json<serde_json
     Json(serde_json::json!({ "available": state.ndi_manager().is_some() }))
 }
 
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct NdiTimeDto {
+    /// The server's GStreamer PIPELINE-CLOCK time, in milliseconds — NOT
+    /// `SystemTime::now()` wall-clock. See the `ndi_time` doc below.
+    server_time_ms: f64,
+}
+
+/// `GET /ndi/time` (#510, T3 of the NDI true-latency rework) — returns the
+/// server's GStreamer **pipeline-clock** time, the EXACT clock domain the
+/// RTCP Sender Reports encode (`rtpbin ntp-time-source=clock-time`, set in
+/// `consumers.rs`). The browser's clock-offset estimator
+/// (`presenter-ui`'s `ndi_clock_offset` module) does a periodic NTP-style
+/// round trip against this route to compute
+/// `offset_browser→serverPipelineClock`: since both this endpoint and the SR
+/// live in the SAME clock domain, a later metric (#512, T4) can convert
+/// `estimatedPlayoutTimestamp` into that domain without needing an absolute
+/// wall-clock sync (dantesync) on the critical path. See
+/// `docs/superpowers/specs/2026-06-30-ndi-true-latency-design.md` §3.
+///
+/// Deliberately does NOT require an active NDI source/pipeline —
+/// `gst::SystemClock::obtain()` is a process-wide singleton valid as soon as
+/// `gstreamer::init()` has run once (idempotent, lazily triggered here on the
+/// first call if no NDI pipeline has started yet).
+#[instrument(skip_all)]
+pub(crate) async fn ndi_time() -> Result<Json<NdiTimeDto>, AppError> {
+    let server_time_ms = presenter_ndi::pipeline_clock_now_ms()
+        .map_err(|e| AppError::service_unavailable(format!("pipeline clock unavailable: {e}")))?;
+    Ok(Json(NdiTimeDto { server_time_ms }))
+}
+
 /// `GET /ndi/ice-servers` (#502) — returns the browser-ready WebRTC ICE
 /// servers (Cloudflare Realtime TURN). The browser sets these on its
 /// `RTCPeerConnection` so a relay candidate exists when the direct LAN path is
@@ -385,6 +416,26 @@ mod tests {
         assert_eq!(
             classify_playout(Some(report), None),
             PlayoutClass::ValidOtherDomain
+        );
+    }
+
+    #[tokio::test]
+    async fn ndi_time_returns_finite_monotonic_pipeline_clock() {
+        // #510 T3: the offset estimator's NTP-style round trip depends on
+        // /ndi/time returning a sane, ADVANCING value — a stuck or garbage
+        // clock would silently poison every downstream offset sample.
+        let Json(first) = ndi_time().await.expect("first /ndi/time call");
+        assert!(
+            first.server_time_ms.is_finite() && first.server_time_ms >= 0.0,
+            "expected a finite, non-negative pipeline-clock ms value, got {}",
+            first.server_time_ms
+        );
+        let Json(second) = ndi_time().await.expect("second /ndi/time call");
+        assert!(
+            second.server_time_ms >= first.server_time_ms,
+            "pipeline clock must never go backwards: first={} second={}",
+            first.server_time_ms,
+            second.server_time_ms
         );
     }
 
