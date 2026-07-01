@@ -131,6 +131,60 @@ pub(crate) struct NdiClientStatsBeacon {
     pub lite: Option<bool>,
 }
 
+/// Classification of a display's `estimatedPlayoutTimestamp` for the #509 (T0)
+/// device-capability probe: which real TVs expose a trustworthy value — the
+/// field T4's true server→display metric would be defined on. `report_timestamp`
+/// is the SAME inbound-rtp getStats snapshot's own Unix-epoch `.timestamp` (ms),
+/// the epoch reference the playout value is compared against.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum PlayoutClass {
+    /// Field absent (the WebView doesn't expose `estimatedPlayoutTimestamp`) →
+    /// the metric would be permanently `n/a` on this device (repeats #479).
+    Absent,
+    /// Present but non-finite (NaN / ±Inf) → unusable.
+    NonFinite,
+    /// Present but a literal `0` — pre-first-RTCP-SR. `Reflect::get(...).as_f64()`
+    /// returns `Some(0.0)` for a literal 0, so a naive check would read it as a
+    /// real timestamp and surface a bogus huge latency; classified separately.
+    Zero,
+    /// Finite, non-zero, and in the SAME Unix-epoch domain as the report's
+    /// `.timestamp` → trustworthy (T4's metric can be built on it here).
+    ValidUnixEpoch,
+    /// Finite, non-zero, but a different domain than the report's `.timestamp`
+    /// (or no report to compare against) → present but domain-suspect.
+    ValidOtherDomain,
+}
+
+impl PlayoutClass {
+    pub(crate) fn as_str(self) -> &'static str {
+        match self {
+            PlayoutClass::Absent => "absent",
+            PlayoutClass::NonFinite => "nonfinite",
+            PlayoutClass::Zero => "zero",
+            PlayoutClass::ValidUnixEpoch => "valid-unix-epoch",
+            PlayoutClass::ValidOtherDomain => "valid-other-domain",
+        }
+    }
+}
+
+/// Max |playout − report| (ms) for the two to count as the same epoch domain.
+/// `estimatedPlayoutTimestamp` leads the report time only by the buffer depth
+/// (tens of ms); an epoch mismatch (NTP-1900 vs Unix-1970, or the TV's own
+/// unsynced clock) is off by years, so a generous 5-minute window cleanly
+/// separates "same domain" from "wrong domain".
+const PLAYOUT_EPOCH_MATCH_WINDOW_MS: f64 = 300_000.0;
+
+/// Classify a display's `estimatedPlayoutTimestamp` for the T0 probe. Pure so it
+/// is unit-tested directly (RED→GREEN) and reused by T4's trust predicate.
+pub(crate) fn classify_playout(
+    estimated_playout_ms: Option<f64>,
+    report_timestamp_ms: Option<f64>,
+) -> PlayoutClass {
+    // RED stub — real classification lands in the [green] commit.
+    let _ = (estimated_playout_ms, report_timestamp_ms);
+    PlayoutClass::Absent
+}
+
 /// Stage displays POST a compact getStats summary every 15s. Log-only (MVP):
 /// journald keeps the history, so "the stage was laggy at 19:40" is
 /// answerable from data (fps, jitter buffer, freezes per display).
@@ -217,6 +271,51 @@ mod tests {
         assert_eq!(no_gap.max_present_gap_ms, None);
         assert_eq!(no_gap.present_gaps_over100, None);
         assert_eq!(no_gap.presented_fps, None);
+    }
+
+    #[test]
+    fn classify_playout_absent_when_field_missing() {
+        // The WebView doesn't expose estimatedPlayoutTimestamp → permanently n/a.
+        assert_eq!(classify_playout(None, Some(1.75e12)), PlayoutClass::Absent);
+    }
+
+    #[test]
+    fn classify_playout_zero_is_not_a_real_timestamp() {
+        // The Some(0.0) gotcha: pre-first-SR literal 0 must NOT read as valid.
+        assert_eq!(classify_playout(Some(0.0), Some(1.75e12)), PlayoutClass::Zero);
+    }
+
+    #[test]
+    fn classify_playout_nonfinite_is_unusable() {
+        assert_eq!(
+            classify_playout(Some(f64::NAN), Some(1.75e12)),
+            PlayoutClass::NonFinite
+        );
+    }
+
+    #[test]
+    fn classify_playout_valid_when_in_report_epoch() {
+        // Playout leads the report by the buffer depth (tens of ms) → same domain.
+        let report = 1_750_000_000_000.0;
+        assert_eq!(
+            classify_playout(Some(report + 80.0), Some(report)),
+            PlayoutClass::ValidUnixEpoch
+        );
+    }
+
+    #[test]
+    fn classify_playout_other_domain_when_far_from_report_or_no_report() {
+        let report = 1_750_000_000_000.0;
+        // A tiny monotonic-ms value is finite+nonzero but a different domain.
+        assert_eq!(
+            classify_playout(Some(1000.0), Some(report)),
+            PlayoutClass::ValidOtherDomain
+        );
+        // No report to compare against → domain unconfirmable.
+        assert_eq!(
+            classify_playout(Some(report), None),
+            PlayoutClass::ValidOtherDomain
+        );
     }
 
     #[tokio::test]
