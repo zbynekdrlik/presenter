@@ -89,13 +89,15 @@ pub fn StatusBar(
     // #512: the TRUE server→display video latency — network transit (RTT/2 via
     // /ndi/time) + render residual (buffer+decode+present). A SEPARATE readout
     // next to the connection one. Sourced from the shared StageContext signal
-    // written by `NdiVideo`'s frame observer. Shown whenever NDI video is LIVE;
-    // the value is the number, or "n/a" when there is no trustworthy measurement
-    // (no fresh /ndi/time offset / it aged out) — never a misleading residual.
-    // Non-video layouts leave frames not-live so the readout doesn't appear.
+    // written by `NdiVideo`'s frame observer. Shown whenever NDI is the ACTIVE
+    // source (`ndi_active` — a stable per-layout flag, NOT the flaky per-frame
+    // `frames_live` which throttles on idle/headless and would wrongly hide the
+    // readout); the value is the number, or "n/a" when there is no trustworthy
+    // measurement (no fresh /ndi/time offset / it aged out) — never a misleading
+    // residual. Non-NDI layouts leave `ndi_active` false so the readout is absent.
     let video_latency = ctx.video_latency_ms;
-    let frames_live = ctx.ndi_frames_live;
-    let has_video_latency = move || frames_live.get();
+    let ndi_active = ctx.ndi_active;
+    let has_video_latency = move || ndi_active.get();
     let video_latency_text = move || match video_latency.get() {
         Some(ms) => format!("server\u{2192}displej \u{00b7} {} ms", ms as u32),
         None => "server\u{2192}displej \u{00b7} n/a".to_string(),
