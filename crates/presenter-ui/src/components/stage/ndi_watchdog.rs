@@ -346,6 +346,11 @@ impl Watchdog {
         if let Some(setter) = &frames_live_setter {
             setter(false);
         }
+        // #510/#512: the browser<->server pipeline-clock offset estimator. Created
+        // BEFORE the frame observer so the observer can read its current (offset,
+        // RTT) each presented frame — the RTT/2 network-transit term of the TRUE
+        // server→display latency (#512, T4).
+        let clock_offset_estimator = ClockOffsetEstimator::new();
         let rvfc_supported = start_rvfc_frame_observer(
             video,
             pc,
@@ -353,6 +358,7 @@ impl Watchdog {
             &active,
             &stats,
             escalation,
+            &clock_offset_estimator,
             video_latency_setter,
             // #500: the rVFC path marks frames live on each presented frame; the
             // health ticker (below) flips them back to not-live on staleness, so
@@ -368,8 +374,8 @@ impl Watchdog {
         // same `video` element) doing the browser<->server pipeline-clock
         // offset handshake. Independent of the frame-stats observer above —
         // it needs no decode-side counters, just a periodic tick that survives
-        // TV WebView timer throttling the same way.
-        let clock_offset_estimator = ClockOffsetEstimator::new();
+        // TV WebView timer throttling the same way. Feeds the SAME estimator the
+        // observer reads, so the RTT it measures becomes the latency's network term.
         ndi_clock_offset::start(video, &active, &clock_offset_estimator, clock_offset_setter);
         let health_ticker_handle = start_health_ticker(
             video,

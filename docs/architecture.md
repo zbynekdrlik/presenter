@@ -203,6 +203,18 @@ The application version is available at runtime:
 - UI footer displays version with channel suffix for non-release builds
 - Logs include version on startup
 
+### Stage video latency (server→display)
+
+The stage's `server→displej · N ms` readout is the TRUE server→display video
+latency: **network one-way (RTT/2 from the `/ndi/time` pipeline-clock handshake) +
+render residual (`expectedDisplayTime − receiveTime` = jitter-buffer + decode +
+present)**. It shows `n/a` — never a misleading number — when there is no fresh
+`/ndi/time` offset, and is labelled server→display (not glass-to-glass, not
+lip-sync). The old residual-only figure ignored network transit (why Tailscale read
+lowest) and is no longer a headline number. `estimatedPlayoutTimestamp` is absent on
+the real Android-TV WebViews (and desktop Chrome) with our monotonic-clock RTCP SRs,
+so the metric deliberately avoids it. See `docs/adr/0008-ndi-true-latency.md`.
+
 ### CI Validation
 
 The `version-check.yml` workflow enforces:

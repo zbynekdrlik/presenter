@@ -15,6 +15,7 @@ use leptos::wasm_bindgen::{closure::Closure, JsCast, JsValue};
 use leptos::web_sys::{HtmlVideoElement, RtcPeerConnection};
 
 use super::ndi_beacon::post_stats_beacon;
+use super::ndi_clock_offset::ClockOffsetEstimator;
 use super::ndi_profile::persist_proven_profile_mode;
 use super::ndi_watchdog::{now_ms, ReloadEscalation, Watchdog};
 
@@ -96,32 +97,45 @@ const VIDEO_LATENCY_EMIT_INTERVAL_MS: f64 = 1000.0;
 /// higher = more responsive. 0.2 gives a calm, legible stage readout.
 const VIDEO_LATENCY_SMOOTHING_ALPHA: f64 = 0.2;
 
-/// Derive the stage-side VIDEO latency in milliseconds from one frame's rVFC
-/// metadata fields (#479). "Stage-side video latency" is the time from a
-/// frame's media being RECEIVED to it being DISPLAYED on screen — the user's
-/// decode→render definition, distinct from the WS connection round-trip.
+/// Derive the TRUE server→display video latency in milliseconds (#512, T4).
 ///
-/// Preference order:
-/// 1. received→displayed: `expected_display_time - receive_time`. WebRTC rVFC
-///    exposes both (`receiveTime` = last packet of the frame received,
-///    `expectedDisplayTime` = when the UA expects it visible) — the truest
-///    end-to-end figure.
-/// 2. decode duration: `processing_duration_s * 1000`. When `receiveTime` is
-///    absent (non-WebRTC / older browsers) the decode lag is the closest proxy
-///    rVFC offers.
+/// The number is the time from the frame leaving the server to it being painted
+/// on the stage — the sum of two independently-measured, physically-real hops:
 ///
-/// Returns `None` when neither pair is available. Negatives (clock skew between
-/// the receive and display timestamps) clamp to 0 so the stage never shows a
-/// nonsensical negative latency.
+/// 1. **render residual** = `expected_display_time - receive_time` (rVFC).
+///    `receiveTime` is when the frame's LAST RTP packet arrived in the browser;
+///    `expectedDisplayTime` is when the UA will paint it. The span between them
+///    is jitter-buffer + decode + present — i.e. everything AFTER arrival. (When
+///    the receive/display pair is absent, decode duration `processing_duration_s`
+///    is the closest residual proxy.)
+/// 2. **network one-way** = `network_one_way_ms`, ≈ RTT/2 from the `/ndi/time`
+///    offset handshake (#510). This is the server→browser transit that happens
+///    BEFORE `receiveTime` — the hop the old #479 residual-only number MISSED
+///    entirely (why Tailscale-from-home read the LOWEST latency: its WAN transit
+///    was invisible, leaving only local paint delay).
+///
+/// `network_one_way_ms = None` (no fresh `/ndi/time` round-trip landed, or the
+/// last one aged out) → returns `None` (**n/a**), NOT the residual alone: the
+/// residual-only figure is exactly the misleading number #512 replaces, so it is
+/// never shown as if it were the full latency. Honest n/a beats a plausible lie.
+///
+/// Negatives (clock skew) clamp to 0 so the stage never shows a nonsensical
+/// negative latency; the sum is therefore always ≥ 0, and for a given residual a
+/// higher RTT (e.g. Tailscale) always yields a higher — never lower — number.
 pub(crate) fn derive_video_latency_ms(
     receive_time: Option<f64>,
     expected_display_time: Option<f64>,
     processing_duration_s: Option<f64>,
+    network_one_way_ms: Option<f64>,
 ) -> Option<f64> {
-    if let (Some(recv), Some(disp)) = (receive_time, expected_display_time) {
-        return Some((disp - recv).max(0.0));
-    }
-    processing_duration_s.map(|s| (s * 1000.0).max(0.0))
+    let residual = if let (Some(recv), Some(disp)) = (receive_time, expected_display_time) {
+        (disp - recv).max(0.0)
+    } else {
+        (processing_duration_s? * 1000.0).max(0.0)
+    };
+    // Truthful server→display REQUIRES the network hop. Without it the residual
+    // alone is the old misleading number → report n/a (design §3 trust predicate).
+    Some(residual + network_one_way_ms?.max(0.0))
 }
 
 /// Fold one latency `sample` (ms) into the running EMA. `prev = None` (no
@@ -138,7 +152,7 @@ pub(crate) fn smooth_latency(prev: Option<f64>, sample: f64, alpha: f64) -> f64 
 /// typed binding for it, so the fields are read via `Reflect` (missing/non-numeric
 /// → `None`, never an error/log). Returns `None` when the frame carries no
 /// usable timing metadata.
-fn video_latency_from_meta(meta: &JsValue) -> Option<f64> {
+fn video_latency_from_meta(meta: &JsValue, network_one_way_ms: Option<f64>) -> Option<f64> {
     let get = |k: &str| {
         js_sys::Reflect::get(meta, &JsValue::from_str(k))
             .ok()
@@ -148,6 +162,7 @@ fn video_latency_from_meta(meta: &JsValue) -> Option<f64> {
         get("receiveTime"),
         get("expectedDisplayTime"),
         get("processingDuration"),
+        network_one_way_ms,
     )
 }
 
@@ -157,21 +172,40 @@ fn video_latency_from_meta(meta: &JsValue) -> Option<f64> {
 /// `VIDEO_LATENCY_EMIT_INTERVAL_MS` (#479). No-op when the frame carries no
 /// usable timing metadata, so a browser whose rVFC omits the timing fields
 /// simply never shows the readout (rather than showing a wrong value).
-fn update_video_latency(meta: &JsValue, stats: &FrameStats, setter: &Option<VideoLatencySetter>) {
-    let Some(sample) = video_latency_from_meta(meta) else {
-        return;
-    };
-    let smoothed = smooth_latency(
-        stats.video_latency_ms.get(),
-        sample,
-        VIDEO_LATENCY_SMOOTHING_ALPHA,
-    );
-    stats.video_latency_ms.set(Some(smoothed));
+fn update_video_latency(
+    meta: &JsValue,
+    stats: &FrameStats,
+    setter: &Option<VideoLatencySetter>,
+    network_one_way_ms: Option<f64>,
+) {
     let now = now_ms();
-    if now - stats.last_latency_emit_at.get() >= VIDEO_LATENCY_EMIT_INTERVAL_MS {
-        stats.last_latency_emit_at.set(now);
-        if let Some(setter) = setter {
-            setter(Some(smoothed));
+    let due = now - stats.last_latency_emit_at.get() >= VIDEO_LATENCY_EMIT_INTERVAL_MS;
+    match video_latency_from_meta(meta, network_one_way_ms) {
+        Some(sample) => {
+            let smoothed = smooth_latency(
+                stats.video_latency_ms.get(),
+                sample,
+                VIDEO_LATENCY_SMOOTHING_ALPHA,
+            );
+            stats.video_latency_ms.set(Some(smoothed));
+            if due {
+                stats.last_latency_emit_at.set(now);
+                if let Some(setter) = setter {
+                    setter(Some(smoothed));
+                }
+            }
+        }
+        // No trustworthy figure this frame (no fresh /ndi/time offset yet, or it
+        // aged out): show n/a rather than a stale-but-confident number. Reset the
+        // EMA so a resumed reading starts fresh instead of dragging an old value.
+        None => {
+            stats.video_latency_ms.set(None);
+            if due {
+                stats.last_latency_emit_at.set(now);
+                if let Some(setter) = setter {
+                    setter(None);
+                }
+            }
         }
     }
 }
@@ -366,6 +400,7 @@ pub(crate) fn start_rvfc_frame_observer(
     active: &Rc<Cell<bool>>,
     stats: &Rc<FrameStats>,
     escalation: &Rc<ReloadEscalation>,
+    clock_offset: &Rc<ClockOffsetEstimator>,
     video_latency_setter: Option<VideoLatencySetter>,
     frames_live_setter: Option<FramesLiveSetter>,
 ) -> bool {
@@ -382,6 +417,7 @@ pub(crate) fn start_rvfc_frame_observer(
         let source_id = source_id.to_string();
         let holder = Rc::clone(&holder);
         let escalation = Rc::clone(escalation);
+        let clock_offset = Rc::clone(clock_offset);
         Closure::<dyn FnMut(JsValue, JsValue)>::new(move |_now: JsValue, meta: JsValue| {
             if !active.get() {
                 return;
@@ -393,9 +429,11 @@ pub(crate) fn start_rvfc_frame_observer(
             // #500: frames are presenting → drop the neutral covering placeholder
             // (idempotent: only the false→true transition writes the signal).
             mark_frames_live(&stats, &frames_live_setter);
-            // #479: surface this frame's received→displayed latency to the
-            // stage's separate "video · N ms" readout (throttled + smoothed).
-            update_video_latency(&meta, &stats, &video_latency_setter);
+            // #512: TRUE server→display latency = network one-way (RTT/2 from the
+            // /ndi/time offset handshake, #510) + this frame's render residual.
+            // `None` RTT (no fresh offset yet) → update_video_latency shows n/a.
+            let network_one_way_ms = clock_offset.current().map(|(_offset, rtt)| rtt / 2.0);
+            update_video_latency(&meta, &stats, &video_latency_setter, network_one_way_ms);
             let n = record_presented_frame(&stats);
             if n % Watchdog::RVFC_BEACON_FRAME_PERIOD == 0 {
                 post_stats_beacon(&pc, &source_id, &stats);
@@ -522,44 +560,96 @@ mod tests {
     // ─────────────────────────────────────────────────────────────────────
 
     #[test]
-    fn prefers_received_to_displayed_when_both_present() {
-        // receiveTime=1000, expectedDisplayTime=1080 → 80ms received→displayed.
-        // processingDuration is IGNORED when the receive/display pair exists.
+    fn sums_render_residual_and_network_one_way() {
+        // residual = expectedDisplayTime(1080) - receiveTime(1000) = 80ms;
+        // network one-way = 20ms → true server→display = 100ms. processingDuration
+        // is IGNORED when the receive/display pair exists.
         assert_eq!(
-            derive_video_latency_ms(Some(1000.0), Some(1080.0), Some(0.005)),
-            Some(80.0)
+            derive_video_latency_ms(Some(1000.0), Some(1080.0), Some(0.005), Some(20.0)),
+            Some(100.0)
         );
     }
 
     #[test]
-    fn falls_back_to_processing_duration_without_receive_time() {
-        // No receiveTime → decode duration (seconds → ms): 0.012s = 12ms.
+    fn falls_back_to_processing_duration_then_adds_network() {
+        // No receiveTime → decode duration residual (0.012s = 12ms) + 10ms network.
         assert_eq!(
-            derive_video_latency_ms(None, Some(1080.0), Some(0.012)),
-            Some(12.0)
+            derive_video_latency_ms(None, Some(1080.0), Some(0.012), Some(10.0)),
+            Some(22.0)
         );
-        // expectedDisplayTime alone (no receiveTime) also falls back to decode.
-        assert_eq!(derive_video_latency_ms(None, None, Some(0.02)), Some(20.0));
+        // processingDuration alone (no receive/display pair) + network.
+        assert_eq!(
+            derive_video_latency_ms(None, None, Some(0.02), Some(5.0)),
+            Some(25.0)
+        );
     }
 
     #[test]
-    fn none_when_no_usable_metadata() {
-        assert_eq!(derive_video_latency_ms(None, None, None), None);
-        // receiveTime without expectedDisplayTime and no processingDuration
-        // cannot produce a figure.
-        assert_eq!(derive_video_latency_ms(Some(1000.0), None, None), None);
+    fn n_a_without_a_network_sample() {
+        // #512 trust predicate: no fresh /ndi/time offset → n/a, NOT the
+        // residual-only figure (that is exactly the old misleading number).
+        assert_eq!(
+            derive_video_latency_ms(Some(1000.0), Some(1080.0), Some(0.005), None),
+            None
+        );
+        assert_eq!(derive_video_latency_ms(None, None, Some(0.02), None), None);
     }
 
     #[test]
-    fn clamps_negative_skew_to_zero() {
-        // Clock skew making display appear BEFORE receive must never surface a
-        // negative latency on the stage.
+    fn none_when_no_residual_source() {
+        // No residual source at all → n/a regardless of a network sample.
+        assert_eq!(derive_video_latency_ms(None, None, None, Some(10.0)), None);
+        // receiveTime without expectedDisplayTime and no processingDuration.
         assert_eq!(
-            derive_video_latency_ms(Some(1080.0), Some(1000.0), None),
-            Some(0.0)
+            derive_video_latency_ms(Some(1000.0), None, None, Some(10.0)),
+            None
         );
-        // Negative processingDuration (defensive) also clamps.
-        assert_eq!(derive_video_latency_ms(None, None, Some(-0.01)), Some(0.0));
+    }
+
+    #[test]
+    fn clamps_negative_residual_but_keeps_network() {
+        // Clock skew making display appear BEFORE receive clamps the residual to
+        // 0; the (real) network term still contributes. Never negative.
+        assert_eq!(
+            derive_video_latency_ms(Some(1080.0), Some(1000.0), None, Some(10.0)),
+            Some(10.0)
+        );
+        // Negative processingDuration (defensive) also clamps to 0 residual.
+        assert_eq!(
+            derive_video_latency_ms(None, None, Some(-0.01), Some(5.0)),
+            Some(5.0)
+        );
+    }
+
+    #[test]
+    fn tailscale_reading_is_never_lower_than_lan() {
+        // The core #512 regression invariant: for the SAME stream/residual, a
+        // higher network one-way (Tailscale/WAN) must yield a HIGHER — never
+        // lower — latency than LAN. This is the exact bug (Tailscale read the
+        // LOWEST) the redefinition fixes: the old residual-only number ignored
+        // network transit entirely.
+        let lan = derive_video_latency_ms(Some(1000.0), Some(1080.0), None, Some(3.0))
+            .expect("lan reading");
+        let tailscale = derive_video_latency_ms(Some(1000.0), Some(1080.0), None, Some(60.0))
+            .expect("tailscale reading");
+        assert!(
+            tailscale > lan,
+            "tailscale ({tailscale}) must exceed lan ({lan}) for the same residual"
+        );
+    }
+
+    #[test]
+    fn latency_is_always_non_negative() {
+        for (recv, disp, proc, net) in [
+            (Some(1000.0), Some(1080.0), None, Some(0.0)),
+            (Some(1080.0), Some(1000.0), None, Some(0.0)),
+            (None, None, Some(0.0), Some(0.0)),
+            (Some(1000.0), Some(1080.0), None, Some(1000.0)),
+        ] {
+            if let Some(v) = derive_video_latency_ms(recv, disp, proc, net) {
+                assert!(v >= 0.0, "latency must never be negative, got {v}");
+            }
+        }
     }
 
     #[test]

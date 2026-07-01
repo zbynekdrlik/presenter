@@ -86,19 +86,19 @@ pub fn StatusBar(
         }
     };
 
-    // #479: stage-side VIDEO latency — shown as a SEPARATE readout next to the
-    // connection one (decode→render lag of the NDI/WHEP video, distinct from
-    // the WS connection round-trip). Sourced from the shared StageContext
-    // signal written by `NdiVideo`'s frame observer. Rendered ONLY when a value
-    // is present (a video layout with frames flowing); non-video layouts leave
-    // the signal None so the readout simply doesn't appear.
+    // #512: the TRUE server→display video latency — network transit (RTT/2 via
+    // /ndi/time) + render residual (buffer+decode+present). A SEPARATE readout
+    // next to the connection one. Sourced from the shared StageContext signal
+    // written by `NdiVideo`'s frame observer. Shown whenever NDI video is LIVE;
+    // the value is the number, or "n/a" when there is no trustworthy measurement
+    // (no fresh /ndi/time offset / it aged out) — never a misleading residual.
+    // Non-video layouts leave frames not-live so the readout doesn't appear.
     let video_latency = ctx.video_latency_ms;
-    let has_video_latency = move || video_latency.get().is_some();
-    let video_latency_text = move || {
-        video_latency
-            .get()
-            .map(|ms| format!("video \u{00b7} {} ms", ms as u32))
-            .unwrap_or_default()
+    let frames_live = ctx.ndi_frames_live;
+    let has_video_latency = move || frames_live.get();
+    let video_latency_text = move || match video_latency.get() {
+        Some(ms) => format!("server\u{2192}displej \u{00b7} {} ms", ms as u32),
+        None => "server\u{2192}displej \u{00b7} n/a".to_string(),
     };
 
     autofit_effect_tabular(clock_ref, STATUS_MAX_FONT, move || clock_text.get());
