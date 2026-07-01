@@ -110,6 +110,15 @@ impl NdiPipeline {
 
         connect_demux_pads(&ndisrcdemux, &videoconvert, &audio_fakesink);
 
+        // #509 (T0): read-only ingest-timing probe on the raw NDI frames
+        // (videoconvert's static sink pad, fed by the demux video pad). With
+        // ndisrc timestamp-mode=receive-time, buffer PTS = this server's clock
+        // at frame arrival, so the probe logs the camera→NDI→server delivery
+        // cadence — the signal that localizes the "lags/jumps after a while".
+        if let Some(sink) = videoconvert.static_pad("sink") {
+            super::ingest_timing::install_probe(&sink, ndi_name);
+        }
+
         tracing::info!(
             encoder = encoder_name,
             %ndi_name,
